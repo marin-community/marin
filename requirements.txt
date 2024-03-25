@@ -1,0 +1,10 @@
+datasets
+trafilatura
+requests
+warcio
+readabilipy
+readability-lxml
+html2text
+rbloom
+gcsfs
+google-cloud-tasks
