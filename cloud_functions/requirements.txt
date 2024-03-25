@@ -1,0 +1,6 @@
+requests
+rbloom
+gcsfs
+functions-framework==3.*
+tqdm
+pyarrow

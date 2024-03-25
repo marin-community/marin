@@ -8,8 +8,8 @@ from urllib.parse import quote_plus
 # Please note: f-strings require Python 3.6+
 
 # The URL of the Common Crawl Index server
-CC_INDEX_SERVER = 'http://index.commoncrawl.org/'
-# CC_INDEX_SERVER = 'http://localhost:8080/'
+# CC_INDEX_SERVER = 'http://index.commoncrawl.org/'
+CC_INDEX_SERVER = 'http://localhost:8080/'
 
 # The Common Crawl index you want to query
 INDEX_NAME = '2023-40'      # Replace with the latest index name
@@ -35,8 +35,13 @@ def fetch_page_from_cc(records):
         response = requests.get(s3_url, headers={'Range': f'bytes={offset}-{offset+length-1}'})
         if response.status_code == 206:
             with io.BytesIO(response.content) as stream:
+                i = 0
                 for record in warcio.ArchiveIterator(stream):
                     html = record.content_stream().read()
+                    i += 1
+                    if i > 1:
+                        print("More than one record found")
+                        break
                     result += html
         else:
             print(f"Failed to fetch data: {response.status_code}")
@@ -59,17 +64,21 @@ def fetch_page_from_cc(records):
 
 
 if __name__ == '__main__':
-    # Search the index for the target URL
-    # The URL you want to look up in the Common Crawl index
-    target_url = 'http://canalciencia.us.es/abierto-el-plazo-para-participar-en-la-noche-europea-de-los-investigadores-2017/'
+    import time
+    time_in = time.time()
+    for i in range(20):
+        # Search the index for the target URL
+        # The URL you want to look up in the Common Crawl index
+        target_url = 'http://canalciencia.us.es/abierto-el-plazo-para-participar-en-la-noche-europea-de-los-investigadores-2017/'
 
-    records = search_cc_index(target_url)
-    if records:
-        print(f"Found {len(records)} records for {target_url}")
+        records = search_cc_index(target_url)
+        if records:
+            print(f"Found {len(records)} records for {target_url}")
 
-        # Fetch the page content from the first record
-        for content in fetch_page_from_cc(records):
-            print(f"Successfully fetched content for {target_url}")
-            print(content.decode('utf-8'))
-    else:
-        print(f"No records found for {target_url}")
+            # Fetch the page content from the first record
+            content = fetch_page_from_cc(records)
+            # print(content)
+        else:
+            print(f"No records found for {target_url}")
+
+    print("Time taken:", time.time() - time_in)
