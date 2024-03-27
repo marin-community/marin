@@ -68,6 +68,7 @@ def save_bloom_filter_fsspec(bloom_filter, out_path):
         del bloom_filter
         fs = fsspec.filesystem("gs")
         fs.put(f.name, out_path)
+        print(f"Saved bloom filter to {out_path}")
 
 
 def load_bloom(path):
