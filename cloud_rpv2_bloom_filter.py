@@ -13,23 +13,6 @@ from build_rpv2_bloom_filter import _fsspec_exists, all_paths_for_crawl
 from rpv2 import RPV2_CRAWLS
 
 
-
-def with_auth(audience_url):
-    def decorator(f):
-        def wrapper(*args, **kwargs):
-            credentials, project = default(scopes=[
-                "https://www.googleapis.com/auth/cloud-platform",
-                "https://www.googleapis.com/auth/cloud-tasks",
-            ])
-            auth_req = Request()
-            id_token = google.oauth2.id_token.fetch_id_token(auth_req, audience=(audience_url))
-            return f(*args, **kwargs, credentials=credentials, id_token=id_token)
-        return wrapper
-
-    return decorator
-
-
-@with_auth("https://us-central1-hai-gcp-models.cloudfunctions.net/build_rpv2_bloom_filter")
 def create_process_slice_task(out_path, lang, crawl, part, chunk_range, credentials, id_token):
     # Package relevant data needed for the task into a dictionary
     task_data = {
@@ -93,8 +76,6 @@ def create_process_slice_task(out_path, lang, crawl, part, chunk_range, credenti
     return task_resp
 
 
-
-@with_auth("https://us-central1-hai-gcp-models.cloudfunctions.net/union_blooms")
 def create_union_blooms_task(out_path, paths, credentials, id_token):
     # Package relevant data needed for the task into a dictionary
     task_data = {
@@ -154,21 +135,28 @@ if __name__ == "__main__":
     skipped = 0
     total = 0
 
-    # for crawl in RPV2_CRAWLS[0:1]:
-    #     for part, slice, path in all_paths_for_crawl(PATH, crawl, lang):
-    #         if _fsspec_exists(path):
-    #             skipped += 1
-    #             continue
-    #         create_process_slice_task(path, lang, crawl, part, slice)
-    #         total += 1
+    auth_req = Request()
+    id_token = google.oauth2.id_token.fetch_id_token(auth_req, audience="https://us-central1-hai-gcp-models.cloudfunctions.net/build_rpv2_bloom_filter")
+
+
+    for crawl in RPV2_CRAWLS[0:10]:
+        for part, slice, path in all_paths_for_crawl(PATH, crawl, lang):
+            if _fsspec_exists(path):
+                skipped += 1
+                continue
+            create_process_slice_task(path, lang, crawl, part, slice, credentials, id_token)
+            total += 1
 
     print(f"Skipped {skipped} tasks, created {total} tasks")
 
-    for crawl in RPV2_CRAWLS[:1]:
-        paths = []
-        for part, slice, path in all_paths_for_crawl(PATH, crawl, lang):
-            paths.append(path)
-
-        out_path = f"gs://levanter-data/markweb/v0/url_blooms/{lang}_{crawl}.bloom"
-        create_union_blooms_task(out_path, paths)
+    # auth_req = Request()
+    # id_token = google.oauth2.id_token.fetch_id_token(auth_req, audience="https://us-central1-hai-gcp-models.cloudfunctions.net/union_blooms")
+    #
+    # for crawl in RPV2_CRAWLS[:1]:
+    #     paths = []
+    #     for part, slice, path in all_paths_for_crawl(PATH, crawl, lang):
+    #         paths.append(path)
+    #
+    #     out_path = f"gs://levanter-data/markweb/v0/url_blooms/{lang}_{crawl}.bloom"
+    #     create_union_blooms_task(out_path, paths, credentials, id_token)
 
