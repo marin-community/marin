@@ -19,7 +19,7 @@ def search_cc_index(url, index_name=INDEX_NAME):
     encoded_url = quote_plus(url)
     index_url = f'{CC_INDEX_SERVER}CC-MAIN-{index_name}-index?url={encoded_url}&output=json'
     response = requests.get(index_url)
-    print("Response from CCI:", response.text)  # Output the response from the server
+    # print("Response from CCI:", response.text)  # Output the response from the server
     if response.status_code == 200:
         records = response.text.strip().split('\n')
         return [json.loads(record) for record in records]
