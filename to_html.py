@@ -5,6 +5,7 @@ import logging
 import os
 import sys
 
+import fsspec
 import lxml.etree as ET
 
 import trafilatura
@@ -80,40 +81,60 @@ def traf_xml_to_html(node):
 
 
 
+import html2text
+
+_global_markdown_converter = html2text.HTML2Text()
+_global_markdown_converter.ignore_links = False
+_global_markdown_converter.body_width = 0
+# TODO: html2text uses [code]...[/code] for code blocks. would prefer github markdown style
+# Could also use some kind of PL lang-id to highlight code blocks, but probably not super necessary
+_global_markdown_converter.mark_code = True  # Optionally convert code blocks to markdown
+_global_markdown_converter.include_sup_sub = True  # Optionally include <sup> and <sub> tags
+_global_markdown_converter.pad_tables = False
+
+
+def html_to_markdown(html):
+    html = str(html)
+    return _global_markdown_converter.handle(html)
+
+
+
 if __name__ == '__main__':
     orig_html_path = sys.argv[1]
 
-    with open(orig_html_path, "r") as f:
+    with fsspec.open(orig_html_path, "r") as f:
         html = f.read()
 
     out = trafilatura.bare_extraction(html, output_format="python",
-                                       include_links=True, include_comments=True,
-                                       include_images=True, include_tables=True,
-                                          as_dict=False)
+                                      include_links=True, include_comments=True,
+                                      include_images=True, include_tables=True,
+                                      as_dict=False)
 
-    node = out.body
+    if orig_html_path.endswith("/"):
+        orig_html_path = orig_html_path[:-1]
 
-    ET.indent(node, space="  ")
-    orig_node_string = ET.tostring(node, pretty_print=True).decode()
     base_name = os.path.basename(orig_html_path)
     base_name = os.path.splitext(base_name)[0]
 
-    with open(f"{base_name}.xml", "w") as f:
-        f.write(orig_node_string)
+    node = out.body
+    if not node:
+        logger.error("Trafilatura did not return a body")
+    else:
 
-    traf_xml_to_html(node)
-    with open(f"{base_name}.traf.html", "w") as f:
-        f.write(ET.tostring(node, pretty_print=True).decode())
+        ET.indent(node, space="  ")
+        orig_node_string = ET.tostring(node, pretty_print=True).decode()
 
-    # now markdown
-    import html2text
-    h = html2text.HTML2Text()
-    h.ignore_links = False
-    h.body_width = 0
-    markdown = h.handle(ET.tostring(node, pretty_print=True).decode())
+        with open(f"{base_name}.xml", "w") as f:
+            f.write(orig_node_string)
 
-    with open(f"{base_name}.traf.md", "w") as f:
-        print(markdown, file=f)
+        traf_xml_to_html(node)
+        with open(f"{base_name}.traf.html", "w") as f:
+            f.write(ET.tostring(node, pretty_print=True).decode())
+
+        markdown = html_to_markdown(ET.tostring(node, pretty_print=True).decode())
+
+        with open(f"{base_name}.traf.md", "w") as f:
+            print(markdown, file=f)
 
     import readabilipy
     reabilitied = readabilipy.simple_json_from_html_string(html, use_readability=True)
@@ -121,7 +142,7 @@ if __name__ == '__main__':
     # tree_str = ET.tostring(tree, pretty_print=True).decode()
     tree = reabilitied["content"]
     tree_str = str(tree)
-    markdown2 = h.handle(tree_str)
+    markdown2 = html_to_markdown(tree_str)
 
     title = reabilitied["title"]
 
