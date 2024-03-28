@@ -8,3 +8,4 @@ html2text
 rbloom
 gcsfs
 google-cloud-tasks
+mini-racer
