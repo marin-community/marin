@@ -9,3 +9,5 @@ rbloom
 gcsfs
 google-cloud-tasks
 mini-racer
+apache-beam
+regex

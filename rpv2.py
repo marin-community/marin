@@ -97,10 +97,10 @@ NUM_SHARDS = 5000
 _LANGUAGES = ("en", "de", "fr", "es", "it")
 
 
-def iterate_rpv2_file(snapshot, n, lang, part):
+def iterate_rpv2_file(snapshot, n, lang, part, url_base=_URL_BASE):
     base_tag = f"{snapshot}/{n:04d}/{lang}_{part}"
-    qs_file = f"{_URL_BASE}/quality_signals/{base_tag}.signals.json.gz"
-    dupe_file = f"{_URL_BASE}/duplicates/{base_tag}.duplicates.parquet"
+    qs_file = f"{url_base}/quality_signals/{base_tag}.signals.json.gz"
+    dupe_file = f"{url_base}/duplicates/{base_tag}.duplicates.parquet"
 
     # Load duplicates
     try:
@@ -112,6 +112,7 @@ def iterate_rpv2_file(snapshot, n, lang, part):
 
     try:
         with fsspec.open(qs_file, "r", compression="infer", encoding="utf-8") as qf:
+            print(qs_file)
             for row, line in enumerate(qf):
                 doc_id = f"{base_tag}.json.gz/{row}"
                 try:
@@ -122,6 +123,12 @@ def iterate_rpv2_file(snapshot, n, lang, part):
                     logger.exception(f"Error processing {doc_id}: {e}")
     except Exception as e:
         logger.exception(f"Error processing {qs_file}: {e}")
+
+
+def list_rpv2_parts(snapshot, lang):
+    for part in ("head", "middle", "tail"):
+        for n in range(NUM_SHARDS):
+            yield snapshot, n, lang, part
 
 
 def all_urls():

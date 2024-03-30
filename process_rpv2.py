@@ -5,6 +5,7 @@ import os
 from urllib.parse import urljoin
 
 import html2text
+import markdownify
 from bs4 import BeautifulSoup
 
 import trafilatura
@@ -34,7 +35,7 @@ def make_image_links_absolute(html_content, base_url):
             img["src"] = urljoin(base_url, img["src"])
     return str(soup)
 
-def process_single_doc(url, snapshot_id):
+def process_single_doc(url, snapshot_id, debug=False):
     # Implement or integrate your methods for fetching the WARC location and HTML content
     warc_location = search_cc_index(url, snapshot_id)
     if not warc_location:
@@ -46,8 +47,11 @@ def process_single_doc(url, snapshot_id):
         logger.warning(f"Failed to fetch content for URL: {url}")
         return None
 
-    html_content = make_image_links_absolute(html_content, url)
+    return extract_from_html(url, html_content, debug=debug)
 
+
+def extract_from_html(url, html_content, debug=False):
+    html_content = make_image_links_absolute(html_content, url)
     # trafilatura_result = trafilatura.extract(html_content, include_formatting=True, output_format="txt", include_images=True, include_links=True)
     # trafilatura_xml = trafilatura.extract(html_content, output_format="xml")
 
@@ -60,33 +64,43 @@ def process_single_doc(url, snapshot_id):
             prefix = f"# {cleaned_article['title']}\n\n"
         else:
             prefix = ""
-        if cleaned_article["byline"]:
-            prefix += f"Author: {cleaned_article['byline']}\n\n"
+        # if cleaned_article["byline"]:
+        #     prefix += f"Author: {cleaned_article['byline']}\n\n"
+
         if prefix:
             cleaned_md = prefix + cleaned_md
     else:
         logger.warning(f"Failed to extract content from URL: {url}")
         return None
-
-    return {
+    out = {
         "content": cleaned_md,
         "title": cleaned_article["title"],
         "byline": cleaned_article["byline"],
         "date": cleaned_article["date"],
         "plain_content": cleaned_article["plain_content"],
-        "original_html": html_content,
-        "readable_html": cleaned_html,
+        # "original_html": html_content,
+        # "readable_html": cleaned_html,
         # "patched_traf_content": trafilatura_result,
         # "traf_xml": trafilatura_xml,
     }
 
+    if debug:
+        out["original_html"] = html_content
+        out["readable_html"] = cleaned_html
 
-def process_files(snapshot, n, lang, part):
+        # try markdownify
+        md = markdownify.markdownify(cleaned_html)
+        out["markdownify_md"] = md
+
+    return out
+
+
+def process_files(snapshot, n, lang, part, debug=False):
    for doc_id, qs in iterate_rpv2_file(snapshot, n, lang, part):
         url = qs["metadata"]["url"]
         snapshot_id = qs["metadata"]["snapshot_id"]
         try:
-            cleaned_article = process_single_doc(url, snapshot_id)
+            cleaned_article = process_single_doc(url, snapshot_id, debug=debug)
             if cleaned_article:
                 # Yield the cleaned text along with other metadata and the quality signals
                 yield {
@@ -112,12 +126,14 @@ if __name__ == "__main__":
     os.makedirs(base_dir, exist_ok=True)
     for n in range(NUM_SHARDS):
         with gzip.open(f"{lang}_{n:04d}.jsonl.gz", "wt") as f:
-            for doc in process_files(snapshot, n, lang, part):
+            for doc in process_files(snapshot, n, lang, part, debug=True):
                 i += 1
                 f.write(json.dumps(doc) + "\n")
                 id = doc["id_int"]
                 os.makedirs(f"{base_dir}/{lang}_{n:04d}_{id}", exist_ok=True)
-                for key in ["content", "readable_html", "original_html"]:
+                for key in ["content", "readable_html", "original_html", "markdownify_md"]:
+                    if not key in doc:
+                        continue
                     suf = "md"
                     if "html" in key:
                         suf = "html"
