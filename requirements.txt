@@ -13,3 +13,4 @@ apache-beam
 regex
 tensorflow==2.16.1
 markdownify
+pytest
