@@ -28,9 +28,12 @@
 </xsl:template>
 
 <xsl:template match="m:math[@display='block'] | m:math[@mode='display'][not(@display)]">
-	<xsl:text>&#xA;\[&#xA;&#x9;</xsl:text>
+<!--	<xsl:text>&#xA;\[&#xA;&#x9;</xsl:text>-->
+	<!-- change for Github-Flavored Markdown https://docs.github.com/en/get-started/writing-on-github/working-with-advanced-formatting/writing-mathematical-expressions#writing-expressions-as-blocks -->
+	<xsl:text>&#xa;$$</xsl:text>
 	<xsl:apply-templates/>
-	<xsl:text>&#xA;\]</xsl:text>
+	<xsl:text>$$&#xa;</xsl:text>
+<!--	<xsl:text>&#xA;\]</xsl:text>-->
 </xsl:template>
 
 <!-- we sometimes add a dummy 'root' element to the MathML document -->
