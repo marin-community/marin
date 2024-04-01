@@ -1,4 +1,4 @@
-from to_html import minimal_markdown_escape
+from markdown import minimal_markdown_escape
 
 
 def test_always_escaped():
