@@ -114,6 +114,19 @@ def test_mathml_to_markdown():
         assert mathml_to_markdown(mathml) == expected
 
 
+def test_mathml_block():
+    """Tests conversion of MathML to markdown."""
+    test_cases = [
+        ("<math display='block'><mi>x</mi><mo>+</mo><mn>1</mn></math>", "\n$$x+1$$\n"),
+        # integration
+        ("<math display='block'><mo>&#x222B;</mo><mi>x</mi><mi>d</mi><mi>x</mi></math>", "\n$$\int xdx$$\n"),
+        # cauchy-schwarz inequality
+        ("<math display='block'><mrow><mo>(</mo><mrow><mfrac><mrow><mo>|</mo><mi>a</mi><mo>,</mo><mi>b</mi><mo>|</mo></mrow><mrow><mo>(</mo><mrow><msup><mi>a</mi><mn>2</mn></msup><mo>+</mo><msup><mi>b</mi><mn>2</mn></msup></mrow><mo>)</mo></mrow></mfrac></mrow><mo>)</mo><mo>^</mo><mn>2</mn></mrow></math>",
+         "\n$$\\left(\\frac{|a,b|}{\\left(a^2+b^2\\right)}\\right)^2$$\n"),
+    ]
+
+    for mathml, expected in test_cases:
+        assert mathml_to_markdown(mathml) == expected
 if __name__ == "__main__":
     pytest.main(["-v", "test_markdown.py"])
 
