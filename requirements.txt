@@ -11,3 +11,5 @@ google-cloud-tasks
 mini-racer
 apache-beam
 regex
+tensorflow==2.16.1
+markdownify

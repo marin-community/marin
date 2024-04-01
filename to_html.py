@@ -8,16 +8,18 @@ import sys
 
 import fsspec
 import markdownify
+import six
+from bs4 import Comment, Doctype, NavigableString
 from regex import regex
 
 import html2text
 from markdownify import MarkdownConverter
 import lxml.etree as ET
-import trafilatura
-from trafilatura.htmlprocessing import REND_TAG_MAPPING
+# import trafilatura
+# from trafilatura.htmlprocessing import REND_TAG_MAPPING
 
 
-REVERSE_REND_TAG_MAPPING = {v: k for k, v in REND_TAG_MAPPING.items()}
+# REVERSE_REND_TAG_MAPPING = {v: k for k, v in REND_TAG_MAPPING.items()}
 
 logger = logging.getLogger(__name__)
 
@@ -185,7 +187,11 @@ def minimal_markdown_escape(text):
 
 
 def to_markdown(tree):
-    return MyMarkdownConverter().convert(tree)
+    text = MyMarkdownConverter().convert(tree)
+    # cleanup: replace nbsp as space
+    # this isn't quite right if we preserve html in places, but we currently are not
+    text = text.replace("\xa0", " ")
+    return text
 
 
 # reference: https://github.github.com/gfm/
@@ -239,8 +245,6 @@ class MyMarkdownConverter(MarkdownConverter):
                 text += '\n'
         return text
 
-
-
     def convert_tr(self, el, text, convert_as_inline):
         # this is also mostly copied from the parent class
         # but the logic for guessing a th isn't quite right
@@ -276,16 +280,87 @@ class MyMarkdownConverter(MarkdownConverter):
             overline += '| ' + ' | '.join(['---'] * len(cells)) + ' |' + '\n'
         return overline + '|' + text + '\n' + underline
 
+    def process_tag(self, node, convert_as_inline, children_only=False):
+        text = ''
+
+        # markdown headings or cells can't include
+        # block elements (elements w/newlines)
+        isHeading = markdownify.html_heading_re.match(node.name) is not None
+        isCell = node.name in ['td', 'th']
+        convert_children_as_inline = convert_as_inline
+
+        if not children_only and (isHeading or isCell):
+            convert_children_as_inline = True
+
+        # Remove whitespace-only textnodes in purely nested nodes
+        def is_nested_node(el):
+            return el and el.name in ['ol', 'ul', 'li',
+                                      'table', 'thead', 'tbody', 'tfoot',
+                                      'tr', 'td', 'th']
+
+        if is_nested_node(node):
+            for el in node.children:
+                # Only extract (remove) whitespace-only text node if any of the
+                # conditions is true:
+                # - el is the first element in its parent
+                # - el is the last element in its parent
+                # - el is adjacent to an nested node
+                can_extract = (not el.previous_sibling
+                               or not el.next_sibling
+                               or is_nested_node(el.previous_sibling)
+                               or is_nested_node(el.next_sibling))
+                if (isinstance(el, NavigableString)
+                        and six.text_type(el).strip() == ''
+                        and can_extract):
+                    el.extract()
+
+        # Convert the children first
+        for el in node.children:
+            if isinstance(el, Comment) or isinstance(el, Doctype):
+                continue
+            elif isinstance(el, NavigableString):
+                next_text = self.process_text(el)
+                text = self.join_text(text, next_text)
+            else:
+                text = self.join_text(text, self.process_tag(el, convert_children_as_inline))
+
+        if not children_only:
+            convert_fn = getattr(self, 'convert_%s' % node.name, None)
+            if convert_fn and self.should_convert_tag(node.name):
+                text = convert_fn(node, text, convert_as_inline)
+
+        return text
+
+
+    def join_text(self, text1, text2):
+        # mostly want to remove extra newlines
+        # in MD, two newlines is a paragraph break, which is the most we want
+        # so if text1 already has two newlines, we don't want to add another
+        if text1.endswith('\n\n'):
+            if text2.startswith('\n\n'):
+                text2 = text2[2:]
+            elif text2.startswith('\n'):
+                text2 = text2[1:]
+        elif text1.endswith('\n'):
+            if text2.startswith('\n\n'):
+                text2 = text2[1:]
+            elif text2.startswith('\n'):
+                text2 = text2[0:]
+        return text1 + text2
+
+
+
+
 
 if __name__ == '__main__':
     for orig_html_path in sys.argv[1:]:
         with fsspec.open(orig_html_path, "r") as f:
             html = f.read()
 
-        out = trafilatura.bare_extraction(html, output_format="python",
-                                          include_links=True, include_comments=True,
-                                          include_images=True, include_tables=True,
-                                          as_dict=False)
+        # out = trafilatura.bare_extraction(html, output_format="python",
+        #                                   include_links=True, include_comments=True,
+        #                                   include_images=True, include_tables=True,
+        #                                   as_dict=False)
 
         if orig_html_path.endswith("/"):
             orig_html_path = orig_html_path[:-1]
@@ -293,25 +368,25 @@ if __name__ == '__main__':
         base_name = os.path.basename(orig_html_path)
         base_name = os.path.splitext(base_name)[0]
 
-        node = out.body
-        if not node:
-            logger.error("Trafilatura did not return a body")
-        else:
-
-            ET.indent(node, space="  ")
-            orig_node_string = ET.tostring(node, pretty_print=True).decode()
-
-            with open(f"{base_name}.xml", "w") as f:
-                f.write(orig_node_string)
-
-            traf_xml_to_html(node)
-            with open(f"{base_name}.traf.html", "w") as f:
-                f.write(ET.tostring(node, pretty_print=True).decode())
-
-            markdown = html_to_markdown(ET.tostring(node, pretty_print=True).decode())
-
-            with open(f"{base_name}.traf.md", "w") as f:
-                print(markdown, file=f)
+        # node = out.body
+        # if not node:
+        #     logger.error("Trafilatura did not return a body")
+        # else:
+        #
+        #     ET.indent(node, space="  ")
+        #     orig_node_string = ET.tostring(node, pretty_print=True).decode()
+        #
+        #     with open(f"{base_name}.xml", "w") as f:
+        #         f.write(orig_node_string)
+        #
+        #     traf_xml_to_html(node)
+        #     with open(f"{base_name}.traf.html", "w") as f:
+        #         f.write(ET.tostring(node, pretty_print=True).decode())
+        #
+            # markdown = html_to_markdown(ET.tostring(node, pretty_print=True).decode())
+            #
+            # with open(f"{base_name}.traf.md", "w") as f:
+            #     print(markdown, file=f)
 
         import readabilipy
         reabilitied = readabilipy.simple_json_from_html_string(html, use_readability=True)
