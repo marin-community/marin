@@ -1,16 +1,32 @@
 import logging
+import os
 import re
 
 import markdownify
 import six
 from bs4 import Comment, Doctype, NavigableString
 from markdownify import MarkdownConverter
+import lxml.etree as ET
 
 from regex import regex
 
 import html2text
 
 logger = logging.getLogger(__name__)
+
+# TODOs:
+# - [ ] add more tests of core functionality (tables, lists, etc)
+# - [ ] add code block lang id
+# - [ ] add latex math support
+
+def to_markdown(html):
+    text = MyMarkdownConverter().convert(html)
+    # cleanup: replace nbsp as space
+    # this isn't quite right if we preserve html in places, but we currently are not doing that
+    text = text.replace("\xa0", " ")
+    return text
+
+
 _global_html2text = html2text.HTML2Text()
 
 _global_html2text.ignore_links = False
@@ -98,13 +114,6 @@ def minimal_markdown_escape(text):
 
     return text
 
-
-def to_markdown(tree):
-    text = MyMarkdownConverter().convert(tree)
-    # cleanup: replace nbsp as space
-    # this isn't quite right if we preserve html in places, but we currently are not
-    text = text.replace("\xa0", " ")
-    return text
 
 
 class MyMarkdownConverter(MarkdownConverter):
@@ -259,3 +268,39 @@ class MyMarkdownConverter(MarkdownConverter):
             elif text2.startswith('\n'):
                 text2 = text2[0:]
         return text1 + text2
+
+
+_xslt_mml = None
+
+_xslt_mml_path = os.path.join(os.path.dirname(__file__), "xsl_yarosh/mmltex.xsl")
+
+
+
+# cf https://github.com/oerpub/mathconverter/blob/master/converter.py#L14
+# (we've modified the xslt to output simpler markdown when possible
+def mathml_to_markdown(mathml_node):
+    global _xslt_mml
+    if _xslt_mml is None:
+        _xslt_mml = ET.parse(_xslt_mml_path)
+
+    # mathml_node is a bs4 element. we need to convert it to an lxml element
+    mml_str = str(mathml_node)
+    # often times, the mathml doesn't have the xmlns, which lxml needs
+    # need to also handle display being present or not
+    # this is hacky but probably enough
+    if 'xmlns' not in mml_str:
+        if 'display' in mml_str:
+            mml_str = mml_str.replace('<math', '<math xmlns="http://www.w3.org/1998/Math/MathML"')
+        else:
+            # default is inline
+            mml_str = mml_str.replace('<math', '<math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"')
+
+    mml_dom = ET.fromstring(mml_str)
+
+    transform = ET.XSLT(_xslt_mml)
+    try:
+        mml_dom = transform(mml_dom)
+    except Exception as e:
+        print(transform.error_log)
+        raise e
+    return str(mml_dom)
