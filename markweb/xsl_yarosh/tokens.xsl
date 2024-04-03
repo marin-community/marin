@@ -74,23 +74,23 @@
 </xsl:template>
 
 <xsl:template match="m:mspace">
-	<xsl:text>\phantom{\rule</xsl:text>
-	<xsl:if test="@depth">
-		<xsl:text>[-</xsl:text>
-		<xsl:value-of select="@depth"/>
-		<xsl:text>]</xsl:text>
-	</xsl:if>
-	<xsl:text>{</xsl:text>
-	<xsl:if test="not(@width)">
-		<xsl:text>0ex</xsl:text>
-	</xsl:if>
-	<xsl:value-of select="@width"/>
-	<xsl:text>}{</xsl:text>
-	<xsl:if test="not(@height)">
-		<xsl:text>0ex</xsl:text>
-	</xsl:if>
-	<xsl:value-of select="@height"/>
-	<xsl:text>}}</xsl:text>
+<!--	<xsl:text>\phantom{\rule</xsl:text>-->
+<!--	<xsl:if test="@depth">-->
+<!--		<xsl:text>[-</xsl:text>-->
+<!--		<xsl:value-of select="@depth"/>-->
+<!--		<xsl:text>]</xsl:text>-->
+<!--	</xsl:if>-->
+<!--	<xsl:text>{</xsl:text>-->
+<!--	<xsl:if test="not(@width)">-->
+<!--		<xsl:text>0ex</xsl:text>-->
+<!--	</xsl:if>-->
+<!--	<xsl:value-of select="@width"/>-->
+<!--	<xsl:text>}{</xsl:text>-->
+<!--	<xsl:if test="not(@height)">-->
+<!--		<xsl:text>0ex</xsl:text>-->
+<!--	</xsl:if>-->
+<!--	<xsl:value-of select="@height"/>-->
+<!--	<xsl:text>}}</xsl:text>-->
 </xsl:template>
 
 <xsl:template name="ms">

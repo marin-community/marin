@@ -1,6 +1,6 @@
 import pytest
 
-from markdown import mathml_to_markdown, minimal_markdown_escape
+from markweb.markdown import mathml_to_markdown, minimal_markdown_escape
 
 
 def test_always_escaped():
@@ -23,6 +23,8 @@ def test_no_escaping():
         ("-normal hyphen-", "-normal hyphen-"),
         ("+normal plus+", "+normal plus+"),
         ("Normal line with #", "Normal line with #"),
+        # don't escape @, even in links
+        ("[@user](https://example.com)", r"\[@user\](https://example.com)"),
     ]
     for text, expected in test_cases:
         assert minimal_markdown_escape(text) == expected

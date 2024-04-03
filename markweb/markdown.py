@@ -202,6 +202,9 @@ class MyMarkdownConverter(MarkdownConverter):
         return overline + '|' + text + '\n' + underline
 
     def process_tag(self, node, convert_as_inline, children_only=False):
+        # skip aria-hidden elements
+        if node.get('aria-hidden') == 'true':
+            return ''
         text = ''
 
         # markdown headings or cells can't include
@@ -268,6 +271,11 @@ class MyMarkdownConverter(MarkdownConverter):
             elif text2.startswith('\n'):
                 text2 = text2[0:]
         return text1 + text2
+
+    def convert_math(self, el, text, convert_as_inline):
+        x = mathml_to_markdown(el)
+        return x
+
 
 
 _xslt_mml = None

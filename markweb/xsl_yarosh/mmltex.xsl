@@ -22,9 +22,9 @@
 <xsl:strip-space elements="m:*"/>
 
 <xsl:template match="m:math[not(@mode) or @mode='inline'][not(@display)] | m:math[@display='inline']">
-	<xsl:text>&#x00024; </xsl:text>
+	<xsl:text>&#x00024;`</xsl:text>
 	<xsl:apply-templates/>
-	<xsl:text>&#x00024;</xsl:text>
+	<xsl:text>`&#x00024;</xsl:text>
 </xsl:template>
 
 <xsl:template match="m:math[@display='block'] | m:math[@mode='display'][not(@display)]">
@@ -34,11 +34,6 @@
 	<xsl:apply-templates/>
 	<xsl:text>$$&#xa;</xsl:text>
 <!--	<xsl:text>&#xA;\]</xsl:text>-->
-</xsl:template>
-
-<!-- we sometimes add a dummy 'root' element to the MathML document -->
-<xsl:template match="m:root">
-	<xsl:apply-templates/>
 </xsl:template>
 
 
