@@ -6,15 +6,18 @@ import sys
 
 import fsspec
 
-from markdown import html2text_markdown, to_markdown
-
-
-
+from markweb.markdown import html2text_markdown, to_markdown
 
 
 if __name__ == '__main__':
     for orig_html_path in sys.argv[1:]:
-        with fsspec.open(orig_html_path, "r") as f:
+        # being a little sneaky. not really doing crawling.
+        with fsspec.open(orig_html_path, "r",
+                         client_kwargs={
+                             "headers": {
+                                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3"
+                                }
+                         }) as f:
             html = f.read()
 
         # out = trafilatura.bare_extraction(html, output_format="python",

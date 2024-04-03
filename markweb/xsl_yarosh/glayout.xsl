@@ -145,9 +145,10 @@
 </xsl:template>
 
 <xsl:template match="m:mphantom">
-	<xsl:text>\phantom{</xsl:text>
-	<xsl:apply-templates/>
-	<xsl:text>}</xsl:text>
+	<!-- GFM doesn't support \phantom{} -->
+<!--	<xsl:text>\phantom{</xsl:text>-->
+<!--	<xsl:apply-templates/>-->
+<!--	<xsl:text>}</xsl:text>-->
 </xsl:template>
 
 <xsl:template match="m:menclose">
