@@ -124,11 +124,57 @@ def iterate_rpv2_file(snapshot, n, lang, part, url_base=_URL_BASE):
     except Exception as e:
         logger.exception(f"Error processing {qs_file}: {e}")
 
-
 def list_rpv2_parts(snapshot, lang):
     for part in ("head", "middle", "tail"):
         for n in range(NUM_SHARDS):
             yield snapshot, n, lang, part
+
+
+def gopher_rules_pass_with_rpv2(signals) -> tuple[bool, str]:
+    """Function returns True if the sample complies with Gopher rules using pre-computed RPV2 signals."""
+
+    # Rule 1: Number of words between 50 and 100,000
+    if signals["rps_doc_word_count"][0][2] < 50:
+        return False, "word count too low"
+    if signals["rps_doc_word_count"][0][2] > 100000:
+        return False, "word count too high"
+
+    # Rule 2: Mean word length between 3 and 10
+    if signals["rps_doc_mean_word_length"][0][2] < 3:
+        return False, "mean word length too low"
+    if signals["rps_doc_mean_word_length"][0][2] > 10:
+        return False, "mean word length too high"
+
+    # Rule 3: Symbol to word ratio below 0.1
+    if signals["rps_doc_symbol_to_word_ratio"][0][2] > 0.1:
+        return False, "symbol to word ratio too high"
+
+    # Rule 4: Less than 90% of lines should start without a bullet point
+    n_lines = signals["ccnet_nlines"][0][2]
+    n_lines_bulletpoint_start = sum([ln[2] for ln in signals["rps_lines_start_with_bulletpoint"]])
+    if n_lines_bulletpoint_start / n_lines > 0.9:
+        return False, "too many lines start with bullet points"
+
+    # Rule 5: The ratio between characters in the most frequent 2-gram and the total number of characters must be below 0.2
+    if signals["rps_doc_frac_chars_top_2gram"][0][2] > 0.2:
+        return False, "top 2-gram ratio too high"
+
+    # Check fraction of non-alphabetical words should be less than 80%
+    if signals["rps_doc_frac_no_alph_words"][0][2] > 0.8:
+        return False, "too many non-alphabetical words"
+
+    # Check for duplicate n-grams fractions (5-10 grams)
+    for n in range(5, 11):  # from 5-grams to 10-grams
+        if signals.get(f"rps_doc_frac_chars_dupe_{n}grams", [[0, 0, 0]])[0][2] > 0.15 - 0.01 * (n - 5):
+            return False, f"too many duplicate {n}-grams"
+
+    # top 2-, 3-, 4-grams should be less than 0.2 - 0.02 * (n-2)
+    for n in range(2, 5):
+        if signals.get(f"rps_doc_frac_chars_top_{n}gram", [[0, 0, 0]])[0][2] > 0.2 - 0.02 * (n - 2):
+            return False, f"top {n}-gram ratio too high"
+
+    return True, "ok"
+
 
 
 def all_urls():
@@ -145,11 +191,20 @@ def all_urls():
 
 
 if __name__ == "__main__":
-    import csv
-    out = csv.writer(open("all_urls.csv", "w"))
-    out.writerow(["url"])
-    for url in all_urls():
-        out.writerow([url])
+    # import csv
+    # out = csv.writer(open("all_urls.csv", "w"))
+    # out.writerow(["url"])
+    # for url in all_urls():
+    #     out.writerow([url])
+    i = 0
+    for snapshot, n, lang, part in list_rpv2_parts("2023-14", "en"):
+        for doc_id, qs in iterate_rpv2_file(snapshot, n, lang, part):
+            passes, reason = gopher_rules_pass_with_rpv2(qs["quality_signals"])
+            print(passes, reason, qs["metadata"]["url"])
+            i += 1
+            if i > 400:
+                break
+        break
 
 
 

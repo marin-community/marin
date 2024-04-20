@@ -17,8 +17,16 @@ class Model(object):
         self.mapping = {v: k for k, v in self.forward_mapping.items()}
 
     def predict(self, text):
-        return predict(self.model, self.mapping, text)
+        return _predict(self.model, self.mapping, text)
 
+
+_DEFAULT_MODEL = None
+
+def predict(text: str) -> list[tuple[str, float]]:
+    global _DEFAULT_MODEL
+    if _DEFAULT_MODEL is None:
+        _DEFAULT_MODEL = Model()
+    return _DEFAULT_MODEL.predict(text)
 
 def load_model(saved_model_dir: str):
     """Load a Tensorflow saved model"""
@@ -34,7 +42,7 @@ def load_language_mapping(mapping_file: str) -> dict[str, str]:
 
 
 
-def predict(
+def _predict(
     saved_model,
     mapping: dict[str, str],
     text: str
