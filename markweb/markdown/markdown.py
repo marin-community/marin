@@ -20,7 +20,9 @@ logger = logging.getLogger(__name__)
 # - [x] add latex math support
 
 def to_markdown(html):
-    text = MyMarkdownConverter().convert(html)
+    if isinstance(html, str):
+        html = BeautifulSoup(html, "html.parser")
+    text = MyMarkdownConverter().convert_soup(html)
     # cleanup: replace nbsp as space
     # this isn't quite right if we preserve html in places, but we currently are not doing that
     text = text.replace("\xa0", " ")
@@ -126,10 +128,6 @@ class MyMarkdownConverter(MarkdownConverter):
             **kwargs
         }
         super().__init__(**kwargs)
-
-    def convert(self, html):
-        soup = BeautifulSoup(html, 'html.parser')
-        return self.convert_soup(soup)
 
 
     # markdownify doesn't allow difference pre- and post- text for converting sub and sup
