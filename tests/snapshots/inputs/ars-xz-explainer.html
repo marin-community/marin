@@ -1,0 +1,1089 @@
+<!DOCTYPE html>
+<html lang="en-us">
+
+<head>
+  <title>What we know about the xz Utils backdoor that almost infected the world | Ars Technica</title>
+<script type="text/javascript">
+  ars = {"ASSETS":"https:\/\/cdn.arstechnica.net\/wp-content\/themes\/ars\/assets","HOME_URL":"https:\/\/arstechnica.com","CIVIS":"\/civis","THEME":"light","VIEW":"grid","MOBILE":false,"SUBSCRIBER":true,"PLUS_PLUS":false,"LOGGED":true,"USER_ID":753253,"ENV":"production","AD":{"tags":["backdoors","llinux","supply-chain-attacks"],"channel":"security","slug":"what-we-know-about-the-xz-utils-backdoor-that-almost-infected-the-world","template_type":"article","queue":[],"server":"production"},"TOTAL":112202,"UNREAD":0,"RECENT":[2014470,2014411,2014327,2014318,2014104,2014269,2014256,2014274,2014290,2014220,2014264,2014246,2014208,2013803,2014076,2013950,2014027,2014074,2014073,2014018,2014008,2013955,2013957,2013961,2009827],"LOGINS":true,"CROSS":false,"PARSELY":"arstechnica.com","COMMENTS":false,"HOMEPAGE":false,"SITE":1,"READY":[],"SHOW_ADS":false,"IMG_PROXY":"https:\/\/cdn.arstechnica.net\/i\/","CATEGORY":"security","PAGETITLE":"","ZEN_MODE":false,"MEMO_PID":"62012a7a19351c07620394e0"};
+</script>
+<link rel="stylesheet" type="text/css" media="all" href="https://cdn.arstechnica.net/wp-content/themes/ars/assets/css/main-1eae76c908.css" />
+    <link rel="alternate" type="application/rss+xml" href="http://feeds.arstechnica.com/arstechnica/index" />
+  <link rel="shortcut icon" href="https://cdn.arstechnica.net/favicon.ico" />
+  <link rel="icon" type="image/x-icon" href="https://cdn.arstechnica.net/favicon.ico" />
+  <link rel="apple-touch-icon" sizes="180x180" href="https://cdn.arstechnica.net/wp-content/themes/ars/assets/img/ars-ios-icon-d9a45f558c.png" />
+  <link rel="mask-icon" href="https://cdn.arstechnica.net/wp-content/themes/ars/assets/img/ars-macos-safari-8997f76b21.svg" color="#ff4e00">
+  <link rel="icon" sizes="192x192" href="https://cdn.arstechnica.net/wp-content/themes/ars/assets/img/material-ars-db41652381.png" />
+  <link rel="me" href="https://mastodon.social/@arstechnica" />
+
+    <meta name="application-name" content="Ars Technica"/>
+  <meta name="msapplication-starturl" content="http://arstechnica.com/"/>
+  <meta name="msapplication-tooltip" content="Ars Technica: Serving the technologist for 1.2 decades"/>
+  <meta name="msapplication-task" content="name=News;action-uri=http://arstechnica.com/;icon-uri=https://cdn.arstechnica.net/favicon.ico"/>
+  <meta name="msapplication-task" content="name=Features;action-uri=http://arstechnica.com/features/;icon-uri=https://cdn.arstechnica.net/ie-jump-menu/jump-features.ico"/>
+  <meta name="msapplication-task" content="name=OpenForum;action-uri=http://arstechnica.com/civis/;icon-uri=https://cdn.arstechnica.net/ie-jump-menu/jump-forum.ico"/>
+  <meta name="msapplication-task" content="name=Subscribe;action-uri=http://arstechnica.com/subscriptions/;icon-uri=https://cdn.arstechnica.net/ie-jump-menu/jump-subscribe.ico"/>
+
+
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+  <meta name="advertising" content="ask" />
+  <meta property="fb:admins" content="592156917" />
+  <meta property="fb:admins" content="108943" />
+  <meta property="fb:pages" content="19374573752" />
+
+  <meta name="format-detection" content="telephone=no" />
+  <meta name="theme-color" content="#000000" />
+
+  
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+
+  <!-- cache hit 307:single/meta:cecf63838af3f8a4a2ec94340792c586 -->
+<meta name='parsely-page' content='{"title":"What we know about the xz Utils backdoor that almost infected the world","link":"https:\/\/arstechnica.com\/security\/2024\/04\/what-we-know-about-the-xz-utils-backdoor-that-almost-infected-the-world\/","type":"post","author":"Dan Goodin","post_id":2013894,"pub_date":"2024-04-01T06:55:22Z","section":"Security","tags":["backdoors","llinux","supply-chain-attacks","type: report"],"image_url":"https:\/\/cdn.arstechnica.net\/wp-content\/uploads\/2024\/04\/malware-150x150.jpg"}'>
+<meta name='parsely-metadata' content='{"type":"report","title":"What we know about the xz Utils backdoor that almost infected the world","post_id":2013894,"lower_deck":"Malicious updates made to a ubiquitous tool were a few weeks away from going mainstream.","image_url":"https:\/\/cdn.arstechnica.net\/wp-content\/uploads\/2024\/04\/malware-150x150.jpg","listing_image_url":"https:\/\/cdn.arstechnica.net\/wp-content\/uploads\/2024\/04\/malware-360x200.jpg"}'>
+
+  <link rel="canonical" href="https://arstechnica.com/security/2024/04/what-we-know-about-the-xz-utils-backdoor-that-almost-infected-the-world/" />
+
+<link rel="shorturl" href="https://arstechnica.com/?p=2013894" />
+
+<meta name="description" content="Malicious updates made to a ubiquitous tool were a few weeks away from going mainstream." />
+
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:url" content="https://arstechnica.com/security/2024/04/what-we-know-about-the-xz-utils-backdoor-that-almost-infected-the-world/">
+<meta name="twitter:title" content="What we know about the xz Utils backdoor that almost infected the world">
+<meta name="twitter:description" content="Malicious updates made to a ubiquitous tool were a few weeks away from going mainstream.">
+
+<meta name="twitter:site" content="@arstechnica">
+<meta name="twitter:domain" content="arstechnica.com">
+
+<meta property="og:site_name" content="Ars Technica" />
+
+<meta name="twitter:image:src" content="https://cdn.arstechnica.net/wp-content/uploads/2024/04/malware-760x380.jpg">
+  <meta name="twitter:image:width" content="760">
+  <meta name="twitter:image:height" content="380">
+
+
+<meta property="og:url" content="https://arstechnica.com/security/2024/04/what-we-know-about-the-xz-utils-backdoor-that-almost-infected-the-world/" />
+<meta property="og:title" content="What we know about the xz Utils backdoor that almost infected the world" />
+<meta property="og:image" content="https://cdn.arstechnica.net/wp-content/uploads/2024/04/malware-760x380.jpg" />
+<meta property="og:description" content="Malicious updates made to a ubiquitous tool were a few weeks away from going mainstream." />
+<meta property="og:type" content="article" />
+  <!-- cache hit 307:single/header:cecf63838af3f8a4a2ec94340792c586 -->
+        
+
+<!-- Start Headline A/B -->
+<script type="text/javascript">
+  class ABTest {
+    constructor(post_id, init_method) {
+      this.post_id = post_id;
+      this.ajaxurl = '/services/ars-ajax-handler.php';
+      this.expireDays = 1 / 48; // 30 min
+      this.group = this.getGroup();
+      this.uid = this.getUid();
+      this.init_method = init_method;
+      this.setTitle();
+
+      if (this.init_method === 'click') {
+        this.click();
+      } else {
+        this.impression();
+      }
+    }
+
+    setCookie(name, value, days) {
+      var expires = "";
+      if (days) {
+        var date = new Date();
+        date.setTime(date.getTime() + (days * 24 * 60 * 60 * 1000));
+        expires = "; expires=" + date.toUTCString();
+      }
+      document.cookie = name + "=" + (value || "") + expires + "; path=/";
+    }
+
+    getCookie(name) {
+      var nameEQ = name + "=";
+      var ca = document.cookie.split(';');
+      for (var i = 0; i < ca.length; i++) {
+        var c = ca[i];
+        while (c.charAt(0) == ' ') c = c.substring(1, c.length);
+        if (c.indexOf(nameEQ) == 0) return c.substring(nameEQ.length, c.length);
+      }
+      return null;
+    }
+
+    // Retrieves a unique id for determining whether the event should be recorded
+    getUid() {
+      var uid = this.getCookie('ars_ab_' + this.post_id + '_uid');
+      if (!uid) {
+        uid = (Math.random() + 1).toString(36).substring(2, 7);
+        this.setCookie('ars_ab_' + this.post_id + '_uid', uid, this.expireDays);
+      }
+      return uid;
+    };
+
+    // Places the user in either A or B for this post id
+    getGroup() {
+      var group = this.getCookie('ars_ab_' + this.post_id + '_group');
+      if (!group) {
+        group = String.fromCharCode(Math.floor(Math.random() * 2) + 65).toLowerCase();
+        this.setCookie('ars_ab_' + this.post_id + '_group', group, this.expireDays);
+      }
+      return group;
+    };
+
+    // Records a headline impression (from homepage or other listing)
+    impression() {
+      // Send fake ajax
+      var params = {
+        nonce: 'ce468b7abb',
+        action: 'ars_ab_impression',
+        id: this.post_id,
+        group: this.group,
+        uid: this.uid,
+        ts: (new Date()).getTime()
+      };
+      var url = this.ajaxurl + '?' + this.encodeParams(params);
+      document.write('\x3Cscript type="text/javascript" src="' + url + '">\x3C/script>');
+    };
+
+    // Records a headline click from the actual post page
+    click() {
+      // Send fake ajax
+      var params = {
+        nonce: '4ca4ab1e76',
+        action: 'ars_ab_click',
+        id: this.post_id,
+        group: this.group,
+        uid: this.uid,
+        ts: (new Date()).getTime()
+      };
+      var url = this.ajaxurl + '?' + this.encodeParams(params);
+      document.write('\x3Cscript type="text/javascript" src="' + url + '">\x3C/script>');
+    };
+
+    // If user is in B group, dynamically set title
+    setTitle() {
+      if (this.group == 'b') {
+        var span = document.getElementById('ars_ab_' + this.post_id);
+        var title = span.parentNode;
+        title.innerHTML = span.getAttribute('data-title-b');
+      }
+    };
+
+    encodeParams(data) {
+      var ret = [];
+      for (var d in data)
+        ret.push(encodeURIComponent(d) + "=" + encodeURIComponent(data[d]));
+      return ret.join("&");
+    };
+
+  };
+</script>
+<!-- End Headline A/B -->
+  <meta name='robots' content='max-image-preview:large' />
+<link rel='dns-prefetch' href='//s.w.org' />
+<link rel='dns-prefetch' href='//arstechnica-apps.s3.amazonaws.com' />
+<link rel='stylesheet' id='wp-block-library-css'  href='https://cdn.arstechnica.net/wp/wp-includes/css/dist/block-library/style.min.css?ver=6.0.3' type='text/css' media='all' />
+<style id='global-styles-inline-css' type='text/css'>
+body{--wp--preset--color--black: #000000;--wp--preset--color--cyan-bluish-gray: #abb8c3;--wp--preset--color--white: #ffffff;--wp--preset--color--pale-pink: #f78da7;--wp--preset--color--vivid-red: #cf2e2e;--wp--preset--color--luminous-vivid-orange: #ff6900;--wp--preset--color--luminous-vivid-amber: #fcb900;--wp--preset--color--light-green-cyan: #7bdcb5;--wp--preset--color--vivid-green-cyan: #00d084;--wp--preset--color--pale-cyan-blue: #8ed1fc;--wp--preset--color--vivid-cyan-blue: #0693e3;--wp--preset--color--vivid-purple: #9b51e0;--wp--preset--gradient--vivid-cyan-blue-to-vivid-purple: linear-gradient(135deg,rgba(6,147,227,1) 0%,rgb(155,81,224) 100%);--wp--preset--gradient--light-green-cyan-to-vivid-green-cyan: linear-gradient(135deg,rgb(122,220,180) 0%,rgb(0,208,130) 100%);--wp--preset--gradient--luminous-vivid-amber-to-luminous-vivid-orange: linear-gradient(135deg,rgba(252,185,0,1) 0%,rgba(255,105,0,1) 100%);--wp--preset--gradient--luminous-vivid-orange-to-vivid-red: linear-gradient(135deg,rgba(255,105,0,1) 0%,rgb(207,46,46) 100%);--wp--preset--gradient--very-light-gray-to-cyan-bluish-gray: linear-gradient(135deg,rgb(238,238,238) 0%,rgb(169,184,195) 100%);--wp--preset--gradient--cool-to-warm-spectrum: linear-gradient(135deg,rgb(74,234,220) 0%,rgb(151,120,209) 20%,rgb(207,42,186) 40%,rgb(238,44,130) 60%,rgb(251,105,98) 80%,rgb(254,248,76) 100%);--wp--preset--gradient--blush-light-purple: linear-gradient(135deg,rgb(255,206,236) 0%,rgb(152,150,240) 100%);--wp--preset--gradient--blush-bordeaux: linear-gradient(135deg,rgb(254,205,165) 0%,rgb(254,45,45) 50%,rgb(107,0,62) 100%);--wp--preset--gradient--luminous-dusk: linear-gradient(135deg,rgb(255,203,112) 0%,rgb(199,81,192) 50%,rgb(65,88,208) 100%);--wp--preset--gradient--pale-ocean: linear-gradient(135deg,rgb(255,245,203) 0%,rgb(182,227,212) 50%,rgb(51,167,181) 100%);--wp--preset--gradient--electric-grass: linear-gradient(135deg,rgb(202,248,128) 0%,rgb(113,206,126) 100%);--wp--preset--gradient--midnight: linear-gradient(135deg,rgb(2,3,129) 0%,rgb(40,116,252) 100%);--wp--preset--duotone--dark-grayscale: url('#wp-duotone-dark-grayscale');--wp--preset--duotone--grayscale: url('#wp-duotone-grayscale');--wp--preset--duotone--purple-yellow: url('#wp-duotone-purple-yellow');--wp--preset--duotone--blue-red: url('#wp-duotone-blue-red');--wp--preset--duotone--midnight: url('#wp-duotone-midnight');--wp--preset--duotone--magenta-yellow: url('#wp-duotone-magenta-yellow');--wp--preset--duotone--purple-green: url('#wp-duotone-purple-green');--wp--preset--duotone--blue-orange: url('#wp-duotone-blue-orange');--wp--preset--font-size--small: 13px;--wp--preset--font-size--medium: 20px;--wp--preset--font-size--large: 36px;--wp--preset--font-size--x-large: 42px;}.has-black-color{color: var(--wp--preset--color--black) !important;}.has-cyan-bluish-gray-color{color: var(--wp--preset--color--cyan-bluish-gray) !important;}.has-white-color{color: var(--wp--preset--color--white) !important;}.has-pale-pink-color{color: var(--wp--preset--color--pale-pink) !important;}.has-vivid-red-color{color: var(--wp--preset--color--vivid-red) !important;}.has-luminous-vivid-orange-color{color: var(--wp--preset--color--luminous-vivid-orange) !important;}.has-luminous-vivid-amber-color{color: var(--wp--preset--color--luminous-vivid-amber) !important;}.has-light-green-cyan-color{color: var(--wp--preset--color--light-green-cyan) !important;}.has-vivid-green-cyan-color{color: var(--wp--preset--color--vivid-green-cyan) !important;}.has-pale-cyan-blue-color{color: var(--wp--preset--color--pale-cyan-blue) !important;}.has-vivid-cyan-blue-color{color: var(--wp--preset--color--vivid-cyan-blue) !important;}.has-vivid-purple-color{color: var(--wp--preset--color--vivid-purple) !important;}.has-black-background-color{background-color: var(--wp--preset--color--black) !important;}.has-cyan-bluish-gray-background-color{background-color: var(--wp--preset--color--cyan-bluish-gray) !important;}.has-white-background-color{background-color: var(--wp--preset--color--white) !important;}.has-pale-pink-background-color{background-color: var(--wp--preset--color--pale-pink) !important;}.has-vivid-red-background-color{background-color: var(--wp--preset--color--vivid-red) !important;}.has-luminous-vivid-orange-background-color{background-color: var(--wp--preset--color--luminous-vivid-orange) !important;}.has-luminous-vivid-amber-background-color{background-color: var(--wp--preset--color--luminous-vivid-amber) !important;}.has-light-green-cyan-background-color{background-color: var(--wp--preset--color--light-green-cyan) !important;}.has-vivid-green-cyan-background-color{background-color: var(--wp--preset--color--vivid-green-cyan) !important;}.has-pale-cyan-blue-background-color{background-color: var(--wp--preset--color--pale-cyan-blue) !important;}.has-vivid-cyan-blue-background-color{background-color: var(--wp--preset--color--vivid-cyan-blue) !important;}.has-vivid-purple-background-color{background-color: var(--wp--preset--color--vivid-purple) !important;}.has-black-border-color{border-color: var(--wp--preset--color--black) !important;}.has-cyan-bluish-gray-border-color{border-color: var(--wp--preset--color--cyan-bluish-gray) !important;}.has-white-border-color{border-color: var(--wp--preset--color--white) !important;}.has-pale-pink-border-color{border-color: var(--wp--preset--color--pale-pink) !important;}.has-vivid-red-border-color{border-color: var(--wp--preset--color--vivid-red) !important;}.has-luminous-vivid-orange-border-color{border-color: var(--wp--preset--color--luminous-vivid-orange) !important;}.has-luminous-vivid-amber-border-color{border-color: var(--wp--preset--color--luminous-vivid-amber) !important;}.has-light-green-cyan-border-color{border-color: var(--wp--preset--color--light-green-cyan) !important;}.has-vivid-green-cyan-border-color{border-color: var(--wp--preset--color--vivid-green-cyan) !important;}.has-pale-cyan-blue-border-color{border-color: var(--wp--preset--color--pale-cyan-blue) !important;}.has-vivid-cyan-blue-border-color{border-color: var(--wp--preset--color--vivid-cyan-blue) !important;}.has-vivid-purple-border-color{border-color: var(--wp--preset--color--vivid-purple) !important;}.has-vivid-cyan-blue-to-vivid-purple-gradient-background{background: var(--wp--preset--gradient--vivid-cyan-blue-to-vivid-purple) !important;}.has-light-green-cyan-to-vivid-green-cyan-gradient-background{background: var(--wp--preset--gradient--light-green-cyan-to-vivid-green-cyan) !important;}.has-luminous-vivid-amber-to-luminous-vivid-orange-gradient-background{background: var(--wp--preset--gradient--luminous-vivid-amber-to-luminous-vivid-orange) !important;}.has-luminous-vivid-orange-to-vivid-red-gradient-background{background: var(--wp--preset--gradient--luminous-vivid-orange-to-vivid-red) !important;}.has-very-light-gray-to-cyan-bluish-gray-gradient-background{background: var(--wp--preset--gradient--very-light-gray-to-cyan-bluish-gray) !important;}.has-cool-to-warm-spectrum-gradient-background{background: var(--wp--preset--gradient--cool-to-warm-spectrum) !important;}.has-blush-light-purple-gradient-background{background: var(--wp--preset--gradient--blush-light-purple) !important;}.has-blush-bordeaux-gradient-background{background: var(--wp--preset--gradient--blush-bordeaux) !important;}.has-luminous-dusk-gradient-background{background: var(--wp--preset--gradient--luminous-dusk) !important;}.has-pale-ocean-gradient-background{background: var(--wp--preset--gradient--pale-ocean) !important;}.has-electric-grass-gradient-background{background: var(--wp--preset--gradient--electric-grass) !important;}.has-midnight-gradient-background{background: var(--wp--preset--gradient--midnight) !important;}.has-small-font-size{font-size: var(--wp--preset--font-size--small) !important;}.has-medium-font-size{font-size: var(--wp--preset--font-size--medium) !important;}.has-large-font-size{font-size: var(--wp--preset--font-size--large) !important;}.has-x-large-font-size{font-size: var(--wp--preset--font-size--x-large) !important;}
+</style>
+<link rel='stylesheet' id='article_forum_connect_comments-css'  href='https://cdn.arstechnica.net/wp-content/plugins/article-forum-connect/public/css/comments.css?ver=1.2.2' type='text/css' media='all' />
+<link rel='stylesheet' id='article_forum_connect_paywall-css'  href='https://cdn.arstechnica.net/wp-content/plugins/article-forum-connect/public/css/paywall.css?ver=1.2.2' type='text/css' media='all' />
+<meta property="article:published_time" content="2024-04-01T06:55:22+00:00">
+<meta property="article:modified_time" content="2024-04-01T21:52:01+00:00">
+<meta name="twitter:partner" content="tfwp" /></head>
+
+<body class="post-template-default single single-post postid-2013894 single-format-standard grid-view light is_subscriber blog-us">
+  
+  
+  <div class="site-wrapper">
+    <a class="screen-reader-text skip-link" href="#main" aria-label="Skip to main content">Skip to main content</a>
+    <header class="site-header">
+      <div class="header-left">
+        <a href="https://arstechnica.com" id="header-logo" title="Ars Technica Homepage">
+            <span class="icon icon-logo-ars-pro"></span>
+      </a>
+      </div>
+
+      <div class="header-right">
+        <nav id="header-nav-primary">
+          <ul>
+            
+  <li><a class="nav-link section-information-technology active" href="/information-technology/">Biz &amp; IT</a></li>
+  <li><a class="nav-link section-gadgets " href="/gadgets/">Tech</a></li>
+  <li><a class="nav-link section-science " href="/science/">Science</a></li>
+  <li><a class="nav-link section-tech-policy " href="/tech-policy/">Policy</a></li>
+  <li><a class="nav-link section-cars " href="/cars/">Cars</a></li>
+  <li><a class="nav-link section-gaming " href="/gaming/">Gaming &amp; Culture</a></li>
+  <li><a class="nav-link store" href="/store/">Store</a></li>
+  <li><a class="nav-link forums" href="/civis/">Forums</a></li>
+          </ul>
+        </nav>
+
+                                          <div class="dropdown" id="header-search">
+          <a href="/search/" class="dropdown-toggle search-toggle" aria-label="Search" aria-expanded="false">
+            <span class="icon icon-search-mag-glass"></span>
+          </a>
+          <div class="dropdown-content">
+            <form action="/search/" method="GET" id="search_form">
+  <input type="hidden" name="ie" value="UTF-8">
+  <input type="text" name="q" id="hdr_search_input" value="" aria-label="Search..." placeholder="Search...">
+</form>
+<a class="nav-search-close">Close</a>
+          </div>
+        </div>
+        <div class="dropdown dropdown-mega" id="header-burger">
+          <a href="#site-menu" class="dropdown-toggle" aria-label="Menu" aria-expanded="false">
+            <span></span>
+          </a>
+          <div id="site-menu" class="dropdown-content">
+            <section class="burger-navigate">
+  <h3>
+    <span class="icon icon-half-target"></span>
+    Navigate
+  </h3>
+  <ul>
+          <li><a class="nav-link store" href="/store/">Store</a></li>
+      <li><a class="nav-link subscribe" href="/store/product/subscriptions/">Subscribe</a></li>
+        <li><a class="nav-link videos" href="http://video.arstechnica.com/">Videos</a></li>
+    <li><a class="nav-link section-features" href="/features/">Features</a></li>
+    <li><a class="nav-link section-reviews" href="/reviews/">Reviews</a></li>
+  </ul>
+
+  <ul>
+    <li><a class="nav-link page-rss-feeds" href="/rss-feeds/">RSS Feeds</a></li>
+    <li><a class="nav-link mobile" href="/?view=mobile">Mobile Site</a></li>
+  </ul>
+
+  <ul>
+    <li><a class="nav-link page-about-us" href="/about-us/">About Ars</a></li>
+    <li><a class="nav-link page-staff-directory" href="/staff-directory/">Staff Directory</a></li>
+    <li><a class="nav-link page-contact-us" href="/contact-us/">Contact Us</a></li>
+  </ul>
+
+  <ul>
+    <li><a class="nav-link page-advertise-with-us" href="https://advertising.condenast.com/brands/ars-technica">Advertise with Ars</a></li>
+    <li><a class="nav-link page-reprints" href="/reprints/">Reprints</a></li>
+  </ul>
+</section>
+
+<section class="burger-filter">
+  <h3>
+    <span class="icon icon-half-mag"></span>
+    Filter by topic
+  </h3>
+  <ul id="burger-nav-primary">
+    
+  <li><a class="nav-link section-information-technology active" href="/information-technology/">Biz &amp; IT</a></li>
+  <li><a class="nav-link section-gadgets " href="/gadgets/">Tech</a></li>
+  <li><a class="nav-link section-science " href="/science/">Science</a></li>
+  <li><a class="nav-link section-tech-policy " href="/tech-policy/">Policy</a></li>
+  <li><a class="nav-link section-cars " href="/cars/">Cars</a></li>
+  <li><a class="nav-link section-gaming " href="/gaming/">Gaming &amp; Culture</a></li>
+  <li><a class="nav-link store" href="/store/">Store</a></li>
+  <li><a class="nav-link forums" href="/civis/">Forums</a></li>
+  </ul>
+</section>
+
+<section class="burger-settings">
+  <h3>
+    <span class="icon icon-half-gear"></span>
+    Settings
+  </h3>
+  <div>
+    <div class="burger-layout">
+      
+<p>Front page layout</p>
+<div class="burger-layout-grid">
+  <a rel="nofollow" href="/security/2024/04/what-we-know-about-the-xz-utils-backdoor-that-almost-infected-the-world/?view=grid&amp;all=1">
+    <span class="icon icon-grid"></span><br>
+    Grid
+    <div class="faux-radio active"></div>
+  </a>
+</div>
+
+<div class="burger-layout-list">
+  <a rel="nofollow" href="/security/2024/04/what-we-know-about-the-xz-utils-backdoor-that-almost-infected-the-world/?view=archive&amp;all=1">
+    <span class="icon icon-list"></span><br>
+    List
+    <div class="faux-radio "></div>
+  </a>
+</div>
+
+  <div class="burger-layout-classic">
+    <a rel="nofollow" href="/security/2024/04/what-we-know-about-the-xz-utils-backdoor-that-almost-infected-the-world/?view=classic&amp;all=1">
+      <span class="icon icon-classic"></span><br>
+      Classic
+      <div class="faux-radio "></div>
+    </a>
+  </div>
+    </div>
+    <div class="burger-theme">
+      <p>Site theme</p>
+  <div class="burger-theme-light">
+    <a rel="nofollow" href="/security/2024/04/what-we-know-about-the-xz-utils-backdoor-that-almost-infected-the-world/?theme=light&amp;all=1">
+      <span><span>light</span></span>
+      <div class="faux-radio active"></div>
+    </a>
+  </div>
+  <div class="burger-theme-dark">
+    <a rel="nofollow" href="/security/2024/04/what-we-know-about-the-xz-utils-backdoor-that-almost-infected-the-world/?theme=dark&amp;all=1">
+      <span><span>dark</span></span>
+      <div class="faux-radio "></div>
+    </a>
+  </div>
+    </div>
+  </div>
+</section>
+          </div>
+        </div>
+          
+      <div class="dropdown dropdown-mega" id="header-account">
+      <a href="/civis/account/" class="dropdown-toggle" aria-expanded="false">
+        <span class="icon profile-icon icon-account-person-icon"></span>
+        <span class="icon dropdown-indicator icon-drop-indicator"></span>
+      </a>
+      <div class="dropdown-content">
+        <section class="profile-activity">
+          <h3>
+            <span class="icon icon-half-bubble-up"></span>
+            Comment activity
+          </h3>
+          <ol class="discussions plain-links"></ol>
+        </section>
+
+        <section class="profile-settings">
+          <div class="userinfo">
+            <p class="username">dlwh</p>
+
+            <p class="regdate">Member since <time class="date" datetime="2018-10-03T02:50:51+00:00" data-date-format="MMMM DD, YYYY">2018-10-03T02:50:51+00:00</time>
+            <p>
+
+            <p class="postcount">Posts: 0</p>
+
+            <a class="logout button button-green button-wide" href="/civis/logout/?t=1712126557%2C040e457f9409feb4411551f9dd3e0bd1">Sign out</a>
+
+          </div>
+          <a class="profile-link button button-orange button-wide" href="/civis/account/">Account settings</a>
+        </section>
+      </div>
+    </div>
+        </div>
+    </header>
+
+    
+    <main id="main" class="content-wrapper">
+
+<script type="text/javascript">
+  ars.ARTICLE = {"url":"https:\/\/arstechnica.com\/security\/2024\/04\/what-we-know-about-the-xz-utils-backdoor-that-almost-infected-the-world\/","short_url":"https:\/\/arstechnica.com\/?p=2013894","title":"What we know about the xz Utils backdoor that almost infected the world","author":329388,"authorName":"Dan Goodin","pubDate":"2024-04-01T06:55:22Z","id":2013894,"topic":1499806,"pages":2,"current_page":1,"superscroll":true,"promoted":[],"single_page":1,"comments":195,"fullwidth":false,"slug":"what-we-know-about-the-xz-utils-backdoor-that-almost-infected-the-world","arsStaff":{"104481":{"name":"Aaron Zimmerman","title":"Copy Chief","staff":true},"332715":{"name":"Andrew Cunningham","title":"Senior Technology Reporter","staff":true},"855306":{"name":"Ashley Belanger","title":"Senior Policy Reporter","staff":true},"1002":{"name":"Aurich Lawson","title":"Creative Director","staff":true},"857898":{"name":"Benj Edwards","title":"AI and Machine Learning Reporter","staff":true},"509873":{"name":"Beth Mole","title":"Senior Health Reporter","staff":true},"453791":{"name":"Cathleen O'Grady","title":"Contributing science reporter","staff":false},"102179":{"name":"Chris Lee","title":"Associate writer","staff":true},"329388":{"name":"Dan Goodin","title":"Security Editor","staff":true},"254631":{"name":"Diana Gitig","title":"Associate Writer","staff":false},"25862":{"name":"Eric Bangeman","title":"Managing Editor","staff":true},"512413":{"name":"Eric Berger","title":"Senior Space Editor","staff":true},"46707":{"name":"Iljitsch van Beijnum","title":"Associate Writer","staff":false},"316010":{"name":"Jason Marlin","title":"Technical Director","staff":true},"746799":{"name":"Jennifer Ouellette","title":"Senior Writer","staff":true},"15365":{"name":"Jeremy Reimer","title":"Senior Niche Technology Historian","staff":false},"52979":{"name":"John Timmer","title":"Senior Science Editor","staff":true},"312082":{"name":"Jon Brodkin","title":"Senior IT Reporter","staff":true},"14317":{"name":"Jonathan M. Gitlin","title":"Automotive Editor","staff":true},"998":{"name":"Ken Fisher","title":"Editor in Chief","staff":true},"440179":{"name":"Kerry Staurseth","title":"Associate Copyeditor","staff":true},"856780":{"name":"Kevin Purdy","title":"Senior Technology Reporter","staff":true},"328283":{"name":"Kyle Orland","title":"Senior Gaming Editor","staff":true},"10243":{"name":"Lee Hutchinson","title":"Senior Technology Editor","staff":true},"173191":{"name":"Matthew Lasar","title":"Associate writer","staff":true},"182268":{"name":"Nate Anderson","title":"Deputy Editor","staff":true},"1991":{"name":"Ohrmazd","title":"","staff":false},"391727":{"name":"Ron Amadeo","title":"Reviews Editor","staff":true},"588289":{"name":"Samuel Axon","title":"Senior Editor","staff":true},"294205":{"name":"Scott K. Johnson","title":"Associate Writer","staff":true},"173910":{"name":"Timothy B. Lee","title":"Senior tech policy reporter","staff":false}},"tags":["backdoors","llinux","supply-chain-attacks"],"zen_mode":false};
+</script>
+
+<article itemscope itemtype="http://schema.org/NewsArticle" class="article-single standalone intro-standard " id="">
+      <div class="column-wrapper">
+    <div class="left-column">
+        <header class="article-header">
+            <h4 class="post-upperdek">
+      NIGHTMARE SUPPLY CHAIN ATTACK SCENARIO    &mdash;
+</h4>
+            <h1 itemprop="headline">What we know about the xz Utils backdoor that almost infected the world</h1>
+            <h2 itemprop="description">Malicious updates made to a ubiquitous tool were a few weeks away from going mainstream.</h2>
+            <section class="post-meta">
+
+  
+<p class="byline" itemprop="author creator" itemscope itemtype="http://schema.org/Person">
+      <a itemprop="url" href="https://arstechnica.com/author/dan-goodin/"  rel="author" ><span itemprop="name">Dan Goodin</span></a>
+    -    <time class="date" data-time="1711954522" datetime="2024-04-01T06:55:22+00:00">Apr 1, 2024 6:55 am UTC</time>
+</p>
+
+  
+</section>        </header>
+        <section class="article-guts">
+            <div itemprop="articleBody" class="article-content post-page">
+                                    
+<figure class="intro-image intro-left">
+  <img src="https://cdn.arstechnica.net/wp-content/uploads/2024/04/malware-800x450.jpg" alt="What we know about the xz Utils backdoor that almost infected the world"/>
+      <figcaption class="caption"><div class="caption-text"><a href="https://cdn.arstechnica.net/wp-content/uploads/2024/04/malware.jpg" class="enlarge-link" data-height="619" data-width="1100">Enlarge</a></div><div class="caption-credit">Getty Images</div></figcaption>  </figure>
+
+  <aside id="social-left" class="social-left" aria-label="Read the comments or share this article">
+          <a class="comment-count icon-comment-bubble-down" href="https://arstechnica.com/security/2024/04/what-we-know-about-the-xz-utils-backdoor-that-almost-infected-the-world/?comments=1">
+      <h4 class="comment-count-before">reader comments</h4>
+  
+  <span class="comment-count-number">195</span>
+  </a>
+        </aside>
+
+
+
+
+<!-- cache hit 307:single/related:cecf63838af3f8a4a2ec94340792c586 --><!-- empty -->
+<div><a name='page-1'></a></div>
+<p>On Friday, a lone Microsoft developer rocked the world when he revealed a <a href="https://arstechnica.com/security/2024/03/backdoor-found-in-widely-used-linux-utility-breaks-encrypted-ssh-connections/">backdoor</a> had been intentionally planted in xz Utils, an open source data compression utility available on almost all installations of Linux and other Unix-like operating systems. The person or people behind this project likely spent years on it. They were likely very close to seeing the backdoor update merged into Debian and Red Hat, the two biggest distributions of Linux, when an eagle-eyed software developer spotted something fishy.</p>
+<p><div class="pullbox sidebar story-sidebar right"><div class="story-sidebar-part"><a href="https://arstechnica.com/security/2024/03/backdoor-found-in-widely-used-linux-utility-breaks-encrypted-ssh-connections/" class="recommendation-further-reading story-sidebar-part-img" style="background-image:url('https://cdn.arstechnica.net/wp-content/uploads/2024/03/backdoor-1-360x200.jpg');" tabindex="-1" role="presentation" aria-hidden="true"></a><div class="story-sidebar-part-content"><h3>Further Reading</h3><a class="recommendation-further-reading" href="https://arstechnica.com/security/2024/03/backdoor-found-in-widely-used-linux-utility-breaks-encrypted-ssh-connections/">Backdoor found in widely used Linux utility targets encrypted SSH connections</a></div></div></div>"This might be the best executed supply chain attack we've seen described in the open, and it's a nightmare scenario: malicious, competent, authorized upstream in a widely used library," software and cryptography engineer Filippo Valsorda <a href="https://bsky.app/profile/filippo.abyssdomain.expert/post/3kouaom62oi2b">said</a> of the effort, which came frightfully close to succeeding.</p>
+<p>Researchers have spent the weekend gathering clues. Here's what we know so far.</p>
+<p><b>What is xz Utils?</b></p>
+<p>xz Utils is nearly ubiquitous in Linux. It provides lossless data compression on virtually all Unix-like operating systems, including Linux. xz Utils provides critical functions for compressing and decompressing data during all kinds of operations. xz Utils also supports the legacy .lzma format, making this component even more crucial.</p>
+<p><b>What happened?</b></p>
+<p>Andres Freund, a developer and engineer working on Microsoft’s PostgreSQL offerings, was recently troubleshooting performance problems a Debian system was experiencing with SSH, the most widely used protocol for remotely logging in to devices over the Internet. Specifically, SSH logins were consuming too many CPU cycles and were generating errors with <a href="https://valgrind.org/">valgrind</a>, a utility for monitoring computer memory.</p>
+<p>Through sheer luck and Freund’s careful eye, he eventually discovered the problems were the result of updates that had been made to xz Utils. On Friday, Freund took to the Open Source Security List to disclose the updates were the result of someone intentionally planting a backdoor in the compression software.</p>
+<p>It's hard to overstate the complexity of the social engineering and the inner workings of the backdoor. Thomas Roccia, a researcher at Microsoft, <a href="https://infosec.exchange/@fr0gger/112189232773640259">published</a> a graphic on Mastodon that helps visualize the sprawling extent of the nearly successful endeavor to spread a backdoor with a reach that would have dwarfed the <a href="https://arstechnica.com/information-technology/2020/12/only-an-elite-few-solarwinds-hack-victims-received-follow-on-attacks/">SolarWinds event</a> from 2020.</p>
+<figure class="image shortcode-img center large" style="width:100%"><a href="https://cdn.arstechnica.net/wp-content/uploads/2024/04/xz-backdoor-graphic-thomas-roccia-scaled.jpg" class="enlarge" data-height="2560" data-width="1829"><img src="https://cdn.arstechnica.net/wp-content/uploads/2024/04/xz-backdoor-graphic-thomas-roccia-640x896.jpg" width="640" height="896" srcset="https://cdn.arstechnica.net/wp-content/uploads/2024/04/xz-backdoor-graphic-thomas-roccia-1280x1792.jpg 2x"></a><figcaption class="caption"><div class="caption-text"><a href="https://cdn.arstechnica.net/wp-content/uploads/2024/04/xz-backdoor-graphic-thomas-roccia-scaled.jpg" class="enlarge-link" data-height="2560" data-width="1829">Enlarge</a></div></figcaption></figure>
+<p><b>What does the backdoor do?</b></p>
+<p>Malicious code added to xz Utils versions 5.6.0 and 5.6.1 modified the way the software functions. The backdoor manipulated sshd, the executable file used to make remote SSH connections. Anyone in possession of a predetermined encryption key could stash any code of their choice in an SSH login certificate, upload it, and execute it on the backdoored device. No one has actually seen code uploaded, so it's not known what code the attacker planned to run. In theory, the code could allow for just about anything, including stealing encryption keys or installing malware.</p>
+<p><b>Wait, how can a compression utility manipulate a process as security sensitive as SSH?</b></p>
+<p>Any library can tamper with the inner workings of any executable it is linked against. Often, the developer of the executable will establish a link to a library that's needed for it to work properly. OpenSSH, the most popular sshd implementation, doesn’t link the liblzma library, but Debian and many other Linux distributions add a patch to link sshd to <a href="https://en.wikipedia.org/wiki/Systemd">systemd</a>, a program that loads a variety of services during the system bootup. Systemd, in turn, links to liblzma, and this allows xz Utils to exert control over sshd.</p>
+<p><b>How did this backdoor come to be?</b></p>
+<p>It would appear that this backdoor was years in the making. In 2021, someone with the username JiaT75 made their <a href="https://github.com/libarchive/libarchive/pull/1609">first known commit</a> to an open source project. In retrospect, the change to the libarchive project is suspicious, because it replaced the safe_fprint funcion with a variant that has long been recognized as less secure. No one noticed at the time.</p>
+<p>The following year, JiaT75 submitted a patch over the xz Utils mailing list, and, almost immediately, a never-before-seen participant named Jigar Kumar joined the discussion and argued that Lasse Collin, the longtime maintainer of xz Utils, hadn’t been updating the software often or fast enough. Kumar, with the support of Dennis Ens and several other people who had never had a presence on the list, pressured Collin to bring on an additional developer to maintain the project.</p>
+<p>In January 2023, JiaT75 made their <a href="https://github.com/tukaani-project/xz/pull/7">first commit</a> to xz Utils. In the months following, JiaT75, who used the name Jia Tan, became increasingly involved in xz Utils affairs. For instance, Tan replaced Collins' contact information with their own on oss-fuzz, a project that scans open source software for vulnerabilities that can be exploited. Tan also requested that oss-fuzz disable the ifunc function during testing, a change that prevented it from detecting the malicious changes Tan would soon make to xz Utils.</p>
+<p>In February of this year, Tan issued commits for versions 5.6.0 and 5.6.1 of xz Utils. The updates implemented the backdoor. In the following weeks, Tan or others appealed to developers of Ubuntu, Red Hat, and Debian to merge the updates into their OSes. Eventually, one of the two updates made its way into the following releases, <a href="https://www.tenable.com/blog/frequently-asked-questions-cve-2024-3094-supply-chain-backdoor-in-xz-utils">according to</a> security firm Tenable:</p>
+<div class="table-responsive">
+<table class="table">
+<thead>
+<tr>
+<th><strong>Distribution</strong></th>
+<th><strong>Advisory</strong></th>
+<th><strong>Notes</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Fedora Rawhide</td>
+<td><a href="https://www.redhat.com/en/blog/urgent-security-alert-fedora-41-and-rawhide-users"><u>https://www.redhat.com/en/blog/urgent-security-alert-fedora-41-and-rawhide-users</u></a></td>
+<td>Fedora Rawhide is the development distribution of Fedora Linux</td>
+</tr>
+<tr>
+<td>Fedora 41</td>
+<td><a href="https://www.redhat.com/en/blog/urgent-security-alert-fedora-41-and-rawhide-users"><u>https://www.redhat.com/en/blog/urgent-security-alert-fedora-41-and-rawhide-users</u></a></td>
+<td></td>
+</tr>
+<tr>
+<td>Debian testing, unstable and experimental distributions versions 5.5.1alpha-0.1 to 5.6.1-1.</td>
+<td><a href="https://lists.debian.org/debian-security-announce/2024/msg00057.html"><u>https://lists.debian.org/debian-security-announce/2024/msg00057.html</u></a></td>
+<td></td>
+</tr>
+<tr>
+<td>openSUSE Tumbleweed and openSUSE MicroOS</td>
+<td><a href="https://news.opensuse.org/2024/03/29/xz-backdoor/"><u>https://news.opensuse.org/2024/03/29/xz-backdoor/</u></a></td>
+<td>Backdoored version of xz was included in Tumbleweed and MicroOS between March 7 and March 28</td>
+</tr>
+<tr>
+<td>Kali Linux</td>
+<td><a href="https://www.kali.org/blog/about-the-xz-backdoor/"><u>https://www.kali.org/blog/about-the-xz-backdoor/</u></a></td>
+<td>Backdoored version of xz was included in Kali Linux (xz-utils 5.6.0-0.2) between March 26 and March 28</td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>There’s more about Tan and the timeline <a href="https://boehs.org/node/everything-i-know-about-the-xz-backdoor">here</a>.</p>
+<div><a name='page-2'></a></div>
+<p><b>Can you say more about what this backdoor does?</b></p>
+<p>In a nutshell, it allows someone with the right private key to hijack sshd, the executable file responsible for making SSH connections, and from there to execute malicious commands. The backdoor is implemented through a five-stage loader that uses a series of simple but clever techniques to hide itself. It also provides the means for new payloads to be delivered without major changes being required.</p>
+<p>Multiple people who have reverse-engineered the updates have much more to say about the backdoor.</p>
+<p>Developer Sam James provided <a href="https://gist.github.com/thesamesam/223949d5a074ebc3dce9ee78baad9e27">this overview</a>:</p>
+<blockquote><p>This backdoor has several components. At a high level:</p>
+<ul>
+<li aria-level="1">The release tarballs upstream publishes don't have the same code that GitHub has. This is common in C projects so that downstream consumers don't need to remember how to run autotools and autoconf. The version of build-to-host.m4 in the release tarballs differs wildly from the upstream on GitHub.</li>
+<li aria-level="1">There are crafted test files in the tests/ folder within the git repository too. These files are in the following commits:
+<ul>
+<li aria-level="2">tests/files/bad-3-corrupt_lzma2.xz (<a href="https://github.com/tukaani-project/xz/commit/cf44e4b7f5dfdbf8c78aef377c10f71e274f63c0">cf44e4b7f5dfdbf8c78aef377c10f71e274f63c0</a>,<a href="https://github.com/tukaani-project/xz/commit/74b138d2a6529f2c07729d7c77b1725a8e8b16f1"> 74b138d2a6529f2c07729d7c77b1725a8e8b16f1</a>)</li>
+<li aria-level="2">tests/files/good-large_compressed.lzma (<a href="https://github.com/tukaani-project/xz/commit/cf44e4b7f5dfdbf8c78aef377c10f71e274f63c0">cf44e4b7f5dfdbf8c78aef377c10f71e274f63c0</a>,<a href="https://github.com/tukaani-project/xz/commit/74b138d2a6529f2c07729d7c77b1725a8e8b16f1"> 74b138d2a6529f2c07729d7c77b1725a8e8b16f1</a>)</li>
+</ul>
+</li>
+<li aria-level="1">A script called by build-to-host.m4 unpacks this malicious test data and uses it to modify the build process.</li>
+<li aria-level="1">IFUNC, a mechanism in glibc that allows for indirect function calls, is used to perform runtime hooking/redirection of OpenSSH's authentication routines. IFUNC is a tool that is normally used for legitimate things, but in this case it is exploited for this attack path.</li>
+</ul>
+<p>Normally, upstream publishes release tarballs that are different than the automatically generated ones in GitHub. In these modified tarballs, a malicious version of build-to-host.m4 is included to execute a script during the build process.</p>
+<p>This script (at least in versions 5.6.0 and 5.6.1) checks for various conditions like the architecture of the machine. Here is a snippet of the malicious script that gets unpacked by build-to-host.m4 and an explanation of what it does:</p>
+<pre>if ! (echo "$build" | grep -Eq "^x86_64" &gt; /dev/null 2&gt;&amp;1) &amp;&amp; (echo "$build" | grep -Eq "linux-gnu$" &gt; /dev/null 2&gt;&amp;1);then</pre>
+<ul>
+<li aria-level="1">If amd64/x86_64 is the target of the build</li>
+<li aria-level="1">And if the target uses the name linux-gnu (mostly checks for the use of glibc)</li>
+</ul>
+<p>It also checks for the toolchain being used:</p>
+<pre>if test "x$GCC" != 'xyes' &gt; /dev/null 2&gt;&amp;1;then
+exit 0
+fi
+if test "x$CC" != 'xgcc' &gt; /dev/null 2&gt;&amp;1;then
+exit 0
+fi
+LDv=$LD" -v"
+if ! $LDv 2&gt;&amp;1 | grep -qs 'GNU ld' &gt; /dev/null 2&gt;&amp;1;then
+exit 0</pre>
+<p>And if you are trying to build a Debian or Red Hat package:</p>
+<pre>if test -f "$srcdir/debian/rules" || test "x$RPM_ARCH" = "xx86_64";then</pre>
+<p>This attack thusly seems to be targeted at amd64 systems running glibc using either Debian or Red Hat derived distributions. Other systems may be vulnerable at this time, but we don't know.</p></blockquote>
+<p>In an online interview, developer and reverse-engineer HD Moore confirmed the Sam James suspicion that the backdoor targeted either Debian or Red Hat distributions.</p>
+<p>“The attack was sneaky in that it only did the final steps of the backdoor if you were building the library on amd64 (intel x86 64-bit) and were building a Debian or a RPM package (instead of using it for a local installation),” he wrote.</p>
+<p>Paraphrasing observations from researchers who collectively spent the weekend analyzing the malicious updates, he continued:</p>
+<blockquote><p>When verifying an SSH public key, if the public key matches a certain fingerprint function, the key contents are decrypted using a pre-shared key before the public key is actually verified. The decrypted contents are then passed directly to system.</p>
+<p>If the fingerprint doesn't match or the decrypted contents don't match a certain format, it falls back to regular key verification and no-one's the wiser.</p>
+<p>The backdoor is super sneaky. It uses a little-known feature of the glibc to hook a function. It only triggers when the backdoored xz library gets loaded by a /usr/bin/sshd process on one of the affected distributions. There may be many other backdoors, but the one everyone is talking about uses the function indirection stuff to add the hook. The payload was encoded into fake xz test files and runs as a shellcode effectively, changing the SSH RSA key verification code so that a magic public key (sent during normal authentication) let the attacker gain access</p>
+<p>​​Their grand scheme was:</p>
+<p>1) sneakily backdoor the release tarballs, but not the source code</p>
+<p>2) use sockpuppet accounts to convince the various Linux distributions to pull the latest version and package it</p>
+<p>3) once those distributions shipped it, they could take over any downstream user/company system/etc</p></blockquote>
+<p>Researchers from networking firm Akamai also <a href="https://www.akamai.com/blog/security-research/critical-linux-backdoor-xz-utils-discovered-what-to-know">explain</a> well how the backdoor works:</p>
+<blockquote><p>
+The backdoor is quite complex. For starters, you won’t find it in the xz GitHub repository (which is currently disabled, but that’s besides the point). In what seems like an attempt to avoid detection, instead of pushing parts of the backdoor to the public git repository, the malicious maintainer only included it in source code tarball releases. This caused parts of the backdoor to remain relatively hidden, while still being used during the build process of <a href="https://repology.org/project/xz/versions" target="_blank" rel="nofollow noopener noreferrer">dependent projects</a>.</p>
+<p>The backdoor is composed of many parts introduced over multiple commits:</p>
+<ul>
+<li>Using IFUNCs in the build process, which will be used to hijack the symbol resolve functions by the malware</li>
+<li>Including an obfuscated shared object hidden in <a href="https://git.tukaani.org/?p=xz.git;a=commitdiff;h=cf44e4b7f5dfdbf8c78aef377c10f71e274f63c0" target="_blank" rel="nofollow noopener noreferrer">test files</a></li>
+<li>Running a script set during the build process of the library that extracts the shared object (not included in the repository, only in releases, but added to <a href="https://git.tukaani.org/?p=xz.git;a=blobdiff;f=m4/.gitignore;h=a7628601822c778d6ef01ad35d76e85cdb6a193c;hp=985c2800e8f991383b264edadba7ea1126f5db0b;hb=4323bc3e0c1e1d2037d5e670a3bf6633e8a3031e;hpb=5394a1665b7a108a54cb8b4ef3ebe59d3dbcca3a" target="_blank" rel="nofollow noopener noreferrer">.gitignore</a>)</li>
+<li><a href="https://git.tukaani.org/?p=xz.git;a=commitdiff;h=328c52da8a2bbb81307644efdb58db2c422d9ba7" target="_blank" rel="nofollow noopener noreferrer">Disabling landlocking</a>, which is a security feature to restrict process privileges</li>
+</ul>
+<p>The execution chain also consists of multiple stages:</p>
+<ul>
+<li>The malicious script <i>build-to-host.m4</i> is run during the library’s build process and decodes the “test” file <i>bad-3-corrupt_lzma2.xz</i> into a bash script</li>
+<li>The bash script then performs a more complicated decode process on another “test” file, <i>good-large_compressed.lzma</i>, decoding it into another script</li>
+<li>That script then extracts a shared object <i>liblzma_la-crc64-fast.o</i>, which is added to the compilation process of liblzma</li>
+</ul>
+<p>This process is admittedly hard to follow. We recommend <a href="https://twitter.com/fr0gger_" target="_blank" rel="nofollow noopener noreferrer">Thomas Roccia</a>’s <a href="https://twitter.com/fr0gger_/status/1774342248437813525" target="_blank" rel="nofollow noopener noreferrer">infographic</a> for a great visual reference and in-depth analysis.</p>
+<p>The shared object itself is compiled into liblzma, and replaces the regular function name resolution process. During (any) process loading, function names are resolved into actual pointers to the process memory, pointing at the binary code. The malicious library interferes with the function resolving process, so it could replace the function pointer for the OpenSSH function <a href="https://www.openssl.org/docs/manmaster/man3/RSA_public_decrypt.html" target="_blank" rel="nofollow noopener noreferrer">RSA_public_decrypt</a> (Figure 1).</p>
+<p>It then points that function to a malicious one of its own, which according to research published by <a href="https://bsky.app/profile/filippo.abyssdomain.expert/post/3kowjkx2njy2b" target="_blank" rel="nofollow noopener noreferrer">Filippo Valsorda</a>, extracts a command from the authenticating client’s certificate (after verifying that it is the threat actor) and passes it on to the system() function for execution, thereby achieving RCE prior to authentication.</p>
+<figure class="image shortcode-img center large" style="width:100%"><a href="https://cdn.arstechnica.net/wp-content/uploads/2024/04/liblzma-hooking-process.jpeg" class="enlarge" data-height="839" data-width="1367" alt='The liblzma hooking process' ><img alt='The liblzma hooking process'  src="https://cdn.arstechnica.net/wp-content/uploads/2024/04/liblzma-hooking-process-640x393.jpeg" width="640" height="393" srcset="https://cdn.arstechnica.net/wp-content/uploads/2024/04/liblzma-hooking-process-1280x786.jpeg 2x" alt='The liblzma hooking process' ></a><figcaption class="caption"><div class="caption-text"><a href="https://cdn.arstechnica.net/wp-content/uploads/2024/04/liblzma-hooking-process.jpeg" class="enlarge-link" data-height="839" data-width="1367">Enlarge</a> <span class="sep">/</span> The liblzma hooking process</div><div class="caption-credit">Akamai</div></figcaption></figure></blockquote>
+<p><b>What more do we know about Jia Tan?</b></p>
+<p>At the moment, extremely little, especially for someone entrusted to steward a piece of software as ubiquitous and as sensitive as xz Utils. This developer persona has touched dozens of other pieces of open source software in the past few years. At the moment, it’s unknown if there was ever a real-world person behind this username or if Jia Tan is a completely fabricated individual.</p>
+<p>Additional technical analysis is available from the <a href="https://bsky.app/profile/filippo.abyssdomain.expert/post/3kowkezwz6g2q">above</a> Bluesky thread from Valsorda, <a href="https://doublepulsar.com/inside-the-failed-attempt-to-backdoor-ssh-globally-that-got-caught-by-chance-bbfe628fafdd">researcher Kevin Beaumont</a>, and <a href="https://www.openwall.com/lists/oss-security/2024/03/29/4">Freund’s Friday disclosure</a>.</p>
+<p><b>Is there a CVE tracking designation?</b></p>
+<p>Yes, it's CVE-2024-3094.</p>
+<p><b>How do I know if the backdoor is present on my device?</b></p>
+<p>There are several ways. One is <a href="https://xz.fail/">this page</a> from security firm Binarly. The tool detects implementation of IFUNC and is based on behavioral analysis. It can automatically detect invariants in the event a similar backdoor is implanted elsewhere.</p>
+<p>There's also a project called <a href="https://github.com/amlweems/xzbot">xzbot</a>. It provides the following:</p>
+<ul dir="auto">
+<li><a href="https://github.com/amlweems/xzbot#honeypot">honeypot</a>: fake vulnerable server to detect exploit attempts</li>
+<li><a href="https://github.com/amlweems/xzbot#ed448-patch">ed448 patch</a>: patch liblzma.so to use our own ED448 public key</li>
+<li><a href="https://github.com/amlweems/xzbot#backdoor-format">backdoor format</a>: format of the backdoor payload</li>
+<li><a href="https://github.com/amlweems/xzbot#backdoor-demo">backdoor demo</a>: cli to trigger the RCE assuming knowledge of the ED448 private key</li>
+</ul>
+</blockquote>
+
+                                                </div>
+
+            
+            
+            
+        </section>
+    </div>
+    <div class="xrail">
+        <div class="xrail-content">
+              <div class="reader-tools thick-divide-top">
+    <h2 class="subheading notched">Ars Pro Subscriber</h2>
+          <a class="single-toggle" href="https://arstechnica.com/security/2024/04/what-we-know-about-the-xz-utils-backdoor-that-almost-infected-the-world/?all=1">View on a single page</a><br>
+                <a href="/?ARS_PDF=2013894" class="pdf">Article PDF</a><br>
+      </div>
+
+            
+            
+            
+            
+                    </div>
+    </div>
+</div>
+
+<div class="column-wrapper">
+    <div class="left-column">
+        <div id="social-footer">
+                  <a class="comment-count icon-comment-bubble-down" href="https://arstechnica.com/security/2024/04/what-we-know-about-the-xz-utils-backdoor-that-almost-infected-the-world/?comments=1">
+      <h4 class="comment-count-before">reader comments</h4>
+  
+  <span class="comment-count-number">195</span>
+  </a>
+          </div>
+                    <!-- cache hit 307:single/author:4170d529a01e41995b049a27ec23a1fa -->  <section class="article-author">
+          <a style="background-image:url('https://cdn.arstechnica.net/wp-content/uploads/2018/10/Dang.jpg');" class="author-photo" href="/author/dan-goodin" tabindex="-1" role="presentation" aria-hidden="true"></a>
+    
+    <div class="author-bio">
+      <section class="author-bio-top">
+        <a href="/author/dan-goodin" class="author-name">Dan Goodin</a>
+        Dan Goodin is Senior Security Editor at Ars Technica, where he oversees coverage of malware, computer espionage, botnets, hardware hacking, encryption, and passwords. In his spare time, he enjoys gardening, cooking, and following the independent music scene.      </section>
+    </div>
+
+  </section>
+            </div>
+    <div class="xrail"></div>
+</div>
+<div id="article-footer-wrap">
+    
+            <section id="comments-area" class="comments-area column-wrapper">
+      <div class="row comments-row left-column">
+      <a name="comments-bar"></a>
+      
+<div class="wp-forum-connect-container">
+
+    
+<div class="wp-forum-connect-featured">
+
+    <h2 class="comments-title">Promoted Comments</h2>
+
+    <div class="wp-forum-connect-comment-list">
+
+                <article class="wp-forum-connect-comment">
+
+            <div class="wp-forum-connect-comment-avatar">
+
+                <img alt="" src="https://arstechnica.com/wp-content/plugins/article-forum-connect/public/img/avatar.png" srcset="https://arstechnica.com/wp-content/plugins/article-forum-connect/public/img/avatar.png 2x" class="avatar avatar-60 photo" height="60" width="60" loading="lazy">
+
+            </div>
+
+            <div class="wp-forum-connect-comment-message">
+
+                <div>
+
+                    <b class="fn"><a href="https://arstechnica.com/civis/members/christarp.400181/" target="_blank">Christarp</a></b>
+
+                </div>
+
+                <div>
+
+                    The whole world got lucky that one developer was determined enough to discover the cause of a minor performance regression. Just makes you wonder what else hasn't yet been discovered in our open source tooling out there.<br />
+<br />
+Really eye opening, thank you Andres!<br />
+<br />
+Edit: And of course, Dan for the wonderful article.
+                </div>
+
+                <div>
+
+                    <a href="https://arstechnica.com/civis/posts/42715252/" target="_blank">
+
+                        <time datetime="2024-04-01T07:16:05+00:00">April 1, 2024 at 7:16 am</time>
+
+                    </a>
+
+                </div>
+
+            </div>
+
+        </article>
+                <article class="wp-forum-connect-comment">
+
+            <div class="wp-forum-connect-comment-avatar">
+
+                <img alt="" src="https://arstechnica.com/wp-content/plugins/article-forum-connect/public/img/avatar.png" srcset="https://arstechnica.com/wp-content/plugins/article-forum-connect/public/img/avatar.png 2x" class="avatar avatar-60 photo" height="60" width="60" loading="lazy">
+
+            </div>
+
+            <div class="wp-forum-connect-comment-message">
+
+                <div>
+
+                    <b class="fn"><a href="https://arstechnica.com/civis/members/barnsofteng.518713/" target="_blank">BarnSoftEng</a></b>
+
+                </div>
+
+                <div>
+
+                    <blockquote class="xfBb-quote" data-name="om1">It should be noted that the attack only works because Debian and Redhat added functionality to sshd that is not present in it as distributed by its developers. The extra functionality adds systemd interaction, which requires libsystemd which requires liblzma, a component of the (compromised) xz package.<br />
+<br />
+One should be wary of distributions adding functionality. Often it increases the attack surface, not only because of the modifications/additions themselves, but also by adding dependencies.</blockquote>This conclusion ignores the huge value that the patches that all OS apply to packages provides. Without patches much upstream software will not build, will not run correctly.
+                </div>
+
+                <div>
+
+                    <a href="https://arstechnica.com/civis/posts/42715268/" target="_blank">
+
+                        <time datetime="2024-04-01T07:49:20+00:00">April 1, 2024 at 7:49 am</time>
+
+                    </a>
+
+                </div>
+
+            </div>
+
+        </article>
+                <article class="wp-forum-connect-comment">
+
+            <div class="wp-forum-connect-comment-avatar">
+
+                <img alt="" src="https://arstechnica.com/wp-content/plugins/article-forum-connect/public/img/avatar.png" srcset="https://arstechnica.com/wp-content/plugins/article-forum-connect/public/img/avatar.png 2x" class="avatar avatar-60 photo" height="60" width="60" loading="lazy">
+
+            </div>
+
+            <div class="wp-forum-connect-comment-message">
+
+                <div>
+
+                    <b class="fn"><a href="https://arstechnica.com/civis/members/pseudonomous.250516/" target="_blank">pseudonomous</a></b>
+
+                </div>
+
+                <div>
+
+                    <blockquote class="xfBb-quote" data-name="om1">It should be noted that the attack only works because Debian and Redhat added functionality to sshd that is not present in it as distributed by its developers. The extra functionality adds systemd interaction, which requires libsystemd which requires liblzma, a component of the (compromised) xz package.<br />
+<br />
+One should be wary of distributions adding functionality. Often it increases the attack surface, not only because of the modifications/additions themselves, but also by adding dependencies.</blockquote><br />
+While this is true, to a degree, it's also quite possible that if there were a lot of interesting targets out there that didn't patch sshd to use systemd and libxz, that given the level of access they had, the actor here could almost certainly found some other way to put an obfuscated backdoor into the code.<br />
+<br />
+I mean, certainly the OpenSSH project is obviously in the clear, but having gained commit access to a critical library, I don't think we could feel safe that &quot;Jia Tan&quot; couldn't have constructed a different backdoor even if they couldn't use the particular behavior Debian and Ubuntu added to their version of SSH.<br />
+<br />
+And I'm not sure anybody feels totally safe until somebody audits the code to make sure there's nothing else lurking in here that might be dangerous.
+                </div>
+
+                <div>
+
+                    <a href="https://arstechnica.com/civis/posts/42715269/" target="_blank">
+
+                        <time datetime="2024-04-01T07:50:15+00:00">April 1, 2024 at 7:50 am</time>
+
+                    </a>
+
+                </div>
+
+            </div>
+
+        </article>
+                <article class="wp-forum-connect-comment">
+
+            <div class="wp-forum-connect-comment-avatar">
+
+                <img alt="" src="https://arstechnica.com/wp-content/plugins/article-forum-connect/public/img/avatar.png" srcset="https://arstechnica.com/wp-content/plugins/article-forum-connect/public/img/avatar.png 2x" class="avatar avatar-60 photo" height="60" width="60" loading="lazy">
+
+            </div>
+
+            <div class="wp-forum-connect-comment-message">
+
+                <div>
+
+                    <b class="fn"><a href="https://arstechnica.com/civis/members/barnsofteng.518713/" target="_blank">BarnSoftEng</a></b>
+
+                </div>
+
+                <div>
+
+                    <blockquote class="xfBb-quote" data-name="KoalaBear">So a prime reason this became potentially exploitable is libsystemd in OpenSSH. Need I say more.</blockquote>The prime reason is a very well funded and capable attacker looked for a way in.<br />
+if not xz or systemd then they would have attacked via the next candidate weak point.
+                </div>
+
+                <div>
+
+                    <a href="https://arstechnica.com/civis/posts/42715270/" target="_blank">
+
+                        <time datetime="2024-04-01T07:51:47+00:00">April 1, 2024 at 7:51 am</time>
+
+                    </a>
+
+                </div>
+
+            </div>
+
+        </article>
+                <article class="wp-forum-connect-comment">
+
+            <div class="wp-forum-connect-comment-avatar">
+
+                <img alt="" src="https://arstechnica.com/wp-content/plugins/article-forum-connect/public/img/avatar.png" srcset="https://arstechnica.com/wp-content/plugins/article-forum-connect/public/img/avatar.png 2x" class="avatar avatar-60 photo" height="60" width="60" loading="lazy">
+
+            </div>
+
+            <div class="wp-forum-connect-comment-message">
+
+                <div>
+
+                    <b class="fn"><a href="https://arstechnica.com/civis/members/om1.355201/" target="_blank">om1</a></b>
+
+                </div>
+
+                <div>
+
+                    <blockquote class="xfBb-quote" data-name="BarnSoftEng">The prime reason is a very well funded and capable attacker looked for a way in.<br />
+if not xz or systemd then they would have attacked via the next candidate weak point.</blockquote>I do know that the OpenSSH devs are very strict on not increasing attack surface. The main reason why they did not want to link to systemd in the distributed version. You can be sure that OpenSSH as distributed contains less opportunity for attackers than the modified versions. That's my main point: modifications by distributions are not always improvements.
+                </div>
+
+                <div>
+
+                    <a href="https://arstechnica.com/civis/posts/42715283/" target="_blank">
+
+                        <time datetime="2024-04-01T08:20:15+00:00">April 1, 2024 at 8:20 am</time>
+
+                    </a>
+
+                </div>
+
+            </div>
+
+        </article>
+                <article class="wp-forum-connect-comment">
+
+            <div class="wp-forum-connect-comment-avatar">
+
+                <img alt="" src="https://cdn.arstechnica.net/civis/data/avatars/m/298/298928.jpg?1668460738" srcset="https://cdn.arstechnica.net/civis/data/avatars/l/298/298928.jpg?1668460738 2x" class="avatar avatar-60 photo" height="60" width="60" loading="lazy">
+
+            </div>
+
+            <div class="wp-forum-connect-comment-message">
+
+                <div>
+
+                    <b class="fn"><a href="https://arstechnica.com/civis/members/mikegale.298928/" target="_blank">MikeGale</a></b>
+
+                </div>
+
+                <div>
+
+                    We are lucky that this was detected and that some competent people have moved in to analyse. I presume more analysis is still being done. (Thanks to them.)<br />
+<br />
+What we don't know is how many <b>other</b> similar attacks have been deployed, and how many are <b>in preparation</b>.<br />
+<br />
+<b>What can decent people do</b> to reduce our risks?<br />
+<br />
+Thoughts that come to mind:<br />
+1.  Some of those who do this, often thankless, maintenance work might like <b>more support</b>.  This might be financial contributions, or people (who know what they're doing) reviewing code submissions.  Those who incorporate these libraries into their own programs (and all users) should maybe think about this.  If there were a &quot;donate to the maintainers&quot; button on a story like this, that would convert the immediate story into something of greater value, if the maintainer would like that.<br />
+2.  Some of the maintainers might appreciate <b>recognition</b>.  Some won't, but worth considering.<br />
+3.  Some who <b>use the libraries</b> can improve the checking they do.<br />
+4.  Unpleasant people who <b>harass maintainers</b> should be detected and treated appropriately.
+                </div>
+
+                <div>
+
+                    <a href="https://arstechnica.com/civis/posts/42715305/" target="_blank">
+
+                        <time datetime="2024-04-01T09:17:04+00:00">April 1, 2024 at 9:17 am</time>
+
+                    </a>
+
+                </div>
+
+            </div>
+
+        </article>
+                <article class="wp-forum-connect-comment">
+
+            <div class="wp-forum-connect-comment-avatar">
+
+                <img alt="" src="https://arstechnica.com/wp-content/plugins/article-forum-connect/public/img/avatar.png" srcset="https://arstechnica.com/wp-content/plugins/article-forum-connect/public/img/avatar.png 2x" class="avatar avatar-60 photo" height="60" width="60" loading="lazy">
+
+            </div>
+
+            <div class="wp-forum-connect-comment-message">
+
+                <div>
+
+                    <b class="fn"><a href="https://arstechnica.com/civis/members/themongoose.322516/" target="_blank">TheMongoose</a></b>
+
+                </div>
+
+                <div>
+
+                    <blockquote class="xfBb-quote" data-name="gautier">&quot;This developer persona has touched dozens of other pieces of open-source software in the past few years.&quot;. Well, I guess the Opensource community have some codes to review. Maybe the xz incident is only the tips of the iceberg.</blockquote>Right? I didn’t realise until I read this article just how far back this started. Now you’ve got to wonder: if this was a group, how  many other so-far benign identities they have, contributing good code and building up reputations. And how easy it would be for them to slip a little something into another fundamental tool.
+                </div>
+
+                <div>
+
+                    <a href="https://arstechnica.com/civis/posts/42715307/" target="_blank">
+
+                        <time datetime="2024-04-01T09:18:14+00:00">April 1, 2024 at 9:18 am</time>
+
+                    </a>
+
+                </div>
+
+            </div>
+
+        </article>
+        
+    </div>
+
+</div>
+
+    
+</div>
+
+    </div>
+      </section>
+                <div class="prev-next-links">
+  <a href="https://arstechnica.com/science/2024/03/the-entire-state-of-illinois-is-going-to-be-crawling-with-cicadas/" rel="prev"><span class="arrow">&larr;</span> Previous story</a>  <a href="https://arstechnica.com/space/2024/04/daily-telescope-no-tricks-today-just-some-celestial-treats-in-the-sky/" rel="next">Next story <span class="arrow">&rarr;</span></a></div>
+        <footer id="article-footer">
+  <div class="recommendations-footer">
+    <div id="story-recommendations">
+  <div class="heading-column">
+    <h3>Related Stories</h3>
+  </div>
+  <ul id="story-recs" class="rec-wrap"></ul>
+</div>
+  </div>
+    <div class="recommendations-footer">
+    <div id="latest-stories">
+  <div class="heading-column">
+    <h3>Today on Ars</h3>
+  </div>
+  <ul id="latest-recs" class="rec-wrap"></ul>
+</div>
+  </div>
+</footer>
+    </div>
+  </article>
+  </main>
+
+  <footer class="site-footer">
+    <nav class="nav-footer">
+
+  <section>
+    <ul>
+      <li><a href="/store/">Store</a></li>
+      <li><a href="/store/product/subscriptions/">Subscribe</a></li>
+      <li><a href="/about-us/">About Us</a></li>
+      <li><a href="/rss-feeds/">RSS Feeds</a></li>
+      <li><a rel="nofollow" href="/security/2024/04/what-we-know-about-the-xz-utils-backdoor-that-almost-infected-the-world/?view=mobile&amp;all=1">View Mobile Site</a></li>
+    </ul>
+  </section>
+
+  <section>
+    <ul>
+      <li><a href="/contact-us/">Contact Us</a></li>
+      <li><a href="/staff-directory/">Staff</a></li>
+      <li><a href="https://advertising.condenast.com/brands/ars-technica">Advertise with us</a></li>
+      <li><a href="/reprints/">Reprints</a></li>
+    </ul>
+  </section>
+
+  <section class="footer-newsletter">
+    <div class="newsletter-wrapper">
+      <h3>
+        <a href="/newsletters/" class="footer-newsletter-sign-up">Newsletter Signup</a>
+      </h3>
+      <p>Join the Ars Orbital Transmission mailing list to get weekly updates delivered to your inbox. <a href="/newsletters/" class="footer-newsletter-sign-up">Sign me up &rarr;</a></p>
+
+      <div class="footer-social-links">
+        <a href="https://twitter.com/arstechnica" class="footer-social-twitter">
+          <svg style="height: 40px; width: 40px;" id="b" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 40 40">
+            <defs>
+              <clipPath id="e">
+                <rect width="40" height="40" fill="none" />
+              </clipPath>
+              <clipPath id="f">
+                <rect width="40" height="40" fill="none" />
+              </clipPath>
+            </defs>
+            <g id="c">
+              <g id="d">
+                <g clip-path="url(#e)">
+                  <g clip-path="url(#f)">
+                    <path d="M16.3,28.1c7.5,0,11.7-6.3,11.7-11.7s0-.4,0-.5c.8-.6,1.5-1.3,2-2.1-.7,.3-1.5,.5-2.4,.6,.9-.5,1.5-1.3,1.8-2.3-.8,.5-1.7,.8-2.6,1-.6-.7-1.4-1.1-2.3-1.2s-1.8,0-2.6,.4c-.8,.4-1.4,1.1-1.8,1.9-.4,.8-.5,1.7-.3,2.6-1.6,0-3.2-.5-4.7-1.2-1.5-.7-2.7-1.8-3.8-3-.5,.9-.7,2-.5,3,.2,1,.9,1.9,1.7,2.5-.7,0-1.3-.2-1.9-.5h0c0,1,.3,1.9,.9,2.7,.6,.7,1.4,1.2,2.4,1.4-.6,.2-1.2,.2-1.9,0,.3,.8,.8,1.5,1.5,2s1.5,.8,2.4,.8c-1.5,1.1-3.2,1.8-5.1,1.8-.3,0-.7,0-1,0,1.9,1.2,4.1,1.8,6.3,1.8" fill="currentColor" />
+                  </g>
+                </g>
+              </g>
+            </g>
+          </svg>
+        </a>
+        <a href="https://mastodon.social/@arstechnica" class="footer-social-mastodon">
+          <svg style="height: 40px; width: 40px;" id="b" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 40 40">
+            <defs>
+              <clipPath id="e">
+                <rect width="40" height="40" fill="none" />
+              </clipPath>
+              <clipPath id="f">
+                <rect width="40" height="40" fill="none" />
+              </clipPath>
+            </defs>
+            <g id="c">
+              <g id="d">
+                <g clip-path="url(#e)">
+                  <g clip-path="url(#f)">
+                    <path d="M29.3,16.6c0-4.3-2.8-5.6-2.8-5.6-1.4-.7-3.9-.9-6.5-1h0c-2.6,0-5,.3-6.4,1,0,0-2.8,1.3-2.8,5.6s0,2.2,0,3.4c.1,4.2,.8,8.4,4.7,9.5,1.8,.5,3.4,.6,4.6,.5,2.3-.1,3.5-.8,3.5-.8v-1.6c0,0-1.7,.5-3.5,.4-1.8,0-3.7-.2-4-2.4,0-.2,0-.4,0-.6,0,0,1.8,.4,4,.5,1.4,0,2.7,0,4-.2,2.5-.3,4.7-1.8,5-3.3,.4-2.2,.4-5.4,.4-5.4h0Zm-3.4,5.6h-2.1v-5.1c0-1.1-.5-1.6-1.4-1.6s-1.5,.6-1.5,1.9v2.8h-2.1v-2.8c0-1.3-.5-1.9-1.5-1.9s-1.4,.5-1.4,1.6v5.1h-2.1v-5.3c0-1.1,.3-1.9,.8-2.6,.6-.6,1.3-1,2.2-1s1.9,.4,2.4,1.2l.5,.9,.5-.9c.5-.8,1.3-1.2,2.4-1.2s1.7,.3,2.2,1c.6,.6,.8,1.5,.8,2.6v5.3Z" fill="currentColor" />
+                  </g>
+                </g>
+              </g>
+            </g>
+          </svg>
+        </a>
+        <a href="https://www.facebook.com/arstechnica" class="footer-social-facebook">
+          <svg style="height: 40px; width: 40px;" id="b" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 40 40">
+            <defs>
+              <clipPath id="e">
+                <rect width="40" height="40" fill="none" />
+              </clipPath>
+              <clipPath id="f">
+                <rect width="40" height="40" fill="none" />
+              </clipPath>
+            </defs>
+            <g id="c">
+              <g id="d">
+                <g clip-path="url(#e)">
+                  <g clip-path="url(#f)">
+                    <path d="M17.3,13.9v2.8h-2v3.4h2v10h4.2v-10h2.8s.3-1.6,.4-3.4h-3.2v-2.3c0-.3,.5-.8,.9-.8h2.3v-3.5h-3.1c-4.4,0-4.3,3.4-4.3,3.9" fill="currentColor" />
+                  </g>
+                </g>
+              </g>
+            </g>
+          </svg>
+        </a>
+        <a href="https://www.youtube.com/@arstechnica" class="footer-social-youtube">
+          <svg style="height: 40px; width: 40px;" id="b" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 40 40">
+            <defs>
+              <clipPath id="e">
+                <rect width="40" height="40" fill="none" />
+              </clipPath>
+              <clipPath id="f">
+                <rect width="40" height="40" fill="none" />
+              </clipPath>
+            </defs>
+            <g id="c">
+              <g id="d">
+                <g clip-path="url(#e)">
+                  <g clip-path="url(#f)">
+                    <path d="M29.6,15.2c-.1-.4-.3-.8-.6-1.1-.3-.3-.7-.5-1.1-.7-1.6-.4-7.8-.4-7.8-.4,0,0-6.3,0-7.8,.4-.4,.1-.8,.3-1.1,.7-.3,.3-.5,.7-.6,1.1-.4,1.6-.4,4.8-.4,4.8,0,0,0,3.3,.4,4.8,.1,.4,.3,.8,.6,1.1,.3,.3,.7,.5,1.1,.7,1.6,.4,7.8,.4,7.8,.4,0,0,6.3,0,7.8-.4,.4-.1,.8-.3,1.1-.7s.5-.7,.6-1.1c.4-1.6,.4-4.8,.4-4.8,0,0,0-3.3-.4-4.8m-11.6,7.8v-5.9l5.2,3-5.2,3Z" fill="currentColor" />
+                  </g>
+                </g>
+              </g>
+            </g>
+          </svg>
+        </a>
+        <a href="https://www.instagram.com/arstechnica/" class="footer-social-instagram">
+          <svg style="height: 40px; width: 40px;" id="b" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 40 40">
+            <defs>
+              <clipPath id="e">
+                <rect width="40" height="40" fill="none" />
+              </clipPath>
+              <clipPath id="f">
+                <rect width="40" height="40" fill="none" />
+              </clipPath>
+            </defs>
+            <g id="c">
+              <g id="d">
+                <g clip-path="url(#e)">
+                  <g clip-path="url(#f)">
+                    <path d="M20,10c2.7,0,3.1,0,4.1,0,1.1,0,1.8,.2,2.4,.5,.7,.3,1.2,.6,1.8,1.2,.6,.6,.9,1.1,1.2,1.8,.2,.6,.4,1.4,.5,2.4,0,1.1,0,1.4,0,4.1s0,3.1,0,4.1c0,1.1-.2,1.8-.5,2.4-.3,.7-.6,1.3-1.2,1.8-.6,.6-1.1,.9-1.8,1.2-.6,.2-1.4,.4-2.4,.5-1.1,0-1.4,0-4.1,0s-3.1,0-4.1,0c-1.1,0-1.8-.2-2.4-.5-.7-.3-1.3-.6-1.8-1.2-.5-.5-.9-1.1-1.2-1.8-.2-.6-.4-1.4-.5-2.4,0-1.1,0-1.4,0-4.1s0-3.1,0-4.1c0-1.1,.2-1.8,.5-2.4,.3-.7,.6-1.2,1.2-1.8,.6-.6,1.1-.9,1.8-1.2,.6-.2,1.4-.4,2.4-.5,1.1,0,1.4,0,4.1,0m0,2.5c-2.4,0-2.7,0-3.7,0-.9,0-1.4,.2-1.7,.3-.4,.1-.8,.4-1.1,.7-.3,.3-.5,.6-.7,1.1-.1,.3-.3,.8-.3,1.7,0,1,0,1.3,0,3.7s0,2.7,0,3.7c0,.9,.2,1.4,.3,1.7,.2,.4,.4,.7,.7,1.1,.3,.3,.6,.5,1.1,.7,.3,.1,.8,.3,1.7,.3,1,0,1.3,0,3.7,0s2.7,0,3.7,0c.9,0,1.4-.2,1.7-.3,.4-.2,.7-.4,1.1-.7,.3-.3,.5-.6,.7-1.1,.1-.3,.3-.8,.3-1.7,0-1,0-1.3,0-3.7s0-2.7,0-3.7c0-.9-.2-1.4-.3-1.7-.1-.4-.4-.8-.7-1.1-.3-.3-.7-.5-1.1-.7-.3-.1-.8-.3-1.7-.3-1,0-1.3,0-3.7,0m0,2.2c.7,0,1.4,.1,2,.4,.6,.3,1.2,.7,1.7,1.1,.5,.5,.9,1.1,1.1,1.7,.3,.6,.4,1.3,.4,2s-.1,1.4-.4,2c-.3,.6-.7,1.2-1.1,1.7-.5,.5-1.1,.9-1.7,1.1-.6,.3-1.3,.4-2,.4-1.4,0-2.7-.6-3.7-1.5-1-1-1.5-2.3-1.5-3.7s.6-2.7,1.5-3.7,2.3-1.5,3.7-1.5m0,8.3c.8,0,1.5-.3,2.1-.9,.6-.6,.9-1.3,.9-2.1s-.3-1.5-.9-2.1c-.6-.6-1.3-.9-2.1-.9s-1.5,.3-2.1,.9c-.6,.6-.9,1.3-.9,2.1s.3,1.5,.9,2.1c.6,.6,1.3,.9,2.1,.9m6.6-8.1c0,.4-.2,.7-.4,1s-.6,.4-1,.4-.7-.2-1-.4c-.3-.3-.4-.6-.4-1s.2-.7,.4-1c.3-.3,.6-.4,1-.4s.7,.2,1,.4c.3,.3,.4,.6,.4,1" fill="currentColor" />
+                  </g>
+                </g>
+              </g>
+            </g>
+          </svg>
+        </a>
+      </div>
+
+    </div>
+  </section>
+</nav>
+
+<section class="footer-terms-logo">
+  <div class="cn-logo">
+    <a href="http://condenast.com/" class="icon icon-logo-cn-us" title="Visit Condé Nast"></a>
+  </div>
+
+  <p id="copyright-terms">
+  CNMN Collection<br>
+  WIRED Media Group<br>
+  © 2024 Condé Nast. All rights reserved. Use of and/or registration on any portion of this site constitutes acceptance of our <a href="https://www.condenast.com/user-agreement/">User Agreement</a> (updated 1/1/20) and <a href="https://www.condenast.com/privacy-policy/">Privacy Policy and Cookie Statement</a> (updated 1/1/20) and <a href="/amendment-to-conde-nast-user-agreement-privacy-policy/">Ars Technica Addendum</a> (effective 8/21/2018). Ars may earn compensation on sales from links on this site. <a href="/affiliate-link-policy/">Read our affiliate link policy</a>.<br>
+  <span style="display: inline-flex; flex-flow: row nowrap; align-items: center; gap: 5px;"><a href="https://www.condenast.com/privacy-policy/#california">Your California Privacy Rights</a> | <img src="https://cdn.arstechnica.net/wp-content/themes/ars/assets/img/privacyoptions123x59-c5c9972158.png" style="height: 1em; width: auto;" /> <a id="ot-sdk-btn" class="ot-sdk-show-settings">Do Not Sell My Personal Information</a></span><br>
+  The material on this site may not be reproduced, distributed, transmitted, cached or otherwise used, except with the prior written permission of Condé Nast.<br>
+  <a href="https://www.condenast.com/online-behavioral-advertising-oba-and-how-to-opt-out-of-oba/#clickheretoreadmoreaboutonlinebehavioraladvertising(oba)">Ad Choices</a>
+</p>
+</section>
+  </footer>
+  </div>
+
+  <script type="text/javascript" src="https://cdn.arstechnica.net/wp-content/themes/ars/assets/js/main-db925e406c.js"></script>
+
+
+<!-- cache hit 307:single/javascript-footer:cecf63838af3f8a4a2ec94340792c586 -->
+        
+
+
+
+
+  
+  
+    <script type='text/javascript' src='https://cdn.arstechnica.net/wp-content/plugins/article-forum-connect/public/js/iframeResizer.min.js?ver=1.2.2' id='article_forum_connect_iframe_resizer-js'></script>
+<script type='text/javascript' src='https://cdn.arstechnica.net/wp-content/plugins/article-forum-connect/public/js/iframe.js?ver=1.2.2' id='article_forum_connect_iframe-js'></script>
+  </body>
+
+  </html>

@@ -171,9 +171,9 @@ Common practice is to use binary features, such as:
 $$b(o_t)=\{\begin{array}{l}{\textstyle \text{1 if }{\textstyle o_t}\text{ has shape “Xxx”}}\\ {\textstyle \text{0 otherwise}}\end{array}$$
 
 
-These features are then paired with the current state $`s`$ to form feature-state pairs $`a=⟨b,s⟩`$:
+These features are then paired with the current state $`s`$ to form feature-state pairs $`a=\langle b,s\rangle `$:
 
-$$f_{⟨b,s⟩}(o_t,s_t)=\{\begin{array}{l}{\textstyle \text{1 if }{\textstyle b(o_t)=1}\text{ and }{\textstyle s_t=s}}\\ {\textstyle \text{0 otherwise}}\end{array}$$
+$$f_{\langle b,s\rangle }(o_t,s_t)=\{\begin{array}{l}{\textstyle \text{1 if }{\textstyle b(o_t)=1}\text{ and }{\textstyle s_t=s}}\\ {\textstyle \text{0 otherwise}}\end{array}$$
 
 
 Feature-state pairs provide useful additional information how which features and states go together and which don’t. For example, we can expect pairs like "is\_capitalized" + “B-ORG” to occur together frequently, capturing the fact that in English named entities are often capitalized.
@@ -183,7 +183,7 @@ MEMMs’ state transition distributions have exponential form and contain a weig
 $$p_{s\mathrm{\prime }}(s\mathrm{\mid }o)=\frac{1}{Z(o,s\mathrm{\prime })}\mathrm{exp}\left(\sum _{a}\lambda _a\text{\hspace{0.17em}}f_a(o,s)\right)$$
 
 
-where $`s\mathrm{\prime }`$ and $`s`$ are the previous and current state, $`o`$ is the current observation, $`a=⟨b,s⟩`$ is a feature-state pair, $`\lambda _a`$ is the learned weight for $`a`$, and $`Z(o,s\mathrm{\prime })`$ is a normalizing term to make the distribution $`p_{s\mathrm{\prime }}`$ sum to one across all next states $`s`$.
+where $`s\mathrm{\prime }`$ and $`s`$ are the previous and current state, $`o`$ is the current observation, $`a=\langle b,s\rangle `$ is a feature-state pair, $`\lambda _a`$ is the learned weight for $`a`$, and $`Z(o,s\mathrm{\prime })`$ is a normalizing term to make the distribution $`p_{s\mathrm{\prime }}`$ sum to one across all next states $`s`$.
 
 | λ<sub>a</sub> | f<sub>a</sub> | λ<sub>a</sub>f<sub>a</sub> |
 | --- | --- | --- |
