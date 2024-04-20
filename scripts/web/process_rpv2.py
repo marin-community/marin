@@ -8,11 +8,11 @@ import html2text
 import markdownify
 from bs4 import BeautifulSoup
 
-import trafilatura
 import readabilipy
 
-from lookup_cc import fetch_page_from_cc, search_cc_index
-from rpv2 import NUM_SHARDS, iterate_rpv2_file
+from markweb.markdown import to_markdown
+from markweb.web.lookup_cc import fetch_page_from_cc, search_cc_index
+from markweb.web.rpv2 import NUM_SHARDS, iterate_rpv2_file
 
 # Setup logging
 logger = logging.getLogger(__name__)
@@ -56,19 +56,14 @@ def extract_from_html(url, html_content, debug=False):
     # trafilatura_xml = trafilatura.extract(html_content, output_format="xml")
 
     cleaned_article = readabilipy.simple_json_from_html_string(html_content, use_readability=True)
+
+
     if cleaned_article:
         cleaned_html = cleaned_article["content"]
-        cleaned_md = h.handle(cleaned_html)
-        # add title and byline to the markdown
-        if cleaned_article["title"]:
-            prefix = f"# {cleaned_article['title']}\n\n"
-        else:
-            prefix = ""
-        # if cleaned_article["byline"]:
-        #     prefix += f"Author: {cleaned_article['byline']}\n\n"
+        cleaned_md = to_markdown(cleaned_html)
 
-        if prefix:
-            cleaned_md = prefix + cleaned_md
+        if cleaned_article["title"]:
+            cleaned_md = f"# {cleaned_article['title']}\n\n{cleaned_md}"
     else:
         logger.warning(f"Failed to extract content from URL: {url}")
         return None
@@ -84,13 +79,12 @@ def extract_from_html(url, html_content, debug=False):
         # "traf_xml": trafilatura_xml,
     }
 
+
     if debug:
+        md = h.handle(cleaned_html)
+        out["text2html_md"] = md
         out["original_html"] = html_content
         out["readable_html"] = cleaned_html
-
-        # try markdownify
-        md = markdownify.markdownify(cleaned_html)
-        out["markdownify_md"] = md
 
     return out
 

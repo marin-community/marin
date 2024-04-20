@@ -11,3 +11,4 @@ regex==2024.4.16
 tensorflow~=2.16.1
 markdownify~=0.12.1
 pytest~=8.1
+chardet~=5.2.0
