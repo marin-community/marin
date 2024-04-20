@@ -45,7 +45,7 @@ def html2text_markdown(html):
     return _global_html2text.handle(html)
 
 
-always_escape_pattern = re.compile(r"([\[\]`])")  # square brackets, backticks
+always_escape_pattern = re.compile(r"([\[\]<>`])")  # square brackets, backticks, angle brackets
 line_start_escape_pattern = re.compile(r"^(\s*)([-+#]\s)", flags=re.MULTILINE)
 # only escape backslashes before ascii punctuation. in gfm, other backslackes are literal
 backslash_before_ascii_punct_pattern = re.compile(r'(\\[!"#$%&\'()*+,\-./:;<=>?@\[\]^_`{|}~])', flags=re.ASCII)
@@ -106,6 +106,7 @@ def minimal_markdown_escape(text):
     # '`' is always escaped
     # '\' is escaped before ascii punctuation
     # '!' doesn't need to be escaped because we escape the following '['
+    # '<' must be escaped in html, and since Markdown uses '<' for html, we should escape it
 
     # this has to come first because it will escape the other characters
     text = backslash_before_ascii_punct_pattern.sub(r"\\\1", text)
