@@ -1,0 +1,78 @@
+<div id="readability-page-1" class="page"><div id="mainContent">
+
+<hr>
+
+
+<hr>
+
+
+<p>&lt;mphantom&gt; element renders invisibly keeping same size and other dimensions, including baseline position, as its contents would have if they were rendered normally. It is used to align parts of an expression by invisibly duplicating sub-expressions.</p>
+<h2>Syntax</h2>
+<p>Here is the simple syntax to use this tag −</p>
+<pre>&lt;mphantom&gt; expression &lt;/mphantom&gt;
+</pre>
+<h2>Parameters</h2>
+<p>Here is the description of all the parameters of this tag −</p>
+<ul>
+<li><p><b>expression</b> − inferred mrow of multiple children.</p></li>
+</ul>
+<h2>Attributes</h2>
+<p>Here is the description of all the attributes of this tag −</p>
+<ul>
+<li><p><b>mathbackground</b> − To specify the background color. Valid formats are #rgb, #rrggbb and html color names.</p></li>
+</ul>
+<h2>Examples</h2>
+
+<pre>&lt;math xmlns = "http://www.w3.org/1998/Math/MathML"&gt;
+   &lt;mfrac&gt;
+      &lt;mrow&gt;
+         &lt;mi&gt; x &lt;/mi&gt;
+         &lt;mo&gt; + &lt;/mo&gt;
+         &lt;mi&gt; y &lt;/mi&gt;
+         &lt;mo&gt; + &lt;/mo&gt;
+         &lt;mi&gt; z &lt;/mi&gt;
+      &lt;/mrow&gt;
+      
+      &lt;mrow&gt;
+         &lt;mi&gt; x &lt;/mi&gt;
+         &lt;mphantom&gt;
+            &lt;mo&gt; + &lt;/mo&gt;
+         &lt;/mphantom&gt;
+         
+         &lt;mphantom&gt;
+            &lt;mi&gt; y &lt;/mi&gt;
+         &lt;/mphantom&gt;
+         &lt;mo&gt; + &lt;/mo&gt;
+         &lt;mi&gt; z &lt;/mi&gt;
+      &lt;/mrow&gt;
+   &lt;/mfrac&gt;
+&lt;/math&gt;  
+</pre>
+<h2>Output</h2>
+<p>
+<math xmlns="http://www.w3.org/1998/Math/MathML">
+<mfrac>
+   <mrow>
+      <mi> x </mi>
+      <mo> + </mo>
+      <mi> y </mi>
+      <mo> + </mo>
+      <mi> z </mi>
+   </mrow>
+   <mrow>
+      <mi> x </mi>
+      <mphantom>
+         <mo> + </mo>
+      </mphantom>
+      <mphantom>
+         <mi> y </mi>
+      </mphantom>
+      <mo> + </mo>
+      <mi> z </mi>
+   </mrow>
+</mfrac>
+</math>   
+</p>
+
+		
+</div></div>
