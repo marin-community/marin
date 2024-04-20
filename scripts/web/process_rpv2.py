@@ -2,15 +2,13 @@ import gzip
 import json
 import logging
 import os
-from urllib.parse import urljoin
 
 import html2text
-import markdownify
-from bs4 import BeautifulSoup
 
 import readabilipy
 
 from markweb.markdown import to_markdown
+from markweb.markweb import convert_page
 from markweb.web.lookup_cc import fetch_page_from_cc, search_cc_index
 from markweb.web.rpv2 import NUM_SHARDS, iterate_rpv2_file
 
@@ -26,14 +24,6 @@ h.mark_code = True  # Optionally convert code blocks to markdown
 h.include_sup_sub = True  # Optionally include <sup> and <sub> tags
 h.pad_tables = False  # We disable b/c it seems like a silly thing for the LLM to do
 
-
-def make_image_links_absolute(html_content, base_url):
-    """Converts relative image URLs to absolute URLs."""
-    soup = BeautifulSoup(html_content, "html.parser")
-    for img in soup.find_all("img"):
-        if img.has_attr("src"):
-            img["src"] = urljoin(base_url, img["src"])
-    return str(soup)
 
 def process_single_doc(url, snapshot_id, debug=False):
     # Implement or integrate your methods for fetching the WARC location and HTML content
@@ -51,28 +41,16 @@ def process_single_doc(url, snapshot_id, debug=False):
 
 
 def extract_from_html(url, html_content, debug=False):
-    html_content = make_image_links_absolute(html_content, url)
     # trafilatura_result = trafilatura.extract(html_content, include_formatting=True, output_format="txt", include_images=True, include_links=True)
     # trafilatura_xml = trafilatura.extract(html_content, output_format="xml")
 
-    cleaned_article = readabilipy.simple_json_from_html_string(html_content, use_readability=True)
+    cleaned = convert_page(html_content, url)
 
-
-    if cleaned_article:
-        cleaned_html = cleaned_article["content"]
-        cleaned_md = to_markdown(cleaned_html)
-
-        if cleaned_article["title"]:
-            cleaned_md = f"# {cleaned_article['title']}\n\n{cleaned_md}"
-    else:
-        logger.warning(f"Failed to extract content from URL: {url}")
-        return None
     out = {
-        "content": cleaned_md,
-        "title": cleaned_article["title"],
-        "byline": cleaned_article["byline"],
-        "date": cleaned_article["date"],
-        "plain_content": cleaned_article["plain_content"],
+        "content": cleaned["content"],
+        "title": cleaned["title"],
+        "byline": cleaned["byline"],
+        "date": cleaned["date"],
         # "original_html": html_content,
         # "readable_html": cleaned_html,
         # "patched_traf_content": trafilatura_result,
@@ -81,6 +59,7 @@ def extract_from_html(url, html_content, debug=False):
 
 
     if debug:
+        cleaned_html = cleaned["html"]
         md = h.handle(cleaned_html)
         out["text2html_md"] = md
         out["original_html"] = html_content
