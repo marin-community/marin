@@ -4,7 +4,7 @@ import re
 
 import markdownify
 import six
-from bs4 import Comment, Doctype, NavigableString
+from bs4 import BeautifulSoup, Comment, Doctype, NavigableString
 from markdownify import MarkdownConverter
 import lxml.etree as ET
 
@@ -121,10 +121,16 @@ class MyMarkdownConverter(MarkdownConverter):
     def __init__(self, **kwargs):
         kwargs = {
             "heading_style": "ATX",
+            "keep_inline_images_in": ["li", "p", "td", "th", "h1", "h2", "h3", "h4", "h5", "h6", "a"],
             # "code_language_callback": self._infer_code_language,
             **kwargs
         }
         super().__init__(**kwargs)
+
+    def convert(self, html):
+        soup = BeautifulSoup(html, 'html.parser')
+        return self.convert_soup(soup)
+
 
     # markdownify doesn't allow difference pre- and post- text for converting sub and sup
     def convert_sub(self, el, text, convert_as_inline):
