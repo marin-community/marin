@@ -11,6 +11,8 @@ def convert_page(html: str, url: str | None = None) -> dict[str, str]:
     tree = BeautifulSoup(reabilitied["content"], "html.parser")
     if url:
         tree = make_links_absolute(tree, url)
+    # reconvert tree to str with absolute URLs
+    reabilitied["content"] = str(tree)
     markdown = to_markdown(tree)
 
     out = {
