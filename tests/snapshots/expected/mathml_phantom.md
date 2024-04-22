@@ -1,5 +1,3 @@
-# MathML - Phantom
-
 
 
 ---
@@ -62,6 +60,5 @@ Here is the description of all the attributes of this tag −
 ## Output
 
 $`\frac{x+y+z}{x+z}`$
-
 
 
