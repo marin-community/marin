@@ -6,13 +6,16 @@ import sys
 
 import fsspec
 
-from markweb.markdown import html2text_markdown, to_markdown
+import markweb.markweb
+from markweb.markdown import to_markdown
 
 
 if __name__ == '__main__':
-    for orig_html_path in sys.argv[1:]:
+    out_dir = "output"
+    os.makedirs(out_dir, exist_ok=True)
+    for url in sys.argv[1:]:
         # being a little sneaky. not really doing crawling.
-        with fsspec.open(orig_html_path, "r",
+        with fsspec.open(url, "r",
                          client_kwargs={
                              "headers": {
                                     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3"
@@ -25,10 +28,15 @@ if __name__ == '__main__':
         #                                   include_images=True, include_tables=True,
         #                                   as_dict=False)
 
-        if orig_html_path.endswith("/"):
-            orig_html_path = orig_html_path[:-1]
+        html_path = url
+        if html_path.endswith("/"):
+            html_path = html_path[:-1]
+        if "?" in url:
+            maybe_html_path = url.split("?")[0]
+            if maybe_html_path:
+                html_path = maybe_html_path
 
-        base_name = os.path.basename(orig_html_path)
+        base_name = os.path.basename(html_path)
         base_name = os.path.splitext(base_name)[0]
 
         # node = out.body
@@ -51,25 +59,18 @@ if __name__ == '__main__':
             # with open(f"{base_name}.traf.md", "w") as f:
             #     print(markdown, file=f)
 
-        import readabilipy
-        reabilitied = readabilipy.simple_json_from_html_string(html, use_readability=True)
-        # readabilipy is beautifulsoup-ba
-        # tree_str = ET.tostring(tree, pretty_print=True).decode()
-        tree = reabilitied["content"]
-        tree_str = str(tree)
-        markdown2 = html2text_markdown(tree_str)
+        out = markweb.markweb.convert_page(html, url=url)
+        title = out["title"]
+        md = out["content"]
 
-        title = reabilitied["title"]
+        with open(f"{out_dir}/{base_name}.orig.html", "w") as f:
+            print(html, file=f)
 
-        with open(f"{base_name}.readability.html", "w") as f:
-            f.write(tree_str)
 
-        with open(f"{base_name}.readability.md", "w") as f:
-            print(f"# {title}\n", file=f)
-            print(markdown2, file=f)
+        with open(f"{out_dir}/{base_name}.readability.html", "w") as f:
+            print(out["html"], file=f)
 
-        md = to_markdown(tree)
-        with open(f"{base_name}.readability.markdownify.md", "w") as f:
+        with open(f"{out_dir}/{base_name}.md", "w") as f:
             print(f"# {title}\n", file=f)
             print(md, file=f)
 

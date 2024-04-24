@@ -4,7 +4,7 @@ import re
 
 import markdownify
 import six
-from bs4 import Comment, Doctype, NavigableString
+from bs4 import BeautifulSoup, Comment, Doctype, NavigableString
 from markdownify import MarkdownConverter
 import lxml.etree as ET
 
@@ -15,12 +15,14 @@ import html2text
 logger = logging.getLogger(__name__)
 
 # TODOs:
-# - [ ] add more tests of core functionality (tables, lists, etc)
-# - [ ] add code block lang id
-# - [ ] add latex math support
+# - [x] add more tests of core functionality (tables, lists, etc)
+# - [x] add code block lang id
+# - [x] add latex math support
 
 def to_markdown(html):
-    text = MyMarkdownConverter().convert(html)
+    if isinstance(html, str):
+        html = BeautifulSoup(html, "html.parser")
+    text = MyMarkdownConverter().convert_soup(html)
     # cleanup: replace nbsp as space
     # this isn't quite right if we preserve html in places, but we currently are not doing that
     text = text.replace("\xa0", " ")
@@ -43,7 +45,7 @@ def html2text_markdown(html):
     return _global_html2text.handle(html)
 
 
-always_escape_pattern = re.compile(r"([\[\]`])")  # square brackets, backticks
+always_escape_pattern = re.compile(r"([\[\]<>`])")  # square brackets, backticks, angle brackets
 line_start_escape_pattern = re.compile(r"^(\s*)([-+#]\s)", flags=re.MULTILINE)
 # only escape backslashes before ascii punctuation. in gfm, other backslackes are literal
 backslash_before_ascii_punct_pattern = re.compile(r'(\\[!"#$%&\'()*+,\-./:;<=>?@\[\]^_`{|}~])', flags=re.ASCII)
@@ -104,6 +106,7 @@ def minimal_markdown_escape(text):
     # '`' is always escaped
     # '\' is escaped before ascii punctuation
     # '!' doesn't need to be escaped because we escape the following '['
+    # '<' must be escaped in html, and since Markdown uses '<' for html, we should escape it
 
     # this has to come first because it will escape the other characters
     text = backslash_before_ascii_punct_pattern.sub(r"\\\1", text)
@@ -121,9 +124,12 @@ class MyMarkdownConverter(MarkdownConverter):
     def __init__(self, **kwargs):
         kwargs = {
             "heading_style": "ATX",
+            "keep_inline_images_in": ["li", "p", "td", "th", "h1", "h2", "h3", "h4", "h5", "h6", "a"],
+            # "code_language_callback": self._infer_code_language,
             **kwargs
         }
         super().__init__(**kwargs)
+
 
     # markdownify doesn't allow difference pre- and post- text for converting sub and sup
     def convert_sub(self, el, text, convert_as_inline):
@@ -141,7 +147,7 @@ class MyMarkdownConverter(MarkdownConverter):
         # the gfm spec says that the alt text is markdown, so we need to escape it
         alt = el.attrs.get('alt', None) or ''
         alt = self.escape(alt)
-        src = el.attrs.get('src', None) or ''
+        src = el.attrs.get('src', None) or el.attrs.get("data-src", None) or ''
         title = el.attrs.get('title', None) or ''
         title_part = ' "%s"' % title.replace('"', r'\"') if title else ''
         if (convert_as_inline
@@ -152,6 +158,15 @@ class MyMarkdownConverter(MarkdownConverter):
 
     def escape(self, text):
         return minimal_markdown_escape(text)
+
+    def _infer_code_language(self, el):
+        text = el.get_text()
+        if not text:
+            return None
+        from .guess_code import predict
+        lang = predict(text)[0][0]
+        return lang.lower()
+
 
 
     def convert_figure(self, el, text, convert_as_inline):
@@ -273,8 +288,12 @@ class MyMarkdownConverter(MarkdownConverter):
         return text1 + text2
 
     def convert_math(self, el, text, convert_as_inline):
-        x = mathml_to_markdown(el)
-        return x
+        try:
+            x = mathml_to_markdown(el)
+            return x
+        except Exception as e:
+            logger.exception(f"Error converting math: {e}")
+            return text
 
 
 
