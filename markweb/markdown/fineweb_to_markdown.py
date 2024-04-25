@@ -26,13 +26,12 @@ def process_wrac_file(s3_url, url_inp_list):
     list: HTML content of the URLs found
     list: Markdown content of the URLs found
     """
-    if not s3_url == "s3://commoncrawl/crawl-data/CC-MAIN-2024-10/segments/1707947473347.0/warc/CC-MAIN-20240220211055-20240221001055-00000.warc.gz":
-        return [(s3_url + "_" + url, s3_url + "211_" + url) for url in url_inp_list]
 
     htmls_mds = []
     with s3.open(s3_url, 'rb') as f:
-        stream = gzip.GzipFile(fileobj=f)  # Decompress data with gzip
-        for record in ArchiveIterator(stream):
+        # TODO: I think the code was a bit faster with this.
+        # stream = gzip.GzipFile(fileobj=f)  # Decompress data with gzip
+        for record in ArchiveIterator(f):
             # Check if it's a response record
             if record.rec_type == 'response':
                 # Process the record
@@ -43,7 +42,7 @@ def process_wrac_file(s3_url, url_inp_list):
                 if url in url_inp_list:
                     # TODO: Is it ok to ignore errors here? I got errors sometimes
                     html_decoded = content.decode(errors='ignore')
-                    htmls_mds.append((html_decoded, to_markdown(html_decoded)))
+                    htmls_mds.append((html_decoded, to_markdown(html_decoded).encode('utf-8', 'ignore').decode('utf-8')))
     logging.info(f"Processed {s3_url}")
     return htmls_mds
 
@@ -62,9 +61,7 @@ def fineweb_to_markdown(input_path, output_path=None):
         # such that urls are all the urls in that file_path
         modified_df = df.groupby('file_path')["url"].transform(lambda x:
                                                                process_wrac_file(x.name, x.tolist()))
-        df["html", "md"] = pd.DataFrame(modified_df.tolist(), index=df.index)
-        import pdb;
-        pdb.set_trace()
+        df[["html", "md"]] = pd.DataFrame(modified_df.tolist(), index=df.index)
 
         # Save the modified df to parquet with same name as input file but with "_markdownified" appended
         file_name = os.path.basename(file).split(".")[0] + "_markdownified" + ".parquet"
