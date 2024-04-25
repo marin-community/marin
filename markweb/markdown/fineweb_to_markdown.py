@@ -57,7 +57,12 @@ def fineweb_to_markdown(input_path, output_path=None):
     input_path (str): Path to the fineweb file, will be processed using glob
     output_path (str): Path to the markdown file
     """
+    if os.path.isdir(input_path): # If input_path is a directory
+        input_path = os.path.join(input_path, "*.parquet")
+
     for file in glob.glob(input_path):
+        print(f"Processing {file}")
+        continue
         df = pd.read_parquet(file)
         # The below line groups by file_path and then applies the process_wrac_file function
         # such that urls are all the urls in that file_path
@@ -80,7 +85,7 @@ def fineweb_to_markdown(input_path, output_path=None):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Convert fineweb to markdown")
-    parser.add_argument('input_path', type=str, help='Path to the fineweb file, will be processed using glob')
+    parser.add_argument('input_path', type=str, help='Path to the fineweb file,if its a directory, all files will be processed')
     parser.add_argument('output_path', type=str, help='Path to the markdown file', default=None, nargs='?')
     args = parser.parse_args()
     fineweb_to_markdown(args.input_path, args.output_path)
