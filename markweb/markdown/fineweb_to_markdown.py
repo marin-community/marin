@@ -1,12 +1,14 @@
 '''Convert fineweb to markdown'''
 import argparse
-import os
 import glob
-import s3fs, gzip
-import pandas as pd
-from markdown import to_markdown
 import logging
+import os
+
+import pandas as pd
+import s3fs
 from warcio.archiveiterator import ArchiveIterator
+
+from markdown import to_markdown
 
 # Initialize S3 file system
 s3 = s3fs.S3FileSystem()
