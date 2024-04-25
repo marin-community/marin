@@ -61,8 +61,7 @@ def fineweb_to_markdown(input_path, output_path=None):
         input_path = os.path.join(input_path, "*.parquet")
 
     for file in glob.glob(input_path):
-        print(f"Processing {file}")
-        continue
+        logging.info(f"Processing {file}")
         df = pd.read_parquet(file)
         # The below line groups by file_path and then applies the process_wrac_file function
         # such that urls are all the urls in that file_path
