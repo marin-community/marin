@@ -42,9 +42,13 @@ def process_wrac_file(s3_url, url_inp_list):
                 # Read the response body
                 content = record.content_stream().read()
                 if url in url_inp_list:
+                    try:
                     # TODO: Is it ok to ignore errors here? I got errors sometimes
-                    html_decoded = content.decode(errors='ignore')
-                    htmls_mds.append((html_decoded, to_markdown(html_decoded).encode('utf-8', 'ignore').decode('utf-8')))
+                        html_decoded = content.decode(errors='ignore')
+                        htmls_mds.append((html_decoded, to_markdown(html_decoded).encode('utf-8', 'ignore').decode('utf-8')))
+                    except Exception as e:
+                        logging.error(f"Error processing {url} in {s3_url}: {e}")
+                        htmls_mds.append(("None", "None"))
     logging.info(f"Processed {s3_url}")
     return htmls_mds
 
