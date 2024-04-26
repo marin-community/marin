@@ -3,17 +3,18 @@ import argparse
 import glob
 import logging
 import os
+from concurrent.futures.thread import ThreadPoolExecutor
 
 import pandas as pd
 import s3fs
 from warcio.archiveiterator import ArchiveIterator
 
 from markdown import to_markdown
+from markweb.markweb import convert_page
 
 # Initialize S3 file system
 s3 = s3fs.S3FileSystem()
 logging.basicConfig(level=logging.INFO)
-
 
 def process_wrac_file(s3_url, url_inp_list):
     """
@@ -28,28 +29,37 @@ def process_wrac_file(s3_url, url_inp_list):
     list: HTML content of the URLs found
     list: Markdown content of the URLs found
     """
-
     htmls_mds = []
+
+    length_url_inp_list = len(url_inp_list)
+    length_warc = 0
+    logging.info(f"Processing {s3_url}")
     with s3.open(s3_url, 'rb') as f:
         # TODO: I think the code was a bit faster with this.
         # stream = gzip.GzipFile(fileobj=f)  # Decompress data with gzip
-        for record in ArchiveIterator(f):
+        for record in ArchiveIterator(f, block_size=1024*1024):
             # Check if it's a response record
             if record.rec_type == 'response':
                 # Process the record
                 url = record.rec_headers.get_header('WARC-Target-URI')
-
-                # Read the response body
-                content = record.content_stream().read()
+                length_warc += 1
+                if length_warc % 1000 == 0: logging.info(f"Processed {length_warc} records")
                 if url in url_inp_list:
                     try:
-                    # TODO: Is it ok to ignore errors here? I got errors sometimes
+                        # TODO: Is it ok to ignore errors here? I got errors sometimes
+                        # Read the response body
+                        content = record.content_stream().read()
                         html_decoded = content.decode(errors='ignore')
-                        htmls_mds.append((html_decoded, to_markdown(html_decoded).encode('utf-8', 'ignore').decode('utf-8')))
+                        markdown = convert_page(html_decoded, url)
+                        htmls_mds.append((html_decoded,
+                                          markdown["content"].encode('utf-8', 'ignore').decode('utf-8')))
                     except Exception as e:
-                        logging.error(f"Error processing {url} in {s3_url}: {e}")
+                        logging.error(f"This is the real ERROR")
+                        if not "CSS stylesheet" in str(e):
+                            # Ignore CSS stylesheet errors
+                            logging.error(f"Error processing {url} in {s3_url}: {e}")
                         htmls_mds.append(("None", "None"))
-    logging.info(f"Processed {s3_url}")
+    logging.info(f"Processed {s3_url}, found {length_warc} records, {length_url_inp_list} urls, {length_warc}/{length_url_inp_list} ratio")
     return htmls_mds
 
 
@@ -84,7 +94,6 @@ def fineweb_to_markdown(input_path, output_path=None):
         output_path = os.path.join(output_path, file_name)
 
         df.to_parquet(output_path)
-
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Convert fineweb to markdown")
