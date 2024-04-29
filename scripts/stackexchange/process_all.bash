@@ -8,9 +8,9 @@ GCS_PREFIX="gs://levanter-data/markweb-raw/stackexchange/"
 # we want "gs://levanter-data/markweb-raw/stackexchange/archive.org/stackexchange/3dprinting.stackexchange.com.7z"
 # (That is, replace https:// with gs://levanter-data/markweb-raw/stackexchange/
 
-for path in $(grep stackexchange.com ${D}/stack_exchange_urls.tsv); do
+for path in $(grep http ${D}/stack_exchange_urls.tsv); do
     echo "Processing $path"
-    gcspath=$(echo $path | sed 's|https://|gs://levanter-data/markweb-raw/stackexchange/|')
+    gcspath=$(echo $path | sed "s|https://|$GCS_PREFIX|")
     echo $gcspath
     python ${D}/process_stack_exchange.py $gcspath
 done

@@ -130,9 +130,22 @@ def process_posts_xml(xml):
 if __name__ == '__main__':
     import sys
     if len(sys.argv) < 2:
-        print('Usage: python process_stack_exchange.py <posts.xml>')
+        print('Usage: python process_stack_exchange.py <posts.xml>', file=sys.stderr)
         sys.exit(1)
     xml = sys.argv[1]
+    if xml.endswith('.7z'):
+        domain = os.path.basename(xml)[:-3]
+    else:
+        dirname = os.path.dirname(xml)
+        domain = os.path.basename(dirname)
+
+    print(f"Processing {xml} for domain {domain}", file=sys.stderr)
+
+    out_path = f"{domain}.jsonl.gz"
+    if os.path.exists(out_path):
+        print(f"Output file {out_path} already exists, skipping", file=sys.stderr)
+        sys.exit(0)
+
     with tempfile.TemporaryDirectory() as tmpdir:
         # the file might be in a blob store, so we need to download it
         if not os.path.exists(xml):
@@ -150,12 +163,12 @@ if __name__ == '__main__':
             import py7zr
             with py7zr.SevenZipFile(local_path, mode='r') as archive:
                 archive.extract(tmpdir, targets=['Posts.xml'])
-                domain = os.path.basename(local_path).split('.')[0]
                 xml = os.path.join(tmpdir, 'Posts.xml')
-        else:
-            domain = os.path.basename(os.path.dirname(xml))
 
-        with fsspec.open(f"{domain}.jsonl.gz", 'wt', compression='gzip') as f:
+                if not os.path.exists(xml):
+                    raise FileNotFoundError(f"Expected to find Posts.xml in {local_path}, but it was not found")
+
+        with fsspec.open(out_path, 'wt', compression='gzip') as f:
             for aq in process_posts_xml(xml):
                 question_markdown = to_markdown(aq.question)
                 answers_markdown = [to_markdown(a.body) for a in aq.answers]
