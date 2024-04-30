@@ -51,7 +51,6 @@ always_escape_pattern = re.compile(r"([\[\]<>`])")  # square brackets, backticks
 line_start_escape_pattern = re.compile(r"^(\s*)([-+#]\s)", flags=re.MULTILINE)
 # only escape backslashes before ascii punctuation. in gfm, other backslackes are literal
 backslash_before_ascii_punct_pattern = re.compile(r'(\\[!"#$%&\'()*+,\-./:;<=>?@\[\]^_`{|}~])', flags=re.ASCII)
-double_tilde_pattern = re.compile(r"~~", flags=re.ASCII)
 
 
 # reference: https://github.github.com/gfm/
@@ -110,14 +109,12 @@ def minimal_markdown_escape(text):
     # '\' is escaped before ascii punctuation
     # '!' doesn't need to be escaped because we escape the following '['
     # '<' must be escaped in html, and since Markdown uses '<' for html, we should escape it
-    # `~` is escaped if it's preceded by another `~` (to avoid strikethrough or code fence)
 
     # this has to come first because it will escape the other characters
     text = backslash_before_ascii_punct_pattern.sub(r"\\\1", text)
     text = line_start_escape_pattern.sub(r"\1\\\2", text)
     text = flanking_pattern.sub(r"\\\1", text)
     text = always_escape_pattern.sub(r"\\\1", text)
-    text = double_tilde_pattern.sub(r"~\\~", text)
 
     return text
 
