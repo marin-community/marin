@@ -1,6 +1,7 @@
 import logging
 import os
 import re
+from textwrap import fill
 
 import markdownify
 import six
@@ -178,7 +179,6 @@ class MyMarkdownConverter(MarkdownConverter):
         return lang.lower()
 
 
-
     def convert_figure(self, el, text, convert_as_inline):
         if convert_as_inline:
             return text
@@ -236,7 +236,6 @@ class MyMarkdownConverter(MarkdownConverter):
         # has block elements in it.
         if self._is_layout_table(node):
             return self._process_layout_table(node, convert_as_inline)
-
 
         # markdown headings or cells can't include
         # block elements (elements w/newlines)
@@ -382,6 +381,20 @@ class MyMarkdownConverter(MarkdownConverter):
         except Exception as e:
             logger.exception(f"Error converting math: {e}")
             return text
+
+    def convert_p(self, el, text, convert_as_inline):
+        if convert_as_inline:
+            # if el has a sibling, add a <br> at the end
+            if el.next_sibling and text:
+                return text + '<br>'
+            return text
+
+        if self.options['wrap']:
+            text = fill(text,
+                        width=self.options['wrap_width'],
+                        break_long_words=False,
+                        break_on_hyphens=False)
+        return '%s\n\n' % text if text else ''
 
     def process_text(self, el):
         text = six.text_type(el) or ''
