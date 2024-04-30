@@ -222,6 +222,12 @@ class MyMarkdownConverter(MarkdownConverter):
             return ''
         text = ''
 
+        # some sites use tables for layout, and so we need to 'inline' them. Our heuristic is that if the table
+        # has block elements in it.
+        if self._is_layout_table(node):
+            return self._process_layout_table(node, convert_as_inline)
+
+
         # markdown headings or cells can't include
         # block elements (elements w/newlines)
         isHeading = markdownify.html_heading_re.match(node.name) is not None
@@ -268,6 +274,47 @@ class MyMarkdownConverter(MarkdownConverter):
             if convert_fn and self.should_convert_tag(node.name):
                 text = convert_fn(node, text, convert_as_inline)
 
+        return text
+
+
+    def _is_layout_table(self, table):
+        # heuristic to determine if a table is for layout
+        if table.name != 'table' and table.name != 'tbody':
+            return False
+
+        # if the table has th, caption, thead, or summary, it's probably not for layout
+        if table.select_one('th, caption, thead, summary'):
+            return False
+
+        # unlikely, but if it's aria role=presentation, it's for layout
+        if table.get('role') == 'presentation':
+            return True
+
+        # if the table has exactly 1 td element (which happens after readability), then it's probably for layout
+        if len(table.select('td')) == 1:
+            return True
+
+        # if there are block elements anywhere in the table, it's probably for layout
+        if table.select_one('div, h1, h2, h3, h4, h5, h6, blockquote, pre, ul, ol, dl, table, video, address, hr, section, main, nav, aside'):
+            return True
+
+        # now we want to understand paragraphs. We want to look at each cell and see how many paragraphs are in it
+        # if it's more than 1, it's probably for layout
+        # Actually, we're fine with <p>'s. we'll convert them to <br>'s.
+        # for td in table.select('td'):
+        #     if len(td.select('p')) > 1:
+        #         return True
+
+
+        return False
+
+    def _process_layout_table(self, table, convert_as_inline):
+        # if the table is for layout, we want to inline it
+        text = ''
+        for row in table.find_all('tr'):
+            for cell in row.find_all(['td', 'th']):
+                text += self.process_tag(cell, convert_as_inline, children_only=True)
+            text += '\n'
         return text
 
     def convert_li(self, el, text, convert_as_inline):
