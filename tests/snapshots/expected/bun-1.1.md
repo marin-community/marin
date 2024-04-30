@@ -511,7 +511,7 @@ When you first add a package, Bun will tell you if the package had a lifecycle s
 ```
 bun add v1.1.0  
  Saved lockfile installed @biomejs/biome@1.6.1 with binaries:  
-- biome
+  - biome
 
  1 package installed [55.00ms]
 
@@ -525,7 +525,7 @@ If you want to see which scripts were blocked, you can run `bun pm untrusted`.
 
 ```
 bun pm untrusted v1.1.0./node_modules/@biomejs/biome @1.6.1  
-» [postinstall]: node scripts/postinstall.js
+ » [postinstall]: node scripts/postinstall.js
 
 These dependencies had their lifecycle scripts blocked during install.
 
@@ -539,7 +539,7 @@ If you trust the package, you can run `bun pm trust [package]`. If you want to t
 
 ```
 bun pm trust v1.1.0./node_modules/@biomejs/biome @1.6.1  
-✓ [postinstall]: node scripts/postinstall.js
+ ✓ [postinstall]: node scripts/postinstall.js
 
  1 script ran across 1 package [71.00ms]
 
