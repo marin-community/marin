@@ -32,15 +32,15 @@ Among the models we evaluated, DBRX Instruct scores the highest on two composite
 
 | Model | DBRX Instruct | Mixtral Instruct | Mixtral Base | LLaMA2-70B Chat | LLaMA2-70B Base | Grok-1<sup>1</sup> |
 | --- | --- | --- | --- | --- | --- | --- |
-| Open LLM Leaderboard<sup>2</sup>(Avg of next 6 rows) | 74.5% | 72.7% | 68.4% | 62.4% | 67.9% | — |
+| Open LLM Leaderboard<sup>2</sup><br>(Avg of next 6 rows) | 74.5% | 72.7% | 68.4% | 62.4% | 67.9% | — |
 | ARC-challenge 25-shot | 68.9% | 70.1% | 66.4% | 64.6% | 67.3% | — |
 | HellaSwag 10-shot | 89.0% | 87.6% | 86.5% | 85.9% | 87.3% | — |
 | MMLU 5-shot | 73.7% | 71.4% | 71.9% | 63.9% | 69.8% | 73.0% |
 | Truthful QA 0-shot | 66.9% | 65.0% | 46.8% | 52.8% | 44.9% | — |
 | WinoGrande 5-shot | 81.8% | 81.1% | 81.7% | 80.5% | 83.7% | — |
 | GSM8k CoT 5-shot maj@1<sup>3</sup> | 66.9% | 61.1% | 57.6% | 26.7% | 54.1% | 62.9% (8-shot) |
-| Gauntlet v0.3<sup>4</sup>(Avg of 30+ diverse tasks) | 66.8% | 60.7% | 56.8% | 52.8% | 56.4% | — |
-| HumanEval<sup>5</sup>0-Shot, pass@1(Programming) | 70.1% | 54.8% | 40.2% | 32.2% | 31.0% | 63.2% |
+| Gauntlet v0.3<sup>4</sup><br>(Avg of 30+ diverse tasks) | 66.8% | 60.7% | 56.8% | 52.8% | 56.4% | — |
+| HumanEval<sup>5</sup><br>0-Shot, pass@1<br>(Programming) | 70.1% | 54.8% | 40.2% | 32.2% | 31.0% | 63.2% |
 
 Table 1. Quality of DBRX Instruct and leading open models. See footnotes for details on how numbers were collected. Bolded and underlined is the highest score.
 
