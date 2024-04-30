@@ -256,6 +256,9 @@ class MyMarkdownConverter(MarkdownConverter):
                                       'table', 'thead', 'tbody', 'tfoot',
                                       'tr', 'td', 'th']
 
+        def is_in_preformatted(el):
+            return el.name == 'pre' or el.find_parent('pre')
+
         if is_nested_node(node):
             for el in node.children:
                 # Only extract (remove) whitespace-only text node if any of the
@@ -273,14 +276,16 @@ class MyMarkdownConverter(MarkdownConverter):
                     el.extract()
 
         # Convert the children first
+        is_in_pre = is_in_preformatted(node)
+
         for el in node.children:
             if isinstance(el, Comment) or isinstance(el, Doctype):
                 continue
             elif isinstance(el, NavigableString):
                 next_text = self.process_text(el)
-                text = self.join_text(text, next_text)
+                text = self.join_text(text, next_text, is_in_pre)
             else:
-                text = self.join_text(text, self.process_tag(el, convert_children_as_inline))
+                text = self.join_text(text, self.process_tag(el, convert_children_as_inline), is_in_pre)
 
         if not children_only:
             convert_fn = getattr(self, 'convert_%s' % node.name, None)
@@ -351,43 +356,27 @@ class MyMarkdownConverter(MarkdownConverter):
         return '%s %s\n' % (bullet, (text or '').strip())
 
 
-    def join_text(self, text1, text2):
-        # mostly want to remove extra newlines
-        # in MD, two newlines is a paragraph break, which is the most we want
-        # so if text1 already has two newlines, we don't want to add another
+    def join_text(self, text1, text2, is_in_pre):
+        if not is_in_pre:
+            # mostly want to remove extra newlines
+            # in MD, two newlines is a paragraph break, which is the most we want
+            # so if text1 already has two newlines, we don't want to add another
 
-        # more specifically we want to get the tail from text1 which is \n\s*$ and the head from text2 which is ^\n*
-        # and replace it with at most two newlines
+            # more specifically we want to get the tail from text1 which is \n\s*$ and the head from text2 which is ^\n*
+            # and replace it with at most two newlines
+            tail1 = re.search(r'\n\s*$', text1)
+            head2 = re.search(r'^\n*', text2)
 
-        tail1 = re.search(r'\n\s*$', text1)
-        head2 = re.search(r'^\n*', text2)
-
-        if tail1 and head2:
-            text1 = text1[:tail1.start()]
-            text2 = text2[head2.end():]
-            newline_count = tail1.group().count('\n') + head2.group().count('\n')
-            if newline_count > 2:
-                newline_count = 2
-            text2 = '\n' * newline_count + text2
+            if tail1 and head2:
+                text1 = text1[:tail1.start()]
+                text2 = text2[head2.end():]
+                newline_count = tail1.group().count('\n') + head2.group().count('\n')
+                if newline_count > 2:
+                    newline_count = 2
+                text2 = '\n' * newline_count + text2
 
         return text1 + text2
 
-
-        # if text1.endswith('\n\n'):
-        #     if text2.startswith('\n\n'):
-        #         text2 = text2[2:]
-        #     elif text2.startswith('\n'):
-        #         text2 = text2[1:]
-        #     elif text2 == ' ':  # don't add a single space if we're right after a newline
-        #         return text1
-        # elif text1.endswith('\n'):
-        #     if text2.startswith('\n\n'):
-        #         text2 = text2[1:]
-        #     elif text2.startswith('\n'):
-        #         text2 = text2[0:]
-        #     elif text2 == ' ':
-        #         return text1
-        # return text1 + text2
 
     def convert_math(self, el, text, convert_as_inline):
         try:
