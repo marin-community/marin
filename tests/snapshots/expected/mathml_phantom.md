@@ -61,4 +61,3 @@ Here is the description of all the attributes of this tag −
 
 $`\frac{x+y+z}{x+z}`$
 
-
