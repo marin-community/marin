@@ -30,8 +30,6 @@ In the book, a baby bird hatches while his mother is away looking for food for h
 
 [![](https://1.bp.blogspot.com/-nYoEReZWHwc/UWx_AbSuPhI/AAAAAAAABQ8/N0tQkKhQxTY/s1600/foto+2.JPG)](https://1.bp.blogspot.com/-nYoEReZWHwc/UWx_AbSuPhI/AAAAAAAABQ8/N0tQkKhQxTY/s1600/foto+2.JPG)
 
-  
-
 I told Sofia we'd be making our own tree.  First we folded our papers in half and drew our tree trunks on the bottom half:
 
 | [![](https://4.bp.blogspot.com/-oj30_nxNGO8/UWx_CuR8qQI/AAAAAAAABPU/rt7Jh7q-C9k/s1600/foto+3.JPG)](https://4.bp.blogspot.com/-oj30_nxNGO8/UWx_CuR8qQI/AAAAAAAABPU/rt7Jh7q-C9k/s1600/foto+3.JPG) |
@@ -65,8 +63,6 @@ Then we worked on our apple trees:
 [![](https://2.bp.blogspot.com/-0ZxCcLicmTQ/UWx_BN-zoxI/AAAAAAAABOo/tHVgRxUkHx0/s1600/foto+2.JPG)](https://2.bp.blogspot.com/-0ZxCcLicmTQ/UWx_BN-zoxI/AAAAAAAABOo/tHVgRxUkHx0/s1600/foto+2.JPG)
 
 [![](https://1.bp.blogspot.com/-cHbG6oHH5R4/UWx_E8orhkI/AAAAAAAABQg/HWt5HqCYvEs/s1600/foto+5.JPG)](https://1.bp.blogspot.com/-cHbG6oHH5R4/UWx_E8orhkI/AAAAAAAABQg/HWt5HqCYvEs/s1600/foto+5.JPG)
-
-  
 
 | [![](https://3.bp.blogspot.com/-nCm6KdF4_jE/UWx_FMoednI/AAAAAAAABQk/9TnCBMlIX_s/s1600/foto+5.JPG)](https://3.bp.blogspot.com/-nCm6KdF4_jE/UWx_FMoednI/AAAAAAAABQk/9TnCBMlIX_s/s1600/foto+5.JPG) |
 | --- |

@@ -39,6 +39,8 @@ _global_html2text.mark_code = True  # Optionally convert code blocks to markdown
 _global_html2text.include_sup_sub = True  # Optionally include <sup> and <sub> tags
 _global_html2text.pad_tables = False
 
+whitespace_re = re.compile(r'[\t ]+')
+spaces_re = re.compile(r'^[ ]+$')
 
 def html2text_markdown(html):
     html = str(html)
@@ -49,6 +51,7 @@ always_escape_pattern = re.compile(r"([\[\]<>`])")  # square brackets, backticks
 line_start_escape_pattern = re.compile(r"^(\s*)([-+#]\s)", flags=re.MULTILINE)
 # only escape backslashes before ascii punctuation. in gfm, other backslackes are literal
 backslash_before_ascii_punct_pattern = re.compile(r'(\\[!"#$%&\'()*+,\-./:;<=>?@\[\]^_`{|}~])', flags=re.ASCII)
+double_tilde_pattern = re.compile(r"~~", flags=re.ASCII)
 
 
 # reference: https://github.github.com/gfm/
@@ -107,16 +110,16 @@ def minimal_markdown_escape(text):
     # '\' is escaped before ascii punctuation
     # '!' doesn't need to be escaped because we escape the following '['
     # '<' must be escaped in html, and since Markdown uses '<' for html, we should escape it
+    # `~` is escaped if it's preceded by another `~` (to avoid strikethrough or code fence)
 
     # this has to come first because it will escape the other characters
     text = backslash_before_ascii_punct_pattern.sub(r"\\\1", text)
     text = line_start_escape_pattern.sub(r"\1\\\2", text)
     text = flanking_pattern.sub(r"\\\1", text)
     text = always_escape_pattern.sub(r"\\\1", text)
-
+    text = double_tilde_pattern.sub(r"~\\~", text)
 
     return text
-
 
 
 class MyMarkdownConverter(MarkdownConverter):
@@ -142,10 +145,20 @@ class MyMarkdownConverter(MarkdownConverter):
             return ""
         return f"<sup>{text}</sup>"
 
+    def convert_br(self, el, text, convert_as_inline):
+        if convert_as_inline:
+            return "<br>"
+
+        if self.options['newline_style'].lower() == markdownify.BACKSLASH:
+            return '\\\n'
+        else:
+            return '  \n'
+
     def convert_img(self, el, text, convert_as_inline):
         # mostly copied from the parent class
         # the gfm spec says that the alt text is markdown, so we need to escape it
         alt = el.attrs.get('alt', None) or ''
+        alt = alt.replace('\n', ' ')
         alt = self.escape(alt)
         src = el.attrs.get('src', None) or el.attrs.get("data-src", None) or ''
         title = el.attrs.get('title', None) or ''
@@ -342,17 +355,39 @@ class MyMarkdownConverter(MarkdownConverter):
         # mostly want to remove extra newlines
         # in MD, two newlines is a paragraph break, which is the most we want
         # so if text1 already has two newlines, we don't want to add another
-        if text1.endswith('\n\n'):
-            if text2.startswith('\n\n'):
-                text2 = text2[2:]
-            elif text2.startswith('\n'):
-                text2 = text2[1:]
-        elif text1.endswith('\n'):
-            if text2.startswith('\n\n'):
-                text2 = text2[1:]
-            elif text2.startswith('\n'):
-                text2 = text2[0:]
+
+        # more specifically we want to get the tail from text1 which is \n\s*$ and the head from text2 which is ^\n*
+        # and replace it with at most two newlines
+
+        tail1 = re.search(r'\n\s*$', text1)
+        head2 = re.search(r'^\n*', text2)
+
+        if tail1 and head2:
+            text1 = text1[:tail1.start()]
+            text2 = text2[head2.end():]
+            newline_count = tail1.group().count('\n') + head2.group().count('\n')
+            if newline_count > 2:
+                newline_count = 2
+            text2 = '\n' * newline_count + text2
+
         return text1 + text2
+
+
+        # if text1.endswith('\n\n'):
+        #     if text2.startswith('\n\n'):
+        #         text2 = text2[2:]
+        #     elif text2.startswith('\n'):
+        #         text2 = text2[1:]
+        #     elif text2 == ' ':  # don't add a single space if we're right after a newline
+        #         return text1
+        # elif text1.endswith('\n'):
+        #     if text2.startswith('\n\n'):
+        #         text2 = text2[1:]
+        #     elif text2.startswith('\n'):
+        #         text2 = text2[0:]
+        #     elif text2 == ' ':
+        #         return text1
+        # return text1 + text2
 
     def convert_math(self, el, text, convert_as_inline):
         try:
@@ -361,6 +396,27 @@ class MyMarkdownConverter(MarkdownConverter):
         except Exception as e:
             logger.exception(f"Error converting math: {e}")
             return text
+
+    def process_text(self, el):
+        text = six.text_type(el) or ''
+
+        # normalize whitespace if we're not inside a preformatted element
+        if not el.find_parent('pre'):
+            text = whitespace_re.sub(' ', text)
+
+        # escape special characters if we're not inside a preformatted or code element
+        if not el.find_parent(['pre', 'code', 'kbd', 'samp']):
+            text = self.escape(text)
+
+        # remove trailing whitespaces if any of the following condition is true:
+        # - current text node is the last node in li
+        # - current text node is followed by an embedded list
+        if (el.parent.name == 'li'
+                and (not el.next_sibling
+                     or el.next_sibling.name in ['ul', 'ol'])):
+            text = text.rstrip()
+
+        return text
 
 
 

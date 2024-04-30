@@ -124,7 +124,5 @@ I will close by stating that, when I went to Ukraine in the summer of 2002 (?) â
  March 23, 2024 @ 9:49 pm 
 Â· Filed by [Victor Mair](https://languagelog.ldc.upenn.edu/nll/?author=13 "Posts by Victor Mair") under [Language and culture](https://languagelog.ldc.upenn.edu/nll/?cat=39), [Language and ethnicity](https://languagelog.ldc.upenn.edu/nll/?cat=323), [Language and history](https://languagelog.ldc.upenn.edu/nll/?cat=312)
 
-
 [Permalink](https://languagelog.ldc.upenn.edu/nll/?p=63123 "Permanent link to Scythians between Russia and Ukraine")
-
 

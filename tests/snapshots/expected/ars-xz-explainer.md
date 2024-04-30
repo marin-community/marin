@@ -4,15 +4,9 @@
 
 ## Malicious updates made to a ubiquitous tool were a few weeks away from going mainstream.
 
- 
-
 ![What we know about the xz Utils backdoor that almost infected the world](https://cdn.arstechnica.net/wp-content/uploads/2024/04/malware-800x450.jpg)
 
 Getty Images
-
-
-
- 
 
 On Friday, a lone Microsoft developer rocked the world when he revealed a [backdoor](https://arstechnica.com/security/2024/03/backdoor-found-in-widely-used-linux-utility-breaks-encrypted-ssh-connections/) had been intentionally planted in xz Utils, an open source data compression utility available on almost all installations of Linux and other Unix-like operating systems. The person or people behind this project likely spent years on it. They were likely very close to seeing the backdoor update merged into Debian and Red Hat, the two biggest distributions of Linux, when an eagle-eyed software developer spotted something fishy.
 
@@ -33,8 +27,6 @@ Through sheer luck and Freund’s careful eye, he eventually discovered the prob
 It's hard to overstate the complexity of the social engineering and the inner workings of the backdoor. Thomas Roccia, a researcher at Microsoft, [published](https://infosec.exchange/@fr0gger/112189232773640259) a graphic on Mastodon that helps visualize the sprawling extent of the nearly successful endeavor to spread a backdoor with a reach that would have dwarfed the [SolarWinds event](https://arstechnica.com/information-technology/2020/12/only-an-elite-few-solarwinds-hack-victims-received-follow-on-attacks/) from 2020.
 
 [![](https://cdn.arstechnica.net/wp-content/uploads/2024/04/xz-backdoor-graphic-thomas-roccia-640x896.jpg)](https://cdn.arstechnica.net/wp-content/uploads/2024/04/xz-backdoor-graphic-thomas-roccia-scaled.jpg)
-
-
 
 **What does the backdoor do?**
 

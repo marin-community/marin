@@ -72,7 +72,7 @@ each other out,' and left Hazel in his uncomfortable position."
 
  *Murray 
 Montgomery*  
- [**Lone Star Diary**](../DEPARTMENTS/Guest_Columnists/Times_past/Times_Past_column.htm)
+[**Lone Star Diary**](../DEPARTMENTS/Guest_Columnists/Times_past/Times_Past_column.htm)
 
 February 
 13, 2009 Column   
