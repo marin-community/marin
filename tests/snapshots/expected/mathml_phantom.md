@@ -14,7 +14,6 @@ Here is the simple syntax to use this tag −
 <mphantom> expression </mphantom>
 
 ```
-
 ## Parameters
 
 Here is the description of all the parameters of this tag −
@@ -56,7 +55,6 @@ Here is the description of all the attributes of this tag −
 </math>  
 
 ```
-
 ## Output
 
 $`\frac{x+y+z}{x+z}`$

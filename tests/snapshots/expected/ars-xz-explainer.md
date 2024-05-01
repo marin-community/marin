@@ -1,4 +1,4 @@
-
+# What we know about the xz Utils backdoor that almost infected the world
 
 #### NIGHTMARE SUPPLY CHAIN ATTACK SCENARIO —
 
@@ -7,6 +7,8 @@
 ![What we know about the xz Utils backdoor that almost infected the world](https://cdn.arstechnica.net/wp-content/uploads/2024/04/malware-800x450.jpg)
 
 Getty Images
+
+
 
 On Friday, a lone Microsoft developer rocked the world when he revealed a [backdoor](https://arstechnica.com/security/2024/03/backdoor-found-in-widely-used-linux-utility-breaks-encrypted-ssh-connections/) had been intentionally planted in xz Utils, an open source data compression utility available on almost all installations of Linux and other Unix-like operating systems. The person or people behind this project likely spent years on it. They were likely very close to seeing the backdoor update merged into Debian and Red Hat, the two biggest distributions of Linux, when an eagle-eyed software developer spotted something fishy.
 
@@ -27,6 +29,8 @@ Through sheer luck and Freund’s careful eye, he eventually discovered the prob
 It's hard to overstate the complexity of the social engineering and the inner workings of the backdoor. Thomas Roccia, a researcher at Microsoft, [published](https://infosec.exchange/@fr0gger/112189232773640259) a graphic on Mastodon that helps visualize the sprawling extent of the nearly successful endeavor to spread a backdoor with a reach that would have dwarfed the [SolarWinds event](https://arstechnica.com/information-technology/2020/12/only-an-elite-few-solarwinds-hack-victims-received-follow-on-attacks/) from 2020.
 
 [![](https://cdn.arstechnica.net/wp-content/uploads/2024/04/xz-backdoor-graphic-thomas-roccia-640x896.jpg)](https://cdn.arstechnica.net/wp-content/uploads/2024/04/xz-backdoor-graphic-thomas-roccia-scaled.jpg)
+
+
 
 **What does the backdoor do?**
 
@@ -60,8 +64,8 @@ Developer Sam James provided [this overview](https://gist.github.com/thesamesam/
 > 
 > * The release tarballs upstream publishes don't have the same code that GitHub has. This is common in C projects so that downstream consumers don't need to remember how to run autotools and autoconf. The version of build-to-host.m4 in the release tarballs differs wildly from the upstream on GitHub.
 > * There are crafted test files in the tests/ folder within the git repository too. These files are in the following commits:
-> 	+ tests/files/bad-3-corrupt\_lzma2.xz ([cf44e4b7f5dfdbf8c78aef377c10f71e274f63c0](https://github.com/tukaani-project/xz/commit/cf44e4b7f5dfdbf8c78aef377c10f71e274f63c0), [74b138d2a6529f2c07729d7c77b1725a8e8b16f1](https://github.com/tukaani-project/xz/commit/74b138d2a6529f2c07729d7c77b1725a8e8b16f1))
-> 	+ tests/files/good-large\_compressed.lzma ([cf44e4b7f5dfdbf8c78aef377c10f71e274f63c0](https://github.com/tukaani-project/xz/commit/cf44e4b7f5dfdbf8c78aef377c10f71e274f63c0), [74b138d2a6529f2c07729d7c77b1725a8e8b16f1](https://github.com/tukaani-project/xz/commit/74b138d2a6529f2c07729d7c77b1725a8e8b16f1))
+>     + tests/files/bad-3-corrupt\_lzma2.xz ([cf44e4b7f5dfdbf8c78aef377c10f71e274f63c0](https://github.com/tukaani-project/xz/commit/cf44e4b7f5dfdbf8c78aef377c10f71e274f63c0), [74b138d2a6529f2c07729d7c77b1725a8e8b16f1](https://github.com/tukaani-project/xz/commit/74b138d2a6529f2c07729d7c77b1725a8e8b16f1))
+>     + tests/files/good-large\_compressed.lzma ([cf44e4b7f5dfdbf8c78aef377c10f71e274f63c0](https://github.com/tukaani-project/xz/commit/cf44e4b7f5dfdbf8c78aef377c10f71e274f63c0), [74b138d2a6529f2c07729d7c77b1725a8e8b16f1](https://github.com/tukaani-project/xz/commit/74b138d2a6529f2c07729d7c77b1725a8e8b16f1))
 > * A script called by build-to-host.m4 unpacks this malicious test data and uses it to modify the build process.
 > * IFUNC, a mechanism in glibc that allows for indirect function calls, is used to perform runtime hooking/redirection of OpenSSH's authentication routines. IFUNC is a tool that is normally used for legitimate things, but in this case it is exploited for this attack path.
 > 
@@ -72,7 +76,6 @@ Developer Sam James provided [this overview](https://gist.github.com/thesamesam/
 > ```
 > if ! (echo "$build" | grep -Eq "^x86_64" > /dev/null 2>&1) && (echo "$build" | grep -Eq "linux-gnu$" > /dev/null 2>&1);then
 > ```
-> 
 > * If amd64/x86\_64 is the target of the build
 > * And if the target uses the name linux-gnu (mostly checks for the use of glibc)
 > 
@@ -89,13 +92,11 @@ Developer Sam James provided [this overview](https://gist.github.com/thesamesam/
 > if ! $LDv 2>&1 | grep -qs 'GNU ld' > /dev/null 2>&1;then
 > exit 0
 > ```
-> 
 > And if you are trying to build a Debian or Red Hat package:
 > 
 > ```
 > if test -f "$srcdir/debian/rules" || test "x$RPM_ARCH" = "xx86_64";then
 > ```
-> 
 > This attack thusly seems to be targeted at amd64 systems running glibc using either Debian or Red Hat derived distributions. Other systems may be vulnerable at this time, but we don't know.
 
 In an online interview, developer and reverse-engineer HD Moore confirmed the Sam James suspicion that the backdoor targeted either Debian or Red Hat distributions.
@@ -167,4 +168,3 @@ There's also a project called [xzbot](https://github.com/amlweems/xzbot). It pro
 * [ed448 patch](https://github.com/amlweems/xzbot#ed448-patch): patch liblzma.so to use our own ED448 public key
 * [backdoor format](https://github.com/amlweems/xzbot#backdoor-format): format of the backdoor payload
 * [backdoor demo](https://github.com/amlweems/xzbot#backdoor-demo): cli to trigger the RCE assuming knowledge of the ED448 private key
-
