@@ -15,3 +15,4 @@ chardet~=5.2.0
 fsspec~=2024.3
 py7zr~=0.21.0
 tqdm~=4.66
+htmlmin~=0.1.12
