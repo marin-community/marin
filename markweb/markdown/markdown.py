@@ -191,6 +191,19 @@ class MyMarkdownConverter(MarkdownConverter):
                 text += '\n'
         return text
 
+    def convert_pre(self, el, text, convert_as_inline):
+        if not text:
+            return ''
+        code_language = self.options['code_language']
+
+        if self.options['code_language_callback']:
+            code_language = self.options['code_language_callback'](el) or code_language
+
+        if '```' in text:  # have to use <pre>
+            return '\n<pre><code>%s</code></pre>\n' % text
+        else:
+            return '\n```%s\n%s\n```\n' % (code_language, text)
+
     def convert_tr(self, el, text, convert_as_inline):
         # this is also mostly copied from the parent class
         # but the logic for guessing a th isn't quite right
