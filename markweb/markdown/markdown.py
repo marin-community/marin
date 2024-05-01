@@ -226,6 +226,9 @@ class MyMarkdownConverter(MarkdownConverter):
             overline += '| ' + ' | '.join(['---'] * len(cells)) + ' |' + '\n'
         return overline + '|' + text + '\n' + underline
 
+    def indent(self, text, level):
+        return markdownify.line_beginning_re.sub('    ' * level, text) if text else ''
+
     def process_tag(self, node, convert_as_inline, children_only=False):
         # skip aria-hidden elements
         if node.get('aria-hidden') == 'true':
@@ -240,10 +243,11 @@ class MyMarkdownConverter(MarkdownConverter):
         # markdown headings or cells can't include
         # block elements (elements w/newlines)
         isHeading = markdownify.html_heading_re.match(node.name) is not None
+        isEmphasisLike = node.name in ['em', 'strong', 'b', 'i', 'u', 's', 'del', 'ins']
         isCell = node.name in ['td', 'th']
         convert_children_as_inline = convert_as_inline
 
-        if not children_only and (isHeading or isCell):
+        if not children_only and (isHeading or isCell or isEmphasisLike):
             convert_children_as_inline = True
 
         # Remove whitespace-only textnodes in purely nested nodes
@@ -354,6 +358,13 @@ class MyMarkdownConverter(MarkdownConverter):
 
     def join_text(self, text1, text2, is_in_pre):
         if not is_in_pre:
+            is_paragraph = text1.endswith('\n\n')
+            is_br = text1.endswith('<br>') or text1.endswith('  \n')
+            # if text1 is a paragraph or br, we can trim any leading spaces
+            # however, we nede to
+            if (is_paragraph or is_br):
+                text2 = text2.lstrip()
+
             # mostly want to remove extra newlines
             # in MD, two newlines is a paragraph break, which is the most we want
             # so if text1 already has two newlines, we don't want to add another
@@ -361,7 +372,7 @@ class MyMarkdownConverter(MarkdownConverter):
             # more specifically we want to get the tail from text1 which is \n\s*$ and the head from text2 which is ^\n*
             # and replace it with at most two newlines
             tail1 = re.search(r'\n\s*$', text1)
-            head2 = re.search(r'^\n*', text2)
+            head2 = re.search(r'^([\n ]+|\n*)', text2)
 
             if tail1 and head2:
                 text1 = text1[:tail1.start()]
@@ -369,7 +380,16 @@ class MyMarkdownConverter(MarkdownConverter):
                 newline_count = tail1.group().count('\n') + head2.group().count('\n')
                 if newline_count > 2:
                     newline_count = 2
-                text2 = '\n' * newline_count + text2
+                if newline_count:
+                    text2 = '\n' * newline_count + text2
+            # elif rhs_is_string:
+            #     # if instead we are joining spaces, only join if there's not already a space
+            #     tail1 = re.search(r' +$', text1)
+            #     head2 = re.search(r'^ +', text2)
+            #     if tail1 and head2:
+            #         text1 = text1[:tail1.start()]
+            #         text2 = text2[head2.end():]
+            #         text2 = ' ' + text2
 
         return text1 + text2
 
@@ -382,7 +402,12 @@ class MyMarkdownConverter(MarkdownConverter):
             logger.exception(f"Error converting math: {e}")
             return text
 
+
     def convert_p(self, el, text, convert_as_inline):
+        # no reason for leading whitespace in a paragraph
+        if text:
+            text = text.lstrip()
+
         if convert_as_inline:
             # if el has a sibling, add a <br> at the end
             if el.next_sibling and text:
@@ -406,6 +431,11 @@ class MyMarkdownConverter(MarkdownConverter):
         # escape special characters if we're not inside a preformatted or code element
         if not el.find_parent(['pre', 'code', 'kbd', 'samp']):
             text = self.escape(text)
+
+            # text = text.replace(' *\n', ' ')
+            text = re.sub('\s+', ' ', text, flags=re.MULTILINE)
+
+
 
         # remove trailing whitespaces if any of the following condition is true:
         # - current text node is the last node in li

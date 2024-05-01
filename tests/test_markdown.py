@@ -146,6 +146,34 @@ def test_mathml_block():
 
     for mathml, expected in test_cases:
         assert mathml_to_markdown(mathml) == expected
+
+def test_weird_inline_newlines():
+    html = """<I>Murray 
+Montgomery</I><BR>"""
+    expected = "*Murray Montgomery*  \n"
+    assert to_markdown(html) == expected
+
+
+def test_nested_lists():
+    html = """<ul>
+    <li>Item 1
+        <ul>
+            <li>Subitem 1</li>
+            <li>Subitem 2</li>
+        </ul>
+    </li>
+    <li>Item 2</li>
+</ul>"""
+
+    expected = """* Item 1
+    + Subitem 1
+    + Subitem 2
+* Item 2
+"""
+    assert to_markdown(html) == expected
+
+    
+
 if __name__ == "__main__":
     pytest.main(["-v", "test_markdown.py"])
 
