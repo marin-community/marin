@@ -1,3 +1,5 @@
+# Introducing DBRX: A New State-of-the-Art Open LLM | Databricks
+
 Today, we are excited to introduce DBRX, an open, general-purpose LLM created by Databricks. Across a range of standard benchmarks, DBRX sets a new state-of-the-art for established open LLMs. Moreover, it provides the open community and enterprises building their own LLMs with capabilities that were previously limited to closed model APIs; according to our measurements, it surpasses GPT-3.5, and it is competitive with Gemini 1.0 Pro. It is an especially capable code model, surpassing specialized models like CodeLLaMA-70B on programming, in addition to its strength as a general-purpose LLM.
 
 This state-of-the-art quality comes with marked improvements in training and inference performance. DBRX advances the state-of-the-art in efficiency among open models thanks to its fine-grained mixture-of-experts (MoE) architecture. Inference is up to 2x faster than LLaMA2-70B, and DBRX is about 40% of the size of Grok-1 in terms of both total and active parameter-counts. When hosted on Mosaic AI Model Serving, DBRX can generate text at up to 150 tok/s/user. Our customers will find that training MoEs is also about 2x more FLOP-efficient than training dense models for the same final model quality. End-to-end, our overall recipe for DBRX (including the pretraining data, model architecture, and optimization strategy) can match the quality of our previous-generation MPT models with nearly 4x less compute.
@@ -10,7 +12,7 @@ The weights of the base model ([DBRX Base](https://huggingface.co/databricks/dbr
 
 Training mixture-of-experts models is hard. We had to overcome a variety of scientific and performance challenges to build a pipeline robust enough to repeatably train DBRX-class models in an efficient manner. Now that we have done so, we have a one-of-a-kind training stack that allows any enterprise to train world-class MoE foundation models from scratch. We look forward to sharing that capability with our customers and sharing our lessons learned with the community.
 
-Download DBRX today from Hugging Face ([DBRX Base](https://huggingface.co/databricks/dbrx-base), [DBRX Instruct](https://huggingface.co/databricks/dbrx-instruct)), or try out DBRX Instruct in our [HF Space](https://huggingface.co/spaces/databricks/dbrx-instruct),  or see our model repository on github: [databricks/dbrx](https://www.github.com/databricks/dbrx).
+Download DBRX today from Hugging Face ([DBRX Base](https://huggingface.co/databricks/dbrx-base), [DBRX Instruct](https://huggingface.co/databricks/dbrx-instruct)), or try out DBRX Instruct in our [HF Space](https://huggingface.co/spaces/databricks/dbrx-instruct), or see our model repository on github: [databricks/dbrx](https://www.github.com/databricks/dbrx).
 
 ## What is DBRX?
 
@@ -123,6 +125,7 @@ To build DBRX, we leveraged the same suite of Databricks tools that are availabl
 
 If you’re looking to start working with DBRX right away, it’s easy to do so with the Databricks Mosaic AI [Foundation Model APIs](https://docs.databricks.com/en/machine-learning/foundation-models/index.html). You can quickly get started with our pay-as-you-go pricing and query the model from our [AI Playground](https://docs.databricks.com/en/large-language-models/ai-playground.html) chat interface. For production applications, we offer a provisioned throughput option to provide performance guarantees, support for finetuned models, and additional security and compliance. To privately host DBRX, you can download the model from the [Databricks Marketplace](https://marketplace.databricks.com/details/357c33c9-7cd3-48d2-bb5b-b4a88172d193/Databricks_DBRX-Models) and [deploy the model on Model Serving](https://learn.microsoft.com/en-us/azure/databricks/machine-learning/foundation-models/deploy-prov-throughput-foundation-model-apis).  
 
+
 ## Conclusions
 
 At Databricks, we believe that every enterprise should have the ability to control its data and its destiny in the emerging world of GenAI. DBRX is a central pillar of our next generation of GenAI products, and we look forward to the exciting journey that awaits our customers as they leverage the capabilities of DBRX and the tools we used to build it. In the past year, we have trained thousands of LLMs with our customers. DBRX is only one example of the powerful and efficient models being built at Databricks for a wide range of applications, from internal features to ambitious use-cases for our customers.
@@ -151,7 +154,7 @@ Databricks is the Data and AI company. More than 10,000 organizations worldwide 
 
 <sup>5 </sup>Unless otherwise noted, measured by Databricks.
 
-<sup>6</sup>  This number is from the Mixtral Arxiv paper. We report this number because it is higher than what we measured when evaluating the model ourselves (36.7%)
+<sup>6</sup> This number is from the Mixtral Arxiv paper. We report this number because it is higher than what we measured when evaluating the model ourselves (36.7%)
 
 <sup>7 </sup>All scores as reported in the [GPT-4 paper](https://arxiv.org/pdf/2303.08774.pdf). We could not collect Inflection Corrected MTBench because this version of GPT-3.5 is not available. We found the current version of GPT-3.5 Turbo to score 8.58 ± 0.04 on Inflection Corrected MTBench compared to 8.39 +/- 0.08 for DBRX Instruct.
 

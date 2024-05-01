@@ -1,3 +1,5 @@
+# Bun 1.1
+
 Bun is a fast, all-in-one toolkit for running, building, testing, and debugging JavaScript and TypeScript, from a single script to a full-stack application. If you're new to Bun, you can learn more in the [Bun 1.0](about:/blog/bun-v1.0#bun-is-an-all-in-one-toolkit) blog post.
 
 Bun 1.1 is huge update.
@@ -510,12 +512,12 @@ When you first add a package, Bun will tell you if the package had a lifecycle s
 
 ```
 bun add v1.1.0  
- Saved lockfile installed @biomejs/biome@1.6.1 with binaries:  
+ Saved lockfileinstalled @biomejs/biome@1.6.1 with binaries:  
   - biome
 
- 1 package installed [55.00ms]
+1 package installed [55.00ms]
 
- Blocked 1 postinstall. Run `bun pm untrusted` for details.
+Blocked 1 postinstall. Run `bun pm untrusted` for details.
 
 
 ```
@@ -541,7 +543,7 @@ If you trust the package, you can run `bun pm trust [package]`. If you want to t
 bun pm trust v1.1.0./node_modules/@biomejs/biome @1.6.1  
  ✓ [postinstall]: node scripts/postinstall.js
 
- 1 script ran across 1 package [71.00ms]
+1 script ran across 1 package [71.00ms]
 
 
 ```
