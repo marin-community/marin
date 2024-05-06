@@ -1,3 +1,4 @@
+# Learning What’s in a Name with Graphical Models — Gradient
 
 “The UK” alone is a country, but “The UK Department of Transport” is an organization within said country. In a named entity recognition (NER) task, where we want to label each word with a name tag (organization/person/location/other/not a name) <sup>[\[1\]](#reference-Chinchor1998)</sup>, how can a computer model know one from the other?
 
@@ -15,13 +16,11 @@ Let’s start with a simple example with two random variables, $`A`$ and $`B`$. 
 
 $$p(a,b)=p(a)\cdot p(b\mathrm{\mid }a)$$
 
-
 Notation: the shorthand *p(a)* means *p(A = a)*, that is, the probability of variable A taking value a.
 
 This is a simple enough example, with 2 factors in the right hand side. Add more variables, however, and the result can get messy fast. To see this, assume that there are two more variables, $`C`$ and $`D`$, and that $`D`$ is conditionally dependent on $`A`$, $`B`$, and $`C`$. The factorization becomes:
 
 $$p(a,b,c,d)=p(a)\cdot p(b\mathrm{\mid }a)\cdot p(c)\cdot p(d\mathrm{\mid }a,b,c)$$
-
 
 The relationship between variables is more opaque, hidden behind second-order dependencies. For example, while it’s clear that $`D`$ is directly dependent on $`A`$, we may miss the fact that there is another, second-order dependency between the two ($`D`$ is dependent on $`B`$, which in turn is dependent on $`A`$).
 
@@ -41,13 +40,11 @@ The hidden layer is assumed to be a Markov process: a chain of events in which e
 
 $$p(s_i\mathrm{\mid }s_1,s_2,\dots ,s_{i-1})=p(s_i\mathrm{\mid }s_{i-1})\text{for all }{\textstyle i{\scriptscriptstyle \in }\{2,\dots ,N\}}$$
 
-
 In a graph, this translates to a linear chain of events where each event has one arrow pointing towards it (except for the first event) and one pointing away from it (except for the last):
 
 A second assumption that HMMs make is time-homogeneity: that the probability of transition from one event's state to the next is constant over time. In formal terms:
 
 $$p(s_i\mathrm{\mid }s_{i-1})=p(s_{i+1}\mathrm{\mid }s_i)\text{for all }{\textstyle i{\scriptscriptstyle \in }\{2,\dots ,N-1\}}$$
-
 
 $`p(s_i\mathrm{\mid }s_{i-1})`$ is called the transition probability and is one of the two key parameters to be learned during training.
 
@@ -56,7 +53,6 @@ The assumptions about the hidden layer — Markov and time-homogeneity — hold 
 The hidden and observed layer are connected via a one-to-one mapping relationship. The probability of each observation is assumed to depend only on the state of the hidden event at the same time step. Given a sequence of $`N`$ hidden events $`S_1`$, $`S_2`$,…, $`S_N`$ and observed events $`O_1`$, $`O_2`$,…, $`O_N`$ we have:
 
 $$p(o_i\mathrm{\mid }s_1,s_2,\dots ,s_N)=p(o_i\mathrm{\mid }s_i)\text{for all }{\textstyle i{\scriptscriptstyle \in }\{1,2,\dots ,N\}}$$
-
 
 In a graph, this one-to-one relationship looks like:
 
@@ -170,11 +166,9 @@ Common practice is to use binary features, such as:
 
 $$b(o_t)=\{\begin{array}{l}{\textstyle \text{1 if }{\textstyle o_t}\text{ has shape “Xxx”}}\\ {\textstyle \text{0 otherwise}}\end{array}$$
 
-
 These features are then paired with the current state $`s`$ to form feature-state pairs $`a=\langle b,s\rangle `$:
 
 $$f_{\langle b,s\rangle }(o_t,s_t)=\{\begin{array}{l}{\textstyle \text{1 if }{\textstyle b(o_t)=1}\text{ and }{\textstyle s_t=s}}\\ {\textstyle \text{0 otherwise}}\end{array}$$
-
 
 Feature-state pairs provide useful additional information how which features and states go together and which don’t. For example, we can expect pairs like "is\_capitalized" + “B-ORG” to occur together frequently, capturing the fact that in English named entities are often capitalized.
 
@@ -182,13 +176,12 @@ MEMMs’ state transition distributions have exponential form and contain a weig
 
 $$p_{s\mathrm{\prime }}(s\mathrm{\mid }o)=\frac{1}{Z(o,s\mathrm{\prime })}\mathrm{exp}\left(\sum _{a}\lambda _a\text{\hspace{0.17em}}f_a(o,s)\right)$$
 
-
 where $`s\mathrm{\prime }`$ and $`s`$ are the previous and current state, $`o`$ is the current observation, $`a=\langle b,s\rangle `$ is a feature-state pair, $`\lambda _a`$ is the learned weight for $`a`$, and $`Z(o,s\mathrm{\prime })`$ is a normalizing term to make the distribution $`p_{s\mathrm{\prime }}`$ sum to one across all next states $`s`$.
 
 | λ<sub>a</sub> | f<sub>a</sub> | λ<sub>a</sub>f<sub>a</sub> |
 | --- | --- | --- |
 
-p<sub>O</sub>(B-LOC | “UK”) = e<sup>SUM(λ<sub>a</sub>f<sub>a</sub>)</sup>  / Z  
+p<sub>O</sub>(B-LOC | “UK”) = e<sup>SUM(λ<sub>a</sub>f<sub>a</sub>)</sup> / Z  
 ≈ e<sup>0</sup> / 1  
 ≈ 0
 
@@ -295,20 +288,17 @@ Rather than assuming a generative relationship between variables, MRFs model the
 
 $$\varphi (X,Y)=\{\begin{array}{l}{\textstyle \text{3 if }{\textstyle X=1}\text{ and }{\textstyle Y=1}}\\ {\textstyle \text{2 if }{\textstyle X=0}\text{ and }{\textstyle Y=0}}\\ {\textstyle \text{1 otherwise}}\end{array}$$
 
-
 Unlike conditional probabilities, there is no assumed directionality in scoring functions. These functions simply return higher scores if the variables agree and lower scores if they disagree. They model pairwise correlation, not causation.
 
 The joint probability of all variables in the graph is:
 
 $$p(A,B,C)=\frac{1}{Z}\text{\hspace{0.17em}}\varphi (A,B)\text{\hspace{0.17em}}\varphi (B,C)\text{\hspace{0.17em}}\varphi (C,A)\text{where Z is a normalization factor}$$
 
-
 The factors $`\varphi `$ promote assignments in which their constituent variables ($`A`$ and $`B`$ in the case of $`\varphi (A,B)`$) agree with each other. The assignment 1-1-1 would receive a higher score and thus have higher probability than say 1-1-0, since there is more agreement in the former case.
 
 More generally, MRFs are probability distributions $`p`$ over random variables $`x_1`$, $`x_2`$,… that are defined by an undirected graph $`\mathcal{G}`$ and have the form:
 
 $$p(x_1,x_2,\dots )=\frac{1}{Z}\prod _{c\text{\hspace{0.17em}}{\scriptscriptstyle \in }\text{\hspace{0.17em}}C}\varphi _c(x_c)\text{where Z is a normalization factor}\text{and C is the set of cliques in }{\textstyle \mathcal{G}}$$
-
 
 p(1, 1, 1, 0, 0, 0)  
 =1/Z  
@@ -321,7 +311,6 @@ p(1, 1, 1, 0, 0, 0)
 ⨯ ɸ<sub><sub>DE</sub></sub>(0, 0)  
 ⨯ ɸ<sub><sub>EF</sub></sub>(0, 0)  
 ⨯ ɸ<sub><sub>DF</sub></sub>(0, 0)  
-  
 =1 / 28,915  
 ⨯ 3  
 ⨯ 3  
@@ -332,7 +321,6 @@ p(1, 1, 1, 0, 0, 0)
 ⨯ 2  
 ⨯ 2  
 ⨯ 2  
-  
 ≈0.0448
 
 ɸ<sub><sub>ABC</sub></sub> = ɸ<sub><sub>AB</sub></sub> = ɸ<sub><sub>…</sub></sub>(x) = 3 if x<sub>1</sub> = x<sub>2</sub> = … = 1  
@@ -347,7 +335,6 @@ CRFs are random fields globally conditioned on a set of observations $`x`$ <sup>
 
 $$p(y\mathrm{\mid }x)=\frac{1}{Z(x)}\prod _{c\text{\hspace{0.17em}}{\scriptscriptstyle \in }\text{\hspace{0.17em}}C}\varphi _c(y_c,x_c)\text{where Z is a normalization factor}\text{and C is the set of cliques in the}\text{graph }{\textstyle \mathcal{G}}\text{ representing the labels }{\textstyle y}$$
 
-
 The distribution $`p(y\mathrm{\mid }x)`$ is parameterized by $`x`$. When we replace all the values $`x_i`$ in the right hand side with real values, what remains has the same form as an MRF. In fact, we get a new MRF for every observation sequence $`x`$.
 
 CRFs are globally conditioned on $`x`$. They directly model the probability of the label sequence $`y`$ — $`p(y\mathrm{\mid }x)`$ — rather than local transition/emission probabilities $`p(y_i\mathrm{\mid }y_{i-1})`$ or $`p(y_i\mathrm{\mid }x_i)`$.
@@ -360,7 +347,6 @@ The factors $`\varphi _c`$ have an exponential form <sup>[\[18\]](#reference-Laf
 
 $$\varphi _c(y_c,x_c)=\mathrm{exp}\left(\sum _{a}\lambda _a\text{\hspace{0.17em}}f_a(y_c,x_c)\right)\text{where }{\textstyle f_a}\text{ is a feature function defined for clique }{\textstyle c}\text{and }{\textstyle \lambda _a}\text{ is the weight parameter for }{\textstyle f_a}$$
 
-
 1. **MUC-7 Named Entity Task Definition (Version 3.5)** [PDF](https://aclanthology.org/M98-1028.pdf)  
 Nancy Chinchor. 1998. In Seventh Message Understanding Conference (MUC-7).
 2. **Probabilistic Graphical Models: Principles and Techniques - Adaptive Computation and Machine Learning**  
@@ -368,7 +354,7 @@ Daphne Koller and Nir Friedman. 2009. The MIT Press.
 3. **Probabilistic Reasoning in Intelligent Systems: Networks of Plausible Inference**  
 Judea Pearl. 1988. Morgan Kaufmann Publishers Inc, San Francisco, CA, USA.
 4. **Genes, Themes and Microarrays: Using Information Retrieval for Large-Scale Gene Analysis**  
-Hagit Shatkay, Stephen Edwards, W John Wilbur, and Mark Boguski. 2000. In Proceedings of the  International Conference on Intelligent Systems for Molecular Biology, 317–328.
+Hagit Shatkay, Stephen Edwards, W John Wilbur, and Mark Boguski. 2000. In Proceedings of the International Conference on Intelligent Systems for Molecular Biology, 317–328.
 5. **Information Extraction Using Hidden Markov Models**  
 Timothy Robert Leek. 1997. Master’s Thesis, UC San Diego.
 6. **Information Extraction with HMMs and Shrinkage** [PDF](https://www.aaai.org/Papers/Workshops/1999/WS-99-11/WS99-11-006.pdf)  

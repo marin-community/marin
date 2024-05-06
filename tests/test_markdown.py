@@ -1,6 +1,6 @@
 import pytest
 
-from markweb.markdown import mathml_to_markdown, minimal_markdown_escape
+from markweb.markdown import mathml_to_markdown, minimal_markdown_escape, to_markdown
 
 
 def test_always_escaped():
@@ -53,6 +53,12 @@ def test_line_start_escaping():
     ]
     for text, expected in test_cases:
         assert minimal_markdown_escape(text) == expected
+
+
+def test_weird_list_item():
+    html = r"""<html><body><ol start="'3..'"><li>Item 3</li></ol></body></html>"""
+    expected = "1. Item 3\n"  # back off to no start
+    assert to_markdown(html) == expected
 
 
 def test_combined_scenarios():
@@ -140,6 +146,34 @@ def test_mathml_block():
 
     for mathml, expected in test_cases:
         assert mathml_to_markdown(mathml) == expected
+
+def test_weird_inline_newlines():
+    html = """<I>Murray 
+Montgomery</I><BR>"""
+    expected = "*Murray Montgomery*  \n"
+    assert to_markdown(html) == expected
+
+
+def test_nested_lists():
+    html = """<ul>
+    <li>Item 1
+        <ul>
+            <li>Subitem 1</li>
+            <li>Subitem 2</li>
+        </ul>
+    </li>
+    <li>Item 2</li>
+</ul>"""
+
+    expected = """* Item 1
+    + Subitem 1
+    + Subitem 2
+* Item 2
+"""
+    assert to_markdown(html) == expected
+
+    
+
 if __name__ == "__main__":
     pytest.main(["-v", "test_markdown.py"])
 

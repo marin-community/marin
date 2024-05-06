@@ -1,4 +1,4 @@
-
+# Language Log » Scythians between Russia and Ukraine
 
 « [previous post](https://languagelog.ldc.upenn.edu/nll/?p=63137) | [next post](https://languagelog.ldc.upenn.edu/nll/?p=63181) » 
 
@@ -11,8 +11,7 @@ The **Scythian languages** (/ˈsɪθiən/ or /ˈsɪðiən/ or /ˈskɪθiən/) ar
 Everyone will recognize the current avatar of this ancestress of the Scythian nation:
 
 [![](http://languagelog.ldc.upenn.edu/~bgzimmer/scythian1.jpg "Click to embiggen")](http://languagelog.ldc.upenn.edu/~bgzimmer/scythian1.jpg)  
-
-[Source](https://en.m.wikipedia.org/wiki/File:The_Mixoparthenos_(half-maiden),_a_hybrid_creature_from_the_Black_Sea,_limestone_sculpture,_1st-2nd_century_AD,_from_Panticapaeum,_Taurica_(Crimea)_(12852697335).jpg):  [The Mixoparthenos (half-maiden), a hybrid creature from the Black Sea, limestone sculpture, 1st-2nd century AD, from Panticapaeum, Taurica (Crimea)](https://www.flickr.com/photos/carolemage/12852697335/)
+[Source](https://en.m.wikipedia.org/wiki/File:The_Mixoparthenos_(half-maiden),_a_hybrid_creature_from_the_Black_Sea,_limestone_sculpture,_1st-2nd_century_AD,_from_Panticapaeum,_Taurica_(Crimea)_(12852697335).jpg): [The Mixoparthenos (half-maiden), a hybrid creature from the Black Sea, limestone sculpture, 1st-2nd century AD, from Panticapaeum, Taurica (Crimea)](https://www.flickr.com/photos/carolemage/12852697335/)
 
 The Mixoparthenos (Greek: Μιξοπάρθενος) was a Greek mythological figure, a variety of Siren somewhat akin to a Mermaid, traditionally hailing from the Black Sea region. The name means "half-maiden" and is the surname of the Furies. The form of the Mixoparthenos is distinctive – above the waist, a beautiful woman, but covered with scales from waist down, ending in a double snake-tail. Some versions have the Mixoparthenos ending in a double fish-tail.
 
@@ -30,9 +29,9 @@ Herodotus writes that the horses of Heracles were stolen by the Mixoparthenos, w
 
 I knew of this figure before, when Miriam Robbins Dexter and I wrote *Sacred Display* (see **Selected readings** below) but my attention was drawn to it today by this article:
 
-"[Legacy of the Scythians](https://aeon.co/essays/how-russia-is-putting-the-ancient-scythians-to-war-in-ukraine):  How the ancient warrior people of the steppes have found themselves on the cultural frontlines of Russia’s war against Ukraine", Peter Mumford, aeon (3/18/24)
+"[Legacy of the Scythians](https://aeon.co/essays/how-russia-is-putting-the-ancient-scythians-to-war-in-ukraine): How the ancient warrior people of the steppes have found themselves on the cultural frontlines of Russia’s war against Ukraine", Peter Mumford, aeon (3/18/24)
 
-This is a bipolar presentation, swinging between politics and history-culture.  I'm not very much interested in the former, but fortunately there is plenty enough material concerning the latter that we can use it to ruminate on the trans-Eurasian aspects of the Scythians and other peoples of the steppes and Central / Inner Asia.
+This is a bipolar presentation, swinging between politics and history-culture. I'm not very much interested in the former, but fortunately there is plenty enough material concerning the latter that we can use it to ruminate on the trans-Eurasian aspects of the Scythians and other peoples of the steppes and Central / Inner Asia.
 
 …
 
@@ -62,7 +61,7 @@ This symbolic appeal of the Scythians to nationalist ideology in Russia began in
 
 The golden pectoral from the Tovsta Mohyla burial mound. Courtesy the Museum of Historical Treasures, Kyiv/Wikipedia (click to enlarge)
 
-\[VHM:  Notice the incredible wealth of detail from daily life, mythology, etc.  This Scythian work of art is a genuine masterpiece, a wonder of the world.  I was privileged to see it in person in several exhibitions.\]
+\[VHM: Notice the incredible wealth of detail from daily life, mythology, etc. This Scythian work of art is a genuine masterpiece, a wonder of the world. I was privileged to see it in person in several exhibitions.\]
 
 Other finds in the *kurhany* provided evidence of the Scythians’ extensive trade links with regions **as far away as China**, from where some of the artefacts originated.
 
@@ -74,9 +73,9 @@ Perhaps the most famous example of *Skifstvo* is the poem *Skify* (1918) (‘The
 
 The Scythians have since been appropriated as a symbol of cultural superiority by present-day Russian nationalists, but any remaining links with the *Skifstvo* of the late 19th and early 20th centuries are tangential and distorted. One fringe group calls itself the ‘New Scythians’ and members of a [notorious](https://www.theguardian.com/world/2014/may/09/vladimir-putin-arrives-crimea-victory-day-ukraine) far-Right biker gang involved in the invasion of Crimea have used the pseudonym ‘Scythian’ when interviewed by international media. These groups subscribe to the wider ideology of ‘Eurasianism’, a far-Right, ultranationalist movement that seeks to restore Russian dominance over its neighbours in ‘Eurasia’, especially Ukraine. Eurasianism is at its core deeply hostile to the West and supportive of a Russia-dominated sphere of influence that corresponds to the former borders of the Soviet Union. Its proponents, most notably the far-Right philosopher Aleksandr Dugin, have spent decades [advocating](https://tec.fsi.stanford.edu/docs/aleksandr-dugins-foundations-geopolitics) against Ukrainian independence and in favour of Russian political control over its neighbour.
 
-The author skillfully weaves a narrative based on accounts in ancient, medieval, and modern languages, but it is too long to recapitulate here.  This is a fascinating tale, and if you are interested in the Scythian background of trans-Eurasian history and the conflict between Russia and Ukraine, not to mention linguistic and cultural exchange across the Eurasian continent, this is a good place to start.
+The author skillfully weaves a narrative based on accounts in ancient, medieval, and modern languages, but it is too long to recapitulate here. This is a fascinating tale, and if you are interested in the Scythian background of trans-Eurasian history and the conflict between Russia and Ukraine, not to mention linguistic and cultural exchange across the Eurasian continent, this is a good place to start.
 
-I will close by stating that, when I went to Ukraine in the summer of 2002 (?) — it was very hot — and clambered over and around the kurgans, I came upon some young Russian families who were living outdoors with their little children, cooking over wood fires, and giving all the appearance of having gone wild.  They were taciturn, but I got the impression that they were trying to adopt a Scythian lifestyle.
+I will close by stating that, when I went to Ukraine in the summer of 2002 (?) — it was very hot — and clambered over and around the kurgans, I came upon some young Russian families who were living outdoors with their little children, cooking over wood fires, and giving all the appearance of having gone wild. They were taciturn, but I got the impression that they were trying to adopt a Scythian lifestyle.
 
 **Selected readings**
 
@@ -110,21 +109,15 @@ I will close by stating that, when I went to Ukraine in the summer of 2002 (?) �
 * "[Ukrainian at the edge](https://languagelog.ldc.upenn.edu/nll/?p=56853 "Permanent link to Ukrainian at the edge")" (10/30/22)
 * "[Old Ukrainian windmills and Old Sinitic reconstructions](https://languagelog.ldc.upenn.edu/nll/?p=54087 "Permanent link to Old Ukrainian windmills and Old Sinitic reconstructions")"(3/27/22)
 * "[Where did the PIEs come from; when was that?](https://languagelog.ldc.upenn.edu/nll/?p=59908 "Permanent link to Where did the PIEs come from; when was that?")" (7/28/23)
-
 * + C. Scott Littleton, "Were Some of the Xinjiang Mummies 'Epi-Scythians'? An Excursus in Trans-Eurasian Folklore and Mythology." In Victor H. Mair, *The Bronze Age and Early Iron Age Peoples of Eastern Central Asia* (Washington D.C. and Philadelphia: Institute for the Study of Man and the University of Pennsylvania Museum, 1998), vol. 2, pp. 746-766.
-	+ C. Scott Littleton and Linda A. Malcor, *From Scythia to Camelot: A Radical Reassessment of the Legends of King Arthur, the Knights of the Round Table, and the Holy Grail* (New York and London: Garland, 1994; rev. pb. 2000). In the British journal, Religion, 28.3 (July, 1998), 294-300, I \[VHM\] wrote a review in which I pointed out that the celebrated motif of a mighty arm rising up out of the water holding aloft the hero's sword can also be found in a medieval Chinese tale from Dunhuang. That review is available electronically from ScienceDirect, if your library subscribes to it. Otherwise, I think [this version](http://www.heroicage.org/issues/2/ha2tf.htm) on the Web is a fairly faithful copy.
-
+    + C. Scott Littleton and Linda A. Malcor, *From Scythia to Camelot: A Radical Reassessment of the Legends of King Arthur, the Knights of the Round Table, and the Holy Grail* (New York and London: Garland, 1994; rev. pb. 2000). In the British journal, Religion, 28.3 (July, 1998), 294-300, I \[VHM\] wrote a review in which I pointed out that the celebrated motif of a mighty arm rising up out of the water holding aloft the hero's sword can also be found in a medieval Chinese tale from Dunhuang. That review is available electronically from ScienceDirect, if your library subscribes to it. Otherwise, I think [this version](http://www.heroicage.org/issues/2/ha2tf.htm) on the Web is a fairly faithful copy.
 * Miriam Robbins Dexter and Victor H. Mair, *Sacred Display: Divine and Magical Female Figures of Eurasia* (Amherst, NY: Cambria, 2010)
 * Miriam Robbins Dexter and Victor H. Mair, "*Sacred Display*: New Findings", Sino-Platonic Papers, 240 (Sept. 2013), 122 pages
-* Petya Andreeva, *Fantastic Fauna from China to Crimea:  Image-Making in Eurasian Nomadic Societies, 700 BCE-500 CE* (Edinburgh:  University Press, 2024).
+* Petya Andreeva, *Fantastic Fauna from China to Crimea: Image-Making in Eurasian Nomadic Societies, 700 BCE-500 CE* (Edinburgh: University Press, 2024).
 
 \[h.t. Wang Chiu-kuei\]
 
- 
- March 23, 2024 @ 9:49 pm 
-· Filed by [Victor Mair](https://languagelog.ldc.upenn.edu/nll/?author=13 "Posts by Victor Mair") under [Language and culture](https://languagelog.ldc.upenn.edu/nll/?cat=39), [Language and ethnicity](https://languagelog.ldc.upenn.edu/nll/?cat=323), [Language and history](https://languagelog.ldc.upenn.edu/nll/?cat=312)
-
+March 23, 2024 @ 9:49 pm · Filed by [Victor Mair](https://languagelog.ldc.upenn.edu/nll/?author=13 "Posts by Victor Mair") under [Language and culture](https://languagelog.ldc.upenn.edu/nll/?cat=39), [Language and ethnicity](https://languagelog.ldc.upenn.edu/nll/?cat=323), [Language and history](https://languagelog.ldc.upenn.edu/nll/?cat=312)
 
 [Permalink](https://languagelog.ldc.upenn.edu/nll/?p=63123 "Permanent link to Scythians between Russia and Ukraine")
-
 
