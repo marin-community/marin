@@ -113,7 +113,7 @@ def _fsspec_exists(path):
 
 
 if __name__ == "__main__":
-    base_path = "gs://levanter-data/markweb/v0/url_blooms/"
+    base_path = "gs://levanter-data/marin/v0/url_blooms/"
     lang = "en"
     for crawl in RPV2_CRAWLS:
         paths = []

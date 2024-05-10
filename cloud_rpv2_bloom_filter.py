@@ -130,7 +130,7 @@ if __name__ == "__main__":
         "https://www.googleapis.com/auth/devstorage.read_write",
     ])
 
-    PATH = "gs://levanter-data/markweb/v0/url_blooms/"
+    PATH = "gs://levanter-data/marin/v0/url_blooms/"
 
     skipped = 0
     total = 0
@@ -157,6 +157,6 @@ if __name__ == "__main__":
     #     for part, slice, path in all_paths_for_crawl(PATH, crawl, lang):
     #         paths.append(path)
     #
-    #     out_path = f"gs://levanter-data/markweb/v0/url_blooms/{lang}_{crawl}.bloom"
+    #     out_path = f"gs://levanter-data/marin/v0/url_blooms/{lang}_{crawl}.bloom"
     #     create_union_blooms_task(out_path, paths, credentials, id_token)
 

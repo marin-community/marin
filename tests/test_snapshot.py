@@ -3,7 +3,7 @@ import os
 
 import pytest
 
-from markweb.markweb import convert_page
+from marin.web.convert import convert_page
 
 my_dir = os.path.dirname(os.path.realpath(__file__))
 input_dir = os.path.join(my_dir, "snapshots/inputs")  # Directory containing HTML input files

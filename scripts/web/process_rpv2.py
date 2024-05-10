@@ -7,10 +7,10 @@ import html2text
 
 import readabilipy
 
-from markweb.markdown import to_markdown
-from markweb.markweb import convert_page
-from markweb.web.lookup_cc import fetch_page_from_cc, search_cc_index
-from markweb.web.rpv2 import NUM_SHARDS, iterate_rpv2_file
+from marin.markdown import to_markdown
+from marin.marin import convert_page
+from marin.web.lookup_cc import fetch_page_from_cc, search_cc_index
+from marin.web.rpv2 import NUM_SHARDS, iterate_rpv2_file
 
 # Setup logging
 logger = logging.getLogger(__name__)
