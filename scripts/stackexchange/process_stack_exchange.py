@@ -172,9 +172,9 @@ if __name__ == '__main__':
             for aq in process_posts_xml(xml):
                 question_markdown = to_markdown(aq.question)
                 answers_markdown = [to_markdown(a.body) for a in aq.answers]
-                answer_markdown = '\n\n---\n\n'.join(answers_markdown)
+                answer_markdown = '\n\n## Answer\n\n'.join(answers_markdown)
 
-                text = f"# {aq.title}\n\n{question_markdown.strip()}\n\n## Answer\n\n{answer_markdown.strip()}\n\n---\n\n---\n\n"
+                text = f"# {aq.title}\n\n{question_markdown.strip()}\n\n## Answer\n\n{answer_markdown.strip()}"
 
                 out = {
                     'metadata': {
