@@ -9,7 +9,7 @@ from typing import Optional
 import fsspec
 import tqdm
 from fsspec.callbacks import TqdmCallback
-from markweb.markdown import to_markdown
+from marin.markdown import to_markdown
 
 # StackExchange dumps come in two flavors: single file and multiple file.
 # StackOverflow is special in that it is multiple file:
@@ -25,7 +25,7 @@ from markweb.markdown import to_markdown
 # We only use the Posts file.
 
 # The file format for StackExchange is an XML dump of posts.
-# Posts are stored in escaped HTML format, so we can use our markweb pipeline to handle them.
+# Posts are stored in escaped HTML format, so we can use our marin pipeline to handle them.
 # <row Id="1" PostTypeId="1" AcceptedAnswerId="51" CreationDate="2016-01-12T18:45:19.963" Score="11" ViewCount="458" Body="&lt;p&gt;When I've printed an object I've had to choose between high resolution and quick prints.  What techniques or technologies can I use or deploy to speed up my high resolution prints?&lt;/p&gt;&#xA;" OwnerUserId="16" LastActivityDate="2017-10-31T02:31:08.560" Title="How to obtain high resolution prints in a shorter period of time?" Tags="|resolution|speed|quality|" AnswerCount="2" CommentCount="6" ContentLicense="CC BY-SA 3.0" />
 
 # we want to extract question answer pairs. We keep the accepted answer for simplicity. We thought about keeping

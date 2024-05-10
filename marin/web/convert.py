@@ -3,7 +3,8 @@ from urllib.parse import urljoin
 import htmlmin
 from bs4 import BeautifulSoup
 
-from .markdown import to_markdown
+from marin.markdown import to_markdown
+
 
 def convert_page(html: str, url: str | None = None) -> dict[str, str]:
     from readabilipy import simple_json_from_html_string

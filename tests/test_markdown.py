@@ -1,6 +1,6 @@
 import pytest
 
-from markweb.markdown import mathml_to_markdown, minimal_markdown_escape, to_markdown
+from marin.markdown import mathml_to_markdown, minimal_markdown_escape, to_markdown
 
 
 def test_always_escaped():

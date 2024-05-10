@@ -12,9 +12,9 @@ Scripts go in `scripts/$domain/`. Once there's a script for actually creating th
 
 ### Source
 
-Markdown conversion goes in `markweb/markdown/`.
+Markdown conversion goes in `marin/markdown/`.
 
-Library-y source code goes in `markweb/$domain/`.
+Library-y source code goes in `marin/$domain/`.
 
 
 # Domains
