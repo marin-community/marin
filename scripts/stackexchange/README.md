@@ -23,3 +23,12 @@ python process_stack_exchange.py <path to 7z file or Posts.xml>
 ```
 
 The file can be on GCS or local. The script will download the file if it is on GCS.
+
+As a convenience, we provide a script that processes all sites in a loop: `process_all.bash`.
+
+```bash
+bash process_all.bash
+```
+
+This will read the `stack_exchange_urls.tsv` file and process all sites. If you filter our StackOverflow, this
+runs in couple hours on a MacBook.
