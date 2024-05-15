@@ -1,0 +1,58 @@
+slurm submission log: 2024-05-15 13:51:35.401270
+created following sbatch script: 
+
+###############################
+
+#!/bin/bash
+
+#SBATCH --account=nlp
+#SBATCH --cpus-per-task=16
+#SBATCH --gres=gpu:1
+#SBATCH --job-name=cychou-job-2802072
+#SBATCH --mem=40G
+#SBATCH --nodelist=jagupard36
+#SBATCH --open-mode=append
+#SBATCH --output=cychou-job-2802072.out
+#SBATCH --partition=jag-standard
+#SBATCH --time=14-0
+
+# activate your desired anaconda environment
+
+
+# cd to working directory
+cd .
+
+# launch commands
+srun --unbuffered run_as_child_processes 'python marin/processing/fasttext/data/train_test_split.py --input-file /nlp/scr/cychou/fasttext.txt --train-file  /nlp/scr/cychou/fasttext.train --val-file /nlp/scr/cychou/fasttext.val --val-ratio 0.2'
+
+###############################
+
+submission to slurm complete!
+
+
+###############################
+slurm submission output
+
+Submitted batch job 7617722
+
+
+
+###############################
+
+###############################
+start time: 2024-05-15 13:52:00.942060
+machine: jagupard36.stanford.edu
+conda env: marin
+###############################
+running following processes
+
+	python marin/processing/fasttext/data/train_test_split.py --input-file /nlp/scr/cychou/fasttext.txt --train-file  /nlp/scr/cychou/fasttext.train --val-file /nlp/scr/cychou/fasttext.val --val-ratio 0.2
+
+
+###############################
+command outputs: 
+
+
+###############################
+end time: 2024-05-15 13:52:10.957861
+elapsed time: 0:00:10.015801
