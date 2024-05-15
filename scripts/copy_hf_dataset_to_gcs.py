@@ -1,3 +1,11 @@
+# For a given Hugging Face dataset, this script will:
+# 1. Get the URLs of the dataset files
+# 2. Save the URLs to a TSV file
+# 3. Upload the TSV file to a GCS bucket
+# 4. Create a Google Storage Transfer Service job to transfer the dataset files to a GCS bucket
+#
+# Usage:
+# python copy_hf_dataset_to_gcs.py --dataset_name <DATASET_NAME> --destination_path gs://somewhere/ --urls_dir gs://somewhere_publicly_readable
 import os
 import tempfile
 import urllib.parse
@@ -8,6 +16,7 @@ from datasets import DownloadConfig
 from huggingface_hub import HfFileSystem, hf_hub_url
 from google.auth import default
 from google.cloud import storage, storage_transfer_v1
+
 
 
 def get_urls_to_copy(dataset_name: str, **kwargs):
