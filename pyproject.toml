@@ -1,0 +1,62 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "marin"
+version = "0.1.0"
+readme = "README.md"
+license = {file = "LICENSE"}
+
+requires-python = ">=3.10"
+dependencies = [
+    "apache-beam==2.55.1",      # TODO (dlwh, siddk) :: Are we actually using Beam?
+    "chardet==5.2.0",
+    "datasets==2.19.0",
+    "fsspec~=2024.3",
+    "gcsfs~=2024.3",
+    "html2text==2024.2.26",
+    "htmlmin==0.1.12",
+    "markdownify==0.12.1",
+    "py7zr==0.21.0",
+    "rbloom==1.5.0",
+    "readabilipy==0.2.0",
+    "regex==2024.4.16",
+    "requests",
+    "tensorflow==2.16.1",
+    "trafilatura==1.8.1",
+    "tqdm",
+    "warcio==1.7.4",
+]
+
+[project.optional-dependencies]
+dev = [
+    "black==24.4.2",
+    "ipython",
+    "pre-commit",
+    "pytest~=8.1",
+    "ruff==0.4.4"
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+exclude = ["cache", "infra"]
+
+[tool.setuptools.package-data]
+"marin" = ["py.typed"]
+
+[tool.black]
+line-length = 121
+target-version = ["py310"]
+preview = true
+
+[tool.ruff]
+line-length = 121
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["A", "B", "E", "F", "I", "RUF", "W"]
+ignore = ["F722"]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["E402", "F401"]
