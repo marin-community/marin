@@ -10,7 +10,7 @@ import google.oauth2.id_token
 from google.cloud import tasks_v2
 
 from build_rpv2_bloom_filter import _fsspec_exists, all_paths_for_crawl
-from rpv2 import RPV2_CRAWLS
+from marin.web.rpv2 import RPV2_CRAWLS
 
 
 def create_process_slice_task(out_path, lang, crawl, part, chunk_range, credentials, id_token):

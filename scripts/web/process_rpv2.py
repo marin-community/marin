@@ -8,7 +8,7 @@ import html2text
 import readabilipy
 
 from marin.markdown import to_markdown
-from marin.marin import convert_page
+from marin.web.convert import convert_page
 from marin.web.lookup_cc import fetch_page_from_cc, search_cc_index
 from marin.web.rpv2 import NUM_SHARDS, iterate_rpv2_file
 
