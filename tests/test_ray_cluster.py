@@ -1,0 +1,64 @@
+"""
+test_ray_cluster.py
+
+Simple debugging script that attempts to run 4096 jobs on our Ray cluster, verifying that all nodes can successfully
+read from GCS (specifically `gs://marin-data/scratch/siddk/hello-ray.txt`).
+
+Run with:
+  - [Local] python tests/test_ray_cluster.py
+  - [Ray] ray job submit --no-wait --address=http://127.0.0.1:8265 --working-dir . -- python tests/test_ray_cluster.py
+        => Assumes that `ray dashboard infra/marin-cluster.yaml` running in a separate terminal (port forwarding)!
+"""
+
+import socket
+import time
+from typing import Dict
+
+import ray
+
+from marin.utils.gcs import read_gcs_file
+
+# === Constants ===
+GCS_DEBUG_FILE_PATH = "gs://marin-data/scratch/siddk/hello-ray.txt"
+N_JOBS = 4096
+
+
+@ray.remote
+def test_ray_cluster() -> Dict[str, str]:
+    """Read from `GCS_DEBUG_FILE_PATH` and return {"ip": <Worker IP>, "content": <GCS_FILE_CONTENT>}."""
+    content = read_gcs_file(GCS_DEBUG_FILE_PATH)
+
+    # Sleep to Force Schedule on Multiple Nodes
+    time.sleep(0.1)
+
+    return {"ip": socket.gethostbyname(socket.gethostname()), "content": content.strip()}
+
+
+def main() -> None:
+    print(f"[*] Launching {N_JOBS} Verification Jobs on Ray Cluster!")
+
+    # Initialize Ray w/ Appropriate Runtime Environment (bind `marin` in set of `py_modules`)
+    ray.init()
+
+    # Print Cluster Information
+    print(f"[*] Cluster Statistics :: {len(ray.nodes())} nodes w/ {ray.cluster_resources().get('CPU', 0)} total CPUs")
+
+    # Invoke Jobs (call .remote() --> return *promises* -- a list of references)
+    print(f"[*] Invoking {N_JOBS} Verification Jobs...")
+    output_refs = [test_ray_cluster.remote() for _ in range(N_JOBS)]
+
+    # Resolve references (actually get return result from `test_ray_cluster()`)
+    print("[*] Getting Job Results...")
+    outputs = ray.get(output_refs)
+
+    # Run Verification
+    unique_ips = set()
+    for output_dict in outputs:
+        assert output_dict["content"].strip() == "Hello World!", f"Unexpected output `{output_dict['content'] = }"
+        unique_ips.add(output_dict["ip"])
+
+    print(f"[*] Job Successfully Executed over {len(unique_ips)} Unique IPs: {unique_ips}!")
+
+
+if __name__ == "__main__":
+    main()
