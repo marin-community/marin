@@ -151,7 +151,7 @@ dmypy.json
 .pyre/
 
 # Ruff
-.ruff_ache/
+.ruff_cache/
 
 # pytype static type analyzer
 .pytype/
