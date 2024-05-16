@@ -13,7 +13,20 @@ interacting with it to do lightweight monitoring and reconfiguration. The archit
 + **Worker Nodes**: An autoscaling number of TPU v4-8 VMs; a minimum of 4 VMs will be kept alive at all times, with a
   maximum of 64 VMs alive at once (we can increase this number). 
 
+## Quickstart -- Structuring Code & Running Jobs 
+
+
+
 
 ## Setting Up a Ray Cluster
+
+TODO (siddk, dlwh) -- Shouldn't require changing / updating all that often...
+
+
+## Ray Cluster Utilities
+
+
+
+## Ray Jobs & Special Cases
 
 
