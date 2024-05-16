@@ -1,14 +1,30 @@
+# Marin
+
+> "*I am not afraid of storms, for I am learning how to sail my ship."*<br/>
+> – Louisa May Alcott
+
 ## Getting Started
 
-`pip install -r requirements.txt`, ideally in a virtual environment.
+To get set up, create a new virtual environment (or `conda` environment) with the appropriate Python version (3.10),
+then run the following:
 
+```bash
+git clone https://github.com/stanford-crfm/marin
+cd marin
+pip install -e ".[dev]"
+```
 
+This will install all the core dependencies and build `marin` as a Python package. Installing the `[dev]` requirements
+will additionally install test, linting, and debugging dependencies (e.g., `pytest`).
+
+---
 
 ## Organization
 
 ### Scripts
 
-Scripts go in `scripts/$domain/`. Once there's a script for actually creating the domain, let's make a README.md in that directory that explains how to use the script.
+Scripts go in `scripts/$domain/`. Once there's a script for actually creating the domain, let's make a README.md in 
+that directory that explains how to use the script.
 
 ### Source
 
