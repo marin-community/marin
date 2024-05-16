@@ -2,7 +2,7 @@
 Code to split the fasttext training file created using `create_dataset.py` into a train-val split
 
 Usage:
-nlprun -m jagupard36 -c 16 -r 40G 'python marin/processing/fasttext/data/train_test_split.py --input-file /nlp/scr/cychou/fasttext.txt --train-file  /nlp/scr/cychou/fasttext.train --val-file /nlp/scr/cychou/fasttext.val --val-ratio 0.2'
+nlprun -m jagupard36 -c 16 -r 40G 'python marin/processing/fasttext/data/train_test_split.py --input-file /nlp/scr/cychou/fasttext.txt --train-file /nlp/scr/cychou/fasttext.train --val-file /nlp/scr/cychou/fasttext.val --val-ratio 0.2'
 """
 
 import argparse

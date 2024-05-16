@@ -23,12 +23,9 @@ def print_results(num_examples, precision, recall):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--train-file", type=str, help="The training file")
-    parser.add_argument("--val-file", type=str, help="The validation file")
     parser.add_argument("--output-model-path", type=str, help="The output model path")
     parser.add_argument("--word-ngrams", type=int, default=2, help="The number of word n-grams to use")
 
     args = parser.parse_args()
 
     model = train(args.train_file, args.output_model_path, args.word_ngrams)
-
-    print_results(*model.test(args.val_file))

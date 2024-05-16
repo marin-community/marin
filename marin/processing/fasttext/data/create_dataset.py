@@ -17,9 +17,8 @@ def process_file(json_path, label, max_num_samples=None):
 
             data = json.loads(line)
             text = data.get("text", "")
+            text = text.replace("\n", " ")
             if text:
-                if label == "positive":
-                    print(i)
                 labeled_lines.append(f"__label__{label} {text}")
     return labeled_lines
 
