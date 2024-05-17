@@ -1,7 +1,7 @@
 """
 test_ray_cluster.py
 
-Simple debugging script that attempts to run 4096 jobs on our Ray cluster, verifying that all nodes can successfully
+Simple debugging script that attempts to run 4096 tasks on our Ray cluster, verifying that all nodes can successfully
 read from GCS (specifically `gs://marin-data/scratch/siddk/hello-ray.txt`).
 
 Run with:
@@ -20,7 +20,7 @@ from marin.utils.gcs import read_gcs_file
 
 # === Constants ===
 GCS_DEBUG_FILE_PATH = "gs://marin-data/scratch/siddk/hello-ray.txt"
-N_JOBS = 4096
+N_TASKS = 4096
 
 
 @ray.remote
@@ -28,24 +28,24 @@ def test_ray_cluster() -> Dict[str, str]:
     """Read from `GCS_DEBUG_FILE_PATH` and return {"ip": <Worker IP>, "content": <GCS_FILE_CONTENT>}."""
     content = read_gcs_file(GCS_DEBUG_FILE_PATH)
 
-    # Sleep to Force Schedule on Multiple Nodes
+    # Sleep to force schedule on multiple nodes
     time.sleep(0.1)
 
     return {"ip": socket.gethostbyname(socket.gethostname()), "content": content.strip()}
 
 
 def main() -> None:
-    print(f"[*] Launching {N_JOBS} Verification Jobs on Ray Cluster!")
+    print(f"[*] Launching {N_TASKS} Verification Tasks on Ray Cluster!")
 
-    # Initialize Ray w/ Appropriate Runtime Environment (bind `marin` in set of `py_modules`)
+    # Initialize Connection to Ray Cluster
     ray.init()
 
     # Print Cluster Information
     print(f"[*] Cluster Statistics :: {len(ray.nodes())} nodes w/ {ray.cluster_resources().get('CPU', 0)} total CPUs")
 
-    # Invoke Jobs (call .remote() --> return *promises* -- a list of references)
-    print(f"[*] Invoking {N_JOBS} Verification Jobs...")
-    output_refs = [test_ray_cluster.remote() for _ in range(N_JOBS)]
+    # Invoke Tasks (call .remote() --> return *promises* -- a list of references)
+    print(f"[*] Invoking {N_TASKS} Verification Tasks...")
+    output_refs = [test_ray_cluster.remote() for _ in range(N_TASKS)]
 
     # Resolve references (actually get return result from `test_ray_cluster()`)
     print("[*] Getting Job Results...")
