@@ -14,9 +14,8 @@ import socket
 import time
 from typing import Dict
 
+import fsspec
 import ray
-
-from marin.utils.gcs import read_gcs_file
 
 # === Constants ===
 GCS_DEBUG_FILE_PATH = "gs://marin-data/scratch/siddk/hello-ray.txt"
@@ -26,7 +25,8 @@ N_TASKS = 4096
 @ray.remote
 def test_ray_cluster() -> Dict[str, str]:
     """Read from `GCS_DEBUG_FILE_PATH` and return {"ip": <Worker IP>, "content": <GCS_FILE_CONTENT>}."""
-    content = read_gcs_file(GCS_DEBUG_FILE_PATH)
+    with fsspec.open(GCS_DEBUG_FILE_PATH, "r") as f:
+        content = f.read()
 
     # Sleep to force schedule on multiple nodes
     time.sleep(0.1)

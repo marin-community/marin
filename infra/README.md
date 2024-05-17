@@ -42,7 +42,17 @@ The following provides a simple sketch of what a job script might look like:
 from marin.toxicity import toxicity_classifier
 from marin.utils import gcs_file_exists
 
+import fsspec
 import ray
+
+
+def get_sentinel_path(gcs_file_path: str) -> str:
+    return f"{gcs_file_path}.COMPLETE"
+
+
+def finalize_sentinel(sentinel_gcs_path: str, content: str = "Task Completed") -> None:
+    with fsspec.open(sentinel_gcs_path, "w") as f:
+        f.write(content)
 
 
 # Task Function --> this actually will be parallelized across cluster workers
@@ -50,18 +60,20 @@ import ray
 def classify_reddit_toxicity(gcs_reddit_input: str, gcs_toxicity_output: str) -> bool:
     """Read from input, perform toxicity classification, write to output -- return success/failure."""
     
-    # [Short-Circuit] Assumes that if output file exists, "task" has been successfully completed
-    if gcs_file_exists(gcs_toxicity_output):
+    # [Short-Circuit] If "sentinel" file exists, task has been successfully completed
+    sentinel_gcs_path = get_sentinel_path(gcs_toxicity_output)
+    if gcs_file_exists(sentinel_gcs_path):
         return True
     
     # Read and validate `gcs_reddit_input`
     ...
 
-    # Run toxicity classifier and get scores
-    ...
-
-    # Write *entire* output back to GCS at once
-    ...
+    # Run toxicity classifier and get scores --> write to `gcs_toxicity_output` as you go!
+    with fsspec.open(gcs_toxicity_output, "w", compression="infer") as out:
+        ...
+    
+    # Finalize Sentinel
+    finalize_sentinel(sentinel_gcs_path)
 
     return True
 
@@ -101,9 +113,8 @@ if __name__ == "__main__":
 
 Note the "short-circuiting" structure of the `@ray.remote` decorated function `classify_reddit_toxicity`; in general,
 writing your job scripts and tasks so that they are 
-[*idempotent*](https://stackoverflow.com/questions/1077412/what-is-an-idempotent-operation) (can be invoked multiple
-times, always returning the same output) is a good idea, and gracefully handles cases where individual tasks crash or
-a VM worker gets preempted in the middle of running a task.
+[*idempotent*](https://stackoverflow.com/questions/1077412/what-is-an-idempotent-operation) (can be invoked multiple times, always returning the same output) is a good idea, and gracefully 
+handles cases where individual tasks crash or a VM worker gets preempted in the middle of running a task.
 
 ---
 
