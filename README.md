@@ -87,7 +87,7 @@ ray job submit --address http://127.0.0.1:8265 --working_dir . --no-wait -- pyth
 ray job status --address http://127.0.0.1:8265 raysubmit_pAJM8vKfHPhiyHBa
 
 # Get Job Logs (Console Out)
-ray job status --address http://127.0.0.1:8265 raysubmit_pAJM8vKfHPhiyHBa
+ray job logs --address http://127.0.0.1:8265 raysubmit_pAJM8vKfHPhiyHBa
 
 # Kill / Stop Job (if necessary / error / bug)
 ray job stop --address http://127.0.0.1:8265 raysubmit_pAJM8vKfHPhiyHBa
