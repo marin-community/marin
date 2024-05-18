@@ -5,8 +5,40 @@ from bs4 import BeautifulSoup
 
 from marin.markdown import to_markdown
 
-
 def convert_page(html: str, url: str | None = None) -> dict[str, str]:
+    from readability import Document
+    doc = Document(html)
+    title = doc.title()
+
+    tree = doc.summary()
+
+    tree = htmlmin.minify(tree, remove_empty_space=True, keep_pre=True)
+    tree = BeautifulSoup(tree, "html.parser")
+    if url:
+        tree = make_links_absolute(tree, url)
+
+    # reconvert tree to str with absolute URLs
+    content = str(tree)
+
+    # convert to markdown
+    markdown = to_markdown(tree)
+
+    # add title to markdown
+    if title:
+        markdown = f"# {title}\n\n{markdown}"
+
+    out = {
+        "title": title,
+        "content": markdown,
+        "html": content,
+    }
+    if url:
+        out["url"] = url
+
+    return out
+
+def convert_page_legacy(html: str, url: str | None = None) -> dict[str, str]:
+    print(f"This is Legacy method, use convert_page_python instead")
     from readabilipy import simple_json_from_html_string
 
     reabilitied = simple_json_from_html_string(html, use_readability=True)
