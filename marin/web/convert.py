@@ -5,7 +5,7 @@ from bs4 import BeautifulSoup
 
 from marin.markdown import to_markdown
 
-def convert_page_python(html: str, url: str | None = None) -> dict[str, str]:
+def convert_page(html: str, url: str | None = None) -> dict[str, str]:
     from readability import Document
     doc = Document(html)
     title = doc.title()
@@ -37,7 +37,7 @@ def convert_page_python(html: str, url: str | None = None) -> dict[str, str]:
 
     return out
 
-def convert_page(html: str, url: str | None = None) -> dict[str, str]:
+def convert_page_legacy(html: str, url: str | None = None) -> dict[str, str]:
     print(f"This is Legacy method, use convert_page_python instead")
     from readabilipy import simple_json_from_html_string
 
