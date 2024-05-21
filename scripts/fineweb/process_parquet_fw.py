@@ -1,25 +1,22 @@
 '''Convert fineweb to markdown'''
 import argparse
 import json
-import logging
 import os
 import time
 import traceback
 
 import fsspec
-import ray
-
 import pandas as pd
+import ray
 import requests
 from warcio import ArchiveIterator
-from marin.web.convert import convert_page
+
 from marin.utils import gcs_file_exists
+from marin.web.convert import convert_page
 from scripts.fineweb.utils import get_warc_parquet_success_path
 
-# Initialize S3 file system
-logging.basicConfig(level=logging.INFO)
 
-@ray.remote(memory=1*1024*1024*1024) # 1 GB
+@ray.remote(memory=1 * 1024 * 1024 * 1024)  # 1 GB
 def process_one_warc_file(input_file_path):
     """
     Takes in the input file and processes it to get the html and md content.
@@ -87,30 +84,30 @@ def process_one_warc_file(input_file_path):
                         traceback.print_exc()
 
     print(f"Processed {s3_url}, found {length_warc} records, {length_url_inp_list} urls, "
-          f"{length_warc/length_url_inp_list} ratio")
+          f"{length_warc / length_url_inp_list} ratio")
 
     # Write the output to a file with md information. MD will have html in the metadata
     output_file = input_file_path.replace(".parquet", "_processed_md.jsonl.gz")
-    with fsspec.open(output_file, 'wb', compression='gzip') as f: #md output
+    with fsspec.open(output_file, 'wb', compression='gzip') as f:  # md output
         for index, row in df.iterrows():
-            out_fw  = row.to_dict()
+            out_fw = row.to_dict()
             out_dolma = {"id": out_fw["id"],
                          "text": out_fw["md"],
                          "source": "fineweb"
-            }
+                         }
             all_except_md = {key: value for key, value in out_fw.items() if key != 'md'}
             out_dolma["metadata"] = {"fineweb_metadata": all_except_md}
             f.write(json.dumps(out_dolma).encode('utf-8') + b"\n")
 
     # Write the output to a file with html format.
     output_file_html = output_file.replace("_processed_md.jsonl.gz", "_processed_html.jsonl.gz")
-    with fsspec.open(output_file_html, 'wb', compression='gzip') as f: #html output
+    with fsspec.open(output_file_html, 'wb', compression='gzip') as f:  # html output
         for index, row in df.iterrows():
-            out_fw  = row.to_dict()
+            out_fw = row.to_dict()
             out_dolma = {"id": out_fw["id"],
                          "text": out_fw["html"],
                          "source": "fineweb"
-            }
+                         }
             all_except_md_html = {key: value for key, value in out_fw.items() if key not in ('md', 'html')}
             out_dolma["metadata"] = {"fineweb_metadata": all_except_md_html}
             f.write(json.dumps(out_dolma).encode('utf-8') + b"\n")
@@ -127,7 +124,8 @@ def process_one_warc_file(input_file_path):
 
     return True
 
-@ray.remote(memory=10*1024*1024*1024) # 10 GB
+
+@ray.remote(memory=10 * 1024 * 1024 * 1024)  # 10 GB
 def process_fw_parquet(input_file_path):
     """
        Converts fineweb files to html and markdown. This will essentially take in fineweb and split different groups based
@@ -163,7 +161,7 @@ def process_fw_parquet(input_file_path):
         success_refs["ray_waitable"].append(process_one_warc_file.remote(filename))
         success_refs["file_path"].append(filename)
 
-    TASK_TIMEOUT = 600.0 #10 minutes
+    TASK_TIMEOUT = 600.0  # 10 minutes
     done, in_progress = ray.wait(success_refs["ray_waitable"], num_returns=len(success_refs["ray_waitable"]),
                                  timeout=TASK_TIMEOUT, fetch_local=False)
     in_progress_indices = [success_refs["ray_waitable"].index(task) for task in in_progress]
@@ -178,13 +176,12 @@ def process_fw_parquet(input_file_path):
 
     return True
 
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Convert fineweb to markdown.")
-    # Example of input_folder =
+    # Example of input_folder = gs://marin-data/raw/fineweb/fw-v1.0/CC-MAIN-2024-10/000_00000.parquet
     parser.add_argument('--input_file_path', type=str, help='Path to the fineweb parquet file', required=True)
 
     args = parser.parse_args()
     ray.init()
     ray.get(process_fw_parquet.remote(args.input_file_path))
-
-
