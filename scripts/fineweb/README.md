@@ -1,6 +1,12 @@
 # Overview of the dataset
-[google doc](www.google.com)
 
+[google doc](https://docs.google.com/document/d/1yVYnhswWnyBYzj-nz6Od-9b2OQogoVtstDRsC6L9vjk/edit?usp=sharing)
+
+# Example Run
+
+```bash
+python process_parquet_fw.py --parquet_file  gs://marin-data/raw/fineweb/fw-v1.0/CC-MAIN-2024-10/
+```
 # Process
 1. `process_dump.sh` will run for a single for a single dump of common crawl, and iterate through all the parquet files in 
 `gs://marin-data/raw/fineweb/fw-v1.0/DUMP/`. For each parquet file it will call `process_parquet_fw.py`

@@ -24,7 +24,7 @@ PARQUET_FILES=$(gsutil ls "${GCS_PATH}*.parquet")
 for FILE in $PARQUET_FILES
 do
   echo "Processing $FILE..."
-#  python scripts/fineweb/process_parquet_fw.py --input_file_path "$FILE"
+  ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python scripts/fineweb/process_parquet_fw.py --input_file_path "$FILE"
 done
 
 echo "All files processed."

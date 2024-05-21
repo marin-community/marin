@@ -179,7 +179,7 @@ def process_fw_parquet(input_file_path):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Convert fineweb to markdown.")
-    # Example of input_folder = gs://marin-data/raw/fineweb/fw-v1.0/CC-MAIN-2024-10/000_00000.parquet
+    # Example of input_file_path = gs://marin-data/raw/fineweb/fw-v1.0/CC-MAIN-2024-10/000_00000.parquet
     parser.add_argument('--input_file_path', type=str, help='Path to the fineweb parquet file', required=True)
 
     args = parser.parse_args()
