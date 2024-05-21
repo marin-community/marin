@@ -77,6 +77,7 @@ setup_commands:
     "ray[default]==2.22.0" 
     "rbloom==1.5.0" 
     "readabilipy==0.2.0" 
+    "readability-lxml==0.8.1" 
     "regex==2024.4.16" 
     "requests" 
     "tensorflow==2.16.1" 
