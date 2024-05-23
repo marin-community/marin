@@ -1,4 +1,4 @@
-# Learning What’s in a Name with Graphical Models — Gradient
+# Learning What’s in a Name with Graphical Models - Gradient
 
 “The UK” alone is a country, but “The UK Department of Transport” is an organization within said country. In a named entity recognition (NER) task, where we want to label each word with a name tag (organization/person/location/other/not a name) <sup>[\[1\]](#reference-Chinchor1998)</sup>, how can a computer model know one from the other?
 
@@ -15,14 +15,14 @@ Graphical modeling is a robust framework for representing probabilistic models. 
 Let’s start with a simple example with two random variables, $`A`$ and $`B`$. Assume that $`B`$ is conditionally dependent on $`A`$. Through a canonical application of the chain rule, the joint distribution of $`A`$ and $`B`$ is:
 
 $$p(a,b)=p(a)\cdot p(b\mathrm{\mid }a)$$
-
 Notation: the shorthand *p(a)* means *p(A = a)*, that is, the probability of variable A taking value a.
 
 This is a simple enough example, with 2 factors in the right hand side. Add more variables, however, and the result can get messy fast. To see this, assume that there are two more variables, $`C`$ and $`D`$, and that $`D`$ is conditionally dependent on $`A`$, $`B`$, and $`C`$. The factorization becomes:
 
 $$p(a,b,c,d)=p(a)\cdot p(b\mathrm{\mid }a)\cdot p(c)\cdot p(d\mathrm{\mid }a,b,c)$$
-
 The relationship between variables is more opaque, hidden behind second-order dependencies. For example, while it’s clear that $`D`$ is directly dependent on $`A`$, we may miss the fact that there is another, second-order dependency between the two ($`D`$ is dependent on $`B`$, which in turn is dependent on $`A`$).
+
+### Directed Acyclic Graphs
 
 Directed Acyclic Graphs, or DAGs, offer a natural remedy to this problem. Each factor in the equation can be represented by a node. An arrow indicates conditional dependence. The resulting graph would look like:
 
@@ -32,28 +32,31 @@ Below is what a sampled population of the given distributions would look like. F
 
 For more detailed accounts of probabilistic graphical models, consider reading the textbooks *Probabilistic Graphical Models: Principles and Techniques* by Daphne Koller and Nir Friedman <sup>[\[2\]](#reference-Koller2009)</sup> and *Probabilistic Reasoning in Intelligent Systems* by Judea Pearl <sup>[\[3\]](#reference-Pearl1988)</sup>.
 
+## II. Hidden Markov Models
+
 Hidden Markov Models (HMMs) are an early class of probabilistic graphical models representing partially hidden (unobserved) sequences of events. Structurally, they are built with two main layers, one hidden ($`S_i`$) and one observed ($`O_i`$):
 
 HMMs have been successfully applied to a wide range of problems, including gene analysis <sup>[\[4\]](#reference-Shatkay2000)</sup>, information extraction <sup>[\[5,](#reference-Leek1997) [6\]](#reference-Freitag1999)</sup>, speech recognition <sup>[\[7\]](#reference-Rabiner1989)</sup>, and named entity recognition <sup>[\[8\]](#reference-Bikel1999)</sup>.
 
+### The Hidden Layer
+
 The hidden layer is assumed to be a Markov process: a chain of events in which each event’s probability depends only on the state of the preceding event. More formally, given a sequence of $`N`$ random events $`S_1`$, $`S_2`$,…, $`S_N`$, the Markov assumption holds that:
 
 $$p(s_i\mathrm{\mid }s_1,s_2,\dots ,s_{i-1})=p(s_i\mathrm{\mid }s_{i-1})\text{for all }{\textstyle i{\scriptscriptstyle \in }\{2,\dots ,N\}}$$
-
 In a graph, this translates to a linear chain of events where each event has one arrow pointing towards it (except for the first event) and one pointing away from it (except for the last):
 
 A second assumption that HMMs make is time-homogeneity: that the probability of transition from one event's state to the next is constant over time. In formal terms:
 
 $$p(s_i\mathrm{\mid }s_{i-1})=p(s_{i+1}\mathrm{\mid }s_i)\text{for all }{\textstyle i{\scriptscriptstyle \in }\{2,\dots ,N-1\}}$$
-
 $`p(s_i\mathrm{\mid }s_{i-1})`$ is called the transition probability and is one of the two key parameters to be learned during training.
 
 The assumptions about the hidden layer — Markov and time-homogeneity — hold up in various time-based systems where the hidden, unobserved events occur sequentially, one after the other. Together, they meaningfully reduce the computational complexity of both learning and inference.
 
+### The Observed Layer
+
 The hidden and observed layer are connected via a one-to-one mapping relationship. The probability of each observation is assumed to depend only on the state of the hidden event at the same time step. Given a sequence of $`N`$ hidden events $`S_1`$, $`S_2`$,…, $`S_N`$ and observed events $`O_1`$, $`O_2`$,…, $`O_N`$ we have:
 
 $$p(o_i\mathrm{\mid }s_1,s_2,\dots ,s_N)=p(o_i\mathrm{\mid }s_i)\text{for all }{\textstyle i{\scriptscriptstyle \in }\{1,2,\dots ,N\}}$$
-
 In a graph, this one-to-one relationship looks like:
 
 The conditional probability $`p(o_i\mathrm{\mid }s_i)`$, called the emission probability, is also assumed to be time-homogenous, further reducing the model's complexity. It is the second key parameter to be learned, alongside the transition probability.
@@ -70,9 +73,13 @@ Between any two consecutive hidden states, there are 9² = 81 possible transitio
 
 In the observed layer, each node can have any value from the vocabulary, whose size ranges anywhere from the thousands to the hundreds of thousands. The vocabulary created for the HMM in this article contains 23,622 tokens. Let N be the number of tokens in the vocabulary. The number of possible emission probabilities is 9N ($`n_{states}\cdot n_{tokens}`$).
 
+### Training
+
 There are three sets of parameters to be learned during training: the transition, emission, and start probabilities. All can be computed as normalized rates of occurrence from the training data.
 
-For example, to get the transition probability from state “O” to state “B-LOC”, $`p(B-LOC\mathrm{\mid }O)`$, we need two numbers: the number of times state “O” is followed by any other state (that is, it isn't the last state in the sequence), as $`N_O`$, and the number of times state “O” is followed by state “B-LOC”, as $`N_{O\to B-LOC}`$. The desired transition probability is $`\frac{N_{O\to B-LOC}}{N_O}`$. The same calculation can be done for each of the remaining probabilities.
+For example, to get the transition probability from state “O ” to state “B-LOC”, $`p(B-LOC\mathrm{\mid }O)`$, we need two numbers: the number of times state “O” is followed by any other state (that is, it isn't the last state in the sequence), as $`N_O`$, and the number of times state “O” is followed by state “B-LOC”, as $`N_{O\to B-LOC}`$. The desired transition probability is $`\frac{N_{O\to B-LOC}}{N_O}`$. The same calculation can be done for each of the remaining probabilities.
+
+### Inference
 
 In the context of HMMs, inference involves answering useful questions about hidden states given observed values, or about missing values given a partially observed sequence. In NER, we are focused on the first type of inference. Specifically, we want to perform maximum a posteriori (MAP) inference to identify the most likely state sequence conditioned on observed values.
 
@@ -80,11 +87,11 @@ There is usually an intractably large number of candidate state sequences. For a
 
 Luckily, there is an efficient dynamic algorithm that returns the most likely path with relatively low computational complexity: the Viterbi algorithm <sup>[\[9\]](#reference-Viterbi1967)</sup>. It moves through the input sequence from left to right, at each step identifying and saving the most likely path in a trellis-shaped memory structure. For more details, refer to the excellent description of the Viterbi algorithm in the book *Speech and Language Processing* by Jurafsky & Martin <sup>[\[10\]](#reference-Jurafsky2021)</sup>.
 
+### Results
+
 An HMM with the structure outlined above was trained on the CoNLL-2003 English dataset <sup>[\[11\]](#reference-Sang2003)</sup>. The train set contains 14,987 sentences and a total of 203,621 word tokens. Here's the model in action:
 
-Name tag predictions by HMM:
-
-Starting prediction server…
+Name tag predictions by HMM:Starting prediction server…
 
 Evaluated against a test set, the model achieves satisfactory per-word accuracy:
 
@@ -115,6 +122,8 @@ Recall
 | ALL | 0.64 | 0.41 |
 
 This makes sense: we expect the model to perform worse on tokens that it wasn't trained on. And because the CoNLL-2003 train set has a large number of OOV tokens — 80.6% of all test entities contain at least one OOV token — across-the-board precision and recall are heavily impacted.
+
+### Limitations
 
 HMMs are by no means perfect candidates for NER or text labeling problems in general, for at least three reasons. The first two have to do with the statistical assumptions that underlie HMMs’ chain structure, while the third relates to their sole reliance on word identity in the observed layer.
 
@@ -156,26 +165,29 @@ The arrows connecting observations with their respective states have switched di
 
 Similar to HMMs, MEMMs have been successfully applied to a wide range of sequence modeling problems <sup>[\[12,](#reference-McCallum2000) [13,](#reference-Thierry2010) [14\]](#reference-Ziebart2009)</sup>.
 
+### Discriminative Structure
+
 There are two main approaches to building classification models: generative and discriminative <sup>[\[15\]](#reference-Ng2001)</sup>. Suppose there is a system with two variables, $`X`$ and $`Y`$. We want to make predictions about $`Y`$ based on observations on $`X`$. A generative classifier would do that by first learning the prior distribution $`p(X,Y)`$ and then applying Bayes' rule to find the posterior $`p(Y\mathrm{\mid }X)`$. This can be thought of as reconstructing the process that generated the observed data. A discriminative classifier, on the other hand, would model the posterior $`p(Y\mathrm{\mid }X)`$ directly based on training data.
 
 HMMs are generative classifiers, while MEMMs are discriminative. The former are generative because they model the joint distribution over both observations and hidden states (as a product of transition and emission probabilities) before using that joint distribution to find the most likely state sequence given observations (or solve some other inference problem). MEMMs, on the other hand, directly model the conditional probabilities $`p(state\mathrm{\mid }observation,prevstate)`$ without any intermediary.
+
+### Word Features
 
 Notably, MEMMs’ discriminative structure allows them to model overlapping word features. Two features can overlap when they contain the same or similar pieces of information, like word shape (“Xxx”) and capitalization. HMMs don’t allow overlapping features, since as a result of their generative structure they require that all events in the observation layer be independent of one another. MEMMs, on the other hand, are discriminative and able to relax the independence requirement, so they can use arbitrary overlapping word features <sup>[\[12\]](#reference-McCallum2000)</sup>.
 
 Common practice is to use binary features, such as:
 
 $$b(o_t)=\{\begin{array}{l}{\textstyle \text{1 if }{\textstyle o_t}\text{ has shape “Xxx”}}\\ {\textstyle \text{0 otherwise}}\end{array}$$
-
 These features are then paired with the current state $`s`$ to form feature-state pairs $`a=\langle b,s\rangle `$:
 
 $$f_{\langle b,s\rangle }(o_t,s_t)=\{\begin{array}{l}{\textstyle \text{1 if }{\textstyle b(o_t)=1}\text{ and }{\textstyle s_t=s}}\\ {\textstyle \text{0 otherwise}}\end{array}$$
-
 Feature-state pairs provide useful additional information how which features and states go together and which don’t. For example, we can expect pairs like "is\_capitalized" + “B-ORG” to occur together frequently, capturing the fact that in English named entities are often capitalized.
+
+### State Transitions
 
 MEMMs’ state transition distributions have exponential form and contain a weighted sum of all feature-state pairs:
 
 $$p_{s\mathrm{\prime }}(s\mathrm{\mid }o)=\frac{1}{Z(o,s\mathrm{\prime })}\mathrm{exp}\left(\sum _{a}\lambda _a\text{\hspace{0.17em}}f_a(o,s)\right)$$
-
 where $`s\mathrm{\prime }`$ and $`s`$ are the previous and current state, $`o`$ is the current observation, $`a=\langle b,s\rangle `$ is a feature-state pair, $`\lambda _a`$ is the learned weight for $`a`$, and $`Z(o,s\mathrm{\prime })`$ is a normalizing term to make the distribution $`p_{s\mathrm{\prime }}`$ sum to one across all next states $`s`$.
 
 | λ<sub>a</sub> | f<sub>a</sub> | λ<sub>a</sub>f<sub>a</sub> |
@@ -187,9 +199,13 @@ p<sub>O</sub>(B-LOC | “UK”) = e<sup>SUM(λ<sub>a</sub>f<sub>a</sub>)</sup> /
 
 Those familiar with neural networks will recognize that the function above is a softmax. Its exponential form is a result of the core principle of maximum entropy that underlies MEMMs’ statistical structure and gives them their name. Maximum entropy states that the model that best represents our knowledge about a system is one that makes the fewest possible assumptions except for certain constraints derived from prior data from that system <sup>[\[12,](#reference-McCallum2000) [16\]](#reference-Pietra1997)</sup>.
 
+### Training & Inference
+
 The training step involves learning the weights $`\lambda _a`$ that satisfy MEMMs’ maximum entropy constraint <sup>[\[12\]](#reference-McCallum2000)</sup>. Learning is done through Generalized Iterative Scaling, which iteratively updates the values $`\lambda _a`$ in order to nudge the expected value of all features closer to their train set average. Convergence at a global optimum is guaranteed given the exponential form of the transition distribution.
 
 As with HMMs, the Viterbi algorithm makes MAP inference tractable <sup>[\[12,](#reference-McCallum2000) [9\]](#reference-Viterbi1967)</sup>. The variable transition probability $`p_{s\mathrm{\prime }}(s\mathrm{\mid }o)`$ takes the place of HMMs’ fixed transition and emission probabilities.
+
+### Results
 
 A MEMM was trained on the CoNLL-2003 English dataset <sup>[\[11\]](#reference-Sang2003)</sup>. In addition to word identity, features used for training include the word’s lowercase version (“Algeria” → “algeria”), shape (“Xxxx”), whether it’s in title/upper case, and whether it contains only digits.
 
@@ -216,9 +232,7 @@ Other features relate to established linguistic patterns. For example, if the cu
 
 Here’s a live version of the trained model:
 
-Name tag predictions by MEMM:
-
-Starting prediction server…
+Name tag predictions by MEMM:Starting prediction server…
 
 The model has better performance than its HMM counterpart. Per-word accuracy is higher than the HMM’s 90.1%:
 
@@ -246,6 +260,8 @@ Recall
 | MISC | 0.78 | 0.02 |
 | ALL | 0.79 | 0.37 |
 
+### Advantage Over HMMs
+
 The ability to model word features allows MEMMs to fare better with OOV-dense name entities than HMMs. Faced with words that they have never seen before during training, these models can easily stumble. Word identity alone provides no useful information. In those cases, derived features such as word shape and capitalization can function as imperfect yet doubtlessly helpful proxies for word identity, allowing MEMMs to make better guesses at the name tag, resulting higher precision and recall scores:
 
 | Entity Length | OOV Rate 0 | OOV Rate 0.2 | OOV Rate 0.25 | OOV Rate 0.33 | OOV Rate 0.4 | OOV Rate 0.5 | OOV Rate 0.6 | OOV Rate 0.66 | OOV Rate 0.75 | OOV Rate 0.8 | OOV Rate 1 |
@@ -266,6 +282,8 @@ With stronger predictive power on OOV words, we can additionally expect better p
 | MISC | 0.82 | 0.57 | 0.29 | 0.18 |  |
 | ALL | 0.77 | 0.7 | 0.58 | 0.16 | 0.43 |
 
+### Label Bias Problem
+
 MEMMs’ discriminative structure confers great benefits, but there’s a downside: it makes them susceptible to the label bias problem. First recorded by Bottou <sup>[\[17\]](#reference-Bottou1991)</sup>, this problem mostly affects discriminative models, causing certain states to effectively ignore their observations, biasing predictions toward less likely transition paths. While the label bias problem doesn’t render models useless, it still has a notable effect on predictions, causing demonstrably higher error rates <sup>[\[18\]](#reference-Lafferty2001)</sup>.
 
 What’s important to know is that MEMMs fall victim to the label bias problem because they have local probability normalization. The normalization factor $`Z(o,s\mathrm{\prime })`$ ensures that transition probabilities between neighboring states sum up to one. Local normalization forces every state to transfer all of its probability mass onto the next state, regardless of how likely or unlikely the current observation is. Hannun <sup>[\[19\]](#reference-Hannun2019)</sup> provides an excellent, detailed explanation of how this happens.
@@ -278,6 +296,8 @@ Conditional Random Fields (CRFs) are a class of undirected probabilistic models.
 
 While CRFs can have any graph structure, in this article we’ll focus on the linear-chain version:
 
+### Markov Random Fields
+
 CRFs are a type of Markov Random Fields (MRFs) — probability distributions over random variables defined by *undirected* graphs <sup>[\[28\]](#reference-Blake2011)</sup>:
 
 Undirected graphs are appropriate for when it’s difficult or implausible to establish causal, generative relationships between random variables. Social networks are a good example of undirected relationships. We can think of $`A`$, $`B`$, and $`C`$ in the graph above as people in a simple network. $`A`$ and $`B`$ are friends and tend to share similar beliefs. The same goes for $`B`$ and $`C`$ as well as $`C`$ and $`A`$. We might, for example, want to model how each person in the network thinks about a specific topic.
@@ -287,19 +307,16 @@ Acyclic Directed graphs fail to adequately represent the mutual belief propagati
 Rather than assuming a generative relationship between variables, MRFs model their mutual relationships with non-negative scoring functions $`\varphi `$, called *factors*, that assign higher scores if the variables’ values are in agreement, for example:
 
 $$\varphi (X,Y)=\{\begin{array}{l}{\textstyle \text{3 if }{\textstyle X=1}\text{ and }{\textstyle Y=1}}\\ {\textstyle \text{2 if }{\textstyle X=0}\text{ and }{\textstyle Y=0}}\\ {\textstyle \text{1 otherwise}}\end{array}$$
-
 Unlike conditional probabilities, there is no assumed directionality in scoring functions. These functions simply return higher scores if the variables agree and lower scores if they disagree. They model pairwise correlation, not causation.
 
 The joint probability of all variables in the graph is:
 
 $$p(A,B,C)=\frac{1}{Z}\text{\hspace{0.17em}}\varphi (A,B)\text{\hspace{0.17em}}\varphi (B,C)\text{\hspace{0.17em}}\varphi (C,A)\text{where Z is a normalization factor}$$
-
 The factors $`\varphi `$ promote assignments in which their constituent variables ($`A`$ and $`B`$ in the case of $`\varphi (A,B)`$) agree with each other. The assignment 1-1-1 would receive a higher score and thus have higher probability than say 1-1-0, since there is more agreement in the former case.
 
 More generally, MRFs are probability distributions $`p`$ over random variables $`x_1`$, $`x_2`$,… that are defined by an undirected graph $`\mathcal{G}`$ and have the form:
 
 $$p(x_1,x_2,\dots )=\frac{1}{Z}\prod _{c\text{\hspace{0.17em}}{\scriptscriptstyle \in }\text{\hspace{0.17em}}C}\varphi _c(x_c)\text{where Z is a normalization factor}\text{and C is the set of cliques in }{\textstyle \mathcal{G}}$$
-
 p(1, 1, 1, 0, 0, 0)  
 =1/Z  
 ⨯ ɸ<sub><sub>ABC</sub></sub>(1, 1, 1)  
@@ -331,22 +348,22 @@ MRFs have a generalized form of which the directed models we’ve seen so far �
 
 The additional level of generality comes at a cost, however: the normalization factors $`Z`$ are often difficult to compute. They require summing over an exponential number of potential assignments, an infeasible task if the network is large enough. Fortunately, there are configurations that can be solved using efficient decoding algorithms. That includes linear-chain CRFs, which can be decoded with the Viterbi algorithm.
 
+### Conditional Form
+
 CRFs are random fields globally conditioned on a set of observations $`x`$ <sup>[\[18\]](#reference-Lafferty2001)</sup> and have the form:
 
-$$p(y\mathrm{\mid }x)=\frac{1}{Z(x)}\prod _{c\text{\hspace{0.17em}}{\scriptscriptstyle \in }\text{\hspace{0.17em}}C}\varphi _c(y_c,x_c)\text{where Z is a normalization factor}\text{and C is the set of cliques in the}\text{graph }{\textstyle \mathcal{G}}\text{ representing the labels }{\textstyle y}$$
-
+$$p(y\mathrm{\mid }x)=\frac{1}{Z(x)}\prod _{c\text{\hspace{0.17em}}{\scriptscriptstyle \in }\text{\hspace{0.17em}}C}\varphi _c(y_c,x_c)\text{where Z is a normalization factor}\text{and C is the set of cliques in the}\text{graph }{\textstyle \mathcal{G}}\text{ representing the  labels }{\textstyle y}$$
 The distribution $`p(y\mathrm{\mid }x)`$ is parameterized by $`x`$. When we replace all the values $`x_i`$ in the right hand side with real values, what remains has the same form as an MRF. In fact, we get a new MRF for every observation sequence $`x`$.
 
 CRFs are globally conditioned on $`x`$. They directly model the probability of the label sequence $`y`$ — $`p(y\mathrm{\mid }x)`$ — rather than local transition/emission probabilities $`p(y_i\mathrm{\mid }y_{i-1})`$ or $`p(y_i\mathrm{\mid }x_i)`$.
 
 Global conditioning on $`x`$ means that the hidden states $`y_i`$ can depend not only on the current observation but also any other observation in the sequence. Adding more such dependencies to the model does not increase the computational complexity of inference tasks, since we don’t have to model the marginal probabilities $`p(x_i)`$ at train/test time.
 
-Linear-chain CRF where the hidden layer depends on the current, previous, and future observations.
+Linear-chain CRF where the hidden layer depends on the current, previous, and future observations.### Exponential Factors
 
 The factors $`\varphi _c`$ have an exponential form <sup>[\[18\]](#reference-Lafferty2001)</sup> that’s similar MEMMs’ transition function:
 
 $$\varphi _c(y_c,x_c)=\mathrm{exp}\left(\sum _{a}\lambda _a\text{\hspace{0.17em}}f_a(y_c,x_c)\right)\text{where }{\textstyle f_a}\text{ is a feature function defined for clique }{\textstyle c}\text{and }{\textstyle \lambda _a}\text{ is the weight parameter for }{\textstyle f_a}$$
-
 1. **MUC-7 Named Entity Task Definition (Version 3.5)** [PDF](https://aclanthology.org/M98-1028.pdf)  
 Nancy Chinchor. 1998. In Seventh Message Understanding Conference (MUC-7).
 2. **Probabilistic Graphical Models: Principles and Techniques - Adaptive Computation and Machine Learning**  
