@@ -11,7 +11,7 @@ import ray
 import requests
 from warcio import ArchiveIterator
 
-from marin.utils import gcs_file_exists
+from marin.utils import gcs_file_exists, get_gcs_path
 from marin.web.convert import convert_page
 from scripts.fineweb.utils import get_warc_parquet_success_path
 
@@ -161,6 +161,8 @@ def process_fw_parquet(input_file_path):
         success_refs["ray_waitable"].append(process_one_warc_file.remote(filename))
         success_refs["file_path"].append(filename)
 
+    for i, task in enumerate(success_refs["ray_waitable"]):
+        ray.get(task)
     TASK_TIMEOUT = 600.0  # 10 minutes
     done, in_progress = ray.wait(success_refs["ray_waitable"], num_returns=len(success_refs["ray_waitable"]),
                                  timeout=TASK_TIMEOUT, fetch_local=False)
@@ -179,9 +181,25 @@ def process_fw_parquet(input_file_path):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Convert fineweb to markdown.")
-    # Example of input_file_path = gs://marin-data/raw/fineweb/fw-v1.0/CC-MAIN-2024-10/000_00000.parquet
-    parser.add_argument('--input_file_path', type=str, help='Path to the fineweb parquet file', required=True)
+    # Example of input_dir = gs://marin-data/raw/fineweb/fw-v1.0/CC-MAIN-2024-10/
+    parser.add_argument('--input_dir', type=str, help='Path to the fineweb parquet diretory', required=True)
 
     args = parser.parse_args()
+    gfs = fsspec.filesystem("gcs")
+    files = gfs.glob(os.path.join(args.input_dir, "*.parquet"))
+    MAX_NUM_PENDING_TASKS = 20  # Max number of parquet files we want to process in pending state
+    NUM_TASKS = len(files)
     ray.init()
-    ray.get(process_fw_parquet.remote(args.input_file_path))
+    result_refs = []
+    for file in files:
+        if len(result_refs) > MAX_NUM_PENDING_TASKS:
+            # update result_refs to only
+            # track the remaining tasks.
+            ready_refs, result_refs = ray.wait(result_refs, num_returns=1)
+            ray.get(ready_refs)
+
+        gs_file = get_gcs_path(file)
+        print(f"Starting Processing for the fw parquet file: {gs_file}")
+        result_refs.append(process_fw_parquet.remote(gs_file))
+
+    ray.get(result_refs)
