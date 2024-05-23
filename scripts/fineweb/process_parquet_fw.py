@@ -34,7 +34,11 @@ def process_one_warc_file(input_file_path):
             fs.rm(input_file_path)
         return True
 
-    df = pd.read_parquet(input_file_path)
+    try:
+        df = pd.read_parquet(input_file_path)
+    except FileNotFoundError as e:
+        print(f"Error reading the parquet file: {e}")
+        return False
     df["md"] = None
     df["html"] = None
 
@@ -144,7 +148,12 @@ def process_fw_parquet(input_file_path):
         print(f"Output file already processed. Skipping {input_file_path}")
         return True
 
-    df = pd.read_parquet(input_file_path)
+    try:
+        df = pd.read_parquet(input_file_path)
+    except FileNotFoundError as e:
+        print(f"Error reading the parquet file: {e}")
+        return False
+
     success_refs = {"ray_waitable": [], "file_path": []}
     # file_path is s3 url
     grouped = df.groupby("file_path")
@@ -176,7 +185,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
     gfs = fsspec.filesystem("gcs")
     files = gfs.glob(os.path.join(args.input_dir, "*.parquet"))
-    MAX_NUM_PENDING_TASKS = 20  # Max number of parquet files we want to process in pending state
+    MAX_NUM_PENDING_TASKS = 30  # Max number of parquet files we want to process in pending state
     NUM_TASKS = len(files)
     ray.init()
     result_refs = []
