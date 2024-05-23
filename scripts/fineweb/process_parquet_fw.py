@@ -47,7 +47,8 @@ def process_one_warc_file(input_file_path):
     index = df.index.tolist()
     # url_dict is url to index in df so that we can update that record
     url_dict = {url: idx for idx, url in zip(index, urls)}
-    num_urls_processed = 0  # Used to early terminate
+    num_urls_found = 0  # Used to early terminate
+    num_urls_processed = 0
     length_url_inp_list = len(urls)
 
     # Logging variables
@@ -61,7 +62,7 @@ def process_one_warc_file(input_file_path):
 
     if response.status_code == 200:
         for record in ArchiveIterator(response.raw):
-            if num_urls_processed == length_url_inp_list:
+            if num_urls_found == length_url_inp_list:
                 break
             # Check if it's a response record
             if record.rec_type == 'response':
@@ -69,11 +70,11 @@ def process_one_warc_file(input_file_path):
                 url = record.rec_headers.get_header('WARC-Target-URI')
                 length_warc += 1
 
-                if length_warc % 1000 == 0:
-                    print(f"Processed {length_warc} records in {time.time() - stat_time} seconds")
+                # if length_warc % 1000 == 0:
+                #     print(f"Processed {length_warc} records in {time.time() - stat_time} seconds")
 
                 if url in url_dict:
-                    num_urls_processed += 1
+                    num_urls_found += 1
                     url_idx_in_df = url_dict[url]
                     try:
                         # Read the response body
@@ -83,11 +84,12 @@ def process_one_warc_file(input_file_path):
                         df.loc[url_idx_in_df, "html"] = html_decoded
                         markdown = convert_page(html_decoded, url)
                         df.loc[url_idx_in_df, "md"] = markdown["content"].encode('utf-8', 'ignore').decode('utf-8')
+                        num_urls_processed += 1
                     except Exception as e:
                         print(f"Error processing {url} in {s3_url} for {input_file_path}: {e}")
                         traceback.print_exc()
 
-    print(f"Processed {s3_url}, found {length_warc} records, {length_url_inp_list} urls, "
+    print(f"Processed {input_file_path}, found {length_warc} records, {length_url_inp_list} urls, "
           f"{length_warc / length_url_inp_list} ratio")
 
     # Write the output to a file with md information. MD will have html in the metadata
@@ -123,8 +125,10 @@ def process_one_warc_file(input_file_path):
     with fsspec.open(success_file, 'w') as f:
         f.write("SUCCESS")
 
-    if num_urls_processed != length_url_inp_list:
-        print(f"All urls should be processed, only process {num_urls_processed} out of {length_url_inp_list} urls,")
+    if num_urls_found != length_url_inp_list:
+        print(f"All urls should be processed, "
+              f"Found: {num_urls_found}, Processed: {num_urls_processed}, out of {length_url_inp_list} urls, "
+              f"in {input_file_path}")
 
     return True
 
@@ -170,7 +174,12 @@ def process_fw_parquet(input_file_path):
         success_refs["ray_waitable"].append(process_one_warc_file.remote(filename))
         success_refs["file_path"].append(filename)
 
-    ray.get(success_refs["ray_waitable"])
+    try:
+        ray.get(success_refs["ray_waitable"])
+    except Exception as e:
+        print(f"Error processing the group: {e}")
+        return False
+
     with fsspec.open(success_file, 'w') as f:
         f.write("SUCCESS")
 
@@ -185,7 +194,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
     gfs = fsspec.filesystem("gcs")
     files = gfs.glob(os.path.join(args.input_dir, "*.parquet"))
-    MAX_NUM_PENDING_TASKS = 30  # Max number of parquet files we want to process in pending state
+    MAX_NUM_PENDING_TASKS = 300  # Max number of parquet files we want to process in pending state
     NUM_TASKS = len(files)
     ray.init()
     result_refs = []
@@ -194,10 +203,18 @@ if __name__ == '__main__':
             # update result_refs to only
             # track the remaining tasks.
             ready_refs, result_refs = ray.wait(result_refs, num_returns=1)
-            ray.get(ready_refs)
+            try:
+                ray.get(ready_refs)
+            except Exception as e:
+                print(f"Error processing the group: {e}")
+                continue
 
         gs_file = get_gcs_path(file)
         print(f"Starting Processing for the fw parquet file: {gs_file}")
         result_refs.append(process_fw_parquet.remote(gs_file))
 
-    ray.get(result_refs)
+    # Wait for all the tasks to finish
+    try:
+        ray.get(result_refs)
+    except Exception as e:
+        print(f"Error processing the group: {e}")
