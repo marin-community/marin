@@ -19,6 +19,7 @@ Gemini
 May 22 - June 21
 
 
+
 The Lunar eclipse on the 31st highlights your solar 3rd and 9th houses of communication, travel and spiritual knowledge. Surprises surrounding your siblings, neighbours, or communications are in store. Something that has been brewing for while comes to light which needs to be dealt with. A flurry of activity in your immediate environment requires attention.
 
 Cancer

@@ -314,6 +314,10 @@ class MyMarkdownConverter(MarkdownConverter):
         if table.name not in ['table', 'tbody', 'tr']:
             return False
 
+        # don't reprocess elements like tbody or tr if they are immediate children of a table
+        if table.name != 'table' and (table.parent and table.parent.name in ['table', 'tbody']):
+            return False
+
         # if the table has th, caption, thead, or summary, it's probably not for layout
         if table.select_one('th, caption, thead, summary'):
             return False
@@ -347,7 +351,7 @@ class MyMarkdownConverter(MarkdownConverter):
             for row in table.find_all('tr', recursive=False):
                 for cell in row.find_all(['td', 'th'], recursive=False):
                     text += self.process_tag(cell, convert_as_inline, children_only=True)
-                text += '\n'
+                text += '\n\n'
         elif table.name == 'tr':
             for cell in table.find_all(['td', 'th'], recursive=False):
                 text += self.process_tag(cell, convert_as_inline, children_only=True)
