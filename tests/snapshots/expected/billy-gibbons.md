@@ -1,4 +1,4 @@
-# Billy Gibbons & Co., 'Oh Well' – Song Review
+# Billy Gibbons & Co., ‘Oh Well’ - Song Review
 
 No one will accuse Gibbons, Matt Sweeney and Blake Mills of being intimidated by the already bluesy rock song. Their version is an original, born from the mud of Mississippi Delta.
 

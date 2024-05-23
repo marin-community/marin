@@ -1,8 +1,6 @@
-# Exhibition
+# Exhibition → Photomarathon Sheffield
 
 ### Exhibition
-
-![](/site/assets/files/1038/runner_up_and_ofp_pick_201_copy.jpg )
 
 **Photomarathon Sheffield 2023: The Exhibition<br>Saturday 25 November–Friday 8 December 2023**
 
