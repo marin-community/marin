@@ -1,24 +1,34 @@
-import logging
+"""
+markdown.py
+
+Utilities and customized logic for converting HTML and other text representations to Marin-compatible Markdown.
+
+TODO (dlwh, siddk, ...):
+    - [x] Add more tests of core functionality (tables, lists, etc)
+    - [x] Add code block lang id
+    - [x] Add latex math support
+    - [ ] Yak-shaving
+"""
+
 import os
 import re
 from textwrap import fill
 
+import html2text
+import lxml.etree as ET
 import markdownify
 import six
 from bs4 import BeautifulSoup, Comment, Doctype, NavigableString
 from markdownify import MarkdownConverter
-import lxml.etree as ET
-
 from regex import regex
 
-import html2text
+from marin.overwatch import initialize_overwatch
 
-logger = logging.getLogger(__name__)
+# Initialize Overwatch =>> Wraps `logging.Logger`
+overwatch = initialize_overwatch(__name__)
 
-# TODOs:
-# - [x] add more tests of core functionality (tables, lists, etc)
-# - [x] add code block lang id
-# - [x] add latex math support
+# ruff: noqa
+
 
 def to_markdown(html):
     if isinstance(html, str):
@@ -40,8 +50,9 @@ _global_html2text.mark_code = True  # Optionally convert code blocks to markdown
 _global_html2text.include_sup_sub = True  # Optionally include <sup> and <sub> tags
 _global_html2text.pad_tables = False
 
-whitespace_re = re.compile(r'[\t ]+')
-spaces_re = re.compile(r'^[ ]+$')
+whitespace_re = re.compile(r"[\t ]+")
+spaces_re = re.compile(r"^[ ]+$")
+
 
 def html2text_markdown(html):
     html = str(html)
@@ -56,7 +67,8 @@ backslash_before_ascii_punct_pattern = re.compile(r'(\\[!"#$%&\'()*+,\-./:;<=>?@
 
 # reference: https://github.github.com/gfm/
 
-delimiter_run_pattern = regex.compile(r"""(?:
+delimiter_run_pattern = regex.compile(
+    r"""(?:
     (?<!\\[*])  # Assert not preceded by a backslash '\*'
     [*]+       # Match one or more '*
     (?!\\[*])   # Assert not followed by a backslash '\*'
@@ -64,7 +76,9 @@ delimiter_run_pattern = regex.compile(r"""(?:
     (?<!\\[_])  # Assert not preceded by a backslash '\_'
     [_]+       # Match one or more '_'
     (?!\\[_])   # Assert not followed by a backslash '\_'
-    )""", re.VERBOSE)
+    )""",
+    re.VERBOSE,
+)
 
 
 # A left-flanking delimiter run is a delimiter run that is (1) not followed by Unicode whitespace, and either
@@ -75,7 +89,12 @@ delimiter_run_pattern = regex.compile(r"""(?:
 # Restated:
 # followed by a non-space-non-punctuation character OR
 # preceded by a space, punctuation character, or bol and followed by a punctuation character
-left_flanking_pattern = regex.compile(r"""(?:(?:{}(?=[^\s\p{{P}}]))|(?:(?<=[\s\p{{P}}]|^){}(?:\p{{P}})))""".format(delimiter_run_pattern.pattern, delimiter_run_pattern.pattern), re.VERBOSE)
+left_flanking_pattern = regex.compile(
+    r"""(?:(?:{}(?=[^\s\p{{P}}]))|(?:(?<=[\s\p{{P}}]|^){}(?:\p{{P}})))""".format(
+        delimiter_run_pattern.pattern, delimiter_run_pattern.pattern
+    ),
+    re.VERBOSE,
+)
 
 # A right-flanking delimiter run is a delimiter run that is (1) not preceded by Unicode whitespace, and either
 # (2a) not preceded by a punctuation character, or
@@ -85,9 +104,15 @@ left_flanking_pattern = regex.compile(r"""(?:(?:{}(?=[^\s\p{{P}}]))|(?:(?<=[\s\p
 # Restated:
 # preceded by a non-space-non-punctuation character OR
 # followed by a space, punctuation character, or eol and preceded by a punctuation character
-right_flanking_pattern = regex.compile(r"""(?:(?:(?<=[^\s\p{{P}}]){})|(?:(?<=\p{{P}}){}(?=\p{{P}}|\s|$)))""".format(delimiter_run_pattern.pattern, delimiter_run_pattern.pattern))
+right_flanking_pattern = regex.compile(
+    r"""(?:(?:(?<=[^\s\p{{P}}]){})|(?:(?<=\p{{P}}){}(?=\p{{P}}|\s|$)))""".format(
+        delimiter_run_pattern.pattern, delimiter_run_pattern.pattern
+    )
+)
 
-flanking_pattern = regex.compile(r"({}|{})".format(left_flanking_pattern.pattern, right_flanking_pattern.pattern), re.VERBOSE)
+flanking_pattern = regex.compile(
+    r"({}|{})".format(left_flanking_pattern.pattern, right_flanking_pattern.pattern), re.VERBOSE
+)
 
 
 def minimal_markdown_escape(text):
@@ -127,10 +152,9 @@ class MyMarkdownConverter(MarkdownConverter):
             "heading_style": "ATX",
             "keep_inline_images_in": ["li", "p", "td", "th", "h1", "h2", "h3", "h4", "h5", "h6", "a"],
             # "code_language_callback": self._infer_code_language,
-            **kwargs
+            **kwargs,
         }
         super().__init__(**kwargs)
-
 
     # markdownify doesn't allow difference pre- and post- text for converting sub and sup
     def convert_sub(self, el, text, convert_as_inline):
@@ -147,25 +171,24 @@ class MyMarkdownConverter(MarkdownConverter):
         if convert_as_inline:
             return "<br>"
 
-        if self.options['newline_style'].lower() == markdownify.BACKSLASH:
-            return '\\\n'
+        if self.options["newline_style"].lower() == markdownify.BACKSLASH:
+            return "\\\n"
         else:
-            return '  \n'
+            return "  \n"
 
     def convert_img(self, el, text, convert_as_inline):
         # mostly copied from the parent class
         # the gfm spec says that the alt text is markdown, so we need to escape it
-        alt = el.attrs.get('alt', None) or ''
-        alt = alt.replace('\n', ' ')
+        alt = el.attrs.get("alt", None) or ""
+        alt = alt.replace("\n", " ")
         alt = self.escape(alt)
-        src = el.attrs.get('src', None) or el.attrs.get("data-src", None) or ''
-        title = el.attrs.get('title', None) or ''
-        title_part = ' "%s"' % title.replace('"', r'\"') if title else ''
-        if (convert_as_inline
-                and el.parent.name not in self.options['keep_inline_images_in']):
+        src = el.attrs.get("src", None) or el.attrs.get("data-src", None) or ""
+        title = el.attrs.get("title", None) or ""
+        title_part = ' "%s"' % title.replace('"', r"\"") if title else ""
+        if convert_as_inline and el.parent.name not in self.options["keep_inline_images_in"]:
             return alt
 
-        return '![%s](%s%s)' % (alt, src, title_part)
+        return "![%s](%s%s)" % (alt, src, title_part)
 
     def escape(self, text):
         return minimal_markdown_escape(text)
@@ -175,78 +198,77 @@ class MyMarkdownConverter(MarkdownConverter):
         if not text:
             return None
         from .guess_code import predict
+
         lang = predict(text)[0][0]
         return lang.lower()
-
 
     def convert_figure(self, el, text, convert_as_inline):
         if convert_as_inline:
             return text
 
         # the super doesn't handle this specifically. we basically want to be sure there's a newline
-        if not text.endswith('\n\n'):
-            if not text.endswith('\n'):
-                text += '\n\n'
+        if not text.endswith("\n\n"):
+            if not text.endswith("\n"):
+                text += "\n\n"
             else:
-                text += '\n'
+                text += "\n"
         return text
 
     def convert_pre(self, el, text, convert_as_inline):
         if not text:
-            return ''
-        code_language = self.options['code_language']
+            return ""
+        code_language = self.options["code_language"]
 
-        if self.options['code_language_callback']:
-            code_language = self.options['code_language_callback'](el) or code_language
+        if self.options["code_language_callback"]:
+            code_language = self.options["code_language_callback"](el) or code_language
 
-        if '```' in text:  # have to use <pre>
-            return '\n<pre><code>%s</code></pre>\n' % text
+        if "```" in text:  # have to use <pre>
+            return "\n<pre><code>%s</code></pre>\n" % text
         else:
-            return '\n```%s\n%s\n```\n' % (code_language, text)
+            return "\n```%s\n%s\n```\n" % (code_language, text)
 
     def convert_tr(self, el, text, convert_as_inline):
         # this is also mostly copied from the parent class
         # but the logic for guessing a th isn't quite right
-        cells = el.find_all(['td', 'th'])
-        is_headrow = all([cell.name == 'th' for cell in cells])
+        cells = el.find_all(["td", "th"])
+        is_headrow = all([cell.name == "th" for cell in cells])
 
         # we can be a headrow if we are the first row in the table or if all our cells are th
         # find table parent
         if not is_headrow:
             parent = el.parent
-            while parent and parent.name != 'table':
+            while parent and parent.name != "table":
                 parent = parent.parent
 
             if parent:
-                first_row = parent.find('tr')
+                first_row = parent.find("tr")
                 if first_row is el:
                     is_headrow = True
 
-        overline = ''
-        underline = ''
+        overline = ""
+        underline = ""
         if is_headrow and not el.previous_sibling:
             # first row and is headline: print headline underline
-            underline += '| ' + ' | '.join(['---'] * len(cells)) + ' |' + '\n'
-        elif (not el.previous_sibling
-              and (el.parent.name == 'table'
-                   or (el.parent.name == 'tbody'
-                       and not el.parent.previous_sibling))):
+            underline += "| " + " | ".join(["---"] * len(cells)) + " |" + "\n"
+        elif not el.previous_sibling and (
+            el.parent.name == "table" or (el.parent.name == "tbody" and not el.parent.previous_sibling)
+        ):
             # first row, not headline, and:
             # - the parent is table or
             # - the parent is tbody at the beginning of a table.
             # print empty headline above this row
-            overline += '| ' + ' | '.join([''] * len(cells)) + ' |' + '\n'
-            overline += '| ' + ' | '.join(['---'] * len(cells)) + ' |' + '\n'
-        return overline + '|' + text + '\n' + underline
+            overline += "| " + " | ".join([""] * len(cells)) + " |" + "\n"
+            overline += "| " + " | ".join(["---"] * len(cells)) + " |" + "\n"
+        return overline + "|" + text + "\n" + underline
 
     def indent(self, text, level):
-        return markdownify.line_beginning_re.sub('    ' * level, text) if text else ''
+        return markdownify.line_beginning_re.sub("    " * level, text) if text else ""
 
     def process_tag(self, node, convert_as_inline, children_only=False):
         # skip aria-hidden elements
-        if node.get('aria-hidden') == 'true':
-            return ''
-        text = ''
+        if node.get("aria-hidden") == "true":
+            return ""
+        text = ""
 
         # some sites use tables for layout, and so we need to 'inline' them. Our heuristic is that if the table
         # has block elements in it.
@@ -256,8 +278,8 @@ class MyMarkdownConverter(MarkdownConverter):
         # markdown headings or cells can't include
         # block elements (elements w/newlines)
         isHeading = markdownify.html_heading_re.match(node.name) is not None
-        isEmphasisLike = node.name in ['em', 'strong', 'b', 'i', 'u', 's', 'del', 'ins']
-        isCell = node.name in ['td', 'th']
+        isEmphasisLike = node.name in ["em", "strong", "b", "i", "u", "s", "del", "ins"]
+        isCell = node.name in ["td", "th"]
         convert_children_as_inline = convert_as_inline
 
         if not children_only and (isHeading or isCell or isEmphasisLike):
@@ -265,12 +287,10 @@ class MyMarkdownConverter(MarkdownConverter):
 
         # Remove whitespace-only textnodes in purely nested nodes
         def is_nested_node(el):
-            return el and el.name in ['ol', 'ul', 'li',
-                                      'table', 'thead', 'tbody', 'tfoot',
-                                      'tr', 'td', 'th']
+            return el and el.name in ["ol", "ul", "li", "table", "thead", "tbody", "tfoot", "tr", "td", "th"]
 
         def is_in_preformatted(el):
-            return el.name == 'pre' or el.find_parent('pre')
+            return el.name == "pre" or el.find_parent("pre")
 
         if is_nested_node(node):
             for el in node.children:
@@ -279,13 +299,13 @@ class MyMarkdownConverter(MarkdownConverter):
                 # - el is the first element in its parent
                 # - el is the last element in its parent
                 # - el is adjacent to an nested node
-                can_extract = (not el.previous_sibling
-                               or not el.next_sibling
-                               or is_nested_node(el.previous_sibling)
-                               or is_nested_node(el.next_sibling))
-                if (isinstance(el, NavigableString)
-                        and six.text_type(el).strip() == ''
-                        and can_extract):
+                can_extract = (
+                    not el.previous_sibling
+                    or not el.next_sibling
+                    or is_nested_node(el.previous_sibling)
+                    or is_nested_node(el.next_sibling)
+                )
+                if isinstance(el, NavigableString) and six.text_type(el).strip() == "" and can_extract:
                     el.extract()
 
         # Convert the children first
@@ -301,32 +321,33 @@ class MyMarkdownConverter(MarkdownConverter):
                 text = self.join_text(text, self.process_tag(el, convert_children_as_inline), is_in_pre)
 
         if not children_only:
-            convert_fn = getattr(self, 'convert_%s' % node.name, None)
+            convert_fn = getattr(self, "convert_%s" % node.name, None)
             if convert_fn and self.should_convert_tag(node.name):
                 text = convert_fn(node, text, convert_as_inline)
 
         return text
 
-
     def _is_layout_table(self, table):
         # heuristic to determine if a table is for layout
-        if table.name != 'table' and table.name != 'tbody':
+        if table.name != "table" and table.name != "tbody":
             return False
 
         # if the table has th, caption, thead, or summary, it's probably not for layout
-        if table.select_one('th, caption, thead, summary'):
+        if table.select_one("th, caption, thead, summary"):
             return False
 
         # unlikely, but if it's aria role=presentation, it's for layout
-        if table.get('role') == 'presentation':
+        if table.get("role") == "presentation":
             return True
 
         # if the table has exactly 1 td element (which happens after readability), then it's probably for layout
-        if len(table.select('td')) == 1:
+        if len(table.select("td")) == 1:
             return True
 
         # if there are block elements anywhere in the table, it's probably for layout
-        if table.select_one('div, h1, h2, h3, h4, h5, h6, blockquote, pre, ul, ol, dl, table, video, address, hr, section, main, nav, aside'):
+        if table.select_one(
+            "div, h1, h2, h3, h4, h5, h6, blockquote, pre, ul, ol, dl, table, video, address, hr, section, main, nav, aside"
+        ):
             return True
 
         # now we want to understand paragraphs. We want to look at each cell and see how many paragraphs are in it
@@ -336,46 +357,44 @@ class MyMarkdownConverter(MarkdownConverter):
         #     if len(td.select('p')) > 1:
         #         return True
 
-
         return False
 
     def _process_layout_table(self, table, convert_as_inline):
         # if the table is for layout, we want to inline it
-        text = ''
-        for row in table.find_all('tr'):
-            for cell in row.find_all(['td', 'th']):
+        text = ""
+        for row in table.find_all("tr"):
+            for cell in row.find_all(["td", "th"]):
                 text += self.process_tag(cell, convert_as_inline, children_only=True)
-            text += '\n'
+            text += "\n"
         return text
 
     def convert_li(self, el, text, convert_as_inline):
         parent = el.parent
-        if parent is not None and parent.name == 'ol':
+        if parent is not None and parent.name == "ol":
             # TODO: upstream this
             # in theory this should always be an int, but in practice it might not be
             try:
                 start = int(parent.get("start", 1))
             except (KeyError, ValueError):
                 start = 1
-            bullet = '%s.' % (start + parent.index(el))
+            bullet = "%s." % (start + parent.index(el))
         else:
             depth = -1
             while el:
-                if el.name == 'ul':
+                if el.name == "ul":
                     depth += 1
                 el = el.parent
-            bullets = self.options['bullets']
+            bullets = self.options["bullets"]
             bullet = bullets[depth % len(bullets)]
-        return '%s %s\n' % (bullet, (text or '').strip())
-
+        return "%s %s\n" % (bullet, (text or "").strip())
 
     def join_text(self, text1, text2, is_in_pre):
         if not is_in_pre:
-            is_paragraph = text1.endswith('\n\n')
-            is_br = text1.endswith('<br>') or text1.endswith('  \n')
+            is_paragraph = text1.endswith("\n\n")
+            is_br = text1.endswith("<br>") or text1.endswith("  \n")
             # if text1 is a paragraph or br, we can trim any leading spaces
             # however, we nede to
-            if (is_paragraph or is_br):
+            if is_paragraph or is_br:
                 text2 = text2.lstrip()
 
             # mostly want to remove extra newlines
@@ -384,17 +403,17 @@ class MyMarkdownConverter(MarkdownConverter):
 
             # more specifically we want to get the tail from text1 which is \n\s*$ and the head from text2 which is ^\n*
             # and replace it with at most two newlines
-            tail1 = re.search(r'\n\s*$', text1)
-            head2 = re.search(r'^([\n ]+|\n*)', text2)
+            tail1 = re.search(r"\n\s*$", text1)
+            head2 = re.search(r"^([\n ]+|\n*)", text2)
 
             if tail1 and head2:
-                text1 = text1[:tail1.start()]
-                text2 = text2[head2.end():]
-                newline_count = tail1.group().count('\n') + head2.group().count('\n')
+                text1 = text1[: tail1.start()]
+                text2 = text2[head2.end() :]
+                newline_count = tail1.group().count("\n") + head2.group().count("\n")
                 if newline_count > 2:
                     newline_count = 2
                 if newline_count:
-                    text2 = '\n' * newline_count + text2
+                    text2 = "\n" * newline_count + text2
             # elif rhs_is_string:
             #     # if instead we are joining spaces, only join if there's not already a space
             #     tail1 = re.search(r' +$', text1)
@@ -406,15 +425,13 @@ class MyMarkdownConverter(MarkdownConverter):
 
         return text1 + text2
 
-
     def convert_math(self, el, text, convert_as_inline):
         try:
             x = mathml_to_markdown(el)
             return x
         except Exception as e:
-            logger.exception(f"Error converting math: {e}")
+            overwatch.exception(f"Error converting math: {e}")
             return text
-
 
     def convert_p(self, el, text, convert_as_inline):
         # no reason for leading whitespace in a paragraph
@@ -424,48 +441,39 @@ class MyMarkdownConverter(MarkdownConverter):
         if convert_as_inline:
             # if el has a sibling, add a <br> at the end
             if el.next_sibling and text:
-                return text + '<br>'
+                return text + "<br>"
             return text
 
-        if self.options['wrap']:
-            text = fill(text,
-                        width=self.options['wrap_width'],
-                        break_long_words=False,
-                        break_on_hyphens=False)
-        return '%s\n\n' % text if text else ''
+        if self.options["wrap"]:
+            text = fill(text, width=self.options["wrap_width"], break_long_words=False, break_on_hyphens=False)
+        return "%s\n\n" % text if text else ""
 
     def process_text(self, el):
-        text = six.text_type(el) or ''
+        text = six.text_type(el) or ""
 
         # normalize whitespace if we're not inside a preformatted element
-        if not el.find_parent('pre'):
-            text = whitespace_re.sub(' ', text)
+        if not el.find_parent("pre"):
+            text = whitespace_re.sub(" ", text)
 
         # escape special characters if we're not inside a preformatted or code element
-        if not el.find_parent(['pre', 'code', 'kbd', 'samp']):
+        if not el.find_parent(["pre", "code", "kbd", "samp"]):
             text = self.escape(text)
 
             # text = text.replace(' *\n', ' ')
-            text = re.sub('\s+', ' ', text, flags=re.MULTILINE)
-
-
+            text = re.sub(r"\s+", " ", text, flags=re.MULTILINE)
 
         # remove trailing whitespaces if any of the following condition is true:
         # - current text node is the last node in li
         # - current text node is followed by an embedded list
-        if (el.parent.name == 'li'
-                and (not el.next_sibling
-                     or el.next_sibling.name in ['ul', 'ol'])):
+        if el.parent.name == "li" and (not el.next_sibling or el.next_sibling.name in ["ul", "ol"]):
             text = text.rstrip()
 
         return text
 
 
-
 _xslt_mml = None
 
 _xslt_mml_path = os.path.join(os.path.dirname(__file__), "xsl_yarosh/mmltex.xsl")
-
 
 
 # cf https://github.com/oerpub/mathconverter/blob/master/converter.py#L14
@@ -480,12 +488,12 @@ def mathml_to_markdown(mathml_node):
     # often times, the mathml doesn't have the xmlns, which lxml needs
     # need to also handle display being present or not
     # this is hacky but probably enough
-    if 'xmlns' not in mml_str:
-        if 'display' in mml_str:
-            mml_str = mml_str.replace('<math', '<math xmlns="http://www.w3.org/1998/Math/MathML"')
+    if "xmlns" not in mml_str:
+        if "display" in mml_str:
+            mml_str = mml_str.replace("<math", '<math xmlns="http://www.w3.org/1998/Math/MathML"')
         else:
             # default is inline
-            mml_str = mml_str.replace('<math', '<math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"')
+            mml_str = mml_str.replace("<math", '<math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"')
 
     mml_dom = ET.fromstring(mml_str)
 

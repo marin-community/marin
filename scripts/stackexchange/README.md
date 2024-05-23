@@ -1,18 +1,25 @@
 # StackExchange
 
-## Steps to create the dataset
+Instructions for downloading and processing raw StackExchange dumps, along with descriptions of data formats and file
+structure.
+
+## Downloading Raw Data
+
+*TODO (dlwh, siddk) :: Provide instructions for generating `stackexchange-urls.tsv`?*
+
+Data is available at https://archive.org/download/stackexchange. We use the dump from 2024-04-02.
+We exclude "meta" sites and only use the main sites (i.e., we use "3dprinting.stackexchange.com.7z" but don't use
+"3dprinting.meta.stackexchange.com.7z"). The full dump is approximately 100 GB.
+
+**Using GCS**: Start a storage transfer service job on GCS to copy the data from the public dataset to your bucket.
+You can upload the `stackexchange-urls.tsv` to an http server somewhere and use it.
 
 
-### Download the data
+## Processing Pipeline
 
-Data is available at https://archive.org/download/stackexchange. We used the dump from 2024-04-02.
-We exclude "meta" sites and only use the main sites. So we don't use "3dprinting.meta.stackexchange.com.7z"
-but we use "3dprinting.stackexchange.com.7z".
 
-It is about 100 GB.
+---
 
-Using GCS: Start a storage transfer service job on GCS to copy the data from the public dataset to your bucket.
-You can upload the `stack_exchange_urls.tsv` to an http server somewhere and use it.
 
 ### Process the data
 
