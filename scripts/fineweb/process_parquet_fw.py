@@ -161,20 +161,9 @@ def process_fw_parquet(input_file_path):
         success_refs["ray_waitable"].append(process_one_warc_file.remote(filename))
         success_refs["file_path"].append(filename)
 
-    for i, task in enumerate(success_refs["ray_waitable"]):
-        ray.get(task)
-    TASK_TIMEOUT = 600.0  # 10 minutes
-    done, in_progress = ray.wait(success_refs["ray_waitable"], num_returns=len(success_refs["ray_waitable"]),
-                                 timeout=TASK_TIMEOUT, fetch_local=False)
-    in_progress_indices = [success_refs["ray_waitable"].index(task) for task in in_progress]
-
-    for i in in_progress_indices:
-        print(f"Error: Timeout processing {success_refs['file_path'][i]}")
-
-    if len(in_progress_indices) == 0:
-        print(f"Processed {input_file_path}")
-        with fsspec.open(success_file, 'w') as f:
-            f.write("SUCCESS")
+    ray.get(success_refs["ray_waitable"])
+    with fsspec.open(success_file, 'w') as f:
+        f.write("SUCCESS")
 
     return True
 
