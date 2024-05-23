@@ -3,6 +3,7 @@
 # **Hazel's Whip<br>*or "Freight hauler with a sense of humor"***
 
 *by Murray Montgomery*[![Murray Montgomery](MurrayMontgomery.jpg)](../DEPARTMENTS/Guest_Columnists/Times_past/Times_Past_column.htm)
+
 **R**ecently, I made the observation that not many feature stories were written in the small-town newspapers back in the early 1900s. As fate would have it, after making that remark, I came across several articles in the old *Hallettsville Herald* that I found to be very interesting, if not downright hilarious.   
 Take for example the one about a fellow known simply as "Hazel" - back in 1902 it seems he had several adventures that were quite humorous and I would like to share them with you this week. Squire Townsend, a well-known Hallettsville judge, told the story to the paper.   
 The following article is printed just as it appeared when first published.   
@@ -20,3 +21,4 @@ The following article is printed just as it appeared when first published.
 *Murray Montgomery*  
 [**Lone Star Diary**](../DEPARTMENTS/Guest_Columnists/Times_past/Times_Past_column.htm) February 13, 2009 Column   
 Related Topics: [Texas](../default.htm) | [Features](../FEATURES/features.htm) | [Columns](../FEATURES/Writers.htm) | [Texas Towns](../TOWNS/towns.htm) | [People](../FEATURES/features_Texas_personalites_archives.htm) | [Old News](../DEPARTMENTS/Old_News/TexasTownsOldNews.htm) | [Texas Railroads](../TexasRailroads/TexasRailroads.htm)
+
