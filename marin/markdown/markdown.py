@@ -310,7 +310,12 @@ class MyMarkdownConverter(MarkdownConverter):
 
     def _is_layout_table(self, table):
         # heuristic to determine if a table is for layout
-        if table.name != 'table' and table.name != 'tbody':
+        # for some reason readability-lxml will have trs inside of a div with no table
+        if table.name not in ['table', 'tbody', 'tr']:
+            return False
+
+        # don't reprocess elements like tbody or tr if they are immediate children of a table
+        if table.name != 'table' and (table.parent and table.parent.name in ['table', 'tbody']):
             return False
 
         # if the table has th, caption, thead, or summary, it's probably not for layout
@@ -342,10 +347,15 @@ class MyMarkdownConverter(MarkdownConverter):
     def _process_layout_table(self, table, convert_as_inline):
         # if the table is for layout, we want to inline it
         text = ''
-        for row in table.find_all('tr'):
-            for cell in row.find_all(['td', 'th']):
+        if table.name == 'table' or table.name == 'tbody':
+            for row in table.find_all('tr', recursive=False):
+                for cell in row.find_all(['td', 'th'], recursive=False):
+                    text += self.process_tag(cell, convert_as_inline, children_only=True)
+                text += '\n\n'
+        elif table.name == 'tr':
+            for cell in table.find_all(['td', 'th'], recursive=False):
                 text += self.process_tag(cell, convert_as_inline, children_only=True)
-            text += '\n'
+
         return text
 
     def convert_li(self, el, text, convert_as_inline):

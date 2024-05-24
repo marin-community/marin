@@ -23,6 +23,10 @@ def convert_page(html: str, url: str | None = None) -> dict[str, str]:
     # convert to markdown
     markdown = to_markdown(tree)
 
+    # readability-lxml uses "[no-title]" for pages without a title
+    if title == "[no-title]":
+        title = None
+
     # add title to markdown
     if title:
         markdown = f"# {title}\n\n{markdown}"

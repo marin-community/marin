@@ -1,4 +1,4 @@
-# Language Log » Scythians between Russia and Ukraine
+# Language Log " Scythians between Russia and Ukraine
 
 « [previous post](https://languagelog.ldc.upenn.edu/nll/?p=63137) | [next post](https://languagelog.ldc.upenn.edu/nll/?p=63181) » 
 
