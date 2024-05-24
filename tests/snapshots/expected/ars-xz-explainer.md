@@ -1,8 +1,4 @@
-# What we know about the xz Utils backdoor that almost infected the world
-
-#### NIGHTMARE SUPPLY CHAIN ATTACK SCENARIO —
-
-## Malicious updates made to a ubiquitous tool were a few weeks away from going mainstream.
+# What we know about the xz Utils backdoor that almost infected the world | Ars Technica
 
 ![What we know about the xz Utils backdoor that almost infected the world](https://cdn.arstechnica.net/wp-content/uploads/2024/04/malware-800x450.jpg)
 
@@ -10,7 +6,9 @@ Getty Images
 
 On Friday, a lone Microsoft developer rocked the world when he revealed a [backdoor](https://arstechnica.com/security/2024/03/backdoor-found-in-widely-used-linux-utility-breaks-encrypted-ssh-connections/) had been intentionally planted in xz Utils, an open source data compression utility available on almost all installations of Linux and other Unix-like operating systems. The person or people behind this project likely spent years on it. They were likely very close to seeing the backdoor update merged into Debian and Red Hat, the two biggest distributions of Linux, when an eagle-eyed software developer spotted something fishy.
 
-"This might be the best executed supply chain attack we've seen described in the open, and it's a nightmare scenario: malicious, competent, authorized upstream in a widely used library," software and cryptography engineer Filippo Valsorda [said](https://bsky.app/profile/filippo.abyssdomain.expert/post/3kouaom62oi2b) of the effort, which came frightfully close to succeeding.
+"This might be the best executed supply chain attack we've seen described in the open, and it's a nightmare scenario: malicious, competent, authorized upstream in a widely used library," software and cryptography engineer Filippo Valsorda 
+
+[said](https://bsky.app/profile/filippo.abyssdomain.expert/post/3kouaom62oi2b)of the effort, which came frightfully close to succeeding. 
 
 Researchers have spent the weekend gathering clues. Here's what we know so far.
 
@@ -60,8 +58,6 @@ Developer Sam James provided [this overview](https://gist.github.com/thesamesam/
 > 
 > * The release tarballs upstream publishes don't have the same code that GitHub has. This is common in C projects so that downstream consumers don't need to remember how to run autotools and autoconf. The version of build-to-host.m4 in the release tarballs differs wildly from the upstream on GitHub.
 > * There are crafted test files in the tests/ folder within the git repository too. These files are in the following commits:
->     + tests/files/bad-3-corrupt\_lzma2.xz ([cf44e4b7f5dfdbf8c78aef377c10f71e274f63c0](https://github.com/tukaani-project/xz/commit/cf44e4b7f5dfdbf8c78aef377c10f71e274f63c0), [74b138d2a6529f2c07729d7c77b1725a8e8b16f1](https://github.com/tukaani-project/xz/commit/74b138d2a6529f2c07729d7c77b1725a8e8b16f1))
->     + tests/files/good-large\_compressed.lzma ([cf44e4b7f5dfdbf8c78aef377c10f71e274f63c0](https://github.com/tukaani-project/xz/commit/cf44e4b7f5dfdbf8c78aef377c10f71e274f63c0), [74b138d2a6529f2c07729d7c77b1725a8e8b16f1](https://github.com/tukaani-project/xz/commit/74b138d2a6529f2c07729d7c77b1725a8e8b16f1))
 > * A script called by build-to-host.m4 unpacks this malicious test data and uses it to modify the build process.
 > * IFUNC, a mechanism in glibc that allows for indirect function calls, is used to perform runtime hooking/redirection of OpenSSH's authentication routines. IFUNC is a tool that is normally used for legitimate things, but in this case it is exploited for this attack path.
 > 
@@ -140,7 +136,7 @@ Researchers from networking firm Akamai also [explain](https://www.akamai.com/bl
 > 
 > [![The liblzma hooking process](https://cdn.arstechnica.net/wp-content/uploads/2024/04/liblzma-hooking-process-640x393.jpeg)](https://cdn.arstechnica.net/wp-content/uploads/2024/04/liblzma-hooking-process.jpeg)
 > 
-> [Enlarge](https://cdn.arstechnica.net/wp-content/uploads/2024/04/liblzma-hooking-process.jpeg) / The liblzma hooking process
+> [Enlarge](https://cdn.arstechnica.net/wp-content/uploads/2024/04/liblzma-hooking-process.jpeg) /The liblzma hooking process
 > 
 > Akamai
 
