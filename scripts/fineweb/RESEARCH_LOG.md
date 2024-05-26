@@ -2,8 +2,8 @@
 
 ## Errors in readability
 
-1. Sometimes readability-xml or markdownification is not able to convert an html and throws ValueError
-2. Errors inside readability-xml are mostly Document being empty errors
+1. Sometimes readability-lxml or markdownification is not able to convert an html and throws ValueError
+2. Errors inside readability-lxml are mostly Document being empty errors
 3. Errors inside markdownification are due to string literal errors
 4. Log file to inspect the errors can be found in the logs folder (Search for ValueError)
 
@@ -34,3 +34,15 @@
 1. Both seems to be very similar and can be used interchangeably.
 2. fsspec does seem to be more generic and better for our use case.
 3. https://github.com/piskvorky/smart_open/issues/579
+
+## reabability-lxml v/s ReadabiliPy
+
+1. reabability-lxml is a python implementation of readability.js
+2. ReadabiliPy offer a way where we can just call `node readability.js` and get the output
+3. Since ReadabiliPy calls node for each url it it much slower as compared to readability-lxml
+4. However we can start a node server and make calls to the server instead of invoking node each time, which will make
+   it faster.
+5. Quality:
+   1. I looked at initial few example of ReadabiliPy and readability-lxml and the output was very similar.
+   2. David looked at readability-lxml recently and seemed to not like the output
+6. [TODO] Probably try to start a node server and see how much faster it is.
