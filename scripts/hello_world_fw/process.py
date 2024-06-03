@@ -26,7 +26,7 @@ from scripts.hello_world_fw.utils import get_output_paths_html_to_md
 @ray.remote(memory=1 * 1024 * 1024 * 1024, runtime_env={"pip": ["s3fs"]}, num_cpus=1)  # 1 GB
 def html_to_md(input_file_path):
     # The runtime for this function should be low (less than 5-10 min), as the machines are preemptible
-    # Example of input_path = gs://marin-data/processed/fineweb/fw-v1.0/CC-MAIN-2024-10/000_00000/0_processed_html.jsonl.gz
+    # Example of input_path = gs://marin-data/hello_world_fw/fineweb/fw-v1.0/CC-MAIN-2024-10/000_00000/0_processed_html.jsonl.gz
 
     # output_file is file for md output and success_file is the Ledger file to
     output_file, success_file = get_output_paths_html_to_md(input_file_path)
@@ -96,7 +96,7 @@ if __name__ == '__main__':
 
     result_refs = []
     for file in files:
-        result_refs.append(html_to_md.remote(file))
+        result_refs.append(html_to_md.remote(get_gcs_path(file)))
 
     # Wait for all the tasks to finish.
     # The try and catch is important here as incase html_to_md throws any exception, that exception is passed here,
