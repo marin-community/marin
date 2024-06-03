@@ -5,7 +5,7 @@
 # Inputs: jsonl.gz files in dolma format having html content, Output: jsonl.gz files in dolma format having markdown
 # Example Usage: ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- \
 # python scripts/hello_world_fw/process.py \
-# --input_dir gs://marin-data/processed/hello_world_fw/fw-v1.0/CC-MAIN-2024-10/000_00000/
+# --input_dir gs://marin-data/hello_world_fw/fw-v1.0/CC-MAIN-2024-10/000_00000/
 import argparse
 import json
 import os
@@ -76,7 +76,7 @@ def html_to_md(input_file_path):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Example script to convert fineweb html to markdown.")
-    # Example of input_dir = gs://marin-data/processed/hello_world_fw/fw-v1.0/CC-MAIN-2024-10/000_00000/
+    # Example of input_dir = gs://marin-data/hello_world_fw/fw-v1.0/CC-MAIN-2024-10/000_00000/
     # We will process all html_jsonl.gz files in this directory.
     # As a reminder all the processing in this function will be done on the head node. We should try
     # to keep number of jobs (started using ray job submit command) to minimum while trying to use tasks(ray.remote
