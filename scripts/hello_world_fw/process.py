@@ -3,9 +3,10 @@
 # Anything which is not inside ray.remote function will be executed on the head node, so keep it to minimum.
 # path: scripts/fineweb/process_parquet_fw.py
 # Inputs: jsonl.gz files in dolma format having html content, Output: jsonl.gz files in dolma format having markdown
-# Example Usage: ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- \
+# Example Usage:
+# ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- \
 # python scripts/hello_world_fw/process.py \
-# --input_dir gs://marin-data/hello_world_fw/fw-v1.0/CC-MAIN-2024-10/000_00000/
+# --input_dir gs://marin-data/hello_world_fw/fineweb/fw-v1.0/CC-MAIN-2024-10/000_00000/
 import argparse
 import json
 import os
@@ -15,7 +16,7 @@ import ray
 
 from marin.utils import gcs_file_exists, get_gcs_path
 from marin.web.convert import convert_page
-from .utils import get_output_paths_html_to_md
+from scripts.hello_world_fw.utils import get_output_paths_html_to_md
 
 
 # This function will be executed on the worker nodes. It is important to keep the function idempotent and resumable.
@@ -76,7 +77,7 @@ def html_to_md(input_file_path):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Example script to convert fineweb html to markdown.")
-    # Example of input_dir = gs://marin-data/hello_world_fw/fw-v1.0/CC-MAIN-2024-10/000_00000/
+    # Example of input_dir = gs://marin-data/hello_world_fw/fineweb/fw-v1.0/CC-MAIN-2024-10/000_00000/
     # We will process all html_jsonl.gz files in this directory.
     # As a reminder all the processing in this function will be done on the head node. We should try
     # to keep number of jobs (started using ray job submit command) to minimum while trying to use tasks(ray.remote
@@ -87,6 +88,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
     gfs = fsspec.filesystem("gcs")
     files = gfs.glob(os.path.join(args.input_dir, "*_html.jsonl.gz"))
+
     ray.init()
 
     # If you have too many tasks to schedule you might consider:
