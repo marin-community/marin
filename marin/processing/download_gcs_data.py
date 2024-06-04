@@ -17,7 +17,8 @@ filenames = [
                 # "gs://marin-data/raw/dolma/dolma-v1.7/wiki-0001.json.gz",
                 # "gs://marin-data/raw/dolma/dolma-v1.7/c4-0001.json.gz",
                 # "gs://marin-data/scratch/chrisc/test.json.gz",
-                "gs://marin-data/scratch/chrisc/dataset.json.gz"
+                "gs://marin-data/scratch/chrisc/dataset.txt.gz",
+                "gs://marin-data/scratch/chrisc/fasttext_train.txt.gz"
             ]
 
 # Function to decompress .gz file to .json
@@ -27,14 +28,19 @@ def decompress_gz_to_json(gz_file_path, json_file_path):
             shutil.copyfileobj(f_in, f_out)
 
 def download_file(filename, output_dir):
-    with fsspec.open(filename, 'r', compression="gzip") as f:
-        json_filename = os.path.basename(filename).replace(".gz", "")
-        json_file_path = os.path.join(output_dir, json_filename)
-        with open(json_file_path, "w", encoding="utf-8") as f_out:
-            for line in f:
-                json_line = json.loads(line)
-                f_out.write(json.dumps(json_line) + "\n")
+    output_filename = os.path.basename(filename).replace(".gz", "")
+    output_file_path = os.path.join(output_dir, output_filename)
+    file_format = filename.split(".")[1]
 
+    with fsspec.open(filename, 'r', compression="gzip") as f:
+        with open(output_file_path, "w", encoding="utf-8") as f_out:
+            for line in f:
+                if file_format == "json":
+                    json_line = json.loads(line)
+                    f_out.write(json.dumps(json_line) + "\n")
+                elif file_format == "txt":
+                    f_out.write(line)
+        
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--output-dir", type=str, help="The output directory")
