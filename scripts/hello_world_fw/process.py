@@ -44,7 +44,7 @@ def html_to_md(input_file_path, output_file_path):
 
             # Convert page can throw exception based on the html content (e.g. invalid html, Empty page)
             try:
-                md = convert_page(html, url)
+                md = convert_page(html, url)["content"]
             except Exception as e:
                 print(f"Error {e} in processing {id = }, {url = }, file: {input_file_path}")
                 # You can choose to raise it or ignore it depending upon the use case
