@@ -1,0 +1,30 @@
+slurm submission log: 2024-05-20 17:02:03.839849
+created following sbatch script: 
+
+###############################
+
+#!/bin/bash
+
+#SBATCH --account=nlp
+#SBATCH --cpus-per-task=16
+#SBATCH --gres=gpu:0
+#SBATCH --job-name=cychou-job-2655747
+#SBATCH --mem=40G
+#SBATCH --open-mode=append
+#SBATCH --output=cychou-job-2655747.out
+#SBATCH --partition=john
+#SBATCH --time=14-0
+
+# activate your desired anaconda environment
+
+
+# cd to working directory
+cd .
+
+# launch commands
+srun --unbuffered run_as_child_processes 'python marin/processing/download_gcs_data.py --output-dir /nlp/scr/cychou'
+
+###############################
+
+submission to slurm complete!
+
