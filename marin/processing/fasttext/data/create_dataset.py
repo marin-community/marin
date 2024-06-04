@@ -2,44 +2,82 @@
 Code to load and preprocess data for fasttext training
 
 Usage:
-nlprun -m jagupard36 -c 16 -r 40G 'python marin/processing/fasttext/data/create_dataset.py --positive-json-paths /nlp/scr/cychou/wiki-0000.json --negative-json-paths /nlp/scr/cychou/c4-0000.json --max-num-samples 5000 --output-file-path /nlp/scr/cychou/fasttext.txt'
+ray job submit --working-dir . --no-wait -- python processing/fasttext/data/create_dataset.py --max-num-samples <max-num-samples>
 """
 
 import argparse
 import json
 
+import fsspec
+import ray
+
+POSITIVE_JSON_PATHS = [
+    "gs://marin-data/raw/dolma/dolma-v1.7/wiki-0000.json.gz",
+    "gs://marin-data/raw/dolma/dolma-v1.7/wiki-0001.json.gz"
+]
+
+NEGATIVE_JSON_PATHS = [
+    "gs://marin-data/raw/dolma/dolma-v1.7/c4-0000.json.gz",
+]
+
+OUTPUT_FILE_PATH = "gs://marin-data/scratch/chrisc/dataset.txt.gz"
+
+@ray.remote
 def process_file(json_path, label, max_num_samples=None):
     labeled_lines = []
-    with open(json_path, 'r') as file:
-        for i, line in enumerate(file):
+    with fsspec.open(json_path, 'rt', compression="gzip") as f_in:
+        for i, line in enumerate(f_in):
             if max_num_samples and i >= max_num_samples:
                 break
 
             data = json.loads(line)
             text = data.get("text", "")
             text = text.replace("\n", " ")
+            print(text)
             if text:
                 labeled_lines.append(f"__label__{label} {text}")
     return labeled_lines
 
-def process_files(input_files, output_file, label, max_num_samples=None):
-    for json_path in input_files:
-        labeled_lines = process_file(json_path, label, max_num_samples)
-        with open(output_file, 'a') as output_file:
-            for line in labeled_lines:
-                output_file.write(line + '\n')
+@ray.remote
+def write_lines(output_file, lines):
+    with fsspec.open(output_file, 'a', compression="gzip") as f:
+        for line in lines:
+            f.write(line + "\n")
+
+def process_files(input_files, output_file, max_num_samples=None):
+    # Remove the output file if it exists, to start fresh
+    if fs.exists(output_file):
+        fs.rm(output_file)
+
+    labeled_lines = ray.get([process_file.remote(json_path, label, max_num_samples) for json_path, label in input_files])
+    flattened_labeled_lines = [line for sublist in labeled_lines for line in sublist]
+    
+    # Write lines in parallel
+    chunk_size = 1024  # Adjust chunk size as needed
+    chunks = [flattened_labeled_lines[i:i + chunk_size] for i in range(0, len(flattened_labeled_lines), chunk_size)]
+    ray.get([write_lines.remote(output_file, chunk) for chunk in chunks])
+
+def main(max_num_samples):
+    ray.init()
+    print(f"[*] Cluster Statistics :: {len(ray.nodes())} nodes w/ {ray.cluster_resources().get('CPU', 0)} total CPUs")
+
+    input_files = []
+    for filename in POSITIVE_JSON_PATHS:
+        input_files.append((filename, "positive"))
+    
+    for filename in NEGATIVE_JSON_PATHS:
+        input_files.append((filename, "negative"))
+
+    process_files(input_files, OUTPUT_FILE_PATH, max_num_samples)
+
+    print(f"[*] Training file created at: {OUTPUT_FILE_PATH}")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--positive-json-paths", nargs="+", help="The paths to the positive JSON files")
-    parser.add_argument("--negative-json-paths", nargs="+", help="The paths to the negative JSON files")
-    parser.add_argument("--output-file-path", type=str, help="The output file path")
     parser.add_argument("--max-num-samples", type=int, default=None, help="The maximum number of samples to process")
 
     args = parser.parse_args()
 
-    process_files(args.positive_json_paths, args.output_file_path, "positive", args.max_num_samples)
-    process_files(args.negative_json_paths, args.output_file_path, "negative", args.max_num_samples)
+    fs = fsspec.filesystem('gcs')
 
-    # Combine and write to the output file
-    print(f"Training file created at: {args.output_file_path}")
+    main(args.max_num_samples)

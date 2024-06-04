@@ -14,9 +14,10 @@ import json
 
 filenames = [
                 # "gs://marin-data/raw/dolma/dolma-v1.7/wiki-0000.json.gz",
-                "gs://marin-data/raw/dolma/dolma-v1.7/wiki-0001.json.gz",
+                # "gs://marin-data/raw/dolma/dolma-v1.7/wiki-0001.json.gz",
                 # "gs://marin-data/raw/dolma/dolma-v1.7/c4-0001.json.gz",
-                # "gs://marin-data/scratch/chrisc/test.json.gz"
+                # "gs://marin-data/scratch/chrisc/test.json.gz",
+                "gs://marin-data/scratch/chrisc/dataset.json.gz"
             ]
 
 # Function to decompress .gz file to .json
