@@ -2,7 +2,7 @@
 Code to load and preprocess data for fasttext training
 
 Usage:
-ray job submit --working-dir . --no-wait -- python processing/fasttext/data/create_dataset.py --max-num-samples <max-num-samples>
+ray job submit --working-dir . --no-wait -- python marin/processing/fasttext/data/create_dataset.py --max-num-samples <max-num-samples>
 """
 
 import argparse
@@ -33,14 +33,17 @@ def process_file(json_path, label, max_num_samples=None):
             data = json.loads(line)
             text = data.get("text", "")
             text = text.replace("\n", " ")
-            print(text)
             if text:
                 labeled_lines.append(f"__label__{label} {text}")
+
+    # with fsspec.open(f"{json_path}.success", 'w') as f_out:
+    #     f_out.write("SUCCESS")
+
     return labeled_lines
 
 @ray.remote
 def write_lines(output_file, lines):
-    with fsspec.open(output_file, 'a', compression="gzip") as f:
+    with fsspec.open(output_file, 'wt', compression="gzip") as f:
         for line in lines:
             f.write(line + "\n")
 
@@ -52,10 +55,12 @@ def process_files(input_files, output_file, max_num_samples=None):
     labeled_lines = ray.get([process_file.remote(json_path, label, max_num_samples) for json_path, label in input_files])
     flattened_labeled_lines = [line for sublist in labeled_lines for line in sublist]
     
+    print(len(flattened_labeled_lines))
     # Write lines in parallel
-    chunk_size = 1024  # Adjust chunk size as needed
-    chunks = [flattened_labeled_lines[i:i + chunk_size] for i in range(0, len(flattened_labeled_lines), chunk_size)]
-    ray.get([write_lines.remote(output_file, chunk) for chunk in chunks])
+    ray.get(write_lines.remote(output_file, flattened_labeled_lines))
+    # chunk_size = 1024  # Adjust chunk size as needed
+    # chunks = [flattened_labeled_lines[i:i + chunk_size] for i in range(0, len(flattened_labeled_lines), chunk_size)]
+    # ray.get([write_lines.remote(output_file, chunk) for chunk in chunks])
 
 def main(max_num_samples):
     ray.init()

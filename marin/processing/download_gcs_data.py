@@ -1,7 +1,6 @@
 """
 Usage:
-python3 -m marin.processing.download_gcs_data --output-dir <output-dir>
-nlprun -q john -c 16 -r 40G 'python marin/processing/download_gcs_data.py --output-dir /nlp/scr/cychou'
+python3 -m marin.processing.download_gcs_data --output-dir ~/data
 """
 
 from google.cloud import storage
@@ -18,14 +17,9 @@ filenames = [
                 # "gs://marin-data/raw/dolma/dolma-v1.7/c4-0001.json.gz",
                 # "gs://marin-data/scratch/chrisc/test.json.gz",
                 "gs://marin-data/scratch/chrisc/dataset.txt.gz",
-                "gs://marin-data/scratch/chrisc/fasttext_train.txt.gz"
+                "gs://marin-data/scratch/chrisc/fasttext_train.txt.gz",
+                "gs://marin-data/scratch/chrisc/fasttext_test.txt.gz"
             ]
-
-# Function to decompress .gz file to .json
-def decompress_gz_to_json(gz_file_path, json_file_path):
-    with gzip.open(gz_file_path, 'rb') as f_in:
-        with open(json_file_path, 'wb') as f_out:
-            shutil.copyfileobj(f_in, f_out)
 
 def download_file(filename, output_dir):
     output_filename = os.path.basename(filename).replace(".gz", "")
