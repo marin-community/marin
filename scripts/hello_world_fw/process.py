@@ -14,7 +14,7 @@ import os
 import fsspec
 import ray
 
-from marin.utils import get_gcs_path, make_sential
+from marin.utils import get_gcs_path, cached_or_construct_output
 from marin.web.convert import convert_page
 from scripts.hello_world_fw.utils import get_output_paths_html_to_md
 
@@ -24,7 +24,7 @@ from scripts.hello_world_fw.utils import get_output_paths_html_to_md
 # IMPORTANT:Ray resources are logical and not physical: https://docs.ray.io/en/latest/ray-core/scheduling/resources.html
 # Ray will not impose any physical limits on the resources used by the function, these numbers are used for scheduling.
 @ray.remote(memory=1 * 1024 * 1024 * 1024, runtime_env={"pip": ["s3fs"]}, num_cpus=1)  # 1 GB
-@make_sential(success_suffix="SUCCESS") # We use make_sential decorator to make this function idempotent
+@cached_or_construct_output(success_suffix="SUCCESS") # We use this decorator to make this function idempotent
 def html_to_md(input_file_path, output_file_path):
     # The runtime for this function should be low (less than 5-10 min), as the machines are preemptible
     # Example of input_path = gs://marin-data/hello_world_fw/fineweb/fw-v1.0/CC-MAIN-2024-10/000_00000/0_processed_html.jsonl.gz

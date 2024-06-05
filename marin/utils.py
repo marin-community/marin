@@ -27,7 +27,13 @@ def get_gcs_path(file_path):
     return f"gs://{file_path}"
 
 
-def make_sential(success_suffix="success"):
+def cached_or_construct_output(success_suffix="success"):
+    '''
+    Decorator to make a function idempotent. This decorator will check if the success file exists, if it does then it will
+    skip the function. If the success file does not exist, then it will execute the function and write the success file.
+    sucess_suffix: The suffix of the success file.
+                    The path for the success file will be output_file_path + "." + success_suffix
+    '''
     def decorator(func):
         @functools.wraps(func)
         def wrapper(input_file_path, output_file_path, *args, **kwargs):
