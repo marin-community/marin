@@ -1,13 +1,15 @@
 """
 Usage:
-nlprun -m jagupard36 -c 16 -r 40G 'python marin/processing/fasttext/model/eval.py --val-file /nlp/scr/cychou/fasttext.val --model-path /nlp/scr/cychou/fasttext_model.bin'
+python marin/processing/fasttext/model/eval.py
 """
 
+import os
 import argparse
 import fasttext
 
-EVAL_DATASET_FILE_PATH = "/home/gcpuser/data/fasttext_train.txt"
-OUTPUT_MODEL_PATH = "/home/gcpuser/model/fasttext_model.bin"
+EVAL_DATASET_FILE_PATH = os.path.expanduser("~/data/fasttext_test.txt")
+OUTPUT_MODEL_PATH = os.path.expanduser("~/dolma_fasttext_model/model.bin")
+# OUTPUT_MODEL_PATH = os.path.expanduser("~/model/fasttext_model.bin")
 
 def predict(model, text):
     return model.predict(text)
@@ -25,5 +27,6 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     model = fasttext.load_model(OUTPUT_MODEL_PATH)
+    print(model.get_dimension())
 
     print_results(*model.test(EVAL_DATASET_FILE_PATH))
