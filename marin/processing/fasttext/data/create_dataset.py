@@ -11,12 +11,12 @@ import json
 import fsspec
 import ray
 
-POSITIVE_JSON_PATHS = [
+HIGH_QUALITY_JSON_PATHS = [
     "gs://marin-data/raw/dolma/dolma-v1.7/wiki-0000.json.gz",
     "gs://marin-data/raw/dolma/dolma-v1.7/wiki-0001.json.gz"
 ]
 
-NEGATIVE_JSON_PATHS = [
+LOW_QUALITY_JSON_PATHS = [
     "gs://marin-data/raw/dolma/dolma-v1.7/c4-0000.json.gz",
 ]
 
@@ -67,11 +67,11 @@ def main(max_num_samples):
     print(f"[*] Cluster Statistics :: {len(ray.nodes())} nodes w/ {ray.cluster_resources().get('CPU', 0)} total CPUs")
 
     input_files = []
-    for filename in POSITIVE_JSON_PATHS:
-        input_files.append((filename, "positive"))
+    for filename in HIGH_QUALITY_JSON_PATHS:
+        input_files.append((filename, "hq"))
     
-    for filename in NEGATIVE_JSON_PATHS:
-        input_files.append((filename, "negative"))
+    for filename in LOW_QUALITY_JSON_PATHS:
+        input_files.append((filename, "lq"))
 
     process_files(input_files, OUTPUT_FILE_PATH, max_num_samples)
 
