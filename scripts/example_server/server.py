@@ -25,7 +25,6 @@ def display_content(dataname, idx):
     filename = f"gcs://marin-data/examples/{dataname}.jsonl"
     try:
         i = 0
-        # fs = fsspec.filesystem("gcs")
         with fsspec.open(filename, 'r') as file:
             for line in file:
                 if i < idx:
