@@ -73,7 +73,7 @@ if __name__ == '__main__':
     parser.add_argument('--input_dir', type=str, help='Path to the fineweb html diretory', required=True)
 
     args = parser.parse_args()
-    gfs = fsspec.filesystem("gcs")
+    gfs = fsspec.core.url_to_fs(args.input_dir)[0]
     files = gfs.glob(os.path.join(args.input_dir, "*_html.jsonl.gz"))
 
     ray.init()

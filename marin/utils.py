@@ -14,7 +14,7 @@ def gcs_file_exists(file_path):
     """
 
     # Use fsspec to check if the file exists
-    fs = fsspec.filesystem('gcs')
+    fs = fsspec.core.url_to_fs(file_path)[0]
     return fs.exists(file_path)
 
 
