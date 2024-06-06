@@ -15,6 +15,7 @@ from dataclasses import dataclass
 import draccus
 import fsspec
 import ray
+import tqdm
 
 from marin.core.runtime import RayConfig, TaskConfig, cached_or_construct_output, map_files_in_directory
 from marin.web.convert import convert_page
@@ -29,11 +30,12 @@ from marin.web.convert import convert_page
 def html_to_md(input_file_path, output_file_path):
     # The runtime for this function should be low (less than 5-10 min), as the machines are preemptible
     # Example of input_path = gs://marin-data/hello_world_fw/fineweb/fw-v1.0/CC-MAIN-2024-10/000_00000/0_processed_html.jsonl.gz
+    print(f"hello: {input_file_path}")
 
     # Read the input file
     with fsspec.open(input_file_path, "rt", compression="gzip") as f, \
             fsspec.open(output_file_path, "wt", compression="gzip") as output:
-        for line in f:
+        for line in tqdm.tqdm(f):
             data = json.loads(line)
 
             # data is in dolma format hence
@@ -45,6 +47,7 @@ def html_to_md(input_file_path, output_file_path):
 
             # Convert page can throw exception based on the html content (e.g. invalid html, Empty page)
             try:
+                print(url)
                 md = convert_page(html, url)["content"]
             except Exception as e:
                 print(f"Error {e} in processing {id = }, {url = }, file: {input_file_path}")
