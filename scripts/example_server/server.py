@@ -3,8 +3,10 @@ import json
 import markdown
 from markupsafe import escape
 import fsspec
+import grip
 
 app = Flask(__name__)
+githubRenderer = grip.GitHubRenderer()
 
 # Function to render content based on type
 def render_content(content):
@@ -15,7 +17,7 @@ def render_content(content):
         iframe_content = f'<iframe srcdoc="{escape(content["text"])}" style="width:100%; height:500px; border:none;"></iframe>'
         return iframe_content
     elif content['type'] == 'md':
-        return markdown.markdown(content['text'])
+        return githubRenderer.render(content['text'])
     else:
         return '<p>Unsupported content type</p>'
 
@@ -84,6 +86,13 @@ def display_content(dataname, idx):
             <div id="content-{}" class="dropdown-content">{}</div>
         </div>
         '''.format(i, escape(item['title']), i, item['rendered'])
+
+    if int(idx) > 0:
+        html_content += f'<a href="/content/{dataname}/{0}">First</a>'
+        html_content += ' | '
+        html_content += f'<a href="/content/{dataname}/{int(idx)-1}">Previous</a>'
+        html_content += ' | '
+    html_content += f'<a href="/content/{dataname}/{int(idx)+1}">Next</a>'
 
     html_content += '''
     </body>
