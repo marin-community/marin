@@ -7,19 +7,17 @@
 # ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- \
 # python scripts/hello_world_fw/process.py \
 # --input_dir gs://marin-data/hello_world_fw/fineweb/fw-v1.0/CC-MAIN-2024-10/000_00000/
+# --output_dir gs://marin-data/scratch/user/hello_world_fw/fineweb/fw-v1.0/CC-MAIN-2024-10/000_00000/
 import argparse
 import json
-import os
 from dataclasses import dataclass
 
 import draccus
 import fsspec
 import ray
 
-from marin.utils import fsspec_glob, get_gcs_path
 from marin.core.runtime import RayConfig, TaskConfig, cached_or_construct_output, map_files_in_directory
 from marin.web.convert import convert_page
-from scripts.hello_world_fw.utils import get_output_paths_html_to_md
 
 
 # This function will be executed on the worker nodes. It is important to keep the function idempotent and resumable.
