@@ -22,6 +22,31 @@ def render_content(content):
         return '<p>Unsupported content type</p>'
 
 # Route to display the content
+@app.route('/', methods=['GET'])
+def display_home():
+    fs = fsspec.filesystem("gcs")
+    files = fs.ls("gcs://marin-data/examples/")
+    files = [file.split('/')[-1][:-6] for file in files]
+    html_content = """
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <title>Home</title>
+    </head>
+    <body>
+    <h1>Home</h1>"""
+    for i, file in enumerate(files):
+        # add links to files if they exist
+        if file:
+            html_content += f'''<li><a href="/content/{file}/0">{file}</a><br>'''
+    html_content += '''
+    </body>
+    </html>
+    '''
+    return render_template_string(html_content)
+
+# Route to display the content
 @app.route('/content/<path:dataname>/<int:idx>', methods=['GET'])
 def display_content(dataname, idx):
     filename = f"gcs://marin-data/examples/{dataname}.jsonl"
