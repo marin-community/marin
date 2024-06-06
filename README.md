@@ -8,15 +8,9 @@
 To get set up, create a new virtual environment (or `conda` environment) with the appropriate Python version (3.10),
 then run the following:
 
-On MacOS, you will need to use conda, because Ray doesn't work with the system Python. On Linux, you can use the system
-Python.
-
 ```bash
 git clone https://github.com/stanford-crfm/marin
 cd marin
-# on macos:
-conda create -n marin python=3.10 grpc
-conda activate marin
 pip install -e ".[dev]"
 ```
 
