@@ -34,6 +34,7 @@ dependencies = [
     "trafilatura==1.8.1",
     "tqdm",
     "warcio==1.7.4",
+    "grip==4.6.2",
 ]
 
 [project.optional-dependencies]
