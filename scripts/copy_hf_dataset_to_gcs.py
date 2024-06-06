@@ -25,14 +25,6 @@ def get_urls_to_copy(dataset_name: str, **kwargs):
     download_config = DownloadConfig(token=ds_builder.token, storage_options=ds_builder.storage_options)
     config._resolve_data_files(base_path=ds_builder.base_path, download_config=download_config)
 
-    if dataset_name == "joelniklaus/MultiLegalPileWikipediaFiltered":  # ugly hack to download this dataset
-        base_url = "https://huggingface.co/datasets/joelniklaus/MultiLegalPileWikipediaFiltered/resolve/main/data"
-        urls = [f"{base_url}/en_caselaw_train_{i}" for i in range(66)]
-        urls.extend([f"{base_url}/en_contracts_train_{i}" for i in range(16)])
-        urls.extend([f"{base_url}/en_legislation_train_{i}" for i in range(5)])
-        urls.extend([f"{base_url}/en_legislation_train_{i}" for i in range(15)])
-        return urls
-
     data_files = config.data_files
     if data_files is None:
         if hasattr(config, "data_url"):
@@ -135,6 +127,14 @@ def get_gcloud_project():
             "Google Cloud project ID is not set. Use 'gcloud config set project PROJECT_ID' to set it.")
 
 
+def save_urls(urls, urls_dir, url_tsv_name):
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        urls_file_name = os.path.join(tmp_dir, url_tsv_name)
+        save_urls_to_tsv(urls, urls_file_name)
+        base_name = os.path.basename(urls_file_name)
+        return upload_file_to_gcs(urls_file_name, f"{urls_dir}/{base_name}")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Transfer a Hugging Face dataset to Google Cloud Storage.")
     parser.add_argument('--dataset_name', required=True, help="The name of the Hugging Face dataset.")
@@ -154,11 +154,7 @@ if __name__ == "__main__":
     url_tsv_name = f'{args.dataset_name.replace("/", "-")}.tsv'
 
     # Step 2: Save URLs to a TSV file
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        urls_file_name = os.path.join(tmp_dir, url_tsv_name)
-        save_urls_to_tsv(urls, urls_file_name)
-        base_name = os.path.basename(urls_file_name)
-        url_path_on_gcs = upload_file_to_gcs(urls_file_name, f"{args.urls_dir}/{base_name}")
+    url_path_on_gcs = save_urls(urls, args.urls_dir, url_tsv_name)
 
     # Step 4: Create a Google Storage Transfer Service job
     # STS only reads from a public url, so we need to get the public url of the file
