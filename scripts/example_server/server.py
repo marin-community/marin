@@ -66,6 +66,9 @@ def display_content(dataname, idx):
 
 
         print(f"Displaying content for {dataname} with index: {idx}, ID: {source_id}")
+        for entry in record['content']:
+            if entry['type'] == 'md':
+                record['content'].append({'title': f"raw {entry['title']}", 'type': 'html', 'text': '<iframe srcdoc="{}" style="width:100%; height:500px; border:none;"></iframe>'.format(escape(entry["text"]).replace('\n', '<br>'))})
         rendered_content = [
             {'title': entry['title'], 'rendered': render_content(entry)}
             for entry in record['content']
