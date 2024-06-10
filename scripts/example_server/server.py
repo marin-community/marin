@@ -1,9 +1,10 @@
 from flask import Flask, render_template_string, jsonify
 import json
-import markdown
 from markupsafe import escape
 import fsspec
 import grip
+import os
+import traceback
 
 app = Flask(__name__)
 githubRenderer = grip.GitHubRenderer()
@@ -58,73 +59,80 @@ def display_content(dataname, idx):
                     i += 1
                     continue
                 record = json.loads(line.strip())
-                idx = record['id']
+                source_id = record['id']
                 break
             else:
                 return jsonify({'error': 'Record not found'}), 404
-    except FileNotFoundError:
-        return jsonify({'error': 'File not found'}), 404
 
-    print(f"Displaying content for {dataname} with ID: {idx}")
-    rendered_content = [
-        {'title': entry['title'], 'rendered': render_content(entry)}
-        for entry in record['content']
-    ]
 
-    html_content = '''
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <title>Example with ID: {}, in {}</title>
-        <style>
-            .dropdown-header {{
-                background-color: #f2f2f2;
-                padding: 10px;
-                margin: 0;
-                cursor: pointer;
-            }}
-            .dropdown-content {{
-                display: none;
-                padding: 10px;
-            }}
-            .dropdown-content.show {{
-                display: block;
-            }}
-        </style>
-        <script>
-            function toggleContent(id) {{
-                var content = document.getElementById(id);
-                content.classList.toggle("show");
-            }}
-        </script>
-    </head>
-    <body>
-        <h1>Example with ID: {}, in {}</h1>
-        <p> Each title is a dropdown, you can click on it</p>
-    '''.format(idx, dataname, escape(idx), dataname)
+        print(f"Displaying content for {dataname} with index: {idx}, ID: {source_id}")
+        rendered_content = [
+            {'title': entry['title'], 'rendered': render_content(entry)}
+            for entry in record['content']
+        ]
 
-    for i, item in enumerate(rendered_content):
+        html_content = '''
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+            <meta charset="UTF-8">
+            <title>Example with ID: {}, in {}</title>
+            <style>
+                .dropdown-header {{
+                    background-color: #f2f2f2;
+                    padding: 10px;
+                    margin: 0;
+                    cursor: pointer;
+                }}
+                .dropdown-content {{
+                    display: none;
+                    padding: 10px;
+                }}
+                .dropdown-content.show {{
+                    display: block;
+                }}
+            </style>
+            <script>
+                function toggleContent(id) {{
+                    var content = document.getElementById(id);
+                    content.classList.toggle("show");
+                }}
+            </script>
+        </head>
+        <body>
+            <h1>Example with ID: {}, in {}</h1>
+            <p> Each title is a dropdown, you can click on it</p>
+        '''.format(escape(source_id), dataname, escape(source_id), dataname)
+
+        for i, item in enumerate(rendered_content):
+            html_content += '''
+            <div class="dropdown">
+                <h2 class="dropdown-header" onclick="toggleContent('content-{}')">{}</h2>
+                <div id="content-{}" class="dropdown-content">{}</div>
+            </div>
+            '''.format(i, escape(item['title']), i, item['rendered'])
+
+        if int(idx) > 0:
+            html_content += f'<a href="/content/{dataname}/{0}">First</a>'
+            html_content += ' | '
+            html_content += f'<a href="/content/{dataname}/{int(idx)-1}">Previous</a>'
+            html_content += ' | '
+        html_content += f'<a href="/content/{dataname}/{int(idx)+1}">Next</a>'
+
         html_content += '''
-        <div class="dropdown">
-            <h2 class="dropdown-header" onclick="toggleContent('content-{}')">{}</h2>
-            <div id="content-{}" class="dropdown-content">{}</div>
-        </div>
-        '''.format(i, escape(item['title']), i, item['rendered'])
+        </body>
+        </html>
+        '''
 
-    if int(idx) > 0:
-        html_content += f'<a href="/content/{dataname}/{0}">First</a>'
-        html_content += ' | '
-        html_content += f'<a href="/content/{dataname}/{int(idx)-1}">Previous</a>'
-        html_content += ' | '
-    html_content += f'<a href="/content/{dataname}/{int(idx)+1}">Next</a>'
-
-    html_content += '''
-    </body>
-    </html>
-    '''
-
-    return render_template_string(html_content)
+        return render_template_string(html_content)
+    except Exception as e:
+        stack = traceback.format_exc().replace("\n", "<br>")
+        error_msg = f'''Server internal Error<br>Error: {e}<br>Stack Trace: {stack}'''
+        return error_msg, 500
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    # Check if the deployment variable is set (to run on the server)
+    if 'DEPLOYMENT' in os.environ:
+        app.run(host='0.0.0.0', port=80)
+    else:
+        app.run(debug=True)
