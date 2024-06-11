@@ -54,8 +54,7 @@ provider:
 initialization_commands:
   - sudo apt-get update
   - sudo NEEDRESTART_MODE=a DEBIAN_FRONTEND=noninteractive apt-get upgrade -y
-  - sudo apt-get install -y python3-pip python-is-python3
-  - sudo apt-get install -y pandoc
+  - sudo NEEDRESTART_MODE=a DEBIAN_FRONTEND=noninteractive apt-get install -y python3-pip python-is-python3 pandoc
 
 
 setup_commands:
