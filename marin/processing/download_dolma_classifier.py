@@ -1,7 +1,7 @@
 """
 Usage:
-python marin/processing/fasttext/model/download_dolma_classifier.py
-ray job submit --working-dir . --no-wait -- python marin/processing/fasttext/model/download_dolma_classifier.py
+python marin/processing/fasttext/download_dolma_classifier.py
+ray job submit --working-dir . --no-wait -- python marin/processing/fasttext/download_dolma_classifier.py
 """
 import os
 from huggingface_hub import hf_hub_download
