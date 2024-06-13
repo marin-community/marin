@@ -7,6 +7,7 @@ import sys
 import fsspec
 
 import marin
+import marin.web as web
 from marin.markdown import to_markdown
 
 
@@ -59,7 +60,7 @@ if __name__ == '__main__':
             # with open(f"{base_name}.traf.md", "w") as f:
             #     print(markdown, file=f)
 
-        out = marin.convert_page(html, url=url)
+        out = web.convert_page(html, url=url)
         title = out["title"]
         md = out["content"]
 
