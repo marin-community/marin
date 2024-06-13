@@ -143,6 +143,27 @@ class MyMarkdownConverter(MarkdownConverter):
             **kwargs
         }
         super().__init__(**kwargs)
+    
+    def convert_a(self, el, text, convert_as_inline):
+        prefix, suffix, text = markdownify.chomp(text)
+        if not text:
+            return ''
+        href = el.get('href')
+        # ignore base64 images
+        if "data" in href:
+            return ""
+        title = el.get('title')
+        # For the replacement see #29: text nodes underscores are escaped
+        if (self.options['autolinks']
+                and text.replace(r'\_', '_') == href
+                and not title
+                and not self.options['default_title']):
+            # Shortcut syntax
+            return '<%s>' % href
+        if self.options['default_title'] and not title:
+            title = href
+        title_part = ' "%s"' % title.replace('"', r'\"') if title else ''
+        return '%s[%s](%s%s)%s' % (prefix, text, href, title_part, suffix) if href else text
 
 
     # markdownify doesn't allow difference pre- and post- text for converting sub and sup
@@ -218,6 +239,8 @@ class MyMarkdownConverter(MarkdownConverter):
             return '\n```%s\n%s\n```\n' % (code_language, text)
 
     def convert_tr(self, el, text, convert_as_inline):
+        if convert_as_inline:
+            return text + "\n"
         # this is also mostly copied from the parent class
         # but the logic for guessing a th isn't quite right
         cells = el.find_all(['td', 'th'])
@@ -235,11 +258,41 @@ class MyMarkdownConverter(MarkdownConverter):
                 if first_row is el:
                     is_headrow = True
 
+        # rowspan check
+        length_of_cells = len(cells)
+        if el.previous_sibling:
+            prev = el.previous_sibling
+            count = 1
+            while prev:
+                if prev.name == 'tr':
+                    prev_td = prev.findAll('td')
+                    length_of_cells = max(length_of_cells, len(prev_td))
+                prev = prev.previous_sibling
+        rowspan = [0 for _ in range(length_of_cells)]
+        if el.previous_sibling:
+            prev = el.previous_sibling
+            count = 1
+            while prev:
+                if prev.name == 'tr':
+                    prev_td = prev.findAll('td')
+                    row_span_exists = False
+                    for i, td in enumerate(prev_td):
+                        if 'rowspan' in td.attrs and int(td['rowspan']) > count:
+                            rowspan[i] = 1
+                prev = prev.previous_sibling
+                count += 1
+        # modify text for rowspan
+        text = text.split('|')
+        for i, row in enumerate(rowspan):
+            if row:
+                text.insert(i, '')
+        text = '|'.join(text)
+
         overline = ''
         underline = ''
         if is_headrow and not el.previous_sibling:
             # first row and is headline: print headline underline
-            underline += '| ' + ' | '.join(['---'] * len(cells)) + ' |' + '\n'
+            underline += '| ' + ' | '.join(['---'] * text.count('|')) + ' |' + '\n'
         elif (not el.previous_sibling
               and (el.parent.name == 'table'
                    or (el.parent.name == 'tbody'
@@ -392,13 +445,21 @@ class MyMarkdownConverter(MarkdownConverter):
         return '%s %s\n' % (bullet, (text or '').strip())
 
     def convert_td(self, el, text, convert_as_inline):
+        if convert_as_inline:
+            return text + ' '
         colspan = 1
         if 'colspan' in el.attrs:
             colspan = _try_convert_int(el['colspan'], 1)
 
         return ' ' + text.strip().replace("\n", " ") + ' |' * colspan
 
+    def convert_svg(self, el, text, convert_as_inline):
+        # ignore svg elements
+        return ""
+
     def convert_th(self, el, text, convert_as_inline):
+        if convert_as_inline:
+            return text + ' '
         colspan = 1
         if 'colspan' in el.attrs:
             colspan = _try_convert_int(el['colspan'], 1)
