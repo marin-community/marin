@@ -150,7 +150,7 @@ class MyMarkdownConverter(MarkdownConverter):
             return ''
         href = el.get('href')
         # ignore base64 images
-        if "data" in href:
+        if "data" in href and ";base64" in href:
             return ""
         title = el.get('title')
         # For the replacement see #29: text nodes underscores are escaped
