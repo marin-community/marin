@@ -40,7 +40,7 @@ The following provides a simple sketch of what a job script might look like:
 
 ```python
 from marin.toxicity import toxicity_classifier
-from marin.utils import gcs_file_exists
+from marin.utils import fsspec_exists
 
 import fsspec
 import ray
@@ -59,19 +59,19 @@ def finalize_sentinel(sentinel_gcs_path: str, content: str = "Task Completed") -
 @ray.remote
 def classify_reddit_toxicity(gcs_reddit_input: str, gcs_toxicity_output: str) -> bool:
     """Read from input, perform toxicity classification, write to output -- return success/failure."""
-    
+
     # [Short-Circuit] If "sentinel" file exists, task has been successfully completed
     sentinel_gcs_path = get_sentinel_path(gcs_toxicity_output)
-    if gcs_file_exists(sentinel_gcs_path):
+    if fsspec_exists(sentinel_gcs_path):
         return True
-    
+
     # Read and validate `gcs_reddit_input`
     ...
 
     # Run toxicity classifier and get scores --> write to `gcs_toxicity_output` as you go!
     with fsspec.open(gcs_toxicity_output, "w", compression="infer") as out:
         ...
-    
+
     # Finalize Sentinel
     finalize_sentinel(sentinel_gcs_path)
 
@@ -81,34 +81,34 @@ def classify_reddit_toxicity(gcs_reddit_input: str, gcs_toxicity_output: str) ->
 # Main Function (runs in a single processing on cluster head node) --> responsible for "dispatching" tasks
 def run_toxicity_classifier_reddit() -> None:
     """Iterate over Reddit threads and run toxicity classifier."""
-    
+
     # Load List of GCS Input Paths (e.g., one file for K threads)
     gcs_reddit_inputs: List[str] = [...]
-    
+
     # Create Corresponding List of GCS Output Paths (to store toxicity scores)
     gcs_toxicity_outputs: List[str] = ["<...>" for input_path in gcs_reddit_inputs]
-    
+
     # Initialize Connection to Ray Cluster
     ray.init()
-    
+
     # Invoke / Dispatch Tasks (call .remote() --> return *promises* -- a list of references to task output)
     success_refs = []
     for i in range(len(gcs_reddit_inputs)):
         success_refs.append(classify_reddit_toxicity.remote(gcs_reddit_inputs[i], gcs_toxicity_outputs[i]))
-        
+
     # Resolve / Verify Task Successes (call .get() on individual references)
     #   =>> TODO (siddk) :: There's actually a cleaner API for this that doesn't block on task ordering... fix!
     task_successes = {input_path: False for input_path in gcs_reddit_inputs}
     for i, input_path in enumerate(gcs_reddit_inputs):
-        successful = ray.get(success_refs[i])   # Blocks until ready
+        successful = ray.get(success_refs[i])  # Blocks until ready
         task_successes[input_path] = successful
-    
+
     # Cleanup -- Write Successes / Failures to GCS
     ...
-  
+
 
 if __name__ == "__main__":
-  run_toxicity_classifier_reddit()
+    run_toxicity_classifier_reddit()
 ```
 
 Note the "short-circuiting" structure of the `@ray.remote` decorated function `classify_reddit_toxicity`; in general,
