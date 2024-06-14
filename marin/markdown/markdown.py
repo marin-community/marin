@@ -279,8 +279,18 @@ class MyMarkdownConverter(MarkdownConverter):
             count = 1
             while prev:
                 if prev.name == 'tr':
-                    prev_td = prev.findAll('td')
-                    length_of_cells = max(length_of_cells, len(prev_td))
+                    prev_td = prev.findAll('td', recursive=False)
+                    length = len(prev_td)
+                    for td in prev_td:
+                        if 'colspan' in td.attrs:
+                            length += _try_convert_int(td['colspan'], 1) - 1
+                    length_of_cells = max(length_of_cells, length)
+                    prev_th = prev.findAll('th', recursive=False)
+                    length = len(prev_th)
+                    for th in prev_th:
+                        if 'colspan' in th.attrs:
+                            length += _try_convert_int(th['colspan'], 1) - 1
+                    length_of_cells = max(length_of_cells, length)
                 prev = prev.previous_sibling
         rowspan = [0 for _ in range(length_of_cells)]
         if el.previous_sibling:
@@ -288,16 +298,24 @@ class MyMarkdownConverter(MarkdownConverter):
             count = 1
             while prev:
                 if prev.name == 'tr':
-                    prev_td = prev.findAll('td')
-                    row_span_exists = False
-                    for i, td in enumerate(prev_td):
+                    prev_td = prev.findAll('td', recursive=False)
+                    i = 0
+                    for td in prev_td:
                         if 'rowspan' in td.attrs and int(td['rowspan']) > count:
                             rowspan[i] = 1
-                    prev_th = prev.findAll('th')
-                    row_span_exists = False
-                    for i, th in enumerate(prev_th):
+                        if 'colspan' in td.attrs:
+                            i += _try_convert_int(td['colspan'], 1)
+                        else:
+                            i += 1
+                    prev_th = prev.findAll('th', recursive=False)
+                    i = 0
+                    for th in prev_th:
                         if 'rowspan' in th.attrs and int(th['rowspan']) > count:
                             rowspan[i] = 1
+                        if 'colspan' in th.attrs:
+                            i += _try_convert_int(th['colspan'], 1)
+                        else:
+                            i += 1
                 prev = prev.previous_sibling
                 count += 1
         # modify text for rowspan
