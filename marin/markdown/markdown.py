@@ -156,7 +156,7 @@ class MyMarkdownConverter(MarkdownConverter):
         hashes = '#' * n
         if style == markdownify.ATX_CLOSED:
             return '%s %s %s\n\n' % (hashes, text, hashes)
-        return '\n%s %s\n' % (hashes, text)
+        return '%s %s\n\n' % (hashes, text)
     
     def convert_a(self, el, text, convert_as_inline):
         prefix, suffix, text = markdownify.chomp(text)
@@ -273,20 +273,28 @@ class MyMarkdownConverter(MarkdownConverter):
                     is_headrow = True
 
         # rowspan check
-        length_of_cells = len(cells)
+        length_of_cells = 0
+        prev_td = el.findAll('td', recursive=False)
+        prev_th = el.findAll('th', recursive=False)
+        length = len(prev_td) + len(prev_th)
+        for td in prev_td:
+            if 'colspan' in td.attrs:
+                length += _try_convert_int(td['colspan'], 1) - 1
+        for th in prev_th:
+            if 'colspan' in th.attrs:
+                length += _try_convert_int(th['colspan'], 1) - 1
+        length_of_cells = max(length_of_cells, length)
         if el.previous_sibling:
             prev = el.previous_sibling
             count = 1
             while prev:
                 if prev.name == 'tr':
                     prev_td = prev.findAll('td', recursive=False)
-                    length = len(prev_td)
+                    prev_th = prev.findAll('th', recursive=False)
+                    length = len(prev_td) + len(prev_th)
                     for td in prev_td:
                         if 'colspan' in td.attrs:
                             length += _try_convert_int(td['colspan'], 1) - 1
-                    length_of_cells = max(length_of_cells, length)
-                    prev_th = prev.findAll('th', recursive=False)
-                    length = len(prev_th)
                     for th in prev_th:
                         if 'colspan' in th.attrs:
                             length += _try_convert_int(th['colspan'], 1) - 1
@@ -322,14 +330,14 @@ class MyMarkdownConverter(MarkdownConverter):
         text = text.split('|')
         for i, row in enumerate(rowspan):
             if row:
-                text.insert(i, '')
+                text.insert(i, ' ')
         text = '|'.join(text)
 
         overline = ''
         underline = ''
         if is_headrow and not el.previous_sibling:
             # first row and is headline: print headline underline
-            underline += '| ' + ' | '.join(['---'] * text.count('|')) + ' |' + '\n'
+            underline += '| ' + ' | '.join(['---'] * length_of_cells) + ' |' + '\n'
         elif (not el.previous_sibling
               and (el.parent.name == 'table'
                    or (el.parent.name == 'tbody'
@@ -338,8 +346,8 @@ class MyMarkdownConverter(MarkdownConverter):
             # - the parent is table or
             # - the parent is tbody at the beginning of a table.
             # print empty headline above this row
-            overline += '| ' + ' | '.join([''] * len(cells)) + ' |' + '\n'
-            overline += '| ' + ' | '.join(['---'] * len(cells)) + ' |' + '\n'
+            overline += '| ' + ' | '.join([''] * length_of_cells) + ' |' + '\n'
+            overline += '| ' + ' | '.join(['---'] * length_of_cells) + ' |' + '\n'
         return overline + '|' + text + '\n' + underline
 
     def indent(self, text, level):

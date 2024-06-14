@@ -20,7 +20,7 @@ Favorite and Least Favorite Things
 |  |  | Bob | Alice |
 | --- | --- | --- | --- |
 | Favorite | Color | Blue | Purple |
-|| Flavor | Banana | Chocolate |
+| | Flavor | Banana | Chocolate |
 | Least<br>Favorite | Color | Yellow | Pink |
-|| Flavor | Mint | Walnut |
+| | Flavor | Mint | Walnut |
 
