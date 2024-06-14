@@ -144,6 +144,20 @@ class MyMarkdownConverter(MarkdownConverter):
         }
         super().__init__(**kwargs)
     
+    def convert_hn(self, n, el, text, convert_as_inline):
+        if convert_as_inline:
+            return text
+
+        style = self.options['heading_style'].lower()
+        text = text.strip()
+        if style == markdownify.UNDERLINED and n <= 2:
+            line = '=' if n == 1 else '-'
+            return self.underline(text, line)
+        hashes = '#' * n
+        if style == markdownify.ATX_CLOSED:
+            return '%s %s %s\n\n' % (hashes, text, hashes)
+        return '\n%s %s\n' % (hashes, text)
+    
     def convert_a(self, el, text, convert_as_inline):
         prefix, suffix, text = markdownify.chomp(text)
         if not text:
