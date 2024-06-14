@@ -150,7 +150,7 @@ class MyMarkdownConverter(MarkdownConverter):
             return ''
         href = el.get('href')
         # ignore base64 images
-        if "data" in href and ";base64" in href:
+        if href and "data" in href and ";base64" in href:
             return ""
         title = el.get('title')
         # For the replacement see #29: text nodes underscores are escaped
@@ -278,6 +278,11 @@ class MyMarkdownConverter(MarkdownConverter):
                     row_span_exists = False
                     for i, td in enumerate(prev_td):
                         if 'rowspan' in td.attrs and int(td['rowspan']) > count:
+                            rowspan[i] = 1
+                    prev_th = prev.findAll('th')
+                    row_span_exists = False
+                    for i, th in enumerate(prev_th):
+                        if 'rowspan' in th.attrs and int(th['rowspan']) > count:
                             rowspan[i] = 1
                 prev = prev.previous_sibling
                 count += 1
