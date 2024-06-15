@@ -55,12 +55,12 @@ def clean_html(html):
     linelisting = html.findAll('div', {'class': 'ltx_listingline'})
     for fn in linelisting:
         fn.append(BeautifulSoup("<br>", "html.parser"))
-    # Removes reference links
     biblinks = html.findAll('a', {'class': 'ltx_ref'})
     for biblink in biblinks:
-        biblink.decompose()
+        # Removes reference links
+        # biblink.decompose()
         # Removes linking but keeps text
-        # biblink.unwrap()
+        biblink.unwrap()
     
     eqntables = html.findAll('table', {'class': 'ltx_eqn_table'})
     for eqn in eqntables:
@@ -131,7 +131,7 @@ if __name__ == '__main__':
     html_folder = get_gcs_path(args.input_dir)
     files = gfs.ls(html_folder)
 
-    MAX_NUM_PENDING_TASKS = 300  # Max number of html files we want to process in pending state
+    MAX_NUM_PENDING_TASKS = 450  # Max number of html files we want to process in pending state
     ray.init()
     result_refs = []
 

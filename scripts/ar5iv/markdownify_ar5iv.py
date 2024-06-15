@@ -87,7 +87,7 @@ if __name__ == '__main__':
     html_folder = get_gcs_path(args.input_dir)
     files = gfs.ls(html_folder)
 
-    MAX_NUM_PENDING_TASKS = 300  # Max number of html files we want to process in pending state
+    MAX_NUM_PENDING_TASKS = 450  # Max number of html files we want to process in pending state
     ray.init()
     result_refs = []
 

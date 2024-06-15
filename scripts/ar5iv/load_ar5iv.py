@@ -145,7 +145,7 @@ if __name__ == '__main__':
             counts.append(dictionary[out_file])
     
 
-    MAX_NUM_PENDING_TASKS = 300  # Max number of html files we want to process in pending state
+    MAX_NUM_PENDING_TASKS = 450  # Max number of html files we want to process in pending state
     ray.init()
     result_refs = []
 
