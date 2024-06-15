@@ -156,7 +156,7 @@ class MyMarkdownConverter(MarkdownConverter):
         hashes = '#' * n
         if style == markdownify.ATX_CLOSED:
             return '%s %s %s\n\n' % (hashes, text, hashes)
-        return '%s %s\n\n' % (hashes, text)
+        return '\n%s %s\n' % (hashes, text)
     
     def convert_a(self, el, text, convert_as_inline):
         prefix, suffix, text = markdownify.chomp(text)
