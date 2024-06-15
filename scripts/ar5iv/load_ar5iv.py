@@ -29,59 +29,6 @@ import re
 from bs4 import BeautifulSoup
 import markdownify
 
-
-def to_markdown(html):
-    if isinstance(html, str):
-        html = BeautifulSoup(html, "html.parser")
-    authors = html.findAll('div', {'class': 'ltx_authors'})
-    for author in authors:
-        author.decompose()
-    tags = html.findAll('span', {'class': 'ltx_tag_item'})
-    for author in tags:
-        author.decompose()
-    tags = html.findAll('span', {'class': 'ltx_tag_listingline'})
-    for author in tags:
-        author.decompose()
-    title_page = html.findAll('div', {'class': 'ltx_titlepage'})
-    for tp in title_page:
-        tp.decompose()
-    biblio = html.findAll('section', {'id': 'bib'})
-    for bib in biblio:
-        bib.decompose()
-    footnotes = html.findAll('div', {'class': 'ltx_role_footnote'})
-    for fn in footnotes:
-        fn.decompose()
-    linelisting = html.findAll('div', {'class': 'ltx_listingline'})
-    for fn in linelisting:
-        fn.append(BeautifulSoup("<br>", "html.parser"))
-    
-    eqntables = html.findAll('table', {'class': 'ltx_eqn_table'})
-    for eqn in eqntables:
-        eqn.append(BeautifulSoup("<br>", "html.parser"))
-        eqn.unwrap()
-    
-    eqnrows = html.findAll('tr', {'class': 'ltx_eqn_row'})
-    for eqn in eqnrows:
-        eqn.append(BeautifulSoup("<br>", "html.parser"))
-        eqn.unwrap()
-    eqncell = html.findAll('td', {'class': 'ltx_eqn_cell'})
-    for eqn in eqncell:
-        eqn.unwrap()
-    footer = html.findAll('footer')
-    for fn in footer:
-        fn.decompose()
-    # data = html.findAll('div', {'class': 'ltx_listing_data'})
-    # for fn in data:
-    #     fn.decompose()
-    title = html.find('title')
-    if title:
-        title.decompose()
-    text = markdown.MyMarkdownConverter().convert_soup(html)
-    # cleanup: replace nbsp as space
-    # this isn't quite right if we preserve html in places, but we currently are not doing that
-    text = text.replace("\xa0", " ").strip()
-    return text
-
 @ray.remote(memory=512 * 1024 * 1024)  # 512 MB
 def load_ar5iv_html(input_file_paths, zip_path, counts):
     """
