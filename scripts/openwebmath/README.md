@@ -11,11 +11,11 @@ This will create a folder in GCS with the parquet files. The folder will roughly
 ```
 gs://marin-data/raw/openwebmath/huggingface.co/datasets/open-web-math/open-web-math/resolve/fde8ef8de2300f5e778f56261843dab89f230815/data/
 ```
-2. Run the following commands to process the dataset. Since OWM is already (partly) converted to markdown, this command just filters non-markdown files and formats the data in Dolma format. First init Ray cluster:
+2. Run the following commands to process the dataset. Since OWM is already (mostly) converted to markdown, we don't do any preprocessing and just format the data in Dolma format. First init Ray cluster:
 ```
 ray dashboard infra/marin-cluster.yaml 
 ```
 Then in a second terminal, run the processing script:
 ```
-ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python scripts/openwebmath/process_raw_owm.py --input_dir gs://marin-data/raw/openwebmath/huggingface.co/datasets/open-web-math/open-web-math/resolve/fde8ef8de2300f5e778f56261843dab89f230815/data/
+ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python scripts/openwebmath/process_raw_owm.py --input_dir gs://marin-data/raw/openwebmath/huggingface.co/datasets/open-web-math/open-web-math/resolve/fde8ef8de2300f5e778f56261843dab89f230815/data/ --output_dir gs://marin-data/processed/openwebmath/documents/
 ```
