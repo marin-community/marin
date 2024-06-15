@@ -1,7 +1,7 @@
 """
 file: process_raw_owm.py
 ---
-Filters non-markdown files from the OpenWebMath dataset.
+Processes the OpenWebMath data.
 
 OpenWebMath randomly converts doc to either plaintext or markdown with the following probabilities:
 - headings: 0.9 markdown, 0.1 plaintext
@@ -20,7 +20,7 @@ import ray
 from marin.utils import fsspec_exists, get_gcs_path
 
 
-def get_owm_paths(input_file_path):
+def get_owm_paths(input_file_path, output_dir):
     """
     Given a parquet file path, return the path to the output jsonl file and success file
     Args:
@@ -32,10 +32,7 @@ def get_owm_paths(input_file_path):
     filename = "-".join(filename.split("-")[:2])
     output_file = get_gcs_path(
         os.path.join(
-            "marin-data",
-            "processed",
-            "openwebmath",
-            "documents",
+            output_dir,
             filename + "_processed_md.jsonl.gz",
         )
     )
@@ -44,13 +41,13 @@ def get_owm_paths(input_file_path):
 
 
 @ray.remote(memory=1 * 1024 * 1024 * 1024)  # 1 GB
-def process_one_parquet_file(input_file_path):
+def process_one_parquet_file(input_file_path, output_dir):
     """
-    Takes in raw OpenWebMath parquet file, filters out non-markdown files, and writes the filtered files to a new directory in Dolma format.
+    Takes in raw OpenWebMath parquet file and writes to a new directory in Dolma format.
     Args:
         input_file_path (str): The input file to process
     """
-    output_file, success_file = get_owm_paths(input_file_path)
+    output_file, success_file = get_owm_paths(input_file_path, output_dir)
     if fsspec_exists(success_file):
         print(f"File {output_file} already processed. Skipping...")
         return True
@@ -64,21 +61,8 @@ def process_one_parquet_file(input_file_path):
     if isinstance(df["metadata"].iloc[0], str):
         df["metadata"] = df["metadata"].apply(json.loads)
 
-    # Filter rows where markdown_headings and markdown_code are both True
-    df_filtered = df[
-        df["metadata"].apply(
-            lambda x: x["config"].get("markdown_headings") == True
-            and x["config"].get("markdown_code") == True
-        )
-    ]
-
-    num_filtered = len(df) - len(df_filtered)
-    print(
-        f"File {os.path.basename(input_file_path)} filtered out {num_filtered}/{len(df)} ({num_filtered/len(df):.2%}%) non-markdown entries"
-    )
-
     with fsspec.open(output_file, "wb", compression="gzip") as f:
-        for _, row in df_filtered.iterrows():
+        for _, row in df.iterrows():
             out_fw = row.to_dict()
             out_dolma = {
                 "id": out_fw["url"],
@@ -107,6 +91,12 @@ if __name__ == "__main__":
         required=True,
         help="The directory containing the unmodified OpenWebMath data in parquet format",
     )
+    parser.add_argument(
+        "--output_dir",
+        type=str,
+        required=True,
+        help="The directory to store processed OpenWebMath data, which will be formatted as jsonl files",
+    )
 
     args = parser.parse_args()
     gfs = fsspec.filesystem("gcs")
@@ -116,7 +106,7 @@ if __name__ == "__main__":
     for file in files:
         gs_file = get_gcs_path(file)
         print(f"Starting Processing for the fw parquet file: {gs_file}")
-        result_refs.append(process_one_parquet_file.remote(gs_file))
+        result_refs.append(process_one_parquet_file.remote(gs_file, args.output_dir))
 
     # Wait for all the tasks to finish
     try:
