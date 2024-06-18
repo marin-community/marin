@@ -34,6 +34,7 @@ dependencies = [
     "trafilatura==1.8.1",
     "tqdm",
     "warcio==1.7.4",
+    "grip==4.6.2",
 ]
 
 [project.optional-dependencies]
@@ -63,7 +64,7 @@ target-version = "py310"
 
 [tool.ruff.lint]
 select = ["A", "B", "E", "F", "I", "RUF", "W"]
-ignore = ["F722"]
+ignore = ["F722", "B008"]
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["E402", "F401"]

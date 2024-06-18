@@ -18,13 +18,9 @@ Here is the simple syntax to use this tag −
 
 Here is the description of all the parameters of this tag −
 
-* **expression** − inferred mrow of multiple children.
-
 ## Attributes
 
 Here is the description of all the attributes of this tag −
-
-* **mathbackground** − To specify the background color. Valid formats are #rgb, #rrggbb and html color names.
 
 ## Examples
 
