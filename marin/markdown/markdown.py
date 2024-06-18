@@ -120,6 +120,19 @@ def minimal_markdown_escape(text):
     return text
 
 
+def _try_convert_int(val, default):
+    # handles a few cases we see in the wild: the number, "number", 'number', number;
+    # punting on percent and fraction
+    try:
+        return int(val)
+    except ValueError:
+        val = val.strip().replace('"', '').replace("'", '').replace(';', '').replace(',', '')
+        try:
+            return int(val)
+        except ValueError:
+            return default
+
+
 class MyMarkdownConverter(MarkdownConverter):
 
     def __init__(self, **kwargs):
@@ -378,6 +391,18 @@ class MyMarkdownConverter(MarkdownConverter):
             bullet = bullets[depth % len(bullets)]
         return '%s %s\n' % (bullet, (text or '').strip())
 
+    def convert_td(self, el, text, convert_as_inline):
+        colspan = 1
+        if 'colspan' in el.attrs:
+            colspan = _try_convert_int(el['colspan'], 1)
+
+        return ' ' + text.strip().replace("\n", " ") + ' |' * colspan
+
+    def convert_th(self, el, text, convert_as_inline):
+        colspan = 1
+        if 'colspan' in el.attrs:
+            colspan = _try_convert_int(el['colspan'], 1)
+        return ' ' + text.strip().replace("\n", " ") + ' |' * colspan
 
     def join_text(self, text1, text2, is_in_pre):
         if not is_in_pre:
