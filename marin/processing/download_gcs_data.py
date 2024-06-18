@@ -18,7 +18,8 @@ filenames = [
                 # "gs://marin-data/scratch/chrisc/test.json.gz",
                 "gs://marin-data/scratch/chrisc/dataset.txt.gz",
                 "gs://marin-data/scratch/chrisc/fasttext_train.txt.gz",
-                "gs://marin-data/scratch/chrisc/fasttext_test.txt.gz"
+                "gs://marin-data/scratch/chrisc/fasttext_test.txt.gz",
+                "gs://marin-data/scratch/chrisc/0_processed_md.jsonl.gz"
             ]
 
 def download_file(filename, output_dir):
@@ -29,7 +30,7 @@ def download_file(filename, output_dir):
     with fsspec.open(filename, 'r', compression="gzip") as f:
         with open(output_file_path, "w", encoding="utf-8") as f_out:
             for line in f:
-                if file_format == "json":
+                if file_format == "json" or file_format == "jsonl":
                     json_line = json.loads(line)
                     f_out.write(json.dumps(json_line) + "\n")
                 elif file_format == "txt":
