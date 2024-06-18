@@ -31,7 +31,7 @@ import markdownify
 
 n=256
 
-@ray.remote(memory=512 * 1024 * 1024)  # 512 MB
+@ray.remote(memory=1024 * 1024 * 1024)  # 512 MB
 def markdownify_ar5iv_html(file):
     """
     Takes in the input file and processes it to get the html content.
@@ -87,7 +87,7 @@ if __name__ == '__main__':
     html_folder = get_gcs_path(args.input_dir)
     files = gfs.ls(html_folder)
 
-    MAX_NUM_PENDING_TASKS = 450  # Max number of html files we want to process in pending state
+    MAX_NUM_PENDING_TASKS = 600  # Max number of html files we want to process in pending state
     ray.init()
     result_refs = []
 

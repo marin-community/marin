@@ -29,7 +29,7 @@ import re
 from bs4 import BeautifulSoup
 import markdownify
 
-@ray.remote(memory=512 * 1024 * 1024)  # 512 MB
+@ray.remote(memory=1024 * 1024 * 1024)  # 512 MB
 def load_ar5iv_html(input_file_paths, zip_path, counts):
     """
     Takes in the input file and processes it to get the html content.
