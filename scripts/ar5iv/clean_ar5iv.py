@@ -37,6 +37,11 @@ def clean_html(html):
     authors = html.findAll('div', {'class': 'ltx_authors'})
     for author in authors:
         author.decompose()
+        section = author.previous_sibling
+        while section:
+            new_section = section.previous_sibling
+            section.decompose()
+            section = new_section
     tags = html.findAll('span', {'class': 'ltx_tag_item'})
     for author in tags:
         author.decompose()
@@ -77,6 +82,13 @@ def clean_html(html):
     footer = html.findAll('footer')
     for fn in footer:
         fn.decompose()
+    section = html.find('section')
+    if section:
+        section = section.previous_sibling
+        while section:
+            new_section = section.previous_sibling
+            section.extract()
+            section = new_section
     # data = html.findAll('div', {'class': 'ltx_listing_data'})
     # for fn in data:
     #     fn.decompose()
