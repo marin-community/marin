@@ -5,6 +5,7 @@ import fsspec
 import grip
 import os
 import traceback
+from marin.utils import fsspec_exists
 
 app = Flask(__name__)
 githubRenderer = grip.GitHubRenderer()
@@ -26,8 +27,8 @@ def render_content(content):
 @app.route('/', methods=['GET'])
 def display_home():
     fs = fsspec.filesystem("gcs")
-    files = fs.ls("gcs://marin-data/examples/")
-    files = [file.split('/')[-1][:-6] for file in files]
+    files = fs.ls("gcs://marin-data/processed/")
+    files = ["/".join(file.split('/')[2:]) for file in files]
     html_content = """
     <!DOCTYPE html>
     <html lang="en">
@@ -40,7 +41,7 @@ def display_home():
     for i, file in enumerate(files):
         # add links to files if they exist
         if file:
-            html_content += f'''<li><a href="/content/{file}/0">{file}</a><br>'''
+            html_content += f'''<li><a href="/find/{file}">{file}</a><br>'''
     html_content += '''
     </body>
     </html>
@@ -48,31 +49,86 @@ def display_home():
     return render_template_string(html_content)
 
 # Route to display the content
+@app.route('/find/<path:folder>', methods=['GET'])
+def display_find(folder):
+    fs = fsspec.filesystem("gcs")
+    path = f"gcs://marin-data/processed/{folder}/"
+    files = fs.ls(path)
+    files = fs.walk(files[-1])
+
+    all_files = []
+    for path, folder, file in files:
+        for f in file:
+            if f.endswith("jsonl.gz"):
+                all_files.append(os.path.join(path, f)[21:])
+        
+
+    html_content = """
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <title>Home</title>
+    </head>
+    <body>
+    <h1>Home</h1>"""
+    for i, file in enumerate(all_files):
+        # add links to files if they exist
+        if file:
+            html_content += f'''<li><a href="/content/{file}/0">{file}</a><br>'''
+    html_content += '''
+    </body>
+    </html>
+    '''
+    return render_template_string(html_content)
+
+def get_files(path):
+    fs = fsspec.filesystem("gcs")
+    split_path = path.split('/')
+    folder = f"gcs://marin-data/processed/{split_path[0]}/"
+    subfolders = fs.ls(folder)
+    version_subfolders = []
+    for subfolder in subfolders:
+        if subfolder not in folder:
+            version_subfolders.extend(fs.ls(subfolder))
+    files = []
+    for version_subfolder in version_subfolders:
+        if "jsonl" in version_subfolder:
+            continue
+        content_type = version_subfolder.split('/')[3]
+        out_path = os.path.join(version_subfolder, "/".join(split_path[3:]).replace(split_path[1], content_type))
+        if fsspec_exists("gcs://" + out_path):
+            files.append(out_path)
+    return files
+
+# Route to display the content
 @app.route('/content/<path:dataname>/<int:idx>', methods=['GET'])
 def display_content(dataname, idx):
-    filename = f"gcs://marin-data/examples/{dataname}.jsonl"
+    filename = f"gcs://marin-data/processed/{dataname}"
+    end_of_file = False
     try:
         i = 0
-        with fsspec.open(filename, 'r') as file:
-            for line in file:
-                if i < idx:
-                    i += 1
-                    continue
-                record = json.loads(line.strip())
-                source_id = record['id']
-                break
-            else:
-                return jsonify({'error': 'Record not found'}), 404
-
-
-        print(f"Displaying content for {dataname} with index: {idx}, ID: {source_id}")
-        for entry in record['content']:
-            if entry['type'] == 'md':
-                record['content'].append({'title': f"raw {entry['title']}", 'type': 'html', 'text': '<iframe srcdoc="{}" style="width:100%; height:500px; border:none;"></iframe>'.format(escape(entry["text"]).replace('\n', '<br>'))})
-        rendered_content = [
-            {'title': entry['title'], 'rendered': render_content(entry)}
-            for entry in record['content']
-        ]
+        files = get_files(dataname)
+        rendered_content = []
+        for filename in files:
+            with fsspec.open("gcs://" + filename, 'r', compression='gzip') as file:
+                version = " ".join(filename.split("/")[3:-1])
+                for i in range(idx+1):
+                    line = file.readline()
+                if line:
+                    record = json.loads(line.strip())
+                    source_id = escape(record['id'])
+                else:
+                    return jsonify({'error': 'Record not found'}), 404
+                
+                if 'html' in filename:
+                    # Wrap HTML content in an iframe
+                    rendered = f'<iframe srcdoc="{escape(record["text"])}" style="width:100%; height:500px; border:none;"></iframe>'
+                elif 'md' in filename:
+                    rendered = githubRenderer.render(record['text'])
+                rendered_content.append({'title': version, 'rendered': rendered})
+                if not file.readline():
+                    end_of_file = True
 
         html_content = '''
         <!DOCTYPE html>
@@ -104,6 +160,7 @@ def display_content(dataname, idx):
         </head>
         <body>
             <h1>Example with ID: {}, in {}</h1>
+            <a href="/">Home</a>
             <p> Each title is a dropdown, you can click on it</p>
         '''.format(escape(source_id), dataname, escape(source_id), dataname)
 
@@ -119,15 +176,16 @@ def display_content(dataname, idx):
             html_content += f'<a href="/content/{dataname}/{0}">First</a>'
             html_content += ' | '
             html_content += f'<a href="/content/{dataname}/{int(idx)-1}">Previous</a>'
+        if not end_of_file:
             html_content += ' | '
-        html_content += f'<a href="/content/{dataname}/{int(idx)+1}">Next</a>'
+            html_content += f'<a href="/content/{dataname}/{int(idx)+1}">Next</a>'
 
         html_content += '''
         </body>
         </html>
         '''
 
-        return render_template_string(html_content)
+        return html_content
     except Exception as e:
         stack = traceback.format_exc().replace("\n", "<br>")
         error_msg = f'''Server internal Error<br>Error: {e}<br>Stack Trace: {stack}'''
