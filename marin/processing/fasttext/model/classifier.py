@@ -10,7 +10,7 @@ class BaseQualityClassifier:
     def __call__(self, batch):
         raise NotImplementedError
 
-class DummyQualityClassiifer(BaseQualityClassifier):
+class DummyQualityClassifier(BaseQualityClassifier):
     def __init__(self, model):
         self.model = model
 
@@ -50,10 +50,17 @@ class FasttextQualityClassifier(BaseQualityClassifier):
         else:
             text = ""
 
-        label, score_arr = self.predict(text)
+        label_arr, score_arr = self.predict(text)
+        fasttext_quality_dict = {}
+        for label, score in zip(label_arr, score_arr):
+            fasttext_quality_dict.update({
+                label: score
+            })
+
         row.update({
-            "label": label,
-            "score": score_arr[0],
+            "attributes" : {
+                "fasttext-quality" : fasttext_quality_dict
+            }
         })
 
         return row
