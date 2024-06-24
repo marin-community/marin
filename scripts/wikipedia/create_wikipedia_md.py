@@ -19,6 +19,7 @@ import ray
 from marin.core.runtime import RayConfig, TaskConfig, cached_or_construct_output, map_files_in_directory
 from marin.data_sources.wikipedia.convert import html2md
 
+import re
 
 # This function will be executed on the worker nodes. It is important to keep the function idempotent and resumable.
 # default memory is unbound, default runtime_env is empty, default num_cpus is 1
