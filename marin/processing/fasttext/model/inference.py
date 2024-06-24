@@ -1,7 +1,7 @@
 """
 Usage:
 ray job submit --working-dir . --no-wait -- \
-python -m marin.processing.fasttext.model.inference --input_dir gs://marin-data/processed/fineweb/fw-v1.0/CC-MAIN-2023-50/000_00000/  --output_dir gs://marin-data/scratch/chrisc/quality/fineweb/fw-v1.0/CC-MAIN-2024-10/000_00000/
+python -m marin.processing.fasttext.model.inference --input_dir gs://marin-data/processed/fineweb/fw-v1.0/CC-MAIN-2023-50/000_00000/  --output_dir gs://marin-data/scratch/chrisc/processed/fineweb/fw-v1.0/CC-MAIN-2024-10/attributes/fasttext-quality/000_00000/
 """
 import argparse
 import datetime
@@ -12,7 +12,7 @@ import fsspec
 import ray
 
 from marin.core.runtime import cached_or_construct_output, map_files_in_directory
-from marin.processing.fasttext.model.classifier import FasttextQualityClassifier
+from marin.processing.fasttext.model.classifier import FasttextQualityClassifier, DummyQualityClassifier
 
 def is_json_serializable(value):
     try:
@@ -32,9 +32,11 @@ def make_serializable(obj):
         return str(obj)
     return obj
 
+
+# TODO(chris): fix this code, perhaps having fasttext dependency on head node can make it easier to load model ref to workers
 @ray.remote(memory= 5 * 1024 * 1024 * 1024, runtime_env={"pip": ["fasttext"]})
 @cached_or_construct_output(success_suffix="SUCCESS")
-def process_file(input_filename, output_filename):
+def process_file_using_actor_pool(input_filename, output_filename):
     ds = ray.data.read_json(input_filename)
 
     print(f"[*] Read in dataset {input_filename}")
@@ -42,7 +44,7 @@ def process_file(input_filename, output_filename):
     # NOTE(chris): Could we parallelize using map_batches?
     # There are sometimes some issues with initialization when concurrency increases
     results = ds.map(
-        FasttextQualityClassifier,
+        DummyQualityClassifier,
         # concurrency=(1,16),
         concurrency=1,
         fn_constructor_args=("",)
@@ -56,17 +58,29 @@ def process_file(input_filename, output_filename):
                 json_row = json.dumps(make_serializable(row))
                 f_out.write(json_row + "\n")
 
+@ray.remote(memory= 5 * 1024 * 1024 * 1024, runtime_env={"pip": ["fasttext"]})
+@cached_or_construct_output(success_suffix="SUCCESS")
+def process_file(input_filename, output_filename):
+    print(f"[*] Read in dataset {input_filename}")
+    
+    quality_classifier = FasttextQualityClassifier("")
+
+    with fsspec.open(input_filename, "rt", compression="gzip") as f_in:
+        with fsspec.open(output_filename, "wt", compression="gzip") as f_out:
+            for line in f_in:
+                data = json.loads(line)
+                processed_data = quality_classifier(data)
+                res = {
+                    "id": processed_data["id"],
+                    "source": processed_data["source"],
+                    "attributes": processed_data["attributes"]
+                }          
+                json_row = json.dumps(res)
+                f_out.write(json_row + "\n")
+
+
 def main(input_dir, output_dir):
     ray.init()
-
-    # TODO(chris): At some point we should be able to place the fasttext object in the global object store. Currently seems not serializable
-    # Load fasttext classifier in the global object store
-    # model = fasttext.load_model(MODEL_PATH)
-    # model_ref = ray.put(model)
-
-    # output_filename = "gs://marin-data/scratch/chrisc/0_processed_md.jsonl.gz"
-    # for filename in FILENAMES:
-    #     ray.get(process_file.remote(filename, output_filename))
 
     responses = map_files_in_directory(process_file.remote, input_dir, "**/*_md.jsonl.gz", output_dir)
 
