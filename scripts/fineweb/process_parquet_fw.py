@@ -15,7 +15,7 @@ from marin.utils import fsspec_exists, fsspec_glob, fsspec_rm
 from marin.web.convert import convert_page
 
 
-@ray.remote(memory=1 * 1024 * 1024 * 1024, runtime_env={"pip": ["s3fs"]}, retry_exceptions=True, max_retries=3)  # 1 GB
+@ray.remote(memory=1.5 * 1024 * 1024 * 1024, runtime_env={"pip": ["s3fs"]})  # 1 GB
 @cached_or_construct_output(success_suffix="SUCCESS")  # We use this decorator to make this function idempotent
 def process_one_warc_file(input_file_path, output_file):
     """
@@ -32,7 +32,8 @@ def process_one_warc_file(input_file_path, output_file):
         df = pd.read_parquet(input_file_path)
     except FileNotFoundError as e:
         print(f"Error reading the parquet file: {e}")
-        return False
+        raise e
+
     df["md"] = None
     df["html"] = None
 
@@ -52,9 +53,7 @@ def process_one_warc_file(input_file_path, output_file):
     s3_fs = fsspec.filesystem("s3", anon=False, key="AKIAXVYC7AAF6JHGUA5K",
                               secret="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")
     with s3_fs.open(s3_url, mode='rb') as file_stream:
-
         for record in ArchiveIterator(file_stream):
-
             if num_urls_found == length_url_inp_list:
                 break
 
@@ -68,6 +67,9 @@ def process_one_warc_file(input_file_path, output_file):
                 if url in url_dict:
                     num_urls_found += 1
                     url_idx_in_df = url_dict[url]
+                    if num_urls_found % 100 == 0:
+                        print(
+                            f"Found Url {num_urls_found = }, Processed Url {num_urls_processed = }, length of warc {length_warc = }")
                     try:
                         content = record.content_stream().read()
 
@@ -87,6 +89,7 @@ def process_one_warc_file(input_file_path, output_file):
 
     # Write the output to a file with md information. MD will have html in the metadata
     # output_file = input_file_path.replace(".parquet", "_processed_md.jsonl.gz")
+    print(f"Writing to {output_file}")
     with fsspec.open(output_file, 'wt', compression='gzip') as f:  # md output
         for index, row in df.iterrows():
             out_fw = row.to_dict()
@@ -94,7 +97,7 @@ def process_one_warc_file(input_file_path, output_file):
                          "text": out_fw["md"],
                          "source": "fineweb",
                          "metadata": {
-                             f"fw_{key}": value for key, value in out_fw.items() if key != 'md'
+                             f"fw_{key}": value for key, value in out_fw.items() if key not in ('md', 'html', 'text')
                          }
                          }
 
@@ -102,6 +105,7 @@ def process_one_warc_file(input_file_path, output_file):
 
     # Write the output to a file with html format.
     output_file_html = output_file.replace("_processed_md.jsonl.gz", "_processed_html.jsonl.gz")
+    print(f"Writing to {output_file_html}")
     with fsspec.open(output_file_html, 'wt', compression='gzip') as f:  # html output
         for index, row in df.iterrows():
             out_fw = row.to_dict()
@@ -152,7 +156,7 @@ def process_fw_parquet(input_file_path):
         df = pd.read_parquet(input_file_path)
     except FileNotFoundError as e:
         print(f"Error reading the parquet file: {e}")
-        return False
+        raise e
 
     success_refs = {"ray_waitable": [], "file_path": []}
     # file_path is s3 url
@@ -171,18 +175,20 @@ def process_fw_parquet(input_file_path):
 
         # Save the group to a parquet file
         group_df.to_parquet(filename)
+        print(f"Processing the group: {filename}, into {output_file_name}")
         success_refs["ray_waitable"].append(process_one_warc_file.remote(filename, output_file_name))
         success_refs["file_path"].append(filename)
-
     was_successful = True
-    try:
-        ray.get(success_refs["ray_waitable"])
-    except Exception as e:
-        print(f"Error processing the group: {e}")
-        was_successful = False
 
-    for file in success_refs["file_path"]:
-        fsspec_rm(file)
+    for waitable, filename in zip(success_refs["ray_waitable"], success_refs["file_path"]):
+        try:
+            ray.get(waitable)
+        except Exception as e:
+            print(f"Error processing {filename = }, Error: {e}")
+            was_successful = False
+        finally:
+            fsspec_rm(filename)
+
     datetime_end = datetime.utcnow()
 
     if not was_successful:
@@ -209,7 +215,7 @@ if __name__ == '__main__':
     # gfs = fsspec.filesystem("gcs")
     # gs://marin-data/processed/hello_world_fw/fw-v1.0/CC-MAIN-2024-10/000_00000/
     files = fsspec_glob(os.path.join(args.input_dir, "*.parquet"))
-    MAX_NUM_PENDING_TASKS = 300  # Max number of parquet files we want to process in pending state
+    MAX_NUM_PENDING_TASKS = 15  # Max number of parquet files we want to process in pending state
     NUM_TASKS = len(files)
     ray.init()
     result_refs = []
