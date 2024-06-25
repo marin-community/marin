@@ -13,7 +13,7 @@ from ray.remote_function import RemoteFunction
 
 from marin.utils import fsspec_exists, fsspec_glob, fsspec_mkdirs, rebase_file_path
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("ray")
 
 
 @dataclass
