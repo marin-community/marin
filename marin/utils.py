@@ -38,7 +38,6 @@ def fsspec_rm(file_path):
     return False
 
 
-
 def fsspec_glob(file_path):
     """
     Get a list of files in a fsspec filesystem that match a pattern.
