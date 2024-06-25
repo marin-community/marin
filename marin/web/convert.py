@@ -1,3 +1,4 @@
+import re
 from urllib.parse import urljoin
 
 import htmlmin
@@ -5,8 +6,12 @@ from bs4 import BeautifulSoup
 
 from marin.markdown import to_markdown
 
+
 def convert_page(html: str, url: str | None = None) -> dict[str, str]:
     from readability import Document
+    # remove null character and control characters
+    html = re.sub(u'[^\u0020-\uD7FF\u0009\u000A\u000D\uE000-\uFFFD\U00010000-\U0010FFFF]+', '', html)
+
     doc = Document(html)
     title = doc.title()
 
@@ -77,7 +82,17 @@ def make_links_absolute(soup: BeautifulSoup, base_url):
     for tag in soup.select("a, img"):
         # handle images and anchors
         if tag.has_attr("src"):
-            tag["src"] = urljoin(base_url, tag["src"])
+            try:
+                tag["src"] = urljoin(base_url, tag["src"])
+            except Exception as e:
+                # Leave it unchanged
+                print(f"Error in src {e} {tag['src']}")
+
         if tag.has_attr("href"):
-            tag["href"] = urljoin(base_url, tag["href"])
+            try:
+                tag["href"] = urljoin(base_url, tag["href"])
+            except Exception as e:
+                # Leave it unchanged
+                print(f"Error in href {e} {tag['href']}")
+
     return soup
