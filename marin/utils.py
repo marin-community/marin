@@ -33,8 +33,12 @@ def fsspec_rm(file_path):
     # Use fsspec to check if the file exists
     fs = fsspec.core.url_to_fs(file_path)[0]
     if fs.exists(file_path):
-        fs.rm(file_path)
-        return True
+        try:
+            fs.rm(file_path)
+        except FileNotFoundError as e:
+            print(f"Error removing the file: {e}. Likely caused by the race condition and file is already removed.")
+        finally:
+            return True
     return False
 
 
