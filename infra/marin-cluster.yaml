@@ -2,7 +2,7 @@
 cluster_name: marin-data
 
 # Maximum Workers (excluding Head Node)
-max_workers: 64
+max_workers: 145
 
 # List of Available Node Types
 available_node_types:
@@ -31,7 +31,7 @@ available_node_types:
   # Worker Nodes =>> Preemptible TPU v4-8 VMs
   tpu_worker:
     min_workers: 4
-    max_workers: 64
+    max_workers: 145
     resources: {"CPU": 120, "TPU": 1}
 
     # GCP-Specific Configuration; setup for TPU V4-8 VMs (in `us-central2-b`)
