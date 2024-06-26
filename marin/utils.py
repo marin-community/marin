@@ -1,7 +1,6 @@
 import os
 
 import fsspec
-import functools
 
 
 def fsspec_exists(file_path):
@@ -18,6 +17,29 @@ def fsspec_exists(file_path):
     # Use fsspec to check if the file exists
     fs = fsspec.core.url_to_fs(file_path)[0]
     return fs.exists(file_path)
+
+
+def fsspec_rm(file_path):
+    """
+    Check if a file exists in a fsspec filesystem. If it exists, remove it.
+
+    Args:
+        file_path (str): The path of the file
+
+    Returns:
+        bool: True if the file exists, False otherwise.
+    """
+
+    # Use fsspec to check if the file exists
+    fs = fsspec.core.url_to_fs(file_path)[0]
+    if fs.exists(file_path):
+        try:
+            fs.rm(file_path)
+        except FileNotFoundError as e:
+            print(f"Error removing the file: {e}. Likely caused by the race condition and file is already removed.")
+        finally:
+            return True
+    return False
 
 
 def fsspec_glob(file_path):
