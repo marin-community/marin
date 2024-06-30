@@ -17,7 +17,6 @@ import fsspec
 import ray
 
 from marin.core.runtime import RayConfig, TaskConfig, cached_or_construct_output, map_files_in_directory
-from marin.data_sources.pubmed_central.convert import xml2json
 
 import os
 import re
@@ -34,22 +33,22 @@ import xml.etree.ElementTree as ET
 def xml_to_md(input_file_path, output_file_path):
     # The runtime for this function should be low (less than 5-10 min), as the machines are preemptible
     # Example of input_path = gs://marin-data/raw/pubmed/pubmed_central/oa_comm/oa_comm_xml.PMC000xxxxxx.baseline.2023-12-18.tar.gz 
-
+    from marin.data_sources.pubmed_central.convert import xml2json
     # Read the input file
+    fs = fsspec.filesystem('gcs')
     with (
-        fsspec.open(input_file_path, "rt", compression="gzip") as f,
-        #fsspec.open(re.sub("xml", "md", output_file_path), "wt", compression="gzip") as output,
+        fs.open(input_file_path, 'rb') as f
     ):
         with tarfile.open(fileobj=f, mode="r:gz") as tar:
             output = None
             for idx, member in enumerate(tar.getmembers()):
-                if tar_file_idx % 1000 == 0:
+                if idx % 2500 == 0:
                     if output:
                         output.close()
                     output_bucket_path = "gs://marin-data/processed/pubmed/pubmed_central/oa_comm"
                     output_basename = re.sub("xml", "md", os.path.basename(input_file_path))[:-7] + f"_{idx}_" + ".jsonl.gz"
                     output_path = f"{output_bucket_path}/{output_basename}"
-                    output = fsspec.open(output_path, "wt", compression="gzip")
+                    output = fsspec.open(output_path, "wt", compression="gzip").open()
                 if not (member.isfile() and member.name.endswith('.xml')):
                     continue
                 xml_file = tar.extractfile(member)
@@ -61,7 +60,8 @@ def xml_to_md(input_file_path, output_file_path):
                         article_str = ET.tostring(elem, encoding='unicode')
                         try:
                             article_json = xml2json(article_str)
-                            output.write(json.dumps(article_json) + "\n")
+                            if article_json:
+                                output.write(json.dumps(article_json) + "\n")
                             elem.clear()
                         except:
                             pass
@@ -87,7 +87,7 @@ def main(config: HelloWorldConfig):
     # 400GB of data and spawns about 75000 tasks (ray.remote functions).
 
     responses = map_files_in_directory(
-        html_to_md, config.input_dir, "**/*tar.gz", config.output_dir, task_config=config.task
+        xml_to_md, config.input_dir, "**/*baseline*tar.gz", config.output_dir, task_config=config.task
     )
     try:
         ray.get(responses)
@@ -115,7 +115,7 @@ if __name__ == "__main__":
 
     ray.init()
 
-    responses = map_files_in_directory(html_to_md.remote, args.input_dir, "*tar.gz", args.output_dir)
+    responses = map_files_in_directory(xml_to_md.remote, args.input_dir, "*baseline*tar.gz", args.output_dir)
 
     # Wait for all the tasks to finish.
     # The try and catch is important here as incase html_to_md throws any exception, that exception is passed here,
