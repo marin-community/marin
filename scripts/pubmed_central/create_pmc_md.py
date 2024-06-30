@@ -46,7 +46,7 @@ def xml_to_md(input_file_path, output_file_path):
                     if output:
                         output.close()
                     output_bucket_path = "gs://marin-data/processed/pubmed/pubmed_central/oa_comm"
-                    output_basename = re.sub("xml", "md", os.path.basename(input_file_path))[:-7] + f"_{idx}_" + ".jsonl.gz"
+                    output_basename = re.sub("xml", "md", os.path.basename(input_file_path))[:-7] + f"_{idx}" + ".jsonl.gz"
                     output_path = f"{output_bucket_path}/{output_basename}"
                     output = fsspec.open(output_path, "wt", compression="gzip").open()
                 if not (member.isfile() and member.name.endswith('.xml')):
