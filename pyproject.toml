@@ -15,6 +15,7 @@ dependencies = [
     "datasets==2.19.0",
     "dill==0.3.8",
     "draccus @ git+https://github.com/dlwh/draccus",
+    "fastparquet~=2024.5.0",
     "fsspec~=2024.3",
     "gcsfs~=2024.3",
     "google-api-python-client==2.129.0",
