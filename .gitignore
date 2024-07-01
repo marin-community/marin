@@ -1,6 +1,11 @@
 tests/snapshots/outputs
 tests/snapshots/diffs
 
+# don't log data/MD outputs to git
+data/*
+output/*
+outputs/*
+
 ### Python template
 # Byte-compiled / optimized / DLL files
 __pycache__/
