@@ -25,3 +25,7 @@ single WARC file. This smaller parquet chunck will be saved in `gs://marin-data/
 # Important Functions inside `process_parquet_fw.py`
 1. `process_fw_parquet` :  This function takes a single parquet file and splits it into smaller parquet chuncks. it takes about 8GB of memory to process about 2GB of parquet file.
 2. `process_one_warc_file` : This function takes a single parquet chunck file, downloads the WARC file, converts it to markdown and saves the results to a new jsonl files. It takes about 1GB of memory.
+
+# Time taken for processing
+
+1. Current it takes about 2 hours to process one dump of fineweb data.
