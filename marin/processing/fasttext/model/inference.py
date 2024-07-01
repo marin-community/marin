@@ -1,11 +1,12 @@
 """
 Usage:
 ray job submit --working-dir . --no-wait -- \
-python -m marin.processing.fasttext.model.inference --input_dir gs://marin-data/processed/fineweb/fw-v1.0/CC-MAIN-2023-50/000_00000/  --output_dir gs://marin-data/scratch/chrisc/processed/fineweb/fw-v1.0/CC-MAIN-2024-10/attributes/fasttext-quality/000_00000/
+python -m marin.processing.fasttext.model.inference --input_dir gs://marin-data/processed/fineweb/fw-v1.0/CC-MAIN-2023-50/  --output_dir gs://marin-data/scratch/chrisc/test-attributes/fasttext-quality/fineweb/fw-v1.0/CC-MAIN-2023-50/
 """
 import argparse
 import datetime
 import json
+import io
 import os
 
 import fsspec
@@ -13,6 +14,12 @@ import ray
 
 from marin.core.runtime import cached_or_construct_output, map_files_in_directory
 from marin.processing.fasttext.model.classifier import FasttextQualityClassifier, DummyQualityClassifier
+from marin.processing.utils import download_huggingface_file_with_backoff, download_gcs_file_with_backoff
+
+GCS_BUCKET_NAME = "marin-data"
+GCS_BLOB_NAME = "scratch/chrisc/dolma_fasttext_model/model.bin"
+HF_REPO_ID = "allenai/dolma-1_7-fasttext-quality-filter"
+HF_FILENAME = "model.bin"
 
 def is_json_serializable(value):
     try:
@@ -34,20 +41,21 @@ def make_serializable(obj):
 
 
 # TODO(chris): fix this code, perhaps having fasttext dependency on head node can make it easier to load model ref to workers
-@ray.remote(memory= 5 * 1024 * 1024 * 1024, runtime_env={"pip": ["fasttext"]})
+@ray.remote(memory= 15 * 1024 * 1024 * 1024, runtime_env={"pip": ["fasttext", "tenacity"]})
 @cached_or_construct_output(success_suffix="SUCCESS")
-def process_file_using_actor_pool(input_filename, output_filename):
+def process_file_using_actor_pool(input_filename, output_filename, model_ref):
     ds = ray.data.read_json(input_filename)
 
     print(f"[*] Read in dataset {input_filename}")
     
-    # NOTE(chris): Could we parallelize using map_batches?
+    # FIXME(chris): Could we parallelize using map_batches?
     # There are sometimes some issues with initialization when concurrency increases
-    results = ds.map(
-        DummyQualityClassifier,
+    results = ds.map_batches(
+        FasttextQualityClassifier,
         # concurrency=(1,16),
         concurrency=1,
-        fn_constructor_args=("",)
+        fn_constructor_args=(model_ref,),
+        batch_size=1024,
     )
 
     print("[*] Finished quality classification")
@@ -60,10 +68,10 @@ def process_file_using_actor_pool(input_filename, output_filename):
 
 @ray.remote(memory= 5 * 1024 * 1024 * 1024, runtime_env={"pip": ["fasttext"]})
 @cached_or_construct_output(success_suffix="SUCCESS")
-def process_file(input_filename, output_filename):
+def process_file(input_filename, output_filename, model_ref):
     print(f"[*] Read in dataset {input_filename}")
     
-    quality_classifier = FasttextQualityClassifier("")
+    quality_classifier = FasttextQualityClassifier(model_ref)
 
     with fsspec.open(input_filename, "rt", compression="gzip") as f_in:
         with fsspec.open(output_filename, "wt", compression="gzip") as f_out:
@@ -79,10 +87,40 @@ def process_file(input_filename, output_filename):
                 f_out.write(json_row + "\n")
 
 
-def main(input_dir, output_dir):
+def main(input_dir, output_dir, model_path):
     ray.init()
 
-    responses = map_files_in_directory(process_file.remote, input_dir, "**/*_md.jsonl.gz", output_dir)
+    # responses = map_files_in_directory(process_file.remote, input_dir, "**/*_md.jsonl.gz", output_dir, None, model_path)
+    # FIXME(chris): only one file rn
+
+    byte_buffer = io.BytesIO()
+    directory, basename = os.path.dirname(model_path), os.path.basename(model_path)
+    os.makedirs(directory, exist_ok=True)
+    
+    # NOTE(chris): 1 try theoretically should work but there are sometimes some SystemExceptions from either FastText loading or Huggingface about metadata
+    try:
+        try:
+            print("Download using huggingface start.")
+            download_huggingface_file_with_backoff(HF_REPO_ID, HF_FILENAME, directory)
+            print("Downloaded from huggingface.")
+        except Exception as e:
+            print(e, flush=True)
+            
+            try:
+                print("Download using GCS start.")
+                download_gcs_file_with_backoff(GCS_BUCKET_NAME, GCS_BLOB_NAME, model_path)
+                print("Downloaded from GCS.")
+            except Exception as e:
+                print(e, flush=True)
+
+        with open(model_path, "rb") as f:
+            byte_buffer.write(f.read())
+        byte_buffer.seek(0)
+    except Exception as e:
+        raise e
+
+    model_ref = ray.put(byte_buffer)
+    responses = map_files_in_directory(process_file_using_actor_pool.remote, input_dir, "**/*_md.jsonl.gz", output_dir, None, model_ref)
 
     try:
         ray.get(responses)
@@ -95,7 +133,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Example script to convert fineweb html to markdown.")
     parser.add_argument('--input_dir', type=str, help='Path to the unprocessed data directory', required=True)
     parser.add_argument('--output_dir', type=str, help='Path to store data updated with quality scores directory', required=True)
+    parser.add_argument('--model-path', type=str, default=os.path.expanduser("~/dolma_fasttext_model/model.bin"), help="Model path of fasttext classifier")
 
     args = parser.parse_args()
 
-    main(input_dir=args.input_dir, output_dir=args.output_dir)
+    main(input_dir=args.input_dir, output_dir=args.output_dir, model_path=args.model_path)
