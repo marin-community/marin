@@ -159,4 +159,5 @@ if __name__ == "__main__":
     # Step 4: Create a Google Storage Transfer Service job
     # STS only reads from a public url, so we need to get the public url of the file
     public_url = f"https://storage.googleapis.com/{url_path_on_gcs}"
+    print(f"\n Public URL: {public_url}")
     create_transfer_job(args.dataset_name, project_id, public_url, args.destination_path)

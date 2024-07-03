@@ -6,8 +6,16 @@ import fsspec
 from tqdm import tqdm
 from marin.web.convert import convert_page
 
-
 def html_to_md(input_file_path, md_output_dir, html_output_dir):
+    """
+    Convert HTML files to Markdown format and render them locally.
+
+    Args:
+        input_file_path (str): Path to the input HTML file.
+        md_output_dir (str): Directory to save the converted Markdown files.
+        html_output_dir (str): Directory to save the rendered HTML files.
+    """
+    
     with gzip.open(input_file_path, "rt", encoding="utf-8") as f:
         for idx, line in enumerate(tqdm(f, desc="Processing lines")):
             data = json.loads(line)
@@ -51,6 +59,16 @@ def html_to_md(input_file_path, md_output_dir, html_output_dir):
 
 
 def main(input_dir, output_dir):
+    """
+    Process and render HTML/MD files locally.
+
+    Args:
+        input_dir (str): Path to the directory containing HTML files.
+        output_dir (str): Path to the output directory.
+
+    The function converts HTML files to Markdown format and saves them in the 'markdown' subdirectory of the output directory.
+    It also renders the HTML files and saves them in the 'html' subdirectory of the output directory.
+    """
     md_output_dir = os.path.join(output_dir, "markdown")
     html_output_dir = os.path.join(output_dir, "html")
 
