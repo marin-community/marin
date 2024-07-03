@@ -17,7 +17,6 @@ import fsspec
 import ray
 
 from marin.core.runtime import RayConfig, TaskConfig, cached_or_construct_output, map_files_in_directory
-from marin.processing.pubmed.convert import xml2md
 
 import re
 
@@ -29,7 +28,10 @@ import re
 @cached_or_construct_output(success_suffix="SUCCESS")  # We use this decorator to make this function idempotent
 def xml_to_md(input_file_path, output_file_path):
     # The runtime for this function should be low (less than 5-10 min), as the machines are preemptible
-    # Example of input_path = gs://marin-data/processed/wikipedia/html/2024-06-14
+    # Example of input_path = gs://marin-data/processed/pubmed/2024-07-02/xml
+    
+    # import conversion function (needs to be done within this function)
+    from marin.processing.pubmed.convert import xml2md
 
     # Read the input file
     with (
