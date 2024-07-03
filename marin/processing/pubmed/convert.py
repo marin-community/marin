@@ -17,5 +17,5 @@ def xml2md(xml_str):
         if section_title != current_section_title and section_title.strip():
             text += "\n\n## " + section_title
             current_section_title = section_title
-       text += "\n\n" + paragraph["text"].strip()
+        text += "\n\n" + paragraph["text"].strip()
     return text
