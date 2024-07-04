@@ -1,13 +1,13 @@
 """
 Anything which is not inside ray.remote function will be executed on the h
-path: scripts/legal/process_edgar.py
+path: scripts/legal/process_multilegalpile.py
 Inputs: raw parquet files, Output: jsonl.gz files in dolma format
 
 Example Usage:
 ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- \
-python scripts/legal/process_edgar.py \
---input_dir gs://marin-data/raw/huggingface.co/datasets/eloukas/edgar-corpus/resolve/f7d3ba73d65ff10194a95b84c75eb484d60b0ede/full/partial-train \
---output_dir gs://marin-data/processed/law/edgar-v1.0/documents
+python scripts/legal/process_multilegalpile.py \
+--input_dir gs://marin-data/raw/huggingface.co/datasets/joelniklaus/MultiLegalPileWikipediaFiltered/resolve/main/data \
+--output_dir gs://marin-data/processed/law/multilegalpile-v1.0/documents
 """
 
 import argparse
@@ -16,8 +16,6 @@ import os
 
 import fsspec
 import ray
-
-import pandas as pd
 
 from marin.core.runtime import cached_or_construct_output, map_files_in_directory
 
@@ -31,45 +29,43 @@ from marin.core.runtime import cached_or_construct_output, map_files_in_director
 def convert_to_dolma(input_file_path, output_file_path):
     # The runtime for this function should be low (less than 5-10 min), as the machines are preemptible
 
+    source = "multilegalpile"
+    change_extension = lambda filepath: os.path.splitext(filepath)[0] + '.gz'
+
     # Read the input file
-    df = pd.read_parquet(input_file_path, engine='fastparquet')
-    source = "edgar"
+    with fsspec.open(input_file_path, "rt", compression="xz") as f, \
+            fsspec.open(change_extension(output_file_path), "wt", compression="gzip") as output:
+        for idx, line in enumerate(f):
+            row = json.loads(line)
 
-    change_extension = lambda filepath: os.path.splitext(filepath)[0] + '.jsonl.gz'
-
-    with fsspec.open(change_extension(output_file_path), "wt", compression="gzip") as output:
-        for _, row in df.iterrows():
-            sections = ['section_1', 'section_1A', 'section_1B', 'section_2', 'section_3', 'section_4', 'section_5',
-                        'section_6', 'section_7', 'section_7A', 'section_8', 'section_9', 'section_9A', 'section_9B',
-                        'section_10', 'section_11', 'section_12', 'section_13', 'section_14', 'section_15']
-            text = "\n\n".join([row[section] for section in sections]).strip()
+            types = ["caselaw", "contracts", "legislation", "other"]
 
             output.write(json.dumps({
-                "id": row['cik'],
-                "text": text,
+                "id": idx + types.index(row['type']) * 1000000,  # to make sure the id is unique
+                "text": row['text'],
                 "source": source,
                 "metadata": {
-                    f"year": row['year'],
-                    f"filename": row['filename'],
+                    f"type": row['type'],
+                    f"jurisdiction": row['jurisdiction'],
                 }
             }) + "\n")
     return True
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description="Script to convert edgar data to dolma format.")
+    parser = argparse.ArgumentParser(description="Script to convert multilegalpile data to dolma format.")
     # As a reminder all the processing in this function will be done on the head node. We should try
     # to keep number of jobs (started using ray job submit command) to minimum while trying to use tasks(ray.remote
     # function) as much as possible. For reference, fw uses only 1 job to process a complete dump which is about
     # 400GB of data and spawns about 75000 tasks (ray.remote functions).
-    parser.add_argument('--input_dir', type=str, help='Path to the edgar raw directory', required=True)
-    parser.add_argument('--output_dir', type=str, help='Path to store edgar dolma files', required=True)
+    parser.add_argument('--input_dir', type=str, help='Path to the multilegalpile raw directory', required=True)
+    parser.add_argument('--output_dir', type=str, help='Path to store multilegalpile dolma files', required=True)
 
     args = parser.parse_args()
 
     ray.init()
 
-    responses = map_files_in_directory(convert_to_dolma.remote, args.input_dir, "**/*.parquet", args.output_dir)
+    responses = map_files_in_directory(convert_to_dolma.remote, args.input_dir, "**/*.jsonl.xz", args.output_dir)
 
     # Wait for all the tasks to finish.
     # The try and catch is important here as incase convert_to_dolma throws any exception, that exception is passed here,
