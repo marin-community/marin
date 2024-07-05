@@ -1,7 +1,7 @@
 """
-Anything which is not inside ray.remote function will be executed on the h
+Anything which is not inside ray.remote function will be executed on the head node, so keep it to minimum.
 path: scripts/legal/process_multilegalpile.py
-Inputs: raw parquet files, Output: jsonl.gz files in dolma format
+Inputs: raw jsonl.xz files, Output: jsonl.gz files in dolma format
 
 Example Usage:
 ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- \
@@ -38,10 +38,8 @@ def convert_to_dolma(input_file_path, output_file_path):
         for idx, line in enumerate(f):
             row = json.loads(line)
 
-            types = ["caselaw", "contracts", "legislation", "other"]
-
             output.write(json.dumps({
-                "id": idx + types.index(row['type']) * 1000000,  # to make sure the id is unique
+                "id": f"{row['type']}:{idx}",  # to make sure the id is unique
                 "text": row['text'],
                 "source": source,
                 "metadata": {
