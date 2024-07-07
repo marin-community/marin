@@ -28,8 +28,14 @@ def render_content(content, format_type):
 @app.route('/', methods=['GET'])
 def display_home():
     fs = fsspec.filesystem("gcs")
-    files = fs.ls("gcs://marin-data/examples/", use_listings_cache=False)
-    files = [file.split('/')[-1][:-6] for file in files]
+    files = fs.ls("gcs://marin-data/examples/", use_listings_cache=False, detail=True)
+    # import pdb; pdb.set_trace()
+    domains = [os.path.basename(f["name"]) for f in files if f["type"] == "directory"]
+    versions = {}
+    for domain in domains:
+        versions[domain] = [os.path.basename(f) for f in
+                            fs.ls(f"gcs://marin-data/examples/{domain}", use_listings_cache=False)]
+
     html_content = """
     <!DOCTYPE html>
     <html lang="en">
@@ -39,10 +45,9 @@ def display_home():
     </head>
     <body>
     <h1>Home</h1>"""
-    for file in files:
-        # add links to files if they exist
-        if file:
-            html_content += f'''<li><a href="/content/{file}/0">{file}</a><br>'''
+    for domain in domains:
+        for version in versions[domain]:
+            html_content += f'''<li><a href="/content/{domain}/{version}/0">{domain}, {version}</a><br>'''
     html_content += '''
     </body>
     </html>
