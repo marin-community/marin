@@ -169,6 +169,6 @@ def check_new(domain, version):
 if __name__ == '__main__':
     # Check if the deployment variable is set (to run on the server)
     if 'DEPLOYMENT' in os.environ:
-        app.run(host='0.0.0.0', port=80)
+        app.run(host='0.0.0.0', port=5000)
     else:
         app.run(debug=True)
