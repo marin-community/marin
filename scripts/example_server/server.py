@@ -1,10 +1,11 @@
-from flask import Flask, render_template_string, jsonify
 import json
-from markupsafe import escape
-import fsspec
-import grip
 import os
 import traceback
+
+import fsspec
+import grip
+from flask import Flask, render_template_string, jsonify
+from markupsafe import escape
 
 app = Flask(__name__)
 githubRenderer = grip.GitHubRenderer()
@@ -25,7 +26,7 @@ def render_content(content):
 # Route to display the content
 @app.route('/', methods=['GET'])
 def display_home():
-    fs = fsspec.filesystem("gcs")
+    fs = fsspec.filesystem("gcs", use_listings_cache=False)
     files = fs.ls("gcs://marin-data/examples/")
     files = [file.split('/')[-1][:-6] for file in files]
     html_content = """
@@ -53,7 +54,7 @@ def display_content(dataname, idx):
     filename = f"gcs://marin-data/examples/{dataname}.jsonl"
     try:
         i = 0
-        with fsspec.open(filename, 'r') as file:
+        with fsspec.open(filename, 'r', use_listings_cache=False) as file:
             for line in file:
                 if i < idx:
                     i += 1
