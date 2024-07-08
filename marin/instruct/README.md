@@ -1,47 +1,61 @@
-# how to download hf dataset to gcs
+# Processing Large Datasets using Ray
 
-python scripts/copy_hf_dataset_to_gcs.py --dataset_name allenai/tulu-v2-sft-mixture --destination_path gs://marin-data/raw/instruct --urls_dir hf_dataset_transfer_bucket
+This README provides an overview of the Python script `process_parquet_fw.py` that demonstrates how to process large datasets using the Ray distributed computing framework. The script is designed to convert HTML content from JSONL or Parquet files into Markdown and HTML formats, and save the results as JSONL files.
 
-# i think this is just the path to the data transfer bucket
-https://storage.googleapis.com/hf_dataset_transfer_bucket/eloukas-edgar-corpus.tsv
+## Prerequisites
 
-# the above is broken the transfer job thing fails for some reason
-# says i need to install some transfer_service_default agent
-# gcp says i can't change permissions to public since bucket level access is uniform
+- Python 3.x
+- Ray
+- Required dependencies (listed in the script)
 
-# FIXED WITH PUBLIC BUCKET
+## Usage
 
-# how to process html into markdown
-the script from david doesn't work properly?
+1. Prepare your input dataset in either JSONL or Parquet format. The input files should contain HTML content that needs to be converted to Markdown and HTML.
 
-# below works now! now i can do local stuff
-# do not include jsonl.gz
-python scripts/instruct/process.py --input_dir gs://marin-data/raw/instruct/documents/
+2. Set up a Ray cluster or use a local Ray instance.
 
-# attempt at getting ray to work (stalls)
-# RAY STALLED FOR SOME REASON FIGURE OUT, MAKE SURE ISNTALL SERVER AND
-# NO LARGE LOCAL FILES
+3. Update the `input_dir` and `output_dir` variables in the script to specify the input and output directories respectively. The input directory should contain the JSONL or Parquet files to be processed, and the output directory will be used to store the resulting Markdown and HTML JSONL files.
 
-# WORKS NOW WITH THIS COMMAND ALSO CREATES THE OUTPUT DIRECTORY:
-ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python scripts/instruct/ray_process.py --input_dir gs://marin-data/raw/instruct/documents/ --output_dir gs://marin-data/raw/instruct/instruct_proc/
-# next steps: get the ray example working with parquet!
-# errors
-    response = func(input_file_path, output_file_path, *args, **kwargs)
-  File "/tmp/ray/session_2024-06-22_09-21-13_381610_4354/runtime_resources/working_dir_files/_ray_pkg_a3369b6eb27fd4c7/scripts/instruct/ray_process.py", line 96, in html_to_md
-    df = pd.read_parquet(input_file_path)
-  File "/home/ubuntu/.local/lib/python3.10/site-packages/pandas/io/parquet.py", line 667, in read_parquet
-    return impl.read(
-  File "/home/ubuntu/.local/lib/python3.10/site-packages/pandas/io/parquet.py", line 274, in read
-    pa_table = self.api.parquet.read_table(
-  File "/home/ubuntu/.local/lib/python3.10/site-packages/pyarrow/parquet/core.py", line 1762, in read_table
-    dataset = ParquetDataset(
-  File "/home/ubuntu/.local/lib/python3.10/site-packages/pyarrow/parquet/core.py", line 1329, in __init__
-    [fragment], schema=schema or fragment.physical_schema,
-  File "pyarrow/_dataset.pyx", line 1431, in pyarrow._dataset.Fragment.physical_schema.__get__
-  File "pyarrow/error.pxi", line 154, in pyarrow.lib.pyarrow_internal_check_status
-  File "pyarrow/error.pxi", line 91, in pyarrow.lib.check_status
-pyarrow.lib.ArrowInvalid: Could not open Parquet input source 'marin-data/raw/instruct/instruct_pq/huggingface.co/datasets/allenai/tulu-v2-sft-mixture/resolve/6248b175d2ccb5ec7c4aeb22e6d8ee3b21b2c752/data/train-00000-of-00003-99ee8754042a69f6.parquet': Parquet magic bytes not found in footer. Either the file is corrupted or this is not a parquet file.
-[36m(html_to_md pid=85252, ip=10.130.1.145)[0m Output file already processed. Skipping gs://marin-data/raw/instruct/huggingface.co/datasets/allenai/tulu-v2-sft-mixture/resolve/6248b175d2ccb5ec7c4aeb22e6d8ee3b21b2c752/data/train-00001-of-00003-278198836de5994c.parquet[32m [repeated 2x across cluster] (Ray deduplicates logs by default. Set RAY_DEDUP_LOGS=0 to disable log deduplication, or see https://docs.ray.io/en/master/ray-observability/user-guides/configure-logging.html#log-deduplication for more options.)[0m
-[36m(html_to_md pid=85352, ip=10.130.1.145)[0m Processing gs://marin-data/raw/instruct/instruct_pq/huggingface.co/datasets/allenai/tulu-v2-sft-mixture/resolve/6248b175d2ccb5ec7c4aeb22e6d8ee3b21b2c752/data/train-00002-of-00003-a52de323599d586a.parquet to gs://marin-data/raw/instruct/instruct_pq/instruct_pq/huggingface.co/datasets/allenai/tulu-v2-sft-mixture/resolve/6248b175d2ccb5ec7c4aeb22e6d8ee3b21b2c752/data/train-00002-of-00003-a52de323599d586a.parquet[32m [repeated 2x across cluster][0m
+4. Run the script using the following command:
 
-follow up with Abhi and David.
+   ```bash
+   ray job submit --address <ray_address> --working-dir . --no-wait -- python process_parquet_fw.py --input_dir <input_directory> --output_dir <output_directory> --input_type <jsonl|parquet>
+   ```
+
+   Replace `<ray_address>` with the address of your Ray cluster, `<input_directory>` with the path to your input directory, `<output_directory>` with the path to your desired output directory, and `<jsonl|parquet>` with the type of input files (`jsonl` for JSONL files or `parquet` for Parquet files).
+
+   For example:
+   ```bash
+   ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python process_parquet_fw.py --input_dir gs://marin-data/raw/instruct/ --output_dir gs://marin-data/processed/instruct/ --input_type parquet
+   ```
+
+5. The script will process the input files using Ray's distributed computing capabilities. It will convert the HTML content to Markdown and HTML formats and save the results as JSONL files in the specified output directory.
+
+6. Monitor the progress of the job using the Ray dashboard or by checking the logs.
+
+## FAQ
+
+### 1. What if the script stalls or fails?
+
+If the script stalls or fails, you can check the Ray dashboard or logs to identify the issue. Common reasons for stalling or failure include:
+- Insufficient resources allocated to the Ray cluster.
+- Network connectivity issues.
+- Errors in the input data or processing logic.
+
+Make sure to address any identified issues and retry the job.
+
+### 2. How can I customize the processing logic?
+
+The main processing logic is implemented in the `html_to_md` function. You can modify this function to adapt the processing logic to your specific requirements. Be cautious when making changes to ensure the function remains idempotent and resumable.
+
+### 3. Can I use this script with other file systems?
+
+Yes, the script uses `fsspec` to handle file I/O, which supports various file systems, including local files and cloud storage like Google Cloud Storage (GCS). Make sure to provide the appropriate file paths based on your chosen file system.
+
+## Notes
+
+- The script assumes the input files are in a specific format (JSONL or Parquet) and contain HTML content. Make sure your input files adhere to the expected format.
+- The script uses custom modules (`marin.core.runtime` and `marin.web.convert`) for certain functionalities. Make sure these modules are available in your environment.
+- The script is designed to be run as a Ray job using the `ray job submit` command. Ensure you have a running Ray cluster or a local Ray instance before executing the script.
+
+For more details on how to use Ray and its features, refer to the Ray documentation: [https://docs.ray.io/](https://docs.ray.io/)

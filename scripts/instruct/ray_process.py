@@ -17,9 +17,12 @@ import fsspec
 import os
 import ray
 import pandas as pd
+import sys
 
 from marin.core.runtime import RayConfig, TaskConfig, cached_or_construct_output, map_files_in_directory
 from marin.web.convert import convert_page
+import datetime
+from tqdm import tqdm
 
 
 # This function will be executed on the worker nodes. It is important to keep the function idempotent and resumable.
@@ -27,26 +30,13 @@ from marin.web.convert import convert_page
 # IMPORTANT:Ray resources are logical and not physical: https://docs.ray.io/en/latest/ray-core/scheduling/resources.html
 # Ray will not impose any physical limits on the resources used by the function, these numbers are used for scheduling.
 @ray.remote(memory=1 * 1024 * 1024 * 1024, runtime_env={"pip": ["s3fs"]}, num_cpus=1)  # 1 GB
-@cached_or_construct_output(success_suffix="SUCCESS") # We use this decorator to make this function idempotent
-def html_to_md(input_file_path, output_file_path):
-    """
-    Convert HTML files to Markdown format and render them locally.
-
-    Args:
-        input_file_path (str): Path to the input HTML file.
-        md_output_dir (str): Directory to save the converted Markdown files.
-        html_output_dir (str): Directory to save the rendered HTML files.
-    """
-    # The runtime for this function should be low (less than 5-10 min), as the machines are preemptible
-    # Example of input_path = gs://marin-data/hello_world_fw/fineweb/fw-v1.0/CC-MAIN-2024-10/000_00000/0_processed_html.jsonl.gz
-
-    # Read the input file
+@cached_or_construct_output(success_suffix="SUCCESS")
+def html_to_md(input_file_path, output_dir):
     input_type = "parquet" if input_file_path.endswith(".parquet") else "jsonl"
     base_name = os.path.splitext(os.path.basename(input_file_path))[0]
+    print(f"\n input type: {input_type}, input_file_path: {input_file_path}, output_dir: {output_dir}")
     if input_type == 'jsonl':
-        with fsspec.open(input_file_path, "rt", compression="gzip") as f, \
-                fsspec.open(output_file_path, "wt", compression="gzip") as output:
-            
+        with fsspec.open(input_file_path, "rt", compression="gzip") as f:
             for idx, line in enumerate(f):
                 data = json.loads(line)
                 try:
@@ -71,86 +61,91 @@ def html_to_md(input_file_path, output_file_path):
                 except Exception as e:
                     print(f"Error {e} in processing {idx = }, file: {input_file_path}")
                     continue
-                
-                if idx == 0:
-                    print(f"Processing {base_name} with {len(data)} records")
-                    print(f"\n Example of data: {data[0]}")
 
-                if idx > 1000:
-                    break
-                # data is in dolma format hence
-                id = data[0].get("dataset", f" tulu {idx}")
-                html = html_content
+
+                id = data[0].get("dataset", f"{idx}")
                 source = data[0].get("dataset", "")
                 metadata = data[0].get("metadata", {})
-                md = md_content
-                url = data[0].get("url", {})
 
-                output.write(json.dumps({"id": id,
-                                        "text": md,
-                                        "source": source,
-                                        "metadata": metadata,
-                                        "html": html
-                                        }) + "\n")
+                # Save the Markdown JSONL file
+                # TODO: investigate output dir bug
+                md_output_path = os.path.join(output_dir, version, "md", f"{base_name}.jsonl.gz")
+                print(f"MD path Saving to {md_output_path} with input file path {input_file_path}")
+                with fsspec.open(md_output_path, "at", compression="gzip") as md_file:
+                    md_file.write(json.dumps({"id": id, "text": md_content, "source": source, "metadata": metadata}) + "\n")
+
+                # Save the HTML JSONL file
+                html_output_path = os.path.join(output_dir, version, "html", f"{base_name}.jsonl.gz")
+                print(f"HTML path Saving to {html_output_path} with input file path {input_file_path}")
+                with fsspec.open(html_output_path, "at", compression="gzip") as html_file:
+                    html_file.write(json.dumps({"id": id, "text": html_content, "source": source, "metadata": metadata}) + "\n")
+
     elif input_type == 'parquet':
+
         df = pd.read_parquet(input_file_path)
-        if idx == 0:
-            print("data frame is \n")
-            print(df.columns)
-            os.exit()
-        with fsspec.open(output_file_path, "wt", compression="gzip") as output:
-            for idx, row in df.iterrows():
-                data = row.to_dict()
-                try:
-                    md_content = ""
-                    html_content = ""
+        md_json_files = []
+        html_json_files = []
+        for idx, row in tqdm(enumerate(df.iterrows()), total=len(df)):
+            if len(row) != 2:
+                raise ValueError("Row should have 2 elements, index and data")
+            data_idx, data_series = row
+            data_dict = data_series.to_dict()
+            id = data_dict.get("id", f"{data_idx}")
+            source = data_dict.get("dataset", "")
+            try:
+                title = f"Instruction Doc: {id} Source: {source}"
+                md_content = f"# {title} \n\n"
+                html_content = f"<h1> {title} </h1> \n\n"
 
-                    for item in data:
-                        role = item.get("role", "")
-                        text = item.get("content", "")
+                for message in data_dict['messages']:
+                    role = message.get("role", "")
+                    text = message.get("content", "")
 
-                        out = convert_page(text, url="")
-                        title = out["title"]
-                        md = out["content"]
-                        html = out["html"]
+                    out = convert_page(text, url="")
+                    title = out.get("title", )
+                    md = out["content"]
+                    html = out["html"]
 
-                        if role:
-                            md = f"# {role} \n{md}"
-                            html = f"<h1>{role}</h1> \n{html}"
+                    if not role:
+                        raise ValueError("Role cannot be empty.")
 
-                        md_content += md + "\n\n"
-                        html_content += html + "\n\n"
-                except Exception as e:
-                    print(f"Error {e} in processing {idx = }, file: {input_file_path}")
-                    continue
-                
-                if idx == 0:
-                    print("data frame is \n")
-                    print(df.columns)
-                    print(f"Processing {base_name} with {len(df)} records")
-                    print(f"\n Example of data: {data[0]}")
+                    
+                    md_content += f" \n\n ## **{role}** \n {md}  \n\n"
+                    html_content += f" \n\n <h2><strong> {role} </strong></h2> \n {html} \n\n"
+            except Exception as e:
+                print(f"Error {e} in processing {idx = }, file: {input_file_path}")
+                continue
 
-                if idx > 1000:
-                    break
+            
+            metadata = data_dict.get("metadata", {})
+            md_json_files.append({"id": id, "text": md_content, "source": source, "metadata": metadata})
+            html_json_files.append({"id": id, "text": html_content, "source": source, "metadata": metadata})
 
-                id = data[0].get("dataset", f" tulu {idx}")
-                html = html_content
-                source = data[0].get("dataset", "")
-                metadata = data[0].get("metadata", {})
-                md = md_content
-                url = data[0].get("url", {})
+        # Save the Markdown JSONL file
+        version = "v0.1_olmo_mix"
+        save_path = "/".join(output_dir.split("/")[:5])
 
-                output.write(json.dumps({"id": id,
-                                         "text": md,
-                                         "source": source,
-                                         "metadata": metadata,
-                                         "html": html
-                                         }) + "\n")
+        
+        md_output_path = os.path.join(save_path,  version, "md", f"{base_name}.jsonl.gz")
+        print(f"MD path Saving to {md_output_path} with input file path {input_file_path}")
+        print(f" Number of md files {len(md_json_files)}")
+        with fsspec.open(md_output_path, "at", compression="gzip") as md_file:
+            for md_json in md_json_files:
+                md_file.write(json.dumps(md_json) + "\n")
+
+        # Save the HTML JSONL file
+        html_output_path = os.path.join(save_path, version, "html", f"{base_name}.jsonl.gz")
+        print(f"HTML path Saving to {html_output_path} with input file path {input_file_path}")
+        print(f" Number of html files {len(html_json_files)}")
+        with fsspec.open(html_output_path, "at", compression="gzip") as html_file:
+            for html_json in html_json_files:
+                html_file.write(json.dumps(html_json) + "\n")
+
     return True
 
 
 @dataclass
-class HelloWorldConfig:
+class RayConfig:
     input_dir: str   # Path to the fineweb html directory
     output_dir: str  # Path to store fineweb markdown files
     task: TaskConfig = TaskConfig()
@@ -158,7 +153,7 @@ class HelloWorldConfig:
 
 
 @draccus.wrap()
-def main(config: HelloWorldConfig):
+def main(config: RayConfig):
     config.ray.initialize()
     # Example of input_dir = gs://marin-data/hello_world_fw/fineweb/fw-v1.0/CC-MAIN-2024-10/000_00000/
     # We will process all html_jsonl.gz files in this directory.
@@ -195,15 +190,13 @@ if __name__ == '__main__':
     # to keep number of jobs (started using ray job submit command) to minimum while trying to use tasks(ray.remote
     # function) as much as possible. For reference, fw uses only 1 job to process a complete dump which is about
     # 400GB of data and spawns about 75000 tasks (ray.remote functions).
-    parser.add_argument('--input_dir', type=str, help='Path to  html directory', required=True)
-    parser.add_argument('--output_dir', type=str, help='Path to markdown files', required=True)
+    parser.add_argument('--input_dir', type=str, help='Path to  raw parquet/jsonl directory', required=True)
+    parser.add_argument('--output_dir', type=str, help='Path to processed html/markdown files', required=True)
     parser.add_argument('--input_type', type=str, choices=['jsonl', 'parquet'], default='jsonl', help='Type of input file')
-
 
     args = parser.parse_args()
 
     ray.init()
-
     if args.input_type == 'parquet':
         responses = map_files_in_directory(html_to_md.remote, args.input_dir, "**/*.parquet", args.output_dir, args.input_type)
     else:
