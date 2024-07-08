@@ -81,7 +81,7 @@ launching tasks -- see [`tests/test_ray_cluster.py`](./tests/test_ray_cluster.py
 # [Terminal 2] Submit a Ray Job (specified via a Python script)
 #   =>> Assumes `marin` Python environment is active, current working directory == repository root == "."
 #   =>> Will output a Job ID like `raysubmit_pAJM8vKfHPhiyHBa`
-ray job submit --address http://127.0.0.1:8265 --working_dir . --no-wait -- python tests/test_ray_cluster.py
+ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python tests/test_ray_cluster.py
 
 # Get Job Status (given Job ID = raysubmit_pAJM8vKfHPhiyHBa)
 ray job status --address http://127.0.0.1:8265 raysubmit_pAJM8vKfHPhiyHBa
