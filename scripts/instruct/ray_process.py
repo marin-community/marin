@@ -122,7 +122,7 @@ def html_to_md(input_file_path, output_dir):
             html_json_files.append({"id": id, "text": html_content, "source": source, "metadata": metadata})
 
         # Save the Markdown JSONL file
-        version = "v0.1_olmo_mix"
+        version = "v1_olmo_mix"
         save_path = "/".join(output_dir.split("/")[:5])
 
         
