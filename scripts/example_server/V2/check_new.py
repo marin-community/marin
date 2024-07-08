@@ -40,12 +40,11 @@ def check_and_sample(domain, version):
 
     if not reprocess:
         print("No changes detected, skipping reprocessing.")
-        # return "No changes detected, skipping reprocessing."
+        return "No changes detected, skipping reprocessing."
 
     # Perform reservoir sampling for all formats at once
     sample_size = 1000
     sample_lines = {fmt: [''] * sample_size for fmt in valid_formats}
-    sample_ids = []
 
     # Get file paths for the first format
     primary_format = valid_formats[0]
@@ -53,13 +52,12 @@ def check_and_sample(domain, version):
 
     # Randomly shuffle the files
     random.shuffle(primary_files)
-    # import pdb; pdb.set_trace()
 
     idx = 0
     print("Processing files...")
     # Iterate over the primary files and corresponding files in other formats
     for num_file, primary_file in enumerate(primary_files):
-        if num_file > 0:
+        if num_file > sample_size * 20:
             break
 
         files_in_diff_fmts = []
