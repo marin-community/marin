@@ -1,6 +1,6 @@
 # Processing Large Datasets using Ray
 
-This README provides an overview of the Python script `process_parquet_fw.py` that demonstrates how to process large datasets using the Ray distributed computing framework. The script is designed to convert HTML content from JSONL or Parquet files into Markdown and HTML formats, and save the results as JSONL files.
+This README provides an overview of the Python script `ray_process.py` that demonstrates how to process large datasets using the Ray distributed computing framework. The script is designed to convert HTML content from JSONL or Parquet files into Markdown and HTML formats, and save the results as JSONL files.
 
 ## Prerequisites
 
@@ -24,7 +24,8 @@ This README provides an overview of the Python script `process_parquet_fw.py` th
 
    Replace `<ray_address>` with the address of your Ray cluster, `<input_directory>` with the path to your input directory, `<output_directory>` with the path to your desired output directory, and `<jsonl|parquet>` with the type of input files (`jsonl` for JSONL files or `parquet` for Parquet files).
 
-   For example:
+   For example if the server is running the below will generate version 1.0 of the instruction
+   dataset if it does not already exist:
    ```bash
    ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python process_parquet_fw.py --input_dir gs://marin-data/raw/instruct/ --output_dir gs://marin-data/processed/instruct/ --input_type parquet
    ```
@@ -51,6 +52,12 @@ The main processing logic is implemented in the `html_to_md` function. You can m
 ### 3. Can I use this script with other file systems?
 
 Yes, the script uses `fsspec` to handle file I/O, which supports various file systems, including local files and cloud storage like Google Cloud Storage (GCS). Make sure to provide the appropriate file paths based on your chosen file system.
+
+### 4. What if I want to develop without using Ray first?
+Then look at the `process.py` file for a simple example
+
+### 5. What if I want to merge jsonl files locally to test how process.py is doing?
+Then look at `merge_jsonl_local.py`
 
 ## Notes
 
