@@ -1,3 +1,5 @@
+import os
+
 from flask import Flask, render_template_string
 
 
@@ -34,4 +36,8 @@ def create_app():
 
 if __name__ == '__main__':
     app = create_app()
-    app.run(debug=True)
+    # Check if the deployment variable is set (to run on the server)
+    if 'DEPLOYMENT' in os.environ:
+        app.run(port=8088)
+    else:
+        app.run(debug=True)
