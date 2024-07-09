@@ -1,15 +1,13 @@
 import json
-import os
 import traceback
-import comrak_py
 
 import fsspec
-import grip
-from flask import Flask, render_template_string, jsonify
+from flask import render_template_string, jsonify, Blueprint
 from markupsafe import escape
 
+# import comrak_py
 
-app = Flask(__name__)
+bp = Blueprint('v1', __name__)
 
 # Function to render content based on type
 def render_content(content):
@@ -25,7 +23,7 @@ def render_content(content):
         return '<p>Unsupported content type</p>'
 
 # Route to display the content
-@app.route('/', methods=['GET'])
+@bp.route('/', methods=['GET'])
 def display_home():
     fs = fsspec.filesystem("gcs", use_listings_cache=False)
     files = fs.ls("gcs://marin-data/examples/")
@@ -42,7 +40,7 @@ def display_home():
     for i, file in enumerate(files):
         # add links to files if they exist
         if file:
-            html_content += f'''<li><a href="/content/{file}/0">{file}</a><br>'''
+            html_content += f'''<li><a href="/v1/content/{file}/0">{file}</a><br>'''
     html_content += '''
     </body>
     </html>
@@ -50,7 +48,7 @@ def display_home():
     return render_template_string(html_content)
 
 # Route to display the content
-@app.route('/content/<path:dataname>/<int:idx>', methods=['GET'])
+@bp.route('/content/<path:dataname>/<int:idx>', methods=['GET'])
 def display_content(dataname, idx):
     filename = f"gcs://marin-data/examples/{dataname}.jsonl"
     try:
@@ -118,11 +116,11 @@ def display_content(dataname, idx):
             '''.format(i, escape(item['title']), i, item['rendered'])
 
         if int(idx) > 0:
-            html_content += f'<a href="/content/{dataname}/{0}">First</a>'
+            html_content += f'<a href="/v1/content/{dataname}/{0}">First</a>'
             html_content += ' | '
-            html_content += f'<a href="/content/{dataname}/{int(idx)-1}">Previous</a>'
+            html_content += f'<a href="/v1/content/{dataname}/{int(idx) - 1}">Previous</a>'
             html_content += ' | '
-        html_content += f'<a href="/content/{dataname}/{int(idx)+1}">Next</a>'
+        html_content += f'<a href="/v1/content/{dataname}/{int(idx) + 1}">Next</a>'
 
         html_content += '''
         </body>
@@ -134,10 +132,3 @@ def display_content(dataname, idx):
         stack = traceback.format_exc().replace("\n", "<br>")
         error_msg = f'''Server internal Error<br>Error: {e}<br>Stack Trace: {stack}'''
         return error_msg, 500
-
-if __name__ == '__main__':
-    # Check if the deployment variable is set (to run on the server)
-    if 'DEPLOYMENT' in os.environ:
-        app.run(host='0.0.0.0', port=80)
-    else:
-        app.run(debug=True)

@@ -4,10 +4,10 @@ import traceback
 
 import fsspec
 import grip
-from flask import Flask, render_template_string
+from flask import render_template_string, Blueprint
 from markupsafe import escape
 
-app = Flask(__name__)
+bp = Blueprint('v2', __name__)
 githubRenderer = grip.GitHubRenderer()
 
 
@@ -25,7 +25,7 @@ def render_content(content, format_type):
 
 
 # Route to display the home page
-@app.route('/', methods=['GET'])
+@bp.route('/', methods=['GET'])
 def display_home():
     fs = fsspec.filesystem("gcs")
     files = fs.ls("gcs://marin-data/examples/", use_listings_cache=False, detail=True)
@@ -47,7 +47,7 @@ def display_home():
     <h1>Home</h1>"""
     for domain in domains:
         for version in versions[domain]:
-            html_content += f'''<li><a href="/content/{domain}/{version}/0">{domain}, {version}</a><br>'''
+            html_content += f'''<li><a href="/v2/content/{domain}/{version}/0">{domain}, {version}</a><br>'''
     html_content += '''
     </body>
     </html>
@@ -56,7 +56,7 @@ def display_home():
 
 
 # Route to display the content
-@app.route('/content/<path:domain>/<path:version>/<int:idx>', methods=['GET'])
+@bp.route('/content/<path:domain>/<path:version>/<int:idx>', methods=['GET'])
 def display_content(domain, version, idx):
     try:
         content_data = {}
@@ -138,11 +138,11 @@ def display_content(domain, version, idx):
             '''.format(i, escape(item['title']), i, item['rendered'])
 
         if int(idx) > 0:
-            html_content += f'<a href="/content/{domain}/{version}/0">First</a>'
+            html_content += f'<a href="/v2/content/{domain}/{version}/0">First</a>'
             html_content += ' | '
-            html_content += f'<a href="/content/{domain}/{version}/{int(idx) - 1}">Previous</a>'
+            html_content += f'<a href="/v2/content/{domain}/{version}/{int(idx) - 1}">Previous</a>'
             html_content += ' | '
-        html_content += f'<a href="/content/{domain}/{version}/{int(idx) + 1}">Next</a>'
+        html_content += f'<a href="/v2/content/{domain}/{version}/{int(idx) + 1}">Next</a>'
 
         html_content += '''
         </body>
@@ -157,7 +157,7 @@ def display_content(domain, version, idx):
 
 
 # Route to check for new/modified files and perform sampling
-@app.route('/check-new/<path:domain>/<path:version>', methods=['GET'])
+@bp.route('/check-new/<path:domain>/<path:version>', methods=['GET'])
 def check_new(domain, version):
     # make sure version is basepath
     if os.path.basename(version) != version:
@@ -170,10 +170,3 @@ def check_new(domain, version):
         error_msg = f'''Server internal Error<br>Error: {e}<br>Stack Trace: {stack}'''
         return error_msg, 500
 
-
-if __name__ == '__main__':
-    # Check if the deployment variable is set (to run on the server)
-    if 'DEPLOYMENT' in os.environ:
-        app.run(host='0.0.0.0', port=5000)
-    else:
-        app.run(debug=True)

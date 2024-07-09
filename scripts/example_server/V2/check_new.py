@@ -25,7 +25,7 @@ def check_and_sample(domain, version):
 
     # Load previous md5 hashes if available
     md5_hashes_path = os.path.join(examples_path, 'md5_hashes.json')
-    if fs.exists(md5_hashes_path):
+    if fs.exists(md5_hashes_path, use_listings_cache=False):
         with fsspec.open(md5_hashes_path, 'r', use_listings_cache=False) as f:
             previous_md5_hashes = json.load(f)
     else:
