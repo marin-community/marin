@@ -1,7 +1,13 @@
-# Processing Large Datasets using Ray
+# Processing Instruction Data for Marin
 
-This README provides an overview of the Python script `ray_process.py` that demonstrates how to process large datasets using the Ray distributed computing framework. The script is designed to convert HTML content from JSONL or Parquet files into Markdown and HTML formats, and save the results as JSONL files.
+This README provides an overview of the Python script `ray_process.py` that demonstrates how to process instruction datasets using the Ray distributed computing framework. The script is designed to convert HTML content from JSONL or Parquet files into Markdown and HTML formats, and save the results as JSONL files in the Dolma Format.
 
+
+Quick start command:
+ ```bash
+   ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python process_parquet_fw.py --input_dir gs://marin-data/raw/instruct/ --output_dir gs://marin-data/processed/instruct/ --input_type parquet
+ ```
+ 
 ## Prerequisites
 
 - Python 3.x
