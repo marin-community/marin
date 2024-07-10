@@ -31,7 +31,7 @@ def convert_to_dolma(input_file_path, output_file_path):
     # The runtime for this function should be low (less than 5-10 min), as the machines are preemptible
 
     source = "australianlegalcorpus"
-    change_extension = lambda filepath: os.path.splitext(filepath)[0] + 'jsonl.gz'
+    change_extension = lambda filepath: os.path.splitext(filepath)[0] + '.jsonl.gz'
 
     # Read the input file
     with fsspec.open(input_file_path, "rt") as f, \
