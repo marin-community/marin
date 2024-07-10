@@ -43,15 +43,15 @@ def convert_to_dolma(input_file_path, output_file_path):
                 "id": row['version_id'],
                 "text": row['text'],
                 "source": source,
+                "created": row['date'],
+                "added": row['when_scraped'],
                 "metadata": {
                     f"type": row['type'],
                     f"jurisdiction": row['jurisdiction'],
                     f"source": row['source'],
                     f"citation": row['citation'],
                     f"mime": row['mime'],
-                    f"date": row['date'],
                     f"url": row['url'],
-                    f"when_scraped": row['when_scraped'],
                 }
             }) + "\n")
     return True
