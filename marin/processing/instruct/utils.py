@@ -1,7 +1,7 @@
 
 from marin.web.convert import convert_page
 
-def process_instruction_tulu(source, id, message_dict):
+def process_instruction(source, id, message_dict, format="tulu"):
     """
     Process the instruction for Tulu language.
 
@@ -9,6 +9,8 @@ def process_instruction_tulu(source, id, message_dict):
         source (str): The source of the instruction.
         id (int): The ID of the instruction.
         message_dict (dict): A dictionary containing the messages.
+        format (str): The format of the instruction. Defaults to "tulu" and that's
+        the only option for now until we get more datasets.
 
     Returns:
         tuple: A tuple containing the Markdown content and the plain text content.

@@ -43,7 +43,7 @@ def process_raw_chunk(input_file_path, output_dir):
                 data = json.loads(line)
                 id = data[0].get("dataset", f"{idx}")
                 try:
-                    text_content, md_content = process_instruction(source, id, data)
+                    md_content, text_content = process_instruction(source, id, data)
                 except Exception as e:
                     print(f"Error {e} in processing {idx = }, file: {input_file_path}")
                     continue
@@ -53,6 +53,7 @@ def process_raw_chunk(input_file_path, output_dir):
                 text_json_files.append({"id": id, "text": text_content, "source": source, "metadata": metadata})
 
     elif input_type == 'parquet':
+        print(f"\n\n  Processing parquet file {input_file_path} \n\n")
         df = pd.read_parquet(input_file_path)
         for idx, row in tqdm(enumerate(df.iterrows()), total=len(df)):
             if len(row) != 2:
@@ -62,7 +63,7 @@ def process_raw_chunk(input_file_path, output_dir):
             id = data_dict.get("id", f"{data_idx}")
             source = data_dict.get("dataset", "")
             try:
-                html_content, md_content = process_instruction(source, id, data_dict['messages'])
+                md_content, text_content = process_instruction(source, id, data_dict)
             except Exception as e:
                 print(f"Error {e} in processing {idx = }, file: {input_file_path}")
                 continue
@@ -70,7 +71,7 @@ def process_raw_chunk(input_file_path, output_dir):
             
             metadata = data_dict.get("metadata", {})
             md_json_files.append({"id": id, "text": md_content, "source": source, "metadata": metadata})
-            text_json_files.append({"id": id, "text": html_content, "source": source, "metadata": metadata})
+            text_json_files.append({"id": id, "text": text_content, "source": source, "metadata": metadata})
 
     # Save the Markdown JSONL file
     version = "v1_olmo_mix"
