@@ -156,7 +156,7 @@ class MyMarkdownConverter(MarkdownConverter):
         hashes = '#' * n
         if style == markdownify.ATX_CLOSED:
             return '%s %s %s\n\n' % (hashes, text, hashes)
-        return '\n%s %s\n' % (hashes, text)
+        return '%s %s\n\n' % (hashes, text)
     
     def convert_a(self, el, text, convert_as_inline):
         prefix, suffix, text = markdownify.chomp(text)
@@ -251,28 +251,8 @@ class MyMarkdownConverter(MarkdownConverter):
             return '\n<pre><code>%s</code></pre>\n' % text
         else:
             return '\n```%s\n%s\n```\n' % (code_language, text)
-
-    def convert_tr(self, el, text, convert_as_inline):
-        if convert_as_inline:
-            return text + "\n"
-        # this is also mostly copied from the parent class
-        # but the logic for guessing a th isn't quite right
-        cells = el.find_all(['td', 'th'])
-        is_headrow = all([cell.name == 'th' for cell in cells])
-
-        # we can be a headrow if we are the first row in the table or if all our cells are th
-        # find table parent
-        if not is_headrow:
-            parent = el.parent
-            while parent and parent.name != 'table':
-                parent = parent.parent
-
-            if parent:
-                first_row = parent.find('tr')
-                if first_row is el:
-                    is_headrow = True
-
-        # rowspan check
+    
+    def _compute_num_cols(self, el):
         length_of_cells = 0
         prev_td = el.findAll('td', recursive=False)
         prev_th = el.findAll('th', recursive=False)
@@ -300,6 +280,9 @@ class MyMarkdownConverter(MarkdownConverter):
                             length += _try_convert_int(th['colspan'], 1) - 1
                     length_of_cells = max(length_of_cells, length)
                 prev = prev.previous_sibling
+        return length_of_cells
+    
+    def _adjust_for_rowspan(self, el, text, length_of_cells):
         rowspan = [0 for _ in range(length_of_cells)]
         if el.previous_sibling:
             prev = el.previous_sibling
@@ -332,6 +315,31 @@ class MyMarkdownConverter(MarkdownConverter):
             if row:
                 text.insert(i, ' ')
         text = '|'.join(text)
+        return text
+
+    def convert_tr(self, el, text, convert_as_inline):
+        if convert_as_inline:
+            return text + "\n"
+        # this is also mostly copied from the parent class
+        # but the logic for guessing a th isn't quite right
+        cells = el.find_all(['td', 'th'])
+        is_headrow = all([cell.name == 'th' for cell in cells])
+
+        # we can be a headrow if we are the first row in the table or if all our cells are th
+        # find table parent
+        if not is_headrow:
+            parent = el.parent
+            while parent and parent.name != 'table':
+                parent = parent.parent
+
+            if parent:
+                first_row = parent.find('tr')
+                if first_row is el:
+                    is_headrow = True
+
+        # rowspan check
+        length_of_cells = self._compute_num_cols(el)
+        text = self._adjust_for_rowspan(el, text, length_of_cells)
 
         overline = ''
         underline = ''

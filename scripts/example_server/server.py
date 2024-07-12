@@ -2,12 +2,11 @@ from flask import Flask, render_template_string, jsonify
 import json
 from markupsafe import escape
 import fsspec
-import grip
 import os
 import traceback
+import comrak_py
 
 app = Flask(__name__)
-githubRenderer = grip.GitHubRenderer()
 
 # Function to render content based on type
 def render_content(content):
@@ -18,7 +17,7 @@ def render_content(content):
         iframe_content = f'<iframe srcdoc="{escape(content["text"])}" style="width:100%; height:500px; border:none;"></iframe>'
         return iframe_content
     elif content['type'] == 'md':
-        return githubRenderer.render(content['text'])
+        return comrak_py.gfm_to_html(content['text'])
     else:
         return '<p>Unsupported content type</p>'
 

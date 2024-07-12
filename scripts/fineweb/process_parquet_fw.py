@@ -11,7 +11,7 @@ import ray
 import requests
 from warcio import ArchiveIterator
 
-from marin.utils import gcs_file_exists, get_gcs_path
+from marin.utils import fs_spec_exists, get_gcs_path
 from marin.web.convert import convert_page
 from scripts.fineweb.utils import get_warc_parquet_success_path
 
@@ -27,9 +27,9 @@ def process_one_warc_file(input_file_path):
     # Example of input_file_path = gs://marin-data/processed/fineweb/fw-v1.0/CC-MAIN-2024-10/000_00000/0.parquet
     output_file, success_file = get_warc_parquet_success_path(input_file_path)
 
-    if gcs_file_exists(success_file):
+    if fs_spec_exists(success_file):
         print(f"Output file already processed. Skipping {input_file_path}")
-        if gcs_file_exists(input_file_path):
+        if fs_spec_exists(input_file_path):
             fs = fsspec.filesystem("gcs")
             fs.rm(input_file_path)
         return True
@@ -148,7 +148,7 @@ def process_fw_parquet(input_file_path):
     print(f"Processing {input_file_path}")
     output_dir_path = input_file_path.replace("raw", "processed").replace(".parquet", "")
     success_file = output_dir_path + "/_SUCCESS"
-    if gcs_file_exists(success_file):
+    if fs_spec_exists(success_file):
         print(f"Output file already processed. Skipping {input_file_path}")
         return True
 
@@ -167,7 +167,7 @@ def process_fw_parquet(input_file_path):
 
         _, success_file_group = get_warc_parquet_success_path(filename)
         # Save the group to a parquet file
-        if gcs_file_exists(success_file_group):
+        if fs_spec_exists(success_file_group):
             print(f"Output file already processed. Skipping {filename}")
             continue
         group_df.to_parquet(filename)
