@@ -52,12 +52,12 @@ def convert_to_dolma(input_file_path, output_file_path):
                             output.write(json.dumps({
                                 "id": row['application_number'],
                                 "text": text,
+                                "created": row['date_published'],
                                 "source": source,
                                 "metadata": {
                                     "publication_number": row['publication_number'],
                                     "decision": row['decision'],
                                     "date_produced": row['date_produced'],
-                                    "date_published": row['date_published'],
                                     "main_cpc_label": row['main_cpc_label'],
                                     "cpc_labels": row['cpc_labels'],
                                     "main_ipcr_label": row['main_ipcr_label'],
