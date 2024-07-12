@@ -6,9 +6,9 @@ import fsspec
 from tqdm import tqdm
 from marin.web.convert import convert_page
 
-def html_to_md(input_file_path, md_output_dir, html_output_dir):
+def process_raw_dataset(input_file_path, md_output_dir, html_output_dir):
     """
-    Convert HTML files to Markdown format and render them locally.
+    Convert files to Markdown format and render them locally.
 
     Args:
         input_file_path (str): Path to the input HTML file.
@@ -35,12 +35,16 @@ def html_to_md(input_file_path, md_output_dir, html_output_dir):
 
                     out = convert_page(text, url="")
                     title = out["title"]
+
                     md = out["content"]
                     html = out["html"]
 
+                    if title:
+                        md += f"# {title}\n\n{md}"
+                        html += f"<h1>{title}</h1>\n{html}"
                     if role:
-                        md = f"# {role}\n\n{md}"
-                        html = f"<h1>{role}</h1>\n{html}"
+                        md +=f"# {role}\n\n{md}"
+                        html += f"<h1>{role}</h1>\n{html}"
 
                     md_content += md + "\n\n"
                     html_content += html + "\n\n"
