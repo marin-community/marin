@@ -1,7 +1,7 @@
 # This is a special case of copy_hf_dataset_to_gcs.py, where we have to manually get the URLs of the files to copy.
 #
 # Usage:
-# python -m scripts.legal.copy_multilegalpile --destination_path gs://somewhere/ --urls_dir gs://somewhere_publicly_readable
+# python -m scripts.legal.copy_hupd --destination_path gs://somewhere/ --urls_dir gs://somewhere_publicly_readable
 import argparse
 
 from ..copy_hf_dataset_to_gcs import get_gcloud_project, save_urls, create_transfer_job
@@ -9,7 +9,7 @@ from ..copy_hf_dataset_to_gcs import get_gcloud_project, save_urls, create_trans
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Transfer a Hugging Face dataset to Google Cloud Storage.")
     parser.add_argument('--dataset_name', required=False, help="The name of the Hugging Face dataset.",
-                        default="joelniklaus/MultiLegalPileWikipediaFiltered")
+                        default="HUPD/hupd")
     parser.add_argument('--destination_path', required=True, help="The name of the destination in a GCS bucket.")
     parser.add_argument('--urls_dir', required=True,
                         help="The GCS path to save the URLs file. Should be an HTTP accessible location.")
@@ -19,12 +19,8 @@ if __name__ == "__main__":
     project_id = get_gcloud_project()
 
     # Step 1: Get URLs from the Hugging Face dataset
-    base_url = "https://huggingface.co/datasets/joelniklaus/MultiLegalPileWikipediaFiltered/resolve/main/data"
-    urls = []
-    urls.extend(f"{base_url}/en_caselaw_train.{i}.jsonl.xz" for i in range(66))
-    urls.extend(f"{base_url}/en_contracts_train.{i}.jsonl.xz" for i in range(16))
-    urls.extend(f"{base_url}/en_legislation_train.{i}.jsonl.xz" for i in range(5))
-    urls.extend(f"{base_url}/en_other_train.{i}.jsonl.xz" for i in range(15))
+    base_url = "https://huggingface.co/datasets/HUPD/hupd/resolve/main/data"
+    urls = [f"{base_url}/{i}.tar.gz" for i in range(2004, 2019)]
 
     url_tsv_name = f'{args.dataset_name.replace("/", "-")}.tsv'
 
