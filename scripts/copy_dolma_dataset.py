@@ -32,28 +32,30 @@ def process_one_dolma_file(input_file_path, output_dir_path, domain, examples_pe
     the Dolma data should already be in the correct format.
     """
     gfs = fsspec.filesystem("gcs")
-
-    # read the input file
-    with gfs.open(input_file_path, mode="rb") as f_in:
-        with gzip.open(f_in, mode="rt", encoding="utf-8") as gz_in:
-            # sanitize_entry checks that entry matches Dolma format
-            data = [sanitize_entry(json.loads(line), domain) for line in gz_in]
-
-    # split data into chunks
-    chunks = [data[i : i + examples_per_file] for i in range(0, len(data), examples_per_file)]
-
-    # write each chunk to a new jsonl.gz file
     input_file_basename = os.path.basename(input_file_path)
-    for i, chunk in enumerate(chunks):
-        output_file_path = os.path.join(
-            output_dir_path, f"{input_file_basename}_chunk_{i:04d}.jsonl.gz"
-        )
-        with fsspec.open(output_file_path, mode="wb") as f_out:
-            with gzip.open(f_out, mode="wt", encoding="utf-8") as gz_out:
-                for item in chunk:
-                    gz_out.write(json.dumps(item) + "\n")
 
-    print(f"Processed {input_file_path} into {len(chunks)} files.")
+    out_file_handler = None
+
+    # stream read input file
+    with gfs.open(input_file_path, "rt", compression="gzip") as in_file:
+        for idx, line in enumerate(in_file):
+            if idx % examples_per_file == 0:
+                if out_file_handler:
+                    out_file_handler.close()
+                out_file_path = os.path.join(
+                    output_dir_path,
+                    f"{input_file_basename.split('.')[0]}-chunk{idx // examples_per_file:04d}.jsonl.gz",
+                )
+                out_file_handler = gfs.open(out_file_path, "wt", compression="gzip")
+
+            entry = json.loads(line)
+            entry = sanitize_entry(entry, domain)
+            out_file_handler.write(json.dumps(entry) + "\n")
+
+    if out_file_handler:
+        out_file_handler.close()
+
+    print(f"Finished processing {input_file_path}")
     return True  # success
 
 
@@ -106,7 +108,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--examples_per_file",
         type=int,
-        default=10000,
+        default=100000,
         help="Number of examples to include in each output file. Larger input files are split up into chunks of this size.",
     )
     args = parser.parse_args()
