@@ -7,7 +7,7 @@ Example Usage:
 ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- \
 python scripts/legal/process_edgar.py \
 --input_dir gs://marin-data/raw/huggingface.co/datasets/eloukas/edgar-corpus/resolve/f7d3ba73d65ff10194a95b84c75eb484d60b0ede/full/partial-train \
---output_dir gs://marin-data/processed/law/txt/edgar-v1.0/documents
+--output_dir gs://marin-data/processed/law/edgar-v1.0/txt/documents
 """
 
 import argparse
