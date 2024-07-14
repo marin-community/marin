@@ -1,11 +1,9 @@
 # Utils specific to reddit processing
 import requests
 from urllib.parse import urlparse, parse_qs
-import hashlib
 
 def generate_user(author,i):
     return f"user_{i}"
-    # return hashlib.sha256(author.encode("utf-8")).hexdigest()
 
 def fetch_reddit_post(url):
     response = requests.get(f'{url}.json')
