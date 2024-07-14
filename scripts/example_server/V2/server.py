@@ -2,13 +2,17 @@ import json
 import os
 import traceback
 
-import fsspec
-import grip
+import comrak_py
+import google.auth
 from flask import render_template_string, Blueprint
+from google.cloud import storage
 from markupsafe import escape
 
 bp = Blueprint('v2', __name__)
-githubRenderer = grip.GitHubRenderer()
+
+# Initialize GCP Storage client
+credentials, project = google.auth.default()
+storage_client = storage.Client(credentials=credentials, project=project)
 
 
 # Function to render content based on type
@@ -19,22 +23,35 @@ def render_content(content, format_type):
         iframe_content = f'<iframe srcdoc="{escape(content)}" style="width:100%; height:500px; border:none;"></iframe>'
         return iframe_content
     elif format_type == 'md':
-        return githubRenderer.render(content)
+        return comrak_py.gfm_to_html(content)
     else:
-        return '<p>Unsupported content type, Rending as plain text <br> {}</p>'.format(escape(content))
+        return '<p>Unsupported content type, Rendering as plain text <br> {}</p>'.format(escape(content))
+
+
+def list_gcs_dir(bucket_name, prefix):
+    if prefix.endswith('/'):
+        prefix = prefix[:-1]
+    prefix = prefix + '/'
+    blobs = storage_client.list_blobs(bucket_name, prefix=prefix, delimiter='/')
+
+    temp_list = []
+    for blob in blobs:  # We just need to do this to populate prefixes
+        temp_list.append(blob.name)
+
+    subdir = [blob.split("/")[-2] for blob in blobs.prefixes]
+    return subdir
 
 
 # Route to display the home page
 @bp.route('/', methods=['GET'])
 def display_home():
-    fs = fsspec.filesystem("gcs")
-    files = fs.ls("gcs://marin-data/examples/", use_listings_cache=False, detail=True)
-    # import pdb; pdb.set_trace()
-    domains = [os.path.basename(f["name"]) for f in files if f["type"] == "directory"]
+    bucket_name = "marin-data"
+    prefix = "examples/"
+    domains = list_gcs_dir(bucket_name, prefix)
+
     versions = {}
     for domain in domains:
-        versions[domain] = [os.path.basename(f) for f in
-                            fs.ls(f"gcs://marin-data/examples/{domain}", use_listings_cache=False)]
+        versions[domain] = list_gcs_dir(bucket_name, f"{prefix}{domain}/")
 
     html_content = """
     <!DOCTYPE html>
@@ -60,26 +77,31 @@ def display_home():
 def display_content(domain, version, idx):
     try:
         content_data = {}
-        fs = fsspec.filesystem("gcs")
-        base_path = f"gcs://marin-data/examples/{domain}/{version}/"
-        formats = fs.ls(base_path, use_listings_cache=False)
-        formats = [fmt for fmt in formats if not os.path.basename(fmt).lower().endswith('.json')]
-        formats = [os.path.basename(fmt) for fmt in formats if
-                   os.path.basename(fmt).lower().startswith(('xml', 'html', 'md', 'txt', "text"))]
-        # formats = [fmt.split('/')[-2] for fmt in formats]
+        bucket_name = "marin-data"
+        base_path = f"examples/{domain}/{version}/"
+        formats = list_gcs_dir(bucket_name, base_path)
+        formats = [fmt for fmt in formats if fmt.lower().startswith(('xml', 'html', 'md', 'txt', 'text'))]
+
+        bucket = storage_client.bucket(bucket_name)
 
         for fmt in formats:
-            filename = f"gcs://marin-data/examples/{domain}/{version}/{fmt}/samples.jsonl"
-            i = 0
-            with fsspec.open(filename, 'rt', use_listings_cache=False) as file:
-                for line in file:
-                    if i == idx:
-                        record = json.loads(line.strip())
-                        content_data[fmt] = record['text']
-                        break
-                    i += 1
-                else:
-                    content_data[fmt] = None
+            filename = f"{base_path}{fmt}/samples.jsonl"
+            blob = bucket.get_blob(filename)
+            blob_md5 = blob.md5_hash
+
+            # Implement this (Todo: Abhinav Garg)
+            # content = get_cached_content(bucket_name, filename, blob_md5)
+
+            if not blob:
+                continue
+
+            content = blob.download_as_text().splitlines()
+
+            if idx < len(content):
+                record = json.loads(content[idx].strip())
+                content_data[fmt] = record['text']
+            else:
+                content_data[fmt] = None
 
         rendered_content = []
         for fmt in formats:
@@ -163,10 +185,9 @@ def check_new(domain, version):
     if os.path.basename(version) != version:
         return "Invalid version or domain, they cannot be a path", 400
     try:
-        from check_new import check_and_sample
+        from scripts.example_server.V2.check_new import check_and_sample
         return check_and_sample(domain, version)
     except Exception as e:
         stack = traceback.format_exc().replace("\n", "<br>")
         error_msg = f'''Server internal Error<br>Error: {e}<br>Stack Trace: {stack}'''
         return error_msg, 500
-

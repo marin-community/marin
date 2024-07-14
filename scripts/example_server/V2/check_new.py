@@ -20,7 +20,7 @@ def check_and_sample(domain, version):
     # Collect md5Hash for all files in each valid format
     all_md5_hashes = {}
     for format_type in valid_formats:
-        files = fs.glob(os.path.join(format_type, "*.jsonl.gz"), detail=True, use_listings_cache=False)
+        files = fs.glob(os.path.join(format_type, "**/*.jsonl.gz"), detail=True, use_listings_cache=False)
         all_md5_hashes[format_type] = {file: info['md5Hash'] for file, info in files.items()}
 
     # Load previous md5 hashes if available
@@ -48,7 +48,7 @@ def check_and_sample(domain, version):
 
     # Get file paths for the first format
     primary_format = valid_formats[0]
-    primary_files = fs.glob(os.path.join(primary_format, "*.jsonl.gz"), use_listings_cache=False)
+    primary_files = fs.glob(os.path.join(primary_format, "**/*.jsonl.gz"), use_listings_cache=False)
 
     # Randomly shuffle the files
     random.shuffle(primary_files)
