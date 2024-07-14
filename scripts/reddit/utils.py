@@ -1,6 +1,5 @@
 # Utils specific to reddit processing
 import requests
-from urllib.parse import urlparse, parse_qs
 
 def generate_user(author,i):
     return f"user_{i}"
