@@ -1,13 +1,13 @@
 import json
 import traceback
 
+import comrak_py
 import fsspec
 from flask import render_template_string, jsonify, Blueprint
 from markupsafe import escape
 
-# import comrak_py
-
 bp = Blueprint('v1', __name__)
+
 
 # Function to render content based on type
 def render_content(content):
@@ -21,6 +21,7 @@ def render_content(content):
         return comrak_py.gfm_to_html(content['text'])
     else:
         return '<p>Unsupported content type</p>'
+
 
 # Route to display the content
 @bp.route('/', methods=['GET'])
@@ -47,6 +48,7 @@ def display_home():
     '''
     return render_template_string(html_content)
 
+
 # Route to display the content
 @bp.route('/content/<path:dataname>/<int:idx>', methods=['GET'])
 def display_content(dataname, idx):
@@ -64,11 +66,12 @@ def display_content(dataname, idx):
             else:
                 return jsonify({'error': 'Record not found'}), 404
 
-
         print(f"Displaying content for {dataname} with index: {idx}, ID: {source_id}")
         for entry in record['content']:
             if entry['type'] == 'md':
-                record['content'].append({'title': f"raw {entry['title']}", 'type': 'html', 'text': '<iframe srcdoc="{}" style="width:100%; height:500px; border:none;"></iframe>'.format(escape(entry["text"]).replace('\n', '<br>'))})
+                record['content'].append({'title': f"raw {entry['title']}", 'type': 'html',
+                                          'text': '<iframe srcdoc="{}" style="width:100%; height:500px; border:none;"></iframe>'.format(
+                                              escape(entry["text"]).replace('\n', '<br>'))})
         rendered_content = [
             {'title': entry['title'], 'rendered': render_content(entry)}
             for entry in record['content']
