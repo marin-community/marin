@@ -7,7 +7,7 @@ import fsspec
 import ray
 
 from marin.core.runtime import RayConfig, TaskConfig, cached_or_construct_output, map_files_in_directory
-from marin.reddit.utils import convert_thread
+from scripts.reddit.utils import convert_thread
 
 @ray.remote(memory=1 * 1024 * 1024 * 1024, runtime_env={"pip": ["s3fs"]}, num_cpus=1)  # 1 GB
 @cached_or_construct_output(success_suffix="SUCCESS") # We use this decorator to make this function idempotent
