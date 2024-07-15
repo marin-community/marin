@@ -67,6 +67,7 @@ setup_commands:
     "draccus @ git+https://github.com/dlwh/draccus"
     "fsspec~=2024.3"
     "gcsfs~=2024.3"
+    "s3fs~=2024.3"
     "google-api-python-client==2.129.0"
     "google-cloud-storage-transfer==1.11.3"
     "html2text==2024.2.26"
