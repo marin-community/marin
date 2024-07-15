@@ -7,6 +7,7 @@ import argparse
 import gradio as gr
 import fasttext
 
+
 # Define the prediction function
 def predict(text):
     text = text.replace("\n", " ")
@@ -22,12 +23,13 @@ def predict(text):
 def build_demo():
     # Create the Gradio interface
     demo = gr.Interface(
-        fn=predict,                   # Function to be called
-        inputs=gr.Textbox(),   # User input
-        outputs=gr.Textbox(), # Model prediction output
+        fn=predict,  # Function to be called
+        inputs=gr.Textbox(),  # User input
+        outputs=gr.Textbox(),  # Model prediction output
     )
 
     return demo
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

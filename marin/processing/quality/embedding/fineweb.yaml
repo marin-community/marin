@@ -1,0 +1,7 @@
+input_dir: "gs://marin-data/processed/fineweb_v2/fw-v1.0/md/CC-MAIN-2020-10/000_00000/"
+output_dir: "gs://marin-data/processed/fineweb_v2/attributes_md/fineweb-edu-quality/CC-MAIN-2020-10/000_00000/"
+model_name: "HuggingFaceFW/fineweb-edu-classifier"
+runtime:
+  requirements_filepath: "marin/processing/quality/embedding/requirements.txt"
+  memory_limit_gb: 16
+use_ray_data: false
