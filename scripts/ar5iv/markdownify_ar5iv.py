@@ -1,11 +1,11 @@
 """
-load_ar5iv.py
+markdownify_ar5iv.py
 
-Tries to read from zip file and write the contents to a jsonl file.
+Tries to read from jsonl.gz file, convert to md, and write the contents to a jsonl.gz file.
 
 Run with:
   - [Local] python tests/test_ray_cluster.py
-  - [Ray] ray job submit --no-wait --address=http://127.0.0.1:8265 --working-dir . -- python scripts/ar5iv/load_ar5iv.py
+  - [Ray] ray job submit --no-wait --address=http://127.0.0.1:8265 --working-dir . -- python scripts/ar5iv/markdownify_ar5iv.py
         => Assumes that `ray dashboard infra/marin-cluster.yaml` running in a separate terminal (port forwarding)!
 """
 
@@ -31,7 +31,7 @@ import markdownify
 
 n=256
 
-@ray.remote(memory=1024 * 1024 * 1024)  # 512 MB
+@ray.remote(memory=1024 * 1024 * 1024)  # 1 GB
 def markdownify_ar5iv_html(file):
     """
     Takes in the input file and processes it to get the html content.
@@ -65,7 +65,6 @@ def markdownify_ar5iv_html(file):
                     "text": content,           # MANDATORY: textual content of the document
                     "source": "ar5iv",         # MANDATORY: source of the data, such as peS2o, common-crawl, etc.
                     "added": datetime.datetime.now().isoformat(),          # OPTIONAL: timestamp ai2 acquired this data
-                    "created": datetime.datetime(2024, 4, 1).isoformat()         # OPTIONAL: timestamp when orig document was created (best-guess if not available)
                 }) + "\n"
         out_file = file.replace("html_clean", "md").replace("ar5iv_clean", "ar5iv_md")
         with fsspec.open(get_gcs_path(out_file), 'wb', compression='gzip') as outputf:

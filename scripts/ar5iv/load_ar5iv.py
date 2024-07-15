@@ -1,7 +1,7 @@
 """
 load_ar5iv.py
 
-Tries to read from zip file and write the contents to a jsonl file.
+Tries to read from zip file and write the contents to a jsonl.gz file.
 
 Run with:
   - [Local] python tests/test_ray_cluster.py
@@ -29,7 +29,7 @@ import re
 from bs4 import BeautifulSoup
 import markdownify
 
-@ray.remote(memory=1024 * 1024 * 1024)  # 512 MB
+@ray.remote(memory=1024 * 1024 * 1024)  # 1 GB
 def load_ar5iv_html(input_file_paths, zip_path, counts):
     """
     Takes in the input file and processes it to get the html content.
@@ -45,12 +45,14 @@ def load_ar5iv_html(input_file_paths, zip_path, counts):
                 with zipfile.ZipFile(f) as z:
                     with z.open(input_file_path) as f:
                         content = f.read().decode('utf-8', 'ignore')
+                        paper = os.path.basename(file)[:-5]
+                        letters = re.search(r"^([A-Za-z])*",paper)
+                        numbers = re.search(r"[0-9\.]*$", paper)
                         outs += json.dumps({
-                            "id": f"ar5iv/{input_file_path}",             # MANDATORY: source-specific identifier
+                            "id": f"{letters.group(0)}/{numbers.group(0)}",             # MANDATORY: source-specific identifier
                             "text": content,           # MANDATORY: textual content of the document
                             "source": "ar5iv",         # MANDATORY: source of the data, such as peS2o, common-crawl, etc.
                             "added": datetime.datetime.now().isoformat(),          # OPTIONAL: timestamp ai2 acquired this data
-                            "created": datetime.datetime(2024, 4, 1).isoformat()         # OPTIONAL: timestamp when orig document was created (best-guess if not available)
                         }) + "\n"
         out_file = "marin-data/processed_test/ar5iv/"+"/".join(input_file_path.split("/")[:2]) + f"_{counts}_html.jsonl.gz"
         print(out_file)
