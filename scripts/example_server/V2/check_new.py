@@ -8,6 +8,7 @@ from marin.utils import rebase_file_path
 
 
 def check_and_sample(domain, version):
+    print(f"Checking for new files in {domain}/{version}")
     fs = fsspec.filesystem("gcs")
     base_path = f"gcs://marin-data/processed/{domain}/{version}/"
     examples_path = f"gcs://marin-data/examples/{domain}/{version}/"
@@ -42,22 +43,26 @@ def check_and_sample(domain, version):
         print("No changes detected, skipping reprocessing.")
         return "No changes detected, skipping reprocessing."
 
-    # Perform reservoir sampling for all formats at once
-    sample_size = 1000
-    sample_lines = {fmt: [''] * sample_size for fmt in valid_formats}
-
     # Get file paths for the first format
     primary_format = valid_formats[0]
     primary_files = fs.glob(os.path.join(primary_format, "**/*.jsonl.gz"), use_listings_cache=False)
-
     # Randomly shuffle the files
     random.shuffle(primary_files)
+
+    # Perform reservoir sampling for all formats at once
+    sample_size = 1000
+    total_samples = 1000 * 1000
+    sample_lines = {fmt: [''] * sample_size for fmt in valid_formats}
+    total_lines_per_file = total_samples // len(primary_files)
+    if total_lines_per_file < sample_size:
+        total_lines_per_file = sample_size
+    total_files_to_samples = total_samples // total_lines_per_file
 
     idx = 0
     print("Processing files...")
     # Iterate over the primary files and corresponding files in other formats
     for num_file, primary_file in enumerate(primary_files):
-        if num_file > sample_size * 20:
+        if num_file > total_files_to_samples:
             break
 
         files_in_diff_fmts = []
@@ -80,7 +85,7 @@ def check_and_sample(domain, version):
                         sample_lines[valid_formats[k]][j] = line
 
             idx += 1
-            if i > sample_size * 20:
+            if i > total_lines_per_file:
                 break
             if idx % 10000 == 0:
                 print(f"Processed {idx} lines")
