@@ -1,0 +1,14 @@
+input_dir: "TODO"
+output_dir: "TODO"
+model_name: "allenai/dolma-1_7-fasttext-quality-filter"
+storage:
+  gcs_bucket_name: "marin-data"
+  gcs_blob_name: "scratch/chrisc/dolma_fasttext_model/model.bin"
+  hf_repo_id: "allenai/dolma-1_7-fasttext-quality-filter"
+  hf_filename: "model.bin"
+  local_filepath: "~/dolma_fasttext_model/model.bin"
+runtime:
+  requirements_filepath: "marin/processing/quality/fasttext/requirements.txt"
+  memory_limit_gb: 16
+  tpu_resources_per_task: 0
+use_ray_data: false

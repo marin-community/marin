@@ -13,7 +13,7 @@ import ray
 
 HIGH_QUALITY_JSON_PATHS = [
     "gs://marin-data/raw/dolma/dolma-v1.7/wiki-0000.json.gz",
-    "gs://marin-data/raw/dolma/dolma-v1.7/wiki-0001.json.gz"
+    "gs://marin-data/raw/dolma/dolma-v1.7/wiki-0001.json.gz",
 ]
 
 LOW_QUALITY_JSON_PATHS = [
@@ -22,10 +22,11 @@ LOW_QUALITY_JSON_PATHS = [
 
 OUTPUT_FILE_PATH = "gs://marin-data/scratch/chrisc/dataset.txt.gz"
 
+
 @ray.remote
 def process_file(json_path, label, max_num_samples=None):
     labeled_lines = []
-    with fsspec.open(json_path, 'rt', compression="gzip") as f_in:
+    with fsspec.open(json_path, "rt", compression="gzip") as f_in:
         for i, line in enumerate(f_in):
             if max_num_samples and i >= max_num_samples:
                 break
@@ -41,11 +42,13 @@ def process_file(json_path, label, max_num_samples=None):
 
     return labeled_lines
 
+
 @ray.remote
 def write_lines(output_file, lines):
-    with fsspec.open(output_file, 'wt', compression="gzip") as f:
+    with fsspec.open(output_file, "wt", compression="gzip") as f:
         for line in lines:
             f.write(line + "\n")
+
 
 def process_files(input_files, output_file, max_num_samples=None):
     # Remove the output file if it exists, to start fresh
@@ -54,13 +57,14 @@ def process_files(input_files, output_file, max_num_samples=None):
 
     labeled_lines = ray.get([process_file.remote(json_path, label, max_num_samples) for json_path, label in input_files])
     flattened_labeled_lines = [line for sublist in labeled_lines for line in sublist]
-    
+
     print(len(flattened_labeled_lines))
     # Write lines in parallel
     ray.get(write_lines.remote(output_file, flattened_labeled_lines))
     # chunk_size = 1024  # Adjust chunk size as needed
     # chunks = [flattened_labeled_lines[i:i + chunk_size] for i in range(0, len(flattened_labeled_lines), chunk_size)]
     # ray.get([write_lines.remote(output_file, chunk) for chunk in chunks])
+
 
 def main(max_num_samples):
     ray.init()
@@ -69,7 +73,7 @@ def main(max_num_samples):
     input_files = []
     for filename in HIGH_QUALITY_JSON_PATHS:
         input_files.append((filename, "hq"))
-    
+
     for filename in LOW_QUALITY_JSON_PATHS:
         input_files.append((filename, "lq"))
 
@@ -77,12 +81,13 @@ def main(max_num_samples):
 
     print(f"[*] Training file created at: {OUTPUT_FILE_PATH}")
 
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--max-num-samples", type=int, default=None, help="The maximum number of samples to process")
 
     args = parser.parse_args()
 
-    fs = fsspec.filesystem('gcs')
+    fs = fsspec.filesystem("gcs")
 
     main(args.max_num_samples)
