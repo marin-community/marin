@@ -158,7 +158,8 @@ def process_fw_parquet(input_file_path, output_dir_path):
         print(f"Error reading the parquet file: {e}")
         raise e
 
-    success_refs = {"ray_waitable": [], "file_path": []}
+    ray_waitable = []
+    file_path = []
     # file_path is s3 url
     grouped = df.groupby("file_path")
 
@@ -174,12 +175,12 @@ def process_fw_parquet(input_file_path, output_dir_path):
         group_df.to_parquet(filename)
         print(f"Processing the group: {filename}, into {output_file_name}")
 
-        success_refs["ray_waitable"].append(process_one_warc_file.remote(filename, output_file_name))
-        success_refs["file_path"].append(filename)
+        ray_waitable.append(process_one_warc_file.remote(filename, output_file_name))
+        file_path.append(filename)
 
     was_successful = True
 
-    for waitable, filename in zip(success_refs["ray_waitable"], success_refs["file_path"]):
+    for waitable, filename in zip(ray_waitable, file_path):
         try:
             ray.get(waitable)
         except Exception as e:
