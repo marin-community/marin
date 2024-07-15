@@ -29,6 +29,8 @@ import re
 from bs4 import BeautifulSoup
 import markdownify
 
+n = 256  # Number of files to process in parallel
+
 @ray.remote(memory=1024 * 1024 * 1024)  # 1 GB
 def load_ar5iv_html(input_file_paths, zip_path, counts):
     """
@@ -76,7 +78,6 @@ if __name__ == '__main__':
         with zipfile.ZipFile(f) as z:
             files = z.namelist()
             files = list(filter(lambda x:x.endswith(("html")), files))
-    n = 256  # Number of files to process in parallel
     files.sort()
     all_files = []
     counts = []
