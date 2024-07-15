@@ -114,7 +114,7 @@ def display_content(dataname, idx):
             html_content += '''
             <div class="dropdown">
                 <h2 class="dropdown-header" onclick="toggleContent('content-{}')">{}</h2>
-                <div id="content-{}" class="dropdown-content">{}</div>
+                <div id="content-{}" class="dropdown-content"> {{% raw %}} {} {{% endraw %}}</div>
             </div>
             '''.format(i, escape(item['title']), i, item['rendered'])
 
