@@ -1,20 +1,8 @@
 """
 Usage:
 
-ar5iv
 ray job submit --working-dir . --no-wait -- \
-python -m marin.processing.fasttext.model.inference --input_dir gs://marin-data/processed/ar5iv/md/2024-06-16/no-problem/  --output_dir gs://marin-data/processed/ar5iv/attributes_md/fasttext-quality/2024-06-16/no-problem/
-
-openwebmath
-ray job submit --working-dir . --no-wait -- \
-python -m marin.processing.fasttext.model.inference --input_dir gs://marin-data/processed/openwebmath/2023-09-06/md/ --output_dir gs://marin-data/processed/openwebmath/attributes_md/fasttext-quality/2023-09-06/
-
-wikipedia
-ray job submit --working-dir . --no-wait -- \
-python -m marin.processing.fasttext.model.inference --input_dir gs://marin-data/processed/wikipedia/md/2024-06-24/ --output_dir gs://marin-data/processed/wikipedia/attributes_md/fineweb-edu-quality/2024-06-24/
-
-ray job submit --working-dir . --no-wait -- \
-python -m marin.processing.fasttext.model.inference --input_dir gs://marin-data/processed/wikipedia/md/2024-06-24/ --output_dir gs://marin-data/scratchc/chrisc/wikipedia/attributes_md/fasttext-quality/2024-06-24/
+python -m marin.processing.quality.inference --config marin/processing/quality/embedding/fineweb.yaml
 """
 
 import argparse
