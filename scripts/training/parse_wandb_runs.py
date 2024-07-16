@@ -72,7 +72,7 @@ def parse_run(run: wandb.apis.public.Run) -> dict:
     data = {
         "run_name": run.name,
         "runtime": runtime,
-        "total_time": total_time,
+        "total_job_time": total_time,
         "training_time": training_time,
         "create_time": create_time,
         "heartbeat_time": heartbeat_time,
@@ -95,8 +95,11 @@ def get_runs(num_runs=10, name_prefix="time-to-train"):
     )
     output_data = []
     for run in runs:
-        data = parse_run(run)
-        output_data.append(data)
+        try:
+            data = parse_run(run)
+            output_data.append(data)
+        except Exception as e:
+            print(f"Unable to parse run {run.name} due to error: {e}")
     df = pd.DataFrame(output_data)
     output_csv = f"wandb_runs_{name_prefix}.csv"
     df.to_csv(output_csv, index=False)
