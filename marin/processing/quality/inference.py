@@ -19,10 +19,7 @@ from ray.runtime_env import RuntimeEnv
 from marin.core.runtime import cached_or_construct_output, map_files_in_directory
 from marin.processing.quality.config.inference_config import InferenceConfig, StorageConfig
 from marin.processing.quality.classifier import (
-    BatchFasttextQualityClassifier,
-    DummyQualityClassifier,
-    FasttextQualityClassifier,
-    BERTQualityClassifier,
+    AutoClassifier,
 )
 from marin.processing.quality.utils import (
     download_huggingface_file_with_backoff,
@@ -84,18 +81,19 @@ def print_tpu_driver_info():
 
 @ray.remote
 @cached_or_construct_output(success_suffix="SUCCESS")
-def process_file(input_filename, output_filename, model_ref):
-    try:
-        import jax
+def process_file(input_filename, output_filename, model_ref, model_path):
+    if "fineweb" in model_path:
+        try:
+            import jax
 
-        print(f"TPU DEVICE COUNT: {jax.device_count('tpu')}")
-    except Exception as e:
-        print(e)
-        print_tpu_driver_info()
+            print(f"TPU DEVICE COUNT: {jax.device_count('tpu')}")
+        except Exception as e:
+            print(e)
+            print_tpu_driver_info()
 
     print(f"[*] Read in dataset {input_filename}")
 
-    quality_classifier = BERTQualityClassifier(model_ref)
+    quality_classifier = AutoClassifier.from_model_path(model_ref, model_path)
 
     json_list = []
     with fsspec.open(input_filename, "rt", compression="gzip") as f_in:
@@ -116,25 +114,25 @@ def process_file(input_filename, output_filename, model_ref):
 
 def place_model_in_memory(storage_config: StorageConfig):
     byte_buffer = io.BytesIO()
-    directory, basename = os.path.dirname(model_path), os.path.basename(model_path)
+    directory, basename = os.path.dirname(storage_config.local_filepath), os.path.basename(storage_config.local_filepath)
     os.makedirs(directory, exist_ok=True)
 
     try:
         try:
             print("Download using huggingface start.")
-            download_huggingface_file_with_backoff(storage_config.hf_repo_id, storage_config.hf_filename, directory)
+            download_huggingface_file_with_backoff(storage_config.hf_repo_id, storage_config.hf_filename, directory, storage_config.local_filepath)
             print("Downloaded from huggingface.")
         except Exception as e:
             print(e, flush=True)
 
             try:
                 print("Download using GCS start.")
-                download_gcs_file_with_backoff(storage_config.gcs_bucket_name, storage_config.gcs_blob_name, model_path)
+                download_gcs_file_with_backoff(storage_config.gcs_bucket_name, storage_config.gcs_blob_name, storage_config.local_filepath)
                 print("Downloaded from GCS.")
             except Exception as e:
                 print(e, flush=True)
 
-        with open(model_path, "rb") as f:
+        with open(storage_config.local_filepath, "rb") as f:
             byte_buffer.write(f.read())
         byte_buffer.seek(0)
     except Exception as e:
@@ -150,7 +148,7 @@ def main(inference_config: InferenceConfig):
     if inference_config.storage is not None:
         model_ref = place_model_in_memory(inference_config.storage)
     else:
-        model_ref = inference_config.model_name
+        model_ref = None
 
     runtime_env = RuntimeEnv(
         memory=inference_config.runtime.memory_limit_gb * 1024 * 1024 * 1024,
@@ -169,7 +167,8 @@ def main(inference_config: InferenceConfig):
             "**/*.jsonl.gz",
             inference_config.output_dir,
             None,
-            model_ref,
+            model_ref, # TODO(chris) need better mechanism for this.
+            inference_config.storage.local_filepath if inference_config.storage is not None else model_ref,
         )
 
     try:
