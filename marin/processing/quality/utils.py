@@ -32,8 +32,9 @@ def download_file(filename, output_dir):
 
 
 # @retry(stop=stop_after_attempt(5), wait=wait_exponential(multiplier=1, min=4, max=30))
-def download_huggingface_file_with_backoff(repo_id, filename, local_dir):
+def download_huggingface_file_with_backoff(repo_id, filename, local_dir, output_path):
     hf_hub_download(repo_id=repo_id, filename=filename, local_dir=local_dir)
+    os.rename(os.path.join(local_dir, filename), output_path)
 
 
 # @retry(stop=stop_after_attempt(5), wait=wait_exponential(multiplier=1, min=4, max=30))

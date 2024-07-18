@@ -80,14 +80,15 @@ class FasttextQualityClassifier(BaseQualityClassifier):
 
 
 class BatchFasttextQualityClassifier(BaseQualityClassifier):
-    def __init__(self, model_ref, local_filepath):
-        self.local_filepath = local_filepath
-        if "~" in self.local_filepath:
-            self.local_filepath = os.path.expanduser(self.local_filepath)
-
+    def __init__(self, model_ref, model_path):
+        if "~" in model_path:
+            model_path = os.path.expanduser(model_path)
+        self.local_filepath = model_path
         self.model = self.load_model(model_ref)
 
     def load_model(self, model_ref):
+        import tempfile
+
         from fasttext.FastText import _FastText
 
         try:
@@ -130,10 +131,17 @@ class BatchFasttextQualityClassifier(BaseQualityClassifier):
                 fasttext_quality_dict.update({label: score})
 
             # pyarrow schema does not like it if you do not have a key. We make it non-optional to not have the key
-            if "__label__hq" not in fasttext_quality_dict:
-                fasttext_quality_dict.update({"__label__hq": 1.0 - score})
-            elif "__label__lq" not in fasttext_quality_dict:
-                fasttext_quality_dict.update({"__label__lq": 1.0 - score})
+            if "dolma" in self.local_filepath:
+                if "__label__hq" not in fasttext_quality_dict:
+                    fasttext_quality_dict.update({"__label__hq": 1.0 - fasttext_quality_dict.get("__label__lq")})
+                elif "__label__lq" not in fasttext_quality_dict:
+                    fasttext_quality_dict.update({"__label__lq": 1.0 - fasttext_quality_dict.get("__label__hq")})
+            elif "dclm" in self.local_filepath:
+                if "__label__cc" not in fasttext_quality_dict:
+                    fasttext_quality_dict.update({"__label__cc": 1.0 - fasttext_quality_dict.get("__label__hq")})
+                elif "__label__hq" not in fasttext_quality_dict:
+                    fasttext_quality_dict.update({"__label__hq": 1.0 - fasttext_quality_dict.get("__label__cc")})
+                pass
 
             attributes_arr.append({"fasttext-quality": fasttext_quality_dict})
 
@@ -145,7 +153,7 @@ class BatchFasttextQualityClassifier(BaseQualityClassifier):
 
 
 class BERTQualityClassifier(BaseQualityClassifier):
-    def __init__(self, model_name):
+    def __init__(self, model_name, model_path):
         from transformers import AutoTokenizer, FlaxAutoModelForSequenceClassification
 
         self.model = FlaxAutoModelForSequenceClassification.from_pretrained(model_name)
@@ -165,3 +173,18 @@ class BERTQualityClassifier(BaseQualityClassifier):
         batch.update({"attributes": [{"fineweb-edu-quality": score} for score in scores]})
 
         return batch
+
+class AutoClassifier(BaseQualityClassifier):
+
+    @classmethod
+    def from_model_path(cls, model_name, model_path):
+        _MODEL_NAME_TO_CLS_DICT = {
+            'fasttext': BatchFasttextQualityClassifier,
+            'fineweb': BERTQualityClassifier,
+        }
+
+        for key in _MODEL_NAME_TO_CLS_DICT.keys():
+            if key in model_path:
+                return _MODEL_NAME_TO_CLS_DICT[key](model_name, model_path)
+
+        raise ValueError(f"Model name {model_name} not supported")
