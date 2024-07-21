@@ -5,6 +5,7 @@ def generate_user(author,i):
     return f"user_{i}"
 
 def fetch_reddit_post(url):
+    print("hello")
     response = requests.get(f'{url}.json')
     response.raise_for_status()  # Check if the request was successful
     return response.json()
@@ -50,6 +51,8 @@ def format_comments(comments, escape_new_line, space_comment, author_dict):
 
 def convert_thread(url, escape_new_line=True, space_comment=True):
     data = fetch_reddit_post(url)
+    print("this is the data")
+    print(data)
     post = data[0]['data']['children'][0]['data']
     comments = data[1]['data']['children']
 

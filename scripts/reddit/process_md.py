@@ -45,14 +45,14 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description="Example script to convert fineweb html to markdown.")
     
-    parser.add_argument('--input_dir', type=str, default='gs://marin-data/raw/dolma/dolma-v1.7/', help='Path to the dolma 1.7 directory', required=True)
-    parser.add_argument('--output_dir', type=str, default='gs://marin-data/scratch/rohithk/', help='Path to store reddit markdown files', required=True)
+    parser.add_argument('--input_dir', type=str, default='gs://marin-data/raw/dolma/dolma-v1.7/', help='Path to the dolma 1.7 directory', required=False)
+    parser.add_argument('--output_dir', type=str, default='gs://marin-data/scratch/rohithk/', help='Path to store reddit markdown files', required=False)
 
     args = parser.parse_args()
 
     ray.init()
 
-    responses = map_files_in_directory(json_to_md.remote, args.input_dir, "**/reddit*.json.gz", args.output_dir)
+    responses = map_files_in_directory(json_to_md.remote, args.input_dir, "**/reddit-0000.json.gz", args.output_dir)
 
     try:
         ray.get(responses)
