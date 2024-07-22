@@ -22,7 +22,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Example script to convert fineweb html to markdown.")
     
     parser.add_argument('--input_dir', type=str, default='gs://marin-data/raw/dolma/dolma-v1.7/', help='Path to the dolma 1.7 directory', required=False)
-    parser.add_argument('--output_dir', type=str, default='gs://marin-data/scratch/rohithk/', help='Path to store reddit markdown files', required=False)
+    parser.add_argument('--output_dir', type=str, default='gs://marin-data/scratch/rohithk/processed/reddit/v0/text/', help='Path to store reddit markdown files', required=False)
 
     args = parser.parse_args()
 
