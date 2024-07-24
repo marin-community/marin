@@ -1,1 +1,2 @@
 fasttext
+datasets==2.20.0
