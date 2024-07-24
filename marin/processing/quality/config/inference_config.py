@@ -1,6 +1,8 @@
 import yaml
 import dataclasses
 
+from marin.core.runtime import TaskConfig
+
 
 class StorageConfig:
     def __init__(self, gcs_bucket_name, gcs_blob_name, hf_repo_id, hf_filename, local_filepath):
@@ -19,13 +21,14 @@ class RuntimeConfig:
 
 
 class InferenceConfig:
-    def __init__(self, input_dir, output_dir, model_name, storage, runtime, use_ray_data):
+    def __init__(self, input_dir, output_dir, model_name, storage, runtime, use_ray_data, task):
         self.input_dir = input_dir
         self.output_dir = output_dir
         self.model_name = model_name
         self.storage = storage
         self.runtime = runtime
         self.use_ray_data = use_ray_data
+        self.task = task
 
     @staticmethod
     def from_yaml(path):
@@ -42,6 +45,11 @@ class InferenceConfig:
         else:
             runtime = None
 
+        if "task" in data:
+            task = TaskConfig(**data["task"])
+        else:
+            task = None
+
         return InferenceConfig(
             input_dir=data["input_dir"],
             output_dir=data["output_dir"],
@@ -49,4 +57,5 @@ class InferenceConfig:
             storage=storage,
             runtime=runtime,
             use_ray_data=data["use_ray_data"],
+            task=task,
         )

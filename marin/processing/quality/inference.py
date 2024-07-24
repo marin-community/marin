@@ -10,6 +10,7 @@ import datetime
 import json
 import io
 import os
+from typing import List
 
 import datasets
 import fsspec
@@ -20,6 +21,7 @@ from marin.core.runtime import cached_or_construct_output, map_files_in_director
 from marin.processing.quality.config.inference_config import InferenceConfig, StorageConfig
 from marin.processing.quality.classifier import (
     AutoClassifier,
+    BatchFasttextQualityClassifier,
 )
 from marin.processing.quality.utils import (
     download_huggingface_file_with_backoff,
@@ -27,35 +29,72 @@ from marin.processing.quality.utils import (
     is_json_serializable,
     make_serializable,
 )
+from marin.utils import fsspec_glob, fsspec_mkdirs, rebase_file_path
 
+from ray.data.datasource import FilenameProvider, DefaultFilenameProvider
+
+class JsonFilenameProvider(FilenameProvider):
+
+    def __init__(self, files: List[str], input_dir: str):
+        self.files = files
+        self.input_dir = input_dir
+
+    def get_filename_for_block(self, block, task_index, block_index):
+        # print(f"TASK_INDEX: {task_index}")
+        # print(f"BLOCK INDEX: {block_index}")
+        # print(f"BLOCK: {}")
+        input_filename = self.files[task_index]
+        output_filename = os.path.basename(input_filename)
+        # print(f"OUTPUT FILENAME: {output_filename}")
+        return output_filename
 
 @ray.remote
-def process_file_using_actor_pool(input_filename, output_filename, model_ref):
-    print(f"[*] Reading in dataset {input_filename}")
+def process_file_using_actor_pool(input_dir, output_dir, pattern, model_ref, model_local_filepath):
+    ctx = ray.data.DataContext.get_current()
+    ctx.execution_options.preserve_order = True
+    # print(f"RAY DATA CONTEXT: {ray_data_context}")
+
+    print(f"[*] Reading in dataset {input_dir}")
+
+    files = fsspec_glob(os.path.join(input_dir, pattern))
+
+    print(f"FILES: {files}")
 
     ds = ray.data.read_json(
-        input_filename,
+        files,
         arrow_open_stream_args={"compression": "gzip"},
-    )
+        override_num_blocks=len(files),
+    ).map_batches(
+        AutoClassifier,
+        # concurrency=(1,16),
+        concurrency=(1, len(files)),
+        fn_constructor_args=(model_ref, model_local_filepath),
+        batch_size=None,
+    ).write_json(output_dir, filename_provider=JsonFilenameProvider(files, input_dir), arrow_open_stream_args={"compression": "gzip"})
 
+    # ds.write_json(output_dir, filename_provider=JsonFilenameProvider(files, input_dir), arrow_open_stream_args={"compression": "gzip"})
+
+    
     # print(f"[*] Finished reading in dataset {input_filename}")
 
     # FIXME(chris): Could we parallelize using map_batches?
     # There are sometimes some issues with initialization when concurrency increases
-    ds = ds.map_batches(
-        BatchFasttextQualityClassifier,
-        # concurrency=(1,16),
-        concurrency=(1, 16),
-        fn_constructor_args=(model_ref,),
-        batch_size=1024,
-    )
+
+    # ds = ds.map_batches(
+    #     AutoClassifier,
+    #     # concurrency=(1,16),
+    #     concurrency=(1, len(files)),
+    #     fn_constructor_args=(model_ref, model_local_filepath),
+    #     batch_size=None,
+    # )
+
 
     # only one file
-    ds = ds.repartition(1)
+    # ds = ds.repartition(1)
 
     # TODO(CHRIS): override filename, batch writes everything??
-    ds.write_json(output_filename, arrow_open_stream_args={"compression": "gzip"})
-
+    # ds.write_json(output_filename, arrow_open_stream_args={"compression": "gzip"})
+    # ds.write_json(output_dir, filename_provider=JsonFilenameProvider(files, input_dir), arrow_open_stream_args={"compression": "gzip"})
 
 def print_tpu_driver_info():
     import subprocess
@@ -78,10 +117,10 @@ def print_tpu_driver_info():
     print(f"Standard Output:\n{stdout}")
     print(f"Standard Error:\n{stderr}")
 
-
 @ray.remote
 @cached_or_construct_output(success_suffix="SUCCESS")
 def process_file(input_filename, output_filename, model_ref, model_path):
+    # TODO(chris): remove this code when we are sure that TPU is working
     if "fineweb" in model_path:
         try:
             import jax
@@ -103,14 +142,13 @@ def process_file(input_filename, output_filename, model_ref, model_path):
     dataset = datasets.Dataset.from_list(json_list)
 
     dataset = dataset.select_columns(["text", "id", "source"])
-    predicted_dataset = dataset.map(quality_classifier, batched=True, batch_size=512)
+    predicted_dataset = dataset.map(lambda batch: quality_classifier(batch), batched=True, batch_size=1024)
 
     with fsspec.open(output_filename, "wt", compression="gzip") as f_out:
         for row in predicted_dataset:
             res = {"id": row["id"], "source": row["source"], "attributes": row["attributes"]}
             json_row = json.dumps(res)
             f_out.write(json_row + "\n")
-
 
 def place_model_in_memory(storage_config: StorageConfig):
     byte_buffer = io.BytesIO()
@@ -120,14 +158,18 @@ def place_model_in_memory(storage_config: StorageConfig):
     try:
         try:
             print("Download using huggingface start.")
-            download_huggingface_file_with_backoff(storage_config.hf_repo_id, storage_config.hf_filename, directory, storage_config.local_filepath)
+            download_huggingface_file_with_backoff(
+                storage_config.hf_repo_id, storage_config.hf_filename, directory, storage_config.local_filepath
+            )
             print("Downloaded from huggingface.")
         except Exception as e:
             print(e, flush=True)
 
             try:
                 print("Download using GCS start.")
-                download_gcs_file_with_backoff(storage_config.gcs_bucket_name, storage_config.gcs_blob_name, storage_config.local_filepath)
+                download_gcs_file_with_backoff(
+                    storage_config.gcs_bucket_name, storage_config.gcs_blob_name, storage_config.local_filepath
+                )
                 print("Downloaded from GCS.")
             except Exception as e:
                 print(e, flush=True)
@@ -150,25 +192,36 @@ def main(inference_config: InferenceConfig):
     else:
         model_ref = None
 
-    runtime_env = RuntimeEnv(
-        memory=inference_config.runtime.memory_limit_gb * 1024 * 1024 * 1024,
-        pip=inference_config.runtime.requirements_filepath,
-        resources={"TPU": inference_config.runtime.tpu_resources_per_task},
-    )
+    # TODO(Chris): Cleanup this and put into the runtime config
+    if inference_config.runtime.tpu_resources_per_task > 0:
+        resources = {"TPU": inference_config.runtime.tpu_resources_per_task}
+    else:
+        resources = {}
 
+    model_local_filepath = inference_config.storage.local_filepath if inference_config.storage is not None else model_ref
     if inference_config.use_ray_data:
-        responses = process_file_using_actor_pool.options(runtime_env=runtime_env).remote(
-            inference_config.input_dir, inference_config.output_dir, model_ref
-        )
+        responses = process_file_using_actor_pool.options(
+            memory=inference_config.runtime.memory_limit_gb * 1024 * 1024 * 1024,
+            runtime_env=RuntimeEnv(
+                pip=inference_config.runtime.requirements_filepath,
+            ),
+            resources=resources,
+        ).remote(inference_config.input_dir, inference_config.output_dir, "**/*.jsonl.gz", model_ref, model_local_filepath)
     else:
         responses = map_files_in_directory(
-            process_file.options(runtime_env=runtime_env).remote,
+            process_file.options(
+                memory=inference_config.runtime.memory_limit_gb * 1024 * 1024 * 1024,
+                runtime_env=RuntimeEnv(
+                    pip=inference_config.runtime.requirements_filepath,
+                ),
+                resources=resources,
+            ).remote,
             inference_config.input_dir,
             "**/*.jsonl.gz",
             inference_config.output_dir,
-            None,
-            model_ref, # TODO(chris) need better mechanism for this.
-            inference_config.storage.local_filepath if inference_config.storage is not None else model_ref,
+            inference_config.task,
+            model_ref,  # TODO(chris) need better mechanism for this.
+            model_local_filepath,
         )
 
     try:

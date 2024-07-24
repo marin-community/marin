@@ -11,4 +11,6 @@ runtime:
   requirements_filepath: "marin/processing/quality/fasttext/requirements.txt"
   memory_limit_gb: 16
   tpu_resources_per_task: 0
+task:
+  max_in_flight: 100
 use_ray_data: false

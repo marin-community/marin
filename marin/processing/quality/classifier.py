@@ -85,6 +85,12 @@ class BatchFasttextQualityClassifier(BaseQualityClassifier):
             model_path = os.path.expanduser(model_path)
         self.local_filepath = model_path
         self.model = self.load_model(model_ref)
+        self.model_type = ""
+
+        if "dolma" in model_path:
+            self.model_type = "dolma"
+        elif "dclm" in model_path:
+            self.model_type = "dclm"
 
     def load_model(self, model_ref):
         import tempfile
@@ -131,19 +137,24 @@ class BatchFasttextQualityClassifier(BaseQualityClassifier):
                 fasttext_quality_dict.update({label: score})
 
             # pyarrow schema does not like it if you do not have a key. We make it non-optional to not have the key
-            if "dolma" in self.local_filepath:
+            if self.model_type == "dolma":
                 if "__label__hq" not in fasttext_quality_dict:
                     fasttext_quality_dict.update({"__label__hq": 1.0 - fasttext_quality_dict.get("__label__lq")})
                 elif "__label__lq" not in fasttext_quality_dict:
                     fasttext_quality_dict.update({"__label__lq": 1.0 - fasttext_quality_dict.get("__label__hq")})
-            elif "dclm" in self.local_filepath:
+            elif self.model_type == "dclm":
                 if "__label__cc" not in fasttext_quality_dict:
                     fasttext_quality_dict.update({"__label__cc": 1.0 - fasttext_quality_dict.get("__label__hq")})
                 elif "__label__hq" not in fasttext_quality_dict:
                     fasttext_quality_dict.update({"__label__hq": 1.0 - fasttext_quality_dict.get("__label__cc")})
                 pass
 
-            attributes_arr.append({"fasttext-quality": fasttext_quality_dict})
+            fasttext_key_name = "fasttext-quality"
+
+            if self.model_type != "":
+                fasttext_key_name = f"{self.model_type}-fasttext-quality"
+
+            attributes_arr.append({fasttext_key_name: fasttext_quality_dict})
 
         res = {"id": batch["id"], "source": batch["source"], "attributes": attributes_arr}
 
@@ -174,17 +185,25 @@ class BERTQualityClassifier(BaseQualityClassifier):
 
         return batch
 
+
 class AutoClassifier(BaseQualityClassifier):
+    _MODEL_NAME_TO_CLS_DICT = {
+        "fasttext": BatchFasttextQualityClassifier,
+        "fineweb": BERTQualityClassifier,
+    }
+
+    def __init__(self, model_name, model_path):
+        self.model_name = model_name
+        self.model_path = model_path
+        self.cls = self.from_model_path(model_name, model_path)
+
+    def __call__(self, batch):
+        return self.cls.__call__(batch)
 
     @classmethod
     def from_model_path(cls, model_name, model_path):
-        _MODEL_NAME_TO_CLS_DICT = {
-            'fasttext': BatchFasttextQualityClassifier,
-            'fineweb': BERTQualityClassifier,
-        }
-
-        for key in _MODEL_NAME_TO_CLS_DICT.keys():
+        for key in cls._MODEL_NAME_TO_CLS_DICT.keys():
             if key in model_path:
-                return _MODEL_NAME_TO_CLS_DICT[key](model_name, model_path)
+                return cls._MODEL_NAME_TO_CLS_DICT[key](model_name, model_path)
 
         raise ValueError(f"Model name {model_name} not supported")
