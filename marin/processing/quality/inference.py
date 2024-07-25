@@ -17,7 +17,7 @@ import fsspec
 import ray
 from ray.runtime_env import RuntimeEnv
 
-from marin.core.runtime import cached_or_construct_output, map_files_in_directory
+from marin.core.runtime import cached_or_construct_output, map_files_in_directory, map_directories_in_directory
 from marin.processing.quality.config.inference_config import InferenceConfig, StorageConfig
 from marin.processing.quality.classifier import (
     AutoClassifier,
@@ -29,9 +29,9 @@ from marin.processing.quality.utils import (
     is_json_serializable,
     make_serializable,
 )
-from marin.utils import fsspec_glob, fsspec_mkdirs, rebase_file_path
+from marin.utils import fsspec_glob, fsspec_mkdirs, rebase_file_path, fsspec_isdir, fsspec_get_curr_subdirectories
 
-from ray.data.datasource import FilenameProvider, DefaultFilenameProvider
+from ray.data.datasource import FilenameProvider
 
 class JsonFilenameProvider(FilenameProvider):
 
@@ -52,13 +52,11 @@ class JsonFilenameProvider(FilenameProvider):
 def process_file_using_actor_pool(input_dir, output_dir, pattern, model_ref, model_local_filepath):
     ctx = ray.data.DataContext.get_current()
     ctx.execution_options.preserve_order = True
-    # print(f"RAY DATA CONTEXT: {ray_data_context}")
 
     print(f"[*] Reading in dataset {input_dir}")
+    print(f"[*] Output directory is {output_dir}")
 
     files = fsspec_glob(os.path.join(input_dir, pattern))
-
-    print(f"FILES: {files}")
 
     ds = ray.data.read_json(
         files,
@@ -72,29 +70,6 @@ def process_file_using_actor_pool(input_dir, output_dir, pattern, model_ref, mod
         batch_size=None,
     ).write_json(output_dir, filename_provider=JsonFilenameProvider(files, input_dir), arrow_open_stream_args={"compression": "gzip"})
 
-    # ds.write_json(output_dir, filename_provider=JsonFilenameProvider(files, input_dir), arrow_open_stream_args={"compression": "gzip"})
-
-    
-    # print(f"[*] Finished reading in dataset {input_filename}")
-
-    # FIXME(chris): Could we parallelize using map_batches?
-    # There are sometimes some issues with initialization when concurrency increases
-
-    # ds = ds.map_batches(
-    #     AutoClassifier,
-    #     # concurrency=(1,16),
-    #     concurrency=(1, len(files)),
-    #     fn_constructor_args=(model_ref, model_local_filepath),
-    #     batch_size=None,
-    # )
-
-
-    # only one file
-    # ds = ds.repartition(1)
-
-    # TODO(CHRIS): override filename, batch writes everything??
-    # ds.write_json(output_filename, arrow_open_stream_args={"compression": "gzip"})
-    # ds.write_json(output_dir, filename_provider=JsonFilenameProvider(files, input_dir), arrow_open_stream_args={"compression": "gzip"})
 
 def print_tpu_driver_info():
     import subprocess
@@ -200,13 +175,51 @@ def main(inference_config: InferenceConfig):
 
     model_local_filepath = inference_config.storage.local_filepath if inference_config.storage is not None else model_ref
     if inference_config.use_ray_data:
-        responses = process_file_using_actor_pool.options(
-            memory=inference_config.runtime.memory_limit_gb * 1024 * 1024 * 1024,
-            runtime_env=RuntimeEnv(
-                pip=inference_config.runtime.requirements_filepath,
-            ),
-            resources=resources,
-        ).remote(inference_config.input_dir, inference_config.output_dir, "**/*.jsonl.gz", model_ref, model_local_filepath)
+        # responses = map_directories_in_directory(
+            # process_file_using_actor_pool.options(
+            #     memory=inference_config.runtime.memory_limit_gb * 1024 * 1024 * 1024,
+            #     runtime_env=RuntimeEnv(
+            #         pip=inference_config.runtime.requirements_filepath,
+            #     ),
+            #     resources=resources,
+            # ).remote,
+        #     inference_config.input_dir,
+        #     inference_config.output_dir,
+        #     inference_config.task,
+        #     "*.jsonl.gz",
+        #     model_ref,
+        #     model_local_filepath,
+        # )
+
+        # if len(responses) == 0:
+        #     print(f"No directories found in {inference_config.input_dir}")
+        #     response = process_file_using_actor_pool.options(
+        #         memory=inference_config.runtime.memory_limit_gb * 1024 * 1024 * 1024,
+        #         runtime_env=RuntimeEnv(
+        #             pip=inference_config.runtime.requirements_filepath,
+        #         ),
+        #         resources=resources,
+        #     ).remote(inference_config.input_dir, inference_config.output_dir, "**/*.jsonl.gz", model_ref, model_local_filepath)
+        #     responses = [response]
+        subdirectories = fsspec_get_curr_subdirectories(inference_config.input_dir)
+        responses = []
+        for input_subdir in subdirectories:
+            if len(responses) > inference_config.task_config.max_in_flight:
+                ready_refs, responses = ray.wait(responses, num_returns=1)
+                ray.get(ready_refs)
+
+            output_subdir = rebase_file_path(inference_config.input_dir, input_subdir, inference_config.output_dir)
+            fsspec_mkdirs(output_subdir)
+
+            result_ref = process_file_using_actor_pool.options(
+                memory=inference_config.runtime.memory_limit_gb * 1024 * 1024 * 1024,
+                runtime_env=RuntimeEnv(
+                    pip=inference_config.runtime.requirements_filepath,
+                ),
+                resources=resources,
+            ).remote(input_subdir, output_subdir, "**/*.jsonl.gz", model_ref, model_local_filepath)
+            
+            responses.append(result_ref)
     else:
         responses = map_files_in_directory(
             process_file.options(

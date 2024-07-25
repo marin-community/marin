@@ -54,6 +54,59 @@ def fsspec_mkdirs(dir_path, exist_ok=True):
     fs = fsspec.core.url_to_fs(dir_path)[0]
     fs.makedirs(dir_path, exist_ok=exist_ok)
 
+def fsspec_get_curr_subdirectories(dir_path):
+    """
+    Get all subdirectories under this current directory only. Does not return the parent directory.
+
+    Args:
+        dir_path (str): The path of the directory
+
+    Returns:
+        list: A list of subdirectories.
+    """
+    fs, _ = fsspec.core.url_to_fs(dir_path)
+    protocol = fsspec.core.split_protocol(dir_path)[0]
+    
+    # List only immediate subdirectories
+    subdirs = fs.ls(dir_path, detail=True)
+    
+    def join_protocol(path):
+        return f"{protocol}://{path}" if protocol else path
+    
+    subdirectories = [join_protocol(subdir['name']) for subdir in subdirs if subdir['type'] == 'directory']
+    return subdirectories
+
+def fsspec_dir_only_contains_files(dir_path):
+    """
+    Check if a directory only contains files in a fsspec filesystem.
+    """
+    fs, _ = fsspec.core.url_to_fs(dir_path)
+    ls_res = fs.ls(dir_path, detail=True)
+    if len(ls_res) == 0:
+        return False
+    return all(item['type'] == 'file' for item in ls_res)
+
+def fsspec_get_atomic_directories(dir_path):
+    """
+    Get all directories under this directory that only contains files within them
+    """
+    subdirectories = []
+
+    if fsspec_isdir(dir_path):
+        for subdirectory in fsspec_get_curr_subdirectories(dir_path):
+            if fsspec_dir_only_contains_files(subdirectory):
+                subdirectories.append(subdirectory)
+            else:
+                subdirectories.extend(fsspec_get_atomic_directories(subdirectory))
+    
+    return subdirectories
+
+def fsspec_isdir(dir_path):
+    """
+    Check if a path is a directory in fsspec filesystem.
+    """
+    fs, _ = fsspec.core.url_to_fs(dir_path)
+    return fs.isdir(dir_path)
 
 def rebase_file_path(base_in_dir, file_path, base_out_dir, new_extension=None, old_extension=None):
     """
