@@ -1,5 +1,5 @@
-input_dir: "gs://marin-data/processed/fineweb/fw-v1.0/md/CC-MAIN-2021-49/000_00000/"
-output_dir: "gs://marin-data/scratch/chrisc/chris-attributes/md/CC-MAIN-2021-49/000_00000/"
+input_dir: "gs://marin-data/processed/fineweb/fw-v1.0/md/CC-MAIN-2022-40/"
+output_dir: "gs://marin-data/scratch/chrisc/test-fineweb/fw-v1.0/md/CC-MAIN-2022-40/"
 model_name: "mlfoundations/fasttext-oh-eli5"
 storage:
   gcs_bucket_name: "N/A"
@@ -9,8 +9,8 @@ storage:
   local_filepath: "~/dclm_fasttext_model/model.bin"
 runtime:
   requirements_filepath: "marin/processing/quality/fasttext/requirements.txt"
-  memory_limit_gb: 16
+  memory_limit_gb: 64
   tpu_resources_per_task: 0
 task:
-  max_in_flight: 100
+  max_in_flight: 1
 use_ray_data: true
