@@ -40,12 +40,8 @@ class JsonFilenameProvider(FilenameProvider):
         self.input_dir = input_dir
 
     def get_filename_for_block(self, block, task_index, block_index):
-        # print(f"TASK_INDEX: {task_index}")
-        # print(f"BLOCK INDEX: {block_index}")
-        # print(f"BLOCK: {}")
         input_filename = self.files[task_index]
         output_filename = os.path.basename(input_filename)
-        # print(f"OUTPUT FILENAME: {output_filename}")
         return output_filename
 
 @ray.remote
@@ -94,7 +90,7 @@ def print_tpu_driver_info():
 
 @ray.remote
 @cached_or_construct_output(success_suffix="SUCCESS")
-def process_file(input_filename, output_filename, model_ref, model_path):
+def process_file_ray(input_filename, output_filename, model_ref, model_path):
     # TODO(chris): remove this code when we are sure that TPU is working
     if "fineweb" in model_path:
         try:
@@ -124,6 +120,36 @@ def process_file(input_filename, output_filename, model_ref, model_path):
             res = {"id": row["id"], "source": row["source"], "attributes": row["attributes"]}
             json_row = json.dumps(res)
             f_out.write(json_row + "\n")
+
+
+@cached_or_construct_output(success_suffix="SUCCESS")
+def process_file_with_quality_classifier(input_filename, output_filename, quality_classifier):
+    json_list = []
+    with fsspec.open(input_filename, "rt", compression="gzip") as f_in:
+        for line in f_in:
+            json_list.append(json.loads(line))
+
+    dataset = datasets.Dataset.from_list(json_list)
+
+    dataset = dataset.select_columns(["text", "id", "source"])
+    predicted_dataset = dataset.map(lambda batch: quality_classifier(batch), batched=True, batch_size=1024)
+
+    with fsspec.open(output_filename, "wt", compression="gzip") as f_out:
+        for row in predicted_dataset:
+            res = {"id": row["id"], "source": row["source"], "attributes": row["attributes"]}
+            json_row = json.dumps(res)
+            f_out.write(json_row + "\n")
+
+@ray.remote
+def process_dir(input_dir, output_dir, pattern, model_ref, model_path):
+    files = fsspec_glob(os.path.join(input_dir, pattern))
+
+    quality_classifier = AutoClassifier.from_model_path(model_ref, model_path)
+
+    for input_filename in files:
+        output_filename = rebase_file_path(input_dir, input_filename, output_dir)
+        process_file_with_quality_classifier(input_filename, output_filename, quality_classifier)
+
 
 def place_model_in_memory(storage_config: StorageConfig):
     byte_buffer = io.BytesIO()
@@ -175,43 +201,18 @@ def main(inference_config: InferenceConfig):
 
     model_local_filepath = inference_config.storage.local_filepath if inference_config.storage is not None else model_ref
     if inference_config.use_ray_data:
-        # responses = map_directories_in_directory(
-            # process_file_using_actor_pool.options(
-            #     memory=inference_config.runtime.memory_limit_gb * 1024 * 1024 * 1024,
-            #     runtime_env=RuntimeEnv(
-            #         pip=inference_config.runtime.requirements_filepath,
-            #     ),
-            #     resources=resources,
-            # ).remote,
-        #     inference_config.input_dir,
-        #     inference_config.output_dir,
-        #     inference_config.task,
-        #     "*.jsonl.gz",
-        #     model_ref,
-        #     model_local_filepath,
-        # )
-
-        # if len(responses) == 0:
-        #     print(f"No directories found in {inference_config.input_dir}")
-        #     response = process_file_using_actor_pool.options(
-        #         memory=inference_config.runtime.memory_limit_gb * 1024 * 1024 * 1024,
-        #         runtime_env=RuntimeEnv(
-        #             pip=inference_config.runtime.requirements_filepath,
-        #         ),
-        #         resources=resources,
-        #     ).remote(inference_config.input_dir, inference_config.output_dir, "**/*.jsonl.gz", model_ref, model_local_filepath)
-        #     responses = [response]
         subdirectories = fsspec_get_curr_subdirectories(inference_config.input_dir)
         responses = []
         for input_subdir in subdirectories:
-            if len(responses) > inference_config.task_config.max_in_flight:
+            if len(responses) > inference_config.task.max_in_flight:
                 ready_refs, responses = ray.wait(responses, num_returns=1)
                 ray.get(ready_refs)
 
             output_subdir = rebase_file_path(inference_config.input_dir, input_subdir, inference_config.output_dir)
             fsspec_mkdirs(output_subdir)
 
-            result_ref = process_file_using_actor_pool.options(
+            # TODO(chris): Change to actor pool when done testing with process_dir
+            result_ref = process_dir.options(
                 memory=inference_config.runtime.memory_limit_gb * 1024 * 1024 * 1024,
                 runtime_env=RuntimeEnv(
                     pip=inference_config.runtime.requirements_filepath,
@@ -222,7 +223,7 @@ def main(inference_config: InferenceConfig):
             responses.append(result_ref)
     else:
         responses = map_files_in_directory(
-            process_file.options(
+            process_file_ray.options(
                 memory=inference_config.runtime.memory_limit_gb * 1024 * 1024 * 1024,
                 runtime_env=RuntimeEnv(
                     pip=inference_config.runtime.requirements_filepath,
