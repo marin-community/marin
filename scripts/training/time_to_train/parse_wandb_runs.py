@@ -87,7 +87,7 @@ def parse_run(run: wandb.apis.public.Run) -> dict:
     return data
 
 
-def get_runs(num_runs=10, name_prefix="time-to-train"):
+def get_runs(name_prefix="time-to-train"):
     api = wandb.Api(timeout=TIMEOUT)
     runs = api.runs(
         path=WANDB_PATH,
