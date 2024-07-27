@@ -184,3 +184,6 @@ credentials.json
 # Caches and Outputs
 !/scripts/web/output/
 !/output/
+
+# csv
+*.csv
