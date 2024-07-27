@@ -27,6 +27,26 @@ def convert_to_local_time(utc_str: str) -> str:
     return pacific_str
 
 
+def check_create_time(create_time: str, start_date: str = None, end_date: str = None) -> bool:
+    """Check if the create time is within the start and end date"""
+    # Custom parsing of the create_time string
+    date_part, time_part, tz_part = create_time.rsplit(maxsplit=2)
+    create_dt = datetime.strptime(f"{date_part} {time_part}", "%Y-%m-%d %H:%M:%S")
+
+    if start_date is None and end_date is None:
+        return True
+    if start_date is not None:
+        start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+        if start_dt > create_dt:
+            return False
+    if end_date is not None:
+        end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+        end_dt = end_dt.replace(hour=23, minute=59, second=59)
+        if end_dt < create_dt:
+            return False
+    return True
+
+
 def get_ts_diff(utc_str1: str, utc_str2: str) -> float:
     # Parse the UTC string to a datetime object
     utc_dt1 = datetime.strptime(utc_str1, "%Y-%m-%dT%H:%M:%S")
@@ -50,9 +70,11 @@ TARGET_SUMMARY_KEYS = [
 ]
 
 
-def parse_run(run: wandb.apis.public.Run) -> dict:
+def parse_run(run: wandb.apis.public.Run, start_date: str = None, end_date: str = None) -> dict:
     runtime = run.summary["_runtime"] / 3600.0  # hours
     create_time = convert_to_local_time(run.createdAt)
+    if not check_create_time(create_time, start_date=start_date, end_date=end_date):
+        return 
     heartbeat_time = convert_to_local_time(run.heartbeatAt)
     # get difference between create time and heartbeat time
     total_time = get_ts_diff(run.createdAt, run.heartbeatAt)
@@ -87,7 +109,7 @@ def parse_run(run: wandb.apis.public.Run) -> dict:
     return data
 
 
-def get_runs(name_prefix="time-to-train"):
+def get_runs(name_prefix="time-to-train", start_date: str = "2024-07-25"):
     api = wandb.Api(timeout=TIMEOUT)
     runs = api.runs(
         path=WANDB_PATH,
@@ -96,8 +118,9 @@ def get_runs(name_prefix="time-to-train"):
     output_data = []
     for run in runs:
         try:
-            data = parse_run(run)
-            output_data.append(data)
+            data = parse_run(run, start_date=start_date)
+            if data:
+                output_data.append(data)
         except Exception as e:
             print(f"Unable to parse run {run.name} due to error: {e}")
     df = pd.DataFrame(output_data)
