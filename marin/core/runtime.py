@@ -81,9 +81,9 @@ class TaskConfig:
 
 def map_files_in_directory(
     func: Callable | RemoteFunction,
-    input_dir,
-    pattern,
-    output_dir,
+    input_dir: os.PathLike,
+    pattern: str,
+    output_dir: os.PathLike,
     task_config: TaskConfig = TaskConfig(),  # noqa
     *args,
     **kwargs,
@@ -95,6 +95,7 @@ def map_files_in_directory(
     Args:
         func: The function to map
         input_dir: The input directory
+        pattern: Input file pattern to glob on
         output_dir: The output directory
         task_config: TaskConfig object
 
@@ -222,22 +223,22 @@ def map_dolma_documents(func, input_dir, output_dir, task_config: TaskConfig = T
 
     raise NotImplementedError("This function is not yet implemented")
 
-    def handle_single_file(input_file, output_file):
-        with fsspec.open(input_file, "rb", compression="infer") as f, \
-                fsspec.open(output_file, "wb", compression="gzip") as output:
-            if isinstance(func, ray.remote_function.RemoteFunction):
-                for line in f:
-                    data = json.loads(line)
-                    new_data = func.remote(data, *args, **kwargs)
-                    output.write(json.dumps(new_data) + "\n")
-            else:
-                for line in f:
-                    data = json.loads(line)
-                    if isinstance(func, ray.remote_function.RemoteFunction):
-                        new_data = func.remote(data, *args, **kwargs)
-                    else:
-                        new_data = func(data, *args, **kwargs)
-                    output.write(json.dumps(new_data) + "\n")
+    # def handle_single_file(input_file, output_file):
+    #     with fsspec.open(input_file, "rb", compression="infer") as f, \
+    #             fsspec.open(output_file, "wb", compression="gzip") as output:
+    #         if isinstance(func, ray.remote_function.RemoteFunction):
+    #             for line in f:
+    #                 data = json.loads(line)
+    #                 new_data = func.remote(data, *args, **kwargs)
+    #                 output.write(json.dumps(new_data) + "\n")
+    #         else:
+    #             for line in f:
+    #                 data = json.loads(line)
+    #                 if isinstance(func, ray.remote_function.RemoteFunction):
+    #                     new_data = func.remote(data, *args, **kwargs)
+    #                 else:
+    #                     new_data = func(data, *args, **kwargs)
+    #                 output.write(json.dumps(new_data) + "\n")
 
 
 def simple_backpressure(remote_func, task_generator: Iterator, max_in_flight: Optional[int], fetch_local: bool) -> Iterator[ObjectRef]:
