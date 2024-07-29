@@ -28,7 +28,7 @@ if __name__ == '__main__':
 
     ray.init()
 
-    responses = map_files_in_directory(json_to_md.remote, args.input_dir, "**/reddit-0000.json.gz", args.output_dir)
+    responses = map_files_in_directory(json_to_md.remote, args.input_dir, "**/reddit-*.json.gz", args.output_dir)
 
     try:
         ray.get(responses)
