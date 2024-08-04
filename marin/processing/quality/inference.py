@@ -29,7 +29,7 @@ from marin.processing.quality.utils import (
     is_json_serializable,
     make_serializable,
 )
-from marin.utils import fsspec_glob, fsspec_mkdirs, rebase_file_path, fsspec_isdir, fsspec_get_curr_subdirectories
+from marin.utils import fsspec_glob, fsspec_mkdirs, rebase_file_path, fsspec_isdir, fsspec_get_curr_subdirectories, fsspec_get_atomic_directories
 
 from ray.data.datasource import FilenameProvider
 
@@ -45,7 +45,7 @@ class JsonFilenameProvider(FilenameProvider):
         return output_filename
 
 @ray.remote
-def process_file_using_actor_pool(input_dir, output_dir, pattern, model_ref, model_local_filepath):
+def process_file_using_actor_pool(input_dir: str, output_dir: str, pattern: str, model_ref: ray.ObjectRef, model_local_filepath: str):
     ctx = ray.data.DataContext.get_current()
     ctx.execution_options.preserve_order = True
 
@@ -90,7 +90,7 @@ def print_tpu_driver_info():
 
 @ray.remote
 @cached_or_construct_output(success_suffix="SUCCESS")
-def process_file_ray(input_filename, output_filename, model_ref, model_path):
+def process_file_ray(input_filename: str, output_filename: str, model_ref: ray.ObjectRef, model_path: str):
     # TODO(chris): remove this code when we are sure that TPU is working
     if "fineweb" in model_path:
         try:
@@ -122,8 +122,9 @@ def process_file_ray(input_filename, output_filename, model_ref, model_path):
             f_out.write(json_row + "\n")
 
 
+
 @cached_or_construct_output(success_suffix="SUCCESS")
-def process_file_with_quality_classifier(input_filename, output_filename, quality_classifier):
+def process_file_with_quality_classifier(input_filename: str, output_filename: str, quality_classifier: BaseQualityClassifier):
     json_list = []
     with fsspec.open(input_filename, "rt", compression="gzip") as f_in:
         for line in f_in:
@@ -132,7 +133,7 @@ def process_file_with_quality_classifier(input_filename, output_filename, qualit
     dataset = datasets.Dataset.from_list(json_list)
 
     dataset = dataset.select_columns(["text", "id", "source"])
-    predicted_dataset = dataset.map(lambda batch: quality_classifier(batch), batched=True, batch_size=1024)
+    predicted_dataset = dataset.map(lambda batch: quality_classifier(batch), batched=True, batch_size=512)        
 
     with fsspec.open(output_filename, "wt", compression="gzip") as f_out:
         for row in predicted_dataset:
@@ -141,10 +142,24 @@ def process_file_with_quality_classifier(input_filename, output_filename, qualit
             f_out.write(json_row + "\n")
 
 @ray.remote
-def process_dir(input_dir, output_dir, pattern, model_ref, model_path):
+@cached_or_construct_output(success_suffix="SUCCESS")
+def process_dir(input_dir: str, output_dir: str, pattern: str, model_name: str):
+    if "fineweb" in model_name:
+        try:
+            import jax
+            import jaxlib
+
+            print(f"Jaxlib version: {jaxlib.__version__}")
+            print(f"TPU ID: {ray.get_runtime_context().get_accelerator_ids()['TPU']}")
+            print(f"TPU DEVICE COUNT: {jax.device_count('tpu')}")
+        except Exception as e:
+            # print(e)
+            # print_tpu_driver_info()
+            pass
+
     files = fsspec_glob(os.path.join(input_dir, pattern))
 
-    quality_classifier = AutoClassifier.from_model_path(model_ref, model_path)
+    quality_classifier = AutoClassifier.from_model_path(model_name)
 
     for input_filename in files:
         output_filename = rebase_file_path(input_dir, input_filename, output_dir)
@@ -188,20 +203,16 @@ def place_model_in_memory(storage_config: StorageConfig):
 def main(inference_config: InferenceConfig):
     ray.init()
 
-    if inference_config.storage is not None:
-        model_ref = place_model_in_memory(inference_config.storage)
-    else:
-        model_ref = None
-
     # TODO(Chris): Cleanup this and put into the runtime config
     if inference_config.runtime.tpu_resources_per_task > 0:
         resources = {"TPU": inference_config.runtime.tpu_resources_per_task}
     else:
         resources = {}
 
-    model_local_filepath = inference_config.storage.local_filepath if inference_config.storage is not None else model_ref
+    # model_local_filepath = inference_config.storage.local_filepath if inference_config.storage is not None else model_ref
     if inference_config.use_ray_data:
-        subdirectories = fsspec_get_curr_subdirectories(inference_config.input_dir)
+        # subdirectories = fsspec_get_curr_subdirectories(inference_config.input_dir)
+        subdirectories = fsspec_get_atomic_directories(inference_config.input_dir)
         responses = []
         for input_subdir in subdirectories:
             if len(responses) > inference_config.task.max_in_flight:
@@ -218,7 +229,7 @@ def main(inference_config: InferenceConfig):
                     pip=inference_config.runtime.requirements_filepath,
                 ),
                 resources=resources,
-            ).remote(input_subdir, output_subdir, "**/*.jsonl.gz", model_ref, model_local_filepath)
+            ).remote(input_subdir, output_subdir, "**/*.jsonl.gz", inference_config.model_name)
             
             responses.append(result_ref)
     else:
@@ -234,8 +245,7 @@ def main(inference_config: InferenceConfig):
             "**/*.jsonl.gz",
             inference_config.output_dir,
             inference_config.task,
-            model_ref,  # TODO(chris) need better mechanism for this.
-            model_local_filepath,
+            inference_config.model_name,
         )
 
     try:

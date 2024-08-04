@@ -1,4 +1,9 @@
 """
+This file checks that two directories have matching ids for each row.
+This is useful especially since we store attributes separately from the original file.
+We want to make sure that the attributes match up one to one with the original text, so we check
+their respective IDs.
+
 Usage:
 python -m marin.processing.quality.check_equality --dir1 "gs://marin-data/processed/fineweb/fw-v1.0/md/CC-MAIN-2022-40/000_00000" --dir2 "gs://marin-data/scratch/chrisc/test-fineweb/fw-v1.0/md/CC-MAIN-2022-40/000_00000"
 """
@@ -55,8 +60,7 @@ def main(dir1: str, dir2: str):
         print("Files with mismatching ids:")
         for filename, is_equal, mismatch_lines in results:
             if not is_equal:
-                print(filename)
-                # print(f"  {filename}: Mismatches on lines {mismatch_lines}")
+                print(f"Mismatch exists in {filename}")
 
 
 if __name__ == "__main__":

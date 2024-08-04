@@ -3,13 +3,14 @@ import tempfile
 
 import ray
 from google.cloud import storage
+from huggingface_hub import hf_hub_download
 
 
 class BaseQualityClassifier:
-    def __init__(self, model):
-        self.model = model
+    def __init__(self, model_name, *args, **kwargs):
+        self.model_name = model_name
 
-    def predict(self, document):
+    def predict(self, documents):
         raise NotImplementedError
 
     def __call__(self, batch):
@@ -20,98 +21,53 @@ class DummyQualityClassifier(BaseQualityClassifier):
     def __init__(self, model):
         self.model = model
 
-    def predict(self, document):
+    def predict(self, documents):
         label, score = "__label__test", 1.0
-        return label, score
+        return [{"score": score} for _ in range(len(documents))]
 
-    def __call__(self, row):
-        label, score = self.predict(row["text"])
-        row.update(
-            {
-                "label": label,
-                "score": score,
-            }
-        )
-        return row
-
-
-class FasttextQualityClassifier(BaseQualityClassifier):
-    LOCAL_FILEPATH = os.path.expanduser("~/dolma_fasttext_model/model.bin")
-
-    def __init__(self, model_ref):
-        self.model = self.load_model(model_ref)
-
-    def load_model(self, model_ref):
-        from fasttext.FastText import _FastText
-
-        try:
-            if not os.path.exists(self.LOCAL_FILEPATH):
-                directory, basename = os.path.dirname(self.LOCAL_FILEPATH), os.path.basename(self.LOCAL_FILEPATH)
-                os.makedirs(directory, exist_ok=True)
-
-                with open(self.LOCAL_FILEPATH, "wb") as f:
-                    f.write(model_ref.getvalue())
-
-            print(f"Size of model: {os.path.getsize(self.LOCAL_FILEPATH)}")
-            model = _FastText(self.LOCAL_FILEPATH)
-        except Exception as e:
-            print(e)
-            print("failed to load model")
-
-        return model
-
-    def predict(self, document):
-        return self.model.predict(document)
-
-    def __call__(self, row):
-        if row["text"]:
-            text = row["text"].replace("\n", " ")
-        else:
-            text = ""
-
-        label_arr, score_arr = self.predict(text)
-        fasttext_quality_dict = {}
-        for label, score in zip(label_arr, score_arr):
-            fasttext_quality_dict.update({label: score})
-
-        row.update({"attributes": {"fasttext-quality": fasttext_quality_dict}})
-
-        return row
-
+    def __call__(self, batch):
+        scores = self.predict(batch["text"])
+        batch.update({"attributes": [{"dummy-quality": score} for score in scores]})
+        return batch
 
 class BatchFasttextQualityClassifier(BaseQualityClassifier):
-    def __init__(self, model_ref, model_path):
-        if "~" in model_path:
-            model_path = os.path.expanduser(model_path)
-        self.local_filepath = model_path
-        self.model = self.load_model(model_ref)
-        self.model_type = ""
+    _MODEL_NAME_TO_MODEL_FILENAME_DICT = {
+        "mlfoundations/fasttext-oh-eli5" : "openhermes_reddit_eli5_vs_rw_v2_bigram_200k_train.bin",
+        "allenai/dolma-1_7-fasttext-quality-filter" : "model.bin",
+    }
 
-        if "dolma" in model_path:
-            self.model_type = "dolma"
-        elif "dclm" in model_path:
-            self.model_type = "dclm"
-
-    def load_model(self, model_ref):
-        import tempfile
-
+    def __init__(self, model_name, *args, **kwargs):
         from fasttext.FastText import _FastText
 
-        try:
-            if not os.path.exists(self.local_filepath):
-                directory, basename = os.path.dirname(self.local_filepath), os.path.basename(self.local_filepath)
-                os.makedirs(directory, exist_ok=True)
+        model_path = hf_hub_download(repo_id=model_name, filename=self._MODEL_NAME_TO_MODEL_FILENAME_DICT[model_name])
+        self.model = _FastText(model_path)
+        self.model_type = ""
 
-                with open(self.local_filepath, "wb") as f:
-                    f.write(model_ref.getvalue())
+        if "dolma" in model_name:
+            self.model_type = "dolma"
+        elif "mlfoundations" in model_name:
+            self.model_type = "dclm"
 
-            print(f"Size of model: {os.path.getsize(self.local_filepath)}")
-            model = _FastText(self.local_filepath)
-        except Exception as e:
-            print(e)
-            print("failed to load model")
+    # def load_model(self, model_ref):
+    #     import tempfile
 
-        return model
+    #     from fasttext.FastText import _FastText
+
+    #     try:
+    #         if not os.path.exists(self.local_filepath):
+    #             directory, basename = os.path.dirname(self.local_filepath), os.path.basename(self.local_filepath)
+    #             os.makedirs(directory, exist_ok=True)
+
+    #             with open(self.local_filepath, "wb") as f:
+    #                 f.write(model_ref.getvalue())
+
+    #         print(f"Size of model: {os.path.getsize(self.local_filepath)}")
+    #         model = _FastText(self.local_filepath)
+    #     except Exception as e:
+    #         print(e)
+    #         print("failed to load model")
+
+    #     return model
 
     def predict(self, documents):
         return self.model.predict(documents)
@@ -164,7 +120,7 @@ class BatchFasttextQualityClassifier(BaseQualityClassifier):
 
 
 class BERTQualityClassifier(BaseQualityClassifier):
-    def __init__(self, model_name, model_path):
+    def __init__(self, model_name, *args, **kwargs):
         from transformers import AutoTokenizer, FlaxAutoModelForSequenceClassification
 
         self.model = FlaxAutoModelForSequenceClassification.from_pretrained(model_name)
@@ -175,13 +131,12 @@ class BERTQualityClassifier(BaseQualityClassifier):
         outputs = self.model(**inputs)
         logits = outputs.logits.squeeze(-1)
         logits_list = logits.tolist()
-        scores = [int(round(max(0, min(logit, 5)))) for logit in logits_list]
-        return scores
+        return logits_list
 
     def __call__(self, batch):
         scores = self.predict(batch["text"])
-
-        batch.update({"attributes": [{"fineweb-edu-quality": score} for score in scores]})
+        int_scores = [int(round(max(0, min(score, 5)))) for score in scores]
+        batch.update({"attributes": [{"fineweb-edu-quality": {"score": score, "int_score": int_score}} for score, int_score in zip(scores, int_scores)]})
 
         return batch
 
@@ -192,18 +147,18 @@ class AutoClassifier(BaseQualityClassifier):
         "fineweb": BERTQualityClassifier,
     }
 
-    def __init__(self, model_name, model_path):
+    def __init__(self, model_name, *args, **kwargs):
         self.model_name = model_name
-        self.model_path = model_path
-        self.cls = self.from_model_path(model_name, model_path)
+        self.cls = self.from_model_path(model_name, *args, **kwargs)
 
     def __call__(self, batch):
         return self.cls.__call__(batch)
 
     @classmethod
-    def from_model_path(cls, model_name, model_path):
+    def from_model_path(cls, model_name, *args, **kwargs):
         for key in cls._MODEL_NAME_TO_CLS_DICT.keys():
-            if key in model_path:
-                return cls._MODEL_NAME_TO_CLS_DICT[key](model_name, model_path)
+            if key in model_name:
+                print(f"Using {key} model")
+                return cls._MODEL_NAME_TO_CLS_DICT[key](model_name, *args, **kwargs)
 
         raise ValueError(f"Model name {model_name} not supported")
