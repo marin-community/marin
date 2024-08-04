@@ -26,12 +26,9 @@ RAW_TRANSFER_JOB_MAPPINGS = {
         {"bucket_name": "marin-us-central2", "path": "raw/dolma/v1.7/"},
     ),
 
-    "raw-datacomp (v2024-07-09-baseline-dedup)": (
-        # Note :: Subdirectories are doubly nested (global-shard_XX_of_10 / local-shard_XX_of_YY / *.jsonl.zstd)
+    "raw-dclm (v2024-07-09-baseline-dedup)": (
         {"bucket_name": "marin-data", "path": "datacomp/dclm-baseline-dedup-07-09/"},
-
-        # TODO (@percyliang) :: Updating canonical version name?
-        {"bucket_name": "marin-us-central2", "path": "raw/datacomp/v2024-07-09-baseline-dedup/"},
+        {"bucket_name": "marin-us-central2", "path": "raw/dclm/v2024-07-09-baseline-dedup/"},
     ),
 
     # TODO (@percyliang) :: Should this be treated as "external" or is this a raw source we're doing stuff with?
@@ -56,21 +53,20 @@ RAW_TRANSFER_JOB_MAPPINGS = {
         {"bucket_name": "marin-us-central2", "path": "raw/algebraic-stack/v2023-10-13/"},
     ),
 
-    # TODO (@percyliang) :: From Kamyar -- this is dump *through* April; but not sure if these are "official" dumps
-    #                       (per https://info.arxiv.org/help/bulk_data/index.html) or ar5iv-specific?
-    "raw-ar5iv (v2024-04-30)": (
+    # ar5iv is from: https://sigmathling.kwarc.info/resources/ar5iv-dataset-2024/
+    #   - Note version is just `04.2024`
+    "raw-ar5iv (v04.2024)": (
         {"bucket_name": "marin-data", "path": "raw/arxiv/data.fau.de/"},
-        {"bucket_name": "marin-us-central2", "path": "raw/ar5iv/v2024-04-30/"}
+        {"bucket_name": "marin-us-central2", "path": "raw/ar5iv/v04.2024/"}
     ),
 
     "raw-fineweb (v1.0 - #???)": (
         # TODO (@percyliang) :: Think this was also a HF Datasets transfer... should add commit hash?
-        #   =>> Confirm version w/ Abhi!
         {"bucket_name": "marin-data", "path": "raw/fineweb/fw-v1.0/"},
         # {"bucket_name": "marin-us-central2", "path": "raw/fineweb/v1.0-<COMMIT-HASH>/"}   # TODO
     ),
 
-    "raw-falcon-refinedweb (v1.0 - #c735840": (
+    "raw-falcon-refinedweb (v1.0 - #c735840)": (
         {
             "bucket_name": "marin-data",
             "path": (
@@ -151,39 +147,6 @@ RAW_TRANSFER_JOB_MAPPINGS = {
     #     {"bucket_name": "marin-data", "path": "raw/wikipedia/"},
     #     {"bucket_name": "marin-us-central2", "path": "???"}
     # )
-}
-
-# TODO (@percyliang) :: Unless otherwise specified, I'm setting the base $EXPERIMENT = `initial-markdown`
-# TODO (@percyliang) :: I'm not transferring `processed/examples/` -- let me know if this is incorrect
-BASE_EXPERIMENT = "initial-markdown"
-PROCESSED_DOCUMENTS_TRANSFER_JOB_MAPPINGS = {
-    f"processed-algebraic-stack (v2023-10-13 / {BASE_EXPERIMENT})": (
-        {"bucket_name": "marin-data", "path": "processed/algebraic-stack/v2023-10-13/md/"},
-        {"bucket_name": "marin-us-central2", "path": f"documents/{BASE_EXPERIMENT}/algebraic-stack/v2023-10-13/"},
-    ),
-
-    # TODO (@percyliang) :: Waiting until `raw` naming conventions for `ar5iv` have been settled
-    f"processed-ar5iv (v2024-04-30 / initial-html)": {
-        # TODO (@percyliang) :: Has subdirectories `no-problem/`, `warning/` --> do we want to enforce inner structure?
-        # TODO (@percyliang) :: Changing "modified" date to actual ar5iv version
-        {"bucket_name": "marin-data", "path": "processed/ar5iv/html/2024-06-16/"},
-        {"bucket_name": "marin-us-central2", "path": "documents/initial-html/ar5iv/v2024-04-30/"},
-    },
-
-    f"processed-ar5iv (v2024-04-30 / initial-html-clean)": {
-        # TODO (@percyliang) :: Has subdirectories `no-problem/`, `warning/` --> do we want to enforce inner structure?
-        # TODO (@percyliang) :: Changing "modified" date to actual ar5iv version
-        {"bucket_name": "marin-data", "path": "processed/ar5iv/html_clean/2024-06-16/"},
-        {"bucket_name": "marin-us-central2", "path": "documents/initial-html-clean/ar5iv/v2024-04-30/"},
-    },
-
-    # TODO (@percyliang) :: Skipping `processed/a45iv/tmp_md_out` (assuming any `tmp` directories are actually `tmp`)
-    f"processed-ar5iv (v2024-04-30 / {BASE_EXPERIMENT})": {
-        # TODO (@percyliang) :: Has subdirectories `no-problem/`, `warning/` --> do we want to enforce inner structure?
-        # TODO (@percyliang) :: Changing "modified" date to actual ar5iv version
-        {"bucket_name": "marin-data", "path": "processed/ar5iv/md/2024-06-16/"},
-        {"bucket_name": "marin-us-central2", "path": f"documents/{BASE_EXPERIMENT}/ar5iv/v2024-04-30/"},
-    },
 }
 # fmt: on
 
