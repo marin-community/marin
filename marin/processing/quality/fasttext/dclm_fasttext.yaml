@@ -1,5 +1,5 @@
-input_dir: "gs://marin-data/processed/fineweb/fw-v1.0/md/CC-MAIN-2021-49/"
-output_dir: "gs://marin-data/processed/fineweb/fw-v1.0/attributes_md/dclm-fasttext-quality/CC-MAIN-2021-49/"
+input_dir: "gs://marin-data/processed/wikipedia/md/"
+output_dir: "gs://marin-data/processed/wikipedia/attributes_md/dclm-fasttext-quality/"
 model_name: "mlfoundations/fasttext-oh-eli5"
 storage:
   gcs_bucket_name: "N/A"
