@@ -32,25 +32,79 @@ from marin.markdown import to_markdown
 # Initialize Logger
 logger = logging.getLogger(__name__)
 
+# StackExchange XML Constants
+STACKEXCHANGE_XML_QUESTION_POST_TYPE = "1"
+STACKEXCHANGE_XML_ANSWER_POST_TYPE = "2"
 
 # Formatting Options for StackExchange Threads
 class StackExchangeMarkdownFormat(Enum):
-    # fmt: off
-    ATOMIC = "atomic"                                       # Question/answers as independent (atomic) documents
-    QA_PAIR = "qa-pair"                                     # Question/answer pairs as atomic documents (w/ title)
-    COMPLETE = "complete"                                   # Full thread as document (answers sorted by vote count)
-    # fmt: on
+    # Consider a StackExchange Thread (formatted as a top-level question, and a sequence of answers annotated w/ votes):
+    #   TITLE: "How to 3D print a bike?"
+    #   QUESTION: "What kind of printer is required to 3D print a bike, briefly how long it takes and how much cost?
+    #              Is this even achievable at home?"
+    #   ANSWER 1: "You will need a laser sintering or laser cutting printer, which will not be something you can buy...
+    #   ANSWER 2: "You can probably 3D print a mold with PLA/ABS and use that to cast a frame in aluminum..."
+    #
+    # ---
+    # We define three different ways to "markdownify" such a thread:
+    #
+    # 1. SEPARATE =>> Question/answers are independent (separate) documents:
+    #       + Doc #1: {"text": "What kind of printer is required to 3D print a bike, briefly how long..."}
+    #       + Doc #2: {"text": "You will need a laser sintering or laser cutting printer, which will not..."}
+    #       + Doc #3: {"text": "You can probably 3D print a model with PLA/ABS and use that to cast..."}
+    #
+    # 2. QA_PAIR =>> Each question/answer pair are formatted as a *separate* document (duplicating the question):
+    #       + Doc #1: {"text": ("""
+    #           # How to 3D print a bike?
+    #
+    #           What kind of printer is required to 3D print a bike, briefly how long...
+    #
+    #           ## Answer
+    #
+    #           You will need a laser sintering or laser cutting printer, which will not..."
+    #           """
+    #         )}
+    #
+    #       + Doc #2: {"text": ("""
+    #           # How to 3D print a bike?
+    #
+    #           What kind of printer is required to 3D print a bike, briefly how long...
+    #
+    #           ## Answer
+    #
+    #           You can probably 3D print a model with PLA/ABS and use that to cast..."
+    #           """
+    #         )}
+    #
+    # 3. COMPLETE =>> Each thread is formatted as a *single* document with answers sorted by decreasing vote count:
+    #       + Doc #1: {"text": ("""
+    #           # How to 3D print a bike?
+    #
+    #           What kind of printer is required to 3D print a bike, briefly how long...
+    #
+    #           ## Answer
+    #
+    #           You will need a laser sintering or laser cutting printer, which will not..."
+    #
+    #           ## Answer
+    #
+    #           You can probably 3D print a model with PLA/ABS and use that to case..."
+    #           """
+    #         )}
+    SEPARATE = "separate"
+    QA_PAIR = "qa-pair"
+    COMPLETE = "complete"
 
 
 def markdownify_thread(
     thread_data: dict[str, Any],
-    markdown_format: StackExchangeMarkdownFormat = StackExchangeMarkdownFormat.COMPLETE,
+    markdown_format: StackExchangeMarkdownFormat,
 ) -> list[tuple[str, str]]:
     """Convert the rendered HTML in a StackExchange thread to clean Markdown, returning (unique ID, markdown)."""
     title, question, answers = thread_data["title"], thread_data["question"], thread_data["answers"]
     question_md, answers_md = to_markdown(question), [to_markdown(a["body"]) for a in answers]
 
-    if markdown_format == StackExchangeMarkdownFormat.ATOMIC:
+    if markdown_format == StackExchangeMarkdownFormat.SEPARATE:
         question_doc = (f"q-{thread_data['id']}", question_md)
         answer_docs = [(f"a-{answers[i]['id']}", answer_md) for i, answer_md in enumerate(answers_md)]
 
@@ -77,8 +131,8 @@ def markdownify_thread(
 def extract_stackexchange_threads(
     subdomain: str,
     post_xml_content: str | io.BytesIO,
-    min_vote_threshold: int = -1024,
-    max_answer_threshold: int = 512,
+    min_vote_threshold: int = -1_000_000_000,
+    max_answer_threshold: int = 1_000_000_000,
 ) -> Any:
     """Parses StackExchange Post XML content, and marshals into a (raw) instance of StackExchangeThreadMetadata."""
     question_threads: dict[str, dict[str, Any]] = {}
@@ -92,7 +146,7 @@ def extract_stackexchange_threads(
 
         # Switch on "PostType" in {"1" (Question), "2" (Answer)}
         post_type = element.get("PostTypeId")
-        if post_type == "1":
+        if post_type == STACKEXCHANGE_XML_QUESTION_POST_TYPE:
             # [Short-Circuit] If element ID in `processed_ids`, add to `skipped_question_ids` and continue
             question_id = element.get("Id")
 
@@ -105,7 +159,7 @@ def extract_stackexchange_threads(
 
             # Filter on votes & answer counts =>> note that votes can be negative!
             question_votes, n_answers = int(element.get("Score")), int(element.get("AnswerCount", 0))
-            if (question_votes < min_vote_threshold) or (n_answers == 0):
+            if question_votes < min_vote_threshold:
                 skipped_question_ids.add(question_id)
                 continue
 
@@ -124,8 +178,8 @@ def extract_stackexchange_threads(
                 answers=[],
             )
 
-        elif post_type == "2":
-            # [CONTRACT] In StackExchange XML, answers will always come *after* questions!
+        elif post_type == STACKEXCHANGE_XML_ANSWER_POST_TYPE:
+            # [CONTRACT] In StackExchange XML, answers will always come at some index *after* questions in sequence
             answer_id, parent_question_id = element.get("Id"), element.get("ParentId")
             if parent_question_id in skipped_question_ids:
                 continue

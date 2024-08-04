@@ -24,6 +24,7 @@ import os.path
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import List
 
 import draccus
 import fsspec
@@ -61,7 +62,7 @@ def post_to_md(
     input_file_path: str,
     output_file_path: str,
     subdomain: str,
-    markdown_format: StackExchangeMarkdownFormat = StackExchangeMarkdownFormat.ATOMIC,
+    markdown_format: StackExchangeMarkdownFormat,
     min_vote_threshold: int = -1024,
     max_answer_threshold: int = 512,
 ) -> bool:
@@ -132,8 +133,8 @@ def main(config: ProcessStackExchangeConfig) -> None:
     files = [f for f in fsspec_glob(os.path.join(config.input_dir, "*.7z")) if "stackoverflow.com-" not in f]
     files.append(os.path.join(config.input_dir, "stackoverflow.com-Posts.7z"))
 
-    # Invoke Ray Functions --> track `refs`
-    responses = []
+    # Invoke Ray Functions --> track job references
+    responses: List[ray.ObjectRef] = []
     for input_file in files:
         subdomain = re.match(r"(.+?)\.(stackexchange|net|com)", os.path.basename(input_file)).group(1)
         output_file = os.path.join(output_dir, f"{subdomain}.jsonl.gz")

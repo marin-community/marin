@@ -24,11 +24,10 @@ To kick off the job, create `stackexchange-urls.tsv` using the following instruc
 
 Pass this file to the Storage Transfer Job CLI to kick off the transfer.
 
-## Processing Pipeline
+## Processing the Raw Data
 
-We provide three different "flavors" of Markdown for serializing StackExchange threads (questions and corresponding 
-answers):
-- "atomic" (`gs://marin-data/processed/stackexchange/v2024-04-02/md-atomic`): Each question and individual answer is
+We provide three different ways to "markdownify" StackExchange threads (questions and corresponding answers):
+- "separate" (`gs://marin-data/processed/stackexchange/v2024-04-02/md-separate`): Each question and individual answer is
   formatted independently, as its own document (this is what Dolma does).
 - "qa-pair" (`gs://marin-data/processed/stackexchange/v2024-04-02/md-qa-pair`): Each (question, answer) pair in a thread
   is formatted as its own document (note that this duplicates each question multiple times).
@@ -39,5 +38,5 @@ To launch a processing job via Ray, run (from root of this repository):
 
 ```bash
 ray job submit --address=http://127.0.0.1:8265 --working-dir . --no-wait -- \ 
-  python scripts/stackexchange/process.py --markdown_format="atomic" 
+  python scripts/stackexchange/process.py --markdown_format="separate" 
 ```
