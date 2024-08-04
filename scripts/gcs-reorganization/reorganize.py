@@ -56,12 +56,12 @@ RAW_TRANSFER_JOB_MAPPINGS = {
         {"bucket_name": "marin-us-central2", "path": "raw/algebraic-stack/v2023-10-13/"},
     ),
 
-    # TODO (@percyliang) :: Missing key version & provenance information (pinged Kamyar); not sure if these are
-    #                       "official" dumps (per https://info.arxiv.org/help/bulk_data/index.html) or ar5iv-specific?
-    # "raw-ar5iv (v2024-04-30)": (
-    #     {"bucket_name": "marin-data", "path": "raw/arxiv/data.fau.de/"},
-    #     {"bucket_name": "marin-us-central2", "path": "???"}
-    # ),
+    # TODO (@percyliang) :: From Kamyar -- this is dump *through* April; but not sure if these are "official" dumps
+    #                       (per https://info.arxiv.org/help/bulk_data/index.html) or ar5iv-specific?
+    "raw-ar5iv (v2024-04-30)": (
+        {"bucket_name": "marin-data", "path": "raw/arxiv/data.fau.de/"},
+        {"bucket_name": "marin-us-central2", "path": "raw/ar5iv/v2024-04-30/"}
+    ),
 
     "raw-fineweb (v1.0 - #???)": (
         # TODO (@percyliang) :: Think this was also a HF Datasets transfer... should add commit hash?
@@ -152,8 +152,40 @@ RAW_TRANSFER_JOB_MAPPINGS = {
     #     {"bucket_name": "marin-us-central2", "path": "???"}
     # )
 }
-# fmt: on
 
+# TODO (@percyliang) :: Unless otherwise specified, I'm setting the base $EXPERIMENT = `initial-markdown`
+# TODO (@percyliang) :: I'm not transferring `processed/examples/` -- let me know if this is incorrect
+BASE_EXPERIMENT = "initial-markdown"
+PROCESSED_DOCUMENTS_TRANSFER_JOB_MAPPINGS = {
+    f"processed-algebraic-stack (v2023-10-13 / {BASE_EXPERIMENT})": (
+        {"bucket_name": "marin-data", "path": "processed/algebraic-stack/v2023-10-13/md/"},
+        {"bucket_name": "marin-us-central2", "path": f"documents/{BASE_EXPERIMENT}/algebraic-stack/v2023-10-13/"},
+    ),
+
+    # TODO (@percyliang) :: Waiting until `raw` naming conventions for `ar5iv` have been settled
+    f"processed-ar5iv (v2024-04-30 / initial-html)": {
+        # TODO (@percyliang) :: Has subdirectories `no-problem/`, `warning/` --> do we want to enforce inner structure?
+        # TODO (@percyliang) :: Changing "modified" date to actual ar5iv version
+        {"bucket_name": "marin-data", "path": "processed/ar5iv/html/2024-06-16/"},
+        {"bucket_name": "marin-us-central2", "path": "documents/initial-html/ar5iv/v2024-04-30/"},
+    },
+
+    f"processed-ar5iv (v2024-04-30 / initial-html-clean)": {
+        # TODO (@percyliang) :: Has subdirectories `no-problem/`, `warning/` --> do we want to enforce inner structure?
+        # TODO (@percyliang) :: Changing "modified" date to actual ar5iv version
+        {"bucket_name": "marin-data", "path": "processed/ar5iv/html_clean/2024-06-16/"},
+        {"bucket_name": "marin-us-central2", "path": "documents/initial-html-clean/ar5iv/v2024-04-30/"},
+    },
+
+    # TODO (@percyliang) :: Skipping `processed/a45iv/tmp_md_out` (assuming any `tmp` directories are actually `tmp`)
+    f"processed-ar5iv (v2024-04-30 / {BASE_EXPERIMENT})": {
+        # TODO (@percyliang) :: Has subdirectories `no-problem/`, `warning/` --> do we want to enforce inner structure?
+        # TODO (@percyliang) :: Changing "modified" date to actual ar5iv version
+        {"bucket_name": "marin-data", "path": "processed/ar5iv/md/2024-06-16/"},
+        {"bucket_name": "marin-us-central2", "path": f"documents/{BASE_EXPERIMENT}/ar5iv/v2024-04-30/"},
+    },
+}
+# fmt: on
 
 # === Set `TRANSFER_JOB_MAPPINGS` ===
 TRANSFER_JOB_MAPPINGS = RAW_TRANSFER_JOB_MAPPINGS
