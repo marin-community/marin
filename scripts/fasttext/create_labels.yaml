@@ -1,0 +1,8 @@
+output_path: gs://marin-data/scratch/rohithk
+experiment: experiment-1
+data_cfgs:
+  - path: gs://marin-data/scratch/rohithk
+    experiment: experiment-0
+    dataset: reddit
+    labels:
+      - great
