@@ -28,8 +28,7 @@ RAW_TRANSFER_JOB_MAPPINGS = {
         {"bucket_name": "marin-us-central2", "path": "raw/dclm/v2024-07-09-baseline-dedup/"},
     ),
 
-    # Note :: This was created via a Transfer Job from HF Datasets --> GCS (resulting in path artifacts). Clean!
-    "raw-fineweb-edu (#5b89d1e on HF)": (
+    "raw-fineweb-edu (#5b89d1e)": (
         {
             "bucket_name": "marin-data",
             "path": (
@@ -39,6 +38,7 @@ RAW_TRANSFER_JOB_MAPPINGS = {
         },
         {"bucket_name": "marin-us-central2", "path": "raw/fineweb-edu/5b89d1e/"},
     ),
+
     # === Raw Data ===
     "raw-algebraic-stack (v2023-10-13)": (
         # Note :: Version `v2023-10-13` is from GDrive (Marin / Curation / Marin - Math Datasets)
@@ -54,7 +54,6 @@ RAW_TRANSFER_JOB_MAPPINGS = {
         {"bucket_name": "marin-us-central2", "path": "raw/ar5iv/v04.2024/"}
     ),
 
-    # Note :: This was created via a Transfer Job from HF Datasets --> GCS (resulting in path artifacts). Clean!
     "raw-fineweb (#cd85054)": (
         {"bucket_name": "marin-data", "path": "raw/fineweb/fw-v1.0/"},
         {"bucket_name": "marin-us-central2", "path": "raw/fineweb/cd85054/"}
