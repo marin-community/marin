@@ -18,11 +18,8 @@ from google.cloud import storage_transfer
 # fmt: off
 RAW_TRANSFER_JOB_MAPPINGS = {
     # === External Semi-Formatted (dolma, datacomp, fineweb-edu) ===
-    # TODO (@percyliang) :: Do we want to move the "external" data somewhere special vs. just dumping under "raw"?
     "raw-dolma (v1.7)": (
         {"bucket_name": "marin-data", "path": "raw/dolma/dolma-v1.7/"},
-
-        # TODO (@percyliang) :: Dropping `dolma` from version?
         {"bucket_name": "marin-us-central2", "path": "raw/dolma/v1.7/"},
     ),
 
@@ -31,9 +28,8 @@ RAW_TRANSFER_JOB_MAPPINGS = {
         {"bucket_name": "marin-us-central2", "path": "raw/dclm/v2024-07-09-baseline-dedup/"},
     ),
 
-    # TODO (@percyliang) :: Should this be treated as "external" or is this a raw source we're doing stuff with?
-    "raw-fineweb-edu (v1 :: #5b89d1e on HF)": (
-        # Note :: This was created via a Transfer Job from HF Datasets --> GCS (resulting in path artifacts). Clean?
+    # Note :: This was created via a Transfer Job from HF Datasets --> GCS (resulting in path artifacts). Clean!
+    "raw-fineweb-edu (#5b89d1e on HF)": (
         {
             "bucket_name": "marin-data",
             "path": (
@@ -41,9 +37,7 @@ RAW_TRANSFER_JOB_MAPPINGS = {
                 "resolve/5b89d1ea9319fe101b3cbdacd89a903aca1d6052/data/"
             ),
         },
-
-        # TODO (@percyliang) :: Added HF Datasets short commit hash to canonical version?
-        {"bucket_name": "marin-us-central2", "path": "raw/fineweb-edu/v1-5b89d1e/"},
+        {"bucket_name": "marin-us-central2", "path": "raw/fineweb-edu/5b89d1e/"},
     ),
     # === Raw Data ===
     "raw-algebraic-stack (v2023-10-13)": (
@@ -60,13 +54,13 @@ RAW_TRANSFER_JOB_MAPPINGS = {
         {"bucket_name": "marin-us-central2", "path": "raw/ar5iv/v04.2024/"}
     ),
 
-    "raw-fineweb (v1.0 - #???)": (
-        # TODO (@percyliang) :: Think this was also a HF Datasets transfer... should add commit hash?
+    # Note :: This was created via a Transfer Job from HF Datasets --> GCS (resulting in path artifacts). Clean!
+    "raw-fineweb (#cd85054)": (
         {"bucket_name": "marin-data", "path": "raw/fineweb/fw-v1.0/"},
-        # {"bucket_name": "marin-us-central2", "path": "raw/fineweb/v1.0-<COMMIT-HASH>/"}   # TODO
+        {"bucket_name": "marin-us-central2", "path": "raw/fineweb/cd85054/"}
     ),
 
-    "raw-falcon-refinedweb (v1.0 - #c735840)": (
+    "raw-falcon-refinedweb (#c735840)": (
         {
             "bucket_name": "marin-data",
             "path": (
@@ -74,7 +68,7 @@ RAW_TRANSFER_JOB_MAPPINGS = {
                 "resolve/c735840575b629292b41da8dde11dcd523d4f91c/data/"
             ),
         },
-        {"bucket_name": "marin-us-central2", "path": "raw/falcon-refinedweb/v1.0-c735840/"},
+        {"bucket_name": "marin-us-central2", "path": "raw/falcon-refinedweb/c735840/"},
     ),
 
     # TODO (@percyliang) :: Adding `legal` prefix because not familiar with individual corpora tags... ok?
@@ -85,23 +79,23 @@ RAW_TRANSFER_JOB_MAPPINGS = {
                 "raw/huggingface.co/datasets/eloukas/edgar-corpus/resolve/f7d3ba73d65ff10194a95b84c75eb484d60b0ede/"
             ),
         },
-        {"bucket_name": "marin-us-central2", "path": "raw/legal-edgar/v1.0-f7d3ba7/"},
+        {"bucket_name": "marin-us-central2", "path": "raw/legal-edgar/f7d3ba7/"},
     ),
 
-    "raw-legal-hupd (v1.0 - f570a84)": (
+    "raw-legal-hupd (f570a84)": (
         {"bucket_name": "marin-data", "path": "raw/huggingface.co/datasets/HUPD/hupd/resolve/main/data"},
-        {"bucket_name": "marin-us-central2", "path": "raw/legal-hupd/v1.0-f570a84/"},
+        {"bucket_name": "marin-us-central2", "path": "raw/legal-hupd/f570a84/"},
     ),
 
-    "raw-legal-multi-legal-wikipedia-filtered (v1.0 - #483f6c8)": {
+    "raw-legal-multi-legal-wikipedia-filtered (#483f6c8)": {
         {
             "bucket_name": "marin-data",
             "path": "raw/huggingface.co/datasets/joelniklaus/MultiLegalPileWikipediaFiltered/resolve/main/data/",
         },
-        {"bucket_name": "marin-us-central2", "path": "legal-multi-legal-wikipedia-filtered/v1.0-483f6c8/"},
+        {"bucket_name": "marin-us-central2", "path": "legal-multi-legal-wikipedia-filtered/483f6c8/"},
     },
 
-    "raw-legal-open-australian-legal-corpus": (
+    "raw-legal-open-australian-legal-corpus (#66e7085)": (
         {
             "bucket_name": "marin-data",
             "path": (
@@ -109,11 +103,11 @@ RAW_TRANSFER_JOB_MAPPINGS = {
                 "resolve/66e7085ff50b8d71d3089efbf60e02ef5b53cf46/"
             ),
         },
-        {"bucket_name": "marin-us-central2", "path": "raw/legal-open-australian-legal-corpus/v1.0-66e7085/"},
+        {"bucket_name": "marin-us-central2", "path": "raw/legal-open-australian-legal-corpus/66e7085/"},
     ),
 
     # TODO (@percyliang) :: Similarly, adding `instruct` prefix?
-    "raw-instruct-tulu-sft (v2.0 - #6248b17)": {
+    "raw-instruct-tulu-v2-sft (#6248b17)": {
         {
             "bucket_name": "marin-data",
             "path": (
@@ -121,7 +115,7 @@ RAW_TRANSFER_JOB_MAPPINGS = {
                 "resolve/6248b175d2ccb5ec7c4aeb22e6d8ee3b21b2c752/data/"
             ),
         },
-        {"bucket_name": "marin-us-central2", "path": "raw/instruct-tulu-sft/v2.0-6248b17/"},
+        {"bucket_name": "marin-us-central2", "path": "raw/instruct-tulu-v2-sft/6248b17/"},
     },
 
     # TODO (@percyliang) :: `pubmed` has subdirectories (`europe_pmc`, `pubmed_abstracts`, `pubmed_central`). Should
@@ -132,9 +126,9 @@ RAW_TRANSFER_JOB_MAPPINGS = {
     #     {"bucket_name": "marin-us-central2", "path": "???"}
     # ),
 
-    "raw-slim-pajama (v1.0 - #2d0accd)": (
+    "raw-slim-pajama (#2d0accd)": (
         {"bucket_name": "marin-data", "path": "raw/slim-pajama/2d0accdd/SlimPajama-627B/"},
-        {"bucket_name": "marin-us-central2", "path": "raw/slim-pajama/v1.0-2d0accd/"},
+        {"bucket_name": "marin-us-central2", "path": "raw/slim-pajama/2d0accd/"},
     ),
 
     "raw-stackexchange (v2024-04-02)": (
