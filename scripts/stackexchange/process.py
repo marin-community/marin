@@ -63,8 +63,8 @@ def post_to_md(
     output_file_path: str,
     subdomain: str,
     markdown_format: StackExchangeMarkdownFormat,
-    min_vote_threshold: int = -1024,
-    max_answer_threshold: int = 512,
+    min_vote_threshold: int = -1_000_000_000,
+    max_answer_threshold: int = 1_000_000_000,
 ) -> bool:
     with (
         fsspec.open(input_file_path, "rb") as f,
@@ -112,8 +112,8 @@ class ProcessStackExchangeConfig:
         StackExchangeMarkdownFormat.COMPLETE
     )
 
-    min_vote_threshold: int = -1024                         # Minimum number of votes for keeping questions/answers
-    max_answer_threshold: int = 512                         # Maximum number of high-voted answers to keep per thread
+    min_vote_threshold: int = -1_000_000_000                # Minimum number of votes for keeping questions/answers
+    max_answer_threshold: int = 1_000_000_000               # Maximum number of high-voted answers to keep per thread
     # fmt: on
 
 
