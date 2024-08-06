@@ -14,4 +14,6 @@ bash /home/shared/maintenance/delete_old_docker_images.sh
 df
 
 # clean up inactive TPU queued resources
-bash /home/shared/maintenance/delete_inactive_tpu_queued_resources.sh 
+bash /home/shared/maintenance/delete_inactive_tpu_queued_resources.sh us-central2-b
+bash /home/shared/maintenance/delete_inactive_tpu_queued_resources.sh us-west4-a
+bash /home/shared/maintenance/delete_inactive_tpu_queued_resources.sh europe-west4-b
