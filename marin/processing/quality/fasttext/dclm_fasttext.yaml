@@ -1,16 +1,10 @@
 input_dir: "gs://marin-data/processed/wikipedia/md/"
 output_dir: "gs://marin-data/processed/wikipedia/attributes_md/dclm-fasttext-quality/"
 model_name: "mlfoundations/fasttext-oh-eli5"
-storage:
-  gcs_bucket_name: "N/A"
-  gcs_blob_name: "N/A"
-  hf_repo_id: "mlfoundations/fasttext-oh-eli5"
-  hf_filename: "openhermes_reddit_eli5_vs_rw_v2_bigram_200k_train.bin"
-  local_filepath: "~/dclm_fasttext_model/model.bin"
+attribute_name: "dclm-fasttext-quality"
 runtime:
   requirements_filepath: "marin/processing/quality/fasttext/requirements.txt"
   memory_limit_gb: 12
   tpu_resources_per_task: 0
 task:
-  max_in_flight: 100
-use_ray_data: true
+  max_in_flight: 1000

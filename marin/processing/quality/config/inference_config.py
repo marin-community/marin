@@ -17,17 +17,25 @@ class RuntimeConfig:
     def __init__(self, requirements_filepath, memory_limit_gb, tpu_resources_per_task):
         self.requirements_filepath = requirements_filepath
         self.memory_limit_gb = memory_limit_gb
-        self.tpu_resources_per_task = tpu_resources_per_task
+        self.tpu_resources_per_task = self.set_tpu_resources(tpu_resources_per_task)
+
+    def set_tpu_resources(self, tpu_resources_per_task):
+        if tpu_resources_per_task > 0:
+            resources = {"TPU": tpu_resources_per_task}
+        else:
+            resources = {}
+
+        return resources
 
 
 class InferenceConfig:
-    def __init__(self, input_dir, output_dir, model_name, storage, runtime, use_ray_data, task):
+    def __init__(self, input_dir, output_dir, model_name, attribute_name, storage, runtime, task):
         self.input_dir = input_dir
         self.output_dir = output_dir
         self.model_name = model_name
+        self.attribute_name = attribute_name
         self.storage = storage
         self.runtime = runtime
-        self.use_ray_data = use_ray_data
         self.task = task
 
     @staticmethod
@@ -54,8 +62,8 @@ class InferenceConfig:
             input_dir=data["input_dir"],
             output_dir=data["output_dir"],
             model_name=data["model_name"],
+            attribute_name=data["attribute_name"],
             storage=storage,
             runtime=runtime,
-            use_ray_data=data["use_ray_data"],
             task=task,
         )
