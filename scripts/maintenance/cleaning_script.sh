@@ -2,7 +2,7 @@
 # set cron job to run the following script daily
 
 # Print current date and time
-echo "Script started at: 
+echo "Script started at: $(date)"
 
 # clean up cache directory
 rm -rf /home/shared/.cache
