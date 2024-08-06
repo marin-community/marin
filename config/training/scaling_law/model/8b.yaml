@@ -1,0 +1,12 @@
+# non-embedding: 6,979,588,096
+# total: 8,030,261,248
+
+type: llama
+seq_len: 4096
+hidden_dim: 4096
+intermediate_dim: 14336
+num_layers: 32
+num_heads: 32
+num_kv_heads: 8
+use_flash_attention: True
+flash_attention_block_size: 1024
