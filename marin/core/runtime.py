@@ -125,8 +125,8 @@ def map_files_in_directory(
 
 def map_directories_in_directory(
     func: Callable | RemoteFunction,
-    input_dir,
-    output_dir,
+    input_dir: str,
+    output_dir: str,
     task_config: TaskConfig = TaskConfig(),  # noqa
     *args,
     **kwargs,

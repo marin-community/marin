@@ -15,13 +15,14 @@ from typing import List
 import datasets
 import fsspec
 import ray
+from ray.data.datasource import FilenameProvider
 from ray.runtime_env import RuntimeEnv
 
 from marin.core.runtime import cached_or_construct_output, map_files_in_directory, map_directories_in_directory
 from marin.processing.quality.config.inference_config import InferenceConfig, StorageConfig
 from marin.processing.quality.classifier import (
     AutoClassifier,
-    BatchFasttextQualityClassifier,
+    BaseQualityClassifier,
 )
 from marin.processing.quality.utils import (
     download_huggingface_file_with_backoff,
@@ -31,7 +32,6 @@ from marin.processing.quality.utils import (
 )
 from marin.utils import fsspec_glob, fsspec_mkdirs, rebase_file_path, fsspec_isdir, fsspec_get_curr_subdirectories, fsspec_get_atomic_directories
 
-from ray.data.datasource import FilenameProvider
 
 class JsonFilenameProvider(FilenameProvider):
 
@@ -45,14 +45,14 @@ class JsonFilenameProvider(FilenameProvider):
         return output_filename
 
 @ray.remote
-def process_file_using_actor_pool(input_dir: str, output_dir: str, pattern: str, model_ref: ray.ObjectRef, model_local_filepath: str):
+def process_file_using_actor_pool(input_dir: str, output_dir: str, model_name: str):
     ctx = ray.data.DataContext.get_current()
     ctx.execution_options.preserve_order = True
 
     print(f"[*] Reading in dataset {input_dir}")
     print(f"[*] Output directory is {output_dir}")
 
-    files = fsspec_glob(os.path.join(input_dir, pattern))
+    files = fsspec_glob(os.path.join(input_dir, "**/*.jsonl.gz"))
 
     ds = ray.data.read_json(
         files,
@@ -62,45 +62,13 @@ def process_file_using_actor_pool(input_dir: str, output_dir: str, pattern: str,
         AutoClassifier,
         # concurrency=(1,16),
         concurrency=(1, len(files)),
-        fn_constructor_args=(model_ref, model_local_filepath),
+        fn_constructor_args=(model_name),
         batch_size=None,
     ).write_json(output_dir, filename_provider=JsonFilenameProvider(files, input_dir), arrow_open_stream_args={"compression": "gzip"})
 
-
-def print_tpu_driver_info():
-    import subprocess
-
-    # Command to run
-    # command = ["sudo", "rm", "/tmp/libtpu_lockfile"]  # Example: list files in current directory
-    command = ["cat", "/tmp/tpu_logs/tpu_driver.INFO"]
-
-    # Run the command
-    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-
-    # Wait for the command to complete and get the output
-    stdout, stderr = process.communicate()
-
-    # Check the return code
-    return_code = process.returncode
-
-    # Print the results
-    print(f"Return Code: {return_code}")
-    print(f"Standard Output:\n{stdout}")
-    print(f"Standard Error:\n{stderr}")
-
 @ray.remote
 @cached_or_construct_output(success_suffix="SUCCESS")
-def process_file_ray(input_filename: str, output_filename: str, model_ref: ray.ObjectRef, model_path: str):
-    # TODO(chris): remove this code when we are sure that TPU is working
-    if "fineweb" in model_path:
-        try:
-            import jax
-
-            print(f"TPU DEVICE COUNT: {jax.device_count('tpu')}")
-        except Exception as e:
-            print(e)
-            print_tpu_driver_info()
-
+def process_file_ray(input_filename: str, output_filename: str, model_name: str):
     print(f"[*] Read in dataset {input_filename}")
 
     quality_classifier = AutoClassifier.from_model_path(model_ref, model_path)
@@ -120,8 +88,6 @@ def process_file_ray(input_filename: str, output_filename: str, model_ref: ray.O
             res = {"id": row["id"], "source": row["source"], "attributes": row["attributes"]}
             json_row = json.dumps(res)
             f_out.write(json_row + "\n")
-
-
 
 @cached_or_construct_output(success_suffix="SUCCESS")
 def process_file_with_quality_classifier(input_filename: str, output_filename: str, quality_classifier: BaseQualityClassifier):
@@ -143,21 +109,8 @@ def process_file_with_quality_classifier(input_filename: str, output_filename: s
 
 @ray.remote
 @cached_or_construct_output(success_suffix="SUCCESS")
-def process_dir(input_dir: str, output_dir: str, pattern: str, model_name: str):
-    if "fineweb" in model_name:
-        try:
-            import jax
-            import jaxlib
-
-            print(f"Jaxlib version: {jaxlib.__version__}")
-            print(f"TPU ID: {ray.get_runtime_context().get_accelerator_ids()['TPU']}")
-            print(f"TPU DEVICE COUNT: {jax.device_count('tpu')}")
-        except Exception as e:
-            # print(e)
-            # print_tpu_driver_info()
-            pass
-
-    files = fsspec_glob(os.path.join(input_dir, pattern))
+def process_dir(input_dir: str, output_dir: str, model_name: str):
+    files = fsspec_glob(os.path.join(input_dir, "**/*.jsonl.gz"))
 
     quality_classifier = AutoClassifier.from_model_path(model_name)
 
@@ -165,88 +118,45 @@ def process_dir(input_dir: str, output_dir: str, pattern: str, model_name: str):
         output_filename = rebase_file_path(input_dir, input_filename, output_dir)
         process_file_with_quality_classifier(input_filename, output_filename, quality_classifier)
 
+def get_process_filepath_func(subdirectories: List[str]):
+    if len(subdirectories) > 0:
+        return process_dir
+    else:
+        return process_file_ray
 
-def place_model_in_memory(storage_config: StorageConfig):
-    byte_buffer = io.BytesIO()
-    directory, basename = os.path.dirname(storage_config.local_filepath), os.path.basename(storage_config.local_filepath)
-    os.makedirs(directory, exist_ok=True)
+def get_filepaths_and_process_filepath_func(inference_config: InferenceConfig):
+    filepaths = fsspec_get_atomic_directories(inference_config.input_dir)
+    process_filepath_func = get_process_filepath_func(filepaths)
 
-    try:
-        try:
-            print("Download using huggingface start.")
-            download_huggingface_file_with_backoff(
-                storage_config.hf_repo_id, storage_config.hf_filename, directory, storage_config.local_filepath
-            )
-            print("Downloaded from huggingface.")
-        except Exception as e:
-            print(e, flush=True)
+    # This is the case where the directory has no subdirectories. So, we are iterating through files and not directories
+    if len(filepaths) == 0:
+        filepaths = fsspec_glob(os.path.join(inference_config.input_dir, "**/*.jsonl.gz"))
 
-            try:
-                print("Download using GCS start.")
-                download_gcs_file_with_backoff(
-                    storage_config.gcs_bucket_name, storage_config.gcs_blob_name, storage_config.local_filepath
-                )
-                print("Downloaded from GCS.")
-            except Exception as e:
-                print(e, flush=True)
-
-        with open(storage_config.local_filepath, "rb") as f:
-            byte_buffer.write(f.read())
-        byte_buffer.seek(0)
-    except Exception as e:
-        raise e
-
-    model_ref = ray.put(byte_buffer)
-    return model_ref
-
+    return filepaths, process_filepath_func
 
 def main(inference_config: InferenceConfig):
     ray.init()
 
-    # TODO(Chris): Cleanup this and put into the runtime config
-    if inference_config.runtime.tpu_resources_per_task > 0:
-        resources = {"TPU": inference_config.runtime.tpu_resources_per_task}
-    else:
-        resources = {}
+    filepaths, process_filepath_func = get_filepaths_and_process_filepath_func(inference_config)
 
-    # model_local_filepath = inference_config.storage.local_filepath if inference_config.storage is not None else model_ref
-    if inference_config.use_ray_data:
-        # subdirectories = fsspec_get_curr_subdirectories(inference_config.input_dir)
-        subdirectories = fsspec_get_atomic_directories(inference_config.input_dir)
-        responses = []
-        for input_subdir in subdirectories:
-            if len(responses) > inference_config.task.max_in_flight:
-                ready_refs, responses = ray.wait(responses, num_returns=1)
-                ray.get(ready_refs)
+    responses = []
+    for input_filepath in filepaths:
+        if len(responses) > inference_config.task.max_in_flight:
+            ready_refs, responses = ray.wait(responses, num_returns=1)
+            ray.get(ready_refs)
 
-            output_subdir = rebase_file_path(inference_config.input_dir, input_subdir, inference_config.output_dir)
-            fsspec_mkdirs(output_subdir)
+        output_filepath = rebase_file_path(inference_config.input_dir, input_filepath, inference_config.output_dir)
+        fsspec_mkdirs(output_filepath)
 
-            # TODO(chris): Change to actor pool when done testing with process_dir
-            result_ref = process_dir.options(
-                memory=inference_config.runtime.memory_limit_gb * 1024 * 1024 * 1024,
-                runtime_env=RuntimeEnv(
-                    pip=inference_config.runtime.requirements_filepath,
-                ),
-                resources=resources,
-            ).remote(input_subdir, output_subdir, "**/*.jsonl.gz", inference_config.model_name)
-            
-            responses.append(result_ref)
-    else:
-        responses = map_files_in_directory(
-            process_file_ray.options(
-                memory=inference_config.runtime.memory_limit_gb * 1024 * 1024 * 1024,
-                runtime_env=RuntimeEnv(
-                    pip=inference_config.runtime.requirements_filepath,
-                ),
-                resources=resources,
-            ).remote,
-            inference_config.input_dir,
-            "**/*.jsonl.gz",
-            inference_config.output_dir,
-            inference_config.task,
-            inference_config.model_name,
-        )
+        result_ref = process_filepath_func.options(
+            memory=inference_config.runtime.memory_limit_gb * 1024 * 1024 * 1024,
+            runtime_env=RuntimeEnv(
+                pip=inference_config.runtime.requirements_filepath,
+            ),
+            resources=inference_config.runtime.tpu_resources_per_task,
+        ).remote(input_filepath, output_filepath, inference_config.model_name)
+        
+        responses.append(result_ref)
 
     try:
         ray.get(responses)

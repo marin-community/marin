@@ -12,15 +12,6 @@ import fsspec
 import ray
 from marin.core.runtime import map_files_in_directory
 
-def count_bytes_in_file(filename: str) -> int:
-    total_bytes = 0
-    with fsspec.open(filename, "rt", compression="gzip") as f:
-        for line in f:
-            data = json.loads(line)
-            if "text" in data:
-                total_bytes += len(data["text"].encode('utf-8'))
-    return total_bytes
-
 @ray.remote
 class ByteCounter:
     def __init__(self):
@@ -31,6 +22,15 @@ class ByteCounter:
 
     def get_total(self) -> int:
         return self.total_bytes
+
+def count_bytes_in_file(filename: str) -> int:
+    total_bytes = 0
+    with fsspec.open(filename, "rt", compression="gzip") as f:
+        for line in f:
+            data = json.loads(line)
+            if "text" in data:
+                total_bytes += len(data["text"].encode('utf-8'))
+    return total_bytes
 
 @ray.remote
 def process_file(input_filename: str, output_filename: str, byte_counter: ray.actor.ActorHandle):

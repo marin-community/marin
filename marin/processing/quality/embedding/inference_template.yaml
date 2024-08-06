@@ -1,8 +1,0 @@
-input_dir: "TODO"
-output_dir: "TODO"
-model_name: "HuggingFaceFW/fineweb-edu-classifier"
-runtime:
-  requirements_filepath: "marin/processing/quality/embedding/requirements.txt"
-  memory_limit_gb: 16
-  tpu_resources_per_task: 4
-use_ray_data: false
