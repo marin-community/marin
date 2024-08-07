@@ -1,6 +1,6 @@
 import os
 import tempfile
-from typing import List, Dict
+from typing import List, Dict, Any
 
 import ray
 from google.cloud import storage
@@ -95,6 +95,7 @@ class BERTQualityClassifier(BaseQualityClassifier):
 
         self.model = FlaxAutoModelForSequenceClassification.from_pretrained(model_name)
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        self.attribute_name = attribute_name
 
     def predict(self, documents: List[str]) -> List[float]:
         inputs = self.tokenizer(documents, return_tensors="jax", padding="longest", truncation=True)
@@ -109,6 +110,8 @@ class BERTQualityClassifier(BaseQualityClassifier):
 class FinewebEduQualityClassifier(BERTQualityClassifier):
     def __call__(self, batch: Dict[str, Any]) -> Dict[str, Any]:
         scores = self.predict(batch["text"])
+
+        # Fineweb edu classifier is scored on educational value from 0 to 5, so we want to round to the nearest integer.
         int_scores = [int(round(max(0, min(score, 5)))) for score in scores]
         batch.update({"attributes": [{self.attribute_name: {"score": score, "int_score": int_score}} for score, int_score in zip(scores, int_scores)]})
 

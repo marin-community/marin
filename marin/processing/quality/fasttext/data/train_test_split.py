@@ -1,56 +1,47 @@
 """
-Code to split the fasttext training file created using `create_dataset.py` into a train-val split
+Code to split the fasttext training file created using `create_dataset.py` into a train-test split
 
 Usage:
-python marin/processing/fasttext/data/train_test_split.py
+ray job submit --working-dir . --no-wait -- \
+python -m marin.processing.quality.fasttext.data.train_test_split --input-file <input_file> --output-train-file <output_train_file> --output-test-file <output_test_file> --test-ratio <test_ratio>
 """
 
 import argparse
 import random
 
 import fsspec
+import ray
 
-INPUT_FILE = "gs://marin-data/scratch/chrisc/dataset.txt.gz"
-OUTPUT_TRAIN_FILE = "gs://marin-data/scratch/chrisc/fasttext_train.txt.gz"
-OUTPUT_VAL_FILE = "gs://marin-data/scratch/chrisc/fasttext_test.txt.gz"
+@ray.remote
+def process_file(input_file: str, output_train_file: str, output_test_file: str, test_ratio: float):
+    with fsspec.open(input_file, "rt", compression="gzip") as f_in:
+        with fsspec.open(output_train_file, "wt") as f_out_train:
+            with fsspec.open(output_test_file, "wt") as f_out_test:
+                for line in f_in:
+                    # NOTE(chris): Maybe this is not the best way since this is probabilistic not deterministic
+                    # I don't use the entire file because of fear that it won't fit in memory once it becomes too big.
+                    if random.random() < test_ratio:
+                        f_out_test.write(line)
+                    else:
+                        f_out_train.write(line)
 
+def main(input_file: str, output_train_file: str, output_test_file: str, test_ratio: float):
+    ray.init()
 
-def read_file(file_path):
-    with fsspec.open(file_path, "rt", compression="gzip") as f_in:
-        lines = f_in.readlines()
-    return lines
+    response = process_file.options(memory=16 * 1024 * 1024 * 1024).remote(input_file, output_train_file, output_test_file, test_ratio)
 
-
-def shuffle_lines(lines):
-    random.shuffle(lines)
-    return lines
-
-
-def split_data(lines, val_ratio=0.2):
-    split_index = int(len(lines) * (1 - val_ratio))
-    train_lines = lines[:split_index]
-    val_lines = lines[split_index:]
-    return train_lines, val_lines
-
-
-def write_file(lines, file_path):
-    with fsspec.open(file_path, "wt", compression="gzip") as f_out:
-        for line in lines:
-            f_out.write(line)
-
-
-def main(input_file, output_train_file, output_val_file, val_ratio):
-    lines = read_file(input_file)
-    shuffled_lines = shuffle_lines(lines)
-    train_lines, val_lines = split_data(shuffled_lines, val_ratio)
-    write_file(train_lines, output_train_file)
-    write_file(val_lines, output_val_file)
-
+    try:
+        ray.get(response)
+    except Exception as e:
+        print(f"Error: {e}")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--val-ratio", type=float, default=0.2, help="The size of the validation set")
+    parser.add_argument("--input-file", type=str, required=True, help="The input file path")
+    parser.add_argument("--output-train-file", type=str, required=True, help="The output train file path")
+    parser.add_argument("--output-test-file", type=str, required=True, help="The output test file path")
+    parser.add_argument("--test-ratio", type=float, default=0.2, help="The size of the test set")
 
     args = parser.parse_args()
 
-    main(INPUT_FILE, OUTPUT_TRAIN_FILE, OUTPUT_VAL_FILE, args.val_ratio)
+    main(args.input_file, args.output_train_file, args.output_test_file, args.test_ratio)
