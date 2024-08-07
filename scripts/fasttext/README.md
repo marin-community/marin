@@ -1,34 +1,37 @@
 # fastText training
 
-## Steps to create the dataset
-
-
-### Download the data
-
-Data is available at https://archive.org/download/stackexchange. We used the dump from 2024-04-02.
-We exclude "meta" sites and only use the main sites. So we don't use "3dprinting.meta.stackexchange.com.7z"
-but we use "3dprinting.stackexchange.com.7z".
-
-It is about 100 GB.
-
-Using GCS: Start a storage transfer service job on GCS to copy the data from the public dataset to your bucket.
-You can upload the `stack_exchange_urls.tsv` to an http server somewhere and use it.
-
-### Process the data
-
-There is a single script that can process one site at a time: `process_stack_exchange.py`.
+## Create the dataset
+Use `create_dataset.py` to create multi-label fastText formatted sharded dataset. Associate labels to documents using
+a config file.
 
 ```bash
-python process_stack_exchange.py <path to 7z file or Posts.xml>
+python create_dataset.py --config_path {PATH_TO_CONFIG_FILE}
 ```
-
-The file can be on GCS or local. The script will download the file if it is on GCS.
-
-As a convenience, we provide a script that processes all sites in a loop: `process_all.bash`.
+e.g., including
+```yaml
+...
+data_cfgs:
+  - path: gs://{BUCKET}
+    dataset: reddit/v0
+    experiment: experiment-0
+    labels:
+      - great
+...
+```
+in the config file will associate the label `great` with all documents in `gs://{BUCKET}/documents/experiment-0/reddit/v0`.
+## Train the model
+Use `train_model.py` to train a fastText model on a multi-label dataset (e.g., the output of `create_dataset.py`).
 
 ```bash
-bash process_all.bash
+python train_model.py --config_path {PATH_TO_CONFIG_FILE}
 ```
-
-This will read the `stack_exchange_urls.tsv` file and process all sites. If you filter our StackOverflow, this
-runs in couple hours on a MacBook.
+e.g., including
+```yaml
+...
+data_cfgs:
+  - path: gs://{BUCKET}
+    experiment: experiment-1
+...
+```
+in the config file will concatenate all shards in `gs://{BUCKET}/classifiers/experiment-1/data` into training and validation
+datasets, train a fastText model, and save the model to `gs://{BUCKET}/classifiers/experiment-1/`.
