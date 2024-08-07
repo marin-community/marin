@@ -1,5 +1,5 @@
 """
-create_labels.py
+create_attribute.py
 
 Writes list of quality labels as an attribute for each document in group of datasets. Each dataset gets its own set of labels.
 """
