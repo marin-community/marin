@@ -1,27 +1,35 @@
 from dataclasses import dataclass
-from datetime import datetime
-import json
 import os
 import random
+from typing import List
 
 import draccus
 import fsspec
 import ray
-from google.cloud import storage
 
-from marin.utils import fsspec_glob, rebase_file_path
-from marin.core.runtime import cached_or_construct_output, map_files_in_directory
+from marin.utils import fsspec_glob
 import fasttext
-from typing import List, Optional
 
-def merge_shards(shard_paths, train_path, val_path, val_split, seed):
+def merge_shards(shard_paths: List[str], train_path: str, val_path: str, val_split: float, seed: int) -> bool:
+    """
+    Merges multiple shard files into training and validation datasets.
+
+    Args:
+        shard_paths (List[str]): List of paths to shard files.
+        train_path (str): Path to the output training dataset file.
+        val_path (str): Path to the output validation dataset file.
+        val_split (float): Fraction of data to be used for validation.
+        seed (int): Seed for random number generator to ensure reproducibility.
+
+    Returns:
+        bool: True if the process is successful.
+    """
     random.seed(seed)
     with fsspec.open(train_path, "wt") as f_train, fsspec.open(val_path, "wt") as f_val:
         for shard_path in shard_paths:
             with fsspec.open(shard_path, "rt", compression = "gzip") as f_in:
                 for line in f_in:
-                    p = random.random()
-                    if p < val_split:
+                    if random.random() < val_split:
                         f_val.write(line)
                     else:
                         f_train.write(line)
@@ -30,21 +38,32 @@ def merge_shards(shard_paths, train_path, val_path, val_split, seed):
 
 @dataclass
 class MainConfig:
+    """
+    Configuration class for main process.
+
+    Attributes:
+        path (str): Base path for input and output data (i.e., gs://{BUCKET}).
+        experiment (str): Experiment identifier.
+        training_args (dict): Arguments for the fastText training process (see fastText docs for the full list of options).
+        seed (int): Seed for random number generator to ensure reproducibility.
+        val_split (float): Fraction of data to be used for validation.
+        memory (int): Amount of memory allocated for remote training process (in GB).
+        num_cpus (int): Number of CPUs allocated for remote training process.
+    """
     path: str
     experiment: str
-
     training_args: dict
     seed: int
     val_split: float
-
     memory: int
     num_cpus: int
 
 @draccus.wrap()
 def main(cfg: MainConfig):
     ray.init()
-    cfg.training_args['thread'] = cfg.num_cpus
+    cfg.training_args['thread'] = cfg.num_cpus # tell fasttext trainer to use all available CPUs
 
+    # run training on remote worker, not head node
     @ray.remote(memory=cfg.memory * 1024 * 1024 * 1024, runtime_env={"pip": ["s3fs"]}, num_cpus=cfg.num_cpus)
     def run(cfg):
         experiment_dir = f'{cfg.path}/classifiers/{cfg.experiment}'
@@ -54,6 +73,7 @@ def main(cfg: MainConfig):
         model = fasttext.train_supervised("data.train",**cfg.training_args)
         model.save_model("model.bin")
 
+        # fasttext can't handle gs:// paths, so we copy everything from local worker disk to experiment directory at the end
         with fsspec.open("model.bin","rb") as f_in, \
             fsspec.open(f'{experiment_dir}/model.bin',"wb") as f_out:
                 f_out.write(f_in.read())

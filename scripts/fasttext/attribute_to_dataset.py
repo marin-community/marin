@@ -1,17 +1,14 @@
 from dataclasses import dataclass
-from datetime import datetime
 import json
-import os
 import random
+from typing import List, Optional
 
 import draccus
 import fsspec
 import ray
-from google.cloud import storage
 
-from marin.utils import fsspec_glob, rebase_file_path
+from marin.utils import rebase_file_path
 from marin.core.runtime import cached_or_construct_output, map_files_in_directory
-from typing import List, Optional
 
 @cached_or_construct_output(success_suffix="SUCCESS")
 def write_fasttext_lines(input_file_path, output_file_path, attr_file_path, labels, sampling_rate, seed):
@@ -36,21 +33,38 @@ def write_fasttext_lines(input_file_path, output_file_path, attr_file_path, labe
 
 @dataclass
 class LabeledDatasetConfig:
+    """
+    Configuration class for a labeled dataset.
+
+    Attributes:
+        path (str): Base path of the dataset (i.e., gs://{BUCKET}/documents).
+        dataset (str): Dataset identifier (e.g., reddit/v0).
+        doc_experiment (str): Experiment identifier under documents/ directory.
+        attr_experiment (str): Experiment identifier under attributes/ directory.
+        labels (List[str]): List of quality labels associated with this dataset.
+        sampling_rate (float): Fraction of documents from the dataset to add to fastText training dataset.
+        seed (int): Seed for random number generator to ensure reproducibility.
+    """
     path: str
     dataset: str
-
     doc_experiment: str
     attr_experiment: str
-
     labels: List[str]
     sampling_rate: float
     seed: int
 
 @dataclass
 class MainConfig:
+    """
+    Configuration class for main process.
+
+    Attributes:
+        output_path (str): Base path for output data (i.e., gs://{BUCKET}).
+        experiment (str): Experiment identifier.
+        data_cfgs (List[LabeledDatasetConfig]): List of LabeledDatasetConfig objects from which to construct fastText training dataset.
+    """
     output_path: str
     experiment: str
-    
     data_cfgs: List[LabeledDatasetConfig]
 
 @draccus.wrap()
@@ -58,6 +72,7 @@ def main(cfg: MainConfig):
     ray.init()
     
     for data_cfg in cfg.data_cfgs:
+        # curry write_fasttext_lines so that we can pass it to map_files_in_directory
         @ray.remote(memory=1 * 1024 * 1024 * 1024, runtime_env={"pip": ["s3fs"]}, num_cpus=1)  # 1 GB
         def processing_func(input_file_path,output_file_path):
             attr_file_path = rebase_file_path(f'{data_cfg.path}/documents/{data_cfg.doc_experiment}',input_file_path,f'{data_cfg.path}/attributes/{data_cfg.attr_experiment}')
@@ -73,7 +88,7 @@ def main(cfg: MainConfig):
         try:
             ray.get(responses)
         except Exception as e:
-            print(f"Error processing: {e}")
+            print(f"Error processing {data_cfg.dataset}: {e}")
 
 if __name__ == '__main__':
     main()
