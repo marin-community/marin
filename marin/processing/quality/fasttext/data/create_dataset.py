@@ -2,6 +2,7 @@
 Code to load in Dolma formatted data and create a single file with data in fasttext format:
 "__label__{label_name} {text}" for each row in the input files, where the label can be 
 "hq" or "lq" depending on whether it is a high quality data source or low quality data source.
+The final file format is a single text file with one line per label-text pair.
 
 Usage:
 ray job submit --working-dir . --no-wait -- \

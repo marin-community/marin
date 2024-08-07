@@ -1,5 +1,7 @@
 """
 Code to split the fasttext training file created using `create_dataset.py` into a train-test split
+The output is two files: a train file and test file where the test file is a random sample of the input file
+up to the test-ratio proportion of the input file.
 
 Usage:
 ray job submit --working-dir . --no-wait -- \
@@ -19,8 +21,6 @@ def process_file(input_file: str, output_train_file: str, output_test_file: str,
         with fsspec.open(output_train_file, "wt") as f_out_train:
             with fsspec.open(output_test_file, "wt") as f_out_test:
                 for line in f_in:
-                    # NOTE(chris): Maybe this is not the best way since this is probabilistic not deterministic
-                    # I don't use the entire file because of fear that it won't fit in memory once it becomes too big.
                     if random.random() < test_ratio:
                         f_out_test.write(line)
                     else:
