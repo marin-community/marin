@@ -61,6 +61,7 @@ def downvote(id, index, json_name):
 
     return f"Downvoted: ID {id}, Index {index}, File {json_name}"
 
+
 def build_demo(input_file: str, attributes_file: str):
     # Create Gradio interface
 
@@ -94,12 +95,20 @@ def build_demo(input_file: str, attributes_file: str):
         sample_button.click(
             sample_and_display,
             inputs=[data_content, attr_content, input_filename, attributes_filename],
-            outputs=[text_output, attribute_quality_output, source_info_output, id_output, index_output, json_name_output],
+            outputs=[
+                text_output,
+                attribute_quality_output,
+                source_info_output,
+                id_output,
+                index_output,
+                json_name_output,
+            ],
         )
 
         downvote_button.click(downvote, inputs=[id_output, index_output, json_name_output], outputs=downvote_result)
 
     return iface
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

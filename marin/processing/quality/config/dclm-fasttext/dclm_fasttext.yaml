@@ -3,7 +3,7 @@ output_dir: "gs://marin-data/processed/wikipedia/attributes_md/dclm-fasttext-qua
 model_name: "mlfoundations/fasttext-oh-eli5"
 attribute_name: "dclm-fasttext-quality"
 runtime:
-  requirements_filepath: "marin/processing/quality/fasttext/requirements.txt"
+  requirements_filepath: "marin/processing/quality/config/dclm-fasttext/requirements.txt"
   memory_limit_gb: 12
   tpu_resources_per_task: 0
 task:
