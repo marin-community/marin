@@ -40,7 +40,10 @@ python -m marin.processing.quality.fasttext.model.train --input-file gs://{BUCKE
 ```
 
 ### Viewing Quality Filtering Annotations
-
+Run the following command to start the annotations server:
+```bash
+python -m marin.processing.quality.eval.annotations_server --input-file gs://{BUCKET}/path/to/input.jsonl.gz --attributes-file gs://{BUCKET}/path/to/attributes.jsonl.gz
+```
 
 ### Models supported:
 - FastText models: `DCLM`, `DOLMA`
