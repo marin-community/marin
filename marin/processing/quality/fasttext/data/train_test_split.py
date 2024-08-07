@@ -46,7 +46,10 @@ if __name__ == "__main__":
     parser.add_argument("--output-train-file", type=str, required=True, help="The output train file path")
     parser.add_argument("--output-test-file", type=str, required=True, help="The output test file path")
     parser.add_argument("--test-ratio", type=float, default=0.2, help="The size of the test set")
+    parser.add_argument("--seed", type=int, default=42, help="The random seed")
 
     args = parser.parse_args()
+
+    random.seed(args.seed)
 
     main(args.input_file, args.output_train_file, args.output_test_file, args.test_ratio)
