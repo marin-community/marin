@@ -41,14 +41,11 @@ RAW_TRANSFER_JOB_MAPPINGS = {
 
     # === Raw Data ===
     "raw-algebraic-stack (v2023-10-13)": (
-        # Note :: Version `v2023-10-13` is from GDrive (Marin / Curation / Marin - Math Datasets)
-        #   =>> Subdirectories are split as `< train / validation / test > / <lang>{XXXX}.jsonl.zst`
         {"bucket_name": "marin-data", "path": "raw/algebraic-stack/"},
         {"bucket_name": "marin-us-central2", "path": "raw/algebraic-stack/v2023-10-13/"},
     ),
 
     # ar5iv is from: https://sigmathling.kwarc.info/resources/ar5iv-dataset-2024/
-    #   - Note version is just `04.2024`
     "raw-ar5iv (v04.2024)": (
         {"bucket_name": "marin-data", "path": "raw/arxiv/data.fau.de/"},
         {"bucket_name": "marin-us-central2", "path": "raw/ar5iv/v04.2024/"}
@@ -70,7 +67,7 @@ RAW_TRANSFER_JOB_MAPPINGS = {
         {"bucket_name": "marin-us-central2", "path": "raw/falcon-refinedweb/c735840/"},
     ),
 
-    # TODO (@percyliang) :: Adding `legal` prefix because not familiar with individual corpora tags... ok?
+    # Adding `legal` prefix in case folks are not familiar with individual corpora
     "raw-legal-edgar (v1.0 - #f7d3ba7)": (
         {
             "bucket_name": "marin-data",
@@ -82,17 +79,17 @@ RAW_TRANSFER_JOB_MAPPINGS = {
     ),
 
     "raw-legal-hupd (f570a84)": (
-        {"bucket_name": "marin-data", "path": "raw/huggingface.co/datasets/HUPD/hupd/resolve/main/data"},
+        {"bucket_name": "marin-data", "path": "raw/huggingface.co/datasets/HUPD/hupd/resolve/main/data/"},
         {"bucket_name": "marin-us-central2", "path": "raw/legal-hupd/f570a84/"},
     ),
 
-    "raw-legal-multi-legal-wikipedia-filtered (#483f6c8)": {
+    "raw-legal-multi-legal-wikipedia-filtered (#483f6c8)": (
         {
             "bucket_name": "marin-data",
             "path": "raw/huggingface.co/datasets/joelniklaus/MultiLegalPileWikipediaFiltered/resolve/main/data/",
         },
-        {"bucket_name": "marin-us-central2", "path": "legal-multi-legal-wikipedia-filtered/483f6c8/"},
-    },
+        {"bucket_name": "marin-us-central2", "path": "raw/legal-multi-legal-wikipedia-filtered/483f6c8/"},
+    ),
 
     "raw-legal-open-australian-legal-corpus (#66e7085)": (
         {
@@ -105,8 +102,8 @@ RAW_TRANSFER_JOB_MAPPINGS = {
         {"bucket_name": "marin-us-central2", "path": "raw/legal-open-australian-legal-corpus/66e7085/"},
     ),
 
-    # TODO (@percyliang) :: Similarly, adding `instruct` prefix?
-    "raw-instruct-tulu-v2-sft (#6248b17)": {
+    # Adding `instruct` prefix in case folks are not familiar with individual corpora
+    "raw-instruct-tulu-v2-sft (#6248b17)": (
         {
             "bucket_name": "marin-data",
             "path": (
@@ -115,15 +112,17 @@ RAW_TRANSFER_JOB_MAPPINGS = {
             ),
         },
         {"bucket_name": "marin-us-central2", "path": "raw/instruct-tulu-v2-sft/6248b17/"},
-    },
+    ),
 
-    # TODO (@percyliang) :: `pubmed` has subdirectories (`europe_pmc`, `pubmed_abstracts`, `pubmed_central`). Should
-    #                       these be handled as separate top-level raw datasets?
-    #                       Separately --> Missing version / provenance?
-    # "raw-pubmed (???)": (
-    #     {"bucket_name": "marin-data", "path": "raw/pubmed/"},
-    #     {"bucket_name": "marin-us-central2", "path": "???"}
-    # ),
+    "raw-pubmed-abstracts (v2023-12-14)": (
+        {"bucket_name": "marin-data", "path": "raw/pubmed/pubmed_abstracts/"},
+        {"bucket_name": "marin-us-central2", "path": "raw/pubmed-abstracts/v2023-12-14/"}
+    ),
+
+    "raw-pubmed-central (v2023-12-18)": (
+        {"bucket_name": "marin-data", "path": "raw/pubmed/pubmed_central/"},
+        {"bucket_name": "marin-us-central2", "path": "raw/pubmed-central/v2023-12-18/"}
+    ),
 
     "raw-slim-pajama (#2d0accd)": (
         {"bucket_name": "marin-data", "path": "raw/slim-pajama/2d0accdd/SlimPajama-627B/"},
@@ -135,11 +134,10 @@ RAW_TRANSFER_JOB_MAPPINGS = {
         {"bucket_name": "marin-us-central2", "path": "raw/stackexchange/v2024-04-02/"},
     ),
 
-    # TODO (@percyliang) :: Missing Wikipedia version / provenance
-    # "raw-wikipedia (???)": (
-    #     {"bucket_name": "marin-data", "path": "raw/wikipedia/"},
-    #     {"bucket_name": "marin-us-central2", "path": "???"}
-    # )
+    "raw-wikipedia (v2024-05-01)": (
+        {"bucket_name": "marin-data", "path": "raw/wikipedia/"},
+        {"bucket_name": "marin-us-central2", "path": "raw/wikipedia/v2024-05-01/"}
+    ),
 }
 # fmt: on
 
@@ -186,14 +184,13 @@ def reorganize() -> None:
     try:
         still_running = True
         while still_running:
-            running_jobs = [job for job in transfer_job_operations if job["run_operation"].running()]
+            running_jobs = [job for job in transfer_job_operations.values() if job["run_operation"].running()]
             still_running = len(running_jobs) > 0
 
             print(f"[*] {len(running_jobs)} / {len(transfer_job_operations)} Transfer Jobs are still in progress!")
 
     finally:
-        # If Ctrl-C or Interrupt --> serialize `transfer_job_operations` to Disk
-        print("[*] Interrupt --> Serializing `transfer_job_operations` to `scripts/gcs-reorganization/transfer.json`")
+        print("[*] Serializing `transfer_job_operations` to `scripts/gcs-reorganization/transfer.json`")
         with open(f"scripts/gcs-reorganization/{TRANSFER_JOB_PREFIX}-transfer.json", "w") as f:
             json.dump(
                 {
