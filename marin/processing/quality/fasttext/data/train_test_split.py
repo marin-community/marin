@@ -12,6 +12,7 @@ import random
 import fsspec
 import ray
 
+
 @ray.remote
 def process_file(input_file: str, output_train_file: str, output_test_file: str, test_ratio: float):
     with fsspec.open(input_file, "rt", compression="gzip") as f_in:
@@ -25,15 +26,19 @@ def process_file(input_file: str, output_train_file: str, output_test_file: str,
                     else:
                         f_out_train.write(line)
 
+
 def main(input_file: str, output_train_file: str, output_test_file: str, test_ratio: float):
     ray.init()
 
-    response = process_file.options(memory=16 * 1024 * 1024 * 1024).remote(input_file, output_train_file, output_test_file, test_ratio)
+    response = process_file.options(memory=16 * 1024 * 1024 * 1024).remote(
+        input_file, output_train_file, output_test_file, test_ratio
+    )
 
     try:
         ray.get(response)
     except Exception as e:
         print(f"Error: {e}")
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

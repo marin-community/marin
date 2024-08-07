@@ -30,7 +30,14 @@ from marin.processing.quality.utils import (
     is_json_serializable,
     make_serializable,
 )
-from marin.utils import fsspec_glob, fsspec_mkdirs, rebase_file_path, fsspec_isdir, fsspec_get_curr_subdirectories, fsspec_get_atomic_directories
+from marin.utils import (
+    fsspec_glob,
+    fsspec_mkdirs,
+    rebase_file_path,
+    fsspec_isdir,
+    fsspec_get_curr_subdirectories,
+    fsspec_get_atomic_directories,
+)
 
 
 class JsonFilenameProvider(FilenameProvider):
@@ -44,6 +51,7 @@ class JsonFilenameProvider(FilenameProvider):
         output_filename = os.path.basename(input_filename)
         return output_filename
 
+
 @ray.remote
 def process_file_using_actor_pool(input_dir: str, output_dir: str, model_name: str):
     ctx = ray.data.DataContext.get_current()
@@ -54,17 +62,26 @@ def process_file_using_actor_pool(input_dir: str, output_dir: str, model_name: s
 
     files = fsspec_glob(os.path.join(input_dir, "**/*.jsonl.gz"))
 
-    ds = ray.data.read_json(
-        files,
-        arrow_open_stream_args={"compression": "gzip"},
-        override_num_blocks=len(files),
-    ).map_batches(
-        AutoClassifier,
-        # concurrency=(1,16),
-        concurrency=(1, len(files)),
-        fn_constructor_args=(model_name),
-        batch_size=None,
-    ).write_json(output_dir, filename_provider=JsonFilenameProvider(files, input_dir), arrow_open_stream_args={"compression": "gzip"})
+    ds = (
+        ray.data.read_json(
+            files,
+            arrow_open_stream_args={"compression": "gzip"},
+            override_num_blocks=len(files),
+        )
+        .map_batches(
+            AutoClassifier,
+            # concurrency=(1,16),
+            concurrency=(1, len(files)),
+            fn_constructor_args=(model_name),
+            batch_size=None,
+        )
+        .write_json(
+            output_dir,
+            filename_provider=JsonFilenameProvider(files, input_dir),
+            arrow_open_stream_args={"compression": "gzip"},
+        )
+    )
+
 
 @ray.remote
 @cached_or_construct_output(success_suffix="SUCCESS")
@@ -89,8 +106,11 @@ def process_file_ray(input_filename: str, output_filename: str, model_name: str,
             json_row = json.dumps(res)
             f_out.write(json_row + "\n")
 
+
 @cached_or_construct_output(success_suffix="SUCCESS")
-def process_file_with_quality_classifier(input_filename: str, output_filename: str, quality_classifier: BaseQualityClassifier):
+def process_file_with_quality_classifier(
+    input_filename: str, output_filename: str, quality_classifier: BaseQualityClassifier
+):
     json_list = []
     with fsspec.open(input_filename, "rt", compression="gzip") as f_in:
         for line in f_in:
@@ -99,13 +119,14 @@ def process_file_with_quality_classifier(input_filename: str, output_filename: s
     dataset = datasets.Dataset.from_list(json_list)
 
     dataset = dataset.select_columns(["text", "id", "source"])
-    predicted_dataset = dataset.map(lambda batch: quality_classifier(batch), batched=True, batch_size=512)        
+    predicted_dataset = dataset.map(lambda batch: quality_classifier(batch), batched=True, batch_size=512)
 
     with fsspec.open(output_filename, "wt", compression="gzip") as f_out:
         for row in predicted_dataset:
             res = {"id": row["id"], "source": row["source"], "attributes": row["attributes"]}
             json_row = json.dumps(res)
             f_out.write(json_row + "\n")
+
 
 @ray.remote
 @cached_or_construct_output(success_suffix="SUCCESS")
@@ -118,11 +139,13 @@ def process_dir(input_dir: str, output_dir: str, model_name: str, attribute_name
         output_filename = rebase_file_path(input_dir, input_filename, output_dir)
         process_file_with_quality_classifier(input_filename, output_filename, quality_classifier)
 
+
 def get_process_filepath_func(subdirectories: List[str]):
     if len(subdirectories) > 0:
         return process_dir
     else:
         return process_file_ray
+
 
 def get_filepaths_and_process_filepath_func(inference_config: InferenceConfig):
     filepaths = fsspec_get_atomic_directories(inference_config.input_dir)
@@ -133,6 +156,7 @@ def get_filepaths_and_process_filepath_func(inference_config: InferenceConfig):
         filepaths = fsspec_glob(os.path.join(inference_config.input_dir, "**/*.jsonl.gz"))
 
     return filepaths, process_filepath_func
+
 
 def main(inference_config: InferenceConfig):
     ray.init()
@@ -155,7 +179,7 @@ def main(inference_config: InferenceConfig):
             ),
             resources=inference_config.runtime.tpu_resources_per_task,
         ).remote(input_filepath, output_filepath, inference_config.model_name, inference_config.attribute_name)
-        
+
         responses.append(result_ref)
 
     try:
