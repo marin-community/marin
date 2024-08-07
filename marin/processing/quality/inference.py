@@ -22,7 +22,7 @@ from marin.core.runtime import cached_or_construct_output, map_files_in_director
 from marin.processing.quality.config.inference_config import InferenceConfig, StorageConfig
 from marin.processing.quality.classifier import (
     AutoClassifier,
-    BaseQualityClassifier,
+    BaseClassifier,
 )
 from marin.processing.quality.utils import (
     download_huggingface_file_with_backoff,
@@ -109,7 +109,7 @@ def process_file_ray(input_filename: str, output_filename: str, model_name: str,
 
 @cached_or_construct_output(success_suffix="SUCCESS")
 def process_file_with_quality_classifier(
-    input_filename: str, output_filename: str, quality_classifier: BaseQualityClassifier
+    input_filename: str, output_filename: str, quality_classifier: BaseClassifier
 ):
     json_list = []
     with fsspec.open(input_filename, "rt", compression="gzip") as f_in:
