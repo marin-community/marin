@@ -69,19 +69,6 @@ class FasttextQualityClassifier(BaseQualityClassifier):
         attributes_arr = []
         for i, row in enumerate(list(batch["text"])):
             fasttext_quality_dict = dict(zip(label_arr[i], score_arr[i]))
-
-            # pyarrow schema does not like it if you do not have a key. We make it non-optional to not have the key
-            # if self.model_type == "dolma":
-            #     if "__label__hq" not in fasttext_quality_dict:
-            #         fasttext_quality_dict.update({"__label__hq": 1.0 - fasttext_quality_dict.get("__label__lq")})
-            #     elif "__label__lq" not in fasttext_quality_dict:
-            #         fasttext_quality_dict.update({"__label__lq": 1.0 - fasttext_quality_dict.get("__label__hq")})
-            # elif self.model_type == "dclm":
-            #     if "__label__cc" not in fasttext_quality_dict:
-            #         fasttext_quality_dict.update({"__label__cc": 1.0 - fasttext_quality_dict.get("__label__hq")})
-            #     elif "__label__hq" not in fasttext_quality_dict:
-            #         fasttext_quality_dict.update({"__label__hq": 1.0 - fasttext_quality_dict.get("__label__cc")})
-
             attributes_arr.append({self.attribute_name: fasttext_quality_dict})
 
         res = {"id": batch["id"], "source": batch["source"], "attributes": attributes_arr}
