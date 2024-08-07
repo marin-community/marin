@@ -26,7 +26,7 @@ def write_labels(input_file_path, output_file_path, labels):
     return True
 
 @dataclass
-class LabeledDatasetConfig:
+class DataLabelingConfig:
     path: str
     experiment: str
     dataset: str
@@ -38,7 +38,7 @@ class MainConfig:
     output_path: str
     experiment: str
 
-    data_cfgs: List[LabeledDatasetConfig]
+    data_cfgs: List[DataLabelingConfig]
 
 @draccus.wrap()
 def main(cfg: MainConfig):
@@ -49,11 +49,13 @@ def main(cfg: MainConfig):
         def processing_func(input_file_path,output_file_path):
             return write_labels(input_file_path,output_file_path,data_cfg.labels)
 
+        input_dir = f'{data_cfg.path}/documents/{data_cfg.experiment}/{data_cfg.dataset}'
         output_dir = rebase_file_path(f'{data_cfg.path}/documents/{data_cfg.experiment}', 
                                       f'{data_cfg.path}/documents/{data_cfg.experiment}/{data_cfg.dataset}', 
                                       f'{cfg.output_path}/attributes/{cfg.experiment}'
                                       )
-        responses = map_files_in_directory(processing_func.remote, f'{data_cfg.path}/documents/{data_cfg.experiment}/{data_cfg.dataset}', "**/*.jsonl.gz", output_dir)
+        
+        responses = map_files_in_directory(processing_func.remote, input_dir, "**/*.jsonl.gz", output_dir)
         try:
             ray.get(responses)
         except Exception as e:
