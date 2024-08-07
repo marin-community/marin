@@ -19,6 +19,9 @@ data_cfgs:
 ...
 ```
 in the config file will associate the label `great` with all documents in `gs://{BUCKET}/documents/experiment-0/reddit/v0`.
+Eventually, we might want to automatically determine labels as a function of some existing attributes. 
+See `attribute_to_dataset.py` for a minimal example of what this might look like.
+
 ## Train the model
 Use `train_model.py` to train a fastText model on a multi-label dataset (e.g., the output of `create_dataset.py`).
 
