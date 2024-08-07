@@ -1,3 +1,10 @@
+"""
+attribute_to_dataset.py
+
+Creates a fastText training dataset from a group of datasets and labels specified by an attribute "quality-labels". Intended
+to be one example of mapping attributes to a fastText training dataset.
+"""
+
 from dataclasses import dataclass
 import json
 import random

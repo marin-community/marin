@@ -1,3 +1,9 @@
+"""
+create_dataset.py
+
+Creates a fastText training dataset from a group of datasets and user-specified labels.
+"""
+
 from dataclasses import dataclass
 from datetime import datetime
 import json
