@@ -1,8 +1,9 @@
 """
 Usage:
-python -m marin.processing.fasttext.example_server
+python -m marin.processing.quality.eval.annotations_server --input-file gs://marin-data/filtered/fineweb-edu-quality-3.0/fineweb/fw-v1.0/md/CC-MAIN-2020-10/000_00000/0_processed.jsonl.gz --attributes-file gs://marin-data/processed/fineweb/fw-v1.0/attributes_md/fineweb-edu-quality/CC-MAIN-2020-10/000_00000/0_processed.jsonl.gz
 """
 
+import argparse
 import gradio as gr
 import fsspec
 import json
@@ -12,24 +13,19 @@ import os
 from marin.utils import fsspec_glob
 
 
-def sample_and_display():
-    data_json = "gs://marin-data/filtered/fineweb-edu-quality-3.0/fineweb/fw-v1.0/md/CC-MAIN-2020-10/000_00000/0_processed.jsonl.gz"
+def sample_and_display(data_content, attr_content, input_filename, attributes_filename):
+    if not data_content:
+        with fsspec.open(input_filename, "rt", compression="gzip") as f:
+            for line in f:
+                data_content.append(json.loads(line))
 
-    if not data_json:
+    if not attr_content:
+        with fsspec.open(attributes_filename, "rt", compression="gzip") as f:
+            for line in f:
+                attr_content.append(json.loads(line))
+
+    if not data_content or not attr_content:
         return "No JSON files found in gs://marin-data/", "", "No files found", None, None, None
-
-    data_content = []
-    with fsspec.open(data_json, "rt", compression="gzip") as f:
-        for line in f:
-            data_content.append(json.loads(line))
-
-    attr_json = data_json.replace("filtered/fineweb-edu-quality-3.0", "processed")
-    attr_json = attr_json.replace("md", f"attributes_md/fineweb-edu-quality")
-
-    attr_content = []
-    with fsspec.open(attr_json, "rt", compression="gzip") as f:
-        for line in f:
-            attr_content.append(json.loads(line))
 
     random_index = random.randint(0, len(data_content) - 1)
 
@@ -42,9 +38,9 @@ def sample_and_display():
             attribute_quality = attr["attributes"]["fineweb-edu-quality"]
             break
 
-    source_info = f"File: {data_json}, Index: {random_index}"
+    source_info = f"File: {input_filename}, Index: {random_index}"
 
-    return text, attribute_quality, source_info, data_content_id, random_index, data_json
+    return text, attribute_quality, source_info, data_content_id, random_index, input_filename
 
 
 def downvote(id, index, json_name):
@@ -65,41 +61,52 @@ def downvote(id, index, json_name):
 
     return f"Downvoted: ID {id}, Index {index}, File {json_name}"
 
+def build_demo(input_file: str, attributes_file: str):
+    # Create Gradio interface
 
-def interface_fn():
-    text, attribute_quality, source_info, id, index, json_name = sample_and_display()
-    return text, attribute_quality, source_info, id, index, json_name
+    with gr.Blocks() as iface:
+        input_filename = gr.State(input_file)
+        attributes_filename = gr.State(attributes_file)
+        data_content = gr.State([])
+        attr_content = gr.State([])
 
+        with gr.Row():
+            sample_button = gr.Button("Sample")
 
-# Create Gradio interface
-with gr.Blocks() as iface:
-    with gr.Row():
-        sample_button = gr.Button("Sample")
+        with gr.Row():
+            text_output = gr.Markdown(label="Sampled Text")
 
-    with gr.Row():
-        text_output = gr.Markdown(label="Sampled Text")
+        with gr.Row():
+            attribute_quality_output = gr.Textbox(label="Attribute Quality")
 
-    with gr.Row():
-        attribute_quality_output = gr.Textbox(label="Attribute Quality")
+        with gr.Row():
+            source_info_output = gr.Textbox(label="Source Information")
 
-    with gr.Row():
-        source_info_output = gr.Textbox(label="Source Information")
+        with gr.Row():
+            id_output = gr.Textbox(label="ID", visible=False)
+            index_output = gr.Number(label="Index", visible=False)
+            json_name_output = gr.Textbox(label="JSON Name", visible=False)
 
-    with gr.Row():
-        id_output = gr.Textbox(label="ID", visible=False)
-        index_output = gr.Number(label="Index", visible=False)
-        json_name_output = gr.Textbox(label="JSON Name", visible=False)
+        with gr.Row():
+            downvote_button = gr.Button("Downvote")
+            downvote_result = gr.Textbox(label="Downvote Result")
 
-    with gr.Row():
-        downvote_button = gr.Button("Downvote")
-        downvote_result = gr.Textbox(label="Downvote Result")
+        sample_button.click(
+            sample_and_display,
+            inputs=[data_content, attr_content, input_filename, attributes_filename],
+            outputs=[text_output, attribute_quality_output, source_info_output, id_output, index_output, json_name_output],
+        )
 
-    sample_button.click(
-        interface_fn,
-        outputs=[text_output, attribute_quality_output, source_info_output, id_output, index_output, json_name_output],
-    )
+        downvote_button.click(downvote, inputs=[id_output, index_output, json_name_output], outputs=downvote_result)
 
-    downvote_button.click(downvote, inputs=[id_output, index_output, json_name_output], outputs=downvote_result)
+    return iface
 
-# Launch the server
-iface.launch(share=True)
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--input-file", type=str, default=None)
+    parser.add_argument("--attributes-file", type=str, default=None)
+    args = parser.parse_args()
+
+    iface = build_demo(args.input_file, args.attributes_file)
+
+    iface.launch(share=True)
