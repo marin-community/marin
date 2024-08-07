@@ -1,3 +1,9 @@
+"""
+train_model.py
+
+Trains a fastText model on a dataset (e.g., a result of running create_dataset.py).
+"""
+
 from dataclasses import dataclass
 import os
 import random
