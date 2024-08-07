@@ -7,11 +7,13 @@ Trains a fastText model on a dataset (e.g., a result of running create_dataset.p
 from dataclasses import dataclass
 import os
 import random
+from datetime import datetime
 from typing import List
 
 import draccus
 import fsspec
 import ray
+import logging
 
 from marin.utils import fsspec_glob
 import fasttext
@@ -64,9 +66,15 @@ class MainConfig:
     memory: int
     num_cpus: int
 
+logger = logging.getLogger("ray")
+
 @draccus.wrap()
 def main(cfg: MainConfig):
     ray.init()
+
+    logger.info(f"Training fasText model for experiment {cfg.experiment}")
+    datetime_start = datetime.utcnow()
+
     cfg.training_args['thread'] = cfg.num_cpus # tell fasttext trainer to use all available CPUs
 
     # run training on remote worker, not head node
@@ -97,6 +105,10 @@ def main(cfg: MainConfig):
         ray.get(response)
     except Exception as e:
         print(f"Error processing: {e}")
+    
+    datetime_end = datetime.utcnow()
+    logger.info(f"Training fastText for experiment {cfg.experiment} completed in {datetime_end - datetime_start}.")
+
 
 if __name__ == '__main__':
     main()
