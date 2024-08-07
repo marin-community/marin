@@ -61,12 +61,14 @@ def process_file(input_filename: str, output_filename: str, file_format: str, at
             if is_high_quality(attributes_data.get("attributes", {}), attribute_name, threshold):
                 output_file.write(input_line)
 
+
 @ray.remote
 def process_dir(input_subdir: str, output_subdir: str, file_format: str, attribute_name: str, threshold: float):
     files = fsspec_glob(os.path.join(input_subdir, "**/*.jsonl.gz"))
     for input_filename in files:
         output_filename = rebase_file_path(input_subdir, input_filename, output_subdir)
         process_file(input_filename, output_filename, file_format, attribute_name, threshold)
+
 
 def main(input_dir: str, file_format: str, attribute_name: str, threshold: float):
     ray.init()
@@ -85,9 +87,9 @@ def main(input_dir: str, file_format: str, attribute_name: str, threshold: float
         fsspec_mkdirs(output_subdir)
 
         result_ref = process_dir.options(
-            memory= 500 * 1024 * 1024,
+            memory=500 * 1024 * 1024,
         ).remote(input_subdir, output_subdir, file_format, attribute_name, threshold)
-        
+
         responses.append(result_ref)
     try:
         ray.get(responses)
@@ -100,9 +102,15 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Filter high-quality data based on DCLM FastText scores.")
     parser.add_argument("--input_dir", type=str, required=True, help="Input directory containing original data files")
-    parser.add_argument("--file_format", type=str, default= "md", required=True, help="File format of the data")
-    parser.add_argument("--attribute_name", type=str, default= "dclm-fasttext-quality", required=True, help="Attribute name of the quality score")
-    parser.add_argument("--threshold", type=float, default= 0.5, required=True, help="Threshold for the quality score")
+    parser.add_argument("--file_format", type=str, default="md", required=True, help="File format of the data")
+    parser.add_argument(
+        "--attribute_name",
+        type=str,
+        default="dclm-fasttext-quality",
+        required=True,
+        help="Attribute name of the quality score",
+    )
+    parser.add_argument("--threshold", type=float, default=0.5, required=True, help="Threshold for the quality score")
 
     args = parser.parse_args()
 

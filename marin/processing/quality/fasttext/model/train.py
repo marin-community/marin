@@ -11,9 +11,11 @@ import tempfile
 import fsspec
 import ray
 
+
 def _cleanup(training_file_name, local_output_file_name):
     os.remove(training_file_name)
     os.remove(local_output_file_name)
+
 
 @ray.remote
 def train(
@@ -69,7 +71,6 @@ def train(
             verbose=verbose,
             pretrainedVectors=pretrainedVectors,
         )
-    
 
         model.save_model(local_model_output_file.name)
 
@@ -83,6 +84,7 @@ def train(
         _cleanup(training_file.name, local_model_output_file.name)
 
     print("Finished training fasttext model.")
+
 
 def main(
     input_file,
@@ -130,7 +132,7 @@ def main(
         pretrainedVectors,
         output_model_path,
     )
-    
+
     # Wait for the training to complete and handle any exceptions
     try:
         ray.get(response)
@@ -158,7 +160,9 @@ if __name__ == "__main__":
         "--loss", type=str, default="softmax", choices=["ns", "hs", "softmax", "ova"], help="Loss function"
     )
     parser.add_argument("--bucket", type=int, default=2000000, help="Number of buckets")
-    parser.add_argument("--thread", type=int, default=115, help="Number of threads") # Uses the number of roughly CPUs on a TPU
+    parser.add_argument(
+        "--thread", type=int, default=115, help="Number of threads"
+    )  # Uses the number of roughly CPUs on a TPU
     parser.add_argument("--lrUpdateRate", type=int, default=100, help="Change the rate of updates for the learning rate")
     parser.add_argument("--t", type=float, default=0.0001, help="Sampling threshold")
     parser.add_argument("--label", type=str, default="__label__", help="Label prefix")

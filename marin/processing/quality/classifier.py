@@ -33,10 +33,11 @@ class DummyQualityClassifier(BaseQualityClassifier):
         batch.update({"attributes": [{"dummy-quality": score} for score in scores]})
         return batch
 
+
 class FasttextQualityClassifier(BaseQualityClassifier):
     _MODEL_NAME_TO_MODEL_FILENAME_DICT = {
-        "mlfoundations/fasttext-oh-eli5" : "openhermes_reddit_eli5_vs_rw_v2_bigram_200k_train.bin",
-        "allenai/dolma-1_7-fasttext-quality-filter" : "model.bin",
+        "mlfoundations/fasttext-oh-eli5": "openhermes_reddit_eli5_vs_rw_v2_bigram_200k_train.bin",
+        "allenai/dolma-1_7-fasttext-quality-filter": "model.bin",
     }
 
     def __init__(self, model_name: str, attribute_name: str, *args, **kwargs):
@@ -107,13 +108,21 @@ class BERTQualityClassifier(BaseQualityClassifier):
     def __call__(self, batch: Dict[str, Any]) -> Dict[str, Any]:
         raise NotImplementedError
 
+
 class FinewebEduQualityClassifier(BERTQualityClassifier):
     def __call__(self, batch: Dict[str, Any]) -> Dict[str, Any]:
         scores = self.predict(batch["text"])
 
         # Fineweb edu classifier is scored on educational value from 0 to 5, so we want to round to the nearest integer.
         int_scores = [int(round(max(0, min(score, 5)))) for score in scores]
-        batch.update({"attributes": [{self.attribute_name: {"score": score, "int_score": int_score}} for score, int_score in zip(scores, int_scores)]})
+        batch.update(
+            {
+                "attributes": [
+                    {self.attribute_name: {"score": score, "int_score": int_score}}
+                    for score, int_score in zip(scores, int_scores)
+                ]
+            }
+        )
 
         return batch
 

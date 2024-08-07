@@ -14,6 +14,7 @@ import time
 import fsspec
 import ray
 
+
 @ray.remote
 class QueueActor:
     def __init__(self):
@@ -37,6 +38,7 @@ class QueueActor:
     def is_finished(self):
         return self.finished
 
+
 @ray.remote
 def process_file(json_path: str, label: str) -> List[str]:
     labeled_lines = []
@@ -49,6 +51,7 @@ def process_file(json_path: str, label: str) -> List[str]:
                 labeled_lines.append(f"__label__{label} {text}")
     return labeled_lines
 
+
 @ray.remote
 def write_to_file(output_file: str, queue_actor):
     with fsspec.open(output_file, "wt", compression="gzip") as f:
@@ -60,6 +63,7 @@ def write_to_file(output_file: str, queue_actor):
                 break
             else:
                 time.sleep(0.1)  # Short sleep to avoid busy waiting
+
 
 def main(high_quality_files: List[str], low_quality_files: List[str], output_file: str):
     ray.init()
@@ -93,6 +97,7 @@ def main(high_quality_files: List[str], low_quality_files: List[str], output_fil
     ray.get(writer)
 
     print(f"[*] Training file created at: {output_file}")
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
