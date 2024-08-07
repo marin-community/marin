@@ -7,7 +7,7 @@ from google.cloud import storage
 from huggingface_hub import hf_hub_download
 
 
-class BaseQualityClassifier:
+class BaseClassifier:
     def __init__(self, model_name: str, attribute_name: str, *args, **kwargs):
         self.model_name = model_name
         self.attribute_name = attribute_name
@@ -19,7 +19,7 @@ class BaseQualityClassifier:
         raise NotImplementedError
 
 
-class DummyQualityClassifier(BaseQualityClassifier):
+class DummyClassifier(BaseClassifier):
     def __init__(self, model_name: str, attribute_name: str, *args, **kwargs):
         self.model_name = model_name
         self.attribute_name = attribute_name
@@ -34,7 +34,7 @@ class DummyQualityClassifier(BaseQualityClassifier):
         return batch
 
 
-class FasttextQualityClassifier(BaseQualityClassifier):
+class FasttextClassifier(BaseClassifier):
     _MODEL_NAME_TO_MODEL_FILENAME_DICT = {
         "mlfoundations/fasttext-oh-eli5": "openhermes_reddit_eli5_vs_rw_v2_bigram_200k_train.bin",
         "allenai/dolma-1_7-fasttext-quality-filter": "model.bin",
@@ -77,7 +77,7 @@ class FasttextQualityClassifier(BaseQualityClassifier):
         return res
 
 
-class BERTQualityClassifier(BaseQualityClassifier):
+class BERTClassifier(BaseClassifier):
     def __init__(self, model_name: str, attribute_name: str, *args, **kwargs):
         from transformers import AutoTokenizer, FlaxAutoModelForSequenceClassification
 
@@ -96,7 +96,7 @@ class BERTQualityClassifier(BaseQualityClassifier):
         raise NotImplementedError
 
 
-class FinewebEduQualityClassifier(BERTQualityClassifier):
+class FinewebEduClassifier(BERTClassifier):
     def __call__(self, batch: Dict[str, Any]) -> Dict[str, Any]:
         scores = self.predict(batch["text"])
 
@@ -114,10 +114,10 @@ class FinewebEduQualityClassifier(BERTQualityClassifier):
         return batch
 
 
-class AutoClassifier(BaseQualityClassifier):
+class AutoClassifier(BaseClassifier):
     _MODEL_NAME_TO_CLS_DICT = {
-        "fasttext": FasttextQualityClassifier,
-        "fineweb": FinewebEduQualityClassifier,
+        "fasttext": FasttextClassifier,
+        "fineweb": FinewebEduClassifier,
     }
 
     def __init__(self, model_name, attribute_name, *args, **kwargs):

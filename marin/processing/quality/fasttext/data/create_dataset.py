@@ -1,5 +1,7 @@
 """
-Code to load and preprocess data for fasttext training
+Code to load in Dolma formatted data and create a single file with data in fasttext format:
+"__label__{label_name} {text}" for each row in the input files, where the label can be 
+"hq" or "lq" depending on whether it is a high quality data source or low quality data source.
 
 Usage:
 ray job submit --working-dir . --no-wait -- \

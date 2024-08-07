@@ -1,4 +1,6 @@
 """
+TODO(Chris): Merge the logic of diplaying attributes to @abhinavg4's example server code.
+
 Usage:
 python -m marin.processing.quality.eval.annotations_server --input-file gs://marin-data/filtered/fineweb-edu-quality-3.0/fineweb/fw-v1.0/md/CC-MAIN-2020-10/000_00000/0_processed.jsonl.gz --attributes-file gs://marin-data/processed/fineweb/fw-v1.0/attributes_md/fineweb-edu-quality/CC-MAIN-2020-10/000_00000/0_processed.jsonl.gz
 """

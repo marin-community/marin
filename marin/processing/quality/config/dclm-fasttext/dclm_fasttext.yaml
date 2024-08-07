@@ -1,5 +1,7 @@
-input_dir: "gs://marin-data/processed/wikipedia/md/"
-output_dir: "gs://marin-data/processed/wikipedia/attributes_md/dclm-fasttext-quality/"
+# Copy this template yaml and change the input and output directory accordingly.
+
+input_dir: "gs://marin-$REGION/documents/$EXPERIMENT/$DATASET/$VERSION/"
+output_dir: "gs://marin-$REGION/attributes/$EXPERIMENT/$DATASET/$VERSION/"
 model_name: "mlfoundations/fasttext-oh-eli5"
 attribute_name: "dclm-fasttext-quality"
 runtime:
