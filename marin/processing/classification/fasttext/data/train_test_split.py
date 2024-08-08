@@ -5,7 +5,7 @@ up to the test-ratio proportion of the input file.
 
 Usage:
 ray job submit --working-dir . --no-wait -- \
-python -m marin.processing.quality.fasttext.data.train_test_split --input-file <input_file> --output-train-file <output_train_file> --output-test-file <output_test_file> --test-ratio <test_ratio>
+python -m marin.processing.classification.fasttext.data.train_test_split --input-file <input_file> --output-train-file <output_train_file> --output-test-file <output_test_file> --test-ratio <test_ratio>
 """
 
 import argparse

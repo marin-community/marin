@@ -2,10 +2,10 @@
 Usage:
 
 ray job submit --working-dir . --no-wait -- \
-python -m marin.processing.quality.filter --input_dir gs://marin-data/processed/fineweb/fw-v1.0/md/CC-MAIN-2020-24/ --output_dir gs://marin-data/filtered/dclm-fasttext-quality/fineweb/fw-v1.0/md/CC-MAIN-2020-24/
+python -m marin.processing.classification.filter --input_dir gs://marin-data/processed/fineweb/fw-v1.0/md/CC-MAIN-2020-24/ --output_dir gs://marin-data/filtered/dclm-fasttext-quality/fineweb/fw-v1.0/md/CC-MAIN-2020-24/
 
 ray job submit --working-dir . --no-wait -- \
-python -m marin.processing.quality.filter --input_dir gs://marin-data/processed/fineweb/fw-v1.0/md/CC-MAIN-2020-10/000_00000/ --file_format md --attribute_name fineweb-edu-quality --threshold 3
+python -m marin.processing.classification.filter --input_dir gs://marin-data/processed/fineweb/fw-v1.0/md/CC-MAIN-2020-10/000_00000/ --file_format md --attribute_name fineweb-edu-quality --threshold 3
 """
 
 import json
