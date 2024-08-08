@@ -11,7 +11,7 @@ import ray
 from ray import ObjectRef
 from ray.remote_function import RemoteFunction
 
-from marin.utils import fsspec_exists, fsspec_glob, fsspec_mkdirs, rebase_file_path
+from marin.utils import fsspec_exists, fsspec_glob, fsspec_mkdirs, rebase_file_path, fsspec_get_curr_subdirectories, fsspec_isdir
 
 logger = logging.getLogger("ray")
 
@@ -120,6 +120,38 @@ def map_files_in_directory(
         outputs = []
         for file in files:
             outputs.append(func_to_call(file))
+
+    return outputs
+
+def map_directories_in_directory(
+    func: Callable | RemoteFunction,
+    input_dir: str,
+    output_dir: str,
+    task_config: TaskConfig = TaskConfig(),  # noqa
+    *args,
+    **kwargs,
+):
+    # Gets all the directories in a directory
+    directories = fsspec_get_curr_subdirectories(input_dir)
+
+    if len(directories) == 0:
+        return []
+
+    def func_to_call(input_subdir):
+        # Construct the output directory
+        output_subdir = rebase_file_path(input_dir, input_subdir, output_dir)
+        fsspec_mkdirs(output_subdir)
+        return func(input_subdir, output_subdir, *args, **kwargs)
+
+    if isinstance(func, ray.remote_function.RemoteFunction):
+        # If the function is a ray.remote function, then execute it in parallel
+        responses = simple_backpressure(func_to_call, iter(directories), task_config.max_in_flight, fetch_local=True)
+        return responses
+    else:
+        # Map the function to all files
+        outputs = []
+        for directory in directories:
+            outputs.append(func_to_call(directory))
 
     return outputs
 
