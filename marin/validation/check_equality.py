@@ -5,7 +5,7 @@ We want to make sure that the attributes match up one to one with the original t
 their respective IDs.
 
 Usage:
-python -m marin.processing.quality.check_equality --dir1 "gs://marin-data/processed/fineweb/fw-v1.0/md/CC-MAIN-2022-40/000_00000" --dir2 "gs://marin-data/scratch/chrisc/test-fineweb/fw-v1.0/md/CC-MAIN-2022-40/000_00000"
+python -m marin.validation.check_equality --dir1 "gs://marin-data/processed/fineweb/fw-v1.0/md/CC-MAIN-2022-40/000_00000" --dir2 "gs://marin-data/scratch/chrisc/test-fineweb/fw-v1.0/md/CC-MAIN-2022-40/000_00000"
 """
 
 import argparse

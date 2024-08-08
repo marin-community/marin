@@ -6,7 +6,7 @@ The final file format is a single text file with one line per label-text pair.
 
 Usage:
 ray job submit --working-dir . --no-wait -- \
-python -m marin.processing.quality.fasttext.data.create_dataset --high-quality-files <input_files> --low-quality-files <input_files> --output-file <output_file>
+python -m marin.processing.classification.fasttext.data.create_dataset --high-quality-files <input_files> --low-quality-files <input_files> --output-file <output_file>
 """
 
 import argparse

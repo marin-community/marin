@@ -2,7 +2,7 @@
 Usage:
 
 ray job submit --working-dir . --no-wait -- \
-python -m marin.processing.quality.inference --config marin/processing/quality/embedding/fineweb.yaml
+python -m marin.processing.classification.inference --config marin/processing/classification/embedding/fineweb.yaml
 """
 
 import argparse
@@ -19,12 +19,12 @@ from ray.data.datasource import FilenameProvider
 from ray.runtime_env import RuntimeEnv
 
 from marin.core.runtime import cached_or_construct_output, map_files_in_directory, map_directories_in_directory
-from marin.processing.quality.config.inference_config import InferenceConfig, StorageConfig
-from marin.processing.quality.classifier import (
+from marin.processing.classification.config.inference_config import InferenceConfig, StorageConfig
+from marin.processing.classification.classifier import (
     AutoClassifier,
     BaseClassifier,
 )
-from marin.processing.quality.utils import (
+from marin.processing.classification.utils import (
     download_huggingface_file_with_backoff,
     download_gcs_file_with_backoff,
     is_json_serializable,

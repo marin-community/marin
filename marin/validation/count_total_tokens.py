@@ -2,7 +2,7 @@
 Usage:
 
 ray job submit --working-dir . --no-wait -- \
-python -m marin.processing.quality.count_total_tokens --input_dir gs://marin-data/filtered/dclm-fasttext-quality/fineweb/fw-v1.0/md/
+python -m marin.validation.count_total_tokens --input_dir gs://marin-data/filtered/dclm-fasttext-quality/fineweb/fw-v1.0/md/
 """
 
 import argparse

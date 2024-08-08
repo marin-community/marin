@@ -5,7 +5,7 @@ output_dir: "gs://marin-$REGION/attributes/$EXPERIMENT/$DATASET/$VERSION/"
 model_name: "HuggingFaceFW/fineweb-edu-classifier"
 attribute_name: "fineweb-edu-quality"
 runtime:
-  requirements_filepath: "marin/processing/quality/config/fineweb_edu_classifier_requirements.txt"
+  requirements_filepath: "marin/processing/classification/config/fineweb_edu_classifier_requirements.txt"
   memory_limit_gb: 16
   tpu_resources_per_task: 1
 task:

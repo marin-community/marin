@@ -1,7 +1,7 @@
 """
 Usage:
 ray job submit --working-dir . --no-wait -- \
-python -m marin.processing.quality.fasttext.model.train --input-file <input_file> --output-model-path <output_model_path> [other options]
+python -m marin.processing.classification.fasttext.model.train --input-file <input_file> --output-model-path <output_model_path> [other options]
 """
 
 import argparse
