@@ -10,16 +10,16 @@ python3 run.py <Name of eval harness> --model_gcs_path <GCS path to model> --eva
 import argparse
 import time
 
-from scripts.evaluation.evaluation_harness_factory import get_evaluation_harness, NAME_TO_EVALUATION_HARNESS
-from scripts.evaluation.evaluation_harness import EvaluationHarness
+from scripts.evaluation.evaluator_factory import get_evaluator, NAME_TO_EVALUATOR
+from scripts.evaluation.evaluator import Evaluator
 
 
 def main():
-    print(f"Evaluating {args.model_gcs_path} with {args.eval_harness}")
+    print(f"Evaluating {args.model_path} with {args.evaluator}")
     start_time: float = time.time()
-    harness: EvaluationHarness = get_evaluation_harness(args.eval_harness)
+    harness: Evaluator = get_evaluator(args.evaluator)
     harness.evaluate(
-        model_gcs_path=args.model_gcs_path,
+        model_gcs_path=args.model_path,
         evals=args.evals,
         output_path=args.output_path,
     )
@@ -27,14 +27,16 @@ def main():
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Run an evaluation harness")
+    parser = argparse.ArgumentParser(description="Run an evaluator on a model checkpoint.")
     parser.add_argument(
-        "eval_harness",
+        "evaluator",
         type=str,
-        help="Which eval harness to run",
-        choices=list(NAME_TO_EVALUATION_HARNESS.keys()),
+        help="Which evaluator to run",
+        choices=list(NAME_TO_EVALUATOR.keys()),
     )
-    parser.add_argument("--model-gcs-path", type=str, help="GCS path to the model to evaluate", required=True)
+    parser.add_argument(
+        "--model-path", type=str, help="Path to the model to evaluate (can be a GCS path)", required=True
+    )
     parser.add_argument(
         "-e",
         "--evals",

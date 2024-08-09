@@ -17,7 +17,7 @@ class Dependency:
         return f"{self.name}=={self.version}" if self.version else self.name
 
 
-class EvaluationHarness(ABC):
+class Evaluator(ABC):
 
     _python_version: str
     _pip_packages: List[Dependency]
@@ -26,13 +26,13 @@ class EvaluationHarness(ABC):
     @abstractmethod
     def evaluate(self, model_gcs_path: str, evals: List[str], output_path: str) -> None:
         """
-        Run the evaluation harness given the model checkpoint, the list of evaluations to run, and the output path.
+        Run the evaluator given the model checkpoint, the list of evaluations to run, and the output path.
         """
         pass
 
     def get_runtime_env(self) -> Dict:
         """
-        Returns the runtime environment to run the evaluation harness on the Ray cluster.
+        Returns the runtime environment to run the evaluator on the Ray cluster.
         """
         runtime_env = {
             "pip": {
