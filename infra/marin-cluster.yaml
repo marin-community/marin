@@ -55,6 +55,7 @@ initialization_commands:
   - sudo apt-get update
   - sudo NEEDRESTART_MODE=a DEBIAN_FRONTEND=noninteractive apt-get upgrade -y
   - sudo NEEDRESTART_MODE=a DEBIAN_FRONTEND=noninteractive apt-get install -y python3-pip python-is-python3 pandoc
+  # Install OpenBLAS, OpenMPI, and OpenMP for eval dependencies
   - sudo NEEDRESTART_MODE=a DEBIAN_FRONTEND=noninteractive apt-get install -y libopenblas-base libopenmpi-dev libomp-dev 
 
 
