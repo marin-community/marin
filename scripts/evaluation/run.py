@@ -19,7 +19,7 @@ def main():
     start_time: float = time.time()
     harness: Evaluator = get_evaluator(args.evaluator)
     harness.evaluate(
-        model_gcs_path=args.model_path,
+        model_path=args.model_path,
         evals=args.evals,
         output_path=args.output_path,
     )
