@@ -24,7 +24,7 @@ class Evaluator(ABC):
     _py_modules: List[Dependency]
 
     @abstractmethod
-    def evaluate(self, model_gcs_path: str, evals: List[str], output_path: str) -> None:
+    def evaluate(self, model_path: str, evals: List[str], output_path: str) -> None:
         """
         Run the evaluator given the model checkpoint, the list of evaluations to run, and the output path.
         """

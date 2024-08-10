@@ -46,6 +46,7 @@ class NoopEvaluator(Evaluator):
         # https://docs.vllm.ai/en/latest/getting_started/examples/offline_inference_tpu.html
         from vllm import LLM, SamplingParams
 
+        print("Running some simple model inference.")
         prompts = [
             "A robot may not injure a human being",
             "It is only with the heart that one can see rightly;",
@@ -63,16 +64,21 @@ class NoopEvaluator(Evaluator):
         # Set `enforce_eager=True` to avoid ahead-of-time compilation.
         # In real workloads, `enforace_eager` should be `False`.
         llm = LLM(model="google/gemma-2b", enforce_eager=True)
+        print("Model loaded.")
+
         outputs = llm.generate(prompts, sampling_params)
+        print("Model inference done")
         for output, answer in zip(outputs, answers):
             prompt = output.prompt
             generated_text = output.outputs[0].text
             print(f"Prompt: {prompt!r}, Generated text: {generated_text!r}")
             assert generated_text.startswith(answer)
 
-    def evaluate(self, model_gcs_path: str, evals: List[str], output_path: str) -> None:
+    def evaluate(self, model_path: str, evals: List[str], output_path: str) -> None:
         """
         Run the evaluation harness.
         """
+        print(f"Running {evals} on {model_path} and saving results to {output_path}...")
         ray.init(runtime_env=self.get_runtime_env())
-        ray.get(self._run_something.remote(model_gcs_path, evals, output_path))
+        print("Ray initialized with dependencies.")
+        ray.get(self._run_something.remote(model_path, evals, output_path))
