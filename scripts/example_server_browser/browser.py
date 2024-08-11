@@ -14,7 +14,7 @@ app = Flask(__name__)
 
 
 def canonicalize_format_type(format_type: str):
-    '''Given format_type from jsonl file, get rendering format'''
+    """Given format_type from jsonl file, get rendering format"""
     if format_type == 'md' or format_type == 'markdown':
         return 'markdown'
     elif format_type == 'html' or format_type == 'xml':
