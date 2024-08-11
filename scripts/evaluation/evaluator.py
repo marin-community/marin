@@ -2,6 +2,8 @@ from abc import ABC, abstractmethod
 from typing import Dict, List, Optional
 from dataclasses import dataclass
 
+import subprocess
+
 
 @dataclass(frozen=True)
 class Dependency:
@@ -23,10 +25,17 @@ class Evaluator(ABC):
     _pip_packages: List[Dependency]
     _py_modules: List[Dependency]
 
+    @staticmethod
+    def run_bash_command(command: str) -> None:
+        """
+        Runs a bash command.
+        """
+        subprocess.run(command, shell=True, check=True)
+
     @abstractmethod
     def evaluate(self, model_path: str, evals: List[str], output_path: str) -> None:
         """
-        Run the evaluator given the model checkpoint, the list of evaluations to run, and the output path.
+        Runs the evaluator given the model checkpoint, the list of evaluations to run, and the output path.
         """
         pass
 
