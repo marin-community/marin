@@ -1,9 +1,9 @@
 """
-Script to run an evaluation harnesses on a model checkpoint.
+Script to run an evaluator on a model checkpoint.
 
 Usage:
 
-python3 run.py <Name of eval harness> --model_gcs_path <GCS path to model> --evals <List of evals to run> \
+python3 run.py <Name of evaluator> --model_gcs_path <GCS path to model> --evals <List of evals to run> \
 --output-path <Where to output logs and results>
 """
 
@@ -17,8 +17,8 @@ from scripts.evaluation.evaluator import Evaluator
 def main():
     print(f"Evaluating {args.model_path} with {args.evaluator}")
     start_time: float = time.time()
-    harness: Evaluator = get_evaluator(args.evaluator)
-    harness.evaluate(
+    evaluator: Evaluator = get_evaluator(args.evaluator)
+    evaluator.evaluate(
         model_path=args.model_path,
         evals=args.evals,
         output_path=args.output_path,

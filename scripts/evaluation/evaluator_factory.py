@@ -1,9 +1,9 @@
 from scripts.evaluation.evaluator import Evaluator
-from scripts.evaluation.noop_evaluator import NoopEvaluator
+from scripts.evaluation.simple_inference_evaluator import SimpleInferenceEvaluator
 
 # Supported evaluators
 NAME_TO_EVALUATOR = {
-    "noop": NoopEvaluator,
+    "simple": SimpleInferenceEvaluator,
 }
 
 
