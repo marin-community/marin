@@ -13,7 +13,7 @@ from marin.utils import get_gcs_path
 app = Flask(__name__)
 
 
-def get_format_type(format_type):
+def canonicalize_format_type(format_type: str):
     '''Given format_type from jsonl file, get rendering format'''
     if format_type == 'md' or format_type == 'markdown':
         return 'markdown'
@@ -66,7 +66,7 @@ def list_files():
     return render_template_string(html_content)
 
 
-def render_content(content, format_type):
+def render_content(content: str, format_type: str):
     '''Render content based on format type'''
 
     content_render = ""
@@ -82,12 +82,12 @@ def render_content(content, format_type):
     return content_render
 
 
-def render(path, record, title_suffix=""):
-    '''Render the title and content of the record'''
+def render(path: str, record: dict, title_suffix: str = ""):
+    """Render the title and content of the record"""
 
     # If "format" is not present then we render it as text
     rendered_content = []
-    format_type = get_format_type(record.get('format', 'text'))
+    format_type = canonicalize_format_type(record.get('format', 'text'))
     rendered_content.append({'title': f"{path} ; {format_type} ; {title_suffix}",
                              'rendered': render_content(record['text'], format_type)})
 
