@@ -1,6 +1,7 @@
 import json
 import os
 import traceback
+from collections import defaultdict
 
 import comrak_py
 import fsspec
@@ -22,6 +23,7 @@ def get_format_type(format_type):
         return 'text'
     else:  # We support the only three types above
         raise ValueError(f'Unsupported format type: {format_type}')
+
 
 @app.route('/')
 def list_files():
@@ -80,54 +82,58 @@ def render_content(content, format_type):
     return content_render
 
 
-def render(path, record):
+def render(path, record, title_suffix=""):
     '''Render the title and content of the record'''
 
     # If "format" is not present then we render it as text
     rendered_content = []
     format_type = get_format_type(record.get('format', 'text'))
-    rendered_content.append({'title': f"{path} {format_type}", 'rendered': render_content(record['text'], format_type)})
+    rendered_content.append({'title': f"{path} ; {format_type} ; {title_suffix}",
+                             'rendered': render_content(record['text'], format_type)})
 
     if format_type == 'markdown':  # We also render raw markdown
-        rendered_content.append({'title': f"{path} Raw Markdown", 'rendered': render_content(record['text'], 'text')})
+        rendered_content.append({'title': f"{path} ; Raw Markdown ; {title_suffix}",
+                                 'rendered': render_content(record['text'], 'text')})
 
     return rendered_content
+
 
 # Route to display the content
 @app.route('/content', methods=['GET'])
 def display_content():
     paths = request.args.get('paths')
     index = int(request.args.get('index', 0))
+    count = int(request.args.get('count', 1))  # Get the count parameter with a default value of 1
 
     if not paths:
         return jsonify({'error': 'Paths parameter is required'}), 400
 
     paths = paths.split(',')
-    record = None
+    rendered_content = []
+    jsons_to_render = defaultdict(list)
+
     try:
-        rendered_content = []
         for path in paths:
             filename = get_gcs_path(path)
             with fsspec.open(filename, 'rt', compression='gzip', use_listings_cache=False) as file:
                 for i, line in enumerate(file):
-                    if i == index:
+                    if i >= index and i < index + count:
                         record = json.loads(line.strip())
+                        jsons_to_render[i].append((record, path))
+                        # rendered_content += render(path, record, title_suffix)
+                    if i >= index + count - 1:  # Stop reading after we've collected `count` items
                         break
 
-            if not record:
-                return jsonify({'error': f'Record not found in {path} at index {index}'}), 404
-
-            source_id = record['id']
-
-            rendered_content += render(path, record)
-
+        for i, records in jsons_to_render.items():
+            for record, path in records:
+                rendered_content += render(path, record, f"Index: {i}")
 
         html_content = '''
         <!DOCTYPE html>
         <html lang="en">
         <head>
             <meta charset="UTF-8">
-            <title>Line {} of {}</title>
+            <title>Records {} to {} of {}</title>
             <style>
                 .dropdown-header {{
                     background-color: #f2f2f2;
@@ -151,9 +157,9 @@ def display_content():
             </script>
         </head>
         <body>
-            <h1>Example with ID: {}, in {}</h1>
+            <h1>Example Records from Index {} to {} in {}</h1>
             <p> Each title is a dropdown, you can click on it</p>
-        '''.format(escape(source_id), ', '.join(paths), escape(source_id), ', '.join(paths))
+        '''.format(index, index + count - 1, ', '.join(paths), index, index + count - 1, ', '.join(paths))
 
         for i, item in enumerate(rendered_content):
             html_content += '''
@@ -163,12 +169,12 @@ def display_content():
             </div>
             '''.format(i, escape(item['title']), i, item['rendered'])
 
-        if int(index) > 0:
-            html_content += f'<a href="/content?paths={",".join(paths)}&index={0}">First</a>'
+        if index > 0:
+            html_content += f'<a href="/content?paths={",".join(paths)}&index={0}&count={count}">First</a>'
             html_content += ' | '
-            html_content += f'<a href="/content?paths={",".join(paths)}&index={int(index) - 1}">Previous</a>'
+            html_content += f'<a href="/content?paths={",".join(paths)}&index={max(0, index - count)}&count={count}">Previous</a>'
             html_content += ' | '
-        html_content += f'<a href="/content?paths={",".join(paths)}&index={int(index) + 1}">Next</a>'
+        html_content += f'<a href="/content?paths={",".join(paths)}&index={index + count}&count={count}">Next</a>'
 
         html_content += '''
         </body>
@@ -183,4 +189,4 @@ def display_content():
 
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run()
