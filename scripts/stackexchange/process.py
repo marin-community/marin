@@ -101,10 +101,10 @@ def post_to_md(
 class ProcessStackExchangeConfig:
     # fmt: off
     input_dir: str = (                                      # GCS Path with StackExchange dumps per subdomain (.7z)
-        "gs://marin-data/raw/stackexchange/archive.org/download/stackexchange"
+        "gs://marin-us-central2/raw/stackexchange/v2024-04-02"
     )
     output_dir: str = (                                     # GCS Path to write Dolma-formatted markdown files
-        "gs://marin-data/processed/stackexchange/v2024-04-02"
+        "gs://marin-us-central2/documents/{experiment_id}/stackexchange/v2024-04-02"
     )
 
     # StackExchange Parameters
@@ -118,20 +118,20 @@ class ProcessStackExchangeConfig:
 
 
 @draccus.wrap()
-def main(config: ProcessStackExchangeConfig) -> None:
-    logger.info(f"Processing StackExchange XML (.7z) Dumps to Markdown (Format = `{config.markdown_format.value}`)")
+def main(cfg: ProcessStackExchangeConfig) -> None:
+    logger.info(f"Processing StackExchange XML (.7z) Dumps to Markdown (Format = `{cfg.markdown_format.value}`)")
 
     # Initialize Connection to Cluster
     ray.init()
 
-    # GCS Output Path should reflect Markdown format
-    output_dir = os.path.join(config.output_dir, f"md-{config.markdown_format.value}")
+    # GCS Output Path `experiment_id` should reflect Markdown format
+    output_dir = cfg.output_dir.format(experiment_id=f"md-{cfg.markdown_format.value}")
 
     # === This is basically a rewrite of `map_files_in_directory` so we can have finer-grained control ===
 
     # Handle StackOverflow's unique format -- purge the -Badges/-Comments/-<Whatever> files!
-    files = [f for f in fsspec_glob(os.path.join(config.input_dir, "*.7z")) if "stackoverflow.com-" not in f]
-    files.append(os.path.join(config.input_dir, "stackoverflow.com-Posts.7z"))
+    files = [f for f in fsspec_glob(os.path.join(cfg.input_dir, "*.7z")) if "stackoverflow.com-" not in f]
+    files.append(os.path.join(cfg.input_dir, "stackoverflow.com-Posts.7z"))
 
     # Invoke Ray Functions --> track job references
     responses: List[ray.ObjectRef] = []
@@ -143,12 +143,12 @@ def main(config: ProcessStackExchangeConfig) -> None:
         if subdomain in RAY_MEMORY_OVERRIDES:
             responses.append(
                 post_to_md.options(memory=RAY_MEMORY_OVERRIDES[subdomain]).remote(
-                    input_file, output_file, subdomain, markdown_format=config.markdown_format
+                    input_file, output_file, subdomain, markdown_format=cfg.markdown_format
                 )
             )
         else:
             responses.append(
-                post_to_md.remote(input_file, output_file, subdomain, markdown_format=config.markdown_format)
+                post_to_md.remote(input_file, output_file, subdomain, markdown_format=cfg.markdown_format)
             )
 
     # Wait on Success
