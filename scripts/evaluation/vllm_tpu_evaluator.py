@@ -42,7 +42,7 @@ class VllmTpuEvaluator(Evaluator, ABC):
         # Additional dependencies to install in order for VLLM to work on TPUs
         VllmTpuEvaluator.run_bash_command("sudo apt-get update && sudo apt-get install libopenblas-dev --yes")
         VllmTpuEvaluator.run_bash_command(
-            "pip install torch_xla[tpu] " "-f https://storage.googleapis.com/libtpu-releases/index.html"
+            "pip install torch_xla[tpu] -f https://storage.googleapis.com/libtpu-releases/index.html"
         )
         VllmTpuEvaluator.run_bash_command(
             "pip install torch_xla[pallas] "
