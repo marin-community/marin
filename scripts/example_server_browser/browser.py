@@ -161,6 +161,8 @@ def display_content():
             <p> Each title is a dropdown, you can click on it</p>
         '''.format(index, index + count - 1, ', '.join(paths), index, index + count - 1, ', '.join(paths))
 
+        html_content += navbar(count, index, paths)
+
         for i, item in enumerate(rendered_content):
             html_content += '''
             <div class="dropdown">
@@ -169,12 +171,7 @@ def display_content():
             </div>
             '''.format(i, escape(item['title']), i, item['rendered'])
 
-        if index > 0:
-            html_content += f'<a href="/content?paths={",".join(paths)}&index={0}&count={count}">First</a>'
-            html_content += ' | '
-            html_content += f'<a href="/content?paths={",".join(paths)}&index={max(0, index - count)}&count={count}">Previous</a>'
-            html_content += ' | '
-        html_content += f'<a href="/content?paths={",".join(paths)}&index={index + count}&count={count}">Next</a>'
+        html_content += navbar(count, index, paths)
 
         html_content += '''
         </body>
@@ -186,6 +183,17 @@ def display_content():
         stack = traceback.format_exc().replace("\n", "<br>")
         error_msg = f'''Server internal Error<br>Error: {e}<br>Stack Trace: {stack}'''
         return error_msg, 500
+
+
+def navbar(count: int, index: int, paths: list[str]) -> str:
+    navbar = ""
+    if index > 0:
+        navbar += f'<a href="/content?paths={",".join(paths)}&offset={0}&count={count}">First</a>'
+        navbar += ' | '
+        navbar += f'<a href="/content?paths={",".join(paths)}&offset={max(0, index - count)}&count={count}">Previous</a>'
+        navbar += ' | '
+    navbar += f'<a href="/content?paths={",".join(paths)}&offset={index + count}&count={count}">Next</a>'
+    return navbar
 
 
 if __name__ == '__main__':
