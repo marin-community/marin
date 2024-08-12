@@ -16,6 +16,7 @@ import time
 
 import fsspec
 import ray
+from marin.utils import fsspec_glob, fsspec_isdir
 
 
 @ray.remote
@@ -41,9 +42,27 @@ class QueueActor:
     def is_finished(self):
         return self.finished
 
+@ray.remote
+def process_preprocessed_file(preprocessed_path: str) -> List[str]:
+    """
+    Process a file that is already in fasttext format. Assumes that the text is uncompressed.
+    Used in the case such as combining DCLM's O-H 2.5 fasttext files with the rest of the data.
+    """
+
+    labeled_lines = []
+    with fsspec.open(preprocessed_path, "rt") as f_in:
+        for line in f_in:
+            text = line.strip()
+            labeled_lines.append(text)
+
+    return labeled_lines
 
 @ray.remote
 def process_file(json_path: str, label: str) -> List[str]:
+    """
+    Process a file that is in Dolma format.
+    """
+
     labeled_lines = []
     with fsspec.open(json_path, "rt", compression="gzip") as f_in:
         for line in f_in:
@@ -68,7 +87,19 @@ def write_to_file(output_file: str, queue_actor):
                 time.sleep(0.1)  # Short sleep to avoid busy waiting
 
 
-def main(high_quality_files: List[str], low_quality_files: List[str], output_file: str):
+# Given a list of filepaths, return a list of files to process
+# If the filepath is a directory, recursively search for .jsonl.gz files
+def get_files(filepaths: List[str]):
+    files = []
+    for filepath in filepaths:
+        if fsspec_isdir(filepath):
+            files.extend(fsspec_glob(filepath, "**/*.jsonl.gz"))
+        else:
+            files.append(filepath)
+    return files
+
+
+def main(high_quality_filepaths: List[str], low_quality_filepaths: List[str], preprocessed_filepaths: List[str], output_file: str):
     ray.init()
 
     # We set a large memory limit for the queue actor to avoid memory issues when
@@ -80,6 +111,9 @@ def main(high_quality_files: List[str], low_quality_files: List[str], output_fil
 
     # Process files and add results to the queue
     tasks = []
+    high_quality_files = get_files(high_quality_filepaths)
+    low_quality_files = get_files(low_quality_filepaths)
+    preprocessed_files = get_files(preprocessed_filepaths)
     for filename in high_quality_files:
         label = "hq"
         task = process_file.remote(filename, label)
@@ -88,6 +122,10 @@ def main(high_quality_files: List[str], low_quality_files: List[str], output_fil
     for filename in low_quality_files:
         label = "lq"
         task = process_file.remote(filename, label)
+        tasks.append(queue_actor.add.remote(task))
+    
+    for filename in preprocessed_files:
+        task = process_preprocessed_file.remote(filename)
         tasks.append(queue_actor.add.remote(task))
 
     # Wait for all tasks to complete
@@ -106,6 +144,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--high-quality-files", nargs="+", type=str, required=True)
     parser.add_argument("--low-quality-files", nargs="+", type=str, required=True)
+    parser.add_argument("--preprocessed-files", nargs="+", type=str, required=False)
     parser.add_argument("--output-file", type=str, required=True)
 
     args = parser.parse_args()
