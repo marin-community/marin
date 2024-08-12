@@ -3,8 +3,8 @@ Script to run an evaluator on a model checkpoint.
 
 Usage:
 
-python3 run.py <Name of evaluator> --model_gcs_path <GCS path to model> --evals <List of evals to run> \
---output-path <Where to output logs and results>
+python3 run.py <Name of evaluator> --model <Path to model or Hugging Face model name> \
+--evals <List of evals to run> --output-path <Where to output logs and results>
 """
 
 import argparse
