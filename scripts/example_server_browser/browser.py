@@ -13,7 +13,7 @@ from marin.utils import get_gcs_path
 app = Flask(__name__)
 
 
-def canonicalize_format_type(format_type: str):
+def canonicalize_format_type(format_type: str) -> str:
     """Given format_type from jsonl file, get rendering format"""
     if format_type == 'md' or format_type == 'markdown':
         return 'markdown'
@@ -27,7 +27,7 @@ def canonicalize_format_type(format_type: str):
 
 @app.route('/')
 def list_files():
-    path = request.args.get('path', '')
+    path = request.args.get('path')
     fs = fsspec.filesystem("gcs", use_listings_cache=False)
     if path:
         files = fs.ls(f"gcs://{path}")
@@ -66,8 +66,8 @@ def list_files():
     return render_template_string(html_content)
 
 
-def render_content(content: str, format_type: str):
-    '''Render content based on format type'''
+def render_content(content: str, format_type: str) -> str:
+    """Render content based on format type"""
 
     content_render = ""
     if format_type == 'text':
@@ -82,7 +82,7 @@ def render_content(content: str, format_type: str):
     return content_render
 
 
-def render(path: str, record: dict, title_suffix: str = ""):
+def render(path: str, record: dict, title_suffix: str = "") -> list[dict]:
     """Render the title and content of the record"""
 
     # If "format" is not present then we render it as text
@@ -102,8 +102,8 @@ def render(path: str, record: dict, title_suffix: str = ""):
 @app.route('/content', methods=['GET'])
 def display_content():
     paths = request.args.get('paths')
-    index = int(request.args.get('index', 0))
-    count = int(request.args.get('count', 1))  # Get the count parameter with a default value of 1
+    index = int(request.args.get('offset', 0))  # offset: which record (from the beginning) to start displaying
+    count = int(request.args.get('count', 1))  # count: the number of records to show
 
     if not paths:
         return jsonify({'error': 'Paths parameter is required'}), 400
@@ -117,12 +117,12 @@ def display_content():
             filename = get_gcs_path(path)
             with fsspec.open(filename, 'rt', compression='gzip', use_listings_cache=False) as file:
                 for i, line in enumerate(file):
-                    if i >= index and i < index + count:
-                        record = json.loads(line.strip())
-                        jsons_to_render[i].append((record, path))
-                        # rendered_content += render(path, record, title_suffix)
-                    if i >= index + count - 1:  # Stop reading after we've collected `count` items
+                    if i < index:  # Skip until index (offset) is reached
+                        continue
+                    if i >= index + count:  # Stop reading after we've collected `count` items
                         break
+                    record = json.loads(line.strip())
+                    jsons_to_render[i].append((record, path))
 
         for i, records in jsons_to_render.items():
             for record, path in records:
