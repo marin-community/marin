@@ -67,7 +67,7 @@ class SimpleEvaluator(VllmTpuEvaluator):
     }
 
     @staticmethod
-    @ray.remote(memory=1 * 1024 * 1024 * 1024)  # 1 GB
+    @ray.remote(memory=8 * 1024 * 1024 * 1024)  # 8 GB
     def _evaluate(model_name_or_path: str, evals: List[str], output_path: str) -> Dict[str, float]:
         # Install VLLM from source
         SimpleEvaluator.install_vllm_from_source()

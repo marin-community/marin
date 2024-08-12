@@ -26,9 +26,9 @@ class Evaluator(ABC):
     _py_modules: List[Dependency]
 
     @staticmethod
-    def run_bash_command(command: str) -> None:
+    def run_bash_command(command: str, check: bool = True) -> None:
         """Runs a bash command."""
-        subprocess.run(command, shell=True, check=True)
+        subprocess.run(command, shell=True, check=check)
 
     @abstractmethod
     def evaluate(self, model_name_or_path: str, evals: List[str], output_path: str) -> None:

@@ -28,6 +28,10 @@ class VllmTpuEvaluator(Evaluator, ABC):
         Dependency(name="transformers", version="4.43.2"),
     ]
 
+    # VLLM version to install. TODO: Hardcoded for now. Make it configurable.
+    # Visit https://github.com/vllm-project/vllm/releases to get the list of available versions.
+    VLLM_VERSION: str = "v0.5.4"
+
     @staticmethod
     def install_vllm_from_source() -> None:
         """
@@ -45,10 +49,13 @@ class VllmTpuEvaluator(Evaluator, ABC):
             "-f https://storage.googleapis.com/jax-releases/jax_nightly_releases.html "
             "-f https://storage.googleapis.com/jax-releases/jaxlib_nightly_releases.html"
         )
-        # Clone the VLLM repository to install it from source
-        VllmTpuEvaluator.run_bash_command("git clone https://github.com/vllm-project/vllm.git")
+        # Clone the VLLM repository to install it from source. Can fail if the repository already exists.
+        VllmTpuEvaluator.run_bash_command("git clone https://github.com/vllm-project/vllm.git", check=False)
         # Runs https://github.com/vllm-project/vllm/blob/main/setup.py with the `tpu` target device
-        VllmTpuEvaluator.run_bash_command('cd vllm && VLLM_TARGET_DEVICE="tpu" pip install -e .')
+        VllmTpuEvaluator.run_bash_command(
+            f"cd vllm && git checkout tags/{VllmTpuEvaluator.VLLM_VERSION} "
+            '&& VLLM_TARGET_DEVICE="tpu" pip install -e .'
+        )
 
     _python_version: str = "3.10"
     _pip_packages: List[Dependency] = DEFAULT_PIP_PACKAGES
