@@ -8,7 +8,7 @@ We adapt this to work with the marin filesystem in Google cloud storage and with
 because this is quite memory-intensive.
 
 Usage:
-python scripts/reddit/process_subreddit.py
+python scripts/reddit/process_subreddit.py --shard_size 5000
 """
 import fsspec
 import glob
@@ -44,7 +44,7 @@ def read_df_from_shards(shard_dir):
     return df
 
 def write_jsonl(lines, file):
-    with fsspec.open(file, 'w') as f:
+    with fsspec.open(file, 'w', compression="gzip") as f:
         for line in lines:
             f.write(json.dumps(line) + "\n")
 
@@ -53,7 +53,7 @@ def get_url_regex(args):
 
     # Run the subprocess and wait for it to finish
     tlds_filepath = os.path.expanduser(args.tlds_filepath)
-    subprocess.run(["wget", "-O", tlds_filepath, "https://data.iana.org/TLD/tlds-alpha-by-domain.txt"], check=True)
+    subprocess.run(["wget", "-O", tlds_filepath, "https://raw.githubusercontent.com/mlfoundations/dclm/main/baselines/mappers/iana_tlds.txt"], check=True)
 
     # Get rid of standalone urls with a regex based on top-level domains (taken from IANA)
     with open(tlds_filepath, "r") as file:
@@ -86,6 +86,20 @@ def get_columns_to_keep():
     ] 
     COM_COLUMNS_TO_KEEP = ["parent_id", "id", "body", "score"]
     return SUB_COLUMNS_TO_KEEP, COM_COLUMNS_TO_KEEP
+
+def get_dolma_formatted_row(row):
+    return {
+        "id": row["id"],
+        "text": row["text"],
+        "created": row["created_utc"],
+        "source": "reddit",
+        "metadata": {
+            "subreddit": row["subreddit"],
+            "score": row["score"],
+            "ups": row["ups"],
+            "downs": row["downs"],
+        }
+    }
 
 @ray.remote(memory=200 * 1024 * 1024 * 1024, runtime_env= {"pip": ["retrie"]})
 def process_subreddit(args):
@@ -155,16 +169,17 @@ def process_subreddit(args):
         text = text.strip()
 
         row['text'] = text
-        modified_lines.append(dict(row))
+        dolma_formatted_row = get_dolma_formatted_row(row)
+        modified_lines.append(dolma_formatted_row)
         kept_count += 1
         
         if (args.shard_size and len(modified_lines) == args.shard_size):
-            write_jsonl(modified_lines, os.path.join(args.output_dir, f"{args.subreddit}/{args.subreddit}_shard{shard_num}.jsonl"))
+            write_jsonl(modified_lines, os.path.join(args.output_dir, f"{args.subreddit}/{args.subreddit}_shard{shard_num}.jsonl.gz"))
             shard_num += 1
             modified_lines = []
 
     # Write the last shard
-    write_jsonl(modified_lines, os.path.join(args.output_dir, f"{args.subreddit}/{args.subreddit}_shard{shard_num}.jsonl"))
+    write_jsonl(modified_lines, os.path.join(args.output_dir, f"{args.subreddit}/{args.subreddit}_shard{shard_num}.jsonl.gz"))
     print(f"Kept {kept_count} pages out of {original_len} original pages")
 
 
