@@ -15,15 +15,15 @@ from scripts.evaluation.evaluator import Evaluator
 
 
 def main():
-    print(f"Evaluating {args.model_path} with {args.evaluator}")
+    print(f"Evaluating {args.model} with {args.evaluator}")
     start_time: float = time.time()
     evaluator: Evaluator = get_evaluator(args.evaluator)
     evaluator.evaluate(
-        model_path=args.model_path,
+        model_name_or_path=args.model,
         evals=args.evals,
         output_path=args.output_path,
     )
-    print(f"Done ({time.time() - start_time} seconds)")
+    print(f"Done (total time: {time.time() - start_time} seconds)")
 
 
 if __name__ == "__main__":
@@ -35,7 +35,11 @@ if __name__ == "__main__":
         choices=list(NAME_TO_EVALUATOR.keys()),
     )
     parser.add_argument(
-        "--model-path", type=str, help="Path to the model to evaluate (can be a GCS path)", required=True
+        "--model",
+        type=str,
+        help="Can be the name of the model in Hugging Face (e.g, google/gemma-2b) or "
+        "a path to the model to evaluate (can be a GCS path)",
+        required=True,
     )
     parser.add_argument(
         "-e",
@@ -50,7 +54,7 @@ if __name__ == "__main__":
         "--output-path",
         type=str,
         help="The location of the output path (filesystem path or URL)",
-        required=True,
+        default="output",
     )
     args = parser.parse_args()
 

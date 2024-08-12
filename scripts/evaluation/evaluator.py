@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Dict, List, Optional
+from typing import List, Optional
 from dataclasses import dataclass
 
 import subprocess
@@ -27,32 +27,12 @@ class Evaluator(ABC):
 
     @staticmethod
     def run_bash_command(command: str) -> None:
-        """
-        Runs a bash command.
-        """
+        """Runs a bash command."""
         subprocess.run(command, shell=True, check=True)
 
     @abstractmethod
-    def evaluate(self, model_path: str, evals: List[str], output_path: str) -> None:
+    def evaluate(self, model_name_or_path: str, evals: List[str], output_path: str) -> None:
         """
         Runs the evaluator given the model checkpoint, the list of evaluations to run, and the output path.
         """
         pass
-
-    def get_runtime_env(self) -> Dict:
-        """
-        Returns the runtime environment to run the evaluator on the Ray cluster.
-        """
-        runtime_env = {
-            "pip": {
-                "packages": [str(package) for package in self._pip_packages],
-                "pip_check": False,
-                "pip_version": f"==23.0.1;python_version=='{self._python_version}'",
-            },
-        }
-
-        # An empty list of py_modules can cause an error in Ray
-        if len(self._py_modules) > 0:
-            runtime_env["py_modules"] = [str(module) for module in self._py_modules]
-
-        return runtime_env
