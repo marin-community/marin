@@ -111,7 +111,7 @@ class FasttextClassifier(BaseClassifier):
         label_arr, score_arr = self.predict(texts)
 
         attributes_arr = []
-        for i in range(list(batch["text"])):
+        for i in range(len(list(batch["text"]))):
             fasttext_quality_dict = dict(zip(label_arr[i], score_arr[i], strict=False))
             attributes_arr.append({self.attribute_name: fasttext_quality_dict})
 
