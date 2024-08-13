@@ -97,7 +97,9 @@ def process_file(config: DatasetConfig, seed: int) -> List[str]:
     for i, filepath in tqdm.tqdm(enumerate(filepaths), total=len(filepaths)):
         lines_per_file = []
 
-        # If the file is in a fasttext format, we assume that the file is not compressed.
+        # Use compression="infer" because the file could be either gzipped or not.
+        # This helps to maintain the flexibility of using/combining already preprocessed fasttext-formatted
+        # files or Dolma-formatted gzip-compressed files.
         with fsspec.open(filepath, "rt", compression="infer") as f_in:
             for line in f_in:
                 if config.preprocessed:
