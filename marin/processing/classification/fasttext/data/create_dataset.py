@@ -54,7 +54,7 @@ class QueueActor:
         return self.finished
 
 
-def get_files(filepath: str):
+def get_files(filepath: str) -> List[str]:
     """
     Given a list of filepaths, return a list of files to process
     If the filepath is a directory, recursively search for .jsonl.gz files
@@ -70,7 +70,7 @@ def get_files(filepath: str):
 
 
 @ray.remote
-def process_file(config: DatasetConfig) -> List[str]:
+def process_file(config: DatasetConfig, seed: int) -> List[str]:
     """
     Process a file that is in Dolma format or is a preprocessed fasttext-formatted text file.
 
@@ -82,6 +82,9 @@ def process_file(config: DatasetConfig) -> List[str]:
     Output:
     A dictionary with the filepath as the key and the list of lines in fasttext format as the value.
     """
+
+    # Use seed to ensure reproducibility in sampling from file.
+    random.seed(seed)
 
     filepaths = get_files(config.filepath)
 
@@ -95,22 +98,19 @@ def process_file(config: DatasetConfig) -> List[str]:
         lines_per_file = []
 
         # If the file is in a fasttext format, we assume that the file is not compressed.
-        if config.preprocessed:
-            with fsspec.open(filepath, "rt") as f_in:
-                for line in f_in:
+        with fsspec.open(filepath, "rt", compression="infer") as f_in:
+            for line in f_in:
+                if config.preprocessed:
                     text = line.strip()
-                    text = text.replace("\n", " ")
-                    if text:
-                        lines_per_file.append(f"__label__{config.label} {text}")
-        else:  # The file is in dolma format.
-            with fsspec.open(filepath, "rt", compression="gzip") as f_in:
-                for line in f_in:
+                else:
                     data = json.loads(line)
                     text = data.get("text", "")
-                    text = text.replace("\n", " ")
-                    if text:
+                text = text.replace("\n", " ")
+                if text:
+                    if config.preprocessed:
+                        lines_per_file.append(text)
+                    else:
                         lines_per_file.append(f"__label__{config.label} {text}")
-
         # truncate to not exceed the number of lines in the file
         if config.max_num_samples:
             if i == len(filepaths) - 1:
@@ -152,7 +152,7 @@ def write_to_file(output_file: str, queue_actor):
                     time.sleep(0.1)  # Short sleep to avoid busy waiting
 
 
-def main(config: Dict[str, Any]):
+def main(config: Dict[str, Any], seed: int):
     ray.init()
 
     # We set a large memory limit for the queue actor to avoid memory issues when
@@ -167,7 +167,7 @@ def main(config: Dict[str, Any]):
     # Process files and add results to the queue
     tasks = []
     for dataset_config in dataset_configs:
-        task = process_file.remote(dataset_config)
+        task = process_file.remote(dataset_config, seed)
         tasks.append(queue_actor.add.remote(task))
 
     # Wait for all tasks to complete
@@ -185,9 +185,11 @@ def main(config: Dict[str, Any]):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, required=True)
+    parser.add_argument("--seed", type=int, default=42, required=False)
 
     args = parser.parse_args()
 
     with open(args.config, "r") as f:
         config = yaml.safe_load(f)
-    main(config)
+
+    main(config, args.seed)
