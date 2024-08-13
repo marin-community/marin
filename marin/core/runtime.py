@@ -297,8 +297,7 @@ def simple_backpressure(remote_func, task_generator: Iterator, max_in_flight: Op
     for task in task_generator:
         if max_in_flight is not None:
             while len(in_flight) >= max_in_flight:
-                num_to_await = len(in_flight) - max_in_flight + 1
-                done, in_flight = ray.wait(in_flight, fetch_local=fetch_local, num_returns=num_to_await)
+                done, in_flight = ray.wait(in_flight, fetch_local=fetch_local, num_returns=1)
 
         ref = remote_func.remote(*task, *args, **kwargs)
         refs.append(ref)
