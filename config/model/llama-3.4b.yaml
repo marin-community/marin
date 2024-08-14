@@ -4,7 +4,6 @@
 type: llama
 seq_len: 4096
 use_flash_attention: True
-flash_attention_block_size: 1024
 # ------- END OF COMMON CONFIGS -------
 hidden_dim: 2560
 intermediate_dim: 8960
