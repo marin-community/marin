@@ -45,6 +45,15 @@ Run the following command to start the annotations server:
 python -m marin.processing.classification.eval.annotations_server --input-file gs://{BUCKET}/path/to/input.jsonl.gz --attributes-file gs://{BUCKET}/path/to/attributes.jsonl.gz
 ```
 
+### Consolidation Command
+After the attribute folders have been generated, to filter the dataset based on the quality rules following the example above you can run
+```bash
+ray job submit --working-dir . --no-wait -- \
+python -m marin.processing.classification.filter --input_dir gs://{BUCKET}/path/to/md/input.jsonl.gz --file_format md --attribute_name fineweb-edu-quality --threshold 3
+```
+
+Currently we require the user specifiy the file format and the attribute to filter by
+
 ### Models supported:
 - FastText models: `DCLM`, `DOLMA`
 - BERT models: `Fineweb-edu`
