@@ -104,7 +104,7 @@ class ProcessStackExchangeConfig:
         "gs://marin-us-central2/raw/stackexchange/v2024-04-02"
     )
     output_dir: str = (                                     # GCS Path to write Dolma-formatted markdown files
-        "gs://marin-us-central2/documents/{experiment_id}/stackexchange/v2024-04-02"
+        "gs://marin-us-central2/documents/stackexchange/v2024-04-02/{experiment_id}/"
     )
 
     # StackExchange Parameters
