@@ -1,11 +1,18 @@
-output_path: gs://marin-data/scratch/rohithk
-experiment: experiment-2
+output_path: gs://marin-us-central2
+experiment: quickstart
 data_cfgs:
-  - path: gs://marin-data/scratch/rohithk
-    dataset: reddit
-    doc_experiment: experiment-0
-    attr_experiment: experiment-1
+  - path: gs://marin-us-central2
+    dataset: hello_world_fw/v1.0
+    doc_experiment: quickstart
+    attr_experiment: quickstart
+    labels: []
+    sampling_rate: 1.0
+    seed: 0
+  - path: gs://marin-us-central2
+    dataset: stackexchange/v2024-04-02
+    doc_experiment: md-complete
+    attr_experiment: quickstart
     labels:
-      - great
+      - hq
     sampling_rate: 1.0
     seed: 0

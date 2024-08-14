@@ -48,13 +48,13 @@ class DataLabelingConfig:
 
     Attributes:
         path (str): Base path of the dataset (i.e., gs://{BUCKET}/documents).
-        experiment (str): Experiment identifier.
         dataset (str): Dataset identifier. (e.g., reddit/v0).
+        experiment (str): Experiment identifier.
         labels (List[str]): List of quality labels.
     """
     path: str
-    experiment: str
     dataset: str
+    experiment: str
     labels: List[str]
 
 @dataclass
@@ -81,11 +81,8 @@ def main(cfg: MainConfig):
         def processing_func(input_file_path,output_file_path):
             return write_labels(input_file_path,output_file_path,data_cfg.labels)
 
-        input_dir = f'{data_cfg.path}/documents/{data_cfg.experiment}/{data_cfg.dataset}'
-        output_dir = rebase_file_path(f'{data_cfg.path}/documents/{data_cfg.experiment}', 
-                                      f'{data_cfg.path}/documents/{data_cfg.experiment}/{data_cfg.dataset}', 
-                                      f'{cfg.output_path}/attributes/{cfg.experiment}'
-                                      )
+        input_dir = f'{data_cfg.path}/documents/{data_cfg.dataset}/{data_cfg.experiment}'
+        output_dir = f'{cfg.output_path}/attributes/{data_cfg.dataset}/{cfg.experiment}'
         
         responses = map_files_in_directory(processing_func.remote, input_dir, "**/*.jsonl.gz", output_dir)
         try:

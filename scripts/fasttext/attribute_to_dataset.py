@@ -18,6 +18,19 @@ from marin.utils import rebase_file_path
 from marin.core.runtime import cached_or_construct_output, map_files_in_directory
 from marin.classifiers.fasttext.utils import preprocess as preprocess_for_fasttext
 
+def get_labels(data : dict, attribs : dict) -> List[str]:
+    """
+    Extracts labels from attributes dictionary.
+
+    Args:
+        data (dict): Data dictionary (i.e., from documents/..).
+        attribs (dict): Attributes dictionary (i.e., from attributes/..).
+
+    Returns:
+        List[str]: List of labels.
+    """
+    return attribs["attributes"]["labels"]
+
 @cached_or_construct_output(success_suffix="SUCCESS")
 def write_fasttext_lines(input_file_path : str, output_file_path : str, attr_file_path : str, labels : List[str], sampling_rate : float, seed : int) -> bool:
     """
@@ -44,7 +57,7 @@ def write_fasttext_lines(input_file_path : str, output_file_path : str, attr_fil
             attribs = json.loads(attr_line)
 
             text = preprocess_for_fasttext(data["text"])
-            label_string = ''.join([f" __label__{label}" for label in attribs["attributes"]["labels"] if label in labels])
+            label_string = ''.join([f" __label__{label}" for label in get_labels(data,attribs) if label in labels])
             
             line = label_string + " " + text + "\n"
 
@@ -95,8 +108,8 @@ def main(cfg: MainConfig):
     ray.init()
     
     for data_cfg in cfg.data_cfgs:
-        doc_dir = f'{data_cfg.path}/documents/{data_cfg.doc_experiment}'
-        attr_dir = f'{data_cfg.path}/attributes/{data_cfg.attr_experiment}'
+        doc_dir = f'{data_cfg.path}/documents/{data_cfg.dataset}/{data_cfg.doc_experiment}'
+        attr_dir = f'{data_cfg.path}/attributes/{data_cfg.dataset}/{data_cfg.attr_experiment}'
 
         # curry write_fasttext_lines so that we can pass it to map_files_in_directory
         @ray.remote(memory=1 * 1024 * 1024 * 1024, runtime_env={"pip": ["s3fs"]}, num_cpus=1)  # 1 GB
@@ -104,9 +117,9 @@ def main(cfg: MainConfig):
             attr_file_path = rebase_file_path(doc_dir,input_file_path,attr_dir)
             return write_fasttext_lines(input_file_path,output_file_path,attr_file_path,data_cfg.labels,data_cfg.sampling_rate,data_cfg.seed)
 
-        input_dir = f'{data_cfg.path}/documents/{data_cfg.doc_experiment}/{data_cfg.dataset}'
-        output_dir = rebase_file_path(doc_dir, 
-                                      f'{doc_dir}/{data_cfg.dataset}', 
+        input_dir = doc_dir
+        output_dir = rebase_file_path(f'{data_cfg.path}/documents/', 
+                                      input_dir, 
                                       f'{cfg.output_path}/classifiers/{cfg.experiment}/data'
                                       )
         
