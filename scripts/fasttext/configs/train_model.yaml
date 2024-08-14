@@ -1,5 +1,5 @@
 path: gs://marin-data/scratch/rohithk
-experiment: experiment-2
+experiment: experiment-3
 training_args:
   lr: 0.1
 seed: 0

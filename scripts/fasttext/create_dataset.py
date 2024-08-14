@@ -7,15 +7,16 @@ Creates a fastText training dataset from a group of datasets and user-specified 
 from dataclasses import dataclass
 from datetime import datetime
 import json
-import random
 from typing import List
 
 import draccus
 import fsspec
 import ray
+import numpy as np
 
 from marin.utils import rebase_file_path
 from marin.core.runtime import cached_or_construct_output, map_files_in_directory
+from marin.classifiers.fasttext.utils import preprocess as preprocess_for_fasttext
 
 @cached_or_construct_output(success_suffix="SUCCESS")
 def write_fasttext_lines(input_file_path: str, output_file_path: str, labels: List[str], sampling_rate: float, seed: int) -> bool:
@@ -34,16 +35,16 @@ def write_fasttext_lines(input_file_path: str, output_file_path: str, labels: Li
     Returns:
         bool: True if the process is successful.
     """
-    random.seed(seed)
+    rng = np.random.default_rng(seed=seed)
     with fsspec.open(input_file_path, "rt", compression="gzip") as f_in, \
         fsspec.open(output_file_path, "wt", compression="gzip") as f_out:
             for input_line in f_in:
                 data = json.loads(input_line)
-                text = data["text"].replace("\n"," ")
+                text = preprocess_for_fasttext(data["text"])
                 label_string = ''.join([f" __label__{label}" for label in labels])
                 line = label_string + " " + text + "\n"
 
-                if random.random() < sampling_rate:
+                if rng.random() < sampling_rate:
                     f_out.write(line)
 
     return True

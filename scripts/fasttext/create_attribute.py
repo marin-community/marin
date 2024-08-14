@@ -19,7 +19,7 @@ from marin.utils import rebase_file_path
 @cached_or_construct_output(success_suffix="SUCCESS")
 def write_labels(input_file_path: str, output_file_path: str, labels: List[str]) -> bool:
     """
-    Creates an attribute "quality-labels" from input list of labels for each document.
+    Creates an attribute "labels" from input list of labels for each document.
 
     Args:
         input_file_path (str): Path to the input JSONL file (gzip compressed).
@@ -33,8 +33,7 @@ def write_labels(input_file_path: str, output_file_path: str, labels: List[str])
             fsspec.open(output_file_path, "wt", compression="gzip") as f_out:
         for line in f_in:
             json_obj = json.loads(line)
-            attributes = {}
-            attributes["quality-labels"] = labels
+            attributes = {"labels": labels}
             f_out.write(json.dumps({"id": json_obj["id"],
                                     "source": json_obj["source"],
                                     "attributes": attributes

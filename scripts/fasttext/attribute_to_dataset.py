@@ -1,38 +1,54 @@
 """
 attribute_to_dataset.py
 
-Creates a fastText training dataset from a group of datasets and labels specified by an attribute "quality-labels". Intended
+Creates a fastText training dataset from a group of datasets and labels specified by an attribute "labels". Intended
 to be one example of mapping attributes to a fastText training dataset.
 """
 
 from dataclasses import dataclass
 import json
-import random
 from typing import List, Optional
 
 import draccus
 import fsspec
 import ray
+import numpy as np
 
 from marin.utils import rebase_file_path
 from marin.core.runtime import cached_or_construct_output, map_files_in_directory
+from marin.classifiers.fasttext.utils import preprocess as preprocess_for_fasttext
 
 @cached_or_construct_output(success_suffix="SUCCESS")
-def write_fasttext_lines(input_file_path, output_file_path, attr_file_path, labels, sampling_rate, seed):
-    random.seed(seed)
+def write_fasttext_lines(input_file_path : str, output_file_path : str, attr_file_path : str, labels : List[str], sampling_rate : float, seed : int) -> bool:
+    """
+    Labels each line of input file according to fastText training format and writes to an output file.
+    Only a fraction of the lines, determined by the sampling rate, are written to the output file (eg, to control size 
+    of training dataset and/or weight different domains).
+
+    Args:
+        input_file_path (str): Path to the input JSONL file (gzip compressed).
+        output_file_path (str): Path to the output file (gzip compressed).
+        labels (List[str]): List of labels to be added to each line.
+        sampling_rate (float): Fraction of lines to be written to the output file.
+        seed (int): Seed for random number generator to ensure reproducibility.
+
+    Returns:
+        bool: True if the process is successful.
+    """
+    rng = np.random.default_rng(seed=seed)
     with fsspec.open(input_file_path, "rt", compression="gzip") as f_in, \
             fsspec.open(attr_file_path, "rt", compression="gzip") as f_attr, \
                 fsspec.open(output_file_path, "wt", compression="gzip") as f_out:
-        for input_line,attr_line in zip(f_in,f_attr):
+        for input_line, attr_line in zip(f_in, f_attr):
             data = json.loads(input_line)
             attribs = json.loads(attr_line)
 
-            text = data["text"].replace("\n"," ")
-            label_string = ''.join([f" __label__{label}" for label in attribs["attributes"]["quality-labels"] if label in labels])
+            text = preprocess_for_fasttext(data["text"])
+            label_string = ''.join([f" __label__{label}" for label in attribs["attributes"]["labels"] if label in labels])
             
             line = label_string + " " + text + "\n"
 
-            p = random.random()
+            p = rng.random()
             if p < sampling_rate:
                 f_out.write(line)
 
@@ -79,15 +95,18 @@ def main(cfg: MainConfig):
     ray.init()
     
     for data_cfg in cfg.data_cfgs:
+        doc_dir = f'{data_cfg.path}/documents/{data_cfg.doc_experiment}'
+        attr_dir = f'{data_cfg.path}/attributes/{data_cfg.attr_experiment}'
+
         # curry write_fasttext_lines so that we can pass it to map_files_in_directory
         @ray.remote(memory=1 * 1024 * 1024 * 1024, runtime_env={"pip": ["s3fs"]}, num_cpus=1)  # 1 GB
-        def processing_func(input_file_path,output_file_path):
-            attr_file_path = rebase_file_path(f'{data_cfg.path}/documents/{data_cfg.doc_experiment}',input_file_path,f'{data_cfg.path}/attributes/{data_cfg.attr_experiment}')
+        def processing_func(input_file_path : str,output_file_path : str) -> bool:
+            attr_file_path = rebase_file_path(doc_dir,input_file_path,attr_dir)
             return write_fasttext_lines(input_file_path,output_file_path,attr_file_path,data_cfg.labels,data_cfg.sampling_rate,data_cfg.seed)
 
         input_dir = f'{data_cfg.path}/documents/{data_cfg.doc_experiment}/{data_cfg.dataset}'
-        output_dir = rebase_file_path(f'{data_cfg.path}/documents/{data_cfg.doc_experiment}', 
-                                      f'{data_cfg.path}/documents/{data_cfg.doc_experiment}/{data_cfg.dataset}', 
+        output_dir = rebase_file_path(doc_dir, 
+                                      f'{doc_dir}/{data_cfg.dataset}', 
                                       f'{cfg.output_path}/classifiers/{cfg.experiment}/data'
                                       )
         

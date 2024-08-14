@@ -6,17 +6,18 @@ Trains a fastText model on a dataset (e.g., a result of running create_dataset.p
 
 from dataclasses import dataclass
 import os
-import random
 from datetime import datetime
 from typing import List
+import tempfile
 
 import draccus
 import fsspec
 import ray
+import numpy as np
 import logging
 
 from marin.utils import fsspec_glob
-import fasttext
+# import fasttext
 
 def merge_shards(shard_paths: List[str], train_path: str, val_path: str, val_split: float, seed: int) -> bool:
     """
@@ -32,12 +33,12 @@ def merge_shards(shard_paths: List[str], train_path: str, val_path: str, val_spl
     Returns:
         bool: True if the process is successful.
     """
-    random.seed(seed)
+    rng = np.random.default_rng(seed=seed)
     with fsspec.open(train_path, "wt") as f_train, fsspec.open(val_path, "wt") as f_val:
         for shard_path in shard_paths:
             with fsspec.open(shard_path, "rt", compression = "gzip") as f_in:
                 for line in f_in:
-                    if random.random() < val_split:
+                    if rng.random() < val_split:
                         f_val.write(line)
                     else:
                         f_train.write(line)
@@ -72,31 +73,27 @@ logger = logging.getLogger("ray")
 def main(cfg: MainConfig):
     ray.init()
 
-    logger.info(f"Training fasText model for experiment {cfg.experiment}")
+    logger.info(f"Training fastText model for experiment {cfg.experiment}")
     datetime_start = datetime.utcnow()
 
     cfg.training_args['thread'] = cfg.num_cpus # tell fasttext trainer to use all available CPUs
 
     # run training on remote worker, not head node
-    @ray.remote(memory=cfg.memory * 1024 * 1024 * 1024, runtime_env={"pip": ["s3fs"]}, num_cpus=cfg.num_cpus)
+    @ray.remote(memory=cfg.memory * 1024 * 1024 * 1024, runtime_env={"pip": ["s3fs","fasttext"]}, num_cpus=cfg.num_cpus)
     def run(cfg):
+        import fasttext
+
         experiment_dir = f'{cfg.path}/classifiers/{cfg.experiment}'
         shard_paths = fsspec_glob(os.path.join(f'{experiment_dir}/data', "**/*.jsonl.gz"))
-        merge_shards(shard_paths,"data.train","data.val",cfg.val_split,cfg.seed)
 
-        model = fasttext.train_supervised("data.train",**cfg.training_args)
-        model.save_model("model.bin")
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            merge_shards(shard_paths,os.path.join(tmp_dir, "data.train"),os.path.join(tmp_dir, "data.val"),cfg.val_split,cfg.seed)
 
-        # fasttext can't handle gs:// paths, so we copy everything from local worker disk to experiment directory at the end
-        with fsspec.open("model.bin","rb") as f_in, \
-            fsspec.open(f'{experiment_dir}/model.bin',"wb") as f_out:
-                f_out.write(f_in.read())
-        with fsspec.open("data.train","rb") as f_in, \
-            fsspec.open(f'{experiment_dir}/data.train',"wb") as f_out:
-                f_out.write(f_in.read())
-        with fsspec.open("data.val","rb") as f_in, \
-            fsspec.open(f'{experiment_dir}/data.val',"wb") as f_out:
-                f_out.write(f_in.read())
+            model = fasttext.train_supervised(os.path.join(tmp_dir, "data.train"),**cfg.training_args)
+            model.save_model(os.path.join(tmp_dir, "model.bin"))
+
+            fs = fsspec.core.get_fs_token_paths(experiment_dir, mode="wb")[0]
+            fs.put(os.path.join(tmp_dir, "*"), experiment_dir, recursive=True)
         
         return True
     
