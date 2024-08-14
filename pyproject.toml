@@ -25,7 +25,7 @@ dependencies = [
     "markdownify==0.12.1",
     "multiprocess==0.70.16",
     "py7zr==0.21.0",
-    "ray[default]==2.22.0",
+    "ray[default]==2.34.0",
     "rbloom==1.5.0",
     "readabilipy==0.2.0",
     "readability-lxml==0.8.1",
@@ -36,6 +36,7 @@ dependencies = [
     "tqdm",
     "warcio==1.7.4",
     "grip==4.6.2",
+    "levanter @ git+https://github.com/stanford-crfm/levanter.git@fix_source_build"
 ]
 
 [project.optional-dependencies]
