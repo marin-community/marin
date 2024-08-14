@@ -70,10 +70,13 @@ def process_dir(input_subdir: str, output_subdir: str, file_format: str, attribu
         process_file(input_filename, output_filename, file_format, attribute_name, threshold)
 
 
-def main(input_dir: str, file_format: str, attribute_name: str, threshold: float):
+def main(input_dir: str, output_dir: str, file_format: str, attribute_name: str, threshold: float):
     ray.init()
 
-    output_dir = input_dir.replace("processed", f"filtered/{attribute_name}-{threshold}")
+    if not output_dir:
+        output_dir = input_dir.replace("documents", f"filtered/{attribute_name}-{threshold}")
+    
+    print(f"Output directory is: {output_dir}")
 
     MAX_FLIGHTS_IN_TASK = 1000
     subdirectories = fsspec_get_atomic_directories(input_dir)
@@ -103,6 +106,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Filter high-quality data based on DCLM FastText scores.")
     parser.add_argument("--input_dir", type=str, required=True, help="Input directory containing original data files")
     parser.add_argument("--file_format", type=str, default="md", required=True, help="File format of the data")
+    parser.add_argument("--output_dir", type=str, required=False, help="Output directory to save filtered data. If not set we assume Dolma directory structure")
     parser.add_argument(
         "--attribute_name",
         type=str,
@@ -114,4 +118,4 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    main(args.input_dir, args.file_format, args.attribute_name, args.threshold)
+    main(args.input_dir, args.output_dir, args.file_format, args.attribute_name, args.threshold)
