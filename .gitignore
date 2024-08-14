@@ -181,6 +181,9 @@ cython_debug/
 # Secrets
 credentials.json
 
+# Archive
+archive/
+
 # Caches and Outputs
 !/scripts/web/output/
 !/output/
