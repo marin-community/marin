@@ -86,6 +86,7 @@ setup_commands:
     "trafilatura==1.8.1"
     "tqdm"
     "warcio==1.7.4"
+  - git clone --branch abhi-2.22.0 --single-branch --depth 1 https://github.com/abhinavg4/ray.git && rm -rf /home/ubuntu/.local/lib/python3.10/site-packages/ray/autoscaler && ln -s /home/ubuntu/ray/python/ray/autoscaler /home/ubuntu/.local/lib/python3.10/site-packages/ray/autoscaler
 
 
 # Set Head Node == `ray_head_default`
