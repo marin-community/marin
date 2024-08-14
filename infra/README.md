@@ -155,6 +155,8 @@ to detect when spot-TPU instances are dead and as a result, we may be left in a 
 no more spot-TPU worker instances starting up. When this state occurs, please message in the #marin-infra slack
 that you are going to restart the cluster (call `ray down infra/marin-cluster.yaml` and then `ray up infra/marin-cluster.yaml`).
 
+Please note that after restarting the cluster and queueing the first job, it will likely hang because it takes a while for the head node to actually spin up the worker sometimes (~10min).
+
 #### Reconfiguring the Cluster
 
 In general, for additive operations like increasing the `max_workers` for autoscaling, you can just call `ray up`
