@@ -11,5 +11,7 @@ def get_evaluator(evaluator_name: str) -> Evaluator:
     """
     Returns the evaluator for the given name.
     """
-    assert evaluator_name in NAME_TO_EVALUATOR, f"Unknown evaluator: {evaluator_name}"
+    if evaluator_name not in NAME_TO_EVALUATOR:
+        raise ValueError(f"Unknown evaluator: {evaluator_name}")
+
     return NAME_TO_EVALUATOR[evaluator_name]()
