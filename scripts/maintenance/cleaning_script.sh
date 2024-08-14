@@ -7,6 +7,9 @@ echo "Script started at: $(date)"
 # clean up cache directory
 rm -rf /home/shared/.cache
 
+# clean up gcloud log
+rm -rf /home/shared/.config/gcloud/logs
+
 # clean up old docker image
 bash /home/shared/maintenance/delete_old_docker_images.sh
 
