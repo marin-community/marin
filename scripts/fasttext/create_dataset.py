@@ -55,16 +55,16 @@ class LabeledDatasetConfig:
     Configuration class for a labeled dataset.
 
     Attributes:
-        path (str): Base path of the dataset (i.e., gs://{BUCKET}/documents).
-        experiment (str): Experiment identifier.
+        path (str): Base path of the dataset (i.e., gs://{BUCKET}).
         dataset (str): Dataset identifier (e.g., reddit/v0).
+        experiment (str): Experiment identifier.
         labels (List[str]): List of quality labels associated with this dataset.
         sampling_rate (float): Fraction of documents from the dataset to add to fastText training dataset.
         seed (int): Seed for random number generator to ensure reproducibility.
     """
     path: str
-    experiment: str
     dataset: str
+    experiment: str
     labels: List[str]
     sampling_rate: float
     seed: int
@@ -93,9 +93,10 @@ def main(cfg: MainConfig):
         def processing_func(input_file_path: str, output_file_path: str) -> bool:
             return write_fasttext_lines(input_file_path,output_file_path,data_cfg.labels,data_cfg.sampling_rate,data_cfg.seed)
 
-        input_dir = f'{data_cfg.path}/documents/{data_cfg.experiment}/{data_cfg.dataset}'
-        output_dir = rebase_file_path(f'{data_cfg.path}/documents/{data_cfg.experiment}', 
-                                      f'{data_cfg.path}/documents/{data_cfg.experiment}/{data_cfg.dataset}', 
+        input_dir = f'{data_cfg.path}/documents/{data_cfg.dataset}/{data_cfg.experiment}'
+        output_dir = f'{cfg.output_path}/classifiers/{cfg.experiment}/data'
+        output_dir = rebase_file_path(f'{data_cfg.path}/documents', 
+                                      input_dir, 
                                       f'{cfg.output_path}/classifiers/{cfg.experiment}/data'
                                       )
         

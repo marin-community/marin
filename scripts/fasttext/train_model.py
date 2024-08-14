@@ -17,7 +17,7 @@ import numpy as np
 import logging
 
 from marin.utils import fsspec_glob
-# import fasttext
+# import fasttext (TODO: add fasttext to cluster setup and just import it here instead of using runtime_env)
 
 def merge_shards(shard_paths: List[str], train_path: str, val_path: str, val_split: float, seed: int) -> bool:
     """
