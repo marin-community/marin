@@ -146,13 +146,13 @@ def print_system_info():
 def main(config):
     print("Starting file download...")
     local_base_dir = ray.get(read_gcp_and_write_local.remote(config.input_dir))
-    # print(f"Files downloaded to: {local_base_dir}")
-    # print("Starting DOLMA dedupe work...")
-    # ray.get(busy_work.remote())
-    # print("Printing file system info...")
-    # ray.get(print_file_system_info.remote(local_base_dir))
-    # print("Writing dedupe attributes to GCP...")
-    # ray.get(write_dedupe_attributes.remote('/tmp/gcp_files', config.input_dir))
+    print(f"Files downloaded to: {local_base_dir}")
+    print("Starting DOLMA dedupe work...")
+    ray.get(busy_work.remote())
+    print("Printing file system info...")
+    ray.get(print_file_system_info.remote(local_base_dir))
+    print("Writing dedupe attributes to GCP...")
+    ray.get(write_dedupe_attributes.remote('/tmp/gcp_files', config.input_dir))
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run resource-intensive work on a single Ray worker")
