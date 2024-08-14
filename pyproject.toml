@@ -36,7 +36,7 @@ dependencies = [
     "tqdm",
     "warcio==1.7.4",
     "grip==4.6.2",
-    "levanter @ git+https://github.com/stanford-crfm/levanter.git@fix_source_build"
+    "levanter @ git+https://github.com/stanford-crfm/levanter.git"
 ]
 
 [project.optional-dependencies]
