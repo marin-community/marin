@@ -37,6 +37,7 @@ from marin.utils import (
     fsspec_isdir,
     fsspec_get_curr_subdirectories,
     fsspec_get_atomic_directories,
+    dynamic_path_transform
 )
 
 
@@ -169,7 +170,12 @@ def main(inference_config: InferenceConfig):
             ready_refs, responses = ray.wait(responses, num_returns=1)
             ray.get(ready_refs)
 
-        output_filepath = rebase_file_path(inference_config.input_dir, input_filepath, inference_config.output_dir)
+        output_filepath = dynamic_path_transform(
+            input_filepath, 
+            inference_config.input_dir, 
+            inference_config.output_dir,
+            inference_config.attribute_name  # Use attribute_name instead of experiment
+        )
         fsspec_mkdirs(output_filepath)
 
         result_ref = process_filepath_func.options(

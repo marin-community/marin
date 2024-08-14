@@ -1,0 +1,10 @@
+input_dir: "gs://marin-us-central2/documents/hello_world_fw/"
+output_dir: "gs://marin-us-central2/attributes/hello_world_fw/"
+model_name: "mlfoundations/fasttext-oh-eli5"
+attribute_name: "dclm-fasttext-quality"
+runtime:
+  requirements_filepath: "marin/processing/classification/config/dclm_fasttext_requirements.txt"
+  memory_limit_gb: 12
+  tpu_resources_per_task: 0
+task:
+  max_in_flight: 1000

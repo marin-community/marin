@@ -45,6 +45,14 @@ Run the following command to start the annotations server:
 python -m marin.processing.classification.eval.annotations_server --input-file gs://{BUCKET}/path/to/input.jsonl.gz --attributes-file gs://{BUCKET}/path/to/attributes.jsonl.gz
 ```
 
+
+### Deduplication
+
+Please note that deduplication assumes the input path is of the form gs://{$BUCKET_PATH}/documents/ and will write attributes to gs://{$BUCKET_PATH}/attributes/
+
+```bash
+ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python marin/processing/classification/dedupe.py --input_dir gs://marin-us-central2/scratch/documents/dummy_dedupe_data/                                   
+```
 ### Consolidation Command
 After the attribute folders have been generated, to filter the dataset based on the quality rules following the example above you can run
 ```bash
