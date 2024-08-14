@@ -144,8 +144,6 @@ def display_content():
                     record = json.loads(line.strip())
                     jsons_to_render[i].append((record, path))
 
-        import pdb;
-        pdb.set_trace()
         for i, records in jsons_to_render.items():
             for record, path in records:
                 rendered_content += render(path, record, f"Index: {i}")
