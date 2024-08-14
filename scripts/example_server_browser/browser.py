@@ -83,6 +83,26 @@ def render_content(content: str, format_type: str) -> str:
 
 
 def render(path: str, record: dict, title_suffix: str = "") -> list[dict]:
+    """Render the title and content/attributes of the record"""
+    if 'text' in record:
+        return render_text(path, record, title_suffix)
+    elif 'attributes' in record:
+        return render_attributes(path, record, title_suffix)
+    else:
+        raise ValueError('Record must have either "text" or "attributes" key')
+
+
+def render_attributes(path: str, record: dict, title_suffix: str = "") -> list[dict]:
+    """Render the title and attributes of the record"""
+
+    rendered_content = []
+    # Attribute are just dicts rendered as json with proper formatting
+    rendered_content.append({'title': f"{path} ; Attributes ; {title_suffix}",
+                             'rendered': render_content(json.dumps(record['attributes'], indent=4), 'text')})
+    return rendered_content
+
+
+def render_text(path: str, record: dict, title_suffix: str = "") -> list[dict]:
     """Render the title and content of the record"""
 
     # If "format" is not present then we render it as text
@@ -124,6 +144,8 @@ def display_content():
                     record = json.loads(line.strip())
                     jsons_to_render[i].append((record, path))
 
+        import pdb;
+        pdb.set_trace()
         for i, records in jsons_to_render.items():
             for record, path in records:
                 rendered_content += render(path, record, f"Index: {i}")
