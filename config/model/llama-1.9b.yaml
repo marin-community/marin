@@ -1,13 +1,12 @@
-# non-embedding: 339,788,800
-# total: 602,457,088
+# non-embedding: 1,359,054,848
+# total: 1,884,391,424
 
 type: llama
 seq_len: 4096
 use_flash_attention: True
-flash_attention_block_size: 1024
 # ------- END OF COMMON CONFIGS -------
-hidden_dim: 1024
-intermediate_dim: 3584
+hidden_dim: 2048
+intermediate_dim: 7168
 num_layers: 24
 num_heads: 16
 num_kv_heads: 8
