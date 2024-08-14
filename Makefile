@@ -15,9 +15,10 @@ clean:
 	find . -name "__pycache__" | xargs rm -rf
 
 check:
+	ruff check --output-format concise .
 	black --check .
-	ruff check --show-source .
+	mypy .
 
 autoformat:
-	black .
 	ruff check --fix --show-fixes .
+	black .
