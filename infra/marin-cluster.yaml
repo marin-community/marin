@@ -60,6 +60,9 @@ initialization_commands:
 
 
 setup_commands:
+  # Add Rust for DOLMA
+  - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y && source $HOME/.cargo/env
+  - echo 'source $HOME/.cargo/env' >> $HOME/.bashrc  # or .bash_profile, depending on your system
   - pip install --upgrade pip
   - >
     pip install "chardet==5.2.0"
