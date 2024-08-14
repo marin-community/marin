@@ -76,7 +76,7 @@ class SimpleEvaluator(VllmTpuEvaluator):
 
         # Set `enforce_eager=True` to avoid ahead-of-time compilation.
         # In real workloads, `enforce_eager` should be `False`.
-        llm = LLM(model=model_name_or_path, enforce_eager=True)
+        llm = LLM(model=model_name_or_path, enforce_eager=False)
 
         result: Dict[str, float] = {}
         for eval_name in evals:
