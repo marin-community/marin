@@ -37,7 +37,7 @@ from marin.utils import (
     fsspec_isdir,
     fsspec_get_curr_subdirectories,
     fsspec_get_atomic_directories,
-    dynamic_path_transform
+    validate_gcp_path
 )
 
 
@@ -164,18 +164,16 @@ def main(inference_config: InferenceConfig):
 
     filepaths, process_filepath_func = get_filepaths_and_process_filepath_func(inference_config)
 
+    # Enforce Marin GCP structure
+    input_dir = validate_gcp_path(inference_config.input_dir, path_type="documents")
+    output_dir = validate_gcp_path(inference_config.output_dir, path_type="attributes")
     responses = []
     for input_filepath in filepaths:
         if len(responses) > inference_config.task.max_in_flight:
             ready_refs, responses = ray.wait(responses, num_returns=1)
             ray.get(ready_refs)
 
-        output_filepath = dynamic_path_transform(
-            input_filepath, 
-            inference_config.input_dir, 
-            inference_config.output_dir,
-            inference_config.attribute_name  # Use attribute_name instead of experiment
-        )
+        output_filepath = rebase_file_path(input_dir, input_filepath, output_dir)
         fsspec_mkdirs(output_filepath)
 
         result_ref = process_filepath_func.options(

@@ -1,6 +1,7 @@
 import os
-
+import re
 import fsspec
+from typing import Literal
 
 
 def fsspec_exists(file_path):
@@ -162,14 +163,51 @@ def dynamic_path_transform(input_filepath, input_dir, output_dir, attribute_name
     new_output_path = os.path.join(final_output_dir, new_rel_path, path_components[-1])
     return new_output_path
 
+
+def validate_gcp_path(path: str) -> str:
+    """
+    Validate the given path against a specific Google Cloud Storage (GCS) structure.
+
+    This function ensures that the provided path follows the required format for
+    GCS paths in a specific bucket structure. The expected format is:
+    gs://marin-$REGION/$PATH_TYPE/$EXPERIMENT/$DATASET/$VERSION/
+
+    Parameters:
+    path (str): The GCS path to validate.
+    path_type (str): The expected type of path. Used for informational purposes only.
+
+    Returns:
+    str: The original path if it's valid.
+
+    Raises:
+    ValueError: If the path doesn't match the expected format.
+                The error message provides details on the correct structure.
+
+    Example:
+    >>> validate_gcp_path("gs://marin-us-central1/documents/exp1/dataset1/v1/", "documents")
+    'gs://marin-us-central1/documents/exp1/dataset1/v1/'
+    >>> validate_gcp_path("gs://marin-us-central1/attributes/exp1/dataset1/v1/", "attributes")
+    'gs://marin-us-central1/attributes/exp1/dataset1/v1/'
+    >>> validate_gcp_path("gs://marin-us-central1/filtered/exp1/dataset1/v1/", "filtered")
+    'gs://marin-us-central1/filtered/exp1/dataset1/v1/'
+    """
+    pattern = r"^gs://marin-[^/]+/(documents|attributes|filtered)/[^/]+/[^/]+/[^/]+(/.*)?$"
+    if not re.match(pattern, path):
+        raise ValueError(f"Invalid path format. It should follow the structure: "
+                         f"gs://marin-$REGION/{{documents|attributes|filtered}}/$EXPERIMENT/$DATASET/$VERSION/")
+    return path
+
 def rebase_file_path(base_in_dir, file_path, base_out_dir, new_extension=None, old_extension=None):
     """
-    Rebase a file path from one directory to another.
+    Rebase a file path from one directory to another, with an option to change the file extension.
 
     Args:
         base_in_dir (str): The base directory of the input file
         file_path (str): The path of the file
         base_out_dir (str): The base directory of the output file
+        new_extension (str, optional): If provided, the new file extension to use (including the dot, e.g., '.txt')
+        old_extension (str, optional): If provided along with new_extension, specifies the old extension to replace.
+                                       If not provided, the function will replace everything after the last dot.
 
     Returns:
         str: The rebased file path
