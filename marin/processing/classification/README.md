@@ -22,6 +22,13 @@ Feel free to edit the config yaml to fit your needs:
 - `attribute_name`: The name of the attribute to use. 
 - `runtime`: The runtime environment and memory constraints to use. For example, DCLM fasttext models require downloading the fasttext package while Fineweb's edu classifier requires downloading Jax with TPU support as well as Huggingface.
 
+The quickstart example is
+```bash
+ray job submit  --address http://127.0.0.1:8265
+ --working-dir . --no-wait -- \
+python -m marin.processing.classification.inference --config marin/processing/classification/config/quick_start.yaml
+```
+
 ### Training Fasttext Classifiers
 1. Create the dataset in fasttext format
 ```bash
@@ -48,16 +55,22 @@ python -m marin.processing.classification.eval.annotations_server --input-file g
 
 ### Deduplication
 
-Please note that deduplication assumes the input path is of the form gs://{$BUCKET_PATH}/documents/ and will write attributes to gs://{$BUCKET_PATH}/attributes/
+See the dedupe.md file for more details; below is the quick start command
 
 ```bash
-ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python marin/processing/classification/dedupe.py --input_dir gs://marin-us-central2/scratch/documents/dummy_dedupe_data/                                   
+ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python marin/processing/classification/dedupe.py --input_dir gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart/ --output_dir gs://marin-us-central2/attributes/hello_world_fw/v1.0/quickstart_duplicates/
 ```
 ### Consolidation Command
-After the attribute folders have been generated, to filter the dataset based on the quality rules following the example above you can run
+After the attribute folders have been generated, to filter the dataset based on the quality rules following the example above you can run the following quickstart
+
+dedupe first
 ```bash
-ray job submit --working-dir . --no-wait -- \
-python -m marin.processing.classification.filter --input_dir gs://{BUCKET}/path/to/md/input.jsonl.gz --file_format md --attribute_name fineweb-edu-quality --threshold 3
+ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python -m marin.processing.classification.filter --input_dir gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart/ --output_dir gs://marin-us-central2/filtered/hello_world_fw/v1.0/quickstart_deduped --attributes_dir gs://marin-us-central2/attributes/hello_world_fw/v1.0/quickstart_duplicates/ --attribute_name dedupe
+```
+
+now quality filter
+```bash
+ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python -m marin.processing.classification.filter --input_dir gs://marin-us-central2/filtered/hello_world_fw/v1.0/quickstart_deduped/ --output_dir gs://marin-us-central2/filtered/hello_world_fw/v1.0/quickstart_deduped_dclmfasttext --attributes_dir gs://marin-us-central2/attributes/hello_world_fw/v1.0/dclm-fasttext-quality-quickstart/ --attribute_name dclm-fasttext-quality --threshold 0.2 
 ```
 
 Currently we require the user specifiy the file format and the attribute to filter by
