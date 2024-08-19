@@ -66,52 +66,54 @@ class SimpleEvaluator(VllmTpuEvaluator):
         "many_outputs": MANY_OUTPUTS_TEST_PLAN,
     }
 
-    @staticmethod
-    @ray.remote(memory=8 * 1024 * 1024 * 1024)  # 8 GB
-    def _evaluate(model_name_or_path: str, evals: List[str], output_path: str) -> Dict[str, float]:
-        # Install VLLM from source
-        SimpleEvaluator.install_vllm_from_source()
-
-        from vllm.vllm import LLM, SamplingParams
-
-        # Set `enforce_eager=True` to avoid ahead-of-time compilation.
-        # In real workloads, `enforce_eager` should be `False`.
-        llm = LLM(model=model_name_or_path, enforce_eager=False)
-
-        result: Dict[str, float] = {}
-        for eval_name in evals:
-            assert eval_name in SimpleEvaluator.NAME_TO_TEST_PLAN, f"Unknown eval: {eval_name}"
-            test_plan: TestPlan = SimpleEvaluator.NAME_TO_TEST_PLAN[eval_name]
-
-            # Set sampling parameters based on the test plan
-            sampling_params = SamplingParams(
-                temperature=test_plan.temperature,
-                n=test_plan.num_outputs,
-                max_tokens=test_plan.max_tokens,
-                # Currently, top-p sampling is disabled. `top_p` should be 1.0.
-                top_p=1.0,
-            )
-
-            # Run inference and time it
-            start_time = time.time()
-            outputs = llm.generate(test_plan.prompts, sampling_params)
-            result[eval_name] = time.time() - start_time
-
-            # Print the outputs for debugging
-            for output in outputs:
-                prompt: str = output.prompt
-                print(f"Prompt: {prompt!r}")
-                for i, generation in enumerate(output.outputs):
-                    print(f"Generation (#{i+1} of {test_plan.num_outputs}): {generation.text!r}")
-                print("-" * 100)
-
-        return result
-
-    def evaluate(self, model_name_or_path: str, evals: List[str], output_path: str) -> None:
+    def evaluate(self, model_name_or_path: str, evals: List[str]) -> None:
         """
         Run the evaluator.
         """
-        print(f"Running {evals} on {model_name_or_path} and saving results to {output_path}...")
+
+        @ray.remote(memory=8 * 1024 * 1024 * 1024)  # 8 GB
+        def run():
+            # Install VLLM from source
+            self.install_vllm_from_source()
+
+            # Authenticate with Hugging Face
+            self.authenticate_with_hf()
+
+            from vllm import LLM, SamplingParams
+
+            # Set `enforce_eager=True` to avoid ahead-of-time compilation.
+            # In real workloads, `enforce_eager` should be `False`.
+            llm = LLM(model=model_name_or_path, enforce_eager=False)
+
+            result: Dict[str, float] = {}
+            for eval_name in evals:
+                assert eval_name in SimpleEvaluator.NAME_TO_TEST_PLAN, f"Unknown eval: {eval_name}"
+                test_plan: TestPlan = SimpleEvaluator.NAME_TO_TEST_PLAN[eval_name]
+
+                # Set sampling parameters based on the test plan
+                sampling_params = SamplingParams(
+                    temperature=test_plan.temperature,
+                    n=test_plan.num_outputs,
+                    max_tokens=test_plan.max_tokens,
+                    # Currently, top-p sampling is disabled. `top_p` should be 1.0.
+                    top_p=1.0,
+                )
+
+                # Run inference and time it
+                start_time: float = time.time()
+                outputs = llm.generate(test_plan.prompts, sampling_params)
+                result[eval_name] = time.time() - start_time
+
+                # Print the outputs for debugging
+                for output in outputs:
+                    prompt: str = output.prompt
+                    print(f"Prompt: {prompt!r}")
+                    for i, generation in enumerate(output.outputs):
+                        print(f"Generation (#{i + 1} of {test_plan.num_outputs}): {generation.text!r}")
+                    print("-" * 100)
+
+            return result
+
         ray.init(runtime_env=self.get_runtime_env())
-        result = ray.get(self._evaluate.remote(model_name_or_path, evals, output_path))
+        result = ray.get(run.remote())
         print(f"Inference times (in seconds): {result}")

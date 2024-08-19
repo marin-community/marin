@@ -11,18 +11,21 @@ import argparse
 import time
 
 from scripts.evaluation.evaluator_factory import get_evaluator, NAME_TO_EVALUATOR
-from scripts.evaluation.evaluator import Evaluator
+from scripts.evaluation.evaluator import Evaluator, EvaluatorConfig
 
 
 def main():
-    print(f"Evaluating {args.model} with {args.evaluator}")
-    start_time: float = time.time()
-    evaluator: Evaluator = get_evaluator(args.evaluator)
-    evaluator.evaluate(
-        model_name_or_path=args.model,
-        evals=args.evals,
+    config = EvaluatorConfig(
+        name=args.evaluator,
         output_path=args.output_path,
+        credentials_path=args.credentials_path,
     )
+    print(f"Creating an evaluator with config: {config}")
+    evaluator: Evaluator = get_evaluator(config)
+
+    print(f"Evaluating {args.model} with {args.evals}")
+    start_time: float = time.time()
+    evaluator.evaluate(model_name_or_path=args.model, evals=args.evals)
     print(f"Done (total time: {time.time() - start_time} seconds)")
 
 
@@ -55,6 +58,13 @@ if __name__ == "__main__":
         type=str,
         help="The location of the output path (filesystem path or URL)",
         default="output",
+    )
+    parser.add_argument(
+        "--credentials-path",
+        type=str,
+        help="Path to the JSON file containing credentials.",
+        required=False,
+        default="credentials.json",
     )
     args = parser.parse_args()
 
