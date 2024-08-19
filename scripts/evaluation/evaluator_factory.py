@@ -1,17 +1,19 @@
-from scripts.evaluation.evaluator import Evaluator
+from scripts.evaluation.evaluator import Evaluator, EvaluatorConfig
+from scripts.evaluation.helm_evaluator import HELMEvaluator
 from scripts.evaluation.simple_evaluator import SimpleEvaluator
 
 # Supported evaluators
 NAME_TO_EVALUATOR = {
+    "helm": HELMEvaluator,
     "simple": SimpleEvaluator,
 }
 
 
-def get_evaluator(evaluator_name: str) -> Evaluator:
+def get_evaluator(config: EvaluatorConfig) -> Evaluator:
     """
     Returns the evaluator for the given name.
     """
-    if evaluator_name not in NAME_TO_EVALUATOR:
-        raise ValueError(f"Unknown evaluator: {evaluator_name}")
+    if config.name not in NAME_TO_EVALUATOR:
+        raise ValueError(f"Unknown evaluator: {config.name}")
 
-    return NAME_TO_EVALUATOR[evaluator_name]()
+    return NAME_TO_EVALUATOR[config.name](config)

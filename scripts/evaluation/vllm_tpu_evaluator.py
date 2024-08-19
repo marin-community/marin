@@ -1,5 +1,10 @@
 from abc import ABC
 from typing import Dict, List
+import os
+import requests
+import subprocess
+import sys
+import time
 
 from scripts.evaluation.evaluator import Evaluator, Dependency
 
@@ -25,12 +30,16 @@ class VllmTpuEvaluator(Evaluator, ABC):
         Dependency(name="packaging"),
         Dependency(name="starlette", version="0.37.2"),
         Dependency(name="tokenizers", version="0.19.1"),
-        Dependency(name="transformers", version="4.43.2"),
+        Dependency(name="transformers", version="4.40.0"),
+        # Marin-specific dependencies
+        Dependency(name="ai2-olmo"),
     ]
 
     # VLLM version to install. TODO: Hardcoded for now. Make it configurable.
     # Visit https://github.com/vllm-project/vllm/releases to get the list of available versions.
     VLLM_VERSION: str = "v0.5.4"
+
+    # By default, the VLLM server runs on port 8000.
 
     @staticmethod
     def install_vllm_from_source() -> None:
@@ -52,10 +61,82 @@ class VllmTpuEvaluator(Evaluator, ABC):
         # Clone the VLLM repository to install it from source. Can fail if the repository already exists.
         VllmTpuEvaluator.run_bash_command("git clone https://github.com/vllm-project/vllm.git", check=False)
         # Runs https://github.com/vllm-project/vllm/blob/main/setup.py with the `tpu` target device
-        VllmTpuEvaluator.run_bash_command(
-            f"cd vllm && git checkout tags/{VllmTpuEvaluator.VLLM_VERSION} "
-            '&& VLLM_TARGET_DEVICE="tpu" pip install -e .'
-        )
+        VllmTpuEvaluator.run_bash_command(f"cd vllm && git checkout tags/{VllmTpuEvaluator.VLLM_VERSION}")
+        VllmTpuEvaluator.run_bash_command('VLLM_TARGET_DEVICE="tpu" pip install -e ./vllm')
+
+        # Get the path to the vllm directory and add the path to sys.path and PYTHONPATH
+        current_dir: str = os.path.dirname(os.path.abspath(__file__))
+        vllm_path: str = os.path.join(current_dir, "../../vllm")
+        sys.path.insert(0, vllm_path)
+        os.environ["PYTHONPATH"] = f"{vllm_path}:{os.environ.get('PYTHONPATH', '')}"
+
+    @staticmethod
+    def is_gcs_path(path: str) -> bool:
+        """
+        Checks if the given path is a Google Cloud Storage (GCS) path.
+        """
+        return path.startswith("gs://")
+
+    @staticmethod
+    def download_from_gcs(gcs_path: str, local_path: str = ".") -> None:
+        """
+        Downloads the model checkpoint to the local filesystem.
+        By default, `local_path` is the current directory.
+        """
+        VllmTpuEvaluator.run_bash_command(f"gsutil -m cp -r {gcs_path} {local_path}")
+        print(f"Downloaded {gcs_path} to {local_path}.")
+
+    @staticmethod
+    def upload_to_gcs(local_path: str, gcs_path: str) -> None:
+        """
+        Uploads the model checkpoint to Google Cloud Storage (GCS).
+        """
+        VllmTpuEvaluator.run_bash_command(f"gsutil -m cp -r {local_path} {gcs_path}")
+        print(f"Uploaded {local_path} to {gcs_path}.")
+
+    @staticmethod
+    def start_vllm_server_in_background(
+        model_name_or_path: str, host: str = "127.0.0.1", port: int = 8000, timeout_seconds: int = 3600
+    ) -> str:
+        """
+        Serve the model with a local vLLM server in the background.
+        Returns the server url.
+        """
+        server_args: str = f"--host {host} --port {port}"
+        command: str
+        if VllmTpuEvaluator.is_gcs_path(model_name_or_path):
+            VllmTpuEvaluator.download_from_gcs(model_name_or_path)
+            local_checkpoint_path: str = os.path.split(model_name_or_path)[-1]
+            # From https://docs.vllm.ai/en/v0.4.0/models/engine_args.html
+            command = f"vllm serve {local_checkpoint_path} --trust-remote-code {server_args}"
+        else:
+            command = f"vllm serve {model_name_or_path} {server_args}"
+        process = subprocess.Popen(command, shell=True)
+
+        # Check that the server has started by sending heartbeat checks
+        server_url: str = f"http://{host}:{port}/v1"
+        start_time: float = time.time()
+        elapsed_time: float = 0
+        while True:
+            try:
+                # Attempt to send a request to the server's health endpoint
+                response = requests.get(f"{server_url}/models")
+                if response.status_code == 200:
+                    print(f"vLLM server is up and running at {server_url}: {response.text}")
+                    break
+            except requests.ConnectionError:
+                # If the connection is refused, wait and try again
+                print(f"vLLM server is not ready yet (elapsed time in seconds): {elapsed_time})")
+
+            # Check if the timeout has been reached
+            elapsed_time = time.time() - start_time
+            if elapsed_time > timeout_seconds:
+                process.kill()
+                raise TimeoutError("Failed to start vLLM server within timeout period.")
+
+            time.sleep(5)  # Wait 5 seconds before retrying
+
+        return server_url
 
     _python_version: str = "3.10"
     _pip_packages: List[Dependency] = DEFAULT_PIP_PACKAGES
