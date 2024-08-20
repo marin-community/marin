@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from typing import Dict, List
+import os
 import time
 
 import ray
@@ -66,54 +67,49 @@ class SimpleEvaluator(VllmTpuEvaluator):
         "many_outputs": MANY_OUTPUTS_TEST_PLAN,
     }
 
-    def evaluate(self, model_name_or_path: str, evals: List[str]) -> None:
-        """
-        Run the evaluator.
-        """
+    @ray.remote(memory=8 * 1024 * 1024 * 1024, resources={"TPU": 4})  # 8 GB of memory, always request 4 TPUs
+    def run(self, model_name_or_path: str, evals: List[str]) -> None:
+        super().run(model_name_or_path, evals)
 
-        @ray.remote(memory=8 * 1024 * 1024 * 1024)  # 8 GB
-        def run():
-            # Install VLLM from source
-            self.install_vllm_from_source()
+        from vllm import LLM, SamplingParams
 
-            # Authenticate with Hugging Face
-            self.authenticate_with_hf()
+        # Download the model from GCS if it is a GCS path
+        model: str
+        if SimpleEvaluator.is_gcs_path(model_name_or_path):
+            SimpleEvaluator.download_from_gcs(model_name_or_path)
+            model = os.path.split(model_name_or_path)[-1]
+        else:
+            model = model_name_or_path
 
-            from vllm import LLM, SamplingParams
+        # Set `enforce_eager=True` to avoid ahead-of-time compilation.
+        # In real workloads, `enforce_eager` should be `False`.
+        llm = LLM(model=model, enforce_eager=False, trust_remote_code=True)
 
-            # Set `enforce_eager=True` to avoid ahead-of-time compilation.
-            # In real workloads, `enforce_eager` should be `False`.
-            llm = LLM(model=model_name_or_path, enforce_eager=False)
+        inference_times: Dict[str, float] = {}
+        for eval_name in evals:
+            assert eval_name in SimpleEvaluator.NAME_TO_TEST_PLAN, f"Unknown eval: {eval_name}"
+            test_plan: TestPlan = SimpleEvaluator.NAME_TO_TEST_PLAN[eval_name]
 
-            result: Dict[str, float] = {}
-            for eval_name in evals:
-                assert eval_name in SimpleEvaluator.NAME_TO_TEST_PLAN, f"Unknown eval: {eval_name}"
-                test_plan: TestPlan = SimpleEvaluator.NAME_TO_TEST_PLAN[eval_name]
+            # Set sampling parameters based on the test plan
+            sampling_params = SamplingParams(
+                temperature=test_plan.temperature,
+                n=test_plan.num_outputs,
+                max_tokens=test_plan.max_tokens,
+                # Currently, top-p sampling is disabled. `top_p` should be 1.0.
+                top_p=1.0,
+            )
 
-                # Set sampling parameters based on the test plan
-                sampling_params = SamplingParams(
-                    temperature=test_plan.temperature,
-                    n=test_plan.num_outputs,
-                    max_tokens=test_plan.max_tokens,
-                    # Currently, top-p sampling is disabled. `top_p` should be 1.0.
-                    top_p=1.0,
-                )
+            # Run inference and time it
+            start_time: float = time.time()
+            outputs = llm.generate(test_plan.prompts, sampling_params)
+            inference_times[eval_name] = time.time() - start_time
 
-                # Run inference and time it
-                start_time: float = time.time()
-                outputs = llm.generate(test_plan.prompts, sampling_params)
-                result[eval_name] = time.time() - start_time
+            # Print the outputs for debugging
+            for output in outputs:
+                prompt: str = output.prompt
+                print(f"Prompt: {prompt!r}")
+                for i, generation in enumerate(output.outputs):
+                    print(f"Generation (#{i + 1} of {test_plan.num_outputs}): {generation.text!r}")
+                print("-" * 100)
 
-                # Print the outputs for debugging
-                for output in outputs:
-                    prompt: str = output.prompt
-                    print(f"Prompt: {prompt!r}")
-                    for i, generation in enumerate(output.outputs):
-                        print(f"Generation (#{i + 1} of {test_plan.num_outputs}): {generation.text!r}")
-                    print("-" * 100)
-
-            return result
-
-        ray.init(runtime_env=self.get_runtime_env())
-        result = ray.get(run.remote())
-        print(f"Inference times (in seconds): {result}")
+        print(f"Inference times (in seconds): {inference_times}")

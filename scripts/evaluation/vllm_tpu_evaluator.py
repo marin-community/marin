@@ -1,10 +1,12 @@
-from abc import ABC
+from abc import ABC, abstractmethod
 from typing import Dict, List
 import os
 import requests
 import subprocess
 import sys
 import time
+
+import ray
 
 from scripts.evaluation.evaluator import Evaluator, Dependency
 
@@ -30,7 +32,7 @@ class VllmTpuEvaluator(Evaluator, ABC):
         Dependency(name="packaging"),
         Dependency(name="starlette", version="0.37.2"),
         Dependency(name="tokenizers", version="0.19.1"),
-        Dependency(name="transformers", version="4.40.0"),
+        Dependency(name="transformers", version="4.44.0"),
         # Marin-specific dependencies
         Dependency(name="ai2-olmo"),
     ]
@@ -48,7 +50,7 @@ class VllmTpuEvaluator(Evaluator, ABC):
         https://docs.vllm.ai/en/v0.5.0.post1/getting_started/tpu-installation.html
         TPUs require installing VLLM from source.
         """
-        # Additional dependencies to install in order for VLLM to work on TPUs
+        # Additional dependencies to install in order for vLLM to work on TPUs
         VllmTpuEvaluator.run_bash_command("sudo apt-get update && sudo apt-get install libopenblas-dev --yes")
         VllmTpuEvaluator.run_bash_command(
             "pip install torch_xla[tpu] -f https://storage.googleapis.com/libtpu-releases/index.html"
@@ -138,6 +140,21 @@ class VllmTpuEvaluator(Evaluator, ABC):
 
         return server_url
 
+    @staticmethod
+    def unregister_olmo() -> None:
+        from transformers import CONFIG_MAPPING
+
+        # The olmo library did not set `exists_ok=True` at
+        # https://github.com/allenai/OLMo/blob/main/hf_olmo/configuration_olmo.py#L43.
+        # Therefore, unregister the existing "olmo" config if it exists to prevent the following error:
+        # ValueError: 'olmo' is already used by a Transformers config, pick another name.
+        model_name: str = "olmo"
+        if model_name in CONFIG_MAPPING._mapping:
+            del CONFIG_MAPPING._mapping[model_name]
+            print(f"Unregistered the existing '{model_name}' config.")
+        else:
+            print(f"No existing config found for '{model_name}'.")
+
     _python_version: str = "3.10"
     _pip_packages: List[Dependency] = DEFAULT_PIP_PACKAGES
     _py_modules: List[Dependency] = []
@@ -159,3 +176,26 @@ class VllmTpuEvaluator(Evaluator, ABC):
             runtime_env["py_modules"] = [str(module) for module in self._py_modules]
 
         return runtime_env
+
+    @abstractmethod
+    def run(self, model_name_or_path: str, evals: List[str]) -> None:
+        """
+        Run the evaluator.
+        """
+        # General setup:
+        # Install VLLM from source
+        self.install_vllm_from_source()
+
+        # Authenticate with Hugging Face
+        self.authenticate_with_hf()
+
+        # Download the model from GCS or HuggingFace and serve it with vLLM
+        self.unregister_olmo()
+
+    def evaluate(self, model_name_or_path: str, evals: List[str]) -> None:
+        """
+        Launches the evaluation run with Ray.
+        """
+        ray.init(runtime_env=self.get_runtime_env())
+        result = ray.get(self.run.remote(self, model_name_or_path, evals))
+        print(f"Inference times (in seconds): {result}")
