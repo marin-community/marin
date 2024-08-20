@@ -56,8 +56,12 @@ initialization_commands:
   - sudo NEEDRESTART_MODE=a DEBIAN_FRONTEND=noninteractive apt-get upgrade -y
   - sudo NEEDRESTART_MODE=a DEBIAN_FRONTEND=noninteractive apt-get install -y python3-pip python-is-python3 pandoc
   # Install OpenBLAS, OpenMPI, and OpenMP for eval dependencies
-  - sudo NEEDRESTART_MODE=a DEBIAN_FRONTEND=noninteractive apt-get install -y libopenblas-base libopenmpi-dev libomp-dev 
-
+  - sudo NEEDRESTART_MODE=a DEBIAN_FRONTEND=noninteractive apt-get install -y libopenblas-base libopenmpi-dev libomp-dev libopenblas-dev
+  # Install Miniconda3
+  - mkdir -p ~/miniconda3 && wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O ~/miniconda3/miniconda.sh && bash ~/miniconda3/miniconda.sh -b -u -p ~/miniconda3 && rm -rf ~/miniconda3/miniconda.sh
+  - ~/miniconda3/bin/conda create --name evaluate --yes python=3.10 pip=23.0.1
+  # Ensure that there aren't conflicts with the main packages
+  - echo "include-system-site-packages=false" >> ~/miniconda3/envs/evaluate/pyvenv.cfg
 
 setup_commands:
   - pip install --upgrade pip
@@ -86,6 +90,22 @@ setup_commands:
     "trafilatura==1.8.1"
     "tqdm"
     "warcio==1.7.4"
+  - > 
+    ~/miniconda3/envs/evaluate/bin/pip install
+    "fsspec~=2024.3"
+    "gcsfs~=2024.3"
+    "google-api-python-client==2.129.0"
+    "google-cloud-storage-transfer==1.11.3"
+    "requests"
+  - ~/miniconda3/envs/evaluate/bin/pip install https://storage.googleapis.com/pytorch-xla-releases/wheels/tpuvm/torch-nightly+20240601-cp310-cp310-linux_x86_64.whl https://storage.googleapis.com/pytorch-xla-releases/wheels/tpuvm/torch_xla-nightly+20240601-cp310-cp310-linux_x86_64.whl
+  - ~/miniconda3/envs/evaluate/bin/pip install torch_xla[tpu] -f https://storage.googleapis.com/libtpu-releases/index.html
+  - ~/miniconda3/envs/evaluate/bin/pip install torch_xla[pallas] -f https://storage.googleapis.com/jax-releases/jax_nightly_releases.html -f https://storage.googleapis.com/jax-releases/jaxlib_nightly_releases.html
+  - ~/miniconda3/envs/evaluate/bin/pip install git+https://github.com/TheQuantumFractal/OLMo.git
+  - ~/miniconda3/envs/evaluate/bin/pip install lm-eval==0.4.3
+  - git clone https://github.com/vllm-project/vllm.git
+  - cd ./vllm && git checkout tags/v0.5.0.post1
+  - cd ./vllm && ~/miniconda3/envs/evaluate/bin/pip install -r requirements-tpu.txt
+  - cd ./vllm && VLLM_TARGET_DEVICE="tpu" ~/miniconda3/envs/evaluate/bin/python setup.py develop
 
 
 # Set Head Node == `ray_head_default`
