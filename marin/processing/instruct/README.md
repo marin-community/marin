@@ -42,7 +42,7 @@ Quick start command:
 
 # How do I download the raw data?
 
-Currently this needs to be done on a case by case basis according to the dataset since all the public instruct datasets have slightly different formats. For the tulumix checkout. The ```marin-data/raw/instruct``` bucket must exist apriori
+Currently this needs to be done on a case by case basis according to the dataset since all the public instruct datasets have slightly different formats. For the tulumix checkout, the ```marin-data/raw/instruct``` bucket must exist apriori
 ```bash
 # Original COMMAND
 python scripts/copy_hf_dataset_to_gcs.py --dataset_name allenai/tulu-v2-sft-mixture --destination_path gs://marin-data/raw/instruct --urls_dir hf_dataset_transfer_bucket
