@@ -180,7 +180,7 @@ def rebase_file_path(base_in_dir, file_path, base_out_dir, new_extension=None, o
         base_out_dir (str): The base directory of the output file
         new_extension (str, optional): If provided, the new file extension to use (including the dot, e.g., '.txt')
         old_extension (str, optional): If provided along with new_extension, specifies the old extension to replace.
-                                       If not provided, the function will replace everything after the last dot.
+                                       If not provided (but `new_extension` is), the function will replace everything after the last dot.
 
     Returns:
         str: The rebased file path
