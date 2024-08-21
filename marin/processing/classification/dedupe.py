@@ -11,34 +11,38 @@ from tqdm import tqdm
 import glob
 import shutil
 import subprocess
-from marin.utils import validate_gcp_path, fsspec_mkdirs, rebase_file_path
+import fsspec
+from marin.utils import validate_marin_gcp_path, fsspec_mkdirs, rebase_file_path, fsspec_get_curr_subdirectories, fsspec_isdir, fsspec_dir_only_contains_files, fsspec_glob
 
 def copy_files_in(input_dir, local_base_dir):
-    print(f"\n[DEBUG] Starting copy_files_in function")
-    print(f"[DEBUG] Input directory: {input_dir}")
-    print(f"[DEBUG] Local base directory: {local_base_dir}")
+    # Ensure input_dir doesn't end with a slash
+    input_dir = input_dir.rstrip('/')
     
-    client = storage.Client()
-    bucket_name = input_dir.split('/')[2]
-    prefix = '/'.join(input_dir.split('/')[3:])
-    print(f"[DEBUG] Bucket name: {bucket_name}")
-    print(f"[DEBUG] Prefix: {prefix}")
+    # Get all .jsonl.gz files in the input directory
+    glob_path = f"{input_dir}/**/*.jsonl.gz"
+    print(f"glob_path: {glob_path}")
+    input_files = fsspec_glob(glob_path)
     
-    bucket = client.get_bucket(bucket_name)
-    blobs = list(bucket.list_blobs(prefix=prefix))
-    print(f"[DEBUG] Number of blobs found: {len(blobs)}")
+    print(f"printing input files five: {input_files[:5]}")
     
-    for blob in tqdm(blobs, desc="Downloading files"):
-        if blob.name.endswith('.jsonl.gz'):
-            local_file_path = os.path.join(local_base_dir, 'documents', blob.name.split(prefix)[1].lstrip('/'))
-            os.makedirs(os.path.dirname(local_file_path), exist_ok=True)
-            print(f"[DEBUG] Downloading {blob.name} to {local_file_path}", flush=True)
-            blob.download_to_filename(local_file_path)
-    
-    print(f"[DEBUG] Files in local base directory after download:")
-    for root, dirs, files in os.walk(local_base_dir):
-        for file in files:
-            print(f"[DEBUG] {os.path.join(root, file)}")
+    for input_file in tqdm(input_files, desc="Copying files"):
+        # Extract the relative path from the input file
+        relative_path = os.path.relpath(input_file, input_dir)
+        
+        # Construct the output path, ensuring it's under the 'documents' directory
+        output_file = os.path.join(local_base_dir, 'documents', relative_path)
+        
+        # Ensure the output directory exists
+        output_dir = os.path.dirname(output_file)
+        fsspec_mkdirs(output_dir)
+        
+        # Copy the file using fsspec
+        with fsspec.open(input_file, "rb", compression="infer") as f_remote:
+            with fsspec.open(output_file, "wb", compression="gzip") as f_local:
+                f_local.write(f_remote.read())
+
+    # Dolma deduplicator requires 'documents/' as a subdirectory
+    print(f"Copied {len(input_files)} files to {os.path.join(local_base_dir, 'documents')}")
 
 def do_dedup(local_base_dir, attribute_name, min_length, min_words, bloom_filter_size, estimated_doc_count, false_positive_rate, processes):
     command = [
@@ -61,7 +65,7 @@ def do_dedup(local_base_dir, attribute_name, min_length, min_words, bloom_filter
             "--bloom_filter.estimated_doc_count", str(estimated_doc_count),
             "--bloom_filter.desired_false_positive_rate", str(false_positive_rate)
         ])
-    print(f"[DEBUG] Dolma dedupe command: {' '.join(command)}")
+    
     
     process = subprocess.Popen(
         ' '.join(command),
@@ -75,95 +79,71 @@ def do_dedup(local_base_dir, attribute_name, min_length, min_words, bloom_filter
     for line in process.stdout:
         print(line, end='', flush=True)
     process.wait()
-    print(f"\n[DEBUG] Dolma dedupe command completed with return code: {process.returncode}")
-    
-    print(f"[DEBUG] Contents of local base directory after dedupe:")
-    for root, dirs, files in os.walk(local_base_dir):
-        for file in files:
-            print(f"[DEBUG] {os.path.join(root, file)}")
     
     # Rename temporary files
     attr_dir = os.path.join(local_base_dir, "attributes/duplicate_documents")
-    print(f"[DEBUG] Checking for temporary files in: {attr_dir}")
-    tmp_files_found = False
+    print(f"Checking for temporary files in: {attr_dir}")
     for root, _, files in os.walk(attr_dir):
         for file in files:
             if file.endswith('.jsonl.gz.tmp'):
-                tmp_files_found = True
+
                 old_path = os.path.join(root, file)
-                new_path = old_path[:-4]  # Remove '.tmp'
-                print(f"[DEBUG] Renaming {old_path} to {new_path}")
+                new_path = old_path.rsplit('.tmp', 1)[0]
                 os.rename(old_path, new_path)
-    
-    if not tmp_files_found:
-        print("[DEBUG] No .tmp files found in the attributes directory")
     
     return process.returncode
 
 def copy_files_out(local_base_dir, output_dir, attribute_name):
-    print(f"\n[DEBUG] Starting copy_files_out function")
-    print(f"[DEBUG] Local base directory: {local_base_dir}")
-    print(f"[DEBUG] Output directory: {output_dir}")
+    # Ensure output_dir doesn't end with a slash
+    output_dir = output_dir.rstrip('/')
     
-    client = storage.Client()
-    
-    # Remove 'gs://' prefix if present
-    bucket_name = output_dir.split('/')[2]
-    gcs_base_path = '/'.join(output_dir.split('/')[3:])
-    
-    print(f"[DEBUG] Bucket name: {bucket_name}")
-    print(f"[DEBUG] GCS base path: {gcs_base_path}")
-    
-    bucket = client.get_bucket(bucket_name)
     local_attribute_dir = os.path.join(local_base_dir, 'attributes', attribute_name)
-    print(f"[DEBUG] Local attribute directory: {local_attribute_dir}")
+    
+    # Get all .jsonl.gz files in the local attribute directory
+    glob_path = f"{local_attribute_dir}/**/*.jsonl.gz"
+    local_files = fsspec_glob(glob_path)
     
     files_uploaded = 0
-    for root, _, files in os.walk(local_attribute_dir):
-        for file in files:
-            if file.endswith('.jsonl.gz'):
-                local_file_path = os.path.join(root, file)
-                
-                # Use rebase_file_path to get the correct GCS path
-                gcs_file_path = rebase_file_path(local_attribute_dir, local_file_path, gcs_base_path)
-                
-                print(f"[DEBUG] Uploading {local_file_path} to gs://{bucket_name}/{gcs_file_path}")
-                
-                # Ensure the directory exists in GCS
-                gcs_dir = os.path.dirname(f"gs://{bucket_name}/{gcs_file_path}")
-                fsspec_mkdirs(gcs_dir)
-                
-                blob = bucket.blob(gcs_file_path)
-                blob.upload_from_filename(local_file_path)
-                files_uploaded += 1
+    for local_file in tqdm(local_files, desc="Uploading files"):
+        # Use rebase_file_path to get the correct output path
+        output_file = rebase_file_path(local_base_dir, local_file, output_dir)
+        
+        print(f"[DEBUG] Uploading {local_file} to {output_file}")
+        
+        # Ensure the output directory exists
+        output_file_dir = os.path.dirname(output_file)
+        fsspec_mkdirs(output_file_dir)
+        
+        # Copy the file using fsspec
+        with fsspec.open(local_file, "rb") as f_local:
+            with fsspec.open(output_file, "wb") as f_remote:
+                f_remote.write(f_local.read())
+        
+        files_uploaded += 1
     
-    print(f"[DEBUG] Total files uploaded: {files_uploaded}")
+    print(f"Uploaded {files_uploaded} files to {output_dir}")
 
 
 
 @ray.remote(runtime_env={"pip": ["dolma"]})
 def dolma_dedup(input_dir, output_dir, attribute_name, min_length, min_words, bloom_filter_size, estimated_doc_count, false_positive_rate, processes):
-    print(f"\n[DEBUG] Starting dolma_dedup function")
-    print(f"[DEBUG] Input directory: {input_dir}")
     
     with tempfile.TemporaryDirectory() as tmpdir:
-        print(f"[DEBUG] Created temporary directory: {tmpdir}")
         try:
             copy_files_in(input_dir, tmpdir)
             do_dedup(tmpdir, attribute_name, min_length, min_words, bloom_filter_size, estimated_doc_count, false_positive_rate, processes)
             copy_files_out(tmpdir, output_dir, attribute_name)
         except Exception as e:
-            print(f"[DEBUG] An error occurred: {e}")
+            print(f"An error occurred during deduplication: {e}")
     return "Deduplication process completed"
 
 def main(config):
     ray.init()
 
-    print("[DEBUG] Starting Dolma deduplication process...")
-    input_dir = validate_gcp_path(config.input_dir, path_type="documents")
-    output_dir = validate_gcp_path(config.output_dir, path_type="attributes")
+    input_dir = validate_marin_gcp_path(config.input_dir)
+    output_dir = validate_marin_gcp_path(config.output_dir)
     result = ray.get(dolma_dedup.remote(input_dir, output_dir, config.attribute_name, config.min_length, config.min_words, config.bloom_filter_size, config.estimated_doc_count, config.false_positive_rate, config.processes))
-    print(f"[DEBUG] Result: {result}")
+    print(result)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run Dolma deduplication on a single Ray worker")

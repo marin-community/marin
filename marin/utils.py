@@ -164,17 +164,19 @@ def dynamic_path_transform(input_filepath, input_dir, output_dir, attribute_name
     return new_output_path
 
 
-def validate_gcp_path(path: str) -> str:
+def validate_marin_gcp_path(path: str) -> str:
     """
-    Validate the given path against a specific Google Cloud Storage (GCS) structure.
+    Validate the given path according to the marin GCP convention.
 
     This function ensures that the provided path follows the required format for
     GCS paths in a specific bucket structure. The expected format is:
-    gs://marin-$REGION/$PATH_TYPE/$EXPERIMENT/$DATASET/$VERSION/
+    gs://marin-$REGION//(documents|attributes|filtered)/$EXPERIMENT/$DATASET/$VERSION/
+
+    gs://marin-$REGION/scratch//(documents|attributes|filtered)/$EXPERIMENT/$DATASET/$VERSION/ is also
+    allowed for temporary storage and debugging.
 
     Parameters:
     path (str): The GCS path to validate.
-    path_type (str): The expected type of path. Used for informational purposes only.
 
     Returns:
     str: The original path if it's valid.
@@ -184,17 +186,19 @@ def validate_gcp_path(path: str) -> str:
                 The error message provides details on the correct structure.
 
     Example:
-    >>> validate_gcp_path("gs://marin-us-central1/documents/exp1/dataset1/v1/", "documents")
+    >>> validate_marin_gcp_path("gs://marin-us-central1/documents/exp1/dataset1/v1/")
     'gs://marin-us-central1/documents/exp1/dataset1/v1/'
-    >>> validate_gcp_path("gs://marin-us-central1/attributes/exp1/dataset1/v1/", "attributes")
+    >>> validate_marin_gcp_path("gs://marin-us-central1/attributes/exp1/dataset1/v1/")
     'gs://marin-us-central1/attributes/exp1/dataset1/v1/'
-    >>> validate_gcp_path("gs://marin-us-central1/filtered/exp1/dataset1/v1/", "filtered")
+    >>> validate_marin_gcp_path("gs://marin-us-central1/filtered/exp1/dataset1/v1/")
     'gs://marin-us-central1/filtered/exp1/dataset1/v1/'
+    >>> validate_marin_gcp_path("gs://marin-us-central1/scratch/documents/exp1/dataset1/v1/")
+    'gs://marin-us-central1/scratch/documents/exp1/dataset1/v1/'
     """
-    pattern = r"^gs://marin-[^/]+/(documents|attributes|filtered)/[^/]+/[^/]+/[^/]+(/.*)?$"
+    pattern = r"^gs://marin-[^/]+/(scratch/)?(documents|attributes|filtered)/[^/]+/[^/]+/[^/]+(/.*)?$"
     if not re.match(pattern, path):
         raise ValueError(f"Invalid path format. It should follow the structure: "
-                         f"gs://marin-$REGION/{{documents|attributes|filtered}}/$EXPERIMENT/$DATASET/$VERSION/")
+                         f"gs://marin-$REGION/[scratch/]{{documents|attributes|filtered}}/$EXPERIMENT/$DATASET/$VERSION/")
     return path
 
 def rebase_file_path(base_in_dir, file_path, base_out_dir, new_extension=None, old_extension=None):

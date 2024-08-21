@@ -12,11 +12,11 @@ import json
 import gzip
 import fsspec
 import os
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Callable
 import ray
 
 from marin.core.runtime import map_files_in_directory, cached_or_construct_output
-from marin.utils import fsspec_get_atomic_directories, fsspec_glob, rebase_file_path, fsspec_mkdirs, fsspec_exists, validate_gcp_path
+from marin.utils import fsspec_get_atomic_directories, fsspec_glob, rebase_file_path, fsspec_mkdirs, fsspec_exists, validate_marin_gcp_path
 
 
 def is_high_quality(attributes: Dict[str, Any], attribute_name: str, threshold: float) -> bool:
@@ -34,23 +34,43 @@ def is_high_quality(attributes: Dict[str, Any], attribute_name: str, threshold: 
 
 
 def remove_duplicates(input_data: Dict[str, Any], duplicate_spans: List[List[int]]) -> Dict[str, Any]:
-    deduped_data = input_data.copy()
-    text = deduped_data['text']
-    
+    text = input_data['text']
     # Sort spans in reverse order to avoid index shifting
     sorted_spans = sorted(duplicate_spans, key=lambda x: x[1], reverse=True)
-    
     # Remove duplicate spans
     for start, end, _ in sorted_spans:
         text = text[:start] + text[end:]
     
-    deduped_data['text'] = text
-    return deduped_data
+    # return the deduped data
+    input_data['text'] = text
+    return input_data
+
+def quality_filter_func(input_data: Dict[str, Any], attributes_data: Dict[str, Any], attribute_name: str, threshold: float) -> Dict[str, Any]:
+    if is_high_quality(attributes_data.get("attributes", {}), attribute_name, threshold):
+        return input_data
+    return None
+
+def dedupe_filter_func(input_data: Dict[str, Any], attributes_data: Dict[str, Any], attribute_name: str, threshold: float) -> Dict[str, Any]:
+    # Dolma dedupe has a fixed attribute name and a binary decision
+    duplicate_spans = attributes_data.get("attributes", {}).get("duplicate_text", [])
+    if duplicate_spans:
+        return remove_duplicates(input_data, duplicate_spans)
+    return input_data
+
+def get_filter_func(attribute_name: str) -> Callable:
+    if "dedupe" in attribute_name:
+        return dedupe_filter_func
+    elif "quality" in attribute_name:
+        return quality_filter_func
+    else:
+        raise ValueError(f"Unknown attribute name: {attribute_name}")
 
 @cached_or_construct_output(success_suffix="SUCCESS")
 def process_file(input_filename: str, output_filename: str, attributes_filename: str, attribute_name: str, threshold: float):
     if not fsspec_exists(attributes_filename):
         raise ValueError(f"Attributes file does not exist: {attributes_filename}")
+
+    filter_func = get_filter_func(attribute_name)
 
     with (
         fsspec.open(input_filename, "rt", compression="gzip") as input_file,
@@ -65,16 +85,10 @@ def process_file(input_filename: str, output_filename: str, attributes_filename:
                 print(f"ID of attribute row and input row do not match: {attributes_data['id']} != {input_data['id']}")
                 continue
 
-            if attribute_name == "dedupe":
-                duplicate_spans = attributes_data.get("attributes", {}).get("duplicate_text", [])
-                if duplicate_spans:
-                    deduped_data = remove_duplicates(input_data, duplicate_spans)
-                    output_line = json.dumps(deduped_data) + "\n"
-                    output_file.write(output_line)
-                else:
-                    output_file.write(input_line)
-            elif is_high_quality(attributes_data.get("attributes", {}), attribute_name, threshold):
-                output_file.write(input_line)
+            filtered_data = filter_func(input_data, attributes_data, attribute_name, threshold)
+            if filtered_data:
+                output_line = json.dumps(filtered_data) + "\n"
+                output_file.write(output_line)
 
 
 @ray.remote
@@ -89,9 +103,9 @@ def process_dir(input_subdir: str, output_subdir: str, attribute_dir: str, attri
 def main(input_dir: str, output_dir: str, attribute_dir: str, attribute_name: str, threshold: float):
     ray.init()
 
-    input_dir = validate_gcp_path(input_dir)
-    output_dir = validate_gcp_path(output_dir)
-    attribute_dir = validate_gcp_path(attribute_dir)
+    input_dir = validate_marin_gcp_path(input_dir)
+    output_dir = validate_marin_gcp_path(output_dir)
+    attribute_dir = validate_marin_gcp_path(attribute_dir)
 
     MAX_FLIGHTS_IN_TASK = 1000
     subdirectories = fsspec_get_atomic_directories(input_dir)
