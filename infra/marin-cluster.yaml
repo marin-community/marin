@@ -55,9 +55,14 @@ initialization_commands:
   - sudo apt-get update
   - sudo NEEDRESTART_MODE=a DEBIAN_FRONTEND=noninteractive apt-get upgrade -y
   - sudo NEEDRESTART_MODE=a DEBIAN_FRONTEND=noninteractive apt-get install -y python3-pip python-is-python3 pandoc
+  # Install OpenBLAS, OpenMPI, and OpenMP for eval dependencies
+  - sudo NEEDRESTART_MODE=a DEBIAN_FRONTEND=noninteractive apt-get install -y libopenblas-base libopenmpi-dev libomp-dev 
 
 
 setup_commands:
+  # Add Rust for DOLMA
+  - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y && source $HOME/.cargo/env
+  - echo 'source $HOME/.cargo/env' >> $HOME/.bashrc  # or .bash_profile, depending on your system
   - pip install --upgrade pip
   - >
     pip install "chardet==5.2.0"
@@ -84,6 +89,7 @@ setup_commands:
     "trafilatura==1.8.1"
     "tqdm"
     "warcio==1.7.4"
+  - git clone --branch abhi-2.22.0 --single-branch --depth 1 https://github.com/abhinavg4/ray.git && rm -rf /home/ubuntu/.local/lib/python3.10/site-packages/ray/autoscaler && ln -s /home/ubuntu/ray/python/ray/autoscaler /home/ubuntu/.local/lib/python3.10/site-packages/ray/autoscaler
 
 
 # Set Head Node == `ray_head_default`
