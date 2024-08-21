@@ -132,37 +132,6 @@ def fsspec_isdir(dir_path):
     return fs.isdir(dir_path)
 
 
-def dynamic_path_transform(input_filepath, input_dir, output_dir, attribute_name):
-    # Extract the relative path from input_filepath with respect to input_dir
-    # ignore dataset name in the path
-    final_output_dir = output_dir.rsplit('/', 2)[0] + '/'
-    rel_path = os.path.relpath(input_filepath, input_dir)
-    path_components = rel_path.split(os.sep)
-    
-    # Extract the relevant components
-    # The relative path starts with the version
-    version = path_components[0]
-    experiment = path_components[1]
-    
-    # Extract dataset from input_dir
-    input_dir_components = input_dir.rstrip('/').split('/')
-    dataset = input_dir_components[-1]
-    
-    # Merge attribute_name with experiment
-    merged_experiment = f"{attribute_name}-{experiment}"
-    # Construct the new relative path
-    new_rel_path = os.path.join(
-        dataset,
-        version,
-        merged_experiment,
-        *path_components[2:-1]  # Include all subdirectories after {EXPERIMENT} except the last one
-    )
-    
-    # Construct the new output path
-
-    new_output_path = os.path.join(final_output_dir, new_rel_path, path_components[-1])
-    return new_output_path
-
 
 def validate_marin_gcp_path(path: str) -> str:
     """
