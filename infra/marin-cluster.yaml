@@ -102,10 +102,11 @@ setup_commands:
   - ~/miniconda3/envs/evaluate/bin/pip install torch_xla[pallas] -f https://storage.googleapis.com/jax-releases/jax_nightly_releases.html -f https://storage.googleapis.com/jax-releases/jaxlib_nightly_releases.html
   - ~/miniconda3/envs/evaluate/bin/pip install git+https://github.com/TheQuantumFractal/OLMo.git
   - ~/miniconda3/envs/evaluate/bin/pip install lm-eval==0.4.3
-  - git clone https://github.com/vllm-project/vllm.git
-  - cd ./vllm && git checkout tags/v0.5.0.post1
-  - cd ./vllm && ~/miniconda3/envs/evaluate/bin/pip install -r requirements-tpu.txt
-  - cd ./vllm && VLLM_TARGET_DEVICE="tpu" ~/miniconda3/envs/evaluate/bin/python setup.py develop
+  - rm ./vllmsrc -rf
+  - git clone https://github.com/vllm-project/vllm.git ./vllmsrc
+  - cd ./vllmsrc && git checkout tags/v0.5.0.post1
+  - cd ./vllmsrc && ~/miniconda3/envs/evaluate/bin/pip install -r requirements-tpu.txt
+  - cd ./vllmsrc && VLLM_TARGET_DEVICE="tpu" ~/miniconda3/envs/evaluate/bin/python setup.py develop
 
 
 # Set Head Node == `ray_head_default`
