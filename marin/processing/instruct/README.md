@@ -5,7 +5,7 @@ This README provides an overview of the Python script `ray_process.py` that demo
 
 Quick start command:
  ```bash
-   ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python process_parquet_fw.py --input_dir gs://marin-data/raw/instruct/ --output_dir gs://marin-data/processed/instruct/ --input_type parquet
+   ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python scripts/instruct/ray_process.py --input_dir gs://marin-us-central2/raw/instruct/ --output_dir gs://marin-us-central2/documents/marin_instructv1/ --input_type parquet
  ```
  
 ## Prerequisites
@@ -40,6 +40,16 @@ Quick start command:
 
 6. Monitor the progress of the job using the Ray dashboard or by checking the logs.
 
+# How do I download the raw data?
+
+Currently this needs to be done on a case by case basis according to the dataset since all the public instruct datasets have slightly different formats. For the tulumix checkout, the ```marin-data/raw/instruct``` bucket must exist apriori
+```bash
+# Original COMMAND
+python scripts/copy_hf_dataset_to_gcs.py --dataset_name allenai/tulu-v2-sft-mixture --destination_path gs://marin-data/raw/instruct --urls_dir hf_dataset_transfer_bucket
+
+# Updated to central-2b
+python marin/processing/instruct/copy_hf_dataset_gcs.py --dataset_name allenai/tulu-v2-sft-mixture --destination_path gs://marin-us-central2/raw/instruct/ --urls_dir hf_dataset_transfer_bucket
+```
 ## FAQ
 
 ### 1. What if the script stalls or fails?
