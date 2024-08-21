@@ -74,7 +74,7 @@ def parse_run(run: wandb.apis.public.Run, start_date: str = None, end_date: str 
     runtime = run.summary["_runtime"] / 3600.0  # hours
     create_time = convert_to_local_time(run.createdAt)
     if not check_create_time(create_time, start_date=start_date, end_date=end_date):
-        return 
+        return
     heartbeat_time = convert_to_local_time(run.heartbeatAt)
     # get difference between create time and heartbeat time
     total_time = get_ts_diff(run.createdAt, run.heartbeatAt)
@@ -109,12 +109,15 @@ def parse_run(run: wandb.apis.public.Run, start_date: str = None, end_date: str 
     return data
 
 
-def get_runs(name_prefix="time-to-train", start_date: str = "2024-07-25"):
+def get_runs(name_prefix=None, start_date: str = "2024-07-25"):  # name_prefix="time-to-train"
     api = wandb.Api(timeout=TIMEOUT)
-    runs = api.runs(
-        path=WANDB_PATH,
-        filters={"display_name": {"$regex": f"^{name_prefix}.*"}},
-    )
+    if name_prefix is None:
+        runs = api.runs(path=WANDB_PATH)
+    else:
+        runs = api.runs(
+            path=WANDB_PATH,
+            filters={"display_name": {"$regex": f"^{name_prefix}.*"}},
+        )
     output_data = []
     for run in runs:
         try:
@@ -124,7 +127,8 @@ def get_runs(name_prefix="time-to-train", start_date: str = "2024-07-25"):
         except Exception as e:
             print(f"Unable to parse run {run.name} due to error: {e}")
     df = pd.DataFrame(output_data)
-    output_csv = f"wandb_runs_{name_prefix}.csv"
+    name_prefix = name_prefix or "all"
+    output_csv = f"wandb_runs_{name_prefix}_{start_date}.csv"
     df.to_csv(output_csv, index=False)
     print(f"Saved {len(df)} runs to {output_csv}")
 
