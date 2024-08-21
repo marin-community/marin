@@ -34,7 +34,12 @@ class VllmTpuEvaluator(Evaluator, ABC):
         Dependency(name="tokenizers", version="0.19.1"),
         Dependency(name="transformers", version="4.44.0"),
         # Marin-specific dependencies
-        Dependency(name="ai2-olmo"),
+        # The olmo library did not set `exists_ok=True` at
+        # https://github.com/allenai/OLMo/blob/main/hf_olmo/configuration_olmo.py#L43
+        # which causes the following error:
+        # ValueError: 'olmo' is already used by a Transformers config, pick another name.
+        # Use the following dependency instead where the issue is fixed.
+        Dependency(name="git+https://github.com/teetone/OLMo.git@main"),
     ]
 
     # VLLM version to install. TODO: Hardcoded for now. Make it configurable.
@@ -140,21 +145,6 @@ class VllmTpuEvaluator(Evaluator, ABC):
 
         return server_url
 
-    @staticmethod
-    def unregister_olmo() -> None:
-        from transformers import CONFIG_MAPPING
-
-        # The olmo library did not set `exists_ok=True` at
-        # https://github.com/allenai/OLMo/blob/main/hf_olmo/configuration_olmo.py#L43.
-        # Therefore, unregister the existing "olmo" config if it exists to prevent the following error:
-        # ValueError: 'olmo' is already used by a Transformers config, pick another name.
-        model_name: str = "olmo"
-        if model_name in CONFIG_MAPPING._mapping:
-            del CONFIG_MAPPING._mapping[model_name]
-            print(f"Unregistered the existing '{model_name}' config.")
-        else:
-            print(f"No existing config found for '{model_name}'.")
-
     _python_version: str = "3.10"
     _pip_packages: List[Dependency] = DEFAULT_PIP_PACKAGES
     _py_modules: List[Dependency] = []
@@ -188,9 +178,6 @@ class VllmTpuEvaluator(Evaluator, ABC):
 
         # Authenticate with Hugging Face
         self.authenticate_with_hf()
-
-        # Download the model from GCS or HuggingFace and serve it with vLLM
-        self.unregister_olmo()
 
     def evaluate(self, model_name_or_path: str, evals: List[str]) -> None:
         """
