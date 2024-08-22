@@ -1,7 +1,7 @@
 """
 train_model.py
 
-Trains a fastText model on a dataset (e.g., a result of running create_dataset.py).
+Trains a fastText model on a dataset (e.g., a result of running attribute_to_dataset.py).
 """
 
 from dataclasses import dataclass
@@ -18,6 +18,7 @@ import logging
 import json
 
 from marin.utils import fsspec_glob
+from marin.classifiers.fasttext.utils import preprocess as preprocess_for_fasttext
 # import fasttext (TODO: add fasttext to cluster setup and just import it here instead of using runtime_env)
 
 def merge_shards(shard_paths: List[str], train_path: str, val_path: str, val_split: float, seed: int) -> bool:
@@ -44,7 +45,7 @@ def merge_shards(shard_paths: List[str], train_path: str, val_path: str, val_spl
                     label_string = ''
                     if data["label"] is not None:
                         label_string += f' __label__{data["label"]}'
-                    output_line = label_string + " " + data["text"] + "\n"
+                    output_line = label_string + " " + preprocess_for_fasttext(data["text"]) + "\n"
 
                     if rng.random() < val_split:
                         f_val.write(output_line)
