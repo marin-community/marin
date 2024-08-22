@@ -18,21 +18,21 @@ from marin.utils import rebase_file_path
 from marin.core.runtime import cached_or_construct_output, map_files_in_directory
 from marin.classifiers.fasttext.utils import preprocess as preprocess_for_fasttext
 
-def get_labels(data : dict, attribs : dict) -> List[str]:
+def get_label(data : dict, attribs : dict) -> List[str]:
     """
-    Extracts labels from attributes dictionary.
+    Extracts label from attributes dictionary.
 
     Args:
         data (dict): Data dictionary (i.e., from documents/..).
         attribs (dict): Attributes dictionary (i.e., from attributes/..).
 
     Returns:
-        List[str]: List of labels.
+        str: Quality classifier label.
     """
-    return attribs["attributes"]["labels"]
+    return attribs["attributes"]["label"]
 
 @cached_or_construct_output(success_suffix="SUCCESS")
-def write_fasttext_lines(input_file_path : str, output_file_path : str, attr_file_path : str, labels : List[str], sampling_rate : float, seed : int) -> bool:
+def write_fasttext_lines(input_file_path : str, output_file_path : str, attr_file_path : str, sampling_rate : float, seed : int) -> bool:
     """
     Labels each line of input file according to fastText training format and writes to an output file.
     Only a fraction of the lines, determined by the sampling rate, are written to the output file (eg, to control size 
@@ -41,7 +41,7 @@ def write_fasttext_lines(input_file_path : str, output_file_path : str, attr_fil
     Args:
         input_file_path (str): Path to the input JSONL file (gzip compressed).
         output_file_path (str): Path to the output file (gzip compressed).
-        labels (List[str]): List of labels to be added to each line.
+        label (str): Label to be added to each line.
         sampling_rate (float): Fraction of lines to be written to the output file.
         seed (int): Seed for random number generator to ensure reproducibility.
 
@@ -56,14 +56,13 @@ def write_fasttext_lines(input_file_path : str, output_file_path : str, attr_fil
             data = json.loads(input_line)
             attribs = json.loads(attr_line)
 
-            text = preprocess_for_fasttext(data["text"])
-            label_string = ''.join([f" __label__{label}" for label in get_labels(data,attribs) if label in labels])
-            
-            line = label_string + " " + text + "\n"
+            fasttext_data = {
+                "text": data["text"],
+                "label": get_label(data,attribs)
+            }
 
-            p = rng.random()
-            if p < sampling_rate:
-                f_out.write(line)
+            if rng.random() < sampling_rate:
+                f_out.write(json.dumps(fasttext_data) + "\n")
 
     return True
 
@@ -73,19 +72,13 @@ class LabeledDatasetConfig:
     Configuration class for a labeled dataset.
 
     Attributes:
-        path (str): Base path of the dataset (i.e., gs://{BUCKET}/documents).
-        dataset (str): Dataset identifier (e.g., reddit/v0).
-        doc_experiment (str): Experiment identifier under documents/ directory.
-        attr_experiment (str): Experiment identifier under attributes/ directory.
-        labels (List[str]): List of quality labels associated with this dataset.
+        doc_path (str): Path to documents (i.e., gs://{BUCKET}/documents/reddit/v0/<doc_experiment>).
+        attr_path (str): Path to attributes (i.e., gs://{BUCKET}/attributes/reddit/v0/<attr_experiment>).
         sampling_rate (float): Fraction of documents from the dataset to add to fastText training dataset.
         seed (int): Seed for random number generator to ensure reproducibility.
     """
-    path: str
-    dataset: str
-    doc_experiment: str
-    attr_experiment: str
-    labels: List[str]
+    doc_path: str
+    attr_path: str
     sampling_rate: float
     seed: int
 
@@ -95,39 +88,35 @@ class MainConfig:
     Configuration class for main process.
 
     Attributes:
-        output_path (str): Base path for output data (i.e., gs://{BUCKET}).
+        output_base_path (str): Base path for output data (i.e., gs://{BUCKET}).
         experiment (str): Experiment identifier.
-        data_cfgs (List[LabeledDatasetConfig]): List of LabeledDatasetConfig objects from which to construct fastText training dataset.
+        datasets (List[LabeledDatasetConfig]): List of LabeledDatasetConfig objects from which to construct fastText training dataset.
     """
-    output_path: str
+    output_base_path: str
     experiment: str
-    data_cfgs: List[LabeledDatasetConfig]
+    datasets: List[LabeledDatasetConfig]
 
 @draccus.wrap()
 def main(cfg: MainConfig):
     ray.init()
     
-    for data_cfg in cfg.data_cfgs:
-        doc_dir = f'{data_cfg.path}/documents/{data_cfg.dataset}/{data_cfg.doc_experiment}'
-        attr_dir = f'{data_cfg.path}/attributes/{data_cfg.dataset}/{data_cfg.attr_experiment}'
-
+    for dataset in cfg.datasets:
         # curry write_fasttext_lines so that we can pass it to map_files_in_directory
         @ray.remote(memory=1 * 1024 * 1024 * 1024, runtime_env={"pip": ["s3fs"]}, num_cpus=1)  # 1 GB
         def processing_func(input_file_path : str,output_file_path : str) -> bool:
-            attr_file_path = rebase_file_path(doc_dir,input_file_path,attr_dir)
-            return write_fasttext_lines(input_file_path,output_file_path,attr_file_path,data_cfg.labels,data_cfg.sampling_rate,data_cfg.seed)
+            attr_file_path = rebase_file_path(dataset.doc_path,input_file_path,dataset.attr_path)
+            return write_fasttext_lines(input_file_path,output_file_path,attr_file_path,dataset.label,dataset.sampling_rate,dataset.seed)
 
-        input_dir = doc_dir
-        output_dir = rebase_file_path(f'{data_cfg.path}/documents/', 
-                                      input_dir, 
-                                      f'{cfg.output_path}/classifiers/{cfg.experiment}/data'
+        output_path = rebase_file_path(f'{dataset.path}/documents/', 
+                                      dataset.doc_path, 
+                                      f'{cfg.output_base_path}/classifiers/{cfg.experiment}/data'
                                       )
         
-        responses = map_files_in_directory(processing_func.remote, input_dir, "**/*.jsonl.gz", output_dir)
+        responses = map_files_in_directory(processing_func.remote, dataset.doc_path, "**/*.jsonl.gz", output_path)
         try:
             ray.get(responses)
         except Exception as e:
-            print(f"Error processing {data_cfg.dataset}: {e}")
+            print(f"Error processing {dataset.dataset}: {e}")
 
 if __name__ == '__main__':
     main()

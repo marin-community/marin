@@ -15,6 +15,7 @@ import fsspec
 import ray
 import numpy as np
 import logging
+import json
 
 from marin.utils import fsspec_glob
 # import fasttext (TODO: add fasttext to cluster setup and just import it here instead of using runtime_env)
@@ -37,11 +38,18 @@ def merge_shards(shard_paths: List[str], train_path: str, val_path: str, val_spl
     with fsspec.open(train_path, "wt") as f_train, fsspec.open(val_path, "wt") as f_val:
         for shard_path in shard_paths:
             with fsspec.open(shard_path, "rt", compression = "gzip") as f_in:
-                for line in f_in:
+                for input_line in f_in:
+                    data = json.loads(input_line)
+
+                    label_string = ''
+                    if data["label"] is not None:
+                        label_string += f' __label__{data["label"]}'
+                    output_line = label_string + " " + data["text"] + "\n"
+
                     if rng.random() < val_split:
-                        f_val.write(line)
+                        f_val.write(output_line)
                     else:
-                        f_train.write(line)
+                        f_train.write(output_line)
 
     return True
 
@@ -51,7 +59,7 @@ class MainConfig:
     Configuration class for main process.
 
     Attributes:
-        path (str): Base path for input and output data (i.e., gs://{BUCKET}).
+        base_path (str): Base path for input and output data (i.e., gs://{BUCKET}).
         experiment (str): Experiment identifier.
         training_args (dict): Arguments for the fastText training process (see fastText docs for the full list of options).
         seed (int): Seed for random number generator to ensure reproducibility.
@@ -59,7 +67,7 @@ class MainConfig:
         memory (int): Amount of memory allocated for remote training process (in GB).
         num_cpus (int): Number of CPUs allocated for remote training process.
     """
-    path: str
+    base_path: str
     experiment: str
     training_args: dict
     seed: int
@@ -83,8 +91,8 @@ def main(cfg: MainConfig):
     def run(cfg):
         import fasttext
 
-        experiment_dir = f'{cfg.path}/classifiers/{cfg.experiment}'
-        shard_paths = fsspec_glob(os.path.join(f'{experiment_dir}/data', "**/*.jsonl.gz"))
+        experiment_path = f'{cfg.base_path}/classifiers/{cfg.experiment}'
+        shard_paths = fsspec_glob(os.path.join(f'{experiment_path}/data', "**/*.jsonl.gz"))
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             merge_shards(shard_paths,os.path.join(tmp_dir, "data.train"),os.path.join(tmp_dir, "data.val"),cfg.val_split,cfg.seed)
@@ -92,8 +100,8 @@ def main(cfg: MainConfig):
             model = fasttext.train_supervised(os.path.join(tmp_dir, "data.train"),**cfg.training_args)
             model.save_model(os.path.join(tmp_dir, "model.bin"))
 
-            fs = fsspec.core.get_fs_token_paths(experiment_dir, mode="wb")[0]
-            fs.put(os.path.join(tmp_dir, "*"), experiment_dir, recursive=True)
+            fs = fsspec.core.get_fs_token_paths(experiment_path, mode="wb")[0]
+            fs.put(os.path.join(tmp_dir, "*"), experiment_path, recursive=True)
         
         return True
     

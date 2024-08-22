@@ -1,4 +1,4 @@
-path: gs://marin-us-central2
+base_path: gs://marin-data/scratch/rohithk
 experiment: quickstart
 training_args:
   lr: 0.1
