@@ -105,7 +105,7 @@ setup_commands:
   - ~/miniconda3/envs/evaluate/bin/pip install lm-eval==0.4.3
   - rm ./vllmsrc -rf
   - git clone https://github.com/vllm-project/vllm.git ./vllmsrc
-  - cd ./vllmsrc && git checkout tags/v0.5.0.post1
+  - cd ./vllmsrc && git checkout tags/v0.5.3.post1
   - cd ./vllmsrc && ~/miniconda3/envs/evaluate/bin/pip install -r requirements-tpu.txt
   - cd ./vllmsrc && VLLM_TARGET_DEVICE="tpu" ~/miniconda3/envs/evaluate/bin/python setup.py develop
 
