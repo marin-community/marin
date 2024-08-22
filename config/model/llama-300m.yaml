@@ -1,0 +1,12 @@
+# non-embedding: 102,648,576
+# total: 299,649,792
+
+type: llama
+seq_len: 4096
+use_flash_attention: True
+# ------- END OF COMMON CONFIGS -------
+hidden_dim: 768
+intermediate_dim: 2688
+num_layers: 12
+num_heads: 8
+num_kv_heads: 8
