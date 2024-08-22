@@ -1,7 +1,8 @@
 """
 create_attribute.py
 
-Writes list of quality labels as an attribute for each document in group of datasets. Each dataset gets its own set of labels.
+Writes a label (e.g., for quality classifiers) as an attribute for each document in group of datasets. 
+Each dataset gets its own set of labels.
 """
 
 import draccus
@@ -18,12 +19,12 @@ from dataclasses import dataclass
 @cached_or_construct_output(success_suffix="SUCCESS")
 def write_label(input_file_path: str, output_file_path: str, label: str) -> bool:
     """
-    Creates an attribute "labels" from input list of labels for each document.
+    Creates an attribute "label" from input list of labels for each document.
 
     Args:
         input_file_path (str): Path to the input JSONL file (gzip compressed).
         output_file_path (str): Path to the output attribute JSONL file (gzip compressed).
-        label str: Quality classifier label.
+        label (str): Quality classifier label.
 
     Returns:
         bool: True if the process is successful.

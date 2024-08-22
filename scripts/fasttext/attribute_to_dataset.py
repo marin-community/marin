@@ -1,7 +1,7 @@
 """
 attribute_to_dataset.py
 
-Creates a fastText training dataset from a group of datasets and labels specified by an attribute "labels". Intended
+Creates a fastText training dataset from a group of datasets and labels specified by an attribute "label". Intended
 to be one example of mapping attributes to a fastText training dataset.
 """
 
@@ -16,7 +16,6 @@ import numpy as np
 
 from marin.utils import rebase_file_path
 from marin.core.runtime import cached_or_construct_output, map_files_in_directory
-from marin.classifiers.fasttext.utils import preprocess as preprocess_for_fasttext
 
 def get_label(data : dict, attribs : dict) -> List[str]:
     """
