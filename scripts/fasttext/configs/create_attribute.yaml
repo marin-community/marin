@@ -1,12 +1,7 @@
-output_path : gs://marin-us-central2
+output_base_path : gs://marin-data/scratch/rohithk
 experiment: quickstart
-data_cfgs:
-  - path: gs://marin-us-central2
-    dataset: hello_world_fw/v1.0
-    experiment: quickstart
-    labels: []
-  - path: gs://marin-us-central2
-    dataset: stackexchange/v2024-04-02
-    experiment: md-complete
-    labels:
-      - hq
+datasets:
+  - path: gs://marin-data/scratch/rohithk/documents/hello_world_fw/v1.0
+    label: null
+  - path: gs://marin-data/scratch/rohithk/documents/reddit/v0/text
+    label: hq
