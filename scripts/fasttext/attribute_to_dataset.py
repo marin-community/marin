@@ -40,7 +40,6 @@ def write_fasttext_lines(input_file_path : str, output_file_path : str, attr_fil
     Args:
         input_file_path (str): Path to the input JSONL file (gzip compressed).
         output_file_path (str): Path to the output file (gzip compressed).
-        label (str): Label to be added to each line.
         sampling_rate (float): Fraction of lines to be written to the output file.
         seed (int): Seed for random number generator to ensure reproducibility.
 
