@@ -104,9 +104,11 @@ def main(cfg: MainConfig):
         @ray.remote(memory=1 * 1024 * 1024 * 1024, runtime_env={"pip": ["s3fs"]}, num_cpus=1)  # 1 GB
         def processing_func(input_file_path : str,output_file_path : str) -> bool:
             attr_file_path = rebase_file_path(dataset.doc_path,input_file_path,dataset.attr_path)
-            return write_fasttext_lines(input_file_path,output_file_path,attr_file_path,dataset.label,dataset.sampling_rate,dataset.seed)
+            return write_fasttext_lines(input_file_path,output_file_path,attr_file_path,dataset.sampling_rate,dataset.seed)
 
-        output_path = rebase_file_path(f'{dataset.path}/documents/', 
+        # HACK: ok to keep?
+        doc_path_prefix = dataset.doc_path.split('/documents')[0]
+        output_path = rebase_file_path(f'{doc_path_prefix}/documents', 
                                       dataset.doc_path, 
                                       f'{cfg.output_base_path}/classifiers/{cfg.experiment}/data'
                                       )
@@ -115,7 +117,7 @@ def main(cfg: MainConfig):
         try:
             ray.get(responses)
         except Exception as e:
-            print(f"Error processing {dataset.dataset}: {e}")
+            print(f"Error processing {dataset.doc_path}: {e}")
 
 if __name__ == '__main__':
     main()
