@@ -1,7 +1,0 @@
-output_base_path : gs://marin-data/scratch/rohithk
-experiment: quickstart
-datasets:
-  - path: gs://marin-data/scratch/rohithk/documents/hello_world_fw/v1.0
-    label: null
-  - path: gs://marin-data/scratch/rohithk/documents/reddit/v0/text
-    label: hq

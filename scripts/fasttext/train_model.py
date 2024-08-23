@@ -44,8 +44,11 @@ def merge_shards(shard_paths: List[str], train_path: str, val_path: str, val_spl
 
                     label_string = ''
                     if data["label"] is not None:
+                        print(data["label"])
+                        print(type(data["label"]))
                         label_string += f' __label__{data["label"]}'
                     output_line = label_string + " " + preprocess_for_fasttext(data["text"]) + "\n"
+                    print(output_line)
 
                     if rng.random() < val_split:
                         f_val.write(output_line)

@@ -13,8 +13,8 @@ import ray
 
 from marin.core.runtime import cached_or_construct_output, map_files_in_directory
 
-from typing import List
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Optional
 
 @cached_or_construct_output(success_suffix="SUCCESS")
 def write_label(input_file_path: str, output_file_path: str, label: str) -> bool:
@@ -49,11 +49,11 @@ class MainConfig:
     Attributes:
         input_doc_path (str): Path to documents (i.e., gs://{BUCKET}/documents/...).
         output_attr_path (str): Path to write attributes (i.e., gs://{BUCKET}/attributes/.../<experiment>).
-        label (str): Quality classifier label to write as attribute.
+        label (Optional[str]): Quality classifier label to write as attribute.
     """
     input_doc_path: str
     output_attr_path: str
-    experiment: str
+    label: Optional[str] = field(default=None)
 
 @draccus.wrap()
 def main(cfg: MainConfig):
