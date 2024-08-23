@@ -66,22 +66,6 @@ def write_fasttext_lines(input_file_path : str, output_file_path : str, attr_fil
     return True
 
 @dataclass
-class LabeledDatasetConfig:
-    """
-    Configuration class for a labeled dataset.
-
-    Attributes:
-        doc_path (str): Path to documents (i.e., gs://{BUCKET}/documents/reddit/v0/<doc_experiment>).
-        attr_path (str): Path to attributes (i.e., gs://{BUCKET}/attributes/reddit/v0/<attr_experiment>).
-        sampling_rate (float): Fraction of documents from the dataset to add to fastText training dataset.
-        seed (int): Seed for random number generator to ensure reproducibility.
-    """
-    doc_path: str
-    attr_path: str
-    sampling_rate: float
-    seed: int
-
-@dataclass
 class MainConfig:
     """
     Configuration class for main process.
@@ -89,35 +73,40 @@ class MainConfig:
     Attributes:
         output_base_path (str): Base path for output data (i.e., gs://{BUCKET}).
         experiment (str): Experiment identifier.
-        datasets (List[LabeledDatasetConfig]): List of LabeledDatasetConfig objects from which to construct fastText training dataset.
+        doc_path (str): Path to documents (i.e., gs://{BUCKET}/documents/reddit/v0/<doc_experiment>).
+        attr_path (str): Path to attributes (i.e., gs://{BUCKET}/attributes/reddit/v0/<attr_experiment>).
+        sampling_rate (float): Fraction of documents from the dataset to add to fastText training dataset.
+        seed (int): Seed for random number generator to ensure reproducibility.
     """
     output_base_path: str
     experiment: str
-    datasets: List[LabeledDatasetConfig]
+    doc_path: str
+    attr_path: str
+    sampling_rate: float
+    seed: int
 
 @draccus.wrap()
 def main(cfg: MainConfig):
     ray.init()
     
-    for dataset in cfg.datasets:
-        # curry write_fasttext_lines so that we can pass it to map_files_in_directory
-        @ray.remote(memory=1 * 1024 * 1024 * 1024, runtime_env={"pip": ["s3fs"]}, num_cpus=1)  # 1 GB
-        def processing_func(input_file_path : str,output_file_path : str) -> bool:
-            attr_file_path = rebase_file_path(dataset.doc_path,input_file_path,dataset.attr_path)
-            return write_fasttext_lines(input_file_path,output_file_path,attr_file_path,dataset.sampling_rate,dataset.seed)
+    # curry write_fasttext_lines so that we can pass it to map_files_in_directory
+    @ray.remote(memory=1 * 1024 * 1024 * 1024, runtime_env={"pip": ["s3fs"]}, num_cpus=1)  # 1 GB
+    def processing_func(input_file_path : str,output_file_path : str) -> bool:
+        attr_file_path = rebase_file_path(cfg.doc_path,input_file_path,cfg.attr_path)
+        return write_fasttext_lines(input_file_path,output_file_path,attr_file_path,cfg.sampling_rate,cfg.seed)
 
-        # HACK: ok to keep?
-        doc_path_prefix = dataset.doc_path.split('/documents')[0]
-        output_path = rebase_file_path(f'{doc_path_prefix}/documents', 
-                                      dataset.doc_path, 
-                                      f'{cfg.output_base_path}/classifiers/{cfg.experiment}/data'
-                                      )
-        
-        responses = map_files_in_directory(processing_func.remote, dataset.doc_path, "**/*.jsonl.gz", output_path)
-        try:
-            ray.get(responses)
-        except Exception as e:
-            print(f"Error processing {dataset.doc_path}: {e}")
+    # HACK: ok to keep?
+    doc_path_prefix = cfg.doc_path.split('/documents')[0]
+    output_path = rebase_file_path(f'{doc_path_prefix}/documents', 
+                                    cfg.doc_path, 
+                                    f'{cfg.output_base_path}/classifiers/{cfg.experiment}/data'
+                                    )
+    
+    responses = map_files_in_directory(processing_func.remote, cfg.doc_path, "**/*.jsonl.gz", output_path)
+    try:
+        ray.get(responses)
+    except Exception as e:
+        print(f"Error processing {cfg.doc_path}: {e}")
 
 if __name__ == '__main__':
     main()
