@@ -1,2 +1,86 @@
+"""
+utils.py
+
+Utility functions for training fastText models.
+"""
+
+import os
+import logging
+from datetime import datetime
+import tempfile
+
+import fsspec
+import ray
+
+from marin.utils import fsspec_glob
+from marin.classifiers.utils import merge_shards
+
 def preprocess(text: str) -> str:
+    """
+    Preprocesses text for fastText training by stripping newline characters.
+    """
     return text.replace("\n"," ")
+
+def format_example(data: dict) -> str:
+    """
+    Converts example to fastText training data format.
+    """
+    label_string = ''
+    if data["label"] is not None:
+        label_string += f' __label__{data["label"]}'
+    output_line = label_string + " " + preprocess(data["text"]) + "\n"
+
+    return output_line
+
+def train_model(base_path: str, experiment: str, training_args: dict, seed: int, val_split: float, memory_req: int, num_cpus: int) -> bool:
+    """
+    Train a fastText model.
+
+    Attributes:
+        base_path (str): Base path for input and output data (i.e., gs://{BUCKET}).
+        experiment (str): Experiment identifier.
+        training_args (dict): Arguments for the fastText training process (see fastText docs for the full list of options).
+        seed (int): Seed for random number generator to ensure reproducibility.
+        val_split (float): Fraction of data to be used for validation.
+        memory_req (int): Amount of memory allocated for remote training process (in GB).
+        num_cpus (int): Number of CPUs allocated for remote training process.
+    
+    Returns:
+        bool: True if the process is successful.
+    """
+    logger = logging.getLogger("ray")
+
+    logger.info(f"Training fastText model for experiment {experiment}")
+    datetime_start = datetime.utcnow()
+
+    training_args['thread'] = num_cpus # tell fasttext trainer to use all available CPUs
+
+    # run training on remote worker, not head node
+    @ray.remote(memory=memory_req * 1024 * 1024 * 1024, runtime_env={"pip": ["s3fs","fasttext"]}, num_cpus=num_cpus)
+    def run(base_path, experiment, training_args, seed, val_split):
+        import fasttext
+
+        experiment_path = f'{base_path}/classifiers/{experiment}'
+        shard_paths = fsspec_glob(os.path.join(f'{experiment_path}/data', "**/*.jsonl.gz"))
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            merge_shards(shard_paths,os.path.join(tmp_dir, "data.train"),os.path.join(tmp_dir, "data.val"),val_split,seed,format_example)
+
+            model = fasttext.train_supervised(os.path.join(tmp_dir, "data.train"),**training_args)
+            model.save_model(os.path.join(tmp_dir, "model.bin"))
+
+            fs = fsspec.core.get_fs_token_paths(experiment_path, mode="wb")[0]
+            fs.put(os.path.join(tmp_dir, "*"), experiment_path, recursive=True)
+        
+        return True
+    
+    response = run.remote(base_path, experiment, training_args, seed, val_split)
+    try:
+        ray.get(response)
+    except Exception as e:
+        print(f"Error processing: {e}")
+    
+    datetime_end = datetime.utcnow()
+    logger.info(f"Training fastText for experiment {experiment} completed in {datetime_end - datetime_start}.")
+
+    return True
