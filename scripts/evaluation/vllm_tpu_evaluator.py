@@ -86,11 +86,12 @@ class VllmTpuEvaluator(Evaluator, ABC):
         Returns the server url.
         """
         # Download the model if it's not already downloaded
-        local_model_path: str = os.path.join(VllmTpuEvaluator.CACHE_PATH, model.name)
-        model.ensure_downloaded(local_path=local_model_path)
+        model.ensure_downloaded(local_path=os.path.join(VllmTpuEvaluator.CACHE_PATH, model.name))
+        # Use the model name if a path is not specified (e.g., for Hugging Face models)
+        model_name_or_path: str = model.name if model.path is None else model.path
 
         # From https://docs.vllm.ai/en/v0.4.0/models/engine_args.html
-        command: str = f"vllm serve {local_model_path} --trust-remote-code --host {host} --port {port}"
+        command: str = f"vllm serve {model_name_or_path} --trust-remote-code --host {host} --port {port}"
         process = subprocess.Popen(command, shell=True)
 
         # Check that the server has started by sending heartbeat checks
