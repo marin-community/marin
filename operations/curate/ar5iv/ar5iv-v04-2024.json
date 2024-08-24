@@ -4,22 +4,22 @@
   "links": [
       {
         "name": "C-UDA-1.0.md",
-        "url": "https://data.fau.de/share/zEkvNxgWQ6WapzmLCBwgpJD8zjxTvW9ajsYmiy9ygMjR9q5LPT7BbrvoJmmFwYUL/C-UDA-1.0.md",
+        "url": "",
         "checksum": {"type":  "md5", "encoding":  "hex", "hash":  "0476ea786ce0e3291f6eaaabc43e250e"}
       },
       {
         "name": "ar5iv-04-2024-errors.zip",
-        "url": "https://data.fau.de/share/zEkvNxgWQ6WapzmLCBwgpJD8zjxTvW9ajsYmiy9ygMjR9q5LPT7BbrvoJmmFwYUL/ar5iv-04-2024-errors.zip",
+        "url": "",
         "checksum": {"type":  "md5", "encoding":  "hex", "hash":  "9178d9635085a657956402077b4f8301"}
       },
       {
         "name": "ar5iv-04-2024-no-problem.zip",
-        "url":  "https://data.fau.de/share/zEkvNxgWQ6WapzmLCBwgpJD8zjxTvW9ajsYmiy9ygMjR9q5LPT7BbrvoJmmFwYUL/ar5iv-04-2024-no-problem.zip",
+        "url":  "",
         "checksum":  {"type":  "md5", "encoding":  "hex", "hash":  "6ffa80fa273f29716527db36e1841abf"}
       },
       {
         "name": "ar5iv-04-2024-warnings.zip",
-        "url": "https://data.fau.de/share/zEkvNxgWQ6WapzmLCBwgpJD8zjxTvW9ajsYmiy9ygMjR9q5LPT7BbrvoJmmFwYUL/ar5iv-04-2024-warnings.zip",
+        "url": "",
         "checksum": {"type":  "md5", "encoding":  "hex", "hash":  "51582b218f55286e5fe08431eb5e299d"}
       }
   ]

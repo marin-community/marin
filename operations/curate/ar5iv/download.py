@@ -75,8 +75,6 @@ def download(cfg: DownloadConfig) -> None:
     )
     write_provenance_json(gcs_output_path, cfg.gcs_bucket, metadata=ar5iv_url_cfg)
 
-    # TODO (siddk) =>> Figure out if we want to block on job completion then checksum here (vs. part of "verify")?
-
     # Finalize
     print(
         f"Transfer Job Launched & `provenance.json` written to `{gcs_output_path}`; check Transfer Job status at:\n"

@@ -52,10 +52,6 @@ def create_gcs_transfer_job_from_tsv(
      - File URL: "https://data.fau.de/share/zEkvNxgWQ6W/ar5iv-04-2024-no-problem.zip"
 
     Writes a file to "raw/ar5iv/v04.2024/data.fau.de/share/zEkvNxgWQ6W/ar5iv-04-2024-no-problem.zip" on GCS.
-
-    TODO (siddk, dlwh) :: We can either handle this here (initiate a separate transfer job that renames files (as a
-        "copy" + "remove"), or we just leave `raw` as is, and assume that the subsequent $TRANSFORM (`process.py`)
-        script handles canonicalizing paths to the expected flat format in `documents/`.
     """
     print(f"[*] Creating Storage Transfer Job :: Download `{tsv_url}` to `gs://{gcs_bucket}/{gcs_output_path}`")
     client = storage_transfer.StorageTransferServiceClient()
