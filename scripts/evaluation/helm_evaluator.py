@@ -38,7 +38,9 @@ class HELMEvaluator(VllmTpuEvaluator):
         """
         Write out the necessary model configuration files for HELM.
         """
-        # TODO: Works for our olmo checkpoints, but make this configurable to support any model
+        os.makedirs(HELMEvaluator.PROD_ENV_FOLDER, exist_ok=True)
+
+        # TODO: make this more configurable
         model_name: str = model.name
         tokenizer_name: str = "allenai/olmo-7b"
         content: Dict = {
@@ -62,11 +64,10 @@ class HELMEvaluator(VllmTpuEvaluator):
                 {
                     "name": model_name,
                     "display_name": model_name,
-                    "description": "OLMo is a series of Open Language Models trained on the Dolma dataset.",
-                    "creator_organization_name": "Allen Institute for AI",
+                    "description": "",
+                    "creator_organization_name": "",
                     "access": "open",
-                    "num_parameters": 7000000000,
-                    "release_date": "2024-02-01",
+                    "release_date": None,
                     "tags": ["TEXT_MODEL_TAG", "LIMITED_FUNCTIONALITY_TEXT_MODEL_TAG"],
                 }
             ]
