@@ -27,6 +27,7 @@ def download_from_gcs(gcs_path: str, destination_path: str) -> None:
     """
     os.makedirs(destination_path, exist_ok=True)
     fs, _ = fsspec.core.url_to_fs(gcs_path)
+    # The slash is needed to download the contents of the folder to `destination_path`
     fs.get(gcs_path + "/", destination_path, recursive=True)
     print(f"Downloaded {gcs_path} to {destination_path}.")
 
@@ -36,7 +37,8 @@ def upload_to_gcs(local_path: str, gcs_path: str) -> None:
     Uploads a folder `local_path` to Google Cloud Storage (GCS).
     """
     fs = fsspec.filesystem("gcs")
-    fs.put(local_path, gcs_path, recursive=True)
+    # The slash is needed to upload the contents of the folder to `gcs_path`
+    fs.put(local_path + "/", gcs_path, recursive=True)
     print(f"Uploaded {local_path} to {gcs_path}.")
 
 

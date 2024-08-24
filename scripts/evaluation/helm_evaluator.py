@@ -14,15 +14,16 @@ class HELMEvaluator(VllmTpuEvaluator):
     """
 
     # Following the defaults set in HELM: https://github.com/stanford-crfm/helm/blob/main/src/helm/benchmark/run.py
-    PROD_ENV_FOLDER: str = os.path.join(VllmTpuEvaluator.CACHE_PATH, "prod_env")
+    PROD_ENV_PATH: str = os.path.join(VllmTpuEvaluator.CACHE_PATH, "prod_env")
+    BENCHMARK_OUTPUT_PATH: str = os.path.join(VllmTpuEvaluator.CACHE_PATH, "benchmark_output")
     RESULTS_FOLDER: str = "results"
-    RESULTS_PATH: str = os.path.join(VllmTpuEvaluator.CACHE_PATH, "benchmark_output", "runs", RESULTS_FOLDER)
+    RESULTS_PATH: str = os.path.join(BENCHMARK_OUTPUT_PATH, "runs", RESULTS_FOLDER)
     DEFAULT_MAX_EVAL_INSTANCES: int = 1000
 
     # Required files to run inference on a particular model in HELM. All of these files are in `PROD_ENV_FOLDER`.
-    MODEL_DEPLOYMENTS_FILE_PATH: str = os.path.join(PROD_ENV_FOLDER, "model_deployments.yaml")
-    MODEL_METADATA_FILE_PATH: str = os.path.join(PROD_ENV_FOLDER, "model_metadata.yaml")
-    TOKENIZER_CONFIGS_FILE_PATH: str = os.path.join(PROD_ENV_FOLDER, "tokenizer_configs.yaml")
+    MODEL_DEPLOYMENTS_FILE_PATH: str = os.path.join(PROD_ENV_PATH, "model_deployments.yaml")
+    MODEL_METADATA_FILE_PATH: str = os.path.join(PROD_ENV_PATH, "model_metadata.yaml")
+    TOKENIZER_CONFIGS_FILE_PATH: str = os.path.join(PROD_ENV_PATH, "tokenizer_configs.yaml")
 
     ALL_RUN_ENTRIES_URL: str = "https://github.com/stanford-crfm/helm/tree/main/src/helm/benchmark/presentation"
     RUN_ENTRIES_TEMPLATE: str = (
@@ -38,7 +39,7 @@ class HELMEvaluator(VllmTpuEvaluator):
         """
         Write out the necessary model configuration files for HELM.
         """
-        os.makedirs(HELMEvaluator.PROD_ENV_FOLDER, exist_ok=True)
+        os.makedirs(HELMEvaluator.PROD_ENV_PATH, exist_ok=True)
 
         # TODO: make this more configurable
         model_name: str = model.name
@@ -115,8 +116,9 @@ class HELMEvaluator(VllmTpuEvaluator):
             f"helm-run --conf-paths {' '.join(evals)} "
             f"--models-to-run {model.name} "
             f"--max-eval-instances {self.DEFAULT_MAX_EVAL_INSTANCES} "
+            f"--output-path {self.BENCHMARK_OUTPUT_PATH} "
             f"--suite {self.RESULTS_FOLDER} "
-            f"--local-path {self.PROD_ENV_FOLDER} "
+            f"--local-path {self.PROD_ENV_PATH} "
         )
         assert os.path.exists(self.RESULTS_PATH), f"Results not found at {self.RESULTS_PATH}. Did HELM run?"
 
