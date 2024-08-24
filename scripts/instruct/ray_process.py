@@ -1,13 +1,4 @@
-# Example script on how to run jobs on ray and process large amount of data.
-# The scripts contains comments with critical information to follow along.
-# Anything which is not inside ray.remote function will be executed on the head node, so keep it to minimum.
-# path: scripts/fineweb/process_parquet_fw.py
-# Inputs: jsonl.gz files in dolma format having html content, Output: jsonl.gz files in dolma format having markdown
-# Example Usage:
-# ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- \
-# python scripts/hello_world_fw/process.py \
-# --input_dir gs://marin-data/hello_world_fw/fineweb/fw-v1.0/CC-MAIN-2024-10/000_00000/
-# --output_dir gs://marin-data/scratch/user/hello_world_fw/fineweb/fw-v1.0/CC-MAIN-2024-10/000_00000/
+# INSTRUCT RAY SCRIPT
 import argparse
 import json
 from dataclasses import dataclass
