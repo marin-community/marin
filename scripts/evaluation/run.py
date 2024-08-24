@@ -11,21 +11,19 @@ import argparse
 import time
 
 from scripts.evaluation.evaluator_factory import get_evaluator, NAME_TO_EVALUATOR
-from scripts.evaluation.evaluator import Evaluator, EvaluatorConfig
+from scripts.evaluation.evaluator import Evaluator, EvaluatorConfig, Model
 
 
 def main():
-    config = EvaluatorConfig(
-        name=args.evaluator,
-        output_path=args.output_path,
-        credentials_path=args.credentials_path,
-    )
+    config = EvaluatorConfig(name=args.evaluator, credentials_path=args.credentials_path)
     print(f"Creating an evaluator with config: {config}")
     evaluator: Evaluator = get_evaluator(config)
 
-    print(f"Evaluating {args.model} with {args.evals}")
+    model: Model = Model(name=args.model_name, path=args.model_path)
+    print(f"Evaluating {model.name} with {args.evals}")
+
     start_time: float = time.time()
-    evaluator.evaluate(model_name_or_path=args.model, evals=args.evals)
+    evaluator.evaluate(model, evals=args.evals, output_path=args.results_path)
     print(f"Done (total time: {time.time() - start_time} seconds)")
 
 
@@ -38,11 +36,17 @@ if __name__ == "__main__":
         choices=list(NAME_TO_EVALUATOR.keys()),
     )
     parser.add_argument(
-        "--model",
+        "--model-name",
         type=str,
-        help="Can be the name of the model in Hugging Face (e.g, google/gemma-2b) or "
-        "a path to the model to evaluate (can be a GCS path)",
+        help="Can be a name of the model in Hugging Face (e.g, google/gemma-2b) or "
+        "a name given to the model checkpoint (e.g., $RUN/$CHECKPOINT).",
         required=True,
+    )
+    parser.add_argument(
+        "--model-path",
+        type=str,
+        help="Optional: Path to the model. Can be a path on GCS.",
+        default=None,
     )
     parser.add_argument(
         "-e",
@@ -53,11 +57,11 @@ if __name__ == "__main__":
         default=[],
     )
     parser.add_argument(
-        "-o",
-        "--output-path",
+        "--results-path",
         type=str,
-        help="The location of the output path (filesystem path or URL)",
-        default="output",
+        help="Where to write results to. Can be a local path (e.g., /path/to/output) or "
+        "a path on GCS (e.g., gs://bucket/path/to/output).",
+        default="results",
     )
     parser.add_argument(
         "--credentials-path",

@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Dict, List
+from typing import Dict, List, Optional
 import os
 import requests
 import subprocess
@@ -8,7 +8,8 @@ import time
 
 import ray
 
-from scripts.evaluation.evaluator import Evaluator, Dependency
+from scripts.evaluation.evaluator import Evaluator, Dependency, Model
+from scripts.evaluation.utils import authenticate_with_hf, run_bash_command
 
 
 class VllmTpuEvaluator(Evaluator, ABC):
@@ -46,7 +47,8 @@ class VllmTpuEvaluator(Evaluator, ABC):
     # Visit https://github.com/vllm-project/vllm/releases to get the list of available versions.
     VLLM_VERSION: str = "v0.5.4"
 
-    # By default, the VLLM server runs on port 8000.
+    # Where to store checkpoints, cache inference results, etc.
+    CACHE_PATH: str = "/tmp"
 
     @staticmethod
     def install_vllm_from_source() -> None:
@@ -56,20 +58,18 @@ class VllmTpuEvaluator(Evaluator, ABC):
         TPUs require installing VLLM from source.
         """
         # Additional dependencies to install in order for vLLM to work on TPUs
-        VllmTpuEvaluator.run_bash_command("sudo apt-get update && sudo apt-get install libopenblas-dev --yes")
-        VllmTpuEvaluator.run_bash_command(
-            "pip install torch_xla[tpu] -f https://storage.googleapis.com/libtpu-releases/index.html"
-        )
-        VllmTpuEvaluator.run_bash_command(
+        run_bash_command("sudo apt-get update && sudo apt-get install libopenblas-dev --yes")
+        run_bash_command("pip install torch_xla[tpu] -f https://storage.googleapis.com/libtpu-releases/index.html")
+        run_bash_command(
             "pip install torch_xla[pallas] "
             "-f https://storage.googleapis.com/jax-releases/jax_nightly_releases.html "
             "-f https://storage.googleapis.com/jax-releases/jaxlib_nightly_releases.html"
         )
         # Clone the VLLM repository to install it from source. Can fail if the repository already exists.
-        VllmTpuEvaluator.run_bash_command("git clone https://github.com/vllm-project/vllm.git", check=False)
+        run_bash_command("git clone https://github.com/vllm-project/vllm.git", check=False)
         # Runs https://github.com/vllm-project/vllm/blob/main/setup.py with the `tpu` target device
-        VllmTpuEvaluator.run_bash_command(f"cd vllm && git checkout tags/{VllmTpuEvaluator.VLLM_VERSION}")
-        VllmTpuEvaluator.run_bash_command('VLLM_TARGET_DEVICE="tpu" pip install -e ./vllm')
+        run_bash_command(f"cd vllm && git checkout tags/{VllmTpuEvaluator.VLLM_VERSION}")
+        run_bash_command('VLLM_TARGET_DEVICE="tpu" pip install -e ./vllm')
 
         # Get the path to the vllm directory and add the path to sys.path and PYTHONPATH
         current_dir: str = os.path.dirname(os.path.abspath(__file__))
@@ -78,46 +78,19 @@ class VllmTpuEvaluator(Evaluator, ABC):
         os.environ["PYTHONPATH"] = f"{vllm_path}:{os.environ.get('PYTHONPATH', '')}"
 
     @staticmethod
-    def is_gcs_path(path: str) -> bool:
-        """
-        Checks if the given path is a Google Cloud Storage (GCS) path.
-        """
-        return path.startswith("gs://")
-
-    @staticmethod
-    def download_from_gcs(gcs_path: str, local_path: str = ".") -> None:
-        """
-        Downloads the model checkpoint to the local filesystem.
-        By default, `local_path` is the current directory.
-        """
-        VllmTpuEvaluator.run_bash_command(f"gsutil -m cp -r {gcs_path} {local_path}")
-        print(f"Downloaded {gcs_path} to {local_path}.")
-
-    @staticmethod
-    def upload_to_gcs(local_path: str, gcs_path: str) -> None:
-        """
-        Uploads the model checkpoint to Google Cloud Storage (GCS).
-        """
-        VllmTpuEvaluator.run_bash_command(f"gsutil -m cp -r {local_path} {gcs_path}")
-        print(f"Uploaded {local_path} to {gcs_path}.")
-
-    @staticmethod
     def start_vllm_server_in_background(
-        model_name_or_path: str, host: str = "127.0.0.1", port: int = 8000, timeout_seconds: int = 3600
+        model: Model, host: str = "127.0.0.1", port: int = 8000, timeout_seconds: int = 3600
     ) -> str:
         """
         Serve the model with a local vLLM server in the background.
         Returns the server url.
         """
-        server_args: str = f"--host {host} --port {port}"
-        command: str
-        if VllmTpuEvaluator.is_gcs_path(model_name_or_path):
-            VllmTpuEvaluator.download_from_gcs(model_name_or_path)
-            local_checkpoint_path: str = os.path.split(model_name_or_path)[-1]
-            # From https://docs.vllm.ai/en/v0.4.0/models/engine_args.html
-            command = f"vllm serve {local_checkpoint_path} --trust-remote-code {server_args}"
-        else:
-            command = f"vllm serve {model_name_or_path} {server_args}"
+        # Download the model if it's not already downloaded
+        local_model_path: str = os.path.join(VllmTpuEvaluator.CACHE_PATH, model.name)
+        model.ensure_downloaded(local_path=local_model_path)
+
+        # From https://docs.vllm.ai/en/v0.4.0/models/engine_args.html
+        command: str = f"vllm serve {local_model_path} --trust-remote-code --host {host} --port {port}"
         process = subprocess.Popen(command, shell=True)
 
         # Check that the server has started by sending heartbeat checks
@@ -168,7 +141,7 @@ class VllmTpuEvaluator(Evaluator, ABC):
         return runtime_env
 
     @abstractmethod
-    def run(self, model_name_or_path: str, evals: List[str]) -> None:
+    def run(self, model: Model, evals: List[str], output_path: str) -> None:
         """
         Run the evaluator.
         """
@@ -177,12 +150,16 @@ class VllmTpuEvaluator(Evaluator, ABC):
         self.install_vllm_from_source()
 
         # Authenticate with Hugging Face
-        self.authenticate_with_hf()
+        hf_auth_token: Optional[str] = self._config.hf_auth_token
+        if hf_auth_token is None:
+            print("WARNING: Skipping logging on with HuggingFace. No token provided.")
+        else:
+            authenticate_with_hf(hf_auth_token)
 
-    def evaluate(self, model_name_or_path: str, evals: List[str]) -> None:
+    def evaluate(self, model: Model, evals: List[str], output_path: str) -> None:
         """
         Launches the evaluation run with Ray.
         """
         ray.init(runtime_env=self.get_runtime_env())
-        result = ray.get(self.run.remote(self, model_name_or_path, evals))
+        result = ray.get(self.run.remote(self, model, evals, output_path))
         print(f"Inference times (in seconds): {result}")

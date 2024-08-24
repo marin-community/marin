@@ -5,7 +5,7 @@ from scripts.evaluation.simple_evaluator import SimpleEvaluator
 # Supported evaluators
 NAME_TO_EVALUATOR = {
     "helm": HELMEvaluator,
-    "simple": SimpleEvaluator,
+    "debug": SimpleEvaluator,
 }
 
 

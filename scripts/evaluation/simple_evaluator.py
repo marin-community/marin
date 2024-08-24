@@ -1,11 +1,13 @@
+import os.path
 from dataclasses import dataclass
 from typing import Dict, List
-import os
 import time
 
 import ray
 
 from scripts.evaluation.vllm_tpu_evaluator import VllmTpuEvaluator
+from scripts.evaluation.evaluator import Model
+from scripts.evaluation.utils import run_bash_command
 
 
 @dataclass(frozen=True)
@@ -68,22 +70,18 @@ class SimpleEvaluator(VllmTpuEvaluator):
     }
 
     @ray.remote(memory=8 * 1024 * 1024 * 1024, resources={"TPU": 4})  # 8 GB of memory, always request 4 TPUs
-    def run(self, model_name_or_path: str, evals: List[str]) -> None:
-        super().run(model_name_or_path, evals)
+    def run(self, model: Model, evals: List[str], output_path: str) -> None:
+        super().run(model, evals, output_path)
 
         from vllm import LLM, SamplingParams
 
-        # Download the model from GCS if it is a GCS path
-        model: str
-        if SimpleEvaluator.is_gcs_path(model_name_or_path):
-            SimpleEvaluator.download_from_gcs(model_name_or_path)
-            model = os.path.split(model_name_or_path)[-1]
-        else:
-            model = model_name_or_path
+        # Download the model from GCS if it is stored there
+        local_model_path: str = os.path.join(self.CACHE_PATH, model.name)
+        model.ensure_downloaded(local_path=local_model_path)
 
         # Set `enforce_eager=True` to avoid ahead-of-time compilation.
         # In real workloads, `enforce_eager` should be `False`.
-        llm = LLM(model=model, enforce_eager=False, trust_remote_code=True)
+        llm = LLM(model=local_model_path, enforce_eager=False, trust_remote_code=True)
 
         inference_times: Dict[str, float] = {}
         for eval_name in evals:

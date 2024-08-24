@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 from typing import Dict, List, Optional
 from dataclasses import dataclass, field
 
-import subprocess
+from scripts.evaluation.utils import download_from_gcs, is_gcs_path
 
 
 @dataclass(frozen=True)
@@ -26,12 +26,6 @@ class EvaluatorConfig:
     name: str
     """The name of the evaluator e.g., helm"""
 
-    output_path: str
-    """
-    The path to save the evaluation results e.g., /path/to/output
-    or can be path on GCS gs://bucket/path/to/output.
-    """
-
     credentials_path: str
     """
     The path to file containing the credentials e.g., Hugging Face authentication token.
@@ -51,10 +45,7 @@ class EvaluatorConfig:
             print(f"WARNING: No credentials found at {self.credentials_path}")
 
     def __str__(self) -> str:
-        return (
-            f"EvaluatorConfig(name={self.name}, "
-            f"output_path={self.output_path}, credentials_path={self.credentials_path})"
-        )
+        return f"EvaluatorConfig(name={self.name}, credentials_path={self.credentials_path})"
 
     @property
     def hf_auth_token(self) -> Optional[str]:
@@ -62,6 +53,30 @@ class EvaluatorConfig:
         Returns the Hugging Face authentication token if it exists.
         """
         return self._credentials.get("HuggingFaceAuthToken")
+
+
+@dataclass
+class Model:
+    name: str
+    """The name of the evaluator e.g., helm"""
+
+    path: Optional[str]
+    """
+    The path to the model checkpoint. Can be a local path or a path on GCS.
+    """
+
+    def ensure_downloaded(self, local_path: Optional[str] = None) -> None:
+        """
+        Ensures that the model checkpoint is downloaded to `local_path` if necessary.
+        """
+        if self.path is None:
+            return
+        elif is_gcs_path(self.path):
+            assert local_path is not None
+            download_from_gcs(gcs_path=self.path, destination_path=local_path)
+            self.path = local_path
+            # Show the contents of self.path
+            print(f"Downloaded model checkpoint to {self.path}: {os.listdir(self.path)}")
 
 
 class Evaluator(ABC):
@@ -73,26 +88,9 @@ class Evaluator(ABC):
     def __init__(self, config: EvaluatorConfig):
         self._config: EvaluatorConfig = config
 
-    @staticmethod
-    def run_bash_command(command: str, check: bool = True) -> None:
-        """Runs a bash command."""
-        print(command)
-        subprocess.run(command, shell=True, check=check)
-
     @abstractmethod
-    def evaluate(self, model_name_or_path: str, evals: List[str]) -> None:
+    def evaluate(self, model: Model, evals: List[str], output_path: str) -> None:
         """
         Runs the evaluator given the model checkpoint, the list of evaluations to run, and the output path.
         """
         pass
-
-    def authenticate_with_hf(self) -> None:
-        """Authenticates with the Hugging Face API using the given token."""
-        hf_auth_token: Optional[str] = self._config.hf_auth_token
-        if hf_auth_token is None:
-            print("WARNING: Skipping logging on with HuggingFace. No token provided.")
-        else:
-            from huggingface_hub import login
-
-            login(token=self._config.hf_auth_token)
-            print("Logged in with Hugging Face.")
