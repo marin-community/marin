@@ -118,14 +118,14 @@ def merge_shards(shard_paths: List[str], train_path: str, val_path: str, val_spl
 
     return True
 
-def create_label_attribute(input_doc_path: str, output_attr_path: str, label: Optional[str] = None) -> bool:
+def create_label_attribute(input_doc_path: str, output_attr_path: str, label: str) -> bool:
     """
     Create attribute for quality classifier label.
 
     Args:
         input_doc_path (str): Path to documents (i.e., gs://{BUCKET}/documents/...).
         output_attr_path (str): Path to write attributes (i.e., gs://{BUCKET}/attributes/.../<experiment>).
-        label (Optional[str]): Quality classifier label to write as attribute.
+        label (str): Quality classifier label to write as attribute.
     
     Returns:
         bool: True if the process is successful.

@@ -25,12 +25,8 @@ def format_example(data: dict) -> str:
     """
     Converts example to fastText training data format.
     """
-    label_string = ''
-    if data["label"] is not None:
-        label_string += f' __label__{data["label"]}'
-    output_line = label_string + " " + preprocess(data["text"]) + "\n"
 
-    return output_line
+    return f' __label__{data["label"]}' + " " + preprocess(data["text"]) + "\n"
 
 def train_model(base_path: str, experiment: str, training_args: dict, seed: int, val_split: float, memory_req: int, num_cpus: int) -> bool:
     """
