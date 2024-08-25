@@ -179,3 +179,24 @@ def attribute_to_dataset(output_base_path: str, experiment: str, doc_path: str, 
         print(f"Error processing {doc_path}: {e}")
     
     return True
+
+def shuffle(input_file_path: str, output_file_path: str, seed: int) -> bool:
+    """
+    Shuffles the lines of a file.
+
+    Args:
+        input_file_path (str): Path to the input file.
+        output_file_path (str): Path to the output file.
+        seed (int): Seed for random number generator to ensure reproducibility.
+
+    Returns:
+        bool: True if the process is successful.
+    """
+    rng = np.random.default_rng(seed=seed)
+    with fsspec.open(input_file_path, "rt") as f_in:
+        lines = f_in.readlines()
+    rng.shuffle(lines)
+    with fsspec.open(output_file_path, "wt") as f_out:
+        f_out.writelines(lines)
+
+    return True
