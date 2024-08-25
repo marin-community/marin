@@ -37,7 +37,7 @@ from marin.utils import (
     fsspec_isdir,
     fsspec_get_curr_subdirectories,
     fsspec_get_atomic_directories,
-    validate_gcp_path
+    validate_marin_gcp_path
 )
 
 
@@ -165,8 +165,8 @@ def main(inference_config: InferenceConfig):
     filepaths, process_filepath_func = get_filepaths_and_process_filepath_func(inference_config)
 
     # Enforce Marin GCP structure
-    input_dir = validate_gcp_path(inference_config.input_dir, path_type="documents")
-    output_dir = validate_gcp_path(inference_config.output_dir, path_type="attributes")
+    input_dir = validate_marin_gcp_path(inference_config.input_dir)
+    output_dir = validate_marin_gcp_path(inference_config.output_dir)
     responses = []
     for input_filepath in filepaths:
         if len(responses) > inference_config.task.max_in_flight:
