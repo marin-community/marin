@@ -105,22 +105,22 @@ def map_files_in_directory(
     # Get a list of all files in the input directory
     files = fsspec_glob(os.path.join(input_dir, pattern))
 
-    function_arguments = []
+    file_pairs = []
     for file in files:
         output_file = rebase_file_path(input_dir, file, output_dir)
         dir_name = os.path.dirname(output_file)
         fsspec_mkdirs(dir_name)
-        function_arguments.append([file, output_file])
+        file_pairs.append([file, output_file])
 
     if isinstance(func, ray.remote_function.RemoteFunction):
         # If the function is a ray.remote function, then execute it in parallel
-        responses = simple_backpressure(func, iter(function_arguments), task_config.max_in_flight, fetch_local=True,
+        responses = simple_backpressure(func, iter(file_pairs), task_config.max_in_flight, fetch_local=True,
                                         *args, **kwargs)
         return responses
     else:
         # Map the function to all files
         outputs = []
-        for file in function_arguments:
+        for file in file_pairs:
             outputs.append(func(*file, *args, **kwargs))
 
     return outputs
