@@ -11,7 +11,7 @@ import ray
 from ray import ObjectRef
 from ray.remote_function import RemoteFunction
 
-from marin.utils import fsspec_exists, fsspec_glob, fsspec_mkdirs, rebase_file_path, fsspec_get_curr_subdirectories, fsspec_isdir
+from marin.utils import fsspec_exists, fsspec_glob, fsspec_mkdirs, rebase_file_path, fsspec_get_curr_subdirectories
 
 logger = logging.getLogger("ray")
 
@@ -105,22 +105,23 @@ def map_files_in_directory(
     # Get a list of all files in the input directory
     files = fsspec_glob(os.path.join(input_dir, pattern))
 
-    def func_to_call(input_file):
-        # Construct the output file path
-        output_file = rebase_file_path(input_dir, input_file, output_dir)
+    file_pairs = []
+    for file in files:
+        output_file = rebase_file_path(input_dir, file, output_dir)
         dir_name = os.path.dirname(output_file)
         fsspec_mkdirs(dir_name)
-        return func(input_file, output_file, *args, **kwargs)
+        file_pairs.append([file, output_file])
 
     if isinstance(func, ray.remote_function.RemoteFunction):
         # If the function is a ray.remote function, then execute it in parallel
-        responses = simple_backpressure(func_to_call, iter(files), task_config.max_in_flight, fetch_local=True)
+        responses = simple_backpressure(func, iter(file_pairs), task_config.max_in_flight, fetch_local=True,
+                                        *args, **kwargs)
         return responses
     else:
         # Map the function to all files
         outputs = []
-        for file in files:
-            outputs.append(func_to_call(file))
+        for file in file_pairs:
+            outputs.append(func(*file, *args, **kwargs))
 
     return outputs
 
@@ -157,7 +158,8 @@ def map_directories_in_directory(
     return outputs
 
 
-def simple_backpressure(remote_func, task_generator: Iterator, max_in_flight: Optional[int], fetch_local: bool) -> Iterator[ObjectRef]:
+def simple_backpressure(remote_func, task_generator: Iterator, max_in_flight: Optional[int], fetch_local: bool,
+                        *args, **kwargs) -> Iterator[ObjectRef]:
     """
     Simple backpressure implementation for ray.remote functions.
 
@@ -180,10 +182,9 @@ def simple_backpressure(remote_func, task_generator: Iterator, max_in_flight: Op
     for task in task_generator:
         if max_in_flight is not None:
             while len(in_flight) >= max_in_flight:
-                num_to_await = len(in_flight) - max_in_flight + 1
-                done, in_flight = ray.wait(in_flight, fetch_local=fetch_local, num_returns=num_to_await)
+                done, in_flight = ray.wait(in_flight, fetch_local=fetch_local, num_returns=1)
 
-        ref = remote_func.remote(*task)
+        ref = remote_func.remote(*task, *args, **kwargs)
         refs.append(ref)
 
         if max_in_flight is not None:
