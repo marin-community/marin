@@ -61,7 +61,7 @@ def main(cfg: MainConfig):
     create_label_attribute(input_doc_path=cfg.pos_doc_path, output_attr_path=pos_attr_path, label="hq")
     attribute_to_dataset(output_base_path=cfg.output_base_path, experiment=cfg.experiment, doc_path=cfg.pos_doc_path, attr_path=pos_attr_path, sampling_rate=cfg.pos_sampling_rate, seed=cfg.seed)
 
-    create_label_attribute(input_doc_path=cfg.neg_doc_path, output_attr_path=neg_attr_path)
+    create_label_attribute(input_doc_path=cfg.neg_doc_path, output_attr_path=neg_attr_path, label="lq")
     attribute_to_dataset(output_base_path=cfg.output_base_path, experiment=cfg.experiment, doc_path=cfg.neg_doc_path, attr_path=neg_attr_path, sampling_rate=cfg.neg_sampling_rate, seed=cfg.seed)
 
     train_model(base_path=cfg.output_base_path, experiment=cfg.experiment, training_args=cfg.training_args, seed=cfg.seed, val_split=cfg.val_split, memory_req=cfg.memory, num_cpus=cfg.num_cpus)
