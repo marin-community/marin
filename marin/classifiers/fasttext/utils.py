@@ -13,7 +13,7 @@ import fsspec
 import ray
 
 from marin.utils import fsspec_glob
-from marin.classifiers.utils import merge_shards
+from marin.classifiers.utils import merge_shards, shuffle
 
 def preprocess(text: str) -> str:
     """
@@ -60,10 +60,22 @@ def train_model(base_path: str, experiment: str, training_args: dict, seed: int,
         shard_paths = fsspec_glob(os.path.join(f'{experiment_path}/data', "**/*.jsonl.gz"))
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            merge_shards(shard_paths,os.path.join(tmp_dir, "data.train"),os.path.join(tmp_dir, "data.val"),val_split,seed,format_example)
+            train_path = os.path.join(tmp_dir, "data.train")
+            val_path = os.path.join(tmp_dir, "data.val")
+            model_path = os.path.join(tmp_dir, "model.bin")
 
-            model = fasttext.train_supervised(os.path.join(tmp_dir, "data.train"),**training_args)
-            model.save_model(os.path.join(tmp_dir, "model.bin"))
+            merge_shards(shard_paths,train_path,val_path,val_split,seed,format_example)
+
+            shuffle(train_path,train_path,seed)
+            shuffle(val_path,val_path,seed)
+
+            with fsspec.open(train_path, "rt") as f_in, fsspec.open("gs://marin-data/scratch/rohithk/train.txt", "wt") as f_out:
+                for line in f_in:
+                    f_out.write(line)
+
+
+            model = fasttext.train_supervised(train_path,**training_args)
+            model.save_model(model_path)
 
             fs = fsspec.core.get_fs_token_paths(experiment_path, mode="wb")[0]
             fs.put(os.path.join(tmp_dir, "*"), experiment_path, recursive=True)
