@@ -22,7 +22,8 @@ class MainConfig:
         experiment (str): Experiment name.
         pos_doc_path (str): Path to experiment with positive examples (i.e., gs://{BUCKET}/documents/../$EXPERIMENT).
         neg_doc_path (str): Path to experiment with negative examples (i.e., gs://{BUCKET}/documents/../$EXPERIMENT).
-        sampling_rate (float): Fraction of examples to include the training dataset.
+        pos_sampling_rate (float): Fraction of positive examples to include the training dataset.
+        neg_sampling_rate (float): Fraction of negative examples to include the training dataset.
         training_args (dict): Arguments for the fastText training process (see fastText docs for the full list of options).
         seed (int): Seed for random number generator to ensure reproducibility.
         val_split (float): Fraction of data to be used for validation.
@@ -33,7 +34,8 @@ class MainConfig:
     experiment: str
     pos_doc_path: str
     neg_doc_path: str
-    sampling_rate: float
+    pos_sampling_rate: float
+    neg_sampling_rate: float
     training_args: dict
     seed: int
     val_split: float
@@ -57,10 +59,10 @@ def main(cfg: MainConfig):
     neg_attr_path = get_attr_path(cfg.neg_doc_path, cfg.experiment)
 
     create_label_attribute(input_doc_path=cfg.pos_doc_path, output_attr_path=pos_attr_path, label="hq")
-    attribute_to_dataset(output_base_path=cfg.output_base_path, experiment=cfg.experiment, doc_path=cfg.pos_doc_path, attr_path=pos_attr_path, sampling_rate=cfg.sampling_rate, seed=cfg.seed)
+    attribute_to_dataset(output_base_path=cfg.output_base_path, experiment=cfg.experiment, doc_path=cfg.pos_doc_path, attr_path=pos_attr_path, sampling_rate=cfg.pos_sampling_rate, seed=cfg.seed)
 
     create_label_attribute(input_doc_path=cfg.neg_doc_path, output_attr_path=neg_attr_path)
-    attribute_to_dataset(output_base_path=cfg.output_base_path, experiment=cfg.experiment, doc_path=cfg.neg_doc_path, attr_path=neg_attr_path, sampling_rate=cfg.sampling_rate, seed=cfg.seed)
+    attribute_to_dataset(output_base_path=cfg.output_base_path, experiment=cfg.experiment, doc_path=cfg.neg_doc_path, attr_path=neg_attr_path, sampling_rate=cfg.neg_sampling_rate, seed=cfg.seed)
 
     train_model(base_path=cfg.output_base_path, experiment=cfg.experiment, training_args=cfg.training_args, seed=cfg.seed, val_split=cfg.val_split, memory_req=cfg.memory, num_cpus=cfg.num_cpus)
 
