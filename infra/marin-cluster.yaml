@@ -79,7 +79,7 @@ setup_commands:
     "markdownify==0.12.1"
     "multiprocess==0.70.16"
     "py7zr==0.21.0"
-    "ray[default]==2.22.0"
+    "ray[default]==2.34.0"
     "rbloom==1.5.0"
     "readabilipy==0.2.0"
     "readability-lxml==0.8.1"
@@ -89,8 +89,16 @@ setup_commands:
     "trafilatura==1.8.1"
     "tqdm"
     "warcio==1.7.4"
-  - git clone --branch abhi-2.22.0 --single-branch --depth 1 https://github.com/abhinavg4/ray.git && rm -rf /home/ubuntu/.local/lib/python3.10/site-packages/ray/autoscaler && ln -s /home/ubuntu/ray/python/ray/autoscaler /home/ubuntu/.local/lib/python3.10/site-packages/ray/autoscaler
+    "tblib==3.0.0"
+  - git clone --branch abhi-2.34.0 --single-branch --depth 1 https://github.com/abhinavg4/ray.git && rm -rf /home/ubuntu/.local/lib/python3.10/site-packages/ray/autoscaler && ln -s /home/ubuntu/ray/python/ray/autoscaler /home/ubuntu/.local/lib/python3.10/site-packages/ray/autoscaler
 
+
+# Install Jax and levanter only on workers
+worker_setup_commands:
+  - pip install -U "jax[tpu]" -f https://storage.googleapis.com/jax-releases/libtpu_releases.html
+  - git clone https://github.com/stanford-crfm/levanter.git && cd levanter && pip install -e .
+  - pip install "transformers==4.44.2"
+  - mkdir /home/ubuntu/.cache/huggingface -p && echo <HF_TOKEN> > /home/ubuntu/.cache/huggingface/token
 
 # Set Head Node == `ray_head_default`
 head_node_type: head_default
