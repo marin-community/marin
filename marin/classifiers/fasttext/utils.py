@@ -69,11 +69,6 @@ def train_model(base_path: str, experiment: str, training_args: dict, seed: int,
             shuffle(train_path,train_path,seed)
             shuffle(val_path,val_path,seed)
 
-            with fsspec.open(train_path, "rt") as f_in, fsspec.open("gs://marin-data/scratch/rohithk/train.txt", "wt") as f_out:
-                for line in f_in:
-                    f_out.write(line)
-
-
             model = fasttext.train_supervised(train_path,**training_args)
             model.save_model(model_path)
 
