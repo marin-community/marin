@@ -40,7 +40,7 @@ class MainConfig:
     seed: int = 0
     val_split: float = 0.1
     memory: int = 1
-    num_cpus: int = 1
+    num_cpus: int = 4
 
 def get_attr_path(doc_path: str, attr_experiment: str) -> str:
     """
