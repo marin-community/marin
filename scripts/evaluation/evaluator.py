@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 from typing import Dict, List, Optional
 from dataclasses import dataclass, field
 
-from scripts.evaluation.utils import download_from_gcs, is_gcs_path
+from scripts.evaluation.utils import download_from_gcs, is_remote_path
 
 
 @dataclass(frozen=True)
@@ -56,7 +56,7 @@ class EvaluatorConfig:
 
 
 @dataclass
-class Model:
+class ModelConfig:
     name: str
     """The name of the evaluator e.g., helm"""
 
@@ -65,18 +65,28 @@ class Model:
     The path to the model checkpoint. Can be a local path or a path on GCS.
     """
 
-    def ensure_downloaded(self, local_path: Optional[str] = None) -> None:
+    tokenizer: str = "allenai/olmo-7b"
+    """The name of the tokenizer to use with the model."""
+
+    end_of_text_token: str = "<|endoftext|>"
+    """The end of text token."""
+
+    prefix_token: str = ""
+    """The prefix token."""
+
+    def ensure_downloaded(self, local_path: Optional[str] = None) -> Optional[str]:
         """
         Ensures that the model checkpoint is downloaded to `local_path` if necessary.
         """
         if self.path is None:
-            return
-        elif is_gcs_path(self.path):
+            return None
+        elif is_remote_path(self.path):
             assert local_path is not None
             download_from_gcs(gcs_path=self.path, destination_path=local_path)
             self.path = local_path
             # Show the contents of self.path
             print(f"Downloaded model checkpoint to {self.path}: {os.listdir(self.path)}")
+            return local_path
 
 
 class Evaluator(ABC):
@@ -89,7 +99,7 @@ class Evaluator(ABC):
         self._config: EvaluatorConfig = config
 
     @abstractmethod
-    def evaluate(self, model: Model, evals: List[str], output_path: str) -> None:
+    def evaluate(self, model: ModelConfig, evals: List[str], output_path: str) -> None:
         """
         Runs the evaluator given the model checkpoint, the list of evaluations to run, and the output path.
         """

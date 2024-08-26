@@ -11,7 +11,7 @@ import argparse
 import time
 
 from scripts.evaluation.evaluator_factory import get_evaluator, NAME_TO_EVALUATOR
-from scripts.evaluation.evaluator import Evaluator, EvaluatorConfig, Model
+from scripts.evaluation.evaluator import Evaluator, EvaluatorConfig, ModelConfig
 
 
 def main():
@@ -19,7 +19,7 @@ def main():
     print(f"Creating an evaluator with config: {config}")
     evaluator: Evaluator = get_evaluator(config)
 
-    model: Model = Model(name=args.model_name, path=args.model_path)
+    model: ModelConfig = ModelConfig(name=args.model_name, path=args.model_path)
     print(f"Evaluating {model.name} with {args.evals}")
 
     start_time: float = time.time()
@@ -66,7 +66,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--credentials-path",
         type=str,
-        help="Path to the JSON file containing credentials.",
+        help="Path to the JSON file containing credentials to authenticate with services (e.g., Hugging Face).",
         required=False,
         default="credentials.json",
     )

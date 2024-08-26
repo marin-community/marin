@@ -1,13 +1,12 @@
 import os.path
 from dataclasses import dataclass
-from typing import Dict, List
+from typing import Dict, List, Optional
 import time
 
 import ray
 
 from scripts.evaluation.vllm_tpu_evaluator import VllmTpuEvaluator
-from scripts.evaluation.evaluator import Model
-from scripts.evaluation.utils import run_bash_command
+from scripts.evaluation.evaluator import ModelConfig
 
 
 @dataclass(frozen=True)
@@ -69,19 +68,20 @@ class SimpleEvaluator(VllmTpuEvaluator):
         "many_outputs": MANY_OUTPUTS_TEST_PLAN,
     }
 
-    @ray.remote(memory=8 * 1024 * 1024 * 1024, resources={"TPU": 4})  # 8 GB of memory, always request 4 TPUs
-    def run(self, model: Model, evals: List[str], output_path: str) -> None:
+    @ray.remote(memory=64 * 1024 * 1024 * 1024, resources={"TPU": 4})  # 64 GB of memory, always request 4 TPUs
+    def run(self, model: ModelConfig, evals: List[str], output_path: str) -> None:
         super().run(model, evals, output_path)
 
         from vllm import LLM, SamplingParams
 
         # Download the model from GCS if it is stored there
-        local_model_path: str = os.path.join(self.CACHE_PATH, model.name)
-        model.ensure_downloaded(local_path=local_model_path)
+        downloaded_path: Optional[str] = model.ensure_downloaded(local_path=os.path.join(self.CACHE_PATH, model.name))
+        # Use the model name if a path is not specified (e.g., for Hugging Face models)
+        model_name_or_path: str = model.name if downloaded_path is None else downloaded_path
 
         # Set `enforce_eager=True` to avoid ahead-of-time compilation.
         # In real workloads, `enforce_eager` should be `False`.
-        llm = LLM(model=local_model_path, enforce_eager=False, trust_remote_code=True)
+        llm = LLM(model=model_name_or_path, enforce_eager=False, trust_remote_code=True)
 
         inference_times: Dict[str, float] = {}
         for eval_name in evals:

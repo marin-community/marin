@@ -3,9 +3,9 @@ import os
 
 import ray
 
-from scripts.evaluation.evaluator import Dependency, Model
+from scripts.evaluation.evaluator import Dependency, ModelConfig
 from scripts.evaluation.vllm_tpu_evaluator import VllmTpuEvaluator
-from scripts.evaluation.utils import is_gcs_path, upload_to_gcs, run_bash_command, write_yaml
+from scripts.evaluation.utils import is_remote_path, upload_to_gcs, run_bash_command, write_yaml
 
 
 class HELMEvaluator(VllmTpuEvaluator):
@@ -20,7 +20,7 @@ class HELMEvaluator(VllmTpuEvaluator):
     RESULTS_PATH: str = os.path.join(BENCHMARK_OUTPUT_PATH, "runs", RESULTS_FOLDER)
     DEFAULT_MAX_EVAL_INSTANCES: int = 1000
 
-    # Required files to run inference on a particular model in HELM. All of these files are in `PROD_ENV_FOLDER`.
+    # Required files to run inference on a particular model in HELM. All of these files are in `PROD_ENV_PATH`.
     MODEL_DEPLOYMENTS_FILE_PATH: str = os.path.join(PROD_ENV_PATH, "model_deployments.yaml")
     MODEL_METADATA_FILE_PATH: str = os.path.join(PROD_ENV_PATH, "model_metadata.yaml")
     TOKENIZER_CONFIGS_FILE_PATH: str = os.path.join(PROD_ENV_PATH, "tokenizer_configs.yaml")
@@ -35,15 +35,14 @@ class HELMEvaluator(VllmTpuEvaluator):
     ]
 
     @staticmethod
-    def write_model_config_files(model: Model) -> None:
+    def write_model_config_files(model: ModelConfig) -> None:
         """
         Write out the necessary model configuration files for HELM.
         """
         os.makedirs(HELMEvaluator.PROD_ENV_PATH, exist_ok=True)
 
-        # TODO: make this more configurable
         model_name: str = model.name
-        tokenizer_name: str = "allenai/olmo-7b"
+        tokenizer_name: str = model.tokenizer
         content: Dict = {
             "model_deployments": [
                 {
@@ -83,15 +82,15 @@ class HELMEvaluator(VllmTpuEvaluator):
                         "class_name": "helm.tokenizers.huggingface_tokenizer.HuggingFaceTokenizer",
                         "args": {"trust_remote_code": True},
                     },
-                    "end_of_text_token": "<|endoftext|>",
-                    "prefix_token": "",
+                    "end_of_text_token": model.end_of_text_token,
+                    "prefix_token": model.prefix_token,
                 }
             ]
         }
         write_yaml(content, HELMEvaluator.TOKENIZER_CONFIGS_FILE_PATH)
 
-    @ray.remote(memory=8 * 1024 * 1024 * 1024, resources={"TPU": 4})  # 8 GB of memory, always request 4 TPUs
-    def run(self, model: Model, evals: List[str], output_path: str) -> None:
+    @ray.remote(memory=64 * 1024 * 1024 * 1024, resources={"TPU": 4})  # 64 GB of memory, always request 4 TPUs
+    def run(self, model: ModelConfig, evals: List[str], output_path: str) -> None:
         super().run(model, evals, output_path)
 
         from helm.common.general import ensure_file_downloaded
@@ -123,5 +122,5 @@ class HELMEvaluator(VllmTpuEvaluator):
         assert os.path.exists(self.RESULTS_PATH), f"Results not found at {self.RESULTS_PATH}. Did HELM run?"
 
         # Upload the results to GCS
-        if is_gcs_path(output_path):
+        if is_remote_path(output_path):
             upload_to_gcs(self.RESULTS_PATH, output_path)
