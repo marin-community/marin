@@ -31,8 +31,6 @@ dependencies = [
     "readability-lxml==0.8.1",              # TODO :: Check usage | pin?
     "regex==2024.4.16",                     # TODO :: Check usage | pin?
     "requests",
-    "tensorflow==2.16.1",                   # TODO :: Check usage | pin?
-    "trafilatura==1.8.1",                   # TODO :: Check usage | pin?
     "tqdm",
     "warcio==1.7.4",                        # TODO :: Check usage | pin?
     "grip==4.6.2",                          # TODO :: Check usage | pin?
@@ -66,7 +64,8 @@ preview = true
 # Note :: Grow more strict over time!
 extend-exclude = """
 (
-    scripts/
+    marin/
+    | scripts/
 )
 """
 
@@ -75,11 +74,11 @@ line-length = 121
 target-version = "py310"
 
 # Note :: Grow more strict over time!
-extend-exclude = ["scripts/"]
+extend-exclude = ["marin", "scripts/"]
 
 [tool.ruff.lint]
 select = ["A", "B", "E", "F", "I", "NPY", "RUF", "UP", "W"]
-ignore = ["F722", "B008"]
+ignore = ["F722", "B008", "UP015"]
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["E402", "F401"]
@@ -90,5 +89,6 @@ python_version = "3.10"
 # Note: Grow more strict over time!
 ignore_missing_imports = true
 exclude = [
+    "marin/",
     "scripts/"
 ]

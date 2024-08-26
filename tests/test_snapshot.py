@@ -1,5 +1,5 @@
-import subprocess
 import os
+import subprocess
 
 import pytest
 
@@ -11,9 +11,11 @@ expected_dir = os.path.join(my_dir, "snapshots/expected")  # Directory containin
 output_dir = os.path.join(my_dir, "snapshots/outputs")  # Directory containing actual output files
 diff_dir = os.path.join(my_dir, "snapshots/diffs")  # Directory containing diff files
 
+
 def read_file(file_path):
-    with open(file_path, 'r', encoding='utf-8') as file:
+    with open(file_path, "r", encoding="utf-8") as file:
         return file.read()
+
 
 def compare_outputs(input_name, expected_file, output_file):
     """Compare expected and actual output files using pandiff."""
@@ -26,7 +28,13 @@ def compare_outputs(input_name, expected_file, output_file):
     base_name = os.path.basename(expected_file)
     diff_name = f"{base_name}.diff.md"
     try:
-        result = subprocess.run(["pandiff", expected_file, output_file, "-o", f"{diff_dir}/{diff_name}"], check=True, text=True, capture_output=True)
+        result = subprocess.run(
+            ["pandiff", expected_file, output_file, "-o", f"{diff_dir}/{diff_name}"],
+            check=True,
+            text=True,
+            capture_output=True,
+        )
+
         # print stdout and stderr and the command
         print(result.stdout)
         print(result.stderr)
@@ -36,12 +44,14 @@ def compare_outputs(input_name, expected_file, output_file):
         raise
 
     # show the diff
-    raise AssertionError(f"Output does not match expected for {input_name}. See snapshots/diffs/{diff_name} for details.")
+    raise AssertionError(
+        f"Output does not match expected for {input_name}. See snapshots/diffs/{diff_name} for details."
+    )
 
 
 def parametrize_with_files(fn):
     """Parametrize a test function with the files in the input directory."""
-    files = [ os.path.splitext(os.path.basename(f))[0] for f in os.listdir(input_dir) if f.endswith(".html")]
+    files = [os.path.splitext(os.path.basename(f))[0] for f in os.listdir(input_dir) if f.endswith(".html")]
     return pytest.mark.parametrize("input_name", files)(fn)
 
 
@@ -64,6 +74,7 @@ def test_generate_markdown_from_html(input_name):
         f.write(output)
 
     compare_outputs(input_name, expected_file, output_file)
+
 
 def accept_change(input_name):
     """Accept a change for a specific input."""
