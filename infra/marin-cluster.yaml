@@ -64,6 +64,9 @@ initialization_commands:
   - echo "include-system-site-packages=false" >> ~/miniconda3/envs/evaluate/pyvenv.cfg
 
 setup_commands:
+  # Add Rust for DOLMA
+  - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y && source $HOME/.cargo/env
+  - echo 'source $HOME/.cargo/env' >> $HOME/.bashrc  # or .bash_profile, depending on your system
   - pip install --upgrade pip
   - >
     pip install "chardet==5.2.0"
@@ -80,7 +83,7 @@ setup_commands:
     "markdownify==0.12.1"
     "multiprocess==0.70.16"
     "py7zr==0.21.0"
-    "ray[default]==2.22.0"
+    "ray[default]==2.34.0"
     "rbloom==1.5.0"
     "readabilipy==0.2.0"
     "readability-lxml==0.8.1"
@@ -90,6 +93,8 @@ setup_commands:
     "trafilatura==1.8.1"
     "tqdm"
     "warcio==1.7.4"
+    "tblib==3.0.0"
+    "transformers==4.44.2"
   - > 
     ~/miniconda3/envs/evaluate/bin/pip install
     "fsspec~=2024.3"
@@ -108,7 +113,18 @@ setup_commands:
   - cd ./vllmsrc && git checkout tags/v0.5.3.post1
   - cd ./vllmsrc && ~/miniconda3/envs/evaluate/bin/pip install -r requirements-tpu.txt
   - cd ./vllmsrc && VLLM_TARGET_DEVICE="tpu" ~/miniconda3/envs/evaluate/bin/python setup.py develop
+  - git clone --branch abhi-2.34.0 --single-branch --depth 1 https://github.com/abhinavg4/ray.git && rm -rf /home/ubuntu/.local/lib/python3.10/site-packages/ray/autoscaler && ln -s /home/ubuntu/ray/python/ray/autoscaler /home/ubuntu/.local/lib/python3.10/site-packages/ray/autoscaler
 
+
+# Install Jax and levanter only on workers
+worker_setup_commands:
+  - pip install -U "jax[tpu]" -f https://storage.googleapis.com/jax-releases/libtpu_releases.html
+  - git clone https://github.com/stanford-crfm/levanter.git && cd levanter && pip install -e .
+  - mkdir /home/ubuntu/.cache/huggingface -p && echo <HF_TOKEN> > /home/ubuntu/.cache/huggingface/token
+
+# Levanter is installed on head node without Jax
+head_setup_commands:
+  - pip install levanter@git+https://github.com/stanford-crfm/levanter.git
 
 # Set Head Node == `ray_head_default`
 head_node_type: head_default
