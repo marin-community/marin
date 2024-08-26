@@ -1,10 +1,12 @@
+import os.path
 from dataclasses import dataclass
-from typing import Dict, List
+from typing import Dict, List, Optional
 import time
 
 import ray
 
 from scripts.evaluation.vllm_tpu_evaluator import VllmTpuEvaluator
+from scripts.evaluation.evaluator import ModelConfig
 
 
 @dataclass(frozen=True)
@@ -66,19 +68,22 @@ class SimpleEvaluator(VllmTpuEvaluator):
         "many_outputs": MANY_OUTPUTS_TEST_PLAN,
     }
 
-    @staticmethod
-    @ray.remote(memory=8 * 1024 * 1024 * 1024)  # 8 GB
-    def _evaluate(model_name_or_path: str, evals: List[str], output_path: str) -> Dict[str, float]:
-        # Install VLLM from source
-        SimpleEvaluator.install_vllm_from_source()
+    @ray.remote(memory=64 * 1024 * 1024 * 1024, resources={"TPU": 4})  # 64 GB of memory, always request 4 TPUs
+    def run(self, model: ModelConfig, evals: List[str], output_path: str) -> None:
+        super().run(model, evals, output_path)
 
-        from vllm.vllm import LLM, SamplingParams
+        from vllm import LLM, SamplingParams
+
+        # Download the model from GCS if it is stored there
+        downloaded_path: Optional[str] = model.ensure_downloaded(local_path=os.path.join(self.CACHE_PATH, model.name))
+        # Use the model name if a path is not specified (e.g., for Hugging Face models)
+        model_name_or_path: str = model.name if downloaded_path is None else downloaded_path
 
         # Set `enforce_eager=True` to avoid ahead-of-time compilation.
         # In real workloads, `enforce_eager` should be `False`.
-        llm = LLM(model=model_name_or_path, enforce_eager=False)
+        llm = LLM(model=model_name_or_path, enforce_eager=False, trust_remote_code=True)
 
-        result: Dict[str, float] = {}
+        inference_times: Dict[str, float] = {}
         for eval_name in evals:
             assert eval_name in SimpleEvaluator.NAME_TO_TEST_PLAN, f"Unknown eval: {eval_name}"
             test_plan: TestPlan = SimpleEvaluator.NAME_TO_TEST_PLAN[eval_name]
@@ -93,25 +98,16 @@ class SimpleEvaluator(VllmTpuEvaluator):
             )
 
             # Run inference and time it
-            start_time = time.time()
+            start_time: float = time.time()
             outputs = llm.generate(test_plan.prompts, sampling_params)
-            result[eval_name] = time.time() - start_time
+            inference_times[eval_name] = time.time() - start_time
 
             # Print the outputs for debugging
             for output in outputs:
                 prompt: str = output.prompt
                 print(f"Prompt: {prompt!r}")
                 for i, generation in enumerate(output.outputs):
-                    print(f"Generation (#{i+1} of {test_plan.num_outputs}): {generation.text!r}")
+                    print(f"Generation (#{i + 1} of {test_plan.num_outputs}): {generation.text!r}")
                 print("-" * 100)
 
-        return result
-
-    def evaluate(self, model_name_or_path: str, evals: List[str], output_path: str) -> None:
-        """
-        Run the evaluator.
-        """
-        print(f"Running {evals} on {model_name_or_path} and saving results to {output_path}...")
-        ray.init(runtime_env=self.get_runtime_env())
-        result = ray.get(self._evaluate.remote(model_name_or_path, evals, output_path))
-        print(f"Inference times (in seconds): {result}")
+        print(f"Inference times (in seconds): {inference_times}")

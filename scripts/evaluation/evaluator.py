@@ -1,8 +1,10 @@
+import os
+import json
 from abc import ABC, abstractmethod
-from typing import List, Optional
-from dataclasses import dataclass
+from typing import Dict, List, Optional
+from dataclasses import dataclass, field
 
-import subprocess
+from scripts.evaluation.utils import download_from_gcs, is_remote_path
 
 
 @dataclass(frozen=True)
@@ -19,19 +21,85 @@ class Dependency:
         return f"{self.name}=={self.version}" if self.version else self.name
 
 
+@dataclass
+class EvaluatorConfig:
+    name: str
+    """The name of the evaluator e.g., helm"""
+
+    credentials_path: str
+    """
+    The path to file containing the credentials e.g., Hugging Face authentication token.
+    """
+
+    _credentials: Dict[str, str] = field(default_factory=dict)
+    """
+    The credentials to use for the evaluator.
+    """
+
+    def __post_init__(self) -> None:
+        if os.path.exists(self.credentials_path):
+            with open(self.credentials_path, "r") as f:
+                self._credentials = json.load(f)
+                print(f"Loaded credentials from {self.credentials_path}.")
+        else:
+            print(f"WARNING: No credentials found at {self.credentials_path}")
+
+    def __str__(self) -> str:
+        return f"EvaluatorConfig(name={self.name}, credentials_path={self.credentials_path})"
+
+    @property
+    def hf_auth_token(self) -> Optional[str]:
+        """
+        Returns the Hugging Face authentication token if it exists.
+        """
+        return self._credentials.get("HuggingFaceAuthToken")
+
+
+@dataclass
+class ModelConfig:
+    name: str
+    """The name of the evaluator e.g., helm"""
+
+    path: Optional[str]
+    """
+    The path to the model checkpoint. Can be a local path or a path on GCS.
+    """
+
+    tokenizer: str = "allenai/olmo-7b"
+    """The name of the tokenizer to use with the model."""
+
+    end_of_text_token: str = "<|endoftext|>"
+    """The end of text token."""
+
+    prefix_token: str = ""
+    """The prefix token."""
+
+    def ensure_downloaded(self, local_path: Optional[str] = None) -> Optional[str]:
+        """
+        Ensures that the model checkpoint is downloaded to `local_path` if necessary.
+        """
+        if self.path is None:
+            return None
+        elif is_remote_path(self.path):
+            assert local_path is not None
+            download_from_gcs(gcs_path=self.path, destination_path=local_path)
+            self.path = local_path
+            # Show the contents of self.path
+            print(f"Downloaded model checkpoint to {self.path}: {os.listdir(self.path)}")
+            return local_path
+
+
 class Evaluator(ABC):
 
     _python_version: str
     _pip_packages: List[Dependency]
     _py_modules: List[Dependency]
 
-    @staticmethod
-    def run_bash_command(command: str, check: bool = True) -> None:
-        """Runs a bash command."""
-        subprocess.run(command, shell=True, check=check)
+    def __init__(self, config: EvaluatorConfig):
+        self._config: EvaluatorConfig = config
 
     @abstractmethod
-    def evaluate(self, model_name_or_path: str, evals: List[str], output_path: str) -> None:
+    def evaluate(self, model: ModelConfig, evals: List[str], output_path: str) -> None:
         """
         Runs the evaluator given the model checkpoint, the list of evaluations to run, and the output path.
         """
