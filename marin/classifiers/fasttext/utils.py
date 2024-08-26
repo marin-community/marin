@@ -81,7 +81,8 @@ def train_model(base_path: str, experiment: str, training_args: dict, seed: int,
     try:
         ray.get(response)
     except Exception as e:
-        print(f"Error processing: {e}")
+        logger.exception(f"Error processing: {e}")
+        raise
     
     datetime_end = datetime.utcnow()
     logger.info(f"Training fastText for experiment {experiment} completed in {datetime_end - datetime_start}.")
