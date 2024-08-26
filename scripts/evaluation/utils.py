@@ -2,6 +2,7 @@ from typing import Dict, Optional
 import os
 import subprocess
 
+from fsspec.implementations.local import LocalFileSystem
 import fsspec
 import yaml
 
@@ -14,11 +15,12 @@ def authenticate_with_hf(hf_auth_token: Optional[str]) -> None:
     print("Logged in with Hugging Face.")
 
 
-def is_gcs_path(path: str) -> bool:
+def is_remote_path(path: str) -> bool:
     """
-    Checks if the given path is a Google Cloud Storage (GCS) path.
+    Checks if the given path is a remote path, e.g., Google Cloud Storage (GCS) path.
     """
-    return path.startswith("gs://") or path.startswith("gcs://")
+    fs, _ = fsspec.core.url_to_fs(path)
+    return not isinstance(fs, LocalFileSystem)
 
 
 def download_from_gcs(gcs_path: str, destination_path: str) -> None:
@@ -26,9 +28,13 @@ def download_from_gcs(gcs_path: str, destination_path: str) -> None:
     Downloads the folder at `gcs_path` to `destination_path`.
     """
     os.makedirs(destination_path, exist_ok=True)
-    fs, _ = fsspec.core.url_to_fs(gcs_path)
+    fs = fsspec.filesystem("gcs")
+    if not fs.exists(gcs_path):
+        raise FileNotFoundError(f"{gcs_path} does not exist in GCS.")
+
     # The slash is needed to download the contents of the folder to `destination_path`
     fs.get(gcs_path + "/", destination_path, recursive=True)
+    # run_bash_command(f"gsutil -m cp -r {gcs_path} {destination_path}")
     print(f"Downloaded {gcs_path} to {destination_path}.")
 
 

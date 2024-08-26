@@ -8,7 +8,7 @@ import time
 
 import ray
 
-from scripts.evaluation.evaluator import Evaluator, Dependency, Model
+from scripts.evaluation.evaluator import Evaluator, Dependency, ModelConfig
 from scripts.evaluation.utils import authenticate_with_hf, run_bash_command
 
 
@@ -79,16 +79,18 @@ class VllmTpuEvaluator(Evaluator, ABC):
 
     @staticmethod
     def start_vllm_server_in_background(
-        model: Model, host: str = "127.0.0.1", port: int = 8000, timeout_seconds: int = 3600
+        model: ModelConfig, host: str = "127.0.0.1", port: int = 8000, timeout_seconds: int = 3600
     ) -> str:
         """
         Serve the model with a local vLLM server in the background.
         Returns the server url.
         """
         # Download the model if it's not already downloaded
-        model.ensure_downloaded(local_path=os.path.join(VllmTpuEvaluator.CACHE_PATH, model.name))
+        downloaded_path: Optional[str] = model.ensure_downloaded(
+            local_path=os.path.join(VllmTpuEvaluator.CACHE_PATH, model.name)
+        )
         # Use the model name if a path is not specified (e.g., for Hugging Face models)
-        model_name_or_path: str = model.name if model.path is None else model.path
+        model_name_or_path: str = model.name if downloaded_path is None else downloaded_path
 
         # From https://docs.vllm.ai/en/v0.4.0/models/engine_args.html
         command: str = f"vllm serve {model_name_or_path} --trust-remote-code --host {host} --port {port}"
@@ -142,7 +144,7 @@ class VllmTpuEvaluator(Evaluator, ABC):
         return runtime_env
 
     @abstractmethod
-    def run(self, model: Model, evals: List[str], output_path: str) -> None:
+    def run(self, model: ModelConfig, evals: List[str], output_path: str) -> None:
         """
         Run the evaluator.
         """
@@ -157,7 +159,7 @@ class VllmTpuEvaluator(Evaluator, ABC):
         else:
             authenticate_with_hf(hf_auth_token)
 
-    def evaluate(self, model: Model, evals: List[str], output_path: str) -> None:
+    def evaluate(self, model: ModelConfig, evals: List[str], output_path: str) -> None:
         """
         Launches the evaluation run with Ray.
         """
