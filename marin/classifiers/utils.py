@@ -197,10 +197,10 @@ def shuffle(input_file_path: str, output_file_path: str, seed: int) -> bool:
         bool: True if the process is successful.
     """
     rng = np.random.default_rng(seed=seed)
-    with fsspec.open(input_file_path, "rt", compression="auto") as f_in:
+    with fsspec.open(input_file_path, "rt") as f_in:
         lines = f_in.readlines()
     rng.shuffle(lines)
-    with fsspec.open(output_file_path, "wt", compression="auto") as f_out:
+    with fsspec.open(output_file_path, "wt") as f_out:
         f_out.writelines(lines)
 
     return True
