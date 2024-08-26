@@ -4,7 +4,7 @@ run_training.py
 Training script for fastText quality classifiers.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import ray
 import draccus
@@ -34,13 +34,13 @@ class MainConfig:
     experiment: str
     pos_doc_path: str
     neg_doc_path: str
-    pos_sampling_rate: float
-    neg_sampling_rate: float
-    training_args: dict
-    seed: int
-    val_split: float
-    memory: int
-    num_cpus: int
+    pos_sampling_rate: float = 1.0
+    neg_sampling_rate: float = 1.0
+    training_args: dict = field(default_factory=dict)
+    seed: int = 0
+    val_split: float = 0.1
+    memory: int = 1
+    num_cpus: int = 1
 
 def get_attr_path(doc_path: str, attr_experiment: str) -> str:
     """

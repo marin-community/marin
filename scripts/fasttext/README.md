@@ -18,3 +18,5 @@ python train_fasttext.py \
 will train a fastText classifier using OLMo instruct data as high quality examples and Fineweb as low quality examples and 
 the additional training hyperparameters specified in `train_fasttext.yaml` 
 and save the results to `gs://marin-us-central2/classifiers/quickstart`.
+Typically, one should choose the sampling rates to balance the number of high quality and low quality examples (and also 
+to ensure that the entire dataset fits into worker memory).

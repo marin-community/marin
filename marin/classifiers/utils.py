@@ -5,6 +5,7 @@ Utility functions for building quality classifiers.
 """
 
 from typing import List, Optional, Callable
+import logging
 
 import fsspec
 import numpy as np
@@ -17,7 +18,7 @@ from marin.core.runtime import cached_or_construct_output, map_files_in_director
 @cached_or_construct_output(success_suffix="SUCCESS")
 def write_label_attribute(input_file_path: str, output_file_path: str, label: str) -> bool:
     """
-    Creates an attribute "label" from input list of labels for each document.
+    Creates an attribute "label" from input label for each document.
 
     Args:
         input_file_path (str): Path to the input JSONL file (gzip compressed).
@@ -145,7 +146,7 @@ def create_label_attribute(input_doc_path: str, output_attr_path: str, label: st
 
 def attribute_to_dataset(output_base_path: str, experiment: str, doc_path: str, attr_path: str, sampling_rate: float, seed: int, get_label: Callable[[dict,dict], str] = get_label) -> bool:
     """
-    Configuration class for main process.
+    Converts documents and attributes to quality classifier training data (text,label) pairs.
 
     Args:
         output_base_path (str): Base path for output data (i.e., gs://{BUCKET}).
@@ -159,6 +160,8 @@ def attribute_to_dataset(output_base_path: str, experiment: str, doc_path: str, 
     Returns:
         bool: True if the process is successful.
     """
+    logger = logging.getLogger("ray")
+
     # curry write_fasttext_lines so that we can pass it to map_files_in_directory
     @ray.remote(memory=1 * 1024 * 1024 * 1024, runtime_env={"pip": ["s3fs"]}, num_cpus=1)  # 1 GB
     def processing_func(input_file_path : str,output_file_path : str) -> bool:
@@ -176,7 +179,8 @@ def attribute_to_dataset(output_base_path: str, experiment: str, doc_path: str, 
     try:
         ray.get(responses)
     except Exception as e:
-        print(f"Error processing {doc_path}: {e}")
+        logger.exception(f"Error processing {doc_path}: {e}")
+        raise
     
     return True
 
@@ -193,10 +197,10 @@ def shuffle(input_file_path: str, output_file_path: str, seed: int) -> bool:
         bool: True if the process is successful.
     """
     rng = np.random.default_rng(seed=seed)
-    with fsspec.open(input_file_path, "rt") as f_in:
+    with fsspec.open(input_file_path, "rt", compression="auto") as f_in:
         lines = f_in.readlines()
     rng.shuffle(lines)
-    with fsspec.open(output_file_path, "wt") as f_out:
+    with fsspec.open(output_file_path, "wt", compression="auto") as f_out:
         f_out.writelines(lines)
 
     return True
