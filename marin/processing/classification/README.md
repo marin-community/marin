@@ -65,12 +65,12 @@ After the attribute folders have been generated, to filter the dataset based on 
 
 dedupe first
 ```bash
-ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python -m marin.processing.classification.filter --input_dir gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart/ --output_dir gs://marin-us-central2/filtered/hello_world_fw/v1.0/quickstart_deduped --attributes_dir gs://marin-us-central2/attributes/hello_world_fw/v1.0/quickstart_duplicates/ --attribute_name dedupe
+ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python -m marin.processing.classification.filter --input_dir gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart/ --output_dir gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart_deduped --attributes_dir gs://marin-us-central2/attributes/hello_world_fw/v1.0/quickstart_duplicates/ --attribute_name dedupe
 ```
 
 now quality filter
 ```bash
-ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python -m marin.processing.classification.filter --input_dir gs://marin-us-central2/filtered/hello_world_fw/v1.0/quickstart_deduped/ --output_dir gs://marin-us-central2/filtered/hello_world_fw/v1.0/quickstart_deduped_dclmfasttext --attributes_dir gs://marin-us-central2/attributes/hello_world_fw/v1.0/dclm-fasttext-quality-quickstart/ --attribute_name dclm-fasttext-quality --threshold 0.2 
+ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python -m marin.processing.classification.filter --input_dir gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart_deduped/ --output_dir gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart_deduped_dclmfasttext --attributes_dir gs://marin-us-central2/attributes/hello_world_fw/v1.0/dclm-fasttext-quality-quickstart/ --attribute_name dclm-fasttext-quality --threshold 0.2 
 ```
 
 Currently we require the user specifiy the file format and the attribute to filter by
