@@ -18,26 +18,18 @@ import ray
 from ray.data.datasource import FilenameProvider
 from ray.runtime_env import RuntimeEnv
 
-from marin.core.runtime import cached_or_construct_output, map_files_in_directory, map_directories_in_directory
-from marin.processing.classification.config.inference_config import InferenceConfig, StorageConfig
+from marin.core.runtime import cached_or_construct_output
+from marin.processing.classification.config.inference_config import InferenceConfig
 from marin.processing.classification.classifier import (
     AutoClassifier,
     BaseClassifier,
-)
-from marin.processing.classification.utils import (
-    download_huggingface_file_with_backoff,
-    download_gcs_file_with_backoff,
-    is_json_serializable,
-    make_serializable,
 )
 from marin.utils import (
     fsspec_glob,
     fsspec_mkdirs,
     rebase_file_path,
-    fsspec_isdir,
-    fsspec_get_curr_subdirectories,
     fsspec_get_atomic_directories,
-    validate_gcp_path
+    validate_marin_gcp_path
 )
 
 
@@ -165,8 +157,8 @@ def main(inference_config: InferenceConfig):
     filepaths, process_filepath_func = get_filepaths_and_process_filepath_func(inference_config)
 
     # Enforce Marin GCP structure
-    input_dir = validate_gcp_path(inference_config.input_dir, path_type="documents")
-    output_dir = validate_gcp_path(inference_config.output_dir, path_type="attributes")
+    input_dir = validate_marin_gcp_path(inference_config.input_dir)
+    output_dir = validate_marin_gcp_path(inference_config.output_dir)
     responses = []
     for input_filepath in filepaths:
         if len(responses) > inference_config.task.max_in_flight:

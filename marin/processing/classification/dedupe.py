@@ -1,9 +1,5 @@
 import argparse
 import ray
-import time
-import psutil
-import multiprocessing
-import socket
 import os
 import tempfile
 from google.cloud import storage
@@ -23,7 +19,7 @@ def copy_files_in(input_dir, local_base_dir):
     print(f"glob_path: {glob_path}")
     input_files = fsspec_glob(glob_path)
     
-    print(f"printing input files five: {input_files[:5]}")
+    print(f"printing first five input files: {input_files[:5]}")
     
     for input_file in tqdm(input_files, desc="Copying files"):
         # Extract the relative path from the input file
@@ -106,7 +102,7 @@ def copy_files_out(local_base_dir, output_dir, attribute_name):
     files_uploaded = 0
     for local_file in tqdm(local_files, desc="Uploading files"):
         # Use rebase_file_path to get the correct output path
-        output_file = rebase_file_path(local_base_dir, local_file, output_dir)
+        output_file = rebase_file_path(local_attribute_dir, local_file, output_dir)
         
         print(f"[DEBUG] Uploading {local_file} to {output_file}")
         
