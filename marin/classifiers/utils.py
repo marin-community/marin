@@ -40,21 +40,15 @@ def write_label_attribute(input_file_path: str, output_file_path: str, label: st
 
     return True
 
-def get_label(data : dict, attribs : dict) -> str:
-    """
-    Extracts label from attributes dictionary.
-
-    Args:
-        data (dict): Data dictionary (i.e., from documents/..).
-        attribs (dict): Attributes dictionary (i.e., from attributes/..).
-
-    Returns:
-        str: Quality classifier label.
-    """
-    return attribs["attributes"]["label"]
-
 @cached_or_construct_output(success_suffix="SUCCESS")
-def write_examples(input_file_path: str, output_file_path: str, attr_file_path: str, sampling_rate: float, seed: int, get_label: Callable[[dict,dict], str]) -> bool:
+def write_examples(
+        input_file_path: str, 
+        output_file_path: str, 
+        attr_file_path: str, 
+        sampling_rate: float, 
+        seed: int, 
+        get_label: Callable[[dict,dict], str]
+    ) -> bool:
     """
     Writes training examples to an output file.
     Only a fraction of the examples, determined by the sampling rate, are written to the output file (eg, to control size 
@@ -91,7 +85,14 @@ def write_examples(input_file_path: str, output_file_path: str, attr_file_path: 
 
     return True
 
-def merge_shards_and_split(shard_paths: List[str], train_path: str, val_path: str, val_split: float, seed: int, format_example: Callable[[dict],str]) -> bool:
+def merge_shards_and_split(
+        shard_paths: List[str], 
+        train_path: str, 
+        val_path: str, 
+        val_split: float, 
+        seed: int, 
+        format_example: Callable[[dict],str]
+    ) -> bool:
     """
     Merges multiple shard files into training and validation datasets.
 
@@ -146,7 +147,15 @@ def create_label_attribute(input_doc_path: str, output_attr_path: str, label: st
     
     return True
 
-def attribute_to_dataset(output_base_path: str, experiment: str, doc_path: str, attr_path: str, sampling_rate: float, seed: int, get_label: Callable[[dict,dict], str] = get_label) -> bool:
+def attribute_to_dataset(
+        output_base_path: str, 
+        experiment: str, 
+        doc_path: str, 
+        attr_path: str, 
+        sampling_rate: float, 
+        seed: int, 
+        get_label: Callable[[dict,dict], str] = lambda data,attribs : attribs["attributes"]["label"]
+    ) -> bool:
     """
     Converts documents and attributes to quality classifier training data (text,label) pairs.
 
