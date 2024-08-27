@@ -10,7 +10,7 @@ import ray
 import draccus
 
 from marin.classifiers.utils import create_label_attribute, attribute_to_dataset
-from marin.classifiers.fasttext.utils import train_model
+from marin.classifiers.fasttext.training import train_model
 
 @dataclass
 class MainConfig:

@@ -76,6 +76,9 @@ def write_examples(input_file_path: str, output_file_path: str, attr_file_path: 
             fsspec.open(attr_file_path, "rt", compression="gzip") as f_attr, \
                 fsspec.open(output_file_path, "wt", compression="gzip") as f_out:
         for input_line, attr_line in zip(f_in, f_attr):
+            if rng.random() > sampling_rate:
+                continue
+
             data = json.loads(input_line)
             attribs = json.loads(attr_line)
 
@@ -84,12 +87,11 @@ def write_examples(input_file_path: str, output_file_path: str, attr_file_path: 
                 "label": get_label(data,attribs)
             }
 
-            if rng.random() < sampling_rate:
-                f_out.write(json.dumps(example) + "\n")
+            f_out.write(json.dumps(example) + "\n")
 
     return True
 
-def merge_shards(shard_paths: List[str], train_path: str, val_path: str, val_split: float, seed: int, format_example: Callable[[dict],str]) -> bool:
+def merge_shards_and_split(shard_paths: List[str], train_path: str, val_path: str, val_split: float, seed: int, format_example: Callable[[dict],str]) -> bool:
     """
     Merges multiple shard files into training and validation datasets.
 
@@ -197,10 +199,10 @@ def shuffle(input_file_path: str, output_file_path: str, seed: int) -> bool:
         bool: True if the process is successful.
     """
     rng = np.random.default_rng(seed=seed)
-    with fsspec.open(input_file_path, "rt") as f_in:
+    with fsspec.open(input_file_path, "rt", compression = "infer") as f_in:
         lines = f_in.readlines()
     rng.shuffle(lines)
-    with fsspec.open(output_file_path, "wt") as f_out:
+    with fsspec.open(output_file_path, "wt", compression = "infer") as f_out:
         f_out.writelines(lines)
 
     return True
