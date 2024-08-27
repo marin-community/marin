@@ -6,14 +6,14 @@ instantiation of this pipeline. To run `train_fasttext.py` you will need to spec
 and a set of low quality documents. The script will then create the appropriate label attributes, convert these attributes into a fastText dataset and train a model on this dataset. For example, running 
 
 ```bash
-python train_fasttext.py \
---pos_doc_path gs://marin-us-central2/documents/marin_instructv1/v1_olmo_mix/text \
---neg_doc_path gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart \
---pos_sampling_rate 0.1 \
---neg_sampling_rate 1.0 \
---output_base_path gs://marin-us-central2 \
---experiment quickstart \
---config_path train_fasttext.yaml
+python ./scripts/fasttext/train_fasttext.py \
+  --pos_doc_path gs://marin-us-central2/documents/marin_instructv1/v1_olmo_mix/text \
+  --neg_doc_path gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart \
+  --pos_sampling_rate 0.1 \
+  --neg_sampling_rate 1.0 \
+  --output_base_path gs://marin-us-central2 \
+  --experiment quickstart \
+  --config_path ./scripts/fasttext/configs/train_fasttext.yaml
 ```
 will train a fastText classifier using OLMo instruct data as high quality examples and Fineweb as low quality examples and 
 the additional training hyperparameters specified in `train_fasttext.yaml` 

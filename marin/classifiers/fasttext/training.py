@@ -15,7 +15,15 @@ from marin.utils import fsspec_glob
 from marin.classifiers.utils import merge_shards_and_split, shuffle
 from marin.classifiers.fasttext.utils import format_example
 
-def train_model(base_path: str, experiment: str, training_args: dict, seed: int, val_split: float, memory_req: int, num_cpus: int) -> bool:
+def train_model(
+        base_path: str, 
+        experiment: str, 
+        training_args: dict, 
+        seed: int, 
+        val_split: float, 
+        memory_req: int, 
+        num_cpus: int
+    ) -> bool:
     """
     Train a fastText model.
 
