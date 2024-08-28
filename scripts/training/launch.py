@@ -20,19 +20,16 @@ zone_to_bucket = {
     "eu-west4-b": "marin-ckpt-eu-w4"
 }
 
-# DEFAULT_DOCKER_IMAGE = "ghcr.io/stanford-crfm/levanter-tpu:latest"
-
-
 def construct_levanter_config(
-        base_config,
-        model_config,
-        data_config,
-        cache_dir,
-        bucket,
-        id,
-        exp_name,
-        name,
-        tags,
+        base_config: dict,
+        model_config: dict,
+        data_config: dict,
+        cache_dir: str,
+        bucket: str,
+        id: str,
+        exp_name: str,
+        name: str,
+        tags: list[str],
 ):
     config = deepcopy(base_config)
 
@@ -54,7 +51,7 @@ def construct_levanter_config(
     return config
 
 
-def _get_data_config(base_data, data_name, data_config):
+def _get_data_config(base_data: dict, data_name: Optional[str], dataset_path: Optional[str], data_config_path: Optional[str]) -> dict:
     """
     We support a few different kinds of data configurations. One option is a YAML file that specifies a data mixture,
     following Levanter's data mixture config. Another option is a string that specifies a root directory for a dataset.
@@ -66,21 +63,22 @@ def _get_data_config(base_data, data_name, data_config):
     all jsonl.gz files recursively. We then set the weight of that dataset to 1, and the weight of all other datasets
     to 0, meaning they are only used for evaluation.
     """
-    assert (data_name is None) != (data_config is None)
+    assert (data_name is None) != (data_config_path is None)
+    assert (data_name is None) == (dataset_path is None)
 
     ret_data = deepcopy(base_data)
 
-    if data_config is not None:
-        data_config = yaml.load(open(data_config), Loader=yaml.SafeLoader)
-        mergedeep.merge(ret_data, data_config)
+    if data_config_path is not None:
+        data_config_path = yaml.load(open(data_config_path), Loader=yaml.SafeLoader)
+        mergedeep.merge(ret_data, data_config_path)
 
         for key in ret_data["train_weights"]:
-            if key not in data_config["train_weights"]:
+            if key not in data_config_path["train_weights"]:
                 ret_data["train_weights"][key] = 0
     else:
         # TODO: this isn't really right, but it doesn't matter if you pre-run tokenization
         # I don't love this.
-        ret_data["configs"][data_name] = {"train_urls": [f"{data_name}/**/*.jsonl.gz"]}
+        ret_data["configs"][data_name] = {"train_urls": [dataset_path]}
         for key in ret_data["train_weights"]:
             ret_data["train_weights"][key] = 0
 
@@ -95,20 +93,31 @@ class LaunchConfig:
     cache_dir: str
     """Tokenizer cache dir"""
 
-    data_name: Optional[str] = None
-    """This should be the name of the dataset you tokenized in the tokenization step. Either this or data_config must be provided."""
-    data_config: Optional[str] = None
-    """This should be a path to a YAML file that specifies a Levanter data configuration. Either this or data_name must be provided."""
+    dataset_name: Optional[str] = None
+    """This should be the name of the dataset you tokenized in the tokenization step. Either (this and dataset_path) or dataset_config must be provided."""
+    dataset_path: Optional[str] = None
+    """This should be the path to a directory containing a dataset. Either (this and dataset_name) or dataset_config must be provided."""
+    dataset_config: Optional[str] = None
+    """This should be a path to a YAML file that specifies a Levanter data configuration. Either this or dataset_name must be provided."""
     tpu_type: str = "v5litepod-256"
     project: Optional[str] = None
+    """The GCP project to use. If not provided, the default project will be used."""
     zone: Optional[str] = None
+    """The GCP zone to use. If not provided, the default zone will be used."""
     base_config: str = "config/training/standard_run.yaml"
+    """The base Levanter config to use."""
     run_name: Optional[str] = None
+    """The name of the run. If not provided, it will be the experiment name followed by the run_id."""
     run_id: Optional[str] = None
+    """The id of the run. If not provided, a random run_id will be used."""
     foreground: bool = False
+    """If True, the job will be launched in the foreground."""
     env: dict[str, str] = field(default_factory=dict)
+    """Environment variables to set in the container."""
     capacity_type: str = "spot"
+    """The capacity type to use for the TPU."""
     tags: list[str] = field(default_factory=list)
+    """Tags to add to the wandb run."""
 
 @draccus.wrap()
 def main(args: LaunchConfig):
@@ -128,16 +137,18 @@ def main(args: LaunchConfig):
     if zone is None:
         raise ValueError("No zone provided and no default zone set.")
 
-    tpu_type = args.tpu_type
-    data_name = args.data_name
-    data_config = args.data_config
+    dataset_name = args.dataset_name
+    dataset_path = args.dataset_path
+    dataset_config = args.dataset_config
 
-    if data_name is None and data_config is None:
-        raise ValueError("Either data_name or data_config must be provided.")
-    if data_name is not None and data_config is not None:
-        raise ValueError("Only one of data_name and data_config can be provided.")
+    if dataset_name is None and dataset_config is None:
+        raise ValueError("Either dataset_name or dataset_config must be provided.")
+    if dataset_name is not None and dataset_config is not None:
+        raise ValueError("Only one of dataset_name and dataset_config can be provided.")
+    if (dataset_name is None) != (dataset_path is None):
+        raise ValueError("Either both dataset_name and dataset_path must be provided, or neither.")
 
-    model_config = args.model_config
+
     run_id = args.run_id
     if run_id is None:
         run_id = cli.default_run_id()
@@ -154,12 +165,12 @@ def main(args: LaunchConfig):
         raise ValueError(f"Unknown zone {zone}")
 
     base_config = yaml.load(open(args.base_config), Loader=yaml.SafeLoader)
-    model_config = yaml.load(open(model_config), Loader=yaml.SafeLoader)
+    model_config = yaml.load(open(args.model_config), Loader=yaml.SafeLoader)
 
     run_config = construct_levanter_config(
         base_config=base_config,
         model_config=model_config,
-        data_config=_get_data_config(base_config["data"], data_name, data_config),
+        data_config=_get_data_config(base_config["data"], dataset_name, dataset_path, dataset_config),
         cache_dir=args.cache_dir,
         bucket=bucket,
         id=run_id,
@@ -226,7 +237,7 @@ def main(args: LaunchConfig):
         launch_job(
             command=cmd,
             tpu_name=run_name,
-            tpu_type=tpu_type,
+            tpu_type=(args.tpu_type),
             zone=zone,
             capacity_type=capacity_type,
             node_count=1,
