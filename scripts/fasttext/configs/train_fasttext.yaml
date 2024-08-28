@@ -1,0 +1,6 @@
+training_args:
+  lr: 0.01
+seed: 0
+val_split: 0.1
+memory: 1
+num_cpus: 4

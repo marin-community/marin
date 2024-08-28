@@ -1,34 +1,42 @@
 # StackExchange
 
-## Steps to create the dataset
+Instructions for downloading and processing raw StackExchange dumps, along with descriptions of data formats and file
+structure.
 
+## Downloading Raw Data
 
-### Download the data
+Raw StackExchange dumps are available at https://archive.org/download/stackexchange. We use the dump from 2024-04-02.
+We exclude "meta" sites and only use the main sites (i.e., we use "3dprinting.stackexchange.com.7z" but don't use
+"3dprinting.meta.stackexchange.com.7z"). The full dump is approximately 100 GB.
 
-Data is available at https://archive.org/download/stackexchange. We used the dump from 2024-04-02.
-We exclude "meta" sites and only use the main sites. So we don't use "3dprinting.meta.stackexchange.com.7z"
-but we use "3dprinting.stackexchange.com.7z".
+**Downloading Data to GCS**: To get the raw data, we use the GCS Storage Transfer Service to perform the data transfer.
+To kick off the job, create `stackexchange-urls.tsv` using the following instructions (per @dlwh):
 
-It is about 100 GB.
+- Go to `[https://archive.org/details/stackexchange](https://archive.org/details/stackexchange)`
+- Expand the `7z` sidebar, copy all the names (w/ mouse)
+- Paste into a text editor (i.e., VSCode)
+- Run (sequence of find/replace commands - regex mode) 
+  + Remove all " download" strings -- match on `download `
+  + Remove all file sizes (e.g., 188M) -- match on `^\d.*?\d[KMG]`
+  + Remove all `meta` sites -- match on `.*\.meta\..*\n`
+  + Prepend URL Prefix `https://archive.org/download/stackexchange/` to each line
+  + Insert `TsvHttpData-1.0` on the first line
 
-Using GCS: Start a storage transfer service job on GCS to copy the data from the public dataset to your bucket.
-You can upload the `stack_exchange_urls.tsv` to an http server somewhere and use it.
+Pass this file to the Storage Transfer Job CLI to kick off the transfer.
 
-### Process the data
+## Processing the Raw Data
 
-There is a single script that can process one site at a time: `process_stack_exchange.py`.
+We provide three different ways to "markdownify" StackExchange threads (questions and corresponding answers):
+- "separate" (`gs://marin-data/processed/stackexchange/v2024-04-02/md-separate`): Each question and individual answer is
+  formatted independently, as its own document (this is what Dolma does).
+- "qa-pair" (`gs://marin-data/processed/stackexchange/v2024-04-02/md-qa-pair`): Each (question, answer) pair in a thread
+  is formatted as its own document (note that this duplicates each question multiple times).
+- "complete" (`gs://marin-data/processed/stackexchange/v2024-04-02/md-complete`): An entire thread (question, answer1, 
+  answer2, ...) is formatted as a single document.
+
+To launch a processing job via Ray, run (from root of this repository):
 
 ```bash
-python process_stack_exchange.py <path to 7z file or Posts.xml>
+ray job submit --address=http://127.0.0.1:8265 --working-dir . --no-wait -- \ 
+  python scripts/stackexchange/process.py --markdown_format="separate" 
 ```
-
-The file can be on GCS or local. The script will download the file if it is on GCS.
-
-As a convenience, we provide a script that processes all sites in a loop: `process_all.bash`.
-
-```bash
-bash process_all.bash
-```
-
-This will read the `stack_exchange_urls.tsv` file and process all sites. If you filter our StackOverflow, this
-runs in couple hours on a MacBook.
