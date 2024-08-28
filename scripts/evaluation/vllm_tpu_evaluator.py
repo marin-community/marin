@@ -9,7 +9,7 @@ import time
 import ray
 
 from scripts.evaluation.evaluator import Evaluator, Dependency, ModelConfig
-from scripts.evaluation.utils import authenticate_with_hf, run_bash_command
+from scripts.evaluation.utils import run_bash_command
 
 
 class VllmTpuEvaluator(Evaluator, ABC):
@@ -151,13 +151,6 @@ class VllmTpuEvaluator(Evaluator, ABC):
         # General setup:
         # Install VLLM from source
         self.install_vllm_from_source()
-
-        # Authenticate with Hugging Face
-        hf_auth_token: Optional[str] = self._config.hf_auth_token
-        if hf_auth_token is None:
-            print("WARNING: Skipping logging on with HuggingFace. No token provided.")
-        else:
-            authenticate_with_hf(hf_auth_token)
 
     def evaluate(self, model: ModelConfig, evals: List[str], output_path: str) -> None:
         """

@@ -98,6 +98,10 @@ class HELMEvaluator(VllmTpuEvaluator):
         # Download the model from GCS or HuggingFace and serve it with vLLM
         self.start_vllm_server_in_background(model)
 
+        # HELM requires the model name to match the local path
+        if model.path is not None:
+            model.name = model.path
+
         # Download the run_entries file specified in `evals`
         for run_entries_file in evals:
             run_entries_url: str = self.RUN_ENTRIES_TEMPLATE.format(run_entries_file=run_entries_file)
