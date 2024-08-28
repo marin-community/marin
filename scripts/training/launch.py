@@ -51,7 +51,12 @@ def construct_levanter_config(
     return config
 
 
-def _get_data_config(base_data: dict, data_name: Optional[str], dataset_path: Optional[str], data_config_path: Optional[str]) -> dict:
+def _get_data_config(
+        base_data: dict,
+        data_name: Optional[str],
+        dataset_path: Optional[str],
+        data_config_path: Optional[str],
+        tokenizer: str) -> dict:
     """
     We support a few different kinds of data configurations. One option is a YAML file that specifies a data mixture,
     following Levanter's data mixture config. Another option is a string that specifies a root directory for a dataset.
@@ -67,6 +72,7 @@ def _get_data_config(base_data: dict, data_name: Optional[str], dataset_path: Op
     assert (data_name is None) == (dataset_path is None)
 
     ret_data = deepcopy(base_data)
+    ret_data["tokenizer"] = tokenizer
 
     if data_config_path is not None:
         data_config_path = yaml.load(open(data_config_path), Loader=yaml.SafeLoader)
@@ -99,6 +105,10 @@ class LaunchConfig:
     """This should be the path to a directory containing a dataset. Either (this and dataset_name) or dataset_config must be provided."""
     dataset_config: Optional[str] = None
     """This should be a path to a YAML file that specifies a Levanter data configuration. Either this or dataset_name must be provided."""
+
+    # TODO: change to llama 3
+    tokenizer: str = "meta-llama/Llama-2-7b-hf"
+
     tpu_type: str = "v5litepod-256"
     project: Optional[str] = None
     """The GCP project to use. If not provided, the default project will be used."""
@@ -170,7 +180,7 @@ def main(args: LaunchConfig):
     run_config = construct_levanter_config(
         base_config=base_config,
         model_config=model_config,
-        data_config=_get_data_config(base_config["data"], dataset_name, dataset_path, dataset_config),
+        data_config=_get_data_config(base_config["data"], dataset_name, dataset_path, dataset_config, args.tokenizer),
         cache_dir=args.cache_dir,
         bucket=bucket,
         id=run_id,
