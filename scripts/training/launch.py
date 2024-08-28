@@ -15,14 +15,15 @@ from levanter.infra import docker
 from levanter.infra.tpus import launch_job
 
 zone_to_bucket = {
-    "us-central2-b": "marin-ckpt-us-c2",
-    "us-west4-a": "marin-ckpt-us-w4",
-    "eu-west4-b": "marin-ckpt-eu-w4"
+    "us-central2-b": "marin-us-central2",
+    "us-west4-a": "marin-us-west4",
+    "eu-west4-b": "marin-eu-west4",
 }
+
 
 def construct_levanter_config(
         base_config: dict,
-        model_config: dict,
+        model_config: Optional[dict],
         data_config: dict,
         cache_dir: str,
         bucket: str,
@@ -33,10 +34,11 @@ def construct_levanter_config(
 ):
     config = deepcopy(base_config)
 
-    config["model"] = model_config
+    if model_config is not None:
+        config["model"] = model_config
+
     base_data = config["data"]
-    # merge the data config
-    import mergedeep
+
     mergedeep.merge(base_data, data_config)
     base_data["cache_dir"] = cache_dir
 
@@ -92,10 +94,10 @@ def _get_data_config(
 
     return ret_data
 
+
 @dataclass
 class LaunchConfig:
     experiment: str
-    model_config: str
     cache_dir: str
     """Tokenizer cache dir"""
 
@@ -105,6 +107,9 @@ class LaunchConfig:
     """This should be the path to a directory containing a dataset. Either (this and dataset_name) or dataset_config must be provided."""
     dataset_config: Optional[str] = None
     """This should be a path to a YAML file that specifies a Levanter data configuration. Either this or dataset_name must be provided."""
+
+    model_config: Optional[str] = None
+    """The model config to use. If not provided, the default model config will be used."""
 
     # TODO: change to llama 3
     tokenizer: str = "meta-llama/Llama-2-7b-hf"
@@ -128,6 +133,7 @@ class LaunchConfig:
     """The capacity type to use for the TPU."""
     tags: list[str] = field(default_factory=list)
     """Tags to add to the wandb run."""
+
 
 @draccus.wrap()
 def main(args: LaunchConfig):
@@ -158,7 +164,6 @@ def main(args: LaunchConfig):
     if (dataset_name is None) != (dataset_path is None):
         raise ValueError("Either both dataset_name and dataset_path must be provided, or neither.")
 
-
     run_id = args.run_id
     if run_id is None:
         run_id = cli.default_run_id()
@@ -175,7 +180,10 @@ def main(args: LaunchConfig):
         raise ValueError(f"Unknown zone {zone}")
 
     base_config = yaml.load(open(args.base_config), Loader=yaml.SafeLoader)
-    model_config = yaml.load(open(args.model_config), Loader=yaml.SafeLoader)
+    if args.model_config is not None:
+        model_config = yaml.load(open(args.model_config), Loader=yaml.SafeLoader)
+    else:
+        model_config = None
 
     run_config = construct_levanter_config(
         base_config=base_config,
@@ -189,8 +197,7 @@ def main(args: LaunchConfig):
         tags=args.tags
     )
 
-    with tempfile.NamedTemporaryFile(prefix=f"{args.experiment}-{run_id}",
-        suffix=".yaml",
+    with tempfile.NamedTemporaryFile(prefix=f"{args.experiment}-{run_id}", suffix=".yaml",
                                      dir=".", delete=True, encoding="utf-8", mode="w") as config_file:
         yaml.dump(run_config, config_file, default_flow_style=False)
         config_file.flush()
@@ -261,9 +268,11 @@ def main(args: LaunchConfig):
         print("##################")
         print(f"You can get logs with:")
         # gcloud compute tpus tpu-vm ssh dlwh-quickstart-gtxdwom2 --zone us-central2-b --worker=0 --command "docker logs -f levanter"
-        print(f"  gcloud compute tpus tpu-vm ssh {run_name} --zone {zone} --worker=0 --command 'docker logs -f levanter'")
+        print(
+            f"  gcloud compute tpus tpu-vm ssh {run_name} --zone {zone} --worker=0 --command 'docker logs -f levanter'")
         print()
-        print(f"Assuming all went well, you should see a wandb run named {run_name} with id {run_id} in the wandb dashboard.")
+        print(
+            f"Assuming all went well, you should see a wandb run named {run_name} with id {run_id} in the wandb dashboard.")
 
 
 if __name__ == "__main__":

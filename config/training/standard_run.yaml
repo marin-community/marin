@@ -139,6 +139,7 @@ data:
     paloma/redpajama: 0.0
     paloma/twitterAAE_HELM_fixed: 0.0
     paloma/wikitext_103: 0.0
+
 model: # 1B class model
   type: llama
   seq_len: 4096
@@ -148,6 +149,7 @@ model: # 1B class model
   num_heads: 16
   num_kv_heads: 16
   use_flash_attention: True
+
 trainer:
   tracker:
     type: wandb

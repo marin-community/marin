@@ -1,7 +1,6 @@
 # This is the base configuration for a "normal" levanter run.
 # It is designed to run on a single dataset from scratch
 data:
-  # cache_dir needs to be set to the directory where the tokenized data is stored
   tokenizer: "meta-llama/Llama-2-7b-hf"
   shuffle_buffer_size: 50000
   stop_strategy: restart
@@ -140,6 +139,7 @@ data:
     paloma/redpajama: 0.0
     paloma/twitterAAE_HELM_fixed: 0.0
     paloma/wikitext_103: 0.0
+
 model: # 1B class model
   type: llama
   seq_len: 4096
