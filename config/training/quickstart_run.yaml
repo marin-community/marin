@@ -140,15 +140,17 @@ data:
     paloma/twitterAAE_HELM_fixed: 0.0
     paloma/wikitext_103: 0.0
 
-model: # 1B class model
+model: # 150M class model
   type: llama
   seq_len: 4096
-  hidden_dim: 2048
-  intermediate_dim: 8192
-  num_layers: 16
-  num_heads: 16
-  num_kv_heads: 16
   use_flash_attention: True
+  # ------- END OF COMMON CONFIGS -------
+  hidden_dim: 768
+  intermediate_dim: 2688
+  num_layers: 12
+  num_heads: 12
+  num_kv_heads: 6
+
 trainer:
   tracker:
     type: wandb
