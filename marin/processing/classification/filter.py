@@ -9,15 +9,33 @@ python -m marin.processing.classification.filter --input_dir gs://marin-data/pro
 """
 
 import json
-import gzip
 import fsspec
 import os
-from typing import Dict, Any, List, Callable
+from typing import Dict, Any, List, Callable, Optional
 import ray
+from dataclasses import dataclass, field
+import draccus
 
-from marin.core.runtime import map_files_in_directory, cached_or_construct_output
+from marin.core.runtime import cached_or_construct_output
 from marin.utils import fsspec_get_atomic_directories, fsspec_glob, rebase_file_path, fsspec_mkdirs, fsspec_exists, validate_marin_gcp_path
 
+
+
+    
+@dataclass
+class ConsolidateConfig:
+    """Config for Consolidation operation on Marin data"""
+    input_path: str  # The input path to the Marin data
+    output_path: str  # The output path to save the consolidated data
+    max_tasks_in_flight: int = field(default=1000)  # The maximum number of flights in a task
+
+    dedupe: bool = False  # Whether to dedupe the data or not
+    dedupe_path: Optional[str] = None  # The path to save the deduped data
+
+    fasttext: bool = False # Whether to filter the data based on fasttext scores or not
+    fasttext_threshold: float = field(default=0.5)  # The threshold for the fasttext scores
+    fasttext_path: Optional[str] = None  # The path to save the filtered data based on fasttext scores
+    fasttext_name: Optional[str] = None # The name of the fasttext attribute
 
 def is_high_quality(attributes: Dict[str, Any], attribute_name: str, threshold: float) -> bool:
     _ATTRIBUTE_NAME_TO_LABEL_DICT = {
@@ -65,24 +83,32 @@ def get_filter_func(attribute_name: str) -> Callable:
     else:
         raise ValueError(f"Unknown attribute name: {attribute_name}")
 
-@cached_or_construct_output(success_suffix="SUCCESS")
+
 def process_file(input_filename: str, output_filename: str, attributes_filename: str, attribute_name: str, threshold: float):
     if not fsspec_exists(attributes_filename):
         raise ValueError(f"Attributes file does not exist: {attributes_filename}")
 
     filter_func = get_filter_func(attribute_name)
 
+    # First, read all attributes into a dictionary
+    attributes_dict = {}
+    with fsspec.open(attributes_filename, "rt", compression="gzip") as attributes_file:
+        for attributes_line in attributes_file:
+            attributes_data = json.loads(attributes_line)
+            attributes_dict[attributes_data["id"]] = attributes_data
+
     with (
         fsspec.open(input_filename, "rt", compression="gzip") as input_file,
-        fsspec.open(attributes_filename, "rt", compression="gzip") as attributes_file,
         fsspec.open(output_filename, "wt", compression="gzip") as output_file,
     ):
-        for input_line, attributes_line in zip(input_file, attributes_file):
+        for input_line in input_file:
             input_data = json.loads(input_line)
-            attributes_data = json.loads(attributes_line)
             
-            if attributes_data["id"] != input_data["id"]:
-                print(f"ID of attribute row and input row do not match: {attributes_data['id']} != {input_data['id']}")
+            # Look up attributes by ID
+            attributes_data = attributes_dict.get(input_data["id"])
+            
+            if attributes_data is None:
+                print(f"No attributes found for input ID: {input_data['id']}")
                 continue
 
             filtered_data = filter_func(input_data, attributes_data, attribute_name, threshold)
@@ -100,18 +126,14 @@ def process_dir(input_subdir: str, output_subdir: str, attribute_dir: str, attri
         process_file(input_filename, output_filename, attributes_filename, attribute_name, threshold)
 
 
-def main(input_dir: str, output_dir: str, attribute_dir: str, attribute_name: str, threshold: float):
-    ray.init()
-
-    input_dir = validate_marin_gcp_path(input_dir)
-    output_dir = validate_marin_gcp_path(output_dir)
-    attribute_dir = validate_marin_gcp_path(attribute_dir)
-
-    MAX_FLIGHTS_IN_TASK = 1000
+def filter_attribute(input_dir: str, output_dir: str, attribute_dir: str, attribute_name: str, threshold: float, max_tasks_in_flight: int):
+    print(f"input_dir: {input_dir}, output_dir: {output_dir}, attribute_dir: {attribute_dir}, attribute_name: {attribute_name}, threshold: {threshold}")
     subdirectories = fsspec_get_atomic_directories(input_dir)
+    print(f"subdirectories: {subdirectories}")
     responses = []
     for input_subdir in subdirectories:
-        if len(responses) > MAX_FLIGHTS_IN_TASK:
+        print(f"Processing {input_subdir}")
+        if len(responses) > max_tasks_in_flight:
             ready_refs, responses = ray.wait(responses, num_returns=1)
             ray.get(ready_refs)
 
@@ -127,25 +149,34 @@ def main(input_dir: str, output_dir: str, attribute_dir: str, attribute_name: st
         ray.get(responses)
     except Exception as e:
         print(f"Error: {e}")
+    return output_dir
+    
+@draccus.wrap()
+def main(cfg: ConsolidateConfig):
+    if not cfg.dedupe and not cfg.fasttext:
+        raise ValueError("At least one operation should be enabled")
+    
+    input_path = validate_marin_gcp_path(cfg.input_path)
+    output_path = validate_marin_gcp_path(cfg.output_path)
+    
+    print(f"MAX_TASKS_IN_FLIGHT: {cfg.max_tasks_in_flight}")
 
+    if cfg.dedupe:
+        if cfg.dedupe_path is None:
+            raise ValueError("dedupe_path is required for dedupe operation")
+        dedupe_path = validate_marin_gcp_path(cfg.dedupe_path)
+        print("Running dedupe filter")
+        output_path = filter_attribute(input_path, output_path, dedupe_path, "dedupe", 0, cfg.max_tasks_in_flight)
+        input_path = output_path  # Update input_path for potential next step
 
+    if cfg.fasttext:
+        if cfg.fasttext_path is None or cfg.fasttext_name is None:
+            raise ValueError("Both fasttext_path and fasttext_name are required for fasttext operation")
+        fasttext_path = validate_marin_gcp_path(cfg.fasttext_path)
+        print(f"Running fasttext filter {cfg.fasttext_name} with threshold {cfg.fasttext_threshold}")
+        output_path = filter_attribute(input_path, output_path, fasttext_path, cfg.fasttext_name, cfg.fasttext_threshold, cfg.max_tasks_in_flight)
+
+    print(f"Processing complete. Final output path: {output_path}")
+    
 if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser(description="Filter high-quality data based on DCLM FastText scores.")
-    parser.add_argument("--input_dir", type=str, required=True, help="Input directory containing original data files")
-    parser.add_argument("--attributes_dir", type=str, required=True, help="Directory containing attribute files")
-    parser.add_argument("--output_dir", type=str, required=True, help="Output directory to save filtered data")
-    parser.add_argument(
-        "--attribute_name",
-        type=str,
-        default="dclm-fasttext-quality",
-        required=True,
-        choices=["dclm-fasttext-quality", "dolma-fasttext-quality", "fineweb-edu-quality", "dedupe"],
-        help="Attribute name of the quality score",
-    )
-    parser.add_argument("--threshold", type=float, default=0.5, required=False, help="Threshold for the quality score, ignored for dedupe")
-
-    args = parser.parse_args()
-
-    main(args.input_dir, args.output_dir, args.attributes_dir, args.attribute_name, args.threshold)
+    main()

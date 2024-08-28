@@ -1,0 +1,12 @@
+input_path: "gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart/"
+output_path: "gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart_consolidate_dedupe_dclm/"
+max_tasks_in_flight: 1000
+
+
+dedupe: true
+dedupe_path: gs://marin-us-central2/attributes/hello_world_fw/v1.0/quickstart_duplicates/
+
+fasttext: true
+fasttext_path: "gs://marin-us-central2/attributes/hello_world_fw/v1.0/dclm-fasttext-quality-quickstart/"
+fasttext_name: "dclm-fasttext-quality"
+fasttext_threshold: 0.5
