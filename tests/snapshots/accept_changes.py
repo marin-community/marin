@@ -23,7 +23,7 @@ def accept_change(test_name):
         f.write(output)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     # if we get "--all" as an argument, we accept all changes
     # otherwise, we expect the name of the test(s) to accept
     if len(sys.argv) == 2 and sys.argv[1] == "--all":
