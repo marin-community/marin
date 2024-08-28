@@ -23,7 +23,7 @@ def main():
     print(f"Evaluating {model.name} with {args.evals}")
 
     start_time: float = time.time()
-    evaluator.evaluate(model, evals=args.evals, output_path=args.results_path)
+    evaluator.evaluate(model, evals=args.evals, output_path=args.evaluation_path)
     print(f"Done (total time: {time.time() - start_time} seconds)")
 
 
@@ -57,7 +57,7 @@ if __name__ == "__main__":
         default=[],
     )
     parser.add_argument(
-        "--results-path",
+        "--evaluation-path",
         type=str,
         help="Where to write results to. Can be a local path (e.g., /path/to/output) or "
         "a path on GCS (e.g., gs://bucket/path/to/output).",
