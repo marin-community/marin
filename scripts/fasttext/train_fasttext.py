@@ -47,7 +47,7 @@ def get_attr_path(doc_path: str, attr_experiment: str) -> str:
     Utility function to get the attribute experiment path for a given document experiment path.
     """
     base_path,experiment_path = doc_path.split('/documents/')
-    doc_experiment = experiment_path.split('/')[-2]
+    doc_experiment = experiment_path.split('/')[-1]
 
     return f"{base_path}/attributes/{experiment_path.split(doc_experiment)[0]}{attr_experiment}"
 
