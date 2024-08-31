@@ -6,8 +6,8 @@ dataset_configs:
   - filepath: gs://marin-us-central2/documents/dclm/oh_100k.txt
     label: hq
     preprocessed: true
-  - filepath: gs://marin-data/processed/fineweb/fw-v1.0/text_fw/CC-MAIN-2020-10/000_00000/
-    label: lq
+  - filepath: gs://marin-us-central2/documents/dclm/negative_examples.txt
+    label: cc
     max_num_samples: 200000
-    preprocessed: false
+    preprocessed: true
 output_file: gs://marin-us-central2/documents/dclm/fasttext.txt.gz

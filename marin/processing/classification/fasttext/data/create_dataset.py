@@ -34,7 +34,7 @@ class QueueActor:
 
     def __init__(self):
         self.queue: List[Dict[str, List[str]]] = []
-        self.finished: bool = False
+        self.reads_finished: bool = False
 
     def add(self, item: Dict[str, List[str]]):
         self.queue.append(item)
@@ -47,11 +47,11 @@ class QueueActor:
     def is_empty(self):
         return len(self.queue) == 0
 
-    def set_finished(self):
-        self.finished = True
+    def set_reads_finished(self):
+        self.reads_finished = True
 
-    def is_finished(self):
-        return self.finished
+    def is_reads_finished(self):
+        return self.reads_finished
 
 
 def get_files(filepath: str) -> List[str]:
@@ -67,6 +67,18 @@ def get_files(filepath: str) -> List[str]:
         files.append(filepath)
 
     return files
+
+
+def _maybe_add_line_to_file(rows: List[str], text: str, label: Optional[str] = None):
+    if text:
+        if label:
+            rows.append(f"__label__{label} {text}")
+        else:
+            rows.append(text)
+
+
+def _clean_text(text: str):
+    return text.replace("\n", " ")
 
 
 @ray.remote
@@ -107,12 +119,9 @@ def process_file(config: DatasetConfig, seed: int) -> List[str]:
                 else:
                     data = json.loads(line)
                     text = data.get("text", "")
-                text = text.replace("\n", " ")
-                if text:
-                    if config.preprocessed:
-                        lines_per_file.append(text)
-                    else:
-                        lines_per_file.append(f"__label__{config.label} {text}")
+
+                text = _clean_text(text)
+                _maybe_add_line_to_file(lines_per_file, text, config.label)
         # truncate to not exceed the number of lines in the file
         if config.max_num_samples:
             if i == len(filepaths) - 1:
@@ -140,14 +149,14 @@ def write_to_file(output_file: str, queue_actor):
     with fsspec.open(output_file, "wt", compression="gzip") as f:
         with fsspec.open(f"{output_file}.metadata", "wt") as f_metadata:
             while True:
-                item: Dict[str, List[str]] = ray.get(queue_actor.get.remote())
+                item: Optional[Dict[str, List[str]]] = ray.get(queue_actor.get.remote())
                 if item is not None:
                     for filepath, lines in item.items():
                         for line in lines:
                             f.write(line + "\n")
 
                         metadata[filepath] = len(lines)
-                elif ray.get(queue_actor.is_finished.remote()) and ray.get(queue_actor.is_empty.remote()):
+                elif ray.get(queue_actor.is_reads_finished.remote()) and ray.get(queue_actor.is_empty.remote()):
                     f_metadata.write(json.dumps(metadata))
                     break
                 else:
@@ -176,7 +185,7 @@ def main(config: Dict[str, Any], seed: int):
     ray.get(tasks)
 
     # Signal that all files have been processed
-    ray.get(queue_actor.set_finished.remote())
+    ray.get(queue_actor.set_reads_finished.remote())
 
     # Wait for the writer to finish
     ray.get(writer)
