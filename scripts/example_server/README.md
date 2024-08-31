@@ -1,8 +1,8 @@
-# This folder contains script for the example server and how to use it
+# [This version of Example Server is Decprecated. Please see example_server_browser] This folder contains script for the example server and how to use it
 
 1. Make a jsonl file with the examples you want to serve. The format of jsonl file is discussed below.
 2. Save the jsonl file at location `gcs://marin-data/examples/{filename}.jsonl`.
-3. You can see the example in ith line by visiting `http://34.66.160.95/content/{filename}/{i}`.
+3. You can see the example in ith line by visiting `http://34.66.160.95/content/{fislename}/{i}`.
 4. For example see: http://34.66.160.95/content/fineweb/0, gcs://marin-data/examples/fineweb.jsonl
 
 ## Note
