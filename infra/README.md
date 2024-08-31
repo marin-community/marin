@@ -142,12 +142,20 @@ ray attach infra/marin-cluster.yaml
 
 By default, the cluster is set up in availability zone `us-central-2b` with a persistent `n2-standard-8` VM acting as
 the head node. At any given time, there should be a minimum of 4 TPU `v4-8` VMs acting as workers, with an autoscaling
-limit of 64 VMs (so a maximum of 8 * 64 = 512 total v4 cores).
+limit of 1024 VMs (so a maximum of 8 * 1024 = 8,192 total v4 cores or 4,096 v4 chips).
 
 Each TPU `v4-8` VM actually has a surprising amount of CPUs and RAM (~240 CPUs, 200GB+ of RAM). However, Ray doesn't
 actually do anything under the hood to ensure that a job is actually using the number of logical resources specified
 (e.g., a job that on paper requests 1 CPU can use arbitrary cores/RAM). To mitigate this on the scheduler side, the
 `cluster.yaml` file configures each worker with only 120 visible CPUs.
+
+#### Restarting the cluster
+There is currently an error on the Ray autoscaler side with spot-TPU instances, where the Ray autoscaler is not able
+to detect when spot-TPU instances are dead and as a result, we may be left in a state with just the head node and 
+no more spot-TPU worker instances starting up. When this state occurs, please message in the #marin-infra slack
+that you are going to restart the cluster (call `ray down infra/marin-cluster.yaml` and then `ray up infra/marin-cluster.yaml`).
+
+Please note that after restarting the cluster and queueing the first job, it will likely stall because it takes a while for the head node to actually spin up the worker sometimes (~10min).
 
 #### Reconfiguring the Cluster
 

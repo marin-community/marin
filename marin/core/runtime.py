@@ -11,7 +11,7 @@ import ray
 from ray import ObjectRef
 from ray.remote_function import RemoteFunction
 
-from marin.utils import fsspec_exists, fsspec_glob, fsspec_mkdirs, rebase_file_path
+from marin.utils import fsspec_exists, fsspec_glob, fsspec_mkdirs, rebase_file_path, fsspec_get_curr_subdirectories
 
 logger = logging.getLogger("ray")
 
@@ -81,9 +81,9 @@ class TaskConfig:
 
 def map_files_in_directory(
     func: Callable | RemoteFunction,
-    input_dir,
-    pattern,
-    output_dir,
+    input_dir: os.PathLike,
+    pattern: str,
+    output_dir: os.PathLike,
     task_config: TaskConfig = TaskConfig(),  # noqa
     *args,
     **kwargs,
@@ -95,6 +95,7 @@ def map_files_in_directory(
     Args:
         func: The function to map
         input_dir: The input directory
+        pattern: Input file pattern to glob on
         output_dir: The output directory
         task_config: TaskConfig object
 
@@ -104,143 +105,61 @@ def map_files_in_directory(
     # Get a list of all files in the input directory
     files = fsspec_glob(os.path.join(input_dir, pattern))
 
-    def func_to_call(input_file):
-        # Construct the output file path
-        output_file = rebase_file_path(input_dir, input_file, output_dir)
+    file_pairs = []
+    for file in files:
+        output_file = rebase_file_path(input_dir, file, output_dir)
         dir_name = os.path.dirname(output_file)
         fsspec_mkdirs(dir_name)
-        return func(input_file, output_file, *args, **kwargs)
+        file_pairs.append([file, output_file])
 
     if isinstance(func, ray.remote_function.RemoteFunction):
         # If the function is a ray.remote function, then execute it in parallel
-        responses = simple_backpressure(func_to_call, iter(files), task_config.max_in_flight, fetch_local=True)
+        responses = simple_backpressure(func, iter(file_pairs), task_config.max_in_flight, fetch_local=True,
+                                        *args, **kwargs)
         return responses
     else:
         # Map the function to all files
         outputs = []
-        for file in files:
-            outputs.append(func_to_call(file))
+        for file in file_pairs:
+            outputs.append(func(*file, *args, **kwargs))
+
+    return outputs
+
+def map_directories_in_directory(
+    func: Callable | RemoteFunction,
+    input_dir: str,
+    output_dir: str,
+    task_config: TaskConfig = TaskConfig(),  # noqa
+    *args,
+    **kwargs,
+):
+    # Gets all the directories in a directory
+    directories = fsspec_get_curr_subdirectories(input_dir)
+
+    if len(directories) == 0:
+        return []
+
+    def func_to_call(input_subdir):
+        # Construct the output directory
+        output_subdir = rebase_file_path(input_dir, input_subdir, output_dir)
+        fsspec_mkdirs(output_subdir)
+        return func(input_subdir, output_subdir, *args, **kwargs)
+
+    if isinstance(func, ray.remote_function.RemoteFunction):
+        # If the function is a ray.remote function, then execute it in parallel
+        responses = simple_backpressure(func_to_call, iter(directories), task_config.max_in_flight, fetch_local=True)
+        return responses
+    else:
+        # Map the function to all files
+        outputs = []
+        for directory in directories:
+            outputs.append(func_to_call(directory))
 
     return outputs
 
 
-def map_dolma_documents(func, input_dir, output_dir, task_config: TaskConfig = TaskConfig(), *args, **kwargs):
-    """
-    Convenience wrapper around map_files_in_directory for processing directories that are already in
-    [Dolma format](https://github.com/allenai/dolma/blob/main/docs/data-format.md) (or similar).
-
-    The Dolma format looks like this:
-
-    ```
-    |-- dataset-name/
-        |-- documents/
-            |-- 2019-09/
-                |-- 0933_uk_all.jsonl.gz        (1GB)
-                |-- 0933_vi_all.jsonl.gz        (1GB)
-                |-- 0106_uk_all.jsonl.gz        (1GB)
-                |-- 0106_vi_all.jsonl.gz        (1GB)
-            |-- 2019-08/
-                |-- ...
-        |-- attributes/
-            |-- toxicity-0/
-                |-- 2019-09/
-                    |-- 0933_uk_all.jsonl.gz    (..MB)
-                    |-- 0933_vi_all.jsonl.gz    (..MB)
-                    |-- 0106_uk_all.jsonl.gz    (..MB)
-                    |-- 0106_vi_all.jsonl.gz    (..MB)
-                |-- 2019-08/
-                    |-- ...
-            |-- paragraph_duplicates/
-                |-- ...
-    ```
-
-
-    Each directory (e.g. dataset-name/documents/) contains a list of jsonl files, each of which is a Dolma document.
-    This function will process each shard in the directory in parallel, producing a corresponding output file in the
-    output directory. It will call the provided function with each document in the corpus. It should either
-    return a new/modified document or an attributes file. It should in general not "split" or "skip" documents.
-
-    Dolma documents have this structure:
-
-    ```
-        {
-        "id": "...",             # MANDATORY: source-specific identifier
-        "text": "foo",           # MANDATORY: textual content of the document
-        "source": "...",         # MANDATORY: source of the data, such as peS2o, common-crawl, etc.
-        "added": "...",          # OPTIONAL: timestamp ai2 acquired this data
-        "created": "..."         # OPTIONAL: timestamp when orig document was created (best-guess if not available)
-        "metadata": {...}        # OPTIONAL: source-specific metadata
-        }
-    ```
-
-    Quality classification decisions/annotations have this structure:
-
-    ```
-    {
-    "source": "...",
-    "id": "...",
-        "attributes": {
-           "toxicity": 0.7  # this should be a unique label per classifier.
-       }
-    }
-    ```
-
-    The content of an attribute can be arbitrary json. Ideally it should be a score, a label, or spans labels:
-    ```
-    {
-    "source": "...",
-    "id": "...",
-    attributes: {
-        "olmo_mix_v1_taggers__ft_lang_id_en_paragraph_with_doc_score_v2__en": [
-            [0, 300, 0.9],         # this means text[0:300] is tagged with score 0.9
-            [300, 540, 0.3],       # this means text[300:540] is tagged with score 0.3
-            ...
-        ],
-        ...
-        }
-    }
-    ```
-
-    Span labels should be w.r.t. python string offsets.
-
-    Example:
-    ```
-    def simple_quality_classifier(document):
-        return {
-            "source": document["source"],
-            "id": document["id"],
-            "attributes": {
-                "toxicity": 0.7
-            }
-        }
-
-    map_dolma_documents(simple_quality_classifier, "gs://my-bucket/dataset/documents", "gs://my-bucket/dataset/attributes/toxicity/0")
-    ```
-    """
-
-    # TODO: use Ray Data to autoscale this nicer
-
-    raise NotImplementedError("This function is not yet implemented")
-
-    def handle_single_file(input_file, output_file):
-        with fsspec.open(input_file, "rb", compression="infer") as f, \
-                fsspec.open(output_file, "wb", compression="gzip") as output:
-            if isinstance(func, ray.remote_function.RemoteFunction):
-                for line in f:
-                    data = json.loads(line)
-                    new_data = func.remote(data, *args, **kwargs)
-                    output.write(json.dumps(new_data) + "\n")
-            else:
-                for line in f:
-                    data = json.loads(line)
-                    if isinstance(func, ray.remote_function.RemoteFunction):
-                        new_data = func.remote(data, *args, **kwargs)
-                    else:
-                        new_data = func(data, *args, **kwargs)
-                    output.write(json.dumps(new_data) + "\n")
-
-
-def simple_backpressure(remote_func, task_generator: Iterator, max_in_flight: Optional[int], fetch_local: bool) -> Iterator[ObjectRef]:
+def simple_backpressure(remote_func, task_generator: Iterator, max_in_flight: Optional[int], fetch_local: bool,
+                        *args, **kwargs) -> Iterator[ObjectRef]:
     """
     Simple backpressure implementation for ray.remote functions.
 
@@ -263,10 +182,9 @@ def simple_backpressure(remote_func, task_generator: Iterator, max_in_flight: Op
     for task in task_generator:
         if max_in_flight is not None:
             while len(in_flight) >= max_in_flight:
-                num_to_await = len(in_flight) - max_in_flight + 1
-                done, in_flight = ray.wait(in_flight, fetch_local=fetch_local, num_returns=num_to_await)
+                done, in_flight = ray.wait(in_flight, fetch_local=fetch_local, num_returns=1)
 
-        ref = remote_func.remote(*task)
+        ref = remote_func.remote(*task, *args, **kwargs)
         refs.append(ref)
 
         if max_in_flight is not None:
