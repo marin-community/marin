@@ -1,6 +1,7 @@
 import os
-
+import re
 import fsspec
+from typing import Literal
 
 
 def fsspec_exists(file_path):
@@ -76,15 +77,110 @@ def fsspec_mkdirs(dir_path, exist_ok=True):
     fs = fsspec.core.url_to_fs(dir_path)[0]
     fs.makedirs(dir_path, exist_ok=exist_ok)
 
+def fsspec_get_curr_subdirectories(dir_path):
+    """
+    Get all subdirectories under this current directory only. Does not return the parent directory.
+
+    Args:
+        dir_path (str): The path of the directory
+
+    Returns:
+        list: A list of subdirectories.
+    """
+    fs, _ = fsspec.core.url_to_fs(dir_path)
+    protocol = fsspec.core.split_protocol(dir_path)[0]
+    
+    # List only immediate subdirectories
+    subdirs = fs.ls(dir_path, detail=True)
+    
+    def join_protocol(path):
+        return f"{protocol}://{path}" if protocol else path
+    
+    subdirectories = [join_protocol(subdir['name']) for subdir in subdirs if subdir['type'] == 'directory']
+    return subdirectories
+
+def fsspec_dir_only_contains_files(dir_path):
+    """
+    Check if a directory only contains files in a fsspec filesystem.
+    """
+    fs, _ = fsspec.core.url_to_fs(dir_path)
+    ls_res = fs.ls(dir_path, detail=True)
+    if len(ls_res) == 0:
+        return False
+    return all(item['type'] == 'file' for item in ls_res)
+
+def fsspec_get_atomic_directories(dir_path):
+    """
+    Get all directories under this directory that only contains files within them
+    """
+    subdirectories = []
+
+    if fsspec_isdir(dir_path):
+        for subdirectory in fsspec_get_curr_subdirectories(dir_path):
+            if fsspec_dir_only_contains_files(subdirectory):
+                subdirectories.append(subdirectory)
+            else:
+                subdirectories.extend(fsspec_get_atomic_directories(subdirectory))
+    
+    return subdirectories
+
+def fsspec_isdir(dir_path):
+    """
+    Check if a path is a directory in fsspec filesystem.
+    """
+    fs, _ = fsspec.core.url_to_fs(dir_path)
+    return fs.isdir(dir_path)
+
+
+
+def validate_marin_gcp_path(path: str) -> str:
+    """
+    Validate the given path according to the marin GCP convention.
+
+    This function ensures that the provided path follows the required format for
+    GCS paths in a specific bucket structure. The expected format is:
+    gs://marin-$REGION//(documents|attributes|filtered)/$EXPERIMENT/$DATASET/$VERSION/
+
+    gs://marin-$REGION/scratch//(documents|attributes|filtered)/$EXPERIMENT/$DATASET/$VERSION/ is also
+    allowed for temporary storage and debugging.
+
+    Parameters:
+    path (str): The GCS path to validate.
+
+    Returns:
+    str: The original path if it's valid.
+
+    Raises:
+    ValueError: If the path doesn't match the expected format.
+                The error message provides details on the correct structure.
+
+    Example:
+    >>> validate_marin_gcp_path("gs://marin-us-central1/documents/exp1/dataset1/v1/")
+    'gs://marin-us-central1/documents/exp1/dataset1/v1/'
+    >>> validate_marin_gcp_path("gs://marin-us-central1/attributes/exp1/dataset1/v1/")
+    'gs://marin-us-central1/attributes/exp1/dataset1/v1/'
+    >>> validate_marin_gcp_path("gs://marin-us-central1/filtered/exp1/dataset1/v1/")
+    'gs://marin-us-central1/filtered/exp1/dataset1/v1/'
+    >>> validate_marin_gcp_path("gs://marin-us-central1/scratch/documents/exp1/dataset1/v1/")
+    'gs://marin-us-central1/scratch/documents/exp1/dataset1/v1/'
+    """
+    pattern = r"^gs://marin-[^/]+/(scratch/)?(documents|attributes|filtered)/[^/]+/[^/]+/[^/]+(/.*)?$"
+    if not re.match(pattern, path):
+        raise ValueError(f"Invalid path format. It should follow the structure: "
+                         f"gs://marin-$REGION/[scratch/]{{documents|attributes|filtered}}/$EXPERIMENT/$DATASET/$VERSION/")
+    return path
 
 def rebase_file_path(base_in_dir, file_path, base_out_dir, new_extension=None, old_extension=None):
     """
-    Rebase a file path from one directory to another.
+    Rebase a file path from one directory to another, with an option to change the file extension.
 
     Args:
         base_in_dir (str): The base directory of the input file
         file_path (str): The path of the file
         base_out_dir (str): The base directory of the output file
+        new_extension (str, optional): If provided, the new file extension to use (including the dot, e.g., '.txt')
+        old_extension (str, optional): If provided along with new_extension, specifies the old extension to replace.
+                                       If not provided (but `new_extension` is), the function will replace everything after the last dot.
 
     Returns:
         str: The rebased file path
