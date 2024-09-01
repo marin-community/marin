@@ -1,0 +1,9 @@
+FROM ghcr.io/stanford-crfm/levanter-tpu:latest
+# This dockerfile just copies in a training config file and otherwise the default levanter image
+
+ARG CONFIG_FILE=train.yaml
+
+# Just copy in the code
+COPY $CONFIG_FILE /tmp/levanter_training_config.yaml
+
+RUN mv /tmp/levanter_training_config.yaml /opt/levanter/$(basename $CONFIG_FILE)
