@@ -76,7 +76,7 @@ setup_commands:
     "draccus @ git+https://github.com/dlwh/draccus"
     "fsspec~=2024.3"
     "gcsfs~=2024.3"
-    "google-api-python-client==2.129.0"
+    "google-api-python-client"
     "google-cloud-storage-transfer==1.11.3"
     "html2text==2024.2.26"
     "htmlmin==0.1.12"
@@ -95,6 +95,10 @@ setup_commands:
     "warcio==1.7.4"
     "tblib==3.0.0"
     "transformers==4.44.2"
+    "torch"
+    "torch_xla[tpu]"
+    "torchvision"
+    -f https://storage.googleapis.com/libtpu-releases/index.html
   - > 
     ~/miniconda3/envs/evaluate/bin/pip install
     "fsspec~=2024.3"
