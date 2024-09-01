@@ -7,6 +7,7 @@ attribute_name: "fineweb-edu-quality"
 runtime:
   requirements_filepath: "marin/processing/classification/config/fineweb_edu_classifier_requirements.txt"
   memory_limit_gb: 16
-  tpu_resources_per_task: 1
+  resources:
+    "TPU": 1
 task:
   max_in_flight: 500
