@@ -1,6 +1,14 @@
 """
 Usage:
 
+ray job submit --working-dir . --no-wait -- \
+python -m marin.processing.classification.eval.compare_classifiers \
+    --ground_truth_filepath <filepath> \
+    --prediction_filepath <filepath> \
+    --ground_truth_attribute_name <attribute_name> \
+    --prediction_attribute_name <attribute_name> \
+    --label_name <label_name> \
+    --threshold <threshold>
 """
 
 import argparse
@@ -11,12 +19,17 @@ from typing import Dict, List, Tuple
 import fsspec
 import ray
 
-from marin.utils import fsspec_glob
+from marin.utils import fsspec_glob, fsspec_isdir
 
 
 @ray.remote
 def process_file(
-    ground_truth_file: str, prediction_file: str, ground_truth_attribute_name: str, prediction_attribute_name: str
+    ground_truth_file: str,
+    prediction_file: str,
+    ground_truth_attribute_name: str,
+    prediction_attribute_name: str,
+    label_name: str,
+    threshold: float,
 ) -> Tuple[List[int], List[int]]:
     ground_truth_labels: List[int] = []
     prediction_labels: List[int] = []
@@ -31,8 +44,8 @@ def process_file(
 
             # NOTE(chris): A bit of a hack assuming that both of them take in __label__hq as the key
             # Reformat this to be more generic.
-            gt_label = 1 if gt_data["attributes"][ground_truth_attribute_name]["__label__hq"] >= 0.5 else 0
-            pred_label = 1 if pred_data["attributes"][prediction_attribute_name]["__label__hq"] >= 0.5 else 0
+            gt_label = 1 if gt_data["attributes"][ground_truth_attribute_name][label_name] >= threshold else 0
+            pred_label = 1 if pred_data["attributes"][prediction_attribute_name][label_name] >= threshold else 0
 
             ground_truth_labels.append(gt_label)
             prediction_labels.append(pred_label)
@@ -81,19 +94,33 @@ class ClassificationReportActor:
         return results
 
 
+def _get_filepaths(filepath: str) -> List[str]:
+    if fsspec_isdir(filepath):
+        return fsspec_glob(os.path.join(filepath, "**/*.jsonl.gz"))
+    else:
+        return [filepath]
+
+
 def main(args):
     ray.init()
 
     # NOTE(Chris): Make this generic to take in any filepath whether it be directory or file.
-    ground_truth_files = fsspec_glob(os.path.join(args.ground_truth_dir, "**/*.jsonl.gz"))
-    prediction_files = fsspec_glob(os.path.join(args.prediction_dir, "**/*.jsonl.gz"))
+    ground_truth_files = _get_filepaths(args.ground_truth_filepath)
+    prediction_files = _get_filepaths(args.prediction_filepath)
 
     report_actor = ClassificationReportActor.remote()
 
     process_file_tasks = []
     for gt_file, pred_file in zip(ground_truth_files, prediction_files, strict=False):
         process_file_tasks.append(
-            process_file.remote(gt_file, pred_file, args.ground_truth_attribute_name, args.prediction_attribute_name)
+            process_file.remote(
+                gt_file,
+                pred_file,
+                args.ground_truth_attribute_name,
+                args.prediction_attribute_name,
+                args.label_name,
+                args.threshold,
+            )
         )
 
     report_actor_tasks = []
@@ -115,12 +142,16 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Generate classification report for predictions")
-    parser.add_argument("--ground_truth_dir", type=str, required=True, help="Directory containing ground truth files")
-    parser.add_argument("--prediction_dir", type=str, required=True, help="Directory containing prediction files")
+    parser.add_argument(
+        "--ground_truth_filepath", type=str, required=True, help="Filepath containing ground truth files"
+    )
+    parser.add_argument("--prediction_filepath", type=str, required=True, help="Filepath containing prediction files")
     parser.add_argument(
         "--ground_truth_attribute_name", type=str, required=True, help="Name of the attribute to evaluate"
     )
     parser.add_argument("--prediction_attribute_name", type=str, required=True, help="Name of the attribute to evaluate")
+    parser.add_argument("--label_name", type=str, required=True, help="Name of the label to evaluate")
+    parser.add_argument("--threshold", type=float, required=True, help="Threshold to use for classification")
     args = parser.parse_args()
 
     main(args)
