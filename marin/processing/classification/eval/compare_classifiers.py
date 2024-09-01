@@ -42,8 +42,6 @@ def process_file(
             gt_data = json.loads(gt_line)
             pred_data = json.loads(pred_line)
 
-            # NOTE(chris): A bit of a hack assuming that both of them take in __label__hq as the key
-            # Reformat this to be more generic.
             gt_label = 1 if gt_data["attributes"][ground_truth_attribute_name][label_name] >= threshold else 0
             pred_label = 1 if pred_data["attributes"][prediction_attribute_name][label_name] >= threshold else 0
 
