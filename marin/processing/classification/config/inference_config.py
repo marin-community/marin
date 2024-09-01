@@ -7,16 +7,7 @@ from marin.core.runtime import TaskConfig
 class RuntimeConfig:
     requirements_filepath: str
     memory_limit_gb: int
-    tpu_resources_per_task: int
-
-    @property
-    def ray_resources(self):
-        if self.tpu_resources_per_task > 0:
-            resources = {"TPU": self.tpu_resources_per_task}
-        else:
-            resources = {}
-
-        return resources
+    resources: dict = field(default_factory=dict)
 
 
 @dataclass

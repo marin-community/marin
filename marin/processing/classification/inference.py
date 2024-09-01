@@ -168,7 +168,7 @@ def main(inference_config: InferenceConfig):
             runtime_env=RuntimeEnv(
                 pip=inference_config.runtime.requirements_filepath,
             ),
-            resources=inference_config.runtime.ray_resources,
+            resources=inference_config.runtime.resources,
         ).remote(input_filepath, output_filepath, inference_config.model_name, inference_config.attribute_name)
 
         responses.append(result_ref)
