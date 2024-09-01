@@ -102,7 +102,6 @@ def _get_filepaths(filepath: str) -> List[str]:
 def main(args):
     ray.init()
 
-    # NOTE(Chris): Make this generic to take in any filepath whether it be directory or file.
     ground_truth_files = _get_filepaths(args.ground_truth_filepath)
     prediction_files = _get_filepaths(args.prediction_filepath)
 
