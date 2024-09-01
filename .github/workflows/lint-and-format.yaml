@@ -21,7 +21,7 @@ jobs:
         pip install ruff black
 
     - name: Run ruff
-      run: ruff check . --fix --exit-non-zero-on-fix
+      run: ruff check .
 
     - name: Run black
       run: black --check .
