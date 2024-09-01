@@ -1,7 +1,10 @@
 """
 Usage:
 ray job submit --working-dir . --no-wait -- \
-python -m marin.processing.classification.fasttext.model.train --input-file <input_file> --output-model-path <output_model_path> [other options]
+python -m marin.processing.classification.fasttext.model.train \
+    --input-file <input_file> \
+    --output-model-path <output_model_path> \
+    [other options]
 """
 
 import argparse
@@ -75,7 +78,7 @@ def train(
         model.save_model(local_model_output_file.name)
 
         with open(local_model_output_file.name, "rb") as f_in:
-            with fsspec.open(output_model_path, "wb", compression="gzip") as f_out:
+            with fsspec.open(output_model_path, "wb") as f_out:
                 f_out.write(f_in.read())
 
     except Exception as e:

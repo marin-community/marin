@@ -2,17 +2,16 @@
 Usage:
 
 ray job submit --working-dir . --no-wait -- \
-python -m marin.processing.classification.inference --config marin/processing/classification/embedding/fineweb.yaml
+python -m marin.processing.classification.inference \
+    --config_path marin/processing/classification/config/dclm_fasttext.yaml
 """
 
-import argparse
-import datetime
 import json
-import io
 import os
 from typing import List
 
 import datasets
+import draccus
 import fsspec
 import ray
 from ray.data.datasource import FilenameProvider
@@ -25,11 +24,12 @@ from marin.processing.classification.classifier import (
     BaseClassifier,
 )
 from marin.utils import (
+    fsspec_get_atomic_directories,
     fsspec_glob,
     fsspec_mkdirs,
     rebase_file_path,
     fsspec_get_atomic_directories,
-    validate_marin_gcp_path
+    validate_marin_gcp_path,
 )
 
 
@@ -55,24 +55,20 @@ def process_file_using_actor_pool(input_dir: str, output_dir: str, model_name: s
 
     files = fsspec_glob(os.path.join(input_dir, "**/*.jsonl.gz"))
 
-    ds = (
-        ray.data.read_json(
-            files,
-            arrow_open_stream_args={"compression": "gzip"},
-            override_num_blocks=len(files),
-        )
-        .map_batches(
-            AutoClassifier,
-            # concurrency=(1,16),
-            concurrency=(1, len(files)),
-            fn_constructor_args=(model_name),
-            batch_size=None,
-        )
-        .write_json(
-            output_dir,
-            filename_provider=JsonFilenameProvider(files, input_dir),
-            arrow_open_stream_args={"compression": "gzip"},
-        )
+    ray.data.read_json(
+        files,
+        arrow_open_stream_args={"compression": "gzip"},
+        override_num_blocks=len(files),
+    ).map_batches(
+        AutoClassifier,
+        # concurrency=(1,16),
+        concurrency=(1, len(files)),
+        fn_constructor_args=(model_name),
+        batch_size=None,
+    ).write_json(
+        output_dir,
+        filename_provider=JsonFilenameProvider(files, input_dir),
+        arrow_open_stream_args={"compression": "gzip"},
     )
 
 
@@ -101,9 +97,7 @@ def process_file_ray(input_filename: str, output_filename: str, model_name: str,
 
 
 @cached_or_construct_output(success_suffix="SUCCESS")
-def process_file_with_quality_classifier(
-    input_filename: str, output_filename: str, quality_classifier: BaseClassifier
-):
+def process_file_with_quality_classifier(input_filename: str, output_filename: str, quality_classifier: BaseClassifier):
     json_list = []
     with fsspec.open(input_filename, "rt", compression="gzip") as f_in:
         for line in f_in:
@@ -151,6 +145,7 @@ def get_filepaths_and_process_filepath_func(inference_config: InferenceConfig):
     return filepaths, process_filepath_func
 
 
+@draccus.wrap()
 def main(inference_config: InferenceConfig):
     ray.init()
 
@@ -173,7 +168,7 @@ def main(inference_config: InferenceConfig):
             runtime_env=RuntimeEnv(
                 pip=inference_config.runtime.requirements_filepath,
             ),
-            resources=inference_config.runtime.tpu_resources_per_task,
+            resources=inference_config.runtime.resources,
         ).remote(input_filepath, output_filepath, inference_config.model_name, inference_config.attribute_name)
 
         responses.append(result_ref)
@@ -185,11 +180,4 @@ def main(inference_config: InferenceConfig):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Example script to convert fineweb html to markdown.")
-    parser.add_argument("--config", type=str, help="Path to the config file", required=True)
-
-    args = parser.parse_args()
-
-    inference_config = InferenceConfig.from_yaml(args.config)
-
-    main(inference_config=inference_config)
+    main()
