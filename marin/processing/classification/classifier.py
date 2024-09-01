@@ -1,4 +1,7 @@
+import atexit
 import os
+import time
+import urllib.parse
 from typing import Any, ClassVar, Dict, List
 
 import fsspec
@@ -45,43 +48,45 @@ class FasttextClassifier(BaseClassifier):
 
     def load_model(self):
         from fasttext.FastText import _FastText
+        from filelock import FileLock
 
         # Classifier is stored in a remote storage.
-        if "://" in self.model_name:
-            from google.cloud import storage
+        if urllib.parse.urlparse(self.model_name).scheme:
+            fs, fs_path = fsspec.core.url_to_fs(self.model_name)
 
-            # Parse bucket name and blob name from the path
-            protocol, path = fsspec.core.split_protocol(self.model_name)
+            model_basename = os.path.basename(self.model_name)
+            local_filepath = f"/tmp/{model_basename}"
+            lock_file = f"/tmp/{model_basename}.lock"
+            success_file = f"/tmp/{model_basename}.success"
 
-            # Sample filepath is: gs://bucket_name/file/to/blob_name
-            # bucket_name is bucket_name
-            # blob_name is file/to/blob_name
-            split_path = path.split("/")
-            bucket_name = split_path[0]
-            blob_name = "/".join(split_path[1:])
+            with FileLock(lock_file):
+                if not os.path.exists(success_file):
+                    # Reset local_filepath if it exists. This ensures we get the newest model each time.
+                    # This operation is amortized across each process so this is not too heavy of an operation.
+                    if os.path.exists(local_filepath):
+                        os.unlink(local_filepath)
 
-            # Check if the local path exists
-            local_path = os.path.expanduser(f"~/{blob_name}")
-            local_success_file = f"{local_path}.success"
+                    if not os.path.exists(local_filepath):
+                        fs.get(fs_path, local_filepath)
+                        atexit.register(lambda: os.unlink(local_filepath))
+                        print(f"Downloaded model from {fs_path} to {local_filepath}")
 
-            # We make sure that the success file exists as well since it's possible that the
-            # file was partially downloaded.
-            if os.path.exists(local_path) and os.path.exists(local_success_file):
-                print(f"Using existing model from {local_path}")
-                model = _FastText(local_path)
-            else:
-                os.makedirs(os.path.dirname(local_path), exist_ok=True)
+                    with open(success_file, "w") as f:
+                        f.write("success")
 
-                # Download the file from Google Cloud Storage
-                storage_client = storage.Client()
-                bucket = storage_client.bucket(bucket_name)
-                blob = bucket.blob(blob_name)
-                blob.download_to_filename(local_path)
+            # Wait for the file to be ready, with a timeout
+            timeout_s = 300  # 5 minutes
+            start_time = time.time()
+            while not os.path.exists(success_file):
+                if time.time() - start_time > timeout_s:
+                    raise TimeoutError(f"Timeout waiting for {success_file}")
+                time.sleep(1)
 
-                with open(local_success_file, "wt") as f:
-                    f.write("success")
+            assert os.path.exists(success_file) and os.path.exists(
+                local_filepath
+            ), f"Model file {local_filepath} not found"
 
-                model = _FastText(local_path)
+            model = _FastText(local_filepath)
         else:
             # Classifier is stored in HuggingFace Hub.
             model_path = hf_hub_download(
