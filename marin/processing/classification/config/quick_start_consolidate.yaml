@@ -9,4 +9,4 @@ dedupe_path: gs://marin-us-central2/attributes/hello_world_fw/v1.0/quickstart_du
 fasttext: true
 fasttext_path: "gs://marin-us-central2/attributes/hello_world_fw/v1.0/dclm-fasttext-quality-quickstart/"
 fasttext_name: "dclm-fasttext-quality"
-fasttext_threshold: 0.5
+fasttext_threshold: 0.1
