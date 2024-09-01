@@ -63,21 +63,22 @@ ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- pyth
 ### Consolidation Command
 After the attribute folders have been generated, to filter the dataset based on the quality rules following the example above you can run the following quickstart
 
-dedupe first
+You can deduplicate files as follows
+
 ```bash
-ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python -m marin.processing.classification.filter --input_path gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart/ --output_path gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart_deduped --dedupe true --dedupe_path gs://marin-us-central2/attributes/hello_world_fw/v1.0/quickstart_duplicates/
+ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python -m marin.processing.classification.consolidate --input_path gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart/ --output_path gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart_deduped_consolidate --dedupe true --dedupe_path gs://marin-us-central2/attributes/hello_world_fw/v1.0/quickstart_duplicates/
 ```
 
-now quality filter
+We now run quality filtering on the subsequent files like so
 
 ```bash
-ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python -m marin.processing.classification.filter --input_path gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart_deduped/ --output_path gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart_dup_fasttext0.1 --fasttext true --fasttext_path gs://marin-us-central2/attributes/hello_world_fw/v1.0/dclm-fasttext-quality-quickstart/ --fasttext_threshold 0.1 --fasttext_name dclm-fasttext-quality
+ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python -m marin.processing.classification.consolidate --input_path gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart_deduped/ --output_path gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart_consolidate_dedupe_dclm/ --fasttext true --fasttext_path gs://marin-us-central2/attributes/hello_world_fw/v1.0/dclm-fasttext-quality-quickstart/ --fasttext_threshold 0.1 --fasttext_name dclm-fasttext-quality
 ```
 
 We can also run both consolidation operations and use a yaml file for ease of use. For the quickstart the combined command for deduping and quality filtering is
 
 ```bash
-ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python -m marin.processing.classification.filter --config_path marin/processing/classification/config/quick_start_consolidate.yaml
+ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python -m marin.processing.classification.consolidate --config_path marin/processing/classification/config/quick_start_consolidate.yaml
 ```
 
 Currently we require the user specifiy the file format and the attribute to filter by
