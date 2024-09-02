@@ -9,6 +9,7 @@ import fsspec
 
 import torch
 from torch.utils.data import Dataset
+from transformers import BertTokenizer
 
 def format_example(data: dict) -> str:
     """
@@ -22,38 +23,47 @@ def format_example(data: dict) -> str:
 
     return json.dumps(example) + "\n"
 
-# TODO: document
 class BertDataset(Dataset):
-    def __init__(self, path, tokenizer, max_len=128, labels=[]):
+    """
+    Dataset subclass for BERT quality classifier training data.
+    """
+    def __init__(self, dataset_path: str, tokenizer: BertTokenizer, max_len: int = 128, labels: list = []):
+        """
+        __init__ method for BertDataset.
+
+        Args:
+            dataset_path (str): Path to the dataset file.
+            tokenizer (BertTokenizer): Tokenizer for BERT model.
+            max_len (int): Maximum length (in tokens) of sequences in dataset.
+            labels (list): List of possible labels.
+        """
         self.tokenizer = tokenizer
         self.max_len = max_len
         self.label_set = set(labels)
 
-        self.construct_dataset(path)
-    
-    def construct_dataset(self, path):
         self.texts = []
         self.labels = []
 
-        with fsspec.open(path, 'rb') as f:
+        with fsspec.open(dataset_path, 'rb') as f:
             for line in f:
                 example = json.loads(line)
 
                 self.texts.append(example['text'])
                 self.labels.append(example['label'])
-                self.label_set.add(example['label'])
+                self.label_set.add(example['label']) # if input labels is not empty then this should typically be a no-op
         
         self.num_labels = len(self.label_set)
         self.label_set = sorted(self.label_set)
-        self.label_index = {label : i for label,i in zip(self.label_set,range(self.num_labels))}
+        self.label_index = {label : i for label,i in zip(self.label_set,range(self.num_labels))} # map label to index
 
     def __len__(self):
         return len(self.texts)
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: int):
         text = self.texts[idx]
         label = self.labels[idx]
 
+        # TODO: make some of these args configurable
         encoding = self.tokenizer.encode_plus(
             text,
             add_special_tokens=True,
