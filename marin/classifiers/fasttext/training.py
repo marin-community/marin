@@ -18,11 +18,10 @@ from marin.classifiers.fasttext.utils import format_example
 def train_model(
         base_path: str, 
         experiment: str, 
-        training_args: dict, 
         seed: int, 
         val_split: float, 
-        memory_req: int, 
-        num_cpus: int
+        memory_req: int,
+        fasttext_args: dict
     ) -> bool:
     """
     Train a fastText model.
@@ -30,11 +29,10 @@ def train_model(
     Args:
         base_path (str): Base path for input and output data (i.e., gs://{BUCKET}).
         experiment (str): Experiment identifier.
-        training_args (dict): Arguments for the fastText training process (see fastText docs for the full list of options).
         seed (int): Seed for random number generator to ensure reproducibility.
         val_split (float): Fraction of data to be used for validation.
         memory_req (int): Amount of memory allocated for remote training process (in GB).
-        num_cpus (int): Number of CPUs allocated for remote training process.
+        fasttext_args (dict): Arguments for the fastText training process (see fastText docs for the full list of options).
     
     Returns:
         bool: True if the process is successful.
@@ -44,7 +42,7 @@ def train_model(
     logger.info(f"Training fastText model for experiment {experiment}")
     datetime_start = datetime.utcnow()
 
-    training_args['thread'] = num_cpus # tell fasttext trainer to use all available CPUs
+    num_cpus = fasttext_args['thread'] if 'thread' in fasttext_args else 1
 
     # run training on remote worker, not head node
     @ray.remote(memory=memory_req * 1024 * 1024 * 1024, runtime_env={"pip": ["s3fs","fasttext"]}, num_cpus=num_cpus)
@@ -64,7 +62,7 @@ def train_model(
             shuffle(train_path,train_path,seed)
             shuffle(val_path,val_path,seed)
 
-            model = fasttext.train_supervised(train_path,**training_args)
+            model = fasttext.train_supervised(train_path,**fasttext_args)
             model.save_model(model_path)
 
             fs = fsspec.core.get_fs_token_paths(experiment_path, mode="wb")[0]
@@ -72,7 +70,7 @@ def train_model(
         
         return True
     
-    response = run.remote(base_path, experiment, training_args, seed, val_split)
+    response = run.remote()
     try:
         ray.get(response)
     except Exception as e:

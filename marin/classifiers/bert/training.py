@@ -1,4 +1,8 @@
+"""
+training.py
 
+Train BERT models.
+"""
 import os
 import logging
 from datetime import datetime
