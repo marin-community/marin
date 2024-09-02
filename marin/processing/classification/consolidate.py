@@ -36,6 +36,8 @@ def is_high_quality(attributes: Dict[str, Any], attribute_name: str, threshold: 
         quality_scores = attributes[attribute_name]
         label = _ATTRIBUTE_NAME_TO_LABEL_DICT[attribute_name]
         return quality_scores.get(label, 0) >= threshold
+    else:
+        raise ValueError("No valid attriubte found!")
 
     return False
 
