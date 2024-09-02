@@ -27,7 +27,7 @@ def train_model(
     """
     Train a fastText model.
 
-    Attributes:
+    Args:
         base_path (str): Base path for input and output data (i.e., gs://{BUCKET}).
         experiment (str): Experiment identifier.
         training_args (dict): Arguments for the fastText training process (see fastText docs for the full list of options).
@@ -48,7 +48,7 @@ def train_model(
 
     # run training on remote worker, not head node
     @ray.remote(memory=memory_req * 1024 * 1024 * 1024, runtime_env={"pip": ["s3fs","fasttext"]}, num_cpus=num_cpus)
-    def run(base_path, experiment, training_args, seed, val_split):
+    def run():
         import fasttext
 
         experiment_path = f'{base_path}/classifiers/{experiment}'

@@ -33,7 +33,7 @@ def train_epochs(
     """
     Train a model for a number of epochs.
 
-    Attributes:
+    Args:
         model (BertForSequenceClassification): Model to train.
         optimizer (torch.optim.Optimizer): Optimizer to use for training.
         data_loader (torch.utils.data.DataLoader): DataLoader for training data.
@@ -62,18 +62,37 @@ def train_epochs(
         print(f'Epoch {epoch + 1}/{num_epochs}, Loss: {total_loss/len(data_loader):.4f}')
 
 # TODO: document and also **model_args
-def _mp_fn(index,train_loader,bert_model,lr,num_epochs,model_path,train_dataset):
+def _mp_fn(index,hf_model,train_path,save_path,lr,batch_size,num_epochs):
+    """
+    Function to run on each TPU device for BERT classifier training.
+
+    Args:
+        index (int): Index of the TPU device.
+        hf_model (str): Pretrained BERT model to use (from Huggingface).
+        train_path (str): Path to the training dataset.
+        save_path (str): Path to save the trained model.
+        lr (float): Learning rate for training.
+        batch_size (int): Batch size for training.
+        num_epochs (int): Number of epochs to train for.
+    
+    Returns:
+        bool: True if the process is successful.
+    """
+    tokenizer = BertTokenizer.from_pretrained(hf_model)
+    train_dataset = BertDataset(train_path, tokenizer)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size)
+    
     device = xm.xla_device()
     device_loader = pl.MpDeviceLoader(train_loader, device)
 
-    model = BertForSequenceClassification.from_pretrained(bert_model,num_labels=train_dataset.num_labels).to(device)
+    model = BertForSequenceClassification.from_pretrained(hf_model,num_labels=train_dataset.num_labels).to(device)
     optimizer = AdamW(model.parameters(), lr=lr)
     xm.broadcast_master_param(model)
 
     train_epochs(model, optimizer, device_loader, num_epochs)
 
     if index == 0:
-        xm.save(model.state_dict(), model_path)
+        xm.save(model.state_dict(), save_path)
     return True
 
 def train_model(
@@ -84,22 +103,21 @@ def train_model(
         memory_req: int = 10,
         batch_size: int = 1,
         lr: float = 2e-5,
-        bert_model: str = 'bert-base-uncased',
+        hf_model: str = 'bert-base-uncased',
         num_epochs: int = 1
     ) -> bool:
     """
     Train a fastText model.
 
-    Attributes:
+    Args:
         base_path (str): Base path for input and output data (i.e., gs://{BUCKET}).
         experiment (str): Experiment identifier.
         seed (int): Seed for random number generator to ensure reproducibility.
         val_split (float): Fraction of data to be used for validation.
         memory_req (int): Amount of memory allocated for remote training process (in GB).
-        num_cpus (int): Number of CPUs allocated for remote training process.
         batch_size (int): Batch size for training.
         lr (float): Learning rate for training.
-        bert_model (str): Pretrained BERT model to use.
+        hf_model (str): Pretrained BERT model to use (from Huggingface).
         num_epochs (int): Number of epochs to train for.
     
     Returns:
@@ -126,11 +144,7 @@ def train_model(
             shuffle(train_path,train_path,seed)
             shuffle(val_path,val_path,seed)
 
-            tokenizer = BertTokenizer.from_pretrained(bert_model)
-            train_dataset = BertDataset(train_path, tokenizer)
-            train_loader = DataLoader(train_dataset, batch_size=batch_size)
-
-            xmp.spawn(_mp_fn, args=(train_loader,bert_model,lr,num_epochs,model_path,train_dataset))
+            xmp.spawn(_mp_fn, args=(hf_model,train_path,model_path,lr,batch_size,num_epochs))
 
             fs = fsspec.core.get_fs_token_paths(experiment_path, mode="wb")[0]
             fs.put(os.path.join(tmp_dir, "*"), experiment_path, recursive=True)
