@@ -39,8 +39,6 @@ def is_high_quality(attributes: Dict[str, Any], attribute_name: str, threshold: 
     else:
         raise ValueError("No valid attriubte found!")
 
-    return False
-
 
 def remove_duplicates(input_data: Dict[str, Any], duplicate_spans: List[List[int]]) -> Dict[str, Any]:
     text = input_data['text']
