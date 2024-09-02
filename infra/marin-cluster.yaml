@@ -1,5 +1,5 @@
 # Unique Identifier for the Head Node + Workers
-cluster_name: marin
+cluster_name: marin-data
 
 # Maximum Workers (excluding Head Node)
 max_workers: 1024
