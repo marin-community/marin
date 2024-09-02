@@ -65,7 +65,6 @@ def train_epochs(
         
         print(f'Epoch {epoch + 1}/{num_epochs}, Loss: {total_loss/len(data_loader):.4f}')
 
-# TODO: document and also **model_args
 def _mp_fn(index,hf_model,train_path,save_path,lr,batch_size,num_epochs):
     """
     Function to run on each TPU device for BERT classifier training.

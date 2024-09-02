@@ -12,7 +12,6 @@ import draccus
 from marin.classifiers.utils import create_label_attribute, attribute_to_dataset
 from marin.classifiers.bert.training import train_model
 
-# TODO: update documentation here
 @dataclass
 class MainConfig:
     """
