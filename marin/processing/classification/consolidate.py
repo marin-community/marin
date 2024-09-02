@@ -16,7 +16,7 @@ class ConsolidateConfig:
     """Config for Consolidation operation on Marin data"""
     input_path: str  # The input path to the Marin data
     output_path: str  # The output path to save the consolidated data
-    max_tasks_in_flight: int = field(default=1000)  # The maximum number of flights in a task
+    max_tasks_in_flight: int = 1000  # The maximum number of flights in a task
 
     dedupe: bool = False  # Whether to dedupe the data or not
     dedupe_path: Optional[str] = None  # The path to save the deduped data
