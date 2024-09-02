@@ -25,7 +25,7 @@ class MainConfig:
         neg_doc_path (str): Path to experiment with negative examples (i.e., gs://{BUCKET}/documents/../$EXPERIMENT).
         pos_sampling_rate (float): Fraction of positive examples to include the training dataset.
         neg_sampling_rate (float): Fraction of negative examples to include the training dataset.
-        training_args (dict): Arguments for the fastText training process (see fastText docs for the full list of options).
+        bert_args (dict): Arguments for the BERT training process.
         seed (int): Seed for random number generator to ensure reproducibility.
         val_split (float): Fraction of data to be used for validation.
         memory (int): Amount of memory allocated for remote training process (in GB).
@@ -37,7 +37,7 @@ class MainConfig:
     neg_doc_path: str
     pos_sampling_rate: float = 1.0
     neg_sampling_rate: float = 1.0
-    training_args: dict = field(default_factory=dict)
+    bert_args: dict = field(default_factory=dict)
     seed: int = 0
     val_split: float = 0.1
     memory: int = 1
@@ -64,7 +64,7 @@ def main(cfg: MainConfig):
     create_label_attribute(input_doc_path=cfg.neg_doc_path, output_attr_path=neg_attr_path, label="lq")
     attribute_to_dataset(output_base_path=cfg.output_base_path, experiment=cfg.experiment, doc_path=cfg.neg_doc_path, attr_path=neg_attr_path, sampling_rate=cfg.neg_sampling_rate, seed=cfg.seed)
 
-    train_model(base_path=cfg.output_base_path, experiment=cfg.experiment, seed=cfg.seed, val_split=cfg.val_split, memory_req=cfg.memory)
+    train_model(base_path=cfg.output_base_path, experiment=cfg.experiment, seed=cfg.seed, val_split=cfg.val_split, memory_req=cfg.memory, **cfg.bert_args)
 
 if __name__ == '__main__':
     main()
