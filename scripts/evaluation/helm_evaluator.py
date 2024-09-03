@@ -39,17 +39,20 @@ class HELMEvaluator(VllmTpuEvaluator):
         """
         Write out the necessary model configuration files for HELM.
         """
+        from transformers import AutoTokenizer
+
         os.makedirs(HELMEvaluator.PROD_ENV_PATH, exist_ok=True)
 
         model_name: str = model.name
-        tokenizer_name: str = model.tokenizer
+        tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+
         content: Dict = {
             "model_deployments": [
                 {
                     "name": model_name,
                     "model_name": model_name,
-                    "tokenizer_name": tokenizer_name,
-                    "max_sequence_length": 4096,
+                    "tokenizer_name": model_name,
+                    "max_sequence_length": tokenizer.model_max_length,
                     "client_spec": {
                         "class_name": "helm.clients.vllm_client.VLLMClient",
                         "args": {"base_url": "http://localhost:8000/v1"},
@@ -77,13 +80,16 @@ class HELMEvaluator(VllmTpuEvaluator):
         content = {
             "tokenizer_configs": [
                 {
-                    "name": tokenizer_name,
+                    "name": model_name,
                     "tokenizer_spec": {
                         "class_name": "helm.tokenizers.huggingface_tokenizer.HuggingFaceTokenizer",
-                        "args": {"trust_remote_code": True},
+                        "args": {
+                            "pretrained_model_name_or_path": model_name,
+                            "trust_remote_code": True
+                        },
                     },
-                    "end_of_text_token": model.end_of_text_token,
-                    "prefix_token": model.prefix_token,
+                    "prefix_token": tokenizer.bos_token,
+                    "end_of_text_token": tokenizer.eos_token,
                 }
             ]
         }
