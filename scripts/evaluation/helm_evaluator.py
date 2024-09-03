@@ -44,7 +44,7 @@ class HELMEvaluator(VllmTpuEvaluator):
         os.makedirs(HELMEvaluator.PROD_ENV_PATH, exist_ok=True)
 
         model_name: str = model.name
-        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
 
         content: Dict = {
             "model_deployments": [
