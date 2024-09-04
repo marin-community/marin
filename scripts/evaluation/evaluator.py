@@ -58,21 +58,12 @@ class EvaluatorConfig:
 @dataclass
 class ModelConfig:
     name: str
-    """The name of the evaluator e.g., helm"""
+    """The name of the model e.g., allenai/olmo-7b"""
 
     path: Optional[str]
     """
     The path to the model checkpoint. Can be a local path or a path on GCS.
     """
-
-    tokenizer: str = "allenai/olmo-7b"
-    """The name of the tokenizer to use with the model."""
-
-    end_of_text_token: str = "<|endoftext|>"
-    """The end of text token."""
-
-    prefix_token: str = ""
-    """The prefix token."""
 
     def ensure_downloaded(self, local_path: Optional[str] = None) -> Optional[str]:
         """

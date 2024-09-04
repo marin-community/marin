@@ -105,8 +105,16 @@ class VllmTpuEvaluator(Evaluator, ABC):
                 # Attempt to send a request to the server's health endpoint
                 response = requests.get(f"{server_url}/models")
                 if response.status_code == 200:
+                    raw_response: Dict = response.json()
+                    loaded_models: List[str] = [model["id"] for model in raw_response["data"]]
+
+                    # Can be on a machine with a vLLM server up and running, so also check the model is loaded
                     print(f"vLLM server is up and running at {server_url}: {response.text}")
-                    break
+                    if model_name_or_path in loaded_models:
+                        print(f"Model {model_name_or_path} is loaded.")
+                        break
+                    else:
+                        print(f"Model {model_name_or_path} is not loaded yet. Loaded models: {loaded_models}")
             except requests.ConnectionError:
                 # If the connection is refused, wait and try again
                 print(f"vLLM server is not ready yet (elapsed time in seconds): {elapsed_time})")
