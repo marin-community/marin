@@ -58,7 +58,12 @@ python -m marin.processing.classification.eval.annotations_server --input-file g
 See the dedupe.md file for more details; below is the quick start command
 
 ```bash
-ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python marin/processing/classification/dedupe.py --input_dir gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart/ --output_dir gs://marin-us-central2/attributes/hello_world_fw/v1.0/quickstart_duplicates/
+ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python -m marin.processing.classification.dedupe --input_dir gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart/ --output_dir gs://marin-us-central2/attributes/hello_world_fw/v1.0/quickstart_duplicates/
+```
+
+Or if you want to use the yaml quickstart file:
+```bash
+ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python -m marin.processing.classification.dedupe --config_path marin/processing/classification/config/quick_start_dedupe.yaml
 ```
 ### Consolidation Command
 After the attribute folders have been generated, to filter the dataset based on the quality rules following the example above you can run the following quickstart. We currently only support yaml

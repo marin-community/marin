@@ -1,14 +1,28 @@
-import argparse
 import ray
 import os
 import tempfile
-from google.cloud import storage
 from tqdm import tqdm
-import glob
-import shutil
 import subprocess
 import fsspec
-from marin.utils import validate_marin_gcp_path, fsspec_mkdirs, rebase_file_path, fsspec_get_curr_subdirectories, fsspec_isdir, fsspec_dir_only_contains_files, fsspec_glob
+from marin.utils import validate_marin_gcp_path, fsspec_mkdirs, rebase_file_path, fsspec_glob
+import draccus
+from dataclasses import dataclass
+
+from typing import Optional
+
+@dataclass
+class DedupeConfig:
+    input_dir: str
+    output_dir: str
+    attribute_name: str = "duplicate_text"
+    min_length: int = 0
+    min_words: int = 0
+    bloom_filter_size: int = 0 # default to 0 to use estimated_doc_count and false_positive_rate
+    estimated_doc_count: int = 1000000
+    false_positive_rate: float = 0.001
+    processes: int = 1
+    decontaminate: bool = False
+    decontaminate_dir: Optional[str] = None
 
 def copy_files_in(input_dir, local_base_dir):
     # Ensure input_dir doesn't end with a slash
@@ -40,7 +54,8 @@ def copy_files_in(input_dir, local_base_dir):
     # Dolma deduplicator requires 'documents/' as a subdirectory
     print(f"Copied {len(input_files)} files to {os.path.join(local_base_dir, 'documents')}")
 
-def do_dedup(local_base_dir, attribute_name, min_length, min_words, bloom_filter_size, estimated_doc_count, false_positive_rate, processes):
+def do_dedup(local_base_dir, attribute_name, min_length, min_words, bloom_filter_size, estimated_doc_count, false_positive_rate, processes, read_only=False, bloom_filter_file="deduper_bloom_filter.bin"):
+    bloom_filter_file = os.path.join(local_base_dir, bloom_filter_file)
     command = [
         "RUST_BACKTRACE=full",
         "dolma", "dedupe",
@@ -49,8 +64,7 @@ def do_dedup(local_base_dir, attribute_name, min_length, min_words, bloom_filter
         "--dedupe.skip_empty" ,
         "--dedupe.min_length", str(min_length),
         "--dedupe.min_words", str(min_words),
-        "--bloom_filter.file", f"{local_base_dir}/deduper_bloom_filter_test.bin",
-        "--no-bloom_filter.read_only",
+        "--bloom_filter.file", bloom_filter_file,
         "--processes", str(processes)
     ]
 
@@ -61,8 +75,10 @@ def do_dedup(local_base_dir, attribute_name, min_length, min_words, bloom_filter
             "--bloom_filter.estimated_doc_count", str(estimated_doc_count),
             "--bloom_filter.desired_false_positive_rate", str(false_positive_rate)
         ])
-    
-    
+
+    # for decontamination bloom filter is read only
+    command.append("--bloom_filter.read_only" if read_only else "--no-bloom_filter.read_only")
+
     process = subprocess.Popen(
         ' '.join(command),
         stdout=subprocess.PIPE,
@@ -122,46 +138,50 @@ def copy_files_out(local_base_dir, output_dir, attribute_name):
 
 
 @ray.remote(runtime_env={"pip": ["dolma"]})
-def dolma_dedup(input_dir, output_dir, attribute_name, min_length, min_words, bloom_filter_size, estimated_doc_count, false_positive_rate, processes):
+def dolma_dedup(input_dir, output_dir, attribute_name, min_length, min_words, bloom_filter_size, estimated_doc_count, false_positive_rate, processes, decomtaminate_dir, decontaminate):
     
     with tempfile.TemporaryDirectory() as tmpdir:
         try:
-            copy_files_in(input_dir, tmpdir)
-            do_dedup(tmpdir, attribute_name, min_length, min_words, bloom_filter_size, estimated_doc_count, false_positive_rate, processes)
-            copy_files_out(tmpdir, output_dir, attribute_name)
+            if decontaminate:
+                # First we copy the files to the temporary directory to get bloom filter
+                copy_files_in(decomtaminate_dir, tmpdir)
+                do_dedup(tmpdir, attribute_name, min_length, min_words, bloom_filter_size, estimated_doc_count, false_positive_rate, processes, read_only=False, bloom_filter_file="decotaminated_bloom_filter.bin")
+
+                # Then copy files of interest and apply bloom filter read only
+                copy_files_in(input_dir, tmpdir)
+                do_dedup(tmpdir, attribute_name, min_length, min_words, bloom_filter_size, estimated_doc_count, false_positive_rate, processes, read_only=True, bloom_filter_file="decotaminated_bloom_filter.bin")
+                copy_files_out(tmpdir, decomtaminate_dir, attribute_name)
+            else:
+                copy_files_in(input_dir, tmpdir)
+                do_dedup(tmpdir, attribute_name, min_length, min_words, bloom_filter_size, estimated_doc_count, false_positive_rate, processes)
+                copy_files_out(tmpdir, output_dir, attribute_name)
         except Exception as e:
             print(f"An error occurred during deduplication: {e}")
     return "Deduplication process completed"
 
-def main(config):
+@draccus.wrap()
+def main(config: DedupeConfig):
     ray.init()
+    # require directory if decontaminate is set
+    if config.decontaminate and config.decontaminate_dir is None:
+        raise ValueError("decontaminate_dir is required if decontaminate is set")
 
     input_dir = validate_marin_gcp_path(config.input_dir)
     output_dir = validate_marin_gcp_path(config.output_dir)
-    result = ray.get(dolma_dedup.remote(input_dir, output_dir, config.attribute_name, config.min_length, config.min_words, config.bloom_filter_size, config.estimated_doc_count, config.false_positive_rate, config.processes))
+    result = ray.get(dolma_dedup.remote(
+        input_dir, 
+        output_dir, 
+        config.attribute_name, 
+        config.min_length, 
+        config.min_words, 
+        config.bloom_filter_size, 
+        config.estimated_doc_count, 
+        config.false_positive_rate, 
+        config.processes,
+        config.decontaminate_dir,
+        config.decontaminate
+    ))
     print(result)
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Run Dolma deduplication on a single Ray worker")
-    parser.add_argument('--input_dir', type=str, required=True, help='GCP input directory path')
-    parser.add_argument('--output_dir', type=str, required=True, help="Output directory to save attributes for dedupe")
-    parser.add_argument('--attribute_name', type=str, default='duplicate_text', help='Name of the attribute to set if the document is a duplicate')
-    parser.add_argument('--min_length', type=int, default=0, help='Minimum length of documents to be deduplicated')
-    parser.add_argument('--min_words', type=int, default=0, help='Minimum number of uniseg word units in documents to be deduplicated')
-    parser.add_argument('--bloom_filter_size', type=int, default=None, help='Size of the Bloom filter in bytes')
-    parser.add_argument('--estimated_doc_count', type=int, default=1000000, help='Estimated number of documents to dedupe')
-    parser.add_argument('--false_positive_rate', type=float, default=0.001, help='Desired false positive rate for the Bloom filter')
-    parser.add_argument('--processes', type=int, default=1, help='Number of processes to use for deduplication')
-    args = parser.parse_args()
-    config = argparse.Namespace(
-    input_dir=args.input_dir,
-    output_dir=args.output_dir,
-    attribute_name=args.attribute_name,
-    min_length=args.min_length,
-    min_words=args.min_words,
-    bloom_filter_size=args.bloom_filter_size,
-    estimated_doc_count=args.estimated_doc_count,
-    false_positive_rate=args.false_positive_rate,
-    processes=args.processes
-    )   
-    main(config)
+    main()
