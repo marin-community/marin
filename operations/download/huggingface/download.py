@@ -11,7 +11,7 @@ appropriate files to GCS.
 (TODO :: siddk) For gated datasets...
 
 Run with:
-    - [Local] python operations/curate/hf/curate.py \
+    - [Local] python operations/download/hf/download.py \
         --gcs_output_path="raw/hello_world_fw" \
         --hf_dataset_id="skaramcheti/hello_world_fw" \
         --revision="8fd6e8e"

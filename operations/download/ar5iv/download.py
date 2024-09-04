@@ -7,7 +7,7 @@ Mathematical/Technical Documents).
 Home Page: https://sigmathling.kwarc.info/resources/ar5iv-dataset-2024/
 
 Run with:
-    - [Local] python operations/curate/ar5iv/curate.py --gcs_output_path="raw/ar5iv"
+    - [Local] python operations/download/ar5iv/download.py --gcs_output_path="raw/ar5iv"
 """
 
 import json
