@@ -2,6 +2,7 @@ import argparse
 import yaml
 
 from pathlib import Path
+from levanter.utils.flop_utils import lm_flops_per_token
 
 
 def add_arguments(parser: argparse.ArgumentParser):
@@ -39,11 +40,38 @@ def calculate_model_size(
     transformer_layer = attn + mlp + 2 * hidden_dim # plus 2 rmsnorm
 
     transformer = num_layers * transformer_layer + hidden_dim # plus final rmsnorm
+    print(f"{transformer=}")
 
     lm_head = hidden_dim * vocab_size
+    print(transformer + lm_head)
 
     print(f"Non-embedding params: {transformer}")
     print(f"Total params: {token_embedding + transformer + lm_head}")
+
+
+def calculate_model_flops_per_token(
+    hidden_dim: int,
+    intermediate_dim: int,
+    num_layers: int,
+    num_kv_heads: int,
+    num_heads: int,
+    seq_len: int,
+    vocab_size: int = 128256,
+    **kwargs,
+):
+    """Calculates number of FLOPs per token to train a given llama model config (fwd + bwd)."""
+    flops_per_token = lm_flops_per_token(
+        hidden_dim,
+        intermediate_dim,
+        num_layers,
+        num_kv_heads,
+        num_heads,
+        seq_len,
+        vocab_size,
+        glu=True,
+    )   # only fwd flops
+    flops_per_token *= 3    # fwd + bwd
+    print(f"Total FLOPs per token: {int(flops_per_token)}")
     
 
 if __name__ == "__main__":
@@ -60,3 +88,4 @@ if __name__ == "__main__":
     assert data['type'] == 'llama', "Model size calculator currently only supports llama models"
 
     calculate_model_size(**data)
+    calculate_model_flops_per_token(**data)

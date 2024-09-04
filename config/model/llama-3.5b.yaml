@@ -8,5 +8,5 @@ use_flash_attention: True
 hidden_dim: 2560
 intermediate_dim: 8960
 num_layers: 32
-num_heads: 32
-num_kv_heads: 8
+num_heads: 20
+num_kv_heads: 10
