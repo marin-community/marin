@@ -1,4 +1,5 @@
 import json
+import threading
 import time
 
 import fsspec
@@ -23,6 +24,8 @@ class Node:
                                                 and the call to execute is proper.
     """
 
+    _lock = threading.Lock()
+
     def __init__(
         self,
         func,
@@ -41,17 +44,24 @@ class Node:
         self.args = func_args if func_args else []
         self.kwargs = func_kwargs if func_kwargs else {}
 
-        print(f"Creating node for {self.step_name} {self.args}")
-
         path = "gs://marin-us-central2/experiments/"
         self.experiment_path = f"{path}{self.experiment_name}.json"
         self.old_experiment_path = f"{path}{self.old_experiment_name}.json"
         self.fs = fsspec.filesystem("gcs")
+        self.dry_run = False
 
     @ray.remote
     def execute_func(self):
         logging = {"start_time": time.time()}
-        ray.get(self.func.remote(*self.args, **self.kwargs))
+        logging["args"] = self.args
+        logging["kwargs"] = self.kwargs
+        if self.dry_run:
+            print(
+                f"Running {self.step_name} with args {self.args} and kwargs {self.kwargs}. "
+                f"Each node might be executed multiple times in dry run as there is no caching."
+            )
+        else:
+            ray.get(self.func.remote(*self.args, **self.kwargs))
         logging["end_time"] = time.time()
         self.write_data(self.step_name, logging)
 
@@ -63,17 +73,38 @@ class Node:
         return data
 
     def write_data(self, key, value):
+        if self.dry_run:
+            return
+        with Node._lock:
+            data = self.get_data()
+            data[key] = value
+            with self.fs.open(self.experiment_path, "w") as f:
+                json.dump(data, f)
+
+    def get_task_executed(self, key, value):
+        if self.dry_run:
+            return
+
+        with Node._lock:
+            data = self.get_data()
+            if key in data:
+                return True
+
+            data[key] = value
+            with self.fs.open(self.experiment_path, "w") as f:
+                json.dump(data, f)
+            return False
+
+    def execute(self, dry_run=False):
+        self.dry_run = dry_run
+
         data = self.get_data()
-        data[key] = value
-        with self.fs.open(self.experiment_path, "w") as f:
-            json.dump(data, f)
 
-    def execute(self):
-
-        data = self.get_data()
-
-        if self.step_name in data:
-            print(f"{self.step_name} was already executed." f"\nStats for {self.step_name}: {data[self.step_name]}")
+        if self.get_task_executed(self.step_name, {"status": "running"}):
+            print(
+                f"{self.step_name} was already executed or is running."
+                f"\nStats for {self.step_name}: {data[self.step_name]}"
+            )
             return None
 
         if self.old_experiment_name:
@@ -94,7 +125,7 @@ class Node:
         waitable_refs = []
         # Execute dependencies first
         for node in self.depends_on:
-            node_execute = node.execute()
+            node_execute = node.execute(dry_run=dry_run)
             if node_execute:
                 waitable_refs.append(node_execute)
 
