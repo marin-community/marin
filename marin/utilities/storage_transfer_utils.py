@@ -10,7 +10,6 @@ from pathlib import Path
 
 import fsspec
 from google.cloud import storage_transfer
-from huggingface_hub import hf_hub_url
 
 
 def create_url_list_tsv_on_gcs(
@@ -86,26 +85,3 @@ def create_gcs_transfer_job_from_tsv(
             f"{urllib.parse.quote_plus(creation_request.name)}/"
             f"monitoring?hl=en&project={gcp_project_id}"
         )
-
-
-def get_hf_dataset_urls(hf_dataset_id: str, revision: str) -> list[str]:
-    """Walk through Dataset Repo using the `hf://` fsspec built-ins."""
-    fs = fsspec.filesystem("hf")
-
-    url_list = []
-    for fpath in fs.find(f"hf://datasets/{hf_dataset_id}", revision=revision):
-        if ".git" in fpath:
-            continue
-
-        # Resolve to HF Path =>> grab URL
-        resolved_fpath = fs.resolve_path(fpath)
-        url_list.append(
-            hf_hub_url(
-                resolved_fpath.repo_id,
-                resolved_fpath.path_in_repo,
-                revision=resolved_fpath.revision,
-                repo_type=resolved_fpath.repo_type,
-            )
-        )
-
-    return url_list

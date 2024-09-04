@@ -1,13 +1,13 @@
 """
-ar5iv/download.py
+ar5iv/curate.py
 
-Download script for the ar5iv raw HTML data, provided by SIGMathLing (Forum/Resource Cooperative for the Linguistics of
-Mathematical/Technical Documents).
+Curation/Download script for the ar5iv raw HTML data, provided by SIGMathLing (Forum/Resource Cooperative for the
+Linguistics of Mathematical/Technical Documents).
 
 Home Page: https://sigmathling.kwarc.info/resources/ar5iv-dataset-2024/
 
 Run with:
-    - [Local] python operations/curate/ar5iv/download.py --gcs_output_path="scratch/raw/ar5iv"
+    - [Local] python operations/curate/ar5iv/curate.py --gcs_output_path="raw/ar5iv"
 """
 
 import json
@@ -33,10 +33,10 @@ DOWNLOAD_INSTRUCTIONS = (
 
 
 @dataclass
-class DownloadConfig:
+class CurationConfig:
     # fmt: off
-    gcs_output_path: Path = Path("scratch/raw/ar5iv")   # Path to store (versioned) raw data on GCS
-    gcs_bucket: str | None = None                       # Default GCS Bucket (`None` defaults to `os.environ["MARIN"]`)
+    gcs_output_path: Path = Path("raw/ar5iv")           # Path to store (versioned) raw data on GCS
+    gcs_bucket: str | None = None                       # Default GCS Bucket (if None: os.environ["MARIN"])
 
     # Dataset-Specific Parameters
     personalized_url_json: Path | None = Path(          # Path to JSON File defining (personalized) links to ar5iv data
@@ -45,12 +45,14 @@ class DownloadConfig:
 
     def __post_init__(self) -> None:
         self.gcs_bucket = os.environ["MARIN"] if self.gcs_bucket is None else self.gcs_bucket
+        if "gs://" in str(self.gcs_output_path):
+            raise ValueError(f"Unexpected GCS Bucket Prefix in `{self.gcs_output_path = }`")
 
     # fmt: on
 
 
 @draccus.wrap()
-def download(cfg: DownloadConfig) -> None:
+def curate(cfg: CurationConfig) -> None:
     print(f"[*] Downloading ar5iv Dataset to `gs://{cfg.gcs_bucket}/{cfg.gcs_output_path}`")
     if cfg.personalized_url_json is None or not cfg.personalized_url_json.exists():
         print(DOWNLOAD_INSTRUCTIONS)
@@ -83,4 +85,4 @@ def download(cfg: DownloadConfig) -> None:
 
 
 if __name__ == "__main__":
-    download()
+    curate()
