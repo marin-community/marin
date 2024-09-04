@@ -10,18 +10,17 @@ from pathlib import Path
 
 import fsspec
 from google.cloud import storage_transfer
-from huggingface_hub import hf_hub_url
 
 
 def create_url_list_tsv_on_gcs(
     url_list: list[str],
     gcs_output_path: Path,
-    public_gcs_bucket: str = "hf_dataset_transfer_bucket",
+    public_gcs_bucket: str,
     return_url: bool = False,
 ) -> str:
     """
     Creates a TSV file specifying the URLs to download using the Google Cloud Storage Transfer Service. This TSV file
-    must be publicly readable, which is why we write to `public_gcs_bucket` instead of $MARIN.
+    must be publicly readable, which is why we write to `public_gcs_bucket`.
     """
     gcs_tsv_path = f"{public_gcs_bucket}/{gcs_output_path!s}/download-urls.tsv"
     with fsspec.open(f"gs://{gcs_tsv_path}", "wt") as f:
@@ -86,26 +85,3 @@ def create_gcs_transfer_job_from_tsv(
             f"{urllib.parse.quote_plus(creation_request.name)}/"
             f"monitoring?hl=en&project={gcp_project_id}"
         )
-
-
-def get_hf_dataset_urls(hf_dataset_id: str, revision: str) -> list[str]:
-    """Walk through Dataset Repo using the `hf://` fsspec built-ins."""
-    fs = fsspec.filesystem("hf")
-
-    url_list = []
-    for fpath in fs.find(f"hf://datasets/{hf_dataset_id}", revision=revision):
-        if ".git" in fpath:
-            continue
-
-        # Resolve to HF Path =>> grab URL
-        resolved_fpath = fs.resolve_path(fpath)
-        url_list.append(
-            hf_hub_url(
-                resolved_fpath.repo_id,
-                resolved_fpath.path_in_repo,
-                revision=resolved_fpath.revision,
-                repo_type=resolved_fpath.repo_type,
-            )
-        )
-
-    return url_list
