@@ -1,8 +1,8 @@
 """
-ar5iv/curate.py
+ar5iv/download.py
 
-Curation/Download script for the ar5iv raw HTML data, provided by SIGMathLing (Forum/Resource Cooperative for the
-Linguistics of Mathematical/Technical Documents).
+Download script for the ar5iv raw HTML data, provided by SIGMathLing (Forum/Resource Cooperative for the Linguistics of
+Mathematical/Technical Documents).
 
 Home Page: https://sigmathling.kwarc.info/resources/ar5iv-dataset-2024/
 
@@ -33,7 +33,7 @@ DOWNLOAD_INSTRUCTIONS = (
 
 
 @dataclass
-class CurationConfig:
+class DownloadConfig:
     # fmt: off
     gcs_output_path: Path = Path("raw/ar5iv")           # Path to store (versioned) raw data on GCS
     gcs_bucket: str | None = None                       # Default GCS Bucket (if None: os.environ["MARIN"])
@@ -52,7 +52,7 @@ class CurationConfig:
 
 
 @draccus.wrap()
-def curate(cfg: CurationConfig) -> None:
+def download(cfg: DownloadConfig) -> None:
     print(f"[*] Downloading ar5iv Dataset to `gs://{cfg.gcs_bucket}/{cfg.gcs_output_path}`")
     if cfg.personalized_url_json is None or not cfg.personalized_url_json.exists():
         print(DOWNLOAD_INSTRUCTIONS)
@@ -85,4 +85,4 @@ def curate(cfg: CurationConfig) -> None:
 
 
 if __name__ == "__main__":
-    curate()
+    download()

@@ -1,11 +1,14 @@
 """
-hf/curate.py
+huggingface/download.py
 
-Curation/Download script for arbitrary datasets hosted on HuggingFace (supports both public and gated HF Datasets); this
-script requires a pointer to the dataset repository URL, a revision (Git SHA from the HF Dataset page), and an optional
+Download script for arbitrary datasets hosted on HuggingFace (supports both public and gated HF Datasets); this script
+requires a pointer to the dataset repository URL, a revision (Git SHA from the HF Dataset page), and an optional
 authentication token (for gated datasets).
 
-We will automatically generate a Google Storage Transfer Service (STS) job to download the appropriate files to GCS.
+For public datasets, we will automatically launch a Google Storage Transfer Service (STS) job to download the
+appropriate files to GCS.
+
+(TODO :: siddk) For gated datasets...
 
 Run with:
     - [Local] python operations/curate/hf/curate.py \
@@ -24,7 +27,7 @@ from marin.utilities.huggingface_hub_utils import download_hf_dataset
 
 
 @dataclass
-class CurationConfig:
+class DownloadConfig:
     # fmt: off
     gcs_output_path: Path = Path("raw/hello_world_fw")              # Path to store (versioned) raw data on GCS
     gcs_bucket: str | None = None                                   # Default GCS Bucket (if None: os.environ["MARIN"])
@@ -42,7 +45,7 @@ class CurationConfig:
 
 
 @draccus.wrap()
-def curate(cfg: CurationConfig) -> None:
+def download(cfg: DownloadConfig) -> None:
     print(f"[*] Downloading HF Dataset `{cfg.hf_dataset_id}` to `gs://{cfg.gcs_bucket}/{cfg.gcs_output_path}`")
     job_url = download_hf_dataset(cfg.hf_dataset_id, cfg.revision, cfg.gcs_output_path, cfg.gcs_bucket)
 
@@ -50,4 +53,4 @@ def curate(cfg: CurationConfig) -> None:
 
 
 if __name__ == "__main__":
-    curate()
+    download()
