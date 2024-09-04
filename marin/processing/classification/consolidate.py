@@ -9,6 +9,16 @@ import draccus
 from marin.core.runtime import cached_or_construct_output
 from marin.utils import fsspec_get_atomic_directories, fsspec_glob, rebase_file_path, fsspec_mkdirs, fsspec_exists, validate_marin_gcp_path, fsspec_isdir
 
+@dataclass
+class FilterConfig:
+    """Config for filtering operation on Marin data"""
+    type: str
+    attribute_path: str
+    name: str
+    label: Optional[str] = None
+    threshold: Optional[float] = 0.5
+    min_score: Optional[float] = 0.0
+    max_score: Optional[float] = 1.0
 
     
 @dataclass
@@ -16,28 +26,22 @@ class ConsolidateConfig:
     """Config for Consolidation operation on Marin data"""
     input_path: str  # The input path to the Marin data
     output_path: str  # The output path to save the consolidated data
+    filters: List[FilterConfig] # The list of filters to apply
+
     max_tasks_in_flight: int = 1000  # The maximum number of flights in a task
 
-    dedupe: bool = False  # Whether to dedupe the data or not
-    dedupe_path: Optional[str] = None  # The path to save the deduped data
 
-    fasttext: bool = False # Whether to filter the data based on fasttext scores or not
-    fasttext_threshold: float = field(default=0.5)  # The threshold for the fasttext scores
-    fasttext_path: Optional[str] = None  # The path to save the filtered data based on fasttext scores
-    fasttext_name: Optional[str] = None # The name of the fasttext attribute
-
-def is_high_quality(attributes: Dict[str, Any], attribute_name: str, threshold: float) -> bool:
-    _ATTRIBUTE_NAME_TO_LABEL_DICT = {
-        "dclm-fasttext-quality": "__label__hq",
-        "dolma-fasttext-quality": "__label__hq",
-        "fineweb-edu-quality": "score",
-    }
+def validate_scores(min_score: float, max_score: float, threshold: float) -> None:
+    if not (0 <= min_score < threshold < max_score <= 1):
+        raise ValueError(f"Scores must satisfy: 0 <= min_score ({min_score}) < threshold ({threshold}) < max_score ({max_score}) <= 1")
+    
+def is_high_quality(attributes: Dict[str, Any], attribute_name: str, threshold: float, label: str, min_score: float, max_score: float) -> bool:
     if attribute_name in attributes:
         quality_scores = attributes[attribute_name]
-        label = _ATTRIBUTE_NAME_TO_LABEL_DICT[attribute_name]
-        return quality_scores.get(label, 0) >= threshold
+        score = quality_scores.get(label, 0)
+        return min_score <= score <= max_score and score >= threshold
     else:
-        raise ValueError("No valid attriubte found!")
+        raise ValueError("No valid attribute found!")
 
 
 def remove_duplicates(input_data: Dict[str, Any], duplicate_spans: List[List[int]]) -> Dict[str, Any]:
@@ -52,25 +56,27 @@ def remove_duplicates(input_data: Dict[str, Any], duplicate_spans: List[List[int
     input_data['text'] = text
     return input_data
 
-def quality_filter_func(input_data: Dict[str, Any], attributes_data: Dict[str, Any], attribute_name: str, threshold: float) -> Dict[str, Any]:
-    if is_high_quality(attributes_data, attribute_name, threshold):
+def quality_filter_func(input_data: Dict[str, Any], attributes_data: Dict[str, Any], attribute_name: str, threshold: float, label: str, min_score: float, max_score: float) -> Dict[str, Any]:
+    validate_scores(min_score, max_score, threshold)
+    if is_high_quality(attributes_data, attribute_name, threshold, label, min_score, max_score):
         return input_data
     return None
 
-def dedupe_filter_func(input_data: Dict[str, Any], attributes_data: Dict[str, Any], attribute_name: str, threshold: float) -> Dict[str, Any]:
+def dedupe_filter_func(input_data: Dict[str, Any], attributes_data: Dict[str, Any], attribute_name: str, threshold: float, label: str, min_score: float, max_score: float) -> Dict[str, Any]:
     # Dolma dedupe has a fixed attribute name and a binary decision
-    duplicate_spans = attributes_data.get("attributes", {}).get("duplicate_text", [])
+    # So there is no need to check the threshold
+    duplicate_spans = attributes_data.get("attributes", {}).get(attribute_name, [])
     if duplicate_spans:
         return remove_duplicates(input_data, duplicate_spans)
     return input_data
 
-def get_filter_func(attribute_name: str) -> Callable:
-    if "dedupe" in attribute_name:
+def get_filter_func(filter_type: str) -> Callable:
+    if "dedupe" in filter_type:
         return dedupe_filter_func
-    elif "quality" in attribute_name:
+    elif "classify" in filter_type:
         return quality_filter_func
     else:
-        raise ValueError(f"Unknown attribute name: {attribute_name}")
+        raise ValueError(f"Unknown attribute name: {filter_type}")
 
 def load_all_attributes(attribute_filenames: List[str]) -> Dict[str, Dict[str, Any]]:
     
@@ -116,8 +122,8 @@ def process_file(input_filename: str, output_filename: str, all_attributes: Dict
             attributes = all_attributes[doc_id]
             filtered_data = input_data
             
-            for attr_name, threshold, filter_func in filters:
-                filtered_data = filter_func(filtered_data, attributes, attr_name, threshold)
+            for attr_name, threshold, filter_func, label, min_score, max_score in filters:
+                filtered_data = filter_func(filtered_data, attributes, attr_name, threshold, label, min_score, max_score)
                 if filtered_data is None:
                     break
             
@@ -157,30 +163,17 @@ def apply_filters(input_dir: str, output_dir: str, attribute_files: List[str], f
 
 @draccus.wrap()
 def main(cfg: ConsolidateConfig):
-    if not cfg.dedupe and not cfg.fasttext:
-        raise ValueError("At least one operation should be enabled")
-
     input_path = validate_marin_gcp_path(cfg.input_path)
     output_path = validate_marin_gcp_path(cfg.output_path)
 
     attribute_files = []
     filters = []
 
-    if cfg.dedupe:
-        if cfg.dedupe_path is None:
-            raise ValueError("dedupe_path is required for dedupe operation")
-        dedupe_path = validate_marin_gcp_path(cfg.dedupe_path)
-        attribute_files.append(dedupe_path)
-        filters.append(("dedupe", 0, dedupe_filter_func))
-        print("Dedupe filter enabled")
-
-    if cfg.fasttext:
-        if cfg.fasttext_path is None or cfg.fasttext_name is None:
-            raise ValueError("Both fasttext_path and fasttext_name are required for fasttext operation")
-        fasttext_path = validate_marin_gcp_path(cfg.fasttext_path)
-        attribute_files.append(fasttext_path)
-        filters.append((cfg.fasttext_name, cfg.fasttext_threshold, quality_filter_func))
-        print(f"Fasttext filter enabled: {cfg.fasttext_name} with threshold {cfg.fasttext_threshold}")
+    
+    for filter in cfg.filters:
+        attribute_files.append(filter.attribute_path)
+        filters.append((filter.name, filter.threshold, get_filter_func(filter.type), filter.label, filter.min_score, filter.max_score))
+        print(f"Filter enabled: {filter.name} with threshold {filter.threshold})")
 
     output_path = apply_filters(input_path, output_path, attribute_files, filters, cfg.max_tasks_in_flight)
     print(f"Processing complete. Final output path: {output_path}")
