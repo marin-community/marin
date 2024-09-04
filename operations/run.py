@@ -34,7 +34,7 @@ def destination(child_results):
 
 
 # Create Node objects
-experiment_name = "experiment_3"
+experiment_name = "experiment_4"
 source_node = Node(func=source, step_name="source", experiment_name=experiment_name)
 child1_node = Node(
     func=child_1, depends_on=[source_node], step_name="child_1", experiment_name=experiment_name, func_args=[1]
@@ -53,4 +53,4 @@ destination_node = Node(
 # Execute the DAG
 if __name__ == "__main__":
     ray.init(local_mode=True)
-    destination_node.execute()
+    destination_node.execute(dry_run=True)
