@@ -22,13 +22,11 @@ from marin.utilities.huggingface_hub_utils import download_hf_dataset
 @dataclass
 class DownloadConfig:
     # fmt: off
-    gcs_output_path: str = (                                # Path to store raw data on GCS (including gs://$BUCKET)
-        "gs://marin-us-central2/raw/hello_world_fw"
-    )
+    gcs_output_path: str                                    # Path to store raw data on GCS (includes gs://$BUCKET/...)
 
     # HuggingFace Dataset Parameters
-    hf_dataset_id: str = "skaramcheti/hello_world_fw"       # HF Dataset to Download (as Repository ID)
-    revision: str = "8fd6e8e"                               # (Short) Git Commit Hash (from HF Dataset Repo)
+    hf_dataset_id: str                                      # HF Dataset to Download (as `$ORG/$DATASET` on HF Hub)
+    revision: str                                           # (Short) Commit Hash (from HF Dataset Repo; 7 characters)
 
     # Additional GCS Parameters
     public_gcs_path: str = (                                # Path to Publicly Readable Bucket (for Storage Transfer)
