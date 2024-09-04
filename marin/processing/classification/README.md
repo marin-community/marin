@@ -1,7 +1,7 @@
-# Quality Filtering
+# Consolidation
 
 ## Overview
-This repository contains the code for filtering out high-quality documents from a dataset.
+This repository contains the code for filtering out high-quality documents from a dataset, deduping those documents and combing the two to consolidate datasets.
 
 ### Serving Quality Filtering Models
 To get started, run the following command in the root of the directory:
@@ -78,6 +78,23 @@ We can also run both consolidation operations  (or many more) all in parallel. F
 
 ```bash
 ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python -m marin.processing.classification.consolidate --config_path marin/processing/classification/config/quick_start_consolidate.yaml
+```
+
+The yaml for the full consolidationj is as follows:
+```yaml
+input_path: "gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart/"
+output_path: "gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart_consolidate_e2e/"
+max_tasks_in_flight: 1000
+
+filters:
+ - type: "dedupe"
+   attribute_path: "gs://marin-us-central2/attributes/hello_world_fw/v1.0/quickstart_duplicates/"
+   name: "duplicate_text"
+ - type: "classify"
+   attribute_path: "gs://marin-us-central2/attributes/hello_world_fw/v1.0/dclm-fasttext-quality-quickstart/"
+   name: "dclm-fasttext-quality"
+   label: "__label__hq"
+   threshold: 0.1
 ```
 
 Currently we require the user specifiy the file format and the attribute to filter by
