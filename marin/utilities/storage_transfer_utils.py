@@ -15,12 +15,12 @@ from google.cloud import storage_transfer
 def create_url_list_tsv_on_gcs(
     url_list: list[str],
     gcs_output_path: Path,
-    public_gcs_bucket: str = "hf_dataset_transfer_bucket",
+    public_gcs_bucket: str,
     return_url: bool = False,
 ) -> str:
     """
     Creates a TSV file specifying the URLs to download using the Google Cloud Storage Transfer Service. This TSV file
-    must be publicly readable, which is why we write to `public_gcs_bucket` instead of $MARIN.
+    must be publicly readable, which is why we write to `public_gcs_bucket`.
     """
     gcs_tsv_path = f"{public_gcs_bucket}/{gcs_output_path!s}/download-urls.tsv"
     with fsspec.open(f"gs://{gcs_tsv_path}", "wt") as f:
