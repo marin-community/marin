@@ -15,6 +15,10 @@ class InferenceConfig:
     input_dir: str
     output_dir: str
     model_name: str
+    """A path to a model or the name of a model. 
+    If it doesn't have the classifier type in its name, you need to specify the model_type."""
     attribute_name: str
+    model_type: str | None = None
+    """The type of the model. Currently: fasttext, fineweb, or None."""
     runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
     task: TaskConfig = field(default_factory=TaskConfig)
