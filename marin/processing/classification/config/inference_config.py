@@ -20,5 +20,5 @@ class InferenceConfig:
     attribute_name: str
     model_type: str | None = None
     """The type of the model. Currently: fasttext, fineweb, or None."""
-    runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
+    runtime: RuntimeConfig = field(default_factory=lambda : RuntimeConfig(requirements_filepath="marin/processing/classification/config/dclm_fasttext_requirements.txt", memory_limit_gb=12))
     task: TaskConfig = field(default_factory=TaskConfig)
