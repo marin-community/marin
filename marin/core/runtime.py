@@ -81,10 +81,11 @@ class TaskConfig:
 
 def map_files_in_directory(
     func: Callable | RemoteFunction,
-    input_dir: os.PathLike,
+    input_dir: os.PathLike | str,
     pattern: str,
-    output_dir: os.PathLike,
+    output_dir: os.PathLike | str,
     task_config: TaskConfig = TaskConfig(),  # noqa
+    empty_glob_ok: bool = False,
     *args,
     **kwargs,
 ):
@@ -99,6 +100,8 @@ def map_files_in_directory(
         output_dir: The output directory
         task_config: TaskConfig object
 
+        empty_glob_ok: If True, then an empty glob will not raise an error.
+
     Returns:
         List: A list of outputs from the function.
     """
@@ -111,6 +114,11 @@ def map_files_in_directory(
         dir_name = os.path.dirname(output_file)
         fsspec_mkdirs(dir_name)
         file_pairs.append([file, output_file])
+
+    if len(file_pairs) == 0:
+        logger.error(f"No files found in {input_dir} with pattern {pattern}!!! This is likely an error.")
+        if not empty_glob_ok:
+            raise FileNotFoundError(f"No files found in {input_dir} with pattern {pattern}")
 
     if isinstance(func, ray.remote_function.RemoteFunction):
         # If the function is a ray.remote function, then execute it in parallel
