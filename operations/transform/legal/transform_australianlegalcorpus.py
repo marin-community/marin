@@ -46,12 +46,12 @@ def convert_to_dolma(input_file_path, output_file_path):
                 "created": row['date'],
                 "added": row['when_scraped'],
                 "metadata": {
-                    f"type": row['type'],
-                    f"jurisdiction": row['jurisdiction'],
-                    f"source": row['source'],
-                    f"citation": row['citation'],
-                    f"mime": row['mime'],
-                    f"url": row['url'],
+                    "type": row['type'],
+                    "jurisdiction": row['jurisdiction'],
+                    "source": row['source'],
+                    "citation": row['citation'],
+                    "mime": row['mime'],
+                    "url": row['url'],
                 }
             }) + "\n")
     return True
