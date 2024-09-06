@@ -30,34 +30,40 @@ def convert_to_dolma(input_file_path, output_file_path):
     # The runtime for this function should be low (less than 5-10 min), as the machines are preemptible
 
     source = "multilegalpile"
-    change_extension = lambda filepath: os.path.splitext(filepath)[0] + '.gz'
 
     # Read the input file
-    with fsspec.open(input_file_path, "rt", compression="xz") as f, \
-            fsspec.open(change_extension(output_file_path), "wt", compression="gzip") as output:
+    with (
+        fsspec.open(input_file_path, "rt", compression="xz") as f,
+        fsspec.open(os.path.splitext(output_file_path)[0] + ".gz", "wt", compression="gzip") as output,
+    ):
         for idx, line in enumerate(f):
             row = json.loads(line)
 
-            output.write(json.dumps({
-                "id": f"{row['type']}:{idx}",  # to make sure the id is unique
-                "text": row['text'],
-                "source": source,
-                "metadata": {
-                    "type": row['type'],
-                    "jurisdiction": row['jurisdiction'],
-                }
-            }) + "\n")
+            output.write(
+                json.dumps(
+                    {
+                        "id": f"{row['type']}:{idx}",  # to make sure the id is unique
+                        "text": row["text"],
+                        "source": source,
+                        "metadata": {
+                            "type": row["type"],
+                            "jurisdiction": row["jurisdiction"],
+                        },
+                    }
+                )
+                + "\n"
+            )
     return True
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Script to convert multilegalpile data to dolma format.")
     # As a reminder all the processing in this function will be done on the head node. We should try
     # to keep number of jobs (started using ray job submit command) to minimum while trying to use tasks(ray.remote
     # function) as much as possible. For reference, fw uses only 1 job to process a complete dump which is about
     # 400GB of data and spawns about 75000 tasks (ray.remote functions).
-    parser.add_argument('--input_dir', type=str, help='Path to the multilegalpile raw directory', required=True)
-    parser.add_argument('--output_dir', type=str, help='Path to store multilegalpile dolma files', required=True)
+    parser.add_argument("--input_dir", type=str, help="Path to the multilegalpile raw directory", required=True)
+    parser.add_argument("--output_dir", type=str, help="Path to store multilegalpile dolma files", required=True)
 
     args = parser.parse_args()
 
