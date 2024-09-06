@@ -2,14 +2,14 @@
 Main for running Levanter's tokenizer infrastructure on a dataset using an existing Ray cluster.
 
 Usage:
-    ray job submit --working-dir . --no-wait -- python -m marin.processing.tokenize --input_path <input-dir> --cache_dir <cache-dir> --dataset_name <dataset-name> --tokenizer <tokenizer_name>
+    ray job submit --working-dir . --no-wait -- python -m marin.processing.tokenize --input_path <input-dir> --cache_path <cache-path> --dataset_name <dataset-name> --tokenizer <tokenizer_name>
 
     input_path: The input directory containing the jsonl files or the name of a hf dataset
-    cache_dir: The base directory to save the tokenized files
+    cache_path: The base directory to save the tokenized files
     dataset_name: The name of the dataset for the cache dir. This must be the same as the dataset name used in the Levanter training run
     tokenizer: The name of the tokenizer to use. This must be the same as the tokenizer used in the Levanter training run
 
-    The data will be tokenized to $cache_dir/$dataset_name/train
+    The data will be tokenized to $cache_path/$dataset_name/train
 """
 import dataclasses
 import logging
@@ -81,14 +81,14 @@ def levanter_tokenize(input_path: str, tokenizer_name: str, output_path: str):
 @dataclasses.dataclass
 class TokenizeConfig:
     input_path: str  # input dir containing jsonl files, or hf dataset
-    cache_dir: str  # base path to save the tokenized files
+    cache_path: str  # base path to save the tokenized files
     dataset_name: str  # dataset name. Must be the same as you intend to use in the dataset spec for the training run
     tokenizer: str  # tokenizer name. Should be the same as you intend to use in the tokenizer spec for the training run
 
 
 @draccus.wrap()
 def main(config: TokenizeConfig):
-    output_path = os.path.join(config.cache_dir, config.dataset_name, "train")
+    output_path = os.path.join(config.cache_path, config.dataset_name, "train")
     response = levanter_tokenize.remote(config.input_path, config.tokenizer, output_path)
     ray.get(response)
 

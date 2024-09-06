@@ -170,14 +170,14 @@ def validate_marin_gcp_path(path: str) -> str:
                          f"gs://marin-$REGION/[scratch/]{{documents|attributes|filtered}}/$EXPERIMENT/$DATASET/$VERSION/")
     return path
 
-def rebase_file_path(base_in_dir, file_path, base_out_dir, new_extension=None, old_extension=None):
+def rebase_file_path(base_in_path, file_path, base_out_path, new_extension=None, old_extension=None):
     """
     Rebase a file path from one directory to another, with an option to change the file extension.
 
     Args:
-        base_in_dir (str): The base directory of the input file
+        base_in_path (str): The base directory of the input file
         file_path (str): The path of the file
-        base_out_dir (str): The base directory of the output file
+        base_out_path (str): The base directory of the output file
         new_extension (str, optional): If provided, the new file extension to use (including the dot, e.g., '.txt')
         old_extension (str, optional): If provided along with new_extension, specifies the old extension to replace.
                                        If not provided (but `new_extension` is), the function will replace everything after the last dot.
@@ -186,7 +186,7 @@ def rebase_file_path(base_in_dir, file_path, base_out_dir, new_extension=None, o
         str: The rebased file path
     """
 
-    rel_path = os.path.relpath(file_path, base_in_dir)
+    rel_path = os.path.relpath(file_path, base_in_path)
 
     # Construct the output file path
     if new_extension:
@@ -194,7 +194,7 @@ def rebase_file_path(base_in_dir, file_path, base_out_dir, new_extension=None, o
             rel_path = rel_path[:rel_path.rfind(old_extension)] + new_extension
         else:
             rel_path = rel_path[:rel_path.rfind(".")] + new_extension
-    result = os.path.join(base_out_dir, rel_path)
+    result = os.path.join(base_out_path, rel_path)
     return result
 
 
