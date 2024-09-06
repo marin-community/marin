@@ -6,7 +6,8 @@ Inputs: raw parquet files, Output: jsonl.gz files in dolma format
 Example Usage:
 ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- \
 python operations/transform/legal/transform_edgar.py \
---input_dir gs://marin-data/raw/huggingface.co/datasets/eloukas/edgar-corpus/resolve/f7d3ba73d65ff10194a95b84c75eb484d60b0ede/full/partial-train \
+--input_dir gs://marin-data/raw/huggingface.co/datasets/eloukas/edgar-corpus/resolve/\
+f7d3ba73d65ff10194a95b84c75eb484d60b0ede/full/partial-train \
 --output_dir gs://marin-data/processed/law/edgar-v1.0/txt/documents
 """
 
@@ -31,38 +32,60 @@ def convert_to_dolma(input_file_path, output_file_path):
     # The runtime for this function should be low (less than 5-10 min), as the machines are preemptible
 
     # Read the input file
-    df = pd.read_parquet(input_file_path, engine='fastparquet')
+    df = pd.read_parquet(input_file_path, engine="fastparquet")
     source = "edgar"
 
-    change_extension = lambda filepath: os.path.splitext(filepath)[0] + '.jsonl.gz'
-
-    with fsspec.open(change_extension(output_file_path), "wt", compression="gzip") as output:
+    with fsspec.open(os.path.splitext(output_file_path)[0] + ".jsonl.gz", "wt", compression="gzip") as output:
         for _, row in df.iterrows():
-            sections = ['section_1', 'section_1A', 'section_1B', 'section_2', 'section_3', 'section_4', 'section_5',
-                        'section_6', 'section_7', 'section_7A', 'section_8', 'section_9', 'section_9A', 'section_9B',
-                        'section_10', 'section_11', 'section_12', 'section_13', 'section_14', 'section_15']
+            sections = [
+                "section_1",
+                "section_1A",
+                "section_1B",
+                "section_2",
+                "section_3",
+                "section_4",
+                "section_5",
+                "section_6",
+                "section_7",
+                "section_7A",
+                "section_8",
+                "section_9",
+                "section_9A",
+                "section_9B",
+                "section_10",
+                "section_11",
+                "section_12",
+                "section_13",
+                "section_14",
+                "section_15",
+            ]
             text = "\n\n".join([row[section] for section in sections]).strip()
 
-            output.write(json.dumps({
-                "id": row['cik'],
-                "text": text,
-                "source": source,
-                "metadata": {
-                    "year": row['year'],
-                    "filename": row['filename'],
-                }
-            }) + "\n")
+            output.write(
+                json.dumps(
+                    {
+                        "id": row["cik"],
+                        "text": text,
+                        "source": source,
+                        "metadata": {
+                            "year": row["year"],
+                            "filename": row["filename"],
+                        },
+                    }
+                )
+                + "\n"
+            )
     return True
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Script to convert edgar data to dolma format.")
     # As a reminder all the processing in this function will be done on the head node. We should try
     # to keep number of jobs (started using ray job submit command) to minimum while trying to use tasks(ray.remote
     # function) as much as possible. For reference, fw uses only 1 job to process a complete dump which is about
     # 400GB of data and spawns about 75000 tasks (ray.remote functions).
-    parser.add_argument('--input_dir', type=str, help='Path to the edgar raw directory', required=True)
-    parser.add_argument('--output_dir', type=str, help='Path to store edgar dolma files', required=True)
+    parser.add_argument("--input_dir", type=str, help="Path to the edgar raw directory", required=True)
+    parser.add_argument("--output_dir", type=str, help="Path to store edgar dolma files", required=True)
 
     args = parser.parse_args()
 
