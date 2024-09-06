@@ -1,11 +1,11 @@
 """
 Anything which is not inside ray.remote function will be executed on the head node, so keep it to minimum.
-path: scripts/legal/process_multilegalpile.py
+path: scripts/legal/transform_multilegalpile.py
 Inputs: raw jsonl.xz files, Output: jsonl.gz files in dolma format
 
 Example Usage:
 ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- \
-python scripts/legal/process_multilegalpile.py \
+python operations/transform/legal/transform_multilegalpile.py \
 --input_dir gs://marin-data/raw/huggingface.co/datasets/joelniklaus/MultiLegalPileWikipediaFiltered/resolve/main/data \
 --output_dir gs://marin-data/processed/law/multilegalpile-v1.0/txt/documents
 """
