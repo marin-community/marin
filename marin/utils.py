@@ -77,27 +77,27 @@ def fsspec_mkdirs(dir_path, exist_ok=True):
     fs = fsspec.core.url_to_fs(dir_path)[0]
     fs.makedirs(dir_path, exist_ok=exist_ok)
 
-def fsspec_get_curr_subdirectories(dir_path):
+def fsspec_get_curr_subpaths(dir_path):
     """
-    Get all subdirectories under this current directory only. Does not return the parent directory.
+    Get all subpaths under this current directory only. Does not return the parent directory.
 
     Args:
         dir_path (str): The path of the directory
 
     Returns:
-        list: A list of subdirectories.
+        list: A list of subpaths.
     """
     fs, _ = fsspec.core.url_to_fs(dir_path)
     protocol = fsspec.core.split_protocol(dir_path)[0]
     
-    # List only immediate subdirectories
-    subdirs = fs.ls(dir_path, detail=True)
+    # List only immediate subpaths
+    subpaths = fs.ls(dir_path, detail=True)
     
     def join_protocol(path):
         return f"{protocol}://{path}" if protocol else path
     
-    subdirectories = [join_protocol(subdir['name']) for subdir in subdirs if subdir['type'] == 'directory']
-    return subdirectories
+    subpaths = [join_protocol(subpath['name']) for subpath in subpaths if subpath['type'] == 'directory']
+    return subpaths
 
 def fsspec_dir_only_contains_files(dir_path):
     """
@@ -113,16 +113,16 @@ def fsspec_get_atomic_directories(dir_path):
     """
     Get all directories under this directory that only contains files within them
     """
-    subdirectories = []
+    subpaths = []
 
     if fsspec_isdir(dir_path):
-        for subdirectory in fsspec_get_curr_subdirectories(dir_path):
-            if fsspec_dir_only_contains_files(subdirectory):
-                subdirectories.append(subdirectory)
+        for subpath in fsspec_get_curr_subpaths(dir_path):
+            if fsspec_dir_only_contains_files(subpath):
+                subpaths.append(subpath)
             else:
-                subdirectories.extend(fsspec_get_atomic_directories(subdirectory))
+                subpaths.extend(fsspec_get_atomic_directories(subpath))
     
-    return subdirectories
+    return subpaths
 
 def fsspec_isdir(dir_path):
     """

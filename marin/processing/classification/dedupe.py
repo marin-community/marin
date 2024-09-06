@@ -8,14 +8,14 @@ import glob
 import shutil
 import subprocess
 import fsspec
-from marin.utils import validate_marin_gcp_path, fsspec_mkdirs, rebase_file_path, fsspec_get_curr_subdirectories, fsspec_isdir, fsspec_dir_only_contains_files, fsspec_glob
+from marin.utils import validate_marin_gcp_path, fsspec_mkdirs, rebase_file_path, fsspec_get_curr_subpaths, fsspec_isdir, fsspec_dir_only_contains_files, fsspec_glob
 
-def copy_files_in(input_dir, local_base_dir):
-    # Ensure input_dir doesn't end with a slash
-    input_dir = input_dir.rstrip('/')
+def copy_files_in(input_path, local_base_dir):
+    # Ensure input_path doesn't end with a slash
+    input_path = input_path.rstrip('/')
     
     # Get all .jsonl.gz files in the input directory
-    glob_path = f"{input_dir}/**/*.jsonl.gz"
+    glob_path = f"{input_path}/**/*.jsonl.gz"
     print(f"glob_path: {glob_path}")
     input_files = fsspec_glob(glob_path)
     
@@ -23,21 +23,21 @@ def copy_files_in(input_dir, local_base_dir):
     
     for input_file in tqdm(input_files, desc="Copying files"):
         # Extract the relative path from the input file
-        relative_path = os.path.relpath(input_file, input_dir)
+        relative_path = os.path.relpath(input_file, input_path)
         
         # Construct the output path, ensuring it's under the 'documents' directory
         output_file = os.path.join(local_base_dir, 'documents', relative_path)
         
         # Ensure the output directory exists
-        output_dir = os.path.dirname(output_file)
-        fsspec_mkdirs(output_dir)
+        output_path = os.path.dirname(output_file)
+        fsspec_mkdirs(output_path)
         
         # Copy the file using fsspec
         with fsspec.open(input_file, "rb", compression="infer") as f_remote:
             with fsspec.open(output_file, "wb", compression="gzip") as f_local:
                 f_local.write(f_remote.read())
 
-    # Dolma deduplicator requires 'documents/' as a subdirectory
+    # Dolma deduplicator requires 'documents/' as a subpath
     print(f"Copied {len(input_files)} files to {os.path.join(local_base_dir, 'documents')}")
 
 def do_dedup(local_base_dir, attribute_name, min_length, min_words, bloom_filter_size, estimated_doc_count, false_positive_rate, processes):
@@ -89,9 +89,9 @@ def do_dedup(local_base_dir, attribute_name, min_length, min_words, bloom_filter
     
     return process.returncode
 
-def copy_files_out(local_base_dir, output_dir, attribute_name):
-    # Ensure output_dir doesn't end with a slash
-    output_dir = output_dir.rstrip('/')
+def copy_files_out(local_base_dir, output_path, attribute_name):
+    # Ensure output_path doesn't end with a slash
+    output_path = output_path.rstrip('/')
     
     local_attribute_dir = os.path.join(local_base_dir, 'attributes', attribute_name)
     
@@ -102,7 +102,7 @@ def copy_files_out(local_base_dir, output_dir, attribute_name):
     files_uploaded = 0
     for local_file in tqdm(local_files, desc="Uploading files"):
         # Use rebase_file_path to get the correct output path
-        output_file = rebase_file_path(local_attribute_dir, local_file, output_dir)
+        output_file = rebase_file_path(local_attribute_dir, local_file, output_path)
         
         print(f"[DEBUG] Uploading {local_file} to {output_file}")
         
@@ -117,18 +117,18 @@ def copy_files_out(local_base_dir, output_dir, attribute_name):
         
         files_uploaded += 1
     
-    print(f"Uploaded {files_uploaded} files to {output_dir}")
+    print(f"Uploaded {files_uploaded} files to {output_path}")
 
 
 
 @ray.remote(runtime_env={"pip": ["dolma"]})
-def dolma_dedup(input_dir, output_dir, attribute_name, min_length, min_words, bloom_filter_size, estimated_doc_count, false_positive_rate, processes):
+def dolma_dedup(input_path, output_path, attribute_name, min_length, min_words, bloom_filter_size, estimated_doc_count, false_positive_rate, processes):
     
     with tempfile.TemporaryDirectory() as tmpdir:
         try:
-            copy_files_in(input_dir, tmpdir)
+            copy_files_in(input_path, tmpdir)
             do_dedup(tmpdir, attribute_name, min_length, min_words, bloom_filter_size, estimated_doc_count, false_positive_rate, processes)
-            copy_files_out(tmpdir, output_dir, attribute_name)
+            copy_files_out(tmpdir, output_path, attribute_name)
         except Exception as e:
             print(f"An error occurred during deduplication: {e}")
     return "Deduplication process completed"
@@ -136,15 +136,15 @@ def dolma_dedup(input_dir, output_dir, attribute_name, min_length, min_words, bl
 def main(config):
     ray.init()
 
-    input_dir = validate_marin_gcp_path(config.input_dir)
-    output_dir = validate_marin_gcp_path(config.output_dir)
-    result = ray.get(dolma_dedup.remote(input_dir, output_dir, config.attribute_name, config.min_length, config.min_words, config.bloom_filter_size, config.estimated_doc_count, config.false_positive_rate, config.processes))
+    input_path = validate_marin_gcp_path(config.input_path)
+    output_path = validate_marin_gcp_path(config.output_path)
+    result = ray.get(dolma_dedup.remote(input_path, output_path, config.attribute_name, config.min_length, config.min_words, config.bloom_filter_size, config.estimated_doc_count, config.false_positive_rate, config.processes))
     print(result)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run Dolma deduplication on a single Ray worker")
-    parser.add_argument('--input_dir', type=str, required=True, help='GCP input directory path')
-    parser.add_argument('--output_dir', type=str, required=True, help="Output directory to save attributes for dedupe")
+    parser.add_argument('--input_path', type=str, required=True, help='GCP input directory path')
+    parser.add_argument('--output_path', type=str, required=True, help="Output directory to save attributes for dedupe")
     parser.add_argument('--attribute_name', type=str, default='duplicate_text', help='Name of the attribute to set if the document is a duplicate')
     parser.add_argument('--min_length', type=int, default=0, help='Minimum length of documents to be deduplicated')
     parser.add_argument('--min_words', type=int, default=0, help='Minimum number of uniseg word units in documents to be deduplicated')
@@ -154,8 +154,8 @@ if __name__ == "__main__":
     parser.add_argument('--processes', type=int, default=1, help='Number of processes to use for deduplication')
     args = parser.parse_args()
     config = argparse.Namespace(
-    input_dir=args.input_dir,
-    output_dir=args.output_dir,
+    input_path=args.input_path,
+    output_path=args.output_path,
     attribute_name=args.attribute_name,
     min_length=args.min_length,
     min_words=args.min_words,
