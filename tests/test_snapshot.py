@@ -5,11 +5,11 @@ import pytest
 
 from marin.web.convert import convert_page
 
-my_dir = os.path.dirname(os.path.realpath(__file__))
-input_path = os.path.join(my_dir, "snapshots/inputs")  # Directory containing HTML input files
-expected_dir = os.path.join(my_dir, "snapshots/expected")  # Directory containing expected output files
-output_path = os.path.join(my_dir, "snapshots/outputs")  # Directory containing actual output files
-diff_dir = os.path.join(my_dir, "snapshots/diffs")  # Directory containing diff files
+my_path = os.path.dirname(os.path.realpath(__file__))
+input_path = os.path.join(my_path, "snapshots/inputs")  # Directory containing HTML input files
+expected_path = os.path.join(my_path, "snapshots/expected")  # Directory containing expected output files
+output_path = os.path.join(my_path, "snapshots/outputs")  # Directory containing actual output files
+diff_path = os.path.join(my_path, "snapshots/diffs")  # Directory containing diff files
 
 
 def read_file(file_path):
@@ -24,12 +24,12 @@ def compare_outputs(input_name, expected_file, output_file):
         if f.read() == g.read():
             return
 
-    os.makedirs(diff_dir, exist_ok=True)
+    os.makedirs(diff_path, exist_ok=True)
     base_name = os.path.basename(expected_file)
     diff_name = f"{base_name}.diff.md"
     try:
         result = subprocess.run(
-            ["pandiff", expected_file, output_file, "-o", f"{diff_dir}/{diff_name}"],
+            ["pandiff", expected_file, output_file, "-o", f"{diff_path}/{diff_name}"],
             check=True,
             text=True,
             capture_output=True,
@@ -58,14 +58,14 @@ def parametrize_with_files(fn):
 @parametrize_with_files
 def test_generate_markdown_from_html(input_name):
     """Test the Markdown generation from HTML and compare outputs."""
-    input_path = os.path.join(input_path, f"{input_name}.html")
-    input_content = read_file(input_path)
+    input_file = os.path.join(input_path, f"{input_name}.html")
+    input_content = read_file(input_file)
 
     output_dict = convert_page(input_content)
 
     output = output_dict["content"]
 
-    expected_file = os.path.join(expected_dir, f"{input_name}.md")
+    expected_file = os.path.join(expected_path, f"{input_name}.md")
     output_file = os.path.join(output_path, f"{input_name}.md")
 
     os.makedirs(output_path, exist_ok=True)
@@ -78,7 +78,7 @@ def test_generate_markdown_from_html(input_name):
 
 def accept_change(input_name):
     """Accept a change for a specific input."""
-    expected_file = os.path.join(expected_dir, f"{input_name}.md")
+    expected_file = os.path.join(expected_path, f"{input_name}.md")
     output_file = os.path.join(output_path, f"{input_name}.md")
     os.replace(output_file, expected_file)
     print(f"Accepted changes for {input_name}.")
