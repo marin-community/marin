@@ -145,18 +145,18 @@ def process_directory(input_subdir: str, output_subdir: str, all_attributes: Dic
         output_filename = rebase_file_path(input_subdir, input_filename, output_subdir)
         process_file(input_filename, output_filename, all_attributes, filters)
 
-def apply_filters(input_dir: str, output_dir: str, attribute_files: List[str], filters: List[Tuple[str, float, Callable]], max_tasks_in_flight: int):
+def apply_filters(input_path: str, output_path: str, attribute_files: List[str], filters: List[Tuple[str, float, Callable]], max_tasks_in_flight: int):
     
     all_attributes = load_all_attributes(attribute_files)
 
     
-    subdirectories = fsspec_get_atomic_directories(input_dir)
+    subdirectories = fsspec_get_atomic_directories(input_path)
     print(f"subdirectories: {subdirectories}")
 
     tasks = []
     for input_subdir in subdirectories:
         print(f"Processing {input_subdir}")
-        output_subdir = rebase_file_path(input_dir, input_subdir, output_dir)
+        output_subdir = rebase_file_path(input_path, input_subdir, output_path)
         fsspec_mkdirs(output_subdir)
 
         task = process_directory.remote(input_subdir, output_subdir, all_attributes, filters)
@@ -166,7 +166,7 @@ def apply_filters(input_dir: str, output_dir: str, attribute_files: List[str], f
             ray.get(tasks.pop(0))
 
     ray.get(tasks)
-    return output_dir
+    return output_path
 
 @draccus.wrap()
 def main(cfg: ConsolidateConfig):

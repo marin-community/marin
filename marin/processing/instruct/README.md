@@ -5,7 +5,7 @@ This README provides an overview of the Python script `ray_process.py` that demo
 
 Quick start command:
  ```bash
-   ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python scripts/instruct/ray_process.py --input_dir gs://marin-us-central2/raw/instruct/ --output_dir gs://marin-us-central2/documents/marin_instructv1/ --input_type parquet
+   ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python scripts/instruct/ray_process.py --input_path gs://marin-us-central2/raw/instruct/ --output_path gs://marin-us-central2/documents/marin_instructv1/ --input_type parquet
  ```
  
 ## Prerequisites
@@ -20,20 +20,20 @@ Quick start command:
 
 2. Set up a Ray cluster or use a local Ray instance.
 
-3. Update the `input_dir` and `output_dir` variables in the script to specify the input and output directories respectively. The input directory should contain the JSONL or Parquet files to be processed, and the output directory will be used to store the resulting Markdown and HTML JSONL files.
+3. Update the `input_path` and `output_path` variables in the script to specify the input and output directories respectively. The input directory should contain the JSONL or Parquet files to be processed, and the output directory will be used to store the resulting Markdown and HTML JSONL files.
 
 4. Run the script using the following command:
 
    ```bash
-   ray job submit --address <ray_address> --working-dir . --no-wait -- python process_parquet_fw.py --input_dir <input_directory> --output_dir <output_directory> --input_type <jsonl|parquet>
+   ray job submit --address <ray_address> --working-dir . --no-wait -- python process_parquet_fw.py --input_path <input_pathectory> --output_path <output_pathectory> --input_type <jsonl|parquet>
    ```
 
-   Replace `<ray_address>` with the address of your Ray cluster, `<input_directory>` with the path to your input directory, `<output_directory>` with the path to your desired output directory, and `<jsonl|parquet>` with the type of input files (`jsonl` for JSONL files or `parquet` for Parquet files).
+   Replace `<ray_address>` with the address of your Ray cluster, `<input_pathectory>` with the path to your input directory, `<output_pathectory>` with the path to your desired output directory, and `<jsonl|parquet>` with the type of input files (`jsonl` for JSONL files or `parquet` for Parquet files).
 
    For example if the server is running the below will generate version 1.0 of the instruction
    dataset if it does not already exist:
    ```bash
-   ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python process_parquet_fw.py --input_dir gs://marin-data/raw/instruct/ --output_dir gs://marin-data/processed/instruct/ --input_type parquet
+   ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python process_parquet_fw.py --input_path gs://marin-data/raw/instruct/ --output_path gs://marin-data/processed/instruct/ --input_type parquet
    ```
 
 5. The script will process the input files using Ray's distributed computing capabilities. It will convert the HTML content to Markdown and HTML formats and save the results as JSONL files in the specified output directory.
