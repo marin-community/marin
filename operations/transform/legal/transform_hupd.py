@@ -31,61 +31,69 @@ from marin.core.runtime import cached_or_construct_output, map_files_in_director
 def convert_to_dolma(input_file_path, output_file_path):
     # The runtime for this function should be low (less than 5-10 min), as the machines are preemptible
     source = "hupd"
-    change_extension = lambda filepath: os.path.splitext(os.path.splitext(filepath)[0])[0] + '.jsonl.gz'
 
-    with fsspec.open(input_file_path, mode='rb', compression="gzip") as f:
+    with fsspec.open(input_file_path, mode="rb", compression="gzip") as f:
         with tarfile.open(fileobj=f) as tar:
-            with fsspec.open(change_extension(output_file_path), "wt", compression="gzip") as output:
+            with fsspec.open(
+                os.path.splitext(os.path.splitext(output_file_path)[0])[0] + ".jsonl.gz", "wt", compression="gzip"
+            ) as output:
                 for member in tar.getmembers():
-                    if member.name.endswith('.json'):
+                    if member.name.endswith(".json"):
                         f = tar.extractfile(member)
                         if f is not None:
                             content = f.read()
                             row = json.loads(content)
 
                             # The background and summary should be part of the full description, so we leave them out
-                            text = f"Title:\n{row['title']}\n\n" \
-                                   f"Abstract:\n{row['abstract']}\n\n" \
-                                   f"Claims:\n{row['claims']}\n\n" \
-                                   f"Full Description:\n{row['full_description']}"
+                            text = (
+                                f"Title:\n{row['title']}\n\n"
+                                f"Abstract:\n{row['abstract']}\n\n"
+                                f"Claims:\n{row['claims']}\n\n"
+                                f"Full Description:\n{row['full_description']}"
+                            )
 
-                            output.write(json.dumps({
-                                "id": row['application_number'],
-                                "text": text,
-                                "created": row['date_published'],
-                                "source": source,
-                                "metadata": {
-                                    "publication_number": row['publication_number'],
-                                    "decision": row['decision'],
-                                    "date_produced": row['date_produced'],
-                                    "main_cpc_label": row['main_cpc_label'],
-                                    "cpc_labels": row['cpc_labels'],
-                                    "main_ipcr_label": row['main_ipcr_label'],
-                                    "ipcr_labels": row['ipcr_labels'],
-                                    "patent_number": row['patent_number'],
-                                    "filing_date": row['filing_date'],
-                                    "patent_issue_date": row['patent_issue_date'],
-                                    "abandon_date": row['abandon_date'],
-                                    "uspc_class": row['uspc_class'],
-                                    "uspc_subclass": row['uspc_subclass'],
-                                    "examiner_id": row['examiner_id'],
-                                    "examiner_name_last": row['examiner_name_last'],
-                                    "examiner_name_first": row['examiner_name_first'],
-                                    "examiner_name_middle": row['examiner_name_middle'],
-                                    # Leave out inventor_list for simplicity
-                                }
-                            }) + "\n")
+                            output.write(
+                                json.dumps(
+                                    {
+                                        "id": row["application_number"],
+                                        "text": text,
+                                        "created": row["date_published"],
+                                        "source": source,
+                                        "metadata": {
+                                            "publication_number": row["publication_number"],
+                                            "decision": row["decision"],
+                                            "date_produced": row["date_produced"],
+                                            "main_cpc_label": row["main_cpc_label"],
+                                            "cpc_labels": row["cpc_labels"],
+                                            "main_ipcr_label": row["main_ipcr_label"],
+                                            "ipcr_labels": row["ipcr_labels"],
+                                            "patent_number": row["patent_number"],
+                                            "filing_date": row["filing_date"],
+                                            "patent_issue_date": row["patent_issue_date"],
+                                            "abandon_date": row["abandon_date"],
+                                            "uspc_class": row["uspc_class"],
+                                            "uspc_subclass": row["uspc_subclass"],
+                                            "examiner_id": row["examiner_id"],
+                                            "examiner_name_last": row["examiner_name_last"],
+                                            "examiner_name_first": row["examiner_name_first"],
+                                            "examiner_name_middle": row["examiner_name_middle"],
+                                            # Leave out inventor_list for simplicity
+                                        },
+                                    }
+                                )
+                                + "\n"
+                            )
     return True
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Script to convert hupd data to dolma format.")
     # As a reminder all the processing in this function will be done on the head node. We should try
     # to keep number of jobs (started using ray job submit command) to minimum while trying to use tasks(ray.remote
     # function) as much as possible. For reference, fw uses only 1 job to process a complete dump which is about
     # 400GB of data and spawns about 75000 tasks (ray.remote functions).
-    parser.add_argument('--input_dir', type=str, help='Path to the hupd raw directory', required=True)
-    parser.add_argument('--output_dir', type=str, help='Path to store hupd dolma files', required=True)
+    parser.add_argument("--input_dir", type=str, help="Path to the hupd raw directory", required=True)
+    parser.add_argument("--output_dir", type=str, help="Path to store hupd dolma files", required=True)
 
     args = parser.parse_args()
 
