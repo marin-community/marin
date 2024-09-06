@@ -127,8 +127,8 @@ def process_dir(input_path: str, output_path: str, model_name_or_path: str, attr
         process_file_with_quality_classifier(input_filename, output_filename, quality_classifier)
 
 
-def get_process_filepath_func(subpaths: List[str]):
-    if len(subpaths) > 0:
+def get_process_filepath_func(subdirectories: List[str]):
+    if len(subdirectories) > 0:
         return process_dir
     else:
         return process_file_ray
@@ -138,7 +138,7 @@ def get_filepaths_and_process_filepath_func(inference_config: InferenceConfig):
     filepaths = fsspec_get_atomic_directories(inference_config.input_path)
     process_filepath_func = get_process_filepath_func(filepaths)
 
-    # This is the case where the directory has no subpaths. So, we are iterating through files and not directories
+    # This is the case where the directory has no subdirectories. So, we are iterating through files and not directories
     if len(filepaths) == 0:
         filepaths = fsspec_glob(os.path.join(inference_config.input_path, "**/*.jsonl.gz"))
 

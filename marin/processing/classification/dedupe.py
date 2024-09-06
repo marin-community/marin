@@ -8,7 +8,7 @@ import glob
 import shutil
 import subprocess
 import fsspec
-from marin.utils import validate_marin_gcp_path, fsspec_mkdirs, rebase_file_path, fsspec_get_curr_subpaths, fsspec_isdir, fsspec_dir_only_contains_files, fsspec_glob
+from marin.utils import validate_marin_gcp_path, fsspec_mkdirs, rebase_file_path, fsspec_get_curr_subdirectories, fsspec_isdir, fsspec_dir_only_contains_files, fsspec_glob
 
 def copy_files_in(input_path, local_base_dir):
     # Ensure input_path doesn't end with a slash
@@ -37,7 +37,7 @@ def copy_files_in(input_path, local_base_dir):
             with fsspec.open(output_file, "wb", compression="gzip") as f_local:
                 f_local.write(f_remote.read())
 
-    # Dolma deduplicator requires 'documents/' as a subpath
+    # Dolma deduplicator requires 'documents/' as a subdir
     print(f"Copied {len(input_files)} files to {os.path.join(local_base_dir, 'documents')}")
 
 def do_dedup(local_base_dir, attribute_name, min_length, min_words, bloom_filter_size, estimated_doc_count, false_positive_rate, processes):

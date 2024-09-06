@@ -70,8 +70,8 @@ def main(input_path, output_path):
         input_path (str): Path to the directory containing HTML files.
         output_path (str): Path to the output directory.
 
-    The function converts HTML files to Markdown format and saves them in the 'markdown' subpath of the output directory.
-    It also renders the HTML files and saves them in the 'html' subpath of the output directory.
+    The function converts HTML files to Markdown format and saves them in the 'markdown' subdir of the output directory.
+    It also renders the HTML files and saves them in the 'html' subdir of the output directory.
     """
     md_output_path = os.path.join(output_path, "markdown")
     html_output_path = os.path.join(output_path, "html")

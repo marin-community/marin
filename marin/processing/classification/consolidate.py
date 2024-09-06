@@ -94,7 +94,7 @@ def load_all_attributes(attribute_filenames: List[str]) -> Dict[str, Dict[str, A
             print(f"Warning: Attribute file or directory {filename} does not exist. Skipping.")
             continue
 
-        # If filename is a directory, glob all jsonl.gz files in it and its subpaths
+        # If filename is a directory, glob all jsonl.gz files in it and its subdirectories
         if fsspec_isdir(filename):
             matching_files = fsspec_glob(os.path.join(filename, "**/*.jsonl.gz"))
         else:
@@ -139,10 +139,10 @@ def process_file(input_filename: str, output_filename: str, all_attributes: Dict
                 output_file.write(output_line)
 
 @ray.remote
-def process_directory(input_subpath: str, output_subpath: str, all_attributes: Dict[str, Dict[str, Any]], filters: List[Tuple[str, float, Callable]]):
-    files = fsspec_glob(os.path.join(input_subpath, "**/*.jsonl.gz"))
+def process_directory(input_subdir: str, output_subdir: str, all_attributes: Dict[str, Dict[str, Any]], filters: List[Tuple[str, float, Callable]]):
+    files = fsspec_glob(os.path.join(input_subdir, "**/*.jsonl.gz"))
     for input_filename in files:
-        output_filename = rebase_file_path(input_subpath, input_filename, output_subpath)
+        output_filename = rebase_file_path(input_subdir, input_filename, output_subdir)
         process_file(input_filename, output_filename, all_attributes, filters)
 
 def apply_filters(input_path: str, output_path: str, attribute_files: List[str], filters: List[Tuple[str, float, Callable]], max_tasks_in_flight: int):
@@ -150,16 +150,16 @@ def apply_filters(input_path: str, output_path: str, attribute_files: List[str],
     all_attributes = load_all_attributes(attribute_files)
 
     
-    subpaths = fsspec_get_atomic_directories(input_path)
-    print(f"subpaths: {subpaths}")
+    subdirectories = fsspec_get_atomic_directories(input_path)
+    print(f"subdirectories: {subdirectories}")
 
     tasks = []
-    for input_subpath in subpaths:
-        print(f"Processing {input_subpath}")
-        output_subpath = rebase_file_path(input_path, input_subpath, output_path)
-        fsspec_mkdirs(output_subpath)
+    for input_subdir in subdirectories:
+        print(f"Processing {input_subdir}")
+        output_subdir = rebase_file_path(input_path, input_subdir, output_path)
+        fsspec_mkdirs(output_subdir)
 
-        task = process_directory.remote(input_subpath, output_subpath, all_attributes, filters)
+        task = process_directory.remote(input_subdir, output_subdir, all_attributes, filters)
         tasks.append(task)
 
         if len(tasks) >= max_tasks_in_flight:
