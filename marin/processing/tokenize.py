@@ -2,9 +2,9 @@
 Main for running Levanter's tokenizer infrastructure on a dataset using an existing Ray cluster.
 
 Usage:
-    ray job submit --working-dir . --no-wait -- python -m marin.processing.tokenize --input_dir <input-dir> --cache_dir <cache-dir> --dataset_name <dataset-name> --tokenizer <tokenizer_name>
+    ray job submit --working-dir . --no-wait -- python -m marin.processing.tokenize --input_path <input-dir> --cache_dir <cache-dir> --dataset_name <dataset-name> --tokenizer <tokenizer_name>
 
-    input_dir: The input directory containing the jsonl files or the name of a hf dataset
+    input_path: The input directory containing the jsonl files or the name of a hf dataset
     cache_dir: The base directory to save the tokenized files
     dataset_name: The name of the dataset for the cache dir. This must be the same as the dataset name used in the Levanter training run
     tokenizer: The name of the tokenizer to use. This must be the same as the tokenizer used in the Levanter training run
@@ -80,7 +80,7 @@ def levanter_tokenize(input_path: str, tokenizer_name: str, output_path: str):
 
 @dataclasses.dataclass
 class TokenizeConfig:
-    input_dir: str  # input dir containing jsonl files, or hf dataset
+    input_path: str  # input dir containing jsonl files, or hf dataset
     cache_dir: str  # base path to save the tokenized files
     dataset_name: str  # dataset name. Must be the same as you intend to use in the dataset spec for the training run
     tokenizer: str  # tokenizer name. Should be the same as you intend to use in the tokenizer spec for the training run
@@ -88,8 +88,8 @@ class TokenizeConfig:
 
 @draccus.wrap()
 def main(config: TokenizeConfig):
-    output_dir = os.path.join(config.cache_dir, config.dataset_name, "train")
-    response = levanter_tokenize.remote(config.input_dir, config.tokenizer, output_dir)
+    output_path = os.path.join(config.cache_dir, config.dataset_name, "train")
+    response = levanter_tokenize.remote(config.input_path, config.tokenizer, output_path)
     ray.get(response)
 
 
