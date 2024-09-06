@@ -8,11 +8,13 @@ from scripts.copy_hf_dataset_to_gcs import create_transfer_job, get_gcloud_proje
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Transfer a Hugging Face dataset to Google Cloud Storage.")
-    parser.add_argument('--dataset_name', required=False, help="The name of the Hugging Face dataset.",
-                        default="HUPD/hupd")
-    parser.add_argument('--destination_path', required=True, help="The name of the destination in a GCS bucket.")
-    parser.add_argument('--urls_dir', required=True,
-                        help="The GCS path to save the URLs file. Should be an HTTP accessible location.")
+    parser.add_argument(
+        "--dataset_name", required=False, help="The name of the Hugging Face dataset.", default="HUPD/hupd"
+    )
+    parser.add_argument("--destination_path", required=True, help="The name of the destination in a GCS bucket.")
+    parser.add_argument(
+        "--urls_dir", required=True, help="The GCS path to save the URLs file. Should be an HTTP accessible location."
+    )
     args = parser.parse_args()
 
     # Automatically determine the project ID
