@@ -1,11 +1,11 @@
 """
 Anything which is not inside ray.remote function will be executed on the head node, so keep it to minimum.
-path: scripts/legal/process_hupd.py
+path: scripts/legal/transform_hupd.py
 Inputs: one tar.gz file per year containing multiple json files, Output: one jsonl.gz file in dolma format per year
 
 Example Usage:
 ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- \
-python scripts/legal/process_hupd.py \
+python operations/transform/legal/transform_hupd.py \
 --input_dir gs://marin-data/raw/huggingface.co/datasets/HUPD/hupd/resolve/main/data \
 --output_dir gs://marin-data/processed/law/hupd-v1.0/txt/documents
 """
