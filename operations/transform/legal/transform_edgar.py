@@ -15,9 +15,8 @@ import json
 import os
 
 import fsspec
-import ray
-
 import pandas as pd
+import ray
 
 from marin.core.runtime import cached_or_construct_output, map_files_in_directory
 
@@ -49,8 +48,8 @@ def convert_to_dolma(input_file_path, output_file_path):
                 "text": text,
                 "source": source,
                 "metadata": {
-                    f"year": row['year'],
-                    f"filename": row['filename'],
+                    "year": row['year'],
+                    "filename": row['filename'],
                 }
             }) + "\n")
     return True

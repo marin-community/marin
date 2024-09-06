@@ -43,8 +43,8 @@ def convert_to_dolma(input_file_path, output_file_path):
                 "text": row['text'],
                 "source": source,
                 "metadata": {
-                    f"type": row['type'],
-                    f"jurisdiction": row['jurisdiction'],
+                    "type": row['type'],
+                    "jurisdiction": row['jurisdiction'],
                 }
             }) + "\n")
     return True
