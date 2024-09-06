@@ -65,6 +65,11 @@ Or if you want to use the yaml quickstart file:
 ```bash
 ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python -m marin.processing.classification.dedupe --config_path marin/processing/classification/config/quick_start_dedupe.yaml
 ```
+
+To run decomination for MMLU on the quickstart data we will also use a yaml
+```bash
+ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python -m marin.processing.classification.dedupe --config_path marin/processing/classification/config/quick_start_decontaminate.yaml
+```
 ### Consolidation Command
 After the attribute folders have been generated, to filter the dataset based on the quality rules following the example above you can run the following quickstart. We currently only support yaml
 and not command line args for this pipeline to allow support arbitrary classifiers for consolidation.
