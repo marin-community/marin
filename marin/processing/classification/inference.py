@@ -46,7 +46,7 @@ class JsonFilenameProvider(FilenameProvider):
 
 
 @ray.remote
-def process_file_using_actor_pool(input_dir: str, output_dir: str, model_name: str):
+def process_file_using_actor_pool(input_dir: str, output_dir: str, model_name_or_path: str):
     ctx = ray.data.DataContext.get_current()
     ctx.execution_options.preserve_order = True
 
@@ -63,7 +63,7 @@ def process_file_using_actor_pool(input_dir: str, output_dir: str, model_name: s
         AutoClassifier,
         # concurrency=(1,16),
         concurrency=(1, len(files)),
-        fn_constructor_args=(model_name),
+        fn_constructor_args=(model_name_or_path),
         batch_size=None,
     ).write_json(
         output_dir,
@@ -74,10 +74,10 @@ def process_file_using_actor_pool(input_dir: str, output_dir: str, model_name: s
 
 @ray.remote
 @cached_or_construct_output(success_suffix="SUCCESS")
-def process_file_ray(input_filename: str, output_filename: str, model_name: str, attribute_name: str):
+def process_file_ray(input_filename: str, output_filename: str, model_name_or_path: str, attribute_name: str, model_type: str | None):
     print(f"[*] Read in dataset {input_filename}")
 
-    quality_classifier = AutoClassifier.from_model_path(model_name, attribute_name)
+    quality_classifier = AutoClassifier.from_model_path(model_name_or_path, attribute_name, model_type=model_type)
 
     json_list = []
     with fsspec.open(input_filename, "rt", compression="gzip") as f_in:
@@ -117,10 +117,10 @@ def process_file_with_quality_classifier(input_filename: str, output_filename: s
 
 @ray.remote
 @cached_or_construct_output(success_suffix="SUCCESS")
-def process_dir(input_dir: str, output_dir: str, model_name: str, attribute_name: str):
+def process_dir(input_dir: str, output_dir: str, model_name_or_path: str, attribute_name: str, model_type: str | None):
     files = fsspec_glob(os.path.join(input_dir, "**/*.jsonl.gz"))
 
-    quality_classifier = AutoClassifier.from_model_path(model_name, attribute_name)
+    quality_classifier = AutoClassifier.from_model_path(model_name_or_path, attribute_name, model_type=model_type)
 
     for input_filename in files:
         output_filename = rebase_file_path(input_dir, input_filename, output_dir)
@@ -169,7 +169,7 @@ def main(inference_config: InferenceConfig):
                 pip=inference_config.runtime.requirements_filepath,
             ),
             resources=inference_config.runtime.resources,
-        ).remote(input_filepath, output_filepath, inference_config.model_name, inference_config.attribute_name)
+        ).remote(input_filepath, output_filepath, inference_config.model_name, inference_config.attribute_name, inference_config.model_type)
 
         responses.append(result_ref)
 
