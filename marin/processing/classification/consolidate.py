@@ -17,8 +17,8 @@ class FilterConfig:
     name: str
     label: Optional[str] = None
     threshold: Optional[float] = 0.5
-    min_score: Optional[float] = 0.0
-    max_score: Optional[float] = 1e6
+    min_score: float = 0.0
+    max_score: float = 1e6
     
     def __post_init__(self):
         if not (self.min_score < self.threshold < self.max_score):
