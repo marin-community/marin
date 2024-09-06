@@ -102,7 +102,7 @@ setup_commands:
     "google-api-python-client==2.129.0"
     "google-cloud-storage-transfer==1.11.3"
     "requests"
-    "ray[default]==2.22.0"
+    "ray[default]==2.34.0"
   - ~/miniconda3/envs/evaluate/bin/pip install https://storage.googleapis.com/pytorch-xla-releases/wheels/tpuvm/torch-nightly+20240601-cp310-cp310-linux_x86_64.whl https://storage.googleapis.com/pytorch-xla-releases/wheels/tpuvm/torch_xla-nightly+20240601-cp310-cp310-linux_x86_64.whl
   - ~/miniconda3/envs/evaluate/bin/pip install torch_xla[tpu] -f https://storage.googleapis.com/libtpu-releases/index.html
   - ~/miniconda3/envs/evaluate/bin/pip install torch_xla[pallas] -f https://storage.googleapis.com/jax-releases/jax_nightly_releases.html -f https://storage.googleapis.com/jax-releases/jaxlib_nightly_releases.html
