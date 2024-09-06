@@ -20,12 +20,13 @@ import ray
 import transformers
 
 from marin.utils import fsspec_glob, fsspec_isdir
-
 logger = logging.getLogger(__name__)
 
 def _get_jsonls(input_path):
-    if fsspec_isdir(input_path):
-        return fsspec_glob(os.path.join(input_path, "/**/*.jsonl*"))
+    if fsspec_isdir(input_path) or input_path.endswith("/"):
+        logger.info(f"Getting all jsonl files in {input_path}")
+        logger.info(f"Using glob: {os.path.join(input_path, '**/*.jsonl.gz')}")
+        return fsspec_glob(os.path.join(input_path, "**/*.jsonl.gz"))
     else:
         return fsspec_glob(input_path)
 
@@ -47,7 +48,7 @@ def is_hf_dataset(path):
 def levanter_tokenize(input_path: str, tokenizer_name: str, output_path: str):
     import levanter
     from levanter.data.text import BatchTokenizer
-    from levanter.data.shard_cache import build_or_load_cache  # noqa
+    from levanter.store.cache import build_or_load_cache
     from levanter.data.metrics_monitor import LoggerMetricsMonitor
 
     logging.basicConfig(level=logging.INFO)
@@ -58,11 +59,12 @@ def levanter_tokenize(input_path: str, tokenizer_name: str, output_path: str):
     batch_tokenizer = BatchTokenizer(tokenizer, enforce_eos=True)
 
     if is_hf_dataset(input_path):
-        hf_source = levanter.data.sharded_dataset.WrappedHFDataset(input_path, split="train")
-        source = hf_source.map(lambda x: x["text"])
+        source = levanter.data.datasource_from_hf(input_path, split="train")
     else:
         jsonls = _get_jsonls(input_path)
-        source = levanter.data.sharded_dataset.TextUrlDataset(jsonls)
+        source = levanter.data.datasource_from_jsonl(jsonls)
+
+    source = source.map(lambda d: d["text"])
 
     cache = build_or_load_cache(
         cache_dir=output_path,
