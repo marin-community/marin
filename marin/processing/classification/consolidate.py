@@ -18,7 +18,18 @@ class FilterConfig:
     label: Optional[str] = None
     threshold: Optional[float] = 0.5
     min_score: Optional[float] = 0.0
-    max_score: Optional[float] = 1.0
+    max_score: Optional[float] = 1e6
+    
+    def __post_init__(self):
+        if not (self.min_score < self.threshold < self.max_score):
+            raise ValueError(f"Scores must satisfy: min_score ({self.min_score}) < threshold ({self.threshold}) < max_score ({self.max_score})")
+        
+        if "dedupe" in self.type:
+            self.filter_func = dedupe_filter_func
+        elif "classify" in self.type:
+            self.filter_func = quality_filter_func
+        else:
+            raise ValueError(f"Unknown attribute type: {self.type}")
 
     
 @dataclass
@@ -29,15 +40,12 @@ class ConsolidateConfig:
     filters: List[FilterConfig] # The list of filters to apply
 
     max_tasks_in_flight: int = 1000  # The maximum number of flights in a task
-
-
-def validate_scores(min_score: float, max_score: float, threshold: float) -> None:
-    if not (0 <= min_score < threshold < max_score <= 1):
-        raise ValueError(f"Scores must satisfy: 0 <= min_score ({min_score}) < threshold ({threshold}) < max_score ({max_score}) <= 1")
     
 def is_high_quality(attributes: Dict[str, Any], attribute_name: str, threshold: float, label: str, min_score: float, max_score: float) -> bool:
     if attribute_name in attributes:
         quality_scores = attributes[attribute_name]
+        if label not in quality_scores:
+            raise ValueError(f"Label '{label}' not found in quality scores for attribute '{attribute_name}'!")
         score = quality_scores.get(label, 0)
         return min_score <= score <= max_score and score >= threshold
     else:
@@ -57,7 +65,6 @@ def remove_duplicates(input_data: Dict[str, Any], duplicate_spans: List[List[int
     return input_data
 
 def quality_filter_func(input_data: Dict[str, Any], attributes_data: Dict[str, Any], attribute_name: str, threshold: float, label: str, min_score: float, max_score: float) -> Dict[str, Any]:
-    validate_scores(min_score, max_score, threshold)
     if is_high_quality(attributes_data, attribute_name, threshold, label, min_score, max_score):
         return input_data
     return None
