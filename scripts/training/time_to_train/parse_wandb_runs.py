@@ -1,11 +1,13 @@
 import pytz
-from datetime import datetime
-
-import pandas as pd
 import wandb
 
+import pandas as pd
+from datetime import datetime
 
-WANDB_ENTITY = "stanford-mercury"
+from marin.utilities.gcs_utils import get_secret
+
+
+WANDB_ENTITY = get_secret("WANDB_ENTITY")
 WANDB_PROJECT = "marin"
 WANDB_PATH = f"{WANDB_ENTITY}/{WANDB_PROJECT}"
 TIMEOUT = 3600  # seconds
