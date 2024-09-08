@@ -92,8 +92,8 @@ if __name__ == "__main__":
     # to keep number of jobs (started using ray job submit command) to minimum while trying to use tasks(ray.remote
     # function) as much as possible. For reference, fw uses only 1 job to process a complete dump which is about
     # 400GB of data and spawns about 75000 tasks (ray.remote functions).
-    parser.add_argument('--input_path', type=str, help='Path to the hupd raw directory', required=True)
-    parser.add_argument('--output_path', type=str, help='Path to store hupd dolma files', required=True)
+    parser.add_argument("--input_path", type=str, help="Path to the hupd raw directory", required=True)
+    parser.add_argument("--output_path", type=str, help="Path to store hupd dolma files", required=True)
 
     args = parser.parse_args()
 
