@@ -6,6 +6,7 @@ Helpful functions for manipulating Google Cloud Storage (path manipulation, pars
 
 from pathlib import Path
 
+
 def split_gcs_path(gs_uri: str) -> tuple[str, Path]:
     """Split a GCS URI of the form `gs://BUCKET/path/to/resource` into a tuple (BUCKET, Path(path/to/resource))."""
     if not gs_uri.startswith("gs://"):
