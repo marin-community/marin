@@ -1,5 +1,5 @@
-input_dir: "gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart/"
-output_dir: "gs://marin-us-central2/attributes/hello_world_fw/v1.0/dclm-fasttext-quality-quickstart/"
+input_path: "gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart/"
+output_path: "gs://marin-us-central2/attributes/hello_world_fw/v1.0/dclm-fasttext-quality-quickstart/"
 model_name: "mlfoundations/fasttext-oh-eli5"
 attribute_name: "dclm-fasttext-quality"
 runtime:
