@@ -29,7 +29,7 @@ def get_secret(secret_id: str) -> secretmanager.GetSecretRequest:
     client = secretmanager.SecretManagerServiceClient()
 
     # Build the resource name of the secret version
-    name = client.secret_version_path("marin-ml", secret_id, "latest")
+    name = client.secret_version_path("hai-gcp-models", secret_id, "latest")
 
     # Access the secret version
     response = client.access_secret_version(name=name)
