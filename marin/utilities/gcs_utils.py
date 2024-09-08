@@ -5,7 +5,6 @@ Helpful functions for manipulating Google Cloud Storage (path manipulation, pars
 """
 
 from pathlib import Path
-from google.cloud import secretmanager
 
 def split_gcs_path(gs_uri: str) -> tuple[str, Path]:
     """Split a GCS URI of the form `gs://BUCKET/path/to/resource` into a tuple (BUCKET, Path(path/to/resource))."""
@@ -18,23 +17,3 @@ def split_gcs_path(gs_uri: str) -> tuple[str, Path]:
         return maybe_bucket_path[0], Path(".")
 
     return maybe_bucket_path[0], Path(maybe_bucket_path[1])
-
-
-def get_secret(secret_id: str) -> secretmanager.GetSecretRequest:
-    """
-    Retrieve the secret key from Secret Manager.
-    """
-
-    # Create the Secret Manager client.
-    client = secretmanager.SecretManagerServiceClient()
-
-    # Build the resource name of the secret version
-    name = client.secret_version_path("hai-gcp-models", secret_id, "latest")
-
-    # Access the secret version
-    response = client.access_secret_version(name=name)
-
-    # Return the secret key
-    key = response.payload.data.decode('UTF-8')
-
-    return key
