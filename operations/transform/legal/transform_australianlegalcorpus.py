@@ -6,9 +6,9 @@ Inputs: one raw jsonl file, Output: one jsonl.gz file in dolma format
 Example Usage:
 ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- \
 python operations/transform/legal/transform_australianlegalcorpus.py \
---input_dir gs://marin-data/raw/huggingface.co/datasets/umarbutler/open-australian-legal-corpus/resolve/\
+--input_path gs://marin-data/raw/huggingface.co/datasets/umarbutler/open-australian-legal-corpus/resolve/\
 66e7085ff50b8d71d3089efbf60e02ef5b53cf46 \
---output_dir gs://marin-data/processed/law/australianlegalcorpus-v1.0/txt/documents
+--output_path gs://marin-data/processed/law/australianlegalcorpus-v1.0/txt/documents
 """
 
 import argparse
@@ -70,14 +70,14 @@ if __name__ == "__main__":
     # to keep number of jobs (started using ray job submit command) to minimum while trying to use tasks(ray.remote
     # function) as much as possible. For reference, fw uses only 1 job to process a complete dump which is about
     # 400GB of data and spawns about 75000 tasks (ray.remote functions).
-    parser.add_argument("--input_dir", type=str, help="Path to the australianlegalcorpus raw directory", required=True)
-    parser.add_argument("--output_dir", type=str, help="Path to store australianlegalcorpus dolma files", required=True)
+    parser.add_argument('--input_path', type=str, help='Path to the australianlegalcorpus raw directory', required=True)
+    parser.add_argument('--output_path', type=str, help='Path to store australianlegalcorpus dolma files', required=True)
 
     args = parser.parse_args()
 
     ray.init()
 
-    responses = map_files_in_directory(convert_to_dolma.remote, args.input_dir, "**/*.jsonl", args.output_dir)
+    responses = map_files_in_directory(convert_to_dolma.remote, args.input_path, "**/*.jsonl", args.output_path)
 
     # Wait for all the tasks to finish.
     # The try and catch is important here as incase convert_to_dolma throws any exception, that exception is passed here,

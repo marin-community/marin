@@ -1,7 +1,7 @@
 # Copy this template yaml and change the input and output directory accordingly.
 
-input_dir: "gs://marin-$REGION/documents/$EXPERIMENT/$DATASET/$VERSION/"
-output_dir: "gs://marin-$REGION/attributes/$EXPERIMENT/$DATASET/$VERSION/"
+input_path: "gs://marin-$REGION/documents/$EXPERIMENT/$DATASET/$VERSION/"
+output_path: "gs://marin-$REGION/attributes/$EXPERIMENT/$DATASET/$VERSION/"
 model_name: "HuggingFaceFW/fineweb-edu-classifier"
 attribute_name: "fineweb-edu-quality"
 runtime:

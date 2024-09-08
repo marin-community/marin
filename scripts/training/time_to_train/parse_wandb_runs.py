@@ -1,11 +1,12 @@
+import os
 import pytz
-from datetime import datetime
-
-import pandas as pd
 import wandb
 
+import pandas as pd
+from datetime import datetime
 
-WANDB_ENTITY = "stanford-mercury"
+
+WANDB_ENTITY = os.getenv("WANDB_ENTITY", "stanford-mercury")
 WANDB_PROJECT = "marin"
 WANDB_PATH = f"{WANDB_ENTITY}/{WANDB_PROJECT}"
 TIMEOUT = 3600  # seconds
