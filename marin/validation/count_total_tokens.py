@@ -2,7 +2,7 @@
 Usage:
 
 ray job submit --working-dir . --no-wait -- \
-python -m marin.validation.count_total_tokens --input_dir gs://marin-data/filtered/dclm-fasttext-quality/fineweb/fw-v1.0/md/
+python -m marin.validation.count_total_tokens --input_path gs://marin-data/filtered/dclm-fasttext-quality/fineweb/fw-v1.0/md/
 """
 
 import argparse
@@ -37,16 +37,16 @@ def process_file(input_filename: str, output_filename: str, byte_counter: ray.ac
     file_bytes = count_bytes_in_file(input_filename)
     byte_counter.add.remote(file_bytes)
 
-def count_total_bytes(input_dir: str) -> int:
+def count_total_bytes(input_path: str) -> int:
     ray.init()
 
     byte_counter = ByteCounter.remote()
 
     responses = map_files_in_directory(
         process_file.remote,
-        input_dir,
+        input_path,
         "**/*.jsonl.gz",
-        "gs://marin-data/scratch/chrisc/count-total-tokens/", # random output_dir, unused
+        "gs://marin-data/scratch/chrisc/count-total-tokens/", # random output_path, unused
         None,
         byte_counter
     )
@@ -61,11 +61,11 @@ def count_total_bytes(input_dir: str) -> int:
 
 def main():
     parser = argparse.ArgumentParser(description="Count total bytes in 'text' fields of jsonl.gz files.")
-    parser.add_argument("--input_dir", type=str, required=True, help="Input directory containing jsonl.gz files")
+    parser.add_argument("--input_path", type=str, required=True, help="Input directory containing jsonl.gz files")
 
     args = parser.parse_args()
 
-    total_bytes = count_total_bytes(args.input_dir)
+    total_bytes = count_total_bytes(args.input_path)
     print(f"Total bytes in 'text' fields: {total_bytes}")
 
 if __name__ == "__main__":

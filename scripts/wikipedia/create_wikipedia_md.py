@@ -6,8 +6,8 @@
 # Example Usage:
 # ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- \
 # python scripts/hello_world_fw/process.py \
-# --input_dir gs://marin-data/hello_world_fw/fineweb/fw-v1.0/CC-MAIN-2024-10/000_00000/
-# --output_dir gs://marin-data/scratch/user/hello_world_fw/fineweb/fw-v1.0/CC-MAIN-2024-10/000_00000/
+# --input_path gs://marin-data/hello_world_fw/fineweb/fw-v1.0/CC-MAIN-2024-10/000_00000/
+# --output_path gs://marin-data/scratch/user/hello_world_fw/fineweb/fw-v1.0/CC-MAIN-2024-10/000_00000/
 import argparse
 import json
 from dataclasses import dataclass
@@ -64,8 +64,8 @@ def html_to_md(input_file_path, output_file_path):
 
 @dataclass
 class HelloWorldConfig:
-    input_dir: str  # Path to the fineweb html directory
-    output_dir: str  # Path to store fineweb markdown files
+    input_path: str  # Path to the fineweb html directory
+    output_path: str  # Path to store fineweb markdown files
     task: TaskConfig = TaskConfig()
     ray: RayConfig = RayConfig()
 
@@ -73,7 +73,7 @@ class HelloWorldConfig:
 @draccus.wrap()
 def main(config: HelloWorldConfig):
     config.ray.initialize()
-    # Example of input_dir = gs://marin-data/hello_world_fw/fineweb/fw-v1.0/CC-MAIN-2024-10/000_00000/
+    # Example of input_path = gs://marin-data/hello_world_fw/fineweb/fw-v1.0/CC-MAIN-2024-10/000_00000/
     # We will process all html_jsonl.gz files in this directory.
     # As a reminder all the processing in this function will be done on the head node. We should try
     # to keep number of jobs (started using ray job submit command) to minimum while trying to use tasks(ray.remote
@@ -81,7 +81,7 @@ def main(config: HelloWorldConfig):
     # 400GB of data and spawns about 75000 tasks (ray.remote functions).
 
     responses = map_files_in_directory(
-        html_to_md, config.input_dir, "**/*_html.jsonl.gz", config.output_dir, task_config=config.task
+        html_to_md, config.input_path, "**/*_html.jsonl.gz", config.output_path, task_config=config.task
     )
     try:
         ray.get(responses)
@@ -96,20 +96,20 @@ def main(config: HelloWorldConfig):
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Example script to convert wikipedia html to markdown.")
-    # Example of input_dir = gs://marin-data/processed/wikipedia/html/2024-06-14
+    # Example of input_path = gs://marin-data/processed/wikipedia/html/2024-06-14
     # We will process all html_jsonl.gz files in this directory.
     # As a reminder all the processing in this function will be done on the head node. We should try
     # to keep number of jobs (started using ray job submit command) to minimum while trying to use tasks(ray.remote
     # function) as much as possible. For reference, fw uses only 1 job to process a complete dump which is about
     # 400GB of data and spawns about 75000 tasks (ray.remote functions).
-    parser.add_argument("--input_dir", type=str, help="Path to the wikipedia html directory", required=True)
-    parser.add_argument("--output_dir", type=str, help="Path to store wikipedia markdown files", required=True)
+    parser.add_argument("--input_path", type=str, help="Path to the wikipedia html directory", required=True)
+    parser.add_argument("--output_path", type=str, help="Path to store wikipedia markdown files", required=True)
 
     args = parser.parse_args()
 
     ray.init()
 
-    responses = map_files_in_directory(html_to_md.remote, args.input_dir, "*jsonl.gz", args.output_dir)
+    responses = map_files_in_directory(html_to_md.remote, args.input_path, "*jsonl.gz", args.output_path)
 
     # Wait for all the tasks to finish.
     # The try and catch is important here as incase html_to_md throws any exception, that exception is passed here,
