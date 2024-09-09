@@ -44,12 +44,14 @@ class BertDataset(Dataset):
         self.texts = []
         self.labels = []
 
-        with fsspec.open(dataset_path, 'rb') as f:
+        with fsspec.open(dataset_path, 'rb', compression="infer") as f:
             for line in f:
                 example = json.loads(line)
 
                 self.texts.append(example['text'])
                 self.labels.append(example['label'])
+                if len(labels) > 0 and example['label'] not in self.label_set:
+                    raise ValueError(f"Label {example['label']} not in provided label set")
                 self.label_set.add(example['label']) # if input labels is not empty then this should typically be a no-op
         
         self.num_labels = len(self.label_set)

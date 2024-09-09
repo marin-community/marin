@@ -126,7 +126,7 @@ def train_model(
     Returns:
         bool: True if the process is successful.
     """
-    logger = logging.getLogger("ray")
+    logger = logging.getLogger("bert")
 
     logger.info(f"Training BERT model for experiment {experiment}")
     datetime_start = datetime.utcnow()
