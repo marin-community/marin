@@ -69,15 +69,6 @@ setup_commands:
   - gcloud config set compute/zone us-central2-b
   - mkdir $HOME/.cache/huggingface -p
   - gcloud secrets versions access latest --secret=HF_TOKEN > $HOME/.cache/huggingface/token
-#setup_commands:
-#  - sudo apt install docker.io
-#
-#worker_setup_commands:
-#  - pip install -U "jax[tpu]" -f https://storage.googleapis.com/jax-releases/libtpu_releases.html
-#
-## Levanter is installed on head node without Jax
-#head_setup_commands:
-#  - pip install levanter@git+https://github.com/stanford-crfm/levanter.git
-#
+
 # Set Head Node == `ray_head_default`
 head_node_type: head_default
