@@ -1,5 +1,5 @@
 FROM rayproject/ray:nightly-py311-cpu
-RUN sudo apt-get update && sudo apt-get install -y clang curl
+RUN sudo apt-get update && sudo apt-get install -y clang curl g++ vim
 
 # install rust
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
