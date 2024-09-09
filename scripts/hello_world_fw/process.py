@@ -7,12 +7,12 @@
 # On Cluster (After starting ray dashboard):
 # ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- \
 # python scripts/hello_world_fw/process.py \
-# --input_dir gs://marin-us-central2/raw/hello_world_fw/v1.0/CC-MAIN-2024-10/000_00000
-# --output_dir gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart/CC-MAIN-2024-10/000_00000
+# --input_path gs://marin-us-central2/raw/hello_world_fw/v1.0/CC-MAIN-2024-10/000_00000
+# --output_path gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart/CC-MAIN-2024-10/000_00000
 # On Local:
 # python scripts/hello_world_fw/process.py \
-# --input_dir gs://marin-us-central2/raw/hello_world_fw/v1.0/CC-MAIN-2024-10/000_00000
-# --output_dir gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart/CC-MAIN-2024-10/000_00000
+# --input_path gs://marin-us-central2/raw/hello_world_fw/v1.0/CC-MAIN-2024-10/000_00000
+# --output_path gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart/CC-MAIN-2024-10/000_00000
 import argparse
 import json
 
@@ -69,19 +69,19 @@ def html_to_md(input_file_path, output_file_path):
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description="Example script to convert html to markdown.")
-    # Example of input_dir = gs://marin-us-central2/raw/hello_world_fw/v1.0/CC-MAIN-2024-10/000_00000
+    # Example of input_path = gs://marin-us-central2/raw/hello_world_fw/v1.0/CC-MAIN-2024-10/000_00000
     # We will process all html_jsonl.gz files in this directory.
     # As a reminder all the processing in this function will be done on the head node. We should try
     # to keep number of jobs (started using ray job submit command) to minimum while trying to use tasks(ray.remote
     # function) as much as possible. For reference, fw uses only 1 job to process a complete dump which is about
     # 400GB of data and spawns about 75000 tasks (ray.remote functions).
-    parser.add_argument('--input_dir', type=str, help='Path to the html directory', required=True)
-    parser.add_argument('--output_dir', type=str, help='Path to store markdown files', required=True)
+    parser.add_argument('--input_path', type=str, help='Path to the html directory', required=True)
+    parser.add_argument('--output_path', type=str, help='Path to store markdown files', required=True)
 
     args = parser.parse_args()
 
     ray.init()
-    responses = map_files_in_directory(html_to_md, args.input_dir, "**/*.jsonl.gz", args.output_dir)
+    responses = map_files_in_directory(html_to_md, args.input_path, "**/*.jsonl.gz", args.output_path)
 
 
     # Wait for all the tasks to finish.
