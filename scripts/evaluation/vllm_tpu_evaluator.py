@@ -9,7 +9,7 @@ import time
 import ray
 
 from scripts.evaluation.evaluator import Evaluator, Dependency, ModelConfig
-from scripts.evaluation.utils import run_bash_command
+from scripts.evaluation.utils import run_bash_command, kill_process_on_port
 
 
 class VllmTpuEvaluator(Evaluator, ABC):
@@ -58,6 +58,7 @@ class VllmTpuEvaluator(Evaluator, ABC):
         TPUs require installing VLLM from source.
         """
         # Additional dependencies to install in order for vLLM to work on TPUs
+        start_time: float = time.time()
         run_bash_command("sudo apt-get update && sudo apt-get install libopenblas-dev --yes")
         run_bash_command("pip install torch_xla[tpu] -f https://storage.googleapis.com/libtpu-releases/index.html")
         run_bash_command(
@@ -76,6 +77,8 @@ class VllmTpuEvaluator(Evaluator, ABC):
         vllm_path: str = os.path.join(current_dir, "../../vllm")
         sys.path.insert(0, vllm_path)
         os.environ["PYTHONPATH"] = f"{vllm_path}:{os.environ.get('PYTHONPATH', '')}"
+        elapsed_time: float = time.time() - start_time
+        print(f"Installed vLLM and dependencies. ({elapsed_time}s)")
 
     @staticmethod
     def start_vllm_server_in_background(
@@ -83,7 +86,7 @@ class VllmTpuEvaluator(Evaluator, ABC):
     ) -> str:
         """
         Serve the model with a local vLLM server in the background.
-        Returns the server url.
+        Returns the port the server is running on.
         """
         # Download the model if it's not already downloaded
         downloaded_path: Optional[str] = model.ensure_downloaded(
@@ -117,7 +120,7 @@ class VllmTpuEvaluator(Evaluator, ABC):
                         print(f"Model {model_name_or_path} is not loaded yet. Loaded models: {loaded_models}")
             except requests.ConnectionError:
                 # If the connection is refused, wait and try again
-                print(f"vLLM server is not ready yet (elapsed time in seconds): {elapsed_time})")
+                print(f"vLLM server is not ready yet. Elapsed time in seconds: {elapsed_time}")
 
             # Check if the timeout has been reached
             elapsed_time = time.time() - start_time
@@ -127,7 +130,19 @@ class VllmTpuEvaluator(Evaluator, ABC):
 
             time.sleep(5)  # Wait 5 seconds before retrying
 
+        print(f"vLLM server is ready at {server_url} ({elapsed_time}s).")
         return server_url
+
+    @staticmethod
+    def cleanup(model: ModelConfig, vllm_port: int) -> None:
+        """
+        Clean up the vLLM server and any other resources.
+        """
+        print("Cleaning up resources.")
+        # Kill the vLLM server
+        kill_process_on_port(vllm_port)
+        # Delete the checkpoint
+        model.destroy()
 
     _python_version: str = "3.10"
     _pip_packages: List[Dependency] = DEFAULT_PIP_PACKAGES
