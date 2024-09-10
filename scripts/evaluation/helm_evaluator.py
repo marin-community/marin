@@ -102,35 +102,41 @@ class HELMEvaluator(VllmTpuEvaluator):
         from helm.common.general import ensure_file_downloaded
 
         # Download the model from GCS or HuggingFace and serve it with vLLM
-        self.start_vllm_server_in_background(model)
+        vllm_port: int = 8000
+        self.start_vllm_server_in_background(model, port=vllm_port)
 
-        # HELM requires the model name to match the local path
-        if model.path is not None:
-            model.name = model.path
+        try:
+            # HELM requires the model name to match the local path
+            if model.path is not None:
+                model.name = model.path
 
-        # Download the run_entries file specified in `evals`
-        for run_entries_file in evals:
-            run_entries_url: str = self.RUN_ENTRIES_TEMPLATE.format(run_entries_file=run_entries_file)
-            ensure_file_downloaded(source_url=run_entries_url, target_path=run_entries_file)
-            assert (
-                os.path.exists(run_entries_file),
-                f"Failed to download. Does {run_entries_file} exist at {self.ALL_RUN_ENTRIES_URL}?",
+            # Download the run_entries file specified in `evals`
+            for run_entries_file in evals:
+                run_entries_url: str = self.RUN_ENTRIES_TEMPLATE.format(run_entries_file=run_entries_file)
+                ensure_file_downloaded(source_url=run_entries_url, target_path=run_entries_file)
+                assert (
+                    os.path.exists(run_entries_file),
+                    f"Failed to download. Does {run_entries_file} exist at {self.ALL_RUN_ENTRIES_URL}?",
+                )
+
+            # Write the model configuration files necessary for HELM
+            self.write_model_config_files(model)
+
+            # Run HELM with the model and the specified evals
+            run_bash_command(
+                f"helm-run --conf-paths {' '.join(evals)} "
+                f"--models-to-run {model.name} "
+                f"--max-eval-instances {self.DEFAULT_MAX_EVAL_INSTANCES} "
+                f"--output-path {self.BENCHMARK_OUTPUT_PATH} "
+                f"--suite {self.RESULTS_FOLDER} "
+                f"--local-path {self.PROD_ENV_PATH} "
             )
+            assert os.path.exists(self.RESULTS_PATH), f"Results not found at {self.RESULTS_PATH}. Did HELM run?"
 
-        # Write the model configuration files necessary for HELM
-        self.write_model_config_files(model)
-
-        # Run HELM with the model and the specified evals
-        run_bash_command(
-            f"helm-run --conf-paths {' '.join(evals)} "
-            f"--models-to-run {model.name} "
-            f"--max-eval-instances {self.DEFAULT_MAX_EVAL_INSTANCES} "
-            f"--output-path {self.BENCHMARK_OUTPUT_PATH} "
-            f"--suite {self.RESULTS_FOLDER} "
-            f"--local-path {self.PROD_ENV_PATH} "
-        )
-        assert os.path.exists(self.RESULTS_PATH), f"Results not found at {self.RESULTS_PATH}. Did HELM run?"
-
-        # Upload the results to GCS
-        if is_remote_path(output_path):
-            upload_to_gcs(self.RESULTS_PATH, output_path)
+            # Upload the results to GCS
+            if is_remote_path(output_path):
+                upload_to_gcs(self.RESULTS_PATH, output_path)
+        except Exception as e:
+            print(f"An error occurred: {e}")
+        finally:
+            self.cleanup(model, vllm_port=vllm_port)

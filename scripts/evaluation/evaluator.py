@@ -1,5 +1,6 @@
 import os
 import json
+import shutil
 from abc import ABC, abstractmethod
 from typing import Dict, List, Optional
 from dataclasses import dataclass, field
@@ -78,6 +79,14 @@ class ModelConfig:
             # Show the contents of self.path
             print(f"Downloaded model checkpoint to {self.path}: {os.listdir(self.path)}")
             return local_path
+
+    def destroy(self) -> None:
+        """
+        Deletes the model checkpoint if it was downloaded from GCS.
+        """
+        if os.path.exists(self.path):
+            shutil.rmtree(self.path)
+            print(f"Deleted local checkpoint at {self.path}.")
 
 
 class Evaluator(ABC):
