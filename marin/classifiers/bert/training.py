@@ -24,7 +24,7 @@ import torch_xla.distributed.xla_multiprocessing as xmp
 
 from transformers import BertTokenizer, BertForSequenceClassification, AdamW
 
-from marin.utils import fsspec_glob
+from marin.utils import fsspec_glob, fsspec_cpdir
 from marin.classifiers.utils import merge_shards_and_split, shuffle
 from marin.classifiers.bert.utils import format_example, BertDataset
 
@@ -149,8 +149,7 @@ def train_model(
 
             xmp.spawn(_mp_fn, args=(hf_model,train_path,model_path,lr,batch_size,num_epochs))
 
-            fs = fsspec.core.get_fs_token_paths(experiment_path, mode="wb")[0]
-            fs.put(os.path.join(tmp_dir, "*"), experiment_path, recursive=True)
+            fsspec_cpdir(tmp_dir, experiment_path)
         
         return True
     

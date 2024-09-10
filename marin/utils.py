@@ -131,7 +131,22 @@ def fsspec_isdir(dir_path):
     fs, _ = fsspec.core.url_to_fs(dir_path)
     return fs.isdir(dir_path)
 
+def fsspec_cpdir(dir_path: str, target_path: str) -> bool:
+    """
+    Recursively copies all contents of dir_path to target_path.
 
+    Args:
+        dir_path (str): The path of the directory to copy.
+        target_path (str): The target path.
+
+    Returns:
+        bool: True if successful.
+    """
+
+    fs = fsspec.core.get_fs_token_paths(target_path, mode="wb")[0]
+    fs.put(os.path.join(dir_path, "*"), target_path, recursive=True)
+    
+    return True
 
 def validate_marin_gcp_path(path: str) -> str:
     """
