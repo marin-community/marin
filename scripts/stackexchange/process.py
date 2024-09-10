@@ -100,10 +100,10 @@ def post_to_md(
 @dataclass
 class ProcessStackExchangeConfig:
     # fmt: off
-    input_dir: str = (                                      # GCS Path with StackExchange dumps per subdomain (.7z)
+    input_path: str = (                                      # GCS Path with StackExchange dumps per subdomain (.7z)
         "gs://marin-us-central2/raw/stackexchange/v2024-04-02"
     )
-    output_dir: str = (                                     # GCS Path to write Dolma-formatted markdown files
+    output_path: str = (                                     # GCS Path to write Dolma-formatted markdown files
         "gs://marin-us-central2/documents/stackexchange/v2024-04-02/{experiment_id}/"
     )
 
@@ -125,19 +125,19 @@ def main(cfg: ProcessStackExchangeConfig) -> None:
     ray.init()
 
     # GCS Output Path `experiment_id` should reflect Markdown format
-    output_dir = cfg.output_dir.format(experiment_id=f"md-{cfg.markdown_format.value}")
+    output_path = cfg.output_path.format(experiment_id=f"md-{cfg.markdown_format.value}")
 
     # === This is basically a rewrite of `map_files_in_directory` so we can have finer-grained control ===
 
     # Handle StackOverflow's unique format -- purge the -Badges/-Comments/-<Whatever> files!
-    files = [f for f in fsspec_glob(os.path.join(cfg.input_dir, "*.7z")) if "stackoverflow.com-" not in f]
-    files.append(os.path.join(cfg.input_dir, "stackoverflow.com-Posts.7z"))
+    files = [f for f in fsspec_glob(os.path.join(cfg.input_path, "*.7z")) if "stackoverflow.com-" not in f]
+    files.append(os.path.join(cfg.input_path, "stackoverflow.com-Posts.7z"))
 
     # Invoke Ray Functions --> track job references
     responses: List[ray.ObjectRef] = []
     for input_file in files:
         subdomain = re.match(r"(.+?)\.(stackexchange|net|com)", os.path.basename(input_file)).group(1)
-        output_file = os.path.join(output_dir, f"{subdomain}.jsonl.gz")
+        output_file = os.path.join(output_path, f"{subdomain}.jsonl.gz")
 
         # Handle RAM Overrides
         if subdomain in RAY_MEMORY_OVERRIDES:
