@@ -133,7 +133,7 @@ def process_one_warc_file(input_file_path, output_file):
 
 
 @ray.remote(memory=10 * 1024 * 1024 * 1024)  # 10 GB
-def process_fw_parquet(input_file_path, output_dir_path):
+def process_fw_parquet(input_file_path, output_path_path):
     """
        Converts fineweb files to html and markdown. This will essentially take in fineweb and split different groups based
        on file_path and write all those file paths to a new folder and then run ray for each group
@@ -143,9 +143,9 @@ def process_fw_parquet(input_file_path, output_dir_path):
     """
 
     # Example of input_path = gs://marin-data/raw/fineweb/fw-v1.0/CC-MAIN-2024-10/000_00000.parquet
-    # Example of output_dir_path = gs://marin-data/processed/fineweb/fw-v1.0/ledgers/CC-MAIN-2024-10/000_00000/
+    # Example of output_path_path = gs://marin-data/processed/fineweb/fw-v1.0/ledgers/CC-MAIN-2024-10/000_00000/
     print(f"Processing {input_file_path}")
-    success_file = output_dir_path + "/_SUCCESS"
+    success_file = output_path_path + "/_SUCCESS"
     datetime_start = datetime.utcnow()
 
     if fsspec_exists(success_file):
@@ -164,7 +164,7 @@ def process_fw_parquet(input_file_path, output_dir_path):
     grouped = df.groupby("file_path")
 
     for index, (file_url, group_df) in enumerate(grouped):
-        filename = os.path.join(output_dir_path, f"{index}.parquet")
+        filename = os.path.join(output_path_path, f"{index}.parquet")
         # filename = gs://marin-data/processed/fineweb/fw-v1.0/ledgers/CC-MAIN-2024-10/000_00000/0.parquet
 
         output_file_name = filename.replace(".parquet", "_processed.jsonl.gz")
@@ -198,7 +198,7 @@ def process_fw_parquet(input_file_path, output_dir_path):
     with fsspec.open(success_file, 'w') as f:
         metadata = {
             "input_file_path": input_file_path,
-            "output_file_path": output_dir_path,
+            "output_file_path": output_path_path,
             "datetime_start": str(datetime_start),
             "datetime_end": str(datetime_end),
         }
@@ -209,11 +209,11 @@ def process_fw_parquet(input_file_path, output_dir_path):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Convert fineweb to markdown.")
-    # Example of input_dir = gs://marin-data/raw/fineweb/fw-v1.0/CC-MAIN-2024-10/
-    parser.add_argument('--input_dir', type=str, help='Path to the fineweb parquet diretory', required=True)
+    # Example of input_path = gs://marin-data/raw/fineweb/fw-v1.0/CC-MAIN-2024-10/
+    parser.add_argument('--input_path', type=str, help='Path to the fineweb parquet diretory', required=True)
 
     args = parser.parse_args()
-    files = fsspec_glob(os.path.join(args.input_dir, "*.parquet"))
+    files = fsspec_glob(os.path.join(args.input_path, "*.parquet"))
     MAX_NUM_PENDING_TASKS = 15  # Max number of parquet files we want to process in pending state
     NUM_TASKS = len(files)
     ray.init()
@@ -229,10 +229,10 @@ if __name__ == '__main__':
                 print(f"Error processing the group: {e}")
                 continue
 
-        output_dir_path = file.replace("raw/fineweb/fw-v1.0",
+        output_path_path = file.replace("raw/fineweb/fw-v1.0",
                                        "processed/fineweb/fw-v1.0/ledgers").replace(".parquet", "")
-        print(f"Starting Processing for the fw parquet file: {file} in output_dir: {output_dir_path}")
-        result_refs.append(process_fw_parquet.remote(file, output_dir_path))
+        print(f"Starting Processing for the fw parquet file: {file} in output_path: {output_path_path}")
+        result_refs.append(process_fw_parquet.remote(file, output_path_path))
 
     # Wait for all the tasks to finish
     try:
