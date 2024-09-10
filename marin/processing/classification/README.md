@@ -16,8 +16,8 @@ python -m marin.processing.classification.inference --config marin/processing/cl
 ```
 
 Feel free to edit the config yaml to fit your needs:
-- `input_dir`: The directory containing the documents to be filtered. If you input a directory with multiple directories, the script will filter to run inference on each directory in parallel.
-- `output_dir`: The directory to save the filtered documents. We rebase the output directory's filepath to match that of the input directory.
+- `input_path`: The directory containing the documents to be filtered. If you input a directory with multiple directories, the script will filter to run inference on each directory in parallel.
+- `output_path`: The directory to save the filtered documents. We rebase the output directory's filepath to match that of the input directory.
 - `model_name`: The name of the model on Huggingface to use. The model needs to be hosted on huggingface for now and it uses the same convention as Huggingface.
 - `attribute_name`: The name of the attribute to use. 
 - `runtime`: The runtime environment and memory constraints to use. For example, DCLM fasttext models require downloading the fasttext package while Fineweb's edu classifier requires downloading Jax with TPU support as well as Huggingface.
@@ -58,7 +58,7 @@ python -m marin.processing.classification.eval.annotations_server --input-file g
 See the dedupe.md file for more details; below is the quick start command
 
 ```bash
-ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python marin/processing/classification/dedupe.py --input_dir gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart/ --output_dir gs://marin-us-central2/attributes/hello_world_fw/v1.0/quickstart_duplicates/
+ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python marin/processing/classification/dedupe.py --input_path gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart/ --output_path gs://marin-us-central2/attributes/hello_world_fw/v1.0/quickstart_duplicates/
 ```
 ### Consolidation Command
 After the attribute folders have been generated, to filter the dataset based on the quality rules following the example above you can run the following quickstart. We currently only support yaml
