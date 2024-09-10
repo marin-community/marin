@@ -1,5 +1,5 @@
-input_path: "gs://marin-us-central2/scratch/decontamination/decontamination_demo.jsonl.gz"
-output_path: "gs://marin-us-central2/scratch/decontamination/dolma_decontamination_outputs/"
+input_path: "gs://marin-us-central2/scratch/decontamination/"
+output_path: "gs://marin-us-central2/scratch/dolma_decontamination_outputs/"
 max_tasks_in_flight: 1000
 
 filters:

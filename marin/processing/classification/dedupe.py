@@ -4,7 +4,7 @@ import tempfile
 from tqdm import tqdm
 import subprocess
 import fsspec
-from marin.utils import validate_marin_gcp_path, fsspec_mkdirs, rebase_file_path, fsspec_glob
+from marin.utils import validate_marin_gcp_path, fsspec_mkdirs, rebase_file_path, fsspec_glob, fsspec_rm
 import draccus
 from dataclasses import dataclass
 
@@ -135,7 +135,32 @@ def copy_files_out(local_base_dir, output_path, attribute_name):
     
     print(f"Uploaded {files_uploaded} files to {output_path}")
 
+def delete_jsonl_files(dir_path):
+    """
+    Delete all JSONL files (both .jsonl and .jsonl.gz) in the specified directory and its subdirectories.
 
+    Args:
+        dir_path (str): The path to the directory containing JSONL files.
+
+    Returns:
+        int: The number of files deleted.
+    """
+    # Ensure dir_path doesn't end with a slash
+    dir_path = dir_path.rstrip('/')
+    
+    # Get all .jsonl and .jsonl.gz files in the directory and its subdirectories
+    glob_path_jsonl = f"{dir_path}/**/*.jsonl"
+    glob_path_jsonl_gz = f"{dir_path}/**/*.jsonl.gz"
+    
+    files_to_delete = fsspec_glob(glob_path_jsonl) + fsspec_glob(glob_path_jsonl_gz)
+    
+    files_deleted = 0
+    for file_path in tqdm(files_to_delete, desc="Deleting files"):
+        if fsspec_rm(file_path):
+            files_deleted += 1
+    
+    print(f"Deleted {files_deleted} JSONL files from {dir_path}")
+    return files_deleted
 
 @ray.remote(runtime_env={"pip": ["dolma"]})
 def dolma_dedup(input_path, output_path, attribute_name, min_length, min_words, bloom_filter_size, estimated_doc_count, false_positive_rate, processes, decomtaminate_dir, decontaminate):
@@ -147,6 +172,8 @@ def dolma_dedup(input_path, output_path, attribute_name, min_length, min_words, 
                 copy_files_in(decomtaminate_dir, tmpdir)
                 do_dedup(tmpdir, attribute_name, min_length, min_words, bloom_filter_size, estimated_doc_count, false_positive_rate, processes, read_only=False, bloom_filter_file="decotaminated_bloom_filter.bin")
 
+                # Delete all JSONL files in the temporary directory since we have bloom filter
+                delete_jsonl_files(tmpdir)
                 # Then copy files of interest and apply bloom filter read only
                 copy_files_in(input_path, tmpdir)
                 do_dedup(tmpdir, attribute_name, min_length, min_words, bloom_filter_size, estimated_doc_count, false_positive_rate, processes, read_only=True, bloom_filter_file="decotaminated_bloom_filter.bin")

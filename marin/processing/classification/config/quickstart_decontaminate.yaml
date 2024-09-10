@@ -1,4 +1,4 @@
-input_path: gs://marin-us-central2/scratch/decontamination/decontamination_demo.jsonl.gz #gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart/
+input_path: gs://marin-us-central2/scratch/decontamination/v1/ #gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart/
 output_path: gs://marin-us-central2/attributes/hello_world_fw/v1.0/quickstart_decontaminate_mmlu/
 decontaminate_path: gs://marin-us-central2/documents/mmlu/v2024-08-30/v1-basic/ #gs://marin-us-central2/documents/stackexchange/v2024-04-02/
 decontaminate: true
