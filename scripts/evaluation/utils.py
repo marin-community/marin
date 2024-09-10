@@ -1,3 +1,4 @@
+import time
 from typing import Dict, Optional
 import os
 import subprocess
@@ -28,6 +29,7 @@ def download_from_gcs(gcs_path: str, destination_path: str) -> None:
     Downloads the folder at `gcs_path` to `destination_path`.
     """
     print(f"Downloading {gcs_path} from GCS.")
+    start_time: float = time.time()
     fs = fsspec.filesystem("gcs")
     if not fs.exists(gcs_path):
         raise FileNotFoundError(f"{gcs_path} does not exist in GCS.")
@@ -35,8 +37,8 @@ def download_from_gcs(gcs_path: str, destination_path: str) -> None:
     # The slash is needed to download the contents of the folder to `destination_path`
     os.makedirs(destination_path, exist_ok=True)
     fs.get(gcs_path + "/", destination_path, recursive=True)
-    # run_bash_command(f"gsutil -m cp -r {gcs_path} {destination_path}")
-    print(f"Downloaded {gcs_path} to {destination_path}.")
+    elapsed_time_seconds: float = time.time() - start_time
+    print(f"Downloaded {gcs_path} to {destination_path} ({elapsed_time_seconds}s).")
 
 
 def upload_to_gcs(local_path: str, gcs_path: str) -> None:
