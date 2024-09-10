@@ -68,7 +68,7 @@ ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- pyth
 
 To run decomination for MMLU on the quickstart data we will also use a yaml
 ```bash
-ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python -m marin.processing.classification.dedupe --config_path marin/processing/classification/config/quick_start_decontaminate.yaml
+ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python -m marin.processing.classification.dedupe --config_path marin/processing/classification/config/quickstart_decontaminate.yaml
 ```
 ### Consolidation Command
 After the attribute folders have been generated, to filter the dataset based on the quality rules following the example above you can run the following quickstart. We currently only support yaml
@@ -90,7 +90,11 @@ We can also run both consolidation operations  (or many more) all in parallel. F
 ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python -m marin.processing.classification.consolidate --config_path marin/processing/classification/config/quickstart_consolidate.yaml
 ```
 
-The yaml for the full consolidationj is as follows:
+If you would like to test the decontamination demo then after generate the attributes for MMLU then run
+```bash
+ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python -m marin.processing.classification.consolidate --config_path marin/processing/classification/config/quickstart_consolidate_decontaminate.yaml
+```
+The yaml for the full consolidation is as follows:
 ```yaml
 input_path: "gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart/"
 output_path: "gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart_consolidate_e2e/"
