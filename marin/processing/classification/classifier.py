@@ -54,25 +54,27 @@ class FasttextClassifier(BaseClassifier):
         if urllib.parse.urlparse(self.model_name).scheme:
             fs, fs_path = fsspec.core.url_to_fs(self.model_name)
 
-            model_basename = os.path.basename(self.model_name)
-            local_filepath = f"/tmp/{model_basename}"
-            lock_file = f"/tmp/{model_basename}.lock"
-            success_file = f"/tmp/{model_basename}.success"
+            if not fs_path.endswith(".bin"):
+                fs_path = os.path.join(fs_path, "model.bin")
+
+            model_descriptor = fs.checksum(fs_path)
+            model_basename = os.path.basename(fs_path)
+
+            local_filepath = f"/tmp/{model_descriptor}/{model_basename}"
+
+            lock_file = f"/tmp/{model_descriptor}.lock"
+            success_file = f"/tmp/{model_descriptor}.success"
 
             with FileLock(lock_file):
                 if not os.path.exists(success_file):
-                    # Reset local_filepath if it exists. This ensures we get the newest model each time.
-                    # This operation is amortized across each process so this is not too heavy of an operation.
-                    if os.path.exists(local_filepath):
-                        os.unlink(local_filepath)
-
-                    if not os.path.exists(local_filepath):
-                        fs.get(fs_path, local_filepath)
-                        atexit.register(lambda: os.unlink(local_filepath))
-                        print(f"Downloaded model from {fs_path} to {local_filepath}")
+                    fs.get(fs_path, local_filepath)
+                    atexit.register(lambda: os.unlink(local_filepath))
+                    print(f"Downloaded model from {fs_path} to {local_filepath}")
 
                     with open(success_file, "w") as f:
                         f.write("success")
+                else:
+                    print(f"Model already downloaded to {local_filepath}")
 
             # Wait for the file to be ready, with a timeout
             timeout_s = 300  # 5 minutes
@@ -169,19 +171,28 @@ class AutoClassifier(BaseClassifier):
         "fineweb": FinewebEduClassifier,
     }
 
-    def __init__(self, model_name: str, attribute_name: str, *args, **kwargs):
+    def __init__(self, model_name: str, attribute_name: str, model_type: str|None, *args, **kwargs):
         self.model_name = model_name
+        self.model_type = model_type
         self.attribute_name = attribute_name
-        self.cls = self.from_model_path(model_name, attribute_name, *args, **kwargs)
+        self.cls = self.from_model_path(model_name, attribute_name, model_type, *args, **kwargs)
 
     def __call__(self, batch: Dict[str, Any]) -> Dict[str, Any]:
         return self.cls.__call__(batch)
 
     @classmethod
-    def from_model_path(cls, model_name: str, attribute_name: str, *args, **kwargs) -> BaseClassifier:
-        for key in cls._MODEL_NAME_TO_CLS_DICT.keys():
-            if key in model_name:
-                print(f"Using {key} model")
-                return cls._MODEL_NAME_TO_CLS_DICT[key](model_name, attribute_name, *args, **kwargs)
+    def from_model_path(cls, model_name_or_path: str, attribute_name: str, model_type: str | None, *args, **kwargs) -> BaseClassifier:
+        if model_type is None:
+            for key in cls._MODEL_NAME_TO_CLS_DICT.keys():
+                if key in model_name_or_path:
+                    print(f"Using {key} model")
+                    break
+            else:
+                raise ValueError(f"Model type must be specified for model {model_name_or_path} or must have one of {cls._MODEL_NAME_TO_CLS_DICT.keys()} in the name.")
+        else:
+            key = model_type.lower()
 
-        raise ValueError(f"Model name {model_name} not supported")
+        try:
+            return cls._MODEL_NAME_TO_CLS_DICT[key](model_name_or_path, attribute_name, model_type, *args, **kwargs)
+        except KeyError:
+            raise ValueError(f"Model name {model_name_or_path} not supported. Must have one of {cls._MODEL_NAME_TO_CLS_DICT.keys()} in the name.")

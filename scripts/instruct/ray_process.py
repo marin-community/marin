@@ -21,10 +21,10 @@ from marin.processing.instruct.utils import process_instruction
 # Ray will not impose any physical limits on the resources used by the function, these numbers are used for scheduling.
 @ray.remote(memory=1 * 1024 * 1024 * 1024, runtime_env={"pip": ["s3fs"]}, num_cpus=1)  # 1 GB
 @cached_or_construct_output(success_suffix="SUCCESS")
-def process_raw_chunk(input_file_path, output_dir):
+def process_raw_chunk(input_file_path, output_path):
     input_type = "parquet" if input_file_path.endswith(".parquet") else "jsonl"
     base_name = os.path.splitext(os.path.basename(input_file_path))[0]
-    print(f"\n input type: {input_type}, input_file_path: {input_file_path}, output_dir: {output_dir}")
+    print(f"\n input type: {input_type}, input_file_path: {input_file_path}, output_path: {output_path}")
     md_json_files = []
     text_json_files = []
 
@@ -66,7 +66,7 @@ def process_raw_chunk(input_file_path, output_dir):
 
     # Save the Markdown JSONL file
     version = "v1_olmo_mix"
-    save_path = "/".join(output_dir.split("/")[:5])
+    save_path = "/".join(output_path.split("/")[:5])
 
     
     md_output_path = os.path.join(save_path,  version, "md", f"{base_name}.jsonl.gz")
@@ -89,8 +89,8 @@ def process_raw_chunk(input_file_path, output_dir):
 
 @dataclass
 class RayConfig:
-    input_dir: str   # Path to the fineweb html directory
-    output_dir: str  # Path to store fineweb markdown files
+    input_path: str   # Path to the fineweb html directory
+    output_path: str  # Path to store fineweb markdown files
     task: TaskConfig = TaskConfig()
     ray: RayConfig = RayConfig()
 
@@ -98,7 +98,7 @@ class RayConfig:
 @draccus.wrap()
 def main(config: RayConfig):
     config.ray.initialize()
-    # Example of input_dir = gs://marin-data/hello_world_fw/fineweb/fw-v1.0/CC-MAIN-2024-10/000_00000/
+    # Example of input_path = gs://marin-data/hello_world_fw/fineweb/fw-v1.0/CC-MAIN-2024-10/000_00000/
     # We will process all html_jsonl.gz files in this directory.
     # As a reminder all the processing in this function will be done on the head node. We should try
     # to keep number of jobs (started using ray job submit command) to minimum while trying to use tasks(ray.remote
@@ -108,9 +108,9 @@ def main(config: RayConfig):
 
     responses = map_files_in_directory(
         process_raw_chunk,
-        config.input_dir,
+        config.input_path,
         "**/*.jsonl.gz",
-        config.output_dir,
+        config.output_path,
         task_config=config.task
     )
     try:
@@ -127,23 +127,23 @@ if __name__ == '__main__':
 
 
     parser = argparse.ArgumentParser(description="Example script to convert HF instruction data to markdown.")
-    # Example of input_dir = gs://marin-data/hello_world_fw/fineweb/fw-v1.0/CC-MAIN-2024-10/000_00000/
+    # Example of input_path = gs://marin-data/hello_world_fw/fineweb/fw-v1.0/CC-MAIN-2024-10/000_00000/
     # We will process all html_jsonl.gz files in this directory.
     # As a reminder all the processing in this function will be done on the head node. We should try
     # to keep number of jobs (started using ray job submit command) to minimum while trying to use tasks(ray.remote
     # function) as much as possible. For reference, fw uses only 1 job to process a complete dump which is about
     # 400GB of data and spawns about 75000 tasks (ray.remote functions).
-    parser.add_argument('--input_dir', type=str, help='Path to  raw parquet/jsonl directory', required=True)
-    parser.add_argument('--output_dir', type=str, help='Path to processed html/markdown files', required=True)
+    parser.add_argument('--input_path', type=str, help='Path to  raw parquet/jsonl directory', required=True)
+    parser.add_argument('--output_path', type=str, help='Path to processed html/markdown files', required=True)
     parser.add_argument('--input_type', type=str, choices=['jsonl', 'parquet'], default='jsonl', help='Type of input file')
 
     args = parser.parse_args()
 
     ray.init()
     if args.input_type == 'parquet':
-        responses = map_files_in_directory(process_raw_chunk.remote, args.input_dir, "**/*.parquet", args.output_dir, args.input_type)
+        responses = map_files_in_directory(process_raw_chunk.remote, args.input_path, "**/*.parquet", args.output_path, args.input_type)
     else:
-        responses = map_files_in_directory(process_raw_chunk.remote, args.input_dir, "**/*.jsonl.gz", args.output_dir, args.input_type)
+        responses = map_files_in_directory(process_raw_chunk.remote, args.input_path, "**/*.jsonl.gz", args.output_path, args.input_type)
 
     # Wait for all the tasks to finish.
     # The try and catch is important here as incase process_raw_chunk throws any exception, that exception is passed here,

@@ -1,7 +1,5 @@
-# Copy this template yaml and change the input and output directory accordingly.
-
-input_path: "gs://marin-$REGION/documents/$EXPERIMENT/$DATASET/$VERSION/"
-output_path: "gs://marin-$REGION/attributes/$EXPERIMENT/$DATASET/$VERSION/"
+input_path: "gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart/"
+output_path: "gs://marin-us-central2/attributes/hello_world_fw/v1.0/dclm-fasttext-quality-quickstart/"
 model_name: "mlfoundations/fasttext-oh-eli5"
 attribute_name: "dclm-fasttext-quality"
 runtime:

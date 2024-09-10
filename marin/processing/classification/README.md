@@ -16,8 +16,8 @@ python -m marin.processing.classification.inference --config marin/processing/cl
 ```
 
 Feel free to edit the config yaml to fit your needs:
-- `input_dir`: The directory containing the documents to be filtered. If you input a directory with multiple directories, the script will filter to run inference on each directory in parallel.
-- `output_dir`: The directory to save the filtered documents. We rebase the output directory's filepath to match that of the input directory.
+- `input_path`: The directory containing the documents to be filtered. If you input a directory with multiple directories, the script will filter to run inference on each directory in parallel.
+- `output_path`: The directory to save the filtered documents. We rebase the output directory's filepath to match that of the input directory.
 - `model_name`: The name of the model on Huggingface to use. The model needs to be hosted on huggingface for now and it uses the same convention as Huggingface.
 - `attribute_name`: The name of the attribute to use. 
 - `runtime`: The runtime environment and memory constraints to use. For example, DCLM fasttext models require downloading the fasttext package while Fineweb's edu classifier requires downloading Jax with TPU support as well as Huggingface.
@@ -77,17 +77,17 @@ and not command line args for this pipeline to allow support arbitrary classifie
 You can deduplicate files as follows
 
 ```bash
-ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python -m marin.processing.classification.consolidate --config_path marin/processing/classification/config/quick_start_consolidate_dedupe.yaml
+ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python -m marin.processing.classification.consolidate --config_path marin/processing/classification/config/quickstart_consolidate_dedupe.yaml
 ```
 We now run quality filtering on the subsequent files like so
 
 ```bash
-ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python -m marin.processing.classification.consolidate --config_path marin/processing/classification/config/quick_start_consolidate_fasttext.yaml
+ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python -m marin.processing.classification.consolidate --config_path marin/processing/classification/config/quickstart_consolidate_fasttext.yaml
 ```
 We can also run both consolidation operations  (or many more) all in parallel. For the quickstart the combined command for deduping and quality filtering is
 
 ```bash
-ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python -m marin.processing.classification.consolidate --config_path marin/processing/classification/config/quick_start_consolidate.yaml
+ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python -m marin.processing.classification.consolidate --config_path marin/processing/classification/config/quickstart_consolidate.yaml
 ```
 
 The yaml for the full consolidationj is as follows:
