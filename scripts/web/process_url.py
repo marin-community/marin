@@ -12,8 +12,8 @@ from marin.markdown import to_markdown
 
 
 if __name__ == '__main__':
-    out_dir = "output"
-    os.makedirs(out_dir, exist_ok=True)
+    out_path = "output"
+    os.makedirs(out_path, exist_ok=True)
     for url in sys.argv[1:]:
         # being a little sneaky. not really doing crawling.
         with fsspec.open(url, "r",
@@ -64,14 +64,14 @@ if __name__ == '__main__':
         title = out["title"]
         md = out["content"]
 
-        with open(f"{out_dir}/{base_name}.orig.html", "w") as f:
+        with open(f"{out_path}/{base_name}.orig.html", "w") as f:
             print(html, file=f)
 
 
-        with open(f"{out_dir}/{base_name}.readability.html", "w") as f:
+        with open(f"{out_path}/{base_name}.readability.html", "w") as f:
             print(out["html"], file=f)
 
-        with open(f"{out_dir}/{base_name}.md", "w") as f:
+        with open(f"{out_path}/{base_name}.md", "w") as f:
             print(f"# {title}\n", file=f)
             print(md, file=f)
 
