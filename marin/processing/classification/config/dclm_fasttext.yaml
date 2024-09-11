@@ -3,6 +3,7 @@
 input_path: "gs://marin-$REGION/documents/$EXPERIMENT/$DATASET/$VERSION/"
 output_path: "gs://marin-$REGION/attributes/$EXPERIMENT/$DATASET/$VERSION/"
 model_name: "mlfoundations/fasttext-oh-eli5"
+model_type: "fasttext"
 attribute_name: "dclm-fasttext-quality"
 runtime:
   requirements_filepath: "marin/processing/classification/config/dclm_fasttext_requirements.txt"
