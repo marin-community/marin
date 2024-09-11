@@ -12,11 +12,10 @@ Run with:
         --revision="8fd6e8e"
 """
 
-import ray
-import draccus
-
-from typing import Optional
 from dataclasses import dataclass
+
+import draccus
+import ray
 
 from marin.utilities.huggingface_hub_utils import download_hf_dataset
 from marin.utilities.storage_transfer_utils import wait_for_transfer_job
@@ -26,7 +25,7 @@ from marin.utilities.storage_transfer_utils import wait_for_transfer_job
 class DownloadConfig:
     # fmt: off
     gcs_output_path: str                                    # Path to store raw data on GCS (includes gs://$BUCKET/...)
-    wait_for_completion: bool = False                        # Wait for Job Completion (if True, will block until job completes)
+    wait_for_completion: bool = False                        # if True, will block until job completes
 
     # HuggingFace Dataset Parameters
     hf_dataset_id: str                                      # HF Dataset to Download (as `$ORG/$DATASET` on HF Hub)
@@ -54,7 +53,6 @@ class DownloadConfig:
 @ray.remote
 def _wait_for_job_completion(job_url: str, timeout: int) -> None:
     """Wait for a Transfer Job to complete.
-    
     Parameters:
         job_url (str): URL to the Transfer Job
         timeout (int): Maximum time to wait for the job to complete (in seconds).
@@ -68,7 +66,7 @@ def _wait_for_job_completion(job_url: str, timeout: int) -> None:
 
 
 @draccus.wrap()
-def download(cfg: DownloadConfig) -> Optional[ray.ObjectRef]:
+def download(cfg: DownloadConfig) -> None | ray.ObjectRef:
     print(f"[*] Downloading HF Dataset `{cfg.hf_dataset_id}` to `{cfg.gcs_output_path}`")
     job_url = download_hf_dataset(cfg.hf_dataset_id, cfg.revision, cfg.gcs_output_path, cfg.public_gcs_path)
 
