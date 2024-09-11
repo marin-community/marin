@@ -4,7 +4,7 @@
 # python operations/download/legal/download_hupd.py --destination_path gs://somewhere/ --urls_dir gs://somewhere_publicly_readable
 import argparse
 
-from scripts.copy_hf_dataset_to_gcs import create_transfer_job, get_gcloud_project, save_urls
+from marin.utilities.copy_hf_dataset_to_gcs import create_transfer_job, get_gcloud_project, save_urls
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Transfer a Hugging Face dataset to Google Cloud Storage.")
