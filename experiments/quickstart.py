@@ -20,8 +20,7 @@ def execute(fn: Callable | ray.remote_function.RemoteFunction, *args, depends_on
     args, kwargs: List of arguments and key arguments to pass to the remote function
 
     """
-    for ref in depends_on:
-        ray.get(ref)
+    ray.get(depends_on)
 
     is_ray_fn = type(fn) is ray.remote_function.RemoteFunction
 
