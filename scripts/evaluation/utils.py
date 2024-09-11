@@ -43,6 +43,7 @@ def upload_to_gcs(local_path: str, gcs_path: str) -> None:
     """
     Uploads a folder `local_path` to Google Cloud Storage (GCS).
     """
+    print(f"Uploading {local_path}.")
     fs = fsspec.filesystem("gcs")
     # The slash is needed to upload the contents of the folder to `gcs_path`
     fs.put(local_path + "/", gcs_path, recursive=True)
