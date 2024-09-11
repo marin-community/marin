@@ -6,11 +6,12 @@ Training script for fastText quality classifiers.
 
 from dataclasses import dataclass, field
 
-import ray
 import draccus
+import ray
 
-from marin.classifiers.utils import create_label_attribute, attribute_to_dataset
 from marin.classifiers.fasttext.training import train_model
+from marin.classifiers.utils import create_label_attribute, attribute_to_dataset
+
 
 @dataclass
 class MainConfig:
@@ -30,6 +31,7 @@ class MainConfig:
         memory (int): Amount of memory allocated for remote training process (in GB).
         num_cpus (int): Number of CPUs allocated for remote training process.
     """
+
     output_base_path: str
     experiment: str
     pos_doc_path: str
@@ -42,30 +44,58 @@ class MainConfig:
     memory: int = 1
     num_cpus: int = 4
 
+
 def get_attr_path(doc_path: str, attr_experiment: str) -> str:
     """
     Utility function to get the attribute experiment path for a given document experiment path.
     """
-    base_path,experiment_path = doc_path.split('/documents/')
-    doc_experiment = experiment_path.split('/')[-1]
+    base_path, experiment_path = doc_path.split("/documents/")
+    doc_experiment = experiment_path.split("/")[-1]
 
     return f"{base_path}/attributes/{experiment_path.split(doc_experiment)[0]}{attr_experiment}"
 
-@draccus.wrap()
-def main(cfg: MainConfig):
-    ray.init()
 
+@ray.remote
+def main_ray(cfg: MainConfig):
     pos_attr_path = get_attr_path(cfg.pos_doc_path, cfg.experiment)
     neg_attr_path = get_attr_path(cfg.neg_doc_path, cfg.experiment)
 
     create_label_attribute(input_doc_path=cfg.pos_doc_path, output_attr_path=pos_attr_path, label="hq")
-    attribute_to_dataset(output_base_path=cfg.output_base_path, experiment=cfg.experiment, doc_path=cfg.pos_doc_path, attr_path=pos_attr_path, sampling_rate=cfg.pos_sampling_rate, seed=cfg.seed)
+    attribute_to_dataset(
+        output_base_path=cfg.output_base_path,
+        experiment=cfg.experiment,
+        doc_path=cfg.pos_doc_path,
+        attr_path=pos_attr_path,
+        sampling_rate=cfg.pos_sampling_rate,
+        seed=cfg.seed,
+    )
 
     create_label_attribute(input_doc_path=cfg.neg_doc_path, output_attr_path=neg_attr_path, label="lq")
-    attribute_to_dataset(output_base_path=cfg.output_base_path, experiment=cfg.experiment, doc_path=cfg.neg_doc_path, attr_path=neg_attr_path, sampling_rate=cfg.neg_sampling_rate, seed=cfg.seed)
+    attribute_to_dataset(
+        output_base_path=cfg.output_base_path,
+        experiment=cfg.experiment,
+        doc_path=cfg.neg_doc_path,
+        attr_path=neg_attr_path,
+        sampling_rate=cfg.neg_sampling_rate,
+        seed=cfg.seed,
+    )
 
-    train_model(base_path=cfg.output_base_path, experiment=cfg.experiment, training_args=cfg.training_args, seed=cfg.seed, val_split=cfg.val_split, memory_req=cfg.memory, num_cpus=cfg.num_cpus)
+    train_model(
+        base_path=cfg.output_base_path,
+        experiment=cfg.experiment,
+        training_args=cfg.training_args,
+        seed=cfg.seed,
+        val_split=cfg.val_split,
+        memory_req=cfg.memory,
+        num_cpus=cfg.num_cpus,
+    )
 
-if __name__ == '__main__':
+
+@draccus.wrap()
+def main(cfg: MainConfig):
+    ray.init()
+    ray.get(main_ray.remote(cfg))
+
+
+if __name__ == "__main__":
     main()
-
