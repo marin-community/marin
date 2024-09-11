@@ -1,17 +1,28 @@
 import json
-import fsspec
 import os
+from dataclasses import dataclass
 from typing import Dict, Any, List, Tuple, Callable, Optional
-import ray
-from dataclasses import dataclass, field
+
 import draccus
+import fsspec
+import ray
 
 from marin.core.runtime import cached_or_construct_output
-from marin.utils import fsspec_get_atomic_directories, fsspec_glob, rebase_file_path, fsspec_mkdirs, fsspec_exists, validate_marin_gcp_path, fsspec_isdir
+from marin.utils import (
+    fsspec_get_atomic_directories,
+    fsspec_glob,
+    rebase_file_path,
+    fsspec_mkdirs,
+    fsspec_exists,
+    validate_marin_gcp_path,
+    fsspec_isdir,
+)
+
 
 @dataclass
 class FilterConfig:
     """Config for filtering operation on Marin data"""
+
     type: str
     attribute_path: str
     name: str
@@ -19,11 +30,13 @@ class FilterConfig:
     threshold: Optional[float] = 0.5
     min_score: float = 0.0
     max_score: float = 1e6
-    
+
     def __post_init__(self):
         if not (self.min_score < self.threshold < self.max_score):
-            raise ValueError(f"Scores must satisfy: min_score ({self.min_score}) < threshold ({self.threshold}) < max_score ({self.max_score})")
-        
+            raise ValueError(
+                f"Scores must satisfy: min_score ({self.min_score}) < threshold ({self.threshold}) < max_score ({self.max_score})"
+            )
+
         if "dedupe" in self.type:
             self.filter_func = dedupe_filter_func
         elif "classify" in self.type:
@@ -31,17 +44,21 @@ class FilterConfig:
         else:
             raise ValueError(f"Unknown attribute type: {self.type}")
 
-    
+
 @dataclass
 class ConsolidateConfig:
     """Config for Consolidation operation on Marin data"""
+
     input_path: str  # The input path to the Marin data
     output_path: str  # The output path to save the consolidated data
-    filters: List[FilterConfig] # The list of filters to apply
+    filters: List[FilterConfig]  # The list of filters to apply
 
     max_tasks_in_flight: int = 1000  # The maximum number of flights in a task
-    
-def is_high_quality(attributes: Dict[str, Any], attribute_name: str, threshold: float, label: str, min_score: float, max_score: float) -> bool:
+
+
+def is_high_quality(
+    attributes: Dict[str, Any], attribute_name: str, threshold: float, label: str, min_score: float, max_score: float
+) -> bool:
     if attribute_name in attributes:
         quality_scores = attributes[attribute_name]
         if label not in quality_scores:
@@ -53,29 +70,48 @@ def is_high_quality(attributes: Dict[str, Any], attribute_name: str, threshold: 
 
 
 def remove_duplicates(input_data: Dict[str, Any], duplicate_spans: List[List[int]]) -> Dict[str, Any]:
-    text = input_data['text']
+    text = input_data["text"]
     # Sort spans in reverse order to avoid index shifting
     sorted_spans = sorted(duplicate_spans, key=lambda x: x[1], reverse=True)
     # Remove duplicate spans
     for start, end, _ in sorted_spans:
         text = text[:start] + text[end:]
-    
+
     # return the deduped data
-    input_data['text'] = text
+    input_data["text"] = text
     return input_data
 
-def quality_filter_func(input_data: Dict[str, Any], attributes_data: Dict[str, Any], attribute_name: str, threshold: float, label: str, min_score: float, max_score: float) -> Dict[str, Any]:
+
+def quality_filter_func(
+    input_data: Dict[str, Any],
+    attributes_data: Dict[str, Any],
+    attribute_name: str,
+    threshold: float,
+    label: str,
+    min_score: float,
+    max_score: float,
+) -> Dict[str, Any]:
     if is_high_quality(attributes_data, attribute_name, threshold, label, min_score, max_score):
         return input_data
     return None
 
-def dedupe_filter_func(input_data: Dict[str, Any], attributes_data: Dict[str, Any], attribute_name: str, threshold: float, label: str, min_score: float, max_score: float) -> Dict[str, Any]:
+
+def dedupe_filter_func(
+    input_data: Dict[str, Any],
+    attributes_data: Dict[str, Any],
+    attribute_name: str,
+    threshold: float,
+    label: str,
+    min_score: float,
+    max_score: float,
+) -> Dict[str, Any]:
     # Dolma dedupe has a fixed attribute name and a binary decision
     # So there is no need to check the threshold
     duplicate_spans = attributes_data.get("attributes", {}).get(attribute_name, [])
     if duplicate_spans:
         return remove_duplicates(input_data, duplicate_spans)
     return input_data
+
 
 def get_filter_func(filter_type: str) -> Callable:
     if "dedupe" in filter_type:
@@ -85,8 +121,8 @@ def get_filter_func(filter_type: str) -> Callable:
     else:
         raise ValueError(f"Unknown attribute name: {filter_type}")
 
+
 def load_all_attributes(attribute_filenames: List[str]) -> Dict[str, Dict[str, Any]]:
-    
     all_attributes = {}
     for filename in attribute_filenames:
         print(f"Loading attributes from {filename}")
@@ -113,43 +149,62 @@ def load_all_attributes(attribute_filenames: List[str]) -> Dict[str, Dict[str, A
     print(f"Loaded attributes for {len(all_attributes)} documents")
     return all_attributes
 
+
 @cached_or_construct_output(success_suffix="SUCCESS")
-def process_file(input_filename: str, output_filename: str, all_attributes: Dict[str, Dict[str, Any]], filters: List[Tuple[str, float, Callable]]):
-    with fsspec.open(input_filename, "rt", compression="gzip") as input_file, \
-         fsspec.open(output_filename, "wt", compression="gzip") as output_file:
+def process_file(
+    input_filename: str,
+    output_filename: str,
+    all_attributes: Dict[str, Dict[str, Any]],
+    filters: List[Tuple[str, float, Callable]],
+):
+    with (
+        fsspec.open(input_filename, "rt", compression="gzip") as input_file,
+        fsspec.open(output_filename, "wt", compression="gzip") as output_file,
+    ):
         for input_line in input_file:
 
             input_data = json.loads(input_line)
             doc_id = input_data["id"]
-            
+
             if doc_id not in all_attributes:
                 print(f"No attributes found for input ID: {doc_id}")
                 continue
-            
+
             attributes = all_attributes[doc_id]
             filtered_data = input_data
-            
+
             for attr_name, threshold, filter_func, label, min_score, max_score in filters:
                 filtered_data = filter_func(filtered_data, attributes, attr_name, threshold, label, min_score, max_score)
                 if filtered_data is None:
                     break
-            
+
             if filtered_data:
                 output_line = json.dumps(filtered_data) + "\n"
                 output_file.write(output_line)
 
+
 @ray.remote
-def process_directory(input_subdir: str, output_subdir: str, all_attributes: Dict[str, Dict[str, Any]], filters: List[Tuple[str, float, Callable]]):
+def process_directory(
+    input_subdir: str,
+    output_subdir: str,
+    all_attributes: Dict[str, Dict[str, Any]],
+    filters: List[Tuple[str, float, Callable]],
+):
     files = fsspec_glob(os.path.join(input_subdir, "**/*.jsonl.gz"))
     for input_filename in files:
         output_filename = rebase_file_path(input_subdir, input_filename, output_subdir)
         process_file(input_filename, output_filename, all_attributes, filters)
 
-def apply_filters(input_path: str, output_path: str, attribute_files: List[str], filters: List[Tuple[str, float, Callable]], max_tasks_in_flight: int):
-    
+
+def apply_filters(
+    input_path: str,
+    output_path: str,
+    attribute_files: List[str],
+    filters: List[Tuple[str, float, Callable]],
+    max_tasks_in_flight: int,
+):
     all_attributes = load_all_attributes(attribute_files)
 
-    
     subdirectories = fsspec_get_atomic_directories(input_path)
     print(f"subdirectories: {subdirectories}")
 
@@ -168,22 +223,38 @@ def apply_filters(input_path: str, output_path: str, attribute_files: List[str],
     ray.get(tasks)
     return output_path
 
-@draccus.wrap()
-def main(cfg: ConsolidateConfig):
+
+@ray.remote
+def main_ray(cfg: ConsolidateConfig):
     input_path = validate_marin_gcp_path(cfg.input_path)
     output_path = validate_marin_gcp_path(cfg.output_path)
 
     attribute_files = []
     filters = []
 
-    
     for filter in cfg.filters:
         attribute_files.append(filter.attribute_path)
-        filters.append((filter.name, filter.threshold, get_filter_func(filter.type), filter.label, filter.min_score, filter.max_score))
+        filters.append(
+            (
+                filter.name,
+                filter.threshold,
+                get_filter_func(filter.type),
+                filter.label,
+                filter.min_score,
+                filter.max_score,
+            )
+        )
         print(f"Filter enabled: {filter.name} with threshold {filter.threshold})")
 
     output_path = apply_filters(input_path, output_path, attribute_files, filters, cfg.max_tasks_in_flight)
     print(f"Processing complete. Final output path: {output_path}")
+
+
+@draccus.wrap()
+def main(cfg: ConsolidateConfig):
+    ray.init()
+    ray.get(main_ray.remote(cfg))
+
 
 if __name__ == "__main__":
     main()
