@@ -36,7 +36,10 @@ class DownloadConfig:
     )
 
     # Job Control Parameters
-    wait_for_completion: bool = False                        # if True, will block until job completes
+    wait_for_completion: bool = False                       # if True, will block until job completes
+    timeout: int = 1800                                     # Maximum time to wait for job completion (in seconds)
+    poll_interval: int = 10                                 # Time to wait between polling job status (in seconds)
+
 
     def __post_init__(self) -> None:
         if not self.gcs_output_path.startswith("gs://"):
@@ -53,7 +56,7 @@ class DownloadConfig:
 
 
 @ray.remote
-def _wait_for_job_completion(job_name: str, timeout: int = 1800, poll_interval: int = 10) -> str:
+def _wait_for_job_completion(job_name: str, timeout: int, poll_interval: int) -> str:
     """Wait for a Transfer Job to complete.
     Parameters:
         job_name (str): Name of the Transfer Job to wait for.
@@ -64,7 +67,7 @@ def _wait_for_job_completion(job_name: str, timeout: int = 1800, poll_interval: 
         TimeoutError: If the job does not complete within the specified `timeout`.
     """
 
-    wait_for_transfer_job(job_name, timeout)
+    wait_for_transfer_job(job_name, timeout=timeout, poll_interval=poll_interval)
     return f"Transfer job completed: {job_name}"
 
 
@@ -75,7 +78,7 @@ def download(cfg: DownloadConfig) -> None | ray.ObjectRef:
 
     if cfg.wait_for_completion:
         print(f"[*] Waiting for Job Completion :: {job_url}")
-        future = _wait_for_job_completion.remote(job_name)
+        future = _wait_for_job_completion.remote(job_name, cfg.timeout, cfg.poll_interval)
 
         print(f"[*] Launched Job Completion Waiter :: {future}")
         result = ray.get(future)
