@@ -91,8 +91,9 @@ def create_gcs_transfer_job_from_tsv(
 
 def wait_for_transfer_job(
     job_name: str, 
-    timeout: int = 1800, 
-    poll_interval: int = 10,
+    timeout: int, 
+    poll_interval: int,
+    gcp_project_id: str = "hai-gcp-models"
 ):
     """
     Waits for a Transfer Job to complete by polling the job status every 10 seconds. Raises a `TimeoutError` if the
@@ -113,7 +114,7 @@ def wait_for_transfer_job(
 
     while time() - start_time < timeout:
         if (time() - start_time) % poll_interval == 0:
-            job = client.get_transfer_job({"job_name": job_name, "project_id": "hai-gcp-models"})
+            job = client.get_transfer_job({"job_name": job_name, "project_id": gcp_project_id})
             
             if job.status == storage_transfer.TransferJob.Status.ENABLED:
                 print(f"[*] Transfer Job Completed :: {job_name}")
