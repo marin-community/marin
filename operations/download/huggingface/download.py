@@ -14,7 +14,6 @@ Run with:
 
 from dataclasses import dataclass
 
-import re
 import draccus
 import ray
 
