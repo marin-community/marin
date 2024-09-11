@@ -95,7 +95,7 @@ def download(cfg: DownloadConfig) -> None:
     )
 
     # Initialize and Launch STS Job (using GCloud API)
-    job_url = create_gcs_transfer_job_from_tsv(
+    _, job_url = create_gcs_transfer_job_from_tsv(
         tsv_url,
         gcs_versioned_relative_path,
         gcs_bucket,

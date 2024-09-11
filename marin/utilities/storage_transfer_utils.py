@@ -81,36 +81,42 @@ def create_gcs_transfer_job_from_tsv(
         return creation_request.name
 
     else:
-        return (
-            f"https://console.cloud.google.com/transfer/jobs/"
+        job_url = (
+            "https://console.cloud.google.com/transfer/jobs/"
             f"{urllib.parse.quote_plus(creation_request.name)}/"
             f"monitoring?hl=en&project={gcp_project_id}"
         )
+        return creation_request.name, job_url
 
 
-def wait_for_transfer_job(job_url: str, timeout: int = 1800, poll_interval: int = 10) -> None:
+def wait_for_transfer_job(
+    job_name: str, 
+    timeout: int = 1800, 
+    poll_interval: int = 10,
+):
     """
     Waits for a Transfer Job to complete by polling the job status every 10 seconds. Raises a `TimeoutError` if the
     job does not complete within the specified `timeout` (default: 30 minutes).
 
     Parameters:
-        job_url (str): The URL of the Transfer Job to monitor.
+        job_name (str): The name of the Transfer Job to wait for.
         timeout (int): The maximum number of seconds to wait for the job to complete.
         poll_interval (int): The number of seconds to wait between polling the job status.
 
     Raises:
         TimeoutError: If the Transfer Job does not complete within the specified `timeout`.
     """
+    print(f"[*] Waiting for Transfer Job :: {job_name}")
 
     client = storage_transfer.StorageTransferServiceClient()
     start_time = time()
 
     while time() - start_time < timeout:
         if (time() - start_time) % poll_interval == 0:
-            job = client.get_transfer_job({"job_name": job_url.split("/")[-2], "project_id": "hai-gcp-models"})
+            job = client.get_transfer_job({"job_name": job_name, "project_id": "hai-gcp-models"})
             
-            if job.status == storage_transfer.TransferJob.Status.SUCCESS:
-                print(f"[*] Transfer Job Completed :: {job_url}")
+            if job.status == storage_transfer.TransferJob.Status.ENABLED:
+                print(f"[*] Transfer Job Completed :: {job_name}")
                 return
 
-    raise TimeoutError(f"Transfer Job did not complete within {timeout} seconds; check status at {job_url}")
+    raise TimeoutError(f"Transfer Job did not complete within {timeout} seconds; check status for {job_name}")
