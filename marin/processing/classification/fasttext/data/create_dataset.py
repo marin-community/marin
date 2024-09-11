@@ -82,7 +82,7 @@ def _clean_text(text: str):
 
 
 @ray.remote
-def process_file(config: DatasetConfig, seed: int) -> List[str]:
+def process_file(config: DatasetConfig, rng: random.Random) -> List[str]:
     """
     Process a file that is in Dolma format or is a preprocessed fasttext-formatted text file.
 
@@ -94,9 +94,6 @@ def process_file(config: DatasetConfig, seed: int) -> List[str]:
     Output:
     A dictionary with the filepath as the key and the list of lines in fasttext format as the value.
     """
-
-    # Use seed to ensure reproducibility in sampling from file.
-    random.seed(seed)
 
     filepaths = get_files(config.filepath)
 
@@ -127,7 +124,7 @@ def process_file(config: DatasetConfig, seed: int) -> List[str]:
             if i == len(filepaths) - 1:
                 chunk_size = config.max_num_samples - total_offset
             maybe_truncated_chunk_size = min(chunk_size, len(lines_per_file))
-            filepaths_to_labelled_lines[filepath] = random.sample(lines_per_file, maybe_truncated_chunk_size)
+            filepaths_to_labelled_lines[filepath] = rng.sample(lines_per_file, maybe_truncated_chunk_size)
             total_offset += maybe_truncated_chunk_size
         else:
             filepaths_to_labelled_lines[filepath] = lines_per_file
@@ -166,6 +163,9 @@ def write_to_file(output_file: str, queue_actor):
 def main(config: Dict[str, Any], seed: int):
     ray.init()
 
+    # Create an RNG object with the provided seed
+    rng = random.Random(seed)
+
     # We set a large memory limit for the queue actor to avoid memory issues when
     # processing large files
     queue_actor = QueueActor.options(memory=100 * 1024 * 1024 * 1024).remote()
@@ -178,7 +178,7 @@ def main(config: Dict[str, Any], seed: int):
     # Process files and add results to the queue
     tasks = []
     for dataset_config in dataset_configs:
-        task = process_file.remote(dataset_config, seed)
+        task = process_file.remote(dataset_config, rng)
         tasks.append(queue_actor.add.remote(task))
 
     # Wait for all tasks to complete
