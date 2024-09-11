@@ -25,7 +25,6 @@ from marin.utilities.storage_transfer_utils import wait_for_transfer_job
 class DownloadConfig:
     # fmt: off
     gcs_output_path: str                                    # Path to store raw data on GCS (includes gs://$BUCKET/...)
-    wait_for_completion: bool = False                        # if True, will block until job completes
 
     # HuggingFace Dataset Parameters
     hf_dataset_id: str                                      # HF Dataset to Download (as `$ORG/$DATASET` on HF Hub)
@@ -35,6 +34,9 @@ class DownloadConfig:
     public_gcs_path: str = (                                # Path to Publicly Readable Bucket (for Storage Transfer)
         "gs://hf_dataset_transfer_bucket"
     )
+
+    # Job Control Parameters
+    wait_for_completion: bool = False                        # if True, will block until job completes
 
     def __post_init__(self) -> None:
         if not self.gcs_output_path.startswith("gs://"):
