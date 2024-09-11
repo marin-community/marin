@@ -63,7 +63,7 @@ EXPERIMENT = "quickstart_single_script_1"
 DATASET = "hello_world_fw"
 
 # Transform
-from scripts.hello_world_fw.process import FineWebConfig
+from scripts.hello_world_fw.process import FineWebConfig  # noqa
 
 config = FineWebConfig(
     input_path=RAWDATAPATH, output_path=f"gs://marin-us-central2/documents/{DATASET}/v1.0/{EXPERIMENT}"
@@ -71,7 +71,7 @@ config = FineWebConfig(
 transform_ref = execute.remote(scripts.hello_world_fw.process.main_ray, [], config)
 
 # FastText classifier
-from scripts.fasttext.train_fasttext import MainConfig
+from scripts.fasttext.train_fasttext import MainConfig  # noqa
 
 config = MainConfig(
     output_base_path="gs://marin-us-central2",
@@ -85,7 +85,7 @@ config = MainConfig(
 fasttext_ref = execute.remote(scripts.fasttext.train_fasttext.main_ray, [transform_ref], config)
 
 ## Use olmo classifier to annotate, Note the dependency on transform only
-from marin.processing.classification.inference import InferenceConfig
+from marin.processing.classification.inference import InferenceConfig  # noqa
 
 config = InferenceConfig(
     input_path=f"gs://marin-us-central2/documents/{DATASET}/v1.0/{EXPERIMENT}",
@@ -109,7 +109,7 @@ annotate_ref_2 = execute.remote(marin.processing.classification.inference.main_r
 ray.get(ray.get(annotate_ref_2))
 
 ## Dedup, see the dependency on transform_ref
-from marin.processing.classification.dedupe import DedupeConfig
+from marin.processing.classification.dedupe import DedupeConfig  # noqa
 
 config = DedupeConfig(
     input_path=f"gs://marin-us-central2/documents/{DATASET}/v1.0/{EXPERIMENT}",
@@ -118,7 +118,7 @@ config = DedupeConfig(
 dedup_ref = execute.remote(marin.processing.classification.dedupe.main_ray, [transform_ref], config)
 
 # Consolidate all the results
-from marin.processing.classification.consolidate import ConsolidateConfig, FilterConfig
+from marin.processing.classification.consolidate import ConsolidateConfig, FilterConfig  # noqa
 
 config = ConsolidateConfig(
     input_path=f"gs://marin-us-central2/documents/{DATASET}/v1.0/{EXPERIMENT}",
