@@ -59,7 +59,7 @@ RAWDATAPATH = (
     "gs://marin-us-central2/raw/hello_world_fw/8fd6e8e/huggingface.co/datasets/skaramcheti/hello_world_fw/"
     "resolve/8fd6e8e/data"
 )
-EXPERIMENT = "quickstart_single_script_1"
+EXPERIMENT = "quickstart_single_script_2"
 DATASET = "hello_world_fw"
 
 # Transform
@@ -106,7 +106,7 @@ config = InferenceConfig(
 )
 annotate_ref_2 = execute.remote(marin.processing.classification.inference.main_ray, [fasttext_ref], config)
 # Getting annotate_ref_2 as it will not be used later no and not in DAG
-ray.get(ray.get(annotate_ref_2))
+ray.get(annotate_ref_2)
 
 ## Dedup, see the dependency on transform_ref
 from marin.processing.classification.dedupe import DedupeConfig  # noqa
@@ -141,4 +141,16 @@ config = ConsolidateConfig(
 
 consolidate_ref = execute.remote(marin.processing.classification.consolidate.main_ray, [dedup_ref, annotate_ref], config)
 
-ray.get(consolidate_ref)
+
+# Tokenize
+from marin.processing.tokenize import TokenizeConfig  # noqa
+
+config = TokenizeConfig(
+    input_path=f"gs://marin-us-central2/documents/{DATASET}/v1.0/{EXPERIMENT}_consolidate/",
+    cache_path="gs://marin-us-central2/tokenized/llama3/",
+    dataset_name=f"{DATASET}-{EXPERIMENT}",
+    tokenizer="meta-llama/Meta-Llama-3.1-8B",
+)
+tokenize_ref = execute.remote(marin.processing.tokenize.main_ray, [consolidate_ref], config)
+
+ray.get(tokenize_ref)
