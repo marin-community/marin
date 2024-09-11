@@ -100,8 +100,6 @@ def _get_filepaths(filepath: str) -> List[str]:
 
 
 def main(args):
-    ray.init()
-
     ground_truth_files = _get_filepaths(args.ground_truth_filepath)
     prediction_files = _get_filepaths(args.prediction_filepath)
 
@@ -134,8 +132,6 @@ def main(args):
     print(f"Recall: {results['recall']:.4f}")
     print(f"F1-Score: {results['f1']:.4f}")
 
-    ray.shutdown()
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Generate classification report for predictions")
@@ -151,4 +147,5 @@ if __name__ == "__main__":
     parser.add_argument("--threshold", type=float, required=True, help="Threshold to use for classification")
     args = parser.parse_args()
 
+    ray.init()
     main(args)
