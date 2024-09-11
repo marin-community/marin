@@ -12,7 +12,7 @@ logger = logging.getLogger("ray")
 
 
 @ray.remote
-def execute(fn: Callable | ray.remote_function.RemoteFunction, depends_on, *args, **kwargs):
+def execute(fn: Callable | ray.remote_function.RemoteFunction, *args, depends_on, **kwargs):
     """
     Utility function to execute a remote function with dependencies on another functions
     fn: The function to execute. The function can be a ray remote function or a normal function
