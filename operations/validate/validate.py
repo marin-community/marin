@@ -39,7 +39,9 @@ logger = logging.getLogger(__name__)
 class ValidationConfig:
     # fmt: off
     input_path: str                             # Path to top-level `documents` directory to validate
-    n_examples: int = 1024                      # Number of Documents to Sample for Example Server (across all shards)
+    num_examples_to_sample: int = 1024          # Number of Documents to Sample for Example Server (across all shards)
+
+    overwrite_validation_cache: bool = False    # Whether to invalidate existing ledgers/metadata files (re-validate)
 
     def __post_init__(self) -> None:
         if not self.input_path.startswith("gs://"):
@@ -51,35 +53,52 @@ class ValidationConfig:
 
 
 @ray.remote(memory=4 * 1024 * 1024 * 1024)  # 4 GB of RAM by Default
-def validate_jsonl_gz(input_file_path: str, n_examples_per_shard: int) -> dict:
+def validate_jsonl_gz(input_file_path: str, num_samples_per_shard: int, overwrite_validation_cache: bool) -> dict:
     fs = fsspec.filesystem("gcs")
 
-    # Short-Circuit on Metadata File =>> this is basically an extended version of @cached_or_construct_output
+    # Short-Circuit on Metadata File =>> this is basically an extended version of @cached_or_construct_output with
+    #   extra (custom) logic for "invalidating" ledgers
     success_file_path = input_file_path + ".METADATA"
-    if fsspec_exists(success_file_path):
-        logger.info(f"Metadata for `{input_file_path = }` already exists; skipping validation!")
+    if fsspec_exists(success_file_path) and overwrite_validation_cache:
+        logger.info(f"Metadata for `{input_file_path = }` exists but `{overwrite_validation_cache = }`; unlink")
+        fs.rm(success_file_path)
+
+    elif fsspec_exists(success_file_path):
+        logger.info(f"Metadata for `{input_file_path = }` exists; skipping validation!")
         with fsspec.open(success_file_path, "rt") as f:
             return json.load(f)
 
-    # Create Per-Document Metadata Trackers, Example Reservoir for Sampling
-    n_documents, all_document_bytes, all_text_bytes = 0, [], []
-    example_reservoir, rng = [], np.random.default_rng(abs(hash(input_file_path)))  # Controlled Chaos
+    # Create Per-Document Metadata Trackers
+    num_documents, all_document_bytes, all_text_bytes = 0, [], []
+
+    # Create Reservoir for Sampling Example Documents & Seed Random Number Generator (for determinism)
+    #
+    # We're going to try our best to uniformly sample `n_example_per_shard_documents` from each `.jsonl.gz` file
+    # Rather than precompute total number of documents/sample up front, we're going to reservoir sample; for each new
+    # document we process, decide whether to include it with decreasing probability over time.
+    #
+    # Note (@siddk): This is very overkill for the current implementation, but I originally wrote this to smoothly
+    #   handle preemption *during* the course of reading an individual shard file (some shard files are *huge*);
+    #   leaving it as is in case we want to try getting that working later on...
+    rng = np.random.default_rng(abs(hash(input_file_path)))
+    example_reservoir = []
 
     # Lazily iterate + validate individual lines (documents) in the `.jsonl.gz` file
     with fsspec.open(input_file_path, "rt", compression="gzip") as input_jsonl_gz:
         for doc_idx, line in enumerate(input_jsonl_gz):
-            document_bytes, text_bytes = summarize_document_from_json(line)
+            document_footprint = summarize_document_from_json(line)
+            document_bytes, text_bytes = document_footprint.document_bytes, document_footprint.text_bytes
 
             all_document_bytes.append(document_bytes)
             all_text_bytes.append(text_bytes)
-            n_documents += 1
+            num_documents += 1
 
             # Reservoir Sampling
-            if doc_idx < n_examples_per_shard:
+            if doc_idx < num_samples_per_shard:
                 example_reservoir.append(json.loads(line))
             else:
                 j = rng.integers(0, doc_idx)
-                if j < n_examples_per_shard:
+                if j < num_samples_per_shard:
                     example_reservoir[j] = json.loads(line)
 
     # Compute Document Size Summary Statistics (Mean, Standard Deviation)
@@ -89,7 +108,7 @@ def validate_jsonl_gz(input_file_path: str, n_examples_per_shard: int) -> dict:
     file_metadata = {
         "file_path": input_file_path,
         "file_size_bytes": fs.size(input_file_path),
-        "n_documents": n_documents,
+        "num_documents": num_documents,
         "document_bytes_mean": doc_bytes_mean,
         "document_bytes_std": doc_bytes_std,
         "text_bytes_mean": text_bytes_mean,
@@ -104,13 +123,22 @@ def validate_jsonl_gz(input_file_path: str, n_examples_per_shard: int) -> dict:
     return file_metadata
 
 
-def write_global_metadata(metadata_output_path: str, all_shard_metadata: list[dict]) -> bool:
-    if fsspec_exists(metadata_output_path):
-        logger.info(f"Global Metadata File `{metadata_output_path = }` already exists; skipping aggregation")
+def write_global_metadata(
+    metadata_output_path: str, all_shard_metadata: list[dict], overwrite_validation_cache: bool
+) -> bool:
+    fs = fsspec.filesystem("gcs")
+
+    # Short-Circuit on Metadata File (respecting `overwrite_validation_cache`)
+    if fsspec_exists(metadata_output_path) and overwrite_validation_cache:
+        logger.info(f"Global Metadata `{metadata_output_path = }` exists but `{overwrite_validation_cache}`; unlink")
+        fs.rm(metadata_output_path)
+
+    elif fsspec_exists(metadata_output_path):
+        logger.info(f"Global Metadata `{metadata_output_path = }` exists; skipping aggregation")
         return True
 
     # Aggregate Summary Statistics & Examples across Shards
-    shard_file_paths, shard_file_size_bytes, shard_n_documents = [], [], []
+    shard_file_paths, shard_file_size_bytes, shard_num_documents = [], [], []
     shard_document_bytes_means, shard_document_bytes_stds = [], []
     shard_text_bytes_means, shard_text_bytes_stds = [], []
     examples = []
@@ -118,7 +146,7 @@ def write_global_metadata(metadata_output_path: str, all_shard_metadata: list[di
     for shard_metadata in all_shard_metadata:
         shard_file_paths.append(shard_metadata["file_path"])
         shard_file_size_bytes.append(shard_metadata["file_size_bytes"])
-        shard_n_documents.append(shard_metadata["n_documents"])
+        shard_num_documents.append(shard_metadata["num_documents"])
 
         shard_document_bytes_means.append(shard_metadata["document_bytes_mean"])
         shard_document_bytes_stds.append(shard_metadata["document_bytes_std"])
@@ -129,28 +157,28 @@ def write_global_metadata(metadata_output_path: str, all_shard_metadata: list[di
         examples.extend(shard_metadata["examples"])
 
     # Reconstitute Global Mean/Standard Deviations
-    global_document_bytes_mean, global_document_bytes_std = compute_global_mean_std(
-        shard_n_documents, shard_document_bytes_means, shard_document_bytes_stds
+    document_bytes_stats = compute_global_mean_std(
+        shard_num_documents, shard_document_bytes_means, shard_document_bytes_stds
     )
+    document_bytes_mean, document_bytes_std = document_bytes_stats.mean, document_bytes_stats.std
 
-    global_text_bytes_mean, global_text_bytes_std = compute_global_mean_std(
-        shard_n_documents, shard_text_bytes_means, shard_text_bytes_stds
-    )
+    text_bytes_stats = compute_global_mean_std(shard_num_documents, shard_text_bytes_means, shard_text_bytes_stds)
+    text_bytes_mean, text_bytes_std = text_bytes_stats.mean, text_bytes_stats.std
 
     # Write `metadata.json`
     with fsspec.open(metadata_output_path, "wt") as f:
         json.dump(
             {
-                "n_documents": sum(shard_n_documents),
+                "num_documents": sum(shard_num_documents),
                 "file_size_bytes": sum(shard_file_size_bytes),
-                "document_bytes_mean": global_document_bytes_mean,
-                "document_bytes_std": global_document_bytes_std,
-                "text_bytes_mean": global_text_bytes_mean,
-                "text_bytes_std": global_text_bytes_std,
-                "n_shards": len(shard_n_documents),
+                "document_bytes_mean": document_bytes_mean,
+                "document_bytes_std": document_bytes_std,
+                "text_bytes_mean": text_bytes_mean,
+                "text_bytes_std": text_bytes_std,
+                "num_shards": len(shard_num_documents),
                 "shard_file_paths": shard_file_paths,
                 "shard_file_size_bites": shard_file_size_bytes,
-                "shard_n_documents": shard_n_documents,
+                "shard_num_documents": shard_num_documents,
                 "examples": examples,
             },
             f,
@@ -169,17 +197,21 @@ def validate(cfg: ValidationConfig) -> None:
 
     # Identify the complete set of files to validate; note that this doesn't explicitly check subdirectory structure!
     shard_files = fsspec_glob(os.path.join(cfg.input_path, "**/*.jsonl.gz"))
-    n_examples_per_shard = (cfg.n_examples // len(shard_files)) + 1
+    num_samples_per_shard = (cfg.num_examples_to_sample // len(shard_files)) + 1
 
     # Invoke Ray Functions --> we're going to aggregate the function outputs
     responses: list[ray.ObjectRef] = []
     for shard_file_path in shard_files:
-        responses.append(validate_jsonl_gz.remote(shard_file_path, n_examples_per_shard))
+        responses.append(
+            validate_jsonl_gz.remote(shard_file_path, num_samples_per_shard, cfg.overwrite_validation_cache)
+        )
 
     # Wait on Success --> compute global mean/std, write top-level `metadata.json`
     try:
         all_shard_metadata = ray.get(responses)
-        write_global_metadata(os.path.join(cfg.input_path, "metadata.json"), all_shard_metadata)
+        write_global_metadata(
+            os.path.join(cfg.input_path, "metadata.json"), all_shard_metadata, cfg.overwrite_validation_cache
+        )
     except Exception as e:
         logger.error(f"Error Aggregating Validation Metadata: {e}")
 
