@@ -1,5 +1,5 @@
 # Unique Identifier for the Head Node + Workers
-cluster_name: marin-data
+cluster_name: bert-stuff
 
 # Maximum Workers (excluding Head Node)
 max_workers: 1024
@@ -95,7 +95,6 @@ setup_commands:
     "warcio==1.7.4"
     "tblib==3.0.0"
     "transformers==4.44.2"
-    "torch"
     "torch_xla[tpu]"
     "torchvision"
     -f https://storage.googleapis.com/libtpu-releases/index.html
