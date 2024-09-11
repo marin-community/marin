@@ -17,7 +17,7 @@ class DedupeConfig:
     attribute_name: str = "duplicate_text"
     min_length: int = 0
     min_words: int = 0
-    bloom_filter_size: int = 0 # default to 0 to use estimated_doc_count and false_positive_rate
+    bloom_filter_size: Optional[int] = None # default to 0 to use estimated_doc_count and false_positive_rate
     estimated_doc_count: int = 1000000
     false_positive_rate: float = 0.001
     processes: int = 1
