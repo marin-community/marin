@@ -116,9 +116,9 @@ def merge_shards_and_split(
                     output_line = format_example(data)
 
                     if rng.random() < val_split:
-                        f_val.write(output_line)
+                        f_val.write(output_line + "\n")
                     else:
-                        f_train.write(output_line)
+                        f_train.write(output_line + "\n")
 
     return True
 
