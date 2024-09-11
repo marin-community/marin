@@ -1,19 +1,56 @@
+import logging
+import time
+from collections.abc import Callable
+from datetime import datetime
+
 import ray
 
 import marin
 import scripts
 
+logger = logging.getLogger("ray")
+
 
 @ray.remote
-def utils(remote_func, depends_on, *args, **kwargs):
+def execute(fn: Callable | ray.remote_function.RemoteFunction, depends_on, *args, **kwargs):
+    """
+    Utility function to execute a remote function with dependencies on another functions
+    fn: The function to execute. The function can be a ray remote function or a normal function
+    depends_on: List of references on which the remote function depends. These references are Ray references
+    args, kwargs: List of arguments and key arguments to pass to the remote function
+
+    """
     for ref in depends_on:
-        ray.get(ray.get(ref))
-    print(f"Executing {remote_func} with {args} and {kwargs}")
+        ray.get(ref)
 
-    return remote_func.remote(*args, **kwargs)
+    is_ray_fn = type(fn) is ray.remote_function.RemoteFunction
 
+    name = None
+    if is_ray_fn:
+        name = f"{fn._function.__module__}.{fn._function.__name__}"
+    else:
+        name = f"{fn.__module__}.{fn.__name__}"
 
-# Create Node objects
+    # Datetime can probably go into ray logger but I don't wanna touch it for now and custom logger are wierd with ray
+    logger.info(
+        f"Starting to Execute {name} with {args} and {kwargs} at " f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+    )
+
+    start = time.time()
+
+    output = None
+    if is_ray_fn:
+        output = ray.get(fn.remote(*args, **kwargs))
+    else:
+        output = fn(*args, **kwargs)
+
+    logger.info(
+        f"Finished Executing {name} in {time.time() - start} seconds at"
+        f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+    )
+
+    return output
+
 
 ray.init()
 
@@ -22,50 +59,52 @@ RAWDATAPATH = (
     "gs://marin-us-central2/raw/hello_world_fw/8fd6e8e/huggingface.co/datasets/skaramcheti/hello_world_fw/"
     "resolve/8fd6e8e/data"
 )
-EXP = "quickstart_single_script"
+EXPERIMENT = "quickstart_single_script_1"
 DATASET = "hello_world_fw"
 
 # Transform
 from scripts.hello_world_fw.process import FineWebConfig
 
-config = FineWebConfig(input_path=RAWDATAPATH, output_path=f"gs://marin-us-central2/documents/{DATASET}/v1.0/{EXP}")
-transform_ref = utils.remote(scripts.hello_world_fw.process.main_ray, [], config)
+config = FineWebConfig(
+    input_path=RAWDATAPATH, output_path=f"gs://marin-us-central2/documents/{DATASET}/v1.0/{EXPERIMENT}"
+)
+transform_ref = execute.remote(scripts.hello_world_fw.process.main_ray, [], config)
 
 # FastText classifier
 from scripts.fasttext.train_fasttext import MainConfig
 
 config = MainConfig(
     output_base_path="gs://marin-us-central2",
-    experiment=EXP,
+    experiment=EXPERIMENT,
     pos_doc_path="gs://marin-us-central2/documents/marin_instructv1/v1_olmo_mix/text",
-    neg_doc_path=f"gs://marin-us-central2/documents/{DATASET}/v1.0/{EXP}",
+    neg_doc_path=f"gs://marin-us-central2/documents/{DATASET}/v1.0/{EXPERIMENT}",
     pos_sampling_rate=0.1,
     neg_sampling_rate=1.0,
     training_args={"lr": 0.1},
 )
-fasttext_ref = utils.remote(scripts.fasttext.train_fasttext.main_ray, [transform_ref], config)
+fasttext_ref = execute.remote(scripts.fasttext.train_fasttext.main_ray, [transform_ref], config)
 
 ## Use olmo classifier to annotate, Note the dependency on transform only
 from marin.processing.classification.inference import InferenceConfig
 
 config = InferenceConfig(
-    input_path=f"gs://marin-us-central2/documents/{DATASET}/v1.0/{EXP}",
-    output_path=f"gs://marin-us-central2/attributes/{DATASET}/v1.0/{EXP}_olmo_fasttext",
+    input_path=f"gs://marin-us-central2/documents/{DATASET}/v1.0/{EXPERIMENT}",
+    output_path=f"gs://marin-us-central2/attributes/{DATASET}/v1.0/{EXPERIMENT}_olmo_fasttext",
     model_name="allenai/dolma-1_7-fasttext-quality-filter",
     model_type="fasttext",
     attribute_name="olmo-fasttext-quality",
 )
-annotate_ref = utils.remote(marin.processing.classification.inference.main_ray, [transform_ref], config)
+annotate_ref = execute.remote(marin.processing.classification.inference.main_ray, [transform_ref], config)
 
-## Use olmo classifier to annotate, Note the dependency on fasttext_ref
+## Use quickstart classifier to annotate, Note the dependency on fasttext_ref
 config = InferenceConfig(
-    input_path=f"gs://marin-us-central2/documents/{DATASET}/v1.0/{EXP}",
-    output_path=f"gs://marin-us-central2/attributes/{DATASET}/v1.0/{EXP}_{EXP}_fasttext",
-    model_name=f"gs://marin-us-central2/classifiers/{EXP}/",
+    input_path=f"gs://marin-us-central2/documents/{DATASET}/v1.0/{EXPERIMENT}",
+    output_path=f"gs://marin-us-central2/attributes/{DATASET}/v1.0/{EXPERIMENT}_{EXPERIMENT}_fasttext",
+    model_name=f"gs://marin-us-central2/classifiers/{EXPERIMENT}/",
     model_type="fasttext",
     attribute_name="quickstart-fasttext-quality",
 )
-annotate_ref_2 = utils.remote(marin.processing.classification.inference.main_ray, [fasttext_ref], config)
+annotate_ref_2 = execute.remote(marin.processing.classification.inference.main_ray, [fasttext_ref], config)
 # Getting annotate_ref_2 as it will not be used later no and not in DAG
 ray.get(ray.get(annotate_ref_2))
 
@@ -73,26 +112,26 @@ ray.get(ray.get(annotate_ref_2))
 from marin.processing.classification.dedupe import DedupeConfig
 
 config = DedupeConfig(
-    input_path=f"gs://marin-us-central2/documents/{DATASET}/v1.0/{EXP}",
-    output_path=f"gs://marin-us-central2/attributes/{DATASET}/v1.0/{EXP}_duplicates",
+    input_path=f"gs://marin-us-central2/documents/{DATASET}/v1.0/{EXPERIMENT}",
+    output_path=f"gs://marin-us-central2/attributes/{DATASET}/v1.0/{EXPERIMENT}_duplicates",
 )
-dedup_ref = utils.remote(marin.processing.classification.dedupe.main_ray, [transform_ref], config)
+dedup_ref = execute.remote(marin.processing.classification.dedupe.main_ray, [transform_ref], config)
 
 # Consolidate all the results
 from marin.processing.classification.consolidate import ConsolidateConfig, FilterConfig
 
 config = ConsolidateConfig(
-    input_path=f"gs://marin-us-central2/documents/{DATASET}/v1.0/{EXP}",
-    output_path=f"gs://marin-us-central2/documents/{DATASET}/v1.0/{EXP}_consolidate",
+    input_path=f"gs://marin-us-central2/documents/{DATASET}/v1.0/{EXPERIMENT}",
+    output_path=f"gs://marin-us-central2/documents/{DATASET}/v1.0/{EXPERIMENT}_consolidate",
     filters=[
         FilterConfig(
             type="dedupe",
-            attribute_path=f"gs://marin-us-central2/attributes/{DATASET}/v1.0/{EXP}_duplicates/",
+            attribute_path=f"gs://marin-us-central2/attributes/{DATASET}/v1.0/{EXPERIMENT}_duplicates/",
             name="duplicate_text",
         ),
         FilterConfig(
             type="classify",
-            attribute_path=f"gs://marin-us-central2/attributes/{DATASET}/v1.0/{EXP}_olmo_fasttext/",
+            attribute_path=f"gs://marin-us-central2/attributes/{DATASET}/v1.0/{EXPERIMENT}_olmo_fasttext/",
             name="olmo-fasttext-quality",
             label="__label__hq",
             threshold=0.1,
@@ -100,5 +139,6 @@ config = ConsolidateConfig(
     ],
 )
 
-consolidate_ref = utils.remote(marin.processing.classification.consolidate.main_ray, [dedup_ref, annotate_ref], config)
-ray.get(ray.get(consolidate_ref))
+consolidate_ref = execute.remote(marin.processing.classification.consolidate.main_ray, [dedup_ref, annotate_ref], config)
+
+ray.get(consolidate_ref)
