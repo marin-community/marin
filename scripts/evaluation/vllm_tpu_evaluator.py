@@ -77,6 +77,9 @@ class VllmTpuEvaluator(Evaluator, ABC):
         sys.path.insert(0, vllm_path)
         os.environ["PYTHONPATH"] = f"{vllm_path}:{os.environ.get('PYTHONPATH', '')}"
 
+        # To allow us to specify a really large value for model length for vLLM
+        os.environ["VLLM_ALLOW_LONG_MAX_MODEL_LEN"] = "1"
+
     @staticmethod
     def start_vllm_server_in_background(
         model: ModelConfig, host: str = "127.0.0.1", port: int = 8000, timeout_seconds: int = 3600
@@ -93,7 +96,12 @@ class VllmTpuEvaluator(Evaluator, ABC):
         model_name_or_path: str = model.name if downloaded_path is None else downloaded_path
 
         # From https://docs.vllm.ai/en/v0.4.0/models/engine_args.html
-        command: str = f"vllm serve {model_name_or_path} --trust-remote-code --host {host} --port {port}"
+        # Set `max_model_len` to a large value to avoid vLLM getting the value from the model config.
+        # This value has to be a multiple of 512.
+        command: str = (
+            f"vllm serve {model_name_or_path} --trust-remote-code --host {host} --port {port} "
+            f"--max-model-len {512 * 20}"
+        )
         process = subprocess.Popen(command, shell=True)
 
         # Check that the server has started by sending heartbeat checks
