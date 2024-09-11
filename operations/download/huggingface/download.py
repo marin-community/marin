@@ -12,17 +12,21 @@ Run with:
         --revision="8fd6e8e"
 """
 
-from dataclasses import dataclass
-
+import ray
 import draccus
 
+from typing import Optional
+from dataclasses import dataclass
+
 from marin.utilities.huggingface_hub_utils import download_hf_dataset
+from marin.utilities.storage_transfer_utils import wait_for_transfer_job
 
 
 @dataclass
 class DownloadConfig:
     # fmt: off
     gcs_output_path: str                                    # Path to store raw data on GCS (includes gs://$BUCKET/...)
+    wait_for_completion: bool = False                        # Wait for Job Completion (if True, will block until job completes)
 
     # HuggingFace Dataset Parameters
     hf_dataset_id: str                                      # HF Dataset to Download (as `$ORG/$DATASET` on HF Hub)
@@ -47,10 +51,34 @@ class DownloadConfig:
     # fmt: on
 
 
+@ray.remote
+def _wait_for_job_completion(job_url: str, timeout: int) -> None:
+    """Wait for a Transfer Job to complete.
+    
+    Parameters:
+        job_url (str): URL to the Transfer Job
+        timeout (int): Maximum time to wait for the job to complete (in seconds).
+
+    Raises:
+        TimeoutError: If the job does not complete within the specified `timeout`.
+    """
+
+    wait_for_transfer_job(job_url, timeout)
+    return f"Transfer job completed: {job_url}"
+
+
 @draccus.wrap()
-def download(cfg: DownloadConfig) -> None:
+def download(cfg: DownloadConfig) -> Optional[ray.ObjectRef]:
     print(f"[*] Downloading HF Dataset `{cfg.hf_dataset_id}` to `{cfg.gcs_output_path}`")
     job_url = download_hf_dataset(cfg.hf_dataset_id, cfg.revision, cfg.gcs_output_path, cfg.public_gcs_path)
+
+    if cfg.wait_for_completion:
+        print(f"[*] Waiting for Job Completion :: {job_url}")
+        future = _wait_for_job_completion.remote(job_url)
+
+        print(f"[*] Launched Job Completion Waiter :: {future}")
+
+        return future
 
     # Finalize
     print(f"[*] Launched Transfer Job & wrote `provenance.json`; check Transfer Job status at:\n\t=> {job_url}")
