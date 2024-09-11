@@ -142,13 +142,14 @@ class VllmTpuEvaluator(Evaluator, ABC):
         return server_url
 
     @staticmethod
-    def cleanup(model: ModelConfig, vllm_port: int) -> None:
+    def cleanup(model: ModelConfig, vllm_port: Optional[int] = None) -> None:
         """
         Clean up the vLLM server and any other resources.
         """
         print("Cleaning up resources.")
         # Kill the vLLM server
-        kill_process_on_port(vllm_port)
+        if vllm_port is not None:
+            kill_process_on_port(vllm_port)
         # Delete the checkpoint
         model.destroy()
 

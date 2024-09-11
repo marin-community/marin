@@ -2,6 +2,7 @@ from typing import Dict, List
 import os
 
 import ray
+import shutil
 
 from scripts.evaluation.evaluator import Dependency, ModelConfig
 from scripts.evaluation.vllm_tpu_evaluator import VllmTpuEvaluator
@@ -132,7 +133,6 @@ class HELMEvaluator(VllmTpuEvaluator):
                 f"--local-path {self.PROD_ENV_PATH} "
             )
             assert os.path.exists(self.RESULTS_PATH), f"Results not found at {self.RESULTS_PATH}. Did HELM run?"
-
             # Upload the results to GCS
             if is_remote_path(output_path):
                 upload_to_gcs(self.RESULTS_PATH, output_path)
@@ -140,3 +140,4 @@ class HELMEvaluator(VllmTpuEvaluator):
             print(f"An error occurred: {e}")
         finally:
             self.cleanup(model, vllm_port=vllm_port)
+            shutil.rmtree(self.RESULTS_PATH)

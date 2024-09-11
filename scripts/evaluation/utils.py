@@ -68,7 +68,7 @@ def write_yaml(content: Dict, output_path: str) -> None:
         yaml.dump(content, file, default_flow_style=False)
 
 
-def kill_process_on_port(port):
+def kill_process_on_port(port: int) -> None:
     # Iterate over all running processes
     for proc in psutil.process_iter(['pid', 'name', 'connections']):
         # Check for connections the process has
