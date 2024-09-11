@@ -21,7 +21,7 @@ def format_example(data: dict) -> str:
         "label": data["label"]
     }
 
-    return json.dumps(example) + "\n"
+    return json.dumps(example)
 
 class BertDataset(Dataset):
     """
