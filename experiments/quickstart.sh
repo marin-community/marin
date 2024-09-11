@@ -27,34 +27,33 @@ ray job submit --working-dir . -- python scripts/fasttext/train_fasttext.py \
 ## Use olmo classifier to annotate
 ray job submit --working-dir . -- python -m marin.processing.classification.inference \
   --input_path gs://marin-us-central2/documents/hello_world_fw/v1.0/$EXP  \
-   --output_path gs://marin-us-central2/attributes/hello_world_fw/v1.0/$EXP_olmo_fasttext \
-     --model_name allenai/dolma-1_7-fasttext-quality-filter --model_type fasttext \
-     --attribute_name "olmo-fasttext-quality"
+  --output_path gs://marin-us-central2/attributes/hello_world_fw/v1.0/$EXP_olmo_fasttext \
+  --model_name allenai/dolma-1_7-fasttext-quality-filter --model_type fasttext \
+  --attribute_name "olmo-fasttext-quality"
 
 
 ## Dedup
-ray job submit --working-dir . \
-  -- python marin/processing/classification/dedupe.py \
+ray job submit --working-dir . -- python marin/processing/classification/dedupe.py \
   --input_path gs://marin-us-central2/documents/hello_world_fw/v1.0/$EXP/ \
   --output_path gs://marin-us-central2/attributes/hello_world_fw/v1.0/$EXP_duplicates/
 
-#Annotate the documents
+# Annotate the documents
 ray job submit --address http://127.0.0.1:8265 --working-dir . \
--- python -m marin.processing.classification.consolidate \
---input_path gs://marin-us-central2/documents/hello_world_fw/v1.0/$EXP/ \
---output_path gs://marin-us-central2/documents/hello_world_fw/v1.0/${EXP}_consolidate/ \
---filters '[{    "type" : "dedupe" ,
-"attribute_path": "gs://marin-us-central2/attributes/hello_world_fw/v1.0/'${EXP}'_duplicates/",
-"name": "duplicate_text"},
+  -- python -m marin.processing.classification.consolidate \
+  --input_path gs://marin-us-central2/documents/hello_world_fw/v1.0/$EXP/ \
+  --output_path gs://marin-us-central2/documents/hello_world_fw/v1.0/${EXP}_consolidate/ \
+  --filters '[{    "type" : "dedupe" ,
+    "attribute_path": "gs://marin-us-central2/attributes/hello_world_fw/v1.0/'${EXP}'_duplicates/",
+    "name": "duplicate_text"},
     {"type": "classify",
     "attribute_path": "gs://marin-us-central2/attributes/hello_world_fw/v1.0/'${EXP}'_olmo_fasttext/",
     "name": "olmo-fasttext-quality",
     "label": "__label__hq",
     "threshold": 0.1}]'
 
-#Tokenize
+# Tokenize
 ray job submit --working-dir . \
--- python -m marin.processing.tokenize \
---input_path gs://marin-us-central2/documents/hello_world_fw/v1.0/${EXP}_consolidate/CC-MAIN-2024-10/000_00000/*.jsonl.gz \
---cache_dir gs://marin-central2/tokenized/llama3/ \
---dataset_name $(whoami)-$EXP --tokenizer meta-llama/Meta-Llama-3.1-8B
+  -- python -m marin.processing.tokenize \
+  --input_path gs://marin-us-central2/documents/hello_world_fw/v1.0/${EXP}_consolidate/CC-MAIN-2024-10/000_00000/*.jsonl.gz \
+  --cache_dir gs://marin-central2/tokenized/llama3/ \
+  --dataset_name $(whoami)-$EXP --tokenizer meta-llama/Meta-Llama-3.1-8B
