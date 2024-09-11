@@ -1,0 +1,13 @@
+input_path: "gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart_dlwh/"
+output_path: "gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart_dlwh_consolidate_debugahmed/"
+max_tasks_in_flight: 1000
+
+filters:
+  - type: "dedupe"
+    attribute_path: "gs://marin-us-central2/attributes/hello_world_fw/v1.0/quickstart_dlwh_duplicates/"
+    name: "duplicate_text"
+  - type: "classify"
+    attribute_path: "gs://marin-us-central2/attributes/hello_world_fw/v1.0/quickstart_dlwh/"
+    name: "quickstart-fasttext-quality"
+    label: "__label__hq"
+    threshold: 0.1
