@@ -14,6 +14,7 @@ Run with:
 
 from dataclasses import dataclass
 
+import re
 import draccus
 import ray
 
@@ -53,30 +54,33 @@ class DownloadConfig:
 
 
 @ray.remote
-def _wait_for_job_completion(job_url: str, timeout: int) -> None:
+def _wait_for_job_completion(job_name: str, timeout: int = 1800, poll_interval: int = 10) -> str:
     """Wait for a Transfer Job to complete.
     Parameters:
-        job_url (str): URL to the Transfer Job
+        job_name (str): Name of the Transfer Job to wait for.
         timeout (int): Maximum time to wait for the job to complete (in seconds).
+        poll_interval (int): Time to wait between polling the job status (in seconds
 
     Raises:
         TimeoutError: If the job does not complete within the specified `timeout`.
     """
 
-    wait_for_transfer_job(job_url, timeout)
-    return f"Transfer job completed: {job_url}"
+    wait_for_transfer_job(job_name, timeout)
+    return f"Transfer job completed: {job_name}"
 
 
 @draccus.wrap()
 def download(cfg: DownloadConfig) -> None | ray.ObjectRef:
     print(f"[*] Downloading HF Dataset `{cfg.hf_dataset_id}` to `{cfg.gcs_output_path}`")
-    job_url = download_hf_dataset(cfg.hf_dataset_id, cfg.revision, cfg.gcs_output_path, cfg.public_gcs_path)
+    job_name, job_url = download_hf_dataset(cfg.hf_dataset_id, cfg.revision, cfg.gcs_output_path, cfg.public_gcs_path)
 
     if cfg.wait_for_completion:
         print(f"[*] Waiting for Job Completion :: {job_url}")
-        future = _wait_for_job_completion.remote(job_url)
+        future = _wait_for_job_completion.remote(job_name)
 
         print(f"[*] Launched Job Completion Waiter :: {future}")
+        result = ray.get(future)
+        print(f"[*] Job Completion Waiter Result :: {result}")
 
         return future
 
