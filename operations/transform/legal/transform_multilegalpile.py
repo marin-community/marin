@@ -5,9 +5,9 @@ Inputs: raw jsonl.xz files, Output: jsonl.gz files in dolma format
 
 Example Usage:
 ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- \
-python operations/transform/legal/transform_multilegalpile.py \
---input_path gs://marin-data/raw/huggingface.co/datasets/joelniklaus/MultiLegalPileWikipediaFiltered/resolve/main/data \
---output_path gs://marin-data/processed/law/multilegalpile-v1.0/txt/documents
+    python operations/transform/legal/transform_multilegalpile.py \
+        --input_path gs://marin-data/raw/law/multilegalpile \
+        --output_path gs://marin-data/processed/law/multilegalpile-v1.0/txt/documents
 """
 
 import argparse

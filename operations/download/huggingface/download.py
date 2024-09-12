@@ -26,7 +26,8 @@ class DownloadConfig:
 
     # HuggingFace Dataset Parameters
     hf_dataset_id: str                                      # HF Dataset to Download (as `$ORG/$DATASET` on HF Hub)
-    revision: str                                           # (Short) Commit Hash (from HF Dataset Repo; 7 characters)
+    revision: str = "main"                                  # (Short) Commit Hash (from HF Dataset Repo; 7 characters)
+    hf_url_glob: str = "*"                                  # Glob Pattern to Match Files in HF Dataset
 
     # Additional GCS Parameters
     public_gcs_path: str = (                                # Path to Publicly Readable Bucket (for Storage Transfer)
@@ -50,7 +51,9 @@ class DownloadConfig:
 @draccus.wrap()
 def download(cfg: DownloadConfig) -> None:
     print(f"[*] Downloading HF Dataset `{cfg.hf_dataset_id}` to `{cfg.gcs_output_path}`")
-    job_url = download_hf_dataset(cfg.hf_dataset_id, cfg.revision, cfg.gcs_output_path, cfg.public_gcs_path)
+    job_url = download_hf_dataset(
+        cfg.hf_dataset_id, cfg.revision, cfg.hf_url_glob, cfg.gcs_output_path, cfg.public_gcs_path
+    )
 
     # Finalize
     print(f"[*] Launched Transfer Job & wrote `provenance.json`; check Transfer Job status at:\n\t=> {job_url}")

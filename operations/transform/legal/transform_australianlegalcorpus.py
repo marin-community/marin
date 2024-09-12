@@ -5,10 +5,9 @@ Inputs: one raw jsonl file, Output: one jsonl.gz file in dolma format
 
 Example Usage:
 ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- \
-python operations/transform/legal/transform_australianlegalcorpus.py \
---input_path gs://marin-data/raw/huggingface.co/datasets/umarbutler/open-australian-legal-corpus/resolve/\
-66e7085ff50b8d71d3089efbf60e02ef5b53cf46 \
---output_path gs://marin-data/processed/law/australianlegalcorpus-v1.0/txt/documents
+    python operations/transform/legal/transform_australianlegalcorpus.py \
+        --input_path gs://marin-data/raw/law/australianlegalcorpus \
+        --output_path gs://marin-data/processed/law/australianlegalcorpus-v1.0/txt/documents
 """
 
 import argparse
