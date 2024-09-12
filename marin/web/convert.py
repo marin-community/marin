@@ -12,14 +12,17 @@ def convert_page_with_trafilatura(html: str, url: str | None = None) -> dict[str
 
     title = extract_metadata(html).title
     content = extract(
-        html, 
-        with_metadata=True,
+        html,
         favor_recall=True,
         include_links=True,
+        output_format="markdown",
     )
 
     if title == "[no-title]":
         title = None
+
+    if title:
+        content = f"# {title}\n\n{content}"
     
     out = {
         "title": title,
