@@ -58,7 +58,7 @@ RAWDATAPATH = (
     "gs://marin-us-central2/raw/hello_world_fw/8fd6e8e/huggingface.co/datasets/skaramcheti/hello_world_fw/"
     "resolve/8fd6e8e/data"
 )
-EXPERIMENT = "quickstart_single_script_2"
+EXPERIMENT = "quickstart_single_script_docker_test"
 DATASET = "hello_world_fw"
 
 # Transform
@@ -67,7 +67,7 @@ from scripts.hello_world_fw.process import FineWebConfig  # noqa
 config = FineWebConfig(
     input_path=RAWDATAPATH, output_path=f"gs://marin-us-central2/documents/{DATASET}/v1.0/{EXPERIMENT}"
 )
-transform_ref = execute.remote(scripts.hello_world_fw.process.main_ray, [], config)
+transform_ref = execute.remote(scripts.hello_world_fw.process.main_ray, config, depends_on=[])
 
 # FastText classifier
 from scripts.fasttext.train_fasttext import MainConfig  # noqa
@@ -81,7 +81,7 @@ config = MainConfig(
     neg_sampling_rate=1.0,
     training_args={"lr": 0.1},
 )
-fasttext_ref = execute.remote(scripts.fasttext.train_fasttext.main_ray, [transform_ref], config)
+fasttext_ref = execute.remote(scripts.fasttext.train_fasttext.main_ray, config, depends_on=[transform_ref])
 
 ## Use olmo classifier to annotate, Note the dependency on transform only
 from marin.processing.classification.inference import InferenceConfig  # noqa
@@ -93,7 +93,7 @@ config = InferenceConfig(
     model_type="fasttext",
     attribute_name="olmo-fasttext-quality",
 )
-annotate_ref = execute.remote(marin.processing.classification.inference.main_ray, [transform_ref], config)
+annotate_ref = execute.remote(marin.processing.classification.inference.main_ray, config, depends_on=[transform_ref])
 
 ## Use quickstart classifier to annotate, Note the dependency on fasttext_ref
 config = InferenceConfig(
@@ -103,7 +103,7 @@ config = InferenceConfig(
     model_type="fasttext",
     attribute_name="quickstart-fasttext-quality",
 )
-annotate_ref_2 = execute.remote(marin.processing.classification.inference.main_ray, [fasttext_ref], config)
+annotate_ref_2 = execute.remote(marin.processing.classification.inference.main_ray, config, depends_on=[fasttext_ref])
 # Getting annotate_ref_2 as it will not be used later no and not in DAG
 ray.get(annotate_ref_2)
 
@@ -114,7 +114,7 @@ config = DedupeConfig(
     input_path=f"gs://marin-us-central2/documents/{DATASET}/v1.0/{EXPERIMENT}",
     output_path=f"gs://marin-us-central2/attributes/{DATASET}/v1.0/{EXPERIMENT}_duplicates",
 )
-dedup_ref = execute.remote(marin.processing.classification.dedupe.main_ray, [transform_ref], config)
+dedup_ref = execute.remote(marin.processing.classification.dedupe.main_ray, config, depends_on=[transform_ref])
 
 # Consolidate all the results
 from marin.processing.classification.consolidate import ConsolidateConfig, FilterConfig  # noqa
@@ -138,7 +138,9 @@ config = ConsolidateConfig(
     ],
 )
 
-consolidate_ref = execute.remote(marin.processing.classification.consolidate.main_ray, [dedup_ref, annotate_ref], config)
+consolidate_ref = execute.remote(
+    marin.processing.classification.consolidate.main_ray, config, depends_on=[transform_ref, dedup_ref]
+)
 
 
 # Tokenize
@@ -150,6 +152,21 @@ config = TokenizeConfig(
     dataset_name=f"{DATASET}-{EXPERIMENT}",
     tokenizer="meta-llama/Meta-Llama-3.1-8B",
 )
-tokenize_ref = execute.remote(marin.processing.tokenize.main_ray, [consolidate_ref], config)
+tokenize_ref = execute.remote(marin.processing.tokenize.main_ray, config, depends_on=[consolidate_ref])
 
-ray.get(tokenize_ref)
+# Train
+from scripts.training.launch import LaunchConfig  # noqa
+
+config = LaunchConfig(
+    experiment=EXPERIMENT,
+    base_config="config/training/quickstart_run.yaml",
+    dataset_name=f"{DATASET}-{EXPERIMENT}",
+    dataset_path=f"gs://marin-us-central2/documents/{DATASET}/v1.0/{EXPERIMENT}_consolidate/**/*.jsonl.gz",
+    cache_dir="gs://marin-us-central2/tokenized/llama3/",
+    zone="us-central2-b",
+    tpu_type="v4-32",
+)
+
+train_ref = execute.remote(scripts.training.launch.main, config, depends_on=[tokenize_ref])
+
+ray.get(train_ref)
