@@ -140,4 +140,4 @@ class HELMEvaluator(VllmTpuEvaluator):
             print(f"An error occurred: {e}")
         finally:
             self.cleanup(model, vllm_port=vllm_port)
-            shutil.rmtree(self.RESULTS_PATH)
+            shutil.rmtree(self.RESULTS_PATH, ignore_errors=True)
