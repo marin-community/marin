@@ -1,13 +1,39 @@
 import re
-from urllib.parse import urljoin
-
 import htmlmin
+
 from bs4 import BeautifulSoup
+from urllib.parse import urljoin
 
 from marin.markdown import to_markdown
 
 
-def convert_page(html: str, url: str | None = None) -> dict[str, str]:
+def convert_page_with_trafilatura(html: str, url: str | None = None) -> dict[str, str]:
+    from trafilatura import extract, extract_metadata
+
+    title = extract_metadata(html).title
+    content = extract(
+        html, 
+        with_metadata=True,
+        favor_recall=True,
+        include_links=True,
+    )
+
+    if title == "[no-title]":
+        title = None
+    
+    out = {
+        "title": title,
+        "content": content,
+        "html": html
+    }
+
+    if url:
+        out["url"] = url
+
+    return out
+
+
+def convert_page_with_readability(html: str, url: str | None = None) -> dict[str, str]:
     from readability import Document
     # remove null character and control characters
     html = re.sub(u'[^\u0020-\uD7FF\u0009\u000A\u000D\uE000-\uFFFD\U00010000-\U0010FFFF]+', '', html)
@@ -46,6 +72,7 @@ def convert_page(html: str, url: str | None = None) -> dict[str, str]:
 
     return out
 
+
 def convert_page_legacy(html: str, url: str | None = None) -> dict[str, str]:
     print(f"This is Legacy method, use convert_page_python instead")
     from readabilipy import simple_json_from_html_string
@@ -75,6 +102,19 @@ def convert_page_legacy(html: str, url: str | None = None) -> dict[str, str]:
         out["url"] = url
 
     return out
+
+
+def convert_page(html: str, url: str | None = None, extract_method: str = "trafilatura") -> dict[str, str]:
+    match extract_method:
+        case "trafilatura":
+            return convert_page_with_trafilatura(html, url)
+        case "readability":
+            return convert_page_with_readability(html, url)
+        case "legacy":
+            return convert_page_legacy(html, url)
+        case _:
+            print(f"Invalid extract_method: {extract_method}. Switching to readability for extraction.")
+            return convert_page_with_readability(html, url)
 
 
 def make_links_absolute(soup: BeautifulSoup, base_url):
