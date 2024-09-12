@@ -5,9 +5,9 @@ Inputs: one tar.gz file per year containing multiple json files, Output: one jso
 
 Example Usage:
 ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- \
-python operations/transform/legal/transform_hupd.py \
---input_path gs://marin-data/raw/huggingface.co/datasets/HUPD/hupd/resolve/main/data \
---output_path gs://marin-data/processed/law/hupd-v1.0/txt/documents
+    python operations/transform/legal/transform_hupd.py \
+        --input_path gs://marin-data/raw/law/hupd \
+        --output_path gs://marin-data/processed/law/hupd-v1.0/txt/documents
 """
 
 import argparse
