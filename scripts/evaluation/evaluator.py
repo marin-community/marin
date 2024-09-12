@@ -84,9 +84,12 @@ class ModelConfig:
         """
         Deletes the model checkpoint if it was downloaded from GCS.
         """
-        if os.path.exists(self.path):
-            shutil.rmtree(self.path)
-            print(f"Deleted local checkpoint at {self.path}.")
+        try:
+            if os.path.exists(self.path):
+                shutil.rmtree(self.path)
+                print(f"Deleted local checkpoint at {self.path}.")
+        except Exception as e:
+            print(f"An error occurred while deleting the model checkpoint: {e}")
 
 
 class Evaluator(ABC):
