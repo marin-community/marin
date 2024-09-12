@@ -64,7 +64,7 @@ def download_hf_dataset(hf_dataset_id: str, revision: str, hf_url_glob: str, gcs
     tsv_url = create_url_list_tsv_on_gcs(hf_urls, gcs_versioned_relative_path, public_gcs_bucket, return_url=True)
 
     # Initialize and Launch STS Job (using GCloud API)
-    job_url = create_gcs_transfer_job_from_tsv(
+    job_name, job_url = create_gcs_transfer_job_from_tsv(
         tsv_url,
         gcs_versioned_relative_path,
         gcs_bucket,
@@ -79,4 +79,4 @@ def download_hf_dataset(hf_dataset_id: str, revision: str, hf_url_glob: str, gcs
         metadata={"dataset": hf_dataset_id, "version": revision, "links": hf_urls},
     )
 
-    return job_url
+    return job_name, job_url
