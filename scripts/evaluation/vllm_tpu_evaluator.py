@@ -148,11 +148,11 @@ class VllmTpuEvaluator(Evaluator, ABC):
         """
         print("Cleaning up resources.")
         # Kill the vLLM server
-        if vllm_port is not None:
-            try:
+        try:
+            if vllm_port is not None:
                 kill_process_on_port(vllm_port)
-            except Exception as e:
-                print(f"Failed to kill vLLM server on port {vllm_port}: {e}")
+        except Exception as e:
+            print(f"Failed to kill vLLM server on port {vllm_port}: {e}")
 
         # Delete the checkpoint
         model.destroy()
