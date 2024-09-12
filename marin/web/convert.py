@@ -107,7 +107,7 @@ def convert_page_legacy(html: str, url: str | None = None) -> dict[str, str]:
     return out
 
 
-def convert_page(html: str, url: str | None = None, extract_method: str = "trafilatura") -> dict[str, str]:
+def convert_page(html: str, url: str | None = None, extract_method: str = "readability") -> dict[str, str]:
     match extract_method:
         case "trafilatura":
             return convert_page_with_trafilatura(html, url)
