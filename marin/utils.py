@@ -133,16 +133,17 @@ def fsspec_isdir(dir_path):
 
 
 
+import re
+
 def validate_marin_gcp_path(path: str) -> str:
     """
     Validate the given path according to the marin GCP convention.
 
     This function ensures that the provided path follows the required format for
-    GCS paths in a specific bucket structure. The expected format is:
-    gs://marin-$REGION//(documents|attributes|filtered)/$EXPERIMENT/$DATASET/$VERSION/
-
-    gs://marin-$REGION/scratch//(documents|attributes|filtered)/$EXPERIMENT/$DATASET/$VERSION/ is also
-    allowed for temporary storage and debugging.
+    GCS paths in a specific bucket structure. The expected format is either:
+    gs://marin-$REGION/scratch//* (any structure after scratch)
+    or
+    gs://marin-$REGION/(documents|attributes|filtered)/$EXPERIMENT/$DATASET/$VERSION/
 
     Parameters:
     path (str): The GCS path to validate.
@@ -163,11 +164,14 @@ def validate_marin_gcp_path(path: str) -> str:
     'gs://marin-us-central1/filtered/exp1/dataset1/v1/'
     >>> validate_marin_gcp_path("gs://marin-us-central1/scratch/documents/exp1/dataset1/v1/")
     'gs://marin-us-central1/scratch/documents/exp1/dataset1/v1/'
+    >>> validate_marin_gcp_path("gs://marin-us-central1/scratch/decontamination/decontamination_demo.jsonl.gz")
+    'gs://marin-us-central1/scratch/decontamination/decontamination_demo.jsonl.gz'
     """
-    pattern = r"^gs://marin-[^/]+/(scratch/)?(documents|attributes|filtered)/[^/]+/[^/]+/[^/]+(/.*)?$"
+    pattern = r"^gs://marin-[^/]+/(scratch/.+|(documents|attributes|filtered)/[^/]+/[^/]+/[^/]+(/.*)?$)"
     if not re.match(pattern, path):
-        raise ValueError(f"Invalid path format. It should follow the structure: "
-                         f"gs://marin-$REGION/[scratch/]{{documents|attributes|filtered}}/$EXPERIMENT/$DATASET/$VERSION/")
+        raise ValueError(f"Invalid path format. It should follow either:\n"
+                         f"1. gs://marin-$REGION/scratch/* (any structure after scratch)\n"
+                         f"2. gs://marin-$REGION/{{documents|attributes|filtered}}/$EXPERIMENT/$DATASET/$VERSION/")
     return path
 
 def rebase_file_path(base_in_path, file_path, base_out_path, new_extension=None, old_extension=None):
