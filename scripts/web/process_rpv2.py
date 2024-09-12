@@ -5,7 +5,7 @@ import os
 
 import html2text
 
-import readabilipy
+import readability
 
 from marin.markdown import to_markdown
 from marin.web.convert import convert_page

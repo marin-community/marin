@@ -50,81 +50,25 @@ provider:
   availability_zone: us-central2-b
   project_id: hai-gcp-models
 
+docker:
+    image: "us-central2-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:latest"
+    container_name: "ray_docker"
+    pull_before_run: true
+
 
 initialization_commands:
-  - sudo apt-get update
-  - sudo NEEDRESTART_MODE=a DEBIAN_FRONTEND=noninteractive apt-get upgrade -y
-  - sudo NEEDRESTART_MODE=a DEBIAN_FRONTEND=noninteractive apt-get install -y python3-pip python-is-python3 pandoc
-  # Install OpenBLAS, OpenMPI, and OpenMP for eval dependencies
-  - sudo NEEDRESTART_MODE=a DEBIAN_FRONTEND=noninteractive apt-get install -y libopenblas-base libopenmpi-dev libomp-dev libopenblas-dev
-  # Install Miniconda3
-  - mkdir -p ~/miniconda3 && wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O ~/miniconda3/miniconda.sh && bash ~/miniconda3/miniconda.sh -b -u -p ~/miniconda3 && rm -rf ~/miniconda3/miniconda.sh
-  - ~/miniconda3/bin/conda create --name evaluate --yes python=3.10 pip=23.0.1
-  # Ensure that there aren't conflicts with the main packages
-  - echo "include-system-site-packages=false" >> ~/miniconda3/envs/evaluate/pyvenv.cfg
+  - yes | gcloud auth configure-docker us-central2-docker.pkg.dev
+  - which docker || (curl -fsSL https://get.docker.com -o get-docker.sh; sudo sh get-docker.sh; sudo usermod -aG docker $USER; sudo systemctl restart docker -f)
+  # always run this because ray doesn't run with sudo
+  - sudo usermod -aG docker $USER
 
 setup_commands:
-  # Add Rust for DOLMA
-  - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y && source $HOME/.cargo/env
-  - echo 'source $HOME/.cargo/env' >> $HOME/.bashrc  # or .bash_profile, depending on your system
-  - pip install --upgrade pip
-  - >
-    pip install "chardet==5.2.0"
-    "cryptography"
-    "datasets==2.19.0"
-    "dill==0.3.8"
-    "draccus @ git+https://github.com/dlwh/draccus"
-    "fsspec~=2024.3"
-    "gcsfs~=2024.3"
-    "google-api-python-client==2.129.0"
-    "google-cloud-storage-transfer==1.11.3"
-    "html2text==2024.2.26"
-    "htmlmin==0.1.12"
-    "markdownify==0.12.1"
-    "multiprocess==0.70.16"
-    "py7zr==0.21.0"
-    "ray[default]==2.34.0"
-    "rbloom==1.5.0"
-    "readabilipy==0.2.0"
-    "readability-lxml==0.8.1"
-    "regex==2024.4.16"
-    "requests"
-    "tensorflow==2.16.1"
-    "trafilatura==1.8.1"
-    "tqdm"
-    "warcio==1.7.4"
-    "tblib==3.0.0"
-    "transformers==4.44.2"
-  #  - >
-  #    ~/miniconda3/envs/evaluate/bin/pip install
-  #    "fsspec~=2024.3"
-  #    "gcsfs~=2024.3"
-  #    "google-api-python-client==2.129.0"
-  #    "google-cloud-storage-transfer==1.11.3"
-  #    "requests"
-  #    "ray[default]==2.34.0"
-  #  - ~/miniconda3/envs/evaluate/bin/pip install https://storage.googleapis.com/pytorch-xla-releases/wheels/tpuvm/torch-nightly+20240601-cp310-cp310-linux_x86_64.whl https://storage.googleapis.com/pytorch-xla-releases/wheels/tpuvm/torch_xla-nightly+20240601-cp310-cp310-linux_x86_64.whl
-  #  - ~/miniconda3/envs/evaluate/bin/pip install torch_xla[tpu] -f https://storage.googleapis.com/libtpu-releases/index.html
-  #  - ~/miniconda3/envs/evaluate/bin/pip install torch_xla[pallas] -f https://storage.googleapis.com/jax-releases/jax_nightly_releases.html -f https://storage.googleapis.com/jax-releases/jaxlib_nightly_releases.html
-  #  - ~/miniconda3/envs/evaluate/bin/pip install git+https://github.com/TheQuantumFractal/OLMo.git
-  #  - ~/miniconda3/envs/evaluate/bin/pip install lm-eval==0.4.3
-  #  - rm ./vllmsrc -rf
-  #  - git clone https://github.com/vllm-project/vllm.git ./vllmsrc
-  #  - cd ./vllmsrc && git checkout tags/v0.5.3.post1
-  #  - cd ./vllmsrc && ~/miniconda3/envs/evaluate/bin/pip install -r requirements-tpu.txt
-  #  - cd ./vllmsrc && VLLM_TARGET_DEVICE="tpu" ~/miniconda3/envs/evaluate/bin/python setup.py develop
-  - git clone --branch abhi-2.34.0 --single-branch --depth 1 https://github.com/abhinavg4/ray.git && rm -rf /home/ubuntu/.local/lib/python3.10/site-packages/ray/autoscaler && ln -s /home/ubuntu/ray/python/ray/autoscaler /home/ubuntu/.local/lib/python3.10/site-packages/ray/autoscaler
-
-
-# Install Jax and levanter only on workers
-worker_setup_commands:
-  - pip install -U "jax[tpu]" -f https://storage.googleapis.com/jax-releases/libtpu_releases.html
-  - git clone https://github.com/stanford-crfm/levanter.git && cd levanter && pip install -e .
-  - mkdir /home/ubuntu/.cache/huggingface -p && gcloud secrets versions access latest --secret=HF_TOKEN > /home/ubuntu/.cache/huggingface/token
-
-# Levanter is installed on head node without Jax
-head_setup_commands:
-  - pip install levanter@git+https://github.com/stanford-crfm/levanter.git
+  # set the GCP project because it's not injected by default
+  - gcloud config set project hai-gcp-models
+  - gcloud config set compute/region us-central2
+  - gcloud config set compute/zone us-central2-b
+  - mkdir $HOME/.cache/huggingface -p
+  - gcloud secrets versions access latest --secret=HF_TOKEN > $HOME/.cache/huggingface/token
 
 # Set Head Node == `ray_head_default`
 head_node_type: head_default

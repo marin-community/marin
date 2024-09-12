@@ -15,8 +15,10 @@ Run with:
 from dataclasses import dataclass
 
 import draccus
+import ray
 
 from marin.utilities.huggingface_hub_utils import download_hf_dataset
+from marin.utilities.storage_transfer_utils import wait_for_transfer_job
 
 
 @dataclass
@@ -34,6 +36,12 @@ class DownloadConfig:
         "gs://hf_dataset_transfer_bucket"
     )
 
+    # Job Control Parameters
+    wait_for_completion: bool = False                       # if True, will block until job completes
+    timeout: int = 1800                                     # Maximum time to wait for job completion (in seconds)
+    poll_interval: int = 10                                 # Time to wait between polling job status (in seconds)
+
+
     def __post_init__(self) -> None:
         if not self.gcs_output_path.startswith("gs://"):
             raise ValueError(
@@ -48,12 +56,39 @@ class DownloadConfig:
     # fmt: on
 
 
+@ray.remote
+def _wait_for_job_completion(job_name: str, timeout: int, poll_interval: int) -> str:
+    """Wait for a Transfer Job to complete.
+    Parameters:
+        job_name (str): Name of the Transfer Job to wait for.
+        timeout (int): Maximum time to wait for the job to complete (in seconds).
+        poll_interval (int): Time to wait between polling the job status (in seconds
+
+    Raises:
+        TimeoutError: If the job does not complete within the specified `timeout`.
+    """
+
+    wait_for_transfer_job(job_name, timeout=timeout, poll_interval=poll_interval)
+    return f"Transfer job completed: {job_name}"
+
+
 @draccus.wrap()
-def download(cfg: DownloadConfig) -> None:
+def download(cfg: DownloadConfig) -> None | ray.ObjectRef:
     print(f"[*] Downloading HF Dataset `{cfg.hf_dataset_id}` to `{cfg.gcs_output_path}`")
-    job_url = download_hf_dataset(
+
+    job_name, job_url = download_hf_dataset(
         cfg.hf_dataset_id, cfg.revision, cfg.hf_url_glob, cfg.gcs_output_path, cfg.public_gcs_path
     )
+
+    if cfg.wait_for_completion:
+        print(f"[*] Waiting for Job Completion :: {job_url}")
+        future = _wait_for_job_completion.remote(job_name, cfg.timeout, cfg.poll_interval)
+
+        print(f"[*] Launched Job Completion Waiter :: {future}")
+        result = ray.get(future)
+        print(f"[*] Job Completion Waiter Result :: {result}")
+
+        return future
 
     # Finalize
     print(f"[*] Launched Transfer Job & wrote `provenance.json`; check Transfer Job status at:\n\t=> {job_url}")
