@@ -56,17 +56,59 @@ def parametrize_with_files(fn):
 
 
 @parametrize_with_files
-def test_generate_markdown_from_html(input_name):
-    """Test the Markdown generation from HTML and compare outputs."""
+def test_generate_markdown_from_html_with_readability(input_name):
+    """Test the Markdown generation from HTML and compare outputs using the Readability method."""
     input_file = os.path.join(input_path, f"{input_name}.html")
     input_content = read_file(input_file)
 
-    output_dict = convert_page(input_content)
+    output_dict = convert_page(input_content, extract_method="readability")
 
     output = output_dict["content"]
 
-    expected_file = os.path.join(expected_path, f"{input_name}.md")
-    output_file = os.path.join(output_path, f"{input_name}.md")
+    expected_file = os.path.join(expected_path, "readability", f"{input_name}.md")
+    output_file = os.path.join(output_path, "readability", f"{input_name}.md")
+
+    os.makedirs(output_path, exist_ok=True)
+
+    with open(output_file, "w") as f:
+        f.write(output)
+
+    compare_outputs(input_name, expected_file, output_file)
+
+
+@parametrize_with_files
+def test_generate_markdown_from_html_with_resiliparse(input_name):
+    """Test the Markdown generation from HTML and compare outputs using the Resiliparse method[NON MARKDOWN]."""
+    input_file = os.path.join(input_path, f"{input_name}.html")
+    input_content = read_file(input_file)
+
+    output_dict = convert_page(input_content, extract_method="resiliparse")
+
+    output = output_dict["content"]
+
+    expected_file = os.path.join(expected_path, "resiliparse", f"{input_name}.md")
+    output_file = os.path.join(output_path, "resiliparse", f"{input_name}.md")
+
+    os.makedirs(output_path, exist_ok=True)
+
+    with open(output_file, "w") as f:
+        f.write(output)
+
+    compare_outputs(input_name, expected_file, output_file)
+
+
+@parametrize_with_files
+def test_generate_markdown_from_html_with_trafilatura(input_name):
+    """Test the Markdown generation from HTML and compare outputs using the Trafilatura method."""
+    input_file = os.path.join(input_path, f"{input_name}.html")
+    input_content = read_file(input_file)
+
+    output_dict = convert_page(input_content, extract_method="trafilatura")
+
+    output = output_dict["content"]
+
+    expected_file = os.path.join(expected_path, "trafilatura", f"{input_name}.md")
+    output_file = os.path.join(output_path, "trafilatura", f"{input_name}.md")
 
     os.makedirs(output_path, exist_ok=True)
 
