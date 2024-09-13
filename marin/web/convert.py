@@ -8,6 +8,16 @@ from marin.markdown import to_markdown
 
 
 def convert_page_with_trafilatura(html: str, url: str | None = None) -> dict[str, str]:
+    """
+    Convert HTML to text[markdown] using Trafilatura.
+
+    Parameters:
+        html (str): HTML content to convert.
+        url (str | None): URL of the page.
+
+    Returns:
+        dict[str, str]: Dictionary containing the title, content, and HTML of the page.
+    """
     from trafilatura import extract, extract_metadata
 
     title = extract_metadata(html).title
@@ -37,6 +47,16 @@ def convert_page_with_trafilatura(html: str, url: str | None = None) -> dict[str
 
 
 def convert_page_with_resiliparse(html: str, url: str | None = None) -> dict[str, str]:
+    """
+    Convert HTML to text[non-markdown] using Resiliparse.
+
+    Parameters:
+        html (str): HTML content to convert.
+        url (str | None): URL of the page.
+    
+    Returns:
+        dict[str, str]: Dictionary containing the title, content, and HTML of the page.
+    """
     from resiliparse.parse.html import HTMLTree
     from resiliparse.extract.html2text import extract_plain_text
 
@@ -66,6 +86,16 @@ def convert_page_with_resiliparse(html: str, url: str | None = None) -> dict[str
 
 
 def convert_page_with_readability(html: str, url: str | None = None) -> dict[str, str]:
+    """
+    Convert HTML to text[markdown] using Readability and markdownify.
+
+    Parameters:
+        html (str): HTML content to convert.
+        url (str | None): URL of the page.
+
+    Returns:
+        dict[str, str]: Dictionary containing the title, content, and HTML of the page.
+    """
     from readability import Document
     # remove null character and control characters
     html = re.sub(u'[^\u0020-\uD7FF\u0009\u000A\u000D\uE000-\uFFFD\U00010000-\U0010FFFF]+', '', html)
@@ -137,6 +167,18 @@ def convert_page_legacy(html: str, url: str | None = None) -> dict[str, str]:
 
 
 def convert_page(html: str, url: str | None = None, extract_method: str = "readability") -> dict[str, str]:
+    """
+    Convert HTML to text using the specified method.
+
+    Parameters:
+        html (str): HTML content to convert.
+        url (str | None): URL of the page.
+        extract_method (str): Method to use for extraction. Defaults to "readability".
+
+    Returns:
+        dict[str, str]: Dictionary containing the title, content, and HTML of the page.
+    """
+
     match extract_method:
         case "trafilatura":
             return convert_page_with_trafilatura(html, url)
