@@ -36,6 +36,35 @@ def convert_page_with_trafilatura(html: str, url: str | None = None) -> dict[str
     return out
 
 
+def convert_page_with_resiliparse(html: str, url: str | None = None) -> dict[str, str]:
+    from resiliparse.parse.html import HTMLTree
+    from resiliparse.extract.html2text import extract_plain_text
+
+    tree = HTMLTree.parse(html)
+    title = tree.title or None
+
+    content = extract_plain_text(
+        html,
+        main_content=True,
+        alt_texts=False,
+        list_bullets=True,
+    )
+
+    if title:
+        content = f"# {title}\n\n{content}"
+
+    out = {
+        "title": title,
+        "content": content,
+        "html": html
+    }
+
+    if url:
+        out["url"] = url
+
+    return out
+
+
 def convert_page_with_readability(html: str, url: str | None = None) -> dict[str, str]:
     from readability import Document
     # remove null character and control characters
@@ -113,6 +142,8 @@ def convert_page(html: str, url: str | None = None, extract_method: str = "reada
             return convert_page_with_trafilatura(html, url)
         case "readability":
             return convert_page_with_readability(html, url)
+        case "resiliparse":
+            return convert_page_with_resiliparse(html, url)
         case "legacy":
             return convert_page_legacy(html, url)
         case _:
