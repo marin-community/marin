@@ -9,7 +9,7 @@ from marin.markdown import to_markdown
 
 def convert_page_with_trafilatura(html: str, url: str | None = None) -> dict[str, str]:
     """
-    Convert HTML to text[markdown] using Trafilatura.
+    Convert HTML to text[non-markdown] using Trafilatura.
 
     Parameters:
         html (str): HTML content to convert.
@@ -25,7 +25,7 @@ def convert_page_with_trafilatura(html: str, url: str | None = None) -> dict[str
         html,
         favor_recall=True,
         include_links=True,
-        output_format="markdown",
+        output_format="txt",
     )
 
     if title == "[no-title]":
