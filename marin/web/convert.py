@@ -48,7 +48,10 @@ def convert_page_with_trafilatura(html: str, url: str | None = None) -> dict[str
 
 def convert_page_with_resiliparse(html: str, url: str | None = None) -> dict[str, str]:
     """
-    Convert HTML to text[non-markdown] using Resiliparse.
+    Convert HTML to text[non-markdown] using Resiliparse. 
+    Note: This method does not convert the content to markdown. Resiliparse does not have a markdown conversion method.
+    You can use the markdown conversion method from the `marin.markdown` module over HTMLTree from `resiliparse.parse.html`.
+    But, then this method will be identical to the `convert_page_with_readability` method then.
 
     Parameters:
         html (str): HTML content to convert.
