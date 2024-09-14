@@ -56,8 +56,8 @@ docker:
     pull_before_run: true
     worker_run_options:
         - --privileged
+        - --ulimit memlock=-1:-1  #
         - --shm-size=32gb
-        - --net=host
         - -v
         - "/tmp:/tmp"
 
