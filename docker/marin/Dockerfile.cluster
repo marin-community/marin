@@ -45,4 +45,8 @@ RUN git clone --branch abhi-2.34.0 --single-branch --depth 1 https://github.com/
 RUN rm -rf $VENV_PATH/lib/python3.11/site-packages/ray/autoscaler
 RUN ln -s /opt/abhi-ray/ray/python/ray/autoscaler $VENV_PATH/lib/python3.11/site-packages/ray/autoscaler
 
+ENV PYTHONPATH=$PYTHONPATH:/opt/abhi-ray/ray/python:/opt/vllm:$VENVPATH/lib/python3.11/site-packages
+ENV LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/home/ray/anaconda3/lib
+ENV PATH=$PATH:/home/ray/anaconda3/bin
+
 WORKDIR /opt/marin
