@@ -1,5 +1,5 @@
 FROM rayproject/ray:nightly-py311-cpu
-RUN sudo apt-get update && sudo apt-get install -y clang curl g++ vim
+RUN sudo apt-get update && sudo apt-get install -y clang curl g++ vim libpython3.11 libpython3.11-dev
 
 # install rust
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
@@ -12,16 +12,17 @@ ENV PATH=/home/ray/anaconda3/bin:/home/ray/anaconda3/bin:/home/ray/anaconda3/con
 RUN pip install -U "jax[tpu]==0.4.30" -f https://storage.googleapis.com/jax-releases/libtpu_releases.html
 
 # gcloud
-RUN conda install conda-forge::google-cloud-sdk
+RUN conda install conda-forge::google-cloud-sdk -y
 RUN gcloud components install alpha
 
-# Install package dependencies to make incremental builds faster.
+RUN conda install -c conda-forge ncurses -y
+
 WORKDIR /tmp/
 ADD pyproject.toml /tmp/
 RUN pip install . --extra-index-url https://download.pytorch.org/whl/cpu
 
-# Our weird fork of OLMo
-RUN pip install git+https://github.com/TheQuantumFractal/OLMo.git
+# Our weird fork of OLMO
+RUN pip install git+https://github.com/teetone/OLMo.git@main
 
 # Install vllm for TPU
 # cf https://github.com/vllm-project/vllm/blob/main/Dockerfile.tpu
@@ -44,5 +45,11 @@ WORKDIR /opt/abhi-ray
 RUN git clone --branch abhi-2.34.0 --single-branch --depth 1 https://github.com/abhinavg4/ray.git
 RUN rm -rf $VENV_PATH/lib/python3.11/site-packages/ray/autoscaler
 RUN ln -s /opt/abhi-ray/ray/python/ray/autoscaler $VENV_PATH/lib/python3.11/site-packages/ray/autoscaler
+
+ENV PYTHONPATH=$PYTHONPATH:$VENV_PATH/lib/python3.11/site-packages
+ENV LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/home/ray/anaconda3/lib
+ENV PATH=$PATH:/home/ray/anaconda3/bin
+
+# this is necessary to make bash happy
 
 WORKDIR /opt/marin
