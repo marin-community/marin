@@ -1,5 +1,5 @@
 # Unique Identifier for the Head Node + Workers
-cluster_name: marin-data
+cluster_name: marin-data-dlwh
 
 # Maximum Workers (excluding Head Node)
 max_workers: 1024
@@ -54,6 +54,12 @@ docker:
     image: "us-central2-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:latest"
     container_name: "ray_docker"
     pull_before_run: true
+    worker_run_options:
+        - --privileged
+        - --shm-size=32gb
+        - --net=host
+        - -v
+        - "/tmp:/tmp"
 
 
 initialization_commands:
