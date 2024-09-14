@@ -100,13 +100,23 @@ class HELMEvaluator(VllmTpuEvaluator):
     def run(self, model: ModelConfig, evals: List[str], output_path: str) -> None:
         super().run(model, evals, output_path)
 
-        from helm.common.general import ensure_file_downloaded
-
-        # Download the model from GCS or HuggingFace and serve it with vLLM
         vllm_port: int = 8000
-        self.start_vllm_server_in_background(model, port=vllm_port)
+
+        import torch_xla.core.xla_model as xm
+        # print("Tony --- TPU device: " + xm.xla_device())
+
+        print("Tonyyyyy:")
+        run_bash_command("helm-run --help")
+        run_bash_command("which vllm")
+        run_bash_command("vllm serve google/gemma-2b")
+        assert False
 
         try:
+            # Download the model from GCS or HuggingFace and serve it with vLLM
+            self.start_vllm_server_in_background(model, port=vllm_port)
+
+            from helm.common.general import ensure_file_downloaded
+
             # HELM requires the model name to match the local path
             if model.path is not None:
                 model.name = model.path
