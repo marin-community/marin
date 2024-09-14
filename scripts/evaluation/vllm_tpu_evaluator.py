@@ -18,14 +18,14 @@ class VllmTpuEvaluator(Evaluator, ABC):
     # Default pip packages to install for VLLM on TPUs
     # Some versions were fixed in order to resolve dependency conflicts.
     DEFAULT_PIP_PACKAGES: List[Dependency] = [
-        Dependency(
-            name="https://storage.googleapis.com/pytorch-xla-releases/wheels/tpuvm/torch-nightly+20240726"
-            "-cp310-cp310-linux_x86_64.whl",
-        ),
-        Dependency(
-            name="https://storage.googleapis.com/pytorch-xla-releases/wheels/tpuvm/torch_xla-nightly+20240726"
-            "-cp310-cp310-linux_x86_64.whl",
-        ),
+        # Dependency(
+        #     name="https://storage.googleapis.com/pytorch-xla-releases/wheels/tpuvm/torch-nightly+20240726"
+        #     "-cp310-cp310-linux_x86_64.whl",
+        # ),
+        # Dependency(
+        #     name="https://storage.googleapis.com/pytorch-xla-releases/wheels/tpuvm/torch_xla-nightly+20240726"
+        #     "-cp310-cp310-linux_x86_64.whl",
+        # ),
         Dependency(name="aiohttp"),
         Dependency(name="attrs", version="22.2.0"),
         Dependency(name="click", version="8.1.3"),
@@ -57,31 +57,32 @@ class VllmTpuEvaluator(Evaluator, ABC):
         https://docs.vllm.ai/en/v0.5.0.post1/getting_started/tpu-installation.html
         TPUs require installing VLLM from source.
         """
-        # Additional dependencies to install in order for vLLM to work on TPUs
-        start_time: float = time.time()
-        run_bash_command("sudo apt-get update && sudo apt-get install libopenblas-dev --yes")
-        run_bash_command("pip install torch_xla[tpu] -f https://storage.googleapis.com/libtpu-releases/index.html")
-        run_bash_command(
-            "pip install torch_xla[pallas] "
-            "-f https://storage.googleapis.com/jax-releases/jax_nightly_releases.html "
-            "-f https://storage.googleapis.com/jax-releases/jaxlib_nightly_releases.html"
-        )
-        # Clone the VLLM repository to install it from source. Can fail if the repository already exists.
-        run_bash_command("git clone https://github.com/vllm-project/vllm.git", check=False)
-        # Runs https://github.com/vllm-project/vllm/blob/main/setup.py with the `tpu` target device
-        run_bash_command(f"cd vllm && git checkout tags/{VllmTpuEvaluator.VLLM_VERSION}")
-        run_bash_command('VLLM_TARGET_DEVICE="tpu" pip install -e ./vllm')
+        # # Additional dependencies to install in order for vLLM to work on TPUs
+        # start_time: float = time.time()
+        # run_bash_command("sudo apt-get update && sudo apt-get install libopenblas-dev --yes")
+        # # Clone the VLLM repository to install it from source. Can fail if the repository already exists.
+        # run_bash_command("git clone https://github.com/vllm-project/vllm.git", check=False)
+        # # Runs https://github.com/vllm-project/vllm/blob/main/setup.py with the `tpu` target device
+        # run_bash_command(f"cd vllm && git checkout tags/{VllmTpuEvaluator.VLLM_VERSION}")
+        # run_bash_command('VLLM_TARGET_DEVICE="tpu" pip install -e ./vllm')
+
+        print("Tony --- where libpython3.11")
+        run_bash_command("sudo apt-get install libpython3.11 libpython3.11-dev --yes")
 
         # Get the path to the vllm directory and add the path to sys.path and PYTHONPATH
-        current_dir: str = os.path.dirname(os.path.abspath(__file__))
-        vllm_path: str = os.path.join(current_dir, "../../vllm")
-        sys.path.insert(0, vllm_path)
-        os.environ["PYTHONPATH"] = f"{vllm_path}:{os.environ.get('PYTHONPATH', '')}"
-        elapsed_time: float = time.time() - start_time
-        print(f"Installed vLLM and dependencies. ({elapsed_time}s)")
+        # current_dir: str = os.path.dirname(os.path.abspath(__file__))
+        # print(f"tonyyy - current_dir: {current_dir}")
+        # vllm_path = "/opt/vllm/"
+        # print(f"tonyyy - vllm_path: {vllm_path}")
+        # run_bash_command(f"ls {vllm_path}")
+        # sys.path.insert(0, vllm_path)
+        # python_path = f"{vllm_path}:{os.environ.get('PYTHONPATH', '')}"
+        # print(f"tonyyy -- python_path: {python_path}")
+        # os.environ["PYTHONPATH"] = python_path
 
-        # To allow us to specify a really large value for model length for vLLM
-        os.environ["VLLM_ALLOW_LONG_MAX_MODEL_LEN"] = "1"
+        # run_bash_command("pip install https://storage.googleapis.com/pytorch-xla-releases/wheels/tpuvm/torch-nightly+20240726-cp310-cp310-linux_x86_64.whl")
+        # run_bash_command("pip install https://storage.googleapis.com/pytorch-xla-releases/wheels/tpuvm/torch_xla-nightly+20240726-cp310-cp310-linux_x86_64.whl")
+        # run_bash_command("pip install torch~=2.4.0 torch_xla[tpu]~=2.4.0 -f https://storage.googleapis.com/libtpu-releases/index.html")
 
     @staticmethod
     def start_vllm_server_in_background(
@@ -187,6 +188,7 @@ class VllmTpuEvaluator(Evaluator, ABC):
         # General setup:
         # Install VLLM from source
         self.install_vllm_from_source()
+        pass
 
     def evaluate(self, model: ModelConfig, evals: List[str], output_path: str) -> None:
         """

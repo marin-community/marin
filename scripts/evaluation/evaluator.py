@@ -88,6 +88,7 @@ class ModelConfig:
             shutil.rmtree(self.path, ignore_errors=True)
             print(f"Deleted local checkpoint at {self.path}.")
 
+
 class Evaluator(ABC):
 
     _python_version: str

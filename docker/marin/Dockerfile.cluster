@@ -21,7 +21,13 @@ WORKDIR /tmp/
 ADD pyproject.toml /tmp/
 RUN pip install . --extra-index-url https://download.pytorch.org/whl/cpu
 
-# Our weird fork of OLMO
+
+# Our weird fork of OLMo
+# The olmo library did not set `exists_ok=True` at
+# https://github.com/allenai/OLMo/blob/main/hf_olmo/configuration_olmo.py#L43
+# which causes the following error:
+# ValueError: 'olmo' is already used by a Transformers config, pick another name.
+# Use the following dependency instead where the issue is fixed.
 RUN pip install git+https://github.com/teetone/OLMo.git@main
 
 # Install vllm for TPU
@@ -51,5 +57,4 @@ ENV LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/home/ray/anaconda3/lib
 ENV PATH=$PATH:/home/ray/anaconda3/bin
 
 # this is necessary to make bash happy
-
 WORKDIR /opt/marin
