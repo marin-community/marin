@@ -21,9 +21,6 @@ class EleutherEvaluator(VllmTpuEvaluator):
 
     @ray.remote(memory=64 * 1024 * 1024 * 1024, resources={"TPU": 4})  # 64 GB of memory, always request 4 TPUs
     def run(self, model: ModelConfig, evals: List[str], output_path: str) -> None:
-        # Installs and starts the vLLM server in the background
-        super().run(model, evals, output_path)
-
         # Download the model from GCS or HuggingFace
         model.ensure_downloaded(local_path=os.path.join(VllmTpuEvaluator.CACHE_PATH, model.name))
 

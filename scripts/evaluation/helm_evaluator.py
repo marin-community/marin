@@ -98,18 +98,7 @@ class HELMEvaluator(VllmTpuEvaluator):
 
     @ray.remote(memory=64 * 1024 * 1024 * 1024, resources={"TPU": 4})  # 64 GB of memory, always request 4 TPUs
     def run(self, model: ModelConfig, evals: List[str], output_path: str) -> None:
-        super().run(model, evals, output_path)
-
         vllm_port: int = 8000
-
-        import torch_xla.core.xla_model as xm
-        # print("Tony --- TPU device: " + xm.xla_device())
-
-        print("Tonyyyyy:")
-        run_bash_command("helm-run --help")
-        run_bash_command("which vllm")
-        run_bash_command("vllm serve google/gemma-2b")
-        assert False
 
         try:
             # Download the model from GCS or HuggingFace and serve it with vLLM
