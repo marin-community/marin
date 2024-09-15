@@ -3,8 +3,8 @@ Usage:
 
 ray job submit --working-dir . --no-wait -- \
 python -m marin.processing.classification.eval.compare_classifiers \
-    --ground_truth_filepath <filepath> \
-    --prediction_filepath <filepath> \
+    --ground_truth_path <path> \
+    --prediction_path <path> \
     --ground_truth_attribute_name <attribute_name> \
     --prediction_attribute_name <attribute_name> \
     --label_name <label_name> \
@@ -14,7 +14,7 @@ python -m marin.processing.classification.eval.compare_classifiers \
 import argparse
 import json
 import os
-from typing import Dict, List, Tuple
+from typing import List, Tuple
 
 import fsspec
 import ray
@@ -52,58 +52,43 @@ def process_file(
 
 
 @ray.remote(runtime_env={"pip": ["evaluate", "scikit-learn"]})
-class ClassificationReportActor:
-    def __init__(self):
-        self.all_ground_truth: List[int] = []
-        self.all_predictions: List[int] = []
+def generate_report(ground_truth_list: List[int], predictions_list: List[int]):
+    from evaluate import load
+    from sklearn.metrics import classification_report, confusion_matrix
 
-    def add_results(self, ground_truth: List[int], predictions: List[int]) -> Dict[str, float]:
-        self.all_ground_truth.extend(ground_truth)
-        self.all_predictions.extend(predictions)
+    report = classification_report(ground_truth_list, predictions_list)
+    confusion_matrix = confusion_matrix(ground_truth_list, predictions_list)
 
-    def generate_report(self):
-        from evaluate import load
-        from sklearn.metrics import classification_report, confusion_matrix
+    print("Validation Report:\n" + report)
+    print("Confusion Matrix:\n" + str(confusion_matrix))
 
-        report = classification_report(self.all_ground_truth, self.all_predictions)
-        confusion_matrix = confusion_matrix(self.all_ground_truth, self.all_predictions)
+    precision_metric = load("precision")
+    recall_metric = load("recall")
+    f1_metric = load("f1")
+    accuracy_metric = load("accuracy")
 
-        print("Validation Report:\n" + report)
-        print("Confusion Matrix:\n" + str(confusion_matrix))
+    precision = precision_metric.compute(predictions=predictions_list, references=ground_truth_list, average="macro")[
+        "precision"
+    ]
+    recall = recall_metric.compute(predictions=predictions_list, references=ground_truth_list, average="macro")["recall"]
+    f1 = f1_metric.compute(predictions=predictions_list, references=ground_truth_list, average="macro")["f1"]
+    accuracy = accuracy_metric.compute(predictions=predictions_list, references=ground_truth_list)["accuracy"]
 
-        precision_metric = load("precision")
-        recall_metric = load("recall")
-        f1_metric = load("f1")
-        accuracy_metric = load("accuracy")
+    results = {"precision": precision, "recall": recall, "f1": f1, "accuracy": accuracy}
 
-        precision = precision_metric.compute(
-            predictions=self.all_predictions, references=self.all_ground_truth, average="macro"
-        )["precision"]
-        recall = recall_metric.compute(
-            predictions=self.all_predictions, references=self.all_ground_truth, average="macro"
-        )["recall"]
-        f1 = f1_metric.compute(predictions=self.all_predictions, references=self.all_ground_truth, average="macro")["f1"]
-        accuracy = accuracy_metric.compute(predictions=self.all_predictions, references=self.all_ground_truth)[
-            "accuracy"
-        ]
-
-        results = {"precision": precision, "recall": recall, "f1": f1, "accuracy": accuracy}
-
-        return results
+    return results
 
 
-def _get_filepaths(filepath: str) -> List[str]:
-    if fsspec_isdir(filepath):
-        return fsspec_glob(os.path.join(filepath, "**/*.jsonl.gz"))
+def _get_filepaths(path: str) -> List[str]:
+    if fsspec_isdir(path):
+        return fsspec_glob(os.path.join(path, "**/*.jsonl.gz"))
     else:
-        return [filepath]
+        return [path]
 
 
 def main(args):
-    ground_truth_files = _get_filepaths(args.ground_truth_filepath)
-    prediction_files = _get_filepaths(args.prediction_filepath)
-
-    report_actor = ClassificationReportActor.remote()
+    ground_truth_files = _get_filepaths(args.ground_truth_path)
+    prediction_files = _get_filepaths(args.prediction_path)
 
     process_file_tasks = []
     for gt_file, pred_file in zip(ground_truth_files, prediction_files, strict=False):
@@ -118,14 +103,14 @@ def main(args):
             )
         )
 
-    report_actor_tasks = []
+    all_predictions = []
+    all_ground_truth = []
     for task in process_file_tasks:
         ground_truth, predictions = ray.get(task)
-        report_actor_tasks.append(report_actor.add_results.remote(ground_truth, predictions))
+        all_ground_truth.extend(ground_truth)
+        all_predictions.extend(predictions)
 
-    ray.get(report_actor_tasks)
-
-    results = ray.get(report_actor.generate_report.remote())
+    results = generate_report.remote(all_ground_truth, all_predictions)
 
     print("\nEvaluation Metrics:")
     print(f"Precision: {results['precision']:.4f}")
@@ -135,10 +120,8 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Generate classification report for predictions")
-    parser.add_argument(
-        "--ground_truth_filepath", type=str, required=True, help="Filepath containing ground truth files"
-    )
-    parser.add_argument("--prediction_filepath", type=str, required=True, help="Filepath containing prediction files")
+    parser.add_argument("--ground_truth_path", type=str, required=True, help="Path containing ground truth files")
+    parser.add_argument("--prediction_path", type=str, required=True, help="Path containing prediction files")
     parser.add_argument(
         "--ground_truth_attribute_name", type=str, required=True, help="Name of the attribute to evaluate"
     )
