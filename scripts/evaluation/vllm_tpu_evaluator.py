@@ -3,13 +3,12 @@ from typing import Dict, List, Optional
 import os
 import requests
 import subprocess
-import sys
 import time
 
 import ray
 
 from scripts.evaluation.evaluator import Evaluator, Dependency, ModelConfig
-from scripts.evaluation.utils import run_bash_command, kill_process_on_port
+from scripts.evaluation.utils import kill_process_on_port
 
 
 class VllmTpuEvaluator(Evaluator, ABC):
@@ -18,14 +17,6 @@ class VllmTpuEvaluator(Evaluator, ABC):
     # Default pip packages to install for VLLM on TPUs
     # Some versions were fixed in order to resolve dependency conflicts.
     DEFAULT_PIP_PACKAGES: List[Dependency] = [
-        # Dependency(
-        #     name="https://storage.googleapis.com/pytorch-xla-releases/wheels/tpuvm/torch-nightly+20240726"
-        #     "-cp310-cp310-linux_x86_64.whl",
-        # ),
-        # Dependency(
-        #     name="https://storage.googleapis.com/pytorch-xla-releases/wheels/tpuvm/torch_xla-nightly+20240726"
-        #     "-cp310-cp310-linux_x86_64.whl",
-        # ),
         Dependency(name="aiohttp"),
         Dependency(name="attrs", version="22.2.0"),
         Dependency(name="click", version="8.1.3"),
@@ -34,55 +25,10 @@ class VllmTpuEvaluator(Evaluator, ABC):
         Dependency(name="starlette", version="0.37.2"),
         Dependency(name="tokenizers", version="0.19.1"),
         Dependency(name="transformers", version="4.44.0"),
-        # Marin-specific dependencies
-        # The olmo library did not set `exists_ok=True` at
-        # https://github.com/allenai/OLMo/blob/main/hf_olmo/configuration_olmo.py#L43
-        # which causes the following error:
-        # ValueError: 'olmo' is already used by a Transformers config, pick another name.
-        # Use the following dependency instead where the issue is fixed.
-        Dependency(name="git+https://github.com/teetone/OLMo.git@main"),
     ]
-
-    # VLLM version to install. TODO: Hardcoded for now. Make it configurable.
-    # Visit https://github.com/vllm-project/vllm/releases to get the list of available versions.
-    VLLM_VERSION: str = "v0.5.4"
 
     # Where to store checkpoints, cache inference results, etc.
     CACHE_PATH: str = "/tmp"
-
-    @staticmethod
-    def install_vllm_from_source() -> None:
-        """
-        Runs the necessary commands to install VLLM from source, following the instructions here:
-        https://docs.vllm.ai/en/v0.5.0.post1/getting_started/tpu-installation.html
-        TPUs require installing VLLM from source.
-        """
-        # # Additional dependencies to install in order for vLLM to work on TPUs
-        # start_time: float = time.time()
-        # run_bash_command("sudo apt-get update && sudo apt-get install libopenblas-dev --yes")
-        # # Clone the VLLM repository to install it from source. Can fail if the repository already exists.
-        # run_bash_command("git clone https://github.com/vllm-project/vllm.git", check=False)
-        # # Runs https://github.com/vllm-project/vllm/blob/main/setup.py with the `tpu` target device
-        # run_bash_command(f"cd vllm && git checkout tags/{VllmTpuEvaluator.VLLM_VERSION}")
-        # run_bash_command('VLLM_TARGET_DEVICE="tpu" pip install -e ./vllm')
-
-        print("Tony --- where libpython3.11")
-        run_bash_command("sudo apt-get install libpython3.11 libpython3.11-dev --yes")
-
-        # Get the path to the vllm directory and add the path to sys.path and PYTHONPATH
-        # current_dir: str = os.path.dirname(os.path.abspath(__file__))
-        # print(f"tonyyy - current_dir: {current_dir}")
-        # vllm_path = "/opt/vllm/"
-        # print(f"tonyyy - vllm_path: {vllm_path}")
-        # run_bash_command(f"ls {vllm_path}")
-        # sys.path.insert(0, vllm_path)
-        # python_path = f"{vllm_path}:{os.environ.get('PYTHONPATH', '')}"
-        # print(f"tonyyy -- python_path: {python_path}")
-        # os.environ["PYTHONPATH"] = python_path
-
-        # run_bash_command("pip install https://storage.googleapis.com/pytorch-xla-releases/wheels/tpuvm/torch-nightly+20240726-cp310-cp310-linux_x86_64.whl")
-        # run_bash_command("pip install https://storage.googleapis.com/pytorch-xla-releases/wheels/tpuvm/torch_xla-nightly+20240726-cp310-cp310-linux_x86_64.whl")
-        # run_bash_command("pip install torch~=2.4.0 torch_xla[tpu]~=2.4.0 -f https://storage.googleapis.com/libtpu-releases/index.html")
 
     @staticmethod
     def start_vllm_server_in_background(
@@ -100,11 +46,8 @@ class VllmTpuEvaluator(Evaluator, ABC):
         model_name_or_path: str = model.name if downloaded_path is None else downloaded_path
 
         # From https://docs.vllm.ai/en/v0.4.0/models/engine_args.html
-        # Set `max_model_len` to a large value to avoid vLLM getting the value from the model config.
-        # This value has to be a multiple of 512.
         command: str = (
-            f"vllm serve {model_name_or_path} --trust-remote-code --host {host} --port {port} "
-            f"--max-model-len {512 * 20}"
+            f"vllm serve {model_name_or_path} --trust-remote-code --host {host} --port {port}"
         )
         process = subprocess.Popen(command, shell=True)
 
@@ -179,16 +122,6 @@ class VllmTpuEvaluator(Evaluator, ABC):
             runtime_env["py_modules"] = [str(module) for module in self._py_modules]
 
         return runtime_env
-
-    @abstractmethod
-    def run(self, model: ModelConfig, evals: List[str], output_path: str) -> None:
-        """
-        Run the evaluator.
-        """
-        # General setup:
-        # Install VLLM from source
-        self.install_vllm_from_source()
-        pass
 
     def evaluate(self, model: ModelConfig, evals: List[str], output_path: str) -> None:
         """
