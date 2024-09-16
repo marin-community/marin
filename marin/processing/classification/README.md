@@ -102,8 +102,8 @@ max_tasks_in_flight: 1000
 
 filters:
   - type: "dedupe"
-	attribute_path: "gs://marin-us-central2/attributes/hello_world_fw/v1.0/quickstart_duplicates/"
-	name: "duplicate_text"
+    attribute_path: "gs://marin-us-central2/attributes/hello_world_fw/v1.0/quickstart_duplicates/"
+    name: "duplicate_text"
   - type: "classify"
     attribute_path: "gs://marin-us-central2/attributes/hello_world_fw/v1.0/quickstart_olmo_fasttext/"
     name: "olmo-fasttext-quality"
