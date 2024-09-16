@@ -1,9 +1,10 @@
-from flask import Flask, jsonify, request
-import fsspec
-import json
 import gzip
 import io
+import json
+
+import fsspec
 import zstandard as zstd
+from flask import Flask, jsonify, request
 from pyarrow.parquet import ParquetFile
 
 app = Flask(__name__)
@@ -27,7 +28,7 @@ def list_files(path: str) -> dict:
 
 def read_json_file(path: str) -> dict:
     """Reads a JSON file."""
-    MAX_BYTES = 100 * 1024 * 1024 
+    MAX_BYTES = 100 * 1024 * 1024
     with fs.open(path) as f:
         raw = f.read(MAX_BYTES)  # Don't OOM on huge files
         if len(raw) == MAX_BYTES:
@@ -43,7 +44,8 @@ def read_json_file(path: str) -> dict:
     }
 
 
-def read_text_file(path: str, get_json: bool, offset: int, count: int, gzipped: bool = False, zstded: bool = False) -> dict:
+def read_text_file(path: str, get_json: bool, offset: int, count: int,
+                   gzipped: bool = False, zstded: bool = False) -> dict:
     """
     Reads a range of lines (offset to offset + count) from a text file (possibly compressed using gzip or zstd).
     Interpret each line as a JSON if `get_json` is set.
@@ -59,13 +61,13 @@ def read_text_file(path: str, get_json: bool, offset: int, count: int, gzipped: 
         f = io.TextIOWrapper(f, encoding="utf-8", errors="ignore")
 
         # Seek to line `offset` (note: O(offset) time!)
-        for i in range(offset):
+        for _ in range(offset):
             if not f.readline():
                 break
 
         # Read `count` lines
         items = []
-        for i in range(count):
+        for _ in range(count):
             line = f.readline()
             if not line:
                 break
