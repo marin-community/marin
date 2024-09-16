@@ -39,7 +39,7 @@ RUN sudo mkdir -p /opt/vllm
 RUN sudo chown -R $(whoami) /opt/vllm
 RUN cd /opt/vllm && git clone https://github.com/vllm-project/vllm.git /opt/vllm
 WORKDIR /opt/vllm/
-RUN git checkout tags/v0.5.3.post1
+RUN git checkout tags/v0.5.4
 RUN pip install -r requirements-tpu.txt
 RUN VLLM_TARGET_DEVICE="tpu" python3 setup.py develop
 
