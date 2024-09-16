@@ -12,6 +12,7 @@ app = Flask(__name__)
 # Initialize fsspec GCS filesystem
 fs = fsspec.filesystem("gcs")
 
+
 def list_files(path: str) -> dict:
     """List all files in the given path."""
     files = fs.ls(path, detail=True)
@@ -44,8 +45,9 @@ def read_json_file(path: str) -> dict:
     }
 
 
-def read_text_file(path: str, get_json: bool, offset: int, count: int,
-                   gzipped: bool = False, zstded: bool = False) -> dict:
+def read_text_file(
+    path: str, get_json: bool, offset: int, count: int, gzipped: bool = False, zstded: bool = False
+) -> dict:
     """
     Reads a range of lines (offset to offset + count) from a text file (possibly compressed using gzip or zstd).
     Interpret each line as a JSON if `get_json` is set.
@@ -87,7 +89,7 @@ def read_parquet_file(path: str, offset: int, count: int) -> dict:
     rows = next(pf.iter_batches(batch_size=offset + count))[offset:]
     return {
         "type": "parquet",
-        "items": json.loads(rows.to_pandas().to_json(orient='records')),
+        "items": json.loads(rows.to_pandas().to_json(orient="records")),
     }
 
 
@@ -130,6 +132,7 @@ def view():
     except Exception as e:
         print(f"EXCEPTION: {e}")
         import traceback
+
         traceback.print_exc()
         return jsonify({"error": str(e)})
 
