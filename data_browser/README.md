@@ -2,6 +2,10 @@
 
 ## Development
 
+Installation:
+
+    npm install
+
 To start the data browser:
 
     npm start             # Starts React frontend at https://localhost:3000
