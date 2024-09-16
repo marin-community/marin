@@ -98,6 +98,9 @@ class HELMEvaluator(VllmTpuEvaluator):
 
     @ray.remote(memory=64 * 1024 * 1024 * 1024, resources={"TPU": 4})  # 64 GB of memory, always request 4 TPUs
     def run(self, model: ModelConfig, evals: List[str], output_path: str) -> None:
+        run_bash_command(f"cd /opt/vllm/ && git checkout tags/v0.5.4")
+        run_bash_command('VLLM_TARGET_DEVICE="tpu" pip install -e /opt/vllm/')
+
         vllm_port: int = 8000
 
         try:
@@ -130,6 +133,7 @@ class HELMEvaluator(VllmTpuEvaluator):
                 f"--output-path {self.BENCHMARK_OUTPUT_PATH} "
                 f"--suite {self.RESULTS_FOLDER} "
                 f"--local-path {self.PROD_ENV_PATH} "
+                "--num-threads 1 --exit-on-error"
             )
             assert os.path.exists(self.RESULTS_PATH), f"Results not found at {self.RESULTS_PATH}. Did HELM run?"
             # Upload the results to GCS

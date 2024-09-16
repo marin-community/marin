@@ -1,4 +1,4 @@
-FROM rayproject/ray:nightly-py311-cpu
+FROM rayproject/ray:nightly.240914.bb15a3-py311-cpu
 RUN sudo apt-get update && sudo apt-get install -y clang curl g++ vim libpython3.11 libpython3.11-dev
 
 # install rust
@@ -56,5 +56,8 @@ ENV PYTHONPATH=$PYTHONPATH:$VENV_PATH/lib/python3.11/site-packages
 ENV LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/home/ray/anaconda3/lib
 ENV PATH=$PATH:/home/ray/anaconda3/bin
 
-# this is necessary to make bash happy
+# We need higher ulimit for tpu https://cloud.google.com/kubernetes-engine/docs/how-to/tpus#privileged-mode
+# see also https://cloud.google.com/kubernetes-engine/docs/troubleshooting/tpus
+RUN ulimit -l 68719476736
+
 WORKDIR /opt/marin
