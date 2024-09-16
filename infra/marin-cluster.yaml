@@ -54,6 +54,12 @@ docker:
     image: "us-central2-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:latest"
     container_name: "ray_docker"
     pull_before_run: true
+    worker_run_options:
+        - --privileged
+        - --ulimit memlock=-1:-1  #
+        - --shm-size=32gb
+        - -v
+        - "/tmp:/tmp"
 
 
 initialization_commands:
