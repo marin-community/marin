@@ -1,3 +1,4 @@
+import copy
 import json
 import fsspec
 import os
@@ -171,8 +172,16 @@ def process_file(input_filename: str, output_filename: str, filters: List[Filter
             attributes = all_attributes[doc_id]
             filtered_data = input_data
 
-            for attr_name, threshold, filter_func, label, min_score, max_score in filters:
-                filtered_data = filter_func(filtered_data, attributes, attr_name, threshold, label, min_score, max_score)
+            for filter in filters:
+                filtered_data = filter.filter_func(
+                    filtered_data,
+                    attributes,
+                    filter.name,
+                    filter.threshold,
+                    filter.label,
+                    filter.min_score,
+                    filter.max_score,
+                )
                 if filtered_data is None:
                     break
 
@@ -191,7 +200,7 @@ def rebase_filter_filepath(input_subdir: str, input_path: str, filter: FilterCon
     attribute_path = rebase_file_path(input_subdir, input_path, filter.attribute_path)
     assert fsspec_exists(attribute_path), f"Warning: Attribute path {attribute_path} does not exist."
 
-    sub_filter = filter.copy()
+    sub_filter = copy.deepcopy(filter)
     sub_filter.attribute_path = attribute_path
     return sub_filter
 
@@ -210,7 +219,12 @@ def apply_filters(input_path: str, output_path: str, filters: List[FilterConfig]
     print(f"subdirectories: {subdirectories}")
 
     tasks = []
+    ready_refs = []
     for input_subdir in subdirectories:
+        if len(tasks) > max_tasks_in_flight:
+            ready_refs, tasks = ray.wait(tasks, num_returns=1)
+            ray.get(ready_refs)
+
         print(f"Processing {input_subdir}")
         output_subdir = rebase_file_path(input_path, input_subdir, output_path)
         subdir_filters = [rebase_filter_filepath(input_path, input_subdir, filter) for filter in filters]
@@ -219,10 +233,11 @@ def apply_filters(input_path: str, output_path: str, filters: List[FilterConfig]
         task = process_directory.remote(input_subdir, output_subdir, subdir_filters)
         tasks.append(task)
 
-        if len(tasks) >= max_tasks_in_flight:
-            ray.get(tasks.pop(0))
+    try:
+        ray.get(tasks)
+    except Exception as e:
+        print(f"Error processing: {e}")
 
-    ray.get(tasks)
     return output_path
 
 
