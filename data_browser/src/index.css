@@ -56,3 +56,7 @@ tr:nth-child(even) {
 tr:nth-child(odd) {
   background-color: #ffffff;
 }
+
+.items-table {
+  border-spacing: 0 50px;
+}
