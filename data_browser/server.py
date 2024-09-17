@@ -17,9 +17,6 @@ def list_files(path: str) -> dict:
     """List all files in the given path."""
     files = fs.ls(path, detail=True)
 
-    # Filter out the stray file that just has an extra "/" (GCS quirk?)
-    files = [file for file in files if not (path + "/").endswith(file["name"])]
-
     return {
         "type": "directory",
         "files": files,

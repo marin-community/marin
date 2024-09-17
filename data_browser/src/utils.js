@@ -1,5 +1,5 @@
 export function viewUrl(params) {
-  // Encode arrays as JSON
+  // Encode arrays (e.g., `paths`) as JSON
   params = {...params, paths: JSON.stringify(params.paths)};
   return "/view?" + new URLSearchParams(params);
 }
