@@ -1,0 +1,20 @@
+[tool.poetry]
+name = "data-browser"
+version = "0.1.0"
+description = "Marin data browser"
+authors = ["Your Name <you@example.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.12"
+py7zr = "^0.22.0"
+fsspec = "^2024.9.0"
+zstandard = "^0.23.0"
+flask = "^3.0.3"
+pyarrow = "^17.0.0"
+gcsfs = "^2024.9.0.post1"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

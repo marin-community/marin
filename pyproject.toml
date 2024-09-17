@@ -25,6 +25,7 @@ dependencies = [
     "markdownify==0.12.1",                  # TODO :: Check usage | pin?
     "multiprocess==0.70.16",
     "py7zr",
+    "zstandard==0.23.0",
     "ray[default]==2.34.0",
     "readabilipy",
     "readability-lxml",
