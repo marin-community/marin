@@ -1,57 +1,66 @@
-import json
+import os
 import random
+import argparse
 import streamlit as st
 
+from datasets import load_dataset
+from marin.web.convert import convert_page
+
+
+# Setting dataset name for comparison
+DATASET_NAME='skaramcheti/hello_world_fw'
+
+# Define session configurations
 st.set_page_config(layout="wide")
 
+
+# Load the dataset
 @st.cache_resource
-def get_file_positions():
-    positions = []
-    with open('hello_world_fw_extracted.jsonl', 'rb') as f:
-        while True:
-            pos = f.tell()
-            line = f.readline()
-            if not line:
-                break
-            positions.append(pos)
-    return positions
+def get_dataset():
+    progress_bar = st.progress(0)
+    dataset = load_dataset(DATASET_NAME, split="train")
+    total_rows = len(dataset)
+    
+    for i in range(total_rows):
+        # Update progress bar
+        progress_bar.progress((i + 1) / total_rows)
+    
+    progress_bar.empty()
+    return dataset
 
-def load_single_entry(index):
-    positions = get_file_positions()
-    with open('hello_world_fw_extracted.jsonl', 'rb') as f:
-        f.seek(positions[index])
-        line = f.readline().decode('utf-8')
-        return json.loads(line)
+dataset = get_dataset()
+total_lines = len(dataset)
 
-file_positions = get_file_positions()
-total_lines = len(file_positions)
 
+# Main app
 def app():
     st.title('Extraction Tools Comparison')
     st.write('This page compares the output of different extraction tools on the same webpage. The tools are: Trafilatura, Readability, and Resiliparse.')
     
     if 'current_index' not in st.session_state:
-        st.session_state.current_index = random.randint(0, total_lines - 1)
+        st.session_state.current_index = random.randint(0, len(dataset) - 1)
 
-    data = load_single_entry(st.session_state.current_index)
-    
+    html = dataset[st.session_state.current_index]["text"]
     col1, col2, col3, col4 = st.columns([1, 1, 1, 1])
     
     with col1:
         st.subheader("HTML")
-        st.text_area("", value=data['html'], height=600, disabled=True, label_visibility="collapsed")
+        st.text_area("", value=html, height=600, disabled=True, label_visibility="collapsed")
     
     with col2:
         st.subheader("Trafilatura")
-        st.text_area("", value=data['trafilatura'], height=600, disabled=True, label_visibility="collapsed")
+        extracted_text = convert_page(html, extract_method="trafilatura")["content"]
+        st.text_area("", value=extracted_text, height=600, disabled=True, label_visibility="collapsed")
     
     with col3:
         st.subheader("Readability")
-        st.text_area("", value=data['readability'], height=600, disabled=True, label_visibility="collapsed")
+        extracted_text = convert_page(html, extract_method="readability")["content"]
+        st.text_area("", value=extracted_text, height=600, disabled=True, label_visibility="collapsed")
     
     with col4:
         st.subheader("Resiliparse")
-        st.text_area("", value=data['resiliparse'], height=600, disabled=True, label_visibility="collapsed")
+        extracted_text = convert_page(html, extract_method="resiliparse")["content"]
+        st.text_area("", value=extracted_text, height=600, disabled=True, label_visibility="collapsed")
 
     if st.button("Load Random Comparison"):
         st.session_state.current_index = random.randint(0, total_lines - 1)
