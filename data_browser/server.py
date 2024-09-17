@@ -1,7 +1,6 @@
 import gzip
 import io
 import json
-import os
 
 import fsspec
 import zstandard as zstd
