@@ -91,12 +91,12 @@ def fsspec_get_curr_subdirectories(dir_path):
     protocol = fsspec.core.split_protocol(dir_path)[0]
     
     # List only immediate subdirectories
-    subdirs = fs.ls(dir_path, detail=True)
+    subdirectories = fs.ls(dir_path, detail=True)
     
     def join_protocol(path):
         return f"{protocol}://{path}" if protocol else path
     
-    subdirectories = [join_protocol(subdir['name']) for subdir in subdirs if subdir['type'] == 'directory']
+    subdirectories = [join_protocol(subdir['name']) for subdir in subdirectories if subdir['type'] == 'directory']
     return subdirectories
 
 def fsspec_dir_only_contains_files(dir_path):
@@ -116,11 +116,11 @@ def fsspec_get_atomic_directories(dir_path):
     subdirectories = []
 
     if fsspec_isdir(dir_path):
-        for subdirectory in fsspec_get_curr_subdirectories(dir_path):
-            if fsspec_dir_only_contains_files(subdirectory):
-                subdirectories.append(subdirectory)
+        for subdir in fsspec_get_curr_subdirectories(dir_path):
+            if fsspec_dir_only_contains_files(subdir):
+                subdirectories.append(subdir)
             else:
-                subdirectories.extend(fsspec_get_atomic_directories(subdirectory))
+                subdirectories.extend(fsspec_get_atomic_directories(subdir))
     
     return subdirectories
 
@@ -148,16 +148,17 @@ def fsspec_cpdir(dir_path: str, target_path: str) -> bool:
     
     return True
 
+import re
+
 def validate_marin_gcp_path(path: str) -> str:
     """
     Validate the given path according to the marin GCP convention.
 
     This function ensures that the provided path follows the required format for
-    GCS paths in a specific bucket structure. The expected format is:
-    gs://marin-$REGION//(documents|attributes|filtered)/$EXPERIMENT/$DATASET/$VERSION/
-
-    gs://marin-$REGION/scratch//(documents|attributes|filtered)/$EXPERIMENT/$DATASET/$VERSION/ is also
-    allowed for temporary storage and debugging.
+    GCS paths in a specific bucket structure. The expected format is either:
+    gs://marin-$REGION/scratch//* (any structure after scratch)
+    or
+    gs://marin-$REGION/(documents|attributes|filtered)/$EXPERIMENT/$DATASET/$VERSION/
 
     Parameters:
     path (str): The GCS path to validate.
@@ -178,21 +179,24 @@ def validate_marin_gcp_path(path: str) -> str:
     'gs://marin-us-central1/filtered/exp1/dataset1/v1/'
     >>> validate_marin_gcp_path("gs://marin-us-central1/scratch/documents/exp1/dataset1/v1/")
     'gs://marin-us-central1/scratch/documents/exp1/dataset1/v1/'
+    >>> validate_marin_gcp_path("gs://marin-us-central1/scratch/decontamination/decontamination_demo.jsonl.gz")
+    'gs://marin-us-central1/scratch/decontamination/decontamination_demo.jsonl.gz'
     """
-    pattern = r"^gs://marin-[^/]+/(scratch/)?(documents|attributes|filtered)/[^/]+/[^/]+/[^/]+(/.*)?$"
+    pattern = r"^gs://marin-[^/]+/(scratch/.+|(documents|attributes|filtered)/[^/]+/[^/]+/[^/]+(/.*)?$)"
     if not re.match(pattern, path):
-        raise ValueError(f"Invalid path format. It should follow the structure: "
-                         f"gs://marin-$REGION/[scratch/]{{documents|attributes|filtered}}/$EXPERIMENT/$DATASET/$VERSION/")
+        raise ValueError(f"Invalid path format. It should follow either:\n"
+                         f"1. gs://marin-$REGION/scratch/* (any structure after scratch)\n"
+                         f"2. gs://marin-$REGION/{{documents|attributes|filtered}}/$EXPERIMENT/$DATASET/$VERSION/")
     return path
 
-def rebase_file_path(base_in_dir, file_path, base_out_dir, new_extension=None, old_extension=None):
+def rebase_file_path(base_in_path, file_path, base_out_path, new_extension=None, old_extension=None):
     """
     Rebase a file path from one directory to another, with an option to change the file extension.
 
     Args:
-        base_in_dir (str): The base directory of the input file
+        base_in_path (str): The base directory of the input file
         file_path (str): The path of the file
-        base_out_dir (str): The base directory of the output file
+        base_out_path (str): The base directory of the output file
         new_extension (str, optional): If provided, the new file extension to use (including the dot, e.g., '.txt')
         old_extension (str, optional): If provided along with new_extension, specifies the old extension to replace.
                                        If not provided (but `new_extension` is), the function will replace everything after the last dot.
@@ -201,7 +205,7 @@ def rebase_file_path(base_in_dir, file_path, base_out_dir, new_extension=None, o
         str: The rebased file path
     """
 
-    rel_path = os.path.relpath(file_path, base_in_dir)
+    rel_path = os.path.relpath(file_path, base_in_path)
 
     # Construct the output file path
     if new_extension:
@@ -209,7 +213,7 @@ def rebase_file_path(base_in_dir, file_path, base_out_dir, new_extension=None, o
             rel_path = rel_path[:rel_path.rfind(old_extension)] + new_extension
         else:
             rel_path = rel_path[:rel_path.rfind(".")] + new_extension
-    result = os.path.join(base_out_dir, rel_path)
+    result = os.path.join(base_out_path, rel_path)
     return result
 
 

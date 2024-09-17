@@ -77,6 +77,9 @@ class VllmTpuEvaluator(Evaluator, ABC):
         sys.path.insert(0, vllm_path)
         os.environ["PYTHONPATH"] = f"{vllm_path}:{os.environ.get('PYTHONPATH', '')}"
 
+        # To allow us to specify a really large value for model length for vLLM
+        os.environ["VLLM_ALLOW_LONG_MAX_MODEL_LEN"] = "1"
+
     @staticmethod
     def start_vllm_server_in_background(
         model: ModelConfig, host: str = "127.0.0.1", port: int = 8000, timeout_seconds: int = 3600
@@ -93,7 +96,12 @@ class VllmTpuEvaluator(Evaluator, ABC):
         model_name_or_path: str = model.name if downloaded_path is None else downloaded_path
 
         # From https://docs.vllm.ai/en/v0.4.0/models/engine_args.html
-        command: str = f"vllm serve {model_name_or_path} --trust-remote-code --host {host} --port {port}"
+        # Set `max_model_len` to a large value to avoid vLLM getting the value from the model config.
+        # This value has to be a multiple of 512.
+        command: str = (
+            f"vllm serve {model_name_or_path} --trust-remote-code --host {host} --port {port} "
+            f"--max-model-len {512 * 20}"
+        )
         process = subprocess.Popen(command, shell=True)
 
         # Check that the server has started by sending heartbeat checks
@@ -105,8 +113,16 @@ class VllmTpuEvaluator(Evaluator, ABC):
                 # Attempt to send a request to the server's health endpoint
                 response = requests.get(f"{server_url}/models")
                 if response.status_code == 200:
+                    raw_response: Dict = response.json()
+                    loaded_models: List[str] = [model["id"] for model in raw_response["data"]]
+
+                    # Can be on a machine with a vLLM server up and running, so also check the model is loaded
                     print(f"vLLM server is up and running at {server_url}: {response.text}")
-                    break
+                    if model_name_or_path in loaded_models:
+                        print(f"Model {model_name_or_path} is loaded.")
+                        break
+                    else:
+                        print(f"Model {model_name_or_path} is not loaded yet. Loaded models: {loaded_models}")
             except requests.ConnectionError:
                 # If the connection is refused, wait and try again
                 print(f"vLLM server is not ready yet (elapsed time in seconds): {elapsed_time})")

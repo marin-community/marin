@@ -16,9 +16,9 @@ def write_jsonl_file(data, output_file):
             file.write((json_string + '\n').encode('utf-8'))
 
 def main():
-    output_dir = 'output'
-    html_dir = os.path.join(output_dir, 'html')
-    md_dir = os.path.join(output_dir, 'markdown')
+    output_path = 'output'
+    html_dir = os.path.join(output_path, 'html')
+    md_dir = os.path.join(output_path, 'markdown')
     output_file = 'server_convos.jsonl.gz'
 
     jsonl_data = []

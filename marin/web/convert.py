@@ -1,13 +1,104 @@
 import re
-from urllib.parse import urljoin
-
 import htmlmin
+
 from bs4 import BeautifulSoup
+from urllib.parse import urljoin
 
 from marin.markdown import to_markdown
 
 
-def convert_page(html: str, url: str | None = None) -> dict[str, str]:
+def convert_page_with_trafilatura(html: str, url: str | None = None) -> dict[str, str]:
+    """
+    Convert HTML to text[non-markdown] using Trafilatura.
+
+    Parameters:
+        html (str): HTML content to convert.
+        url (str | None): URL of the page.
+
+    Returns:
+        dict[str, str]: Dictionary containing the title, content, and HTML of the page.
+    """
+    from trafilatura import extract, extract_metadata
+
+    title = extract_metadata(html).title
+    content = extract(
+        html,
+        favor_recall=True,
+        include_links=True,
+        output_format="txt",
+    )
+
+    if title == "[no-title]":
+        title = None
+
+    if title:
+        content = f"# {title}\n\n{content}"
+    
+    out = {
+        "title": title,
+        "content": content,
+        "html": html
+    }
+
+    if url:
+        out["url"] = url
+
+    return out
+
+
+def convert_page_with_resiliparse(html: str, url: str | None = None) -> dict[str, str]:
+    """
+    Convert HTML to text[non-markdown] using Resiliparse. 
+    Note: This method does not convert the content to markdown. Resiliparse does not have a markdown conversion method.
+    You can use the markdown conversion method from the `marin.markdown` module over HTMLTree from `resiliparse.parse.html`.
+    But, then this method will be identical to the `convert_page_with_readability` method then.
+
+    Parameters:
+        html (str): HTML content to convert.
+        url (str | None): URL of the page.
+    
+    Returns:
+        dict[str, str]: Dictionary containing the title, content, and HTML of the page.
+    """
+    from resiliparse.parse.html import HTMLTree
+    from resiliparse.extract.html2text import extract_plain_text
+
+    tree = HTMLTree.parse(html)
+    title = tree.title or None
+
+    content = extract_plain_text(
+        html,
+        main_content=True,
+        alt_texts=False,
+        list_bullets=True,
+    )
+
+    if title:
+        content = f"# {title}\n\n{content}"
+
+    out = {
+        "title": title,
+        "content": content,
+        "html": html
+    }
+
+    if url:
+        out["url"] = url
+
+    return out
+
+
+def convert_page_with_readability(html: str, url: str | None = None) -> dict[str, str]:
+    """
+    Convert HTML to text[markdown] using Readability and markdownify.
+
+    Parameters:
+        html (str): HTML content to convert.
+        url (str | None): URL of the page.
+
+    Returns:
+        dict[str, str]: Dictionary containing the title, content, and HTML of the page.
+    """
     from readability import Document
     # remove null character and control characters
     html = re.sub(u'[^\u0020-\uD7FF\u0009\u000A\u000D\uE000-\uFFFD\U00010000-\U0010FFFF]+', '', html)
@@ -46,6 +137,7 @@ def convert_page(html: str, url: str | None = None) -> dict[str, str]:
 
     return out
 
+
 def convert_page_legacy(html: str, url: str | None = None) -> dict[str, str]:
     print(f"This is Legacy method, use convert_page_python instead")
     from readabilipy import simple_json_from_html_string
@@ -75,6 +167,33 @@ def convert_page_legacy(html: str, url: str | None = None) -> dict[str, str]:
         out["url"] = url
 
     return out
+
+
+def convert_page(html: str, url: str | None = None, extract_method: str = "readability") -> dict[str, str]:
+    """
+    Convert HTML to text using the specified method.
+
+    Parameters:
+        html (str): HTML content to convert.
+        url (str | None): URL of the page.
+        extract_method (str): Method to use for extraction. Defaults to "readability".
+
+    Returns:
+        dict[str, str]: Dictionary containing the title, content, and HTML of the page.
+    """
+
+    match extract_method:
+        case "trafilatura":
+            return convert_page_with_trafilatura(html, url)
+        case "readability":
+            return convert_page_with_readability(html, url)
+        case "resiliparse":
+            return convert_page_with_resiliparse(html, url)
+        case "legacy":
+            return convert_page_legacy(html, url)
+        case _:
+            print(f"Invalid extract_method: {extract_method}. Switching to readability for extraction.")
+            return convert_page_with_readability(html, url)
 
 
 def make_links_absolute(soup: BeautifulSoup, base_url):

@@ -1,7 +1,7 @@
-# Quality Filtering
+# Consolidation
 
 ## Overview
-This repository contains the code for filtering out high-quality documents from a dataset.
+This repository contains the code for filtering out high-quality documents from a dataset, deduping those documents and combing the two to consolidate datasets.
 
 ### Serving Quality Filtering Models
 To get started, run the following command in the root of the directory:
@@ -16,8 +16,8 @@ python -m marin.processing.classification.inference --config marin/processing/cl
 ```
 
 Feel free to edit the config yaml to fit your needs:
-- `input_dir`: The directory containing the documents to be filtered. If you input a directory with multiple directories, the script will filter to run inference on each directory in parallel.
-- `output_dir`: The directory to save the filtered documents. We rebase the output directory's filepath to match that of the input directory.
+- `input_path`: The directory containing the documents to be filtered. If you input a directory with multiple directories, the script will filter to run inference on each directory in parallel.
+- `output_path`: The directory to save the filtered documents. We rebase the output directory's filepath to match that of the input directory.
 - `model_name`: The name of the model on Huggingface to use. The model needs to be hosted on huggingface for now and it uses the same convention as Huggingface.
 - `attribute_name`: The name of the attribute to use. 
 - `runtime`: The runtime environment and memory constraints to use. For example, DCLM fasttext models require downloading the fasttext package while Fineweb's edu classifier requires downloading Jax with TPU support as well as Huggingface.
@@ -58,19 +58,57 @@ python -m marin.processing.classification.eval.annotations_server --input-file g
 See the dedupe.md file for more details; below is the quick start command
 
 ```bash
-ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python marin/processing/classification/dedupe.py --input_dir gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart/ --output_dir gs://marin-us-central2/attributes/hello_world_fw/v1.0/quickstart_duplicates/
+ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python -m marin.processing.classification.dedupe --input_dir gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart/ --output_dir gs://marin-us-central2/attributes/hello_world_fw/v1.0/quickstart_duplicates/
+```
+
+Or if you want to use the yaml quickstart file:
+```bash
+ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python -m marin.processing.classification.dedupe --config_path marin/processing/classification/config/quick_start_dedupe.yaml
+```
+
+To run decomination for MMLU on the quickstart data we will also use a yaml
+```bash
+ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python -m marin.processing.classification.dedupe --config_path marin/processing/classification/config/quickstart_decontaminate.yaml
 ```
 ### Consolidation Command
-After the attribute folders have been generated, to filter the dataset based on the quality rules following the example above you can run the following quickstart
+After the attribute folders have been generated, to filter the dataset based on the quality rules following the example above you can run the following quickstart. We currently only support yaml
+and not command line args for this pipeline to allow support arbitrary classifiers for consolidation.
 
-dedupe first
+You can deduplicate files as follows
+
 ```bash
-ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python -m marin.processing.classification.filter --input_dir gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart/ --output_dir gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart_deduped --attributes_dir gs://marin-us-central2/attributes/hello_world_fw/v1.0/quickstart_duplicates/ --attribute_name dedupe
+ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python -m marin.processing.classification.consolidate --config_path marin/processing/classification/config/quickstart_consolidate_dedupe.yaml
+```
+We now run quality filtering on the subsequent files like so
+
+```bash
+ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python -m marin.processing.classification.consolidate --config_path marin/processing/classification/config/quickstart_consolidate_fasttext.yaml
+```
+We can also run both consolidation operations  (or many more) all in parallel. For the quickstart the combined command for deduping and quality filtering is
+
+```bash
+ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python -m marin.processing.classification.consolidate --config_path marin/processing/classification/config/quickstart_consolidate.yaml
 ```
 
-now quality filter
+If you would like to test the decontamination demo then after generate the attributes for MMLU then run
 ```bash
-ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python -m marin.processing.classification.filter --input_dir gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart_deduped/ --output_dir gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart_deduped_dclmfasttext --attributes_dir gs://marin-us-central2/attributes/hello_world_fw/v1.0/dclm-fasttext-quality-quickstart/ --attribute_name dclm-fasttext-quality --threshold 0.2 
+ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python -m marin.processing.classification.consolidate --config_path marin/processing/classification/config/quickstart_consolidate_decontaminate.yaml
+```
+The yaml for the full consolidation is as follows:
+```yaml
+input_path: "gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart/"
+output_path: "gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart_consolidate_e2e/"
+max_tasks_in_flight: 1000
+
+filters:
+ - type: "dedupe"
+   attribute_path: "gs://marin-us-central2/attributes/hello_world_fw/v1.0/quickstart_duplicates/"
+   name: "duplicate_text"
+ - type: "classify"
+   attribute_path: "gs://marin-us-central2/attributes/hello_world_fw/v1.0/dclm-fasttext-quality-quickstart/"
+   name: "dclm-fasttext-quality"
+   label: "__label__hq"
+   threshold: 0.1
 ```
 
 Currently we require the user specifiy the file format and the attribute to filter by
