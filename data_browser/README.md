@@ -13,8 +13,38 @@ To start the data browser:
 
 ## Deployment
 
-Build React app into static assets to optimize for performance:
+### One-time setup (already done for everyone, just for reference)
+
+Create a GCP service account:
+
+    gcloud iam service-accounts create marin-data-browser --description="Marin Data Browser"
+    gcloud projects add-iam-policy-binding hai-gcp-models --member=serviceAccount:marin-data-browser@hai-gcp-models.iam.gserviceaccount.com --role=roles/storage.objectViewer
+
+### One-time setup (for each person):
+
+Get GCS credentials:
+
+    gcloud iam service-accounts keys create gcs-key.json --iam-account=marin-data-browser@hai-gcp-models.iam.gserviceaccount.com
+
+Get ngrok credentials (get it from https://dashboard.ngrok.com/get-started/your-authtoken):
+
+    export NGROK_AUTHTOKEN=<insert auth token>
+
+### Every time you change the code:
+
+Build React app into static assets to optimize for performance; these assets
+will be served from the server:
 
     npm run build
 
-TODO: finish instructions here.
+Build the Docker image:
+
+    docker build . -t marin/data_browser
+
+To run the server:
+
+    docker run -p 5000:5000 -v $PWD/gcs-key.json:/app/gcs-key.json -e GOOGLE_APPLICATION_CREDENTIALS=/app/gcs-key.json marin/data_browser
+
+Use ngrok to make the server available publicly:
+
+    ngrok http --domain=marlin-subtle-barnacle.ngrok-free.app http://localhost:5000 --oauth google --oauth-allow-email percyliang@gmail.com --oauth-allow-domain stanford.edu

@@ -4,10 +4,10 @@ import json
 
 import fsspec
 import zstandard as zstd
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, send_from_directory
 from pyarrow.parquet import ParquetFile
 
-app = Flask(__name__)
+app = Flask(__name__, static_folder="build")
 
 # Initialize fsspec GCS filesystem
 fs = fsspec.filesystem("gcs")
@@ -18,7 +18,6 @@ def list_files(path: str) -> dict:
     files = fs.ls(path, detail=True)
 
     # Filter out the stray file that just has an extra "/" (GCS quirk?)
-    print(files)
     files = [file for file in files if not (path + "/").endswith(file["name"])]
 
     return {
@@ -122,7 +121,7 @@ def view():
         if path.endswith(".parquet"):
             return jsonify(read_parquet_file(path=path, offset=offset, count=count))
 
-        # json files that are used to keep track of progress (Marin-specific)
+        # json files (.SUCCESS is used in Marin to keep track of progress)
         if path.endswith(".json") or path.endswith(".SUCCESS"):
             return jsonify(read_json_file(path))
 
@@ -137,5 +136,12 @@ def view():
         return jsonify({"error": str(e)})
 
 
+@app.route("/")
+@app.route("/<path:filename>")
+def serve(filename="index.html"):
+    # Serve the static React app
+    return send_from_directory(app.static_folder, filename)
+
+
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(host="0.0.0.0", port=5000)

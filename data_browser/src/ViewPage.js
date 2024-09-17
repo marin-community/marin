@@ -275,16 +275,25 @@ function renderPath(args) {
 function renderPaths(args) {
   const {paths, updateUrlParams} = args;
 
-  return (<ul>
-    {paths.map((path, index) => {
-      const downloadUrl = path.replace("gs://", "https://storage.cloud.google.com/");
-      const downloadLink = <Link to={downloadUrl}>download</Link>;
-      const cloneLink = <span className="clickable" onClick={() => updatePath(paths, paths.length, path, updateUrlParams)}>clone</span>;
-      const hideLink = <span className="clickable" onClick={() => removePath(paths, index, updateUrlParams)}>hide</span>;
-      const extra = <span> [{downloadLink}] [{cloneLink}] [{hideLink}]</span>;
-      return <li key={index}>{renderPath({paths, index, updateUrlParams})}{extra}</li>;
-    })}
-  </ul>);
+  return (<div>
+    Paths:
+    <ul>
+      {paths.map((path, index) => {
+        const downloadUrl = path.replace("gs://", "https://storage.cloud.google.com/");
+        const downloadLink = <Link to={downloadUrl} title="Download this link.">download</Link>;
+        const cloneLink =
+          <span className="clickable"
+                title="Append this path so you can edit it."
+                onClick={() => updatePath(paths, paths.length, path, updateUrlParams)}>clone</span>;
+        const hideLink =
+          <span className="clickable"
+                title="Don't show this path (removing it from the list)."
+                onClick={() => removePath(paths, index, updateUrlParams)}>hide</span>;
+        const extra = <span> [{downloadLink}] [{cloneLink}] [{hideLink}]</span>;
+        return <li key={index}>{renderPath({paths, index, updateUrlParams})}{extra}</li>;
+      })}
+    </ul>
+  </div>);
 }
 
 /**
@@ -376,7 +385,7 @@ function renderItems(args) {
       <td>{rendered}</td>
     </tr>);
   });
-  return <table><tbody>{rows}</tbody></table>;
+  return <table className="items-table"><tbody>{rows}</tbody></table>;
 }
 
 /**
