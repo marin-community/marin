@@ -22,3 +22,10 @@ check:
 autoformat:
 	ruff check --fix --show-fixes .
 	black .
+
+
+cluster_docker:
+	gcloud artifacts repositories create --repository-format=docker --location=us-central2 marin || true
+	docker buildx build --platform linux/amd64 -t 'marin_cluster:latest' -f docker/marin/Dockerfile.cluster .
+	docker tag 'marin_cluster:latest' 'us-central2-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:latest'
+	docker push 'us-central2-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:latest'

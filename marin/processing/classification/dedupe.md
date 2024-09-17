@@ -5,7 +5,7 @@ To run deduplication, we use the dolma deduplication tool. You can find in-depth
 For our purposes, here is a quickstart:
 
 ```bash
-ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python marin/processing/classification/dedupe.py --input_dir gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart/ --output_dir gs://marin-us-central2/attributes/hello_world_fw/v1.0/quickstart_duplicates/
+ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python marin/processing/classification/dedupe.py --input_path gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart/ --output_path gs://marin-us-central2/attributes/hello_world_fw/v1.0/quickstart_duplicates/
 ```
 
 Please note that deduplication assumes the input path is of the form `gs://{$BUCKET_PATH}/documents/` and will write attributes to `gs://{$BUCKET_PATH}/attributes/`
@@ -13,9 +13,9 @@ Please note that deduplication assumes the input path is of the form `gs://{$BUC
 ## Parameters
 
 ### Required Parameters:
-- `--input_dir`: GCP input directory path (required)
+- `--input_path`: GCP input directory path (required)
     - Example: `gs://marin-us-central2/scratch/documents/dummy_dedupe_data/`
-- `--output_dir`: GCP output directory path to save deduplication attributes (required)
+- `--output_path`: GCP output directory path to save deduplication attributes (required)
     - Example: `gs://marin-us-central2/scratch/attributes/dummy_dedupe_data/text_dup/`
 
 ### Optional Parameters with Defaults:
@@ -41,12 +41,12 @@ The `false_positive_rate` parameter inversely affects the Bloom filter size and 
 
 ### Example command on dummy data:
 ```bash
-ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python marin/processing/classification/dedupe.py --input_dir gs://marin-us-central2/scratch/documents/dummy_dedupe_data/text/ --output_dir gs://marin-us-central2/scratch/attributes/dummy_dedupe_data/text_dup/ 
+ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python marin/processing/classification/dedupe.py --input_path gs://marin-us-central2/scratch/documents/dummy_dedupe_data/text/ --output_path gs://marin-us-central2/scratch/attributes/dummy_dedupe_data/text_dup/ 
 ```
 
 ### Another example:
 ```bash
-ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python marin/processing/classification/dedupe.py --input_dir gs://marin-us-central2/scratch/documents/dedupe_data/v1/testdedupe/ --output_dir gs://marin-us-central2/scratch/attribute/dedupe_data/v1/testdedupe/
+ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python marin/processing/classification/dedupe.py --input_path gs://marin-us-central2/scratch/documents/dedupe_data/v1/testdedupe/ --output_path gs://marin-us-central2/scratch/attribute/dedupe_data/v1/testdedupe/
 ```
 ```
 
