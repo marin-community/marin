@@ -28,7 +28,10 @@ class DownloadConfig:
 
     # HuggingFace Dataset Parameters
     hf_dataset_id: str                                      # HF Dataset to Download (as `$ORG/$DATASET` on HF Hub)
-    revision: str = "main"                                  # (Short) Commit Hash (from HF Dataset Repo; 7 characters)
+
+    # Note: when just specifying main, the revision that gets saved on GCS won't actually autofetch the underlying SHA
+    # (it will just say main, which isn't useful if the dataset repo gets updated later)
+    revision: str                                           # (Short) Commit Hash (from HF Dataset Repo; 7 characters)
     hf_url_glob: str = "*"                                  # Glob Pattern to Match Files in HF Dataset
 
     # Additional GCS Parameters
