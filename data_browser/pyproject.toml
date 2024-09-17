@@ -13,6 +13,7 @@ zstandard = "^0.23.0"
 flask = "^3.0.3"
 pyarrow = "^17.0.0"
 gcsfs = "^2024.9.0.post1"
+pandas = "^2.2.2"
 
 
 [build-system]
