@@ -65,7 +65,7 @@ def train_epochs(
         
         print(f'Epoch {epoch + 1}/{num_epochs}, Loss: {total_loss/len(data_loader):.4f}')
 
-def _mp_fn(index,hf_model,train_path,save_path,lr,batch_size,num_epochs):
+def _mp_fn(index, hf_model, train_path, save_path, lr, batch_size, num_epochs):
     """
     Function to run on each TPU device for BERT classifier training.
 
@@ -99,8 +99,7 @@ def _mp_fn(index,hf_model,train_path,save_path,lr,batch_size,num_epochs):
     return True
 
 def train_model(
-        base_path: str, 
-        experiment: str, 
+        experiment_path: str, 
         seed: int, 
         val_split: float, 
         memory_req: int = 10,
@@ -108,13 +107,12 @@ def train_model(
         lr: float = 2e-5,
         hf_model: str = 'bert-base-uncased',
         num_epochs: int = 1
-    ) -> bool:
+    ) -> None:
     """
     Train a fastText model.
 
     Args:
-        base_path (str): Base path for input and output data (i.e., gs://{BUCKET}).
-        experiment (str): Experiment identifier.
+        experiment_path (str): Path for input (i.e., training data) and output (i.e., trained model) data (i.e., gs://{BUCKET}).
         seed (int): Seed for random number generator to ensure reproducibility.
         val_split (float): Fraction of data to be used for validation.
         memory_req (int): Amount of memory allocated for remote training process (in GB).
@@ -124,17 +122,16 @@ def train_model(
         num_epochs (int): Number of epochs to train for.
     
     Returns:
-        bool: True if the process is successful.
+        None: No return value.
     """
     logger = logging.getLogger("bert")
 
-    logger.info(f"Training BERT model for experiment {experiment}")
+    logger.info(f"Training BERT model for experiment {experiment_path}")
     datetime_start = datetime.utcnow()
 
     # run training on remote worker, not head node
     @ray.remote(memory=memory_req * 1024 * 1024 * 1024, resources={"TPU": 4},)
     def run():
-        experiment_path = f'{base_path}/classifiers/{experiment}'
         shard_paths = fsspec_glob(os.path.join(f'{experiment_path}/data', "**/*.jsonl.gz"))
 
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -143,15 +140,13 @@ def train_model(
             model_path = os.path.join(tmp_dir, "model.bin")
 
             merge_shards_and_split(shard_paths,train_path,val_path,val_split,seed,format_example)
-
             shuffle(train_path,train_path,seed)
-            shuffle(val_path,val_path,seed)
 
             xmp.spawn(_mp_fn, args=(hf_model,train_path,model_path,lr,batch_size,num_epochs))
 
             fsspec_cpdir(tmp_dir, experiment_path)
         
-        return True
+        return None
     
     response = run.remote()
     try:
@@ -161,6 +156,6 @@ def train_model(
         raise
     
     datetime_end = datetime.utcnow()
-    logger.info(f"Training BERT for experiment {experiment} completed in {datetime_end - datetime_start}.")
+    logger.info(f"Training BERT for experiment {experiment_path} completed in {datetime_end - datetime_start}.")
 
     return True

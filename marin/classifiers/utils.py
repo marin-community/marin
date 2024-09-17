@@ -147,9 +147,8 @@ def create_label_attribute(input_doc_path: str, output_attr_path: str, label: st
     
     return True
 
-def attribute_to_dataset(
-        output_base_path: str, 
-        experiment: str, 
+def attributes_to_dataset(
+        experiment_path: str, 
         doc_path: str, 
         attr_path: str, 
         sampling_rate: float, 
@@ -160,8 +159,7 @@ def attribute_to_dataset(
     Converts documents and attributes to quality classifier training data (text,label) pairs.
 
     Args:
-        output_base_path (str): Base path for output data (i.e., gs://{BUCKET}).
-        experiment (str): Experiment identifier.
+        experiment_path (str): Path for output data (i.e., gs://{BUCKET}/classifiers/$EXPERIMENT).
         doc_path (str): Path to documents (i.e., gs://{BUCKET}/documents/reddit/v0/<doc_experiment>).
         attr_path (str): Path to attributes (i.e., gs://{BUCKET}/attributes/reddit/v0/<attr_experiment>).
         sampling_rate (float): Fraction of documents from the dataset to add to fastText training dataset.
@@ -183,7 +181,7 @@ def attribute_to_dataset(
     doc_path_prefix = doc_path.split('/documents')[0]
     output_path = rebase_file_path(f'{doc_path_prefix}/documents', 
                                     doc_path, 
-                                    f'{output_base_path}/classifiers/{experiment}/data'
+                                    f'{experiment_path}/data'
                                     )
     
     responses = map_files_in_directory(processing_func.remote, doc_path, "**/*.jsonl.gz", output_path)
