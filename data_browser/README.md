@@ -26,9 +26,9 @@ Get GCS credentials:
 
     gcloud iam service-accounts keys create gcs-key.json --iam-account=marin-data-browser@hai-gcp-models.iam.gserviceaccount.com
 
-Get ngrok credentials (get it from https://dashboard.ngrok.com/get-started/your-authtoken):
+Put the ngrok credentials in `ngrok.env` (get it from https://dashboard.ngrok.com/get-started/your-authtoken):
 
-    export NGROK_AUTHTOKEN=<insert auth token>
+    NGROK_AUTHTOKEN=<insert auth token>
 
 ### Every time you change the code:
 
@@ -41,10 +41,16 @@ Build the Docker image:
 
     docker build . -t marin/data_browser
 
+Create a shared network:
+
+    docker network create data_browser_net
+
 To run the server:
 
-    docker run -p 5000:5000 -v $PWD/gcs-key.json:/app/gcs-key.json -e GOOGLE_APPLICATION_CREDENTIALS=/app/gcs-key.json marin/data_browser
+    docker run --rm --name flask -p 5000:5000 --network data_browser_net -v $PWD/gcs-key.json:/app/gcs-key.json -e GOOGLE_APPLICATION_CREDENTIALS=/app/gcs-key.json marin/data_browser
 
 Use ngrok to make the server available publicly:
 
-    ngrok http --domain=marlin-subtle-barnacle.ngrok-free.app http://localhost:5000 --oauth google --oauth-allow-email percyliang@gmail.com --oauth-allow-domain stanford.edu
+    docker run --rm --name ngrok -p 4040:4040 --network data_browser_net --env-file ngrok.env ngrok/ngrok http --domain=marlin-subtle-barnacle.ngrok-free.app http://flask:5000 --oauth google --oauth-allow-email percyliang@gmail.com --oauth-allow-domain stanford.edu
+
+TODO: make this work with docker-compose
