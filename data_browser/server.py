@@ -134,10 +134,14 @@ def view():
 
 
 @app.route("/")
-@app.route("/<path:filename>")
-def serve(filename="index.html"):
-    # Serve the static React app
-    return send_from_directory(app.static_folder, filename)
+@app.route("/view")
+def serve():
+    return send_from_directory(app.static_folder, "index.html")
+
+
+@app.route("/<path:path>")
+def static_proxy(path):
+    return send_from_directory(app.static_folder, path)
 
 
 if __name__ == "__main__":
