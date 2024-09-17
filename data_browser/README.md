@@ -51,6 +51,6 @@ To run the server:
 
 Use ngrok to make the server available publicly:
 
-    docker run --rm --name ngrok -p 4040:4040 --network data_browser_net --env-file ngrok.env ngrok/ngrok http --domain=marlin-subtle-barnacle.ngrok-free.app http://flask:5000 --oauth google --oauth-allow-email percyliang@gmail.com --oauth-allow-domain stanford.edu
+    docker run --rm --name ngrok -p 4040:4040 --network data_browser_net --env-file ngrok.env ngrok/ngrok http --domain=marlin-subtle-barnacle.ngrok-free.app http://flask:5000 --oauth google
 
 TODO: make this work with docker-compose
