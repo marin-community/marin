@@ -11,7 +11,7 @@ import tempfile
 import fsspec
 import ray
 
-from marin.utils import fsspec_glob
+from marin.utils import fsspec_glob, fsspec_cpdir, fsspec_exists
 from marin.classifiers.utils import merge_shards_and_split, shuffle
 from marin.classifiers.fasttext.utils import format_example
 
@@ -45,6 +45,10 @@ def train_model(
     # run training on remote worker, not head node
     @ray.remote(memory=memory_req * 1024 * 1024 * 1024, runtime_env={"pip": ["s3fs","fasttext"]}, num_cpus=num_cpus)
     def run():
+        if fsspec_exists(f'{experiment_path}/model.bin'):
+            logger.info(f"Model already exists at {experiment_path}/model.bin. Skipping training.")
+            return True
+
         import fasttext
 
         shard_paths = fsspec_glob(os.path.join(f'{experiment_path}/data', "**/*.jsonl.gz"))
@@ -60,10 +64,9 @@ def train_model(
             model = fasttext.train_supervised(train_path,**fasttext_args)
             model.save_model(model_path)
 
-            fs = fsspec.core.get_fs_token_paths(experiment_path, mode="wb")[0]
-            fs.put(os.path.join(tmp_dir, "*"), experiment_path, recursive=True)
+            fsspec_cpdir(tmp_dir, experiment_path)
         
-        return None
+        return True
     
     response = run.remote()
     try:
@@ -75,4 +78,4 @@ def train_model(
     datetime_end = datetime.utcnow()
     logger.info(f"Training fastText for experiment {experiment_path} completed in {datetime_end - datetime_start}.")
 
-    return True
+    return None

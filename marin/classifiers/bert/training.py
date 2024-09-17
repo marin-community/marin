@@ -24,7 +24,7 @@ import torch_xla.distributed.xla_multiprocessing as xmp
 
 from transformers import BertTokenizer, BertForSequenceClassification, AdamW
 
-from marin.utils import fsspec_glob, fsspec_cpdir
+from marin.utils import fsspec_glob, fsspec_cpdir, fsspec_exists
 from marin.classifiers.utils import merge_shards_and_split, shuffle
 from marin.classifiers.bert.utils import format_example, BertDataset
 
@@ -132,6 +132,10 @@ def train_model(
     # run training on remote worker, not head node
     @ray.remote(memory=memory_req * 1024 * 1024 * 1024, resources={"TPU": 4},)
     def run():
+        if fsspec_exists(f'{experiment_path}/model.bin'):
+            logger.info(f"Model already exists at {experiment_path}/model.bin. Skipping training.")
+            return True
+        
         shard_paths = fsspec_glob(os.path.join(f'{experiment_path}/data', "**/*.jsonl.gz"))
 
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -146,7 +150,7 @@ def train_model(
 
             fsspec_cpdir(tmp_dir, experiment_path)
         
-        return None
+        return True
     
     response = run.remote()
     try:
@@ -158,4 +162,4 @@ def train_model(
     datetime_end = datetime.utcnow()
     logger.info(f"Training BERT for experiment {experiment_path} completed in {datetime_end - datetime_start}.")
 
-    return True
+    return None
