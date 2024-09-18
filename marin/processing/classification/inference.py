@@ -8,7 +8,6 @@ python -m marin.processing.classification.inference \
 
 import json
 import os
-from typing import List
 
 import datasets
 import draccus
@@ -18,24 +17,23 @@ from ray.data.datasource import FilenameProvider
 from ray.runtime_env import RuntimeEnv
 
 from marin.core.runtime import cached_or_construct_output
-from marin.processing.classification.config.inference_config import InferenceConfig
 from marin.processing.classification.classifier import (
     AutoClassifier,
     BaseClassifier,
 )
+from marin.processing.classification.config.inference_config import InferenceConfig
 from marin.utils import (
     fsspec_get_atomic_directories,
     fsspec_glob,
     fsspec_mkdirs,
     rebase_file_path,
-    fsspec_get_atomic_directories,
     validate_marin_gcp_path,
 )
 
 
 class JsonFilenameProvider(FilenameProvider):
 
-    def __init__(self, files: List[str], input_path: str):
+    def __init__(self, files: list[str], input_path: str):
         self.files = files
         self.input_path = input_path
 
@@ -74,7 +72,9 @@ def process_file_using_actor_pool(input_path: str, output_path: str, model_name_
 
 @ray.remote
 @cached_or_construct_output(success_suffix="SUCCESS")
-def process_file_ray(input_filename: str, output_filename: str, model_name_or_path: str, attribute_name: str, model_type: str | None):
+def process_file_ray(
+    input_filename: str, output_filename: str, model_name_or_path: str, attribute_name: str, model_type: str | None
+):
     print(f"[*] Read in dataset {input_filename}")
 
     quality_classifier = AutoClassifier.from_model_path(model_name_or_path, attribute_name, model_type=model_type)
@@ -127,7 +127,7 @@ def process_dir(input_path: str, output_path: str, model_name_or_path: str, attr
         process_file_with_quality_classifier(input_filename, output_filename, quality_classifier)
 
 
-def get_process_filepath_func(subdirectories: List[str]):
+def get_process_filepath_func(subdirectories: list[str]):
     if len(subdirectories) > 0:
         return process_dir
     else:
@@ -169,7 +169,13 @@ def main(inference_config: InferenceConfig):
                 pip=inference_config.runtime.requirements_filepath,
             ),
             resources=inference_config.runtime.resources,
-        ).remote(input_filepath, output_filepath, inference_config.model_name, inference_config.attribute_name, inference_config.model_type)
+        ).remote(
+            input_filepath,
+            output_filepath,
+            inference_config.model_name,
+            inference_config.attribute_name,
+            inference_config.model_type,
+        )
 
         responses.append(result_ref)
 

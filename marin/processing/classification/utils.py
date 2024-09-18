@@ -3,15 +3,12 @@ Usage:
 python3 -m marin.processing.download_gcs_data --output-dir ~/data
 """
 
-import argparse
-import os
-import gzip
-import shutil
 import json
+import os
+from typing import Any
 
 import fsspec
 from google.cloud import storage
-from typing import Any
 from huggingface_hub import hf_hub_download
 
 

@@ -1,5 +1,4 @@
 import pubmed_parser
-import re
 
 
 def xml2md(xml_str):
