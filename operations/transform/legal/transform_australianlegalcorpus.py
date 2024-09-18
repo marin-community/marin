@@ -1,13 +1,13 @@
 """
 Anything which is not inside ray.remote function will be executed on the head node, so keep it to minimum.
-path: scripts/legal/process_edgar.py
-Inputs: raw parquet files, Output: jsonl.gz files in dolma format
+path: scripts/legal/transform_australianlegalcorpus.py
+Inputs: one raw jsonl file, Output: one jsonl.gz file in dolma format
 
 Example Usage:
 ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- \
-python scripts/legal/process_edgar.py \
---input_path gs://marin-data/raw/huggingface.co/datasets/eloukas/edgar-corpus/resolve/f7d3ba73d65ff10194a95b84c75eb484d60b0ede/full/partial-train \
---output_path gs://marin-data/processed/law/edgar-v1.0/txt/documents
+    python operations/transform/legal/transform_australianlegalcorpus.py \
+        --input_path gs://marin-data/raw/law/australianlegalcorpus \
+        --output_path gs://marin-data/processed/law/australianlegalcorpus-v1.0/txt/documents
 """
 
 import argparse
@@ -17,8 +17,6 @@ import os
 import fsspec
 import ray
 
-import pandas as pd
-
 from marin.core.runtime import cached_or_construct_output, map_files_in_directory
 
 
@@ -26,50 +24,59 @@ from marin.core.runtime import cached_or_construct_output, map_files_in_director
 # default memory is unbound, default runtime_env is empty, default num_cpus is 1
 # IMPORTANT:Ray resources are logical and not physical: https://docs.ray.io/en/latest/ray-core/scheduling/resources.html
 # Ray will not impose any physical limits on the resources used by the function, these numbers are used for scheduling.
-@ray.remote(memory=1 * 1024 * 1024 * 1024, runtime_env={"pip": ["fastparquet"]}, num_cpus=1)  # 1 GB
+# 10 GB because the corpus.jsonl is just one large (8.4GB) file
+@ray.remote(memory=10 * 1024 * 1024 * 1024, runtime_env={"pip": ["fastparquet"]}, num_cpus=1)
 @cached_or_construct_output(success_suffix="SUCCESS")  # We use this decorator to make this function idempotent
 def convert_to_dolma(input_file_path, output_file_path):
     # The runtime for this function should be low (less than 5-10 min), as the machines are preemptible
 
+    source = "australianlegalcorpus"
+
     # Read the input file
-    df = pd.read_parquet(input_file_path, engine='fastparquet')
-    source = "edgar"
+    with (
+        fsspec.open(input_file_path, "rt") as f,
+        fsspec.open(os.path.splitext(output_file_path)[0] + ".jsonl.gz", "wt", compression="gzip") as output,
+    ):
+        for line in f:
+            row = json.loads(line)
 
-    change_extension = lambda filepath: os.path.splitext(filepath)[0] + '.jsonl.gz'
-
-    with fsspec.open(change_extension(output_file_path), "wt", compression="gzip") as output:
-        for _, row in df.iterrows():
-            sections = ['section_1', 'section_1A', 'section_1B', 'section_2', 'section_3', 'section_4', 'section_5',
-                        'section_6', 'section_7', 'section_7A', 'section_8', 'section_9', 'section_9A', 'section_9B',
-                        'section_10', 'section_11', 'section_12', 'section_13', 'section_14', 'section_15']
-            text = "\n\n".join([row[section] for section in sections]).strip()
-
-            output.write(json.dumps({
-                "id": row['cik'],
-                "text": text,
-                "source": source,
-                "metadata": {
-                    f"year": row['year'],
-                    f"filename": row['filename'],
-                }
-            }) + "\n")
+            output.write(
+                json.dumps(
+                    {
+                        "id": row["version_id"],
+                        "text": row["text"],
+                        "source": source,
+                        "created": row["date"],
+                        "added": row["when_scraped"],
+                        "metadata": {
+                            "type": row["type"],
+                            "jurisdiction": row["jurisdiction"],
+                            "source": row["source"],
+                            "citation": row["citation"],
+                            "mime": row["mime"],
+                            "url": row["url"],
+                        },
+                    }
+                )
+                + "\n"
+            )
     return True
 
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description="Script to convert edgar data to dolma format.")
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Script to convert australianlegalcorpus data to dolma format.")
     # As a reminder all the processing in this function will be done on the head node. We should try
     # to keep number of jobs (started using ray job submit command) to minimum while trying to use tasks(ray.remote
     # function) as much as possible. For reference, fw uses only 1 job to process a complete dump which is about
     # 400GB of data and spawns about 75000 tasks (ray.remote functions).
-    parser.add_argument('--input_path', type=str, help='Path to the edgar raw directory', required=True)
-    parser.add_argument('--output_path', type=str, help='Path to store edgar dolma files', required=True)
+    parser.add_argument("--input_path", type=str, help="Path to the australianlegalcorpus raw directory", required=True)
+    parser.add_argument("--output_path", type=str, help="Path to store australianlegalcorpus dolma files", required=True)
 
     args = parser.parse_args()
 
     ray.init()
 
-    responses = map_files_in_directory(convert_to_dolma.remote, args.input_path, "**/*.parquet", args.output_path)
+    responses = map_files_in_directory(convert_to_dolma.remote, args.input_path, "**/*.jsonl", args.output_path)
 
     # Wait for all the tasks to finish.
     # The try and catch is important here as incase convert_to_dolma throws any exception, that exception is passed here,
