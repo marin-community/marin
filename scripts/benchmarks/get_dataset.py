@@ -50,6 +50,7 @@ def main(args):
                         answer = output_choices[answer_idx]
                     else:
                         raise ValueError("Please specify either answer_text_key or answer_idx_key.")
+
                     dolma_json = {
                         "id": f"{dataset_name}-{file_name}-{subject}-{idx}",
                         "text": example[prompt_key],
@@ -83,11 +84,10 @@ def main(args):
                     answer = output_choices[answer_idx]
                 else:
                     raise ValueError("Please specify either answer_text_key or answer_idx_key.")
-                output = answer
                 
                 subject = example.get(subject_key, "")
                 
-                subject_files[subject] += (json.dumps({"input": input, "output": output}) + "\n")
+                subject_files[subject] += (json.dumps({"input": input, "output": answer}) + "\n")
             
             for subject in subject_files:
                 output_path = output_prefix / f"{dataset_name}-{subject}-{data_file}-evaluation.jsonl.gz"
