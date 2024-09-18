@@ -127,8 +127,8 @@ def create_label_attribute(input_doc_path: str, output_attr_path: str, label: st
     Create attribute for quality classifier label.
 
     Args:
-        input_doc_path (str): Path to documents (i.e., gs://{BUCKET}/documents/...).
-        output_attr_path (str): Path to write attributes (i.e., gs://{BUCKET}/attributes/.../<experiment>).
+        input_doc_path (str): Path to documents (i.e., gs://$BUCKET/documents/...).
+        output_attr_path (str): Path to write attributes (i.e., gs://$BUCKET/attributes/.../<experiment>).
         label (str): Quality classifier label to write as attribute.
     
     Returns:
@@ -159,9 +159,9 @@ def attributes_to_dataset(
     Converts documents and attributes to quality classifier training data (text,label) pairs.
 
     Args:
-        experiment_path (str): Path for output data (i.e., gs://{BUCKET}/classifiers/$EXPERIMENT).
-        doc_path (str): Path to documents (i.e., gs://{BUCKET}/documents/reddit/v0/<doc_experiment>).
-        attr_path (str): Path to attributes (i.e., gs://{BUCKET}/attributes/reddit/v0/<attr_experiment>).
+        experiment_path (str): Path for output data (i.e., gs://$BUCKET/classifiers/$EXPERIMENT).
+        doc_path (str): Path to documents (i.e., gs://$BUCKET/documents/reddit/v0/<doc_experiment>).
+        attr_path (str): Path to attributes (i.e., gs://$BUCKET/attributes/reddit/v0/<attr_experiment>).
         sampling_rate (float): Fraction of documents from the dataset to add to fastText training dataset.
         seed (int): Seed for random number generator to ensure reproducibility.
         get_label (Callable[[dict,dict], str]): Function to extract label from documents and attributes. Defaults to get_label.
