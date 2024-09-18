@@ -1,5 +1,7 @@
+import time
 from typing import Dict, Optional
 import os
+import psutil
 import subprocess
 
 from fsspec.implementations.local import LocalFileSystem
@@ -28,6 +30,7 @@ def download_from_gcs(gcs_path: str, destination_path: str) -> None:
     Downloads the folder at `gcs_path` to `destination_path`.
     """
     print(f"Downloading {gcs_path} from GCS.")
+    start_time: float = time.time()
     fs = fsspec.filesystem("gcs")
     if not fs.exists(gcs_path):
         raise FileNotFoundError(f"{gcs_path} does not exist in GCS.")
@@ -35,8 +38,8 @@ def download_from_gcs(gcs_path: str, destination_path: str) -> None:
     # The slash is needed to download the contents of the folder to `destination_path`
     os.makedirs(destination_path, exist_ok=True)
     fs.get(gcs_path + "/", destination_path, recursive=True)
-    # run_bash_command(f"gsutil -m cp -r {gcs_path} {destination_path}")
-    print(f"Downloaded {gcs_path} to {destination_path}.")
+    elapsed_time_seconds: float = time.time() - start_time
+    print(f"Downloaded {gcs_path} to {destination_path} ({elapsed_time_seconds}s).")
 
 
 def upload_to_gcs(local_path: str, gcs_path: str) -> None:
@@ -53,10 +56,28 @@ def upload_to_gcs(local_path: str, gcs_path: str) -> None:
 def run_bash_command(command: str, check: bool = True) -> None:
     """Runs a bash command."""
     print(command)
+    start_time: float = time.time()
     subprocess.run(command, shell=True, check=check)
+    elapsed_time_seconds: float = time.time() - start_time
+    print(f"Completed: {command} ({elapsed_time_seconds}s)")
 
 
 def write_yaml(content: Dict, output_path: str) -> None:
     """Writes the given content to a YAML file."""
     with open(output_path, "w") as file:
         yaml.dump(content, file, default_flow_style=False)
+
+
+def kill_process_on_port(port: int) -> None:
+    # Iterate over all running processes
+    for proc in psutil.process_iter(['pid', 'name', 'connections']):
+        # Check for connections the process has
+        for conn in proc.info['connections']:
+            if conn.laddr.port == port:
+                try:
+                    print(f"Killing process {proc.info['name']} (PID {proc.info['pid']}) on port {port}")
+                    proc.kill()
+                except psutil.NoSuchProcess:
+                    print(f"Process {proc.info['pid']} no longer exists.")
+                except Exception as e:
+                    print(f"Error killing process: {e}")

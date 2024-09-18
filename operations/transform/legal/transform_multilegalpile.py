@@ -1,13 +1,13 @@
 """
 Anything which is not inside ray.remote function will be executed on the head node, so keep it to minimum.
-path: scripts/legal/process_multilegalpile.py
+path: scripts/legal/transform_multilegalpile.py
 Inputs: raw jsonl.xz files, Output: jsonl.gz files in dolma format
 
 Example Usage:
 ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- \
-python scripts/legal/process_multilegalpile.py \
---input_path gs://marin-data/raw/huggingface.co/datasets/joelniklaus/MultiLegalPileWikipediaFiltered/resolve/main/data \
---output_path gs://marin-data/processed/law/multilegalpile-v1.0/txt/documents
+    python operations/transform/legal/transform_multilegalpile.py \
+        --input_path gs://marin-data/raw/law/multilegalpile \
+        --output_path gs://marin-data/processed/law/multilegalpile-v1.0/txt/documents
 """
 
 import argparse
@@ -30,34 +30,40 @@ def convert_to_dolma(input_file_path, output_file_path):
     # The runtime for this function should be low (less than 5-10 min), as the machines are preemptible
 
     source = "multilegalpile"
-    change_extension = lambda filepath: os.path.splitext(filepath)[0] + '.gz'
 
     # Read the input file
-    with fsspec.open(input_file_path, "rt", compression="xz") as f, \
-            fsspec.open(change_extension(output_file_path), "wt", compression="gzip") as output:
+    with (
+        fsspec.open(input_file_path, "rt", compression="xz") as f,
+        fsspec.open(os.path.splitext(output_file_path)[0] + ".gz", "wt", compression="gzip") as output,
+    ):
         for idx, line in enumerate(f):
             row = json.loads(line)
 
-            output.write(json.dumps({
-                "id": f"{row['type']}:{idx}",  # to make sure the id is unique
-                "text": row['text'],
-                "source": source,
-                "metadata": {
-                    f"type": row['type'],
-                    f"jurisdiction": row['jurisdiction'],
-                }
-            }) + "\n")
+            output.write(
+                json.dumps(
+                    {
+                        "id": f"{row['type']}:{idx}",  # to make sure the id is unique
+                        "text": row["text"],
+                        "source": source,
+                        "metadata": {
+                            "type": row["type"],
+                            "jurisdiction": row["jurisdiction"],
+                        },
+                    }
+                )
+                + "\n"
+            )
     return True
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Script to convert multilegalpile data to dolma format.")
     # As a reminder all the processing in this function will be done on the head node. We should try
     # to keep number of jobs (started using ray job submit command) to minimum while trying to use tasks(ray.remote
     # function) as much as possible. For reference, fw uses only 1 job to process a complete dump which is about
     # 400GB of data and spawns about 75000 tasks (ray.remote functions).
-    parser.add_argument('--input_path', type=str, help='Path to the multilegalpile raw directory', required=True)
-    parser.add_argument('--output_path', type=str, help='Path to store multilegalpile dolma files', required=True)
+    parser.add_argument("--input_path", type=str, help="Path to the multilegalpile raw directory", required=True)
+    parser.add_argument("--output_path", type=str, help="Path to store multilegalpile dolma files", required=True)
 
     args = parser.parse_args()
 

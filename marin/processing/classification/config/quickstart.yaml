@@ -1,6 +1,7 @@
 input_path: "gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart/"
 output_path: "gs://marin-us-central2/attributes/hello_world_fw/v1.0/dclm-fasttext-quality-quickstart/"
 model_name: "mlfoundations/fasttext-oh-eli5"
+model_type: "fasttext"
 attribute_name: "dclm-fasttext-quality"
 runtime:
   requirements_filepath: "marin/processing/classification/config/dclm_fasttext_requirements.txt"
