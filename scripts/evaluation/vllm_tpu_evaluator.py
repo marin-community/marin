@@ -31,6 +31,18 @@ class VllmTpuEvaluator(Evaluator, ABC):
     CACHE_PATH: str = "/tmp"
 
     @staticmethod
+    def download_model(model: ModelConfig) -> str:
+        """
+        Download the model if it's not already downloaded
+        """
+        downloaded_path: Optional[str] = model.ensure_downloaded(
+            local_path=os.path.join(VllmTpuEvaluator.CACHE_PATH, model.name)
+        )
+        # Use the model name if a path is not specified (e.g., for Hugging Face models)
+        model_name_or_path: str = model.name if downloaded_path is None else downloaded_path
+        return model_name_or_path
+
+    @staticmethod
     def start_vllm_server_in_background(
         model: ModelConfig, host: str = "127.0.0.1", port: int = 8000, timeout_seconds: int = 3600
     ) -> str:
@@ -38,17 +50,11 @@ class VllmTpuEvaluator(Evaluator, ABC):
         Serve the model with a local vLLM server in the background.
         Returns the port the server is running on.
         """
-        # Download the model if it's not already downloaded
-        downloaded_path: Optional[str] = model.ensure_downloaded(
-            local_path=os.path.join(VllmTpuEvaluator.CACHE_PATH, model.name)
-        )
         # Use the model name if a path is not specified (e.g., for Hugging Face models)
-        model_name_or_path: str = model.name if downloaded_path is None else downloaded_path
+        model_name_or_path: str = VllmTpuEvaluator.download_model(model)
 
         # From https://docs.vllm.ai/en/v0.4.0/models/engine_args.html
-        command: str = (
-            f"vllm serve {model_name_or_path} --trust-remote-code --host {host} --port {port}"
-        )
+        command: str = f"vllm serve {model_name_or_path} --trust-remote-code --host {host} --port {port} --device tpu"
         process = subprocess.Popen(command, shell=True)
 
         # Check that the server has started by sending heartbeat checks
