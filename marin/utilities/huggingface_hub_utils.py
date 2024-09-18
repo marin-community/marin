@@ -8,8 +8,8 @@ import fsspec
 from huggingface_hub import hf_hub_url
 from huggingface_hub.utils import GatedRepoError
 
-from marin.utilities.storage_transfer_utils import create_gcs_transfer_job_from_tsv, create_url_list_tsv_on_gcs
 from marin.utilities.gcs_utils import split_gcs_path
+from marin.utilities.storage_transfer_utils import create_gcs_transfer_job_from_tsv, create_url_list_tsv_on_gcs
 from marin.utilities.validation_utils import write_provenance_json
 
 
@@ -47,7 +47,9 @@ def get_hf_dataset_urls(hf_dataset_id: str, revision: str, hf_url_glob: str) -> 
     return url_list
 
 
-def download_hf_dataset(hf_dataset_id: str, revision: str, hf_url_glob: str, gcs_output_path: str, public_gcs_path: str) -> str:
+def download_hf_dataset(
+    hf_dataset_id: str, revision: str, hf_url_glob: str, gcs_output_path: str, public_gcs_path: str
+) -> str:
     """Create & Launch a Google Cloud Storage Transfer Job to Download a (Public) HuggingFace Dataset."""
     hf_urls = get_hf_dataset_urls(hf_dataset_id, revision, hf_url_glob)
 

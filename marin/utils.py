@@ -1,7 +1,7 @@
 import os
 import re
+
 import fsspec
-from typing import Literal
 
 
 def fsspec_exists(file_path):
@@ -38,8 +38,11 @@ def fsspec_rm(file_path):
             fs.rm(file_path)
         except FileNotFoundError as e:
             print(f"Error removing the file: {e}. Likely caused by the race condition and file is already removed.")
+
+        # TODO (@siddk) - I think you don't need the finally?
         finally:
-            return True
+            return True  # noqa: B012
+
     return False
 
 
@@ -144,9 +147,6 @@ def fsspec_size(file_path: str) -> int:
     return fs.size(file_path)
 
 
-import re
-
-
 def validate_marin_gcp_path(path: str) -> str:
     """
     Validate the given path according to the marin GCP convention.
@@ -182,9 +182,9 @@ def validate_marin_gcp_path(path: str) -> str:
     pattern = r"^gs://marin-[^/]+/(scratch/.+|(documents|attributes|filtered)/[^/]+/[^/]+/[^/]+(/.*)?$)"
     if not re.match(pattern, path):
         raise ValueError(
-            f"Invalid path format. It should follow either:\n"
-            f"1. gs://marin-$REGION/scratch/* (any structure after scratch)\n"
-            f"2. gs://marin-$REGION/{{documents|attributes|filtered}}/$EXPERIMENT/$DATASET/$VERSION/"
+            "Invalid path format. It should follow either:\n"
+            "1. gs://marin-$REGION/scratch/* (any structure after scratch)\n"
+            "2. gs://marin-$REGION/{documents|attributes|filtered}/$EXPERIMENT/$DATASET/$VERSION/"
         )
     return path
 
@@ -199,7 +199,8 @@ def rebase_file_path(base_in_path, file_path, base_out_path, new_extension=None,
         base_out_path (str): The base directory of the output file
         new_extension (str, optional): If provided, the new file extension to use (including the dot, e.g., '.txt')
         old_extension (str, optional): If provided along with new_extension, specifies the old extension to replace.
-                                       If not provided (but `new_extension` is), the function will replace everything after the last dot.
+                                       If not provided (but `new_extension` is), the function will replace everything
+                                       after the last dot.
 
     Returns:
         str: The rebased file path

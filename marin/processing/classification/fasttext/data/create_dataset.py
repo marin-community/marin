@@ -1,17 +1,19 @@
 """
 Code to load in Dolma formatted data and create a single file with data in fasttext format:
-"__label__{label_name} {text}" for each row in the input files, where the label can be 
+"__label__{label_name} {text}" for each row in the input files, where the label can be
 "hq" or "lq" depending on whether it is a high quality data source or low quality data source.
 The final file format is a single text file with one line per label-text pair.
 
 Usage:
 ray job submit --working-dir . --no-wait -- \
-python -m marin.processing.classification.fasttext.data.create_dataset --high-quality-files <input_files> --low-quality-files <input_files> --output-file <output_file>
+    python -m marin.processing.classification.fasttext.data.create_dataset \
+        --high-quality-files <input_files> \
+        --low-quality-files <input_files> \
+        --output-file <output_file>
 """
 
 import argparse
 import json
-from typing import List
 import time
 
 import fsspec
@@ -43,7 +45,7 @@ class QueueActor:
 
 
 @ray.remote
-def process_file(json_path: str, label: str) -> List[str]:
+def process_file(json_path: str, label: str) -> list[str]:
     labeled_lines = []
     with fsspec.open(json_path, "rt", compression="gzip") as f_in:
         for line in f_in:
@@ -68,7 +70,7 @@ def write_to_file(output_file: str, queue_actor):
                 time.sleep(0.1)  # Short sleep to avoid busy waiting
 
 
-def main(high_quality_files: List[str], low_quality_files: List[str], output_file: str):
+def main(high_quality_files: list[str], low_quality_files: list[str], output_file: str):
     ray.init()
 
     # We set a large memory limit for the queue actor to avoid memory issues when

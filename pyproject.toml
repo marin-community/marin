@@ -69,8 +69,7 @@ preview = true
 # Note :: Grow more strict over time!
 extend-exclude = """
 (
-    marin/
-    | scripts/
+    scripts/
 )
 """
 
@@ -79,7 +78,7 @@ line-length = 121
 target-version = "py310"
 
 # Note :: Grow more strict over time!
-extend-exclude = ["marin/", "scripts/"]
+extend-exclude = ["scripts/"]
 
 [tool.ruff.lint]
 select = ["A", "B", "E", "F", "I", "NPY", "RUF", "UP", "W"]

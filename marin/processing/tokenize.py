@@ -2,15 +2,19 @@
 Main for running Levanter's tokenizer infrastructure on a dataset using an existing Ray cluster.
 
 Usage:
-    ray job submit --working-dir . --no-wait -- python -m marin.processing.tokenize --input_path <input-dir> --cache_path <cache-path> --dataset_name <dataset-name> --tokenizer <tokenizer_name>
+    ray job submit --working-dir . --no-wait -- python -m marin.processing.tokenize \
+        --input_path <input-dir> --cache_path <cache-path> --dataset_name <dataset-name> --tokenizer <tokenizer_name>
 
     input_path: The input directory containing the jsonl files or the name of a hf dataset
     cache_path: The base directory to save the tokenized files
-    dataset_name: The name of the dataset for the cache dir. This must be the same as the dataset name used in the Levanter training run
-    tokenizer: The name of the tokenizer to use. This must be the same as the tokenizer used in the Levanter training run
+    dataset_name: The name of the dataset for the cache dir. This must be the same as the dataset name used
+                  in the Levanter training run
+    tokenizer: The name of the tokenizer to use. This must be the same as the tokenizer used in the Levanter
+               training run
 
     The data will be tokenized to $cache_path/$dataset_name/train
 """
+
 import dataclasses
 import logging
 import os
@@ -20,7 +24,9 @@ import ray
 import transformers
 
 from marin.utils import fsspec_glob, fsspec_isdir
+
 logger = logging.getLogger(__name__)
+
 
 def _get_jsonls(input_path):
     if fsspec_isdir(input_path) or input_path.endswith("/"):
@@ -34,6 +40,7 @@ def _get_jsonls(input_path):
 def is_hf_dataset(path):
     # see if looks like an hf dataset or not.
     import fsspec
+
     protocol, _ = fsspec.core.split_protocol(path)
 
     if protocol is not None:
@@ -44,12 +51,13 @@ def is_hf_dataset(path):
 
     return True
 
+
 @ray.remote
 def levanter_tokenize(input_path: str, tokenizer_name: str, output_path: str):
     import levanter
+    from levanter.data.metrics_monitor import LoggerMetricsMonitor
     from levanter.data.text import BatchTokenizer
     from levanter.store.cache import build_or_load_cache
-    from levanter.data.metrics_monitor import LoggerMetricsMonitor
 
     logging.basicConfig(level=logging.INFO)
 
