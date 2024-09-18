@@ -112,8 +112,8 @@ function ViewPage() {
 
   return (<div>
     {renderOffsetCount({offset, count, mainPayload, updateUrlParams})}
-    {renderFilters(filters)}
-    {renderSort(sort, reverse)}
+    {renderFilters(filters, updateUrlParams)}
+    {renderSort(sort, reverse, updateUrlParams)}
     {renderPaths({paths, updateUrlParams})}
     <hr />
     {renderPayloads({paths, payloads, offset, filters, sort, reverse, updateUrlParams})}
@@ -123,6 +123,10 @@ function ViewPage() {
 export default ViewPage;
 
 ////////////////////////////////////////////////////////////
+
+const removeSymbol = "✖";
+const cloneSymbol = "📋";
+const downloadSymbol = "⬇";
 
 /**
  * Parses the URL parameter `paths`.
@@ -193,7 +197,11 @@ function renderError(error) {
  */
 function navigateToUrl(urlParams, delta, location, navigate) {
   for (const key in delta) {
-    urlParams.set(key, delta[key]);
+    if (delta[key] === null || delta[key] === false) {
+      urlParams.delete(key);
+    } else {
+      urlParams.set(key, delta[key]);
+    }
   }
   navigate({
     pathname: location.pathname,
@@ -277,22 +285,32 @@ function renderFilterSortKey(key) {
   return "[" + key.join("→") + "]";
 }
 
-function renderFilters(filters) {
+function removeFilter(filters, i, updateUrlParams) {
+  const newFilters = [...filters.filters.slice(0, i), ...filters.filters.slice(i + 1)];
+  updateUrlParams({filters: JSON.stringify(newFilters)});
+}
+
+function renderFilters(filters, updateUrlParams) {
   if (filters.error) {
     return renderError(filters.error);
   }
-  if (!filters.filters) {
+  if (filters.filters.length === 0) {
     return null;
   }
   return (<div>
     Filters:
     <ul>
-      {filters.filters.map((filter, i) => <li key={i}>{renderFilterSortKey(filter.key)} {filter.rel} {JSON.stringify(filter.value)}</li>)}
+      {filters.filters.map((filter, i) => {
+        const removeButton = <span className="clickable" onClick={() => removeFilter(filters, i, updateUrlParams)}>{removeSymbol}</span>;
+        return (<li key={i}>
+          {renderFilterSortKey(filter.key)} {filter.rel} {JSON.stringify(filter.value)} {removeButton}
+        </li>);
+      })}
     </ul>
   </div>);
 }
 
-function renderSort(sort, reverse) {
+function renderSort(sort, reverse, updateUrlParams) {
   if (sort.error) {
     return renderError(sort.error);
   }
@@ -301,9 +319,10 @@ function renderSort(sort, reverse) {
   }
   const upArrow = <span>&uarr;</span>;
   const downArrow = <span>&darr;</span>;
+  const removeButton = <span className="clickable" onClick={() => updateUrlParams({sort: null, reverse: null})}>{removeSymbol}</span>;
   return (<div>
     Sort: {renderFilterSortKey(sort.key)}
-    {reverse ? downArrow : upArrow}
+    {reverse ? downArrow : upArrow} {removeButton}
   </div>);
 }
 
@@ -361,15 +380,15 @@ function renderPaths(args) {
       {paths.map((path, index) => {
         const downloadUrl = path.replace("gs://", "https://storage.cloud.google.com/");
         const downloadLink = <Link to={downloadUrl} title="Download this link.">download</Link>;
-        const cloneLink =
+        const cloneButton =
           <span className="clickable"
                 title="Append this path so you can edit it."
-                onClick={() => updatePath(paths, paths.length, path, updateUrlParams)}>clone</span>;
-        const removeLink =
+                onClick={() => updatePath(paths, paths.length, path, updateUrlParams)}>{cloneSymbol}</span>;
+        const removeButton =
           <span className="clickable"
                 title="Remove this path from the list."
-                onClick={() => removePath(paths, index, updateUrlParams)}>remove</span>;
-        const extra = <span> [{downloadLink}] [{cloneLink}] [{removeLink}]</span>;
+                onClick={() => removePath(paths, index, updateUrlParams)}>{removeSymbol}</span>;
+        const extra = <span> [{downloadLink}] {cloneButton} {removeButton}</span>;
         return <li key={index}>{renderPath({paths, index, updateUrlParams})}{extra}</li>;
       })}
     </ul>
@@ -406,10 +425,15 @@ function isUrl(str) {
 
 /**
  * When click on an sub-item with `itemKey`, we can ask the user to specify
- * sort/filter to that path.
+ * sort/filter to that path.  The user types in a space-separated list of tokens,
+ * where each token can be:
+ * - a filter (e.g., >5, <=0.5, =foo, !=bar, =~baz)
+ * - sort (to sort by this key)
+ * - asc (to sort in ascending order)
+ * - desc (to sort in descending order)
  */
 function onItemClick(itemKey, item, updateUrlParams) {
-  const response = prompt("Enter filter (e.g., >5) or sort or reverse");
+  const response = prompt("Enter filter (e.g., >5) or 'sort' or 'desc' or 'asc'");
   if (!response) {
     return;
   }
@@ -430,7 +454,9 @@ function onItemClick(itemKey, item, updateUrlParams) {
   response.trim().split(" ").forEach((token) => {
     if (token === "sort") {
       sort = itemKey;
-    } else if (token === "reverse") {
+    } else if (token === "asc") {
+      reverse = false;
+    } else if (token === "desc") {
       reverse = true;
     } else {
       const m = token.match(/^(<|<=|>|>=|=|!=|=~)(.*)$/);
@@ -447,11 +473,11 @@ function onItemClick(itemKey, item, updateUrlParams) {
   if (filters.length > 0) {
     delta.filters = JSON.stringify(filters);
   }
-  if (sort) {
+  if (sort !== null) {
     delta.sort = JSON.stringify(sort);
   }
-  if (reverse) {
-    delta.reverse = true;
+  if (reverse !== null) {
+    delta.reverse = reverse;
   }
 
   // Update the URL parameters
