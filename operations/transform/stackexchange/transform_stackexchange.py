@@ -16,7 +16,8 @@ Run with:
     - [Ray] ray job submit --address=http://127.0.0.1:8265 --working_dir . --no-wait -- \
             python operations/transform/transform_stackexchange.py \
             --input_path "gs://marin-us-central2/raw/stackexchange/v2024-04-02" \
-            --output_path "gs://marin-us-central2/documents/stackexchange/v2024-04-02"
+            --output_path "gs://marin-us-central2/documents/stackexchange/v2024-04-02/md-complete" \
+            --markdown_format "complete"
 """
 
 import json
@@ -104,7 +105,7 @@ class TransformStackExchangeConfig:
         "gs://marin-us-central2/raw/stackexchange/v2024-04-02"
     )
     output_path: str = (                                     # GCS Path to write Dolma-formatted markdown files
-        "gs://marin-us-central2/documents/stackexchange/v2024-04-02"
+        "gs://marin-us-central2/documents/stackexchange/v2024-04-02/md-complete"
     )
 
     # StackExchange Parameters
@@ -114,9 +115,6 @@ class TransformStackExchangeConfig:
 
     min_vote_threshold: int = -1_000_000_000                # Minimum number of votes for keeping questions/answers
     max_answer_threshold: int = 1_000_000_000               # Maximum number of high-voted answers to keep per thread
-
-    def __post_init__(self) -> None:
-        self.output_path = os.path.join(self.output_path, f"md-{self.markdown_format.value}")
 
     # fmt: on
 
