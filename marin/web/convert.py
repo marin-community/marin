@@ -24,7 +24,12 @@ def convert_page_with_trafilatura(html: str, url: str | None = None) -> dict[str
     content = extract(
         html,
         favor_recall=True,
-        include_links=True,
+        include_links=False,
+        include_images=False,
+        include_comments=False,
+        include_tables=True,
+        include_formatting=False,
+        deduplicate=False,
         output_format="txt",
     )
 
@@ -32,7 +37,7 @@ def convert_page_with_trafilatura(html: str, url: str | None = None) -> dict[str
         title = None
 
     if title:
-        content = f"# {title}\n\n{content}"
+        content = f"{title}\n\n{content}"
     
     out = {
         "title": title,
@@ -68,13 +73,17 @@ def convert_page_with_resiliparse(html: str, url: str | None = None) -> dict[str
 
     content = extract_plain_text(
         html,
+        preserve_formatting=False,
         main_content=True,
         alt_texts=False,
         list_bullets=True,
+        links=False,
+        form_fields=False,
+        comments=False,
     )
 
     if title:
-        content = f"# {title}\n\n{content}"
+        content = f"{title}\n\n{content}"
 
     out = {
         "title": title,

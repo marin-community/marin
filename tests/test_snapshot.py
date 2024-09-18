@@ -65,10 +65,10 @@ def test_generate_markdown_from_html_with_readability(input_name):
 
     output = output_dict["content"]
 
-    expected_file = os.path.join(expected_path, "readability", f"{input_name}.md")
+    expected_file = os.path.join(expected_path, f"{input_name}.md")
     output_file = os.path.join(output_path, "readability", f"{input_name}.md")
 
-    os.makedirs(output_path, exist_ok=True)
+    os.makedirs(f"{output_path}/readability", exist_ok=True)
 
     with open(output_file, "w") as f:
         f.write(output)
@@ -86,10 +86,10 @@ def test_generate_markdown_from_html_with_resiliparse(input_name):
 
     output = output_dict["content"]
 
-    expected_file = os.path.join(expected_path, "resiliparse", f"{input_name}.md")
+    expected_file = os.path.join(expected_path, f"{input_name}.md")
     output_file = os.path.join(output_path, "resiliparse", f"{input_name}.md")
 
-    os.makedirs(output_path, exist_ok=True)
+    os.makedirs(f"{output_path}/resiliparse", exist_ok=True)
 
     with open(output_file, "w") as f:
         f.write(output)
@@ -107,10 +107,10 @@ def test_generate_markdown_from_html_with_trafilatura(input_name):
 
     output = output_dict["content"]
 
-    expected_file = os.path.join(expected_path, "trafilatura", f"{input_name}.md")
+    expected_file = os.path.join(expected_path, f"{input_name}.md")
     output_file = os.path.join(output_path, "trafilatura", f"{input_name}.md")
 
-    os.makedirs(output_path, exist_ok=True)
+    os.makedirs(f"{output_path}/trafilatura", exist_ok=True)
 
     with open(output_file, "w") as f:
         f.write(output)
