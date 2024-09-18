@@ -1,11 +1,13 @@
 from scripts.evaluation.evaluator import Evaluator, EvaluatorConfig
 from scripts.evaluation.helm_evaluator import HELMEvaluator
 from scripts.evaluation.simple_evaluator import SimpleEvaluator
+from scripts.evaluation.eleuther_evaluator import EleutherEvaluator
 
 # Supported evaluators
 NAME_TO_EVALUATOR = {
     "helm": HELMEvaluator,
     "debug": SimpleEvaluator,
+    "eleuther": EleutherEvaluator,
 }
 
 

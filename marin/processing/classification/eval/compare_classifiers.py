@@ -14,7 +14,6 @@ python -m marin.processing.classification.eval.compare_classifiers \
 import argparse
 import json
 import os
-from typing import List, Tuple
 
 import fsspec
 import ray
@@ -30,9 +29,9 @@ def process_file(
     prediction_attribute_name: str,
     label_name: str,
     threshold: float,
-) -> Tuple[List[int], List[int]]:
-    ground_truth_labels: List[int] = []
-    prediction_labels: List[int] = []
+) -> tuple[list[int], list[int]]:
+    ground_truth_labels: list[int] = []
+    prediction_labels: list[int] = []
 
     with (
         fsspec.open(ground_truth_file, "rt", compression="gzip") as gt_f,
@@ -52,7 +51,7 @@ def process_file(
 
 
 @ray.remote(runtime_env={"pip": ["evaluate", "scikit-learn"]})
-def generate_report(ground_truth_list: List[int], predictions_list: List[int]):
+def generate_report(ground_truth_list: list[int], predictions_list: list[int]):
     from evaluate import load
     from sklearn.metrics import classification_report, confusion_matrix
 
@@ -79,7 +78,7 @@ def generate_report(ground_truth_list: List[int], predictions_list: List[int]):
     return results
 
 
-def _get_filepaths(path: str) -> List[str]:
+def _get_filepaths(path: str) -> list[str]:
     if fsspec_isdir(path):
         return fsspec_glob(os.path.join(path, "**/*.jsonl.gz"))
     else:
