@@ -12,6 +12,10 @@ code {
     monospace;
 }
 
+body {
+  margin: 20px;
+}
+
 .error {
   color: red;
   font-weight: bold;
@@ -49,14 +53,20 @@ tr {
   vertical-align: top;
 }
 
-tr:nth-child(even) {
-  background-color: #e2e2e2;
+/* Alternate colors */
+.item-table tr:nth-child(even) {
+  background-color: #eeeeee;
 }
 
-tr:nth-child(odd) {
+.item-table tr:nth-child(odd) {
   background-color: #ffffff;
 }
 
 .items-table {
-  border-spacing: 0 50px;
+  border-collapse: collapse;
+}
+
+.items-table tr {
+  border-top: 2px solid lightgray;
+  padding-top: 10px;
 }

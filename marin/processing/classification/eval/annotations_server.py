@@ -1,18 +1,21 @@
+# ruff: noqa
+
 """
 TODO(Chris): Merge the logic of diplaying attributes to @abhinavg4's example server code.
 
 Usage:
-python -m marin.processing.classification.eval.annotations_server --input-file gs://marin-data/filtered/fineweb-edu-quality-3.0/fineweb/fw-v1.0/md/CC-MAIN-2020-10/000_00000/0_processed.jsonl.gz --attributes-file gs://marin-data/processed/fineweb/fw-v1.0/attributes_md/fineweb-edu-quality/CC-MAIN-2020-10/000_00000/0_processed.jsonl.gz
+python -m marin.processing.classification.eval.annotations_server \
+    --input-file gs://marin-data/filtered/fineweb-edu-quality-3.0/fineweb/fw-v1.0/md/CC-MAIN-2020-10/000_00000/0_processed.jsonl.gz \\
+    --attributes-file gs://marin-data/processed/fineweb/fw-v1.0/attributes_md/fineweb-edu-quality/CC-MAIN-2020-10/000_00000/0_processed.jsonl.gz
 """
 
 import argparse
-import gradio as gr
-import fsspec
 import json
-import random
 import os
+import random
 
-from marin.utils import fsspec_glob
+import fsspec
+import gradio as gr
 
 
 def sample_and_display(data_content, attr_content, input_filename, attributes_filename):
@@ -45,8 +48,8 @@ def sample_and_display(data_content, attr_content, input_filename, attributes_fi
     return text, attribute_quality, source_info, data_content_id, random_index, input_filename
 
 
-def downvote(id, index, json_name):
-    downvote_data = {"id": id, "index": index, "json_name": json_name}
+def downvote(identifier, index, json_name):
+    downvote_data = {"id": identifier, "index": index, "json_name": json_name}
 
     output_file = "downvotes.json"
 
@@ -61,7 +64,7 @@ def downvote(id, index, json_name):
     with open(output_file, "w") as f:
         json.dump(existing_data, f, indent=2)
 
-    return f"Downvoted: ID {id}, Index {index}, File {json_name}"
+    return f"Downvoted: ID {identifier}, Index {index}, File {json_name}"
 
 
 def build_demo(input_file: str, attributes_file: str):

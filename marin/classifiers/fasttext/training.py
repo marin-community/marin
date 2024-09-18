@@ -3,17 +3,19 @@ training.py
 
 Train fastText models.
 """
-import os
+
 import logging
-from datetime import datetime
+import os
 import tempfile
+from datetime import datetime
 
 import fsspec
 import ray
 
 from marin.utils import fsspec_glob, fsspec_cpdir, fsspec_exists
 from marin.classifiers.utils import merge_shards_and_split, shuffle
-from marin.classifiers.fasttext.utils import format_example
+from marin.utils import fsspec_glob
+
 
 def train_model(
         input_path: str,
@@ -76,7 +78,7 @@ def train_model(
     except Exception as e:
         logger.exception(f"Error processing: {e}")
         raise
-    
+
     datetime_end = datetime.utcnow()
     logger.info(f"Training fastText for experiment {experiment_path} completed in {datetime_end - datetime_start}.")
 

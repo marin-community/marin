@@ -97,18 +97,18 @@ ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- pyth
 The yaml for the full consolidation is as follows:
 ```yaml
 input_path: "gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart/"
-output_path: "gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart_consolidate_e2e/"
+output_path: "gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart_consolidate/"
 max_tasks_in_flight: 1000
 
 filters:
- - type: "dedupe"
-   attribute_path: "gs://marin-us-central2/attributes/hello_world_fw/v1.0/quickstart_duplicates/"
-   name: "duplicate_text"
- - type: "classify"
-   attribute_path: "gs://marin-us-central2/attributes/hello_world_fw/v1.0/dclm-fasttext-quality-quickstart/"
-   name: "dclm-fasttext-quality"
-   label: "__label__hq"
-   threshold: 0.1
+  - type: "dedupe"
+    attribute_path: "gs://marin-us-central2/attributes/hello_world_fw/v1.0/quickstart_duplicates/"
+    name: "duplicate_text"
+  - type: "classify"
+    attribute_path: "gs://marin-us-central2/attributes/hello_world_fw/v1.0/quickstart_olmo_fasttext/"
+    name: "olmo-fasttext-quality"
+    label: "__label__hq"
+    threshold: 0.1
 ```
 
 Currently we require the user specifiy the file format and the attribute to filter by

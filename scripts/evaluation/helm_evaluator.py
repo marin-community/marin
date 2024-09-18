@@ -2,6 +2,7 @@ from typing import Dict, List
 import os
 
 import ray
+import shutil
 
 from scripts.evaluation.evaluator import Dependency, ModelConfig
 from scripts.evaluation.vllm_tpu_evaluator import VllmTpuEvaluator
@@ -31,7 +32,7 @@ class HELMEvaluator(VllmTpuEvaluator):
     )
 
     _pip_packages: List[Dependency] = VllmTpuEvaluator.DEFAULT_PIP_PACKAGES + [
-        Dependency(name="crfm-helm@git+https://github.com/stanford-crfm/helm.git@helm_on_tpu"),
+        Dependency(name="crfm-helm@git+https://github.com/stanford-crfm/helm.git@local_vllm"),
     ]
 
     @staticmethod
@@ -53,10 +54,7 @@ class HELMEvaluator(VllmTpuEvaluator):
                     "model_name": model_name,
                     "tokenizer_name": model_name,
                     "max_sequence_length": tokenizer.model_max_length,
-                    "client_spec": {
-                        "class_name": "helm.clients.vllm_client.VLLMClient",
-                        "args": {"base_url": "http://localhost:8000/v1"},
-                    },
+                    "client_spec": {"class_name": "helm.clients.vllm_client.LocalVLLMClient"},
                 }
             ]
         }
@@ -83,10 +81,7 @@ class HELMEvaluator(VllmTpuEvaluator):
                     "name": model_name,
                     "tokenizer_spec": {
                         "class_name": "helm.tokenizers.huggingface_tokenizer.HuggingFaceTokenizer",
-                        "args": {
-                            "pretrained_model_name_or_path": model_name,
-                            "trust_remote_code": True
-                        },
+                        "args": {"pretrained_model_name_or_path": model_name, "trust_remote_code": True},
                     },
                     "prefix_token": tokenizer.bos_token,
                     "end_of_text_token": tokenizer.eos_token,
@@ -97,40 +92,43 @@ class HELMEvaluator(VllmTpuEvaluator):
 
     @ray.remote(memory=64 * 1024 * 1024 * 1024, resources={"TPU": 4})  # 64 GB of memory, always request 4 TPUs
     def run(self, model: ModelConfig, evals: List[str], output_path: str) -> None:
-        super().run(model, evals, output_path)
+        try:
+            from helm.common.general import ensure_file_downloaded
 
-        from helm.common.general import ensure_file_downloaded
+            # Download the model checkpoint if necessary.
+            self.download_model(model)
+            # HELM requires the model name to match the local path
+            if model.path is not None:
+                model.name = model.path
 
-        # Download the model from GCS or HuggingFace and serve it with vLLM
-        self.start_vllm_server_in_background(model)
+            # Download the run_entries file specified in `evals`
+            for run_entries_file in evals:
+                run_entries_url: str = self.RUN_ENTRIES_TEMPLATE.format(run_entries_file=run_entries_file)
+                ensure_file_downloaded(source_url=run_entries_url, target_path=run_entries_file)
+                assert (
+                    os.path.exists(run_entries_file),
+                    f"Failed to download. Does {run_entries_file} exist at {self.ALL_RUN_ENTRIES_URL}?",
+                )
 
-        # HELM requires the model name to match the local path
-        if model.path is not None:
-            model.name = model.path
+            # Write the model configuration files necessary for HELM
+            self.write_model_config_files(model)
 
-        # Download the run_entries file specified in `evals`
-        for run_entries_file in evals:
-            run_entries_url: str = self.RUN_ENTRIES_TEMPLATE.format(run_entries_file=run_entries_file)
-            ensure_file_downloaded(source_url=run_entries_url, target_path=run_entries_file)
-            assert (
-                os.path.exists(run_entries_file),
-                f"Failed to download. Does {run_entries_file} exist at {self.ALL_RUN_ENTRIES_URL}?",
+            # Run HELM with the model and the specified evals
+            run_bash_command(
+                f"helm-run --conf-paths {' '.join(evals)} "
+                f"--models-to-run {model.name} "
+                f"--max-eval-instances {self.DEFAULT_MAX_EVAL_INSTANCES} "
+                f"--output-path {self.BENCHMARK_OUTPUT_PATH} "
+                f"--suite {self.RESULTS_FOLDER} "
+                f"--local-path {self.PROD_ENV_PATH} "
+                "--num-threads 1 --exit-on-error"
             )
-
-        # Write the model configuration files necessary for HELM
-        self.write_model_config_files(model)
-
-        # Run HELM with the model and the specified evals
-        run_bash_command(
-            f"helm-run --conf-paths {' '.join(evals)} "
-            f"--models-to-run {model.name} "
-            f"--max-eval-instances {self.DEFAULT_MAX_EVAL_INSTANCES} "
-            f"--output-path {self.BENCHMARK_OUTPUT_PATH} "
-            f"--suite {self.RESULTS_FOLDER} "
-            f"--local-path {self.PROD_ENV_PATH} "
-        )
-        assert os.path.exists(self.RESULTS_PATH), f"Results not found at {self.RESULTS_PATH}. Did HELM run?"
-
-        # Upload the results to GCS
-        if is_remote_path(output_path):
-            upload_to_gcs(self.RESULTS_PATH, output_path)
+            assert os.path.exists(self.RESULTS_PATH), f"Results not found at {self.RESULTS_PATH}. Did HELM run?"
+            # Upload the results to GCS
+            if is_remote_path(output_path):
+                upload_to_gcs(self.RESULTS_PATH, output_path)
+        except Exception as e:
+            print(f"An error occurred: {e}")
+        finally:
+            self.cleanup(model)
+            shutil.rmtree(self.RESULTS_PATH, ignore_errors=True)
