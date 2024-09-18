@@ -13,6 +13,7 @@ from marin.utils import fsspec_rm
 from marin.classifiers.utils import create_label_attribute, attributes_to_dataset
 from marin.classifiers.fasttext.training import train_model
 
+
 @dataclass
 class TrainFasttextClassifierConfig:
     """
@@ -29,6 +30,7 @@ class TrainFasttextClassifierConfig:
         val_split (float): Fraction of data to be used for validation.
         memory (int): Amount of memory allocated for remote training process (in GB).
     """
+
     output_path: str
     pos_doc_path: str
     neg_doc_path: str
@@ -39,24 +41,44 @@ class TrainFasttextClassifierConfig:
     val_split: float = 0.1
     memory: int = 1
 
+
 @draccus.wrap()
 def main(cfg: TrainFasttextClassifierConfig):
     ray.init()
 
-    pos_attr_path = f'{cfg.output_path}/tmp/positives'
-    neg_attr_path = f'{cfg.output_path}/tmp/negatives'
+    pos_attr_path = f"{cfg.output_path}/tmp/positives"
+    neg_attr_path = f"{cfg.output_path}/tmp/negatives"
 
     create_label_attribute(input_doc_path=cfg.pos_doc_path, output_attr_path=pos_attr_path, label="hq")
-    attributes_to_dataset(experiment_path=cfg.output_path, doc_path=cfg.pos_doc_path, attr_path=pos_attr_path, sampling_rate=cfg.pos_sampling_rate, seed=cfg.seed)
+    attributes_to_dataset(
+        experiment_path=cfg.output_path,
+        doc_path=cfg.pos_doc_path,
+        attr_path=pos_attr_path,
+        sampling_rate=cfg.pos_sampling_rate,
+        seed=cfg.seed,
+    )
 
     create_label_attribute(input_doc_path=cfg.neg_doc_path, output_attr_path=neg_attr_path, label="lq")
-    attributes_to_dataset(experiment_path=cfg.output_path, doc_path=cfg.neg_doc_path, attr_path=neg_attr_path, sampling_rate=cfg.neg_sampling_rate, seed=cfg.seed)
+    attributes_to_dataset(
+        experiment_path=cfg.output_path,
+        doc_path=cfg.neg_doc_path,
+        attr_path=neg_attr_path,
+        sampling_rate=cfg.neg_sampling_rate,
+        seed=cfg.seed,
+    )
 
-    train_model(input_path=f'{cfg.output_path}/data', output_path=cfg.output_path, seed=cfg.seed, val_split=cfg.val_split, memory_req=cfg.memory, **cfg.fasttext_args)
+    train_model(
+        input_path=f"{cfg.output_path}/data",
+        output_path=cfg.output_path,
+        seed=cfg.seed,
+        val_split=cfg.val_split,
+        memory_req=cfg.memory,
+        **cfg.fasttext_args,
+    )
 
     fsspec_rm(pos_attr_path)
     fsspec_rm(neg_attr_path)
 
-if __name__ == '__main__':
-    main()
 
+if __name__ == "__main__":
+    main()

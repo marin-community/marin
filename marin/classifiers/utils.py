@@ -153,14 +153,15 @@ def create_label_attribute(input_doc_path: str, output_attr_path: str, label: st
 
     return True
 
+
 def attributes_to_dataset(
-        experiment_path: str, 
-        doc_path: str, 
-        attr_path: str, 
-        sampling_rate: float, 
-        seed: int, 
-        get_label: Callable[[dict,dict], str] = lambda data,attribs : attribs["attributes"]["label"]
-    ) -> bool:
+    experiment_path: str,
+    doc_path: str,
+    attr_path: str,
+    sampling_rate: float,
+    seed: int,
+    get_label: Callable[[dict, dict], str] = lambda data, attribs: attribs["attributes"]["label"],
+) -> bool:
     """
     Converts documents and attributes to quality classifier training data (text,label) pairs.
 
@@ -185,12 +186,9 @@ def attributes_to_dataset(
         return write_examples(input_file_path, output_file_path, attr_file_path, sampling_rate, seed, get_label)
 
     # HACK: ok to keep?
-    doc_path_prefix = doc_path.split('/documents')[0]
-    output_path = rebase_file_path(f'{doc_path_prefix}/documents', 
-                                    doc_path, 
-                                    f'{experiment_path}/data'
-                                    )
-    
+    doc_path_prefix = doc_path.split("/documents")[0]
+    output_path = rebase_file_path(f"{doc_path_prefix}/documents", doc_path, f"{experiment_path}/data")
+
     responses = map_files_in_directory(processing_func.remote, doc_path, "**/*.jsonl.gz", output_path)
     try:
         ray.get(responses)
