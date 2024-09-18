@@ -31,6 +31,7 @@ class DocumentSummary:
 
 @dataclass
 class SummaryStatistics:
+    count: int
     mean: float
     std: float
 
@@ -57,10 +58,9 @@ def compute_global_mean_std(
     global_mean = sum(n * mean for n, mean in zip(shard_num_examples, shard_means)) / num_examples
     global_variance = (
         sum(n * (std**2 + mean**2) for n, mean, std in zip(shard_num_examples, shard_means, shard_stds)) / num_examples
-    )
-    global_variance -= global_mean**2
+    ) - (global_mean**2)
 
-    return SummaryStatistics(mean=global_mean, std=global_variance**0.5)
+    return SummaryStatistics(count=num_examples, mean=global_mean, std=global_variance**0.5)
 
 
 # === Dolma-Formatted Data Validation Utilities ===

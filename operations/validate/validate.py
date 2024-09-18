@@ -29,7 +29,7 @@ import numpy as np
 import ray
 
 from marin.utilities.validation_utils import compute_global_mean_std, summarize_document_from_json
-from marin.utils import fsspec_exists, fsspec_glob
+from marin.utils import fsspec_exists, fsspec_glob, fsspec_rm, fsspec_size
 
 # Initialize Logger
 logger = logging.getLogger(__name__)
@@ -43,25 +43,17 @@ class ValidationConfig:
 
     overwrite_validation_cache: bool = False    # Whether to invalidate existing ledgers/metadata files (re-validate)
 
-    def __post_init__(self) -> None:
-        if not self.input_path.startswith("gs://"):
-            raise ValueError(
-                f"Invalid `{self.input_path = }`; expected URI of form `gs://BUCKET/path/to/resource`"
-            )
-
     # fmt: on
 
 
 @ray.remote(memory=4 * 1024 * 1024 * 1024)  # 4 GB of RAM by Default
 def validate_jsonl_gz(input_file_path: str, num_samples_per_shard: int, overwrite_validation_cache: bool) -> dict:
-    fs = fsspec.filesystem("gcs")
-
     # Short-Circuit on Metadata File =>> this is basically an extended version of @cached_or_construct_output with
     #   extra (custom) logic for "invalidating" ledgers
     success_file_path = input_file_path + ".METADATA"
     if fsspec_exists(success_file_path) and overwrite_validation_cache:
         logger.info(f"Metadata for `{input_file_path = }` exists but `{overwrite_validation_cache = }`; unlink")
-        fs.rm(success_file_path)
+        fsspec_rm(success_file_path)
 
     elif fsspec_exists(success_file_path):
         logger.info(f"Metadata for `{input_file_path = }` exists; skipping validation!")
@@ -73,7 +65,7 @@ def validate_jsonl_gz(input_file_path: str, num_samples_per_shard: int, overwrit
 
     # Create Reservoir for Sampling Example Documents & Seed Random Number Generator (for determinism)
     #
-    # We're going to try our best to uniformly sample `n_example_per_shard_documents` from each `.jsonl.gz` file
+    # We're going to try our best to uniformly sample `num_example_per_shard_documents` from each `.jsonl.gz` file
     # Rather than precompute total number of documents/sample up front, we're going to reservoir sample; for each new
     # document we process, decide whether to include it with decreasing probability over time.
     #
@@ -107,7 +99,7 @@ def validate_jsonl_gz(input_file_path: str, num_samples_per_shard: int, overwrit
     text_bytes_mean, text_bytes_std = np.mean(all_text_bytes), np.std(all_text_bytes)
     file_metadata = {
         "file_path": input_file_path,
-        "file_size_bytes": fs.size(input_file_path),
+        "file_size_bytes": fsspec_size(input_file_path),
         "num_documents": num_documents,
         "document_bytes_mean": doc_bytes_mean,
         "document_bytes_std": doc_bytes_std,
@@ -126,12 +118,10 @@ def validate_jsonl_gz(input_file_path: str, num_samples_per_shard: int, overwrit
 def write_global_metadata(
     metadata_output_path: str, all_shard_metadata: list[dict], overwrite_validation_cache: bool
 ) -> bool:
-    fs = fsspec.filesystem("gcs")
-
     # Short-Circuit on Metadata File (respecting `overwrite_validation_cache`)
     if fsspec_exists(metadata_output_path) and overwrite_validation_cache:
         logger.info(f"Global Metadata `{metadata_output_path = }` exists but `{overwrite_validation_cache}`; unlink")
-        fs.rm(metadata_output_path)
+        fsspec_rm(metadata_output_path)
 
     elif fsspec_exists(metadata_output_path):
         logger.info(f"Global Metadata `{metadata_output_path = }` exists; skipping aggregation")
@@ -192,10 +182,10 @@ def write_global_metadata(
 def validate(cfg: ValidationConfig) -> None:
     logger.info(f"Validating Dolma-Formatted Documents at `{cfg.input_path}`")
 
-    # Initialize Connection to Cluster
-    ray.init()
-
-    # Identify the complete set of files to validate; note that this doesn't explicitly check subdirectory structure!
+    # Identify the complete set of files to validate
+    #
+    # Note (@siddk): Right now this will match on *any* `.jsonl.gz` file in the directory, rather than verifying all
+    #   files live at the same level of the directory tree. This could be a potential source of bugs later!
     shard_files = fsspec_glob(os.path.join(cfg.input_path, "**/*.jsonl.gz"))
     num_samples_per_shard = (cfg.num_examples_to_sample // len(shard_files)) + 1
 
@@ -217,4 +207,8 @@ def validate(cfg: ValidationConfig) -> None:
 
 
 if __name__ == "__main__":
+    # Initialize Connection to Cluster
+    ray.init()
+
+    # Launch Validation Jobs
     validate()
