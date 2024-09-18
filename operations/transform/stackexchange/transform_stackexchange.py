@@ -1,5 +1,5 @@
 """
-stackexchange/process.py
+transform_stackexchange.py
 
 Script for converting raw StackExchange dumps (.7z files from `https://archive.org/download/stackexchange`) to sequences
 of (question, answer) pairs formatted in Markdown. We only keep the accepted answer for simplicity, rather than the
@@ -13,9 +13,10 @@ files that flatten out the top-level XML fields (e.g., `stackoverflow.com-Badges
 again, we only use the "Posts" data.
 
 Run with:
-    - [Local] python scripts/stackexchange/process.py
-    - [Ray] ray job submit --address=http://127.0.0.1:8265 --working-dir . --no-wait -- \
-            python scripts/stackexchange/process.py
+    - [Ray] ray job submit --address=http://127.0.0.1:8265 --working_dir . --no-wait -- \
+            python operations/transform/transform_stackexchange.py \
+            --input_path "gs://marin-us-central2/raw/stackexchange/v2024-04-02" \
+            --output_path "gs://marin-us-central2/documents/stackexchange/v2024-04-02"
 """
 
 import json
@@ -24,7 +25,6 @@ import os.path
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import List
 
 import draccus
 import fsspec
@@ -43,7 +43,7 @@ from marin.utils import fsspec_glob
 logger = logging.getLogger(__name__)
 
 
-# === OVERRIDES (Subdomains w/ Higher Resource Requirements) ===
+# === MEMORY OVERRIDES (Subdomains w/ Higher Resource Requirements) ===
 RAY_MEMORY_OVERRIDES = {
     "askubuntu": 16 * 1024 * 1024 * 1024,
     "serverfault": 16 * 1024 * 1024 * 1024,
@@ -98,13 +98,13 @@ def post_to_md(
 
 
 @dataclass
-class ProcessStackExchangeConfig:
+class TransformStackExchangeConfig:
     # fmt: off
     input_path: str = (                                      # GCS Path with StackExchange dumps per subdomain (.7z)
         "gs://marin-us-central2/raw/stackexchange/v2024-04-02"
     )
     output_path: str = (                                     # GCS Path to write Dolma-formatted markdown files
-        "gs://marin-us-central2/documents/stackexchange/v2024-04-02/{experiment_id}/"
+        "gs://marin-us-central2/documents/stackexchange/v2024-04-02"
     )
 
     # StackExchange Parameters
@@ -114,18 +114,16 @@ class ProcessStackExchangeConfig:
 
     min_vote_threshold: int = -1_000_000_000                # Minimum number of votes for keeping questions/answers
     max_answer_threshold: int = 1_000_000_000               # Maximum number of high-voted answers to keep per thread
+
+    def __post_init__(self) -> None:
+        self.output_path = os.path.join(self.output_path, f"md-{self.markdown_format.value}")
+
     # fmt: on
 
 
 @draccus.wrap()
-def main(cfg: ProcessStackExchangeConfig) -> None:
-    logger.info(f"Processing StackExchange XML (.7z) Dumps to Markdown (Format = `{cfg.markdown_format.value}`)")
-
-    # Initialize Connection to Cluster
-    ray.init()
-
-    # GCS Output Path `experiment_id` should reflect Markdown format
-    output_path = cfg.output_path.format(experiment_id=f"md-{cfg.markdown_format.value}")
+def transform_stackexchange(cfg: TransformStackExchangeConfig) -> None:
+    logger.info(f"Transforming StackExchange XML (.7z) Dumps to Markdown (Format = `{cfg.markdown_format.value}`)")
 
     # === This is basically a rewrite of `map_files_in_directory` so we can have finer-grained control ===
 
@@ -134,10 +132,10 @@ def main(cfg: ProcessStackExchangeConfig) -> None:
     files.append(os.path.join(cfg.input_path, "stackoverflow.com-Posts.7z"))
 
     # Invoke Ray Functions --> track job references
-    responses: List[ray.ObjectRef] = []
+    responses: list[ray.ObjectRef] = []
     for input_file in files:
         subdomain = re.match(r"(.+?)\.(stackexchange|net|com)", os.path.basename(input_file)).group(1)
-        output_file = os.path.join(output_path, f"{subdomain}.jsonl.gz")
+        output_file = os.path.join(cfg.output_path, f"{subdomain}.jsonl.gz")
 
         # Handle RAM Overrides
         if subdomain in RAY_MEMORY_OVERRIDES:
@@ -147,9 +145,7 @@ def main(cfg: ProcessStackExchangeConfig) -> None:
                 )
             )
         else:
-            responses.append(
-                post_to_md.remote(input_file, output_file, subdomain, markdown_format=cfg.markdown_format)
-            )
+            responses.append(post_to_md.remote(input_file, output_file, subdomain, markdown_format=cfg.markdown_format))
 
     # Wait on Success
     try:
@@ -159,4 +155,8 @@ def main(cfg: ProcessStackExchangeConfig) -> None:
 
 
 if __name__ == "__main__":
-    main()
+    # Initialize Connection to Cluster
+    ray.init()
+
+    # Launch StackExchange Transform Jobs (one per subdomain)
+    transform_stackexchange()
