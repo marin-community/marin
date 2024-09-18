@@ -123,11 +123,9 @@ class SimpleEvaluator(VllmTpuEvaluator):
         try:
             from vllm import LLM, SamplingParams
 
+            # Download and load the model with vLLM
             # Use the model name if a path is not specified (e.g., for Hugging Face models)
             model_name_or_path: str = self.download_model(model)
-
-            # Set `enforce_eager=True` to avoid ahead-of-time compilation.
-            # In real workloads, `enforce_eager` should be `False`.
             llm = LLM(model=model_name_or_path, enforce_eager=False, trust_remote_code=True)
 
             inference_times: Dict[str, float] = {}
