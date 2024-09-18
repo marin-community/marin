@@ -8,11 +8,10 @@ from scripts.evaluation.vllm_tpu_evaluator import VllmTpuEvaluator
 from scripts.evaluation.utils import is_remote_path, upload_to_gcs, run_bash_command
 
 
+# TODO: this currently doesn't work on TPUs: https://github.com/vllm-project/vllm/issues/8499
 class EleutherEvaluator(VllmTpuEvaluator):
     """
     Evaluator that runs lm-eval: https://github.com/EleutherAI/lm-evaluation-harness
-
-    TODO: this currently doesn't work on TPUs: https://github.com/vllm-project/vllm/issues/8499
     """
     RESULTS_PATH: str = os.path.join(VllmTpuEvaluator.CACHE_PATH, "eleuther_results")
     
