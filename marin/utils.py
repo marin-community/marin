@@ -65,6 +65,7 @@ def fsspec_glob(file_path):
 
     return [join_protocol(file) for file in fs.glob(file_path)]
 
+
 def fsspec_mkdirs(dir_path, exist_ok=True):
     """
     Create a directory in a fsspec filesystem.
@@ -76,6 +77,7 @@ def fsspec_mkdirs(dir_path, exist_ok=True):
     # Use fsspec to create the directory
     fs = fsspec.core.url_to_fs(dir_path)[0]
     fs.makedirs(dir_path, exist_ok=exist_ok)
+
 
 def fsspec_get_curr_subdirectories(dir_path):
     """
@@ -89,15 +91,16 @@ def fsspec_get_curr_subdirectories(dir_path):
     """
     fs, _ = fsspec.core.url_to_fs(dir_path)
     protocol = fsspec.core.split_protocol(dir_path)[0]
-    
+
     # List only immediate subdirectories
     subdirectories = fs.ls(dir_path, detail=True)
-    
+
     def join_protocol(path):
         return f"{protocol}://{path}" if protocol else path
-    
-    subdirectories = [join_protocol(subdir['name']) for subdir in subdirectories if subdir['type'] == 'directory']
+
+    subdirectories = [join_protocol(subdir["name"]) for subdir in subdirectories if subdir["type"] == "directory"]
     return subdirectories
+
 
 def fsspec_dir_only_contains_files(dir_path):
     """
@@ -107,7 +110,8 @@ def fsspec_dir_only_contains_files(dir_path):
     ls_res = fs.ls(dir_path, detail=True)
     if len(ls_res) == 0:
         return False
-    return all(item['type'] == 'file' for item in ls_res)
+    return all(item["type"] == "file" for item in ls_res)
+
 
 def fsspec_get_atomic_directories(dir_path):
     """
@@ -121,8 +125,9 @@ def fsspec_get_atomic_directories(dir_path):
                 subdirectories.append(subdir)
             else:
                 subdirectories.extend(fsspec_get_atomic_directories(subdir))
-    
+
     return subdirectories
+
 
 def fsspec_isdir(dir_path):
     """
@@ -132,8 +137,15 @@ def fsspec_isdir(dir_path):
     return fs.isdir(dir_path)
 
 
+def fsspec_size(file_path: str) -> int:
+    """Get file size (in bytes) of a file on an `fsspec` filesystem."""
+    fs = fsspec.core.url_to_fs(file_path)[0]
+
+    return fs.size(file_path)
+
 
 import re
+
 
 def validate_marin_gcp_path(path: str) -> str:
     """
@@ -169,10 +181,13 @@ def validate_marin_gcp_path(path: str) -> str:
     """
     pattern = r"^gs://marin-[^/]+/(scratch/.+|(documents|attributes|filtered)/[^/]+/[^/]+/[^/]+(/.*)?$)"
     if not re.match(pattern, path):
-        raise ValueError(f"Invalid path format. It should follow either:\n"
-                         f"1. gs://marin-$REGION/scratch/* (any structure after scratch)\n"
-                         f"2. gs://marin-$REGION/{{documents|attributes|filtered}}/$EXPERIMENT/$DATASET/$VERSION/")
+        raise ValueError(
+            f"Invalid path format. It should follow either:\n"
+            f"1. gs://marin-$REGION/scratch/* (any structure after scratch)\n"
+            f"2. gs://marin-$REGION/{{documents|attributes|filtered}}/$EXPERIMENT/$DATASET/$VERSION/"
+        )
     return path
+
 
 def rebase_file_path(base_in_path, file_path, base_out_path, new_extension=None, old_extension=None):
     """
@@ -195,12 +210,11 @@ def rebase_file_path(base_in_path, file_path, base_out_path, new_extension=None,
     # Construct the output file path
     if new_extension:
         if old_extension:
-            rel_path = rel_path[:rel_path.rfind(old_extension)] + new_extension
+            rel_path = rel_path[: rel_path.rfind(old_extension)] + new_extension
         else:
-            rel_path = rel_path[:rel_path.rfind(".")] + new_extension
+            rel_path = rel_path[: rel_path.rfind(".")] + new_extension
     result = os.path.join(base_out_path, rel_path)
     return result
-
 
 
 def get_gcs_path(file_path):
@@ -210,5 +224,3 @@ def get_gcs_path(file_path):
     if file_path.startswith("gs://"):
         return file_path
     return f"gs://{file_path}"
-
-
