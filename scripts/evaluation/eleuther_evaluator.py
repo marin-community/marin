@@ -30,17 +30,6 @@ class EleutherEvaluator(VllmTpuEvaluator):
         # Run lm_eval with the model and the specified evals
         model_name_or_path: str = model.name if model.path is None else model.path
 
-        # To use a vLLM server
-        # run_bash_command(
-        #     f"lm_eval --model local-completions --tasks {','.join(evals)} "
-        #     f"--model_args model={model_name_or_path},base_url={server_url}/completions,"
-        #     # Used the default values from the link above
-        #     # Do not specify `batch_size` here or will get error:
-        #     # got multiple values for keyword argument 'batch_size'
-        #     f"num_concurrent=1,max_retries=3,tokenized_requests=False "
-        #     f"--output_path {self.RESULTS_PATH}"
-        # )
-
         try:
             run_bash_command(
                 f"lm_eval --model vllm --tasks {','.join(evals)} "
