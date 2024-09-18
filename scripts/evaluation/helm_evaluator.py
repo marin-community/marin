@@ -32,7 +32,7 @@ class HELMEvaluator(VllmTpuEvaluator):
     )
 
     _pip_packages: List[Dependency] = VllmTpuEvaluator.DEFAULT_PIP_PACKAGES + [
-        Dependency(name="crfm-helm@git+https://github.com/stanford-crfm/helm.git@helm_on_tpu"),
+        Dependency(name="crfm-helm@git+https://github.com/stanford-crfm/helm.git@local_vllm"),
     ]
 
     @staticmethod
@@ -54,10 +54,7 @@ class HELMEvaluator(VllmTpuEvaluator):
                     "model_name": model_name,
                     "tokenizer_name": model_name,
                     "max_sequence_length": tokenizer.model_max_length,
-                    "client_spec": {
-                        "class_name": "helm.clients.vllm_client.VLLMClient",
-                        "args": {"base_url": "http://localhost:8000/v1"},
-                    },
+                    "client_spec": {"class_name": "helm.clients.vllm_client.LocalVLLMClient"},
                 }
             ]
         }
@@ -84,10 +81,7 @@ class HELMEvaluator(VllmTpuEvaluator):
                     "name": model_name,
                     "tokenizer_spec": {
                         "class_name": "helm.tokenizers.huggingface_tokenizer.HuggingFaceTokenizer",
-                        "args": {
-                            "pretrained_model_name_or_path": model_name,
-                            "trust_remote_code": True
-                        },
+                        "args": {"pretrained_model_name_or_path": model_name, "trust_remote_code": True},
                     },
                     "prefix_token": tokenizer.bos_token,
                     "end_of_text_token": tokenizer.eos_token,
@@ -98,17 +92,11 @@ class HELMEvaluator(VllmTpuEvaluator):
 
     @ray.remote(memory=64 * 1024 * 1024 * 1024, resources={"TPU": 4})  # 64 GB of memory, always request 4 TPUs
     def run(self, model: ModelConfig, evals: List[str], output_path: str) -> None:
-        run_bash_command(f"cd /opt/vllm/ && git checkout tags/v0.5.4")
-        run_bash_command('VLLM_TARGET_DEVICE="tpu" pip install -e /opt/vllm/')
-
-        vllm_port: int = 8000
-
         try:
-            # Download the model from GCS or HuggingFace and serve it with vLLM
-            self.start_vllm_server_in_background(model, port=vllm_port)
-
             from helm.common.general import ensure_file_downloaded
 
+            # Download the model checkpoint if necessary.
+            self.download_model(model)
             # HELM requires the model name to match the local path
             if model.path is not None:
                 model.name = model.path
@@ -142,5 +130,5 @@ class HELMEvaluator(VllmTpuEvaluator):
         except Exception as e:
             print(f"An error occurred: {e}")
         finally:
-            self.cleanup(model, vllm_port=vllm_port)
+            self.cleanup(model)
             shutil.rmtree(self.RESULTS_PATH, ignore_errors=True)
