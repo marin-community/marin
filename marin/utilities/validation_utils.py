@@ -5,8 +5,8 @@ Helpful (and semi-standardized) functions for maintaining and validating dataset
 raw and processed data).
 """
 
-from dataclasses import dataclass
 import json
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -55,9 +55,10 @@ def compute_global_mean_std(
 ) -> SummaryStatistics:
     """Compute global mean/std given lists of (num_examples, mean, std) for individual dataset shards."""
     num_examples = sum(shard_num_examples)
-    global_mean = sum(n * mean for n, mean in zip(shard_num_examples, shard_means)) / num_examples
+    global_mean = sum(n * mean for n, mean in zip(shard_num_examples, shard_means, strict=False)) / num_examples
     global_variance = (
-        sum(n * (std**2 + mean**2) for n, mean, std in zip(shard_num_examples, shard_means, shard_stds)) / num_examples
+        sum(n * (std**2 + mean**2) for n, mean, std in zip(shard_num_examples, shard_means, shard_stds, strict=False))
+        / num_examples
     ) - (global_mean**2)
 
     return SummaryStatistics(count=num_examples, mean=global_mean, std=global_variance**0.5)

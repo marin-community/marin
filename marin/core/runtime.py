@@ -2,23 +2,23 @@ import functools
 import json
 import logging
 import os
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Callable, Iterator, List, Optional
 
 import fsspec
 import ray
 from ray import ObjectRef
 from ray.remote_function import RemoteFunction
 
-from marin.utils import fsspec_exists, fsspec_glob, fsspec_mkdirs, rebase_file_path, fsspec_get_curr_subdirectories
+from marin.utils import fsspec_exists, fsspec_get_curr_subdirectories, fsspec_glob, fsspec_mkdirs, rebase_file_path
 
 logger = logging.getLogger("ray")
 
 
 @dataclass
 class RayConfig:
-    address: Optional[str] = None
+    address: str | None = None
 
     def initialize(self):
         ray.init(address=self.address)
@@ -75,8 +75,9 @@ class TaskConfig:
     """
     Configuration for controlling tasks run with Ray
     """
-    max_in_flight: Optional[int] = 1000  # Maximum number of tasks to run concurrently
-    task_options: Optional[dict] = None  # Options to pass to ray.remote decorator
+
+    max_in_flight: int | None = 1000  # Maximum number of tasks to run concurrently
+    task_options: dict | None = None  # Options to pass to ray.remote decorator
 
 
 def map_files_in_directory(
@@ -84,7 +85,7 @@ def map_files_in_directory(
     input_path: os.PathLike | str,
     pattern: str,
     output_path: os.PathLike | str,
-    task_config: TaskConfig = TaskConfig(),  # noqa
+    task_config: TaskConfig = TaskConfig(),
     empty_glob_ok: bool = False,
     *args,
     **kwargs,
@@ -122,8 +123,9 @@ def map_files_in_directory(
 
     if isinstance(func, ray.remote_function.RemoteFunction):
         # If the function is a ray.remote function, then execute it in parallel
-        responses = simple_backpressure(func, iter(file_pairs), task_config.max_in_flight, fetch_local=True,
-                                        *args, **kwargs)
+        responses = simple_backpressure(
+            func, iter(file_pairs), task_config.max_in_flight, fetch_local=True, *args, **kwargs  # noqa: B026
+        )
         return responses
     else:
         # Map the function to all files
@@ -133,11 +135,12 @@ def map_files_in_directory(
 
     return outputs
 
+
 def map_directories_in_directory(
     func: Callable | RemoteFunction,
     input_path: str,
     output_path: str,
-    task_config: TaskConfig = TaskConfig(),  # noqa
+    task_config: TaskConfig = TaskConfig(),
     *args,
     **kwargs,
 ):
@@ -166,8 +169,9 @@ def map_directories_in_directory(
     return outputs
 
 
-def simple_backpressure(remote_func, task_generator: Iterator, max_in_flight: Optional[int], fetch_local: bool,
-                        *args, **kwargs) -> Iterator[ObjectRef]:
+def simple_backpressure(
+    remote_func, task_generator: Iterator, max_in_flight: int | None, fetch_local: bool, *args, **kwargs
+) -> Iterator[ObjectRef]:
     """
     Simple backpressure implementation for ray.remote functions.
 
@@ -199,5 +203,3 @@ def simple_backpressure(remote_func, task_generator: Iterator, max_in_flight: Op
             in_flight.append(ref)
 
     yield from refs
-
-

@@ -7,10 +7,12 @@ python -m marin.validation.count_total_tokens --input_path gs://marin-data/filte
 
 import argparse
 import json
-import gzip
+
 import fsspec
 import ray
+
 from marin.core.runtime import map_files_in_directory
+
 
 @ray.remote
 class ByteCounter:
@@ -23,19 +25,22 @@ class ByteCounter:
     def get_total(self) -> int:
         return self.total_bytes
 
+
 def count_bytes_in_file(filename: str) -> int:
     total_bytes = 0
     with fsspec.open(filename, "rt", compression="gzip") as f:
         for line in f:
             data = json.loads(line)
             if "text" in data:
-                total_bytes += len(data["text"].encode('utf-8'))
+                total_bytes += len(data["text"].encode("utf-8"))
     return total_bytes
+
 
 @ray.remote
 def process_file(input_filename: str, output_filename: str, byte_counter: ray.actor.ActorHandle):
     file_bytes = count_bytes_in_file(input_filename)
     byte_counter.add.remote(file_bytes)
+
 
 def count_total_bytes(input_path: str) -> int:
     ray.init()
@@ -46,9 +51,9 @@ def count_total_bytes(input_path: str) -> int:
         process_file.remote,
         input_path,
         "**/*.jsonl.gz",
-        "gs://marin-data/scratch/chrisc/count-total-tokens/", # random output_path, unused
+        "gs://marin-data/scratch/chrisc/count-total-tokens/",  # random output_path, unused
         None,
-        byte_counter
+        byte_counter,
     )
 
     # Wait for all tasks to complete
@@ -59,6 +64,7 @@ def count_total_bytes(input_path: str) -> int:
 
     return total_bytes
 
+
 def main():
     parser = argparse.ArgumentParser(description="Count total bytes in 'text' fields of jsonl.gz files.")
     parser.add_argument("--input_path", type=str, required=True, help="Input directory containing jsonl.gz files")
@@ -67,6 +73,7 @@ def main():
 
     total_bytes = count_total_bytes(args.input_path)
     print(f"Total bytes in 'text' fields: {total_bytes}")
+
 
 if __name__ == "__main__":
     main()

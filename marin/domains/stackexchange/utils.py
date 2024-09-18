@@ -36,6 +36,7 @@ logger = logging.getLogger(__name__)
 STACKEXCHANGE_XML_QUESTION_POST_TYPE = "1"
 STACKEXCHANGE_XML_ANSWER_POST_TYPE = "2"
 
+
 # Formatting Options for StackExchange Threads
 class StackExchangeMarkdownFormat(Enum):
     # Consider a StackExchange Thread (formatted as a top-level question, and a sequence of answers annotated w/ votes):

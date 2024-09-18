@@ -8,7 +8,7 @@ from bs4 import BeautifulSoup
 def clean_text(text):
     # This regex pattern matches any sequence of [number]
     # get rid of references
-    pattern = "\^\([^)]+\)"
+    pattern = r"\^\([^)]+\)"
     cleaned_text = re.sub(pattern, "", text)
     # clean empty lines
     lines = cleaned_text.split("\n")
