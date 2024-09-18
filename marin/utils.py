@@ -139,6 +139,7 @@ def fsspec_isdir(dir_path):
     fs, _ = fsspec.core.url_to_fs(dir_path)
     return fs.isdir(dir_path)
 
+
 def fsspec_cpdir(dir_path: str, target_path: str) -> bool:
     """
     Recursively copies all contents of dir_path to target_path.
@@ -153,8 +154,9 @@ def fsspec_cpdir(dir_path: str, target_path: str) -> bool:
 
     fs = fsspec.core.get_fs_token_paths(target_path, mode="wb")[0]
     fs.put(os.path.join(dir_path, "*"), target_path, recursive=True)
-    
+
     return True
+
 
 def fsspec_size(file_path: str) -> int:
     """Get file size (in bytes) of a file on an `fsspec` filesystem."""
