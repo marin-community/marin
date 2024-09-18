@@ -1,0 +1,12 @@
+name: MMLU-Pro
+path: default
+hf_path: TIGER-Lab/MMLU-Pro
+file_type: parquet
+file_names:
+  - test
+  - validation
+prompt_key: question
+options_key: options
+answer_idx_key: answer_index
+subject_key: category
+doc_output_choice: ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P"]

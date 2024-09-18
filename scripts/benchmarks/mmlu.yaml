@@ -1,0 +1,13 @@
+name: mmlu
+path: all
+hf_path: cais/mmlu
+file_type: parquet
+file_names:
+  - dev
+  - test
+  - validation
+prompt_key: question
+options_key: choices
+answer_idx_key: answer
+subject_key: subject
+doc_output_choice: ["A", "B", "C", "D"]
