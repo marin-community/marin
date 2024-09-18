@@ -6,11 +6,13 @@ Utility functions for training fastText models.
 
 import regex as re
 
+
 def preprocess(text: str) -> str:
     """
     Preprocesses text for fastText training by stripping newline characters.
     """
-    return re.sub(r'[\n\r]', ' ', text)
+    return re.sub(r"[\n\r]", " ", text)
+
 
 def format_example(data: dict) -> str:
     """
