@@ -5,11 +5,11 @@ Helpful functions for programmatically creating and verifying GCS Storage Transf
 HuggingFace, external blob-stores like S3, as well as other GCS buckets).
 """
 
-import fsspec
 import urllib.parse
-
-from time import time
 from pathlib import Path
+from time import time
+
+import fsspec
 from google.cloud import storage_transfer
 
 
@@ -89,12 +89,7 @@ def create_gcs_transfer_job_from_tsv(
         return creation_request.name, job_url
 
 
-def wait_for_transfer_job(
-    job_name: str, 
-    timeout: int, 
-    poll_interval: int,
-    gcp_project_id: str = "hai-gcp-models"
-):
+def wait_for_transfer_job(job_name: str, timeout: int, poll_interval: int, gcp_project_id: str = "hai-gcp-models"):
     """
     Waits for a Transfer Job to complete by polling the job status every 10 seconds. Raises a `TimeoutError` if the
     job does not complete within the specified `timeout` (default: 30 minutes).
@@ -115,7 +110,7 @@ def wait_for_transfer_job(
     while time() - start_time < timeout:
         if (time() - start_time) % poll_interval == 0:
             job = client.get_transfer_job({"job_name": job_name, "project_id": gcp_project_id})
-            
+
             if job.status == storage_transfer.TransferJob.Status.ENABLED:
                 print(f"[*] Transfer Job Completed :: {job_name}")
                 return

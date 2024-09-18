@@ -4,11 +4,13 @@ utils.py
 Utility functions for training fastText models.
 """
 
+
 def preprocess(text: str) -> str:
     """
     Preprocesses text for fastText training by stripping newline characters.
     """
-    return text.replace("\n"," ")
+    return text.replace("\n", " ")
+
 
 def format_example(data: dict) -> str:
     """
