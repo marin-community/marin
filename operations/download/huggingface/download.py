@@ -28,7 +28,11 @@ class DownloadConfig:
 
     # HuggingFace Dataset Parameters
     hf_dataset_id: str                                      # HF Dataset to Download (as `$ORG/$DATASET` on HF Hub)
+
+    # Note: when just specifying main, the revision that gets saved on GCS won't actually autofetch the underlying SHA
+    # (it will just say main, which isn't useful if the dataset repo gets updated later)
     revision: str                                           # (Short) Commit Hash (from HF Dataset Repo; 7 characters)
+    hf_url_glob: str = "*"                                  # Glob Pattern to Match Files in HF Dataset
 
     # Additional GCS Parameters
     public_gcs_path: str = (                                # Path to Publicly Readable Bucket (for Storage Transfer)
@@ -74,7 +78,10 @@ def _wait_for_job_completion(job_name: str, timeout: int, poll_interval: int) ->
 @draccus.wrap()
 def download(cfg: DownloadConfig) -> None | ray.ObjectRef:
     print(f"[*] Downloading HF Dataset `{cfg.hf_dataset_id}` to `{cfg.gcs_output_path}`")
-    job_name, job_url = download_hf_dataset(cfg.hf_dataset_id, cfg.revision, cfg.gcs_output_path, cfg.public_gcs_path)
+
+    job_name, job_url = download_hf_dataset(
+        cfg.hf_dataset_id, cfg.revision, cfg.hf_url_glob, cfg.gcs_output_path, cfg.public_gcs_path
+    )
 
     if cfg.wait_for_completion:
         print(f"[*] Waiting for Job Completion :: {job_url}")

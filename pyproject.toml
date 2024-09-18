@@ -25,6 +25,7 @@ dependencies = [
     "markdownify==0.12.1",                  # TODO :: Check usage | pin?
     "multiprocess==0.70.16",
     "py7zr",
+    "zstandard==0.23.0",
     "ray[default]==2.34.0",
     "readabilipy",
     "readability-lxml",
@@ -68,8 +69,7 @@ preview = true
 # Note :: Grow more strict over time!
 extend-exclude = """
 (
-    marin/
-    | scripts/
+    scripts/
 )
 """
 
@@ -78,7 +78,7 @@ line-length = 121
 target-version = "py310"
 
 # Note :: Grow more strict over time!
-extend-exclude = ["marin/", "scripts/"]
+extend-exclude = ["scripts/"]
 
 [tool.ruff.lint]
 select = ["A", "B", "E", "F", "I", "NPY", "RUF", "UP", "W"]
