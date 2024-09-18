@@ -2,14 +2,13 @@ import os
 import subprocess
 import tempfile
 from dataclasses import dataclass
-from typing import Optional
 
 import draccus
 import fsspec
 import ray
 from tqdm import tqdm
 
-from marin.utils import validate_marin_gcp_path, fsspec_mkdirs, rebase_file_path, fsspec_glob, fsspec_rm
+from marin.utils import fsspec_glob, fsspec_mkdirs, fsspec_rm, rebase_file_path, validate_marin_gcp_path
 
 
 @dataclass
@@ -19,12 +18,12 @@ class DedupeConfig:
     attribute_name: str = "duplicate_text"
     min_length: int = 0
     min_words: int = 0
-    bloom_filter_size: Optional[int] = None  # default to 0 to use estimated_doc_count and false_positive_rate
+    bloom_filter_size: int | None = None  # default to 0 to use estimated_doc_count and false_positive_rate
     estimated_doc_count: int = 1000000
     false_positive_rate: float = 0.001
     processes: int = 1
     decontaminate: bool = False
-    decontaminate_path: Optional[str] = None
+    decontaminate_path: str | None = None
 
 
 def copy_files_in(input_path, local_base_dir):

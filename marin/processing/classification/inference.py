@@ -8,7 +8,6 @@ python -m marin.processing.classification.inference \
 
 import json
 import os
-from typing import List
 
 import datasets
 import draccus
@@ -24,17 +23,17 @@ from marin.processing.classification.classifier import (
 )
 from marin.processing.classification.config.inference_config import InferenceConfig
 from marin.utils import (
+    fsspec_get_atomic_directories,
     fsspec_glob,
     fsspec_mkdirs,
     rebase_file_path,
-    fsspec_get_atomic_directories,
     validate_marin_gcp_path,
 )
 
 
 class JsonFilenameProvider(FilenameProvider):
 
-    def __init__(self, files: List[str], input_path: str):
+    def __init__(self, files: list[str], input_path: str):
         self.files = files
         self.input_path = input_path
 
@@ -128,7 +127,7 @@ def process_dir(input_path: str, output_path: str, model_name_or_path: str, attr
         process_file_with_quality_classifier(input_filename, output_filename, quality_classifier)
 
 
-def get_process_filepath_func(subdirectories: List[str]):
+def get_process_filepath_func(subdirectories: list[str]):
     if len(subdirectories) > 0:
         return process_dir
     else:

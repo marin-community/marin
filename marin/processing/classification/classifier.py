@@ -2,7 +2,7 @@ import atexit
 import os
 import time
 import urllib.parse
-from typing import Any, ClassVar, Dict, List
+from typing import Any, ClassVar
 
 import fsspec
 from huggingface_hub import hf_hub_download
@@ -13,10 +13,10 @@ class BaseClassifier:
         self.model_name = model_name
         self.attribute_name = attribute_name
 
-    def predict(self, documents: List[str]):
+    def predict(self, documents: list[str]):
         raise NotImplementedError
 
-    def __call__(self, batch: Dict[str, Any]):
+    def __call__(self, batch: dict[str, Any]):
         raise NotImplementedError
 
 
@@ -25,18 +25,18 @@ class DummyClassifier(BaseClassifier):
         self.model_name = model_name
         self.attribute_name = attribute_name
 
-    def predict(self, documents: List[str]):
+    def predict(self, documents: list[str]):
         score = 1.0
         return [{"score": score} for _ in range(len(documents))]
 
-    def __call__(self, batch: Dict[str, Any]):
+    def __call__(self, batch: dict[str, Any]):
         scores = self.predict(batch["text"])
         batch.update({"attributes": [{"dummy-quality": score} for score in scores]})
         return batch
 
 
 class FasttextClassifier(BaseClassifier):
-    _MODEL_NAME_TO_MODEL_FILENAME_DICT: ClassVar[Dict[str, str]] = {
+    _MODEL_NAME_TO_MODEL_FILENAME_DICT: ClassVar[dict[str, str]] = {
         "mlfoundations/fasttext-oh-eli5": "openhermes_reddit_eli5_vs_rw_v2_bigram_200k_train.bin",
         "allenai/dolma-1_7-fasttext-quality-filter": "model.bin",
     }
@@ -98,11 +98,11 @@ class FasttextClassifier(BaseClassifier):
 
         return model
 
-    def predict(self, documents: List[str]):
+    def predict(self, documents: list[str]):
         # TODO(chris): Add support for multi-class k > 2.
         return self.model.predict(documents, k=2)
 
-    def __call__(self, batch: Dict[str, Any]):
+    def __call__(self, batch: dict[str, Any]):
         texts = []
         for text in list(batch["text"]):
             if text:
@@ -136,19 +136,19 @@ class BERTClassifier(BaseClassifier):
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         self.attribute_name = attribute_name
 
-    def predict(self, documents: List[str]) -> List[float]:
+    def predict(self, documents: list[str]) -> list[float]:
         inputs = self.tokenizer(documents, return_tensors="jax", padding="longest", truncation=True)
         outputs = self.model(**inputs)
         logits = outputs.logits.squeeze(-1)
         logits_list = logits.tolist()
         return logits_list
 
-    def __call__(self, batch: Dict[str, Any]) -> Dict[str, Any]:
+    def __call__(self, batch: dict[str, Any]) -> dict[str, Any]:
         raise NotImplementedError
 
 
 class FinewebEduClassifier(BERTClassifier):
-    def __call__(self, batch: Dict[str, Any]) -> Dict[str, Any]:
+    def __call__(self, batch: dict[str, Any]) -> dict[str, Any]:
         scores = self.predict(batch["text"])
 
         # Fineweb edu classifier is scored on educational value from 0 to 5, so we want to round to the nearest integer.
@@ -166,33 +166,41 @@ class FinewebEduClassifier(BERTClassifier):
 
 
 class AutoClassifier(BaseClassifier):
-    _MODEL_NAME_TO_CLS_DICT: ClassVar[Dict[str, BaseClassifier]] = {
+    _MODEL_NAME_TO_CLS_DICT: ClassVar[dict[str, BaseClassifier]] = {
         "fasttext": FasttextClassifier,
         "fineweb": FinewebEduClassifier,
     }
 
-    def __init__(self, model_name: str, attribute_name: str, model_type: str|None, *args, **kwargs):
+    def __init__(self, model_name: str, attribute_name: str, model_type: str | None, *args, **kwargs):
         self.model_name = model_name
         self.model_type = model_type
         self.attribute_name = attribute_name
         self.cls = self.from_model_path(model_name, attribute_name, model_type, *args, **kwargs)
 
-    def __call__(self, batch: Dict[str, Any]) -> Dict[str, Any]:
+    def __call__(self, batch: dict[str, Any]) -> dict[str, Any]:
         return self.cls.__call__(batch)
 
     @classmethod
-    def from_model_path(cls, model_name_or_path: str, attribute_name: str, model_type: str | None, *args, **kwargs) -> BaseClassifier:
+    def from_model_path(
+        cls, model_name_or_path: str, attribute_name: str, model_type: str | None, *args, **kwargs
+    ) -> BaseClassifier:
         if model_type is None:
             for key in cls._MODEL_NAME_TO_CLS_DICT.keys():
                 if key in model_name_or_path:
                     print(f"Using {key} model")
                     break
             else:
-                raise ValueError(f"Model type must be specified for model {model_name_or_path} or must have one of {cls._MODEL_NAME_TO_CLS_DICT.keys()} in the name.")
+                raise ValueError(
+                    f"Model type must be specified for model {model_name_or_path} or must have "
+                    f"one of {cls._MODEL_NAME_TO_CLS_DICT.keys()} in the name."
+                )
         else:
             key = model_type.lower()
 
         try:
             return cls._MODEL_NAME_TO_CLS_DICT[key](model_name_or_path, attribute_name, model_type, *args, **kwargs)
-        except KeyError:
-            raise ValueError(f"Model name {model_name_or_path} not supported. Must have one of {cls._MODEL_NAME_TO_CLS_DICT.keys()} in the name.")
+        except KeyError as e:
+            raise ValueError(
+                f"Model name {model_name_or_path} not supported. "
+                f"Must have one of {cls._MODEL_NAME_TO_CLS_DICT.keys()} in the name."
+            ) from e

@@ -1,1 +1,1 @@
-from .markdown import mathml_to_markdown, minimal_markdown_escape, to_markdown, MyMarkdownConverter
+from .markdown import MyMarkdownConverter, mathml_to_markdown, minimal_markdown_escape, to_markdown
