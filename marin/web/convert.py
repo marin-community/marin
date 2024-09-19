@@ -7,7 +7,7 @@ from bs4 import BeautifulSoup
 from marin.markdown import to_markdown
 
 
-def convert_page_with_trafilatura(html: str, url: str | None = None) -> dict[str, str]:
+def convert_page_with_trafilatura(html: str, url: str | None = None, use_config: str = "fineweb") -> dict[str, str]:
     """
     Convert HTML to text[non-markdown] using Trafilatura.
 
@@ -21,17 +21,25 @@ def convert_page_with_trafilatura(html: str, url: str | None = None) -> dict[str
     from trafilatura import extract, extract_metadata
 
     title = extract_metadata(html).title
-    content = extract(
-        html,
-        favor_recall=True,
-        include_links=False,
-        include_images=False,
-        include_comments=False,
-        include_tables=True,
-        include_formatting=False,
-        deduplicate=False,
-        output_format="txt",
-    )
+
+    content = None
+    match use_config:
+        case "fineweb":
+            content = extract(
+                html,
+                favor_precision=True,
+                include_comments=False,
+                deduplicate=True,
+            )
+        case "default":
+            content = extract(
+                html,
+                favor_recall=True,
+                include_comments=False,
+                deduplicate=False,
+            )
+        case _:
+            print(f"Invalid use_config: {use_config}. Switching to fineweb for extraction, use 'fineweb' or 'default'.")
 
     if title == "[no-title]":
         title = None
@@ -74,11 +82,7 @@ def convert_page_with_resiliparse(html: str, url: str | None = None) -> dict[str
         html,
         preserve_formatting=False,
         main_content=True,
-        alt_texts=False,
-        list_bullets=True,
         links=False,
-        form_fields=False,
-        comments=False,
     )
 
     if title:
@@ -174,7 +178,12 @@ def convert_page_legacy(html: str, url: str | None = None) -> dict[str, str]:
     return out
 
 
-def convert_page(html: str, url: str | None = None, extract_method: str = "readability") -> dict[str, str]:
+def convert_page(
+    html: str,
+    url: str | None = None,
+    extract_method: str = "readability",
+    use_config: str = "default"
+) -> dict[str, str]:
     """
     Convert HTML to text using the specified method.
 
@@ -189,7 +198,7 @@ def convert_page(html: str, url: str | None = None, extract_method: str = "reada
 
     match extract_method:
         case "trafilatura":
-            return convert_page_with_trafilatura(html, url)
+            return convert_page_with_trafilatura(html, url, use_config)
         case "readability":
             return convert_page_with_readability(html, url)
         case "resiliparse":
