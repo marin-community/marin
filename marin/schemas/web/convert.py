@@ -16,7 +16,6 @@ class TrafilaturaConfig:
     include_formatting: bool = False
     output_format: str = "txt"
 
-
     @classmethod
     def fineweb_config(cls) -> "TrafilaturaConfig":
         """
@@ -33,7 +32,6 @@ class TrafilaturaConfig:
             deduplicate=True,
         )
 
-
     @classmethod
     def default_config(cls) -> "TrafilaturaConfig":
         return cls(
@@ -42,7 +40,6 @@ class TrafilaturaConfig:
             include_comments=False,
             deduplicate=False,
         )
-    
 
     @classmethod
     def get_preset_config(cls, config: str) -> "TrafilaturaConfig":
