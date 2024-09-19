@@ -145,10 +145,8 @@ def get_filepaths_and_process_filepath_func(inference_config: InferenceConfig):
     return filepaths, process_filepath_func
 
 
-@draccus.wrap()
-def main(inference_config: InferenceConfig):
-    ray.init()
-
+@ray.remote
+def main_ray(inference_config: InferenceConfig):
     filepaths, process_filepath_func = get_filepaths_and_process_filepath_func(inference_config)
 
     # Enforce Marin GCP structure
@@ -183,6 +181,12 @@ def main(inference_config: InferenceConfig):
         ray.get(responses)
     except Exception as e:
         print(f"Error processing: {e}")
+
+
+@draccus.wrap()
+def main(inference_config: InferenceConfig):
+    ray.init()
+    ray.get(main_ray.remote(inference_config))
 
 
 if __name__ == "__main__":
