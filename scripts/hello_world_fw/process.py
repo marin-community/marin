@@ -21,6 +21,7 @@ import fsspec
 import ray
 
 from marin.core.runtime import cached_or_construct_output, map_files_in_directory
+from marin.schemas.web.convert import TrafilaturaConfig
 from marin.web.convert import convert_page
 
 
@@ -78,12 +79,12 @@ class FineWebConfig:
     input_path: str
     output_path: str
     extract_method: str
-    use_config: str = "default"
+    config: str | TrafilaturaConfig = "default"
 
 
 @ray.remote
 def main_ray(cfg: FineWebConfig):
-    responses = map_files_in_directory(html_to_md, cfg.input_path, "**/*.jsonl.gz", cfg.output_path, extract_method=cfg.extract_method, use_config=cfg.use_config)
+    responses = map_files_in_directory(html_to_md, cfg.input_path, "**/*.jsonl.gz", cfg.output_path, extract_method=cfg.extract_method, config=cfg.config)
     # Wait for all the tasks to finish.
     # The try and catch is important here as incase html_to_md throws any exception, that exception is passed here,
     # And if we don't catch it here, the script will exit, which will kill all the other tasks.
