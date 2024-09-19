@@ -3,11 +3,10 @@ from dataclasses import dataclass
 
 @dataclass
 class TrafilaturaConfig:
-    favor_precision: bool
-    favor_recall: bool
-    include_comments: bool
-    deduplicate: bool
-    include_comments: bool
+    favor_precision: bool = False
+    favor_recall: bool = True
+    include_comments: bool = False
+    deduplicate: bool = False
 
     # Default config for Trafilatura
     include_images: bool = False
