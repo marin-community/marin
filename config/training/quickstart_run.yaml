@@ -2,7 +2,7 @@
 # It is designed to run on a single dataset from scratch
 data:
   tokenizer: "meta-llama/Llama-2-7b-hf"
-  shuffle_buffer_size: 50000
+  shuffle: True
   stop_strategy: restart
   configs:
     # we include all the dolma datasets, but the mixture weights are all set to 0.0
