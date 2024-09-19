@@ -51,14 +51,12 @@ def execute(fn: Callable | ray.remote_function.RemoteFunction, *args, depends_on
     return output
 
 
-ray.init()
-
 # General config
 RAWDATAPATH = (
     "gs://marin-us-central2/raw/hello_world_fw/8fd6e8e/huggingface.co/datasets/skaramcheti/hello_world_fw/"
     "resolve/8fd6e8e/data"
 )
-EXPERIMENT = "quickstart_single_script_docker_test"
+EXPERIMENT = "quickstart_single_script_docker_test_09_18"
 DATASET = "hello_world_fw"
 
 # Transform
@@ -75,7 +73,7 @@ from scripts.fasttext.train_fasttext import MainConfig  # noqa
 config = MainConfig(
     output_base_path="gs://marin-us-central2",
     experiment=EXPERIMENT,
-    pos_doc_path="gs://marin-us-central2/documents/marin_instructv1/v1_olmo_mix/text",
+    pos_doc_path="gs://marin-us-central2/documents/instruct/v1_olmo_mix/text",
     neg_doc_path=f"gs://marin-us-central2/documents/{DATASET}/v1.0/{EXPERIMENT}",
     pos_sampling_rate=0.1,
     neg_sampling_rate=1.0,
