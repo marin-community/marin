@@ -1,5 +1,5 @@
-from dataclasses import asdict
 import re
+from dataclasses import asdict
 from urllib.parse import urljoin
 
 import htmlmin
@@ -10,9 +10,7 @@ from marin.schemas.web.convert import TrafilaturaConfig
 
 
 def convert_page_with_trafilatura(
-    html: str,
-    url: str | None = None,
-    config: str | TrafilaturaConfig = "fineweb"
+    html: str, url: str | None = None, config: str | TrafilaturaConfig = "fineweb"
 ) -> dict[str, str]:
     """
     Convert HTML to text[non-markdown] using Trafilatura.
@@ -31,25 +29,17 @@ def convert_page_with_trafilatura(
     content = None
     match config:
         case str():
-            if config == "fineweb":
-                content = extract(
-                    html,
-                    **asdict(TrafilaturaConfig.fineweb_config()),
-                )
-            elif config == "default":
-                content = extract(
-                    html,
-                    **asdict(TrafilaturaConfig.default_config()),
-                )
+            content = extract(
+                html,
+                **asdict(TrafilaturaConfig.get_preset_config(config)),
+            )
         case TrafilaturaConfig():
             content = extract(
                 html,
                 **asdict(config),
             )
         case _:
-            raise Exception(
-                f"Invalid config: {config}. Pass a TrafilaturaConfig object or use 'fineweb' or 'default'."
-            )
+            raise Exception(f"Invalid config type: {type(config)}. Pass a TrafilaturaConfig object or use 'fineweb' or 'default' presets.")
 
     if title == "[no-title]":
         title = None

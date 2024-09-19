@@ -31,7 +31,7 @@ from marin.web.convert import convert_page
 # Ray will not impose any physical limits on the resources used by the function, these numbers are used for scheduling.
 @ray.remote(memory=1 * 1024 * 1024 * 1024, runtime_env={"pip": ["s3fs"]}, num_cpus=1)  # 1 GB
 @cached_or_construct_output(success_suffix="SUCCESS")  # We use this decorator to make this function idempotent
-def html_to_md(input_file_path, output_file_path, extract_method, use_config):
+def html_to_md(input_file_path, output_file_path, extract_method, config):
     # The runtime for this function should be low (less than 5-10 min), as the machines are preemptible
     # Example of input_path = gs://marin-data/hello_world_fw/fineweb/fw-v1.0/CC-MAIN-2024-10/000_00000/0_processed_html.jsonl.gz
 
@@ -52,7 +52,7 @@ def html_to_md(input_file_path, output_file_path, extract_method, use_config):
 
             # Convert page can throw exception based on the html content (e.g. invalid html, Empty page)
             try:
-                md = convert_page(html, url, extract_method, use_config)["content"]
+                md = convert_page(html, url, extract_method, config)["content"]
             except Exception as e:
                 print(f"Error {e} in processing {id = }, {url = }, file: {input_file_path}")
                 # You can choose to raise it or ignore it depending upon the use case
