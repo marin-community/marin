@@ -39,7 +39,10 @@ def convert_page_with_trafilatura(
                 **asdict(config),
             )
         case _:
-            raise Exception(f"Invalid config type: {type(config)}. Pass a TrafilaturaConfig object or use 'fineweb' or 'default' presets.")
+            raise Exception(
+                f"Invalid config type: {type(config)}. Pass a TrafilaturaConfig object or use 'fineweb' \
+                or 'default' presets."
+            )
 
     if title == "[no-title]":
         title = None
