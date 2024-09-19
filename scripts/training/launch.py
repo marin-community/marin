@@ -45,9 +45,9 @@ def construct_levanter_config(
     trainer_config["id"] = id
     trainer_config["tracker"]["name"] = name
     trainer_config["tracker"]["tags"] = list(trainer_config["tracker"].get("tags", [])) + list(tags) + [exp_name]
-    trainer_config["checkpointer"]["base_path"] = f"{bucket}/checkpoints/{exp_name}/{id}/"
-    config["hf_save_path"] = f"{bucket}/checkpoints/{exp_name}/{id}/hf/"
-    config["hf_save_steps"] = 20000
+    trainer_config["checkpointer"]["base_path"] = f"gs://{bucket}/checkpoints/{exp_name}/{id}/"
+    config["hf_save_path"] = f"gs://{bucket}/checkpoints/{exp_name}/{id}/hf/"
+    config["hf_save_steps"] = 200
 
     return config
 
@@ -135,6 +135,7 @@ class LaunchConfig:
     """Tags to add to the wandb run."""
 
 
+@draccus.wrap()
 def main(args: LaunchConfig):
     default_config = cli.load_config()
 
@@ -276,11 +277,6 @@ def main(args: LaunchConfig):
         print(
             f"Assuming all went well, you should see a wandb run named {run_name} with id {run_id} in the wandb dashboard."
         )
-
-
-@draccus.wrap()
-def main_wrapper(args: LaunchConfig):
-    main(args)
 
 
 if __name__ == "__main__":
