@@ -178,12 +178,7 @@ def convert_page_legacy(html: str, url: str | None = None) -> dict[str, str]:
     return out
 
 
-def convert_page(
-    html: str,
-    url: str | None = None,
-    extract_method: str = "readability",
-    use_config: str = "default"
-) -> dict[str, str]:
+def convert_page(html: str, url: str | None = None, extract_method: str = "readability", use_config: str = "default") -> dict[str, str]:
     """
     Convert HTML to text using the specified method.
 
