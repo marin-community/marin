@@ -18,7 +18,14 @@ class TrafilaturaConfig:
 
 
     @classmethod
-    def fineweb_config(cls) -> 'TrafilaturaConfig':
+    def fineweb_config(cls) -> "TrafilaturaConfig":
+        """
+        Using the configuration as per the `fineweb` method in datatrove
+        codebase: https://github.com/huggingface/datatrove/blob/c7f6f516abc1349e4995451ff4017790d00d2d68/examples/fineweb.py#L42
+
+        Returns:
+            TrafilaturaConfig: Configuration object for Trafilatura.
+        """
         return cls(
             favor_precision=True,
             favor_recall=False,
@@ -26,11 +33,22 @@ class TrafilaturaConfig:
             deduplicate=True,
         )
 
+
     @classmethod
-    def default_config(cls) -> 'TrafilaturaConfig':
+    def default_config(cls) -> "TrafilaturaConfig":
         return cls(
             favor_precision=False,
             favor_recall=True,
             include_comments=False,
             deduplicate=False,
         )
+    
+
+    @classmethod
+    def get_preset_config(cls, config: str) -> "TrafilaturaConfig":
+        if config == "fineweb":
+            return cls.fineweb_config()
+        elif config == "default":
+            return cls.default_config()
+        else:
+            raise Exception(f"Invalid preset config: {config}. Please use 'fineweb' or 'default'.")
