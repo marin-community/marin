@@ -15,7 +15,7 @@ ray job submit --working-dir . -- python scripts/hello_world_fw/process.py \
 
 ##FastText classifier
 ray job submit --working-dir . -- python scripts/fasttext/train_fasttext.py \
-  --pos_doc_path gs://marin-us-central2/documents/marin_instructv1/v1_olmo_mix/text \
+  --pos_doc_path gs://marin-us-central2/documents/instruct/v1_olmo_mix/text \
   --neg_doc_path gs://marin-us-central2/documents/hello_world_fw/v1.0/$EXP \
   --pos_sampling_rate 0.1 \
   --neg_sampling_rate 1.0 \
@@ -54,6 +54,12 @@ ray job submit --address http://127.0.0.1:8265 --working-dir . \
 # Tokenize
 ray job submit --working-dir . \
   -- python -m marin.processing.tokenize \
-  --input_path gs://marin-us-central2/documents/hello_world_fw/v1.0/${EXP}_consolidate/CC-MAIN-2024-10/000_00000/*.jsonl.gz \
+  --input_path gs://marin-us-central2/documents/hello_world_fw/v1.0/${EXP}_consolidate/ \
   --cache_dir gs://marin-central2/tokenized/llama3/ \
-  --dataset_name $(whoami)-$EXP --tokenizer meta-llama/Meta-Llama-3.1-8B
+  --dataset_name hello_world_fw-{$EXP} --tokenizer meta-llama/Meta-Llama-3.1-8B
+
+
+ python scripts/training/launch.py --experiment $EXP --base_config config/training/quickstart_run.yaml \
+   --dataset_name hello_world_fw-{$EXP} \
+   --dataset_path "gs://marin-us-central2/documents/hello_world_fw/v1.0/'${EXP}_consolidate'/**/*.jsonl.gz"\
+    --cache_dir gs://marin-us-central2/tokenized/llama3/ --zone us-central2-b --tpu_type v4-32
