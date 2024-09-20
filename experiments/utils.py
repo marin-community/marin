@@ -3,158 +3,167 @@ from dataclasses import dataclass, fields, is_dataclass
 from datetime import datetime
 from typing import Optional, Callable, Any
 
+import fsspec
 import graphviz
 import ray
 
 import marin
 
+def return_input(input: Any, config: dataclass):
+    # This function just returns the input
+    return input
 
 @ray.remote
-def execute(fn: Callable | ray.remote_function.RemoteFunction, *args, depends_on, **kwargs):
-    """
-    Utility function to execute a remote function with dependencies on another functions
-    fn: The function to execute. The function can be a ray remote function or a normal function
-    depends_on: List of references on which the remote function depends. These references are Ray references
-    args, kwargs: List of arguments and key arguments to pass to the remote function
+def _run_fn(fn: Callable | ray.remote_function.RemoteFunction, config: dataclass, *args, **kwargs):
 
-    """
-    ray.get(depends_on)
-
-    is_ray_fn = type(fn) is ray.remote_function.RemoteFunction
-
-    name = None
-    if is_ray_fn:
-        name = f"{fn._function.__module__}.{fn._function.__name__}"
-    else:
-        name = f"{fn.__module__}.{fn.__name__}"
-
-    # Datetime can probably go into ray logger but I don't wanna touch it for now and custom logger are wierd with ray
     print(
-        f"Starting to Execute {name} with {args} and {kwargs} at " f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        f"Starting to Execute {get_func_name(fn)} with {config}, {args} "
+        f"and {kwargs} at " f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
     )
 
     start = time.time()
-
-    output = None
+    is_ray_fn = type(fn) is ray.remote_function.RemoteFunction
     if is_ray_fn:
-        output = ray.get(fn.remote(*args, **kwargs))
+        output = ray.get(fn.remote(config, *args, **kwargs))
     else:
-        output = fn(*args, **kwargs)
+        output = fn(config, *args, **kwargs)
 
-    print(
-        f"Finished Executing {name} in {time.time() - start} seconds at"
-        f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-    )
+    print(f"Finished Executing {get_func_name(fn)} in {time.time() - start} seconds at"
+          f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
-    return output
+def get_func_name(fn: Callable | ray.remote_function.RemoteFunction):
+    if type(fn) is ray.remote_function.RemoteFunction:
+        return f"{fn._function.__module__}.{fn._function.__name__}"
+    else:
+        return f"{fn.__module__}.{fn.__name__}"
 
+class Node:
+    def __init__(self, fn: Callable | ray.remote_function.RemoteFunction, *args, config: dataclass, output_path,
+                 depends_on = None, **kwargs):
+        self.fn = fn
+        self.args = args
+        self.config = config
+        self.kwargs = kwargs
+        self.func_name = get_func_name(fn)
+        self.output_path = output_path
+
+        self.should_run = (fn != return_input)
+        self.depends_on = []
+        self.executed = False
+        if self.should_run:
+            # depends_on is a list of references on which this function depends
+            self.depends_on = depends_on + self.get_depends_on(config)
+        self.ray_ref = None
+
+        import pdb; pdb.set_trace()
+
+    def get_depends_on(self, config: dataclass):
+        depends_on = []
+        for field in fields(config):
+            field_value = getattr(config, field.name)
+            if type(field_value) is Node:
+                depends_on.append(field_value)
+            elif is_dataclass(field_value):
+                depends_on += self.get_depends_on(field_value)
+        return depends_on
+
+    def _populate_config(self, config: dataclass):
+        # This function will populate the config with the output path
+        # This function will be called recursively
+        for field in fields(config):
+            field_value = getattr(config, field.name)
+            if type(field_value) is Node:
+                setattr(config, field.name, field_value.output_path)
+            elif is_dataclass(field_value):
+                self._populate_config(field_value)
+        return config
+
+    def run(self):
+        # Make sure that this function is not executed twice
+        if self.executed:
+            return
+        self.executed = True
+
+        for i in self.depends_on:
+            i.run()
+
+        for i in self.depends_on:
+            ray.get(i.ray_ref)
+
+        self.config = self._populate_config(self.config)
+
+        self.ray_ref = _run_fn.remote(self.fn, config=self.config, *self.args, **self.kwargs)
+
+
+
+
+
+    def print_subtree(self, level: int):
+        print("\t"*level + f"{self.func_name} -> ")
+        for i in self.depends_on:
+            i.print_subtree(level+1)
 
 class Executor:
 
-    def __init__(self, region: str, experiment_prefix: str, **kwargs):
+    def __init__(self, region: str, experiment_prefix: str, run_id: str = None, **kwargs):
         # We store everything in output_path_args which will be passed to each config to get output path
         # later we can convert output_path_args to a dataclass.
         self.output_path_args = kwargs
         self.output_path_args["region"] = region
         self.output_path_args["experiment_prefix"] = experiment_prefix
-        self.dry_run = True
-        self.graph = graphviz.Digraph(format='dot')
-        self.obj_ref_to_name = {}
-
-    def replace_values_in_dataclass(self, config: dataclass):
-        # Iterate over all fields in the dataclass
-        for field in fields(config):
-            field_value = getattr(config, field.name)  # Get the value of the field
-
-            # If the field is a dataclass, recurse into it
-            if is_dataclass(field_value):
-                self.replace_values_in_dataclass(field_value)
-            elif type(field_value) is ray.ObjectRef:
-                print(f"Replacing {field.name}'s value with actual value")
-                setattr(config, field.name, ray.get(field))  # Replace the value with "objref"
-                self.graph.edge(self.obj_ref_to_name[field], self.current_node)
-
-        return config
-
-    @ray.remote
-    def _return_input(self, input: Any):
-        # This function just returns the input
-        return input
-    def  add(self, fn: Callable | ray.remote_function.RemoteFunction, *args, config: dataclass,
-             depends_on: list | Optional, run_id: str | Optional = "", **kwargs):
-        # If run_id is not provided, generate a new run_id using experiment_prefix and random string
-
-        is_ray_fn = type(fn) is ray.remote_function.RemoteFunction
-
-        name = None
-        if is_ray_fn:
-            name = f"{fn._function.__module__}.{fn._function.__name__}"
+        if run_id:
+            self.output_path_args["run_id"] = run_id
         else:
-            name = f"{fn.__module__}.{fn.__name__}"
+            # Todo: Implement random string
+            run_id = "dag"
+            self.output_path_args["run_id"] = "dag"
+        self.experiment = experiment_prefix + "_" + run_id
+        self.output_path_args["experiment"] = self.experiment
 
-        self.current_node = name
+
+    def add(self, fn: Callable | ray.remote_function.RemoteFunction, *args, config: dataclass,
+             depends_on: list = None , run_id: str  = None, force_run: bool = False, **kwargs):
+        """
+        Add a function to the execution graph. This function will not run immediately, it will run only when run is called
+        fn: The function to add to the graph
+        config: The dataclass object which will be passed to the function
+        depends_on: Additional List of references on which this function depends, other dependencies will be automatically taken from config.
+        This will probably never be used
+        run_id: The run_id for this function, if not provided, self.experiment will be used
+        force_run: If True, this function will run even if run_id is provided. This is useful when you want to re run something
+        """
+
+
+        name = get_func_name(fn)
+        # self.current_node =
+
+        run = force_run or (run_id is None)
         if not run_id:
-            run_id = f"{self.experiment_prefix}_{marin.utils.random_string()}"
-            print(f"No run_id provided for {name}, generating a new run_id and this function will run with: {run_id = }")
+            run_id = self.experiment
+            print(f"No run_id provided for {name}, this function will run with: {run_id = }")
+        elif force_run:
+            print(f"Egven with provided run_id {run_id} for {name}, this function will run as force_run is True")
         else:
             print(f"Using provided run_id {run_id} for {name}, this function will not run")
 
-        # Add to graph
-        self.graph.node(name, label=f"{name} [will_run={not run_id}]")
         # Step 1:
+
         # every config will have a get_output_path method which gives output path given the run_id and also fill it in itself
-
         output_path = config.get_output_path(run_id, **self.output_path_args)
-
+        depends_on = depends_on or []
         return_ref = None
-        if run_id:
-            return_ref = self._return_input.remote(output_path)
+        if not run:
+            return_ref = Node(return_input, output_path, config=config, output_path=output_path, depends_on=[], kwargs={})
         else:
+            return_ref = Node(fn, *args, config=config, output_path=output_path, depends_on=depends_on, **kwargs)
 
-            # Now we decide to actually run it
-            # Step 2: for every parametere in dataclass check if it's of type ObjectRef, if it is, then replace it with the actual
-            # value using ray.get
+        return return_ref
 
-            self.replace_values_in_dataclass(config)
-
-            # By this point we have everything we need to run the function
-
-            print(
-                f"Starting to Execute {name} with {args} and {kwargs} at " f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-            )
-
-            start = time.time()
-
-            return_ref = self._run_fn.remote(fn, *args, is_ray_fn, **kwargs)
-
-            print(
-                f"Finished Executing {name} in {time.time() - start} seconds at"
-                f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-            )
-        self.obj_ref_to_name[return_ref] = name
-        return output_path
-
-    @ray.remote
-    def _run_fn(self, fn: Callable | ray.remote_function.RemoteFunction, *args, is_ray_fn, **kwargs):
-        while self.dry_run:
-            # busy wait
-            time.sleep(30)
-        if self.dry_run_terminate:
-            return
-
-        if is_ray_fn:
-            output = ray.get(fn.remote(*args, **kwargs))
-        else:
-            output = fn(*args, **kwargs)
-    def run(self, ref: ray.ObjectRef):
-        print(self.graph.source)
+    def run(self, node: Node):
+        node.print_subtree(0)
         continue_input = self.get_user_input()
-        self.dry_run = False
         if continue_input:
-            self.dry_run_terminate = False
-        else:
-            self.dry_run_terminate = True
-        ray.get(ref)
+            node.run()
 
     def get_user_input(self):
         user_input = input(
