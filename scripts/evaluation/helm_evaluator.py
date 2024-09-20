@@ -134,6 +134,7 @@ class HELMEvaluator(VllmTpuEvaluator):
             self.write_model_config_files(model)
 
             # Run HELM with the model and the specified evals
+            # This commands evaluates the model on the specified evals and outputs the results to RESULTS_PATH
             run_bash_command(
                 f"helm-run --conf-paths {' '.join(run_entries_files)} "
                 f"--models-to-run {model.name} "
@@ -145,8 +146,8 @@ class HELMEvaluator(VllmTpuEvaluator):
             )
             assert os.path.exists(self.RESULTS_PATH), f"Results not found at {self.RESULTS_PATH}. Did HELM run?"
 
-            # Run summarize. HELM has an experimental feature to summarize multiple suites but
-            # only supports one schema file at a time.
+            # Run helm-summarize, which aggregates all the results and generates tables for them.
+            # See https://crfm-helm.readthedocs.io/en/latest/get_helm_rank for more information.
             run_bash_command(
                 f"helm-summarize --suite {self.RESULTS_FOLDER} "
                 f"--output-path {self.BENCHMARK_OUTPUT_PATH} --schema-path {schema_files[0]}"
