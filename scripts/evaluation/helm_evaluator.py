@@ -136,21 +136,40 @@ class HELMEvaluator(VllmTpuEvaluator):
             # Run HELM with the model and the specified evals
             # This commands evaluates the model on the specified evals and outputs the results to RESULTS_PATH
             run_bash_command(
-                f"helm-run --conf-paths {' '.join(run_entries_files)} "
-                f"--models-to-run {model.name} "
-                f"--max-eval-instances {self.DEFAULT_MAX_EVAL_INSTANCES} "
-                f"--output-path {self.BENCHMARK_OUTPUT_PATH} "
-                f"--suite {self.RESULTS_FOLDER} "
-                f"--local-path {self.PROD_ENV_PATH} "
-                "--num-threads 1 --exit-on-error"
+                [
+                    "helm-run",
+                    "--conf-paths",
+                    *run_entries_files,  # Use `*` to expand the list into separate arguments
+                    "--models-to-run",
+                    model.name,
+                    "--max-eval-instances",
+                    str(self.DEFAULT_MAX_EVAL_INSTANCES),
+                    "--output-path",
+                    self.BENCHMARK_OUTPUT_PATH,
+                    "--suite",
+                    self.RESULTS_FOLDER,
+                    "--local-path",
+                    self.PROD_ENV_PATH,
+                    "--num-threads",
+                    "1",
+                    "--exit-on-error",
+                ]
             )
             assert os.path.exists(self.RESULTS_PATH), f"Results not found at {self.RESULTS_PATH}. Did HELM run?"
 
             # Run helm-summarize, which aggregates all the results and generates tables for them.
             # See https://crfm-helm.readthedocs.io/en/latest/get_helm_rank for more information.
             run_bash_command(
-                f"helm-summarize --suite {self.RESULTS_FOLDER} "
-                f"--output-path {self.BENCHMARK_OUTPUT_PATH} --schema-path {schema_files[0]}"
+                [
+                    "helm-summarize",
+                    "--suite",
+                    self.RESULTS_FOLDER,
+                    "--output-path",
+                    self.BENCHMARK_OUTPUT_PATH,
+                    "--schema-path",
+                    # helm-summarize only takes one schema file, so we just use the first one
+                    schema_files[0],
+                ]
             )
 
             # Upload the results to GCS
