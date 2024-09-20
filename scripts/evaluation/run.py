@@ -53,7 +53,8 @@ if __name__ == "__main__":
         "--evals",
         nargs="*",
         help="Which specific evals within an evaluation harness to run. This would be a list of "
-        "tasks in for EleutherAI's lm-evaluation-harness or a list of run_entries_*.py files from HELM.",
+        "tasks in for EleutherAI's lm-evaluation-harness or a list of evals from HELM (e.g., mmlu, lite, etc.). "
+        "See https://github.com/stanford-crfm/helm/tree/main/src/helm/benchmark/presentation for the full list.",
         default=[],
     )
     parser.add_argument(
