@@ -76,7 +76,15 @@ def html_to_md(input_file_path, output_file_path):
 @dataclass
 class FineWebConfig:
     input_path: str
-    output_path: str
+    output_path: str | None = None
+
+    def get_output_path(self, *args, **kwargs):
+        experiment = kwargs["experiment"]
+        dataset = kwargs["dataset"]
+        version = kwargs["version"]
+        if self.output_path is None:
+            self.output_path = f"gs://marin-us-central2/documents/{dataset}/{version}/{experiment}"
+        return self.output_path
 
 
 @ray.remote

@@ -26,7 +26,6 @@ config = FineWebConfig(
     input_path=RAWDATAPATH
 )
 transform_ref = executor.add(scripts.hello_world_fw.process.main_ray, config=config)
-
 # FastText classifier
 from scripts.fasttext.train_fasttext import MainConfig  # noqa
 
@@ -41,15 +40,6 @@ fasttext_ref = executor.add(scripts.fasttext.train_fasttext.main_ray, config=con
 
 ## Use olmo classifier to annotate, Note the dependency on transform only
 from marin.processing.classification.inference import InferenceConfig  # noqa
-
-config = InferenceConfig(
-    input_path=transform_ref,
-    model_name="allenai/dolma-1_7-fasttext-quality-filter",
-    model_type="fasttext",
-    attribute_name="olmo-fasttext-quality",
-)
-annotate_ref = executor.add(marin.processing.classification.inference.main_ray, config = config)
-
 ## Use quickstart classifier to annotate, Note the dependency on fasttext_ref
 config = InferenceConfig(
     input_path=transform_ref,
