@@ -55,8 +55,6 @@ class Node:
             self.depends_on = depends_on + self.get_depends_on(config)
         self.ray_ref = None
 
-        import pdb; pdb.set_trace()
-
     def get_depends_on(self, config: dataclass):
         depends_on = []
         for field in fields(config):
@@ -114,7 +112,7 @@ class Executor:
         if run_id:
             self.output_path_args["run_id"] = run_id
         else:
-            # Todo: Implement random string
+            # Todo: Implement random string, run_id should be unique and random
             run_id = "dag"
             self.output_path_args["run_id"] = "dag"
         self.experiment = experiment_prefix + "_" + run_id
