@@ -1,5 +1,6 @@
 from typing import Dict, List
 import os
+import traceback
 
 import ray
 import shutil
@@ -29,6 +30,10 @@ class HELMEvaluator(VllmTpuEvaluator):
     ALL_RUN_ENTRIES_URL: str = "https://github.com/stanford-crfm/helm/tree/main/src/helm/benchmark/presentation"
     RUN_ENTRIES_TEMPLATE: str = (
         "https://raw.githubusercontent.com/stanford-crfm/helm/main/src/helm/benchmark/presentation/{run_entries_file}"
+    )
+    ALL_SCHEMA_URL: str = "https://github.com/stanford-crfm/helm/tree/main/src/helm/benchmark/static"
+    SCHEMA_TEMPLATE: str = (
+        "https://raw.githubusercontent.com/stanford-crfm/helm/refs/heads/main/src/helm/benchmark/static/{schema_file}"
     )
 
     _pip_packages: List[Dependency] = VllmTpuEvaluator.DEFAULT_PIP_PACKAGES + [
@@ -92,8 +97,32 @@ class HELMEvaluator(VllmTpuEvaluator):
 
     @ray.remote(memory=64 * 1024 * 1024 * 1024, resources={"TPU": 4})  # 64 GB of memory, always request 4 TPUs
     def run(self, model: ModelConfig, evals: List[str], output_path: str) -> None:
+        is_successful: bool = False
         try:
             from helm.common.general import ensure_file_downloaded
+
+            # Download the run_entries files and schema files for the specified evals
+            assert len(evals) > 0, "Please specify at least one eval to run."
+            run_entries_files: List[str] = []
+            schema_files: List[str] = []
+            for eval in evals:
+                run_entries_file: str = f"run_entries_{eval}.conf"
+                run_entries_url: str = self.RUN_ENTRIES_TEMPLATE.format(run_entries_file=run_entries_file)
+                ensure_file_downloaded(source_url=run_entries_url, target_path=run_entries_file)
+                assert (
+                    os.path.exists(run_entries_file),
+                    f"Failed to download. Does {run_entries_file} exist at {self.ALL_RUN_ENTRIES_URL}?",
+                )
+                run_entries_files.append(run_entries_file)
+
+                schema_file: str = f"schema_{eval}.yaml"
+                schema_url: str = self.SCHEMA_TEMPLATE.format(schema_file=schema_file)
+                ensure_file_downloaded(source_url=schema_url, target_path=schema_file)
+                assert (
+                    os.path.exists(schema_file),
+                    f"Failed to download. Does {schema_file} exist at {self.ALL_SCHEMA_URL}?",
+                )
+                schema_files.append(schema_file)
 
             # Download the model checkpoint if necessary.
             self.download_model(model)
@@ -101,21 +130,12 @@ class HELMEvaluator(VllmTpuEvaluator):
             if model.path is not None:
                 model.name = model.path
 
-            # Download the run_entries file specified in `evals`
-            for run_entries_file in evals:
-                run_entries_url: str = self.RUN_ENTRIES_TEMPLATE.format(run_entries_file=run_entries_file)
-                ensure_file_downloaded(source_url=run_entries_url, target_path=run_entries_file)
-                assert (
-                    os.path.exists(run_entries_file),
-                    f"Failed to download. Does {run_entries_file} exist at {self.ALL_RUN_ENTRIES_URL}?",
-                )
-
             # Write the model configuration files necessary for HELM
             self.write_model_config_files(model)
 
             # Run HELM with the model and the specified evals
             run_bash_command(
-                f"helm-run --conf-paths {' '.join(evals)} "
+                f"helm-run --conf-paths {' '.join(run_entries_files)} "
                 f"--models-to-run {model.name} "
                 f"--max-eval-instances {self.DEFAULT_MAX_EVAL_INSTANCES} "
                 f"--output-path {self.BENCHMARK_OUTPUT_PATH} "
@@ -124,11 +144,23 @@ class HELMEvaluator(VllmTpuEvaluator):
                 "--num-threads 1 --exit-on-error"
             )
             assert os.path.exists(self.RESULTS_PATH), f"Results not found at {self.RESULTS_PATH}. Did HELM run?"
+
+            # Run summarize. HELM has an experimental feature to summarize multiple suites but
+            # only supports one schema file at a time.
+            run_bash_command(
+                f"helm-summarize --suite {self.RESULTS_FOLDER} "
+                f"--output-path {self.BENCHMARK_OUTPUT_PATH} --schema-path {schema_files[0]}"
+            )
+
             # Upload the results to GCS
             if is_remote_path(output_path):
                 upload_to_gcs(self.RESULTS_PATH, output_path)
-        except Exception as e:
-            print(f"An error occurred: {e}")
+
+            # The run was successful
+            is_successful = True
+        except Exception:
+            traceback.print_exc()
         finally:
             self.cleanup(model)
             shutil.rmtree(self.RESULTS_PATH, ignore_errors=True)
+            assert is_successful, "The evaluation failed. Please check the logs for more information."
