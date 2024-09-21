@@ -6,7 +6,7 @@ set -e
 # Print each command before executing it
 set -x
 
-EXP="quickstart_eval_0921"
+EXP="quickstart_eval_0921-3"
 #
 ###Transform
 ray job submit --working-dir . -- python scripts/hello_world_fw/process.py \
@@ -56,7 +56,7 @@ ray job submit --working-dir . \
   -- python -m marin.processing.tokenize \
   --input_path gs://marin-us-central2/documents/hello_world_fw/v1.0/${EXP}_consolidate/ \
   --cache_path gs://marin-us-central2/tokenized/llama3/ \
-  --dataset_name hello_world_fw-${EXP}-1 --tokenizer meta-llama/Meta-Llama-3.1-8B
+  --dataset_name hello_world_fw-${EXP} --tokenizer meta-llama/Meta-Llama-3.1-8B
 
 
 export LC_CTYPE=C
@@ -64,14 +64,12 @@ export LANG=C
 
 run_id=$(tr -dc 'a-zA-Z0-9' </dev/urandom | head -c 16)
 python scripts/training/launch.py --experiment $EXP --base_config config/training/quickstart_run.yaml \
-   --dataset_name hello_world_fw-${EXP}-1 \
+   --dataset_name hello_world_fw-${EXP} \
    --dataset_path "gs://marin-us-central2/documents/hello_world_fw/v1.0/'${EXP}_consolidate'/**/*.jsonl.gz"\
     --cache_dir gs://marin-us-central2/tokenized/llama3/ --zone us-central2-b --tpu_type v4-32 --run_id $run_id
 
 
 # We assume that the model would be trained for 200 steps in 10 minutes
-
-#!/bin/bash
 
 # Variables
 bucket_path=gs://marin-us-central2/checkpoints/$EXP/$run_id/hf/$run_id/step-200/
@@ -96,7 +94,6 @@ if ((elapsed >= timeout)); then
   exit 1
 fi
 
-# TODO(dlwh, abhinavg): Can we make this more robust?, maybe use a dedicated TPU for quickstart?
 ray job submit --working-dir . -- python scripts/evaluation/run.py helm --model-name $run_id/step-200\
   --model-path gs://marin-us-central2/checkpoints/$EXP/$run_id/hf/$run_id/step-200/ \
-  --evals run_entries_mmlu.conf --evaluation-path gs://marin-us-central2/evaluation/$EXP/$run_id/step-200/mmlu
+  --evals mmlu --evaluation-path gs://marin-us-central2/evaluation/$EXP/$run_id/step-200/mmlu
