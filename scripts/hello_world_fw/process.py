@@ -78,13 +78,20 @@ def html_to_md(input_file_path, output_file_path, extract_method, config):
 class FineWebConfig:
     input_path: str
     output_path: str
-    extract_method: str
+    extract_method: str | None = None
     config: str | TrafilaturaConfig = "default"
 
 
 @ray.remote
 def main_ray(cfg: FineWebConfig):
-    responses = map_files_in_directory(html_to_md, cfg.input_path, "**/*.jsonl.gz", cfg.output_path, extract_method=cfg.extract_method, config=cfg.config)
+    responses = map_files_in_directory(
+        html_to_md,
+        cfg.input_path,
+        "**/*.jsonl.gz",
+        cfg.output_path,
+        extract_method=cfg.extract_method,
+        config=cfg.config,
+    )
     # Wait for all the tasks to finish.
     # The try and catch is important here as incase html_to_md throws any exception, that exception is passed here,
     # And if we don't catch it here, the script will exit, which will kill all the other tasks.
