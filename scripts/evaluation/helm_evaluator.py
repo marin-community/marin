@@ -1,7 +1,9 @@
 from typing import Dict, List
 import os
+import traceback
 
 import ray
+import shutil
 
 from scripts.evaluation.evaluator import Dependency, ModelConfig
 from scripts.evaluation.vllm_tpu_evaluator import VllmTpuEvaluator
@@ -29,9 +31,13 @@ class HELMEvaluator(VllmTpuEvaluator):
     RUN_ENTRIES_TEMPLATE: str = (
         "https://raw.githubusercontent.com/stanford-crfm/helm/main/src/helm/benchmark/presentation/{run_entries_file}"
     )
+    ALL_SCHEMA_URL: str = "https://github.com/stanford-crfm/helm/tree/main/src/helm/benchmark/static"
+    SCHEMA_TEMPLATE: str = (
+        "https://raw.githubusercontent.com/stanford-crfm/helm/refs/heads/main/src/helm/benchmark/static/{schema_file}"
+    )
 
     _pip_packages: List[Dependency] = VllmTpuEvaluator.DEFAULT_PIP_PACKAGES + [
-        Dependency(name="crfm-helm@git+https://github.com/stanford-crfm/helm.git@helm_on_tpu"),
+        Dependency(name="crfm-helm@git+https://github.com/stanford-crfm/helm.git@local_vllm"),
     ]
 
     @staticmethod
@@ -53,10 +59,7 @@ class HELMEvaluator(VllmTpuEvaluator):
                     "model_name": model_name,
                     "tokenizer_name": model_name,
                     "max_sequence_length": tokenizer.model_max_length,
-                    "client_spec": {
-                        "class_name": "helm.clients.vllm_client.VLLMClient",
-                        "args": {"base_url": "http://localhost:8000/v1"},
-                    },
+                    "client_spec": {"class_name": "helm.clients.vllm_client.LocalVLLMClient"},
                 }
             ]
         }
@@ -83,10 +86,7 @@ class HELMEvaluator(VllmTpuEvaluator):
                     "name": model_name,
                     "tokenizer_spec": {
                         "class_name": "helm.tokenizers.huggingface_tokenizer.HuggingFaceTokenizer",
-                        "args": {
-                            "pretrained_model_name_or_path": model_name,
-                            "trust_remote_code": True
-                        },
+                        "args": {"pretrained_model_name_or_path": model_name, "trust_remote_code": True},
                     },
                     "prefix_token": tokenizer.bos_token,
                     "end_of_text_token": tokenizer.eos_token,
@@ -97,40 +97,90 @@ class HELMEvaluator(VllmTpuEvaluator):
 
     @ray.remote(memory=64 * 1024 * 1024 * 1024, resources={"TPU": 4})  # 64 GB of memory, always request 4 TPUs
     def run(self, model: ModelConfig, evals: List[str], output_path: str) -> None:
-        super().run(model, evals, output_path)
+        is_successful: bool = False
+        try:
+            from helm.common.general import ensure_file_downloaded
 
-        from helm.common.general import ensure_file_downloaded
+            # Download the run_entries files and schema files for the specified evals
+            assert len(evals) > 0, "Please specify at least one eval to run."
+            run_entries_files: List[str] = []
+            schema_files: List[str] = []
+            for eval in evals:
+                run_entries_file: str = f"run_entries_{eval}.conf"
+                run_entries_url: str = self.RUN_ENTRIES_TEMPLATE.format(run_entries_file=run_entries_file)
+                ensure_file_downloaded(source_url=run_entries_url, target_path=run_entries_file)
+                assert (
+                    os.path.exists(run_entries_file),
+                    f"Failed to download. Does {run_entries_file} exist at {self.ALL_RUN_ENTRIES_URL}?",
+                )
+                run_entries_files.append(run_entries_file)
 
-        # Download the model from GCS or HuggingFace and serve it with vLLM
-        self.start_vllm_server_in_background(model)
+                schema_file: str = f"schema_{eval}.yaml"
+                schema_url: str = self.SCHEMA_TEMPLATE.format(schema_file=schema_file)
+                ensure_file_downloaded(source_url=schema_url, target_path=schema_file)
+                assert (
+                    os.path.exists(schema_file),
+                    f"Failed to download. Does {schema_file} exist at {self.ALL_SCHEMA_URL}?",
+                )
+                schema_files.append(schema_file)
 
-        # HELM requires the model name to match the local path
-        if model.path is not None:
-            model.name = model.path
+            # Download the model checkpoint if necessary.
+            self.download_model(model)
+            # HELM requires the model name to match the local path
+            if model.path is not None:
+                model.name = model.path
 
-        # Download the run_entries file specified in `evals`
-        for run_entries_file in evals:
-            run_entries_url: str = self.RUN_ENTRIES_TEMPLATE.format(run_entries_file=run_entries_file)
-            ensure_file_downloaded(source_url=run_entries_url, target_path=run_entries_file)
-            assert (
-                os.path.exists(run_entries_file),
-                f"Failed to download. Does {run_entries_file} exist at {self.ALL_RUN_ENTRIES_URL}?",
+            # Write the model configuration files necessary for HELM
+            self.write_model_config_files(model)
+
+            # Run HELM with the model and the specified evals
+            # This commands evaluates the model on the specified evals and outputs the results to RESULTS_PATH
+            run_bash_command(
+                [
+                    "helm-run",
+                    "--conf-paths",
+                    *run_entries_files,  # Use `*` to expand the list into separate arguments
+                    "--models-to-run",
+                    model.name,
+                    "--max-eval-instances",
+                    str(self.DEFAULT_MAX_EVAL_INSTANCES),
+                    "--output-path",
+                    self.BENCHMARK_OUTPUT_PATH,
+                    "--suite",
+                    self.RESULTS_FOLDER,
+                    "--local-path",
+                    self.PROD_ENV_PATH,
+                    "--num-threads",
+                    "1",
+                    "--exit-on-error",
+                ]
+            )
+            assert os.path.exists(self.RESULTS_PATH), f"Results not found at {self.RESULTS_PATH}. Did HELM run?"
+
+            # Run helm-summarize, which aggregates all the results and generates tables for them.
+            # See https://crfm-helm.readthedocs.io/en/latest/get_helm_rank for more information.
+            run_bash_command(
+                [
+                    "helm-summarize",
+                    "--suite",
+                    self.RESULTS_FOLDER,
+                    "--output-path",
+                    self.BENCHMARK_OUTPUT_PATH,
+                    "--schema-path",
+                    # helm-summarize only takes one schema file, so we just use the first one
+                    schema_files[0],
+                ]
             )
 
-        # Write the model configuration files necessary for HELM
-        self.write_model_config_files(model)
+            # Upload the results to GCS
+            if is_remote_path(output_path):
+                upload_to_gcs(self.RESULTS_PATH, output_path)
 
-        # Run HELM with the model and the specified evals
-        run_bash_command(
-            f"helm-run --conf-paths {' '.join(evals)} "
-            f"--models-to-run {model.name} "
-            f"--max-eval-instances {self.DEFAULT_MAX_EVAL_INSTANCES} "
-            f"--output-path {self.BENCHMARK_OUTPUT_PATH} "
-            f"--suite {self.RESULTS_FOLDER} "
-            f"--local-path {self.PROD_ENV_PATH} "
-        )
-        assert os.path.exists(self.RESULTS_PATH), f"Results not found at {self.RESULTS_PATH}. Did HELM run?"
-
-        # Upload the results to GCS
-        if is_remote_path(output_path):
-            upload_to_gcs(self.RESULTS_PATH, output_path)
+            # The run was successful
+            is_successful = True
+        except Exception:
+            traceback.print_exc()
+        finally:
+            self.cleanup(model)
+            shutil.rmtree(self.RESULTS_PATH, ignore_errors=True)
+            assert is_successful, "The evaluation failed. Please check the logs for more information."
