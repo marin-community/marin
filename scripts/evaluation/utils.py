@@ -53,13 +53,13 @@ def upload_to_gcs(local_path: str, gcs_path: str) -> None:
     print(f"Uploaded {local_path} to {gcs_path}.")
 
 
-def run_bash_command(command: str, check: bool = True) -> None:
+def run_bash_command(command: list[str], check: bool = True) -> None:
     """Runs a bash command."""
-    print(command)
+    print(" ".join(command))
     start_time: float = time.time()
-    subprocess.run(command, shell=True, check=check)
+    subprocess.run(command, check=check)  # Pass list directly, remove shell=True
     elapsed_time_seconds: float = time.time() - start_time
-    print(f"Completed: {command} ({elapsed_time_seconds}s)")
+    print(f"Completed: {' '.join(command)} ({elapsed_time_seconds}s)")
 
 
 def write_yaml(content: Dict, output_path: str) -> None:
@@ -70,9 +70,9 @@ def write_yaml(content: Dict, output_path: str) -> None:
 
 def kill_process_on_port(port: int) -> None:
     # Iterate over all running processes
-    for proc in psutil.process_iter(['pid', 'name', 'connections']):
+    for proc in psutil.process_iter(["pid", "name", "connections"]):
         # Check for connections the process has
-        for conn in proc.info['connections']:
+        for conn in proc.info["connections"]:
             if conn.laddr.port == port:
                 try:
                     print(f"Killing process {proc.info['name']} (PID {proc.info['pid']}) on port {port}")

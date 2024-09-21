@@ -13,8 +13,9 @@ class EleutherEvaluator(VllmTpuEvaluator):
     """
     Evaluator that runs lm-eval: https://github.com/EleutherAI/lm-evaluation-harness
     """
+
     RESULTS_PATH: str = os.path.join(VllmTpuEvaluator.CACHE_PATH, "eleuther_results")
-    
+
     _pip_packages: List[Dependency] = VllmTpuEvaluator.DEFAULT_PIP_PACKAGES + [
         Dependency(name="lm_eval"),
         Dependency(name="lm-eval[api]"),
@@ -31,9 +32,19 @@ class EleutherEvaluator(VllmTpuEvaluator):
 
         try:
             run_bash_command(
-                f"lm_eval --model vllm --tasks {','.join(evals)} "
-                f"--model_args pretrained={model_name_or_path} "
-                f"--batch_size auto --output_path {self.RESULTS_PATH}"
+                [
+                    "lm_eval",
+                    "--model",
+                    "vllm",
+                    "--tasks",
+                    ",".join(evals),
+                    "--model_args",
+                    f"pretrained={model_name_or_path}",
+                    "--batch_size",
+                    "auto",
+                    "--output_path",
+                    self.RESULTS_PATH,
+                ]
             )
 
             # Upload the results to GCS
