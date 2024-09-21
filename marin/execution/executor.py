@@ -25,7 +25,7 @@ class ExecutorStep:
 
     The `config` is a dataclass object that recursively might have special
     values of the following form:
-    - `ExecutorStep`: a dependency on another `ExecutorStep`
+    - `InputName(step, name)`: a dependency on another `step`, resolve to the step.output_path / name
     - `OutputName(name)`: resolves to the output_path / name
     - `VersionedValue(value)`: a value that should be part of the version
     """
@@ -40,7 +40,7 @@ class ExecutorStep:
 
 @dataclass(frozen=True)
 class InputName:
-    """To be interpreted as the previous `step`'s output_path joined with `name`."""
+    """To be interpreted as a previous `step`'s output_path joined with `name`."""
     step: ExecutorStep
     name: str = ""
 
@@ -71,8 +71,9 @@ def dependency_index_str(i: int) -> str:
 
 
 def collect_version_dependencies(obj: Any, version: dict[str, Any], dependencies: list[ExecutorStep], prefix: str = ""):
-    """Recurse through `obj` to find all the versioned values, and return
-    them as a dict where the key identifies where the value.  Example:
+    """Recurse through `obj` to find all the versioned values, and return them
+    as a dict where the key is the sequence of fields identifying where the
+    value resides in obj.  Example:
 
         get_version(Foo(a=versioned(1), b=Bar(c=versioned(2)))
 
@@ -80,24 +81,28 @@ def collect_version_dependencies(obj: Any, version: dict[str, Any], dependencies
 
         {"a": 1, "b.c": 2}
 
-    Also, compute the list of dependencies.
+    Along the way, compute the list of dependencies.
     """
     def recurse(obj: Any, prefix: str):
         new_prefix = prefix + "." if prefix else ""
         if isinstance(obj, VersionedValue):
+            # Just extract the value
             version[prefix] = obj.value
         elif isinstance(obj, InputName):
             # Put string i for the i-th dependency
             version[prefix] = dependency_index_str(len(dependencies)) + ("/" + obj.name if obj.name else "")
             dependencies.append(obj.step)
         elif is_dataclass(obj):
+            # Recurse through sub-dataclasses
             for field in fields(obj):
                 value = getattr(obj, field.name)
                 recurse(value, new_prefix + field.name)
         elif isinstance(obj, list):
+            # Recurse through lists
             for i, x in enumerate(obj):
                 recurse(x, new_prefix + f"[{i}]")
         elif isinstance(obj, dict):
+            # Recurse through dicts
             for i, x in obj.items():
                 recurse(x, new_prefix + i)
 
@@ -106,9 +111,11 @@ def collect_version_dependencies(obj: Any, version: dict[str, Any], dependencies
 
 def instantiate_config(config: dataclass, output_path: str, output_paths: dict[ExecutorStep, str]) -> dataclass:
     """
-    Return a "real" config where all the special values (e.g.,
-    `ExecutorStep`, `OutputName`, and `VersionedValue`) have been replaced with
+    Return a "real" config where all the special values (e.g., `InputName`,
+    `OutputName`, and `VersionedValue`) have been replaced with
     the actual paths that they represent.
+    `output_path`: represents the output path of the current step.
+    `output_paths`: a dict from `ExecutorStep` to their output paths.
     """
     if config is None:
         return None
@@ -123,15 +130,15 @@ def instantiate_config(config: dataclass, output_path: str, output_paths: dict[E
             updates[field.name] = value.value
         elif is_dataclass(value):
             updates[field.name] = instantiate_config(value, output_path, output_paths)
+        # Note unversioned primitives don't need to be updated.
     return replace(config, **updates)
-
 
 
 class Executor:
     """"
     Performs the execution of a pipeline of `ExecutorStep`s.
     1. Instantiate all the `output_path`s for each `ExecutorStep` based on `prefix`, names, and versions of everything.
-    2. Run each `ExecutorStep` in the correct order.
+    2. Run each `ExecutorStep` in a proper topological sort order.
     """
 
     def __init__(self, prefix: str):
@@ -185,6 +192,7 @@ class Executor:
 
 
     def run_step(self, step: ExecutorStep, dry_run: bool):
+        """Run a single `step`.  If `dry_run`, only print out what needs to be done."""
         config = instantiate_config(
             config=step.config,
             output_path=self.output_paths[step],
@@ -225,6 +233,7 @@ class Executor:
 
 
 def get_fn_name(fn: Callable | ray.remote_function.RemoteFunction):
+    """Just for debugging: get the name of the function."""
     if fn is None:
         return "None"
     if isinstance(fn, ray.remote_function.RemoteFunction):
