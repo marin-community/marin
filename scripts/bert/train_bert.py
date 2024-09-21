@@ -27,7 +27,7 @@ class TrainBertClassifierConfig:
         neg_sampling_rate (float): Fraction of negative examples to include the training dataset.
         bert_args (dict): Arguments for the BERT training process.
         seed (int): Seed for random number generator to ensure reproducibility.
-        val_split (float): Fraction of data to be used for validation.
+        val_frac (float): Fraction of data to be used for validation.
         memory (int): Amount of memory allocated for remote training process (in GB).
         num_cpus (int): Number of CPUs allocated for remote training process.
     """
@@ -39,7 +39,7 @@ class TrainBertClassifierConfig:
     neg_sampling_rate: float = 1.0
     bert_args: dict = field(default_factory=dict)
     seed: int = 0
-    val_split: float = 0.1
+    val_frac: float = 0.1
     memory: int = 1
 
 
@@ -52,7 +52,7 @@ def main(cfg: TrainBertClassifierConfig):
 
     create_label_attribute(input_doc_path=cfg.pos_doc_path, output_attr_path=pos_attr_path, label="hq")
     attributes_to_dataset(
-        experiment_path=cfg.output_path,
+        output_path=cfg.output_path,
         doc_path=cfg.pos_doc_path,
         attr_path=pos_attr_path,
         sampling_rate=cfg.pos_sampling_rate,
@@ -61,7 +61,7 @@ def main(cfg: TrainBertClassifierConfig):
 
     create_label_attribute(input_doc_path=cfg.neg_doc_path, output_attr_path=neg_attr_path, label="lq")
     attributes_to_dataset(
-        experiment_path=cfg.output_path,
+        output_path=cfg.output_path,
         doc_path=cfg.neg_doc_path,
         attr_path=neg_attr_path,
         sampling_rate=cfg.neg_sampling_rate,
@@ -72,7 +72,7 @@ def main(cfg: TrainBertClassifierConfig):
         input_path=f"{cfg.output_path}/data",
         output_path=cfg.output_path,
         seed=cfg.seed,
-        val_split=cfg.val_split,
+        val_frac=cfg.val_frac,
         memory_req=cfg.memory,
         **cfg.bert_args,
     )

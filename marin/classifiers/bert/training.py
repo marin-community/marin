@@ -98,7 +98,7 @@ def train_model(
     input_path: str,
     output_path: str,
     seed: int,
-    val_split: float,
+    val_frac: float,
     memory_req: int = 10,
     batch_size: int = 1,
     lr: float = 2e-5,
@@ -112,7 +112,7 @@ def train_model(
         input_path (str): Path for input training data.
         output_path (str): Path to save the trained model (i.e., gs://$BUCKET/classifiers/$EXPERIMENT).
         seed (int): Seed for random number generator to ensure reproducibility.
-        val_split (float): Fraction of data to be used for validation.
+        val_frac (float): Fraction of data to be used for validation.
         memory_req (int): Amount of memory allocated for remote training process (in GB).
         batch_size (int): Batch size for training.
         lr (float): Learning rate for training.
@@ -144,7 +144,7 @@ def train_model(
             val_path = os.path.join(tmp_dir, "data.val")
             model_path = os.path.join(tmp_dir, "model.bin")
 
-            merge_shards_and_split(shard_paths, train_path, val_path, val_split, seed, format_example)
+            merge_shards_and_split(shard_paths, train_path, val_path, val_frac, seed, format_example)
             shuffle(train_path, train_path, seed)
 
             xmp.spawn(_mp_fn, args=(hf_model, train_path, model_path, lr, batch_size, num_epochs))
@@ -162,5 +162,3 @@ def train_model(
 
     datetime_end = datetime.utcnow()
     logger.info(f"Training BERT for experiment {output_path} completed in {datetime_end - datetime_start}.")
-
-    return None
