@@ -44,11 +44,6 @@ class MainConfig:
     output_base_path: str = "gs://marin-us-central2"
     experiment: str = None
 
-    def get_output_path(self, *args, **kwargs) -> str:
-        # self.neg_doc_path = f"gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart_dag"
-        self.experiment = kwargs["experiment"]
-        return f"gs://marin-us-central2/classifiers/{self.experiment}/"
-
 
 def get_attr_path(doc_path: str, attr_experiment: str) -> str:
     """

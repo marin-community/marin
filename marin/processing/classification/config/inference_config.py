@@ -30,10 +30,3 @@ class InferenceConfig:
         )
     )
     task: TaskConfig = field(default_factory=TaskConfig)
-
-    def get_output_path(self, *args, **kwargs) -> str:
-        experiment = kwargs["experiment"]
-        dataset = kwargs["dataset"]
-        version = kwargs["version"]
-        self.output_path = f"gs://marin-us-central2/attributes/{dataset}/{version}/{experiment}_{experiment}_fasttext"
-        return self.output_path
