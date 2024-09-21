@@ -8,12 +8,12 @@ import fsspec
 from huggingface_hub import hf_hub_url
 from huggingface_hub.utils import GatedRepoError
 
-from marin.utilities.storage_transfer_utils import create_gcs_transfer_job_from_tsv, create_url_list_tsv_on_gcs
 from marin.utilities.gcs_utils import split_gcs_path
+from marin.utilities.storage_transfer_utils import create_gcs_transfer_job_from_tsv, create_url_list_tsv_on_gcs
 from marin.utilities.validation_utils import write_provenance_json
 
 
-def get_hf_dataset_urls(hf_dataset_id: str, revision: str) -> list[str]:
+def get_hf_dataset_urls(hf_dataset_id: str, revision: str, hf_url_glob: str) -> list[str]:
     """Walk through Dataset Repo using the `hf://` fsspec built-ins."""
     fs = fsspec.filesystem("hf")
 
@@ -24,8 +24,13 @@ def get_hf_dataset_urls(hf_dataset_id: str, revision: str) -> list[str]:
         raise NotImplementedError(f"Unable to automatically download gated dataset `{hf_dataset_id}`") from err
 
     url_list = []
-    for fpath in fs.find(f"hf://datasets/{hf_dataset_id}", revision=revision):
+    base_dir = f"hf://datasets/{hf_dataset_id}"
+    for fpath in fs.find(base_dir, revision=revision):
         if ".git" in fpath:
+            continue
+
+        # Continue if the file does not match the hf_url_glob pattern
+        if not fs.glob(f"{base_dir}/{hf_url_glob}"):
             continue
 
         # Resolve to HF Path =>> grab URL
@@ -42,9 +47,11 @@ def get_hf_dataset_urls(hf_dataset_id: str, revision: str) -> list[str]:
     return url_list
 
 
-def download_hf_dataset(hf_dataset_id: str, revision: str, gcs_output_path: str, public_gcs_path: str) -> str:
+def download_hf_dataset(
+    hf_dataset_id: str, revision: str, hf_url_glob: str, gcs_output_path: str, public_gcs_path: str
+) -> str:
     """Create & Launch a Google Cloud Storage Transfer Job to Download a (Public) HuggingFace Dataset."""
-    hf_urls = get_hf_dataset_urls(hf_dataset_id, revision)
+    hf_urls = get_hf_dataset_urls(hf_dataset_id, revision, hf_url_glob)
 
     # Parse GCS Bucket, Relative Path from `gcs_output_path`
     gcs_bucket, gcs_relative_path = split_gcs_path(gcs_output_path)

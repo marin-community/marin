@@ -6,11 +6,10 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 import draccus
-import mergedeep
-import yaml
-
 import levanter.infra.cli_helpers as cli
 import levanter.infra.docker
+import mergedeep
+import yaml
 from levanter.infra import docker
 from levanter.infra.tpus import launch_job
 
@@ -22,15 +21,15 @@ zone_to_bucket = {
 
 
 def construct_levanter_config(
-        base_config: dict,
-        model_config: Optional[dict],
-        data_config: dict,
-        cache_dir: str,
-        bucket: str,
-        id: str,
-        exp_name: str,
-        name: str,
-        tags: list[str],
+    base_config: dict,
+    model_config: Optional[dict],
+    data_config: dict,
+    cache_dir: str,
+    bucket: str,
+    id: str,
+    exp_name: str,
+    name: str,
+    tags: list[str],
 ):
     config = deepcopy(base_config)
 
@@ -46,19 +45,20 @@ def construct_levanter_config(
     trainer_config["id"] = id
     trainer_config["tracker"]["name"] = name
     trainer_config["tracker"]["tags"] = list(trainer_config["tracker"].get("tags", [])) + list(tags) + [exp_name]
-    trainer_config["checkpointer"]["base_path"] = f"{bucket}/checkpoints/{exp_name}/{id}/"
-    config["hf_save_path"] = f"{bucket}/checkpoints/{exp_name}/{id}/hf/"
-    config["hf_save_steps"] = 20000
+    trainer_config["checkpointer"]["base_path"] = f"gs://{bucket}/checkpoints/{exp_name}/{id}/"
+    config["hf_save_path"] = f"gs://{bucket}/checkpoints/{exp_name}/{id}/hf/"
+    config["hf_save_steps"] = 200
 
     return config
 
 
 def _get_data_config(
-        base_data: dict,
-        data_name: Optional[str],
-        dataset_path: Optional[str],
-        data_config_path: Optional[str],
-        tokenizer: str) -> dict:
+    base_data: dict,
+    data_name: Optional[str],
+    dataset_path: Optional[str],
+    data_config_path: Optional[str],
+    tokenizer: str,
+) -> dict:
     """
     We support a few different kinds of data configurations. One option is a YAML file that specifies a data mixture,
     following Levanter's data mixture config. Another option is a string that specifies a root directory for a dataset.
@@ -194,11 +194,12 @@ def main(args: LaunchConfig):
         id=run_id,
         exp_name=args.experiment,
         name=run_name,
-        tags=args.tags
+        tags=args.tags,
     )
 
-    with tempfile.NamedTemporaryFile(prefix=f"{args.experiment}-{run_id}", suffix=".yaml",
-                                     dir=".", delete=True, encoding="utf-8", mode="w") as config_file:
+    with tempfile.NamedTemporaryFile(
+        prefix=f"{args.experiment}-{run_id}", suffix=".yaml", dir=".", delete=True, encoding="utf-8", mode="w"
+    ) as config_file:
         yaml.dump(run_config, config_file, default_flow_style=False)
         config_file.flush()
         config_path = config_file.name
@@ -213,8 +214,9 @@ def main(args: LaunchConfig):
             "CONFIG_FILE": config_path,
         }
 
-        local_id = docker.build_docker("docker/levanter/Dockerfile.incremental", image_name=image_name, tag=tag,
-                                       build_args=build_args)
+        local_id = docker.build_docker(
+            "docker/levanter/Dockerfile.incremental", image_name=image_name, tag=tag, build_args=build_args
+        )
 
         region = zone.rsplit("-", 1)[0]
 
@@ -269,10 +271,12 @@ def main(args: LaunchConfig):
         print(f"You can get logs with:")
         # gcloud compute tpus tpu-vm ssh dlwh-quickstart-gtxdwom2 --zone us-central2-b --worker=0 --command "docker logs -f levanter"
         print(
-            f"  gcloud compute tpus tpu-vm ssh {run_name} --zone {zone} --worker=0 --command 'docker logs -f levanter'")
+            f"  gcloud compute tpus tpu-vm ssh {run_name} --zone {zone} --worker=0 --command 'docker logs -f levanter'"
+        )
         print()
         print(
-            f"Assuming all went well, you should see a wandb run named {run_name} with id {run_id} in the wandb dashboard.")
+            f"Assuming all went well, you should see a wandb run named {run_name} with id {run_id} in the wandb dashboard."
+        )
 
 
 if __name__ == "__main__":
