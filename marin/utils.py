@@ -20,22 +20,22 @@ def fsspec_exists(file_path):
     return fs.exists(file_path)
 
 
-def fsspec_rm(file_or_dir_path):
+def fsspec_rm(path: str):
     """
     Check if a file/directory exists in a fsspec filesystem. If it exists, remove it (recursively).
 
     Args:
-        file_or_dir_path (str): The path of the file
+        path (str): The path of the file
 
     Returns:
         bool: True if the file exists, False otherwise.
     """
 
     # Use fsspec to check if the file exists
-    fs = fsspec.core.url_to_fs(file_or_dir_path)[0]
-    if fs.exists(file_or_dir_path):
+    fs = fsspec.core.url_to_fs(path)[0]
+    if fs.exists(path):
         try:
-            fs.rm(file_or_dir_path, recursive=True)
+            fs.rm(path, recursive=True)
         except FileNotFoundError as e:
             print(f"Error removing the file: {e}. Likely caused by the race condition and file is already removed.")
 
@@ -140,22 +140,17 @@ def fsspec_isdir(dir_path):
     return fs.isdir(dir_path)
 
 
-def fsspec_cpdir(dir_path: str, target_path: str) -> bool:
+def fsspec_cpdir(dir_path: str, target_path: str) -> None:
     """
     Recursively copies all contents of dir_path to target_path.
 
     Args:
         dir_path (str): The path of the directory to copy.
         target_path (str): The target path.
-
-    Returns:
-        bool: True if successful.
     """
 
     fs = fsspec.core.get_fs_token_paths(target_path, mode="wb")[0]
     fs.put(os.path.join(dir_path, "*"), target_path, recursive=True)
-
-    return True
 
 
 def fsspec_size(file_path: str) -> int:

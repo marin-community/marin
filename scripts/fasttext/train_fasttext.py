@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 
 import ray
 import draccus
+import os
 
 from marin.utils import fsspec_rm
 from marin.classifiers.utils import create_label_attribute, attributes_to_dataset
@@ -27,7 +28,7 @@ class TrainFasttextClassifierConfig:
         neg_sampling_rate (float): Fraction of negative examples to include the training dataset.
         fasttext_args (dict): Arguments for the fastText training process (see fastText docs for the full list of options).
         seed (int): Seed for random number generator to ensure reproducibility.
-        val_split (float): Fraction of data to be used for validation.
+        val_frac (float): Fraction of data to be used for validation.
         memory (int): Amount of memory allocated for remote training process (in GB).
     """
 
@@ -38,7 +39,7 @@ class TrainFasttextClassifierConfig:
     neg_sampling_rate: float = 1.0
     fasttext_args: dict = field(default_factory=dict)
     seed: int = 0
-    val_split: float = 0.1
+    val_frac: float = 0.1
     memory: int = 1
 
 
@@ -46,12 +47,12 @@ class TrainFasttextClassifierConfig:
 def main(cfg: TrainFasttextClassifierConfig):
     ray.init()
 
-    pos_attr_path = f"{cfg.output_path}/tmp/positives"
-    neg_attr_path = f"{cfg.output_path}/tmp/negatives"
+    pos_attr_path = os.path.join(cfg.output_path, "tmp", "positives")
+    neg_attr_path = os.path.join(cfg.output_path, "tmp", "negatives")
 
     create_label_attribute(input_doc_path=cfg.pos_doc_path, output_attr_path=pos_attr_path, label="hq")
     attributes_to_dataset(
-        experiment_path=cfg.output_path,
+        output_path=cfg.output_path,
         doc_path=cfg.pos_doc_path,
         attr_path=pos_attr_path,
         sampling_rate=cfg.pos_sampling_rate,
@@ -60,7 +61,7 @@ def main(cfg: TrainFasttextClassifierConfig):
 
     create_label_attribute(input_doc_path=cfg.neg_doc_path, output_attr_path=neg_attr_path, label="lq")
     attributes_to_dataset(
-        experiment_path=cfg.output_path,
+        output_path=cfg.output_path,
         doc_path=cfg.neg_doc_path,
         attr_path=neg_attr_path,
         sampling_rate=cfg.neg_sampling_rate,
@@ -71,7 +72,7 @@ def main(cfg: TrainFasttextClassifierConfig):
         input_path=f"{cfg.output_path}/data",
         output_path=cfg.output_path,
         seed=cfg.seed,
-        val_split=cfg.val_split,
+        val_frac=cfg.val_frac,
         memory_req=cfg.memory,
         **cfg.fasttext_args,
     )

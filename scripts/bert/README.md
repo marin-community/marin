@@ -14,7 +14,7 @@ python ./scripts/bert/train_bert.py \
   --output_path gs://marin-us-central2/classifiers/quickstart \
   --config_path ./scripts/bert/configs/train_bert.yaml
 ```
-will train a BERT classifier using OLMo instruct data as high quality examples and Fineweb as low quality examples and
+will train a BERT classifier using OLMo instruct data as high quality examples and FineWeb as low quality examples and
 the additional training hyperparameters specified in `train_bert.yaml`
 and save the results to `gs://marin-us-central2/classifiers/quickstart`.
 Typically, one should choose the sampling rates to balance the number of high quality and low quality examples (and also

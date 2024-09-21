@@ -27,7 +27,7 @@ class BertDataset(Dataset):
     Dataset subclass for BERT quality classifier training data.
     """
 
-    def __init__(self, dataset_path: str, tokenizer: BertTokenizer, max_len: int = 128, labels: list | None = None):
+    def __init__(self, dataset_path: str, tokenizer: BertTokenizer, max_len: int = 128, labels: list[str] | None = None):
         """
         __init__ method for BertDataset.
 
@@ -39,7 +39,9 @@ class BertDataset(Dataset):
         """
         self.tokenizer = tokenizer
         self.max_len = max_len
-        self.label_set = set(labels if labels is not None else [])
+
+        labels = [] if labels is None else labels
+        self.label_set = set(labels)
 
         self.texts = []
         self.labels = []

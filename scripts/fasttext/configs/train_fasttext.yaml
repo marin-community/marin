@@ -2,5 +2,5 @@ fasttext_args:
   lr: 0.01
   thread: 4
 seed: 0
-val_split: 0.1
+val_frac: 0.1
 memory: 1
