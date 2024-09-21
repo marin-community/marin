@@ -258,9 +258,8 @@ def dolma_dedup(
     return "Deduplication process completed"
 
 
-@draccus.wrap()
-def main(config: DedupeConfig):
-    ray.init()
+@ray.remote
+def main_ray(config: DedupeConfig):
     # require directory if decontaminate is set
     if config.decontaminate and config.decontaminate_path is None:
         raise ValueError("decontaminate_path is required if decontaminate is set")
@@ -283,6 +282,12 @@ def main(config: DedupeConfig):
         )
     )
     print(result)
+
+
+@draccus.wrap()
+def main(config: DedupeConfig):
+    ray.init()
+    ray.get(main_ray.remote(config))
 
 
 if __name__ == "__main__":

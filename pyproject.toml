@@ -38,7 +38,8 @@ dependencies = [
     "warcio",
     "levanter>=1.1.dev992",
     "lm-eval",
-    "resiliparse"
+    "resiliparse",
+    "trafilatura"
 ]
 
 [project.optional-dependencies]

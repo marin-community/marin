@@ -227,8 +227,8 @@ def apply_filters(
     return output_path
 
 
-@draccus.wrap()
-def main(cfg: ConsolidateConfig):
+@ray.remote
+def main_ray(cfg: ConsolidateConfig):
     input_path = validate_marin_gcp_path(cfg.input_path)
     output_path = validate_marin_gcp_path(cfg.output_path)
 
@@ -251,6 +251,12 @@ def main(cfg: ConsolidateConfig):
 
     output_path = apply_filters(input_path, output_path, attribute_files, filters, cfg.max_tasks_in_flight)
     print(f"Processing complete. Final output path: {output_path}")
+
+
+@draccus.wrap()
+def main(cfg: ConsolidateConfig):
+    ray.init()
+    ray.get(main_ray.remote(cfg))
 
 
 if __name__ == "__main__":
