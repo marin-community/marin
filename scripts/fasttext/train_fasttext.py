@@ -1,5 +1,5 @@
 """
-run_training.py
+train_fasttext.py
 
 Training script for fastText quality classifiers.
 """
