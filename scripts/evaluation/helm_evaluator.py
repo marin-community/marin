@@ -1,4 +1,4 @@
-from typing import Dict, List
+from typing import Dict, List, Optional
 import os
 import traceback
 
@@ -96,7 +96,9 @@ class HELMEvaluator(VllmTpuEvaluator):
         write_yaml(content, HELMEvaluator.TOKENIZER_CONFIGS_FILE_PATH)
 
     @ray.remote(memory=64 * 1024 * 1024 * 1024, resources={"TPU": 4})  # 64 GB of memory, always request 4 TPUs
-    def run(self, model: ModelConfig, evals: List[str], output_path: str) -> None:
+    def run(
+        self, model: ModelConfig, evals: List[str], output_path: str, max_eval_instances: Optional[int] = None
+    ) -> None:
         is_successful: bool = False
         try:
             from helm.common.general import ensure_file_downloaded
@@ -135,6 +137,7 @@ class HELMEvaluator(VllmTpuEvaluator):
 
             # Run HELM with the model and the specified evals
             # This commands evaluates the model on the specified evals and outputs the results to RESULTS_PATH
+            max_eval_instances = max_eval_instances or self.DEFAULT_MAX_EVAL_INSTANCES
             run_bash_command(
                 [
                     "helm-run",
@@ -143,7 +146,7 @@ class HELMEvaluator(VllmTpuEvaluator):
                     "--models-to-run",
                     model.name,
                     "--max-eval-instances",
-                    str(self.DEFAULT_MAX_EVAL_INSTANCES),
+                    str(max_eval_instances),
                     "--output-path",
                     self.BENCHMARK_OUTPUT_PATH,
                     "--suite",
