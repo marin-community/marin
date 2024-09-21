@@ -97,7 +97,9 @@ class Evaluator(ABC):
         self._config: EvaluatorConfig = config
 
     @abstractmethod
-    def evaluate(self, model: ModelConfig, evals: List[str], output_path: str) -> None:
+    def evaluate(
+        self, model: ModelConfig, evals: List[str], output_path: str, max_eval_instances: Optional[int] = None
+    ) -> None:
         """
         Runs the evaluator given the model checkpoint, the list of evaluations to run, and the output path.
         """

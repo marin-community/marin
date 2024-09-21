@@ -129,10 +129,12 @@ class VllmTpuEvaluator(Evaluator, ABC):
 
         return runtime_env
 
-    def evaluate(self, model: ModelConfig, evals: List[str], output_path: str) -> None:
+    def evaluate(
+        self, model: ModelConfig, evals: List[str], output_path: str, max_eval_instances: Optional[int] = None
+    ) -> None:
         """
         Launches the evaluation run with Ray.
         """
         ray.init(runtime_env=self.get_runtime_env())
-        result = ray.get(self.run.remote(self, model, evals, output_path))
+        result = ray.get(self.run.remote(self, model, evals, output_path, max_eval_instances))
         print(f"Inference times (in seconds): {result}")

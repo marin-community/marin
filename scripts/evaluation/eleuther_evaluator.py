@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional
 import os
 
 import ray
@@ -15,6 +15,7 @@ class EleutherEvaluator(VllmTpuEvaluator):
     """
 
     RESULTS_PATH: str = os.path.join(VllmTpuEvaluator.CACHE_PATH, "eleuther_results")
+    DEFAULT_MAX_EVAL_INSTANCES: int = 1000
 
     _pip_packages: List[Dependency] = VllmTpuEvaluator.DEFAULT_PIP_PACKAGES + [
         Dependency(name="lm_eval"),
@@ -22,7 +23,9 @@ class EleutherEvaluator(VllmTpuEvaluator):
     ]
 
     @ray.remote(memory=64 * 1024 * 1024 * 1024, resources={"TPU": 4})  # 64 GB of memory, always request 4 TPUs
-    def run(self, model: ModelConfig, evals: List[str], output_path: str) -> None:
+    def run(
+        self, model: ModelConfig, evals: List[str], output_path: str, max_eval_instances: Optional[int] = None
+    ) -> None:
         # Download the model from GCS or HuggingFace
         model.ensure_downloaded(local_path=os.path.join(VllmTpuEvaluator.CACHE_PATH, model.name))
 
@@ -31,6 +34,7 @@ class EleutherEvaluator(VllmTpuEvaluator):
         model_name_or_path: str = model.name if model.path is None else model.path
 
         try:
+            max_eval_instances = max_eval_instances or self.DEFAULT_MAX_EVAL_INSTANCES
             run_bash_command(
                 [
                     "lm_eval",
@@ -38,6 +42,8 @@ class EleutherEvaluator(VllmTpuEvaluator):
                     "vllm",
                     "--tasks",
                     ",".join(evals),
+                    "--limit",
+                    str(max_eval_instances),
                     "--model_args",
                     f"pretrained={model_name_or_path}",
                     "--batch_size",
