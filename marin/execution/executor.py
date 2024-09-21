@@ -1,12 +1,15 @@
-import draccus
 import hashlib
 import json
 import os
 import time
-from marin.utils import fsspec_exists
-from dataclasses import dataclass, fields, is_dataclass, replace, asdict
-from typing import Any, Callable
+from collections.abc import Callable
+from dataclasses import dataclass, fields, is_dataclass, replace
+from typing import Any
+
+import draccus
 import ray
+
+from marin.utils import fsspec_exists
 
 
 @dataclass(frozen=True)
