@@ -35,13 +35,7 @@ class FilterConfig:
 
     def __post_init__(self):
         if not (self.min_score < self.threshold < self.max_score):
-            raise ValueError(
-                f"""
-                Scores must satisfy: \
-                    min_score ({self.min_score}) < threshold ({self.threshold}) \
-                    < max_score ({self.max_score})
-                """
-            )
+            raise ValueError("Scores must satisfy: min_score < threshold < max_score")
 
         if "dedupe" in self.type:
             self.filter_func = dedupe_filter_func
