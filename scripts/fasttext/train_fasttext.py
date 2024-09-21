@@ -6,7 +6,6 @@ Training script for fastText quality classifiers.
 
 from dataclasses import dataclass, field
 
-import ray
 import draccus
 import os
 
