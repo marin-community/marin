@@ -77,8 +77,8 @@ def html_to_md(input_file_path, output_file_path, extract_method, config):
 @dataclass
 class FineWebConfig:
     input_path: str
-    output_path: str | None = None
-    extract_method: str = "default"
+    output_path: str
+    extract_method: str = "readability"
     config: str | TrafilaturaConfig = "default"
 
 
