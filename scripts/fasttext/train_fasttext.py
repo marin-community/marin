@@ -43,7 +43,7 @@ class TrainFasttextClassifierConfig:
 
 
 @draccus.wrap()
-def main(cfg: TrainFasttextClassifierConfig):
+def train(cfg: TrainFasttextClassifierConfig):
     ray.init()
 
     pos_attr_path = os.path.join(cfg.output_path, "tmp", "positives")
@@ -81,4 +81,4 @@ def main(cfg: TrainFasttextClassifierConfig):
 
 
 if __name__ == "__main__":
-    main()
+    train()

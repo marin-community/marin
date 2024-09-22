@@ -1,6 +1,19 @@
+# TODO: pytest doesn't work with Ray because these functions cannot be found
+import time
+import json
 import re
-from dataclasses import dataclass
+import tempfile
+import os
+from dataclasses import dataclass, asdict
+import pytest
+import ray
 from marin.execution.executor import ExecutorStep, Executor, get_input, get_output, versioned
+
+@pytest.fixture
+def ray_start():
+    ray.init()
+    yield
+    ray.shutdown()
 
 @dataclass(frozen=True)
 class MyConfig:
@@ -9,12 +22,31 @@ class MyConfig:
     n: int
     m: int
 
+# Different Ray processes running `ExecutorStep`s cannot share variables, so use filesystem.
+# Helper functions
+def create_temp():
+    # Note that different steps cannot share variables
+    with tempfile.NamedTemporaryFile(delete=False) as f:
+        return f.name
+
+def append_temp(path: str, obj: dataclass):
+    with open(path, "a") as f:
+        print(json.dumps(asdict(obj) if obj else None), file=f)
+
+def read_temp(path: str):
+    with open(path) as f:
+        return list(map(json.loads, f.readlines()))
+
+def cleanup_temp(path: str):
+    os.unlink(path)
+
+
 def test_executor():
     """Test basic executor functionality."""
-    results: list[MyConfig | None] = []
+    temp = create_temp()
 
-    def fn(config: MyConfig):
-        results.append(config)
+    def fn(config: MyConfig | None):
+        append_temp(temp, config)
 
     a = ExecutorStep(name="a", fn=fn, config=None)
     b = ExecutorStep(name="b", fn=fn, config=MyConfig(input_path=get_input(a, "sub"), output_path=get_output(), n=versioned(3), m=4))
@@ -22,15 +54,56 @@ def test_executor():
     executor = Executor(prefix="/tmp")
     executor.run(steps=[b])
 
-    assert re.match(r"/tmp/a-(\w+)/sub", results[1].input_path)
-    assert re.match(r"/tmp/b-(\w+)", results[1].output_path)
-    assert results[1].n == 3
-
-    assert len(results) == 2
-
     assert len(executor.steps) == 2
     assert executor.output_paths[a].startswith("/tmp/a-")
     assert executor.output_paths[b].startswith("/tmp/b-")
+
+    # Check the results
+    results = read_temp(temp)
+    assert len(results) == 2
+    assert results[0] is None
+    assert re.match(r"/tmp/a-(\w+)/sub", results[1]["input_path"])
+    assert re.match(r"/tmp/b-(\w+)", results[1]["output_path"])
+    assert results[1]["n"] == 3
+    assert results[1]["m"] == 4
+
+    cleanup_temp(temp)
+
+
+def test_parallelism():
+    """Make sure things that parallel execution is possible."""
+    temp = create_temp()
+
+    # Note that due to parallelism, total wall-clock time should be `run_time` +
+    # overhead, as long as all the jobs can get scheduled.
+    run_time = 5
+    parallelism = 6
+    expected_duration = run_time * 2
+
+    def fn(config: MyConfig):
+        append_temp(temp, config)
+        time.sleep(run_time)
+
+    bs = [
+        ExecutorStep(name=f"b{i}", fn=fn, config=MyConfig(input_path="/", output_path=get_output(), n=1, m=1)) \
+        for i in range(parallelism)
+    ]
+    executor = Executor(prefix="/tmp")
+    start_time = time.time()
+    executor.run(steps=bs)
+    end_time = time.time()
+
+    results = read_temp(temp)
+    assert len(results) == parallelism
+    for i in range(parallelism):
+        assert results[i]["output_path"].startswith("/tmp/b")
+
+    duration = end_time - start_time
+    print(f"Duration: {duration}")
+    assert duration < expected_duration
+
+    cleanup_temp(temp)
+
 
 def test_versioning():
     """Make sure that versions (output paths) are computed properly based on upstream dependencies and only the versioned fields."""
