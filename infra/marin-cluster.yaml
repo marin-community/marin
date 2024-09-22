@@ -76,5 +76,14 @@ setup_commands:
   - mkdir $HOME/.cache/huggingface -p
   - gcloud secrets versions access latest --secret=HF_TOKEN > $HOME/.cache/huggingface/token
 
+worker_setup_commands:
+  - sudo apt install lsb-release -y
+  - export GCSFUSE_REPO=gcsfuse-`lsb_release -c -s` && echo "deb https://packages.cloud.google.com/apt $GCSFUSE_REPO main" | sudo tee /etc/apt/sources.list.d/gcsfuse.list
+  - curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo apt-key add -
+  - sudo apt-get update
+  - sudo apt-get install fuse gcsfuse -y
+  - mkdir $HOME/gcsfuse_mount -p
+  - gcsfuse --only-dir gcsfuse_mount marin-us-central2 "$HOME/gcsfuse_mount"
+
 # Set Head Node == `ray_head_default`
 head_node_type: head_default
