@@ -99,6 +99,37 @@ To avoid passing `--address ...` you can set the environment variable `export RA
 [`infra/marin-tmux.sh`](./infra/marin-tmux.sh) that automates launching the dashboard for you. Make sure to read the
 script before running!
 
+
+### Using TPUs
+
+If you're running a job that requires 1 machine's worth of TPUs, use the following resources:
+
+```python
+@ray.remote(num_cpus=8, resources={"TPU": 1, "TPU-v4-8-head": 1})
+def my_tpu_job():
+    ...
+    
+```
+
+Always use the `TPU-v4-8-head` resource when requesting TPUs unless you specifically want a multi-node slice. This will
+ensure you don't accidentally grab part of a multi-node slice, which will lead to weird errors.
+
+Also, despite it saying `"TPU": 1`, you're actually getting all the TPUs. This is because Google requires that only one
+process on a machine can access the TPU.
+
+**IMPORTANT**: Ray and `libtpu` don't always get along. If you are using TPUs, you should either fork a process that 
+uses the TPUs or force remove the libtpu lockfile when your task finishes. The latter is very hacky, but it works.
+We offer a utility decorator to do this for you:
+
+```python
+from marin.utils import remove_tpu_lockfile_on_exit
+
+@ray.remote(num_cpus=8, resources={"TPU": 1, "TPU-v4-8-head": 1})
+@remove_tpu_lockfile_on_exit
+def my_tpu_job():
+    ...
+```
+
 ---
 
 ## Organization

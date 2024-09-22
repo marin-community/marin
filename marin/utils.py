@@ -1,7 +1,11 @@
+import logging
 import os
 import re
+from contextlib import contextmanager
 
 import fsspec
+
+logger = logging.getLogger(__name__)
 
 
 def fsspec_exists(file_path):
@@ -238,3 +242,36 @@ def get_gcs_path(file_path):
     if file_path.startswith("gs://"):
         return file_path
     return f"gs://{file_path}"
+
+
+@contextmanager
+def remove_tpu_lockfile_on_exit(fn):
+    """
+    Context manager to remove the TPU lockfile on exit.
+    """
+    try:
+        yield
+    finally:
+        _hacky_remove_tpu_lockfile()
+
+
+def _hacky_remove_tpu_lockfile():
+    """
+    This is a hack to remove the lockfile that TPU pods create on the host filesystem.
+
+    libtpu only allows one process to access the TPU at a time, and it uses a lockfile to enforce this.
+    Ordinarily a lockfile would be removed when the process exits, but in the case of Ray, the process is
+    a long-running daemon that doesn't typically exit until the node is shut down. This means that the lockfile
+    persists across Ray tasks. This doesn't apply to tasks that fork a new process to do the TPU work, but
+    does apply to tasks that run the TPU code in the same process as the Ray worker.
+    """
+    try:
+        os.unlink("/tmp/libtpu_lockfile")
+    except FileNotFoundError:
+        pass
+    except PermissionError:
+        try:
+            os.system("sudo rm -f /tmp/libtpu_lockfile")
+        except Exception:  # noqa
+            logger.error("Failed to remove lockfile")
+            pass
