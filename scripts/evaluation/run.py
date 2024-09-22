@@ -23,7 +23,9 @@ def main():
     print(f"Evaluating {model.name} with {args.evals}")
 
     start_time: float = time.time()
-    evaluator.evaluate(model, evals=args.evals, output_path=args.evaluation_path)
+    evaluator.evaluate(
+        model, evals=args.evals, output_path=args.evaluation_path, max_eval_instances=args.max_eval_instances
+    )
     print(f"Done (total time: {time.time() - start_time} seconds)")
 
 
@@ -56,6 +58,13 @@ if __name__ == "__main__":
         "tasks in for EleutherAI's lm-evaluation-harness or a list of evals from HELM (e.g., mmlu, lite, etc.). "
         "See https://github.com/stanford-crfm/helm/tree/main/src/helm/benchmark/presentation for the full list.",
         default=[],
+    )
+    parser.add_argument(
+        "-m",
+        "--max-eval-instances",
+        type=int,
+        default=None,
+        help="Maximum number of instances to evaluate on.",
     )
     parser.add_argument(
         "--evaluation-path",
