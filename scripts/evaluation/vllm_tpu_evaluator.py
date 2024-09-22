@@ -1,4 +1,4 @@
-from abc import ABC, abstractmethod
+from abc import ABC
 from typing import Dict, List, Optional
 import os
 import requests
@@ -92,7 +92,7 @@ class VllmTpuEvaluator(Evaluator, ABC):
         return server_url
 
     @staticmethod
-    def cleanup(model: ModelConfig, vllm_port: Optional[int] = None) -> None:
+    def cleanup(model: ModelConfig, vllm_port: int | None = None) -> None:
         """
         Clean up the vLLM server and any other resources.
         """
@@ -130,7 +130,7 @@ class VllmTpuEvaluator(Evaluator, ABC):
         return runtime_env
 
     def evaluate(
-        self, model: ModelConfig, evals: List[str], output_path: str, max_eval_instances: Optional[int] = None
+        self, model: ModelConfig, evals: List[str], output_path: str, max_eval_instances: int | None = None
     ) -> None:
         """
         Launches the evaluation run with Ray.

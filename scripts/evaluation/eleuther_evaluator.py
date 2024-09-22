@@ -23,9 +23,17 @@ class EleutherEvaluator(VllmTpuEvaluator):
     ]
 
     @ray.remote(memory=64 * 1024 * 1024 * 1024, resources={"TPU": 4})  # 64 GB of memory, always request 4 TPUs
-    def run(
-        self, model: ModelConfig, evals: List[str], output_path: str, max_eval_instances: Optional[int] = None
-    ) -> None:
+    def run(self, model: ModelConfig, evals: List[str], output_path: str, max_eval_instances: int | None = None) -> None:
+        """
+        Runs EleutherAI's lm-eval harness on the specified model and set of  tasks.
+
+        Args:
+            model (ModelConfig): The model configuration of the model we want to evaluate
+            evals (List[str]): The list of evaluations to run.
+            output_path (str): The path to save the evaluation results.
+            max_eval_instances (int | None): The maximum number of evaluation instances to run.
+        """
+
         # Download the model from GCS or HuggingFace
         model.ensure_downloaded(local_path=os.path.join(VllmTpuEvaluator.CACHE_PATH, model.name))
 
