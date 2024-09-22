@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Dict, List
 import time
 
 import ray
@@ -120,7 +120,7 @@ class SimpleEvaluator(VllmTpuEvaluator):
 
     @ray.remote(memory=64 * 1024 * 1024 * 1024, resources={"TPU": 4})  # 64 GB of memory, always request 4 TPUs
     def run(
-        self, model: ModelConfig, evals: List[str], output_path: str, max_eval_instances: Optional[int] = None
+        self, model: ModelConfig, evals: List[str], output_path: str, max_eval_instances: int | None = None
     ) -> None:
         try:
             from vllm import LLM, SamplingParams

@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional
+from typing import Dict, List
 import os
 import traceback
 
@@ -97,8 +97,18 @@ class HELMEvaluator(VllmTpuEvaluator):
 
     @ray.remote(memory=64 * 1024 * 1024 * 1024, resources={"TPU": 4})  # 64 GB of memory, always request 4 TPUs
     def run(
-        self, model: ModelConfig, evals: List[str], output_path: str, max_eval_instances: Optional[int] = None
+        self, model: ModelConfig, evals: List[str], output_path: str, max_eval_instances: int | None = None
     ) -> None:
+        """
+        Runs HELM on the specified model and set of evaluations.
+
+        Args:
+            model (ModelConfig): The model configuration of the model we want to evaluate
+            evals (List[str]): The list of evaluations to run.
+            output_path (str): The path to save the evaluation results.
+            max_eval_instances (int | None): The maximum number of evaluation instances to run.
+        """
+
         is_successful: bool = False
         try:
             from helm.common.general import ensure_file_downloaded
