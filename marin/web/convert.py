@@ -1,7 +1,7 @@
+import logging
 import re
 from dataclasses import asdict
 from urllib.parse import urljoin
-import logging
 
 import htmlmin
 from bs4 import BeautifulSoup
