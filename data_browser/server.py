@@ -15,7 +15,7 @@ fs = fsspec.filesystem("gcs")
 
 def list_files(path: str) -> dict:
     """List all files in the given path."""
-    files = fs.ls(path, detail=True)
+    files = fs.ls(path, detail=True, refresh=True)
 
     return {
         "type": "directory",
