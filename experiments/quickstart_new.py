@@ -18,20 +18,32 @@ raw_data = get_input(raw_download_step, "8fd6e8e/huggingface.co/datasets/skaramc
 ############################################################
 # Transform HTML to text
 
-from scripts.hello_world_fw.process import main_ray, FineWebConfig
+from scripts.hello_world_fw.process import transform, FineWebConfig
 from marin.schemas.web.convert import TrafilaturaConfig
 
-transform_step = ExecutorStep(name="documents/hello_world_fw-pliang", fn=main_ray, config=FineWebConfig(
+transform_trafilatura_step = ExecutorStep(name="documents/hello_world_fw-pliang-trafilatura", fn=transform, config=FineWebConfig(
     input_path=raw_data,
     output_path=get_output(),
-    extract_method="trafilatura",
+    extract_method=versioned("trafilatura"),
     config=TrafilaturaConfig(
         favor_precision=versioned(False),
         favor_recall=versioned(True),
         include_comments=versioned(False),
         deduplicate=versioned(False),
-    ))
-)
+    ),
+))
+
+transform_resiliparse_step = ExecutorStep(name="documents/hello_world_fw-pliang-resiliparse", fn=transform, config=FineWebConfig(
+    input_path=raw_data,
+    output_path=get_output(),
+    extract_method=versioned("resiliparse"),
+))
+
+transform_readability_step = ExecutorStep(name="documents/hello_world_fw-pliang-readability", fn=transform, config=FineWebConfig(
+    input_path=raw_data,
+    output_path=get_output(),
+    extract_method=versioned("readability"),
+))
 
 ############################################################
 # Download good data
@@ -49,14 +61,15 @@ sft_data = "gs://marin-us-central2/documents/instruct/v1_olmo_mix/text",
 ############################################################
 # Train quality classifier
 
-from scripts.fasttext.train_fasttext import main_ray, MainConfig
+from scripts.fasttext.train_fasttext import train, TrainFasttextClassifierConfig
 
-train_quality_step = ExecutorStep(name="classifiers/hello_world_fw-pliang", fn=main_ray, config=MainConfig(
+train_quality_step = ExecutorStep(name="classifiers/hello_world_fw-pliang", fn=train, config=TrainFasttextClassifierConfig(
     pos_doc_path=sft_data,
-    neg_doc_path=get_input(transform_step),
+    neg_doc_path=get_input(transform_trafilatura_step),
+    output_path=get_output(),
     pos_sampling_rate=0.1,
     neg_sampling_rate=1.0,
-    training_args={"lr": 0.1},
+    fasttext_args={"lr": 0.1},
 ))
 
 ############################################################
@@ -76,8 +89,10 @@ annotate_quality_step = ExecutorStep(name="attributes/hello_world_fw-pliang", fn
 if __name__ == "__main__":
     executor_main(steps=[
         raw_download_step,
-        transform_step,
-        #train_quality_step,
+        #transform_trafilatura_step,
+        #transform_resiliparse_step,
+        #transform_readability_step,
+        train_quality_step,
         #annotate_quality_step,
     ])
 

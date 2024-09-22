@@ -5,12 +5,17 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, fields, is_dataclass, replace
 from typing import Any
+import logging
 
 import draccus
 import ray
+import ray.remote_function
 
 from marin.utils import fsspec_exists
 
+logger = logging.getLogger("ray")
+
+ExecutorFunction = Callable | ray.remote_function.RemoteFunction | None
 
 @dataclass(frozen=True)
 class ExecutorStep:
@@ -33,7 +38,7 @@ class ExecutorStep:
     - `VersionedValue(value)`: a value that should be part of the version
     """
     name: str
-    fn: Callable | ray.remote_function.RemoteFunction | None
+    fn: ExecutorFunction
     config: dataclass
 
     def __hash__(self):
@@ -73,7 +78,7 @@ def dependency_index_str(i: int) -> str:
     return f"DEP[{i}]"
 
 
-def collect_version_dependencies(obj: Any, version: dict[str, Any], dependencies: list[ExecutorStep], prefix: str = ""):
+def collect_dependencies_and_version(obj: Any, dependencies: list[ExecutorStep], version: dict[str, Any]):
     """Recurse through `obj` to find all the versioned values, and return them
     as a dict where the key is the sequence of fields identifying where the
     value resides in obj.  Example:
@@ -93,8 +98,9 @@ def collect_version_dependencies(obj: Any, version: dict[str, Any], dependencies
             version[prefix] = obj.value
         elif isinstance(obj, InputName):
             # Put string i for the i-th dependency
-            version[prefix] = dependency_index_str(len(dependencies)) + ("/" + obj.name if obj.name else "")
+            index = len(dependencies)
             dependencies.append(obj.step)
+            version[prefix] = dependency_index_str(index) + ("/" + obj.name if obj.name else "")
         elif is_dataclass(obj):
             # Recurse through sub-dataclasses
             for field in fields(obj):
@@ -109,7 +115,7 @@ def collect_version_dependencies(obj: Any, version: dict[str, Any], dependencies
             for i, x in obj.items():
                 recurse(x, new_prefix + i)
 
-    recurse(obj, prefix)
+    recurse(obj, "")
 
 
 def instantiate_config(config: dataclass, output_path: str, output_paths: dict[ExecutorStep, str]) -> dataclass:
@@ -146,27 +152,30 @@ class Executor:
 
     def __init__(self, prefix: str):
         self.prefix = prefix
+        self.dependencies: dict[ExecutorStep, list[ExecutorStep]] = {}
         self.versions: dict[ExecutorStep, dict[str, Any]] = {}
         self.output_paths: dict[ExecutorStep, str] = {}
         self.steps: list[ExecutorStep] = []
+        self.refs: dict[ExecutorStep, ray.ObjectRef] = {}
 
     def run(self, steps: list[ExecutorStep], dry_run: bool = False):
         # Gather all the steps, compute versions and output paths for all of them.
         for step in steps:
             self.compute_version(step)
 
-        # Print and run each step
+        # Run each step
         for step in self.steps:
-            self.run_step(step, dry_run=dry_run)
+            self.refs[step] = self.run_step(step, dry_run=dry_run)
+        ray.get(list(self.refs.values()))
 
     def compute_version(self, step: ExecutorStep) -> dict[str, Any]:
         if step in self.versions:
             return self.versions[step]
 
-        # Collect version and dependencies
-        config_version: dict[str, Any] = {}
+        # Collect dependencies and the config version
         dependencies: list[ExecutorStep] = []
-        collect_version_dependencies(obj=step.config, version=config_version, dependencies=dependencies)
+        config_version: dict[str, Any] = {}
+        collect_dependencies_and_version(obj=step.config, dependencies=dependencies, version=config_version)
 
         # Recurse on dependencies
         for dep in dependencies:
@@ -188,14 +197,18 @@ class Executor:
 
         # Record everything
         self.steps.append(step)
+        self.dependencies[step] = dependencies
         self.versions[step] = version
         self.output_paths[step] = output_path
 
         return version
 
 
-    def run_step(self, step: ExecutorStep, dry_run: bool):
-        """Run a single `step`.  If `dry_run`, only print out what needs to be done."""
+    def run_step(self, step: ExecutorStep, dry_run: bool) -> ray.ObjectRef:
+        """
+        Return a Ray object reference to the result of running the `step`.
+        If `dry_run`, only print out what needs to be done.
+        """
         config = instantiate_config(
             config=step.config,
             output_path=self.output_paths[step],
@@ -210,29 +223,35 @@ class Executor:
         completed_str = "COMPLETED" if completed else "PENDING"
 
         # Print information
-        print(f"[{completed_str}] {step.name}: {get_fn_name(step.fn)}")
-        print(f"  output_path = {output_path}")
-        print(f"  config = {json.dumps(config_version)}")
+        logger.info(f"[{completed_str}] {step.name}: {get_fn_name(step.fn)}")
+        logger.info(f"  output_path = {output_path}")
+        logger.info(f"  config = {json.dumps(config_version)}")
         for i, dep_version in enumerate(self.versions[step]["dependencies"]):
-            print(f"  {dependency_index_str(i)} = {dep_version['name']}")
+            logger.info(f"  {dependency_index_str(i)} = {dep_version['name']}")
 
-        if not dry_run and not completed:
-            start_time = time.time()
+        # Call `fn` if it hasn't been done yet
+        fn = step.fn if not dry_run and not completed else None
 
-            # Actually do the work!
-            if step.fn is None:
-                pass
-            elif isinstance(step.fn, ray.remote_function.RemoteFunction):
-                ray.get(step.fn.remote(config))
-            elif isinstance(step.fn, Callable):
-                step.fn(config)
-            else:
-                raise ValueError(f"Expected a Callable or Ray function, but got {step.fn}")
+        logger.info("")
 
-            end_time = time.time()
-            print(f"  Duration: {end_time - start_time}s")
+        dependencies = [self.refs[dep] for dep in self.dependencies[step]]
+        return execute_after_dependencies.remote(fn, config, dependencies)
 
-        print("")
+@ray.remote
+def execute_after_dependencies(fn: ExecutorFunction, config: dataclass, dependencies: list[ray.ObjectRef]):
+    """Run a function with the given config."""
+    # Ensure that dependencies are all run first
+    ray.get(dependencies)
+
+    # Call fn(config)
+    if fn is None:
+        pass
+    elif isinstance(fn, ray.remote_function.RemoteFunction):
+        ray.get(fn.remote(config))
+    elif isinstance(fn, Callable):
+        fn(config)
+    else:
+        raise ValueError(f"Expected a Callable or Ray function, but got {fn}")
 
 
 def get_fn_name(fn: Callable | ray.remote_function.RemoteFunction):
@@ -254,5 +273,6 @@ class ExecutorMainConfig:
 @draccus.wrap()
 def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep]):
     """Main entry point for experiments (to standardize)"""
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     executor = Executor(prefix=config.prefix)
     executor.run(steps=steps, dry_run=config.dry_run)
