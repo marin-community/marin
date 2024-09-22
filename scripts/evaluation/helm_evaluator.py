@@ -96,9 +96,7 @@ class HELMEvaluator(VllmTpuEvaluator):
         write_yaml(content, HELMEvaluator.TOKENIZER_CONFIGS_FILE_PATH)
 
     @ray.remote(memory=64 * 1024 * 1024 * 1024, resources={"TPU": 4})  # 64 GB of memory, always request 4 TPUs
-    def run(
-        self, model: ModelConfig, evals: List[str], output_path: str, max_eval_instances: int | None = None
-    ) -> None:
+    def run(self, model: ModelConfig, evals: List[str], output_path: str, max_eval_instances: int | None = None) -> None:
         """
         Runs HELM on the specified model and set of evaluations.
 
@@ -121,19 +119,17 @@ class HELMEvaluator(VllmTpuEvaluator):
                 run_entries_file: str = f"run_entries_{eval}.conf"
                 run_entries_url: str = self.RUN_ENTRIES_TEMPLATE.format(run_entries_file=run_entries_file)
                 ensure_file_downloaded(source_url=run_entries_url, target_path=run_entries_file)
-                assert (
-                    os.path.exists(run_entries_file),
-                    f"Failed to download. Does {run_entries_file} exist at {self.ALL_RUN_ENTRIES_URL}?",
-                )
+                assert os.path.exists(
+                    run_entries_file
+                ), f"Failed to download. Does {run_entries_file} exist at {self.ALL_RUN_ENTRIES_URL}?"
                 run_entries_files.append(run_entries_file)
 
                 schema_file: str = f"schema_{eval}.yaml"
                 schema_url: str = self.SCHEMA_TEMPLATE.format(schema_file=schema_file)
                 ensure_file_downloaded(source_url=schema_url, target_path=schema_file)
-                assert (
-                    os.path.exists(schema_file),
-                    f"Failed to download. Does {schema_file} exist at {self.ALL_SCHEMA_URL}?",
-                )
+                assert os.path.exists(
+                    schema_file
+                ), f"Failed to download. Does {schema_file} exist at {self.ALL_SCHEMA_URL}?"
                 schema_files.append(schema_file)
 
             # Download the model checkpoint if necessary.
