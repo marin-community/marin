@@ -272,6 +272,6 @@ def _hacky_remove_tpu_lockfile():
     except PermissionError:
         try:
             os.system("sudo rm -f /tmp/libtpu_lockfile")
-        except Exception:  # noqa
+        except Exception:
             logger.error("Failed to remove lockfile")
             pass
