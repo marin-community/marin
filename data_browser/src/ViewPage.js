@@ -65,6 +65,8 @@ function ViewPage() {
   const filters = parseFilters(urlParams.get("filters"));
   const sort = parseSort(urlParams.get("sort"));
   const reverse = urlParams.get("reverse");
+  const highlights = parseHighlights(urlParams.get("highlights"));
+  const showOnlyHighlights = urlParams.get("showOnlyHighlights");
 
   // State
   const [error, setError] = useState(null);
@@ -114,9 +116,10 @@ function ViewPage() {
     {renderOffsetCount({offset, count, mainPayload, updateUrlParams})}
     {renderFilters(filters, updateUrlParams)}
     {renderSort(sort, reverse, updateUrlParams)}
+    {renderHighlights(highlights, showOnlyHighlights, updateUrlParams)}
     {renderPaths({paths, updateUrlParams})}
     <hr />
-    {renderPayloads({paths, payloads, offset, filters, sort, reverse, updateUrlParams})}
+    {renderPayloads({paths, payloads, offset, filters, sort, reverse, highlights, showOnlyHighlights, updateUrlParams})}
   </div>);
 }
 
@@ -126,7 +129,9 @@ export default ViewPage;
 
 const removeSymbol = "✖";
 const cloneSymbol = "📋";
-const downloadSymbol = "⬇";
+
+const upArrow = <span>&uarr;</span>;
+const downArrow = <span>&darr;</span>;
 
 /**
  * Parses the URL parameter `paths`.
@@ -185,6 +190,27 @@ function parseSort(str) {
     return {key: result};
   } catch (e) {
     return {key: null, error: "Invalid sort (invalid JSON): " + str};
+  }
+}
+
+/**
+ * Parses the URL parameter `highlights`.
+ *
+ * @param {str} str - the highlights URL parameter, encoded as a JSON string
+ * @returns {highlights: string[], error: string}
+ */
+function parseHighlights(str) {
+  if (!str) {
+    return {highlights: []};
+  }
+  try {
+    const result = JSON.parse(str);
+    if (!Array.isArray(result)) {
+      return {highlights: [], error: "Invalid highlights (should be JSON array): " + str};
+    }
+    return {highlights: result};
+  } catch (e) {
+    return {highlights: [], error: "Invalid highlights (invalid JSON): " + str};
   }
 }
 
@@ -281,13 +307,14 @@ function renderOffsetCount(args) {
   </div>);
 }
 
-function renderFilterSortKey(key) {
+function renderKey(key) {
   return "[" + key.join("→") + "]";
 }
 
-function removeFilter(filters, i, updateUrlParams) {
-  const newFilters = [...filters.filters.slice(0, i), ...filters.filters.slice(i + 1)];
-  updateUrlParams({filters: JSON.stringify(newFilters)});
+function removeFromList(name, list, i, updateUrlParams) {
+  // Example: name = "filters" or "highlights"
+  const newList = [...list.slice(0, i), ...list.slice(i + 1)];
+  updateUrlParams({[name]: JSON.stringify(newList)});
 }
 
 function renderFilters(filters, updateUrlParams) {
@@ -301,9 +328,9 @@ function renderFilters(filters, updateUrlParams) {
     Filters:
     <ul>
       {filters.filters.map((filter, i) => {
-        const removeButton = <span className="clickable" onClick={() => removeFilter(filters, i, updateUrlParams)}>{removeSymbol}</span>;
+        const removeButton = <span className="clickable" onClick={() => removeFromList("filters", filters.filters, i, updateUrlParams)}>{removeSymbol}</span>;
         return (<li key={i}>
-          {renderFilterSortKey(filter.key)} {filter.rel} {JSON.stringify(filter.value)} {removeButton}
+          {renderKey(filter.key)} {filter.rel} {JSON.stringify(filter.value)} {removeButton}
         </li>);
       })}
     </ul>
@@ -317,15 +344,41 @@ function renderSort(sort, reverse, updateUrlParams) {
   if (!sort.key) {
     return null;
   }
-  const upArrow = <span>&uarr;</span>;
-  const downArrow = <span>&darr;</span>;
   const removeButton = <span className="clickable" onClick={() => updateUrlParams({sort: null, reverse: null})}>{removeSymbol}</span>;
   return (<div>
-    Sort: {renderFilterSortKey(sort.key)}
+    Sort: {renderKey(sort.key)}
     {reverse ? downArrow : upArrow} {removeButton}
   </div>);
 }
 
+function renderHighlights(highlights, showOnlyHighlights, updateUrlParams) {
+  if (highlights.error) {
+    return renderError(highlights.error);
+  }
+  if (!highlights.highlights.length === 0) {
+    return null;
+  }
+
+  // Toggle showing only highlights or showing all
+  const showOnlyButton = showOnlyHighlights ?
+    <span className="disabled">show only highlights</span> :
+    <span className="clickable" onClick={() => updateUrlParams({showOnlyHighlights: true})}>show only highlights</span>;
+  const showAllButton = showOnlyHighlights ?
+    <span className="clickable" onClick={() => updateUrlParams({showOnlyHighlights: null})}>show all</span> :
+    <span className="disabled">show all</span>;
+
+  return (<div>
+    Highlights [{showOnlyButton} | {showAllButton}]:
+    <ul>
+      {highlights.highlights.map((highlight, i) => {
+        const removeButton = <span className="clickable" onClick={() => removeFromList("highlights", highlights.highlights, i, updateUrlParams)}>{removeSymbol}</span>;
+        return (<li key={i}>
+          {renderKey(highlight)} {removeButton}
+        </li>);
+      })}
+    </ul>
+  </div>);
+}
 
 function updatePath(paths, index, newPath, updateUrlParams) {
   const newPaths = [...paths.slice(0, index), newPath, ...paths.slice(index + 1)]
@@ -432,8 +485,8 @@ function isUrl(str) {
  * - asc (to sort in ascending order)
  * - desc (to sort in descending order)
  */
-function onItemClick(itemKey, item, updateUrlParams) {
-  const response = prompt("Enter filter (e.g., >5) or 'sort' or 'desc' or 'asc'");
+function onItemClick(itemKey, item, oldHighlights, updateUrlParams) {
+  const response = prompt("Enter filter (e.g., >5) or 'sort' or 'desc' or 'asc' or 'hi'/'highlight'");
   if (!response) {
     return;
   }
@@ -449,6 +502,7 @@ function onItemClick(itemKey, item, updateUrlParams) {
   const filters = [];
   let sort = null;
   let reverse = null;
+  const highlights = oldHighlights.highlights.slice();
 
   // The input is a space-separated list of tokens which contribute to filters/sort/reverse.
   response.trim().split(" ").forEach((token) => {
@@ -458,6 +512,8 @@ function onItemClick(itemKey, item, updateUrlParams) {
       reverse = false;
     } else if (token === "desc") {
       reverse = true;
+    } else if (token === "highlight" || token === "hi") {
+      highlights.push(itemKey);
     } else {
       const m = token.match(/^(<|<=|>|>=|=|!=|=~)(.*)$/);
       if (m) {
@@ -479,16 +535,42 @@ function onItemClick(itemKey, item, updateUrlParams) {
   if (reverse !== null) {
     delta.reverse = reverse;
   }
+  if (highlights.length > 0) {
+    delta.highlights = JSON.stringify(highlights);
+  }
 
   // Update the URL parameters
   updateUrlParams(delta);
 }
 
 /**
+ * Return whether if `highlights` is specified, we want to show at least some
+ * things under `itemKey`.
+ */
+function highlightsMatches(highlights, itemKey) {
+  // If no highlights are provided, then it's okay
+  if (highlights.highlights.length === 0) {
+    return true;
+  }
+
+  // Check that some highlight matches in the sense that the itemKey is a prefix
+  // of the highlight or vice-versa.
+  return highlights.highlights.some((highlight) => {
+    const n = Math.min(highlight.length, itemKey.length);
+    for (let i = 0; i < n; i++) {
+      if (highlight[i] !== itemKey[i]) {
+        return false;
+      }
+    }
+    return true;
+  });
+}
+
+/**
  * Recursively render `item`, which is an arbitrary JSON object.
  * `key` references `item`, so that when people click on part of an item, we can modify the key.
  */
-function renderItem(item, itemKey, updateUrlParams) {
+function renderItem(item, itemKey, highlights, showOnlyHighlights, updateUrlParams) {
   if (item === null) {
     return "<null>";
   }
@@ -498,23 +580,30 @@ function renderItem(item, itemKey, updateUrlParams) {
       return <a href={item} target="_blank">{item}</a>;
     } else {
       const clickable = item.length < 20 ? "clickable" : "";
-      return (<div className={clickable} onClick={() => onItemClick(itemKey, item, updateUrlParams)}>
+      return (<div className={clickable} onClick={() => onItemClick(itemKey, item, highlights, updateUrlParams)}>
         {renderText(item)}
       </div>);
     }
   }
 
   if (typeof item === "number") {
-    return (<div className="clickable" onClick={() => onItemClick(itemKey, item, updateUrlParams)}>
+    return (<div className="clickable" onClick={() => onItemClick(itemKey, item, highlights, updateUrlParams)}>
       {item}
     </div>);
   }
 
   if (typeof item === "object") {
     const rows = Object.entries(item).map(([key, value], i) => {
+      const newItemKey = itemKey.concat([key]);
+
+      // Only show if this is consistent with some path in highlight
+      if (showOnlyHighlights && !highlightsMatches(highlights, newItemKey)) {
+        return null;
+      }
+
       return (<tr key={i}>
         <td>{key}</td>
-        <td>{renderItem(value, itemKey.concat([key]), updateUrlParams)}</td>
+        <td>{renderItem(value, newItemKey, highlights, showOnlyHighlights, updateUrlParams)}</td>
       </tr>);
     });
     return <table className="item-table"><tbody>{rows}</tbody></table>;
@@ -627,7 +716,7 @@ function sortRowIndices(args) {
  * the other `paths`.
  */
 function renderItems(args) {
-  const {paths, payloads, offset, filters, sort, reverse, updateUrlParams} = args;
+  const {paths, payloads, offset, filters, sort, reverse, highlights, showOnlyHighlights, updateUrlParams} = args;
 
   // Assume each payload is a list of items
   const hasItems = paths.map((path) => payloads[path] && Array.isArray(payloads[path].items));
@@ -654,7 +743,7 @@ function renderItems(args) {
       const items = payloads[path].items;
       return (<div key={index}>
         {paths.length > 1 ? renderPath({paths, index, updateUrlParams}) : null}
-        {renderItem(items[r], [index], updateUrlParams)}
+        {renderItem(items[r], [index], highlights, showOnlyHighlights, updateUrlParams)}
       </div>);
     });
     return (<tr key={r}>
@@ -669,7 +758,7 @@ function renderItems(args) {
  * Render everything (assume Case 3).
  */
 function renderPayloads(args) {
-  const {paths, payloads, offset, filters, sort, reverse, updateUrlParams} = args;
+  const {paths, payloads, offset, filters, sort, reverse, highlights, showOnlyHighlights, updateUrlParams} = args;
 
   const rendered = [];
 
@@ -692,7 +781,7 @@ function renderPayloads(args) {
   });
 
   // Case 1: render all the paths with items in one table.
-  rendered.push(renderItems({paths, payloads, offset, filters, sort, reverse, updateUrlParams}));
+  rendered.push(renderItems({paths, payloads, offset, filters, sort, reverse, highlights, showOnlyHighlights, updateUrlParams}));
 
   return rendered.map((item, i) => <div key={i}>{item}</div>);
 }
