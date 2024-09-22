@@ -6,6 +6,7 @@ Utility functions for building quality classifiers.
 
 import json
 import logging
+import os
 from collections.abc import Callable
 
 import fsspec
@@ -92,7 +93,7 @@ def merge_shards_and_split(
     shard_paths: list[str],
     train_path: str,
     val_path: str,
-    val_split: float,
+    val_frac: float,
     seed: int,
     format_example: Callable[[dict], str],
 ) -> bool:
@@ -103,7 +104,7 @@ def merge_shards_and_split(
         shard_paths (List[str]): List of paths to shard files.
         train_path (str): Path to the output training dataset file.
         val_path (str): Path to the output validation dataset file.
-        val_split (float): Fraction of data to be used for validation.
+        val_frac (float): Fraction of data to be used for validation.
         seed (int): Seed for random number generator to ensure reproducibility.
         format_example (Callable[[dict],str]): Function to format example into correct training
                                                format (e.g., BERT, fastText, etc.).
@@ -119,10 +120,10 @@ def merge_shards_and_split(
                     data = json.loads(input_line)
                     output_line = format_example(data)
 
-                    if rng.random() < val_split:
-                        f_val.write(output_line)
+                    if rng.random() < val_frac:
+                        f_val.write(output_line + "\n")
                     else:
-                        f_train.write(output_line)
+                        f_train.write(output_line + "\n")
 
     return True
 
@@ -132,8 +133,8 @@ def create_label_attribute(input_doc_path: str, output_attr_path: str, label: st
     Create attribute for quality classifier label.
 
     Args:
-        input_doc_path (str): Path to documents (i.e., gs://{BUCKET}/documents/...).
-        output_attr_path (str): Path to write attributes (i.e., gs://{BUCKET}/attributes/.../<experiment>).
+        input_doc_path (str): Path to documents (i.e., gs://$BUCKET/documents/...).
+        output_attr_path (str): Path to write attributes (i.e., gs://$BUCKET/attributes/.../<experiment>).
         label (str): Quality classifier label to write as attribute.
 
     Returns:
@@ -154,9 +155,8 @@ def create_label_attribute(input_doc_path: str, output_attr_path: str, label: st
     return True
 
 
-def attribute_to_dataset(
-    output_base_path: str,
-    experiment: str,
+def attributes_to_dataset(
+    output_path: str,
     doc_path: str,
     attr_path: str,
     sampling_rate: float,
@@ -167,10 +167,9 @@ def attribute_to_dataset(
     Converts documents and attributes to quality classifier training data (text,label) pairs.
 
     Args:
-        output_base_path (str): Base path for output data (i.e., gs://{BUCKET}).
-        experiment (str): Experiment identifier.
-        doc_path (str): Path to documents (i.e., gs://{BUCKET}/documents/reddit/v0/<doc_experiment>).
-        attr_path (str): Path to attributes (i.e., gs://{BUCKET}/attributes/reddit/v0/<attr_experiment>).
+        output_path (str): Path for output data (i.e., gs://$BUCKET/classifiers/$EXPERIMENT).
+        doc_path (str): Path to input documents (i.e., gs://$BUCKET/documents/reddit/v0/<doc_experiment>).
+        attr_path (str): Path to input attributes (i.e., gs://$BUCKET/attributes/reddit/v0/<attr_experiment>).
         sampling_rate (float): Fraction of documents from the dataset to add to fastText training dataset.
         seed (int): Seed for random number generator to ensure reproducibility.
         get_label (Callable[[dict,dict], str]): Function to extract label from documents and attributes.
@@ -187,13 +186,10 @@ def attribute_to_dataset(
         attr_file_path = rebase_file_path(doc_path, input_file_path, attr_path)
         return write_examples(input_file_path, output_file_path, attr_file_path, sampling_rate, seed, get_label)
 
-    # HACK: ok to keep?
-    doc_path_prefix = doc_path.split("/documents")[0]
-    output_path = rebase_file_path(
-        f"{doc_path_prefix}/documents", doc_path, f"{output_base_path}/classifiers/{experiment}/data"
-    )
+    _, doc_fs_path = fsspec.core.url_to_fs(doc_path)
+    output_dataset_path = os.path.join(output_path, "data", doc_fs_path)
 
-    responses = map_files_in_directory(processing_func.remote, doc_path, "**/*.jsonl.gz", output_path)
+    responses = map_files_in_directory(processing_func.remote, doc_path, "**/*.jsonl.gz", output_dataset_path)
     try:
         ray.get(responses)
     except Exception as e:
