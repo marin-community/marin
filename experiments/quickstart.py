@@ -8,6 +8,7 @@ raw_download_step = ExecutorStep(name="raw/hello_world_fw-pliang", fn=download, 
     hf_dataset_id="skaramcheti/hello_world_fw",
     revision="8fd6e8e",
     gcs_output_path=get_output(),
+    wait_for_completion=True,
 ))
 raw_data = get_input(raw_download_step,
     "8fd6e8e/huggingface.co/datasets/skaramcheti/hello_world_fw/resolve/8fd6e8e/data/CC-MAIN-2024-10")
