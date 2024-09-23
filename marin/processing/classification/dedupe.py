@@ -8,7 +8,7 @@ import fsspec
 import ray
 from tqdm import tqdm
 
-from marin.utils import fsspec_glob, fsspec_mkdirs, fsspec_rm, rebase_file_path, validate_marin_gcp_path
+from marin.utils import fsspec_glob, fsspec_mkdirs, fsspec_rm, rebase_file_path
 
 
 @dataclass

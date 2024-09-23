@@ -16,7 +16,6 @@ from marin.utils import (
     fsspec_isdir,
     fsspec_mkdirs,
     rebase_file_path,
-    validate_marin_gcp_path,
 )
 
 
