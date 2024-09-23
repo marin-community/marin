@@ -82,9 +82,11 @@ def write_examples(
             data = json.loads(input_line)
             attribs = json.loads(attr_line)
 
-            example = {"text": data["text"], "label": get_label(data, attribs)}
-
-            f_out.write(json.dumps(example) + "\n")
+            if "text" in data:
+                example = {"text": data["text"], "label": get_label(data, attribs)}
+                f_out.write(json.dumps(example) + "\n")
+            else:
+                logging.warning(f"Document {data['id']} has no text field.")
 
     return True
 

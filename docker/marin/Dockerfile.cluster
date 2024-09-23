@@ -60,4 +60,12 @@ ENV PATH=$PATH:/home/ray/anaconda3/bin
 # see also https://cloud.google.com/kubernetes-engine/docs/troubleshooting/tpus
 RUN ulimit -l 68719476736
 
+# Setup gcsfuse
+RUN sudo apt install lsb-release -y
+RUN export GCSFUSE_REPO=gcsfuse-`lsb_release -c -s` && echo "deb https://packages.cloud.google.com/apt $GCSFUSE_REPO main" | sudo tee /etc/apt/sources.list.d/gcsfuse.list
+RUN curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo apt-key add -
+RUN sudo apt-get update && sudo apt-get install fuse gcsfuse -y
+RUN sudo mkdir /opt/gcsfuse_mount
+RUN sudo chown -R $(whoami) /opt/gcsfuse_mount
+
 WORKDIR /opt/marin

@@ -65,7 +65,8 @@ from scripts.fasttext.train_fasttext import train, TrainFasttextClassifierConfig
 
 train_quality_step = ExecutorStep(name="classifiers/hello_world_fw-pliang", fn=train, config=TrainFasttextClassifierConfig(
     pos_doc_path=sft_data,
-    neg_doc_path=get_input(transform_trafilatura_step),
+    #neg_doc_path=get_input(transform_trafilatura_step),
+    neg_doc_path=get_input(transform_readability_step),
     output_path=get_output(),
     pos_sampling_rate=0.1,
     neg_sampling_rate=1.0,
