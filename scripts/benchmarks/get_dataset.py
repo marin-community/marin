@@ -2,9 +2,7 @@ from datasets import load_dataset
 import json
 import argparse
 import os
-import glob
 import yaml
-import pathlib
 import fsspec
 from collections import defaultdict
 
@@ -30,7 +28,7 @@ def main(args):
     file_names = config["file_names"]
     hf_path = config["hf_path"]
     datasets = load_datasets(config)
-    output_prefix = pathlib.Path(args.output)
+    output_prefix = args.output
     subject_key = config.get("subject_key", "")
     prompt_key = config.get("prompt_key", "")
     answer_text_key = config.get("answer_text_key", "")
@@ -41,7 +39,7 @@ def main(args):
     # Load dataset from huggingface dataset
     if args.decontamination:
         for dataset, file_name in zip(datasets, file_names):
-            output_path = output_prefix / f"{dataset_name}-{file_name}-decontamination.jsonl.gz"
+            output_path = os.path.join(output_prefix, f"{dataset_name}-{file_name}-decontamination.jsonl.gz")
             with fsspec.open(output_path, "wt", compression='gzip') as dolma_file:
                 for idx, example in enumerate(dataset):
                     subject = example.get(subject_key, "")
@@ -91,7 +89,8 @@ def main(args):
             
             # Writing from subject dict to corresponding files for each subject
             for subject in subject_files:
-                output_path = output_prefix / f"{dataset_name}-{subject}-{data_file}-evaluation.jsonl.gz"
+                output_path = os.path.join(output_prefix, f"{dataset_name}-{subject}-{data_file}-evaluation.jsonl.gz")
+                print(output_path)
                 with fsspec.open(output_path, "wt", compression="gzip") as f:
                     f.write(subject_files[subject])
     else:
@@ -104,7 +103,7 @@ if __name__ == "__main__":
     parser.add_argument("--decontamination", action="store_true")
     parser.add_argument("--evaluation", action="store_true")
     parser.add_argument("--output", type=str, default=".")
-    parser.add_argument("--yaml", type=str)
+    parser.add_argument("--yaml", type=str, required=True)
     args = parser.parse_args()
     main(args)
     
