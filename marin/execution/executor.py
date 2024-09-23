@@ -149,7 +149,7 @@ def instantiate_config(config: dataclass, output_path: str, output_paths: dict[E
             return dict((i, recurse(x)) for i, x in obj.items())
         else:
             return obj
-    
+
     return recurse(config)
 
 
