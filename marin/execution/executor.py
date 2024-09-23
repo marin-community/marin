@@ -268,10 +268,12 @@ def get_fn_name(fn: Callable | ray.remote_function.RemoteFunction):
 class ExecutorMainConfig:
     prefix: str = "gs://marin-us-central2"
     dry_run: bool = False
+    local_mode: bool = False
 
 @draccus.wrap()
 def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep]):
     """Main entry point for experiments (to standardize)"""
+    ray.init(local_mode=config.local_mode)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     executor = Executor(prefix=config.prefix)
     executor.run(steps=steps, dry_run=config.dry_run)

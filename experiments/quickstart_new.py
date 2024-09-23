@@ -56,7 +56,7 @@ download_sft_step = ExecutorStep(name="raw/tulu-v2-sft-mixture", fn=download, co
 
 # TODO: convert the data into Dolma format
 # For now, just use the one that's already given
-sft_data = "gs://marin-us-central2/documents/instruct/v1_olmo_mix/text",
+sft_data = "gs://marin-us-central2/documents/instruct/v1_olmo_mix/text"
 
 ############################################################
 # Train quality classifier
