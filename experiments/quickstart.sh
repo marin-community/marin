@@ -6,22 +6,21 @@ set -e
 # Print each command before executing it
 set -x
 
-EXP="quickstart_eval_0921-3"
+EXP="quickstart_eval_0921-4"
 #
-###Transform
+#Transform
 ray job submit --working-dir . -- python scripts/hello_world_fw/process.py \
   --input_path gs://marin-us-central2/raw/hello_world_fw/8fd6e8e/huggingface.co/datasets/skaramcheti/hello_world_fw/resolve/8fd6e8e/data/CC-MAIN-2024-10 \
   --output_path gs://marin-us-central2/documents/hello_world_fw/v1.0/$EXP/CC-MAIN-2024-10
 
-###FastText classifier
+#FastText classifier
 ray job submit --working-dir . -- python scripts/fasttext/train_fasttext.py \
   --pos_doc_path gs://marin-us-central2/documents/instruct/v1_olmo_mix/text \
   --neg_doc_path gs://marin-us-central2/documents/hello_world_fw/v1.0/$EXP \
   --pos_sampling_rate 0.1 \
   --neg_sampling_rate 1.0 \
-  --output_base_path gs://marin-us-central2 \
-  --experiment $EXP \
-  --training_args '{"lr": 0.01}'
+  --output_path gs://marin-us-central2/classifiers/$EXP \
+  --fasttext_args '{"lr": 0.01, "thread": 4}'
 
 
 ### Use olmo classifier to annotate
