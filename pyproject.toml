@@ -39,7 +39,8 @@ dependencies = [
     "levanter>=1.1.dev992",
     "lm-eval",
     "resiliparse",
-    "trafilatura"
+    "trafilatura",
+    "fasttext",
 ]
 
 [project.optional-dependencies]
