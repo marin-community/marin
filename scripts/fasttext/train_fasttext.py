@@ -4,15 +4,15 @@ train_fasttext.py
 Training script for fastText quality classifiers.
 """
 
-import os
 from dataclasses import dataclass, field
 
 import draccus
+import os
 import ray
 
-from marin.classifiers.fasttext.training import train_model
-from marin.classifiers.utils import create_label_attribute, attributes_to_dataset
 from marin.utils import fsspec_rm
+from marin.classifiers.utils import create_label_attribute, attributes_to_dataset
+from marin.classifiers.fasttext.training import train_model
 
 
 @dataclass
@@ -43,9 +43,7 @@ class TrainFasttextClassifierConfig:
     memory: int = 1
 
 
-@draccus.wrap()
-def main(cfg: TrainFasttextClassifierConfig):
-
+def train(cfg: TrainFasttextClassifierConfig):
     pos_attr_path = os.path.join(cfg.output_path, "tmp", "positives")
     neg_attr_path = os.path.join(cfg.output_path, "tmp", "negatives")
 
@@ -80,6 +78,11 @@ def main(cfg: TrainFasttextClassifierConfig):
     fsspec_rm(neg_attr_path)
 
 
-if __name__ == "__main__":
+@draccus.wrap()
+def main(cfg: TrainFasttextClassifierConfig):
     ray.init()
+    train(cfg)
+
+
+if __name__ == "__main__":
     main()
