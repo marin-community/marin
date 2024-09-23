@@ -127,19 +127,28 @@ def instantiate_config(config: dataclass, output_path: str, output_paths: dict[E
     """
     if config is None:
         return None
-    updates = {}
-    for field in fields(config):
-        value = getattr(config, field.name)
-        if isinstance(value, InputName):
-            updates[field.name] = os.path.join(output_paths[value.step], value.name)
-        elif isinstance(value, OutputName):
-            updates[field.name] = os.path.join(output_path, value.name)
-        elif isinstance(value, VersionedValue):
-            updates[field.name] = value.value
-        elif is_dataclass(value):
-            updates[field.name] = instantiate_config(value, output_path, output_paths)
-        # Note unversioned primitives don't need to be updated.
-    return replace(config, **updates)
+    def recurse(config: dataclass):
+        updates = {}
+        for field in fields(config):
+            value = getattr(config, field.name)
+            if isinstance(value, InputName):
+                updates[field.name] = os.path.join(output_paths[value.step], value.name)
+            elif isinstance(value, OutputName):
+                updates[field.name] = os.path.join(output_path, value.name)
+            elif isinstance(value, VersionedValue):
+                updates[field.name] = value.value
+            elif is_dataclass(value):
+                updates[field.name] = recurse(value)
+            elif isinstance(value, list):
+                # Recurse through lists
+                updates[field.name] = [recurse(x) for x in value]
+            elif isinstance(value, dict):
+                # Recurse through dicts
+                updates[field.name] = dict((i, recurse(x)) for i, x in value.items())
+            # Note unversioned primitives don't need to be updated.
+        return replace(config, **updates)
+    
+    return recurse(config)
 
 
 class Executor:
@@ -225,8 +234,8 @@ class Executor:
         logger.info(f"[{completed_str}] {step.name}: {get_fn_name(step.fn)}")
         logger.info(f"  output_path = {output_path}")
         logger.info(f"  config = {json.dumps(config_version)}")
-        for i, dep_version in enumerate(self.versions[step]["dependencies"]):
-            logger.info(f"  {dependency_index_str(i)} = {dep_version['name']}")
+        for i, dep in enumerate(self.dependencies[step]):
+            logger.info(f"  {dependency_index_str(i)} = {self.output_paths[dep]}")
 
         # Call `fn` if it hasn't been done yet
         fn = step.fn if not dry_run and not completed else None

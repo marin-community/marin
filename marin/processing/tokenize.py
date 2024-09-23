@@ -94,7 +94,7 @@ class TokenizeConfig:
     tokenizer: str  # tokenizer name. Should be the same as you intend to use in the tokenizer spec for the training run
 
 
-def main_ray(config: TokenizeConfig):
+def tokenize(config: TokenizeConfig):
     output_path = os.path.join(config.cache_path, config.dataset_name, "train")
     response = levanter_tokenize.remote(config.input_path, config.tokenizer, output_path)
     ray.get(response)
@@ -103,7 +103,7 @@ def main_ray(config: TokenizeConfig):
 @draccus.wrap()
 def main(config: TokenizeConfig):
     ray.init()
-    main_ray(config)
+    tokenize(config)
 
 
 if __name__ == "__main__":
