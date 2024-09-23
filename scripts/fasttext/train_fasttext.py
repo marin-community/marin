@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 
 import draccus
 import os
+import ray
 
 from marin.utils import fsspec_rm
 from marin.classifiers.utils import create_label_attribute, attributes_to_dataset
@@ -42,10 +43,7 @@ class TrainFasttextClassifierConfig:
     memory: int = 1
 
 
-@draccus.wrap()
-def main(cfg: TrainFasttextClassifierConfig):
-    ray.init()
-
+def train(cfg: TrainFasttextClassifierConfig):
     pos_attr_path = os.path.join(cfg.output_path, "tmp", "positives")
     neg_attr_path = os.path.join(cfg.output_path, "tmp", "negatives")
 
@@ -78,6 +76,12 @@ def main(cfg: TrainFasttextClassifierConfig):
 
     fsspec_rm(pos_attr_path)
     fsspec_rm(neg_attr_path)
+
+
+@draccus.wrap()
+def main(cfg: TrainFasttextClassifierConfig):
+    ray.init()
+    train(cfg)
 
 
 if __name__ == "__main__":
