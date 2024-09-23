@@ -1,3 +1,71 @@
+"""
+The `Executor` framework provides a way to specify a DAG of `ExecutorStep`s that
+are executed in a topological order using Ray.  Beyond that:
+
+1. The key distinguishing feature of the framework is allowing the user to
+   flexibly control what steps are "new".
+
+2. A secondary feature of the framework is that it creates sensible output paths
+   for each step to free the user from having to come up with interpretable
+   names that don't clash.
+
+As an example, suppose you have a two-step pipeline:
+
+    transform(method) -> tokenize(method)
+
+which can be instantiated as:
+
+    [A] transform(trafilatura) -> tokenize(llama2)
+    [B] transform(resiliparse) -> tokenize(llama2)
+    [C] transform(trafilatura) -> tokenize(llama3)
+    [D] transform(resiliparse) -> tokenize(llama3)
+
+If you have already run a particular instantiation, running it again
+should be a no-op (assume idempotence).  If you run [A], then running [C] should
+reuse `transform(trafilatura)`.
+
+## Versioning
+
+But the big question is: when is a step `transform(trafilatura)` "new"?
+In the extreme, you have to hash the code of `transform` and the precise
+configuration passed into it, but this is too strict: Semantics-preserving
+changes to the code or config (e.g., adding logging) should not trigger a rerun.
+
+We want to compute a *version* for each step.  Here's what the user supplies:
+1. a `name` (that characterizes the code and also is useful for interpretability).
+2. which fields of a `config` should be included in the version (things like the
+   "method", not default thresholds that don't change).
+
+Based on the name, versioned fields, and the versions of all the dependencies,
+the version of a step is computed.
+
+## Output paths
+
+Having established the version, the question is what the output path should be.
+One extreme is to let the framework automatically specify all the paths, but
+then the paths are opaque and you can't easily find where things are stored.
+
+Solution: based on the name and version, the output path of a step is computed.
+For example, if name is "documents/fineweb-resiliparse", then the full path
+might be:
+
+    gs://marin-us-central2/documents/fineweb-resiliparse-8c2f3a
+
+## Final remarks
+
+- If you prefer to manage the output paths yourself, you can not use `versioned`
+  fields and specify everything you want in the name.  Note the version will
+  still depend on upstream dependencies.
+
+- The pipeline might get too big and unwieldy, in which case we can cut it up by
+  specifying a hard-coded path as the input to a step.  Or perhaps we can have
+  our cake and eat it to by putting in an "assert" statement to ensure the input
+  path that's computed from upstream dependencies is what we expect.
+
+- If we decide to rename fields, we can extend `versioned` to take a string of
+  the old field name to preserve backward compatibility.
+"""
+
 import hashlib
 import json
 import logging
@@ -35,6 +103,8 @@ class ExecutorStep:
     - `InputName(step, name)`: a dependency on another `step`, resolve to the step.output_path / name
     - `OutputName(name)`: resolves to the output_path / name
     - `VersionedValue(value)`: a value that should be part of the version
+    The `config` is instantiated by replacing these special values with the
+    actual paths during execution.
     """
     name: str
     fn: ExecutorFunction
@@ -228,7 +298,10 @@ class Executor:
         config_version = self.versions[step]["config"]
         output_path = self.output_paths[step]
 
-        # Completed = whether the output path exists (note this is optimistic)
+        # Figure out whether a completed.  Currently, just check whether the
+        # output path exists.  Note this is imperfect, because the job that
+        # creates the output path might have failed or might be still running.
+        # TODO: We need more metadata (e.g., using .STATUS files).
         completed = fsspec_exists(output_path)
         completed_str = "COMPLETED" if completed else "PENDING"
 
