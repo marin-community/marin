@@ -1,13 +1,16 @@
 # TODO: pytest doesn't work with Ray because these functions cannot be found
-import time
 import json
+import os
 import re
 import tempfile
-import os
-from dataclasses import dataclass, asdict
+import time
+from dataclasses import asdict, dataclass
+
 import pytest
 import ray
-from marin.execution.executor import ExecutorStep, Executor, get_input, get_output, versioned
+
+from marin.execution.executor import Executor, ExecutorStep, get_input, get_output, versioned
+
 
 @pytest.fixture
 def ray_start():
@@ -49,7 +52,9 @@ def test_executor():
         append_temp(temp, config)
 
     a = ExecutorStep(name="a", fn=fn, config=None)
-    b = ExecutorStep(name="b", fn=fn, config=MyConfig(input_path=get_input(a, "sub"), output_path=get_output(), n=versioned(3), m=4))
+
+    b = ExecutorStep(name="b", fn=fn, config=MyConfig(
+        input_path=get_input(a, "sub"), output_path=get_output(), n=versioned(3), m=4))
 
     executor = Executor(prefix="/tmp")
     executor.run(steps=[b])
@@ -106,14 +111,17 @@ def test_parallelism():
 
 
 def test_versioning():
-    """Make sure that versions (output paths) are computed properly based on upstream dependencies and only the versioned fields."""
+    """Make sure that versions (output paths) are computed properly based on
+    upstream dependencies and only the versioned fields."""
     def fn(config: MyConfig):
         pass
 
     def get_output_path(a_input_path: str, a_n: int, a_m:int, name: str, b_n: int, b_m: int):
         """Make steps [a -> b] with the given arguments, and return the output_path of `b`."""
-        a = ExecutorStep(name="a", fn=fn, config=MyConfig(input_path=versioned(a_input_path), output_path=get_output(), n=versioned(a_n), m=a_m))
-        b = ExecutorStep(name="b", fn=fn, config=MyConfig(input_path=get_input(a, name), output_path=get_output(), n=versioned(b_n), m=b_m))
+        a = ExecutorStep(name="a", fn=fn, config=MyConfig(
+            input_path=versioned(a_input_path), output_path=get_output(), n=versioned(a_n), m=a_m))
+        b = ExecutorStep(name="b", fn=fn, config=MyConfig(
+            input_path=get_input(a, name), output_path=get_output(), n=versioned(b_n), m=b_m))
         executor = Executor(prefix="/tmp")
         executor.run(steps=[b])
         return executor.output_paths[b]
