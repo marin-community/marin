@@ -1,170 +1,157 @@
-import logging
-import time
-from collections.abc import Callable
-from datetime import datetime
-
-import ray
-
+import draccus
 import marin
 import scripts
+from marin.execution.executor import ExecutorStep, get_input, get_output, versioned, executor_main
 
-logger = logging.getLogger("ray")
+############################################################
+# Download the pretraining data
 
+from operations.download.huggingface.download import download, DownloadConfig
 
-@ray.remote
-def execute(fn: Callable | ray.remote_function.RemoteFunction, *args, depends_on, **kwargs):
-    """
-    Utility function to execute a remote function with dependencies on another functions
-    fn: The function to execute. The function can be a ray remote function or a normal function
-    depends_on: List of references on which the remote function depends. These references are Ray references
-    args, kwargs: List of arguments and key arguments to pass to the remote function
+raw_download_step = ExecutorStep(name="raw/hello_world_fw-pliang", fn=download, config=DownloadConfig(
+    hf_dataset_id="skaramcheti/hello_world_fw",
+    revision="8fd6e8e",
+    gcs_output_path=get_output(),
+))
+raw_data = get_input(raw_download_step, "8fd6e8e/huggingface.co/datasets/skaramcheti/hello_world_fw/resolve/8fd6e8e/data/CC-MAIN-2024-10")
 
-    """
-    ray.get(depends_on)
+############################################################
+# Transform HTML to text
 
-    is_ray_fn = type(fn) is ray.remote_function.RemoteFunction
+from scripts.hello_world_fw.process import transform, FineWebConfig
+from marin.schemas.web.convert import TrafilaturaConfig
 
-    name = None
-    if is_ray_fn:
-        name = f"{fn._function.__module__}.{fn._function.__name__}"
-    else:
-        name = f"{fn.__module__}.{fn.__name__}"
+transform_trafilatura_step = ExecutorStep(name="documents/hello_world_fw-pliang-trafilatura", fn=transform, config=FineWebConfig(
+    input_path=raw_data,
+    output_path=get_output(),
+    extract_method=versioned("trafilatura"),
+    config=TrafilaturaConfig(
+        favor_precision=versioned(False),
+        favor_recall=versioned(True),
+        include_comments=versioned(False),
+        deduplicate=versioned(False),
+    ),
+))
 
-    # Datetime can probably go into ray logger but I don't wanna touch it for now and custom logger are wierd with ray
-    logger.info(
-        f"Starting to Execute {name} with {args} and {kwargs} at " f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-    )
+transform_resiliparse_step = ExecutorStep(name="documents/hello_world_fw-pliang-resiliparse", fn=transform, config=FineWebConfig(
+    input_path=raw_data,
+    output_path=get_output(),
+    extract_method=versioned("resiliparse"),
+))
 
-    start = time.time()
+transform_readability_step = ExecutorStep(name="documents/hello_world_fw-pliang-readability", fn=transform, config=FineWebConfig(
+    input_path=raw_data,
+    output_path=get_output(),
+    extract_method=versioned("readability"),
+))
 
-    output = None
-    if is_ray_fn:
-        output = ray.get(fn.remote(*args, **kwargs))
-    else:
-        output = fn(*args, **kwargs)
+############################################################
+# Download good data
 
-    logger.info(
-        f"Finished Executing {name} in {time.time() - start} seconds at"
-        f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-    )
+download_sft_step = ExecutorStep(name="raw/tulu-v2-sft-mixture", fn=download, config=DownloadConfig(
+    hf_dataset_id="allenai/tulu-v2-sft-mixture",
+    revision="6248b17",
+    gcs_output_path=get_output(),
+))
 
-    return output
+# TODO: convert the data into Dolma format
+# For now, just use the one that's already given
+sft_data = "gs://marin-us-central2/documents/instruct/v1_olmo_mix/text"
 
+############################################################
+# Train quality classifier
 
-# General config
-RAWDATAPATH = (
-    "gs://marin-us-central2/raw/hello_world_fw/8fd6e8e/huggingface.co/datasets/skaramcheti/hello_world_fw/"
-    "resolve/8fd6e8e/data"
-)
-EXPERIMENT = "quickstart_single_script_docker_test_09_18"
-DATASET = "hello_world_fw"
+from scripts.fasttext.train_fasttext import train, TrainFasttextClassifierConfig
 
-# Transform
-from scripts.hello_world_fw.process import FineWebConfig  # noqa
-
-config = FineWebConfig(
-    input_path=RAWDATAPATH, output_path=f"gs://marin-us-central2/documents/{DATASET}/v1.0/{EXPERIMENT}"
-)
-transform_ref = execute.remote(scripts.hello_world_fw.process.main_ray, config, depends_on=[])
-
-# FastText classifier
-from scripts.fasttext.train_fasttext import MainConfig  # noqa
-
-config = MainConfig(
-    output_base_path="gs://marin-us-central2",
-    experiment=EXPERIMENT,
-    pos_doc_path="gs://marin-us-central2/documents/instruct/v1_olmo_mix/text",
-    neg_doc_path=f"gs://marin-us-central2/documents/{DATASET}/v1.0/{EXPERIMENT}",
+train_quality_step = ExecutorStep(name="classifiers/hello_world_fw-pliang", fn=train, config=TrainFasttextClassifierConfig(
+    pos_doc_path=sft_data,
+    #neg_doc_path=get_input(transform_trafilatura_step),
+    neg_doc_path=get_input(transform_readability_step),
+    output_path=get_output(),
     pos_sampling_rate=0.1,
     neg_sampling_rate=1.0,
-    training_args={"lr": 0.1},
-)
-fasttext_ref = execute.remote(scripts.fasttext.train_fasttext.main_ray, config, depends_on=[transform_ref])
+    fasttext_args={"lr": 0.1},
+))
 
-## Use olmo classifier to annotate, Note the dependency on transform only
-from marin.processing.classification.inference import InferenceConfig  # noqa
+############################################################
+# Run inference with quality classifier
 
-config = InferenceConfig(
-    input_path=f"gs://marin-us-central2/documents/{DATASET}/v1.0/{EXPERIMENT}",
-    output_path=f"gs://marin-us-central2/attributes/{DATASET}/v1.0/{EXPERIMENT}_olmo_fasttext",
+from marin.processing.classification.inference import run_inference, InferenceConfig
+
+inference_quality_step = ExecutorStep(name="attributes/hello_world_fw-pliang", fn=run_inference, config=InferenceConfig(
+    input_path=get_input(transform_trafilatura_step),
+    output_path=get_output(),
     model_name="allenai/dolma-1_7-fasttext-quality-filter",
     model_type="fasttext",
     attribute_name="olmo-fasttext-quality",
-)
-annotate_ref = execute.remote(marin.processing.classification.inference.main_ray, config, depends_on=[transform_ref])
+))
 
-## Use quickstart classifier to annotate, Note the dependency on fasttext_ref
-config = InferenceConfig(
-    input_path=f"gs://marin-us-central2/documents/{DATASET}/v1.0/{EXPERIMENT}",
-    output_path=f"gs://marin-us-central2/attributes/{DATASET}/v1.0/{EXPERIMENT}_{EXPERIMENT}_fasttext",
-    model_name=f"gs://marin-us-central2/classifiers/{EXPERIMENT}/",
-    model_type="fasttext",
-    attribute_name="quickstart-fasttext-quality",
-)
-annotate_ref_2 = execute.remote(marin.processing.classification.inference.main_ray, config, depends_on=[fasttext_ref])
-# Getting annotate_ref_2 as it will not be used later no and not in DAG
-ray.get(annotate_ref_2)
+############################################################
+# Deduplicate
 
-## Dedup, see the dependency on transform_ref
-from marin.processing.classification.dedupe import DedupeConfig  # noqa
+from marin.processing.classification.dedupe import dedupe, DedupeConfig
 
-config = DedupeConfig(
-    input_path=f"gs://marin-us-central2/documents/{DATASET}/v1.0/{EXPERIMENT}",
-    output_path=f"gs://marin-us-central2/attributes/{DATASET}/v1.0/{EXPERIMENT}_duplicates",
-)
-dedup_ref = execute.remote(marin.processing.classification.dedupe.main_ray, config, depends_on=[transform_ref])
+dedupe_step = ExecutorStep(name="attributes/hello_world_fw-pliang-dedupe", fn=dedupe, config=DedupeConfig(
+  input_path=get_input(transform_trafilatura_step),
+  output_path=get_output(),
+))
 
-# Consolidate all the results
-from marin.processing.classification.consolidate import ConsolidateConfig, FilterConfig  # noqa
+############################################################
+# Consolidate
 
-config = ConsolidateConfig(
-    input_path=f"gs://marin-us-central2/documents/{DATASET}/v1.0/{EXPERIMENT}",
-    output_path=f"gs://marin-us-central2/documents/{DATASET}/v1.0/{EXPERIMENT}_consolidate",
+from marin.processing.classification.consolidate import consolidate, ConsolidateConfig, FilterConfig
+
+consolidate_step = ExecutorStep(name="documents/hello_world_fw-pliang-consolidate", fn=consolidate, config=ConsolidateConfig(
+    input_path=get_input(transform_trafilatura_step),
+    output_path=get_output(),
     filters=[
         FilterConfig(
-            type="dedupe",
-            attribute_path=f"gs://marin-us-central2/attributes/{DATASET}/v1.0/{EXPERIMENT}_duplicates/",
-            name="duplicate_text",
+            type=versioned("classify"),
+            attribute_path=get_input(inference_quality_step),
+            name=versioned("olmo-fasttext-quality"),
+            label="__label__hq",
+            threshold=versioned(0.1),
         ),
         FilterConfig(
-            type="classify",
-            attribute_path=f"gs://marin-us-central2/attributes/{DATASET}/v1.0/{EXPERIMENT}_olmo_fasttext/",
-            name="olmo-fasttext-quality",
-            label="__label__hq",
-            threshold=0.1,
+            type=versioned("dedupe"),
+            attribute_path=get_input(dedupe_step),
+            name=versioned("duplicate_text"),
         ),
     ],
-)
+))
 
-consolidate_ref = execute.remote(
-    marin.processing.classification.consolidate.main_ray, config, depends_on=[transform_ref, dedup_ref]
-)
-
-
+############################################################
 # Tokenize
-from marin.processing.tokenize import TokenizeConfig  # noqa
 
-config = TokenizeConfig(
-    input_path=f"gs://marin-us-central2/documents/{DATASET}/v1.0/{EXPERIMENT}_consolidate/",
-    cache_path="gs://marin-us-central2/tokenized/llama3/",
-    dataset_name=f"{DATASET}-{EXPERIMENT}",
+from marin.processing.tokenize import tokenize, TokenizeConfig
+
+tokenize_step = ExecutorStep(name="tokenized/llama3/hello_world_fw-pliang", fn=tokenize, config=TokenizeConfig(
+    input_path=get_input(consolidate_step),
+    cache_path=get_output(),
+    dataset_name="hello_world_fw-pliang",  # Does this have to be unique?
     tokenizer="meta-llama/Meta-Llama-3.1-8B",
-)
-tokenize_ref = execute.remote(marin.processing.tokenize.main_ray, config, depends_on=[consolidate_ref])
+))
 
-# Train
-from scripts.training.launch import LaunchConfig  # noqa
+############################################################
+# Training
 
-config = LaunchConfig(
-    experiment=EXPERIMENT,
-    base_config="config/training/quickstart_run.yaml",
-    dataset_name=f"{DATASET}-{EXPERIMENT}",
-    dataset_path=f"gs://marin-us-central2/documents/{DATASET}/v1.0/{EXPERIMENT}_consolidate/**/*.jsonl.gz",
-    cache_dir="gs://marin-us-central2/tokenized/llama3/",
-    zone="us-central2-b",
-    tpu_type="v4-32",
-)
+# TODO: wait for Ray version
 
-train_ref = execute.remote(scripts.training.launch.main, config, depends_on=[tokenize_ref])
+############################################################
+# Evaluate
 
-ray.get(train_ref)
+# TODO: wait for draccus version
+
+############################################################
+
+if __name__ == "__main__":
+    executor_main(steps=[
+        #raw_download_step,
+        #transform_trafilatura_step,
+        #transform_resiliparse_step,
+        #transform_readability_step,
+        #train_quality_step,  # Something wrong
+        #inference_quality_step,
+        #dedupe_step,
+        tokenize_step,
+    ])

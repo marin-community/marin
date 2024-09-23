@@ -259,13 +259,13 @@ def dolma_dedup(
 
 
 @ray.remote
-def main_ray(config: DedupeConfig):
+def dedupe(config: DedupeConfig):
     # require directory if decontaminate is set
     if config.decontaminate and config.decontaminate_path is None:
         raise ValueError("decontaminate_path is required if decontaminate is set")
 
-    input_path = validate_marin_gcp_path(config.input_path)
-    output_path = validate_marin_gcp_path(config.output_path)
+    input_path = config.input_path
+    output_path = config.output_path
     result = ray.get(
         dolma_dedup.remote(
             input_path,
@@ -287,7 +287,7 @@ def main_ray(config: DedupeConfig):
 @draccus.wrap()
 def main(config: DedupeConfig):
     ray.init()
-    ray.get(main_ray.remote(config))
+    ray.get(dedupe.remote(config))
 
 
 if __name__ == "__main__":

@@ -146,12 +146,11 @@ def get_filepaths_and_process_filepath_func(inference_config: InferenceConfig):
 
 
 @ray.remote
-def main_ray(inference_config: InferenceConfig):
+def run_inference(inference_config: InferenceConfig):
     filepaths, process_filepath_func = get_filepaths_and_process_filepath_func(inference_config)
 
-    # Enforce Marin GCP structure
-    input_path = validate_marin_gcp_path(inference_config.input_path)
-    output_path = validate_marin_gcp_path(inference_config.output_path)
+    input_path = inference_config.input_path
+    output_path = inference_config.output_path
     responses = []
     for input_filepath in filepaths:
         if len(responses) > inference_config.task.max_in_flight:
@@ -186,7 +185,7 @@ def main_ray(inference_config: InferenceConfig):
 @draccus.wrap()
 def main(inference_config: InferenceConfig):
     ray.init()
-    ray.get(main_ray.remote(inference_config))
+    ray.get(run_inference.remote(inference_config))
 
 
 if __name__ == "__main__":

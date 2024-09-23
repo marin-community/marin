@@ -20,7 +20,7 @@ from marin.utils import (
 )
 
 
-@dataclass
+@dataclass(frozen=True)
 class FilterConfig:
     """Config for filtering operation on Marin data"""
 
@@ -31,19 +31,6 @@ class FilterConfig:
     threshold: float | None = 0.5
     min_score: float = 0.0
     max_score: float = 1e6
-
-    def __post_init__(self):
-        if not (self.min_score < self.threshold < self.max_score):
-            raise ValueError(
-                f"Scores must satisfy: ({self.min_score = }) < ({self.threshold = }) < ({self.max_score = })"
-            )
-
-        if "dedupe" in self.type:
-            self.filter_func = dedupe_filter_func
-        elif "classify" in self.type:
-            self.filter_func = quality_filter_func
-        else:
-            raise ValueError(f"Unknown attribute type: {self.type}")
 
 
 @dataclass
@@ -115,9 +102,9 @@ def dedupe_filter_func(
 
 
 def get_filter_func(filter_type: str) -> Callable:
-    if "dedupe" in filter_type:
+    if filter_type == "dedupe":
         return dedupe_filter_func
-    elif "classify" in filter_type:
+    elif filter_type == "classify":
         return quality_filter_func
     else:
         raise ValueError(f"Unknown attribute name: {filter_type}")
@@ -228,9 +215,9 @@ def apply_filters(
 
 
 @ray.remote
-def main_ray(cfg: ConsolidateConfig):
-    input_path = validate_marin_gcp_path(cfg.input_path)
-    output_path = validate_marin_gcp_path(cfg.output_path)
+def consolidate(cfg: ConsolidateConfig):
+    input_path = cfg.input_path
+    output_path = cfg.output_path
 
     attribute_files = []
     filters = []
@@ -256,7 +243,7 @@ def main_ray(cfg: ConsolidateConfig):
 @draccus.wrap()
 def main(cfg: ConsolidateConfig):
     ray.init()
-    ray.get(main_ray.remote(cfg))
+    ray.get(consolidate.remote(cfg))
 
 
 if __name__ == "__main__":
