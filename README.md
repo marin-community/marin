@@ -100,9 +100,41 @@ To avoid passing `--address ...` you can set the environment variable `export RA
 script before running!
 
 
-### Using TPUs
+## Programming Guidelines
 
-If you're running a job that requires 1 machine's worth of TPUs, use the following resources:
+### Using Ray
+
+When using Ray, use the `ray.remote` decorator for any function that you want to run distributed.
+`ray.remote` executes the function in a separate process, possibly on a separate machine.
+
+```python
+@ray.remote
+def my_function():
+    ...
+
+result_future = my_function.remote()
+
+# Get the result of the function
+result = ray.get(result_future)
+```
+
+Ray is a resource-aware job scheduler, so you can specify the resources that a job requires:
+    
+```python 
+@ray.remote(num_cpus=4)
+def my_cpu_job():
+    ...
+```
+
+Please see the [Ray documentation](https://docs.ray.io/en/latest/index.html) for more information, though
+see the next section for some important notes about using TPUs.
+
+
+### Using TPUs on Ray
+
+You can use our workers like normal CPU instances, just using the `ray.remote` decorator. However, if you want to use
+the TPUs, you need to tell Ray that you need them. To use TPUs on our cluster, you should use the following:
+
 
 ```python
 @ray.remote(num_cpus=8, resources={"TPU": 1, "TPU-v4-8-head": 1})
