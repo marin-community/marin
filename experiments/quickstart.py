@@ -70,8 +70,7 @@ train_quality_step = ExecutorStep(name="classifiers/hello_world_fw-pliang",
                                   fn=train,
                                   config=TrainFasttextClassifierConfig(
     pos_doc_path=sft_data,
-    #neg_doc_path=get_input(transform_trafilatura_step),
-    neg_doc_path=get_input(transform_readability_step),
+    neg_doc_path=get_input(transform_trafilatura_step),
     output_path=get_output(),
     pos_sampling_rate=0.1,
     neg_sampling_rate=1.0,
@@ -153,11 +152,9 @@ tokenize_step = ExecutorStep(name="tokenized/llama3/hello_world_fw-pliang", fn=t
 
 if __name__ == "__main__":
     executor_main(steps=[
-        #raw_download_step,
-        #transform_trafilatura_step,
-        #transform_resiliparse_step,
-        #transform_readability_step,
-        #train_quality_step,  # Something wrong
-        #inference_quality_step,
+        transform_trafilatura_step,
+        transform_resiliparse_step,  # Not used
+        transform_readability_step,  # Not used
+        train_quality_step,  # Not used
         tokenize_step,
     ])

@@ -101,7 +101,7 @@ def collect_dependencies_and_version(obj: Any, dependencies: list[ExecutorStep],
             dependencies.append(obj.step)
             version[prefix] = dependency_index_str(index) + ("/" + obj.name if obj.name else "")
         elif is_dataclass(obj):
-            # Recurse through sub-dataclasses
+            # Recurse through dataclasses
             for field in fields(obj):
                 value = getattr(obj, field.name)
                 recurse(value, new_prefix + field.name)
@@ -125,28 +125,30 @@ def instantiate_config(config: dataclass, output_path: str, output_paths: dict[E
     `output_path`: represents the output path of the current step.
     `output_paths`: a dict from `ExecutorStep` to their output paths.
     """
-    if config is None:
-        return None
-    def recurse(config: dataclass):
-        updates = {}
-        for field in fields(config):
-            value = getattr(config, field.name)
-            if isinstance(value, InputName):
-                updates[field.name] = os.path.join(output_paths[value.step], value.name)
-            elif isinstance(value, OutputName):
-                updates[field.name] = os.path.join(output_path, value.name)
-            elif isinstance(value, VersionedValue):
-                updates[field.name] = value.value
-            elif is_dataclass(value):
-                updates[field.name] = recurse(value)
-            elif isinstance(value, list):
-                # Recurse through lists
-                updates[field.name] = [recurse(x) for x in value]
-            elif isinstance(value, dict):
-                # Recurse through dicts
-                updates[field.name] = dict((i, recurse(x)) for i, x in value.items())
-            # Note unversioned primitives don't need to be updated.
-        return replace(config, **updates)
+    def recurse(obj: Any):
+        if obj is None:
+            return None
+        if isinstance(obj, InputName):
+            return os.path.join(output_paths[obj.step], obj.name)
+        elif isinstance(obj, OutputName):
+            return os.path.join(output_path, obj.name)
+        elif isinstance(obj, VersionedValue):
+            return obj.value
+        elif is_dataclass(obj):
+            # Recurse through dataclasses
+            result = {}
+            for field in fields(obj):
+                value = getattr(obj, field.name)
+                result[field.name] = recurse(value)
+            return replace(obj, **result)
+        elif isinstance(obj, list):
+            # Recurse through lists
+            return [recurse(x) for x in obj]
+        elif isinstance(obj, dict):
+            # Recurse through dicts
+            return dict((i, recurse(x)) for i, x in obj.items())
+        else:
+            return obj
     
     return recurse(config)
 
