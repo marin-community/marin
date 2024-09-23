@@ -1,27 +1,26 @@
-import draccus
-import marin
-import scripts
-from marin.execution.executor import ExecutorStep, get_input, get_output, versioned, executor_main
+from marin.execution.executor import ExecutorStep, executor_main, get_input, get_output, versioned
 
 ############################################################
 # Download the pretraining data
-
-from operations.download.huggingface.download import download, DownloadConfig
+from operations.download.huggingface.download import DownloadConfig, download
 
 raw_download_step = ExecutorStep(name="raw/hello_world_fw-pliang", fn=download, config=DownloadConfig(
     hf_dataset_id="skaramcheti/hello_world_fw",
     revision="8fd6e8e",
     gcs_output_path=get_output(),
 ))
-raw_data = get_input(raw_download_step, "8fd6e8e/huggingface.co/datasets/skaramcheti/hello_world_fw/resolve/8fd6e8e/data/CC-MAIN-2024-10")
+raw_data = get_input(raw_download_step,
+    "8fd6e8e/huggingface.co/datasets/skaramcheti/hello_world_fw/resolve/8fd6e8e/data/CC-MAIN-2024-10")
 
 ############################################################
 # Transform HTML to text
 
-from scripts.hello_world_fw.process import transform, FineWebConfig
-from marin.schemas.web.convert import TrafilaturaConfig
+from marin.schemas.web.convert import TrafilaturaConfig  # noqa
+from scripts.hello_world_fw.process import FineWebConfig, transform  # noqa
 
-transform_trafilatura_step = ExecutorStep(name="documents/hello_world_fw-pliang-trafilatura", fn=transform, config=FineWebConfig(
+transform_trafilatura_step = ExecutorStep(name="documents/hello_world_fw-pliang-trafilatura",
+                                          fn=transform,
+                                          config=FineWebConfig(
     input_path=raw_data,
     output_path=get_output(),
     extract_method=versioned("trafilatura"),
@@ -33,13 +32,17 @@ transform_trafilatura_step = ExecutorStep(name="documents/hello_world_fw-pliang-
     ),
 ))
 
-transform_resiliparse_step = ExecutorStep(name="documents/hello_world_fw-pliang-resiliparse", fn=transform, config=FineWebConfig(
+transform_resiliparse_step = ExecutorStep(name="documents/hello_world_fw-pliang-resiliparse",
+                                          fn=transform,
+                                          config=FineWebConfig(
     input_path=raw_data,
     output_path=get_output(),
     extract_method=versioned("resiliparse"),
 ))
 
-transform_readability_step = ExecutorStep(name="documents/hello_world_fw-pliang-readability", fn=transform, config=FineWebConfig(
+transform_readability_step = ExecutorStep(name="documents/hello_world_fw-pliang-readability",
+                                          fn=transform,
+                                          config=FineWebConfig(
     input_path=raw_data,
     output_path=get_output(),
     extract_method=versioned("readability"),
@@ -61,9 +64,11 @@ sft_data = "gs://marin-us-central2/documents/instruct/v1_olmo_mix/text"
 ############################################################
 # Train quality classifier
 
-from scripts.fasttext.train_fasttext import train, TrainFasttextClassifierConfig
+from scripts.fasttext.train_fasttext import TrainFasttextClassifierConfig, train  # noqa
 
-train_quality_step = ExecutorStep(name="classifiers/hello_world_fw-pliang", fn=train, config=TrainFasttextClassifierConfig(
+train_quality_step = ExecutorStep(name="classifiers/hello_world_fw-pliang",
+                                  fn=train,
+                                  config=TrainFasttextClassifierConfig(
     pos_doc_path=sft_data,
     #neg_doc_path=get_input(transform_trafilatura_step),
     neg_doc_path=get_input(transform_readability_step),
@@ -76,7 +81,7 @@ train_quality_step = ExecutorStep(name="classifiers/hello_world_fw-pliang", fn=t
 ############################################################
 # Run inference with quality classifier
 
-from marin.processing.classification.inference import run_inference, InferenceConfig
+from marin.processing.classification.inference import InferenceConfig, run_inference  # noqa
 
 inference_quality_step = ExecutorStep(name="attributes/hello_world_fw-pliang", fn=run_inference, config=InferenceConfig(
     input_path=get_input(transform_trafilatura_step),
@@ -89,7 +94,7 @@ inference_quality_step = ExecutorStep(name="attributes/hello_world_fw-pliang", f
 ############################################################
 # Deduplicate
 
-from marin.processing.classification.dedupe import dedupe, DedupeConfig
+from marin.processing.classification.dedupe import DedupeConfig, dedupe  # noqa
 
 dedupe_step = ExecutorStep(name="attributes/hello_world_fw-pliang-dedupe", fn=dedupe, config=DedupeConfig(
   input_path=get_input(transform_trafilatura_step),
@@ -99,9 +104,11 @@ dedupe_step = ExecutorStep(name="attributes/hello_world_fw-pliang-dedupe", fn=de
 ############################################################
 # Consolidate
 
-from marin.processing.classification.consolidate import consolidate, ConsolidateConfig, FilterConfig
+from marin.processing.classification.consolidate import ConsolidateConfig, FilterConfig, consolidate  # noqa
 
-consolidate_step = ExecutorStep(name="documents/hello_world_fw-pliang-consolidate", fn=consolidate, config=ConsolidateConfig(
+consolidate_step = ExecutorStep(name="documents/hello_world_fw-pliang-consolidate",
+                                fn=consolidate,
+                                config=ConsolidateConfig(
     input_path=get_input(transform_trafilatura_step),
     output_path=get_output(),
     filters=[
@@ -123,7 +130,7 @@ consolidate_step = ExecutorStep(name="documents/hello_world_fw-pliang-consolidat
 ############################################################
 # Tokenize
 
-from marin.processing.tokenize import tokenize, TokenizeConfig
+from marin.processing.tokenize import TokenizeConfig, tokenize  # noqa
 
 tokenize_step = ExecutorStep(name="tokenized/llama3/hello_world_fw-pliang", fn=tokenize, config=TokenizeConfig(
     input_path=get_input(consolidate_step),
@@ -152,6 +159,5 @@ if __name__ == "__main__":
         #transform_readability_step,
         #train_quality_step,  # Something wrong
         #inference_quality_step,
-        #dedupe_step,
         tokenize_step,
     ])
