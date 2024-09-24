@@ -44,18 +44,6 @@ class DownloadConfig:
     timeout: int = 1800                                     # Maximum time to wait for job completion (in seconds)
     poll_interval: int = 10                                 # Time to wait between polling job status (in seconds)
 
-
-    def __post_init__(self) -> None:
-        if not self.gcs_output_path.startswith("gs://"):
-            raise ValueError(
-                f"Invalid `{self.gcs_output_path = }`; expected URI of form `gs://BUCKET/path/to/resource`"
-            )
-
-        if not self.public_gcs_path.startswith("gs://"):
-            raise ValueError(
-                f"Invalid `{self.public_gcs_path = }`; expected URI of form `gs://BUCKET/...`"
-            )
-
     # fmt: on
 
 
@@ -75,7 +63,6 @@ def _wait_for_job_completion(job_name: str, timeout: int, poll_interval: int) ->
     return f"Transfer job completed: {job_name}"
 
 
-@draccus.wrap()
 def download(cfg: DownloadConfig) -> None | ray.ObjectRef:
     print(f"[*] Downloading HF Dataset `{cfg.hf_dataset_id}` to `{cfg.gcs_output_path}`")
 
@@ -95,6 +82,11 @@ def download(cfg: DownloadConfig) -> None | ray.ObjectRef:
 
     # Finalize
     print(f"[*] Launched Transfer Job & wrote `provenance.json`; check Transfer Job status at:\n\t=> {job_url}")
+
+
+@draccus.wrap()
+def download_main(cfg: DownloadConfig):
+    download(cfg)
 
 
 if __name__ == "__main__":

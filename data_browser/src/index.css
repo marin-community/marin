@@ -70,3 +70,7 @@ tr {
   border-top: 2px solid lightgray;
   padding-top: 10px;
 }
+
+.disabled {
+  color: gray;
+}

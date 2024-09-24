@@ -1,7 +1,7 @@
 # This is the base configuration for a "normal" levanter run.
 # It is designed to run on a single dataset from scratch
 data:
-  tokenizer: "meta-llama/Llama-2-7b-hf"
+  tokenizer: "meta-llama/Meta-Llama-3.1-8B"
   shuffle: True
   stop_strategy: restart
   configs:
@@ -148,7 +148,7 @@ model: # 150M class model
   hidden_dim: 768
   intermediate_dim: 2688
   num_layers: 12
-  num_heads: 12
+  num_heads: 6
   num_kv_heads: 6
 
 trainer:

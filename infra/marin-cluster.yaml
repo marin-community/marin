@@ -32,7 +32,7 @@ available_node_types:
   tpu_worker:
     min_workers: 4
     max_workers: 1024
-    resources: {"CPU": 120, "TPU": 4}
+    resources: {"CPU": 120, "TPU": 1}
 
     # GCP-Specific Configuration; setup for TPU V4-8 VMs (in `us-central2-b`)
     node_config:
@@ -60,6 +60,8 @@ docker:
         - --shm-size=32gb
         - -v
         - "/tmp:/tmp"
+    head_run_options:
+      - --privileged
 
 
 initialization_commands:
@@ -75,6 +77,7 @@ setup_commands:
   - gcloud config set compute/zone us-central2-b
   - mkdir $HOME/.cache/huggingface -p
   - gcloud secrets versions access latest --secret=HF_TOKEN > $HOME/.cache/huggingface/token
+  - gcsfuse --only-dir gcsfuse_mount marin-us-central2 /opt/gcsfuse_mount || true
 
 # Set Head Node == `ray_head_default`
 head_node_type: head_default
