@@ -1,4 +1,4 @@
-from marin.execution.executor import ExecutorStep, executor_main, get_input, get_output, versioned
+from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path, versioned
 
 ############################################################
 # Download the pretraining data
@@ -10,11 +10,11 @@ raw_download_step = ExecutorStep(
     config=DownloadConfig(
         hf_dataset_id="skaramcheti/hello_world_fw",
         revision="8fd6e8e",
-        gcs_output_path=get_output(),
+        gcs_output_path=this_output_path(),
         wait_for_completion=True,
     ),
 )
-raw_data = get_input(
+raw_data = output_path_of(
     raw_download_step, "8fd6e8e/huggingface.co/datasets/skaramcheti/hello_world_fw/resolve/8fd6e8e/data/CC-MAIN-2024-10"
 )
 
@@ -29,7 +29,7 @@ transform_trafilatura_step = ExecutorStep(
     fn=transform,
     config=FineWebConfig(
         input_path=raw_data,
-        output_path=get_output(),
+        output_path=this_output_path(),
         extract_method=versioned("trafilatura"),
         config=TrafilaturaConfig(
             favor_precision=versioned(False),
@@ -45,7 +45,7 @@ transform_resiliparse_step = ExecutorStep(
     fn=transform,
     config=FineWebConfig(
         input_path=raw_data,
-        output_path=get_output(),
+        output_path=this_output_path(),
         extract_method=versioned("resiliparse"),
     ),
 )
@@ -55,7 +55,7 @@ transform_readability_step = ExecutorStep(
     fn=transform,
     config=FineWebConfig(
         input_path=raw_data,
-        output_path=get_output(),
+        output_path=this_output_path(),
         extract_method=versioned("readability"),
     ),
 )
@@ -69,7 +69,7 @@ download_sft_step = ExecutorStep(
     config=DownloadConfig(
         hf_dataset_id="allenai/tulu-v2-sft-mixture",
         revision="6248b17",
-        gcs_output_path=get_output(),
+        gcs_output_path=this_output_path(),
     ),
 )
 
@@ -87,8 +87,8 @@ train_quality_step = ExecutorStep(
     fn=train,
     config=TrainFasttextClassifierConfig(
         pos_doc_path=sft_data,
-        neg_doc_path=get_input(transform_trafilatura_step),
-        output_path=get_output(),
+        neg_doc_path=output_path_of(transform_trafilatura_step),
+        output_path=this_output_path(),
         pos_sampling_rate=0.1,
         neg_sampling_rate=1.0,
         fasttext_args={"lr": 0.1},
@@ -104,8 +104,8 @@ inference_quality_step = ExecutorStep(
     name="attributes/hello_world_fw-pliang",
     fn=run_inference,
     config=InferenceConfig(
-        input_path=get_input(transform_trafilatura_step),
-        output_path=get_output(),
+        input_path=output_path_of(transform_trafilatura_step),
+        output_path=this_output_path(),
         model_name="allenai/dolma-1_7-fasttext-quality-filter",
         model_type="fasttext",
         attribute_name="olmo-fasttext-quality",
@@ -121,8 +121,8 @@ dedupe_step = ExecutorStep(
     name="attributes/hello_world_fw-pliang-dedupe",
     fn=dedupe,
     config=DedupeConfig(
-        input_path=get_input(transform_trafilatura_step),
-        output_path=get_output(),
+        input_path=output_path_of(transform_trafilatura_step),
+        output_path=this_output_path(),
     ),
 )
 
@@ -135,19 +135,19 @@ consolidate_step = ExecutorStep(
     name="documents/hello_world_fw-pliang-consolidate",
     fn=consolidate,
     config=ConsolidateConfig(
-        input_path=get_input(transform_trafilatura_step),
-        output_path=get_output(),
+        input_path=output_path_of(transform_trafilatura_step),
+        output_path=this_output_path(),
         filters=[
             FilterConfig(
                 type=versioned("classify"),
-                attribute_path=get_input(inference_quality_step),
+                attribute_path=output_path_of(inference_quality_step),
                 name=versioned("olmo-fasttext-quality"),
                 label="__label__hq",
                 threshold=versioned(0.1),
             ),
             FilterConfig(
                 type=versioned("dedupe"),
-                attribute_path=get_input(dedupe_step),
+                attribute_path=output_path_of(dedupe_step),
                 name=versioned("duplicate_text"),
             ),
         ],
@@ -163,8 +163,8 @@ tokenize_step = ExecutorStep(
     name="tokenized/llama3/hello_world_fw-pliang",
     fn=tokenize,
     config=TokenizeConfig(
-        input_path=get_input(consolidate_step),
-        cache_path=get_output(),
+        input_path=output_path_of(consolidate_step),
+        cache_path=this_output_path(),
         dataset_name="hello_world_fw-pliang",  # Does this have to be unique?
         tokenizer="meta-llama/Meta-Llama-3.1-8B",
     ),
