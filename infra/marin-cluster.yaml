@@ -4,43 +4,6 @@ cluster_name: marin-data
 # Maximum Workers (excluding Head Node)
 max_workers: 1024
 
-# Configure GCP
-provider:
-  type: gcp
-  region: us-central2
-  availability_zone: us-central2-b
-  project_id: hai-gcp-models
-
-docker:
-    image: "us-central2-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:latest"
-    container_name: "ray_docker"
-    pull_before_run: true
-    worker_run_options:
-        - --privileged  # needed for TPU
-        - --ulimit memlock=-1:-1  #
-        - --shm-size=32gb
-        - -v
-        - "/tmp:/tmp"
-
-
-initialization_commands:
-  - yes | gcloud auth configure-docker us-central2-docker.pkg.dev
-  - which docker || (curl -fsSL https://get.docker.com -o get-docker.sh; sudo sh get-docker.sh; sudo usermod -aG docker $USER; sudo systemctl restart docker -f)
-  # always run this because ray doesn't run with sudo
-  - sudo usermod -aG docker $USER
-
-setup_commands:
-  # set the GCP project because it's not injected by default
-  - gcloud config set project hai-gcp-models
-  - gcloud config set compute/region us-central2
-  - gcloud config set compute/zone us-central2-b
-  - mkdir $HOME/.cache/huggingface -p
-  - gcloud secrets versions access latest --secret=HF_TOKEN > $HOME/.cache/huggingface/token
-
-# Set Head Node == `ray_head_default`
-head_node_type: head_default
-
-
 # List of Available Node Types
 available_node_types:
   # Head Node =>> On-Demand, sets Min/Max Workers = 0 (Prevent Scheduling Tasks on Head Node)
@@ -79,3 +42,42 @@ available_node_types:
       # [IMPORTANT] Configure all TPU Workers to be Preemptible!
       schedulingConfig:
         preemptible: true
+
+# Configure GCP
+provider:
+  type: gcp
+  region: us-central2
+  availability_zone: us-central2-b
+  project_id: hai-gcp-models
+
+docker:
+    image: "us-central2-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:latest"
+    container_name: "ray_docker"
+    pull_before_run: true
+    worker_run_options:
+        - --privileged
+        - --ulimit memlock=-1:-1  #
+        - --shm-size=32gb
+        - -v
+        - "/tmp:/tmp"
+    head_run_options:
+      - --privileged
+
+
+initialization_commands:
+  - yes | gcloud auth configure-docker us-central2-docker.pkg.dev
+  - which docker || (curl -fsSL https://get.docker.com -o get-docker.sh; sudo sh get-docker.sh; sudo usermod -aG docker $USER; sudo systemctl restart docker -f)
+  # always run this because ray doesn't run with sudo
+  - sudo usermod -aG docker $USER
+
+setup_commands:
+  # set the GCP project because it's not injected by default
+  - gcloud config set project hai-gcp-models
+  - gcloud config set compute/region us-central2
+  - gcloud config set compute/zone us-central2-b
+  - mkdir $HOME/.cache/huggingface -p
+  - gcloud secrets versions access latest --secret=HF_TOKEN > $HOME/.cache/huggingface/token
+  - gcsfuse --only-dir gcsfuse_mount marin-us-central2 /opt/gcsfuse_mount || true
+
+# Set Head Node == `ray_head_default`
+head_node_type: head_default
