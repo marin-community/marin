@@ -66,7 +66,7 @@ def test_executor():
             output_path=this_output_path(),
             n=versioned(3),
             m=4,
-        )
+        ),
     )
 
     executor = Executor(prefix="/tmp")
