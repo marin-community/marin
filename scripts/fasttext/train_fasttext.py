@@ -34,7 +34,7 @@ class TrainFasttextClassifierConfig:
 
     output_path: str
     pos_doc_path: str
-    neg_doc_path: str
+    neg_doc_path: str = None
     pos_sampling_rate: float = 1.0
     neg_sampling_rate: float = 1.0
     fasttext_args: dict = field(default_factory=dict)
@@ -85,4 +85,4 @@ def main(cfg: TrainFasttextClassifierConfig):
 
 
 if __name__ == "__main__":
-    main()
+    train()
