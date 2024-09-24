@@ -8,6 +8,7 @@ import fsspec
 import ray
 from tqdm import tqdm
 
+from marin.core.runtime import cached_or_construct_output
 from marin.utils import fsspec_glob, fsspec_mkdirs, fsspec_rm, rebase_file_path
 
 
@@ -130,7 +131,7 @@ def do_dedup(
 
     return process.returncode
 
-
+@cached_or_construct_output(success_suffix="SUCCESS")
 def copy_files_out(local_base_dir, output_path, attribute_name):
     # Ensure output_path doesn't end with a slash
     output_path = output_path.rstrip("/")
@@ -146,7 +147,6 @@ def copy_files_out(local_base_dir, output_path, attribute_name):
         # Use rebase_file_path to get the correct output path
         output_file = rebase_file_path(local_attribute_dir, local_file, output_path)
 
-        print(f"[DEBUG] Uploading {local_file} to {output_file}")
 
         # Ensure the output directory exists
         output_file_dir = os.path.dirname(output_file)
@@ -161,6 +161,19 @@ def copy_files_out(local_base_dir, output_path, attribute_name):
 
     print(f"Uploaded {files_uploaded} files to {output_path}")
 
+@cached_or_construct_output(success_suffix="SUCCESS")
+def copy_file_out(input_file_path, output_file_path):
+
+    # Ensure the output directory exists
+    output_file_dir = os.path.dirname(output_file_path)
+    fsspec_mkdirs(output_file_dir)
+
+    # Copy the file using fsspec
+    with fsspec.open(input_file_path, "rb") as f_local:
+        with fsspec.open(output_file_path, "wb") as f_remote:
+            f_remote.write(f_local.read())
+
+    print(f"Uploaded file to {output_file_path}")
 
 def delete_jsonl_files(dir_path):
     """
@@ -239,7 +252,6 @@ def dolma_dedup(
                     read_only=True,
                     bloom_filter_file="decotaminated_bloom_filter.bin",
                 )
-                copy_files_out(tmpdir, output_path, attribute_name)
             else:
                 copy_files_in(input_path, tmpdir)
                 do_dedup(
@@ -252,7 +264,20 @@ def dolma_dedup(
                     false_positive_rate,
                     processes,
                 )
-                copy_files_out(tmpdir, output_path, attribute_name)
+
+            # copy files out stays the same.
+            # Ensure output_path doesn't end with a slash
+            output_path = output_path.rstrip("/")
+
+            local_attribute_dir = os.path.join(tmpdir, "attributes", attribute_name)
+
+            # Get all .jsonl.gz files in the local attribute directory
+            glob_path = f"{local_attribute_dir}/**/*.jsonl.gz"
+            local_files = fsspec_glob(glob_path)
+            for local_file in tqdm(local_files, desc="Uploading files"):
+                output_file = rebase_file_path(local_attribute_dir, local_file, output_path)
+                copy_file_out(local_file, output_file)
+        
         except Exception as e:
             print(f"An error occurred during deduplication: {e}")
     return "Deduplication process completed"
