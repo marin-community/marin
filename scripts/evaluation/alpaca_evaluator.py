@@ -66,18 +66,6 @@ class AlpacaEvaluator(VllmTpuEvaluator):
             output_path (str): The path to save the evaluation results.
             max_eval_instances (int | None): The maximum number of evaluation instances to run.
         """
-        import subprocess
-        result = subprocess.run(
-            ["gcloud", "secrets", "versions", "access", "latest", "--secret=OPENAI_API_KEY"],
-            capture_output=True,
-            text=True
-        )
-        # Retrieve the secret value
-        secret_value = result.stdout.strip()
-        # Set the environment variable
-        os.environ["OPENAI_API_KEY"] = secret_value
-        print(f"Set OPENAI_API_KEY to {secret_value}")
-
         is_successful: bool = False
 
         try:
