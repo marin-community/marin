@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 
 
-@dataclass
+@dataclass(frozen=True)
 class TrafilaturaConfig:
     favor_precision: bool = False
     favor_recall: bool = True
