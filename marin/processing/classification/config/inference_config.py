@@ -14,7 +14,6 @@ class RuntimeConfig:
 class InferenceConfig:
     input_path: str
 
-
     # A path to a model or the name of a model. I f it doesn't have the classifier type in its name, you need to
     # specify the model_type.
     model_name: str

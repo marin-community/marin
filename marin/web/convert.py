@@ -11,6 +11,7 @@ from marin.schemas.web.convert import TrafilaturaConfig
 
 logger = logging.getLogger("ray")
 
+
 def convert_page_with_trafilatura(
     html: str, url: str | None = None, config: str | TrafilaturaConfig = "fineweb"
 ) -> dict[str, str]:

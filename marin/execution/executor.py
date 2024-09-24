@@ -84,6 +84,7 @@ logger = logging.getLogger("ray")
 
 ExecutorFunction = Callable | ray.remote_function.RemoteFunction | None
 
+
 @dataclass(frozen=True)
 class ExecutorStep:
     """
@@ -106,6 +107,7 @@ class ExecutorStep:
     The `config` is instantiated by replacing these special values with the
     actual paths during execution.
     """
+
     name: str
     fn: ExecutorFunction
     config: dataclass
@@ -118,8 +120,10 @@ class ExecutorStep:
 @dataclass(frozen=True)
 class InputName:
     """To be interpreted as a previous `step`'s output_path joined with `name`."""
+
     step: ExecutorStep
     name: str = ""
+
 
 def get_input(step: ExecutorStep, name: str = ""):
     return InputName(step=step, name=name)
@@ -128,7 +132,9 @@ def get_input(step: ExecutorStep, name: str = ""):
 @dataclass(frozen=True)
 class OutputName:
     """To be interpreted as part of this step's output_path joined with `name`."""
+
     name: str = ""
+
 
 def get_output(name: str = ""):
     return OutputName(name=name)
@@ -137,7 +143,9 @@ def get_output(name: str = ""):
 @dataclass(frozen=True)
 class VersionedValue:
     """Wraps a value, to signal that this value (part of a config) should be part of the version."""
+
     value: Any
+
 
 def versioned(value: Any):
     return VersionedValue(value)
@@ -160,6 +168,7 @@ def collect_dependencies_and_version(obj: Any, dependencies: list[ExecutorStep],
 
     Along the way, compute the list of dependencies.
     """
+
     def recurse(obj: Any, prefix: str):
         new_prefix = prefix + "." if prefix else ""
         if isinstance(obj, VersionedValue):
@@ -195,6 +204,7 @@ def instantiate_config(config: dataclass, output_path: str, output_paths: dict[E
     `output_path`: represents the output path of the current step.
     `output_paths`: a dict from `ExecutorStep` to their output paths.
     """
+
     def recurse(obj: Any):
         if obj is None:
             return None
@@ -224,7 +234,7 @@ def instantiate_config(config: dataclass, output_path: str, output_paths: dict[E
 
 
 class Executor:
-    """"
+    """ "
     Performs the execution of a pipeline of `ExecutorStep`s.
     1. Instantiate all the `output_path`s for each `ExecutorStep` based on `prefix`, names, and versions of everything.
     2. Run each `ExecutorStep` in a proper topological sort order.
@@ -283,7 +293,6 @@ class Executor:
 
         return version
 
-
     def run_step(self, step: ExecutorStep, dry_run: bool) -> ray.ObjectRef:
         """
         Return a Ray object reference to the result of running the `step`.
@@ -321,6 +330,7 @@ class Executor:
         dependencies = [self.refs[dep] for dep in self.dependencies[step]]
         return execute_after_dependencies.remote(fn, config, dependencies)
 
+
 @ray.remote
 def execute_after_dependencies(fn: ExecutorFunction, config: dataclass, dependencies: list[ray.ObjectRef]):
     """Run a function with the given config."""
@@ -347,13 +357,16 @@ def get_fn_name(fn: Callable | ray.remote_function.RemoteFunction):
     else:
         return f"{fn.__module__}.{fn.__name__}"
 
+
 ############################################################
+
 
 @dataclass(frozen=True)
 class ExecutorMainConfig:
     prefix: str = "gs://marin-us-central2"
     dry_run: bool = False
     local_mode: bool = False
+
 
 @draccus.wrap()
 def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep]):
