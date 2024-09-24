@@ -59,7 +59,14 @@ def test_executor():
     a = ExecutorStep(name="a", fn=fn, config=None)
 
     b = ExecutorStep(
-        name="b", fn=fn, config=MyConfig(input_path=output_path_of(a, "sub"), output_path=this_output_path(), n=versioned(3), m=4)
+        name="b",
+        fn=fn,
+        config=MyConfig(
+            input_path=output_path_of(a, "sub"),
+            output_path=this_output_path(),
+            n=versioned(3),
+            m=4,
+        )
     )
 
     executor = Executor(prefix="/tmp")
