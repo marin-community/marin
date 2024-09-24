@@ -6,8 +6,9 @@ Training script for BERT quality classifiers.
 
 from dataclasses import dataclass, field
 
-import ray
 import draccus
+import os
+import ray
 
 from marin.utils import fsspec_rm
 from marin.classifiers.utils import create_label_attribute, attributes_to_dataset
@@ -43,12 +44,9 @@ class TrainBertClassifierConfig:
     memory: int = 1
 
 
-@draccus.wrap()
-def main(cfg: TrainBertClassifierConfig):
-    ray.init()
-
-    pos_attr_path = f"{cfg.output_path}/tmp/positives"
-    neg_attr_path = f"{cfg.output_path}/tmp/negatives"
+def train(cfg: TrainBertClassifierConfig):
+    pos_attr_path = os.path.join(cfg.output_path, "tmp", "positives")
+    neg_attr_path = os.path.join(cfg.output_path, "tmp", "negatives")
 
     create_label_attribute(input_doc_path=cfg.pos_doc_path, output_attr_path=pos_attr_path, label="hq")
     attributes_to_dataset(
@@ -81,5 +79,11 @@ def main(cfg: TrainBertClassifierConfig):
     fsspec_rm(neg_attr_path)
 
 
+@draccus.wrap()
+def main(cfg: TrainBertClassifierConfig):
+    ray.init()
+    train(cfg)
+
+
 if __name__ == "__main__":
-    main()
+    train()
