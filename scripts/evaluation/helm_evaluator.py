@@ -5,6 +5,7 @@ import traceback
 import ray
 import shutil
 
+from marin.utils import remove_tpu_lockfile_on_exit
 from scripts.evaluation.evaluator import Dependency, ModelConfig
 from scripts.evaluation.vllm_tpu_evaluator import VllmTpuEvaluator
 from scripts.evaluation.utils import is_remote_path, upload_to_gcs, run_bash_command, write_yaml
@@ -95,8 +96,19 @@ class HELMEvaluator(VllmTpuEvaluator):
         }
         write_yaml(content, HELMEvaluator.TOKENIZER_CONFIGS_FILE_PATH)
 
-    @ray.remote(memory=64 * 1024 * 1024 * 1024, resources={"TPU": 4})  # 64 GB of memory, always request 4 TPUs
-    def run(self, model: ModelConfig, evals: List[str], output_path: str) -> None:
+    @ray.remote(memory=64 * 1024 * 1024 * 1024, resources={"TPU": 1, "TPU-v4-8-head": 1})  # 64 GB of memory
+    @remove_tpu_lockfile_on_exit
+    def run(self, model: ModelConfig, evals: List[str], output_path: str, max_eval_instances: int | None = None) -> None:
+        """
+        Runs HELM on the specified model and set of evaluations.
+
+        Args:
+            model (ModelConfig): The model configuration of the model we want to evaluate
+            evals (List[str]): The list of evaluations to run.
+            output_path (str): The path to save the evaluation results.
+            max_eval_instances (int | None): The maximum number of evaluation instances to run.
+        """
+
         is_successful: bool = False
         try:
             from helm.common.general import ensure_file_downloaded
@@ -109,19 +121,17 @@ class HELMEvaluator(VllmTpuEvaluator):
                 run_entries_file: str = f"run_entries_{eval}.conf"
                 run_entries_url: str = self.RUN_ENTRIES_TEMPLATE.format(run_entries_file=run_entries_file)
                 ensure_file_downloaded(source_url=run_entries_url, target_path=run_entries_file)
-                assert (
-                    os.path.exists(run_entries_file),
-                    f"Failed to download. Does {run_entries_file} exist at {self.ALL_RUN_ENTRIES_URL}?",
-                )
+                assert os.path.exists(
+                    run_entries_file
+                ), f"Failed to download. Does {run_entries_file} exist at {self.ALL_RUN_ENTRIES_URL}?"
                 run_entries_files.append(run_entries_file)
 
                 schema_file: str = f"schema_{eval}.yaml"
                 schema_url: str = self.SCHEMA_TEMPLATE.format(schema_file=schema_file)
                 ensure_file_downloaded(source_url=schema_url, target_path=schema_file)
-                assert (
-                    os.path.exists(schema_file),
-                    f"Failed to download. Does {schema_file} exist at {self.ALL_SCHEMA_URL}?",
-                )
+                assert os.path.exists(
+                    schema_file
+                ), f"Failed to download. Does {schema_file} exist at {self.ALL_SCHEMA_URL}?"
                 schema_files.append(schema_file)
 
             # Download the model checkpoint if necessary.
@@ -135,6 +145,7 @@ class HELMEvaluator(VllmTpuEvaluator):
 
             # Run HELM with the model and the specified evals
             # This commands evaluates the model on the specified evals and outputs the results to RESULTS_PATH
+            max_eval_instances = max_eval_instances or self.DEFAULT_MAX_EVAL_INSTANCES
             run_bash_command(
                 [
                     "helm-run",
@@ -143,7 +154,7 @@ class HELMEvaluator(VllmTpuEvaluator):
                     "--models-to-run",
                     model.name,
                     "--max-eval-instances",
-                    str(self.DEFAULT_MAX_EVAL_INSTANCES),
+                    str(max_eval_instances),
                     "--output-path",
                     self.BENCHMARK_OUTPUT_PATH,
                     "--suite",

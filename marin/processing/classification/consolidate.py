@@ -17,11 +17,10 @@ from marin.utils import (
     fsspec_isdir,
     fsspec_mkdirs,
     rebase_file_path,
-    validate_marin_gcp_path,
 )
 
 
-@dataclass
+@dataclass(frozen=True)
 class FilterConfig:
     """Config for filtering operation on Marin data"""
 
@@ -32,17 +31,7 @@ class FilterConfig:
     threshold: float | None = 0.5
     min_score: float = 0.0
     max_score: float = 1e6
-
-    def __post_init__(self):
-        if not (self.min_score < self.threshold < self.max_score):
-            raise ValueError("Scores must satisfy: min_score < threshold < max_score")
-
-        if "dedupe" in self.type:
-            self.filter_func = dedupe_filter_func
-        elif "classify" in self.type:
-            self.filter_func = quality_filter_func
-        else:
-            raise ValueError(f"Unknown attribute type: {self.type}")
+    filter_func: Callable | None = None
 
 
 @dataclass
@@ -114,9 +103,9 @@ def dedupe_filter_func(
 
 
 def get_filter_func(filter_type: str) -> Callable:
-    if "dedupe" in filter_type:
+    if filter_type == "dedupe":
         return dedupe_filter_func
-    elif "classify" in filter_type:
+    elif filter_type == "classify":
         return quality_filter_func
     else:
         raise ValueError(f"Unknown attribute name: {filter_type}")
@@ -244,21 +233,34 @@ def apply_filters(input_path: str, output_path: str, filters: list[FilterConfig]
 
 
 @ray.remote
-def main_ray(cfg: ConsolidateConfig):
-    input_path = validate_marin_gcp_path(cfg.input_path)
-    output_path = validate_marin_gcp_path(cfg.output_path)
+def consolidate(cfg: ConsolidateConfig):
+    input_path = cfg.input_path
+    output_path = cfg.output_path
 
-    for doc_filter in cfg.filters:
-        print(f"Filter enabled: {doc_filter.name} with threshold {doc_filter.threshold})")
+    doc_filters = []
+    for config_filter in cfg.filters:
+        doc_filters.append(
+            FilterConfig(
+                type=config_filter.type,
+                attribute_path=config_filter.attribute_path,
+                name=config_filter.name,
+                label=config_filter.label,
+                threshold=config_filter.threshold,
+                min_score=config_filter.min_score,
+                max_score=config_filter.max_score,
+                filter_func=get_filter_func(config_filter.type),
+            )
+        )
+        print(f"Filter enabled: {config_filter.name} with threshold {config_filter.threshold})")
 
-    output_path = apply_filters(input_path, output_path, cfg.filters, cfg.max_tasks_in_flight)
+    output_path = apply_filters(input_path, output_path, doc_filters, cfg.max_tasks_in_flight)
     print(f"Processing complete. Final output path: {output_path}")
 
 
 @draccus.wrap()
 def main(cfg: ConsolidateConfig):
     ray.init()
-    ray.get(main_ray.remote(cfg))
+    ray.get(consolidate.remote(cfg))
 
 
 if __name__ == "__main__":

@@ -1,3 +1,4 @@
+import logging
 import re
 from dataclasses import asdict
 from urllib.parse import urljoin
@@ -7,6 +8,8 @@ from bs4 import BeautifulSoup
 
 from marin.markdown import to_markdown
 from marin.schemas.web.convert import TrafilaturaConfig
+
+logger = logging.getLogger("ray")
 
 
 def convert_page_with_trafilatura(
@@ -209,8 +212,7 @@ def convert_page(
         case "legacy":
             return convert_page_legacy(html, url)
         case _:
-            print(f"Invalid extract_method: {extract_method}. Switching to readability for extraction.")
-            return convert_page_with_readability(html, url)
+            raise Exception(f"Invalid extract_method: {extract_method}")
 
 
 def make_links_absolute(soup: BeautifulSoup, base_url):
