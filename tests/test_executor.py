@@ -18,12 +18,14 @@ def ray_start():
     yield
     ray.shutdown()
 
+
 @dataclass(frozen=True)
 class MyConfig:
     input_path: str
     output_path: str
     n: int
     m: int
+
 
 # Different Ray processes running `ExecutorStep`s cannot share variables, so use filesystem.
 # Helper functions
@@ -32,13 +34,16 @@ def create_temp():
     with tempfile.NamedTemporaryFile(delete=False) as f:
         return f.name
 
+
 def append_temp(path: str, obj: dataclass):
     with open(path, "a") as f:
         print(json.dumps(asdict(obj) if obj else None), file=f)
 
+
 def read_temp(path: str):
     with open(path) as f:
         return list(map(json.loads, f.readlines()))
+
 
 def cleanup_temp(path: str):
     os.unlink(path)
@@ -53,8 +58,9 @@ def test_executor():
 
     a = ExecutorStep(name="a", fn=fn, config=None)
 
-    b = ExecutorStep(name="b", fn=fn, config=MyConfig(
-        input_path=get_input(a, "sub"), output_path=get_output(), n=versioned(3), m=4))
+    b = ExecutorStep(
+        name="b", fn=fn, config=MyConfig(input_path=get_input(a, "sub"), output_path=get_output(), n=versioned(3), m=4)
+    )
 
     executor = Executor(prefix="/tmp")
     executor.run(steps=[b])
@@ -90,7 +96,7 @@ def test_parallelism():
         time.sleep(run_time)
 
     bs = [
-        ExecutorStep(name=f"b{i}", fn=fn, config=MyConfig(input_path="/", output_path=get_output(), n=1, m=1)) \
+        ExecutorStep(name=f"b{i}", fn=fn, config=MyConfig(input_path="/", output_path=get_output(), n=1, m=1))
         for i in range(parallelism)
     ]
     executor = Executor(prefix="/tmp")
@@ -113,15 +119,22 @@ def test_parallelism():
 def test_versioning():
     """Make sure that versions (output paths) are computed properly based on
     upstream dependencies and only the versioned fields."""
+
     def fn(config: MyConfig):
         pass
 
-    def get_output_path(a_input_path: str, a_n: int, a_m:int, name: str, b_n: int, b_m: int):
+    def get_output_path(a_input_path: str, a_n: int, a_m: int, name: str, b_n: int, b_m: int):
         """Make steps [a -> b] with the given arguments, and return the output_path of `b`."""
-        a = ExecutorStep(name="a", fn=fn, config=MyConfig(
-            input_path=versioned(a_input_path), output_path=get_output(), n=versioned(a_n), m=a_m))
-        b = ExecutorStep(name="b", fn=fn, config=MyConfig(
-            input_path=get_input(a, name), output_path=get_output(), n=versioned(b_n), m=b_m))
+        a = ExecutorStep(
+            name="a",
+            fn=fn,
+            config=MyConfig(input_path=versioned(a_input_path), output_path=get_output(), n=versioned(a_n), m=a_m),
+        )
+        b = ExecutorStep(
+            name="b",
+            fn=fn,
+            config=MyConfig(input_path=get_input(a, name), output_path=get_output(), n=versioned(b_n), m=b_m),
+        )
         executor = Executor(prefix="/tmp")
         executor.run(steps=[b])
         return executor.output_paths[b]
