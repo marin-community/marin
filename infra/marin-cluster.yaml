@@ -32,7 +32,7 @@ available_node_types:
   tpu_worker:
     min_workers: 4
     max_workers: 1024
-    resources: {"CPU": 120, "TPU": 4}
+    resources: {"CPU": 120, "TPU": 1}
 
     # GCP-Specific Configuration; setup for TPU V4-8 VMs (in `us-central2-b`)
     node_config:

@@ -4,6 +4,7 @@ import time
 
 import ray
 
+from marin.utils import remove_tpu_lockfile_on_exit
 from scripts.evaluation.vllm_tpu_evaluator import VllmTpuEvaluator
 from scripts.evaluation.evaluator import ModelConfig
 
@@ -118,7 +119,8 @@ class SimpleEvaluator(VllmTpuEvaluator):
         "many_outputs": MANY_OUTPUTS_TEST_PLAN,
     }
 
-    @ray.remote(memory=64 * 1024 * 1024 * 1024, resources={"TPU": 4})  # 64 GB of memory, always request 4 TPUs
+    @ray.remote(memory=64 * 1024 * 1024 * 1024, resources={"TPU": 1, "TPU-v4-8-head": 1})  # 64 GB of memory
+    @remove_tpu_lockfile_on_exit
     def run(
         self, model: ModelConfig, evals: List[str], output_path: str, max_eval_instances: int | None = None
     ) -> None:
