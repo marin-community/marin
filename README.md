@@ -99,6 +99,69 @@ To avoid passing `--address ...` you can set the environment variable `export RA
 [`infra/marin-tmux.sh`](./infra/marin-tmux.sh) that automates launching the dashboard for you. Make sure to read the
 script before running!
 
+
+## Programming Guidelines
+
+### Using Ray
+
+When using Ray, use the `ray.remote` decorator for any function that you want to run distributed.
+`ray.remote` executes the function in a separate process, possibly on a separate machine.
+
+```python
+@ray.remote
+def my_function():
+    ...
+
+result_future = my_function.remote()
+
+# Get the result of the function
+result = ray.get(result_future)
+```
+
+Ray is a resource-aware job scheduler, so you can specify the resources that a job requires:
+    
+```python 
+@ray.remote(num_cpus=4)
+def my_cpu_job():
+    ...
+```
+
+Please see the [Ray documentation](https://docs.ray.io/en/latest/index.html) for more information, though
+see the next section for some important notes about using TPUs.
+
+
+### Using TPUs on Ray
+
+You can use our workers like normal CPU instances, just using the `ray.remote` decorator. However, if you want to use
+the TPUs, you need to tell Ray that you need them. To use TPUs on our cluster, you should use the following:
+
+
+```python
+@ray.remote(num_cpus=8, resources={"TPU": 1, "TPU-v4-8-head": 1})
+def my_tpu_job():
+    ...
+    
+```
+
+Always use the `TPU-v4-8-head` resource when requesting TPUs unless you specifically want a multi-node slice. This will
+ensure you don't accidentally grab part of a multi-node slice, which will lead to weird errors.
+
+Also, despite it saying `"TPU": 1`, you're actually getting all the TPUs. This is because Google requires that only one
+process on a machine can access TPUs at a time.
+
+**IMPORTANT**: Ray and `libtpu` don't always get along. If you are using TPUs, you should either fork a process that 
+uses the TPUs or force remove the libtpu lockfile when your task finishes. The latter is very hacky, but it works.
+We offer a utility decorator to do this for you:
+
+```python
+from marin.utils import remove_tpu_lockfile_on_exit
+
+@ray.remote(num_cpus=8, resources={"TPU": 1, "TPU-v4-8-head": 1})
+@remove_tpu_lockfile_on_exit
+def my_tpu_job():
+    ...
+```
+
 ---
 
 ## Organization
