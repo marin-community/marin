@@ -58,7 +58,7 @@ python -m marin.processing.classification.eval.annotations_server --input-file g
 See the dedupe.md file for more details; below is the quick start command
 
 ```bash
-ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python -m marin.processing.classification.dedupe --input_dir gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart/ --output_dir gs://marin-us-central2/attributes/hello_world_fw/v1.0/quickstart_duplicates/
+ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python -m marin.processing.classification.dedupe --input_path gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart/ --output_path gs://marin-us-central2/attributes/hello_world_fw/v1.0/quickstart_duplicates/
 ```
 
 Or if you want to use the yaml quickstart file:
