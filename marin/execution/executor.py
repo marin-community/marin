@@ -298,22 +298,23 @@ class Executor:
         config_version = self.versions[step]["config"]
         output_path = self.output_paths[step]
 
-        # Figure out whether a completed.  Currently, just check whether the
-        # output path exists.  Note this is imperfect, because the job that
-        # creates the output path might have failed or might be still running.
-        # TODO: We need more metadata (e.g., using .STATUS files).
-        completed = fsspec_exists(output_path)
-        completed_str = "COMPLETED" if completed else "PENDING"
+        # TODO: we need a scheme to figure out when we need to run this result
+        # as opposed to just using the existing output path.  Currently, just
+        # check if the output path exists.  Note this is imperfect, because the
+        # job that creates the output path might have failed or might be still
+        # running.
+        exists = fsspec_exists(output_path)
+        status = "COMPLETED" if exists else "PENDING"
 
         # Print information
-        logger.info(f"[{completed_str}] {step.name}: {get_fn_name(step.fn)}")
+        logger.info(f"[{status}] {step.name}: {get_fn_name(step.fn)}")
         logger.info(f"  output_path = {output_path}")
         logger.info(f"  config = {json.dumps(config_version)}")
         for i, dep in enumerate(self.dependencies[step]):
             logger.info(f"  {dependency_index_str(i)} = {self.output_paths[dep]}")
 
         # Call `fn` if it hasn't been done yet
-        fn = step.fn if not dry_run and not completed else None
+        fn = step.fn if not dry_run and not exists else None
 
         logger.info("")
 
