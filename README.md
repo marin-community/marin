@@ -147,7 +147,7 @@ Always use the `TPU-v4-8-head` resource when requesting TPUs unless you specific
 ensure you don't accidentally grab part of a multi-node slice, which will lead to weird errors.
 
 Also, despite it saying `"TPU": 1`, you're actually getting all the TPUs. This is because Google requires that only one
-process on a machine can access the TPU.
+process on a machine can access TPUs at a time.
 
 **IMPORTANT**: Ray and `libtpu` don't always get along. If you are using TPUs, you should either fork a process that 
 uses the TPUs or force remove the libtpu lockfile when your task finishes. The latter is very hacky, but it works.
