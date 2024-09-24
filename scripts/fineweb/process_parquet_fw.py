@@ -1,10 +1,12 @@
 """Convert fineweb to markdown"""
 import argparse
+from dataclasses import dataclass
 import json
 import os
 import traceback
 from datetime import datetime
 
+import draccus
 import fsspec
 import pandas as pd
 import ray
@@ -15,7 +17,7 @@ from marin.utils import fsspec_exists, fsspec_glob, fsspec_rm
 from marin.web.convert import convert_page
 
 
-@ray.remote(memory=1.5 * 1024 * 1024 * 1024, runtime_env={"pip": ["s3fs"]})  # 1.5 GB
+@ray.remote(memory=1.5 * 1024 * 1024 * 1024, runtime_env={"pip": ["s3fs==2024.6.1", "botocore==1.35.20"]})  # 1.5 GB
 @cached_or_construct_output(success_suffix="SUCCESS")  # We use this decorator to make this function idempotent
 def process_one_warc_file(input_file_path, output_file):
     """
@@ -132,7 +134,7 @@ def process_one_warc_file(input_file_path, output_file):
     return True
 
 
-@ray.remote(memory=10 * 1024 * 1024 * 1024)  # 10 GB
+@ray.remote(memory=10 * 1024 * 1024 * 1024, runtime_env={"pip": ["s3fs==2024.6.1", "botocore==1.35.20"]})  # 10 GB
 def process_fw_parquet(input_file_path, output_path_path):
     """
        Converts fineweb files to html and markdown. This will essentially take in fineweb and split different groups based
@@ -207,15 +209,18 @@ def process_fw_parquet(input_file_path, output_path_path):
     return True
 
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description="Convert fineweb to markdown.")
-    # Example of input_path = gs://marin-data/raw/fineweb/fw-v1.0/CC-MAIN-2024-10/
-    parser.add_argument('--input_path', type=str, help='Path to the fineweb parquet diretory', required=True)
+@dataclass
+class ParquetFWConfig:
+    input_path: str
+    output_path: str
 
-    args = parser.parse_args()
-    files = fsspec_glob(os.path.join(args.input_path, "*.parquet"))
+
+@draccus.wrap()
+def process_fw_dump(cfg: ParquetFWConfig):
+    files = fsspec_glob(os.path.join(cfg.input_path, "*.parquet"))
     MAX_NUM_PENDING_TASKS = 15  # Max number of parquet files we want to process in pending state
     NUM_TASKS = len(files)
+
     ray.init()
     result_refs = []
     for file in files:
@@ -229,8 +234,7 @@ if __name__ == '__main__':
                 print(f"Error processing the group: {e}")
                 continue
 
-        output_path_path = file.replace("raw/fineweb/fw-v1.0",
-                                       "processed/fineweb/fw-v1.0/ledgers").replace(".parquet", "")
+        output_path_path = os.path.join(cfg.output_path, os.path.basename(file).replace(".parquet", ""))
         print(f"Starting Processing for the fw parquet file: {file} in output_path: {output_path_path}")
         result_refs.append(process_fw_parquet.remote(file, output_path_path))
 
@@ -239,3 +243,7 @@ if __name__ == '__main__':
         ray.get(result_refs)
     except Exception as e:
         print(f"Error processing the group: {e}")
+
+
+if __name__=="__main__":
+    process_fw_dump()
