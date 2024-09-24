@@ -131,6 +131,7 @@ def do_dedup(
 
     return process.returncode
 
+
 @cached_or_construct_output(success_suffix="SUCCESS")
 def copy_files_out(local_base_dir, output_path, attribute_name):
     # Ensure output_path doesn't end with a slash
@@ -147,7 +148,6 @@ def copy_files_out(local_base_dir, output_path, attribute_name):
         # Use rebase_file_path to get the correct output path
         output_file = rebase_file_path(local_attribute_dir, local_file, output_path)
 
-
         # Ensure the output directory exists
         output_file_dir = os.path.dirname(output_file)
         fsspec_mkdirs(output_file_dir)
@@ -160,6 +160,7 @@ def copy_files_out(local_base_dir, output_path, attribute_name):
         files_uploaded += 1
 
     print(f"Uploaded {files_uploaded} files to {output_path}")
+
 
 @cached_or_construct_output(success_suffix="SUCCESS")
 def copy_file_out(input_file_path, output_file_path):
@@ -174,6 +175,7 @@ def copy_file_out(input_file_path, output_file_path):
             f_remote.write(f_local.read())
 
     print(f"Uploaded file to {output_file_path}")
+
 
 def delete_jsonl_files(dir_path):
     """
@@ -277,7 +279,7 @@ def dolma_dedup(
             for local_file in tqdm(local_files, desc="Uploading files"):
                 output_file = rebase_file_path(local_attribute_dir, local_file, output_path)
                 copy_file_out(local_file, output_file)
-        
+
         except Exception as e:
             print(f"An error occurred during deduplication: {e}")
     return "Deduplication process completed"
