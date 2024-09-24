@@ -1,3 +1,4 @@
+import copy
 import json
 import os
 from collections.abc import Callable
@@ -30,6 +31,7 @@ class FilterConfig:
     threshold: float | None = 0.5
     min_score: float = 0.0
     max_score: float = 1e6
+    filter_func: Callable | None = None
 
 
 @dataclass
@@ -161,8 +163,16 @@ def process_file(
             attributes = all_attributes[doc_id]
             filtered_data = input_data
 
-            for attr_name, threshold, filter_func, label, min_score, max_score in filters:
-                filtered_data = filter_func(filtered_data, attributes, attr_name, threshold, label, min_score, max_score)
+            for doc_filter in filters:
+                filtered_data = doc_filter.filter_func(
+                    filtered_data,
+                    attributes,
+                    filter.name,
+                    filter.threshold,
+                    filter.label,
+                    filter.min_score,
+                    filter.max_score,
+                )
                 if filtered_data is None:
                     break
 
@@ -171,45 +181,54 @@ def process_file(
                 output_file.write(output_line)
 
 
+def rebase_filter_filepath(input_subdir: str, input_path: str, doc_filter: FilterConfig) -> FilterConfig:
+    """Changes the attribute path of a filter to point to a more specific file/subdirectory
+
+    Similar to how we rebase_file_path to get the output path from the input path and the subdirectory
+    we are processing, we need to rebase the attribute path to get the attribute subdirectory from the
+    input path and the subdirectory we are processing.
+    """
+    attribute_path = rebase_file_path(input_subdir, input_path, doc_filter.attribute_path)
+    assert fsspec_exists(attribute_path), f"Warning: Attribute path {attribute_path} does not exist."
+
+    sub_filter = copy.deepcopy(doc_filter)
+    sub_filter.attribute_path = attribute_path
+    return sub_filter
+
+
 @ray.remote
-def process_directory(
-    input_subdir: str,
-    output_subdir: str,
-    all_attributes: dict[str, dict[str, Any]],
-    filters: list[tuple[str, float, Callable]],
-):
+def process_directory(input_subdir: str, output_subdir: str, filters: list[FilterConfig]):
     files = fsspec_glob(os.path.join(input_subdir, "**/*.jsonl.gz"))
     for input_filename in files:
         output_filename = rebase_file_path(input_subdir, input_filename, output_subdir)
-        process_file(input_filename, output_filename, all_attributes, filters)
+        file_filters = [rebase_filter_filepath(input_subdir, input_filename, doc_filter) for doc_filter in filters]
+        process_file(input_filename, output_filename, file_filters)
 
 
-def apply_filters(
-    input_path: str,
-    output_path: str,
-    attribute_files: list[str],
-    filters: list[tuple[str, float, Callable]],
-    max_tasks_in_flight: int,
-):
-
-    all_attributes = load_all_attributes(attribute_files)
-
+def apply_filters(input_path: str, output_path: str, filters: list[FilterConfig], max_tasks_in_flight: int):
     subdirectories = fsspec_get_atomic_directories(input_path)
     print(f"subdirectories: {subdirectories}")
 
     tasks = []
+    ready_refs = []
     for input_subdir in subdirectories:
+        if len(tasks) > max_tasks_in_flight:
+            ready_refs, tasks = ray.wait(tasks, num_returns=1)
+            ray.get(ready_refs)
+
         print(f"Processing {input_subdir}")
         output_subdir = rebase_file_path(input_path, input_subdir, output_path)
+        subdir_filters = [rebase_filter_filepath(input_path, input_subdir, doc_filter) for doc_filter in filters]
         fsspec_mkdirs(output_subdir)
 
-        task = process_directory.remote(input_subdir, output_subdir, all_attributes, filters)
+        task = process_directory.remote(input_subdir, output_subdir, subdir_filters)
         tasks.append(task)
 
-        if len(tasks) >= max_tasks_in_flight:
-            ray.get(tasks.pop(0))
+    try:
+        ray.get(tasks)
+    except Exception as e:
+        print(f"Error processing: {e}")
 
-    ray.get(tasks)
     return output_path
 
 
@@ -218,24 +237,23 @@ def consolidate(cfg: ConsolidateConfig):
     input_path = cfg.input_path
     output_path = cfg.output_path
 
-    attribute_files = []
-    filters = []
-
-    for filter_fn in cfg.filters:
-        attribute_files.append(filter_fn.attribute_path)
-        filters.append(
-            (
-                filter_fn.name,
-                filter_fn.threshold,
-                get_filter_func(filter_fn.type),
-                filter_fn.label,
-                filter_fn.min_score,
-                filter_fn.max_score,
+    doc_filters = []
+    for config_filter in cfg.filters:
+        doc_filters.append(
+            FilterConfig(
+                type=config_filter.type,
+                attribute_path=config_filter.attribute_path,
+                name=config_filter.name,
+                label=config_filter.label,
+                threshold=config_filter.threshold,
+                min_score=config_filter.min_score,
+                max_score=config_filter.max_score,
+                filter_func=get_filter_func(config_filter.type),
             )
         )
-        print(f"Filter enabled: {filter_fn.name} with threshold {filter_fn.threshold})")
+        print(f"Filter enabled: {config_filter.name} with threshold {config_filter.threshold})")
 
-    output_path = apply_filters(input_path, output_path, attribute_files, filters, cfg.max_tasks_in_flight)
+    output_path = apply_filters(input_path, output_path, doc_filters, cfg.max_tasks_in_flight)
     print(f"Processing complete. Final output path: {output_path}")
 
 
