@@ -5,7 +5,6 @@ import ray
 import datetime
 import argparse
 
-from marin.utils import get_gcs_path
 from marin import markdown
 from bs4 import BeautifulSoup
 import pathlib
@@ -128,7 +127,7 @@ def clean_ar5iv_html(file, prefix_path, output_path, file_size):
 
     try:
         outs = ""
-        with fsspec.open(get_gcs_path(file), 'rb', compression='gzip') as outputf:
+        with fsspec.open(file, 'rb', compression='gzip') as outputf:
             for _ in range(file_size):
                 line = outputf.readline()
                 if not line:
@@ -147,7 +146,7 @@ def clean_ar5iv_html(file, prefix_path, output_path, file_size):
             out_file = output_path / "html_clean" / file_path.relative_to(prefix_path)
         else:
             raise Exception(f"File {file} is not in the prefix path {prefix_path}")
-        with fsspec.open(get_gcs_path(out_file), 'wb', compression='gzip') as outputf:
+        with fsspec.open(out_file, 'wb', compression='gzip') as outputf:
             outputf.write(outs.encode('utf-8'))
         print(f"Wrote to file {out_file}")
     except FileNotFoundError as e:
@@ -168,7 +167,7 @@ def markdownify_ar5iv_html(file,  prefix_path, output_path, file_size):
     try:
         outs = ""
         print(f"Starting Processing for the ar5iv file: {html}")
-        with fsspec.open(get_gcs_path(file), 'rb', compression='gzip') as outputf:
+        with fsspec.open(file, 'rb', compression='gzip') as outputf:
             for _ in range(file_size):
                 line = outputf.readline()
                 if not line:
@@ -196,7 +195,7 @@ def markdownify_ar5iv_html(file,  prefix_path, output_path, file_size):
             out_file = output_path / "md" / file_path.relative_to(prefix_path)
         else:
             raise Exception(f"File {file} is not in the prefix path {prefix_path}")
-        with fsspec.open(get_gcs_path(out_file), 'wb', compression='gzip') as outputf:
+        with fsspec.open(out_file, 'wb', compression='gzip') as outputf:
             outputf.write(outs.encode('utf-8'))
         print(f"Wrote to file {out_file}")
     except FileNotFoundError as e:
@@ -212,10 +211,13 @@ if __name__ == '__main__':
     parser.add_argument('--file_size', type=int, help='Number of ar5iv documents in a file', required=False, default=256)
 
     args = parser.parse_args()
-    gfs = fsspec.filesystem("gcs")
-    html_folder = get_gcs_path(args.input_path)
-    output_path = get_gcs_path(args.output_path)
-    files = gfs.ls(html_folder)
+    if args.input_path.startswith("gs://"):
+        fs = fsspec.filesystem("gcs")
+    else:
+        fs = fsspec.filesystem("file")
+    html_folder = args.input_path
+    output_path = args.output_path
+    files = fs.ls(html_folder)
 
     MAX_NUM_PENDING_TASKS = 600  # Max number of html files we want to process in pending state
     ray.init()
@@ -235,7 +237,7 @@ if __name__ == '__main__':
         result_refs.append(clean_ar5iv_html.remote(html, html_folder, output_path, args.file_size))
         
         
-    clean_html_folder = get_gcs_path(pathlib.Path(output_path) / "html_clean")
+    clean_html_folder = pathlib.Path(output_path) / "html_clean"
     files = gfs.ls(clean_html_folder)
 
     for html in files:
