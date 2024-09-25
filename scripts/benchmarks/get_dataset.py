@@ -34,6 +34,7 @@ class DatasetConfig:
     output_choices: List[str] = field(default_factory=list)
     options_key: str = ""
     token: str | bool = True
+    trust_remote_code: bool = False
 
 
 def load_datasets(config):
@@ -50,7 +51,7 @@ def load_datasets(config):
     else:
         token = config.token
     for file_name in config.file_names:
-        datasets.append(load_dataset(hf_path, path, split=file_name, token=token))
+        datasets.append(load_dataset(hf_path, path, split=file_name, token=token, trust_remote_code=config.trust_remote_code))
     return datasets
 
 def get_nested_item(data, key, default_item=None):
