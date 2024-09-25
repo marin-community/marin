@@ -36,7 +36,7 @@ class DatasetConfig:
 
 
 def load_datasets(config):
-    """Load the dataset from huggingface cais.
+    """Load the dataset from huggingface.
 
     This function returns all data for the given split (rather than subject specific data).
     """
