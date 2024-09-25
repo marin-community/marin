@@ -1,8 +1,0 @@
-dataset_name: openai_humaneval
-path: openai_humaneval
-hf_path: openai/openai_humaneval
-file_type: parquet
-file_names:
-  - test
-prompt_key: prompt
-answer_text_key: canonical_solution
