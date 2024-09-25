@@ -23,9 +23,8 @@ class AlpacaEvaluator(VllmTpuEvaluator):
     BASE_RESULTS_PATH: str = os.path.join(VllmTpuEvaluator.CACHE_PATH, "alpaca_results")
 
     # AlpacaEval has 805 examples: https://huggingface.co/datasets/tatsu-lab/alpaca_eval/raw/main/alpaca_eval.json
+    # so if the number of instances is not specified, we will run on all of them.
     DEFAULT_MAX_INSTANCES: int = 805
-
-    DEFAULT_MAX_TOKENS: int = 2048
 
     _pip_packages: List[Dependency] = VllmTpuEvaluator.DEFAULT_PIP_PACKAGES + [Dependency(name="alpaca-eval")]
 
@@ -49,7 +48,7 @@ class AlpacaEvaluator(VllmTpuEvaluator):
                     "model_name": model_name_or_path,
                     # Mandatory argument for `vllm_local_completions` in AlpacaEval
                     # https://github.com/tatsu-lab/alpaca_eval/blob/main/src/alpaca_eval/decoders/vllm_local.py#L21
-                    "max_new_tokens": AlpacaEvaluator.DEFAULT_MAX_TOKENS,
+                    "max_new_tokens": None,  # Following the config above, set to None to go up to EOS or context length
                 },
             }
         }
@@ -66,8 +65,6 @@ class AlpacaEvaluator(VllmTpuEvaluator):
             output_path (str): The path to save the evaluation results.
             max_eval_instances (int | None): The maximum number of evaluation instances to run.
         """
-        is_successful: bool = False
-
         try:
             # Download the model from GCS or HuggingFace
             model.ensure_downloaded(local_path=os.path.join(VllmTpuEvaluator.CACHE_PATH, model.name))
@@ -94,12 +91,9 @@ class AlpacaEvaluator(VllmTpuEvaluator):
             # Upload the results to GCS
             if is_remote_path(output_path):
                 upload_to_gcs(local_path=results_path, gcs_path=output_path)
-
-            # The run was successful
-            is_successful = True
-        except Exception:
+        except Exception as e:
             traceback.print_exc()
+            raise RuntimeError("AlpacaEval failed. Please check the logs for more information.") from e
         finally:
             self.cleanup(model)
             shutil.rmtree(self.BASE_RESULTS_PATH, ignore_errors=True)
-            assert is_successful, "AlpacaEval failed. Please check the logs for more information."
