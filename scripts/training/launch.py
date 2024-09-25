@@ -11,7 +11,8 @@ import levanter.infra.docker
 import mergedeep
 import yaml
 from levanter.infra import docker
-from levanter.infra.tpus import launch_job
+from ray.dashboard.modules.job.common import JobStatus
+from ray.dashboard.modules.job.sdk import JobSubmissionClient
 
 zone_to_bucket = {
     "us-central2-b": "marin-us-central2",
@@ -101,6 +102,10 @@ class LaunchConfig:
     cache_dir: str
     """Tokenizer cache dir"""
 
+    address: Optional[str] = None
+    """The address of the Ray dashboard. If not set, RAY_ADDRESS will be used."""
+
+
     dataset_name: Optional[str] = None
     """This should be the name of the dataset you tokenized in the tokenization step. Either (this and dataset_path) or dataset_config must be provided."""
     dataset_path: Optional[str] = None
@@ -129,10 +134,11 @@ class LaunchConfig:
     """If True, the job will be launched in the foreground."""
     env: dict[str, str] = field(default_factory=dict)
     """Environment variables to set in the container."""
-    capacity_type: str = "spot"
-    """The capacity type to use for the TPU."""
     tags: list[str] = field(default_factory=list)
     """Tags to add to the wandb run."""
+
+    retries: int = 10
+    """The number of retries in case of failure."""
 
 
 @draccus.wrap()
@@ -167,8 +173,6 @@ def main(args: LaunchConfig):
     run_id = args.run_id
     if run_id is None:
         run_id = cli.default_run_id()
-
-    capacity_type = args.capacity_type
 
     run_name = args.run_name
     if run_name is None:
@@ -252,31 +256,99 @@ def main(args: LaunchConfig):
         env["RUN_ID"] = run_id
         env["WANDB_DOCKER"] = full_image_id
 
-        # Launch the job
-        launch_job(
+        # TODO: copypaste from levanter...
+        from levanter.infra.ray_tpu import RunOnPodConfig
+
+        config = RunOnPodConfig(
+            image_id=full_image_id,
             command=cmd,
-            tpu_name=run_name,
-            tpu_type=(args.tpu_type),
-            zone=zone,
-            capacity_type=capacity_type,
-            node_count=1,
-            full_image_id=full_image_id,
+            tpu_type=args.tpu_type,
             env=env,
-            foreground=args.foreground,
+            name="levanter",
+            retries=args.retries
         )
 
-        print("##################")
-        print(f"Launched job {run_name} with id {run_id} in zone {zone}")
-        print("##################")
-        print(f"You can get logs with:")
-        # gcloud compute tpus tpu-vm ssh dlwh-quickstart-gtxdwom2 --zone us-central2-b --worker=0 --command "docker logs -f levanter"
-        print(
-            f"  gcloud compute tpus tpu-vm ssh {run_name} --zone {zone} --worker=0 --command 'docker logs -f levanter'"
-        )
-        print()
-        print(
-            f"Assuming all went well, you should see a wandb run named {run_name} with id {run_id} in the wandb dashboard."
-        )
+        with tempfile.NamedTemporaryFile(suffix=".yaml", prefix=f"launch-{run_id}-", dir=".") as f:
+            yaml = draccus.dump(config)
+            f.write(yaml.encode("utf-8"))
+            f.flush()
+
+            f_name = os.path.relpath(f.name)
+            print(f"Submitting job with config path {f_name}")
+
+            address = args.address or os.environ.get("RAY_ADDRESS")
+            client = JobSubmissionClient(address)
+            job_id = _make_unique_job_id(client, run_id)
+            job_id = client.submit_job(
+                entrypoint=f"python src/levanter/infra/ray_tpu.py --config_path {f_name}",
+                runtime_env={"working_dir": "./"},
+                job_id=job_id,
+            )
+
+            print(
+                f"""
+        -------------------------------------------------------
+        Job '{job_id}' submitted successfully
+        -------------------------------------------------------
+
+        Next steps
+          Query the logs of the job:
+            ray job logs {job_id}
+          Query the status of the job:
+            ray job status {job_id}
+          Request the job to be stopped:
+            ray job stop {job_id}
+        
+       Assuming all went well, you should see a wandb run named {run_name} with id {run_id} in the wandb dashboard.
+       That is likely to be:
+             https://wandb.ai/stanford-mercury/marin/runs/{run_id}
+        """
+            )
+
+        if args.foreground:
+
+            async def tail_job(job_id):
+                async for line in client.tail_job_logs(job_id):  # type: ignore
+                    print(line, end="")
+
+                    status = client.get_job_status(job_id)
+                    if status in {JobStatus.FAILED, JobStatus.SUCCEEDED, JobStatus.STOPPED}:
+                        break
+
+            print("Tailing job logs")
+            wait_until_status(
+                client, job_id, {JobStatus.RUNNING, JobStatus.FAILED, JobStatus.SUCCEEDED, JobStatus.STOPPED}
+            )
+            import asyncio
+
+            asyncio.run(tail_job(job_id))
+
+
+
+def wait_until_status(client, job_id, status_to_wait_for, timeout_seconds=5):
+    start = time.time()
+    status = client.get_job_status(job_id)
+    while status not in status_to_wait_for and time.time() - start <= timeout_seconds:
+        status = client.get_job_status(job_id)
+        if status in status_to_wait_for:
+            break
+        time.sleep(1)
+
+    return status
+
+
+# try to make the job id be the same as the run id, but if it already exists, just make it unique
+def _make_unique_job_id(client, run_id):
+    job_id = run_id
+    try:
+        while client.get_job_status(job_id) is not None:
+            job_id = f"{run_id}-{time.time_ns()}"
+    except Exception as e:  # noqa
+        if "does not exist" in str(e):
+            pass
+        else:
+            raise
+    return job_id
 
 
 if __name__ == "__main__":
