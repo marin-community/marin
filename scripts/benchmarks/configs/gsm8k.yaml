@@ -1,7 +1,6 @@
 dataset_name: gsm8k
 path: main
 hf_path: openai/gsm8k
-file_type: parquet
 file_names:
   - test
   - train

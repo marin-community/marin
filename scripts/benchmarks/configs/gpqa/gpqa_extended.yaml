@@ -1,7 +1,6 @@
 dataset_name: gpqa_extended
 path: gpqa_extended
 hf_path: Idavidrein/gpqa 
-file_type: csv
 file_names:
   - train
 prompt_key: Question

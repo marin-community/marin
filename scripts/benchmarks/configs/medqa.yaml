@@ -1,7 +1,6 @@
 dataset_name: med_qa
 path: med_qa_en_4options_source
 hf_path: bigbio/med_qa
-file_type: parquet
 file_names:
   - train
   - test
