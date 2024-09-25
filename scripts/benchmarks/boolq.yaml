@@ -1,5 +1,5 @@
 dataset_name: boolq
-path: data
+path: default
 hf_path: google/boolq
 file_type: parquet
 file_names:
