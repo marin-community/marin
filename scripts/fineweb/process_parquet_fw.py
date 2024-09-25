@@ -1,25 +1,25 @@
 """Convert fineweb to markdown"""
-import argparse
-from dataclasses import dataclass
-import json
 import os
-import traceback
-from datetime import datetime
-
-import draccus
-import fsspec
-import pandas as pd
 import ray
+import json
+import fsspec
+import draccus
+import traceback
+import pandas as pd
+
+from datetime import datetime
+from dataclasses import dataclass
 from warcio import ArchiveIterator
 
+from marin.web.convert import convert_page
+from marin.schemas.web.convert import TrafilaturaConfig
 from marin.core.runtime import cached_or_construct_output
 from marin.utils import fsspec_exists, fsspec_glob, fsspec_rm
-from marin.web.convert import convert_page
 
 
-@ray.remote(memory=1.5 * 1024 * 1024 * 1024, runtime_env={"pip": ["s3fs==2024.6.1", "botocore==1.35.20"]})  # 1.5 GB
+@ray.remote(memory=1.5 * 1024 * 1024 * 1024, runtime_env={"pip": ["s3fs"]})  # 1.5 GB
 @cached_or_construct_output(success_suffix="SUCCESS")  # We use this decorator to make this function idempotent
-def process_one_warc_file(input_file_path, output_file):
+def process_one_warc_file(input_file_path, output_file, extract_method, config):
     """
     Takes in the input file and processes it to get the html and md content.
     It scans the s3 bucket in input_file and returns the content of the urls in the input_file
@@ -83,7 +83,7 @@ def process_one_warc_file(input_file_path, output_file):
 
                         html_decoded = content.decode(errors='ignore')
 
-                        markdown = convert_page(html_decoded, url)
+                        markdown = convert_page(html_decoded, url, extract_method, config)
                         df.loc[url_idx_in_df, "md"] = markdown["content"]
 
                         num_urls_processed += 1
@@ -134,8 +134,8 @@ def process_one_warc_file(input_file_path, output_file):
     return True
 
 
-@ray.remote(memory=10 * 1024 * 1024 * 1024, runtime_env={"pip": ["s3fs==2024.6.1", "botocore==1.35.20"]})  # 10 GB
-def process_fw_parquet(input_file_path, output_path_path):
+@ray.remote(memory=10 * 1024 * 1024 * 1024, runtime_env={"pip": ["s3fs"]})  # 10 GB
+def process_fw_parquet(input_file_path, output_path_path, extract_method, config):
     """
        Converts fineweb files to html and markdown. This will essentially take in fineweb and split different groups based
        on file_path and write all those file paths to a new folder and then run ray for each group
@@ -177,7 +177,7 @@ def process_fw_parquet(input_file_path, output_path_path):
         group_df.to_parquet(filename)
         print(f"Processing the group: {filename}, into {output_file_name}")
 
-        ray_waitable.append(process_one_warc_file.remote(filename, output_file_name))
+        ray_waitable.append(process_one_warc_file.remote(filename, output_file_name, extract_method, config))
         file_path.append(filename)
 
     was_successful = True
@@ -213,6 +213,8 @@ def process_fw_parquet(input_file_path, output_path_path):
 class ParquetFWConfig:
     input_path: str
     output_path: str
+    extract_method: str = "readability"
+    config: str | TrafilaturaConfig = "default"
 
 
 @draccus.wrap()
@@ -233,8 +235,14 @@ def process_fw_dump(cfg: ParquetFWConfig):
             except Exception as e:
                 print(f"Error processing the group: {e}")
                 continue
-
-        output_path_path = os.path.join(cfg.output_path, os.path.basename(file).replace(".parquet", ""))
+        
+        config_path_name = cfg.config if isinstance(cfg.config, str) else "custom_config"
+        output_path_path = os.path.join(
+            cfg.output_path,
+            cfg.extract_method,
+            config_path_name,
+            os.path.basename(file).replace(".parquet", "")
+        )
         print(f"Starting Processing for the fw parquet file: {file} in output_path: {output_path_path}")
         result_refs.append(process_fw_parquet.remote(file, output_path_path))
 

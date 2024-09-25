@@ -31,6 +31,7 @@ dependencies = [
     "readability-lxml",
     "fsspec~=2024.3",
     "gcsfs~=2024.3",
+    "s3fs~=2024.3",
     "ray[default]==2.34.0",
     "lxml[html_clean]",
     "regex",
