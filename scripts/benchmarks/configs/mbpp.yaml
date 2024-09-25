@@ -1,7 +1,6 @@
 dataset_name: mbpp
 path: full
 hf_path: google-research-datasets/mbpp
-file_type: parquet
 file_names:
   - test
   - train

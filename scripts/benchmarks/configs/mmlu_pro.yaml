@@ -1,7 +1,6 @@
 dataset_name: MMLU-Pro
 path: default
 hf_path: TIGER-Lab/MMLU-Pro
-file_type: parquet
 file_names:
   - test
   - validation

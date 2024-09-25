@@ -1,7 +1,6 @@
 dataset_name: mmlu
 path: all
 hf_path: cais/mmlu
-file_type: parquet
 file_names:
   - dev
   - test
