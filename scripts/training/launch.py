@@ -57,7 +57,7 @@ def _get_data_config(
     data_name: Optional[str],
     dataset_path: Optional[str],
     data_config_path: Optional[str],
-    tokenizer: str,
+    tokenizer: Optional[str],
 ) -> dict:
     """
     We support a few different kinds of data configurations. One option is a YAML file that specifies a data mixture,
@@ -74,7 +74,9 @@ def _get_data_config(
     assert (data_name is None) == (dataset_path is None)
 
     ret_data = deepcopy(base_data)
-    ret_data["tokenizer"] = tokenizer
+
+    if tokenizer is not None:
+        ret_data["tokenizer"] = tokenizer
 
     if data_config_path is not None:
         data_config_path = yaml.load(open(data_config_path), Loader=yaml.SafeLoader)
@@ -111,8 +113,7 @@ class LaunchConfig:
     model_config: Optional[str] = None
     """The model config to use. If not provided, the default model config will be used."""
 
-    # TODO: change to llama 3
-    tokenizer: str = "meta-llama/Llama-2-7b-hf"
+    tokenizer: Optional[str] = None
 
     tpu_type: str = "v5litepod-256"
     project: Optional[str] = None
