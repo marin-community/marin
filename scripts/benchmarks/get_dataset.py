@@ -13,8 +13,8 @@ import draccus
 
 
 class OutputFormatOptions(str, Enum):
-    decontaminate = "decontaminate"
-    evaluate = "evaluate"
+    decontamination = "decontamination"
+    evaluation = "evaluation"
 
 
 @dataclass
