@@ -18,7 +18,7 @@ class DatasetConfig:
     file_type: str
     path: str
     hf_path: str
-    output_prefix: str
+    output_prefix: str = "."
     subject_key: str = ""
     prompt_key: str = ""
     answer_text_key: str = ""
