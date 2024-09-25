@@ -32,7 +32,6 @@ def process_file(input_file: str, output_train_file: str, output_test_file: str,
 
 
 def main(input_file: str, output_train_file: str, output_test_file: str, test_ratio: float):
-    ray.init()
 
     response = process_file.options(memory=16 * 1024 * 1024 * 1024).remote(
         input_file, output_train_file, output_test_file, test_ratio
@@ -56,4 +55,5 @@ if __name__ == "__main__":
 
     random.seed(args.seed)
 
+    ray.init()
     main(args.input_file, args.output_train_file, args.output_test_file, args.test_ratio)

@@ -80,9 +80,9 @@ def train(cfg: TrainFasttextClassifierConfig):
 
 @draccus.wrap()
 def main(cfg: TrainFasttextClassifierConfig):
-    ray.init()
     train(cfg)
 
 
 if __name__ == "__main__":
-    train()
+    ray.init()
+    main()

@@ -45,7 +45,6 @@ class TrainBertClassifierConfig:
 
 @draccus.wrap()
 def main(cfg: TrainBertClassifierConfig):
-    ray.init()
 
     pos_attr_path = f"{cfg.output_path}/tmp/positives"
     neg_attr_path = f"{cfg.output_path}/tmp/negatives"
@@ -82,4 +81,5 @@ def main(cfg: TrainBertClassifierConfig):
 
 
 if __name__ == "__main__":
+    ray.init()
     main()

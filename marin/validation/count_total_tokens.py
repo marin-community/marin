@@ -43,7 +43,6 @@ def process_file(input_filename: str, output_filename: str, byte_counter: ray.ac
 
 
 def count_total_bytes(input_path: str) -> int:
-    ray.init()
 
     byte_counter = ByteCounter.remote()
 
@@ -76,4 +75,5 @@ def main():
 
 
 if __name__ == "__main__":
+    ray.init()
     main()

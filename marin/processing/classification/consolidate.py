@@ -259,9 +259,9 @@ def consolidate(cfg: ConsolidateConfig):
 
 @draccus.wrap()
 def main(cfg: ConsolidateConfig):
-    ray.init()
     ray.get(consolidate.remote(cfg))
 
 
 if __name__ == "__main__":
+    ray.init()
     main()

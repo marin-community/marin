@@ -111,7 +111,6 @@ def main(
     pretrainedVectors,
     output_model_path,
 ):
-    ray.init()
 
     response = train.options(num_cpus=thread, runtime_env=ray.runtime_env.RuntimeEnv(pip=["fasttext"])).remote(
         input_file,
@@ -178,6 +177,8 @@ if __name__ == "__main__":
     parser.add_argument("--output-model-path", type=str, required=True, help="The output model path")
 
     args = parser.parse_args()
+
+    ray.init()
 
     main(
         args.input_file,
