@@ -19,7 +19,7 @@ Feel free to edit the config yaml to fit your needs:
 - `input_path`: The directory containing the documents to be filtered. If you input a directory with multiple directories, the script will filter to run inference on each directory in parallel.
 - `output_path`: The directory to save the filtered documents. We rebase the output directory's filepath to match that of the input directory.
 - `model_name`: The name of the model on Huggingface to use. The model needs to be hosted on huggingface for now and it uses the same convention as Huggingface.
-- `attribute_name`: The name of the attribute to use. 
+- `attribute_name`: The name of the attribute to use.
 - `runtime`: The runtime environment and memory constraints to use. For example, DCLM fasttext models require downloading the fasttext package while Fineweb's edu classifier requires downloading Jax with TPU support as well as Huggingface.
 
 The quickstart example is
@@ -30,20 +30,9 @@ python -m marin.processing.classification.inference --config marin/processing/cl
 ```
 
 ### Training Fasttext Classifiers
-1. Create the dataset in fasttext format
 ```bash
 ray job submit --working-dir . --no-wait -- \
-python -m marin.processing.classification.fasttext.data.create_dataset --high-quality-files gs://{BUCKET}/path/to/high-quality.jsonl.gz --low-quality-files gs://{BUCKET}/path/to/low-quality.jsonl.gz --output-file gs://{BUCKET}/path/to/fasttext-file.txt.gz
-```
-2. Split the dataset into train and test dataset
-```bash
-ray job submit --working-dir . --no-wait -- \
-python -m marin.processing.classification.fasttext.data.split_dataset --input-file gs://{BUCKET}/path/to/fasttext-file.txt.gz --train-file gs://{BUCKET}/path/to/fasttext-train.txt.gz --test-file gs://{BUCKET}/path/to/fasttext-test.txt.gz
-```
-3. Run the model training script
-```bash
-ray job submit --working-dir . --no-wait -- \
-python -m marin.processing.classification.fasttext.model.train --input-file gs://{BUCKET}/path/to/fasttext-train.txt.gz --output-model-path gs://{BUCKET}/path/to/fasttext-model.bin
+python ./marin/processing/classification/fasttext/train_fasttext.py --pos_doc_path gs://marin-us-central2/documents/path/to/high-quality --neg_doc_path gs://marin-us-central2/documents/path/to/low-quality --config_path ./marin/processing/classification/config/train_fasttext.yaml
 ```
 
 ### Viewing Quality Filtering Annotations
