@@ -1,4 +1,4 @@
-name: MMLU-Pro
+dataset_name: MMLU-Pro
 path: default
 hf_path: TIGER-Lab/MMLU-Pro
 file_type: parquet

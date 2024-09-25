@@ -1,4 +1,4 @@
-name: boolq
+dataset_name: boolq
 path: data
 hf_path: google/boolq
 file_type: parquet

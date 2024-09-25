@@ -1,4 +1,4 @@
-name: gsm8k
+dataset_name: gsm8k
 path: main
 hf_path: openai/gsm8k
 file_type: parquet
