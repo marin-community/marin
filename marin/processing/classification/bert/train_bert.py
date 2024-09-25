@@ -4,15 +4,15 @@ train_bert.py
 Training script for BERT quality classifiers.
 """
 
+import os
 from dataclasses import dataclass, field
 
 import draccus
-import os
 import ray
 
-from marin.utils import fsspec_rm
-from marin.classifiers.utils import create_label_attribute, attributes_to_dataset
 from marin.classifiers.bert.training import train_model
+from marin.classifiers.utils import attributes_to_dataset, create_label_attribute
+from marin.utils import fsspec_rm
 
 
 @dataclass
