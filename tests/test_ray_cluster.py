@@ -34,7 +34,6 @@ def test_ray_cluster() -> dict[str, str]:
 
 
 def main() -> None:
-    
     print(f"[*] Launching {N_TASKS} Verification Tasks on Ray Cluster!")
 
     # Print Cluster Information
