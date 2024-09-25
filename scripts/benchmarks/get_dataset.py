@@ -21,7 +21,6 @@ class OutputFormatOptions(str, Enum):
 class DatasetConfig:
     dataset_name: str
     file_names: List[str]
-    file_type: str
     path: str
     hf_path: str
     output_prefix: str
