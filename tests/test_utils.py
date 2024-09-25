@@ -1,4 +1,5 @@
 import ray
+
 from marin.utils import remove_tpu_lockfile_on_exit
 
 
@@ -9,6 +10,7 @@ def setup_module(module):
 def teardown_module(module):
     ray.shutdown()
 
+
 def test_remove_tpu_lockfile_on_exit_works_with_ray_remote():
     @ray.remote
     @remove_tpu_lockfile_on_exit
@@ -16,5 +18,3 @@ def test_remove_tpu_lockfile_on_exit_works_with_ray_remote():
         return 1
 
     assert ray.get(test_fn.remote()) == 1
-
-
