@@ -58,7 +58,7 @@ def _get_data_config(
     data_name: Optional[str],
     dataset_path: Optional[str],
     data_config_path: Optional[str],
-    tokenizer: str,
+    tokenizer: Optional[str],
 ) -> dict:
     """
     We support a few different kinds of data configurations. One option is a YAML file that specifies a data mixture,
@@ -75,7 +75,9 @@ def _get_data_config(
     assert (data_name is None) == (dataset_path is None)
 
     ret_data = deepcopy(base_data)
-    ret_data["tokenizer"] = tokenizer
+
+    if tokenizer is not None:
+        ret_data["tokenizer"] = tokenizer
 
     if data_config_path is not None:
         data_config_path = yaml.load(open(data_config_path), Loader=yaml.SafeLoader)
@@ -105,7 +107,6 @@ class LaunchConfig:
     address: Optional[str] = None
     """The address of the Ray dashboard. If not set, RAY_ADDRESS will be used."""
 
-
     dataset_name: Optional[str] = None
     """This should be the name of the dataset you tokenized in the tokenization step. Either (this and dataset_path) or dataset_config must be provided."""
     dataset_path: Optional[str] = None
@@ -116,8 +117,7 @@ class LaunchConfig:
     model_config: Optional[str] = None
     """The model config to use. If not provided, the default model config will be used."""
 
-    # TODO: change to llama 3
-    tokenizer: str = "meta-llama/Llama-2-7b-hf"
+    tokenizer: Optional[str] = None
 
     tpu_type: str = "v5litepod-256"
     project: Optional[str] = None
@@ -260,12 +260,7 @@ def main(args: LaunchConfig):
         from levanter.infra.ray_tpu import RunOnPodConfig
 
         config = RunOnPodConfig(
-            image_id=full_image_id,
-            command=cmd,
-            tpu_type=args.tpu_type,
-            env=env,
-            name="levanter",
-            retries=args.retries
+            image_id=full_image_id, command=cmd, tpu_type=args.tpu_type, env=env, name="levanter", retries=args.retries
         )
 
         with tempfile.NamedTemporaryFile(suffix=".yaml", prefix=f"launch-{run_id}-", dir=".") as f:
@@ -298,7 +293,7 @@ def main(args: LaunchConfig):
             ray job status {job_id}
           Request the job to be stopped:
             ray job stop {job_id}
-        
+
        Assuming all went well, you should see a wandb run named {run_name} with id {run_id} in the wandb dashboard.
        That is likely to be:
              https://wandb.ai/stanford-mercury/marin/runs/{run_id}
@@ -322,7 +317,6 @@ def main(args: LaunchConfig):
             import asyncio
 
             asyncio.run(tail_job(job_id))
-
 
 
 def wait_until_status(client, job_id, status_to_wait_for, timeout_seconds=5):
