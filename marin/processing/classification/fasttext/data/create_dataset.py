@@ -71,7 +71,6 @@ def write_to_file(output_file: str, queue_actor):
 
 
 def main(high_quality_files: list[str], low_quality_files: list[str], output_file: str):
-    ray.init()
 
     # We set a large memory limit for the queue actor to avoid memory issues when
     # processing large files
@@ -112,4 +111,5 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
+    ray.init()
     main(args.high_quality_files, args.low_quality_files, args.output_file)

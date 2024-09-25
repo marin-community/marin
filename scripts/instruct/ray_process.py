@@ -97,7 +97,7 @@ class RayConfig:
 
 @draccus.wrap()
 def main(config: RayConfig):
-    config.ray.initialize()
+
     # Example of input_path = gs://marin-data/hello_world_fw/fineweb/fw-v1.0/CC-MAIN-2024-10/000_00000/
     # We will process all html_jsonl.gz files in this directory.
     # As a reminder all the processing in this function will be done on the head node. We should try

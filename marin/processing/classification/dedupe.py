@@ -313,9 +313,9 @@ def dedupe(config: DedupeConfig):
 
 @draccus.wrap()
 def main(config: DedupeConfig):
-    ray.init()
     ray.get(dedupe.remote(config))
 
 
 if __name__ == "__main__":
+    ray.init()
     main()

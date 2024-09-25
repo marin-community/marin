@@ -183,9 +183,9 @@ def run_inference(inference_config: InferenceConfig):
 
 @draccus.wrap()
 def main(inference_config: InferenceConfig):
-    ray.init()
     ray.get(run_inference.remote(inference_config))
 
 
 if __name__ == "__main__":
+    ray.init()
     main()
