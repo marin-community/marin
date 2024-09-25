@@ -11,4 +11,3 @@ options_key: choices
 answer_idx_key: answer
 subject_key: subject
 output_choices: ["A", "B", "C", "D"]
-output_format: decontamination
