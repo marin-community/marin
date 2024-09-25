@@ -245,7 +245,7 @@ def get_gcs_path(file_path):
     return f"gs://{file_path}"
 
 
-def remove_tpu_lockfile_on_exit(fn = None):
+def remove_tpu_lockfile_on_exit(fn=None):
     """
     Context manager to remove the TPU lockfile on exit. Can be used as a context manager or decorator.
 
@@ -259,6 +259,7 @@ def remove_tpu_lockfile_on_exit(fn = None):
     if fn is None:
         return _remove_tpu_lockfile_on_exit_cm()
     else:
+
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
             with _remove_tpu_lockfile_on_exit_cm():
