@@ -47,6 +47,15 @@ def load_datasets(config):
         datasets.append(load_dataset(hf_path, path, split=file_name))
     return datasets
 
+def get_nested_item(data, key, default_item=None):
+    keys = key.split(".")
+    result = data
+    try:
+        for k in keys:
+            result = result[k]
+        return result
+    except (KeyError, TypeError):
+        return default_item
 
 @draccus.wrap()
 def main(cfg: DatasetConfig):
@@ -62,19 +71,19 @@ def main(cfg: DatasetConfig):
                 for idx, example in enumerate(dataset):
                     subject = example.get(cfg.subject_key, "")
                     if cfg.answer_text_key:
-                        answer = example[cfg.answer_text_key]
+                        answer = get_nested_item(example, cfg.answer_text_key)
                     elif cfg.answer_idx_key:
-                        answer_idx = int(example[cfg.answer_idx_key])
+                        answer_idx = int(get_nested_item(example, cfg.answer_idx_key))
                         answer = cfg.output_choices[answer_idx]
                     else:
                         raise ValueError("Please specify either answer_text_key or answer_idx_key.")
 
                     dolma_json = {
                         "id": f"{cfg.dataset_name}-{file_name}-{subject}-{idx}",
-                        "text": example[cfg.prompt_key],
+                        "text": get_nested_item(example, cfg.prompt_key),
                         "source": cfg.dataset_name,
                         "metadata": {
-                            "options": example.get(cfg.options_key, []),
+                            "options": get_nested_item(example, cfg.options_key, [])
                             "answer": answer,
                             "split": file_name,
                             "provenance": f"https://huggingface.co/datasets/{cfg.hf_path}",
@@ -88,9 +97,9 @@ def main(cfg: DatasetConfig):
             subject_files = defaultdict(lambda: "")
 
             for example in dataset:
-                question = example[cfg.prompt_key]
+                question = get_nested_item(example, cfg.prompt_key)
 
-                choices = example.get(cfg.options_key, [])
+                choices = get_nested_item(example, cfg.options_key, [])
 
                 question_input = (
                     question.strip()
@@ -99,14 +108,14 @@ def main(cfg: DatasetConfig):
                     + "\nAnswer:"
                 )
                 if cfg.answer_text_key:
-                    answer = example[cfg.answer_text_key]
+                    answer = get_nested_item(example, cfg.answer_text_key)
                 elif cfg.answer_idx_key:
-                    answer_idx = int(example[cfg.answer_idx_key])
+                    answer_idx = int(get_nested_item(example, cfg.answer_idx_key))
                     answer = cfg.output_choices[answer_idx]
                 else:
                     raise ValueError("Please specify either answer_text_key or answer_idx_key.")
 
-                subject = example.get(cfg.subject_key, "")
+                subject = get_nested_item(example, cfg.subject_key, "")
 
                 subject_files[subject] += json.dumps({"input": question_input, "output": answer}) + "\n"
 
