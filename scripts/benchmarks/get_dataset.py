@@ -64,6 +64,27 @@ def get_nested_item(data, key, default_item=None):
     except (KeyError, TypeError):
         return default_item
 
+def is_kv_list(lst):
+    if isinstance(lst, list):
+        return all(
+            isinstance(item, dict) and 'key' in item and 'value' in item
+            for item in lst
+        )
+    return False
+
+def standardize_options(options):
+    if is_kv_list(options):
+        sorted_values = [x['value'] for x in sorted(options, key=lambda x: x['key'])]
+        return sorted_values
+    elif isinstance(options, list):
+        return options
+    elif isinstance(options, dict):
+        sorted_keys = sorted(list(options.keys()))
+        sorted_values = [options[key] for key in sorted_keys]
+        return sorted_values
+
+
+
 @draccus.wrap()
 def main(cfg: DatasetConfig):
 
@@ -90,7 +111,7 @@ def main(cfg: DatasetConfig):
                         "text": get_nested_item(example, cfg.prompt_key),
                         "source": cfg.dataset_name,
                         "metadata": {
-                            "options": get_nested_item(example, cfg.options_key, []),
+                            "options": standardize_options(get_nested_item(example, cfg.options_key, [])),
                             "answer": answer,
                             "split": file_name,
                             "provenance": f"https://huggingface.co/datasets/{cfg.hf_path}",
@@ -106,7 +127,7 @@ def main(cfg: DatasetConfig):
             for example in dataset:
                 question = get_nested_item(example, cfg.prompt_key)
 
-                choices = get_nested_item(example, cfg.options_key, [])
+                choices = standardize_options(get_nested_item(example, cfg.options_key, []))
 
                 question_input = (
                     question.strip()
