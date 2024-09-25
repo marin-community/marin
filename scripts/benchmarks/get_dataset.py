@@ -26,6 +26,7 @@ class DatasetConfig:
     hf_path: str
     output_prefix: str
     output_format: OutputFormatOptions = OutputFormatOptions.decontamination
+    doc_input_format: str = ""
     subject_key: str = ""
     prompt_key: str = ""
     answer_text_key: str = ""
