@@ -5,10 +5,16 @@ import os
 import yaml
 import fsspec
 from collections import defaultdict
+from enum import Enum
 from typing import List
 
 from dataclasses import dataclass, field
 import draccus
+
+
+class OutputFormatOptions(str, Enum):
+    decontaminate = "decontaminate"
+    evaluate = "evaluate"
 
 
 @dataclass
@@ -18,14 +24,14 @@ class DatasetConfig:
     file_type: str
     path: str
     hf_path: str
-    output_prefix: str = "."
+    output_prefix: str
+    output_format: OutputFormatOptions = OutputFormatOptions.decontaminate
     subject_key: str = ""
     prompt_key: str = ""
     answer_text_key: str = ""
     answer_idx_key: str = ""
     output_choices: List[str] = field(default_factory=list)
     options_key: str = ""
-    output_format: str = ""
 
 
 def load_datasets(config):
@@ -48,7 +54,7 @@ def main(cfg: DatasetConfig):
     datasets = load_datasets(cfg)
 
     # Load dataset from huggingface dataset
-    if cfg.output_format == "decontamination":
+    if cfg.output_format.value == "decontamination":
         for dataset, file_name in zip(datasets, cfg.file_names):
             output_path = os.path.join(cfg.output_prefix, f"{cfg.dataset_name}-{file_name}-decontamination.jsonl.gz")
             with fsspec.open(output_path, "wt", compression="gzip") as dolma_file:
@@ -75,7 +81,7 @@ def main(cfg: DatasetConfig):
                         },
                     }
                     dolma_file.write(json.dumps(dolma_json) + "\n")
-    elif cfg.output_format == "evaluation":
+    elif cfg.output_format.value == "evaluation":
         for dataset, data_file in zip(datasets, cfg.file_names):
             # Storing the data in a dictionary with the subject as the key
             subject_files = defaultdict(lambda: "")
