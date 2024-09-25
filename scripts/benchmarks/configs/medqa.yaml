@@ -7,7 +7,7 @@ file_names:
   - test
   - validation
 prompt_key: question
-options_key: choices
+options_key: options
 answer_text_key: answer
 subject_key: subject
 output_choices: ["A", "B", "C", "D"]
