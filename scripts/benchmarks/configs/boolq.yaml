@@ -1,0 +1,9 @@
+dataset_name: boolq
+path: default
+hf_path: google/boolq
+file_type: parquet
+file_names:
+  - validation
+  - train
+prompt_key: text
+answer_text_key: metadata.answer
