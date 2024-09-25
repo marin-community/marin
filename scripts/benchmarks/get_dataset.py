@@ -33,6 +33,7 @@ class DatasetConfig:
     answer_idx_key: str = ""
     output_choices: List[str] = field(default_factory=list)
     options_key: str = ""
+    token: str | bool = True
 
 
 def load_datasets(config):
@@ -43,8 +44,13 @@ def load_datasets(config):
     datasets = []
     path = config.path
     hf_path = config.hf_path
+    if config.token == "env":
+        # if user specifies look for token in environment
+        token = os.environ["HUGGINGFACE_TOKEN"]
+    else:
+        token = config.token
     for file_name in config.file_names:
-        datasets.append(load_dataset(hf_path, path, split=file_name))
+        datasets.append(load_dataset(hf_path, path, split=file_name, token=token))
     return datasets
 
 def get_nested_item(data, key, default_item=None):
