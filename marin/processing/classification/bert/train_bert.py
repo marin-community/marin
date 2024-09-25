@@ -86,4 +86,4 @@ def main(cfg: TrainBertClassifierConfig):
 
 
 if __name__ == "__main__":
-    train()
+    main()
