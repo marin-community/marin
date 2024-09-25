@@ -1,14 +1,14 @@
-from datasets import load_dataset
 import json
 import argparse
 import os
-import yaml
-import fsspec
 from collections import defaultdict
 from enum import Enum
 from typing import List
-
 from dataclasses import dataclass, field
+
+import yaml
+import fsspec
+from datasets import load_dataset
 import draccus
 
 
