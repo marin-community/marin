@@ -83,7 +83,7 @@ def main(cfg: DatasetConfig):
                         "text": get_nested_item(example, cfg.prompt_key),
                         "source": cfg.dataset_name,
                         "metadata": {
-                            "options": get_nested_item(example, cfg.options_key, [])
+                            "options": get_nested_item(example, cfg.options_key, []),
                             "answer": answer,
                             "split": file_name,
                             "provenance": f"https://huggingface.co/datasets/{cfg.hf_path}",
