@@ -1,4 +1,4 @@
-name: openai_humaneval
+dataset_name: openai_humaneval
 path: openai_humaneval
 hf_path: openai/openai_humaneval
 file_type: parquet
