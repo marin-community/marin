@@ -20,7 +20,7 @@ class OutputFormatOptions(str, Enum):
 @dataclass
 class DatasetConfig:
     dataset_name: str
-    file_names: list
+    file_names: List[str]
     file_type: str
     path: str
     hf_path: str
@@ -91,7 +91,7 @@ def main(cfg: DatasetConfig):
 
                 choices = example.get(cfg.options_key, [])
 
-                input = (
+                question_input = (
                     question.strip()
                     + "\n"
                     + "\n".join([f"{cfg.output_choices[i]}. {choice}" for i, choice in enumerate(choices)])
@@ -107,7 +107,7 @@ def main(cfg: DatasetConfig):
 
                 subject = example.get(cfg.subject_key, "")
 
-                subject_files[subject] += json.dumps({"input": input, "output": answer}) + "\n"
+                subject_files[subject] += json.dumps({"input": question_input, "output": answer}) + "\n"
 
             # Writing from subject dict to corresponding files for each subject
             for subject in subject_files:
