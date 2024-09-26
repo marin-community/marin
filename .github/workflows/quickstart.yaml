@@ -27,6 +27,7 @@ jobs:
       run: |
         pip install ray[default]
         pip install google-api-python-client
+        pip install . --extra-index-url https://download.pytorch.org/whl/cpu
 
     - name: Connect to Ray cluster on GCP in the background
       run: |
