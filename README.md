@@ -137,7 +137,7 @@ the TPUs, you need to tell Ray that you need them. To use TPUs on our cluster, y
 
 
 ```python
-@ray.remote(num_cpus=8, resources={"TPU": 1, "TPU-v4-8-head": 1})
+@ray.remote(num_cpus=8, resources={"TPU": 4, "TPU-v4-8-head": 1})
 def my_tpu_job():
     ...
     
@@ -146,7 +146,7 @@ def my_tpu_job():
 Always use the `TPU-v4-8-head` resource when requesting TPUs unless you specifically want a multi-node slice. This will
 ensure you don't accidentally grab part of a multi-node slice, which will lead to weird errors.
 
-Also, despite it saying `"TPU": 1`, you're actually getting all the TPUs. This is because Google requires that only one
+Also, despite it saying `"TPU": 4`, you're actually getting all the TPUs. This is because Google requires that only one
 process on a machine can access TPUs at a time.
 
 **IMPORTANT**: Ray and `libtpu` don't always get along. If you are using TPUs, you should either fork a process that 
@@ -156,7 +156,7 @@ We offer a utility decorator to do this for you:
 ```python
 from marin.utils import remove_tpu_lockfile_on_exit
 
-@ray.remote(num_cpus=8, resources={"TPU": 1, "TPU-v4-8-head": 1})
+@ray.remote(num_cpus=8, resources={"TPU": 4, "TPU-v4-8-head": 1})
 @remove_tpu_lockfile_on_exit
 def my_tpu_job():
     ...

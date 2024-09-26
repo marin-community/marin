@@ -239,68 +239,44 @@ def main(args: LaunchConfig):
             f"--config_path={config_path}",
         ]
 
-        env = deepcopy(args.env)
-
         default_env = default_config.get("env")
-        if default_env is not None:
-            mergedeep.merge(env, default_env)
+        env = _add_run_env_variables(args.env, default_env, full_image_id, run_id)
 
-        if env.get("WANDB_API_KEY") is None:
-            key = os.environ.get("WANDB_API_KEY")
-            if key is not None:
-                env["WANDB_API_KEY"] = key
-            else:
-                raise ValueError("WANDB_API_KEY must be set in the environment. Please add it to your .config.")
+        import levanter.infra.ray_tpu as ray_tpu
 
-        env["GIT_COMMIT"] = cli.get_git_commit()
-        env["RUN_ID"] = run_id
-        env["WANDB_DOCKER"] = full_image_id
-
-        # TODO: copypaste from levanter...
-        from levanter.infra.ray_tpu import RunOnPodConfig
-
-        config = RunOnPodConfig(
+        config = ray_tpu.RunDockerOnPodConfig(
             image_id=full_image_id, command=cmd, tpu_type=args.tpu_type, env=env, name="levanter", retries=args.retries
         )
 
-        with tempfile.NamedTemporaryFile(suffix=".yaml", prefix=f"launch-{run_id}-", dir=".") as f:
-            yaml = draccus.dump(config)
-            f.write(yaml.encode("utf-8"))
-            f.flush()
+        address = args.address or os.getenv("RAY_ADDRESS")
 
-            f_name = os.path.relpath(f.name)
-            print(f"Submitting job with config path {f_name}")
+        job_id = ray_tpu.submit_tpu_job_on_ray(
+            config,
+            ray_address=address,
+            run_id=run_id,
+        )
 
-            address = args.address or os.environ.get("RAY_ADDRESS")
-            client = JobSubmissionClient(address)
-            job_id = _make_unique_job_id(client, run_id)
-            job_id = client.submit_job(
-                entrypoint=f"python src/levanter/infra/ray_tpu.py --config_path {f_name}",
-                runtime_env={"working_dir": "./"},
-                job_id=job_id,
-            )
+        print(
+            f"""
+-------------------------------------------------------
+Job '{job_id}' submitted successfully
+-------------------------------------------------------
 
-            print(
-                f"""
-        -------------------------------------------------------
-        Job '{job_id}' submitted successfully
-        -------------------------------------------------------
+Next steps
+  Query the logs of the job:
+    ray job logs {job_id}
+  Query the status of the job:
+    ray job status {job_id}
+  Request the job to be stopped:
+    ray job stop {job_id}
 
-        Next steps
-          Query the logs of the job:
-            ray job logs {job_id}
-          Query the status of the job:
-            ray job status {job_id}
-          Request the job to be stopped:
-            ray job stop {job_id}
-
-       Assuming all went well, you should see a wandb run named {run_name} with id {run_id} in the wandb dashboard.
-       That is likely to be:
-             https://wandb.ai/stanford-mercury/marin/runs/{run_id}
-        """
-            )
+Assuming all went well, you should eventually see a wandb run named {run_name} with id {run_id} in the wandb dashboard.
+That is likely to be:
+     https://wandb.ai/stanford-mercury/marin/runs/{run_id}
+""")
 
         if args.foreground:
+            client = JobSubmissionClient(address)
 
             async def tail_job(job_id):
                 async for line in client.tail_job_logs(job_id):  # type: ignore
@@ -319,6 +295,23 @@ def main(args: LaunchConfig):
             asyncio.run(tail_job(job_id))
 
 
+def _add_run_env_variables(env, default_env, full_image_id, run_id):
+    env = deepcopy(env)
+    if default_env is not None:
+        mergedeep.merge(env, default_env)
+    if env.get("WANDB_API_KEY") is None:
+        key = os.environ.get("WANDB_API_KEY")
+        if key is not None:
+            env["WANDB_API_KEY"] = key
+        else:
+            raise ValueError("WANDB_API_KEY must be set in the environment. Please add it to your .config.")
+    env["GIT_COMMIT"] = cli.get_git_commit()
+    env["RUN_ID"] = run_id
+    env["WANDB_DOCKER"] = full_image_id
+
+    return env
+
+
 def wait_until_status(client, job_id, status_to_wait_for, timeout_seconds=5):
     start = time.time()
     status = client.get_job_status(job_id)
@@ -330,19 +323,6 @@ def wait_until_status(client, job_id, status_to_wait_for, timeout_seconds=5):
 
     return status
 
-
-# try to make the job id be the same as the run id, but if it already exists, just make it unique
-def _make_unique_job_id(client, run_id):
-    job_id = run_id
-    try:
-        while client.get_job_status(job_id) is not None:
-            job_id = f"{run_id}-{time.time_ns()}"
-    except Exception as e:  # noqa
-        if "does not exist" in str(e):
-            pass
-        else:
-            raise
-    return job_id
 
 
 if __name__ == "__main__":

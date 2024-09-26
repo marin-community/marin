@@ -59,7 +59,7 @@ available_node_types:
   head_default:
     min_workers: 0
     max_workers: 0
-    resources: {"CPU": 0}
+    resources: {"CPU": 120}
 
     # GCP-Specific Configuration; by default, Ray will configure unspecified fields (e.g., subnets, ssh-keys)
     #   => Ref: https://cloud.google.com/compute/docs/reference/rest/v1/instances/insert
@@ -81,7 +81,7 @@ available_node_types:
   tpu_worker:
     min_workers: 4
     max_workers: 1024
-    resources: {"CPU": 120, "TPU": 1}
+    resources: {"CPU": 120, "TPU": 4}
 
     # GCP-Specific Configuration; setup for TPU V4-8 VMs (in `us-central2-b`)
     node_config:
@@ -93,11 +93,10 @@ available_node_types:
         preemptible: true
 
   # TPU Slices =>> Preemptible TPU v4-32, v4-64, v4-128, v4-256, v4-512, v4-1024 VMs
-  # We specifically set CPU to 0 to prevent scheduling CPU tasks on TPU slices
   tpu_slice_v4_16:
     min_workers: 0
     max_workers: 1024
-    resources: { "CPU": 0, "TPU": 1 }
+    resources: { "CPU": 120, "TPU": 4 }
 
     node_config:
       acceleratorType: v4-16
@@ -108,7 +107,7 @@ available_node_types:
   tpu_slice_v4_32:
     min_workers: 0
     max_workers: 1024
-    resources: { "CPU": 0, "TPU": 1 }
+    resources: { "CPU": 120, "TPU": 4 }
 
     node_config:
       acceleratorType: v4-32
@@ -119,7 +118,7 @@ available_node_types:
   tpu_slice_v4_64:
     min_workers: 0
     max_workers: 1024
-    resources: { "CPU": 0, "TPU": 1 }
+    resources: { "CPU": 120, "TPU": 4 }
 
     node_config:
       acceleratorType: v4-64
@@ -130,7 +129,7 @@ available_node_types:
   tpu_slice_v4_128:
     min_workers: 0
     max_workers: 1024
-    resources: { "CPU": 0, "TPU": 1 }
+    resources: { "CPU": 120, "TPU": 4 }
 
     node_config:
       acceleratorType: v4-128
@@ -141,7 +140,7 @@ available_node_types:
   tpu_slice_v4_256:
     min_workers: 0
     max_workers: 1024
-    resources: { "CPU": 0, "TPU": 1 }
+    resources: { "CPU": 120, "TPU": 4 }
 
     node_config:
       acceleratorType: v4-256
@@ -152,7 +151,7 @@ available_node_types:
   tpu_slice_v4_512:
     min_workers: 0
     max_workers: 1024
-    resources: { "CPU": 0, "TPU": 1 }
+    resources: { "CPU": 120, "TPU": 4 }
 
     node_config:
       acceleratorType: v4-512
@@ -163,7 +162,7 @@ available_node_types:
   tpu_slice_v4_1024:
     min_workers: 0
     max_workers: 1024
-    resources: { "CPU": 0, "TPU": 1 }
+    resources: { "CPU": 120, "TPU": 4 }
 
     node_config:
       acceleratorType: v4-1024
