@@ -41,7 +41,7 @@ The `false_positive_rate` parameter inversely affects the Bloom filter size and 
 
 ### Example command on dummy data:
 ```bash
-ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python marin/processing/classification/dedupe.py --input_path gs://marin-us-central2/scratch/documents/dummy_dedupe_data/text/ --output_path gs://marin-us-central2/scratch/attributes/dummy_dedupe_data/text_dup/ 
+ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python marin/processing/classification/dedupe.py --input_path gs://marin-us-central2/scratch/documents/dummy_dedupe_data/text/ --output_path gs://marin-us-central2/scratch/attributes/dummy_dedupe_data/text_dup/
 ```
 
 ### Another example:
@@ -49,4 +49,3 @@ ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- pyth
 ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python marin/processing/classification/dedupe.py --input_path gs://marin-us-central2/scratch/documents/dedupe_data/v1/testdedupe/ --output_path gs://marin-us-central2/scratch/attribute/dedupe_data/v1/testdedupe/
 ```
 ```
-
