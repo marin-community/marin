@@ -20,7 +20,7 @@ from marin.utils import (
 )
 
 
-@dataclass(frozen=True)
+@dataclass
 class FilterConfig:
     """Config for filtering operation on Marin data"""
 
