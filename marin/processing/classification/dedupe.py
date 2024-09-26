@@ -8,7 +8,8 @@ import fsspec
 import ray
 from tqdm import tqdm
 
-from marin.utils import fsspec_glob, fsspec_mkdirs, fsspec_rm, rebase_file_path, validate_marin_gcp_path
+from marin.core.runtime import cached_or_construct_output
+from marin.utils import fsspec_glob, fsspec_mkdirs, fsspec_rm, rebase_file_path
 
 
 @dataclass
@@ -131,6 +132,7 @@ def do_dedup(
     return process.returncode
 
 
+@cached_or_construct_output(success_suffix="SUCCESS")
 def copy_files_out(local_base_dir, output_path, attribute_name):
     # Ensure output_path doesn't end with a slash
     output_path = output_path.rstrip("/")
@@ -146,8 +148,6 @@ def copy_files_out(local_base_dir, output_path, attribute_name):
         # Use rebase_file_path to get the correct output path
         output_file = rebase_file_path(local_attribute_dir, local_file, output_path)
 
-        print(f"[DEBUG] Uploading {local_file} to {output_file}")
-
         # Ensure the output directory exists
         output_file_dir = os.path.dirname(output_file)
         fsspec_mkdirs(output_file_dir)
@@ -160,6 +160,21 @@ def copy_files_out(local_base_dir, output_path, attribute_name):
         files_uploaded += 1
 
     print(f"Uploaded {files_uploaded} files to {output_path}")
+
+
+@cached_or_construct_output(success_suffix="SUCCESS")
+def copy_file_out(input_file_path, output_file_path):
+
+    # Ensure the output directory exists
+    output_file_dir = os.path.dirname(output_file_path)
+    fsspec_mkdirs(output_file_dir)
+
+    # Copy the file using fsspec
+    with fsspec.open(input_file_path, "rb") as f_local:
+        with fsspec.open(output_file_path, "wb") as f_remote:
+            f_remote.write(f_local.read())
+
+    print(f"Uploaded file to {output_file_path}")
 
 
 def delete_jsonl_files(dir_path):
@@ -239,7 +254,6 @@ def dolma_dedup(
                     read_only=True,
                     bloom_filter_file="decotaminated_bloom_filter.bin",
                 )
-                copy_files_out(tmpdir, output_path, attribute_name)
             else:
                 copy_files_in(input_path, tmpdir)
                 do_dedup(
@@ -252,20 +266,33 @@ def dolma_dedup(
                     false_positive_rate,
                     processes,
                 )
-                copy_files_out(tmpdir, output_path, attribute_name)
+
+            # copy files out stays the same.
+            # Ensure output_path doesn't end with a slash
+            output_path = output_path.rstrip("/")
+
+            local_attribute_dir = os.path.join(tmpdir, "attributes", attribute_name)
+
+            # Get all .jsonl.gz files in the local attribute directory
+            glob_path = f"{local_attribute_dir}/**/*.jsonl.gz"
+            local_files = fsspec_glob(glob_path)
+            for local_file in tqdm(local_files, desc="Uploading files"):
+                output_file = rebase_file_path(local_attribute_dir, local_file, output_path)
+                copy_file_out(local_file, output_file)
+
         except Exception as e:
             print(f"An error occurred during deduplication: {e}")
     return "Deduplication process completed"
 
 
 @ray.remote
-def main_ray(config: DedupeConfig):
+def dedupe(config: DedupeConfig):
     # require directory if decontaminate is set
     if config.decontaminate and config.decontaminate_path is None:
         raise ValueError("decontaminate_path is required if decontaminate is set")
 
-    input_path = validate_marin_gcp_path(config.input_path)
-    output_path = validate_marin_gcp_path(config.output_path)
+    input_path = config.input_path
+    output_path = config.output_path
     result = ray.get(
         dolma_dedup.remote(
             input_path,
@@ -287,7 +314,7 @@ def main_ray(config: DedupeConfig):
 @draccus.wrap()
 def main(config: DedupeConfig):
     ray.init()
-    ray.get(main_ray.remote(config))
+    ray.get(dedupe.remote(config))
 
 
 if __name__ == "__main__":

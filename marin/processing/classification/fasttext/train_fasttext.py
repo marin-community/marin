@@ -1,50 +1,49 @@
 """
-train_bert.py
+train_fasttext.py
 
-Training script for BERT quality classifiers.
+Training script for fastText quality classifiers.
 """
 
+import os
 from dataclasses import dataclass, field
 
 import draccus
-import os
 import ray
 
+from marin.classifiers.fasttext.training import train_model
+from marin.classifiers.utils import attributes_to_dataset, create_label_attribute
 from marin.utils import fsspec_rm
-from marin.classifiers.utils import create_label_attribute, attributes_to_dataset
-from marin.classifiers.bert.training import train_model
 
 
 @dataclass
-class TrainBertClassifierConfig:
+class TrainFasttextClassifierConfig:
     """
     Configuration class for main process.
 
     Attributes:
-        output__path (str): Path for output data (i.e., gs://$BUCKET/classifiers/$EXPERIMENT).
+        output_path (str): Path for output data (i.e., gs://$BUCKET/classifiers/$EXPERIMENT).
         pos_doc_path (str): Path to experiment with positive examples (i.e., gs://$BUCKET/documents/../$EXPERIMENT).
         neg_doc_path (str): Path to experiment with negative examples (i.e., gs://$BUCKET/documents/../$EXPERIMENT).
         pos_sampling_rate (float): Fraction of positive examples to include the training dataset.
         neg_sampling_rate (float): Fraction of negative examples to include the training dataset.
-        bert_args (dict): Arguments for the BERT training process.
+        fasttext_args (dict): Arguments for the fastText training process (see fastText docs for list of options).
         seed (int): Seed for random number generator to ensure reproducibility.
         val_frac (float): Fraction of data to be used for validation.
         memory (int): Amount of memory allocated for remote training process (in GB).
-        num_cpus (int): Number of CPUs allocated for remote training process.
     """
 
     output_path: str
     pos_doc_path: str
-    neg_doc_path: str
+    neg_doc_path: str = None
     pos_sampling_rate: float = 1.0
     neg_sampling_rate: float = 1.0
-    bert_args: dict = field(default_factory=dict)
+    fasttext_args: dict = field(default_factory=dict)
     seed: int = 0
     val_frac: float = 0.1
     memory: int = 1
 
 
-def train(cfg: TrainBertClassifierConfig):
+def train(cfg: TrainFasttextClassifierConfig):
     pos_attr_path = os.path.join(cfg.output_path, "tmp", "positives")
     neg_attr_path = os.path.join(cfg.output_path, "tmp", "negatives")
 
@@ -72,7 +71,7 @@ def train(cfg: TrainBertClassifierConfig):
         seed=cfg.seed,
         val_frac=cfg.val_frac,
         memory_req=cfg.memory,
-        **cfg.bert_args,
+        **cfg.fasttext_args,
     )
 
     fsspec_rm(pos_attr_path)
@@ -80,7 +79,7 @@ def train(cfg: TrainBertClassifierConfig):
 
 
 @draccus.wrap()
-def main(cfg: TrainBertClassifierConfig):
+def main(cfg: TrainFasttextClassifierConfig):
     ray.init()
     train(cfg)
 
