@@ -108,8 +108,6 @@ class HELMEvaluator(VllmTpuEvaluator):
             output_path (str): The path to save the evaluation results.
             max_eval_instances (int | None): The maximum number of evaluation instances to run.
         """
-
-        is_successful: bool = False
         try:
             from helm.common.general import ensure_file_downloaded
 
@@ -186,12 +184,9 @@ class HELMEvaluator(VllmTpuEvaluator):
             # Upload the results to GCS
             if is_remote_path(output_path):
                 upload_to_gcs(self.RESULTS_PATH, output_path)
-
-            # The run was successful
-            is_successful = True
-        except Exception:
+        except Exception as e:
             traceback.print_exc()
+            raise RuntimeError("HELM failed. Please check the logs for more information.") from e
         finally:
             self.cleanup(model)
             shutil.rmtree(self.RESULTS_PATH, ignore_errors=True)
-            assert is_successful, "The evaluation failed. Please check the logs for more information."
