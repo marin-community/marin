@@ -27,7 +27,7 @@ docker:
         - -v "/var/run/docker.sock:/var/run/docker.sock"
     head_run_options:
       - --privileged
-      - - -v "/tmp:/tmp"
+      - -v "/tmp:/tmp"
 
 
 initialization_commands:

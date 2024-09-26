@@ -21,15 +21,15 @@ will additionally install test, linting, and debugging dependencies (e.g., `pyte
 ## Ray + Google Cloud Platform Quickstart
 
 In order to run data processing and curation workloads, we use [Ray](https://docs.ray.io/), a nifty Python library for
-configuring and launching distributed applications. We use Ray on top of Google Cloud Platform to 1) automatically 
+configuring and launching distributed applications. We use Ray on top of Google Cloud Platform to 1) automatically
 provision and maintain a cluster of virtual machines (VMs), and 2) to launch individual "jobs" (units of work) on our
 cluster. For more detailed information [see the `infra` README](./infra/README.md).
 
 #### Google Cloud (`gcloud`) Setup
 
-The **most important prerequisite** is making sure that your development environment (e.g., laptop) is set up for 
-Google Cloud Platform (GCP) for project `hai-gcp-models`. Make sure to 
-[install `gcloud`](https://cloud.google.com/sdk/docs/quickstarts), then: 
+The **most important prerequisite** is making sure that your development environment (e.g., laptop) is set up for
+Google Cloud Platform (GCP) for project `hai-gcp-models`. Make sure to
+[install `gcloud`](https://cloud.google.com/sdk/docs/quickstarts), then:
 
 ```bash
 gcloud auth login
@@ -44,35 +44,35 @@ gcloud config list
 gcloud storage ls gs://marin-data
 ```
 
-If you don't have permissions for `hai-gcp-models` or you run into permissions issues, contact David Hall or 
+If you don't have permissions for `hai-gcp-models` or you run into permissions issues, contact David Hall or
 Sidd Karamcheti for help!
 
 #### Ray Cluster + Job Submission
 
-Once authenticated for GCP, all other work happens through our 
+Once authenticated for GCP, all other work happens through our
 [Ray Cluster](https://docs.ray.io/en/latest/cluster/getting-started.html). The entire cluster configuration
-is stored in [`infra/marin-cluster.yaml`](./infra/marin-cluster.yaml). **Ray uses this file as the single-source of 
-truth for all cluster operations** -- you can think of this file as an alternative to managing your own SSH keys, 
-remembering the IP address of the cluster head node, what port the dashboard is running on, etc. 
+is stored in [`infra/marin-cluster.yaml`](./infra/marin-cluster.yaml). **Ray uses this file as the single-source of
+truth for all cluster operations** -- you can think of this file as an alternative to managing your own SSH keys,
+remembering the IP address of the cluster head node, what port the dashboard is running on, etc.
 
 There are two steps necessary for 1) establishing a connection to the cluster and 2) submitting/monitoring jobs on the
 cluster. **You will need at least two terminal processes running for the following steps** (make sure to activate your
 `marin` Python environment as well):
 
-```bash  
+```bash
 # [Terminal 1] Establish a Connection to the Ray Dashboard (launches an ssh connection w/ port-forwarding)
 #   =>> Assumes `marin` Python environment is active, and you're running scripts from the repository root directory
-ray dashboard infra/marin-cluster.yaml 
+ray dashboard infra/marin-cluster.yaml
 
 # [Browser] Navigate to `http://localhost:8265` (or whatever URL is output by the above command)
-#   =>> You should see the Cluster Overview Page (with a list of recent jobs, node status, resource status) 
+#   =>> You should see the Cluster Overview Page (with a list of recent jobs, node status, resource status)
 ```
 
 In addition to linking you to the cluster dashboard, the above command will establish a (persistent) SSH connection to
 our cluster's head node (if you're familiar with the NLP SLURM workflow, think of this as a connection to `sc`). Keep
 this terminal open!
 
-To submit jobs, we use the 
+To submit jobs, we use the
 [Jobs API](https://docs.ray.io/en/latest/cluster/running-applications/job-submission/quickstart.html#submitting-a-job).
 This requires that your Python script is formatted in a certain way, calling some boilerplate Ray functions prior to
 launching tasks -- see [`tests/test_ray_cluster.py`](./tests/test_ray_cluster.py) for a minimal example. To launch:
@@ -95,7 +95,7 @@ ray job stop --address http://127.0.0.1:8265 raysubmit_pAJM8vKfHPhiyHBa
 
 To avoid passing `--address ...` you can set the environment variable `export RAY_ADDRESS="http://127.0.0.1:8265"`
 
-**Quality of Life**: If you like `tmux` and `conda` (with environment name `marin`), feel free to run 
+**Quality of Life**: If you like `tmux` and `conda` (with environment name `marin`), feel free to run
 [`infra/marin-tmux.sh`](./infra/marin-tmux.sh) that automates launching the dashboard for you. Make sure to read the
 script before running!
 
@@ -119,8 +119,8 @@ result = ray.get(result_future)
 ```
 
 Ray is a resource-aware job scheduler, so you can specify the resources that a job requires:
-    
-```python 
+
+```python
 @ray.remote(num_cpus=4)
 def my_cpu_job():
     ...
@@ -140,16 +140,16 @@ the TPUs, you need to tell Ray that you need them. To use TPUs on our cluster, y
 @ray.remote(num_cpus=8, resources={"TPU": 4, "TPU-v4-8-head": 1})
 def my_tpu_job():
     ...
-    
+
 ```
 
 Always use the `TPU-v4-8-head` resource when requesting TPUs unless you specifically want a multi-node slice. This will
 ensure you don't accidentally grab part of a multi-node slice, which will lead to weird errors.
 
-Also, despite it saying `"TPU": 4`, you're actually getting all the TPUs. This is because Google requires that only one
-process on a machine can access TPUs at a time.
+Also, despite it saying `"TPU": 4`, you're actually getting all the TPUs. TPU v4 slices have 4 boards with 2 cores each,
+so you're getting 8 cores total, but they present as 4 TPUs.
 
-**IMPORTANT**: Ray and `libtpu` don't always get along. If you are using TPUs, you should either fork a process that 
+**IMPORTANT**: Ray and `libtpu` don't always get along. If you are using TPUs, you should either fork a process that
 uses the TPUs or force remove the libtpu lockfile when your task finishes. The latter is very hacky, but it works.
 We offer a utility decorator to do this for you:
 
@@ -168,7 +168,7 @@ def my_tpu_job():
 
 ### Scripts
 
-Scripts go in `scripts/$domain/`. Once there's a script for actually creating the domain, let's make a README.md in 
+Scripts go in `scripts/$domain/`. Once there's a script for actually creating the domain, let's make a README.md in
 that directory that explains how to use the script.
 
 ### Source
@@ -188,7 +188,7 @@ My (@dlwh) workflow looks like this:
 
 * `export PYTHONPATH=.:$PYTHONPATH`, or use an IDE that does this for you.
 * find a web page that I'm concerned about
-* run `python3 scripts/web/process_url.py <url>` 
+* run `python3 scripts/web/process_url.py <url>`
 * look at the outputs in `output/`. In particular compare `outputs/name.readability.html` to `outputs/name.md` to see what the conversion looks like.
 * If you need to, make a gist of the md at https://gist.github.com/ and look at how GitHub renders it. This is the gold standard for what we're aiming for.
 
