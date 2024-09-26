@@ -40,5 +40,7 @@ jobs:
         sleep 60  # Adjust this time if needed to allow the cluster to connect
 
     - name: Run quickstart.sh
+      env:
+        RAY_ADDRESS: "http://127.0.0.1:8265"
       run: |
         bash experiments/quickstart.sh
