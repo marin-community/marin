@@ -244,7 +244,7 @@ def main(args: LaunchConfig):
 
         import levanter.infra.ray_tpu as ray_tpu
 
-        config = ray_tpu.RunDockerOnPodConfig(
+        config = ray_tpu.Run(
             image_id=full_image_id, command=cmd, tpu_type=args.tpu_type, env=env, name="levanter", retries=args.retries
         )
 
@@ -273,7 +273,8 @@ Next steps
 Assuming all went well, you should eventually see a wandb run named {run_name} with id {run_id} in the wandb dashboard.
 That is likely to be:
      https://wandb.ai/stanford-mercury/marin/runs/{run_id}
-""")
+"""
+        )
 
         if args.foreground:
             client = JobSubmissionClient(address)
@@ -322,7 +323,6 @@ def wait_until_status(client, job_id, status_to_wait_for, timeout_seconds=5):
         time.sleep(1)
 
     return status
-
 
 
 if __name__ == "__main__":
