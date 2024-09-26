@@ -24,9 +24,14 @@ jobs:
       run: |
         pip install ray[default]
 
-    - name: Connect to Ray cluster on GCP
+    - name: Connect to Ray cluster on GCP in the background
       run: |
-        ray dashboard infra/cluster.yaml
+        ray dashboard infra/marin-cluster.yaml &
+      shell: bash
+
+    - name: Wait for Ray cluster to be ready
+      run: |
+        sleep 60  # Adjust this time if needed to allow the cluster to connect
 
     - name: Run quickstart.sh
       run: |
