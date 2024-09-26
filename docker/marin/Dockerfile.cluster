@@ -70,4 +70,7 @@ RUN sudo apt-get update && sudo apt-get install fuse gcsfuse -y
 RUN sudo mkdir /opt/gcsfuse_mount
 RUN sudo chown -R $(whoami) /opt/gcsfuse_mount
 
+# to run docker containers, we need to be in the docker group
+RUN sudo usermod -aG docker $(whoami)
+
 WORKDIR /opt/marin
