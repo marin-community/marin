@@ -19,25 +19,25 @@ jobs:
         project_id: ${{ secrets.GCP_PROJECT_ID }}
 
     - name: Authenticate to Google Cloud
-      uses: google-github-actions/auth@v1
+      uses: google-github-actions/auth@v2
       with:
-        credentials_json: ${{ secrets.GCP_SA_KEY }}
+        credentials_json: ${{ secrets.NEW_GCP_JSON }}
 
     - name: Install Ray
       run: |
         pip install ray[default]
         pip install google-api-python-client
-        python -m pip install --upgrade pip
-        pip install . --extra-index-url https://download.pytorch.org/whl/cpu
+      #        python -m pip install --upgrade pip
+      #        pip install . --extra-index-url https://download.pytorch.org/whl/cpu
 
     - name: Connect to Ray cluster on GCP in the background
       run: |
-        ray start --head
-      #      shell: bash
+        ray dashboard infra/marin-cluster.yaml &
+      shell: bash
 
-      #    - name: Wait for Ray cluster to be ready
-      #      run: |
-      #        sleep 60  # Adjust this time if needed to allow the cluster to connect
+    - name: Wait for Ray cluster to be ready
+      run: |
+        sleep 60  # Adjust this time if needed to allow the cluster to connect
 
     - name: Run quickstart.sh
       run: |
