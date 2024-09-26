@@ -27,11 +27,17 @@ jobs:
       run: |
         pip install ray[default]
         pip install google-api-python-client
+        python -m pip install --upgrade pip
         pip install . --extra-index-url https://download.pytorch.org/whl/cpu
 
     - name: Connect to Ray cluster on GCP in the background
       run: |
-        ray start --head
+        ray dashboard infra/marin-cluster.yaml &
+      shell: bash
+
+    - name: Wait for Ray cluster to be ready
+      run: |
+        sleep 60  # Adjust this time if needed to allow the cluster to connect
 
     - name: Run quickstart.sh
       run: |
