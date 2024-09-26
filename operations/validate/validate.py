@@ -207,8 +207,6 @@ def validate(cfg: ValidationConfig) -> None:
 
 
 if __name__ == "__main__":
-    # Initialize Connection to Cluster
-    ray.init()
 
     # Launch Validation Jobs
     validate()

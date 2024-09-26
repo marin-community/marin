@@ -88,8 +88,6 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    ray.init()
-
     responses = map_files_in_directory(convert_to_dolma.remote, args.input_path, "**/*.parquet", args.output_path)
 
     # Wait for all the tasks to finish.
