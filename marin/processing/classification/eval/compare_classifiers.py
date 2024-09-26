@@ -129,5 +129,4 @@ if __name__ == "__main__":
     parser.add_argument("--threshold", type=float, required=True, help="Threshold to use for classification")
     args = parser.parse_args()
 
-    ray.init()
     main(args)

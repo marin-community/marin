@@ -111,5 +111,4 @@ def main(cfg: FineWebConfig):
 
 
 if __name__ == "__main__":
-    ray.init()
     main()

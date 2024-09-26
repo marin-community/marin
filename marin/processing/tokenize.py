@@ -106,5 +106,4 @@ def main(config: TokenizeConfig):
 
 
 if __name__ == "__main__":
-    ray.init()
     main()

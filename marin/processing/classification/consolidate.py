@@ -263,5 +263,4 @@ def main(cfg: ConsolidateConfig):
 
 
 if __name__ == "__main__":
-    ray.init()
     main()

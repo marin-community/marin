@@ -317,5 +317,4 @@ def main(config: DedupeConfig):
 
 
 if __name__ == "__main__":
-    ray.init()
     main()

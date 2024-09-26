@@ -184,7 +184,6 @@ if __name__ == '__main__':
     files = gfs.ls(html_folder)
 
     MAX_NUM_PENDING_TASKS = 600  # Max number of html files we want to process in pending state
-    ray.init()
     result_refs = []
 
     for html in files:
