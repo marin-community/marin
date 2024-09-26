@@ -29,9 +29,9 @@ dependencies = [
     "ray[default]==2.34.0",
     "readabilipy",
     "readability-lxml",
-    "fsspec~=2024.3",
-    "gcsfs~=2024.3",
-    "s3fs~=2024.3",
+    "fsspec",
+    "gcsfs",
+    "s3fs",
     "ray[default]==2.34.0",
     "lxml[html_clean]",
     "regex",
@@ -42,6 +42,7 @@ dependencies = [
     "resiliparse",
     "trafilatura",
     "fasttext",
+    "boto3==1.35.23"
 ]
 
 [project.optional-dependencies]

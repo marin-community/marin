@@ -9,7 +9,7 @@ from dataclasses import asdict, dataclass
 import pytest
 import ray
 
-from marin.execution.executor import Executor, ExecutorStep, get_input, get_output, versioned
+from marin.execution.executor import Executor, ExecutorStep, output_path_of, this_output_path, versioned
 
 
 @pytest.fixture
@@ -59,7 +59,14 @@ def test_executor():
     a = ExecutorStep(name="a", fn=fn, config=None)
 
     b = ExecutorStep(
-        name="b", fn=fn, config=MyConfig(input_path=get_input(a, "sub"), output_path=get_output(), n=versioned(3), m=4)
+        name="b",
+        fn=fn,
+        config=MyConfig(
+            input_path=output_path_of(a, "sub"),
+            output_path=this_output_path(),
+            n=versioned(3),
+            m=4,
+        ),
     )
 
     executor = Executor(prefix="/tmp")
@@ -96,7 +103,7 @@ def test_parallelism():
         time.sleep(run_time)
 
     bs = [
-        ExecutorStep(name=f"b{i}", fn=fn, config=MyConfig(input_path="/", output_path=get_output(), n=1, m=1))
+        ExecutorStep(name=f"b{i}", fn=fn, config=MyConfig(input_path="/", output_path=this_output_path(), n=1, m=1))
         for i in range(parallelism)
     ]
     executor = Executor(prefix="/tmp")
@@ -128,12 +135,12 @@ def test_versioning():
         a = ExecutorStep(
             name="a",
             fn=fn,
-            config=MyConfig(input_path=versioned(a_input_path), output_path=get_output(), n=versioned(a_n), m=a_m),
+            config=MyConfig(input_path=versioned(a_input_path), output_path=this_output_path(), n=versioned(a_n), m=a_m),
         )
         b = ExecutorStep(
             name="b",
             fn=fn,
-            config=MyConfig(input_path=get_input(a, name), output_path=get_output(), n=versioned(b_n), m=b_m),
+            config=MyConfig(input_path=output_path_of(a, name), output_path=this_output_path(), n=versioned(b_n), m=b_m),
         )
         executor = Executor(prefix="/tmp")
         executor.run(steps=[b])
