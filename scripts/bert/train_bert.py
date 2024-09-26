@@ -81,7 +81,6 @@ def train(cfg: TrainBertClassifierConfig):
 
 @draccus.wrap()
 def main(cfg: TrainBertClassifierConfig):
-    ray.init()
     train(cfg)
 
 

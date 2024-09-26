@@ -8,7 +8,6 @@ import os
 from dataclasses import dataclass, field
 
 import draccus
-import ray
 
 from marin.classifiers.bert.training import train_model
 from marin.classifiers.utils import attributes_to_dataset, create_label_attribute
@@ -81,7 +80,6 @@ def train(cfg: TrainBertClassifierConfig):
 
 @draccus.wrap()
 def main(cfg: TrainBertClassifierConfig):
-    ray.init()
     train(cfg)
 
 

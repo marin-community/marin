@@ -227,7 +227,6 @@ def process_fw_dump(cfg: ParquetFWConfig):
     MAX_NUM_PENDING_TASKS = 15  # Max number of parquet files we want to process in pending state
     NUM_TASKS = len(files)
 
-    ray.init()
     result_refs = []
     for file in files:
         if len(result_refs) > MAX_NUM_PENDING_TASKS:
