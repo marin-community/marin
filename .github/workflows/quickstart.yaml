@@ -23,10 +23,6 @@ jobs:
       with:
         credentials_json: ${{ secrets.GCP_SA_KEY }}
 
-    - name: Configure Google Cloud
-      run: |
-        gcloud config set project ${{ secrets.GCP_PROJECT_ID }}
-
     - name: Install Ray
       run: |
         pip install ray[default]
