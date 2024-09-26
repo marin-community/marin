@@ -36,8 +36,9 @@ We want to compute a *version* for each step.  Here's what the user supplies:
 2. which fields of a `config` should be included in the version (things like the
    "method", not default thresholds that don't change).
 
-Based on the name, versioned fields, and the versions of all the dependencies,
-the version of a step is computed.
+The version of a step is identified by the name, versioned fields, and the
+versions of all the dependencies, This version is represented as a hash (e.g.,
+8ce902).
 
 ## Output paths
 
@@ -125,7 +126,7 @@ class InputName:
     name: str = ""
 
 
-def get_input(step: ExecutorStep, name: str = ""):
+def output_path_of(step: ExecutorStep, name: str = ""):
     return InputName(step=step, name=name)
 
 
@@ -136,7 +137,7 @@ class OutputName:
     name: str = ""
 
 
-def get_output(name: str = ""):
+def this_output_path(name: str = ""):
     return OutputName(name=name)
 
 
@@ -353,9 +354,9 @@ def get_fn_name(fn: Callable | ray.remote_function.RemoteFunction):
     if fn is None:
         return "None"
     if isinstance(fn, ray.remote_function.RemoteFunction):
-        return f"{fn._function.__module__}.{fn._function.__name__}"
+        return f"{fn._function.__module__}.{fn._function.__qualname__}"
     else:
-        return f"{fn.__module__}.{fn.__name__}"
+        return f"{fn.__module__}.{fn.__qualname__}"
 
 
 ############################################################
