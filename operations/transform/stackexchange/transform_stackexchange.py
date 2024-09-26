@@ -153,8 +153,5 @@ def transform_stackexchange(cfg: TransformStackExchangeConfig) -> None:
 
 
 if __name__ == "__main__":
-    # Initialize Connection to Cluster
-    ray.init()
-
     # Launch StackExchange Transform Jobs (one per subdomain)
     transform_stackexchange()

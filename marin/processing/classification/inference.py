@@ -187,5 +187,4 @@ def main(inference_config: InferenceConfig):
 
 
 if __name__ == "__main__":
-    ray.init()
     main()

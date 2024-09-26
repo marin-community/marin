@@ -139,7 +139,6 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    ray.init()
     if args.input_type == 'parquet':
         responses = map_files_in_directory(process_raw_chunk.remote, args.input_path, "**/*.parquet", args.output_path, args.input_type)
     else:
