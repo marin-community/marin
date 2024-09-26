@@ -6,7 +6,7 @@ set -e
 # Print each command before executing it
 set -x
 
-EXP="quickstart_eval_0925"
+EXP="quickstart_eval_0926"
 #
 #Transform
 ray job submit --working-dir . -- python scripts/hello_world_fw/process.py \
