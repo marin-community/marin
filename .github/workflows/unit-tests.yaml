@@ -13,8 +13,8 @@ jobs:
         jax-version: ["0.4.26"]
 
     steps:
-      - name: Checkout code 
-      - uses: actions/checkout@v3
+      - name: Checkout code
+        uses: actions/checkout@v3
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v4
@@ -25,6 +25,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
+
       - name: Test with pytest
         run: |
           PYTHONPATH=tests:. pytest
