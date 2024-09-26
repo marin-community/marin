@@ -220,7 +220,6 @@ if __name__ == "__main__":
     files = fsspec_glob(os.path.join(args.input_path, "*.parquet"))
     MAX_NUM_PENDING_TASKS = 15  # Max number of parquet files we want to process in pending state
     NUM_TASKS = len(files)
-    ray.init()
     result_refs = []
     for file in files:
         if len(result_refs) > MAX_NUM_PENDING_TASKS:
