@@ -1,3 +1,10 @@
+name: Verify PR with quickstart.sh
+
+on:
+  pull_request:
+    branches:
+      - main
+
 jobs:
   verify:
     runs-on: ubuntu-latest
