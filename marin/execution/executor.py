@@ -366,7 +366,7 @@ def get_fn_name(fn: Callable | ray.remote_function.RemoteFunction):
 class ExecutorMainConfig:
     prefix: str = "gs://marin-us-central2"
     dry_run: bool = False
-    
+
 
 @draccus.wrap()
 def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep]):
