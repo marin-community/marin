@@ -13,12 +13,15 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v3
 
+    - name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@v1
+      with:
+        credentials_json: ${{ secrets.GCLOUD_SERVICE_KEY }}
+
     - name: Set up Google Cloud SDK
       uses: google-github-actions/setup-gcloud@v1
       with:
         project_id: hai-gcp-models
-        service_account_key: ${{ secrets.GCLOUD_SERVICE_KEY }}
-        export_default_credentials: true
 
     - name: Install Ray
       run: |
