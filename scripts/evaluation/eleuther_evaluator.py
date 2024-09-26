@@ -1,5 +1,6 @@
-from typing import List, Optional
+from typing import List
 import os
+import traceback
 
 import ray
 
@@ -35,14 +36,12 @@ class EleutherEvaluator(VllmTpuEvaluator):
             output_path (str): The path to save the evaluation results.
             max_eval_instances (int | None): The maximum number of evaluation instances to run.
         """
-        # Download the model from GCS or HuggingFace
-        model.ensure_downloaded(local_path=os.path.join(VllmTpuEvaluator.CACHE_PATH, model.name))
-
         # From https://github.com/EleutherAI/lm-evaluation-harness?tab=readme-ov-file#model-apis-and-inference-servers
         # Run lm_eval with the model and the specified evals
-        model_name_or_path: str = model.name if model.path is None else model.path
-
         try:
+            # Download the model from GCS or HuggingFace
+            model_name_or_path: str = self.download_model(model)
+
             max_eval_instances = max_eval_instances or self.DEFAULT_MAX_EVAL_INSTANCES
             run_bash_command(
                 [
@@ -66,6 +65,7 @@ class EleutherEvaluator(VllmTpuEvaluator):
             if is_remote_path(output_path):
                 upload_to_gcs(self.RESULTS_PATH, output_path)
         except Exception as e:
-            print(f"An error occurred: {e}")
+            traceback.print_exc()
+            raise RuntimeError("lm-eval failed. Please check the logs for more information.") from e
         finally:
             self.cleanup(model)

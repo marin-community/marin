@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from typing import Dict, List
 import time
+import traceback
 
 import ray
 
@@ -161,6 +162,7 @@ class SimpleEvaluator(VllmTpuEvaluator):
 
             print(f"Inference times (in seconds): {inference_times}")
         except Exception as e:
-            print(f"An error occurred: {e}")
+            traceback.print_exc()
+            raise RuntimeError("SimpleEvaluator failed. Please check the logs for more information.") from e
         finally:
             self.cleanup(model)
