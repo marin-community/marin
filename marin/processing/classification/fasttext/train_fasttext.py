@@ -8,7 +8,6 @@ import os
 from dataclasses import dataclass, field
 
 import draccus
-import ray
 
 from marin.classifiers.fasttext.training import train_model
 from marin.classifiers.utils import attributes_to_dataset, create_label_attribute
@@ -80,7 +79,6 @@ def train(cfg: TrainFasttextClassifierConfig):
 
 @draccus.wrap()
 def main(cfg: TrainFasttextClassifierConfig):
-    ray.init()
     train(cfg)
 
 

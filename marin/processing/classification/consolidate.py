@@ -259,7 +259,6 @@ def consolidate(cfg: ConsolidateConfig):
 
 @draccus.wrap()
 def main(cfg: ConsolidateConfig):
-    ray.init()
     ray.get(consolidate.remote(cfg))
 
 
