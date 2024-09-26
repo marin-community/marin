@@ -102,7 +102,6 @@ def tokenize(config: TokenizeConfig):
 
 @draccus.wrap()
 def main(config: TokenizeConfig):
-    ray.init()
     tokenize(config)
 
 
