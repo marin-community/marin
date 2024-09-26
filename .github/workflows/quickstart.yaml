@@ -1,0 +1,26 @@
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Set up Google Cloud SDK
+      uses: google-github-actions/setup-gcloud@v1
+      with:
+        project_id: hai-gcp-models
+        service_account_key: ${{ secrets.GCLOUD_SERVICE_KEY }}
+        export_default_credentials: true
+
+    - name: Install Ray
+      run: |
+        pip install ray[default]
+
+    - name: Connect to Ray cluster on GCP
+      run: |
+        ray dashboard infra/cluster.yaml
+
+    - name: Run quickstart.sh
+      run: |
+        bash experiments/quickstart.sh
