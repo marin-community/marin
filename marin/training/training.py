@@ -47,8 +47,8 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
     This function makes a number of changes to the config and ensures a few things are set:
     - The run ID is set, or sets a default if not.
     - WANDB_API_KEY is set.
-    - it disables the auto-ray-start and auto-worker-start options since we're already in a Ray cluster.
-    - it checks that the paths are set and in the same region as the VM, unless bypass_path_checks is set.
+    - It disables the auto-ray-start and auto-worker-start options since we're already in a Ray cluster.
+    - It checks that the paths are set and in the same region as the VM, unless bypass_path_checks is set.
     """
     default_launch_config = levanter.infra.cli_helpers.load_config()
 
