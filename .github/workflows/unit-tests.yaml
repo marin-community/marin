@@ -36,6 +36,30 @@ jobs:
           npm install -g pandiff
           pip install -e ".[dev]"
 
+      - name: Set up Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v1
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.NEW_GCP_JSON }}
+
+      - name: Install Ray and other dependencies
+        run: |
+          pip install ray[default] google-api-python-client
+          
+      - name: Start Ray cluster on GCP
+        shell: bash -l {0}
+        run: |
+          nohup ray dashboard infra/marin-cluster.yaml > ray_cluster.log 2>&1 &
+          echo $! > ray_cluster.pid
+
+      - name: Wait for Ray cluster to be ready
+        run: |
+          sleep 60
+
       - name: Verify installations
         shell: bash -l {0}
         run: |
@@ -47,4 +71,4 @@ jobs:
       - name: Test with pytest
         shell: bash -l {0}
         run: |
-          PYTHONPATH=tests:. pytest
+          PYTHONPATH=tests:. pytest 
