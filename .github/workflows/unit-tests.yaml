@@ -70,5 +70,7 @@ jobs:
 
       - name: Test with pytest
         shell: bash -l {0}
+        env:
+          RAY_ADDRESS: "http://127.0.0.1:8265"
         run: |
-          PYTHONPATH=tests:. pytest 
+          PYTHONPATH=tests:. pytest --tb=no -v
