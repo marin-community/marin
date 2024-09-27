@@ -24,24 +24,26 @@ logger = logging.getLogger(__name__)
 
 @ray.remote(memory=1.5 * 1024 * 1024 * 1024)  # 1.5 GB
 @cached_or_construct_output(success_suffix="SUCCESS")  # We use this decorator to make this function idempotent
-def process_one_warc_file(input_file_path: str, output_file: str, extract_method: str, config: str | TrafilaturaConfig):
+def process_one_warc_file(input_path: str, output_path: str, extract_method: str, config: str | TrafilaturaConfig):
     """
     Takes in the input file and processes it to get the html and md content.
     It scans the s3 bucket in input_file and returns the content of the urls in the input_file
     Args:
-    input_file_path (str): The input file to process
+    input_path (str): The input file to process
     """
-    # input_file_path = gs://marin-data/processed/fineweb/fw-v1.0/ledgers/CC-MAIN-2024-10/000_00000/0.parquet
-    # output_file = gs://marin-data/processed/fineweb/fw-v1.0/ledgers/CC-MAIN-2024-10/000_00000/0_processed.jsonl.gz
+    # input_path = gs://marin-data/processed/fineweb/fw-v1.0/ledgers/CC-MAIN-2024-10/000_00000/0.parquet
+    # output_path = gs://marin-data/processed/fineweb/fw-v1.0/ledgers/CC-MAIN-2024-10/000_00000/0_processed.jsonl.gz
 
     # We use different output files for md and fineweb, we do not store the html content
-    md_output_file = output_file.replace("ledgers", "md")
-    fw_output_file = output_file.replace("ledgers", "text_fw")
+    base_path = os.path.abspath(os.path.join(os.path.dirname(__file__),"../.."))
+    
+    md_output_file = os.path.join(base_path, "md")
+    fw_output_file = os.path.join(base_path, "text_fw")
     # Write the output to a file with md information.
     logger.info(f"Writing to {md_output_file = }, {fw_output_file = }")
 
     try:
-        df = pd.read_parquet(input_file_path)
+        df = pd.read_parquet(input_path)
     except FileNotFoundError as e:
         logger.exception(f"Error reading the parquet file: {e}")
         raise e
@@ -60,7 +62,7 @@ def process_one_warc_file(input_file_path: str, output_file: str, extract_method
     length_url_inp_list = len(urls)
 
     # Logging variables
-    logger.info(f"Processing {s3_url} in {input_file_path}")
+    logger.info(f"Processing {s3_url} in {input_path}")
     length_warc = 0
     s3_fs = fsspec.filesystem("s3", anon=False)  # make sure s3 keys are setup
 
@@ -86,7 +88,6 @@ def process_one_warc_file(input_file_path: str, output_file: str, extract_method
 
                     try:
                         content = record.content_stream().read()
-
                         html_decoded = content.decode(errors="ignore")
 
                         markdown = convert_page(html_decoded, url, extract_method, config)
@@ -95,11 +96,11 @@ def process_one_warc_file(input_file_path: str, output_file: str, extract_method
                         num_urls_processed += 1
                     except Exception as e:
                         # We are just ignoring the error and moving forward as these errors are generally not a lot
-                        logger.exception(f"Error processing {url} in {s3_url} for {input_file_path}: {e}")
+                        logger.exception(f"Error processing {url} in {s3_url} for {input_path}: {e}")
                         traceback.print_exc()
 
     logger.info(
-        f"Processed {input_file_path}, found {length_warc} records, {length_url_inp_list} urls, "
+        f"Processed {input_path}, found {length_warc} records, {length_url_inp_list} urls, "
         f"{length_warc / length_url_inp_list} ratio"
     )
 
@@ -129,12 +130,12 @@ def process_one_warc_file(input_file_path: str, output_file: str, extract_method
             f.write(json.dumps(out_dolma) + "\n")
 
     # remove the input file
-    fsspec_rm(input_file_path)
+    fsspec_rm(input_path)
 
     # num_urls_found should be equal to length_url_inp_list
     logger.info(
         f"Found: {num_urls_found}, Processed: {num_urls_processed}, out of {length_url_inp_list} urls, "
-        f"in {input_file_path}"
+        f"in {input_path}"
         f"AWS URL: {s3_url}"
         f"Found {length_warc} records in the WARC file"
     )
@@ -143,7 +144,7 @@ def process_one_warc_file(input_file_path: str, output_file: str, extract_method
 
 
 @ray.remote(memory=10 * 1024 * 1024 * 1024, runtime_env={"pip": ["s3fs"]})  # 10 GB
-def process_fw_parquet(input_file_path: str, output_path: str, extract_method: str, config: str | TrafilaturaConfig):
+def process_fw_parquet(input_path: str, output_path: str, extract_method: str, config: str | TrafilaturaConfig):
     """
     Converts fineweb files to html and markdown. This will essentially take in fineweb and split different groups based
     on file_path and write all those file paths to a new folder and then run ray for each group
@@ -154,16 +155,16 @@ def process_fw_parquet(input_file_path: str, output_path: str, extract_method: s
 
     # Example of input_path = gs://marin-data/raw/fineweb/fw-v1.0/CC-MAIN-2024-10/000_00000.parquet
     # Example of output_path = gs://marin-data/processed/fineweb/fw-v1.0/ledgers/CC-MAIN-2024-10/000_00000/
-    logger.info(f"Processing {input_file_path}")
+    logger.info(f"Processing {input_path}")
     success_file = output_path + "/_SUCCESS"
     datetime_start = datetime.utcnow()
 
     if fsspec_exists(success_file):
-        logger.info(f"Output file already processed. Skipping {input_file_path}")
+        logger.info(f"Output file already processed. Skipping {input_path}")
         return True
 
     try:
-        df = pd.read_parquet(input_file_path)
+        df = pd.read_parquet(input_path)
     except FileNotFoundError as e:
         logger.exception(f"Error reading the parquet file: {e}")
         raise e
@@ -207,7 +208,7 @@ def process_fw_parquet(input_file_path: str, output_path: str, extract_method: s
 
     with fsspec.open(success_file, "w") as f:
         metadata = {
-            "input_file_path": input_file_path,
+            "input_path": input_path,
             "output_file_path": output_path,
             "datetime_start": str(datetime_start),
             "datetime_end": str(datetime_end),
