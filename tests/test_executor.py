@@ -14,7 +14,8 @@ from marin.execution.executor import Executor, ExecutorStep, output_path_of, thi
 
 @pytest.fixture
 def ray_start():
-    ray.init()
+    if not ray.is_initialized():
+        ray.init()
     yield
     ray.shutdown()
 
@@ -96,7 +97,6 @@ def test_parallelism():
     # overhead, as long as all the jobs can get scheduled.
     run_time = 5
     parallelism = 6
-    expected_duration = run_time * 2
 
     def fn(config: MyConfig):
         append_temp(temp, config)
@@ -116,9 +116,13 @@ def test_parallelism():
     for i in range(parallelism):
         assert results[i]["output_path"].startswith("/tmp/b")
 
-    duration = end_time - start_time
-    print(f"Duration: {duration}")
-    assert duration < expected_duration
+    serial_duration = run_time * parallelism
+    actual_duration = end_time - start_time
+    print(f"Duration: {actual_duration:.2f}s")
+    assert (
+        actual_duration < serial_duration * 0.75
+    ), f"""Expected parallel execution to be at least 25% faster than serial.
+        Actual: {actual_duration:.2f}s, Serial: {serial_duration:.2f}s"""
 
     cleanup_temp(temp)
 
