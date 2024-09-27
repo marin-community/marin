@@ -72,7 +72,6 @@ class HelloWorldConfig:
 
 @draccus.wrap()
 def main(config: HelloWorldConfig):
-    config.ray.initialize()
     # Example of input_path = gs://marin-data/hello_world_fw/fineweb/fw-v1.0/CC-MAIN-2024-10/000_00000/
     # We will process all html_jsonl.gz files in this directory.
     # As a reminder all the processing in this function will be done on the head node. We should try
@@ -106,8 +105,6 @@ if __name__ == "__main__":
     parser.add_argument("--output_path", type=str, help="Path to store wikipedia markdown files", required=True)
 
     args = parser.parse_args()
-
-    ray.init()
 
     responses = map_files_in_directory(html_to_md.remote, args.input_path, "*jsonl.gz", args.output_path)
 
