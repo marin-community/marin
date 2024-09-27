@@ -5,6 +5,7 @@ import ray
 import json
 import fsspec
 import draccus
+import logging
 import traceback
 import pandas as pd
 
@@ -18,9 +19,12 @@ from marin.core.runtime import cached_or_construct_output
 from marin.utils import fsspec_exists, fsspec_glob, fsspec_rm
 
 
+logger = logging.getLogger(__name__)
+
+
 @ray.remote(memory=1.5 * 1024 * 1024 * 1024)  # 1.5 GB
 @cached_or_construct_output(success_suffix="SUCCESS")  # We use this decorator to make this function idempotent
-def process_one_warc_file(input_file_path, output_file, extract_method, config):
+def process_one_warc_file(input_file_path: str, output_file: str, extract_method: str, config: str | TrafilaturaConfig):
     """
     Takes in the input file and processes it to get the html and md content.
     It scans the s3 bucket in input_file and returns the content of the urls in the input_file
@@ -34,12 +38,12 @@ def process_one_warc_file(input_file_path, output_file, extract_method, config):
     md_output_file = output_file.replace("ledgers", "md")
     fw_output_file = output_file.replace("ledgers", "text_fw")
     # Write the output to a file with md information.
-    print(f"Writing to {md_output_file = }, {fw_output_file = }")
+    logger.info(f"Writing to {md_output_file = }, {fw_output_file = }")
 
     try:
         df = pd.read_parquet(input_file_path)
     except FileNotFoundError as e:
-        print(f"Error reading the parquet file: {e}")
+        logger.exception(f"Error reading the parquet file: {e}")
         raise e
 
     df["md"] = None
@@ -56,7 +60,7 @@ def process_one_warc_file(input_file_path, output_file, extract_method, config):
     length_url_inp_list = len(urls)
 
     # Logging variables
-    print(f"Processing {s3_url} in {input_file_path}")
+    logger.info(f"Processing {s3_url} in {input_file_path}")
     length_warc = 0
     s3_fs = fsspec.filesystem("s3", anon=False)  # make sure s3 keys are setup
 
@@ -75,7 +79,7 @@ def process_one_warc_file(input_file_path, output_file, extract_method, config):
                     num_urls_found += 1
                     url_idx_in_df = url_dict[url]
                     if num_urls_found % 100 == 0:
-                        print(
+                        logger.info(
                             f"Found Url {num_urls_found = }, Processed Url {num_urls_processed = }, "
                             f"length of warc {length_warc = }"
                         )
@@ -91,10 +95,10 @@ def process_one_warc_file(input_file_path, output_file, extract_method, config):
                         num_urls_processed += 1
                     except Exception as e:
                         # We are just ignoring the error and moving forward as these errors are generally not a lot
-                        print(f"Error processing {url} in {s3_url} for {input_file_path}: {e}")
+                        logger.exception(f"Error processing {url} in {s3_url} for {input_file_path}: {e}")
                         traceback.print_exc()
 
-    print(
+    logger.info(
         f"Processed {input_file_path}, found {length_warc} records, {length_url_inp_list} urls, "
         f"{length_warc / length_url_inp_list} ratio"
     )
@@ -128,7 +132,7 @@ def process_one_warc_file(input_file_path, output_file, extract_method, config):
     fsspec_rm(input_file_path)
 
     # num_urls_found should be equal to length_url_inp_list
-    print(
+    logger.info(
         f"Found: {num_urls_found}, Processed: {num_urls_processed}, out of {length_url_inp_list} urls, "
         f"in {input_file_path}"
         f"AWS URL: {s3_url}"
@@ -139,7 +143,7 @@ def process_one_warc_file(input_file_path, output_file, extract_method, config):
 
 
 @ray.remote(memory=10 * 1024 * 1024 * 1024, runtime_env={"pip": ["s3fs"]})  # 10 GB
-def process_fw_parquet(input_file_path, output_path_path, extract_method, config):
+def process_fw_parquet(input_file_path: str, output_path: str, extract_method: str, config: str | TrafilaturaConfig):
     """
     Converts fineweb files to html and markdown. This will essentially take in fineweb and split different groups based
     on file_path and write all those file paths to a new folder and then run ray for each group
@@ -149,19 +153,19 @@ def process_fw_parquet(input_file_path, output_path_path, extract_method, config
     """
 
     # Example of input_path = gs://marin-data/raw/fineweb/fw-v1.0/CC-MAIN-2024-10/000_00000.parquet
-    # Example of output_path_path = gs://marin-data/processed/fineweb/fw-v1.0/ledgers/CC-MAIN-2024-10/000_00000/
-    print(f"Processing {input_file_path}")
-    success_file = output_path_path + "/_SUCCESS"
+    # Example of output_path = gs://marin-data/processed/fineweb/fw-v1.0/ledgers/CC-MAIN-2024-10/000_00000/
+    logger.info(f"Processing {input_file_path}")
+    success_file = output_path + "/_SUCCESS"
     datetime_start = datetime.utcnow()
 
     if fsspec_exists(success_file):
-        print(f"Output file already processed. Skipping {input_file_path}")
+        logger.info(f"Output file already processed. Skipping {input_file_path}")
         return True
 
     try:
         df = pd.read_parquet(input_file_path)
     except FileNotFoundError as e:
-        print(f"Error reading the parquet file: {e}")
+        logger.exception(f"Error reading the parquet file: {e}")
         raise e
 
     ray_waitable = []
@@ -170,7 +174,7 @@ def process_fw_parquet(input_file_path, output_path_path, extract_method, config
     grouped = df.groupby("file_path")
 
     for index, (file_url, group_df) in enumerate(grouped):
-        filename = os.path.join(output_path_path, f"{index}.parquet")
+        filename = os.path.join(output_path, f"{index}.parquet")
         # filename = gs://marin-data/processed/fineweb/fw-v1.0/ledgers/CC-MAIN-2024-10/000_00000/0.parquet
 
         output_file_name = filename.replace(".parquet", "_processed.jsonl.gz")
@@ -179,7 +183,7 @@ def process_fw_parquet(input_file_path, output_path_path, extract_method, config
 
         # Save the group to a parquet file
         group_df.to_parquet(filename)
-        print(f"Processing the group: {filename}, into {output_file_name}")
+        logger.info(f"Processing the group: {filename}, into {output_file_name}")
 
         ray_waitable.append(process_one_warc_file.remote(filename, output_file_name, extract_method, config))
         file_path.append(filename)
@@ -190,7 +194,7 @@ def process_fw_parquet(input_file_path, output_path_path, extract_method, config
         try:
             ray.get(waitable)
         except Exception as e:
-            print(f"Error processing {filename = }, Error: {e}")
+            logger.exception(f"Error processing {filename = }, Error: {e}")
             was_successful = False
         finally:
             # We should still remove the filename
@@ -204,7 +208,7 @@ def process_fw_parquet(input_file_path, output_path_path, extract_method, config
     with fsspec.open(success_file, "w") as f:
         metadata = {
             "input_file_path": input_file_path,
-            "output_file_path": output_path_path,
+            "output_file_path": output_path,
             "datetime_start": str(datetime_start),
             "datetime_end": str(datetime_end),
         }
@@ -236,24 +240,24 @@ def process_fw_dump(cfg: ParquetFWConfig):
             try:
                 ray.get(ready_refs)
             except Exception as e:
-                print(f"Error processing the group: {e}")
+                logger.exception(f"Error processing the group: {e}")
                 continue
 
         config_path_name = cfg.config if isinstance(cfg.config, str) else "custom_config"
-        output_path_path = os.path.join(
+        output_path = os.path.join(
             cfg.output_path,
             cfg.extract_method,
             config_path_name,
             os.path.basename(file).replace(".parquet", "")
         )
-        print(f"Starting Processing for the fw parquet file: {file} in output_path: {output_path_path}")
-        result_refs.append(process_fw_parquet.remote(file, output_path_path))
+        logger.info(f"Starting Processing for the fw parquet file: {file} in output_path: {output_path}")
+        result_refs.append(process_fw_parquet.remote(file, output_path))
 
     # Wait for all the tasks to finish
     try:
         ray.get(result_refs)
     except Exception as e:
-        print(f"Error processing the group: {e}")
+        logger.exception(f"Error processing the group: {e}")
 
 
 if __name__=="__main__":
