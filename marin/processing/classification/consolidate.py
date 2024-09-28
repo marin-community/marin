@@ -126,10 +126,11 @@ def process_file(input_path: str, filters: list[FilterConfig], output_path: str)
         all_attributes = [json.loads(attr_file.readline()) if attr_file else None for attr_file in attribute_files]
 
         # Apply filters
-        for doc_filter, attributes in zip(filters, all_attributes, strict=False):
+        for doc_filter, attributes in zip(filters, all_attributes):
             if attributes is None:
                 continue
             try:
+                assert attributes["id"] == input_data["id"]
                 input_data = apply_filter(input_data, doc_filter, attributes["attributes"])
             except Exception as e:
                 logger.error(f"Error applying filter {doc_filter} to line {num_total}: {e}")
