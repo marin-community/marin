@@ -31,14 +31,16 @@ def process_one_warc_file(input_path: str, output_path: str, extract_method: str
     Args:
     input_path (str): The input file to process
     """
-    # input_path = gs://marin-data/processed/fineweb/fw-v1.0/ledgers/CC-MAIN-2024-10/000_00000/0.parquet
-    # output_path = gs://marin-data/processed/fineweb/fw-v1.0/ledgers/CC-MAIN-2024-10/000_00000/0_processed.jsonl.gz
+    # input_path = gs://marin-data/processed/000_00000/0.parquet
+    # output_path = gs://marin-data/processed/000_00000/0_processed.jsonl.gz
 
     # We use different output files for md and fineweb, we do not store the html content
-    base_path = os.path.abspath(os.path.join(os.path.dirname(__file__),"../.."))
-    
-    md_output_file = os.path.join(base_path, "md")
-    fw_output_file = os.path.join(base_path, "text_fw")
+    output_base_path = os.path.dirname(output_path)
+    output_file_name = os.path.basename(output_path)
+
+    md_output_file = os.path.join(output_base_path, "md", output_file_name)
+    fw_output_file = os.path.join(output_base_path, "text_fw", output_file_name)
+
     # Write the output to a file with md information.
     logger.info(f"Writing to {md_output_file = }, {fw_output_file = }")
 
@@ -151,10 +153,11 @@ def process_fw_parquet(input_path: str, output_path: str, extract_method: str, c
 
     Parameters:
     input_path (str): Path to the fineweb parquet file
+    output_path (str): Path to the output folder where we will write the processed files
     """
 
     # Example of input_path = gs://marin-data/raw/fineweb/fw-v1.0/CC-MAIN-2024-10/000_00000.parquet
-    # Example of output_path = gs://marin-data/processed/fineweb/fw-v1.0/ledgers/CC-MAIN-2024-10/000_00000/
+    # Example of output_path = gs://marin-data/processed/000_00000
     logger.info(f"Processing {input_path}")
     success_file = output_path + "/_SUCCESS"
     datetime_start = datetime.utcnow()
@@ -176,11 +179,10 @@ def process_fw_parquet(input_path: str, output_path: str, extract_method: str, c
 
     for index, (file_url, group_df) in enumerate(grouped):
         filename = os.path.join(output_path, f"{index}.parquet")
-        # filename = gs://marin-data/processed/fineweb/fw-v1.0/ledgers/CC-MAIN-2024-10/000_00000/0.parquet
+        # filename = gs://marin-data/processed/000_00000/0.parquet
 
         output_file_name = filename.replace(".parquet", "_processed.jsonl.gz")
-        # output_file_name = gs://marin-data/processed/fineweb/fw-v1.0/ledgers/CC-MAIN-2024-10/000_00000
-        # /0_processed.jsonl.gz
+        # output_file_name = gs://marin-data/processed/000_00000/0_processed.jsonl.gz
 
         # Save the group to a parquet file
         group_df.to_parquet(filename)
@@ -224,7 +226,7 @@ class ParquetFWConfig:
     output_path: str
     extract_method: str = "readability"
     config: str | TrafilaturaConfig = "default"
-    file_limit: int = None
+    max_files: int | None = None
 
 
 @draccus.wrap()
@@ -245,18 +247,20 @@ def process_fw_dump(cfg: ParquetFWConfig):
                 logger.exception(f"Error processing the group: {e}")
                 continue
 
-        relative_input_path = os.path.relpath(file, cfg.input_path).split("../")[-1]
+        # Get the input file name
+        # Example of file = gs://marin-data/raw/fineweb/fw-v1.0/CC-MAIN-2024-10/000_00000.parquet
+        # input_file_name = 000_00000.parquet
+        input_file_name = os.path.basename(file)
         
         output_path = os.path.join(
             cfg.output_path,
-            os.path.dirname(relative_input_path),
-            os.path.basename(file).replace(".parquet", ""),
-        )
+            input_file_name.replace(".parquet", ""),
+        ) # gs://marin-data/processed/000_00000
 
         logger.info(f"Starting Processing for the fw parquet file: {file} in output_path: {output_path}")
         result_refs.append(process_fw_parquet.remote(file, output_path, cfg.extract_method, cfg.config))
 
-        if cfg.file_limit and len(result_refs) >= cfg.file_limit:
+        if cfg.max_files and len(result_refs) >= cfg.max_files:
             break
 
     # Wait for all the tasks to finish
