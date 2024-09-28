@@ -185,11 +185,10 @@ tokenize_step = ExecutorStep(
 if __name__ == "__main__":
     executor_main(
         steps=[
-            # transform_trafilatura_step,
-            # transform_resiliparse_step,  # Not used
-            # transform_readability_step,  # Not used
+            transform_trafilatura_step,
+            transform_resiliparse_step,  # Not used
+            transform_readability_step,  # Not used
             # train_quality_step,  # Not used  (TODO: fails right now)
-            # tokenize_step,
-            consolidate_step,
+            tokenize_step,
         ]
     )
