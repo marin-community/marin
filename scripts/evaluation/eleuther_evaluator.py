@@ -2,9 +2,6 @@ from typing import List
 import os
 import traceback
 
-import ray
-
-from marin.utils import remove_tpu_lockfile_on_exit
 from scripts.evaluation.evaluator import Dependency, ModelConfig
 from scripts.evaluation.vllm_tpu_evaluator import VllmTpuEvaluator
 from scripts.evaluation.utils import is_remote_path, upload_to_gcs, run_bash_command
@@ -24,8 +21,6 @@ class EleutherEvaluator(VllmTpuEvaluator):
         Dependency(name="lm-eval[api]"),
     ]
 
-    @ray.remote(memory=64 * 1024 * 1024 * 1024, resources={"TPU": 4, "TPU-v4-8-head": 1})  # 64 GB of memory
-    @remove_tpu_lockfile_on_exit
     def run(self, model: ModelConfig, evals: List[str], output_path: str, max_eval_instances: int | None = None) -> None:
         """
         Runs EleutherAI's lm-eval harness on the specified model and set of  tasks.
