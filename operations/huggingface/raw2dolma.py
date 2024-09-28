@@ -33,10 +33,17 @@ class DatasetConversionConfig:
     trust_remote_code: bool = False
 
 
-def load_datasets(config: DatasetConversionConfig):
-    """Load the dataset from huggingface.
+def load_datasets(config: DatasetConversionConfig) -> List[Dataset]:
+    """
+    Load the dataset from Hugging Face.
 
-    This function returns all data for the given split (rather than subject specific data).
+    This function returns all data for the given split (rather than subject-specific data).
+
+    Args:
+        config (DatasetConversionConfig): The configuration for loading datasets.
+
+    Returns:
+        List[Dataset]: A list of Hugging Face datasets loaded according to the given configuration.
     """
     datasets = []
     path = config.path
@@ -53,7 +60,7 @@ def load_datasets(config: DatasetConversionConfig):
     return datasets
 
 
-def get_nested_item(data, key, default_item=None):
+def get_nested_item(data: Dict[str, Any], key: str, default_item: Optional[Any] = None) -> Any:
     """
     Retrieve a nested item from a dictionary using a dot notation key.
 
