@@ -54,6 +54,20 @@ def load_datasets(config: DatasetConversionConfig):
 
 
 def get_nested_item(data, key, default_item=None):
+    """
+    Retrieve a nested item from a dictionary using a dot notation key.
+
+    Args:
+        data (dict): The dictionary from which to retrieve the nested item.
+        key (str): A string representing the key path, with keys separated by dots.
+                   For example, 'a.b.c' will retrieve data['a']['b']['c'].
+        default_item (Any, optional): The value to return if the key path does not exist.
+                                      Defaults to None.
+
+    Returns:
+        Any: The value at the specified key path, or the default_item if any key in the path
+             does not exist or if the input data is not a dictionary.
+    """
     keys = key.split(".")
     result = data
     try:
