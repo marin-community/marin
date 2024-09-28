@@ -11,13 +11,13 @@ This allows us to track both the status of each step as well as the time spent
 on each step.
 """
 
-from datetime import datetime
-from dataclasses import dataclass, asdict
 import json
+from dataclasses import asdict, dataclass
+from datetime import datetime
+
 import fsspec
 
 from marin.utils import fsspec_exists
-
 
 STATUS_WAITING = "WAITING"  # Waiting for dependencies to finish
 STATUS_RUNNING = "RUNNING"
