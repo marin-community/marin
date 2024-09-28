@@ -18,6 +18,7 @@ import fsspec
 
 from marin.utils import fsspec_exists
 
+
 STATUS_WAITING = "WAITING"  # Waiting for dependencies to finish
 STATUS_RUNNING = "RUNNING"
 STATUS_FAILED = "FAILED"
@@ -36,14 +37,15 @@ class ExecutorStepEvent:
 
     message: str | None = None
     """An optional message to provide more context (especially for errors)."""
-    
 
-def get_status_path(path: str) -> str:
-    return path + ".STATUS"
+
+def get_status_path(output_path: str) -> str:
+    """Return the `path` of the STATUS file associated with `output_path`."""
+    return output_path + ".STATUS"
 
 
 def read_events(path: str) -> list[ExecutorStepEvent]:
-    """Reads the status of a step from a file."""
+    """Reads the status of a step from `path`."""
     events = []
     if fsspec_exists(path):
         with fsspec.open(path, "r") as f:
@@ -53,7 +55,7 @@ def read_events(path: str) -> list[ExecutorStepEvent]:
 
 
 def get_current_status(events: list[ExecutorStepEvent]) -> str | None:
-    """Get the most recent status."""
+    """Get the most recent status (last event)."""
     return events[-1].status if len(events) > 0 else None
 
 

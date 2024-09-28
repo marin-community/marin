@@ -80,7 +80,16 @@ import ray
 import ray.remote_function
 
 from marin.utils import fsspec_exists
-from marin.execution.executor_step_status import get_status_path, read_events, append_status, get_current_status, STATUS_WAITING, STATUS_RUNNING, STATUS_FAILED, STATUS_SUCCESS
+from marin.execution.executor_step_status import (
+    get_status_path,
+    read_events,
+    append_status,
+    get_current_status,
+    STATUS_WAITING,
+    STATUS_RUNNING,
+    STATUS_FAILED,
+    STATUS_SUCCESS,
+)
 
 logger = logging.getLogger("ray")
 
@@ -154,6 +163,7 @@ def versioned(value: Any):
 
 
 ############################################################
+
 
 def dependency_index_str(i: int) -> str:
     return f"DEP[{i}]"
@@ -331,7 +341,9 @@ class Executor:
 
 
 @ray.remote
-def execute_after_dependencies(fn: ExecutorFunction, config: dataclass, dependencies: list[ray.ObjectRef], output_path: str, should_run: bool):
+def execute_after_dependencies(
+    fn: ExecutorFunction, config: dataclass, dependencies: list[ray.ObjectRef], output_path: str, should_run: bool
+):
     """
     Run a function `fn` with the given `config`, after all the `dependencies` have finished.
     Only do stuff if `should_run` is True.
