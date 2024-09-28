@@ -15,7 +15,7 @@ class OutputFormatOptions(str, Enum):
 
 
 @dataclass
-class DatasetConfig:
+class DatasetConversionConfig:
     dataset_name: str
     file_names: list[str]
     path: str
@@ -33,7 +33,7 @@ class DatasetConfig:
     trust_remote_code: bool = False
 
 
-def load_datasets(config):
+def load_datasets(config: DatasetConversionConfig):
     """Load the dataset from huggingface.
 
     This function returns all data for the given split (rather than subject specific data).
@@ -65,6 +65,28 @@ def get_nested_item(data, key, default_item=None):
 
 
 def is_kv_list(lst):
+    """
+    Check if the given list is a list of key-value dictionaries.
+
+    This function verifies if the input is a list where each element is a dictionary
+    containing both "key" and "value" fields.
+
+    Parameters:
+    lst (list): The list to check.
+
+    Returns:
+    bool: True if the list is a list of dictionaries with "key" and "value" fields, False otherwise.
+
+    Example:
+    >>> is_kv_list([{"key": "A", "value": "Option 1"}, {"key": "B", "value": "Option 2"}])
+    True
+
+    >>> is_kv_list([{"key": "A"}, {"key": "B", "value": "Option 2"}])
+    False
+
+    >>> is_kv_list("Not a list")
+    False
+    """
     if isinstance(lst, list):
         return all(isinstance(item, dict) and "key" in item and "value" in item for item in lst)
     return False
@@ -116,13 +138,14 @@ def standardize_options(options):
 
 
 @draccus.wrap()
-def main(cfg: DatasetConfig):
+def main(cfg: DatasetConversionConfig):
 
     # Load config parameters
     datasets = load_datasets(cfg)
 
-    # Load dataset from huggingface dataset
+    # Process dataset examples into selected output format {decontamination, evaluation}
     if cfg.output_format.value == "decontamination":
+        # decontamination format is dolma format, expects "text" key for text to be decontaminated
         for dataset, file_name in zip(datasets, cfg.file_names, strict=False):
             output_path = os.path.join(cfg.output_prefix, f"{cfg.dataset_name}-{file_name}-decontamination.jsonl.gz")
             with fsspec.open(output_path, "wt", compression="gzip") as dolma_file:
@@ -150,6 +173,7 @@ def main(cfg: DatasetConfig):
                     }
                     dolma_file.write(json.dumps(dolma_json) + "\n")
     elif cfg.output_format.value == "evaluation":
+        # evaluation format expects "input" and "output" keys, this is used to determine PPL of expected output given the input
         for dataset, data_file in zip(datasets, cfg.file_names, strict=False):
             # Storing the data in a dictionary with the subject as the key
             subject_files = defaultdict(str)
