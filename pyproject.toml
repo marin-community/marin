@@ -37,7 +37,7 @@ dependencies = [
     "regex",
     "requests",
     "warcio",
-    "levanter>=1.2.dev1012",
+    "levanter>=1.2.dev1013",
     "lm-eval",
     "resiliparse",
     "trafilatura",

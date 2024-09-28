@@ -2,17 +2,19 @@ import dataclasses
 import logging
 import os
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import draccus
 import levanter.infra.cli_helpers
 import ray
-from levanter.infra.ray_tpu import run_on_pod_resumable
+from google.api_core.exceptions import Forbidden as GcpForbiddenException
+from levanter.infra.ray_tpu import run_on_pod
 from levanter.main import train_lm
 from mergedeep import mergedeep
 from ray.runtime_env import RuntimeEnv
 
-from marin.utilities.gcs_utils import get_vm_region, is_bucket_in_region
+from marin.utilities.dataclass_utils import shallow_asdict
+from marin.utilities.gcs_utils import get_bucket_location, get_vm_region
 
 logger = logging.getLogger(__name__)
 
@@ -52,8 +54,9 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
     """
     default_launch_config = levanter.infra.cli_helpers.load_config()
 
-    env = _add_run_env_variables(config.env, default_launch_config)
-    config = dataclasses.replace(config, env=env)
+    env = _add_default_env_variables(config.env, default_launch_config["env"])
+    env = _add_run_env_variables(env)
+    config = replace(config, env=env)
 
     config = _suppress_ray_config(config)
     config = _enforce_run_id(config)
@@ -66,22 +69,24 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
         # doesn't need to be a TPU because ray insists that all VMs are in the same region
         ray.get(ray.remote(_doublecheck_paths).options(runtime_env=runtime_env, num_cpus=0.1).remote(config))
 
-    dict_config = dataclasses.asdict(config)
+    dict_config = shallow_asdict(config)
     del dict_config["env"]  # this is the important bit: don't want to leak env vars into the config
     del dict_config["tpu_type"]
+    del dict_config["bypass_path_checks"]
     train_config = train_lm.TrainLmConfig(**dict_config)
 
-    @ray.remote
+    @ray.remote(runtime_env=runtime_env)
     def train_lm_task():
         # upcast TrainLmOnPodConfig to TrainLmConfig by stripping the TPU type and env
         train_lm.main(train_config)
 
-    return run_on_pod_resumable(train_lm_task.options(runtime_env=runtime_env), config.tpu_type)
+    return ray.get(run_on_pod(train_lm_task, config.tpu_type))
 
 
 def _enforce_run_id(config: TrainLmOnPodConfig):
     """
-    Levanter will auto-generate a run ID if it's not set. We want to enforce that it's set for preemption.
+    Levanter will auto-generate a run ID if it's not set. We want to enforce that it's set, so that it resumes
+    properly after preemption.
 
     Look for:
         * config.trainer.id
@@ -98,7 +103,7 @@ def _enforce_run_id(config: TrainLmOnPodConfig):
         run_id = levanter.infra.cli_helpers.default_run_id()
         logger.warning(f"Run ID not set. Using default: {run_id}")
 
-    return dataclasses.replace(config, trainer=dataclasses.replace(config.trainer, id=run_id))
+    return replace(config, trainer=replace(config.trainer, id=run_id))
 
 
 def _suppress_ray_config(config: TrainLmOnPodConfig):
@@ -108,20 +113,18 @@ def _suppress_ray_config(config: TrainLmOnPodConfig):
     # my other kingdom for lenses
     if config.trainer.ray.auto_start_cluster:
         logger.info("Ray cluster is set to auto-start, but that's not what we want for Marin. Disabling.")
-        config = dataclasses.replace(
+        config = replace(
             config,
-            trainer=dataclasses.replace(
+            trainer=replace(
                 config.trainer,
-                ray=dataclasses.replace(config.trainer.ray, auto_start_cluster=False, start_workers=False),
+                ray=replace(config.trainer.ray, auto_start_cluster=False, start_workers=False),
             ),
         )
     elif config.trainer.ray.start_workers:
         logger.info("Ray cluster is set to start workers, but that's not what we want for Marin. Disabling.")
-        config = dataclasses.replace(
+        config = replace(
             config,
-            trainer=dataclasses.replace(
-                config.trainer, ray=dataclasses.replace(config.trainer.ray, start_workers=False)
-            ),
+            trainer=replace(config.trainer, ray=replace(config.trainer.ray, start_workers=False)),
         )
     return config
 
@@ -140,9 +143,16 @@ def _doublecheck_paths(config: TrainLmOnPodConfig):
     def check(key, path):
         if not path.startswith("gs://"):
             raise ValueError(f"{key} must be a GCS path, not {path}")
-        if not is_bucket_in_region(path, region):
-            raise ValueError(
-                f"{key} is not in the same region as the VM. This can cause performance issues and billing surprises."
+        try:
+            bucket_region = get_bucket_location(path)
+            if region.lower() != bucket_region.lower():
+                raise ValueError(
+                    f"{key} is not in the same region ({bucket_region}) as the VM ({region}). "
+                    f"This can cause performance issues and billing surprises."
+                )
+        except GcpForbiddenException:
+            logger.warning(
+                f"Could not check region for {key}. Be sure it's in the same region as the VM.", exc_info=True
             )
 
     check("data.cache_dir", config.data.cache_dir)
@@ -156,19 +166,33 @@ def _doublecheck_paths(config: TrainLmOnPodConfig):
     return config
 
 
-def _add_run_env_variables(env: dict, default_env: dict):
-    env = deepcopy(env)
+def _add_default_env_variables(env: dict, default_env: dict | None):
     if default_env is not None:
-        mergedeep.merge(env, default_env)
+        default_env = deepcopy(default_env)
+        env = mergedeep.merge(default_env, env)
+
+    # Ray gets mad if the values aren't all strings, but e.g. ints
+    env = {str(k): str(v) for k, v in env.items()}
+    return env
+
+
+def _add_run_env_variables(env: dict):
+    """
+    Add a few environment variables that we need for logging. Specifically:
+    - WANDB_API_KEY
+    - GIT_COMMIT
+    """
     if env.get("WANDB_API_KEY") is None:
         key = os.environ.get("WANDB_API_KEY")
         if key is not None:
             env["WANDB_API_KEY"] = key
         else:
-            raise ValueError(
-                "WANDB_API_KEY must be set in the environment. Please add it to your .config, export "
-                "WANDB_API_KEY=..., or add it to the env dict."
-            )
+            wandb_disabled = env.get("WANDB_MODE", os.environ.get("WANDB_MODE"))
+            if wandb_disabled is None or wandb_disabled.lower() != "disabled":
+                raise ValueError(
+                    "WANDB_API_KEY must be set in the environment. Please add it to your .config, export "
+                    "WANDB_API_KEY=..., or add it to the env dict."
+                )
 
     if "GIT_COMMIT" not in env:
         env["GIT_COMMIT"] = levanter.infra.cli_helpers.get_git_commit()

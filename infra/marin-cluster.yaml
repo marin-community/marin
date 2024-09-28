@@ -59,7 +59,7 @@ available_node_types:
   head_default:
     min_workers: 0
     max_workers: 0
-    resources: {"CPU": 120}
+    resources: {"CPU": 1}
 
     # GCP-Specific Configuration; by default, Ray will configure unspecified fields (e.g., subnets, ssh-keys)
     #   => Ref: https://cloud.google.com/compute/docs/reference/rest/v1/instances/insert

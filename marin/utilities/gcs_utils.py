@@ -47,11 +47,5 @@ def get_bucket_location(bucket_name_or_path):
 
     storage_client = storage.Client()
     bucket = storage_client.get_bucket(bucket_name)
-    return bucket.location
-
-
-def is_bucket_in_region(bucket_name_or_path, region):
-    """Check if the GCS bucket is in the specified region."""
-    bucket_region = get_bucket_location(bucket_name_or_path)
-
-    return region == bucket_region
+    # this returns upper case regions, which isn't consistent with the rest of the codebase
+    return bucket.location.lower()
