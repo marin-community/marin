@@ -126,7 +126,7 @@ def process_file(input_path: str, filters: list[FilterConfig], output_path: str)
         all_attributes = [json.loads(attr_file.readline()) if attr_file else None for attr_file in attribute_files]
 
         # Apply filters
-        for doc_filter, attributes in zip(filters, all_attributes):
+        for doc_filter, attributes in zip(filters, all_attributes, strict=True):
             if attributes is None:
                 continue
             try:
