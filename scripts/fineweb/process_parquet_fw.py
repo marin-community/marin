@@ -24,7 +24,14 @@ logger = logging.getLogger(__name__)
 
 @ray.remote(memory=1.5 * 1024 * 1024 * 1024)  # 1.5 GB
 @cached_or_construct_output(success_suffix="SUCCESS")  # We use this decorator to make this function idempotent
-def process_one_warc_file(input_path: str, output_path: str, extract_method: str, config: str | TrafilaturaConfig):
+def process_one_warc_file(
+    input_path: str,
+    output_path: str,
+    extract_method: str,
+    config: str | TrafilaturaConfig,
+    output_path_md: str,
+    output_path_text: str
+):
     """
     Takes in the input file and processes it to get the html and md content.
     It scans the s3 bucket in input_file and returns the content of the urls in the input_file
@@ -35,11 +42,12 @@ def process_one_warc_file(input_path: str, output_path: str, extract_method: str
     # output_path = gs://marin-data/processed/000_00000/0_processed.jsonl.gz
 
     # We use different output files for md and fineweb, we do not store the html content
-    output_base_path = os.path.dirname(output_path)
+    base_folder = os.path.dirname(output_path).split("/")[-1]
     output_file_name = os.path.basename(output_path)
 
-    md_output_file = os.path.join(output_base_path, "md", output_file_name)
-    fw_output_file = os.path.join(output_base_path, "text_fw", output_file_name)
+    md_output_file = os.path.join(output_path_md, base_folder, output_file_name)
+    fw_output_file = os.path.join(output_path_text, base_folder, output_file_name)
+
 
     # Write the output to a file with md information.
     logger.info(f"Writing to {md_output_file = }, {fw_output_file = }")
@@ -146,7 +154,14 @@ def process_one_warc_file(input_path: str, output_path: str, extract_method: str
 
 
 @ray.remote(memory=10 * 1024 * 1024 * 1024, runtime_env={"pip": ["s3fs"]})  # 10 GB
-def process_fw_parquet(input_path: str, output_path: str, extract_method: str, config: str | TrafilaturaConfig):
+def process_fw_parquet(
+    input_path: str,
+    output_path: str,
+    extract_method: str,
+    config: str | TrafilaturaConfig,
+    output_path_md: str,
+    output_path_text: str
+):
     """
     Converts fineweb files to html and markdown. This will essentially take in fineweb and split different groups based
     on file_path and write all those file paths to a new folder and then run ray for each group
@@ -188,7 +203,7 @@ def process_fw_parquet(input_path: str, output_path: str, extract_method: str, c
         group_df.to_parquet(filename)
         logger.info(f"Processing the group: {filename}, into {output_file_name}")
 
-        ray_waitable.append(process_one_warc_file.remote(filename, output_file_name, extract_method, config))
+        ray_waitable.append(process_one_warc_file.remote(filename, output_file_name, extract_method, config, output_path_md, output_path_text))
         file_path.append(filename)
 
     was_successful = True
@@ -223,7 +238,8 @@ def process_fw_parquet(input_path: str, output_path: str, extract_method: str, c
 @dataclass
 class ParquetFWConfig:
     input_path: str
-    output_path: str
+    output_path_md: str
+    output_path_text: str
     extract_method: str = "readability"
     config: str | TrafilaturaConfig = "default"
     max_files: int | None = None
@@ -253,16 +269,15 @@ def process_fw_dump(cfg: ParquetFWConfig):
         input_file_name = os.path.basename(file)
         
         output_path = os.path.join(
-            cfg.output_path,
+            cfg.output_path_text,
             input_file_name.replace(".parquet", ""),
         ) # gs://marin-data/processed/000_00000
 
         logger.info(f"Starting Processing for the fw parquet file: {file} in output_path: {output_path}")
-        result_refs.append(process_fw_parquet.remote(file, output_path, cfg.extract_method, cfg.config))
+        result_refs.append(process_fw_parquet.remote(file, output_path, cfg.extract_method, cfg.config, cfg.output_path_md, cfg.output_path_text))
 
         if cfg.max_files and len(result_refs) >= cfg.max_files:
             break
-
     # Wait for all the tasks to finish
     try:
         ray.get(result_refs)
