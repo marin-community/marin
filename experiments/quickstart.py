@@ -191,7 +191,7 @@ evaluate_step = ExecutorStep(
         evaluation_path="gs://marin-us-central2/evaluation/quickstart_single_script_docker_test_09_18/pf5pe4ut/step-600/mmlu",
         evals=["mmlu"],
         max_eval_instances=None,
-    )
+    ),
 )
 
 ############################################################
