@@ -43,7 +43,7 @@ def load_datasets(config: DatasetConversionConfig):
     hf_path = config.hf_path
     if config.token == "env":
         # if user specifies look for token in environment
-        token = os.environ["HUGGINGFACE_TOKEN"]
+        token = os.environ["HF_TOKEN"]
     else:
         token = config.token
     for file_name in config.file_names:
