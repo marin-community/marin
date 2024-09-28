@@ -146,7 +146,7 @@ consolidate_step = ExecutorStep(
                 threshold=versioned(0.1),
             ),
             FilterConfig(
-                type=versioned("splice"),
+                type=versioned("remove_spans"),
                 attribute_path=output_path_of(dedupe_step),
                 name=versioned("duplicate_text"),
             ),

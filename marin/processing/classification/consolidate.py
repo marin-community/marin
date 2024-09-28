@@ -24,7 +24,7 @@ from marin.utils import (
 )
 
 FILTER_TYPE_CLASSIFY = "classify"
-FILTER_TYPE_SPLICE = "splice"
+FILTER_TYPE_REMOVE_SPANS = "remove_spans"
 
 logger = logging.getLogger("ray")
 
@@ -87,7 +87,7 @@ def apply_filter(input_data: dict, doc_filter: FilterConfig, attributes: dict[st
         score = scores[doc_filter.label]
         return input_data if score >= doc_filter.threshold else None
 
-    elif doc_filter.type == FILTER_TYPE_SPLICE:
+    elif doc_filter.type == FILTER_TYPE_REMOVE_SPANS:
         # Remove spans (e.g., because they are duplicates)
         new_text = remove_spans(input_data["text"], attributes[doc_filter.name])
         return dict(input_data, text=new_text)
