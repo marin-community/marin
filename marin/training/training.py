@@ -69,18 +69,26 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
         # doesn't need to be a TPU because ray insists that all VMs are in the same region
         ray.get(ray.remote(_doublecheck_paths).options(runtime_env=runtime_env, num_cpus=0.1).remote(config))
 
+    train_config = _upcast_trainlm_config(config)
+
+    @ray.remote(runtime_env=runtime_env)
+    def train_lm_task():
+        train_lm.main(train_config)
+
+    return ray.get(run_on_pod(train_lm_task, config.tpu_type))
+
+
+def _upcast_trainlm_config(config):
+    """
+    upcast TrainLmOnPodConfig to TrainLmConfig by stripping the TPU type and env
+    """
     dict_config = shallow_asdict(config)
     del dict_config["env"]  # this is the important bit: don't want to leak env vars into the config
     del dict_config["tpu_type"]
     del dict_config["bypass_path_checks"]
     train_config = train_lm.TrainLmConfig(**dict_config)
 
-    @ray.remote(runtime_env=runtime_env)
-    def train_lm_task():
-        # upcast TrainLmOnPodConfig to TrainLmConfig by stripping the TPU type and env
-        train_lm.main(train_config)
-
-    return ray.get(run_on_pod(train_lm_task, config.tpu_type))
+    return train_config
 
 
 def _enforce_run_id(config: TrainLmOnPodConfig):
@@ -136,9 +144,8 @@ def _doublecheck_paths(config: TrainLmOnPodConfig):
     """
     try:
         region = get_vm_region()
-    except ValueError:
-        region = "us-central2"
-        logger.warning(f"Could not determine region. Defaulting to {region}")
+    except ValueError as e:
+        raise ValueError("Could not determine the region of the VM. This is required for path checks.") from e
 
     def check(key, path):
         if not path.startswith("gs://"):
@@ -178,7 +185,7 @@ def _add_default_env_variables(env: dict, default_env: dict | None):
 
 def _add_run_env_variables(env: dict):
     """
-    Add a few environment variables that we need for logging. Specifically:
+    Add a few environment variables from `os.environ` into `env` that we need for logging. Specifically:
     - WANDB_API_KEY
     - GIT_COMMIT
     """
