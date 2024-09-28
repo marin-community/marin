@@ -17,11 +17,11 @@ class OutputFormatOptions(str, Enum):
 @dataclass
 class DatasetConversionConfig:
     dataset_name: str
-    file_names: list[str]
-    path: str
-    hf_path: str
+    subset: str
+    splits: list[str]
+    input_path: str
     output_prefix: str
-    output_format: OutputFormatOptions = OutputFormatOptions.decontamination
+    output_format: OutputFormatOptions
     doc_input_format: str = ""
     subject_key: str = ""
     prompt_key: str = ""
@@ -46,16 +46,16 @@ def load_datasets(config: DatasetConversionConfig) -> List[Dataset]:
         List[Dataset]: A list of Hugging Face datasets loaded according to the given configuration.
     """
     datasets = []
-    path = config.path
-    hf_path = config.hf_path
+    input_path = config.input_path
+    subset = config.subset
     if config.token == "env":
         # if user specifies look for token in environment
         token = os.environ["HF_TOKEN"]
     else:
         token = config.token
-    for file_name in config.file_names:
+    for split in config.splits:
         datasets.append(
-            load_dataset(hf_path, path, split=file_name, token=token, trust_remote_code=config.trust_remote_code)
+            load_dataset(input_path, subset, split=split, token=token, trust_remote_code=config.trust_remote_code)
         )
     return datasets
 
@@ -167,8 +167,8 @@ def main(cfg: DatasetConversionConfig):
     # Process dataset examples into selected output format {decontamination, evaluation}
     if cfg.output_format.value == "decontamination":
         # decontamination format is dolma format, expects "text" key for text to be decontaminated
-        for dataset, file_name in zip(datasets, cfg.file_names, strict=False):
-            output_path = os.path.join(cfg.output_prefix, f"{cfg.dataset_name}-{file_name}-decontamination.jsonl.gz")
+        for dataset, split in zip(datasets, cfg.splits, strict=False):
+            output_path = os.path.join(cfg.output_prefix, f"{cfg.dataset_name}-{split}-decontamination.jsonl.gz")
             with fsspec.open(output_path, "wt", compression="gzip") as dolma_file:
                 for idx, example in enumerate(dataset):
                     subject = example.get(cfg.subject_key, "")
@@ -181,21 +181,21 @@ def main(cfg: DatasetConversionConfig):
                         raise ValueError("Please specify either answer_text_key or answer_idx_key.")
 
                     dolma_json = {
-                        "id": f"{cfg.dataset_name}-{file_name}-{subject}-{idx}",
+                        "id": f"{cfg.dataset_name}-{split}-{subset}-{idx}",
                         "text": get_nested_item(example, cfg.prompt_key),
                         "source": cfg.dataset_name,
                         "metadata": {
                             "options": standardize_options(get_nested_item(example, cfg.options_key, [])),
                             "answer": answer,
-                            "split": file_name,
-                            "provenance": f"https://huggingface.co/datasets/{cfg.hf_path}",
+                            "split": split,
+                            "provenance": f"https://huggingface.co/datasets/{cfg.input_path}",
                             "hf_path": cfg.hf_path,
                         },
                     }
                     dolma_file.write(json.dumps(dolma_json) + "\n")
     elif cfg.output_format.value == "evaluation":
         # evaluation format expects "input" and "output" keys, this is used to determine PPL of expected output given the input
-        for dataset, data_file in zip(datasets, cfg.file_names, strict=False):
+        for dataset, split in zip(datasets, cfg.splits, strict=False):
             # Storing the data in a dictionary with the subject as the key
             subject_files = defaultdict(str)
 
