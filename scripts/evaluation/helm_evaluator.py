@@ -96,7 +96,7 @@ class HELMEvaluator(VllmTpuEvaluator):
         }
         write_yaml(content, HELMEvaluator.TOKENIZER_CONFIGS_FILE_PATH)
 
-    @ray.remote(memory=64 * 1024 * 1024 * 1024, resources={"TPU": 1, "TPU-v4-8-head": 1})  # 64 GB of memory
+    @ray.remote(memory=64 * 1024 * 1024 * 1024, resources={"TPU": 4, "TPU-v4-8-head": 1})  # 64 GB of memory
     @remove_tpu_lockfile_on_exit
     def run(self, model: ModelConfig, evals: List[str], output_path: str, max_eval_instances: int | None = None) -> None:
         """

@@ -96,7 +96,6 @@ if __name__ == '__main__':
     
 
     MAX_NUM_PENDING_TASKS = 450  # Max number of html files we want to process in pending state
-    ray.init()
     result_refs = []
 
     for idx, file in enumerate(all_files):

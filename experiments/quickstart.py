@@ -146,7 +146,7 @@ consolidate_step = ExecutorStep(
                 threshold=versioned(0.1),
             ),
             FilterConfig(
-                type=versioned("dedupe"),
+                type=versioned("remove_spans"),
                 attribute_path=output_path_of(dedupe_step),
                 name=versioned("duplicate_text"),
             ),
@@ -185,10 +185,11 @@ tokenize_step = ExecutorStep(
 if __name__ == "__main__":
     executor_main(
         steps=[
-            transform_trafilatura_step,
-            transform_resiliparse_step,  # Not used
-            transform_readability_step,  # Not used
+            # transform_trafilatura_step,
+            # transform_resiliparse_step,  # Not used
+            # transform_readability_step,  # Not used
             # train_quality_step,  # Not used  (TODO: fails right now)
-            tokenize_step,
+            # tokenize_step,
+            consolidate_step,
         ]
     )
