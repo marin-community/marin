@@ -1,15 +1,12 @@
 import json
-import argparse
 import os
 from collections import defaultdict
-from enum import Enum
-from typing import List
 from dataclasses import dataclass, field
+from enum import Enum
 
-import yaml
+import draccus
 import fsspec
 from datasets import load_dataset
-import draccus
 
 
 class OutputFormatOptions(str, Enum):
@@ -20,7 +17,7 @@ class OutputFormatOptions(str, Enum):
 @dataclass
 class DatasetConfig:
     dataset_name: str
-    file_names: List[str]
+    file_names: list[str]
     path: str
     hf_path: str
     output_prefix: str
@@ -30,7 +27,7 @@ class DatasetConfig:
     prompt_key: str = ""
     answer_text_key: str = ""
     answer_idx_key: str = ""
-    output_choices: List[str] = field(default_factory=list)
+    output_choices: list[str] = field(default_factory=list)
     options_key: str = ""
     token: str | bool = True
     trust_remote_code: bool = False
@@ -50,8 +47,11 @@ def load_datasets(config):
     else:
         token = config.token
     for file_name in config.file_names:
-        datasets.append(load_dataset(hf_path, path, split=file_name, token=token, trust_remote_code=config.trust_remote_code))
+        datasets.append(
+            load_dataset(hf_path, path, split=file_name, token=token, trust_remote_code=config.trust_remote_code)
+        )
     return datasets
+
 
 def get_nested_item(data, key, default_item=None):
     keys = key.split(".")
@@ -63,17 +63,16 @@ def get_nested_item(data, key, default_item=None):
     except (KeyError, TypeError):
         return default_item
 
+
 def is_kv_list(lst):
     if isinstance(lst, list):
-        return all(
-            isinstance(item, dict) and 'key' in item and 'value' in item
-            for item in lst
-        )
+        return all(isinstance(item, dict) and "key" in item and "value" in item for item in lst)
     return False
+
 
 def standardize_options(options):
     if is_kv_list(options):
-        sorted_values = [x['value'] for x in sorted(options, key=lambda x: x['key'])]
+        sorted_values = [x["value"] for x in sorted(options, key=lambda x: x["key"])]
         return sorted_values
     elif isinstance(options, list):
         return options
@@ -81,7 +80,6 @@ def standardize_options(options):
         sorted_keys = sorted(list(options.keys()))
         sorted_values = [options[key] for key in sorted_keys]
         return sorted_values
-
 
 
 @draccus.wrap()
@@ -92,7 +90,7 @@ def main(cfg: DatasetConfig):
 
     # Load dataset from huggingface dataset
     if cfg.output_format.value == "decontamination":
-        for dataset, file_name in zip(datasets, cfg.file_names):
+        for dataset, file_name in zip(datasets, cfg.file_names, strict=False):
             output_path = os.path.join(cfg.output_prefix, f"{cfg.dataset_name}-{file_name}-decontamination.jsonl.gz")
             with fsspec.open(output_path, "wt", compression="gzip") as dolma_file:
                 for idx, example in enumerate(dataset):
@@ -119,7 +117,7 @@ def main(cfg: DatasetConfig):
                     }
                     dolma_file.write(json.dumps(dolma_json) + "\n")
     elif cfg.output_format.value == "evaluation":
-        for dataset, data_file in zip(datasets, cfg.file_names):
+        for dataset, data_file in zip(datasets, cfg.file_names, strict=False):
             # Storing the data in a dictionary with the subject as the key
             subject_files = defaultdict(lambda: "")
 
