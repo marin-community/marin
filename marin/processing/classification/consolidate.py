@@ -2,7 +2,7 @@ import copy
 import json
 import os
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 import draccus
@@ -191,9 +191,7 @@ def rebase_filter_filepath(input_subdir: str, input_path: str, doc_filter: Filte
     attribute_path = rebase_file_path(input_subdir, input_path, doc_filter.attribute_path)
     assert fsspec_exists(attribute_path), f"Warning: Attribute path {attribute_path} does not exist."
 
-    sub_filter = copy.deepcopy(doc_filter)
-    sub_filter.attribute_path = attribute_path
-    return sub_filter
+    return replace(doc_filter, attribute_path=attribute_path)
 
 
 @ray.remote
