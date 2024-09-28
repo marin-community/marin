@@ -71,6 +71,39 @@ def is_kv_list(lst):
 
 
 def standardize_options(options):
+    """
+    Standardize multiple choice options for LLM benchmarks.
+
+    The function accepts various formats of multiple choice options and converts them
+    into a standard list of answer values. The supported input formats are:
+
+    1. A list of dictionaries with 'key' and 'value' pairs, which is sorted by the 'key'.
+    2. A simple list of answer options.
+    3. A dictionary mapping keys to answer values, which is sorted by the keys.
+
+    Parameters:
+    options (list or dict): The multiple choice options, which can be:
+                            - A list of dictionaries with 'key' and 'value' fields.
+                            - A list of answer values.
+                            - A dictionary mapping keys to answer values.
+
+    Returns:
+    list: A list of answer values, sorted if the input was a dictionary or key-value list.
+
+    Example:
+    >>> options_dict = {"B": "Canada", "A": "France", "D": "United Kingdom", "C": "United States"}
+    >>> standardize_options(options_dict)
+    ['France', 'Canada', 'United States', 'United Kingdom']
+
+    >>> options_list = ["France", "Canada", "United States", "United Kingdom"]
+    >>> standardize_options(options_list)
+    ['France', 'Canada', 'United States', 'United Kingdom']
+
+    >>> options_kv_list = [{"key": "B", "value": "Canada"}, {"key": "A", "value": "France"},
+    ...                    {"key": "D", "value": "United Kingdom"}, {"key": "C", "value": "United States"}]
+    >>> standardize_options(options_kv_list)
+    ['France', 'Canada', 'United States', 'United Kingdom']
+    """
     if is_kv_list(options):
         sorted_values = [x["value"] for x in sorted(options, key=lambda x: x["key"])]
         return sorted_values
@@ -119,7 +152,7 @@ def main(cfg: DatasetConfig):
     elif cfg.output_format.value == "evaluation":
         for dataset, data_file in zip(datasets, cfg.file_names, strict=False):
             # Storing the data in a dictionary with the subject as the key
-            subject_files = defaultdict(lambda: "")
+            subject_files = defaultdict(str)
 
             for example in dataset:
                 question = get_nested_item(example, cfg.prompt_key)
@@ -149,7 +182,6 @@ def main(cfg: DatasetConfig):
                 output_path = os.path.join(
                     cfg.output_prefix, f"{cfg.dataset_name}-{subject}-{data_file}-evaluation.jsonl.gz"
                 )
-                print(output_path)
                 with fsspec.open(output_path, "wt", compression="gzip") as f:
                     f.write(subject_files[subject])
     else:
