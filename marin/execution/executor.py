@@ -71,25 +71,24 @@ import hashlib
 import json
 import logging
 import os
+import traceback
 from collections.abc import Callable
 from dataclasses import dataclass, fields, is_dataclass, replace
 from typing import Any
-import traceback
 
 import draccus
 import ray
 import ray.remote_function
 
-from marin.utils import fsspec_exists
 from marin.execution.executor_step_status import (
-    get_status_path,
-    read_events,
+    STATUS_FAILED,
+    STATUS_RUNNING,
+    STATUS_SUCCESS,
+    STATUS_WAITING,
     append_status,
     get_current_status,
-    STATUS_WAITING,
-    STATUS_RUNNING,
-    STATUS_FAILED,
-    STATUS_SUCCESS,
+    get_status_path,
+    read_events,
 )
 
 logger = logging.getLogger("ray")
