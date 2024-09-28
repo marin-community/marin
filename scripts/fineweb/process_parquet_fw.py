@@ -224,6 +224,7 @@ class ParquetFWConfig:
     output_path: str
     extract_method: str = "readability"
     config: str | TrafilaturaConfig = "default"
+    file_limit: int = None
 
 
 @draccus.wrap()
@@ -244,15 +245,19 @@ def process_fw_dump(cfg: ParquetFWConfig):
                 logger.exception(f"Error processing the group: {e}")
                 continue
 
-        config_path_name = cfg.config if isinstance(cfg.config, str) else "custom_config"
+        relative_input_path = os.path.relpath(file, cfg.input_path).split("../")[-1]
+        
         output_path = os.path.join(
             cfg.output_path,
-            cfg.extract_method,
-            config_path_name,
-            os.path.basename(file).replace(".parquet", "")
+            os.path.dirname(relative_input_path),
+            os.path.basename(file).replace(".parquet", ""),
         )
+
         logger.info(f"Starting Processing for the fw parquet file: {file} in output_path: {output_path}")
-        result_refs.append(process_fw_parquet.remote(file, output_path))
+        result_refs.append(process_fw_parquet.remote(file, output_path, cfg.extract_method, cfg.config))
+
+        if cfg.file_limit and len(result_refs) >= cfg.file_limit:
+            break
 
     # Wait for all the tasks to finish
     try:
