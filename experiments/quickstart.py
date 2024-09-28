@@ -203,7 +203,6 @@ if __name__ == "__main__":
             transform_readability_step,  # Not used
             # train_quality_step,  # Not used  (TODO: fails right now)
             tokenize_step,
-            consolidate_step,
             evaluate_step,
         ]
     )
