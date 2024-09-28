@@ -189,6 +189,6 @@ if __name__ == "__main__":
             transform_resiliparse_step,  # Not used
             transform_readability_step,  # Not used
             # train_quality_step,  # Not used  (TODO: fails right now)
-            # tokenize_step,
+            tokenize_step,
         ]
     )
