@@ -7,25 +7,19 @@ the attributes.  Handles two cases:
 - Deduplication produces attributes (e.g., duplicate_text).  Remove duplicates.
 """
 
-import copy
 import json
+import logging
 import os
-from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Any
 
 import draccus
 import fsspec
 import ray
-import logging
 
-from marin.core.runtime import cached_or_construct_output
 from marin.utils import (
     fsspec_exists,
-    fsspec_get_atomic_directories,
     fsspec_glob,
-    fsspec_isdir,
-    fsspec_mkdirs,
     rebase_file_path,
 )
 
@@ -129,12 +123,10 @@ def process_file(input_path: str, filters: list[FilterConfig], output_path: str)
 
         # Read document and attributes for that document
         input_data = json.loads(input_line)
-        all_attributes = [
-            json.loads(attr_file.readline()) if attr_file else None for attr_file in attribute_files
-        ]
+        all_attributes = [json.loads(attr_file.readline()) if attr_file else None for attr_file in attribute_files]
 
         # Apply filters
-        for doc_filter, attributes in zip(filters, all_attributes):
+        for doc_filter, attributes in zip(filters, all_attributes, strict=False):
             if attributes is None:
                 continue
             try:
@@ -174,7 +166,9 @@ def consolidate(config: ConsolidateConfig):
             ray.get(ready_refs)
 
         filters = [
-            replace(doc_filter, attribute_path=rebase_file_path(config.input_path, input_path, doc_filter.attribute_path)) \
+            replace(
+                doc_filter, attribute_path=rebase_file_path(config.input_path, input_path, doc_filter.attribute_path)
+            )
             for doc_filter in config.filters
         ]
         output_path = rebase_file_path(config.input_path, input_path, config.output_path)
