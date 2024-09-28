@@ -1,9 +1,7 @@
-from typing import List, Optional
+from typing import List
 import os
+import traceback
 
-import ray
-
-from marin.utils import remove_tpu_lockfile_on_exit
 from scripts.evaluation.evaluator import Dependency, ModelConfig
 from scripts.evaluation.vllm_tpu_evaluator import VllmTpuEvaluator
 from scripts.evaluation.utils import is_remote_path, upload_to_gcs, run_bash_command
@@ -23,8 +21,6 @@ class EleutherEvaluator(VllmTpuEvaluator):
         Dependency(name="lm-eval[api]"),
     ]
 
-    @ray.remote(memory=64 * 1024 * 1024 * 1024, resources={"TPU": 4, "TPU-v4-8-head": 1})  # 64 GB of memory
-    @remove_tpu_lockfile_on_exit
     def run(self, model: ModelConfig, evals: List[str], output_path: str, max_eval_instances: int | None = None) -> None:
         """
         Runs EleutherAI's lm-eval harness on the specified model and set of  tasks.
@@ -35,14 +31,12 @@ class EleutherEvaluator(VllmTpuEvaluator):
             output_path (str): The path to save the evaluation results.
             max_eval_instances (int | None): The maximum number of evaluation instances to run.
         """
-        # Download the model from GCS or HuggingFace
-        model.ensure_downloaded(local_path=os.path.join(VllmTpuEvaluator.CACHE_PATH, model.name))
-
         # From https://github.com/EleutherAI/lm-evaluation-harness?tab=readme-ov-file#model-apis-and-inference-servers
         # Run lm_eval with the model and the specified evals
-        model_name_or_path: str = model.name if model.path is None else model.path
-
         try:
+            # Download the model from GCS or HuggingFace
+            model_name_or_path: str = self.download_model(model)
+
             max_eval_instances = max_eval_instances or self.DEFAULT_MAX_EVAL_INSTANCES
             run_bash_command(
                 [
@@ -66,6 +60,7 @@ class EleutherEvaluator(VllmTpuEvaluator):
             if is_remote_path(output_path):
                 upload_to_gcs(self.RESULTS_PATH, output_path)
         except Exception as e:
-            print(f"An error occurred: {e}")
+            traceback.print_exc()
+            raise RuntimeError("lm-eval failed. Please check the logs for more information.") from e
         finally:
             self.cleanup(model)
