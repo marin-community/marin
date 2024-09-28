@@ -15,7 +15,6 @@ from scripts.evaluation.evaluator import Evaluator, ModelConfig
 from scripts.evaluation.evaluation_config import EvaluationConfig
 
 
-@draccus.wrap()
 def evaluate(config: EvaluationConfig) -> None:
     print(f"Running evals with args: {config}")
     evaluator: Evaluator = get_evaluator(config)
@@ -30,5 +29,10 @@ def evaluate(config: EvaluationConfig) -> None:
     print(f"Done (total time: {time.time() - start_time} seconds)")
 
 
+@draccus.wrap()
+def main(config: EvaluationConfig) -> None:
+    evaluate(config)
+
+
 if __name__ == "__main__":
-    evaluate()
+    main()

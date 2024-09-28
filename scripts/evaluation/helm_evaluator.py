@@ -1,11 +1,8 @@
 from typing import Dict, List
 import os
+import shutil
 import traceback
 
-import ray
-import shutil
-
-from marin.utils import remove_tpu_lockfile_on_exit
 from scripts.evaluation.evaluator import Dependency, ModelConfig
 from scripts.evaluation.vllm_tpu_evaluator import VllmTpuEvaluator
 from scripts.evaluation.utils import is_remote_path, upload_to_gcs, run_bash_command, write_yaml
@@ -96,8 +93,6 @@ class HELMEvaluator(VllmTpuEvaluator):
         }
         write_yaml(content, HELMEvaluator.TOKENIZER_CONFIGS_FILE_PATH)
 
-    @ray.remote(memory=64 * 1024 * 1024 * 1024, resources={"TPU": 4, "TPU-v4-8-head": 1})  # 64 GB of memory
-    @remove_tpu_lockfile_on_exit
     def run(self, model: ModelConfig, evals: List[str], output_path: str, max_eval_instances: int | None = None) -> None:
         """
         Runs HELM on the specified model and set of evaluations.
