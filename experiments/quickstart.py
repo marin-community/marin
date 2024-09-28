@@ -178,7 +178,20 @@ tokenize_step = ExecutorStep(
 ############################################################
 # Evaluate
 
-# TODO: wait for draccus version
+from scripts.evaluation.evaluation_config import EvaluationConfig  # noqa
+from scripts.evaluation.run import evaluate  # noqa
+
+evaluate_step = ExecutorStep(
+    name="evaluation/hello_world_fw-pliang",
+    fn=evaluate,
+    config=EvaluationConfig(
+        evaluator="helm",
+        model_name="pf5pe4ut/step-600",
+        model_path="gs://marin-us-central2/checkpoints/quickstart_single_script_docker_test_09_18/pf5pe4ut/hf/pf5pe4ut/step-600",
+        evaluation_path="gs://marin-us-central2/evaluation/quickstart_single_script_docker_test_09_18/pf5pe4ut/step-600/mmlu",
+        evals=["mmlu"],
+    ),
+)
 
 ############################################################
 
@@ -190,5 +203,7 @@ if __name__ == "__main__":
             transform_readability_step,  # Not used
             # train_quality_step,  # Not used  (TODO: fails right now)
             tokenize_step,
+            consolidate_step,
+            evaluate_step,
         ]
     )
