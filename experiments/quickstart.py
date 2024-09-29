@@ -186,9 +186,10 @@ evaluate_step = ExecutorStep(
     fn=evaluate,
     config=EvaluationConfig(
         evaluator="helm",
+        # TODO: replace this with `output_path_of(train_step)`
         model_name="pf5pe4ut/step-600",
         model_path="gs://marin-us-central2/checkpoints/quickstart_single_script_docker_test_09_18/pf5pe4ut/hf/pf5pe4ut/step-600",
-        evaluation_path="gs://marin-us-central2/evaluation/quickstart_single_script_docker_test_09_18/pf5pe4ut/step-600/mmlu",
+        evaluation_path=this_output_path(),
         evals=["mmlu"],
     ),
 )
