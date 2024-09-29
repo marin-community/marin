@@ -36,9 +36,6 @@ def test_ray_cluster() -> dict[str, str]:
 def main() -> None:
     print(f"[*] Launching {N_TASKS} Verification Tasks on Ray Cluster!")
 
-    # Initialize Connection to Ray Cluster
-    ray.init()
-
     # Print Cluster Information
     print(f"[*] Cluster Statistics :: {len(ray.nodes())} nodes w/ {ray.cluster_resources().get('CPU', 0)} total CPUs")
 

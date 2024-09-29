@@ -116,7 +116,6 @@ if __name__ == "__main__":
     gfs = fsspec.filesystem("gcs")
     files = gfs.glob(os.path.join(args.dolma_path, f"{args.domain}*.json.gz"))
 
-    ray.init()
     result_refs = []
     for file in files:
         result_refs.append(
