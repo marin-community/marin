@@ -1,12 +1,14 @@
 # Copy this template yaml and change the input and output directory accordingly.
 
-input_dir: "gs://marin-$REGION/documents/$EXPERIMENT/$DATASET/$VERSION/"
-output_dir: "gs://marin-$REGION/attributes/$EXPERIMENT/$DATASET/$VERSION/"
+input_path: "gs://marin-$REGION/documents/$EXPERIMENT/$DATASET/$VERSION/"
+output_path: "gs://marin-$REGION/attributes/$EXPERIMENT/$DATASET/$VERSION/"
 model_name: "HuggingFaceFW/fineweb-edu-classifier"
+model_type: "fineweb"
 attribute_name: "fineweb-edu-quality"
 runtime:
   requirements_filepath: "marin/processing/classification/config/fineweb_edu_classifier_requirements.txt"
   memory_limit_gb: 16
-  tpu_resources_per_task: 1
+  resources:
+    "TPU": 4
 task:
   max_in_flight: 500

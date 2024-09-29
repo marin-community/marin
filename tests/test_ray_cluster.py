@@ -12,7 +12,6 @@ Run with:
 
 import socket
 import time
-from typing import Dict
 
 import fsspec
 import ray
@@ -23,7 +22,7 @@ N_TASKS = 4096
 
 
 @ray.remote
-def test_ray_cluster() -> Dict[str, str]:
+def test_ray_cluster() -> dict[str, str]:
     """Read from `GCS_DEBUG_FILE_PATH` and return {"ip": <Worker IP>, "content": <GCS_FILE_CONTENT>}."""
     with fsspec.open(GCS_DEBUG_FILE_PATH, "r") as f:
         content = f.read()
@@ -36,9 +35,6 @@ def test_ray_cluster() -> Dict[str, str]:
 
 def main() -> None:
     print(f"[*] Launching {N_TASKS} Verification Tasks on Ray Cluster!")
-
-    # Initialize Connection to Ray Cluster
-    ray.init()
 
     # Print Cluster Information
     print(f"[*] Cluster Statistics :: {len(ray.nodes())} nodes w/ {ray.cluster_resources().get('CPU', 0)} total CPUs")

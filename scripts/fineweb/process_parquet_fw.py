@@ -1,4 +1,5 @@
 """Convert fineweb to markdown"""
+
 import argparse
 import json
 import os
@@ -15,7 +16,7 @@ from marin.utils import fsspec_exists, fsspec_glob, fsspec_rm
 from marin.web.convert import convert_page
 
 
-@ray.remote(memory=1.5 * 1024 * 1024 * 1024, runtime_env={"pip": ["s3fs"]})  # 1.5 GB
+@ray.remote(memory=1.5 * 1024 * 1024 * 1024)  # 1.5 GB
 @cached_or_construct_output(success_suffix="SUCCESS")  # We use this decorator to make this function idempotent
 def process_one_warc_file(input_file_path, output_file):
     """
@@ -57,15 +58,15 @@ def process_one_warc_file(input_file_path, output_file):
     length_warc = 0
     s3_fs = fsspec.filesystem("s3", anon=False)  # make sure s3 keys are setup
 
-    with s3_fs.open(s3_url, mode='rb') as file_stream:
+    with s3_fs.open(s3_url, mode="rb") as file_stream:
         for record in ArchiveIterator(file_stream):
             if num_urls_found == length_url_inp_list:
                 break
 
             # Check if it's a response record
-            if record.rec_type == 'response':
+            if record.rec_type == "response":
                 # Process the record
-                url = record.rec_headers.get_header('WARC-Target-URI')
+                url = record.rec_headers.get_header("WARC-Target-URI")
                 length_warc += 1
 
                 if url in url_dict:
@@ -74,12 +75,13 @@ def process_one_warc_file(input_file_path, output_file):
                     if num_urls_found % 100 == 0:
                         print(
                             f"Found Url {num_urls_found = }, Processed Url {num_urls_processed = }, "
-                            f"length of warc {length_warc = }")
+                            f"length of warc {length_warc = }"
+                        )
 
                     try:
                         content = record.content_stream().read()
 
-                        html_decoded = content.decode(errors='ignore')
+                        html_decoded = content.decode(errors="ignore")
 
                         markdown = convert_page(html_decoded, url)
                         df.loc[url_idx_in_df, "md"] = markdown["content"]
@@ -90,62 +92,64 @@ def process_one_warc_file(input_file_path, output_file):
                         print(f"Error processing {url} in {s3_url} for {input_file_path}: {e}")
                         traceback.print_exc()
 
-    print(f"Processed {input_file_path}, found {length_warc} records, {length_url_inp_list} urls, "
-          f"{length_warc / length_url_inp_list} ratio")
+    print(
+        f"Processed {input_file_path}, found {length_warc} records, {length_url_inp_list} urls, "
+        f"{length_warc / length_url_inp_list} ratio"
+    )
 
-    with fsspec.open(md_output_file, 'wt', compression='gzip') as f:  # md output
+    with fsspec.open(md_output_file, "wt", compression="gzip") as f:  # md output
         for index, row in df.iterrows():
             out_fw = row.to_dict()
-            out_dolma = {"id": out_fw["id"],
-                         "text": out_fw["md"],
-                         "source": "fineweb",
-                         "format": "md",
-                         "metadata": {
-                             f"fw_{key}": value for key, value in out_fw.items() if key not in ('md', 'text')
-                         }
-                         }
+            out_dolma = {
+                "id": out_fw["id"],
+                "text": out_fw["md"],
+                "source": "fineweb",
+                "format": "md",
+                "metadata": {f"fw_{key}": value for key, value in out_fw.items() if key not in ("md", "text")},
+            }
 
-            f.write(json.dumps(out_dolma) + '\n')
+            f.write(json.dumps(out_dolma) + "\n")
 
-    with fsspec.open(fw_output_file, 'wt', compression='gzip') as f:  # html output
+    with fsspec.open(fw_output_file, "wt", compression="gzip") as f:  # html output
         for index, row in df.iterrows():
             out_fw = row.to_dict()
-            out_dolma = {"id": out_fw["id"],
-                         "text": out_fw["text"],
-                         "source": "fineweb",
-                         "format": "text",
-                         "metadata": {
-                             f"fw_{key}": value for key, value in out_fw.items() if key not in ('md', 'html', 'text')
-                         }
-                         }
-            f.write(json.dumps(out_dolma) + '\n')
+            out_dolma = {
+                "id": out_fw["id"],
+                "text": out_fw["text"],
+                "source": "fineweb",
+                "format": "text",
+                "metadata": {f"fw_{key}": value for key, value in out_fw.items() if key not in ("md", "html", "text")},
+            }
+            f.write(json.dumps(out_dolma) + "\n")
 
     # remove the input file
     fsspec_rm(input_file_path)
 
     # num_urls_found should be equal to length_url_inp_list
-    print(f"Found: {num_urls_found}, Processed: {num_urls_processed}, out of {length_url_inp_list} urls, "
-          f"in {input_file_path}"
-          f"AWS URL: {s3_url}"
-          f"Found {length_warc} records in the WARC file")
+    print(
+        f"Found: {num_urls_found}, Processed: {num_urls_processed}, out of {length_url_inp_list} urls, "
+        f"in {input_file_path}"
+        f"AWS URL: {s3_url}"
+        f"Found {length_warc} records in the WARC file"
+    )
 
     return True
 
 
 @ray.remote(memory=10 * 1024 * 1024 * 1024)  # 10 GB
-def process_fw_parquet(input_file_path, output_dir_path):
+def process_fw_parquet(input_file_path, output_path_path):
     """
-       Converts fineweb files to html and markdown. This will essentially take in fineweb and split different groups based
-       on file_path and write all those file paths to a new folder and then run ray for each group
+    Converts fineweb files to html and markdown. This will essentially take in fineweb and split different groups based
+    on file_path and write all those file paths to a new folder and then run ray for each group
 
-       Parameters:
-       input_path (str): Path to the fineweb parquet file
+    Parameters:
+    input_path (str): Path to the fineweb parquet file
     """
 
     # Example of input_path = gs://marin-data/raw/fineweb/fw-v1.0/CC-MAIN-2024-10/000_00000.parquet
-    # Example of output_dir_path = gs://marin-data/processed/fineweb/fw-v1.0/ledgers/CC-MAIN-2024-10/000_00000/
+    # Example of output_path_path = gs://marin-data/processed/fineweb/fw-v1.0/ledgers/CC-MAIN-2024-10/000_00000/
     print(f"Processing {input_file_path}")
-    success_file = output_dir_path + "/_SUCCESS"
+    success_file = output_path_path + "/_SUCCESS"
     datetime_start = datetime.utcnow()
 
     if fsspec_exists(success_file):
@@ -164,7 +168,7 @@ def process_fw_parquet(input_file_path, output_dir_path):
     grouped = df.groupby("file_path")
 
     for index, (file_url, group_df) in enumerate(grouped):
-        filename = os.path.join(output_dir_path, f"{index}.parquet")
+        filename = os.path.join(output_path_path, f"{index}.parquet")
         # filename = gs://marin-data/processed/fineweb/fw-v1.0/ledgers/CC-MAIN-2024-10/000_00000/0.parquet
 
         output_file_name = filename.replace(".parquet", "_processed.jsonl.gz")
@@ -195,10 +199,10 @@ def process_fw_parquet(input_file_path, output_dir_path):
     if not was_successful:
         return False
 
-    with fsspec.open(success_file, 'w') as f:
+    with fsspec.open(success_file, "w") as f:
         metadata = {
             "input_file_path": input_file_path,
-            "output_file_path": output_dir_path,
+            "output_file_path": output_path_path,
             "datetime_start": str(datetime_start),
             "datetime_end": str(datetime_end),
         }
@@ -207,16 +211,15 @@ def process_fw_parquet(input_file_path, output_dir_path):
     return True
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Convert fineweb to markdown.")
-    # Example of input_dir = gs://marin-data/raw/fineweb/fw-v1.0/CC-MAIN-2024-10/
-    parser.add_argument('--input_dir', type=str, help='Path to the fineweb parquet diretory', required=True)
+    # Example of input_path = gs://marin-data/raw/fineweb/fw-v1.0/CC-MAIN-2024-10/
+    parser.add_argument("--input_path", type=str, help="Path to the fineweb parquet diretory", required=True)
 
     args = parser.parse_args()
-    files = fsspec_glob(os.path.join(args.input_dir, "*.parquet"))
+    files = fsspec_glob(os.path.join(args.input_path, "*.parquet"))
     MAX_NUM_PENDING_TASKS = 15  # Max number of parquet files we want to process in pending state
     NUM_TASKS = len(files)
-    ray.init()
     result_refs = []
     for file in files:
         if len(result_refs) > MAX_NUM_PENDING_TASKS:
@@ -229,10 +232,11 @@ if __name__ == '__main__':
                 print(f"Error processing the group: {e}")
                 continue
 
-        output_dir_path = file.replace("raw/fineweb/fw-v1.0",
-                                       "processed/fineweb/fw-v1.0/ledgers").replace(".parquet", "")
-        print(f"Starting Processing for the fw parquet file: {file} in output_dir: {output_dir_path}")
-        result_refs.append(process_fw_parquet.remote(file, output_dir_path))
+        output_path_path = file.replace("raw/fineweb/fw-v1.0", "processed/fineweb/fw-v1.0/ledgers").replace(
+            ".parquet", ""
+        )
+        print(f"Starting Processing for the fw parquet file: {file} in output_path: {output_path_path}")
+        result_refs.append(process_fw_parquet.remote(file, output_path_path))
 
     # Wait for all the tasks to finish
     try:

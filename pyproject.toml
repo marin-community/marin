@@ -10,41 +10,52 @@ license = {file = "LICENSE"}
 
 requires-python = ">=3.10"
 dependencies = [
-    "chardet==5.2.0",
+    "chardet",
     "cryptography",
-    "datasets==2.19.0",
-    "dill==0.3.8",
-    "draccus @ git+https://github.com/dlwh/draccus",
-    "fastparquet~=2024.5.0",
-    "fsspec~=2024.3",
-    "gcsfs~=2024.3",
-    "google-api-python-client==2.129.0",
-    "google-cloud-storage-transfer==1.11.3",
-    "html2text==2024.2.26",
-    "htmlmin==0.1.12",
-    "markdownify==0.12.1",
+    "datasets>=2.18.0",
+    "dill",
+    "draccus>=0.8.0",
+    "fastparquet",
+    "fsspec[http]>=2024.2,<2024.7",
+    "gcsfs>=2024.2,<2024.7",
+    "google-api-python-client~=2.0",
+    "google-cloud-storage-transfer~=1.0",
+    "html2text==2024.2.26",                 # TODO :: Check pin?
+    "htmlmin==0.1.12",                      # TODO :: Check usage | pin?
+    "markdownify==0.12.1",                  # TODO :: Check usage | pin?
     "multiprocess==0.70.16",
-    "py7zr==0.21.0",
-    "ray[default]==2.22.0",
-    "rbloom==1.5.0",
-    "readabilipy==0.2.0",
-    "readability-lxml==0.8.1",
-    "regex==2024.4.16",
+    "py7zr",
+    "zstandard==0.23.0",
+    "ray[default]==2.34.0",
+    "readabilipy",
+    "readability-lxml",
+    "fsspec",
+    "gcsfs",
+    "s3fs",
+    "ray[default]==2.34.0",
+    "lxml[html_clean]",
+    "regex",
     "requests",
-    "tensorflow==2.16.1",
-    "trafilatura==1.8.1",
-    "tqdm",
-    "warcio==1.7.4",
-    "grip==4.6.2",
+    "warcio",
+    "levanter>=1.2.dev1013",
+    "lm-eval",
+    "resiliparse",
+    "trafilatura",
+    "fasttext",
+    "boto3==1.35.23"
 ]
 
 [project.optional-dependencies]
 dev = [
-    "black==24.4.2",
+    "black>=24.8.0",
     "ipython",
+    "mypy>=1.4.1",
     "pre-commit",
-    "pytest~=8.1",
-    "ruff==0.4.4"
+    "pytest>=8.3.2",
+    "ruff>=0.5.7",
+    "types-PyYAML",
+    "types-requests",
+    "types-six",
 ]
 
 [tool.setuptools.packages.find]
@@ -59,13 +70,33 @@ line-length = 121
 target-version = ["py310"]
 preview = true
 
+# Note :: Grow more strict over time!
+extend-exclude = """
+(
+    scripts/
+)
+"""
+
 [tool.ruff]
 line-length = 121
 target-version = "py310"
 
+# Note :: Grow more strict over time!
+extend-exclude = ["scripts/"]
+
 [tool.ruff.lint]
-select = ["A", "B", "E", "F", "I", "RUF", "W"]
-ignore = ["F722", "B008"]
+select = ["A", "B", "E", "F", "I", "NPY", "RUF", "UP", "W"]
+ignore = ["F722", "B008", "UP015"]
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["E402", "F401"]
+
+[tool.mypy]
+python_version = "3.10"
+
+# Note: Grow more strict over time!
+ignore_missing_imports = true
+exclude = [
+    "marin/",
+    "scripts/"
+]

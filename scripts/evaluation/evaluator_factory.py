@@ -1,0 +1,24 @@
+from scripts.evaluation.evaluator import Evaluator
+from scripts.evaluation.evaluation_config import EvaluationConfig
+from scripts.evaluation.alpaca_evaluator import AlpacaEvaluator
+from scripts.evaluation.helm_evaluator import HELMEvaluator
+from scripts.evaluation.simple_evaluator import SimpleEvaluator
+from scripts.evaluation.eleuther_evaluator import EleutherEvaluator
+
+# Supported evaluators
+NAME_TO_EVALUATOR = {
+    "alpaca": AlpacaEvaluator,
+    "helm": HELMEvaluator,
+    "debug": SimpleEvaluator,
+    "eleuther": EleutherEvaluator,
+}
+
+
+def get_evaluator(config: EvaluationConfig) -> Evaluator:
+    """
+    Returns the evaluator for the given name.
+    """
+    if config.evaluator not in NAME_TO_EVALUATOR:
+        raise ValueError(f"Unknown evaluator: {config.evaluator}")
+
+    return NAME_TO_EVALUATOR[config.evaluator]()

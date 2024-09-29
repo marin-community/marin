@@ -118,9 +118,7 @@ handles cases where individual tasks crash or a VM worker gets preempted in the 
 
 ---
 
-## Maintaining a Ray Cluster
-
-*Mostly for David/Sidd -- these are things that should only be handled by one person.*
+# Maintaining a Ray Cluster
 
 The [`cluster.yaml`](./marin-cluster.yaml) file has all the necessary configuration details for the cluster. Some useful
 commands:
@@ -149,21 +147,37 @@ actually do anything under the hood to ensure that a job is actually using the n
 (e.g., a job that on paper requests 1 CPU can use arbitrary cores/RAM). To mitigate this on the scheduler side, the
 `cluster.yaml` file configures each worker with only 120 visible CPUs.
 
-#### Restarting the cluster
+### Restarting the Cluster
 There is currently an error on the Ray autoscaler side with spot-TPU instances, where the Ray autoscaler is not able
 to detect when spot-TPU instances are dead and as a result, we may be left in a state with just the head node and 
 no more spot-TPU worker instances starting up. When this state occurs, please message in the #marin-infra slack
 that you are going to restart the cluster (call `ray down infra/marin-cluster.yaml` and then `ray up infra/marin-cluster.yaml`).
 
-#### Reconfiguring the Cluster
+Please note that after restarting the cluster and queueing the first job, it will likely stall because it takes a while for the head node to actually spin up the worker sometimes (~10min).
+
+
+### Reconfiguring the Cluster
 
 In general, for additive operations like increasing the `max_workers` for autoscaling, you can just call `ray up`
 against the already-running cluster.
 
-However, if changing any of the initialization/setup commands, it's best to bring the entire cluster down (`ray down`),
-*then edit the `cluster.yaml`*, and then bring the cluster back up (`ray up`); note that this will kill all VMs, 
-including the head node (nothing lasts forever).
+If you need to make substantive changes to the machine software, you should change the Docker file at
+`docker/marin/Dockerfile.cluster`. Then run `make cluster_docker` to rebuild the Docker image and push it to the
+Google Artifact Registry. After that, you can restart the cluster with `ray down` and `ray up`.
+
+If you need to change something else about the cluster, e.g. if you're changing any of the initialization/setup
+commands, it's best to bring the entire cluster down (`ray down`), *then edit the `cluster.yaml`*, and then bring the
+cluster back up (`ray up`); note that this will kill all VMs, including the head node (nothing lasts forever).
 
 **Word of Warning**: Ray looks at the actual `cluster_name` and various worker names/configs to "identify" existing/new
 clusters. To prevent orphaned states, do not change the names of anything in the `cluster.yaml` without first bringing
 the cluster down!
+
+
+#### Environment Variables
+
+We are currently using Google Secret Manager to store the environment variables that are needed to run the cluster.
+You can edit those secrets by going to the Google Cloud Console and navigating to the Secret Manager. Once you add
+a new version, you can cause the changes to propagate by killing the workers or restarting the cluster.
+
+
