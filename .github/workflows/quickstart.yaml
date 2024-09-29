@@ -33,8 +33,8 @@ jobs:
 
     - name: Connect to Ray cluster on GCP in the background
       run: |
-        ray dashboard infra/marin-cluster.yaml
-      #      shell: bash
+        ray dashboard infra/marin-cluster.yaml &
+      shell: bash
 
     - name: Wait for Ray cluster to be ready
       run: |
