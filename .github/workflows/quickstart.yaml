@@ -38,7 +38,7 @@ jobs:
 
     - name: Wait for Ray cluster to be ready
       run: |
-        sleep 60  # Adjust this time if needed to allow the cluster to connect
+        sleep 120  # Adjust this time if needed to allow the cluster to connect
 
     - name: Run quickstart.sh
       env:
