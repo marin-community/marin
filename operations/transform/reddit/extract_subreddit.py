@@ -1,25 +1,50 @@
 """
-Adapted from DCLM's code for extracting subreddit dumps from Academic Torrents.
+Adapted from DCLM's code that extracts subreddit dumps from Academic Torrents.
 
-This script extracts a compressed .zst dump from Academic Torrents and outputs the uncompressed contents
-as shards of .jsonl files. We adapt it to work with the marin filesystem in Google cloud storage.
+This script accepts a directory containing all of the subreddit dumps with an example directory structure:
+reddit/
+│
+├── subreddits23/
+│   ├── explainlikeimfive_comments.zst # subreddit comments
+│   ├── explainlikeimfive_submissions.zst # subreddit submissions
+|   |── {subreddit}_{dump)_type}.zst
+
+The script then extracts each of the .zst reddit dumps, decodes the file, and outputs a jsonl file for each subreddit.
 
 You can obtain the initial .zst dump by using Academic Torrents with the transmission client
 and selecting the specific subreddit dumps you want. In this case, we select the explainlikeimfive subreddit.
 """
 
-import argparse
 import json
 import logging.handlers
 import os
+from dataclasses import dataclass
 from datetime import datetime
 
+import draccus
 import fsspec
 import zstandard
 
 log = logging.getLogger("bot")
 log.setLevel(logging.DEBUG)
 log.addHandler(logging.StreamHandler())
+
+
+@dataclass
+class ExtractSubredditConfig:
+    """Configuration class for extracting subreddit jsonl files from Academic Torrents' .zst reddit dumps.
+
+    Attributes:
+        subreddit (str): The subreddit to extract (e.g. "explainlikeimfive")
+        input_parent_dir (str): The path to the directory containing the subreddit dumps (e.g. "~/reddit/subreddits23")
+        shard_size (int): The number of documents in each shard
+        output_dir (str): The directory to write the output which could be a local or remote directory
+    """
+
+    subreddit: str = "explainlikeimfive"
+    input_parent_dir: str = "~/reddit/subreddits23"
+    shard_size: int = 100000
+    output_dir: str = "gs://marin-us-central2/raw"
 
 
 def read_and_decode(reader, chunk_size, max_window_size, previous_chunk=None, bytes_read=0):
@@ -51,22 +76,11 @@ def read_lines_zst(file_name):
         reader.close()
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--subreddit", type=str, default="explainlikeimfive", help="Subreddit to process")
-    parser.add_argument(
-        "--input_parent_dir",
-        help="path to the data directory containing all subreddits",
-        default="~/reddit/subreddits23",
-    )
-    parser.add_argument("--shard_size", type=int, help="The number of documents in each shard", default=100000)
-    parser.add_argument("--output_dir", help="The directory to write the output", default="gs://marin-us-central2/raw")
-
-    args = parser.parse_args()
-
-    parent_dir = args.input_parent_dir
-    subreddit = args.subreddit
-    shard_size = args.shard_size
+@draccus.wrap()
+def main(cfg: ExtractSubredditConfig):
+    parent_dir = cfg.input_parent_dir
+    subreddit = cfg.subreddit
+    shard_size = cfg.shard_size
 
     for dump_type in ["submissions", "comments"]:
         file_path = os.path.join(os.path.expanduser(parent_dir), f"{subreddit}_{dump_type}.zst")
@@ -79,7 +93,7 @@ if __name__ == "__main__":
         shard_num = 0
         lines = []
 
-        output_dir = os.path.join(args.output_dir, subreddit, dump_type)
+        output_dir = os.path.join(cfg.output_dir, subreddit, dump_type)
         os.makedirs(output_dir, exist_ok=True)
         for line, file_bytes_processed in read_lines_zst(file_path):
             try:
@@ -109,3 +123,7 @@ if __name__ == "__main__":
                 f.write(line + "\n")
 
         log.info(f"Complete : {file_lines:,} : {bad_lines:,}")
+
+
+if __name__ == "__main__":
+    main()

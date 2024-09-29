@@ -1,26 +1,58 @@
 """
-Adapted from DCLM's code for filtering subreddit dumps.
+Adapted from DCLM's code for filtering subreddit dumps for desired columns and removing low-quality posts.
 
 This script takes the unfiltered subreddit shards processed from extract_subreddit.py and
-filters out posts that don't meet the minimum comment and submission score thresholds.
+filters out posts that don't meet the minimum comment and submission score thresholds. It then uploads these
+processed jsonl files to the specified output directory.
 
-We adapt this to work with the marin filesystem in Google cloud storage and with Ray
-because this is quite memory-intensive.
-
-Usage:
-python scripts/reddit/process_subreddit.py --shard_size 5000
+We adapt the code to use Ray because it is very memory-intensive;
+it must fit the entire uncompressed jsonl files in memory.
+We set some reasonable defaults for the minimum comment and submission scores
+using what was used in the original DCLM paper.
 """
 
-import argparse
 import json
+import logging
 import os
 import re
 import subprocess
+from dataclasses import dataclass
 
+import draccus
 import fsspec
 import pandas as pd
 import ray
 from tqdm import tqdm
+
+log = logging.getLogger("bot")
+log.setLevel(logging.DEBUG)
+log.addHandler(logging.StreamHandler())
+
+
+@dataclass
+class ProcessSubredditConfig:
+    """Configuration class for processing and filtering subreddit jsonl files after the extraction step.
+
+    Attributes:
+        input_parent_dir (str): The path to the directory containing the jsonl files from the previous extraction step.
+                                In other words, it is the output dir of the extract_subreddit.py script.
+        subreddit (str): The subreddit to process (e.g. "explainlikeimfive")
+        output_dir (str): The directory to write the output files which could be a local or remote directory
+        shard_size (int): The number of documents in each shard
+        min_comments (int): The minimum number of comments a post must have to be included
+        min_comment_score (int): The minimum score a comment must have to be included
+        min_submission_score (int): The minimum score a submission must have to be included
+        min_comment_length (int): The minimum length a comment must have to be included
+    """
+
+    input_parent_dir: str
+    subreddit: str = "explainlikeimfive"
+    output_dir: str
+    shard_size: int | None = 5000
+    min_comments: int = 3
+    min_comment_score: int = 5
+    min_submission_score: int = 0
+    min_comment_length: int = 10
 
 
 def remote_glob(input_dir):
@@ -54,23 +86,25 @@ def write_jsonl(lines, file):
 
 
 def get_url_regex(args):
+    # Run the subprocess and wait for it to finish
+    import tempfile
+
     from retrie.retrie import Blacklist
 
-    # Run the subprocess and wait for it to finish
-    tlds_filepath = os.path.expanduser(args.tlds_filepath)
-    subprocess.run(
-        [
-            "wget",
-            "-O",
-            tlds_filepath,
-            "https://raw.githubusercontent.com/mlfoundations/dclm/main/baselines/mappers/iana_tlds.txt",
-        ],
-        check=True,
-    )
+    with tempfile.NamedTemporaryFile(mode="w+", delete=True) as tmp_file:
+        subprocess.run(
+            [
+                "wget",
+                "-O",
+                tmp_file.name,
+                "https://raw.githubusercontent.com/mlfoundations/dclm/main/baselines/mappers/iana_tlds.txt",
+            ],
+            check=True,
+        )
 
-    # Get rid of standalone urls with a regex based on top-level domains (taken from IANA)
-    with open(tlds_filepath, "r") as file:
-        tlds_list = [re.escape(tld) for tld in file.read().splitlines()]
+        # Get rid of standalone urls with a regex based on top-level domains (taken from IANA)
+        tmp_file.seek(0)
+        tlds_list = [re.escape(tld) for tld in tmp_file.read().splitlines()]
     tlds_regex = Blacklist(tlds_list, match_substrings=True).compiled
     url_regex = re.compile(
         rf"\s{{0,10}}(?:((https?|ftp)://))?[-a-zA-Z0-9@:%._\+~#=]{{1,256}}\.({tlds_regex.pattern})\b([-a-zA-Z0-9()@:%_\+.~#?&//=]*)"
@@ -138,21 +172,21 @@ def get_dolma_formatted_row(row):
 
 
 @ray.remote(memory=200 * 1024 * 1024 * 1024, runtime_env={"pip": ["retrie"]})
-def process_subreddit(args):
+def process_subreddit(cfg: ProcessSubredditConfig):
     eli5_pattern, removed_pattern, gt_pattern, hyperlink_pattern = get_regex_patterns_to_remove()
     sub_columns_to_keep, com_columns_to_keep = get_columns_to_keep()
-    url_regex = get_url_regex(args)
+    url_regex = get_url_regex(cfg)
 
     # Read single dfs for comments and submissions and keep only the necessary columns
-    print("Reading in data")
-    com_df = read_df_from_shards(os.path.join(args.input_parent_dir, args.subreddit, "comments"))
-    sub_df = read_df_from_shards(os.path.join(args.input_parent_dir, args.subreddit, "submissions"))
+    log.info("Reading in data")
+    com_df = read_df_from_shards(os.path.join(cfg.input_parent_dir, cfg.subreddit, "comments"))
+    sub_df = read_df_from_shards(os.path.join(cfg.input_parent_dir, cfg.subreddit, "submissions"))
 
     sub_df = sub_df[[c for c in sub_df.columns if c in sub_columns_to_keep]]
     com_df = com_df[[c for c in com_df.columns if c in com_columns_to_keep]]
 
     # Group comments by submission id and merge with submissions
-    print("Merging submissions and comments")
+    log.info("Merging submissions and comments")
     com_df = com_df.groupby("parent_id").agg(
         {"id": lambda x: list(x), "body": lambda x: list(x), "score": lambda x: list(x)}
     )
@@ -164,12 +198,12 @@ def process_subreddit(args):
     # Drop rows with no found comments
     merged_df = merged_df[~merged_df["body"].isna()].reset_index(drop=True)
 
-    print("Processing the merged dataframe")
-    os.makedirs(os.path.join(args.output_dir, f"{args.subreddit}/"), exist_ok=True)
+    log.info("Processing the merged dataframe")
+    os.makedirs(os.path.join(cfg.output_dir, f"{cfg.subreddit}/"), exist_ok=True)
     modified_lines = []
     shard_num = 0
     kept_count = 0
-    print(f"Processing {len(merged_df)} submissions from {original_len} original submissions.")
+    log.info(f"Processing {len(merged_df)} submissions from {original_len} original submissions.")
 
     for _, row in tqdm(merged_df.iterrows(), total=len(merged_df)):
         title = eli5_pattern.sub("", row["title"])
@@ -177,13 +211,13 @@ def process_subreddit(args):
         comments = [{"text": row["body"][j], "score": row["score_comments"][j]} for j in range(len(row["body"]))]
 
         # Filter out based on number of comments for a given submission
-        if len(comments) < args.min_comments:
+        if len(comments) < cfg.min_comments:
             continue
 
         # Find the best comment based on score and length as tiebreaker. Filter based on submission / comment scores
         comments.sort(key=lambda x: x.get("score", 0), reverse=True)
         best_comment, best_score = comments[0]["text"], comments[0]["score"]
-        if best_score < args.min_comment_score or row["score"] < args.min_submission_score:
+        if best_score < cfg.min_comment_score or row["score"] < cfg.min_submission_score:
             continue
 
         for c in comments:
@@ -194,7 +228,7 @@ def process_subreddit(args):
 
         # Get rid of the [removed] / [deleted] pattern and check if the comment is long enough
         best_comment = removed_pattern.sub("", best_comment)
-        if len(best_comment.strip()) < args.min_comment_length:
+        if len(best_comment.strip()) < cfg.min_comment_length:
             continue
 
         text = title
@@ -211,25 +245,26 @@ def process_subreddit(args):
         modified_lines.append(dolma_formatted_row)
         kept_count += 1
 
-        if args.shard_size and len(modified_lines) == args.shard_size:
+        if cfg.shard_size and len(modified_lines) == cfg.shard_size:
             write_jsonl(
                 modified_lines,
-                os.path.join(args.output_dir, f"{args.subreddit}/{args.subreddit}_shard{shard_num}.jsonl.gz"),
+                os.path.join(cfg.output_dir, f"{cfg.subreddit}/{cfg.subreddit}_shard{shard_num}.jsonl.gz"),
             )
             shard_num += 1
             modified_lines = []
 
     # Write the last shard
     write_jsonl(
-        modified_lines, os.path.join(args.output_dir, f"{args.subreddit}/{args.subreddit}_shard{shard_num}.jsonl.gz")
+        modified_lines, os.path.join(cfg.output_dir, f"{cfg.subreddit}/{cfg.subreddit}_shard{shard_num}.jsonl.gz")
     )
-    print(f"Kept {kept_count} pages out of {original_len} original pages")
+    log.info(f"Kept {kept_count} pages out of {original_len} original pages")
 
 
-def main(args):
+@draccus.wrap()
+def main(cfg: ProcessSubredditConfig):
     ray.init()
 
-    response = process_subreddit.remote(args)
+    response = process_subreddit.remote(cfg)
 
     try:
         ray.get(response)
@@ -238,34 +273,4 @@ def main(args):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--input_parent_dir",
-        type=str,
-        default="gs://marin-us-central2/raw/",
-        help="Path to the data directory containing all subreddits",
-    )
-    parser.add_argument("--subreddit", type=str, default="explainlikeimfive", help="Subreddit to process")
-    parser.add_argument(
-        "--output_dir",
-        type=str,
-        default="gs://marin-us-central2/documents/dclm/",
-        help="The directory to write the) output",
-    )
-    parser.add_argument(
-        "--tlds_filepath", type=str, default="~/iana_tlds.txt", help="The file containing the top-level domains"
-    )
-    parser.add_argument("--shard_size", type=int, default=None, help="Number of documents in each shard")
-    parser.add_argument("--min_comments", type=int, default=3, help="Minimum number of comments to consider a post")
-    parser.add_argument(
-        "--min_comment_score", type=int, default=5, help="Minimum score of the best comment to consider a post"
-    )
-    parser.add_argument(
-        "--min_submission_score", type=int, default=0, help="Minimum score of the best comment to consider a post"
-    )
-    parser.add_argument(
-        "--min_comment_length", type=int, default=10, help="Minimum length of the best comment to consider a post"
-    )
-    args = parser.parse_args()
-
-    main(args)
+    main()
