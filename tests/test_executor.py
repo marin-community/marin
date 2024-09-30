@@ -172,4 +172,3 @@ def test_versioning():
     assert_diff_version(b_n=2)
     assert_same_version(b_m=2)
 
-test_executor()
