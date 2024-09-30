@@ -18,6 +18,7 @@ and selecting the specific subreddit dumps you want. In this case, we select the
 import json
 import logging.handlers
 import os
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -81,7 +82,7 @@ def read_and_decode(
         return read_and_decode(reader, chunk_size, max_window_size, chunk, bytes_read)
 
 
-def read_lines_zst(file_name: str):
+def read_lines_zst(file_name: str) -> Iterator[tuple[str, int]]:
     """
     Read lines from a zst file.
 
