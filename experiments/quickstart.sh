@@ -15,7 +15,7 @@ ray job submit --working-dir . -- python scripts/hello_world_fw/process.py \
 
 #FastText classifier
 ray job submit --working-dir . -- python scripts/fasttext/train_fasttext.py \
-  --pos_doc_path gs://marin-us-central2/documents/instruct/v1_olmo_mix/text \
+  --pos_doc_path gs://marin-us-central2/documents/instruct/tulu_v2_mix/text \
   --neg_doc_path gs://marin-us-central2/documents/hello_world_fw/v1.0/$EXP \
   --pos_sampling_rate 0.1 \
   --neg_sampling_rate 1.0 \
