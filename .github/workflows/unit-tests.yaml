@@ -53,12 +53,7 @@ jobs:
       - name: Start Ray cluster on GCP
         shell: bash -l {0}
         run: |
-          nohup ray dashboard infra/marin-cluster.yaml > ray_cluster.log 2>&1 &
-          echo $! > ray_cluster.pid
-
-      - name: Wait for Ray cluster to be ready
-        run: |
-          sleep 60
+          ray start --head
 
       - name: Verify installations
         shell: bash -l {0}
@@ -70,7 +65,5 @@ jobs:
 
       - name: Test with pytest
         shell: bash -l {0}
-        env:
-          RAY_ADDRESS: "http://127.0.0.1:8265"
         run: |
           PYTHONPATH=tests:. pytest --tb=no -v
