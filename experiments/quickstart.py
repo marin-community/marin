@@ -187,7 +187,7 @@ model_path: str = (
 )
 model_name: str = "pf5pe4ut/step-600"
 
-evaluate_step = ExecutorStep(
+helm_evaluate_step = ExecutorStep(
     name="evaluation/hello_world_fw-pliang/helm",
     fn=evaluate,
     config=EvaluationConfig(
@@ -222,7 +222,7 @@ if __name__ == "__main__":
             transform_readability_step,  # Not used
             # train_quality_step,  # Not used  (TODO: fails right now)
             tokenize_step,
-            evaluate_step,
+            helm_evaluate_step,
             alpaca_evaluate_step,
         ]
     )
