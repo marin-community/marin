@@ -4,14 +4,26 @@ train_fasttext.py
 Training script for fastText quality classifiers.
 """
 
-import os
 from dataclasses import dataclass, field
+from typing import Enum
 
 import draccus
 
 from marin.classifiers.fasttext.training import train_model
-from marin.classifiers.utils import attributes_to_dataset, create_label_attribute
-from marin.utils import fsspec_rm
+from marin.classifiers.utils import attributes_to_dataset
+
+
+class DatasetFormat(Enum):
+    DOLMA_FORMATTED_JSONL = "dolma_formatted_jsonl"
+    FASTTEXT = "fasttext"
+
+
+@dataclass
+class DatasetCurationConfig:
+    input_doc_path: str
+    label: str
+    sampling_rate: float = 1.0
+    format: DatasetFormat
 
 
 @dataclass
@@ -32,10 +44,7 @@ class TrainFasttextClassifierConfig:
     """
 
     output_path: str
-    pos_doc_path: str
-    neg_doc_path: str = None
-    pos_sampling_rate: float = 1.0
-    neg_sampling_rate: float = 1.0
+    input_doc_paths: list[DatasetCurationConfig]
     fasttext_args: dict = field(default_factory=dict)
     seed: int = 0
     val_frac: float = 0.1
@@ -43,26 +52,15 @@ class TrainFasttextClassifierConfig:
 
 
 def train(cfg: TrainFasttextClassifierConfig):
-    pos_attr_path = os.path.join(cfg.output_path, "tmp", "positives")
-    neg_attr_path = os.path.join(cfg.output_path, "tmp", "negatives")
-
-    create_label_attribute(input_doc_path=cfg.pos_doc_path, output_attr_path=pos_attr_path, label="hq")
-    attributes_to_dataset(
-        output_path=cfg.output_path,
-        doc_path=cfg.pos_doc_path,
-        attr_path=pos_attr_path,
-        sampling_rate=cfg.pos_sampling_rate,
-        seed=cfg.seed,
-    )
-
-    create_label_attribute(input_doc_path=cfg.neg_doc_path, output_attr_path=neg_attr_path, label="lq")
-    attributes_to_dataset(
-        output_path=cfg.output_path,
-        doc_path=cfg.neg_doc_path,
-        attr_path=neg_attr_path,
-        sampling_rate=cfg.neg_sampling_rate,
-        seed=cfg.seed,
-    )
+    for input_doc_path in cfg.input_doc_paths:
+        attributes_to_dataset(
+            output_path=cfg.output_path,
+            doc_path=input_doc_path.input_doc_path,
+            sampling_rate=input_doc_path.sampling_rate,
+            seed=cfg.seed,
+            label=input_doc_path.label,
+            file_format=input_doc_path.format,
+        )
 
     train_model(
         input_path=f"{cfg.output_path}/data",
@@ -72,9 +70,6 @@ def train(cfg: TrainFasttextClassifierConfig):
         memory_req=cfg.memory,
         **cfg.fasttext_args,
     )
-
-    fsspec_rm(pos_attr_path)
-    fsspec_rm(neg_attr_path)
 
 
 @draccus.wrap()

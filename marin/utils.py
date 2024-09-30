@@ -158,6 +158,18 @@ def fsspec_cpdir(dir_path: str, target_path: str) -> None:
     fs.put(os.path.join(dir_path, "*"), target_path, recursive=True)
 
 
+def fsspec_cp(file_path: str, target_path: str) -> None:
+    """
+    Copies a file to a target path.
+
+    Args:
+        file_path (str): The path of the file to copy.
+        target_path (str): The target path.
+    """
+    fs = fsspec.core.url_to_fs(target_path)[0]
+    fs.put(file_path, target_path)
+
+
 def fsspec_size(file_path: str) -> int:
     """Get file size (in bytes) of a file on an `fsspec` filesystem."""
     fs = fsspec.core.url_to_fs(file_path)[0]

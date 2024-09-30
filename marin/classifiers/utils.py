@@ -14,7 +14,8 @@ import numpy as np
 import ray
 
 from marin.core.runtime import cached_or_construct_output, map_files_in_directory
-from marin.utils import rebase_file_path
+from marin.processing.classification.fasttext.train_fasttext import DatasetFormat
+from marin.utils import fsspec_glob, fsspec_isdir
 
 
 @cached_or_construct_output(success_suffix="SUCCESS")
@@ -44,14 +45,32 @@ def write_label_attribute(input_file_path: str, output_file_path: str, label: st
     return True
 
 
+def get_example_from_input_line(input_line: str, label: str, file_format: DatasetFormat) -> dict:
+    example = None
+    if file_format == DatasetFormat.DOLMA_FORMATTED_JSONL:
+        data = json.loads(input_line)
+    elif file_format == DatasetFormat.FASTTEXT:
+        data = {}
+        data["text"] = input_line.split(label)[1].strip()
+    else:
+        raise ValueError(f"File format not supported: {file_format}")
+
+    if "text" in data:
+        example = {"text": data["text"], "label": label}
+    else:
+        logging.warning(f"Document {data['id']} has no text field.")
+
+    return example
+
+
 @cached_or_construct_output(success_suffix="SUCCESS")
 def write_examples(
     input_file_path: str,
     output_file_path: str,
-    attr_file_path: str,
     sampling_rate: float,
     seed: int,
-    get_label: Callable[[dict, dict], str],
+    label: str,
+    file_format: DatasetFormat,
 ) -> bool:
     """
     Writes training examples to an output file.
@@ -72,22 +91,15 @@ def write_examples(
     rng = np.random.default_rng(seed=seed)
     with (
         fsspec.open(input_file_path, "rt", compression="gzip") as f_in,
-        fsspec.open(attr_file_path, "rt", compression="gzip") as f_attr,
         fsspec.open(output_file_path, "wt", compression="gzip") as f_out,
     ):
-        for input_line, attr_line in zip(f_in, f_attr, strict=False):
+        for input_line in f_in:
             if rng.random() > sampling_rate:
                 continue
 
-            data = json.loads(input_line)
-            attribs = json.loads(attr_line)
-
-            if "text" in data:
-                example = {"text": data["text"], "label": get_label(data, attribs)}
+            example = get_example_from_input_line(input_line, label, file_format)
+            if example is not None:
                 f_out.write(json.dumps(example) + "\n")
-            else:
-                logging.warning(f"Document {data['id']} has no text field.")
-
     return True
 
 
@@ -157,13 +169,48 @@ def create_label_attribute(input_doc_path: str, output_attr_path: str, label: st
     return True
 
 
+def get_output_path_for_input_doc_path(output_path: str, input_doc_path: str) -> str:
+    _, doc_fs_path = fsspec.core.url_to_fs(input_doc_path)
+    return os.path.join(output_path, "data", doc_fs_path)
+
+
+@cached_or_construct_output(success_suffix="SUCCESS")
+@ray.remote(memory=16 * 1024 * 1024 * 1024, runtime_env={"pip": ["s3fs"]}, num_cpus=1)
+def reservoir_sample_and_write_examples(
+    doc_path: str,
+    output_dataset_path: str,
+    sampling_rate: int,
+    seed: int,
+    label: str,
+    file_format: DatasetFormat,
+):
+    rng = np.random.default_rng(seed=seed)
+    files = fsspec_glob(os.path.join(doc_path, "**/*.jsonl.gz"))
+    reservoir = []
+    reservoir_size = sampling_rate
+
+    for input_file in files:
+        with fsspec.open(input_file, "rt", compression="gzip") as f_in:
+            for line in f_in:
+                if len(reservoir) < reservoir_size:
+                    reservoir.append(line)
+                else:
+                    reservoir[rng.integers(reservoir_size)] = line
+
+    with fsspec.open(output_dataset_path, "wt", compression="gzip") as f_out:
+        for line in reservoir:
+            example = get_example_from_input_line(line, label, file_format)
+            if example is not None:
+                f_out.write(json.dumps(example) + "\n")
+
+
 def attributes_to_dataset(
     output_path: str,
     doc_path: str,
-    attr_path: str,
     sampling_rate: float,
     seed: int,
-    get_label: Callable[[dict, dict], str] = lambda data, attribs: attribs["attributes"]["label"],
+    label: str,
+    file_format: DatasetFormat,
 ) -> bool:
     """
     Converts documents and attributes to quality classifier training data (text,label) pairs.
@@ -185,13 +232,20 @@ def attributes_to_dataset(
     # curry write_fasttext_lines so that we can pass it to map_files_in_directory
     @ray.remote(memory=1 * 1024 * 1024 * 1024, runtime_env={"pip": ["s3fs"]}, num_cpus=1)  # 1 GB
     def processing_func(input_file_path: str, output_file_path: str) -> bool:
-        attr_file_path = rebase_file_path(doc_path, input_file_path, attr_path)
-        return write_examples(input_file_path, output_file_path, attr_file_path, sampling_rate, seed, get_label)
+        return write_examples(input_file_path, output_file_path, sampling_rate, seed, label, file_format)
 
-    _, doc_fs_path = fsspec.core.url_to_fs(doc_path)
-    output_dataset_path = os.path.join(output_path, "data", doc_fs_path)
+    output_dataset_path = get_output_path_for_input_doc_path(output_path, doc_path)
 
-    responses = map_files_in_directory(processing_func.remote, doc_path, "**/*.jsonl.gz", output_dataset_path)
+    if fsspec_isdir(doc_path):
+        if sampling_rate <= 1.0:
+            responses = map_files_in_directory(processing_func.remote, doc_path, "**/*.jsonl.gz", output_dataset_path)
+        else:
+            responses = reservoir_sample_and_write_examples.remote(
+                doc_path, output_dataset_path, sampling_rate, seed, label, file_format
+            )
+    else:
+        responses = processing_func.remote(doc_path, output_dataset_path)
+
     try:
         ray.get(responses)
     except Exception as e:
