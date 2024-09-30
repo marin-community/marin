@@ -1,6 +1,7 @@
 from typing import Dict, List
 import os
 import shutil
+import subprocess
 import traceback
 
 from scripts.evaluation.evaluator import Dependency, ModelConfig
@@ -52,6 +53,23 @@ class AlpacaEvaluator(VllmTpuEvaluator):
         }
         write_yaml(content, path)
 
+    @staticmethod
+    def set_openai_api_key() -> None:
+        """
+        Set the OPENAI_API_KEY environment variable using the secret stored in GCP.
+        """
+        # Fetch the secret value using gcloud
+        result = subprocess.run(
+            ["gcloud", "secrets", "versions", "access", "latest", "--secret=OPENAI_API_KEY"],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            raise RuntimeError("Failed to fetch the OPENAI_API_KEY secret from GCP.")
+
+        # Set the OPENAI_API_KEY in the Python environment
+        os.environ["OPENAI_API_KEY"] = result.stdout.strip()
+
     def run(self, model: ModelConfig, evals: List[str], output_path: str, max_eval_instances: int | None = None) -> None:
         """
         Runs AlpacaEval on the specified model.
@@ -63,6 +81,9 @@ class AlpacaEvaluator(VllmTpuEvaluator):
             max_eval_instances (int | None): The maximum number of evaluation instances to run.
         """
         try:
+            # Set the OPENAI_API_KEY environment variable for the auto evaluator
+            self.set_openai_api_key()
+
             # Download the model from GCS or HuggingFace
             model_name_or_path: str = self.download_model(model)
 
