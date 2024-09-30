@@ -38,6 +38,7 @@ def convert_page_with_trafilatura(
         case str():
             content = extract(
                 html,
+                **asdict(TrafilaturaConfig.get_preset_config(config)),
             )
         case TrafilaturaConfig():
             content = extract(
