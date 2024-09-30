@@ -14,12 +14,9 @@ from marin.execution.executor import Executor, ExecutorStep, output_path_of, thi
 
 @pytest.fixture
 def ray_start():
-    # nothing to do for setup
-
+    # (nothing to do for setup)
     yield
-
-    # teardown
-    ray.shutdown()
+    ray.shutdown()  # teardown
 
 
 @dataclass(frozen=True)
@@ -171,4 +168,3 @@ def test_versioning():
     assert_diff_version(name="bar")
     assert_diff_version(b_n=2)
     assert_same_version(b_m=2)
-
