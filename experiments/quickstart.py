@@ -181,16 +181,34 @@ tokenize_step = ExecutorStep(
 from scripts.evaluation.evaluation_config import EvaluationConfig  # noqa
 from scripts.evaluation.run import evaluate  # noqa
 
+# TODO: replace this with `output_path_of(train_step)`
+model_path: str = (
+    "gs://marin-us-central2/checkpoints/quickstart_single_script_docker_test_09_18/pf5pe4ut/hf/pf5pe4ut/step-600"
+)
+model_name: str = "pf5pe4ut/step-600"
+
 evaluate_step = ExecutorStep(
-    name="evaluation/hello_world_fw-pliang",
+    name="evaluation/hello_world_fw-pliang/helm",
     fn=evaluate,
     config=EvaluationConfig(
         evaluator="helm",
-        model_name="pf5pe4ut/step-600",
-        # TODO: replace this with `output_path_of(train_step)`
-        model_path="gs://marin-us-central2/checkpoints/quickstart_single_script_docker_test_09_18/pf5pe4ut/hf/pf5pe4ut/step-600",
+        model_name=model_name,
+        model_path=model_path,
         evaluation_path=this_output_path(),
         evals=["mmlu"],
+    ),
+)
+
+alpaca_evaluate_step = ExecutorStep(
+    name="evaluation/hello_world_fw-pliang/alpaca",
+    fn=evaluate,
+    config=EvaluationConfig(
+        evaluator="alpaca",
+        model_name=model_name,
+        model_path=model_path,
+        evaluation_path=this_output_path(),
+        # TODO: what value should this be since this is the quickstart?
+        max_eval_instances=1,
     ),
 )
 
@@ -205,5 +223,6 @@ if __name__ == "__main__":
             # train_quality_step,  # Not used  (TODO: fails right now)
             tokenize_step,
             evaluate_step,
+            alpaca_evaluate_step,
         ]
     )
