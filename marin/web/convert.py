@@ -27,14 +27,17 @@ def convert_page_with_trafilatura(
     """
     from trafilatura import extract, extract_metadata
 
-    title = extract_metadata(html).title
+    title = None
+    metadata = extract_metadata(html)
+
+    if metadata:
+        title = metadata.title
 
     content = None
     match config:
         case str():
             content = extract(
                 html,
-                **asdict(TrafilaturaConfig.get_preset_config(config)),
             )
         case TrafilaturaConfig():
             content = extract(
@@ -46,9 +49,6 @@ def convert_page_with_trafilatura(
                 f"Invalid config type: {type(config)}. Pass a TrafilaturaConfig object or use 'fineweb' \
                 or 'default' presets."
             )
-
-    if title == "[no-title]":
-        title = None
 
     if title:
         content = f"{title}\n\n{content}"
