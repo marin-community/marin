@@ -47,7 +47,13 @@ class ExtractSubredditConfig:
     output_dir: str = "gs://marin-us-central2/raw"
 
 
-def read_and_decode(reader, chunk_size, max_window_size, previous_chunk=None, bytes_read=0):
+def read_and_decode(
+    reader: zstandard.ZstdDecompressionReader,
+    chunk_size: int,
+    max_window_size: int,
+    previous_chunk: str | None = None,
+    bytes_read: int = 0,
+) -> str:
     chunk = reader.read(chunk_size)
     bytes_read += chunk_size
     if previous_chunk is not None:
@@ -61,7 +67,7 @@ def read_and_decode(reader, chunk_size, max_window_size, previous_chunk=None, by
             return read_and_decode(reader, chunk_size, max_window_size, chunk, bytes_read)
 
 
-def read_lines_zst(file_name):
+def read_lines_zst(file_name: str):
     with open(file_name, "rb") as file_handle:
         buffer = ""
         reader = zstandard.ZstdDecompressor(max_window_size=2**31).stream_reader(file_handle)

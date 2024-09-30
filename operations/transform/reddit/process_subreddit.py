@@ -55,7 +55,7 @@ class ProcessSubredditConfig:
     min_comment_length: int = 10
 
 
-def remote_glob(input_dir):
+def remote_glob(input_dir: str) -> list[str]:
     file_path = os.path.join(input_dir, "*.jsonl")
 
     # Use fsspec to get a list of files
@@ -70,7 +70,7 @@ def remote_glob(input_dir):
     return [join_protocol(file) for file in fs.glob(file_path)]
 
 
-def read_df_from_shards(shard_dir):
+def read_df_from_shards(shard_dir: str) -> pd.DataFrame:
     shards = []
     for f in tqdm(remote_glob(shard_dir)):
         df = pd.read_json(f, lines=True)
@@ -79,13 +79,13 @@ def read_df_from_shards(shard_dir):
     return df
 
 
-def write_jsonl(lines, file):
+def write_jsonl(lines: list[dict], file: str):
     with fsspec.open(file, "w", compression="gzip") as f:
         for line in lines:
             f.write(json.dumps(line) + "\n")
 
 
-def get_url_regex(args):
+def get_url_regex():
     # Run the subprocess and wait for it to finish
     import tempfile
 
@@ -156,7 +156,7 @@ def get_columns_to_keep():
     return SUB_COLUMNS_TO_KEEP, COM_COLUMNS_TO_KEEP
 
 
-def get_dolma_formatted_row(row):
+def get_dolma_formatted_row(row: dict):
     return {
         "id": row["id"],
         "text": row["text"],
@@ -175,7 +175,7 @@ def get_dolma_formatted_row(row):
 def process_subreddit(cfg: ProcessSubredditConfig):
     eli5_pattern, removed_pattern, gt_pattern, hyperlink_pattern = get_regex_patterns_to_remove()
     sub_columns_to_keep, com_columns_to_keep = get_columns_to_keep()
-    url_regex = get_url_regex(cfg)
+    url_regex = get_url_regex()
 
     # Read single dfs for comments and submissions and keep only the necessary columns
     log.info("Reading in data")
