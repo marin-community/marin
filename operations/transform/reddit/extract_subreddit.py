@@ -56,6 +56,18 @@ def read_and_decode(
     previous_chunk: str | None = None,
     bytes_read: int = 0,
 ) -> str:
+    """Read and decode a chunk of the zst file.
+
+    Args:
+        reader (zstandard.ZstdDecompressor): The zstandard decompressor.
+        chunk_size (int): The size of the chunk to read.
+        max_window_size (int): The maximum window size.
+        previous_chunk (str | None): The previous chunk to decode.
+        bytes_read (int): The number of bytes read.
+
+    Returns:
+        str: The decoded chunk.
+    """
     chunk = reader.read(chunk_size)
     bytes_read += chunk_size
     if previous_chunk is not None:
@@ -70,6 +82,15 @@ def read_and_decode(
 
 
 def read_lines_zst(file_name: str):
+    """
+    Read lines from a zst file.
+
+    Args:
+        file_name (str): The path to the zst file.
+
+    Returns:
+        Iterator[tuple[str, int]]: An iterator that yields a tuple of the line and the number of bytes read.
+    """
     with open(file_name, "rb") as file_handle:
         buffer = ""
         reader = zstandard.ZstdDecompressor(max_window_size=2**31).stream_reader(file_handle)

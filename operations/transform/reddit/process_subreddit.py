@@ -24,6 +24,8 @@ import pandas as pd
 import ray
 from tqdm import tqdm
 
+from marin.utils import fsspec_mkdirs
+
 log = logging.getLogger("bot")
 log.setLevel(logging.DEBUG)
 log.addHandler(logging.StreamHandler())
@@ -199,7 +201,7 @@ def process_subreddit(cfg: ProcessSubredditConfig):
     merged_df = merged_df[~merged_df["body"].isna()].reset_index(drop=True)
 
     log.info("Processing the merged dataframe")
-    os.makedirs(os.path.join(cfg.output_dir, f"{cfg.subreddit}/"), exist_ok=True)
+    fsspec_mkdirs(os.path.join(cfg.output_dir, f"{cfg.subreddit}/"), exist_ok=True)
     modified_lines = []
     shard_num = 0
     kept_count = 0
