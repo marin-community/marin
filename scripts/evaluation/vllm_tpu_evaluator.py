@@ -7,6 +7,7 @@ import time
 
 import ray
 
+from marin.utils import remove_tpu_lockfile_on_exit
 from scripts.evaluation.evaluator import Evaluator, Dependency, ModelConfig
 from scripts.evaluation.utils import kill_process_on_port
 
@@ -135,6 +136,18 @@ class VllmTpuEvaluator(Evaluator, ABC):
         """
         Launches the evaluation run with Ray.
         """
-        ray.init(runtime_env=self.get_runtime_env())
-        result = ray.get(self.run.remote(self, model, evals, output_path, max_eval_instances))
-        print(f"Inference times (in seconds): {result}")
+
+        @ray.remote(
+            memory=64 * 1024 * 1024 * 1024, resources={"TPU": 1, "TPU-v4-8-head": 1}, runtime_env=self.get_runtime_env()
+        )
+        @remove_tpu_lockfile_on_exit
+        def launch(
+            model: ModelConfig, evals: List[str], output_path: str, max_eval_instances: int | None = None
+        ) -> None:
+            self.run(model, evals, output_path, max_eval_instances)
+
+        ray.get(launch.remote(model, evals, output_path, max_eval_instances))
+
+    def run(self, model: ModelConfig, evals: List[str], output_path: str, max_eval_instances: int | None = None) -> None:
+        """What gets run on the machine for evaluation"""
+        raise NotImplementedError

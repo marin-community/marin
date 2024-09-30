@@ -1,9 +1,8 @@
 import os
-import json
 import shutil
 from abc import ABC, abstractmethod
-from typing import Dict, List, Optional
-from dataclasses import dataclass, field
+from typing import List, Optional
+from dataclasses import dataclass
 
 from scripts.evaluation.utils import download_from_gcs, is_remote_path
 
@@ -20,40 +19,6 @@ class Dependency:
 
     def __str__(self):
         return f"{self.name}=={self.version}" if self.version else self.name
-
-
-@dataclass
-class EvaluatorConfig:
-    name: str
-    """The name of the evaluator e.g., helm"""
-
-    credentials_path: str
-    """
-    The path to file containing the credentials e.g., Hugging Face authentication token.
-    """
-
-    _credentials: Dict[str, str] = field(default_factory=dict)
-    """
-    The credentials to use for the evaluator.
-    """
-
-    def __post_init__(self) -> None:
-        if os.path.exists(self.credentials_path):
-            with open(self.credentials_path, "r") as f:
-                self._credentials = json.load(f)
-                print(f"Loaded credentials from {self.credentials_path}.")
-        else:
-            print(f"WARNING: No credentials found at {self.credentials_path}")
-
-    def __str__(self) -> str:
-        return f"EvaluatorConfig(name={self.name}, credentials_path={self.credentials_path})"
-
-    @property
-    def hf_auth_token(self) -> Optional[str]:
-        """
-        Returns the Hugging Face authentication token if it exists.
-        """
-        return self._credentials.get("HuggingFaceAuthToken")
 
 
 @dataclass
@@ -92,9 +57,6 @@ class Evaluator(ABC):
     _python_version: str
     _pip_packages: List[Dependency]
     _py_modules: List[Dependency]
-
-    def __init__(self, config: EvaluatorConfig):
-        self._config: EvaluatorConfig = config
 
     @abstractmethod
     def evaluate(self, model: ModelConfig, evals: List[str], output_path: str, max_eval_instances: int | None) -> None:
