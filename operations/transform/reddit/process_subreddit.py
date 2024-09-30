@@ -24,7 +24,7 @@ import pandas as pd
 import ray
 from tqdm import tqdm
 
-from marin.utils import fsspec_mkdirs
+from marin.utils import fsspec_glob, fsspec_mkdirs
 
 log = logging.getLogger("bot")
 log.setLevel(logging.DEBUG)
@@ -57,24 +57,9 @@ class ProcessSubredditConfig:
     min_comment_length: int = 10
 
 
-def remote_glob(input_dir: str) -> list[str]:
-    file_path = os.path.join(input_dir, "*.jsonl")
-
-    # Use fsspec to get a list of files
-    fs = fsspec.core.url_to_fs(file_path)[0]
-    protocol = fsspec.core.split_protocol(file_path)[0]
-
-    def join_protocol(file):
-        if protocol:
-            return f"{protocol}://{file}"
-        return file
-
-    return [join_protocol(file) for file in fs.glob(file_path)]
-
-
 def read_df_from_shards(shard_dir: str) -> pd.DataFrame:
     shards = []
-    for f in tqdm(remote_glob(shard_dir)):
+    for f in tqdm(fsspec_glob(os.path.join(shard_dir, "*.jsonl"))):
         df = pd.read_json(f, lines=True)
         shards.append(df)
     df = pd.concat(shards)
