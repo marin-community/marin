@@ -25,6 +25,8 @@ import draccus
 import fsspec
 import zstandard
 
+from marin.utils import fsspec_mkdirs
+
 log = logging.getLogger("bot")
 log.setLevel(logging.DEBUG)
 log.addHandler(logging.StreamHandler())
@@ -48,7 +50,7 @@ class ExtractSubredditConfig:
 
 
 def read_and_decode(
-    reader: zstandard.ZstdDecompressionReader,
+    reader: zstandard.ZstdDecompressor,
     chunk_size: int,
     max_window_size: int,
     previous_chunk: str | None = None,
@@ -58,13 +60,13 @@ def read_and_decode(
     bytes_read += chunk_size
     if previous_chunk is not None:
         chunk = previous_chunk + chunk
-        try:
-            return chunk.decode()
-        except UnicodeDecodeError as e:
-            if bytes_read > max_window_size:
-                raise UnicodeError(f"Unable to decode frame after reading {bytes_read:,} bytes") from e
-            log.info(f"Decoding error with {bytes_read:,} bytes, reading another chunk")
-            return read_and_decode(reader, chunk_size, max_window_size, chunk, bytes_read)
+    try:
+        return chunk.decode()
+    except UnicodeDecodeError as e:
+        if bytes_read > max_window_size:
+            raise UnicodeError(f"Unable to decode frame after reading {bytes_read:,} bytes") from e
+        log.info(f"Decoding error with {bytes_read:,} bytes, reading another chunk")
+        return read_and_decode(reader, chunk_size, max_window_size, chunk, bytes_read)
 
 
 def read_lines_zst(file_name: str):
@@ -100,7 +102,7 @@ def main(cfg: ExtractSubredditConfig):
         lines = []
 
         output_dir = os.path.join(cfg.output_dir, subreddit, dump_type)
-        os.makedirs(output_dir, exist_ok=True)
+        fsspec_mkdirs(output_dir, exist_ok=True)
         for line, file_bytes_processed in read_lines_zst(file_path):
             try:
                 obj = json.loads(line)
