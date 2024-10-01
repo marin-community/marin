@@ -1,5 +1,4 @@
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
-
 from scripts.evaluation.evaluation_config import EvaluationConfig
 from scripts.evaluation.run import evaluate
 
@@ -42,8 +41,6 @@ alpaca_evaluate_step = ExecutorStep(
         model_name=model_name,
         model_path=model_path,
         evaluation_path=this_output_path(),
-        # TODO: what value should this be since this is the quickstart?
-        max_eval_instances=1,
     ),
 )
 
