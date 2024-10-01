@@ -1,12 +1,9 @@
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
-
 ############################################################
 # Transform HTML to text
 
-import os
-
-from marin.schemas.web.convert import TrafilaturaConfig  # noqa
-from scripts.fineweb.process_parquet_fw import process_fw_dump, ParquetFWConfig  # noqa
+from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
+from marin.schemas.web.convert import TrafilaturaConfig
+from scripts.fineweb.process_parquet_fw import ParquetFWConfig, process_fw_dump
 
 raw_data = "gs://marin-us-central2/raw/fineweb/cd85054/CC-MAIN-2024-18"
 

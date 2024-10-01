@@ -7,7 +7,7 @@ import htmlmin
 from bs4 import BeautifulSoup
 
 from marin.markdown import to_markdown
-from marin.schemas.web.convert import TrafilaturaConfig, ReadabilityConfig
+from marin.schemas.web.convert import ReadabilityConfig, TrafilaturaConfig
 
 logger = logging.getLogger("ray")
 
