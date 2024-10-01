@@ -2,8 +2,10 @@ from dataclasses import dataclass
 from enum import Enum
 
 
-class DatasetFormat(Enum):
+class DatasetFormat(str, Enum):
     """Dataset formats when curating a dataset for training
+
+    This helps us know how to read the input dataset.
 
     Attributes:
         DOLMA_FORMATTED_JSONL: The given input dataset contains Dolma formatted jsonl files.
