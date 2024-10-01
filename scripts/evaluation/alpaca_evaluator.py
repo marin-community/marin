@@ -52,6 +52,18 @@ class AlpacaEvaluator(VllmTpuEvaluator):
         }
         write_yaml(content, path)
 
+    @staticmethod
+    def set_openai_api_key() -> None:
+        """
+        Set the OPENAI_API_KEY environment variable. We assume the API key is stored in ~/.cache/openai/token.
+        """
+        # If the environment variable is already set, we don't need to do anything
+        if os.environ.get("OPENAI_API_KEY") is not None:
+            return
+
+        with open(os.path.expanduser("~/.cache/openai/token"), "r") as f:
+            os.environ["OPENAI_API_KEY"] = f.read().strip()
+
     def run(self, model: ModelConfig, evals: List[str], output_path: str, max_eval_instances: int | None = None) -> None:
         """
         Runs AlpacaEval on the specified model.
@@ -63,6 +75,9 @@ class AlpacaEvaluator(VllmTpuEvaluator):
             max_eval_instances (int | None): The maximum number of evaluation instances to run.
         """
         try:
+            # Set the OPENAI_API_KEY environment variable for the auto evaluator
+            self.set_openai_api_key()
+
             # Download the model from GCS or HuggingFace
             model_name_or_path: str = self.download_model(model)
 
