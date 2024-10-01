@@ -10,7 +10,7 @@ import draccus
 
 from marin.classifiers.fasttext.training import train_model
 from marin.classifiers.utils import attributes_to_dataset
-from marin.processing.classification.fasttext.types import DatasetFormat
+from marin.processing.classification.types import DatasetFormat
 
 
 @dataclass
