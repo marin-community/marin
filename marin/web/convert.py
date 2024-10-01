@@ -28,10 +28,14 @@ def convert_page_with_trafilatura(
     from trafilatura import extract, extract_metadata
 
     title = None
-    metadata = extract_metadata(html)
+    try:
+        metadata = extract_metadata(html)
 
-    if metadata:
-        title = metadata.title
+        if metadata:
+            title = metadata.title
+    except Exception as e:
+        logger.warning(f"Error extracting metadata: {e}")
+        title = None
 
     content = None
     match config:
