@@ -54,7 +54,7 @@ train_quality_step = ExecutorStep(
         pos_doc_path=output_path_of(transform_hq_data_step),
         neg_doc_path=output_path_of(transform_lq_data_step),
         output_path=this_output_path(),
-        pos_sampling_rate=0.3,
+        pos_sampling_rate=0.5,
         neg_sampling_rate=1.0,
         fasttext_args={"lr": 0.01, "minCount": 1},
     ),
@@ -69,21 +69,21 @@ inference_hq_step = ExecutorStep(
     config=InferenceConfig(
         input_path=output_path_of(transform_hq_data_step),
         output_path=this_output_path(),
-        model_name="allenai/dolma-1_7-fasttext-quality-filter",
+        model_name=output_path_of(train_quality_step),
         model_type="fasttext",
-        attribute_name="olmo-fasttext-quality",
+        attribute_name="quickstart-fasttext-quality-hq",
     ),
 )
 
 inference_lq_step = ExecutorStep(
-    name="quickstart-data/hq-inference",
+    name="quickstart-data/lq-inference",
     fn=run_inference,
     config=InferenceConfig(
         input_path=output_path_of(transform_lq_data_step),
         output_path=this_output_path(),
         model_name=output_path_of(train_quality_step),
         model_type="fasttext",
-        attribute_name="quickstart-fasttext-quality",
+        attribute_name="quickstart-fasttext-quality-lq",
     ),
 )
 
@@ -101,7 +101,6 @@ dedupe_step = ExecutorStep(
 
 ############################################################
 # Consolidate
-
 
 consolidate_step = ExecutorStep(
     name="documents/hello_world_fw-pliang-consolidate",
@@ -171,7 +170,7 @@ if __name__ == "__main__":
             transform_hq_data_step,
             transform_lq_data_step,
             train_quality_step,
-            # inference_hq_step,
-            # inference_lq_step,
+            inference_hq_step,
+            inference_lq_step,
         ]
     )
