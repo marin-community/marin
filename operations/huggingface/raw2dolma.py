@@ -229,14 +229,14 @@ def main(cfg: DatasetConversionConfig):
                 elif cfg.output_format.value == "evaluation":
                     if cfg.output_labels and choices:
                         question_input = (
-                            question.strip()
+                            question_text.strip()
                             + "\n"
                             + "\n".join([f"{cfg.ouput_labels[i]}. {choice}" for i, choice in enumerate(choices)])
                             + "\nAnswer:"
                         )
                         answer_output = f"{cfg.output_labels[answer_idx]}. {answer_text}"
                     else:
-                        question_input = question + "\n\n"
+                        question_input = question_text + "\n\n"
                         answer_output = answer_text
                     dolma_json["input"] = question_input
                     dolma_json["output"] = answer_output
