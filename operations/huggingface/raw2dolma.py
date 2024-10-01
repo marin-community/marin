@@ -229,7 +229,7 @@ def main(cfg: DatasetConversionConfig):
                         question_input = (
                             question_text.strip()
                             + "\n"
-                            + "\n".join([f"{cfg.ouput_labels[i]}. {choice}" for i, choice in enumerate(choices)])
+                            + "\n".join([f"{cfg.output_labels[i]}. {choice}" for i, choice in enumerate(choices)])
                             + "\nAnswer:"
                         )
                         answer_output = f"{cfg.output_labels[answer_idx]}. {answer_text}"
