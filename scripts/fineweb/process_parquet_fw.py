@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from warcio import ArchiveIterator
 
 from marin.web.convert import convert_page
-from marin.schemas.web.convert import TrafilaturaConfig
+from marin.schemas.web.convert import ReadabilityConfig, TrafilaturaConfig
 from marin.core.runtime import cached_or_construct_output
 from marin.utils import fsspec_exists, fsspec_glob, fsspec_rm
 
@@ -28,7 +28,7 @@ def process_one_warc_file(
     input_path: str,
     output_path: str,
     extract_method: str,
-    config: str | TrafilaturaConfig,
+    config: str | TrafilaturaConfig | ReadabilityConfig,
     output_path_md: str,
     output_path_text: str
 ):
@@ -158,7 +158,7 @@ def process_fw_parquet(
     input_path: str,
     output_path: str,
     extract_method: str,
-    config: str | TrafilaturaConfig,
+    config: str | TrafilaturaConfig | ReadabilityConfig,
     output_path_md: str,
     output_path_text: str
 ):
@@ -241,7 +241,7 @@ class ParquetFWConfig:
     output_path_md: str
     output_path_text: str
     extract_method: str = "readability"
-    config: str | TrafilaturaConfig = "default"
+    config: str | TrafilaturaConfig | ReadabilityConfig = "default"
     max_files: int | None = None
 
 
