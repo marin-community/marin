@@ -1,7 +1,6 @@
 from typing import Dict, List
 import os
 import shutil
-import subprocess
 import traceback
 
 from scripts.evaluation.evaluator import Dependency, ModelConfig
@@ -56,19 +55,10 @@ class AlpacaEvaluator(VllmTpuEvaluator):
     @staticmethod
     def set_openai_api_key() -> None:
         """
-        Set the OPENAI_API_KEY environment variable using the secret stored in GCP.
+        Set the OPENAI_API_KEY environment variable. We assume the API key is stored in ~/.cache/openai/token.
         """
-        # Fetch the secret value using gcloud
-        result = subprocess.run(
-            ["gcloud", "secrets", "versions", "access", "latest", "--secret=OPENAI_API_KEY"],
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0:
-            raise RuntimeError("Failed to fetch the OPENAI_API_KEY secret from GCP.")
-
-        # Set the OPENAI_API_KEY in the Python environment
-        os.environ["OPENAI_API_KEY"] = result.stdout.strip()
+        with open(os.path.expanduser("~/.cache/openai/token")) as f:
+            os.environ["OPENAI_API_KEY"] = f.read().strip()
 
     def run(self, model: ModelConfig, evals: List[str], output_path: str, max_eval_instances: int | None = None) -> None:
         """
