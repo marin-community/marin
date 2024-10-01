@@ -14,7 +14,7 @@ import numpy as np
 import ray
 
 from marin.core.runtime import cached_or_construct_output, map_files_in_directory
-from marin.processing.classification.fasttext.train_fasttext import DatasetFormat
+from marin.processing.classification.fasttext.types import DatasetFormat
 from marin.utils import fsspec_glob, fsspec_isdir
 
 
@@ -46,19 +46,34 @@ def write_label_attribute(input_file_path: str, output_file_path: str, label: st
 
 
 def get_example_from_input_line(input_line: str, label: str, file_format: DatasetFormat) -> dict:
+    """Converts a single line of input to an example.
+
+    Args:
+        input_line (str): A single line of input.
+        label (str): The label for the example.
+        file_format (DatasetFormat): The format of the input line.
+
+    Returns:
+        dict: An example with the format {"text": <text>, "label": <label>}.
+    """
+    import re
+
     example = None
     if file_format == DatasetFormat.DOLMA_FORMATTED_JSONL:
         data = json.loads(input_line)
     elif file_format == DatasetFormat.FASTTEXT:
         data = {}
-        data["text"] = input_line.split(label)[1].strip()
+        line = input_line.strip()
+        match = re.match(r"__label__(\S+)\s+(.*)", line, re.DOTALL)
+        if match:
+            data["text"] = match.group(2).strip()
     else:
         raise ValueError(f"File format not supported: {file_format}")
 
     if "text" in data:
         example = {"text": data["text"], "label": label}
     else:
-        logging.warning(f"Document {data['id']} has no text field.")
+        logging.warning(f"Document {data.get('id', '')} has no text field.")
 
     return example
 
@@ -90,7 +105,7 @@ def write_examples(
     """
     rng = np.random.default_rng(seed=seed)
     with (
-        fsspec.open(input_file_path, "rt", compression="gzip") as f_in,
+        fsspec.open(input_file_path, "rt", compression="infer") as f_in,
         fsspec.open(output_file_path, "wt", compression="gzip") as f_out,
     ):
         for input_line in f_in:
@@ -170,8 +185,15 @@ def create_label_attribute(input_doc_path: str, output_attr_path: str, label: st
 
 
 def get_output_path_for_input_doc_path(output_path: str, input_doc_path: str) -> str:
+    from pathlib import Path
+
     _, doc_fs_path = fsspec.core.url_to_fs(input_doc_path)
-    return os.path.join(output_path, "data", doc_fs_path)
+    path = Path(doc_fs_path)
+    while path.suffix:
+        path = path.with_suffix("")
+    path = str(path) + ".jsonl.gz"
+
+    return os.path.join(output_path, "data", path)
 
 
 @cached_or_construct_output(success_suffix="SUCCESS")
@@ -218,11 +240,10 @@ def attributes_to_dataset(
     Args:
         output_path (str): Path for output data (i.e., gs://$BUCKET/classifiers/$EXPERIMENT).
         doc_path (str): Path to input documents (i.e., gs://$BUCKET/documents/reddit/v0/<doc_experiment>).
-        attr_path (str): Path to input attributes (i.e., gs://$BUCKET/attributes/reddit/v0/<attr_experiment>).
         sampling_rate (float): Fraction of documents from the dataset to add to fastText training dataset.
         seed (int): Seed for random number generator to ensure reproducibility.
-        get_label (Callable[[dict,dict], str]): Function to extract label from documents and attributes.
-                                                Defaults to get_label.
+        label (str): Label for the dataset.
+        file_format (DatasetFormat): Format of the dataset.
 
     Returns:
         bool: True if the process is successful.

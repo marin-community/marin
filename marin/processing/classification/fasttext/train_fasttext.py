@@ -5,24 +5,31 @@ Training script for fastText quality classifiers.
 """
 
 from dataclasses import dataclass, field
-from typing import Enum
 
 import draccus
 
 from marin.classifiers.fasttext.training import train_model
 from marin.classifiers.utils import attributes_to_dataset
-
-
-class DatasetFormat(Enum):
-    DOLMA_FORMATTED_JSONL = "dolma_formatted_jsonl"
-    FASTTEXT = "fasttext"
+from marin.processing.classification.fasttext.types import DatasetFormat
 
 
 @dataclass
 class DatasetCurationConfig:
+    """Configuration for curating a dataset for training a quality classfier
+
+    Attributes:
+        input_doc_path (str): Path to the input dataset which can be a directory or a file.
+        label (str): Label for the dataset. This should be either "hq" or "lq"
+            for high quality or low quality, respectively.
+        sampling_rate (float): Sampling rate for the dataset. There are two ways to specify this:
+            1. using a percentage (number between 0 and 1) which will sample that percentage of the data.
+            2. using an integer N (where N > 1) which will sample N examples from the dataset.
+        format (DatasetFormat): Format of the dataset.
+    """
+
     input_doc_path: str
     label: str
-    sampling_rate: float = 1.0
+    sampling_rate: float
     format: DatasetFormat
 
 
@@ -33,10 +40,17 @@ class TrainFasttextClassifierConfig:
 
     Attributes:
         output_path (str): Path for output data (i.e., gs://$BUCKET/classifiers/$EXPERIMENT).
-        pos_doc_path (str): Path to experiment with positive examples (i.e., gs://$BUCKET/documents/../$EXPERIMENT).
-        neg_doc_path (str): Path to experiment with negative examples (i.e., gs://$BUCKET/documents/../$EXPERIMENT).
-        pos_sampling_rate (float): Fraction of positive examples to include the training dataset.
-        neg_sampling_rate (float): Fraction of negative examples to include the training dataset.
+        input_doc_paths (list[DatasetCurationConfig]): List of dataset curation configurations.
+            You can use the following example to specify the input doc paths inside of your YAML file.
+            input_doc_paths:
+                - input_doc_path: "gs://$REGION/documents/$DATASET"
+                    label: "hq"
+                    sampling_rate: 1.0
+                    format: "dolma_formatted_jsonl"
+                - input_doc_path: "gs://$REGION/documents/$DATASET"
+                    label: "lq"
+                    sampling_rate: 1.0
+                    format: "fasttext"
         fasttext_args (dict): Arguments for the fastText training process (see fastText docs for list of options).
         seed (int): Seed for random number generator to ensure reproducibility.
         val_frac (float): Fraction of data to be used for validation.
