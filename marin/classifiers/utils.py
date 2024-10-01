@@ -14,7 +14,7 @@ import numpy as np
 import ray
 
 from marin.core.runtime import cached_or_construct_output, map_files_in_directory
-from marin.processing.classification.fasttext.types import DatasetFormat
+from marin.processing.classification.types import DatasetFormat
 from marin.utils import fsspec_glob, fsspec_isdir
 
 
@@ -51,7 +51,7 @@ def get_example_from_input_line(input_line: str, label: str, file_format: Datase
     Args:
         input_line (str): A single line of input.
         label (str): The label for the example.
-        file_format (DatasetFormat): The format of the input line.
+        file_format (DatasetFormat): The format of the input line (e.g. DOLMA_FORMATTED_JSONL)
 
     Returns:
         dict: An example with the format {"text": <text>, "label": <label>}.
