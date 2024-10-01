@@ -89,41 +89,58 @@ def test_executor():
 
 
 def test_parallelism():
-    """Make sure things that parallel execution is possible."""
-    temp = create_temp()
+    """Test parallel execution by comparing execution times for different parallelism levels."""
 
-    # Note that due to parallelism, total wall-clock time should be `run_time` +
-    # overhead, as long as all the jobs can get scheduled.
-    run_time = 5
-    parallelism = 6
+    def run_parallel_test(parallelism: int) -> float:
+        temp = create_temp()
+        run_time = 5
 
-    def fn(config: MyConfig):
-        append_temp(temp, config)
-        time.sleep(run_time)
+        def fn(config: MyConfig):
+            append_temp(temp, config)
+            time.sleep(run_time)
 
-    bs = [
-        ExecutorStep(name=f"b{i}", fn=fn, config=MyConfig(input_path="/", output_path=this_output_path(), n=1, m=1))
-        for i in range(parallelism)
-    ]
-    executor = Executor(prefix="/tmp")
-    start_time = time.time()
-    executor.run(steps=bs)
-    end_time = time.time()
+        bs = [
+            ExecutorStep(name=f"b{i}", fn=fn, config=MyConfig(input_path="/", output_path=this_output_path(), n=1, m=1))
+            for i in range(parallelism)
+        ]
+        executor = Executor(prefix="/tmp")
+        start_time = time.time()
+        executor.run(steps=bs)
+        end_time = time.time()
 
-    results = read_temp(temp)
-    assert len(results) == parallelism
-    for i in range(parallelism):
-        assert results[i]["output_path"].startswith("/tmp/b")
+        results = read_temp(temp)
+        assert len(results) == parallelism
+        for i in range(parallelism):
+            assert results[i]["output_path"].startswith("/tmp/b")
 
-    serial_duration = run_time * parallelism
-    actual_duration = end_time - start_time
-    print(f"Duration: {actual_duration:.2f}s")
+        cleanup_temp(temp)
+        return end_time - start_time
+
+    # Run tests with parallelism of 2 and 6
+    time_parallel_2 = run_parallel_test(2)
+    time_parallel_6 = run_parallel_test(6)
+
+    print(f"Time for parallelism=2: {time_parallel_2:.2f}s")
+    print(f"Time for parallelism=6: {time_parallel_6:.2f}s")
+
+    # Calculate the difference percentage
+    difference_percentage = abs(time_parallel_6 - time_parallel_2) / time_parallel_2 * 100
+
+    # Assert that the difference is within 10%
     assert (
-        actual_duration < serial_duration * 0.75
-    ), f"""Expected parallel execution to be at least 25% faster than serial.
-        Actual: {actual_duration:.2f}s, Serial: {serial_duration:.2f}s"""
+        difference_percentage < 10
+    ), f"""Expected execution times to be within 10% of each other.
+        Time for parallelism=2: {time_parallel_2:.2f}s
+        Time for parallelism=6: {time_parallel_6:.2f}s
+        Difference: {difference_percentage:.2f}%"""
 
-    cleanup_temp(temp)
+    # Also check that parallel execution for parallel = 6 is faster than serial
+    serial_duration = 5 * 6
+    assert (
+        time_parallel_6 < serial_duration * 0.75
+    ), f"""Expected parallel execution to be at least 25% faster than serial.
+        Parallel time: {time_parallel_6:.2f}s
+        Serial time: {serial_duration:.2f}s"""
 
 
 def test_versioning():
