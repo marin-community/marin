@@ -17,17 +17,19 @@ class OutputFormatOptions(str, Enum):
 @dataclass
 class DatasetConversionConfig:
     dataset_name: str
-    subset: str
+    subsets: list[str]
     splits: list[str]
     input_path: str
+    hf_path: str
     output_prefix: str
     output_format: OutputFormatOptions
+    prompt_key: str
     doc_input_format: str = ""
     subject_key: str = ""
-    prompt_key: str = ""
     answer_text_key: str = ""
     answer_idx_key: str = ""
-    output_choices: list[str] = field(default_factory=list)
+    answer_label_key: str = ""
+    output_labels: list[str] = field(default_factory=list)
     options_key: str = ""
     token: str | bool = True
     trust_remote_code: bool = False
@@ -37,7 +39,9 @@ def load_datasets(config: DatasetConversionConfig) -> List[Dataset]:
     """
     Load the dataset from Hugging Face.
 
-    This function returns all data for the given split (rather than subject-specific data).
+    This function returns all data for the requested subsets and splits.
+
+    A separate dataset is produced for each subset,split pair. Downstream one file per subset,split pair will be created.
 
     Args:
         config (DatasetConversionConfig): The configuration for loading datasets.
@@ -46,17 +50,22 @@ def load_datasets(config: DatasetConversionConfig) -> List[Dataset]:
         List[Dataset]: A list of Hugging Face datasets loaded according to the given configuration.
     """
     datasets = []
-    input_path = config.input_path
-    subset = config.subset
     if config.token == "env":
-        # if user specifies look for token in environment
+        # Setting token to 'env' indicates a request to retrieve the token from the $HF_TOKEN environment variable
         token = os.environ["HF_TOKEN"]
     else:
         token = config.token
-    for split in config.splits:
-        datasets.append(
-            load_dataset(input_path, subset, split=split, token=token, trust_remote_code=config.trust_remote_code)
-        )
+    for subset in config.subsets:
+        for split in config.splits:
+            try:
+                datasets.append(
+                    load_dataset(
+                        config.input_path, subset, split=split, token=token, trust_remote_code=config.trust_remote_code
+                    )
+                )
+            except Exception as e:
+                print(f"Failed to load subset '{subset}' and split '{split}': {e}")
+
     return datasets
 
 
@@ -164,74 +173,71 @@ def main(cfg: DatasetConversionConfig):
     # Load config parameters
     datasets = load_datasets(cfg)
 
-    # Process dataset examples into selected output format {decontamination, evaluation}
-    if cfg.output_format.value == "decontamination":
-        # decontamination format is dolma format, expects "text" key for text to be decontaminated
-        for dataset, split in zip(datasets, cfg.splits, strict=False):
-            output_path = os.path.join(cfg.output_prefix, f"{cfg.dataset_name}-{split}-decontamination.jsonl.gz")
-            with fsspec.open(output_path, "wt", compression="gzip") as dolma_file:
-                for idx, example in enumerate(dataset):
-                    subject = example.get(cfg.subject_key, "")
-                    if cfg.answer_text_key:
-                        answer = get_nested_item(example, cfg.answer_text_key)
-                    elif cfg.answer_idx_key:
-                        answer_idx = int(get_nested_item(example, cfg.answer_idx_key))
-                        answer = cfg.output_choices[answer_idx]
-                    else:
-                        raise ValueError("Please specify either answer_text_key or answer_idx_key.")
-
-                    dolma_json = {
-                        "id": f"{cfg.dataset_name}-{split}-{subset}-{idx}",
-                        "text": get_nested_item(example, cfg.prompt_key),
-                        "source": cfg.dataset_name,
-                        "metadata": {
-                            "options": standardize_options(get_nested_item(example, cfg.options_key, [])),
-                            "answer": answer,
-                            "split": split,
-                            "provenance": f"https://huggingface.co/datasets/{cfg.input_path}",
-                            "hf_path": cfg.hf_path,
-                        },
-                    }
-                    dolma_file.write(json.dumps(dolma_json) + "\n")
-    elif cfg.output_format.value == "evaluation":
-        # evaluation format expects "input" and "output" keys, this is used to determine PPL of expected output given the input
-        for dataset, split in zip(datasets, cfg.splits, strict=False):
-            # Storing the data in a dictionary with the subject as the key
-            subject_files = defaultdict(str)
-
-            for example in dataset:
-                question = get_nested_item(example, cfg.prompt_key)
-
+    # go through (subset,split) pairs and upload file for that (subset,split) producing output JSON specified in config
+    for dataset, subset, split in zip(datasets, cfg.subsets, cfg.splits):
+        output_path = os.path.join(
+            cfg.output_prefix, f"{cfg.dataset_name}-{subset}-{split}-{cfg.output_format.value}.jsonl.gz"
+        )
+        with fsspec.open(output_path, "wt", compression="gzip") as dolma_file:
+            for idx, example in enumerate(dataset):
+                dolma_json = {
+                    "id": f"{cfg.dataset_name}-{subset}-{split}-{cfg.output_format.value}-{idx}",
+                    "source": cfg.dataset_name,
+                    "metadata": {
+                        "subset": subset,
+                        "split": split,
+                        "provenance": f"https://huggingface.co/datasets/{cfg.hf_path}",
+                    },
+                }
+                # get the question text
+                question_text = get_nested_item(example, cfg.prompt_key)
+                # get the list of options in standardized form (list of options
                 choices = standardize_options(get_nested_item(example, cfg.options_key, []))
-
-                question_input = (
-                    question.strip()
-                    + "\n"
-                    + "\n".join([f"{cfg.output_choices[i]}. {choice}" for i, choice in enumerate(choices)])
-                    + "\nAnswer:"
-                )
-                if cfg.answer_text_key:
-                    answer = get_nested_item(example, cfg.answer_text_key)
-                elif cfg.answer_idx_key:
-                    answer_idx = int(get_nested_item(example, cfg.answer_idx_key))
-                    answer = cfg.output_choices[answer_idx]
-                else:
-                    raise ValueError("Please specify either answer_text_key or answer_idx_key.")
-
-                subject = get_nested_item(example, cfg.subject_key, "")
-
-                subject_files[subject] += json.dumps({"input": question_input, "output": answer}) + "\n"
-
-            # Writing from subject dict to corresponding files for each subject
-            for subject in subject_files:
-                output_path = os.path.join(
-                    cfg.output_prefix, f"{cfg.dataset_name}-{subject}-{data_file}-evaluation.jsonl.gz"
-                )
-                with fsspec.open(output_path, "wt", compression="gzip") as f:
-                    f.write(subject_files[subject])
-    else:
-        raise ValueError("Please specify either decontamination or evaluation for output_format.")
-
-
-if __name__ == "__main__":
-    main()
+                # if there is a direct key to answer text, use this
+                answer_text = get_nested_item(example, cfg.answer_text_key) if cfg.answer_text_key else ""
+                # if there is a direct key for the idx into choices of correct answer, use this
+                answer_idx = get_nested_item(example, cfg.answer_idx_key) if cfg.answer_idx_key else -1
+                # if there is a direct key for the label of the correct answer, use this
+                answer_label = get_nested_item(example, cfg.answer_label_key) if cfg.answer_label_key else ""
+                # check if you need to get the answer text by using the answer idx
+                if not answer_text:
+                    if answer_label and choices and cfg.output_choices:
+                        answer_idx = cfg.output_choices.index(answer_label)
+                    if answer_idx and choices:
+                        answer_text = choices[answer_idx]
+                    else:
+                        raise ValueError(
+                            "No answer text was found. Please review config and HF dataset and supply either answer_text_key or answer_idx_key/options_key"
+                        )
+                if choices:
+                    # list of potential answers
+                    dolma_json["metadata"]["options"] = choices
+                if answer_idx:
+                    # index into list of potential answers of correct answer
+                    dolma_json["metadata"]["answer_idx"] = answer_idx
+                if answer_text:
+                    # answer text of correct answer
+                    dolma_json["metadata"]["answer"] = answer
+                if answer_label:
+                    # label of correct answer (e.g. "A")
+                    dolma_json["metadata"]["answer_label"]
+                if cfg.output_labels:
+                    # list of potential labels (e.g. ["A", "B", "C", 'D"])
+                    dolma_json["metadata"]["output_labels"] = cfg.output_labels
+                if cfg.output_format.value == "decontamination":
+                    dolma_json["text"] = question_text
+                elif cfg.output_format.value == "evaluation":
+                    if cfg.output_labels and choices:
+                        question_input = (
+                            question.strip()
+                            + "\n"
+                            + "\n".join([f"{cfg.ouput_labels[i]}. {choice}" for i, choice in enumerate(choices)])
+                            + "\nAnswer:"
+                        )
+                        answer_output = f"{cfg.output_labels[answer_idx]}. {answer_text}"
+                    else:
+                        question_input = question + "\n\n"
+                        answer_output = answer_text
+                    dolma_json["input"] = question_input
+                    dolma_json["output"] = answer_output
+                dolma_file.write(json.dumps(dolma_json) + "\n")
