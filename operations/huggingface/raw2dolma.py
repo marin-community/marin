@@ -69,7 +69,7 @@ def load_datasets(config: DatasetConversionConfig) -> list[Dataset]:
     return datasets
 
 
-def get_nested_item(data: dict[str, Any], key: str, default_item: Any | None = None) -> Any:
+def get_nested_item(data: dict[str, Any], key: str, default_item: Any = None) -> Any:
     """
     Retrieve a nested item from a dictionary using a dot notation key.
 
