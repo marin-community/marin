@@ -40,17 +40,8 @@ class TrainFasttextClassifierConfig:
 
     Attributes:
         output_path (str): Path for output data (i.e., gs://$BUCKET/classifiers/$EXPERIMENT).
-        input_doc_paths (list[DatasetCurationConfig]): List of dataset curation configurations.
-            You can use the following example to specify the input doc paths inside of your YAML file.
-            input_doc_paths:
-                - input_doc_path: "gs://$REGION/documents/$DATASET"
-                    label: "hq"
-                    sampling_rate: 1.0
-                    format: "dolma_formatted_jsonl"
-                - input_doc_path: "gs://$REGION/documents/$DATASET"
-                    label: "lq"
-                    sampling_rate: 1.0
-                    format: "fasttext"
+        input_doc_paths (list[DatasetCurationConfig]): List of configurations for converting input datasets into
+            labelled datasets.
         fasttext_args (dict): Arguments for the fastText training process (see fastText docs for list of options).
         seed (int): Seed for random number generator to ensure reproducibility.
         val_frac (float): Fraction of data to be used for validation.
