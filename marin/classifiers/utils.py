@@ -206,6 +206,20 @@ def reservoir_sample_and_write_examples(
     label: str,
     file_format: DatasetFormat,
 ):
+    """Sample a fixed number of examples from the dataset
+
+    Args:
+        doc_path (str): Path to the input dataset which can be a directory or a file.
+        output_dataset_path (str): Path to the output dataset.
+        sampling_rate (int): Number of examples to sample from the dataset.
+        seed (int): Seed for random number generator to ensure reproducibility.
+        label (str): Label for the dataset.
+        file_format (DatasetFormat): Format of the dataset.
+
+    Returns:
+        bool: True if the process is successful.
+    """
+
     rng = np.random.default_rng(seed=seed)
     files = fsspec_glob(os.path.join(doc_path, "**/*.jsonl.gz"))
     reservoir = []
@@ -224,6 +238,8 @@ def reservoir_sample_and_write_examples(
             example = get_example_from_input_line(line, label, file_format)
             if example is not None:
                 f_out.write(json.dumps(example) + "\n")
+
+    return True
 
 
 def attributes_to_dataset(
