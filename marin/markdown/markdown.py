@@ -149,7 +149,7 @@ class MyMarkdownConverter(MarkdownConverter):
     def __init__(self, **kwargs):
         self.include_links = kwargs.pop("include_links", True)
         self.include_images = kwargs.pop("include_images", True)
-        
+
         kwargs = {
             "heading_style": "ATX",
             "keep_inline_images_in": ["li", "p", "td", "th", "h1", "h2", "h3", "h4", "h5", "h6", "a"],
