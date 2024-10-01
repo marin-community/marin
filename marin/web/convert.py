@@ -7,7 +7,7 @@ import htmlmin
 from bs4 import BeautifulSoup
 
 from marin.markdown import to_markdown
-from marin.schemas.web.convert import TrafilaturaConfig
+from marin.schemas.web.convert import ReadabilityConfig, TrafilaturaConfig
 
 logger = logging.getLogger("ray")
 
@@ -28,10 +28,14 @@ def convert_page_with_trafilatura(
     from trafilatura import extract, extract_metadata
 
     title = None
-    metadata = extract_metadata(html)
+    try:
+        metadata = extract_metadata(html)
 
-    if metadata:
-        title = metadata.title
+        if metadata:
+            title = metadata.title
+    except Exception as e:
+        logger.warning(f"Error extracting metadata: {e}")
+        title = None
 
     content = None
     match config:
@@ -103,7 +107,9 @@ def convert_page_with_resiliparse(html: str, url: str | None = None) -> dict[str
     return out
 
 
-def convert_page_with_readability(html: str, url: str | None = None) -> dict[str, str]:
+def convert_page_with_readability(
+    html: str, url: str | None = None, config: str | ReadabilityConfig = "default"
+) -> dict[str, str]:
     """
     Convert HTML to text[markdown] using Readability and markdownify.
 
@@ -133,7 +139,19 @@ def convert_page_with_readability(html: str, url: str | None = None) -> dict[str
     content = str(tree)
 
     # convert to markdown
-    markdown = to_markdown(tree)
+    markdown = None
+    match config:
+        case str():
+            markdown = to_markdown(
+                tree,
+                **asdict(ReadabilityConfig.get_preset_config(config)),
+            )
+        case ReadabilityConfig():
+            markdown = to_markdown(tree, **asdict(config))
+        case _:
+            raise Exception(
+                f"Invalid config type: {type(config)}. Pass a ReadabilityConfig object or use 'default' preset."
+            )
 
     # readability-lxml uses "[no-title]" for pages without a title
     if title == "[no-title]":
@@ -189,7 +207,7 @@ def convert_page(
     html: str,
     url: str | None = None,
     extract_method: str = "readability",
-    config: str | TrafilaturaConfig = "default",
+    config: str | TrafilaturaConfig | ReadabilityConfig = "default",
 ) -> dict[str, str]:
     """
     Convert HTML to text using the specified method.
@@ -207,7 +225,7 @@ def convert_page(
         case "trafilatura":
             return convert_page_with_trafilatura(html, url, config)
         case "readability":
-            return convert_page_with_readability(html, url)
+            return convert_page_with_readability(html, url, config)
         case "resiliparse":
             return convert_page_with_resiliparse(html, url)
         case "legacy":
