@@ -1,12 +1,12 @@
 import json
 import os
-from collections import defaultdict
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import Any
 
 import draccus
 import fsspec
-from datasets import load_dataset
+from datasets import Dataset, load_dataset
 
 
 class OutputFormatOptions(str, Enum):
@@ -35,7 +35,7 @@ class DatasetConversionConfig:
     trust_remote_code: bool = False
 
 
-def load_datasets(config: DatasetConversionConfig) -> List[Dataset]:
+def load_datasets(config: DatasetConversionConfig) -> list[Dataset]:
     """
     Load the dataset from Hugging Face.
 
@@ -69,7 +69,7 @@ def load_datasets(config: DatasetConversionConfig) -> List[Dataset]:
     return datasets
 
 
-def get_nested_item(data: Dict[str, Any], key: str, default_item: Optional[Any] = None) -> Any:
+def get_nested_item(data: dict[str, Any], key: str, default_item: Any | None = None) -> Any:
     """
     Retrieve a nested item from a dictionary using a dot notation key.
 
@@ -174,7 +174,7 @@ def main(cfg: DatasetConversionConfig):
     datasets = load_datasets(cfg)
 
     # go through (subset,split) pairs and upload file for that (subset,split) producing output JSON specified in config
-    for dataset, subset, split in zip(datasets, cfg.subsets, cfg.splits):
+    for dataset, subset, split in zip(datasets, cfg.subsets, cfg.splits, strict=True):
         output_path = os.path.join(
             cfg.output_prefix, f"{cfg.dataset_name}-{subset}-{split}-{cfg.output_format.value}.jsonl.gz"
         )
@@ -207,7 +207,7 @@ def main(cfg: DatasetConversionConfig):
                         answer_text = choices[answer_idx]
                     else:
                         raise ValueError(
-                            "No answer text was found. Please review config and HF dataset and supply either answer_text_key or answer_idx_key/options_key"
+                            "No answer text was found. Please review config."
                         )
                 if choices:
                     # list of potential answers
@@ -217,7 +217,7 @@ def main(cfg: DatasetConversionConfig):
                     dolma_json["metadata"]["answer_idx"] = answer_idx
                 if answer_text:
                     # answer text of correct answer
-                    dolma_json["metadata"]["answer"] = answer
+                    dolma_json["metadata"]["answer"] = answer_text
                 if answer_label:
                     # label of correct answer (e.g. "A")
                     dolma_json["metadata"]["answer_label"]
