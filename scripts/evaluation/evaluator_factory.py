@@ -1,4 +1,5 @@
-from scripts.evaluation.evaluator import Evaluator, EvaluatorConfig
+from scripts.evaluation.evaluator import Evaluator
+from scripts.evaluation.evaluation_config import EvaluationConfig
 from scripts.evaluation.alpaca_evaluator import AlpacaEvaluator
 from scripts.evaluation.helm_evaluator import HELMEvaluator
 from scripts.evaluation.simple_evaluator import SimpleEvaluator
@@ -13,11 +14,11 @@ NAME_TO_EVALUATOR = {
 }
 
 
-def get_evaluator(config: EvaluatorConfig) -> Evaluator:
+def get_evaluator(config: EvaluationConfig) -> Evaluator:
     """
     Returns the evaluator for the given name.
     """
-    if config.name not in NAME_TO_EVALUATOR:
-        raise ValueError(f"Unknown evaluator: {config.name}")
+    if config.evaluator not in NAME_TO_EVALUATOR:
+        raise ValueError(f"Unknown evaluator: {config.evaluator}")
 
-    return NAME_TO_EVALUATOR[config.name](config)
+    return NAME_TO_EVALUATOR[config.evaluator]()

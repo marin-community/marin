@@ -4,13 +4,62 @@ cluster_name: marin-data
 # Maximum Workers (excluding Head Node)
 max_workers: 1024
 
+
+
+# Configure GCP
+provider:
+  type: gcp
+  region: us-central2
+  availability_zone: us-central2-b
+  project_id: hai-gcp-models
+
+docker:
+    image: "us-central2-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:latest"
+    container_name: "ray_docker"
+    pull_before_run: true
+    worker_run_options:
+        - --privileged
+        - --ulimit memlock=-1:-1  #
+        - --shm-size=32gb
+        - -v
+        - "/tmp:/tmp"
+        # this lets the worker run docker commands and have them run as sibling containers
+        - -v "/var/run/docker.sock:/var/run/docker.sock"
+    head_run_options:
+      - --privileged
+      - -v "/tmp:/tmp"
+
+
+initialization_commands:
+  - yes | gcloud auth configure-docker us-central2-docker.pkg.dev
+  - which docker || (curl -fsSL https://get.docker.com -o get-docker.sh; sudo sh get-docker.sh; sudo usermod -aG docker $USER; sudo systemctl restart docker -f)
+  # always run this because ray doesn't run with sudo
+  - sudo usermod -aG docker $USER
+  # we want to launch docker containers from inside docker, which means we need to loosen the permissions on the docker
+  # socket. This isn't the best security practice, but it's the easiest way to get this working.
+  - sudo chmod 666 /var/run/docker.sock
+
+setup_commands:
+  # set the GCP project because it's not injected by default
+  - gcloud config set project hai-gcp-models
+  - gcloud config set compute/region us-central2
+  - gcloud config set compute/zone us-central2-b
+  - mkdir $HOME/.cache/huggingface -p
+  - gcloud secrets versions access latest --secret=HF_TOKEN > $HOME/.cache/huggingface/token
+  - export OPENAI_API_KEY=$(gcloud secrets versions access latest --secret=OPENAI_API_KEY)
+  - gcsfuse --only-dir gcsfuse_mount marin-us-central2 /opt/gcsfuse_mount || true
+
+# Set Head Node == `ray_head_default`
+head_node_type: head_default
+
+
 # List of Available Node Types
 available_node_types:
   # Head Node =>> On-Demand, sets Min/Max Workers = 0 (Prevent Scheduling Tasks on Head Node)
   head_default:
     min_workers: 0
     max_workers: 0
-    resources: {"CPU": 0}
+    resources: {"CPU": 1}
 
     # GCP-Specific Configuration; by default, Ray will configure unspecified fields (e.g., subnets, ssh-keys)
     #   => Ref: https://cloud.google.com/compute/docs/reference/rest/v1/instances/insert
@@ -32,7 +81,7 @@ available_node_types:
   tpu_worker:
     min_workers: 4
     max_workers: 1024
-    resources: {"CPU": 120, "TPU": 1}
+    resources: {"CPU": 120, "TPU": 4}
 
     # GCP-Specific Configuration; setup for TPU V4-8 VMs (in `us-central2-b`)
     node_config:
@@ -43,42 +92,80 @@ available_node_types:
       schedulingConfig:
         preemptible: true
 
-# Configure GCP
-provider:
-  type: gcp
-  region: us-central2
-  availability_zone: us-central2-b
-  project_id: hai-gcp-models
+  # TPU Slices =>> Preemptible TPU v4-32, v4-64, v4-128, v4-256, v4-512, v4-1024 VMs
+  tpu_slice_v4_16:
+    min_workers: 0
+    max_workers: 1024
+    resources: { "CPU": 120, "TPU": 4 }
 
-docker:
-    image: "us-central2-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:latest"
-    container_name: "ray_docker"
-    pull_before_run: true
-    worker_run_options:
-        - --privileged
-        - --ulimit memlock=-1:-1  #
-        - --shm-size=32gb
-        - -v
-        - "/tmp:/tmp"
-    head_run_options:
-      - --privileged
+    node_config:
+      acceleratorType: v4-16
+      runtimeVersion: tpu-ubuntu2204-base
+      schedulingConfig:
+        preemptible: true
 
+  tpu_slice_v4_32:
+    min_workers: 0
+    max_workers: 1024
+    resources: { "CPU": 120, "TPU": 4 }
 
-initialization_commands:
-  - yes | gcloud auth configure-docker us-central2-docker.pkg.dev
-  - which docker || (curl -fsSL https://get.docker.com -o get-docker.sh; sudo sh get-docker.sh; sudo usermod -aG docker $USER; sudo systemctl restart docker -f)
-  # always run this because ray doesn't run with sudo
-  - sudo usermod -aG docker $USER
+    node_config:
+      acceleratorType: v4-32
+      runtimeVersion: tpu-ubuntu2204-base
+      schedulingConfig:
+        preemptible: true
 
-setup_commands:
-  # set the GCP project because it's not injected by default
-  - gcloud config set project hai-gcp-models
-  - gcloud config set compute/region us-central2
-  - gcloud config set compute/zone us-central2-b
-  - mkdir $HOME/.cache/huggingface -p
-  - gcloud secrets versions access latest --secret=HF_TOKEN > $HOME/.cache/huggingface/token
-  - export OPENAI_API_KEY=$(gcloud secrets versions access latest --secret=OPENAI_API_KEY)
-  - gcsfuse --only-dir gcsfuse_mount marin-us-central2 /opt/gcsfuse_mount || true
+  tpu_slice_v4_64:
+    min_workers: 0
+    max_workers: 1024
+    resources: { "CPU": 120, "TPU": 4 }
 
-# Set Head Node == `ray_head_default`
-head_node_type: head_default
+    node_config:
+      acceleratorType: v4-64
+      runtimeVersion: tpu-ubuntu2204-base
+      schedulingConfig:
+        preemptible: true
+
+  tpu_slice_v4_128:
+    min_workers: 0
+    max_workers: 1024
+    resources: { "CPU": 120, "TPU": 4 }
+
+    node_config:
+      acceleratorType: v4-128
+      runtimeVersion: tpu-ubuntu2204-base
+      schedulingConfig:
+        preemptible: true
+
+  tpu_slice_v4_256:
+    min_workers: 0
+    max_workers: 1024
+    resources: { "CPU": 120, "TPU": 4 }
+
+    node_config:
+      acceleratorType: v4-256
+      runtimeVersion: tpu-ubuntu2204-base
+      schedulingConfig:
+        preemptible: true
+
+  tpu_slice_v4_512:
+    min_workers: 0
+    max_workers: 1024
+    resources: { "CPU": 120, "TPU": 4 }
+
+    node_config:
+      acceleratorType: v4-512
+      runtimeVersion: tpu-ubuntu2204-base
+      schedulingConfig:
+        preemptible: true
+
+  tpu_slice_v4_1024:
+    min_workers: 0
+    max_workers: 1024
+    resources: { "CPU": 120, "TPU": 4 }
+
+    node_config:
+      acceleratorType: v4-1024
+      runtimeVersion: tpu-ubuntu2204-base
+      schedulingConfig:
+        preemptible: true

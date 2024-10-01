@@ -9,6 +9,6 @@ runtime:
   requirements_filepath: "marin/processing/classification/config/fineweb_edu_classifier_requirements.txt"
   memory_limit_gb: 16
   resources:
-    "TPU": 1
+    "TPU": 4
 task:
   max_in_flight: 500

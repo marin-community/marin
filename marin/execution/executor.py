@@ -71,6 +71,7 @@ import hashlib
 import json
 import logging
 import os
+import traceback
 from collections.abc import Callable
 from dataclasses import dataclass, fields, is_dataclass, replace
 from typing import Any
@@ -79,7 +80,16 @@ import draccus
 import ray
 import ray.remote_function
 
-from marin.utils import fsspec_exists
+from marin.execution.executor_step_status import (
+    STATUS_FAILED,
+    STATUS_RUNNING,
+    STATUS_SUCCESS,
+    STATUS_WAITING,
+    append_status,
+    get_current_status,
+    get_status_path,
+    read_events,
+)
 
 logger = logging.getLogger("ray")
 
@@ -150,6 +160,9 @@ class VersionedValue:
 
 def versioned(value: Any):
     return VersionedValue(value)
+
+
+############################################################
 
 
 def dependency_index_str(i: int) -> str:
@@ -256,7 +269,7 @@ class Executor:
 
         # Run each step
         for step in self.steps:
-            self.refs[step] = self.run_step(step, dry_run=dry_run)
+            self.run_step(step, dry_run=dry_run)
         ray.get(list(self.refs.values()))
 
     def compute_version(self, step: ExecutorStep) -> dict[str, Any]:
@@ -294,7 +307,7 @@ class Executor:
 
         return version
 
-    def run_step(self, step: ExecutorStep, dry_run: bool) -> ray.ObjectRef:
+    def run_step(self, step: ExecutorStep, dry_run: bool):
         """
         Return a Ray object reference to the result of running the `step`.
         If `dry_run`, only print out what needs to be done.
@@ -308,45 +321,62 @@ class Executor:
         config_version = self.versions[step]["config"]
         output_path = self.output_paths[step]
 
-        # TODO: we need a scheme to figure out when we need to run this result
-        # as opposed to just using the existing output path.  Currently, just
-        # check if the output path exists.  Note this is imperfect, because the
-        # job that creates the output path might have failed or might be still
-        # running.
-        exists = fsspec_exists(output_path)
-        status = "COMPLETED" if exists else "PENDING"
+        # Figure out the status of this step
+        status_path = get_status_path(output_path)
+        statuses = read_events(status_path)
+        status = get_current_status(statuses)
 
-        # Print information
+        # Print information about this step
         logger.info(f"[{status}] {step.name}: {get_fn_name(step.fn)}")
         logger.info(f"  output_path = {output_path}")
         logger.info(f"  config = {json.dumps(config_version)}")
         for i, dep in enumerate(self.dependencies[step]):
             logger.info(f"  {dependency_index_str(i)} = {self.output_paths[dep]}")
-
-        # Call `fn` if it hasn't been done yet
-        fn = step.fn if not dry_run and not exists else None
-
         logger.info("")
 
+        # Only start if there's no status
+        should_run = not dry_run and status is None
         dependencies = [self.refs[dep] for dep in self.dependencies[step]]
-        return execute_after_dependencies.remote(fn, config, dependencies)
+        self.refs[step] = execute_after_dependencies.remote(step.fn, config, dependencies, output_path, should_run)
 
 
 @ray.remote
-def execute_after_dependencies(fn: ExecutorFunction, config: dataclass, dependencies: list[ray.ObjectRef]):
-    """Run a function with the given config."""
+def execute_after_dependencies(
+    fn: ExecutorFunction, config: dataclass, dependencies: list[ray.ObjectRef], output_path: str, should_run: bool
+):
+    """
+    Run a function `fn` with the given `config`, after all the `dependencies` have finished.
+    Only do stuff if `should_run` is True.
+    """
+    status_path = get_status_path(output_path)
+
     # Ensure that dependencies are all run first
+    if should_run:
+        append_status(status_path, STATUS_WAITING)
     ray.get(dependencies)
 
     # Call fn(config)
-    if fn is None:
-        pass
-    elif isinstance(fn, ray.remote_function.RemoteFunction):
-        ray.get(fn.remote(config))
-    elif isinstance(fn, Callable):
-        fn(config)
-    else:
-        raise ValueError(f"Expected a Callable or Ray function, but got {fn}")
+    if should_run:
+        append_status(status_path, STATUS_RUNNING)
+    try:
+        if isinstance(fn, ray.remote_function.RemoteFunction):
+            if should_run:
+                ray.get(fn.remote(config))
+        elif isinstance(fn, Callable):
+            if should_run:
+                fn(config)
+        else:
+            raise ValueError(f"Expected a Callable or Ray function, but got {fn}")
+    except Exception as e:
+        # Failed due to some exception
+        message = traceback.format_exc()
+        if should_run:
+            append_status(status_path, STATUS_FAILED, message=message)
+        raise e
+
+    # Success!
+    if should_run:
+        append_status(status_path, STATUS_SUCCESS)
 
 
 def get_fn_name(fn: Callable | ray.remote_function.RemoteFunction):
@@ -366,13 +396,11 @@ def get_fn_name(fn: Callable | ray.remote_function.RemoteFunction):
 class ExecutorMainConfig:
     prefix: str = "gs://marin-us-central2"
     dry_run: bool = False
-    local_mode: bool = False
 
 
 @draccus.wrap()
 def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep]):
     """Main entry point for experiments (to standardize)"""
-    ray.init(local_mode=config.local_mode)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     executor = Executor(prefix=config.prefix)
     executor.run(steps=steps, dry_run=config.dry_run)
