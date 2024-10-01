@@ -76,7 +76,6 @@ class HelloWorldConfig:
 
 @draccus.wrap()
 def main(config: HelloWorldConfig):
-    config.ray.initialize()
     # Example of input_path = gs://marin-data/processed/pubmed/2024-07-02/xml
     # We will process all xml_jsonl.gz files in this directory.
     # As a reminder all the processing in this function will be done on the head node. We should try
@@ -110,8 +109,6 @@ if __name__ == "__main__":
     parser.add_argument("--output_path", type=str, help="Path to store pubmed central markdown files", required=True)
 
     args = parser.parse_args()
-
-    ray.init()
 
     responses = map_files_in_directory(xml_to_md.remote, args.input_path, "*xml*jsonl.gz", args.output_path)
 

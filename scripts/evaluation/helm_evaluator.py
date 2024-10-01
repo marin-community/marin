@@ -1,11 +1,8 @@
 from typing import Dict, List
 import os
+import shutil
 import traceback
 
-import ray
-import shutil
-
-from marin.utils import remove_tpu_lockfile_on_exit
 from scripts.evaluation.evaluator import Dependency, ModelConfig
 from scripts.evaluation.vllm_tpu_evaluator import VllmTpuEvaluator
 from scripts.evaluation.utils import is_remote_path, upload_to_gcs, run_bash_command, write_yaml
@@ -96,8 +93,6 @@ class HELMEvaluator(VllmTpuEvaluator):
         }
         write_yaml(content, HELMEvaluator.TOKENIZER_CONFIGS_FILE_PATH)
 
-    @ray.remote(memory=64 * 1024 * 1024 * 1024, resources={"TPU": 1, "TPU-v4-8-head": 1})  # 64 GB of memory
-    @remove_tpu_lockfile_on_exit
     def run(self, model: ModelConfig, evals: List[str], output_path: str, max_eval_instances: int | None = None) -> None:
         """
         Runs HELM on the specified model and set of evaluations.
@@ -108,8 +103,6 @@ class HELMEvaluator(VllmTpuEvaluator):
             output_path (str): The path to save the evaluation results.
             max_eval_instances (int | None): The maximum number of evaluation instances to run.
         """
-
-        is_successful: bool = False
         try:
             from helm.common.general import ensure_file_downloaded
 
@@ -186,12 +179,9 @@ class HELMEvaluator(VllmTpuEvaluator):
             # Upload the results to GCS
             if is_remote_path(output_path):
                 upload_to_gcs(self.RESULTS_PATH, output_path)
-
-            # The run was successful
-            is_successful = True
-        except Exception:
+        except Exception as e:
             traceback.print_exc()
+            raise RuntimeError("HELM failed. Please check the logs for more information.") from e
         finally:
             self.cleanup(model)
             shutil.rmtree(self.RESULTS_PATH, ignore_errors=True)
-            assert is_successful, "The evaluation failed. Please check the logs for more information."

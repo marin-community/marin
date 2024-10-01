@@ -3,8 +3,6 @@ import os
 import shutil
 import traceback
 
-import ray
-
 from scripts.evaluation.evaluator import Dependency, ModelConfig
 from scripts.evaluation.vllm_tpu_evaluator import VllmTpuEvaluator
 from scripts.evaluation.utils import is_remote_path, upload_to_gcs, run_bash_command, write_yaml
@@ -54,7 +52,6 @@ class AlpacaEvaluator(VllmTpuEvaluator):
         }
         write_yaml(content, path)
 
-    @ray.remote(memory=64 * 1024 * 1024 * 1024, resources={"TPU": 4})  # 64 GB of memory, always request 4 TPUs
     def run(self, model: ModelConfig, evals: List[str], output_path: str, max_eval_instances: int | None = None) -> None:
         """
         Runs AlpacaEval on the specified model.
@@ -67,8 +64,7 @@ class AlpacaEvaluator(VllmTpuEvaluator):
         """
         try:
             # Download the model from GCS or HuggingFace
-            model.ensure_downloaded(local_path=os.path.join(VllmTpuEvaluator.CACHE_PATH, model.name))
-            model_name_or_path: str = model.name if model.path is None else model.path
+            model_name_or_path: str = self.download_model(model)
 
             model_config_path: str = os.path.join(VllmTpuEvaluator.CACHE_PATH, model_name_or_path, "model_config.yaml")
             self.write_model_config_file(model, model_config_path)

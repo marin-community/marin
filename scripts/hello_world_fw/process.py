@@ -107,7 +107,6 @@ def transform(cfg: FineWebConfig):
 
 @draccus.wrap()
 def main(cfg: FineWebConfig):
-    ray.init()
     ray.get(transform.remote(cfg))
 
 
