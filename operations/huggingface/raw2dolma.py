@@ -203,7 +203,7 @@ def main(cfg: DatasetConversionConfig):
                 if not answer_text:
                     if answer_label and choices and cfg.output_choices:
                         answer_idx = cfg.output_choices.index(answer_label)
-                    if answer_idx and choices:
+                    if isinstance(answer_idx,int) and answer_idx != -1 and choices:
                         answer_text = choices[answer_idx]
                     else:
                         raise ValueError("No answer text was found. Please review config.")
