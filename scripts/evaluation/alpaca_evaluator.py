@@ -57,6 +57,10 @@ class AlpacaEvaluator(VllmTpuEvaluator):
         """
         Set the OPENAI_API_KEY environment variable. We assume the API key is stored in ~/.cache/openai/token.
         """
+        # If the environment variable is already set, we don't need to do anything
+        if os.environ.get("OPENAI_API_KEY") is not None:
+            return
+
         with open(os.path.expanduser("~/.cache/openai/token"), "r") as f:
             os.environ["OPENAI_API_KEY"] = f.read().strip()
 
