@@ -206,9 +206,7 @@ def main(cfg: DatasetConversionConfig):
                     if answer_idx and choices:
                         answer_text = choices[answer_idx]
                     else:
-                        raise ValueError(
-                            "No answer text was found. Please review config."
-                        )
+                        raise ValueError("No answer text was found. Please review config.")
                 if choices:
                     # list of potential answers
                     dolma_json["metadata"]["options"] = choices
