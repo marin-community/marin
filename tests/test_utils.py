@@ -29,7 +29,7 @@ def parameterize_with_configs(pattern, config_path=None):
     test_path = os.path.dirname(os.path.abspath(__file__))
     if config_path is None:
         config_path = os.path.join(test_path, "..", "config")
-    configs = glob.glob(os.path.join(config_path, pattern))
+    configs = glob.glob(os.path.join(config_path, "**", pattern), recursive=True)
     return pytest.mark.parametrize("config_file", configs, ids=lambda x: f"{os.path.basename(x)}")
 
 
