@@ -218,7 +218,7 @@ def main(cfg: DatasetConversionConfig):
                     dolma_json["metadata"]["answer"] = answer_text
                 if answer_label:
                     # label of correct answer (e.g. "A")
-                    dolma_json["metadata"]["answer_label"]
+                    dolma_json["metadata"]["answer_label"] = answer_label
                 if cfg.output_labels:
                     # list of potential labels (e.g. ["A", "B", "C", 'D"])
                     dolma_json["metadata"]["output_labels"] = cfg.output_labels
