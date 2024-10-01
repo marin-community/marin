@@ -19,11 +19,14 @@ class DatasetCurationConfig:
 
     Attributes:
         input_doc_path (str): Path to the input dataset which can be a directory or a file.
-        label (str): Label for the dataset. This should be either "hq" or "lq"
-            for high quality or low quality, respectively.
+            If it is a directory, the function will glob all the files in the directory and sample from each file.
+            The files can be formatted in jsonl or fasttext format.
+        label (str): Label for the dataset. This should be in the format "__label__<label>"
+            where <label> is the label for the dataset. For example, "__label__hq" or "__label__lq", respectively.
         sampling_rate (float): Sampling rate for the dataset. There are two ways to specify this:
             1. using a percentage (number between 0 and 1) which will sample that percentage of the data.
-            2. using an integer N (where N > 1) which will sample N examples from the dataset.
+            2. using an integer K (where K > 1) which will sample K examples from the dataset of size N
+               where each example is sampled with probability 1/N.
         format (DatasetFormat): Format of the dataset.
     """
 
@@ -41,7 +44,9 @@ class TrainFasttextClassifierConfig:
     Attributes:
         output_path (str): Path for output data (i.e., gs://$BUCKET/classifiers/$EXPERIMENT).
         input_doc_paths (list[DatasetCurationConfig]): List of configurations for converting input datasets into
-            labeled datasets.
+            labeled datasets. The input datasets can be a directory or a file.
+            If it is a directory, the function will glob all the files in the directory and sample from each file.
+            The files can be formatted in jsonl or fasttext format.
         fasttext_args (dict): Arguments for the fastText training process (see fastText docs for list of options).
         seed (int): Seed for random number generator to ensure reproducibility.
         val_frac (float): Fraction of data to be used for validation.
