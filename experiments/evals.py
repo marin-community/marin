@@ -6,8 +6,6 @@ from scripts.evaluation.run import evaluate  # noqa
 """
 Canonical set of evals.
 
-TODO: finalize this list.
-
 How to run:
 ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python3 experiments/evals.py
 """
