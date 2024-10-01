@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from enum import Enum
 
 
@@ -14,3 +15,11 @@ class DatasetFormat(Enum):
 
     DOLMA_FORMATTED_JSONL = "dolma_formatted_jsonl"
     FASTTEXT = "fasttext"
+
+
+@dataclass
+class Example:
+    """Data structure representing a single input with its quality label"""
+
+    label: str
+    text: str

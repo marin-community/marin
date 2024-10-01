@@ -13,7 +13,7 @@ from marin.classifiers.utils import attributes_to_dataset
 from marin.processing.classification.types import DatasetFormat
 
 
-@dataclass
+@dataclass(frozen=True)
 class DatasetCurationConfig:
     """Configuration for curating a dataset for training a quality classfier
 
@@ -41,7 +41,7 @@ class TrainFasttextClassifierConfig:
     Attributes:
         output_path (str): Path for output data (i.e., gs://$BUCKET/classifiers/$EXPERIMENT).
         input_doc_paths (list[DatasetCurationConfig]): List of configurations for converting input datasets into
-            labelled datasets.
+            labeled datasets.
         fasttext_args (dict): Arguments for the fastText training process (see fastText docs for list of options).
         seed (int): Seed for random number generator to ensure reproducibility.
         val_frac (float): Fraction of data to be used for validation.

@@ -8,13 +8,14 @@ import json
 import logging
 import os
 from collections.abc import Callable
+from pathlib import Path
 
 import fsspec
 import numpy as np
 import ray
 
 from marin.core.runtime import cached_or_construct_output, map_files_in_directory
-from marin.processing.classification.types import DatasetFormat
+from marin.processing.classification.types import DatasetFormat, Example
 from marin.utils import fsspec_glob, fsspec_isdir
 
 
@@ -45,8 +46,8 @@ def write_label_attribute(input_file_path: str, output_file_path: str, label: st
     return True
 
 
-def get_example_from_input_line(input_line: str, label: str, file_format: DatasetFormat) -> dict:
-    """Converts a single line of input to an example.
+def get_example_from_input_line(input_line: str, label: str, file_format: DatasetFormat) -> Example:
+    """Converts a single line of input from a jsonl file or fasttext formatted file to a training example
 
     Args:
         input_line (str): A single line of input.
@@ -58,24 +59,21 @@ def get_example_from_input_line(input_line: str, label: str, file_format: Datase
     """
     import re
 
-    example = None
+    text = None
     if file_format == DatasetFormat.DOLMA_FORMATTED_JSONL:
         data = json.loads(input_line)
+        text = data["text"]
     elif file_format == DatasetFormat.FASTTEXT:
-        data = {}
         line = input_line.strip()
         match = re.match(r"__label__(\S+)\s+(.*)", line, re.DOTALL)
-        if match:
-            data["text"] = match.group(2).strip()
+        text = match.group(2).strip()
     else:
         raise ValueError(f"File format not supported: {file_format}")
 
-    if "text" in data:
-        example = {"text": data["text"], "label": label}
-    else:
+    if not text:
         logging.warning(f"Document {data.get('id', '')} has no text field.")
 
-    return example
+    return Example(text=text, label=label)
 
 
 @cached_or_construct_output(success_suffix="SUCCESS")
@@ -114,7 +112,7 @@ def write_examples(
 
             example = get_example_from_input_line(input_line, label, file_format)
             if example is not None:
-                f_out.write(json.dumps(example) + "\n")
+                f_out.write(json.dumps({"text": example.text, "label": example.label}) + "\n")
     return True
 
 
@@ -185,10 +183,20 @@ def create_label_attribute(input_doc_path: str, output_attr_path: str, label: st
 
 
 def get_output_path_for_input_doc_path(output_path: str, input_doc_path: str) -> str:
-    from pathlib import Path
+    """Converts an input document path to an output dataset path
 
+    Examples:
+        [A] (output_path, /documents/hello_world_fw/) ->
+            [B] /output_path/data/documents/hello_world_fw.jsonl.gz
+        [A] (output_path, /documents/hello_world_fw/file.jsonl.gz) ->
+            [B] /output_path/data/documents/hello_world_fw/file.jsonl.gz
+        [A] (output_path, /documents/hello_world_fw/file.txt) ->
+            [B] /output_path/data/documents/hello_world_fw/file.jsonl.gz
+    """
     _, doc_fs_path = fsspec.core.url_to_fs(input_doc_path)
     path = Path(doc_fs_path)
+
+    # Remove all files extensions from the input path and replace with .jsonl.gz
     while path.suffix:
         path = path.with_suffix("")
     path = str(path) + ".jsonl.gz"
@@ -206,7 +214,12 @@ def reservoir_sample_and_write_examples(
     label: str,
     file_format: DatasetFormat,
 ):
-    """Sample a fixed number of examples from the dataset
+    """Sample a fixed number of examples K from any dataset of size N where K < N
+
+    We use the reservoir sampling algorithm to sample K examples from the dataset of size N where
+    each row in the dataset has a uniform probability of 1/N of being sampled.
+    The dataset can be sharded across multiple files in the directory which we glob together and
+    sample from.
 
     Args:
         doc_path (str): Path to the input dataset which can be a directory or a file.
@@ -237,7 +250,7 @@ def reservoir_sample_and_write_examples(
         for line in reservoir:
             example = get_example_from_input_line(line, label, file_format)
             if example is not None:
-                f_out.write(json.dumps(example) + "\n")
+                f_out.write(json.dumps({"text": example.text, "label": example.label}) + "\n")
 
     return True
 
