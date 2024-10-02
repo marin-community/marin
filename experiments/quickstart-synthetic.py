@@ -46,7 +46,6 @@ transform_lq_data_step = ExecutorStep(
 # ############################################################
 # # Train quality classifier
 
-
 train_quality_step = ExecutorStep(
     name="classifiers/synth-classifier-nikil",
     fn=train,
@@ -56,7 +55,7 @@ train_quality_step = ExecutorStep(
         output_path=this_output_path(),
         pos_sampling_rate=0.5,
         neg_sampling_rate=1.0,
-        fasttext_args={"lr": 0.01, "minCount": 1},
+        fasttext_args={"lr": 0.1, "minCount": 1, "epoch": 20},
     ),
 )
 
@@ -91,7 +90,7 @@ inference_lq_step = ExecutorStep(
 # Deduplicate
 
 dedupe_step = ExecutorStep(
-    name="attributes/hello_world_fw-pliang-dedupe",
+    name="quickstart-data/dedupe",
     fn=dedupe,
     config=DedupeConfig(
         input_path=output_path_of(transform_hq_data_step),
@@ -172,5 +171,6 @@ if __name__ == "__main__":
             train_quality_step,
             inference_hq_step,
             inference_lq_step,
+            dedupe_step,
         ]
     )
