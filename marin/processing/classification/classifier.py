@@ -51,7 +51,7 @@ class FasttextClassifier(BaseClassifier):
         from filelock import FileLock
 
         # Classifier is stored in a remote storage.
-        if urllib.parse.urlparse(self.model_name).scheme:
+        if urllib.parse.urlparse(self.model_name).scheme or os.path.exists(self.model_name):
             fs, fs_path = fsspec.core.url_to_fs(self.model_name)
 
             if not fs_path.endswith(".bin"):
@@ -67,6 +67,7 @@ class FasttextClassifier(BaseClassifier):
 
             with FileLock(lock_file):
                 if not os.path.exists(success_file):
+                    fs.makedirs(f"/tmp/{model_descriptor}")
                     fs.get(fs_path, local_filepath)
                     atexit.register(lambda: os.unlink(local_filepath))
                     print(f"Downloaded model from {fs_path} to {local_filepath}")
