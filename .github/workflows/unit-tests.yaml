@@ -3,7 +3,7 @@ name: Run unit tests
 on: [push, pull_request]
 
 jobs:
-  build:
+  test:
     if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository)
 
     runs-on: ubuntu-latest
@@ -35,6 +35,7 @@ jobs:
           conda install -c conda-forge pandoc
           npm install -g pandiff
           pip install -e ".[dev]"
+          pip install ray[default] google-api-python-client
 
       - name: Set up Google Cloud SDK
         uses: google-github-actions/setup-gcloud@v1
@@ -45,23 +46,11 @@ jobs:
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.NEW_GCP_JSON }}
-
-      - name: Install Ray and other dependencies
-        run: |
-          pip install ray[default] google-api-python-client
           
       - name: Start Ray cluster locally
         shell: bash -l {0}
         run: |
           ray start --head
-
-      - name: Verify installations
-        shell: bash -l {0}
-        run: |
-          conda list
-          pandoc --version
-          pandiff --version
-          python --version
 
       - name: Test with pytest
         shell: bash -l {0}
