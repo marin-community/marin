@@ -72,7 +72,7 @@ def get_example_from_input_line(input_line: str, label: str, file_format: Datase
         raise ValueError(f"File format not supported: {file_format}")
 
     if not text:
-        logging.warning(f"Document {data.get('id', '')} has no text field.")
+        logging.warning("Document has no text field.")
         return None
     else:
         return Example(text=text, label=label)
