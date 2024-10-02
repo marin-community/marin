@@ -7,7 +7,7 @@ import htmlmin
 from bs4 import BeautifulSoup
 
 from marin.markdown import to_markdown
-from marin.schemas.web.convert import ReadabilityConfig, TrafilaturaConfig
+from marin.schemas.web.convert import ExtractionConfig, HtmlToMarkdownConfig, TrafilaturaConfig
 
 logger = logging.getLogger("ray")
 
@@ -108,7 +108,7 @@ def convert_page_with_resiliparse(html: str, url: str | None = None) -> dict[str
 
 
 def convert_page_with_readability(
-    html: str, url: str | None = None, config: str | ReadabilityConfig = "default"
+    html: str, url: str | None = None, config: str | HtmlToMarkdownConfig = "default"
 ) -> dict[str, str]:
     """
     Convert HTML to text[markdown] using Readability and markdownify.
@@ -144,9 +144,9 @@ def convert_page_with_readability(
         case str():
             markdown = to_markdown(
                 tree,
-                **asdict(ReadabilityConfig.get_preset_config(config)),
+                **asdict(HtmlToMarkdownConfig.get_preset_config(config)),
             )
-        case ReadabilityConfig():
+        case HtmlToMarkdownConfig():
             markdown = to_markdown(tree, **asdict(config))
         case _:
             raise Exception(
@@ -207,7 +207,7 @@ def convert_page(
     html: str,
     url: str | None = None,
     extract_method: str = "readability",
-    config: str | TrafilaturaConfig | ReadabilityConfig = "default",
+    config: str | ExtractionConfig = "default",
 ) -> dict[str, str]:
     """
     Convert HTML to text using the specified method.

@@ -1,7 +1,13 @@
 from dataclasses import dataclass
+from draccus.choice_types import ChoiceRegistry
 
 
 @dataclass(frozen=True)
+class ExtractionConfig(ChoiceRegistry):
+    pass
+
+
+@ExtractionConfig.register_subclass("trafilatura")
 class TrafilaturaConfig:
     favor_precision: bool = False
     favor_recall: bool = True
@@ -50,17 +56,17 @@ class TrafilaturaConfig:
             raise Exception(f"Invalid preset config: {config}. Please use 'fineweb' or 'default'.")
 
 
-@dataclass(frozen=True)
-class ReadabilityConfig:
+ExtractionConfig.register_subclass("markdownify")
+class HtmlToMarkdownConfig:
     include_images: bool = True
     include_links: bool = True
 
     @classmethod
-    def default_config(cls) -> "ReadabilityConfig":
+    def default_config(cls) -> "HtmlToMarkdownConfig":
         return cls()
 
     @classmethod
-    def get_preset_config(cls, config: str) -> "ReadabilityConfig":
+    def get_preset_config(cls, config: str) -> "HtmlToMarkdownConfig":
         if config == "default":
             return cls.default_config()
         else:

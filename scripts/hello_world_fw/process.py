@@ -22,7 +22,7 @@ import fsspec
 import ray
 
 from marin.core.runtime import cached_or_construct_output, map_files_in_directory
-from marin.schemas.web.convert import TrafilaturaConfig, ReadabilityConfig
+from marin.schemas.web.convert import ExtractionConfig
 from marin.web.convert import convert_page
 
 logger = logging.getLogger("ray")
@@ -85,7 +85,7 @@ class FineWebConfig:
     input_path: str
     output_path: str
     extract_method: str = "readability"
-    config: str | TrafilaturaConfig | ReadabilityConfig = "default"
+    config: str | ExtractionConfig = "default"
 
 
 @ray.remote
