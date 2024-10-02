@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+
 from draccus.choice_types import ChoiceRegistry
 
 
@@ -57,6 +58,8 @@ class TrafilaturaConfig:
 
 
 ExtractionConfig.register_subclass("markdownify")
+
+
 class HtmlToMarkdownConfig:
     include_images: bool = True
     include_links: bool = True
