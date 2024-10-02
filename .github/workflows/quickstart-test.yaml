@@ -1,0 +1,38 @@
+name: Verify PR with quickstart.py
+
+on:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v1
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.NEW_GCP_JSON }}
+
+      - name: Install dependencies
+        run: |
+          pip install ray[default]==2.34.0
+          pip install . --extra-index-url https://download.pytorch.org/whl/cpu
+
+      - name: Start Ray cluster locally
+        run: |
+          ray start --head
+
+
+      - name: Test with pytest
+        run: |
+          ray job submit --working-dir . -- python experiments/quickstart-synthetic.py --commit_hash exp-${{ github.sha }}
