@@ -18,6 +18,9 @@ from marin.processing.classification.inference import InferenceConfig, run_infer
 from scripts.fasttext.train_fasttext import TrainFasttextClassifierConfig, train
 from scripts.hello_world_fw.process import FineWebConfig, transform
 
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
+
 
 @dataclass
 class QuickstartExecutorConfig:
@@ -159,11 +162,13 @@ def main(config: QuickstartExecutorConfig):
         steps = create_steps(config)
         config_executor = ExecutorMainConfig(prefix="/tmp")
         executor_main(config_executor, steps=steps)
+        logger.info(
+            f"Execution completed successfully. All outputs are in gs://marin-us-central2/{config.prefix}{config.commit_hash}"
+        )
     except Exception as e:
-        logging.error(f"Error in main execution: {e}")
+        logger.error(f"Error in main execution: {e}")
         raise e
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     main()
