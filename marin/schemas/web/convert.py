@@ -58,8 +58,6 @@ class TrafilaturaConfig:
 
 
 ExtractionConfig.register_subclass("markdownify")
-
-
 class HtmlToMarkdownConfig:
     include_images: bool = True
     include_links: bool = True
