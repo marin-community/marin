@@ -1,6 +1,7 @@
 fasttext_args:
   lr: 0.01
   thread: 4
+  minCount: 1
 seed: 0
 val_frac: 0.1
 memory: 1

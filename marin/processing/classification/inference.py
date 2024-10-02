@@ -157,7 +157,7 @@ def run_inference(inference_config: InferenceConfig):
             ray.get(ready_refs)
 
         output_filepath = rebase_file_path(input_path, input_filepath, output_path)
-        fsspec_mkdirs(output_filepath)
+        fsspec_mkdirs(os.path.dirname(output_filepath))
 
         result_ref = process_filepath_func.options(
             memory=inference_config.runtime.memory_limit_gb * 1024 * 1024 * 1024,
