@@ -7,6 +7,7 @@ Utility functions for building quality classifiers.
 import json
 import logging
 import os
+import re
 from collections.abc import Callable
 from pathlib import Path
 
@@ -57,8 +58,6 @@ def get_example_from_input_line(input_line: str, label: str, file_format: Datase
     Returns:
         dict: An example with the format {"text": <text>, "label": <label>}.
     """
-    import re
-
     text = None
     if file_format == DatasetFormat.DOLMA_FORMATTED_JSONL:
         data = json.loads(input_line)
