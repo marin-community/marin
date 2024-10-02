@@ -66,14 +66,16 @@ def get_example_from_input_line(input_line: str, label: str, file_format: Datase
     elif file_format == DatasetFormat.FASTTEXT:
         line = input_line.strip()
         match = re.match(r"__label__(\S+)\s+(.*)", line, re.DOTALL)
-        text = match.group(2).strip()
+        if match:
+            text = match.group(2).strip()
     else:
         raise ValueError(f"File format not supported: {file_format}")
 
     if not text:
         logging.warning(f"Document {data.get('id', '')} has no text field.")
-
-    return Example(text=text, label=label)
+        return None
+    else:
+        return Example(text=text, label=label)
 
 
 @cached_or_construct_output(success_suffix="SUCCESS")
