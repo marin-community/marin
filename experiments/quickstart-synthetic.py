@@ -4,11 +4,17 @@ from dataclasses import dataclass
 
 import draccus
 
-from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path, versioned
+from marin.execution.executor import (
+    ExecutorMainConfig,
+    ExecutorStep,
+    executor_main,
+    output_path_of,
+    this_output_path,
+    versioned,
+)
 from marin.processing.classification.consolidate import ConsolidateConfig, FilterConfig, consolidate
 from marin.processing.classification.dedupe import DedupeConfig, dedupe
 from marin.processing.classification.inference import InferenceConfig, run_inference
-from marin.schemas.web.convert import TrafilaturaConfig
 from scripts.fasttext.train_fasttext import TrainFasttextClassifierConfig, train
 from scripts.hello_world_fw.process import FineWebConfig, transform
 
@@ -17,10 +23,10 @@ from scripts.hello_world_fw.process import FineWebConfig, transform
 class QuickstartExecutorConfig:
     # all artifacts will be saved in gs://marin-us-central2/{prefix}{commit_hash}
     commit_hash: str = ""
-    prefix: str = "quickstart-tests/exp"
+    prefix: str = "quickstart-tests"
 
     # path to synthetic test data
-    synth_data: str = "gs://marin-us-central2/documents/nikil-synthetic-data-v1/"
+    synth_data: str = "gs://marin-us-central2/documents/quick-start-tests"
 
 
 def create_steps(config: QuickstartExecutorConfig) -> list[ExecutorStep]:
@@ -28,34 +34,24 @@ def create_steps(config: QuickstartExecutorConfig) -> list[ExecutorStep]:
     # Transform HTML to text
 
     transform_hq_data_step = ExecutorStep(
-        name=f"{config.prefix}{config.commit_hash}/hq-transformed",
+        name=os.path.join(config.prefix, config.commit_hash, "hq-transformed"),
         fn=transform,
         config=FineWebConfig(
             input_path=os.path.join(config.synth_data, "pos"),
             output_path=this_output_path(),
             extract_method=versioned("readability"),
-            config=TrafilaturaConfig(
-                favor_precision=versioned(False),
-                favor_recall=versioned(True),
-                include_comments=versioned(False),
-                deduplicate=versioned(False),
-            ),
+            config=versioned("default"),
         ),
     )
 
     transform_lq_data_step = ExecutorStep(
-        name=f"{config.prefix}{config.commit_hash}/lq-transformed",
+        name=os.path.join(config.prefix, config.commit_hash, "lq-transformed"),
         fn=transform,
         config=FineWebConfig(
             input_path=os.path.join(config.synth_data, "neg"),
             output_path=this_output_path(),
             extract_method=versioned("readability"),
-            config=TrafilaturaConfig(
-                favor_precision=versioned(True),
-                favor_recall=versioned(False),
-                include_comments=versioned(False),
-                deduplicate=versioned(False),
-            ),
+            config=versioned("default"),
         ),
     )
 
@@ -63,7 +59,7 @@ def create_steps(config: QuickstartExecutorConfig) -> list[ExecutorStep]:
     # Train quality classifier
 
     train_quality_step = ExecutorStep(
-        name=f"{config.prefix}{config.commit_hash}/synth-classifier-nikil",
+        name=os.path.join(config.prefix, config.commit_hash, "quality-classifier"),
         fn=train,
         config=TrainFasttextClassifierConfig(
             pos_doc_path=output_path_of(transform_hq_data_step),
@@ -85,7 +81,7 @@ def create_steps(config: QuickstartExecutorConfig) -> list[ExecutorStep]:
     # Run inference with quality classifier
 
     inference_hq_step = ExecutorStep(
-        name=f"{config.prefix}{config.commit_hash}/hq-inference",
+        name=os.path.join(config.prefix, config.commit_hash, "hq-inference"),
         fn=run_inference,
         config=InferenceConfig(
             input_path=output_path_of(transform_hq_data_step),
@@ -97,7 +93,7 @@ def create_steps(config: QuickstartExecutorConfig) -> list[ExecutorStep]:
     )
 
     inference_lq_step = ExecutorStep(
-        name=f"{config.prefix}{config.commit_hash}/lq-inference",
+        name=os.path.join(config.prefix, config.commit_hash, "lq-inference"),
         fn=run_inference,
         config=InferenceConfig(
             input_path=output_path_of(transform_lq_data_step),
@@ -112,7 +108,7 @@ def create_steps(config: QuickstartExecutorConfig) -> list[ExecutorStep]:
     # Deduplicate
 
     dedupe_step = ExecutorStep(
-        name=f"{config.prefix}{config.commit_hash}/dedupe",
+        name=os.path.join(config.prefix, config.commit_hash, "dedupe"),
         fn=dedupe,
         config=DedupeConfig(
             input_path=output_path_of(transform_hq_data_step),
@@ -124,7 +120,7 @@ def create_steps(config: QuickstartExecutorConfig) -> list[ExecutorStep]:
     # Consolidate
 
     consolidate_step = ExecutorStep(
-        name=f"{config.prefix}{config.commit_hash}/consolidate",
+        name=os.path.join(config.prefix, config.commit_hash, "consolidate"),
         fn=consolidate,
         config=ConsolidateConfig(
             input_path=output_path_of(transform_hq_data_step),
@@ -161,7 +157,8 @@ def create_steps(config: QuickstartExecutorConfig) -> list[ExecutorStep]:
 def main(config: QuickstartExecutorConfig):
     try:
         steps = create_steps(config)
-        executor_main(steps=steps)
+        config_executor = ExecutorMainConfig()
+        executor_main(config_executor, steps=steps)
     except Exception as e:
         logging.error(f"Error in main execution: {e}")
         raise e
