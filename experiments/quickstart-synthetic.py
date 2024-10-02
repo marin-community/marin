@@ -26,7 +26,7 @@ class QuickstartExecutorConfig:
     prefix: str = "quickstart-tests"
 
     # path to synthetic test data
-    synth_data: str = "gs://marin-us-central2/documents/quick-start-tests"
+    synth_data: str = "./tests/quick-start-tests"
 
 
 def create_steps(config: QuickstartExecutorConfig) -> list[ExecutorStep]:
@@ -157,7 +157,7 @@ def create_steps(config: QuickstartExecutorConfig) -> list[ExecutorStep]:
 def main(config: QuickstartExecutorConfig):
     try:
         steps = create_steps(config)
-        config_executor = ExecutorMainConfig()
+        config_executor = ExecutorMainConfig(prefix="/tmp")
         executor_main(config_executor, steps=steps)
     except Exception as e:
         logging.error(f"Error in main execution: {e}")
