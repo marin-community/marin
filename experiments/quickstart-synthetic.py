@@ -47,7 +47,7 @@ transform_lq_data_step = ExecutorStep(
 # # Train quality classifier
 
 train_quality_step = ExecutorStep(
-    name="classifiers/synth-classifier-nikil",
+    name="quickstart-data/synth-classifier-nikil",
     fn=train,
     config=TrainFasttextClassifierConfig(
         pos_doc_path=output_path_of(transform_hq_data_step),
@@ -102,7 +102,7 @@ dedupe_step = ExecutorStep(
 # Consolidate
 
 consolidate_step = ExecutorStep(
-    name="documents/hello_world_fw-pliang-consolidate",
+    name="quickstart-data/consolidate",
     fn=consolidate,
     config=ConsolidateConfig(
         input_path=output_path_of(transform_hq_data_step),
@@ -111,7 +111,7 @@ consolidate_step = ExecutorStep(
             FilterConfig(
                 type=versioned("classify"),
                 attribute_path=output_path_of(inference_hq_step),
-                name=versioned("olmo-fasttext-quality"),
+                name=versioned("quickstart-fasttext-quality"),
                 label="__label__hq",
                 threshold=versioned(0.1),
             ),
@@ -172,5 +172,6 @@ if __name__ == "__main__":
             inference_hq_step,
             inference_lq_step,
             dedupe_step,
+            consolidate_step,
         ]
     )
