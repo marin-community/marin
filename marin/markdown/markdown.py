@@ -11,6 +11,8 @@ from bs4 import BeautifulSoup, Comment, Doctype, NavigableString
 from markdownify import MarkdownConverter
 from regex import regex
 
+from marin.schemas.web.convert import HtmlToMarkdownConfig
+
 logger = logging.getLogger(__name__)
 
 # TODOs:
@@ -19,13 +21,10 @@ logger = logging.getLogger(__name__)
 # - [x] add latex math support
 
 
-def to_markdown(html, include_links=True, include_images=True):
+def to_markdown(html, config: HtmlToMarkdownConfig):
     if isinstance(html, str):
         html = BeautifulSoup(html, "html.parser")
-    text = MyMarkdownConverter(
-        include_links=include_links,
-        include_images=include_images,
-    ).convert_soup(html)
+    text = MyMarkdownConverter(config).convert_soup(html)
     # cleanup: replace nbsp as space
     # this isn't quite right if we preserve html in places, but we currently are not doing that
     text = text.replace("\xa0", " ")
@@ -146,9 +145,9 @@ def _try_convert_int(val, default):
 
 class MyMarkdownConverter(MarkdownConverter):
 
-    def __init__(self, **kwargs):
-        self.include_links = kwargs.pop("include_links", True)
-        self.include_images = kwargs.pop("include_images", True)
+    def __init__(self, config: HtmlToMarkdownConfig, **kwargs):
+        self.include_links = config.include_links
+        self.include_images = config.include_images
 
         kwargs = {
             "heading_style": "ATX",
