@@ -130,44 +130,6 @@ consolidate_step = ExecutorStep(
     ),
 )
 
-# ############################################################
-# # Tokenize
-
-# from marin.processing.tokenize import TokenizeConfig, tokenize
-
-# tokenize_step = ExecutorStep(
-#     name="tokenized/llama3/hello_world_fw-pliang",
-#     fn=tokenize,
-#     config=TokenizeConfig(
-#         input_path=output_path_of(consolidate_step),
-#         cache_path=this_output_path(),
-#         dataset_name="hello_world_fw-pliang",  # Does this have to be unique?
-#         tokenizer="meta-llama/Meta-Llama-3.1-8B",
-#     ),
-# )
-
-# ############################################################
-# # Training
-
-# # TODO: wait for Ray version
-
-# ############################################################
-# # Evaluate
-
-# # TODO: wait for draccus version
-
-# ############################################################
-
-# if __name__ == "__main__":
-#     executor_main(
-#         steps=[
-#             transform_trafilatura_step,
-#             transform_resiliparse_step,  # Not used
-#             transform_readability_step,  # Not used
-#             # train_quality_step,  # Not used  (TODO: fails right now)
-#             tokenize_step,
-#         ]
-#     )
 
 if __name__ == "__main__":
     executor_main(
