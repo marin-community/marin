@@ -65,8 +65,9 @@ def train(cfg: TrainFasttextClassifierConfig):
         seed=cfg.seed,
     )
 
+    input_path = os.path.join(cfg.output_path, "data")
     train_model(
-        input_path=f"{cfg.output_path}/data",
+        input_path=input_path,
         output_path=cfg.output_path,
         seed=cfg.seed,
         val_frac=cfg.val_frac,

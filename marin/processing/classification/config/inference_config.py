@@ -25,7 +25,7 @@ class InferenceConfig:
     runtime: RuntimeConfig = field(
         default_factory=lambda: RuntimeConfig(
             requirements_filepath="marin/processing/classification/config/dclm_fasttext_requirements.txt",
-            memory_limit_gb=12,
+            memory_limit_gb=0.1,
         )
     )
     task: TaskConfig = field(default_factory=TaskConfig)
