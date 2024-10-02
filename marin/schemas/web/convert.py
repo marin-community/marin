@@ -9,7 +9,7 @@ class ExtractionConfig(ChoiceRegistry):
 
 
 @ExtractionConfig.register_subclass("trafilatura")
-class TrafilaturaConfig:
+class TrafilaturaConfig(ExtractionConfig):
     favor_precision: bool = False
     favor_recall: bool = True
     include_comments: bool = False
@@ -57,8 +57,8 @@ class TrafilaturaConfig:
             raise Exception(f"Invalid preset config: {config}. Please use 'fineweb' or 'default'.")
 
 
-ExtractionConfig.register_subclass("markdownify")
-class HtmlToMarkdownConfig:
+@ExtractionConfig.register_subclass("markdownify")
+class HtmlToMarkdownConfig(ExtractionConfig):
     include_images: bool = True
     include_links: bool = True
 
