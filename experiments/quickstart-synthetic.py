@@ -53,9 +53,15 @@ train_quality_step = ExecutorStep(
         pos_doc_path=output_path_of(transform_hq_data_step),
         neg_doc_path=output_path_of(transform_lq_data_step),
         output_path=this_output_path(),
-        pos_sampling_rate=0.5,
+        pos_sampling_rate=1.0,
         neg_sampling_rate=1.0,
-        fasttext_args={"lr": 0.1, "minCount": 1, "epoch": 20},
+        fasttext_args={
+            "lr": 0.001,
+            "minCount": 1,
+            "epoch": 25,
+            "wordNgrams": 2,
+            "dim": 50,
+        },  # these params were chosen to ensure training stability given small dataset
     ),
 )
 
@@ -111,12 +117,12 @@ consolidate_step = ExecutorStep(
             FilterConfig(
                 type=versioned("classify"),
                 attribute_path=output_path_of(inference_hq_step),
-                name=versioned("quickstart-fasttext-quality"),
+                name=versioned("quickstart-fasttext-quality-hq"),  # NOTE: has to match attribute name in inference step
                 label="__label__hq",
                 threshold=versioned(0.1),
             ),
             FilterConfig(
-                type=versioned("dedupe"),
+                type=versioned("remove_spans"),
                 attribute_path=output_path_of(dedupe_step),
                 name=versioned("duplicate_text"),
             ),
