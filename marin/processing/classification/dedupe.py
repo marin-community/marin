@@ -205,7 +205,7 @@ def delete_jsonl_files(dir_path):
     return files_deleted
 
 
-@ray.remote(runtime_env={"pip": ["dolma"]})
+@ray.remote
 def dolma_dedup(
     input_path,
     output_path,

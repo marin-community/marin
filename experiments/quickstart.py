@@ -80,7 +80,11 @@ sft_data = "gs://marin-us-central2/documents/instruct/v1_olmo_mix/text"
 ############################################################
 # Train quality classifier
 
-from scripts.fasttext.train_fasttext import TrainFasttextClassifierConfig, train, DatasetCurationConfig  # noqa
+from marin.processing.classification.fasttext.train_fasttext import (  # noqa
+    DatasetCurationConfig,
+    TrainFasttextClassifierConfig,
+    train,
+)
 
 train_quality_step = ExecutorStep(
     name="classifiers/hello_world_fw-pliang",
