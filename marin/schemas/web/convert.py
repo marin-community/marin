@@ -48,3 +48,20 @@ class TrafilaturaConfig:
             return cls.default_config()
         else:
             raise Exception(f"Invalid preset config: {config}. Please use 'fineweb' or 'default'.")
+
+
+@dataclass(frozen=True)
+class ReadabilityConfig:
+    include_images: bool = True
+    include_links: bool = True
+
+    @classmethod
+    def default_config(cls) -> "ReadabilityConfig":
+        return cls()
+
+    @classmethod
+    def get_preset_config(cls, config: str) -> "ReadabilityConfig":
+        if config == "default":
+            return cls.default_config()
+        else:
+            raise Exception(f"Invalid preset config: {config}. Please use 'default'.")
