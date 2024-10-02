@@ -160,10 +160,11 @@ def create_steps(config: QuickstartExecutorConfig) -> list[ExecutorStep]:
 def main(config: QuickstartExecutorConfig):
     try:
         steps = create_steps(config)
-        config_executor = ExecutorMainConfig(prefix="/tmp")
+        bucket_prefix = "/tmp"
+        config_executor = ExecutorMainConfig(prefix=bucket_prefix)
         executor_main(config_executor, steps=steps)
         logger.info(
-            f"Execution completed successfully. All outputs are in gs://marin-us-central2/{config.prefix}{config.commit_hash}"
+            f"Execution completed successfully. All outputs are in {bucket_prefix}/{config.prefix}/{config.commit_hash}"
         )
     except Exception as e:
         logger.error(f"Error in main execution: {e}")
