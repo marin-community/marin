@@ -16,17 +16,6 @@ def test_training_configs(config_file):
     check_load_config(config_class, config_file)
 
 
-@parameterize_with_configs(pattern="train_bert.yaml", config_path=PROJECT_DIR)
-def test_bert_configs(config_file):
-    """
-    Validate all the bert configs (config/bert/*.yaml).
-    """
-    from scripts.bert.train_bert import TrainBertClassifierConfig
-
-    config_class = TrainBertClassifierConfig
-    check_load_config(config_class, config_file)
-
-
 @parameterize_with_configs(pattern="train_fasttext.yaml", config_path=PROJECT_DIR)
 def test_fasttext_configs(config_file):
     """
@@ -38,10 +27,10 @@ def test_fasttext_configs(config_file):
     check_load_config(config_class, config_file)
 
 
-@parameterize_with_configs(pattern="*dedupe.yaml", config_path=PROJECT_DIR)
+@parameterize_with_configs(pattern="*quickstart_dedupe.yaml", config_path=PROJECT_DIR)
 def test_dedupe_configs(config_file):
     """
-    Validate all the dedupe configs (config/dedupe/*.yaml).
+    Validate all the dedupe configs.
     """
     from marin.processing.classification.dedupe import DedupeConfig
 

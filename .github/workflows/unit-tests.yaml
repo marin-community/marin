@@ -50,7 +50,7 @@ jobs:
         run: |
           pip install ray[default] google-api-python-client
           
-      - name: Start Ray cluster on GCP
+      - name: Start Ray cluster locally
         shell: bash -l {0}
         run: |
           ray start --head
