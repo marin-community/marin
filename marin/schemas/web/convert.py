@@ -1,6 +1,6 @@
-from dataclasses import dataclass
-
 from draccus.choice_types import ChoiceRegistry
+from dataclasses import dataclass, field, fields
+from markdownify import UNDERLINED, SPACES, ASTERISK
 
 
 @dataclass(frozen=True)
@@ -8,6 +8,7 @@ class ExtractionConfig(ChoiceRegistry):
     pass
 
 
+@dataclass(frozen=True)
 @ExtractionConfig.register_subclass("trafilatura")
 class TrafilaturaConfig(ExtractionConfig):
     favor_precision: bool = False
@@ -57,10 +58,32 @@ class TrafilaturaConfig(ExtractionConfig):
             raise Exception(f"Invalid preset config: {config}. Please use 'fineweb' or 'default'.")
 
 
+DEFAULT_KEEP_INLINE_IMAGES_IN = ["li", "p", "td", "th", "h1", "h2", "h3", "h4", "h5", "h6", "a"]
+
+@dataclass(frozen=True)
 @ExtractionConfig.register_subclass("markdownify")
 class HtmlToMarkdownConfig(ExtractionConfig):
+    
     include_images: bool = True
     include_links: bool = True
+
+    heading_style: str = "ATX"
+    keep_inline_images_in: list = field(default_factory=lambda: DEFAULT_KEEP_INLINE_IMAGES_IN.copy())
+    autolinks = True
+    bullets = '*+-'  # An iterable of bullet types.
+    code_language = ''
+    code_language_callback = None
+    convert = None
+    default_title = False
+    escape_asterisks = True
+    escape_underscores = True
+    newline_style = SPACES
+    strip = None
+    strong_em_symbol = ASTERISK
+    sub_symbol = ''
+    sup_symbol = ''
+    wrap = False
+    wrap_width = 80
 
     @classmethod
     def default_config(cls) -> "HtmlToMarkdownConfig":
@@ -72,3 +95,12 @@ class HtmlToMarkdownConfig(ExtractionConfig):
             return cls.default_config()
         else:
             raise Exception(f"Invalid preset config: {config}. Please use 'default'.")
+
+    @property
+    def get_markdownify_kwargs(self) -> dict:
+        exclude = {'include_images', 'include_links'}
+        return {
+            f.name: getattr(self, f.name)
+            for f in fields(self)
+            if f.name not in exclude
+        }

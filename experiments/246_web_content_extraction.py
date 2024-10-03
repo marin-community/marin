@@ -2,7 +2,7 @@
 # Transform HTML to text
 
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
-from marin.schemas.web.convert import TrafilaturaConfig
+from marin.schemas.web.convert import TrafilaturaConfig, HtmlToMarkdownConfig
 from scripts.fineweb.process_parquet_fw import ParquetFWConfig, process_fw_dump
 
 raw_data = "gs://marin-us-central2/raw/fineweb/cd85054/CC-MAIN-2024-18"
@@ -43,6 +43,10 @@ transform_readability_step = ExecutorStep(
         output_path_md=this_output_path("md"),
         output_path_text=this_output_path("text"),
         extract_method=versioned("readability"),
+        config=HtmlToMarkdownConfig(
+            include_images=versioned(False),
+            include_links=versioned(False),
+        ),
     ),
 )
 

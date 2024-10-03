@@ -13,7 +13,7 @@ logger = logging.getLogger("ray")
 
 
 def convert_page_with_trafilatura(
-    html: str, url: str | None = None, config: str | TrafilaturaConfig = "fineweb"
+    html: str, url: str | None = None, config: ExtractionConfig = TrafilaturaConfig.default_config()
 ) -> dict[str, str]:
     """
     Convert HTML to text[non-markdown] using Trafilatura.
@@ -37,23 +37,7 @@ def convert_page_with_trafilatura(
         logger.warning(f"Error extracting metadata: {e}")
         title = None
 
-    content = None
-    match config:
-        case str():
-            content = extract(
-                html,
-                **asdict(TrafilaturaConfig.get_preset_config(config)),
-            )
-        case TrafilaturaConfig():
-            content = extract(
-                html,
-                **asdict(config),
-            )
-        case _:
-            raise Exception(
-                f"Invalid config type: {type(config)}. Pass a TrafilaturaConfig object or use 'fineweb' \
-                or 'default' presets."
-            )
+    content = extract(html, **asdict(config))
 
     if title:
         content = f"{title}\n\n{content}"
@@ -108,7 +92,7 @@ def convert_page_with_resiliparse(html: str, url: str | None = None) -> dict[str
 
 
 def convert_page_with_readability(
-    html: str, url: str | None = None, config: str | HtmlToMarkdownConfig = "default"
+    html: str, url: str | None = None, config: HtmlToMarkdownConfig = HtmlToMarkdownConfig.default_config()
 ) -> dict[str, str]:
     """
     Convert HTML to text[markdown] using Readability and markdownify.
@@ -139,19 +123,7 @@ def convert_page_with_readability(
     content = str(tree)
 
     # convert to markdown
-    markdown = None
-    match config:
-        case str():
-            markdown = to_markdown(
-                tree,
-                **asdict(HtmlToMarkdownConfig.get_preset_config(config)),
-            )
-        case HtmlToMarkdownConfig():
-            markdown = to_markdown(tree, **asdict(config))
-        case _:
-            raise Exception(
-                f"Invalid config type: {type(config)}. Pass a ReadabilityConfig object or use 'default' preset."
-            )
+    markdown = to_markdown(tree, config)
 
     # readability-lxml uses "[no-title]" for pages without a title
     if title == "[no-title]":
@@ -207,7 +179,7 @@ def convert_page(
     html: str,
     url: str | None = None,
     extract_method: str = "readability",
-    config: str | ExtractionConfig = "default",
+    config: ExtractionConfig = HtmlToMarkdownConfig.default_config(),
 ) -> dict[str, str]:
     """
     Convert HTML to text using the specified method.
