@@ -23,16 +23,16 @@ class DatasetCurationConfig:
             The files can be formatted in jsonl or fasttext format.
         label (str): Label for the dataset. This should be in the format "__label__<label>"
             where <label> is the label for the dataset. For example, "__label__hq" or "__label__lq", respectively.
-        sampling_rate (float): Sampling rate for the dataset. There are two ways to specify this:
-            1. using a percentage (number between 0 and 1) which will sample that percentage of the data.
-            2. using an integer K (where K > 1) which will sample K examples from the dataset of size N
-               where each example is sampled with probability 1/N.
+        absolute_sampling_rate (Optional[int]): Number of examples to sample from the dataset where each example
+            is sampled with probability 1/N.
+        relative_sampling_rate (Optional[float]): Fraction of the dataset to sample.
         format (DatasetFormat): Format of the dataset.
     """
 
     input_doc_path: str
     label: str
-    sampling_rate: float
+    absolute_sampling_rate: int | None = None
+    relative_sampling_rate: float | None = None
     format: DatasetFormat
 
 
@@ -66,7 +66,8 @@ def train(cfg: TrainFasttextClassifierConfig):
         attributes_to_dataset(
             output_path=cfg.output_path,
             doc_path=input_doc_path.input_doc_path,
-            sampling_rate=input_doc_path.sampling_rate,
+            absolute_sampling_rate=input_doc_path.absolute_sampling_rate,
+            relative_sampling_rate=input_doc_path.relative_sampling_rate,
             seed=cfg.seed,
             label=input_doc_path.label,
             file_format=input_doc_path.format,
