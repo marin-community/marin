@@ -203,7 +203,7 @@ def get_output_path_for_input_doc_path(output_path: str, input_doc_path: str, ou
         return os.path.join(output_path, "data")
 
     # Remove all files extensions from the input path and replace with .jsonl.gz
-    if path.suffix in [".jsonl", ".txt", ".jsonl.gz"]:
+    if path.suffix in [".jsonl", ".txt", ".jsonl.gz", ""]:
         while path.suffix:
             path = path.with_suffix("")
         path = path.with_suffix(".jsonl.gz")
