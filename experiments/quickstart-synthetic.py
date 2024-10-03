@@ -12,6 +12,7 @@ from marin.execution.executor import (
     this_output_path,
     versioned,
 )
+from marin.schemas.web.convert import HtmlToMarkdownConfig, TrafilaturaConfig
 from marin.processing.classification.consolidate import ConsolidateConfig, FilterConfig, consolidate
 from marin.processing.classification.dedupe import DedupeConfig, dedupe
 from marin.processing.classification.inference import InferenceConfig, run_inference
@@ -43,7 +44,7 @@ def create_steps(config: QuickstartExecutorConfig) -> list[ExecutorStep]:
             input_path=os.path.join(config.synth_data, "pos"),
             output_path=this_output_path(),
             extract_method=versioned("readability"),
-            config=versioned("default"),
+            config=HtmlToMarkdownConfig.default_config(),
         ),
     )
 
@@ -54,7 +55,7 @@ def create_steps(config: QuickstartExecutorConfig) -> list[ExecutorStep]:
             input_path=os.path.join(config.synth_data, "neg"),
             output_path=this_output_path(),
             extract_method=versioned("readability"),
-            config=versioned("default"),
+            config=HtmlToMarkdownConfig.default_config()
         ),
     )
 
