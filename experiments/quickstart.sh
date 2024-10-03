@@ -17,11 +17,11 @@ ray job submit --working-dir . -- python scripts/hello_world_fw/process.py \
 ray job submit --working-dir . -- python scripts/fasttext/train_fasttext.py \
   --input_doc_paths '[{    "input_doc_path" : "gs://marin-us-central2/documents/instruct/tulu_v2_mix/text" ,
     "label": "__label__hq",
-    "sampling_rate": 0.1,
+    "relative_sampling_rate": 0.1,
     "format": "dolma_formatted_jsonl"},
     {    "input_doc_path" : "gs://marin-us-central2/documents/hello_world_fw/v1.0/chris-test" ,
     "label": "__label__lq",
-    "sampling_rate": 1.0,
+    "relative_sampling_rate": 1.0,
     "format": "dolma_formatted_jsonl"}]' \
   --output_path gs://marin-us-central2/classifiers/$EXP \
   --fasttext_args '{"lr": 0.01, "thread": 4}'

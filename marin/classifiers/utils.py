@@ -81,7 +81,7 @@ def get_example_from_input_line(input_line: str, label: str, file_format: Datase
 def write_examples(
     input_file_path: str,
     output_file_path: str,
-    sampling_rate: float,
+    relative_sampling_rate: float,
     seed: int,
     label: str,
     file_format: DatasetFormat,
@@ -108,7 +108,7 @@ def write_examples(
         fsspec.open(output_file_path, "wt", compression="gzip") as f_out,
     ):
         for input_line in f_in:
-            if rng.random() > sampling_rate:
+            if rng.random() > relative_sampling_rate:
                 continue
 
             example = get_example_from_input_line(input_line, label, file_format)
@@ -210,7 +210,7 @@ def get_output_path_for_input_doc_path(output_path: str, input_doc_path: str, ou
     else:
         raise ValueError(f"Input path has not been supported yet: {input_doc_path} of sufix {path.suffix}")
 
-    return os.path.join(output_path, "data", path) + ".jsonl.gz"
+    return os.path.join(output_path, "data", path)
 
 
 @cached_or_construct_output(success_suffix="SUCCESS")
@@ -267,7 +267,8 @@ def reservoir_sample_and_write_examples(
 def attributes_to_dataset(
     output_path: str,
     doc_path: str,
-    sampling_rate: float,
+    absolute_sampling_rate: int | None,
+    relative_sampling_rate: float | None,
     seed: int,
     label: str,
     file_format: DatasetFormat,
@@ -291,10 +292,17 @@ def attributes_to_dataset(
     # curry write_fasttext_lines so that we can pass it to map_files_in_directory
     @ray.remote(memory=1 * 1024 * 1024 * 1024, runtime_env={"pip": ["s3fs"]}, num_cpus=1)  # 1 GB
     def processing_func(input_file_path: str, output_file_path: str) -> bool:
-        return write_examples(input_file_path, output_file_path, sampling_rate, seed, label, file_format)
+        return write_examples(input_file_path, output_file_path, relative_sampling_rate, seed, label, file_format)
+
+    assert (
+        absolute_sampling_rate or relative_sampling_rate
+    ), "Either absolute_sampling_rate or relative_sampling_rate must be provided"
+    assert not (
+        absolute_sampling_rate and relative_sampling_rate
+    ), "Either absolute_sampling_rate or relative_sampling_rate must be provided, but not both"
 
     if fsspec_isdir(doc_path):
-        if sampling_rate <= 1.0:
+        if relative_sampling_rate:
             responses = map_files_in_directory(
                 processing_func.remote,
                 doc_path,
@@ -305,7 +313,7 @@ def attributes_to_dataset(
             responses = reservoir_sample_and_write_examples.remote(
                 doc_path,
                 get_output_path_for_input_doc_path(output_path, doc_path, output_path_is_dir=False),
-                sampling_rate,
+                absolute_sampling_rate,
                 seed,
                 label,
                 file_format,
