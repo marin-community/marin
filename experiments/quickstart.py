@@ -80,17 +80,28 @@ sft_data = "gs://marin-us-central2/documents/instruct/v1_olmo_mix/text"
 ############################################################
 # Train quality classifier
 
-from scripts.fasttext.train_fasttext import TrainFasttextClassifierConfig, train  # noqa
+from marin.processing.classification.fasttext.train_fasttext import (  # noqa
+    DatasetCurationConfig,
+    TrainFasttextClassifierConfig,
+    train,
+)
 
 train_quality_step = ExecutorStep(
     name="classifiers/hello_world_fw-pliang",
     fn=train,
     config=TrainFasttextClassifierConfig(
-        pos_doc_path=sft_data,
-        neg_doc_path=output_path_of(transform_trafilatura_step),
+        input_doc_paths=[
+            DatasetCurationConfig(
+                input_doc_path=sft_data, label="__label__hq", relative_sampling_rate=0.1, format="dolma_formatted_jsonl"
+            ),
+            DatasetCurationConfig(
+                input_doc_path=output_path_of(transform_trafilatura_step),
+                label="__label__lq",
+                relative_sampling_rate=1.0,
+                format="dolma_formatted_jsonl",
+            ),
+        ],
         output_path=this_output_path(),
-        pos_sampling_rate=0.1,
-        neg_sampling_rate=1.0,
         fasttext_args={"lr": 0.1},
     ),
 )
