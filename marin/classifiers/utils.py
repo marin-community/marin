@@ -243,12 +243,15 @@ def reservoir_sample_and_write_examples(
     """
 
     rng = np.random.default_rng(seed=seed)
-    files = fsspec_glob(os.path.join(doc_path, "**/*.jsonl.gz"))
+    if fsspec_isdir(doc_path):
+        files = fsspec_glob(os.path.join(doc_path, "**/*.jsonl.gz"))
+    else:
+        files = [doc_path]
     reservoir = []
     reservoir_size = sampling_rate
 
     for input_file in files:
-        with fsspec.open(input_file, "rt", compression="gzip") as f_in:
+        with fsspec.open(input_file, "rt", compression="infer") as f_in:
             for line in f_in:
                 if len(reservoir) < reservoir_size:
                     reservoir.append(line)
@@ -319,9 +322,19 @@ def attributes_to_dataset(
                 file_format,
             )
     else:
-        responses = processing_func.remote(
-            doc_path, get_output_path_for_input_doc_path(output_path, doc_path, output_path_is_dir=False)
-        )
+        if relative_sampling_rate:
+            responses = processing_func.remote(
+                doc_path, get_output_path_for_input_doc_path(output_path, doc_path, output_path_is_dir=False)
+            )
+        else:
+            responses = reservoir_sample_and_write_examples.remote(
+                doc_path,
+                get_output_path_for_input_doc_path(output_path, doc_path, output_path_is_dir=False),
+                absolute_sampling_rate,
+                seed,
+                label,
+                file_format,
+            )
 
     try:
         ray.get(responses)
