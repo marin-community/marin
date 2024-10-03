@@ -1,6 +1,7 @@
-from draccus.choice_types import ChoiceRegistry
 from dataclasses import dataclass, field, fields
-from markdownify import UNDERLINED, SPACES, ASTERISK
+
+from draccus.choice_types import ChoiceRegistry
+from markdownify import ASTERISK, SPACES
 
 
 @dataclass(frozen=True)
@@ -60,18 +61,19 @@ class TrafilaturaConfig(ExtractionConfig):
 
 DEFAULT_KEEP_INLINE_IMAGES_IN = ["li", "p", "td", "th", "h1", "h2", "h3", "h4", "h5", "h6", "a"]
 
+
 @dataclass(frozen=True)
 @ExtractionConfig.register_subclass("markdownify")
 class HtmlToMarkdownConfig(ExtractionConfig):
-    
+
     include_images: bool = True
     include_links: bool = True
 
     heading_style: str = "ATX"
     keep_inline_images_in: list = field(default_factory=lambda: DEFAULT_KEEP_INLINE_IMAGES_IN.copy())
     autolinks = True
-    bullets = '*+-'  # An iterable of bullet types.
-    code_language = ''
+    bullets = "*+-"  # An iterable of bullet types.
+    code_language = ""
     code_language_callback = None
     convert = None
     default_title = False
@@ -80,8 +82,8 @@ class HtmlToMarkdownConfig(ExtractionConfig):
     newline_style = SPACES
     strip = None
     strong_em_symbol = ASTERISK
-    sub_symbol = ''
-    sup_symbol = ''
+    sub_symbol = ""
+    sup_symbol = ""
     wrap = False
     wrap_width = 80
 
@@ -98,9 +100,5 @@ class HtmlToMarkdownConfig(ExtractionConfig):
 
     @property
     def get_markdownify_kwargs(self) -> dict:
-        exclude = {'include_images', 'include_links'}
-        return {
-            f.name: getattr(self, f.name)
-            for f in fields(self)
-            if f.name not in exclude
-        }
+        exclude = {"include_images", "include_links"}
+        return {f.name: getattr(self, f.name) for f in fields(self) if f.name not in exclude}
