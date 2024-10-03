@@ -203,11 +203,14 @@ def get_output_path_for_input_doc_path(output_path: str, input_doc_path: str, ou
         return os.path.join(output_path, "data")
 
     # Remove all files extensions from the input path and replace with .jsonl.gz
-    while path.suffix:
-        path = path.with_suffix("")
-    path = str(path) + ".jsonl.gz"
+    if path.suffix in [".jsonl", ".txt", ".jsonl.gz"]:
+        while path.suffix:
+            path = path.with_suffix("")
+        path = path.with_suffix(".jsonl.gz")
+    else:
+        raise ValueError(f"Input path has not been supported yet: {input_doc_path} of sufix {path.suffix}")
 
-    return os.path.join(output_path, "data", path)
+    return os.path.join(output_path, "data", path) + ".jsonl.gz"
 
 
 @cached_or_construct_output(success_suffix="SUCCESS")
