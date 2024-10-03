@@ -31,9 +31,9 @@ class DatasetCurationConfig:
 
     input_doc_path: str
     label: str
+    format: DatasetFormat
     absolute_sampling_rate: int | None = None
     relative_sampling_rate: float | None = None
-    format: DatasetFormat
 
 
 @dataclass
