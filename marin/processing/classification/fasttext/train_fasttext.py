@@ -4,6 +4,7 @@ train_fasttext.py
 Training script for fastText quality classifiers.
 """
 
+import os
 from dataclasses import dataclass, field
 
 import draccus
@@ -73,8 +74,9 @@ def train(cfg: TrainFasttextClassifierConfig):
             file_format=input_doc_path.format,
         )
 
+    input_dataset_path = os.path.join(cfg.output_path, "data")
     train_model(
-        input_path=f"{cfg.output_path}/data",
+        input_path=input_dataset_path,
         output_path=cfg.output_path,
         seed=cfg.seed,
         val_frac=cfg.val_frac,
