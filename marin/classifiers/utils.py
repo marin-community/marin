@@ -7,6 +7,7 @@ Utility functions for building quality classifiers.
 import json
 import logging
 import os
+import re
 from collections.abc import Callable
 from pathlib import Path
 
@@ -57,8 +58,6 @@ def get_example_from_input_line(input_line: str, label: str, file_format: Datase
     Returns:
         dict: An example with the format {"text": <text>, "label": <label>}.
     """
-    import re
-
     text = None
     if file_format == DatasetFormat.DOLMA_FORMATTED_JSONL:
         data = json.loads(input_line)
@@ -184,19 +183,24 @@ def create_label_attribute(input_doc_path: str, output_attr_path: str, label: st
     return True
 
 
-def get_output_path_for_input_doc_path(output_path: str, input_doc_path: str) -> str:
+def get_output_path_for_input_doc_path(output_path: str, input_doc_path: str, output_path_is_dir: bool) -> str:
     """Converts an input document path to an output dataset path
 
     Examples:
-        [A] (output_path, /documents/hello_world_fw/) ->
+        [A] (output_path, /documents/hello_world_fw/, False) ->
             [B] /output_path/data/documents/hello_world_fw.jsonl.gz
-        [A] (output_path, /documents/hello_world_fw/file.jsonl.gz) ->
+        [A] (output_path, /documents/hello_world_fw/file.jsonl.gz, False) ->
             [B] /output_path/data/documents/hello_world_fw/file.jsonl.gz
-        [A] (output_path, /documents/hello_world_fw/file.txt) ->
+        [A] (output_path, /documents/hello_world_fw/file.txt, False) ->
             [B] /output_path/data/documents/hello_world_fw/file.jsonl.gz
+        [A] (output_path, /documents/hello_world_fw/, True) ->
+            [B] /output_path/data/documents/hello_world_fw/
     """
     _, doc_fs_path = fsspec.core.url_to_fs(input_doc_path)
     path = Path(doc_fs_path)
+
+    if output_path_is_dir:
+        return os.path.join(output_path, "data")
 
     # Remove all files extensions from the input path and replace with .jsonl.gz
     while path.suffix:
@@ -286,17 +290,27 @@ def attributes_to_dataset(
     def processing_func(input_file_path: str, output_file_path: str) -> bool:
         return write_examples(input_file_path, output_file_path, sampling_rate, seed, label, file_format)
 
-    output_dataset_path = get_output_path_for_input_doc_path(output_path, doc_path)
-
     if fsspec_isdir(doc_path):
         if sampling_rate <= 1.0:
-            responses = map_files_in_directory(processing_func.remote, doc_path, "**/*.jsonl.gz", output_dataset_path)
+            responses = map_files_in_directory(
+                processing_func.remote,
+                doc_path,
+                "**/*.jsonl.gz",
+                get_output_path_for_input_doc_path(output_path, doc_path, output_path_is_dir=True),
+            )
         else:
             responses = reservoir_sample_and_write_examples.remote(
-                doc_path, output_dataset_path, sampling_rate, seed, label, file_format
+                doc_path,
+                get_output_path_for_input_doc_path(output_path, doc_path, output_path_is_dir=False),
+                sampling_rate,
+                seed,
+                label,
+                file_format,
             )
     else:
-        responses = processing_func.remote(doc_path, output_dataset_path)
+        responses = processing_func.remote(
+            doc_path, get_output_path_for_input_doc_path(output_path, doc_path, output_path_is_dir=False)
+        )
 
     try:
         ray.get(responses)
