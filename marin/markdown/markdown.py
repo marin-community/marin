@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 # - [x] add latex math support
 
 
-def to_markdown(html, config: HtmlToMarkdownConfig):
+def to_markdown(html, config: HtmlToMarkdownConfig = HtmlToMarkdownConfig.default_config()):
     if isinstance(html, str):
         html = BeautifulSoup(html, "html.parser")
     text = MyMarkdownConverter(config).convert_soup(html)
@@ -144,17 +144,11 @@ def _try_convert_int(val, default):
 
 
 class MyMarkdownConverter(MarkdownConverter):
-
     def __init__(self, config: HtmlToMarkdownConfig, **kwargs):
         self.include_links = config.include_links
         self.include_images = config.include_images
 
-        kwargs = {
-            "heading_style": "ATX",
-            "keep_inline_images_in": ["li", "p", "td", "th", "h1", "h2", "h3", "h4", "h5", "h6", "a"],
-            # "code_language_callback": self._infer_code_language,
-            **kwargs,
-        }
+        kwargs = config.get_markdownify_kwargs
         super().__init__(**kwargs)
 
     def convert_hn(self, n, el, text, convert_as_inline):

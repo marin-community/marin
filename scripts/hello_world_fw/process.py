@@ -22,7 +22,7 @@ import fsspec
 import ray
 
 from marin.core.runtime import cached_or_construct_output, map_files_in_directory
-from marin.schemas.web.convert import ExtractionConfig
+from marin.schemas.web.convert import ExtractionConfig, HtmlToMarkdownConfig
 from marin.web.convert import convert_page
 
 logger = logging.getLogger("ray")
@@ -34,7 +34,7 @@ logger = logging.getLogger("ray")
 # Ray will not impose any physical limits on the resources used by the function, these numbers are used for scheduling.
 @ray.remote(memory=1 * 1024 * 1024 * 1024, runtime_env={"pip": ["s3fs", "trafilatura"]}, num_cpus=1)  # 1 GB
 @cached_or_construct_output(success_suffix="SUCCESS")  # We use this decorator to make this function idempotent
-def html_to_md(input_file_path: str, output_file_path: str, extract_method: str, config):
+def html_to_md(input_file_path: str, output_file_path: str, extract_method: str, config: ExtractionConfig):
     # The runtime for this function should be low (less than 5-10 min), as the machines are preemptible
     # Example of input_path = gs://marin-data/hello_world_fw/fineweb/fw-v1.0/CC-MAIN-2024-10/000_00000/0_processed_html.jsonl.gz
 
@@ -85,7 +85,7 @@ class FineWebConfig:
     input_path: str
     output_path: str
     extract_method: str = "readability"
-    config: str | ExtractionConfig = "default"
+    config: ExtractionConfig = HtmlToMarkdownConfig.default_config()
 
 
 @ray.remote
