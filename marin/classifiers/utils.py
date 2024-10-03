@@ -233,7 +233,7 @@ def reservoir_sample_and_write_examples(
         sampling_rate (int): Number of examples to sample from the dataset.
         seed (int): Seed for random number generator to ensure reproducibility.
         label (str): Label for the dataset.
-        file_format (DatasetFormat): Format of the dataset.
+        file_format (DatasetFormat): Format of the dataset (e.g., DOLMA_FORMATTED_JSONL, FASTTEXT).
 
     Returns:
         bool: True if the process is successful.
