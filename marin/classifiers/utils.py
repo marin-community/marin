@@ -210,7 +210,7 @@ def get_output_path_for_input_doc_path(output_path: str, input_doc_path: str, ou
     else:
         raise ValueError(f"Input path has not been supported yet: {input_doc_path} of sufix {path.suffix}")
 
-    return os.path.join(output_path, "data", path) + ".jsonl.gz"
+    return os.path.join(output_path, "data", path)
 
 
 @cached_or_construct_output(success_suffix="SUCCESS")
