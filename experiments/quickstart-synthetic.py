@@ -12,10 +12,10 @@ from marin.execution.executor import (
     this_output_path,
     versioned,
 )
-from marin.schemas.web.convert import HtmlToMarkdownConfig, TrafilaturaConfig
 from marin.processing.classification.consolidate import ConsolidateConfig, FilterConfig, consolidate
 from marin.processing.classification.dedupe import DedupeConfig, dedupe
 from marin.processing.classification.inference import InferenceConfig, run_inference
+from marin.schemas.web.convert import HtmlToMarkdownConfig
 from scripts.fasttext.train_fasttext import TrainFasttextClassifierConfig, train
 from scripts.hello_world_fw.process import FineWebConfig, transform
 
@@ -55,7 +55,7 @@ def create_steps(config: QuickstartExecutorConfig) -> list[ExecutorStep]:
             input_path=os.path.join(config.synth_data, "neg"),
             output_path=this_output_path(),
             extract_method=versioned("readability"),
-            config=HtmlToMarkdownConfig.default_config()
+            config=HtmlToMarkdownConfig.default_config(),
         ),
     )
 
