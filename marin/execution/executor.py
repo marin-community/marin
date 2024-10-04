@@ -37,7 +37,7 @@ We want to compute a *version* for each step.  Here's what the user supplies:
    "method", not default thresholds that don't change).
 
 The version of a step is identified by the name, versioned fields, and the
-versions of all the dependencies, This version is represented as a hash (e.g.,
+versions of all the dependencies. This version is represented as a hash (e.g.,
 8ce902).
 
 ## Output paths
@@ -122,6 +122,8 @@ class ExecutorStep:
     name: str
     fn: ExecutorFunction
     config: dataclass
+
+    assert_output_path_suffix: str | None = None
 
     def __hash__(self):
         """Hash based on the ID (every object is different)."""
@@ -304,6 +306,11 @@ class Executor:
         self.dependencies[step] = dependencies
         self.versions[step] = version
         self.output_paths[step] = output_path
+
+        # Check output path matches
+        if step.assert_output_path_suffix is not None:
+            if not output_path.endswith(step.assert_output_path_suffix):
+                raise ValueError(f"Output path {output_path} doesn't match suffix {step.assert_output_path_suffix}")
 
         return version
 
