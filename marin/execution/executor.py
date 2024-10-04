@@ -37,7 +37,7 @@ We want to compute a *version* for each step.  Here's what the user supplies:
    "method", not default thresholds that don't change).
 
 The version of a step is identified by the name, versioned fields, and the
-versions of all the dependencies, This version is represented as a hash (e.g.,
+versions of all the dependencies. This version is represented as a hash (e.g.,
 8ce902).
 
 ## Output paths
@@ -122,6 +122,10 @@ class ExecutorStep:
     name: str
     fn: ExecutorFunction
     config: dataclass
+
+    override_output_path: str | None = None
+    """Specifies the `output_path` that should be used.  Print warning if it
+    doesn't match the automatically computed one."""
 
     def __hash__(self):
         """Hash based on the ID (every object is different)."""
@@ -298,6 +302,12 @@ class Executor:
         version_str = json.dumps(version, sort_keys=True)
         hashed_version = hashlib.md5(version_str.encode()).hexdigest()[:6]
         output_path = os.path.join(self.prefix, step.name + "-" + hashed_version)
+
+        # Override output path if specified
+        if step.override_output_path is not None:
+            if output_path != step.override_output_path:
+                logger.warning(f"Output path {output_path} doesn't match {step.override_output_path}, using the latter.")
+                output_path = step.override_output_path
 
         # Record everything
         self.steps.append(step)
