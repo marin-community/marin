@@ -123,7 +123,7 @@ class ExecutorStep:
     fn: ExecutorFunction
     config: dataclass
 
-    assert_output_path_suffix: str | None = None
+    expected_output_path_suffix: str | None = None
 
     def __hash__(self):
         """Hash based on the ID (every object is different)."""
@@ -308,9 +308,9 @@ class Executor:
         self.output_paths[step] = output_path
 
         # Check output path matches
-        if step.assert_output_path_suffix is not None:
-            if not output_path.endswith(step.assert_output_path_suffix):
-                raise ValueError(f"Output path {output_path} doesn't match suffix {step.assert_output_path_suffix}")
+        if step.expected_output_path_suffix is not None:
+            if not output_path.endswith(step.expected_output_path_suffix):
+                raise ValueError(f"Output path {output_path} doesn't match suffix {step.expected_output_path_suffix}")
 
         return version
 
