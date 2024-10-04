@@ -21,7 +21,6 @@ from marin.processing.classification.fasttext.train_fasttext import (
 )
 from marin.processing.classification.inference import InferenceConfig, run_inference
 from marin.schemas.web.convert import HtmlToMarkdownConfig
-from scripts.fasttext.train_fasttext import TrainFasttextClassifierConfig, train
 from scripts.hello_world_fw.process import FineWebConfig, transform
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
