@@ -14,6 +14,11 @@ from marin.execution.executor import (
 )
 from marin.processing.classification.consolidate import ConsolidateConfig, FilterConfig, consolidate
 from marin.processing.classification.dedupe import DedupeConfig, dedupe
+from marin.processing.classification.fasttext.train_fasttext import (
+    DatasetCurationConfig,
+    TrainFasttextClassifierConfig,
+    train,
+)
 from marin.processing.classification.inference import InferenceConfig, run_inference
 from marin.schemas.web.convert import HtmlToMarkdownConfig
 from scripts.fasttext.train_fasttext import TrainFasttextClassifierConfig, train
@@ -66,11 +71,21 @@ def create_steps(config: QuickstartExecutorConfig) -> list[ExecutorStep]:
         name=os.path.join(config.prefix, config.commit_hash, "quality-classifier"),
         fn=train,
         config=TrainFasttextClassifierConfig(
-            pos_doc_path=output_path_of(transform_hq_data_step),
-            neg_doc_path=output_path_of(transform_lq_data_step),
+            input_doc_paths=[
+                DatasetCurationConfig(
+                    input_doc_path=output_path_of(transform_hq_data_step),
+                    label="__label__hq",
+                    relative_sampling_rate=1.0,
+                    format="dolma_formatted_jsonl",
+                ),
+                DatasetCurationConfig(
+                    input_doc_path=output_path_of(transform_lq_data_step),
+                    label="__label__lq",
+                    relative_sampling_rate=1.0,
+                    format="dolma_formatted_jsonl",
+                ),
+            ],
             output_path=this_output_path(),
-            pos_sampling_rate=1.0,
-            neg_sampling_rate=1.0,
             fasttext_args={
                 "lr": 0.001,
                 "minCount": 1,
