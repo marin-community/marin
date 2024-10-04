@@ -123,8 +123,8 @@ class ExecutorStep:
     fn: ExecutorFunction
     config: dataclass
 
-    expected_output_path_suffix: str | None = None
-    """Specifies the `output_path` that should be computed; fails the step if it doesn't match."""
+    override_output_path: str | None = None
+    """Specifies the `output_path` that should be used.  Print warning if it doesn't match the automatically computed one."""
 
     def __hash__(self):
         """Hash based on the ID (every object is different)."""
@@ -302,16 +302,17 @@ class Executor:
         hashed_version = hashlib.md5(version_str.encode()).hexdigest()[:6]
         output_path = os.path.join(self.prefix, step.name + "-" + hashed_version)
 
+        # Override output path if specified
+        if step.override_output_path is not None:
+            if output_path != step.override_output_path:
+                logger.warning(f"Output path {output_path} doesn't match {step.override_output_path}, using the latter.")
+                output_path = step.override_output_path
+
         # Record everything
         self.steps.append(step)
         self.dependencies[step] = dependencies
         self.versions[step] = version
         self.output_paths[step] = output_path
-
-        # Check output path matches
-        if step.expected_output_path_suffix is not None:
-            if not output_path.endswith(step.expected_output_path_suffix):
-                raise ValueError(f"Output path {output_path} doesn't match suffix {step.expected_output_path_suffix}")
 
         return version
 
