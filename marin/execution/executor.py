@@ -124,6 +124,7 @@ class ExecutorStep:
     config: dataclass
 
     expected_output_path_suffix: str | None = None
+    """Specifies the `output_path` that should be computed; fails the step if it doesn't match."""
 
     def __hash__(self):
         """Hash based on the ID (every object is different)."""
