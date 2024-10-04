@@ -10,8 +10,31 @@ from dataclasses import dataclass, field
 import draccus
 
 from marin.classifiers.fasttext.training import train_model
-from marin.classifiers.utils import attributes_to_dataset, create_label_attribute
-from marin.utils import fsspec_rm
+from marin.classifiers.utils import attributes_to_dataset
+from marin.processing.classification.types import DatasetFormat
+
+
+@dataclass(frozen=True)
+class DatasetCurationConfig:
+    """Configuration for curating a dataset for training a quality classfier
+
+    Attributes:
+        input_doc_path (str): Path to the input dataset which can be a directory or a file.
+            If it is a directory, the function will glob all the files in the directory and sample from each file.
+            The files can be formatted in jsonl or fasttext format.
+        label (str): Label for the dataset. This should be in the format "__label__<label>"
+            where <label> is the label for the dataset. For example, "__label__hq" or "__label__lq", respectively.
+        absolute_sampling_rate (Optional[int]): Number of examples to sample from the dataset where each example
+            is sampled with probability 1/N.
+        relative_sampling_rate (Optional[float]): Fraction of the dataset to sample.
+        format (DatasetFormat): Format of the dataset.
+    """
+
+    input_doc_path: str
+    label: str
+    format: DatasetFormat
+    absolute_sampling_rate: int | None = None
+    relative_sampling_rate: float | None = None
 
 
 @dataclass
@@ -21,10 +44,10 @@ class TrainFasttextClassifierConfig:
 
     Attributes:
         output_path (str): Path for output data (i.e., gs://$BUCKET/classifiers/$EXPERIMENT).
-        pos_doc_path (str): Path to experiment with positive examples (i.e., gs://$BUCKET/documents/../$EXPERIMENT).
-        neg_doc_path (str): Path to experiment with negative examples (i.e., gs://$BUCKET/documents/../$EXPERIMENT).
-        pos_sampling_rate (float): Fraction of positive examples to include the training dataset.
-        neg_sampling_rate (float): Fraction of negative examples to include the training dataset.
+        input_doc_paths (list[DatasetCurationConfig]): List of configurations for converting input datasets into
+            labeled datasets. The input datasets can be a directory or a file.
+            If it is a directory, the function will glob all the files in the directory and sample from each file.
+            The files can be formatted in jsonl or fasttext format.
         fasttext_args (dict): Arguments for the fastText training process (see fastText docs for list of options).
         seed (int): Seed for random number generator to ensure reproducibility.
         val_frac (float): Fraction of data to be used for validation.
@@ -32,10 +55,7 @@ class TrainFasttextClassifierConfig:
     """
 
     output_path: str
-    pos_doc_path: str
-    neg_doc_path: str = None
-    pos_sampling_rate: float = 1.0
-    neg_sampling_rate: float = 1.0
+    input_doc_paths: list[DatasetCurationConfig]
     fasttext_args: dict = field(default_factory=dict)
     seed: int = 0
     val_frac: float = 0.1
@@ -43,38 +63,26 @@ class TrainFasttextClassifierConfig:
 
 
 def train(cfg: TrainFasttextClassifierConfig):
-    pos_attr_path = os.path.join(cfg.output_path, "tmp", "positives")
-    neg_attr_path = os.path.join(cfg.output_path, "tmp", "negatives")
+    for input_doc_path in cfg.input_doc_paths:
+        attributes_to_dataset(
+            output_path=cfg.output_path,
+            doc_path=input_doc_path.input_doc_path,
+            absolute_sampling_rate=input_doc_path.absolute_sampling_rate,
+            relative_sampling_rate=input_doc_path.relative_sampling_rate,
+            seed=cfg.seed,
+            label=input_doc_path.label,
+            file_format=input_doc_path.format,
+        )
 
-    create_label_attribute(input_doc_path=cfg.pos_doc_path, output_attr_path=pos_attr_path, label="hq")
-    attributes_to_dataset(
-        output_path=cfg.output_path,
-        doc_path=cfg.pos_doc_path,
-        attr_path=pos_attr_path,
-        sampling_rate=cfg.pos_sampling_rate,
-        seed=cfg.seed,
-    )
-
-    create_label_attribute(input_doc_path=cfg.neg_doc_path, output_attr_path=neg_attr_path, label="lq")
-    attributes_to_dataset(
-        output_path=cfg.output_path,
-        doc_path=cfg.neg_doc_path,
-        attr_path=neg_attr_path,
-        sampling_rate=cfg.neg_sampling_rate,
-        seed=cfg.seed,
-    )
-
+    input_dataset_path = os.path.join(cfg.output_path, "data")
     train_model(
-        input_path=f"{cfg.output_path}/data",
+        input_path=input_dataset_path,
         output_path=cfg.output_path,
         seed=cfg.seed,
         val_frac=cfg.val_frac,
         memory_req=cfg.memory,
         **cfg.fasttext_args,
     )
-
-    fsspec_rm(pos_attr_path)
-    fsspec_rm(neg_attr_path)
 
 
 @draccus.wrap()
