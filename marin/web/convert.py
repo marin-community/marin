@@ -10,6 +10,7 @@ from marin.markdown import to_markdown
 from marin.schemas.web.convert import ExtractionConfig, HtmlToMarkdownConfig, TrafilaturaConfig
 
 logger = logging.getLogger("ray")
+HTML_CORRECTION_PREFIX = "<!DOCTYPE html>"
 
 
 def convert_page_with_trafilatura(
@@ -38,6 +39,8 @@ def convert_page_with_trafilatura(
         title = None
 
     content = extract(html, **asdict(config))
+    if not content:
+        content = extract(HTML_CORRECTION_PREFIX + html, **asdict(config))
 
     if title:
         content = f"{title}\n\n{content}"
