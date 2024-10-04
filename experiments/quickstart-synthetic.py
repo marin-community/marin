@@ -20,6 +20,7 @@ from marin.processing.classification.fasttext.train_fasttext import (
     train,
 )
 from marin.processing.classification.inference import InferenceConfig, run_inference
+from marin.schemas.web.convert import HtmlToMarkdownConfig
 from scripts.hello_world_fw.process import FineWebConfig, transform
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -47,7 +48,7 @@ def create_steps(config: QuickstartExecutorConfig) -> list[ExecutorStep]:
             input_path=os.path.join(config.synth_data, "pos"),
             output_path=this_output_path(),
             extract_method=versioned("readability"),
-            config=versioned("default"),
+            config=HtmlToMarkdownConfig.default_config(),
         ),
     )
 
@@ -58,7 +59,7 @@ def create_steps(config: QuickstartExecutorConfig) -> list[ExecutorStep]:
             input_path=os.path.join(config.synth_data, "neg"),
             output_path=this_output_path(),
             extract_method=versioned("readability"),
-            config=versioned("default"),
+            config=HtmlToMarkdownConfig.default_config(),
         ),
     )
 
