@@ -13,7 +13,7 @@ raw_download_step = ExecutorStep(
         gcs_output_path=this_output_path(),
         wait_for_completion=True,
     ),
-    expected_output_path_suffix="gs://marin-us-central2/raw/hello_world_fw-pliang-22232d",
+    override_output_path="gs://marin-us-central2/raw/hello_world_fw-pliang-22232d",
 )
 raw_data = output_path_of(
     raw_download_step, "8fd6e8e/huggingface.co/datasets/skaramcheti/hello_world_fw/resolve/8fd6e8e/data/CC-MAIN-2024-10"
