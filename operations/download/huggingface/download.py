@@ -23,6 +23,7 @@ from marin.utilities.storage_transfer_utils import wait_for_transfer_job
 
 logger = logging.getLogger("ray")
 
+
 @dataclass
 class DownloadConfig:
     # fmt: off
