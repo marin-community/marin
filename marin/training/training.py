@@ -8,7 +8,7 @@ import draccus
 import levanter.infra.cli_helpers
 import ray
 from google.api_core.exceptions import Forbidden as GcpForbiddenException
-from levanter.infra.ray_tpu import run_on_pod
+from levanter.infra.ray_tpu import run_on_pod_resumable
 from levanter.main import train_lm
 from mergedeep import mergedeep
 from ray.runtime_env import RuntimeEnv
@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 class TrainLmOnPodConfig(train_lm.TrainLmConfig):
     """Inheritance so we can easily use existing TrainLmConfig configs."""
 
-    tpu_type: str = "v4-64"  # have to specify defaults b/c dataclasses
+    tpu_type: str | None = None  # None means local
     env: dict = dataclasses.field(default_factory=dict)
     """Environment variables to set in the training pod."""
     bypass_path_checks: bool = False
@@ -71,11 +71,16 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
 
     train_config = _upcast_trainlm_config(config)
 
-    @ray.remote(runtime_env=runtime_env)
     def train_lm_task():
         train_lm.main(train_config)
 
-    return ray.get(run_on_pod(train_lm_task, config.tpu_type))
+    if config.tpu_type is not None:
+        # @ray.remote(runtime_env=runtime_env)
+        train_lm_task = ray.remote(runtime_env=runtime_env)(train_lm_task)
+
+        return ray.get(run_on_pod_resumable(train_lm_task, config.tpu_type))
+    else:
+        return ray.get(train_lm_task.remote())
 
 
 def _upcast_trainlm_config(config):
