@@ -18,4 +18,4 @@ def format_example(data: dict) -> str:
     """
     Converts example to fastText training data format.
     """
-    return f'__label__{data["label"]}' + " " + preprocess(data["text"])
+    return f'{data["label"]}' + " " + preprocess(data["text"])
