@@ -21,7 +21,7 @@ def test_fasttext_configs(config_file):
     """
     Validate all the fasttext configs (config/fasttext/*.yaml).
     """
-    from scripts.fasttext.train_fasttext import TrainFasttextClassifierConfig
+    from marin.processing.classification.fasttext.train_fasttext import TrainFasttextClassifierConfig
 
     config_class = TrainFasttextClassifierConfig
     check_load_config(config_class, config_file)
