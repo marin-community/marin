@@ -124,7 +124,8 @@ class ExecutorStep:
     config: dataclass
 
     override_output_path: str | None = None
-    """Specifies the `output_path` that should be used.  Print warning if it doesn't match the automatically computed one."""
+    """Specifies the `output_path` that should be used.  Print warning if it
+    doesn't match the automatically computed one."""
 
     def __hash__(self):
         """Hash based on the ID (every object is different)."""
