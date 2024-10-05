@@ -14,8 +14,8 @@
 # --input_path gs://marin-us-central2/raw/hello_world_fw/v1.0/CC-MAIN-2024-10/000_00000
 # --output_path gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart/CC-MAIN-2024-10/000_00000
 import json
-from dataclasses import dataclass
 import logging
+from dataclasses import dataclass
 
 import draccus
 import fsspec
@@ -26,6 +26,7 @@ from marin.schemas.web.convert import ExtractionConfig, HtmlToMarkdownConfig
 from marin.web.convert import convert_page
 
 logger = logging.getLogger("ray")
+
 
 # TODO: move into general utiltiies
 # This function will be executed on the worker nodes. It is important to keep the function idempotent and resumable.
@@ -56,7 +57,7 @@ def html_to_md(input_file_path: str, output_file_path: str, extract_method: str,
 
             # Convert page can throw exception based on the html content (e.g. invalid html, Empty page)
             try:
-                logger.info(f"Converting line {num_lines}: {id} {url}")
+                logger.debug(f"Converting line {num_lines}: {id} {url}")
                 md = convert_page(html, url, extract_method, config)["content"]
                 error = None
             except Exception as e:
@@ -90,7 +91,14 @@ class FineWebConfig:
 
 @ray.remote
 def transform(cfg: FineWebConfig):
-    refs = map_files_in_directory(html_to_md, cfg.input_path, "**/*.jsonl.gz", cfg.output_path, extract_method=cfg.extract_method, config=cfg.config)
+    refs = map_files_in_directory(
+        html_to_md,
+        cfg.input_path,
+        "**/*.jsonl.gz",
+        cfg.output_path,
+        extract_method=cfg.extract_method,
+        config=cfg.config,
+    )
 
     # Wait for all the tasks to finish.
     # The try and catch is important here as in case html_to_md throws any exception, that exception is passed here,

@@ -1,14 +1,10 @@
+import dataclasses
 import logging
 import os
 from dataclasses import dataclass
 
 import draccus
-import jax
 
-from levanter.data.text import LMDatasetConfig
-from levanter.distributed import RayConfig
-from levanter.main import train_lm
-from levanter.tracker.wandb import WandbConfig
 from marin.execution.executor import (
     ExecutorMainConfig,
     ExecutorStep,
@@ -25,9 +21,9 @@ from marin.processing.classification.fasttext.train_fasttext import (
     train,
 )
 from marin.processing.classification.inference import InferenceConfig, run_inference
-from marin.processing.tokenize import TokenizeConfig, tokenize
+from marin.processing.tokenize import TokenizeConfig, lm_training_config, tokenize
 from marin.schemas.web.convert import HtmlToMarkdownConfig
-from marin.training.training import train_lm_task
+from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 from scripts.hello_world_fw.process import FineWebConfig, transform
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -174,45 +170,61 @@ def create_steps(config: QuickstartExecutorConfig) -> list[ExecutorStep]:
         name=os.path.join(config.prefix, config.commit_hash, "tokenized"),
         fn=tokenize,
         config=TokenizeConfig(
-            input_path=output_path_of(consolidate_step),
+            train_urls=output_path_of(consolidate_step),
+            validation_urls=[],
             cache_path=this_output_path(),
-            dataset_name="quickstart_test",  # Does this have to be unique?
-            tokenizer="gpt2",
+            tokenizer=versioned("gpt2"),
         ),
     )
 
     ############################################################
     # Train
 
+    training_config = draccus.load(TrainLmOnPodConfig, open("config/training/quickstart_run.yaml"))
+
     train_step = ExecutorStep(
         name=os.path.join(config.prefix, config.commit_hash, "train"),
-        fn=train_lm_task,
-        config=train_lm.TrainLmConfig(
+        fn=run_levanter_train_lm,
+        config=dataclasses.replace(
+            training_config,
+            out_path=this_output_path(),
+            data=lm_training_config(tokenize_step),
+            tpu_type=None,
+            env={"WANDB_API_KEY": None, "WANDB_MODE": "disabled"},
             hf_save_steps=1,
             hf_save_path=this_output_path(),
-            data=LMDatasetConfig(
-                train_urls=[output_path_of(consolidate_step, "*.jsonl.gz")],
-                validation_urls=[output_path_of(consolidate_step, "*.jsonl.gz")],
-                cache_dir=output_path_of(tokenize_step, "quickstart_test"),
-                tokenizer="gpt2",
-            ),
-            model=train_lm.Gpt2Config(
-                num_layers=2,
-                num_heads=2,
-                seq_len=64,
-                hidden_dim=32,
-                attn_backend=None,  # use default for platform
-            ),
-            trainer=train_lm.TrainerConfig(
-                num_train_steps=2,
-                train_batch_size=len(jax.devices()),
-                max_eval_batches=1,
-                wandb=WandbConfig(mode="disabled"),
-                require_accelerator=False,
-                ray=RayConfig(auto_start_cluster=False),
-            ),
         ),
     )
+
+    # train_step = ExecutorStep(
+    #     name=os.path.join(config.prefix, config.commit_hash, "train"),
+    #     fn=train_lm_task,
+    #     config=train_lm.TrainLmConfig(
+    #         hf_save_steps=1,
+    #         hf_save_path=this_output_path(),
+    #         data=LMDatasetConfig(
+    #             train_urls=[output_path_of(consolidate_step, "*.jsonl.gz")],
+    #             validation_urls=[output_path_of(consolidate_step, "*.jsonl.gz")],
+    #             cache_dir=output_path_of(tokenize_step, "quickstart_test"),
+    #             tokenizer="gpt2",
+    #         ),
+    #         model=train_lm.Gpt2Config(
+    #             num_layers=2,
+    #             num_heads=2,
+    #             seq_len=64,
+    #             hidden_dim=32,
+    #             attn_backend=None,  # use default for platform
+    #         ),
+    #         trainer=train_lm.TrainerConfig(
+    #             num_train_steps=2,
+    #             train_batch_size=len(jax.devices()),
+    #             max_eval_batches=1,
+    #             wandb=WandbConfig(mode="dryrun"),
+    #             require_accelerator=False,
+    #             ray=RayConfig(auto_start_cluster=False),
+    #         ),
+    #     ),
+    # )
 
     return [
         transform_hq_data_step,

@@ -74,7 +74,7 @@ import os
 import traceback
 from collections.abc import Callable
 from dataclasses import dataclass, fields, is_dataclass, replace
-from typing import Any
+from typing import Any, Generic, TypeVar
 
 import draccus
 import ray
@@ -93,11 +93,13 @@ from marin.execution.executor_step_status import (
 
 logger = logging.getLogger("ray")
 
+ConfigT = TypeVar("ConfigT", covariant=True, bound=dataclass)
+
 ExecutorFunction = Callable | ray.remote_function.RemoteFunction | None
 
 
 @dataclass(frozen=True)
-class ExecutorStep:
+class ExecutorStep(Generic[ConfigT]):
     """
     An `ExecutorStep` represents a single step of a larger pipeline (e.g.,
     transforming HTML to text).  It is specified by:
@@ -121,7 +123,7 @@ class ExecutorStep:
 
     name: str
     fn: ExecutorFunction
-    config: dataclass
+    config: ConfigT
 
     override_output_path: str | None = None
     """Specifies the `output_path` that should be used.  Print warning if it
@@ -209,6 +211,9 @@ def collect_dependencies_and_version(obj: Any, dependencies: list[ExecutorStep],
         elif isinstance(obj, dict):
             # Recurse through dicts
             for i, x in obj.items():
+                if isinstance(i, OutputName | InputName | VersionedValue):
+                    # TODO: should we relax this?
+                    raise ValueError(f"dict keys must be real values, not placeholder, but {new_prefix} has {i}")
                 recurse(x, new_prefix + i)
 
     recurse(obj, "")
