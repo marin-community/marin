@@ -13,6 +13,7 @@ from ray.runtime_env import RuntimeEnv
 import levanter.infra.cli_helpers
 from levanter.infra.ray_tpu import run_on_pod
 from levanter.main import train_lm
+from levanter.main.train_lm import TrainLmConfig
 from marin.utilities.dataclass_utils import shallow_asdict
 from marin.utilities.gcs_utils import get_bucket_location, get_vm_region
 
@@ -80,7 +81,7 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
 
 # Just a simple function to call train_lm remotely
 @ray.remote
-def train_lm_task(train_config):
+def train_lm_task(train_config: TrainLmConfig):
     train_lm.main(train_config)
 
 
