@@ -184,36 +184,6 @@ def create_steps(config: QuickstartExecutorConfig) -> list[ExecutorStep]:
 
     ############################################################
     # Train
-    #
-    # config_train = draccus.load(TrainLmOnPodConfig, open("config/training/quickstart_test_run.yaml"))
-    # config_train.data.cache_dir = os.path.join(output_path_of(tokenize_step).name, "quickstart_test")
-    # config_train.data.train_urls = [f"{output_path_of(consolidate_step).name}*.jsonl.gz"]
-    # config_train.data.validation_urls = [f"{output_path_of(consolidate_step).name}*.jsonl.gz"]
-    # config_train.trainer.checkpointer.base_path = this_output_path()
-    #
-    # config_train = train_lm.TrainLmConfig(
-    #             data=LMDatasetConfig(
-    #     train_urls=[os.path.join(output_path_of(consolidate_step), "*.jsonl.gz")],
-    #     validation_urls=[os.path.join(output_path_of(consolidate_step), "*.jsonl.gz")],
-    #     cache_dir=os.path.join(output_path_of(tokenize_step).name, "quickstart_test"),
-    #     tokenizer="gpt2",
-    # ),
-    #             model=train_lm.Gpt2Config(
-    #                 num_layers=2,
-    #                 num_heads=2,
-    #                 seq_len=64,
-    #                 hidden_dim=32,
-    #                 attn_backend=None,  # use default for platform
-    #             ),
-    #             trainer=train_lm.TrainerConfig(
-    #                 num_train_steps=2,
-    #                 train_batch_size=len(jax.devices()),
-    #                 max_eval_batches=1,
-    #                 wandb=WandbConfig(mode="disabled"),
-    #                 require_accelerator=False,
-    #                 ray=RayConfig(auto_start_cluster=False),
-    #             ),
-    #         )
 
     train_step = ExecutorStep(
         name=os.path.join(config.prefix, config.commit_hash, "train"),
