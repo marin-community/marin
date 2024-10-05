@@ -352,7 +352,10 @@ class Executor:
         # Only start if there's no status
         should_run = not dry_run and status is None
         dependencies = [self.refs[dep] for dep in self.dependencies[step]]
-        self.refs[step] = execute_after_dependencies.remote(step.fn, config, dependencies, output_path, should_run)
+        name = f"execute_after_dependencies({get_fn_name(step.fn, short=True)})::{step.name})"
+        self.refs[step] = execute_after_dependencies.options(name=name).remote(
+            step.fn, config, dependencies, output_path, should_run
+        )
 
 
 @ray.remote
@@ -394,14 +397,20 @@ def execute_after_dependencies(
         append_status(status_path, STATUS_SUCCESS)
 
 
-def get_fn_name(fn: Callable | ray.remote_function.RemoteFunction):
+def get_fn_name(fn: Callable | ray.remote_function.RemoteFunction, short: bool = False):
     """Just for debugging: get the name of the function."""
     if fn is None:
         return "None"
     if isinstance(fn, ray.remote_function.RemoteFunction):
-        return f"{fn._function.__module__}.{fn._function.__qualname__}"
+        if short:
+            return f"{fn._function.__name__}"
+        else:
+            return f"{fn._function.__module__}.{fn._function.__qualname__}"
     else:
-        return f"{fn.__module__}.{fn.__qualname__}"
+        if short:
+            return f"{fn.__name__}"
+        else:
+            return f"{fn.__module__}.{fn.__qualname__}"
 
 
 ############################################################
