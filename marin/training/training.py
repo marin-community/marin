@@ -26,13 +26,58 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class TrainLmOnPodConfig(train_lm.TrainLmConfig):
-    """Inheritance so we can easily use existing TrainLmConfig configs."""
+    # Inheritance so we can easily use existing TrainLmConfig configs.
+    out_path: str | None = None
+    """
+    Base output directory to be used for training, mainly for use with executor framework.
+
+    If set, this will override all "output" directories:
+    * checkpoints (in $output_path/checkpoints
+    * hf checkpoints (in $output_path/hf)
+    * logging (in $output_path/log
+    """
 
     tpu_type: str | None = None  # None means local
+
     env: dict = dataclasses.field(default_factory=dict)
     """Environment variables to set in the training pod."""
     bypass_path_checks: bool = False
     """If True, don't check that paths are set and are in the same region as the VM."""
+    impute_run_id_from_out_path: bool = True
+    """
+    If true and out_path is not None, the run id will be set to the basename of the out_path plus a random string.
+
+    Note that trainer.id and the RUN_ID env variable take precedence, in that order.
+    """
+
+
+DEFAULT_CHECKPOINTS_PATH = "checkpoints"
+DEFAULT_HF_CHECKPOINTS_PATH = "hf"
+
+
+def _update_config_to_use_out_path(config: TrainLmOnPodConfig):
+    """
+    Update the config to use the out_path as the base output directory for training.
+
+    This will set the following paths to be subdirectories of the out_path:
+    * checkpoints (in $out_path/checkpoints)
+    * hf checkpoints (in $out_path/hf)
+    * logging (in $out_path/log)
+
+    This is useful when running with the executor framework, where the output path is set by the executor.
+    """
+    if config.out_path is None:
+        return config
+
+    trainer = replace(
+        config.trainer,
+        checkpointer=replace(
+            config.trainer.checkpointer,
+            base_path=os.path.join(config.out_path, DEFAULT_CHECKPOINTS_PATH),
+        ),
+    )
+
+    return replace(config, trainer=trainer, hf_save_path=os.path.join(config.out_path, DEFAULT_HF_CHECKPOINTS_PATH))
 
 
 def run_levanter_train_lm(config: TrainLmOnPodConfig):
@@ -54,6 +99,10 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
     """
     default_launch_config = levanter.infra.cli_helpers.load_config()
 
+    if config.out_path is not None:
+        logger.info(f"Using out path: {config.out_path}")
+        config = _update_config_to_use_out_path(config)
+
     env = _add_default_env_variables(config.env, default_launch_config["env"])
     env = _add_run_env_variables(env)
     config = replace(config, env=env)
@@ -64,7 +113,7 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
 
     runtime_env = RuntimeEnv(env_vars=config.env)
 
-    if not config.bypass_path_checks:
+    if not config.bypass_path_checks and config.tpu_type is not None:
         # run this on the Ray cluster to get the right region
         # doesn't need to be a TPU because ray insists that all VMs are in the same region
         ray.get(ray.remote(_doublecheck_paths).options(runtime_env=runtime_env, num_cpus=0.1).remote(config))
@@ -80,7 +129,7 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
 
         return ray.get(run_on_pod_resumable(train_lm_task, config.tpu_type))
     else:
-        return ray.get(train_lm_task.remote())
+        return ray.get(train_lm_task())
 
 
 def _upcast_trainlm_config(config):
@@ -88,9 +137,11 @@ def _upcast_trainlm_config(config):
     upcast TrainLmOnPodConfig to TrainLmConfig by stripping the TPU type and env
     """
     dict_config = shallow_asdict(config)
+    del dict_config["out_path"]
     del dict_config["env"]  # this is the important bit: don't want to leak env vars into the config
     del dict_config["tpu_type"]
     del dict_config["bypass_path_checks"]
+    del dict_config["impute_run_id_from_out_path"]
     train_config = train_lm.TrainLmConfig(**dict_config)
 
     return train_config
@@ -112,7 +163,14 @@ def _enforce_run_id(config: TrainLmOnPodConfig):
     if run_id is None:
         run_id = config.env.get("RUN_ID", os.environ.get("RUN_ID"))
 
-    if run_id is None:
+    if run_id is None and config.impute_run_id_from_out_path and config.out_path is not None:
+        path = config.out_path
+        while path.endswith("/"):
+            path = path[:-1]
+        run_id = os.path.basename(path)
+        logger.info(f"Imputing run ID from out path: {run_id}")
+
+    if not run_id:
         run_id = levanter.infra.cli_helpers.default_run_id()
         logger.warning(f"Run ID not set. Using default: {run_id}")
 
@@ -147,14 +205,22 @@ def _doublecheck_paths(config: TrainLmOnPodConfig):
     Double-check that we're not using local paths in some of the standard places that Levanter sets defaults.
     Also check that the paths are in the same region as the VM, to avoid performance issues and billing surprises.
     """
+    local_ok = config.bypass_path_checks or config.tpu_type is None
     try:
         region = get_vm_region()
     except ValueError as e:
+        if local_ok:
+            logger.warning("Could not determine the region of the VM. This is fine if you're running locally.")
+            return
         raise ValueError("Could not determine the region of the VM. This is required for path checks.") from e
 
     def check(key, path):
         if not path.startswith("gs://"):
-            raise ValueError(f"{key} must be a GCS path, not {path}")
+            if local_ok:
+                logger.warning(f"{key} is not a GCS path: {path}. This is fine if you're running locally.")
+                return
+            else:
+                raise ValueError(f"{key} must be a GCS path, not {path}")
         try:
             bucket_region = get_bucket_location(path)
             if region.lower() != bucket_region.lower():
@@ -200,14 +266,17 @@ def _add_run_env_variables(env: dict):
             env["WANDB_API_KEY"] = key
         else:
             wandb_disabled = env.get("WANDB_MODE", os.environ.get("WANDB_MODE"))
-            if wandb_disabled is None or wandb_disabled.lower() != "disabled":
+            if wandb_disabled is None or wandb_disabled.lower() not in {"disable", "offline", "dryrun"}:
                 raise ValueError(
                     "WANDB_API_KEY must be set in the environment. Please add it to your .config, export "
                     "WANDB_API_KEY=..., or add it to the env dict."
                 )
 
     if "GIT_COMMIT" not in env:
-        env["GIT_COMMIT"] = levanter.infra.cli_helpers.get_git_commit()
+        try:
+            env["GIT_COMMIT"] = levanter.infra.cli_helpers.get_git_commit()
+        except:  # noqa
+            logger.warning("Could not infer git commit", exc_info=True)
 
     return env
 
