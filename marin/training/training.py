@@ -5,14 +5,14 @@ from copy import deepcopy
 from dataclasses import dataclass, replace
 
 import draccus
-import levanter.infra.cli_helpers
 import ray
 from google.api_core.exceptions import Forbidden as GcpForbiddenException
-from levanter.infra.ray_tpu import run_on_pod
-from levanter.main import train_lm
 from mergedeep import mergedeep
 from ray.runtime_env import RuntimeEnv
 
+import levanter.infra.cli_helpers
+from levanter.infra.ray_tpu import run_on_pod
+from levanter.main import train_lm
 from marin.utilities.dataclass_utils import shallow_asdict
 from marin.utilities.gcs_utils import get_bucket_location, get_vm_region
 
@@ -76,6 +76,12 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
         train_lm.main(train_config)
 
     return ray.get(run_on_pod(train_lm_task, config.tpu_type))
+
+
+# Just a simple function to call train_lm remotely
+@ray.remote
+def train_lm_task(train_config):
+    train_lm.main(train_config)
 
 
 def _upcast_trainlm_config(config):
