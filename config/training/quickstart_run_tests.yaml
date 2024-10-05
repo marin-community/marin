@@ -19,6 +19,7 @@ trainer:
   train_batch_size: 1
   num_train_steps: 2
   max_eval_batches: 1
+  require_accelerator: False
 
 optimizer:
   learning_rate: 4E-4
