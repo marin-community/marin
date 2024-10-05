@@ -92,15 +92,6 @@ class TokenizeConfig:
             cache_dir=actual_output_dir,
         )
 
-    def _to_urls(self, path_spec):
-        if path_spec is None:
-            urls = []
-        elif isinstance(path_spec, str):
-            urls = [path_spec]
-        else:
-            urls = path_spec
-        return urls
-
     def as_lm_dataset_task_config(self, actual_output_dir) -> LMDatasetConfig:
         """
         For use in Levanter training runs with a single dataset.
