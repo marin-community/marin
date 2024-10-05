@@ -37,7 +37,7 @@ We want to compute a *version* for each step.  Here's what the user supplies:
    "method", not default thresholds that don't change).
 
 The version of a step is identified by the name, versioned fields, and the
-versions of all the dependencies, This version is represented as a hash (e.g.,
+versions of all the dependencies. This version is represented as a hash (e.g.,
 8ce902).
 
 ## Output paths
@@ -124,6 +124,10 @@ class ExecutorStep(Generic[ConfigT]):
     name: str
     fn: ExecutorFunction
     config: ConfigT
+
+    override_output_path: str | None = None
+    """Specifies the `output_path` that should be used.  Print warning if it
+    doesn't match the automatically computed one."""
 
     def __hash__(self):
         """Hash based on the ID (every object is different)."""
@@ -304,6 +308,12 @@ class Executor:
         hashed_version = hashlib.md5(version_str.encode()).hexdigest()[:6]
         output_path = os.path.join(self.prefix, step.name + "-" + hashed_version)
 
+        # Override output path if specified
+        if step.override_output_path is not None:
+            if output_path != step.override_output_path:
+                logger.warning(f"Output path {output_path} doesn't match {step.override_output_path}, using the latter.")
+                output_path = step.override_output_path
+
         # Record everything
         self.steps.append(step)
         self.dependencies[step] = dependencies
@@ -342,7 +352,10 @@ class Executor:
         # Only start if there's no status
         should_run = not dry_run and status is None
         dependencies = [self.refs[dep] for dep in self.dependencies[step]]
-        self.refs[step] = execute_after_dependencies.remote(step.fn, config, dependencies, output_path, should_run)
+        name = f"execute_after_dependencies({get_fn_name(step.fn, short=True)})::{step.name})"
+        self.refs[step] = execute_after_dependencies.options(name=name).remote(
+            step.fn, config, dependencies, output_path, should_run
+        )
 
 
 @ray.remote
@@ -384,14 +397,20 @@ def execute_after_dependencies(
         append_status(status_path, STATUS_SUCCESS)
 
 
-def get_fn_name(fn: Callable | ray.remote_function.RemoteFunction):
+def get_fn_name(fn: Callable | ray.remote_function.RemoteFunction, short: bool = False):
     """Just for debugging: get the name of the function."""
     if fn is None:
         return "None"
     if isinstance(fn, ray.remote_function.RemoteFunction):
-        return f"{fn._function.__module__}.{fn._function.__qualname__}"
+        if short:
+            return f"{fn._function.__name__}"
+        else:
+            return f"{fn._function.__module__}.{fn._function.__qualname__}"
     else:
-        return f"{fn.__module__}.{fn.__qualname__}"
+        if short:
+            return f"{fn.__name__}"
+        else:
+            return f"{fn.__module__}.{fn.__qualname__}"
 
 
 ############################################################
