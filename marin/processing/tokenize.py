@@ -79,7 +79,7 @@ class TokenizeConfig:
     validation_urls: list[str]  # path to validation data in jsonl format
     cache_path: str  # base path to save the tokenized files
     tokenizer: str  # tokenizer name. Should be the same as you intend to use in the tokenizer spec for the training run
-    tags: list[str] = dataclasses.field(default_factory=list)  # tags to be added to ocnfig
+    tags: list[str] = dataclasses.field(default_factory=list)  # tags to be added to config
 
     def as_lm_dataset_source_config(self, actual_output_dir) -> LMDatasetSourceConfig:
         """
