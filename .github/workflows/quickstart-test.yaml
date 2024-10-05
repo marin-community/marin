@@ -1,9 +1,10 @@
 name: Verify PR with quickstart.py
 
-on:
-  pull_request:
-    branches:
-      - main
+on: [ push, pull_request ]
+#on:
+#  pull_request:
+#    branches:
+#      - main
 
 jobs:
   build:
