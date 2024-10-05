@@ -4,7 +4,6 @@ from dataclasses import dataclass
 
 import draccus
 import jax
-import ray
 
 from levanter.data.text import LMDatasetConfig
 from levanter.distributed import RayConfig
@@ -244,5 +243,4 @@ def main(config: QuickstartExecutorConfig):
 
 
 if __name__ == "__main__":
-    ray.init()
     main()
