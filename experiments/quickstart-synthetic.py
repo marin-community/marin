@@ -219,10 +219,12 @@ def create_steps(config: QuickstartExecutorConfig) -> list[ExecutorStep]:
         name=os.path.join(config.prefix, config.commit_hash, "train"),
         fn=train_lm_task,
         config=train_lm.TrainLmConfig(
+            hf_save_steps=1,
+            hf_save_path=this_output_path(),
             data=LMDatasetConfig(
-                train_urls=[os.path.join(output_path_of(consolidate_step), "*.jsonl.gz")],
-                validation_urls=[os.path.join(output_path_of(consolidate_step), "*.jsonl.gz")],
-                cache_dir=os.path.join(output_path_of(tokenize_step).name, "quickstart_test"),
+                train_urls=[output_path_of(consolidate_step, "*.jsonl.gz")],
+                validation_urls=[output_path_of(consolidate_step, "*.jsonl.gz")],
+                cache_dir=output_path_of(tokenize_step, "quickstart_test"),
                 tokenizer="gpt2",
             ),
             model=train_lm.Gpt2Config(
@@ -272,5 +274,5 @@ def main(config: QuickstartExecutorConfig):
 
 
 if __name__ == "__main__":
-    ray.init(local_mode=True)
+    ray.init()
     main()
