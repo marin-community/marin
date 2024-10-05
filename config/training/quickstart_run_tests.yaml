@@ -1,0 +1,26 @@
+# This is designed to be quite small and fairly fast.
+#data:
+# data will be filled in in the experiment script
+
+model: # 150M class model
+  type: gpt2
+  num_layers: 2
+  num_heads: 2
+  seq_len: 64
+  hidden_dim: 32
+
+trainer:
+  tracker:
+    type: wandb
+    project: "marin"
+    tags: [ "llama", "quickstart" ]
+
+  mp: p=f32,c=bfloat16
+  train_batch_size: 1
+  num_train_steps: 2
+  max_eval_batches: 1
+
+optimizer:
+  learning_rate: 4E-4
+  weight_decay: 0.1
+  min_lr_ratio: 0.1

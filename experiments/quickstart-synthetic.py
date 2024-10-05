@@ -180,7 +180,7 @@ def create_steps(config: QuickstartExecutorConfig) -> list[ExecutorStep]:
     ############################################################
     # Train
 
-    training_config = draccus.load(TrainLmOnPodConfig, open("config/training/quickstart_run.yaml"))
+    training_config = draccus.load(TrainLmOnPodConfig, open("config/training/quickstart_run_tests.yaml"))
 
     train_step = ExecutorStep(
         name=os.path.join(config.prefix, config.commit_hash, "train"),
