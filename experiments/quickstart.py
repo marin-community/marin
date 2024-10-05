@@ -1,11 +1,23 @@
-from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path, versioned
+import dataclasses
+
+import draccus
+
+from marin.execution.executor import (
+    ExecutorStep,
+    executor_main,
+    output_path_of,
+    this_output_path,
+    versioned,
+)
+
+USER = "pliang"
 
 ############################################################
 # Download the pretraining data
-from operations.download.huggingface.download import DownloadConfig, download
+from operations.download.huggingface.download import DownloadConfig, download  # noqa
 
 raw_download_step = ExecutorStep(
-    name="raw/hello_world_fw-pliang",
+    name=f"raw/hello_world_fw-{USER}",
     fn=download,
     config=DownloadConfig(
         hf_dataset_id="skaramcheti/hello_world_fw",
@@ -25,7 +37,7 @@ from marin.schemas.web.convert import TrafilaturaConfig  # noqa
 from scripts.hello_world_fw.process import FineWebConfig, transform  # noqa
 
 transform_trafilatura_step = ExecutorStep(
-    name="documents/hello_world_fw-pliang-trafilatura",
+    name=f"documents/hello_world_fw-{USER}-trafilatura",
     fn=transform,
     config=FineWebConfig(
         input_path=raw_data,
@@ -41,7 +53,7 @@ transform_trafilatura_step = ExecutorStep(
 )
 
 transform_resiliparse_step = ExecutorStep(
-    name="documents/hello_world_fw-pliang-resiliparse",
+    name=f"documents/hello_world_fw-{USER}-resiliparse",
     fn=transform,
     config=FineWebConfig(
         input_path=raw_data,
@@ -51,7 +63,7 @@ transform_resiliparse_step = ExecutorStep(
 )
 
 transform_readability_step = ExecutorStep(
-    name="documents/hello_world_fw-pliang-readability",
+    name=f"documents/hello_world_fw-{USER}-readability",
     fn=transform,
     config=FineWebConfig(
         input_path=raw_data,
@@ -87,7 +99,7 @@ from marin.processing.classification.fasttext.train_fasttext import (  # noqa
 )
 
 train_quality_step = ExecutorStep(
-    name="classifiers/hello_world_fw-pliang",
+    name=f"classifiers/hello_world_fw-{USER}",
     fn=train,
     config=TrainFasttextClassifierConfig(
         input_doc_paths=[
@@ -112,7 +124,7 @@ train_quality_step = ExecutorStep(
 from marin.processing.classification.inference import InferenceConfig, run_inference  # noqa
 
 inference_quality_step = ExecutorStep(
-    name="attributes/hello_world_fw-pliang",
+    name=f"attributes/hello_world_fw-{USER}",
     fn=run_inference,
     config=InferenceConfig(
         input_path=output_path_of(transform_trafilatura_step),
@@ -129,7 +141,7 @@ inference_quality_step = ExecutorStep(
 from marin.processing.classification.dedupe import DedupeConfig, dedupe  # noqa
 
 dedupe_step = ExecutorStep(
-    name="attributes/hello_world_fw-pliang-dedupe",
+    name=f"attributes/hello_world_fw-{USER}-dedupe",
     fn=dedupe,
     config=DedupeConfig(
         input_path=output_path_of(transform_trafilatura_step),
@@ -143,7 +155,7 @@ dedupe_step = ExecutorStep(
 from marin.processing.classification.consolidate import ConsolidateConfig, FilterConfig, consolidate  # noqa
 
 consolidate_step = ExecutorStep(
-    name="documents/hello_world_fw-pliang-consolidate",
+    name=f"documents/hello_world_fw-{USER}-consolidate",
     fn=consolidate,
     config=ConsolidateConfig(
         input_path=output_path_of(transform_trafilatura_step),
@@ -168,23 +180,36 @@ consolidate_step = ExecutorStep(
 ############################################################
 # Tokenize
 
-from marin.processing.tokenize import TokenizeConfig, tokenize  # noqa
+from marin.processing.tokenize import TokenizeConfig, tokenize, lm_training_config  # noqa
 
 tokenize_step = ExecutorStep(
-    name="tokenized/llama3/hello_world_fw-pliang",
+    name=f"tokenized/llama3/hello_world_fw-{USER}",
     fn=tokenize,
     config=TokenizeConfig(
-        input_path=output_path_of(consolidate_step),
+        train_urls=output_path_of(consolidate_step),
+        validation_urls=[],
         cache_path=this_output_path(),
-        dataset_name="hello_world_fw-pliang",  # Does this have to be unique?
-        tokenizer="meta-llama/Meta-Llama-3.1-8B",
+        tokenizer=versioned("meta-llama/Meta-Llama-3.1-8B"),
     ),
 )
 
 ############################################################
 # Training
 
-# TODO: wait for Ray version
+from marin.training import TrainLmOnPodConfig, run_levanter_train_lm  # noqa
+
+training_config = draccus.load(TrainLmOnPodConfig, open("config/training/quickstart_run.yaml"))
+
+train_step = ExecutorStep(
+    name="checkpoints/quickstart",
+    fn=run_levanter_train_lm,
+    config=dataclasses.replace(
+        training_config,
+        out_path=this_output_path(),
+        data=lm_training_config(tokenize_step),
+        tpu_type=None,
+    ),
+)
 
 ############################################################
 # Evaluate
@@ -215,6 +240,7 @@ if __name__ == "__main__":
             transform_readability_step,  # Not used
             # train_quality_step,  # Not used  (TODO: fails right now)
             tokenize_step,
+            train_step,
             evaluate_step,
         ]
     )
