@@ -187,8 +187,8 @@ tokenize_step = ExecutorStep(
     name=f"tokenized/llama3/hello_world_fw-{USER}",
     fn=tokenize,
     config=TokenizeConfig(
-        train_urls=output_path_of(consolidate_step),
-        validation_urls=[],
+        train_paths=output_path_of(consolidate_step),
+        validation_paths=[],
         cache_path=this_output_path(),
         tokenizer=versioned("meta-llama/Meta-Llama-3.1-8B"),
     ),
@@ -206,7 +206,7 @@ train_step = ExecutorStep(
     fn=run_levanter_train_lm,
     config=dataclasses.replace(
         training_config,
-        out_path=this_output_path(),
+        output_path=this_output_path(),
         data=lm_training_config(tokenize_step),
         tpu_type=None,
     ),

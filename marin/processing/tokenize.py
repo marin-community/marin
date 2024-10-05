@@ -3,11 +3,11 @@ Main for running Levanter's tokenizer infrastructure on a dataset using an exist
 
 Usage:
     ray job submit --working-dir . --no-wait -- python -m marin.processing.tokenize \
-        --train_urls '[<input-dir>]' --cache_path <cache-path> --tokenizer <tokenizer_name>
-        --validation_urls null
+        --train_paths '[<input-dir>]' --cache_path <cache-path> --tokenizer <tokenizer_name>
+        --validation_paths null
 
-    train_urls: The input directory containing the jsonl files for training, or null/None
-    validation_urls: The input directory containing jsonl files for validation, or null/None
+    train_paths: The input directory containing the jsonl files for training, or null/None
+    validation_paths: The input directory containing jsonl files for validation, or null/None
     cache_path: The base directory to save the tokenized files
     tokenizer: The name of the tokenizer to use. This must be the same as the tokenizer used in the Levanter
                training run
@@ -33,31 +33,31 @@ logger = logging.getLogger(__name__)
 
 
 @ray.remote
-def levanter_tokenize(input_urls: list[str] | str, tokenizer_name: str, output_path: str):
+def levanter_tokenize(input_paths: list[str] | str, tokenizer_name: str, output_path: str):
     import levanter
     from levanter.data.metrics_monitor import LoggerMetricsMonitor
     from levanter.data.text import BatchTokenizer
     from levanter.store.cache import build_or_load_cache
 
-    if len(input_urls) == 0:
+    if len(input_paths) == 0:
         logger.warning("No input files found. Nothing to do.")
         return
 
     logging.basicConfig(level=logging.INFO)
 
-    logger.info(f"Caching {input_urls} to {output_path}.")
+    logger.info(f"Caching {input_paths} to {output_path}.")
     tokenizer = transformers.AutoTokenizer.from_pretrained(tokenizer_name)
     batch_tokenizer = BatchTokenizer(tokenizer, enforce_eos=True)
 
-    if isinstance(input_urls, str) and is_hf_dataset(input_urls):
-        source = levanter.data.datasource_from_hf(input_urls, split="train")
+    if isinstance(input_paths, str) and is_hf_dataset(input_paths):
+        source = levanter.data.datasource_from_hf(input_paths, split="train")
         source = source.map(lambda d: d["text"])
     else:
-        if isinstance(input_urls, str):
-            input_urls = [input_urls]
-        jsonls = _get_jsonls(input_urls)
+        if isinstance(input_paths, str):
+            input_paths = [input_paths]
+        jsonls = _get_jsonls(input_paths)
         if len(jsonls) == 0:
-            raise ValueError(f"No jsonl files found in {input_urls}")
+            raise ValueError(f"No jsonl files found in {input_paths}")
         logger.info(f"Found {len(jsonls)} jsonl files.")
         source = TextUrlDataSource(jsonls)
 
@@ -70,38 +70,36 @@ def levanter_tokenize(input_urls: list[str] | str, tokenizer_name: str, output_p
     )
 
     cache.await_finished()
-    logger.info(f"Finished caching {input_urls} to {output_path}.")
+    logger.info(f"Finished caching {input_paths} to {output_path}.")
 
 
 @dataclasses.dataclass(frozen=True)
 class TokenizeConfig:
-    train_urls: list[str]  # path to training data in jsonl format
-    validation_urls: list[str]  # path to validation data in jsonl format
+    train_paths: list[str]  # path to training data in jsonl format
+    validation_paths: list[str]  # path to validation data in jsonl format
     cache_path: str  # base path to save the tokenized files
     tokenizer: str  # tokenizer name. Should be the same as you intend to use in the tokenizer spec for the training run
-    tags: list[str] = dataclasses.field(default_factory=list)  # tags to be added to ocnfig
+    tags: list[str] = dataclasses.field(default_factory=list)  # tags to be added to config
 
-    def as_lm_dataset_source_config(self, actual_output_dir) -> LMDatasetSourceConfig:
+    def as_lm_dataset_source_config(self, actual_output_path: str) -> LMDatasetSourceConfig:
         """
         For use in Levanter training runs with mixtures of datasets.
         """
         return LMDatasetSourceConfig(
             tags=self.tags,
-            train_urls=(self.train_urls),
-            validation_urls=(self.validation_urls),
-            cache_dir=actual_output_dir,
+            train_urls=self.train_paths,
+            validation_urls=self.validation_paths,
+            cache_dir=actual_output_path,
         )
 
-    def as_lm_dataset_task_config(self, actual_output_dir) -> LMDatasetConfig:
+    def as_lm_dataset_task_config(self, actual_output_path: str) -> LMDatasetConfig:
         """
         For use in Levanter training runs with a single dataset.
         """
-        train_urls = self.train_urls
-        validation_urls = self.validation_urls
         return LMDatasetConfig(
-            cache_dir=actual_output_dir,
-            train_urls=train_urls,
-            validation_urls=validation_urls,
+            cache_dir=actual_output_path,
+            train_urls=self.train_paths,
+            validation_urls=self.validation_paths,
             tags=self.tags,
             tokenizer=self.tokenizer,
         )
@@ -206,12 +204,12 @@ def lm_mixture_training_config(
 
 
 def tokenize(config: TokenizeConfig):
-    if len(config.train_urls) == 0 and len(config.validation_urls) == 0:
+    if len(config.train_paths) == 0 and len(config.validation_paths) == 0:
         raise ValueError("No input files specified. Nothing to do.")
     output_path = os.path.join(config.cache_path, "train")
-    response_train = levanter_tokenize.remote(config.train_urls, config.tokenizer, output_path)
+    response_train = levanter_tokenize.remote(config.train_paths, config.tokenizer, output_path)
     validation_out = os.path.join(config.cache_path, "validation")
-    response_validation = levanter_tokenize.remote(config.validation_urls, config.tokenizer, validation_out)
+    response_validation = levanter_tokenize.remote(config.validation_paths, config.tokenizer, validation_out)
     return ray.get([response_train, response_validation])[0]
 
 
