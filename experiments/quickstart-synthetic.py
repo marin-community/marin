@@ -196,36 +196,6 @@ def create_steps(config: QuickstartExecutorConfig) -> list[ExecutorStep]:
         ),
     )
 
-    # train_step = ExecutorStep(
-    #     name=os.path.join(config.prefix, config.commit_hash, "train"),
-    #     fn=train_lm_task,
-    #     config=train_lm.TrainLmConfig(
-    #         hf_save_steps=1,
-    #         hf_save_path=this_output_path(),
-    #         data=LMDatasetConfig(
-    #             train_urls=[output_path_of(consolidate_step, "*.jsonl.gz")],
-    #             validation_urls=[output_path_of(consolidate_step, "*.jsonl.gz")],
-    #             cache_dir=output_path_of(tokenize_step, "quickstart_test"),
-    #             tokenizer="gpt2",
-    #         ),
-    #         model=train_lm.Gpt2Config(
-    #             num_layers=2,
-    #             num_heads=2,
-    #             seq_len=64,
-    #             hidden_dim=32,
-    #             attn_backend=None,  # use default for platform
-    #         ),
-    #         trainer=train_lm.TrainerConfig(
-    #             num_train_steps=2,
-    #             train_batch_size=len(jax.devices()),
-    #             max_eval_batches=1,
-    #             wandb=WandbConfig(mode="dryrun"),
-    #             require_accelerator=False,
-    #             ray=RayConfig(auto_start_cluster=False),
-    #         ),
-    #     ),
-    # )
-
     return [
         transform_hq_data_step,
         transform_lq_data_step,

@@ -126,11 +126,9 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
 
     if config.tpu_type is not None:
         # @ray.remote(runtime_env=runtime_env)
-        train_lm_task = ray.remote(runtime_env=runtime_env)(train_lm_task)
-
         return ray.get(run_on_pod_resumable(train_lm_task, config.tpu_type))
     else:
-        return ray.get(train_lm_task())
+        return ray.get(train_lm_task.remote())
 
 
 def _upcast_trainlm_config(config):
