@@ -16,7 +16,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install --system uv
+          pip install uv
           uv pip install --system -U jax==0.4.31
           git clone https://github.com/stanford-crfm/levanter.git && cd levanter && uv pip install --system -e .
           uv pip install --system . --extra-index-url https://download.pytorch.org/whl/cpu
