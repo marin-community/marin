@@ -7,7 +7,7 @@ from typing import ClassVar
 import ray
 import requests
 
-from marin.evaluation.evaluator import Dependency, Evaluator, ModelConfig
+from marin.evaluation.evaluators.evaluator import Dependency, Evaluator, ModelConfig
 from marin.evaluation.utils import kill_process_on_port
 from marin.utils import remove_tpu_lockfile_on_exit
 

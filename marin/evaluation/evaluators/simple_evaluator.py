@@ -3,8 +3,8 @@ import traceback
 from dataclasses import dataclass
 from typing import ClassVar
 
-from marin.evaluation.evaluator import ModelConfig
-from marin.evaluation.vllm_tpu_evaluator import VllmTpuEvaluator
+from marin.evaluation.evaluators.evaluator import ModelConfig
+from marin.evaluation.evaluators.vllm_tpu_evaluator import VllmTpuEvaluator
 
 
 @dataclass(frozen=True)
