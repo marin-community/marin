@@ -97,26 +97,18 @@ def transform(cfg: FineWebConfig):
     # The try and catch is important here as in case html_to_md throws any exception, that exception is passed here,
     # And if we don't catch it here, the script will exit, which will kill all the other tasks.
     try:
-        _, unfinished_refs = ray.wait(list(refs), num_returns=len(refs), timeout=None)
-        if unfinished_refs:
-            logger.error("Some tasks did not complete successfully.")
-            raise RuntimeError("Transform step encountered an error and did not complete successfully.")
+        ray.get(list(refs))
     except Exception as e:
-        logger.exception("Transform step failed due to one or more worker exceptions.")
+        logger.exception(e)
         # Put your retry logic here, incase you want to get the file for which the processing failed, please see:
         # https://docs.ray.io/en/latest/ray-core/fault-tolerance.html
         # In practice, since we make html_to_md resumable and idempotent, you can just look at the logs in Ray dashboard
         # And retry the same command after fixing the bug.
-        raise RuntimeError("Transform step encountered an error and did not complete successfully.") from e
 
 
 @draccus.wrap()
 def main(cfg: FineWebConfig):
-    try:
-        ray.get(transform.remote(cfg))
-    except RuntimeError as e:
-        logger.error("Main transform job failed, please check the logs for details.")
-        raise
+    ray.get(transform.remote(cfg))
 
 
 if __name__ == "__main__":
