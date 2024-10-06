@@ -99,6 +99,6 @@ class HtmlToMarkdownConfig(ExtractionConfig):
             raise Exception(f"Invalid preset config: {config}. Please use 'default'.")
 
     @property
-    def get_markdownify_kwargs(self) -> dict:
+    def markdownify_kwargs(self) -> dict:
         exclude = {"include_images", "include_links"}
         return {f.name: getattr(self, f.name) for f in fields(self) if f.name not in exclude}

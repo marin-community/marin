@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 def process_one_warc_file(
     input_path: str,
     output_path: str,
+    text_parser: str,
     extract_method: str,
     config: ExtractionConfig,
     output_path_md: str,
@@ -74,7 +75,7 @@ def process_one_warc_file(
     # Logging variables
     logger.info(f"Processing {s3_url} in {input_path}")
     length_warc = 0
-    s3_fs = fsspec.filesystem("s3", anon=False)  # make sure s3 keys are setup
+    s3_fs = fsspec.filesystem("s3", anon=False, key="AKIAUBKFCGE7E4JTLQ5V", secret="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")  # make sure s3 keys are setup
 
     with s3_fs.open(s3_url, mode="rb") as file_stream:
         for record in ArchiveIterator(file_stream):
@@ -100,7 +101,7 @@ def process_one_warc_file(
                         content = record.content_stream().read()
                         html_decoded = content.decode(errors="ignore")
 
-                        markdown = convert_page(html_decoded, url, extract_method, config)
+                        markdown = convert_page(html_decoded, url, extract_method, config, text_parser)
                         df.loc[url_idx_in_df, "md"] = markdown["content"]
 
                         num_urls_processed += 1
@@ -157,6 +158,7 @@ def process_one_warc_file(
 def process_fw_parquet(
     input_path: str,
     output_path: str,
+    text_parser: str,
     extract_method: str,
     config: ExtractionConfig,
     output_path_md: str,
@@ -203,7 +205,7 @@ def process_fw_parquet(
         group_df.to_parquet(filename)
         logger.info(f"Processing the group: {filename}, into {output_file_name}")
 
-        ray_waitable.append(process_one_warc_file.remote(filename, output_file_name, extract_method, config, output_path_md, output_path_text))
+        ray_waitable.append(process_one_warc_file.remote(filename, output_file_name, text_parser, extract_method, config, output_path_md, output_path_text))
         file_path.append(filename)
 
     was_successful = True
@@ -240,6 +242,7 @@ class ParquetFWConfig:
     input_path: str
     output_path_md: str
     output_path_text: str
+    text_parser: str = "default"
     extract_method: str = "readability"
     config: ExtractionConfig = HtmlToMarkdownConfig.default_config()
     max_files: int | None = None
@@ -274,7 +277,7 @@ def process_fw_dump(cfg: ParquetFWConfig):
         ) # gs://marin-data/processed/000_00000
 
         logger.info(f"Starting Processing for the fw parquet file: {file} in output_path: {output_path}")
-        result_refs.append(process_fw_parquet.remote(file, output_path, cfg.extract_method, cfg.config, cfg.output_path_md, cfg.output_path_text))
+        result_refs.append(process_fw_parquet.remote(file, output_path, cfg.text_parser, cfg.extract_method, cfg.config, cfg.output_path_md, cfg.output_path_text))
 
         if cfg.max_files and len(result_refs) >= cfg.max_files:
             break
