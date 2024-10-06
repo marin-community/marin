@@ -427,8 +427,20 @@ function renderPath(args) {
 function renderPaths(args) {
   const {paths, updateUrlParams} = args;
 
+  function appendNewPath() {
+    const newPath = prompt("Enter new path", paths[paths.length - 1]);
+    if (!newPath) {
+      return;
+    }
+    updateUrlParams({paths: JSON.stringify([...paths, newPath])});
+  }
+
+  const addButton = (<span onClick={appendNewPath} className="clickable">
+    [add]
+  </span>);
+
   return (<div>
-    Paths:
+    Paths {addButton}:
     <ul>
       {paths.map((path, index) => {
         const downloadUrl = path.replace("gs://", "https://storage.cloud.google.com/");
@@ -570,7 +582,9 @@ function highlightsMatches(highlights, itemKey) {
  * Recursively render `item`, which is an arbitrary JSON object.
  * `key` references `item`, so that when people click on part of an item, we can modify the key.
  */
-function renderItem(item, itemKey, highlights, showOnlyHighlights, updateUrlParams) {
+function renderItem(args) {
+  const {item, itemKey, highlights, showOnlyHighlights, updateUrlParams} = args;
+
   if (item === null) {
     return "<null>";
   }
@@ -578,6 +592,10 @@ function renderItem(item, itemKey, highlights, showOnlyHighlights, updateUrlPara
   if (typeof item === "string") {
     if (isUrl(item)) {
       return <a href={item} target="_blank">{item}</a>;
+    } else if (item.startsWith("gs://")) {
+      return (<div className="clickable" onClick={() => updateUrlParams({paths: JSON.stringify([item])})}>
+        {renderText(item)}
+      </div>);
     } else {
       const clickable = item.length < 20 ? "clickable" : "";
       return (<div className={clickable} onClick={() => onItemClick(itemKey, item, highlights, updateUrlParams)}>
@@ -603,7 +621,7 @@ function renderItem(item, itemKey, highlights, showOnlyHighlights, updateUrlPara
 
       return (<tr key={i}>
         <td>{key}</td>
-        <td>{renderItem(value, newItemKey, highlights, showOnlyHighlights, updateUrlParams)}</td>
+        <td>{renderItem({item: value, itemKey: newItemKey, highlights, showOnlyHighlights, updateUrlParams})}</td>
       </tr>);
     });
     return <table className="item-table"><tbody>{rows}</tbody></table>;
@@ -743,7 +761,7 @@ function renderItems(args) {
       const items = payloads[path].items;
       return (<div key={index}>
         {paths.length > 1 ? renderPath({paths, index, updateUrlParams}) : null}
-        {renderItem(items[r], [index], highlights, showOnlyHighlights, updateUrlParams)}
+        {renderItem({item: items[r], itemKey: [index], highlights, showOnlyHighlights, updateUrlParams})}
       </div>);
     });
     return (<tr key={r}>
@@ -776,7 +794,7 @@ function renderPayloads(args) {
     if (payload.type === "directory") {
       rendered.push(renderDirectory({files: payload.files, paths, index, updateUrlParams}));
     } else if (payload.type === "json") {
-      rendered.push(renderItem(payload.data, [], updateUrlParams));
+      rendered.push(renderItem({item: payload.data, itemKey: [], updateUrlParams}));
     }
   });
 
