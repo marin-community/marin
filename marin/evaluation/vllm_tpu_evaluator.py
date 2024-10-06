@@ -1,15 +1,15 @@
-from abc import ABC
-from typing import Dict, List, Optional
 import os
-import requests
 import subprocess
 import time
+from abc import ABC
+from typing import ClassVar
 
 import ray
+import requests
 
-from marin.utils import remove_tpu_lockfile_on_exit
-from marin.evaluation.evaluator import Evaluator, Dependency, ModelConfig
+from marin.evaluation.evaluator import Dependency, Evaluator, ModelConfig
 from marin.evaluation.utils import kill_process_on_port
+from marin.utils import remove_tpu_lockfile_on_exit
 
 
 class VllmTpuEvaluator(Evaluator, ABC):
@@ -17,7 +17,7 @@ class VllmTpuEvaluator(Evaluator, ABC):
 
     # Default pip packages to install for VLLM on TPUs
     # Some versions were fixed in order to resolve dependency conflicts.
-    DEFAULT_PIP_PACKAGES: List[Dependency] = [
+    DEFAULT_PIP_PACKAGES: ClassVar[list[Dependency]] = [
         Dependency(name="aiohttp"),
         Dependency(name="attrs", version="22.2.0"),
         Dependency(name="click", version="8.1.3"),
@@ -36,7 +36,7 @@ class VllmTpuEvaluator(Evaluator, ABC):
         """
         Download the model if it's not already downloaded
         """
-        downloaded_path: Optional[str] = model.ensure_downloaded(
+        downloaded_path: str | None = model.ensure_downloaded(
             local_path=os.path.join(VllmTpuEvaluator.CACHE_PATH, model.name)
         )
         # Use the model name if a path is not specified (e.g., for Hugging Face models)
@@ -67,8 +67,8 @@ class VllmTpuEvaluator(Evaluator, ABC):
                 # Attempt to send a request to the server's health endpoint
                 response = requests.get(f"{server_url}/models")
                 if response.status_code == 200:
-                    raw_response: Dict = response.json()
-                    loaded_models: List[str] = [model["id"] for model in raw_response["data"]]
+                    raw_response: dict = response.json()
+                    loaded_models: list[str] = [model["id"] for model in raw_response["data"]]
 
                     # Can be on a machine with a vLLM server up and running, so also check the model is loaded
                     print(f"vLLM server is up and running at {server_url}: {response.text}")
@@ -109,14 +109,14 @@ class VllmTpuEvaluator(Evaluator, ABC):
         model.destroy()
 
     _python_version: str = "3.10"
-    _pip_packages: List[Dependency] = DEFAULT_PIP_PACKAGES
-    _py_modules: List[Dependency] = []
+    _pip_packages: ClassVar[list[Dependency]] = DEFAULT_PIP_PACKAGES
+    _py_modules: ClassVar[list[Dependency]] = []
 
-    def get_runtime_env(self) -> Dict:
+    def get_runtime_env(self) -> dict:
         """
         Returns the runtime environment to run the evaluator on the Ray cluster.
         """
-        runtime_env: Dict = {
+        runtime_env: dict = {
             "pip": {
                 "packages": [str(package) for package in self._pip_packages],
                 "pip_check": False,
@@ -131,7 +131,7 @@ class VllmTpuEvaluator(Evaluator, ABC):
         return runtime_env
 
     def evaluate(
-        self, model: ModelConfig, evals: List[str], output_path: str, max_eval_instances: int | None = None
+        self, model: ModelConfig, evals: list[str], output_path: str, max_eval_instances: int | None = None
     ) -> None:
         """
         Launches the evaluation run with Ray.
@@ -142,12 +142,12 @@ class VllmTpuEvaluator(Evaluator, ABC):
         )
         @remove_tpu_lockfile_on_exit
         def launch(
-            model: ModelConfig, evals: List[str], output_path: str, max_eval_instances: int | None = None
+            model: ModelConfig, evals: list[str], output_path: str, max_eval_instances: int | None = None
         ) -> None:
             self.run(model, evals, output_path, max_eval_instances)
 
         ray.get(launch.remote(model, evals, output_path, max_eval_instances))
 
-    def run(self, model: ModelConfig, evals: List[str], output_path: str, max_eval_instances: int | None = None) -> None:
+    def run(self, model: ModelConfig, evals: list[str], output_path: str, max_eval_instances: int | None = None) -> None:
         """What gets run on the machine for evaluation"""
         raise NotImplementedError

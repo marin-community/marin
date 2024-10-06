@@ -1,11 +1,11 @@
-from typing import Dict, List
 import os
 import shutil
 import traceback
+from typing import ClassVar
 
 from marin.evaluation.evaluator import Dependency, ModelConfig
+from marin.evaluation.utils import is_remote_path, run_bash_command, upload_to_gcs, write_yaml
 from marin.evaluation.vllm_tpu_evaluator import VllmTpuEvaluator
-from marin.evaluation.utils import is_remote_path, upload_to_gcs, run_bash_command, write_yaml
 
 
 class AlpacaEvaluator(VllmTpuEvaluator):
@@ -24,7 +24,7 @@ class AlpacaEvaluator(VllmTpuEvaluator):
     # so if the number of instances is not specified, we will run on all of them.
     DEFAULT_MAX_INSTANCES: int = 805
 
-    _pip_packages: List[Dependency] = VllmTpuEvaluator.DEFAULT_PIP_PACKAGES + [Dependency(name="alpaca-eval")]
+    _pip_packages: ClassVar[list[Dependency]] = [*VllmTpuEvaluator.DEFAULT_PIP_PACKAGES, Dependency(name="alpaca-eval")]
 
     @staticmethod
     def write_model_config_file(model: ModelConfig, path: str) -> None:
@@ -35,7 +35,7 @@ class AlpacaEvaluator(VllmTpuEvaluator):
 
         # On how to write the model configuration file, see
         # https://github.com/tatsu-lab/alpaca_eval/blob/main/src/alpaca_eval/main.py#L241
-        content: Dict = {
+        content: dict = {
             model_name_or_path.split("/")[-1]: {
                 # Could be any arbitrary prompt template but the Cohere one prompts
                 # with the just instruction without any prompt engineering: {instruction}
@@ -64,7 +64,7 @@ class AlpacaEvaluator(VllmTpuEvaluator):
         with open(os.path.expanduser("~/.cache/openai/token"), "r") as f:
             os.environ["OPENAI_API_KEY"] = f.read().strip()
 
-    def run(self, model: ModelConfig, evals: List[str], output_path: str, max_eval_instances: int | None = None) -> None:
+    def run(self, model: ModelConfig, evals: list[str], output_path: str, max_eval_instances: int | None = None) -> None:
         """
         Runs AlpacaEval on the specified model.
 

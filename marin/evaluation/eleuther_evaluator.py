@@ -1,10 +1,10 @@
-from typing import List
 import os
 import traceback
+from typing import ClassVar
 
 from marin.evaluation.evaluator import Dependency, ModelConfig
+from marin.evaluation.utils import is_remote_path, run_bash_command, upload_to_gcs
 from marin.evaluation.vllm_tpu_evaluator import VllmTpuEvaluator
-from marin.evaluation.utils import is_remote_path, upload_to_gcs, run_bash_command
 
 
 # TODO: this currently doesn't work on TPUs: https://github.com/vllm-project/vllm/issues/8499
@@ -16,12 +16,13 @@ class EleutherEvaluator(VllmTpuEvaluator):
     RESULTS_PATH: str = os.path.join(VllmTpuEvaluator.CACHE_PATH, "eleuther_results")
     DEFAULT_MAX_EVAL_INSTANCES: int = 1000
 
-    _pip_packages: List[Dependency] = VllmTpuEvaluator.DEFAULT_PIP_PACKAGES + [
+    _pip_packages: ClassVar[list[Dependency]] = [
+        *VllmTpuEvaluator.DEFAULT_PIP_PACKAGES,
         Dependency(name="lm_eval"),
         Dependency(name="lm-eval[api]"),
     ]
 
-    def run(self, model: ModelConfig, evals: List[str], output_path: str, max_eval_instances: int | None = None) -> None:
+    def run(self, model: ModelConfig, evals: list[str], output_path: str, max_eval_instances: int | None = None) -> None:
         """
         Runs EleutherAI's lm-eval harness on the specified model and set of  tasks.
 
