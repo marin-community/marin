@@ -1,9 +1,9 @@
-from marin.evaluation.alpaca_evaluator import AlpacaEvaluator
-from marin.evaluation.eleuther_evaluator import EleutherEvaluator
 from marin.evaluation.evaluation_config import EvaluationConfig
-from marin.evaluation.evaluator import Evaluator
-from marin.evaluation.helm_evaluator import HELMEvaluator
-from marin.evaluation.simple_evaluator import SimpleEvaluator
+from marin.evaluation.evaluators.alpaca_evaluator import AlpacaEvaluator
+from marin.evaluation.evaluators.eleuther_evaluator import EleutherEvaluator
+from marin.evaluation.evaluators.evaluator import Evaluator
+from marin.evaluation.evaluators.helm_evaluator import HELMEvaluator
+from marin.evaluation.evaluators.simple_evaluator import SimpleEvaluator
 
 # Supported evaluators
 NAME_TO_EVALUATOR = {

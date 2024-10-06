@@ -12,8 +12,8 @@ import time
 import draccus
 
 from marin.evaluation.evaluation_config import EvaluationConfig
-from marin.evaluation.evaluator import Evaluator, ModelConfig
-from marin.evaluation.evaluator_factory import get_evaluator
+from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
+from marin.evaluation.evaluators.evaluator_factory import get_evaluator
 
 
 def evaluate(config: EvaluationConfig) -> None:

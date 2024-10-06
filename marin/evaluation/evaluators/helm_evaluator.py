@@ -3,9 +3,9 @@ import shutil
 import traceback
 from typing import ClassVar
 
-from marin.evaluation.evaluator import Dependency, ModelConfig
+from marin.evaluation.evaluators.evaluator import Dependency, ModelConfig
+from marin.evaluation.evaluators.vllm_tpu_evaluator import VllmTpuEvaluator
 from marin.evaluation.utils import is_remote_path, run_bash_command, upload_to_gcs, write_yaml
-from marin.evaluation.vllm_tpu_evaluator import VllmTpuEvaluator
 
 
 class HELMEvaluator(VllmTpuEvaluator):
