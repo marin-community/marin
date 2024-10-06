@@ -7,12 +7,13 @@ python3 run.py <Name of evaluator> --model <Path to model or Hugging Face model 
 --evals <List of evals to run> --output-path <Where to output logs and results>
 """
 
-import draccus
 import time
 
-from scripts.evaluation.evaluator_factory import get_evaluator
-from scripts.evaluation.evaluator import Evaluator, ModelConfig
-from scripts.evaluation.evaluation_config import EvaluationConfig
+import draccus
+
+from marin.evaluation.evaluation_config import EvaluationConfig
+from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
+from marin.evaluation.evaluators.evaluator_factory import get_evaluator
 
 
 def evaluate(config: EvaluationConfig) -> None:
