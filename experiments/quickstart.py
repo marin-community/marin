@@ -190,8 +190,8 @@ tokenize_step = ExecutorStep(
 ############################################################
 # Evaluate
 
-from scripts.evaluation.evaluation_config import EvaluationConfig  # noqa
-from scripts.evaluation.run import evaluate  # noqa
+from marin.evaluation.evaluation_config import EvaluationConfig  # noqa
+from marin.evaluation.run import evaluate  # noqa
 
 evaluate_step = ExecutorStep(
     name="evaluation/hello_world_fw-pliang",
