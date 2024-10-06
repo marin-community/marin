@@ -1,9 +1,9 @@
-from scripts.evaluation.evaluator import Evaluator
-from scripts.evaluation.evaluation_config import EvaluationConfig
-from scripts.evaluation.alpaca_evaluator import AlpacaEvaluator
-from scripts.evaluation.helm_evaluator import HELMEvaluator
-from scripts.evaluation.simple_evaluator import SimpleEvaluator
-from scripts.evaluation.eleuther_evaluator import EleutherEvaluator
+from marin.evaluation.evaluator import Evaluator
+from marin.evaluation.evaluation_config import EvaluationConfig
+from marin.evaluation.alpaca_evaluator import AlpacaEvaluator
+from marin.evaluation.helm_evaluator import HELMEvaluator
+from marin.evaluation.simple_evaluator import SimpleEvaluator
+from marin.evaluation.eleuther_evaluator import EleutherEvaluator
 
 # Supported evaluators
 NAME_TO_EVALUATOR = {

@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 from typing import List, Optional
 from dataclasses import dataclass
 
-from scripts.evaluation.utils import download_from_gcs, is_remote_path
+from marin.evaluation.utils import download_from_gcs, is_remote_path
 
 
 @dataclass(frozen=True)

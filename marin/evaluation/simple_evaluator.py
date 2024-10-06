@@ -3,8 +3,8 @@ from typing import Dict, List
 import time
 import traceback
 
-from scripts.evaluation.vllm_tpu_evaluator import VllmTpuEvaluator
-from scripts.evaluation.evaluator import ModelConfig
+from marin.evaluation.vllm_tpu_evaluator import VllmTpuEvaluator
+from marin.evaluation.evaluator import ModelConfig
 
 
 @dataclass(frozen=True)

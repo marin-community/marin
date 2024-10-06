@@ -2,9 +2,9 @@ from typing import List
 import os
 import traceback
 
-from scripts.evaluation.evaluator import Dependency, ModelConfig
-from scripts.evaluation.vllm_tpu_evaluator import VllmTpuEvaluator
-from scripts.evaluation.utils import is_remote_path, upload_to_gcs, run_bash_command
+from marin.evaluation.evaluator import Dependency, ModelConfig
+from marin.evaluation.vllm_tpu_evaluator import VllmTpuEvaluator
+from marin.evaluation.utils import is_remote_path, upload_to_gcs, run_bash_command
 
 
 # TODO: this currently doesn't work on TPUs: https://github.com/vllm-project/vllm/issues/8499
