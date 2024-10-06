@@ -10,9 +10,9 @@ python3 run.py <Name of evaluator> --model <Path to model or Hugging Face model 
 import draccus
 import time
 
-from scripts.evaluation.evaluator_factory import get_evaluator
-from scripts.evaluation.evaluator import Evaluator, ModelConfig
-from scripts.evaluation.evaluation_config import EvaluationConfig
+from marin.evaluation.evaluator_factory import get_evaluator
+from marin.evaluation.evaluator import Evaluator, ModelConfig
+from marin.evaluation.evaluation_config import EvaluationConfig
 
 
 def evaluate(config: EvaluationConfig) -> None:

@@ -8,8 +8,8 @@ import time
 import ray
 
 from marin.utils import remove_tpu_lockfile_on_exit
-from scripts.evaluation.evaluator import Evaluator, Dependency, ModelConfig
-from scripts.evaluation.utils import kill_process_on_port
+from marin.evaluation.evaluator import Evaluator, Dependency, ModelConfig
+from marin.evaluation.utils import kill_process_on_port
 
 
 class VllmTpuEvaluator(Evaluator, ABC):
