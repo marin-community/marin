@@ -140,10 +140,10 @@ class InputName:
     """To be interpreted as a previous `step`'s output_path joined with `name`."""
 
     step: ExecutorStep
-    name: str = ""
+    name: str | None
 
 
-def output_path_of(step: ExecutorStep, name: str = ""):
+def output_path_of(step: ExecutorStep, name: str | None = None):
     return InputName(step=step, name=name)
 
 
@@ -151,10 +151,10 @@ def output_path_of(step: ExecutorStep, name: str = ""):
 class OutputName:
     """To be interpreted as part of this step's output_path joined with `name`."""
 
-    name: str = ""
+    name: str | None
 
 
-def this_output_path(name: str = ""):
+def this_output_path(name: str | None = None):
     return OutputName(name=name)
 
 
@@ -278,13 +278,16 @@ def instantiate_config(config: dataclass, output_path: str, output_paths: dict[E
     `output_paths`: a dict from `ExecutorStep` to their output paths.
     """
 
+    def join_path(output_path: str, name: str | None) -> str:
+        return os.path.join(output_path, name) if name else output_path
+
     def recurse(obj: Any):
         if obj is None:
             return None
         if isinstance(obj, InputName):
-            return os.path.join(output_paths[obj.step], obj.name)
+            return join_path(output_paths[obj.step], obj.name)
         elif isinstance(obj, OutputName):
-            return os.path.join(output_path, obj.name)
+            return join_path(output_path, obj.name)
         elif isinstance(obj, VersionedValue):
             return obj.value
         elif is_dataclass(obj):
