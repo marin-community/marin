@@ -14,7 +14,7 @@ HTML_CORRECTION_PREFIX = "<!DOCTYPE html>"
 
 
 def convert_page_with_trafilatura(
-    html: str, url: str | None = None, config: ExtractionConfig = TrafilaturaConfig.default_config()
+    html: str, url: str | None = None, config: ExtractionConfig = TrafilaturaConfig.default_config(), text_parser: str = "default"
 ) -> dict[str, str]:
     """
     Convert HTML to text[non-markdown] using Trafilatura.
@@ -53,7 +53,9 @@ def convert_page_with_trafilatura(
     return out
 
 
-def convert_page_with_resiliparse(html: str, url: str | None = None) -> dict[str, str]:
+def convert_page_with_resiliparse(
+    html: str, url: str | None = None, config: HtmlToMarkdownConfig | None = HtmlToMarkdownConfig.default_config(), text_parser: str = "default"
+) -> dict[str, str]:
     """
     Convert HTML to text[non-markdown] using Resiliparse.
 
@@ -76,12 +78,19 @@ def convert_page_with_resiliparse(html: str, url: str | None = None) -> dict[str
     tree = HTMLTree.parse(html)
     title = tree.title or None
 
-    content = extract_plain_text(
-        html,
-        preserve_formatting=False,
-        main_content=True,
-        links=False,
-    )
+    content = None
+    match text_parser:
+        case "default":
+            content = extract_plain_text(
+                html,
+                preserve_formatting=False,
+                main_content=True,
+                links=False,
+            )
+        case "markdownify":
+            content = to_markdown(str(tree), config)
+        case _:
+            raise Exception(f"Invalid text_parser: {text_parser}. Please use 'default' or 'markdownify'.")
 
     if title:
         content = f"{title}\n\n{content}"
@@ -95,7 +104,7 @@ def convert_page_with_resiliparse(html: str, url: str | None = None) -> dict[str
 
 
 def convert_page_with_readability(
-    html: str, url: str | None = None, config: HtmlToMarkdownConfig = HtmlToMarkdownConfig.default_config()
+    html: str, url: str | None = None, config: HtmlToMarkdownConfig = HtmlToMarkdownConfig.default_config(), text_parser: str = "default"
 ) -> dict[str, str]:
     """
     Convert HTML to text[markdown] using Readability and markdownify.
@@ -183,6 +192,7 @@ def convert_page(
     url: str | None = None,
     extract_method: str = "readability",
     config: ExtractionConfig = HtmlToMarkdownConfig.default_config(),
+    text_parser: str = "default",
 ) -> dict[str, str]:
     """
     Convert HTML to text using the specified method.
@@ -198,11 +208,11 @@ def convert_page(
 
     match extract_method:
         case "trafilatura":
-            return convert_page_with_trafilatura(html, url, config)
+            return convert_page_with_trafilatura(html, url, config, text_parser)
         case "readability":
-            return convert_page_with_readability(html, url, config)
+            return convert_page_with_readability(html, url, config, text_parser)
         case "resiliparse":
-            return convert_page_with_resiliparse(html, url)
+            return convert_page_with_resiliparse(html, url, config, text_parser)
         case "legacy":
             return convert_page_legacy(html, url)
         case _:
