@@ -1,6 +1,7 @@
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 
 from operations.download.huggingface.download import DownloadConfig, download
+from operations.download.huggingface.download_gated_manual import download_and_upload_to_gcs
 
 """
 Downloads the following datasets:
@@ -25,9 +26,9 @@ to GCS. These are the other datasets that were used in the DCLM paper (in additi
 
 ############################################################
 # download The Stack dataset
-stack_download_step = ExecutorStep(
+the_stack_download_step = ExecutorStep(
     name="raw/the-stack-dedup",
-    fn=download,
+    fn=download_and_upload_to_gcs,
     config=DownloadConfig(
         hf_dataset_id="bigcode/the-stack-dedup",
         revision=versioned("17cad72"), 
@@ -39,7 +40,7 @@ stack_download_step = ExecutorStep(
 ############################################################
 # download Proof Pile 2 dataset
 proofpile_download_step = ExecutorStep(
-    name="raw/proof-pile-2",
+    name="raw/proof-pile-2-dummy",
     fn=download,
     config=DownloadConfig(
         hf_dataset_id="EleutherAI/proof-pile-2",
@@ -55,7 +56,7 @@ if __name__ == "__main__":
     executor_main(
         steps=[
             # dclm_baseline_download_step,
-            stack_download_step,
-            proofpile_download_step,
+            the_stack_download_step,
+            # proofpile_download_step,
         ]
     )
