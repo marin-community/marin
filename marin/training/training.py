@@ -100,7 +100,7 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
     default_launch_config = levanter.infra.cli_helpers.load_config()
 
     if config.output_path is not None:
-        logger.info(f"Using out path: {config.output_path}")
+        logger.info(f"Using output path: {config.output_path}")
         config = _update_config_to_use_out_path(config)
 
     env = _add_default_env_variables(config.env, default_launch_config.get("env"))
@@ -121,16 +121,14 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
 
     train_config = _upcast_trainlm_config(config)
 
+    @ray.remote(runtime_env=runtime_env)
     def train_lm_task():
         train_lm.main(train_config)
 
     if config.tpu_type is not None:
-        # @ray.remote(runtime_env=runtime_env)
-        train_lm_task = ray.remote(runtime_env=runtime_env)(train_lm_task)
-
-        return ray.get(run_on_pod_resumable(train_lm_task, config.tpu_type))
+        return run_on_pod_resumable(train_lm_task, config.tpu_type)
     else:
-        return ray.get(train_lm_task())
+        return ray.get(train_lm_task.remote())
 
 
 def _upcast_trainlm_config(config):
@@ -138,11 +136,9 @@ def _upcast_trainlm_config(config):
     upcast TrainLmOnPodConfig to TrainLmConfig by stripping the TPU type and env
     """
     dict_config = shallow_asdict(config)
-    del dict_config["out_path"]
-    del dict_config["env"]  # this is the important bit: don't want to leak env vars into the config
-    del dict_config["tpu_type"]
-    del dict_config["bypass_path_checks"]
-    del dict_config["impute_run_id_from_output_path"]
+    fields_to_remote = set(dict_config.keys()) - set(train_lm.TrainLmConfig.__dataclass_fields__.keys())
+    for field in fields_to_remote:
+        del dict_config[field]
     train_config = train_lm.TrainLmConfig(**dict_config)
 
     return train_config
@@ -166,8 +162,7 @@ def _enforce_run_id(config: TrainLmOnPodConfig):
 
     if run_id is None and config.impute_run_id_from_output_path and config.output_path is not None:
         path = config.output_path
-        while path.endswith("/"):
-            path = path[:-1]
+        path = path.rstrip("/")
         run_id = os.path.basename(path)
         logger.info(f"Imputing run ID from out path: {run_id}")
 

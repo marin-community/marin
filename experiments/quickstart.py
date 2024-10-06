@@ -2,6 +2,7 @@ import dataclasses
 
 import draccus
 
+import marin.utilities.ray_utils as ray_utils
 from marin.execution.executor import (
     ExecutorStep,
     executor_main,
@@ -10,7 +11,9 @@ from marin.execution.executor import (
     versioned,
 )
 
-USER = "pliang"
+is_running_locally = ray_utils.is_local_ray_cluster()
+
+USER = "dlwh"
 
 ############################################################
 # Download the pretraining data
@@ -187,7 +190,7 @@ tokenize_step = ExecutorStep(
     name=f"tokenized/llama3/hello_world_fw-{USER}",
     fn=tokenize,
     config=TokenizeConfig(
-        train_paths=output_path_of(consolidate_step),
+        train_paths=[output_path_of(consolidate_step)],
         validation_paths=[],
         cache_path=this_output_path(),
         tokenizer=versioned("meta-llama/Meta-Llama-3.1-8B"),
@@ -202,13 +205,13 @@ from marin.training import TrainLmOnPodConfig, run_levanter_train_lm  # noqa
 training_config = draccus.load(TrainLmOnPodConfig, open("config/training/quickstart_run.yaml"))
 
 train_step = ExecutorStep(
-    name="checkpoints/quickstart",
+    name=f"checkpoints/quickstart-{USER}",
     fn=run_levanter_train_lm,
     config=dataclasses.replace(
         training_config,
         output_path=this_output_path(),
         data=lm_training_config(tokenize_step),
-        tpu_type=None,
+        tpu_type="v4-8" if not is_running_locally else None,
     ),
 )
 
@@ -219,7 +222,7 @@ from scripts.evaluation.evaluation_config import EvaluationConfig  # noqa
 from scripts.evaluation.run import evaluate  # noqa
 
 evaluate_step = ExecutorStep(
-    name="evaluation/hello_world_fw-pliang",
+    name=f"evaluation/hello_world_fw-{USER}",
     fn=evaluate,
     config=EvaluationConfig(
         evaluator="helm",

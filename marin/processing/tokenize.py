@@ -21,6 +21,7 @@ import os
 from collections.abc import Sequence
 
 import draccus
+import fsspec
 import ray
 import transformers
 from levanter.data.sharded_datasource import TextUrlDataSource
@@ -49,7 +50,7 @@ def levanter_tokenize(input_paths: list[str] | str, tokenizer_name: str, output_
     tokenizer = transformers.AutoTokenizer.from_pretrained(tokenizer_name)
     batch_tokenizer = BatchTokenizer(tokenizer, enforce_eos=True)
 
-    if isinstance(input_paths, str) and is_hf_dataset(input_paths):
+    if isinstance(input_paths, str) and not is_probably_path(input_paths):
         source = levanter.data.datasource_from_hf(input_paths, split="train")
         source = source.map(lambda d: d["text"])
     else:
@@ -141,30 +142,29 @@ def lm_training_config(
 
     if len(validation_sets) == 0:
         return dataclasses.replace(step_to_lm_training_config(training_set), shuffle=shuffle)
-    else:
 
-        for step in validation_sets:
-            if step.config.tokenizer != tokenizer:
-                raise ValueError(
-                    f"Validation set {step.name} must have same tokenizer as training set's,"
-                    f" but got: {step.config.tokenizer} vs {tokenizer}"
-                )
+    for step in validation_sets:
+        if step.config.tokenizer != tokenizer:
+            raise ValueError(
+                f"Validation set {step.name} must have same tokenizer as training set's,"
+                f" but got: {step.config.tokenizer} vs {tokenizer}"
+            )
 
-        prefix = os.path.commonprefix([training_set.name, *(dset.name for dset in validation_sets)])
+    prefix = os.path.commonprefix([training_set.name, *(dset.name for dset in validation_sets)])
 
-        def _strip_prefix(name):
-            return name[len(prefix) :]
+    def _strip_prefix(name):
+        return name[len(prefix) :]
 
-        weights = {_strip_prefix(training_set.name): 1.0, **{_strip_prefix(step.name): 0.0 for step in validation_sets}}
+    weights = {_strip_prefix(training_set.name): 1.0, **{_strip_prefix(step.name): 0.0 for step in validation_sets}}
 
-        components = {
-            _strip_prefix(training_set.name): step_to_lm_mixture_component(training_set),
-            **{_strip_prefix(step.name): step_to_lm_mixture_component(step) for step in validation_sets},
-        }
+    components = {
+        _strip_prefix(training_set.name): step_to_lm_mixture_component(training_set),
+        **{_strip_prefix(step.name): step_to_lm_mixture_component(step) for step in validation_sets},
+    }
 
-        return LMMixtureDatasetConfig(
-            configs=components, train_weights=weights, tokenizer=tokenizer, cache_dir=None, shuffle=shuffle
-        )
+    return LMMixtureDatasetConfig(
+        configs=components, train_weights=weights, tokenizer=tokenizer, cache_dir=None, shuffle=shuffle
+    )
 
 
 def lm_mixture_training_config(
@@ -225,9 +225,8 @@ def _get_jsonls(input_path: list[str]):
     return output_paths
 
 
-def is_hf_dataset(path):
-    # see if looks like an hf dataset or not.
-    import fsspec
+def is_probably_path(path: str) -> bool:
+    """see if looks like a real path or not, in which case it might be an hf dataset"""
 
     protocol, _ = fsspec.core.split_protocol(path)
 
