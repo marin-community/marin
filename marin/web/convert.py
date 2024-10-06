@@ -14,7 +14,10 @@ HTML_CORRECTION_PREFIX = "<!DOCTYPE html>"
 
 
 def convert_page_with_trafilatura(
-    html: str, url: str | None = None, config: ExtractionConfig = TrafilaturaConfig.default_config(), text_parser: str = "default"
+    html: str,
+    url: str | None = None,
+    config: ExtractionConfig = TrafilaturaConfig.default_config(),
+    text_parser: str = "default",
 ) -> dict[str, str]:
     """
     Convert HTML to text[non-markdown] using Trafilatura.
@@ -54,7 +57,10 @@ def convert_page_with_trafilatura(
 
 
 def convert_page_with_resiliparse(
-    html: str, url: str | None = None, config: HtmlToMarkdownConfig | None = HtmlToMarkdownConfig.default_config(), text_parser: str = "default"
+    html: str,
+    url: str | None = None,
+    config: HtmlToMarkdownConfig | None = HtmlToMarkdownConfig.default_config(),
+    text_parser: str = "default",
 ) -> dict[str, str]:
     """
     Convert HTML to text[non-markdown] using Resiliparse.
@@ -104,7 +110,10 @@ def convert_page_with_resiliparse(
 
 
 def convert_page_with_readability(
-    html: str, url: str | None = None, config: HtmlToMarkdownConfig = HtmlToMarkdownConfig.default_config(), text_parser: str = "default"
+    html: str,
+    url: str | None = None,
+    config: HtmlToMarkdownConfig = HtmlToMarkdownConfig.default_config(),
+    text_parser: str = "default",
 ) -> dict[str, str]:
     """
     Convert HTML to text[markdown] using Readability and markdownify.
