@@ -1,15 +1,14 @@
-import time
-from typing import Dict, Optional
 import os
-import psutil
 import subprocess
+import time
 
-from fsspec.implementations.local import LocalFileSystem
 import fsspec
+import psutil
 import yaml
+from fsspec.implementations.local import LocalFileSystem
 
 
-def authenticate_with_hf(hf_auth_token: Optional[str]) -> None:
+def authenticate_with_hf(hf_auth_token: str | None) -> None:
     """Authenticates with the Hugging Face API using the given token."""
     from huggingface_hub import login
 
@@ -62,7 +61,7 @@ def run_bash_command(command: list[str], check: bool = True) -> None:
     print(f"Completed: {' '.join(command)} ({elapsed_time_seconds}s)")
 
 
-def write_yaml(content: Dict, output_path: str) -> None:
+def write_yaml(content: dict, output_path: str) -> None:
     """Writes the given content to a YAML file."""
     with open(output_path, "w") as file:
         yaml.dump(content, file, default_flow_style=False)

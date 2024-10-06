@@ -1,5 +1,4 @@
 from dataclasses import dataclass, field
-from typing import List
 
 
 @dataclass(frozen=True)
@@ -19,7 +18,7 @@ class EvaluationConfig:
     a path on GCS (e.g., gs://bucket/path/to/output).
     """
 
-    evals: List[str] = field(default_factory=list)
+    evals: list[str] = field(default_factory=list)
     """
     Which specific evals within an evaluation harness to run. This would be a list of
     tasks in for EleutherAI's lm-evaluation-harness or a list of evals from HELM (e.g., mmlu, lite, etc.).
