@@ -206,10 +206,10 @@ class ExecutorInfo:
     """Contains information about an execution."""
 
     # Metadata related to the launch
-    git_commit: str
+    git_commit: str | None
     caller_path: str
     created_date: str
-    user: str
+    user: str | None
 
     # Information taken from `Executor`
     prefix: str
@@ -531,7 +531,7 @@ def get_caller_path() -> str:
     return inspect.stack()[-1].filename
 
 
-def get_user() -> str:
+def get_user() -> str | None:
     return os.environ.get("USER")
 
 
