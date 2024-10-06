@@ -73,10 +73,12 @@ import logging
 import os
 import traceback
 from collections.abc import Callable
-from dataclasses import dataclass, fields, is_dataclass, replace
+from dataclasses import asdict, dataclass, fields, is_dataclass, replace
+from datetime import datetime
 from typing import Any
 
 import draccus
+import fsspec
 import ray
 import ray.remote_function
 
@@ -164,6 +166,57 @@ class VersionedValue:
 
 def versioned(value: Any):
     return VersionedValue(value)
+
+
+############################################################
+
+
+@dataclass(frozen=True)
+class ExecutorStepInfo:
+    """
+    Contains the information about an `ExecutorStep` that can be serialized into JSON.
+    Note that this conversion is not reversible.
+    """
+
+    name: str
+    """`step.name`."""
+
+    fn_name: str
+    """Rendered string of `step.fn`."""
+
+    config: dataclass
+    """`step.config`, but concretized (no more `InputName`, `OutputName`, or `VersionedValue`)."""
+
+    override_output_path: str | None
+    """`step.override_output_path`."""
+
+    version: dict[str, Any]
+    """`executor.versions[step]`."""
+
+    dependencies: list[str]
+    """Fully realized output_paths of the dependencies."""
+
+    output_path: str
+    """`executor.output_paths[step]`."""
+
+
+@dataclass(frozen=True)
+class ExecutorInfo:
+    """Contains information about an execution."""
+
+    # Metadata related to the launch
+    git_commit: str
+    created_date: str
+    user: str
+
+    # Information taken from `Executor`
+    prefix: str
+    steps: list[ExecutorStepInfo]
+
+
+def get_info_path(output_path: str) -> str:
+    """Return the `path` of the info file associated with `output_path`."""
+    return os.path.join(output_path, "info.json")
 
 
 ############################################################
@@ -258,8 +311,11 @@ class Executor:
     2. Run each `ExecutorStep` in a proper topological sort order.
     """
 
-    def __init__(self, prefix: str):
+    def __init__(self, prefix: str, executor_info_path: str):
         self.prefix = prefix
+        self.executor_info_path = executor_info_path
+
+        self.configs: dict[ExecutorStep, dataclass] = {}
         self.dependencies: dict[ExecutorStep, list[ExecutorStep]] = {}
         self.versions: dict[ExecutorStep, dict[str, Any]] = {}
         self.output_paths: dict[ExecutorStep, str] = {}
@@ -270,6 +326,8 @@ class Executor:
         # Gather all the steps, compute versions and output paths for all of them.
         for step in steps:
             self.compute_version(step)
+
+        self.write_infos()
 
         # Run each step
         for step in self.steps:
@@ -311,23 +369,60 @@ class Executor:
 
         # Record everything
         self.steps.append(step)
+        self.configs[step] = instantiate_config(
+            config=step.config,
+            output_path=output_path,
+            output_paths=self.output_paths,
+        )
         self.dependencies[step] = dependencies
         self.versions[step] = version
         self.output_paths[step] = output_path
 
         return version
 
+    def write_infos(self):
+        """Output JSON files (one for the entire execution, one for each step)."""
+
+        # Compute info for each step
+        step_infos: list[ExecutorStepInfo] = []
+        for step in self.steps:
+            step_infos.append(
+                ExecutorStepInfo(
+                    name=step.name,
+                    fn_name=get_fn_name(step.fn),
+                    config=self.configs[step],
+                    override_output_path=step.override_output_path,
+                    version=self.versions[step],
+                    dependencies=[self.output_paths[dep] for dep in self.dependencies[step]],
+                    output_path=self.output_paths[step],
+                )
+            )
+
+        # Compute info for the entire execution
+        executor_info = ExecutorInfo(
+            git_commit=get_git_commit(),
+            created_date=datetime.now().isoformat(),
+            user=get_user(),
+            prefix=self.prefix,
+            steps=step_infos,
+        )
+
+        # Write out info for each step
+        for step, info in zip(self.steps, step_infos, strict=True):
+            info_path = get_info_path(self.output_paths[step])
+            with fsspec.open(info_path, "w") as f:
+                print(json.dumps(asdict(info), indent=2), file=f)
+
+        # WRite out info for the entire execution
+        with fsspec.open(self.executor_info_path, "w") as f:
+            print(json.dumps(asdict(executor_info), indent=2), file=f)
+
     def run_step(self, step: ExecutorStep, dry_run: bool):
         """
         Return a Ray object reference to the result of running the `step`.
         If `dry_run`, only print out what needs to be done.
         """
-        config = instantiate_config(
-            config=step.config,
-            output_path=self.output_paths[step],
-            output_paths=self.output_paths,
-        )
-
+        config = self.configs[step]
         config_version = self.versions[step]["config"]
         output_path = self.output_paths[step]
 
@@ -408,12 +503,32 @@ def get_fn_name(fn: Callable | ray.remote_function.RemoteFunction, short: bool =
             return f"{fn.__module__}.{fn.__qualname__}"
 
 
+def get_git_commit() -> str | None:
+    """Return the git commit of the current branch (if it can be found)"""
+    if os.path.exists(".git"):
+        return os.popen("git rev-parse HEAD").read().strip()
+    else:
+        return None
+
+
+def get_user() -> str:
+    return os.environ.get("USER")
+
+
 ############################################################
 
 
 @dataclass(frozen=True)
 class ExecutorMainConfig:
     prefix: str = "gs://marin-us-central2"
+    """Attached to every output path that's constructed (e.g., the GCS bucket)."""
+
+    executor_info_base_path: str = "gs://marin-us-central2/experiments"
+    """Where the executor info should be stored under a file determined by a hash."""
+
+    executor_info_path: str | None = None
+    """Or we can choose a particular path to store the executor info."""
+
     dry_run: bool = False
 
 
@@ -421,5 +536,11 @@ class ExecutorMainConfig:
 def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep]):
     """Main entry point for experiments (to standardize)"""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-    executor = Executor(prefix=config.prefix)
+
+    execution_id = "TODO"
+    executor_info_path = config.executor_info_path or os.path.join(
+        config.executor_info_base_path, f"{execution_id}.json"
+    )
+
+    executor = Executor(prefix=config.prefix, executor_info_path=executor_info_path)
     executor.run(steps=steps, dry_run=config.dry_run)
