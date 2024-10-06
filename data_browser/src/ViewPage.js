@@ -61,7 +61,7 @@ function ViewPage() {
   const pathsResult = parsePaths(urlParams.get("paths"));
   const paths = pathsResult.paths;
   const offset = parseInt(urlParams.get("offset")) || 0;
-  const count = parseInt(urlParams.get("count")) || 1;
+  const count = parseInt(urlParams.get("count")) || 5;
   const filters = parseFilters(urlParams.get("filters"));
   const sort = parseSort(urlParams.get("sort"));
   const reverse = urlParams.get("reverse");
@@ -619,8 +619,10 @@ function renderItem(args) {
         return null;
       }
 
+      const renderedKey = Array.isArray(item) ? `[${key}]` : key;
+
       return (<tr key={i}>
-        <td>{key}</td>
+        <td>{renderedKey}</td>
         <td>{renderItem({item: value, itemKey: newItemKey, highlights, showOnlyHighlights, updateUrlParams})}</td>
       </tr>);
     });
