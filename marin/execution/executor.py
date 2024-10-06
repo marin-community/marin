@@ -68,6 +68,7 @@ might be:
 """
 
 import hashlib
+import inspect
 import json
 import logging
 import os
@@ -206,6 +207,7 @@ class ExecutorInfo:
 
     # Metadata related to the launch
     git_commit: str
+    caller_path: str
     created_date: str
     user: str
 
@@ -311,9 +313,9 @@ class Executor:
     2. Run each `ExecutorStep` in a proper topological sort order.
     """
 
-    def __init__(self, prefix: str, executor_info_path: str):
+    def __init__(self, prefix: str, executor_info_base_path: str):
         self.prefix = prefix
-        self.executor_info_path = executor_info_path
+        self.executor_info_base_path = executor_info_base_path
 
         self.configs: dict[ExecutorStep, dataclass] = {}
         self.dependencies: dict[ExecutorStep, list[ExecutorStep]] = {}
@@ -401,10 +403,20 @@ class Executor:
         # Compute info for the entire execution
         executor_info = ExecutorInfo(
             git_commit=get_git_commit(),
+            caller_path=get_caller_path(),
             created_date=datetime.now().isoformat(),
             user=get_user(),
             prefix=self.prefix,
             steps=step_infos,
+        )
+
+        # Set executor_info_path based on hash and caller path name (e.g., 72_baselines-8c2f3a.json)
+        executor_version_str = json.dumps(list(map(asdict, step_infos)), sort_keys=True)
+        executor_version_hash = hashlib.md5(executor_version_str.encode()).hexdigest()[:6]
+        name = os.path.basename(executor_info.caller_path).replace(".py", "")
+        self.executor_info_path = os.path.join(
+            self.executor_info_base_path,
+            f"{name}-{executor_version_hash}.json",
         )
 
         # Write out info for each step
@@ -413,7 +425,7 @@ class Executor:
             with fsspec.open(info_path, "w") as f:
                 print(json.dumps(asdict(info), indent=2), file=f)
 
-        # WRite out info for the entire execution
+        # Write out info for the entire execution
         with fsspec.open(self.executor_info_path, "w") as f:
             print(json.dumps(asdict(executor_info), indent=2), file=f)
 
@@ -511,6 +523,11 @@ def get_git_commit() -> str | None:
         return None
 
 
+def get_caller_path() -> str:
+    """Return the path of the file that called this function."""
+    return inspect.stack()[-1].filename
+
+
 def get_user() -> str:
     return os.environ.get("USER")
 
@@ -526,9 +543,6 @@ class ExecutorMainConfig:
     executor_info_base_path: str = "gs://marin-us-central2/experiments"
     """Where the executor info should be stored under a file determined by a hash."""
 
-    executor_info_path: str | None = None
-    """Or we can choose a particular path to store the executor info."""
-
     dry_run: bool = False
 
 
@@ -537,10 +551,5 @@ def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep]):
     """Main entry point for experiments (to standardize)"""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-    execution_id = "TODO"
-    executor_info_path = config.executor_info_path or os.path.join(
-        config.executor_info_base_path, f"{execution_id}.json"
-    )
-
-    executor = Executor(prefix=config.prefix, executor_info_path=executor_info_path)
+    executor = Executor(prefix=config.prefix, executor_info_base_path=config.executor_info_base_path)
     executor.run(steps=steps, dry_run=config.dry_run)

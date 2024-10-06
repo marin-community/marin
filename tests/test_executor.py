@@ -59,7 +59,7 @@ def create_temp_dir():
 
 def create_executor(temp_dir: str):
     """Create an Executor that lives in a temporary directory."""
-    return Executor(prefix=temp_dir, executor_info_path=os.path.join(temp_dir, "executor_info.json"))
+    return Executor(prefix=temp_dir, executor_info_base_path=temp_dir)
 
 
 def cleanup_executor(executor: Executor):
