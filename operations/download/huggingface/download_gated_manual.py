@@ -11,25 +11,25 @@ Run with (after setting HF_TOKEN as an environment variable):
           --gcs_output_path gs://marin-us-central2/raw/proof-pile-manual
 """
 
-import os
-import argparse
-import logging
-from pathlib import Path
-import tempfile
-import shutil
 import fnmatch
+import logging
+import os
+import tempfile
+from pathlib import Path
 from urllib.parse import quote
-import draccus
 
-from huggingface_hub import HfApi, hf_hub_download
-from google.cloud import storage
+import draccus
 from google.api_core import exceptions as gcp_exceptions
+from google.cloud import storage
+from huggingface_hub import HfApi, hf_hub_download
+
 from marin.utilities.gcs_utils import split_gcs_path
 from marin.utilities.validation_utils import write_provenance_json
 from operations.download.huggingface.download import DownloadConfig
 
 # Set up logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
 
 def ensure_gcs_path_exists(gcs_path):
     gcs_client = storage.Client()
@@ -38,7 +38,7 @@ def ensure_gcs_path_exists(gcs_path):
 
     if not bucket.exists():
         raise ValueError(f"GCS bucket {bucket_name} does not exist.")
-    
+
     print(f"Checking write access to GCS path: gs://{bucket_name}/{blob_prefix}")
 
     # Check if we can write to the specified path
@@ -47,8 +47,8 @@ def ensure_gcs_path_exists(gcs_path):
         test_blob.upload_from_string("test")
         test_blob.delete()
     except gcp_exceptions.Forbidden:
-        raise ValueError(f"No write access to GCS path: gs://{bucket_name}/{blob_prefix}")
-    
+        raise ValueError(f"No write access to GCS path: gs://{bucket_name}/{blob_prefix}") from None
+
 
 def construct_hf_url(dataset_id: str, revision: str, file_path: str) -> str:
     """Construct a Hugging Face dataset URL manually."""
@@ -71,11 +71,11 @@ def download_and_upload_to_gcs(cfg: DownloadConfig) -> None:
     try:
         ensure_gcs_path_exists(full_gcs_path)
     except ValueError as e:
-        logging.error(f"GCS path validation failed: {str(e)}")
+        logging.error(f"GCS path validation failed: {e!s}")
         return
 
     # Initialize HuggingFace client
-    hf_token = os.environ.get('HF_TOKEN')
+    hf_token = os.environ.get("HF_TOKEN")
     hf_client = HfApi(token=hf_token)
 
     # Initialize GCS client
@@ -87,7 +87,7 @@ def download_and_upload_to_gcs(cfg: DownloadConfig) -> None:
 
     total_files = len(files)
     print(f"Total number of files to process: {total_files}")
-    
+
     processed_files = 0
     hf_urls = []
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -99,7 +99,14 @@ def download_and_upload_to_gcs(cfg: DownloadConfig) -> None:
                     hf_urls.append(hf_url)
 
                     # Download file from HuggingFace
-                    local_path = hf_hub_download(repo_id=cfg.hf_dataset_id, filename=file, revision=cfg.revision, token=hf_token, local_dir=temp_dir, repo_type="dataset")
+                    local_path = hf_hub_download(
+                        repo_id=cfg.hf_dataset_id,
+                        filename=file,
+                        revision=cfg.revision,
+                        token=hf_token,
+                        local_dir=temp_dir,
+                        repo_type="dataset",
+                    )
 
                     # Prepare GCS path
                     gcs_file_path = os.path.join(gcs_versioned_relative_path, file)
@@ -112,11 +119,10 @@ def download_and_upload_to_gcs(cfg: DownloadConfig) -> None:
                     os.remove(local_path)
 
                 except Exception as e:
-                    logging.error(f"Error processing {file}: {str(e)}")
+                    logging.error(f"Error processing {file}: {e!s}")
 
                 processed_files += 1
                 print(f"Processed {processed_files}/{total_files} files ({processed_files/total_files*100:.2f}%)")
-
 
     # Write Provenance JSON
     write_provenance_json(
@@ -127,9 +133,11 @@ def download_and_upload_to_gcs(cfg: DownloadConfig) -> None:
 
     print(f"Uploaded all files and wrote provenance JSON; check {cfg.gcs_output_path}.")
 
+
 @draccus.wrap()
 def download_gated_main(cfg: DownloadConfig):
     download_and_upload_to_gcs(cfg)
+
 
 if __name__ == "__main__":
     download_gated_main()
