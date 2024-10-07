@@ -12,6 +12,7 @@ on each step.
 """
 
 import json
+import os
 from dataclasses import asdict, dataclass
 from datetime import datetime
 
@@ -40,8 +41,8 @@ class ExecutorStepEvent:
 
 
 def get_status_path(output_path: str) -> str:
-    """Return the `path` of the STATUS file associated with `output_path`."""
-    return output_path + ".STATUS"
+    """Return the `path` of the status file associated with `output_path`, which contains a list of events."""
+    return os.path.join(output_path, "executor_status.jsonl")
 
 
 def read_events(path: str) -> list[ExecutorStepEvent]:
