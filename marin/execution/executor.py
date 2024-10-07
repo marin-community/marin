@@ -211,9 +211,8 @@ def collect_dependencies_and_version(obj: Any, dependencies: list[ExecutorStep],
         elif isinstance(obj, dict):
             # Recurse through dicts
             for i, x in obj.items():
-                if isinstance(i, OutputName | InputName | VersionedValue):
-                    # TODO: should we relax this?
-                    raise ValueError(f"dict keys must be real values, not placeholder, but {new_prefix} has {i}")
+                if not isinstance(i, str):
+                    raise ValueError(f"dict keys must be strs, but got {i} (type: {type(i)})")
                 recurse(x, new_prefix + i)
 
     recurse(obj, "")
