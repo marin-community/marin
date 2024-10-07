@@ -93,6 +93,7 @@ from marin.execution.executor_step_status import (
     get_status_path,
     read_events,
 )
+from marin.utilities.json_encoder import CustomJsonEncoder
 
 logger = logging.getLogger("ray")
 
@@ -366,7 +367,7 @@ class Executor:
         }
 
         # Compute output path
-        version_str = json.dumps(version, sort_keys=True)
+        version_str = json.dumps(version, sort_keys=True, cls=CustomJsonEncoder)
         hashed_version = hashlib.md5(version_str.encode()).hexdigest()[:6]
         output_path = os.path.join(self.prefix, step.name + "-" + hashed_version)
 
@@ -418,7 +419,8 @@ class Executor:
         )
 
         # Set executor_info_path based on hash and caller path name (e.g., 72_baselines-8c2f3a.json)
-        executor_version_str = json.dumps(list(map(asdict, step_infos)), sort_keys=True)
+        # import pdb; pdb.set_trace()
+        executor_version_str = json.dumps(list(map(asdict, step_infos)), sort_keys=True, cls=CustomJsonEncoder)
         executor_version_hash = hashlib.md5(executor_version_str.encode()).hexdigest()[:6]
         name = os.path.basename(executor_info.caller_path).replace(".py", "")
         self.executor_info_path = os.path.join(
@@ -430,11 +432,11 @@ class Executor:
         for step, info in zip(self.steps, step_infos, strict=True):
             info_path = get_info_path(self.output_paths[step])
             with fsspec.open(info_path, "w") as f:
-                print(json.dumps(asdict(info), indent=2), file=f)
+                print(json.dumps(asdict(info), indent=2, cls=CustomJsonEncoder), file=f)
 
         # Write out info for the entire execution
         with fsspec.open(self.executor_info_path, "w") as f:
-            print(json.dumps(asdict(executor_info), indent=2), file=f)
+            print(json.dumps(asdict(executor_info), indent=2, cls=CustomJsonEncoder), file=f)
 
     def run_step(self, step: ExecutorStep, dry_run: bool):
         """
@@ -453,7 +455,7 @@ class Executor:
         # Print information about this step
         logger.info(f"[{status}] {step.name}: {get_fn_name(step.fn)}")
         logger.info(f"  output_path = {output_path}")
-        logger.info(f"  config = {json.dumps(config_version)}")
+        logger.info(f"  config = {json.dumps(config_version, cls=CustomJsonEncoder)}")
         for i, dep in enumerate(self.dependencies[step]):
             logger.info(f"  {dependency_index_str(i)} = {self.output_paths[dep]}")
         logger.info("")
