@@ -3,7 +3,6 @@ import os
 from dataclasses import dataclass
 
 import draccus
-import ray
 from levanter.models.gpt2 import Gpt2Config
 from levanter.trainer import TrainerConfig
 
@@ -232,5 +231,4 @@ def main(config: QuickstartExecutorConfig):
 
 
 if __name__ == "__main__":
-    ray.init(local_mode=True)
     main()
