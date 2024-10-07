@@ -14,14 +14,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: Cache pip packages
-        uses: actions/cache@v3
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
-
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
@@ -34,4 +26,3 @@ jobs:
       - name: Test quickstart pipeline
         run: |
           ray job submit --working-dir . -- python experiments/quickstart-synthetic.py --commit_hash exp-${{ github.sha }}
-          
