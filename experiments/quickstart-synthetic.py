@@ -5,6 +5,8 @@ from dataclasses import dataclass
 
 import draccus
 
+from levanter.models.gpt2 import Gpt2Config
+from levanter.trainer import TrainerConfig
 from marin.execution.executor import (
     ExecutorMainConfig,
     ExecutorStep,
@@ -180,19 +182,27 @@ def create_steps(config: QuickstartExecutorConfig) -> list[ExecutorStep]:
     ############################################################
     # Train
 
-    training_config = draccus.load(TrainLmOnPodConfig, open("config/training/quickstart_run_tests.yaml"))
+    training_config = TrainLmOnPodConfig()
+    # Running it locally and turning off wandb
+    training_config.env = {"WANDB_API_KEY": None, "WANDB_MODE": "disabled"}
+    training_config.tpu_type = None
+    training_config.hf_save_steps = 1
+    training_config.model = Gpt2Config(
+        num_layers=2,
+        num_heads=2,
+        seq_len=64,
+        hidden_dim=32,
+    )
+
+    training_config.trainer = TrainerConfig(
+        train_batch_size=1, num_train_steps=2, max_eval_batches=1, require_accelerator=False
+    )
 
     train_step = ExecutorStep(
         name=os.path.join(config.prefix, config.commit_hash, "train"),
         fn=run_levanter_train_lm,
         config=dataclasses.replace(
-            training_config,
-            output_path=this_output_path(),
-            data=lm_training_config(tokenize_step),
-            tpu_type=None,
-            env={"WANDB_API_KEY": None, "WANDB_MODE": "disabled"},
-            hf_save_steps=1,
-            hf_save_path=this_output_path(),
+            training_config, output_path=this_output_path(), data=lm_training_config(tokenize_step)
         ),
     )
 
