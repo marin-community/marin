@@ -3,10 +3,23 @@
 > "*I am not afraid of storms, for I am learning how to sail my ship."*<br/>
 > – Louisa May Alcott
 
-## Getting Started
+Marin is an open-source framework for building foundation models in a
+reproducible and transparent way.  All the code, data, and experiments for all
+stages of the pipeline (e.g., data curation, transformation, filtering,
+tokenization, training, evaluation) are accessible on the platform with full
+provenance.
 
-To get set up, create a new virtual environment (or `conda` environment) with the appropriate Python version (3.10),
-then run the following:
+Marin leverages several tools:
+- For training, it uses [levanter](https://github.com/stanford-crfm/levanter), a Jax-based
+  framework that's legible, scalable, and reproducible.
+- For scheduling distributed jobs over a cluster for data processing and
+  training, we use [Ray](https://docs.ray.io/).
+- We use the same data formats as [Dolma](https://github.com/allenai/dolma).
+
+## Setup
+
+To get set up, create a new virtual environment (or `conda` environment) with
+the appropriate Python version (3.10), then run the following:
 
 ```bash
 git clone https://github.com/stanford-crfm/marin
@@ -17,19 +30,12 @@ pip install -e ".[dev]"
 This will install all the core dependencies and build `marin` as a Python package. Installing the `[dev]` requirements
 will additionally install test, linting, and debugging dependencies (e.g., `pytest`).
 
+### Internal setup
 
-## Ray + Google Cloud Platform Quickstart
+If you're not an internal developer, skip this section.
 
-In order to run data processing and curation workloads, we use [Ray](https://docs.ray.io/), a nifty Python library for
-configuring and launching distributed applications. We use Ray on top of Google Cloud Platform to 1) automatically
-provision and maintain a cluster of virtual machines (VMs), and 2) to launch individual "jobs" (units of work) on our
-cluster. For more detailed information [see the `infra` README](./infra/README.md).
-
-#### Google Cloud (`gcloud`) Setup
-
-The **most important prerequisite** is making sure that your development environment (e.g., laptop) is set up for
-Google Cloud Platform (GCP) for project `hai-gcp-models`. Make sure to
-[install `gcloud`](https://cloud.google.com/sdk/docs/quickstarts), then:
+Behind the scenes, we run an instance of Marin on Google Cloud Platform (GCP).
+Make sure to [install `gcloud`](https://cloud.google.com/sdk/docs/quickstarts) and then run:
 
 ```bash
 gcloud auth login
@@ -41,11 +47,11 @@ gcloud config set project hai-gcp-models
 gcloud config list
 
 # [Verification] Should not throw a permission error
-gcloud storage ls gs://marin-data
+gcloud storage ls gs://marin-us-central2
 ```
 
-If you don't have permissions for `hai-gcp-models` or you run into permissions issues, contact David Hall or
-Sidd Karamcheti for help!
+If you don't have permissions for `hai-gcp-models` or you run into permissions
+issues, contact David Hall or Sidd Karamcheti for help!
 
 #### Ray Cluster + Job Submission
 
@@ -211,48 +217,3 @@ To run the tests, run `pytest` in the root directory. This will run the unit tes
 #### Updating snapshots
 
 If you've made a change that you think is correct, you can update the snapshots by copying `tests/snapshots/outputs/` to `tests/snapshots/expected/`. This will overwrite the expected output with the new output. You should review these changes before committing them.
-
-
-## Wikipedia
-
-TODO
-
-## ArXiv
-
-TODO
-
-## Code
-
-TODO
-
-## Instruction Data
-
-XXX
-
-## Books
-
-XXX
-
-## StackExchange
-
-XXX
-
-## Reddit/Forums
-
-XXX
-
-## CC News?
-
-XXX
-
-## Semantic Scholar??
-
-XXX
-
-## PubMed
-
-TODO
-
-## Law
-
-TODO
