@@ -1,5 +1,4 @@
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
-
 from operations.download.huggingface.download import DownloadConfig, download
 from operations.download.huggingface.download_gated_manual import download_and_upload_to_gcs
 
@@ -18,7 +17,7 @@ to GCS. These are the other datasets that were used in the DCLM paper (in additi
 #     fn=download,
 #     config=DownloadConfig(
 #         hf_dataset_id="mlfoundations/dclm-baseline-1.0",
-#         revision=versioned("a3b142c"), 
+#         revision=versioned("a3b142c"),
 #         gcs_output_path=this_output_path(),
 #         wait_for_completion=True,
 #     ),
@@ -31,7 +30,7 @@ the_stack_download_step = ExecutorStep(
     fn=download_and_upload_to_gcs,
     config=DownloadConfig(
         hf_dataset_id="bigcode/the-stack-dedup",
-        revision=versioned("17cad72"), 
+        revision=versioned("17cad72"),
         gcs_output_path=this_output_path(),
         wait_for_completion=True,
     ),
@@ -44,7 +43,7 @@ proofpile_download_step = ExecutorStep(
     fn=download,
     config=DownloadConfig(
         hf_dataset_id="EleutherAI/proof-pile-2",
-        revision=versioned("901a927"), 
+        revision=versioned("901a927"),
         gcs_output_path=this_output_path(),
         wait_for_completion=True,
     ),
