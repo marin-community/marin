@@ -1,9 +1,0 @@
-dataset_name: gpqa_extended
-path: gpqa_extended
-hf_path: Idavidrein/gpqa 
-file_names:
-  - train
-prompt_key: Question
-answer_text_key: "Correct Answer"
-doc_input_format: "Question: {question}\nAnswer:"
-token: env
