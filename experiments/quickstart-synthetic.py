@@ -170,8 +170,8 @@ def create_steps(config: QuickstartExecutorConfig) -> list[ExecutorStep]:
         name=os.path.join(config.prefix, config.commit_hash, "tokenized"),
         fn=tokenize,
         config=TokenizeConfig(
-            train_urls=output_path_of(consolidate_step),
-            validation_urls=[],
+            train_paths=output_path_of(consolidate_step),
+            validation_paths=[],
             cache_path=this_output_path(),
             tokenizer=versioned("gpt2"),
         ),
@@ -187,7 +187,7 @@ def create_steps(config: QuickstartExecutorConfig) -> list[ExecutorStep]:
         fn=run_levanter_train_lm,
         config=dataclasses.replace(
             training_config,
-            out_path=this_output_path(),
+            output_path=this_output_path(),
             data=lm_training_config(tokenize_step),
             tpu_type=None,
             env={"WANDB_API_KEY": None, "WANDB_MODE": "disabled"},
