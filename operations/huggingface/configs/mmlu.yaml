@@ -10,4 +10,4 @@ splits:
 prompt_key: question
 options_key: choices
 answer_idx_key: answer
-output_choices: ["A", "B", "C", "D"]
+output_labels: ["A", "B", "C", "D"]
