@@ -258,8 +258,10 @@ class Executor:
     2. Run each `ExecutorStep` in a proper topological sort order.
     """
 
-    def __init__(self, prefix: str):
+    def __init__(self, prefix: str, force_run: list[str] | str | None = None):
         self.prefix = prefix
+        self.force_run = force_run or []
+        self.force_ran = []  # steps that were already ran using force run
         self.dependencies: dict[ExecutorStep, list[ExecutorStep]] = {}
         self.versions: dict[ExecutorStep, dict[str, Any]] = {}
         self.output_paths: dict[ExecutorStep, str] = {}
@@ -343,9 +345,14 @@ class Executor:
         for i, dep in enumerate(self.dependencies[step]):
             logger.info(f"  {dependency_index_str(i)} = {self.output_paths[dep]}")
         logger.info("")
+        force_run = False
+        if (step.name in self.force_run or "all" in self.force_run) and step.name not in self.force_ran:
+            self.force_ran.append(step.name)
+            force_run = True
+            logger.info(f"Force running {step.name}")
 
         # Only start if there's no status
-        should_run = not dry_run and status is None
+        should_run = not dry_run and (status is None or force_run)
         dependencies = [self.refs[dep] for dep in self.dependencies[step]]
         name = f"execute_after_dependencies({get_fn_name(step.fn, short=True)})::{step.name})"
         self.refs[step] = execute_after_dependencies.options(name=name).remote(
@@ -415,11 +422,12 @@ def get_fn_name(fn: Callable | ray.remote_function.RemoteFunction, short: bool =
 class ExecutorMainConfig:
     prefix: str = "gs://marin-us-central2"
     dry_run: bool = False
+    force_run: list[str] | str | None = None  # <list of steps name or 'all'>: run list of steps (names) or all
 
 
 @draccus.wrap()
 def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep]):
     """Main entry point for experiments (to standardize)"""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-    executor = Executor(prefix=config.prefix)
+    executor = Executor(prefix=config.prefix, force_run=config.force_run)
     executor.run(steps=steps, dry_run=config.dry_run)

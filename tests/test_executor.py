@@ -88,6 +88,54 @@ def test_executor():
     cleanup_temp(temp)
 
 
+def test_forcerun():
+    """Test force run functionality."""
+
+    def get_b_list(temp, m):
+        def fn(config: MyConfig | None):
+            append_temp(temp, config)
+
+        b = ExecutorStep(
+            name="b",
+            fn=fn,
+            config=MyConfig(
+                input_path="/",
+                output_path=this_output_path(),
+                n=versioned(3),
+                m=m,
+            ),
+        )
+
+        return [b]
+
+    temp = create_temp()
+    executor_initial = Executor(prefix="/tmp")
+    executor_initial.run(steps=get_b_list(temp, 4))
+
+    # Re run without force_run
+    executor_non_force = Executor(prefix="/tmp")
+    executor_non_force.run(steps=get_b_list(temp, 5))  # This would not run b again so m would be 4
+    # Check the results
+    results = read_temp(temp)
+    assert len(results) == 1
+    assert results[0]["n"] == 3
+    assert results[0]["m"] == 4
+
+    temp = create_temp()
+    executor_initial = Executor(prefix="/tmp")
+    executor_initial.run(steps=get_b_list(temp, 4))
+
+    # Re run without force_run
+    executor_force = Executor(prefix="/tmp", force_run="all")
+    executor_force.run(steps=get_b_list(temp, 5))  # This would run b again so m would be 5
+    results = read_temp(temp)
+    assert len(results) == 1
+    assert results[0]["n"] == 3
+    assert results[0]["m"] == 5
+
+    cleanup_temp(temp)
+
+
 def test_parallelism():
     """Make sure things that parallel execution is possible."""
     temp = create_temp()
