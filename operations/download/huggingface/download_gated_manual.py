@@ -85,8 +85,10 @@ def download_and_upload_to_gcs(cfg: DownloadConfig) -> None:
     # Get list of files in the dataset
     files = hf_client.list_repo_files(repo_id=cfg.hf_dataset_id, revision=cfg.revision, repo_type="dataset")
 
-    print("Files: ", files)
-
+    total_files = len(files)
+    print(f"Total number of files to process: {total_files}")
+    
+    processed_files = 0
     hf_urls = []
     with tempfile.TemporaryDirectory() as temp_dir:
         for file in files:
@@ -111,6 +113,10 @@ def download_and_upload_to_gcs(cfg: DownloadConfig) -> None:
 
                 except Exception as e:
                     logging.error(f"Error processing {file}: {str(e)}")
+
+                processed_files += 1
+                print(f"Processed {processed_files}/{total_files} files ({processed_files/total_files*100:.2f}%)")
+
 
     # Write Provenance JSON
     write_provenance_json(
