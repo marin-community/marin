@@ -31,7 +31,7 @@ from operations.download.huggingface.download import DownloadConfig
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 
-def ensure_gcs_path_exists(gcs_path):
+def ensure_gcs_path_exists(gcs_path: str) -> None:
     gcs_client = storage.Client()
     bucket_name, blob_prefix = gcs_path.replace("gs://", "").split("/", 1)
     bucket = gcs_client.bucket(bucket_name)
