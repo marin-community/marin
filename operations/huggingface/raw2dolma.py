@@ -6,7 +6,7 @@ from typing import Any
 
 import draccus
 import fsspec
-from datasets import Dataset, load_dataset
+from datasets import Dataset, load_dataset, get_dataset_config_names
 
 
 class OutputFormatOptions(str, Enum):
@@ -62,6 +62,21 @@ def load_datasets(config: DatasetConversionConfig) -> list[DatasetWithMetaData]:
         token = os.environ["HF_TOKEN"]
     else:
         token = config.token
+    # get subsets
+    subsets = []
+    excludes = []
+    for subset in config.subsets:
+        if subset == "*":
+            # * - is special for you want all
+            subsets += get_dataset_config_names(config.input_path)
+        elif subset.startswith("exclude:"):
+            # you might want to exclude something e.g. in mmlu exclude:all
+            excludes.append(subset.split("exclude:")[1])
+        else:
+            # add a typical subset in the iteration
+            subsets.append(subset)
+    subsets = [subset for subset in subsets if subset not in excludes]
+
     for subset in config.subsets:
         for split in config.splits:
             try:
