@@ -221,7 +221,7 @@ class ExecutorInfo:
 
 def get_info_path(output_path: str) -> str:
     """Return the `path` of the info file associated with `output_path`."""
-    return os.path.join(output_path, "EXECUTOR_INFO")
+    return os.path.join(output_path, ".executor_info")
 
 
 ############################################################
