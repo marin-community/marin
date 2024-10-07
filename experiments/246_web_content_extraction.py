@@ -8,13 +8,12 @@ from scripts.fineweb.process_parquet_fw import ParquetFWConfig, process_fw_dump
 raw_data = "gs://marin-us-central2/raw/fineweb/cd85054/CC-MAIN-2024-18"
 
 transform_trafilatura_step = ExecutorStep(
-    name="documents/helloworld_fw-herumb-cc09d2/fineweb_last_dump_trafilatura",
+    name="documents/helloworld_fw-herumb/fineweb_last_dump_trafilatura",
     fn=process_fw_dump,
     config=ParquetFWConfig(
         input_path=raw_data,
         output_path_md=this_output_path("md"),
         output_path_text=this_output_path("text"),
-        text_parser=versioned("default"),
         extract_method=versioned("trafilatura"),
         config=TrafilaturaConfig(
             favor_precision=versioned(False),
@@ -26,26 +25,24 @@ transform_trafilatura_step = ExecutorStep(
 )
 
 transform_resiliparse_step = ExecutorStep(
-    name="documents/helloworld_fw-herumb-cc09d2/fineweb_last_dump_resiliparse",
+    name="documents/helloworld_fw-herumb/fineweb_last_dump_resiliparse",
     fn=process_fw_dump,
     config=ParquetFWConfig(
         input_path=raw_data,
         output_path_md=this_output_path("md"),
         output_path_text=this_output_path("text"),
         extract_method=versioned("resiliparse"),
-        text_parser=versioned("default"),
     ),
 )
 
 transform_readability_step = ExecutorStep(
-    name="documents/helloworld_fw-herumb-cc09d2/fineweb_last_dump_readability",
+    name="documents/helloworld_fw-herumb/fineweb_last_dump_readability",
     fn=process_fw_dump,
     config=ParquetFWConfig(
         input_path=raw_data,
         output_path_md=this_output_path("md"),
         output_path_text=this_output_path("text"),
         extract_method=versioned("readability"),
-        text_parser=versioned("default"),
         config=HtmlToMarkdownConfig(
             include_images=versioned(False),
             include_links=versioned(False),
