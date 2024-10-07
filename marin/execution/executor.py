@@ -326,7 +326,6 @@ class Executor:
 
         self.configs: dict[ExecutorStep, dataclass] = {}
         self.force_run = force_run or []
-        self.force_ran = []  # steps that were already ran using force run
         self.dependencies: dict[ExecutorStep, list[ExecutorStep]] = {}
         self.versions: dict[ExecutorStep, dict[str, Any]] = {}
         self.output_paths: dict[ExecutorStep, str] = {}
@@ -460,8 +459,7 @@ class Executor:
             logger.info(f"  {dependency_index_str(i)} = {self.output_paths[dep]}")
         logger.info("")
         force_run_step = False
-        if (step.name in self.force_run or "all" in self.force_run) and step.name not in self.force_ran:
-            self.force_ran.append(step.name)
+        if step.name in self.force_run or "all" in self.force_run:
             force_run_step = True
             logger.info(f"Force running {step.name}")
 
