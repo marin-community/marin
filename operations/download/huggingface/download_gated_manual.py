@@ -21,7 +21,7 @@ import fnmatch
 from urllib.parse import quote
 import draccus
 
-from huggingface_hub import HfApi, hf_hub_download, snapshot_download
+from huggingface_hub import HfApi, hf_hub_download
 from google.cloud import storage
 from google.api_core import exceptions as gcp_exceptions
 from marin.utilities.gcs_utils import split_gcs_path
@@ -58,10 +58,10 @@ def construct_hf_url(dataset_id: str, revision: str, file_path: str) -> str:
 
 def download_and_upload_to_gcs(cfg: DownloadConfig) -> None:
 
-    # Parse GCS Bucket, Relative Path from `gcs_output_path`
+    # Parse GCS Bucket, Relative Path from gcs_output_path
     gcs_bucket, gcs_relative_path = split_gcs_path(cfg.gcs_output_path)
 
-    # Use `revision` as "version" for writing to GCS
+    # Use revision as "version" for writing to GCS
     gcs_versioned_relative_path = os.path.join(gcs_relative_path, cfg.revision)
 
     # Construct full GCS path
@@ -85,37 +85,33 @@ def download_and_upload_to_gcs(cfg: DownloadConfig) -> None:
     # Get list of files in the dataset
     files = hf_client.list_repo_files(repo_id=cfg.hf_dataset_id, revision=cfg.revision, repo_type="dataset")
 
-    # construct HF urls
+    print("Files: ", files)
+
     hf_urls = []
-    for file in files:
-        if fnmatch.fnmatch(file, cfg.hf_url_glob):
-            hf_url = construct_hf_url(cfg.hf_dataset_id, cfg.revision, file)
-            hf_urls.append(hf_url)
-
-    # Download entire dataset snapshot
     with tempfile.TemporaryDirectory() as temp_dir:
-        logging.info(f"Downloading dataset {cfg.hf_dataset_id} (revision: {cfg.revision}) to temporary directory {temp_dir}.")
-        local_dataset_path = snapshot_download(
-            repo_id=cfg.hf_dataset_id,
-            revision=cfg.revision,
-            repo_type="dataset",
-            local_dir=temp_dir,
-            token=hf_token
-        )
+        for file in files:
+            if fnmatch.fnmatch(file, cfg.hf_url_glob):
+                try:
+                    # Construct HuggingFace URL
+                    hf_url = construct_hf_url(cfg.hf_dataset_id, cfg.revision, file)
+                    hf_urls.append(hf_url)
 
-        # Upload the entire dataset directory to GCS
-        for root, _, files in os.walk(local_dataset_path):
-            for file in files:
-                if fnmatch.fnmatch(file, cfg.hf_url_glob):
-                    local_file_path = os.path.join(root, file)
-                    relative_path = os.path.relpath(local_file_path, local_dataset_path)
-                    gcs_file_path = os.path.join(gcs_versioned_relative_path, relative_path)
+                    # Download file from HuggingFace
+                    local_path = hf_hub_download(repo_id=cfg.hf_dataset_id, filename=file, revision=cfg.revision, token=hf_token, local_dir=temp_dir, repo_type="dataset")
+
+                    # Prepare GCS path
+                    gcs_file_path = os.path.join(gcs_versioned_relative_path, file)
 
                     # Upload file to GCS
                     blob = bucket.blob(gcs_file_path)
-                    blob.upload_from_filename(local_file_path)
-                    logging.info(f"Uploaded {local_file_path} to GCS path: {gcs_file_path}")
-                
+                    blob.upload_from_filename(local_path)
+                    logging.info(f"Uploaded {file} to GCS path: {gcs_file_path}, blob {blob.name}")
+
+                    os.remove(local_path)
+
+                except Exception as e:
+                    logging.error(f"Error processing {file}: {str(e)}")
+
     # Write Provenance JSON
     write_provenance_json(
         Path(gcs_versioned_relative_path),
