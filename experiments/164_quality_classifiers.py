@@ -25,7 +25,7 @@ train_dclm_eli5_200k_rw_200k_step = ExecutorStep(
             ),
         ],
         output_path=this_output_path(),
-        fasttext_args={"lr": 0.1, "thread": 4},
+        fasttext_args={"lr": versioned(0.1), "thread": 4},
     ),
 )
 
@@ -54,7 +54,7 @@ train_dclm_eli5_100k_oh_100k_rw_200k_step = ExecutorStep(
             ),
         ],
         output_path=this_output_path(),
-        fasttext_args={"lr": 0.1, "thread": 4},
+        fasttext_args={"lr": versioned(0.1), "thread": 4},
     ),
 )
 
@@ -77,7 +77,7 @@ train_dclm_oh_200k_rw_200k_step = ExecutorStep(
             ),
         ],
         output_path=this_output_path(),
-        fasttext_args={"lr": 0.1, "thread": 4},
+        fasttext_args={"lr": versioned(0.1), "thread": 4},
     ),
 )
 
