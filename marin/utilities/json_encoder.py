@@ -1,5 +1,8 @@
 import json
+import logging
 from datetime import timedelta
+
+logger = logging.getLogger("ray")
 
 
 class CustomJsonEncoder(json.JSONEncoder):
@@ -9,4 +12,5 @@ class CustomJsonEncoder(json.JSONEncoder):
         try:
             return super().default(obj)
         except TypeError:
+            logger.warning(f"Could not serialize object of type {type(obj)}: {obj}")
             return str(obj)
