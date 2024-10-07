@@ -8,7 +8,7 @@ from scripts.fineweb.process_parquet_fw import ParquetFWConfig, process_fw_dump
 raw_data = "gs://marin-us-central2/raw/fineweb/cd85054/CC-MAIN-2024-18"
 
 transform_trafilatura_step = ExecutorStep(
-    name="documents/helloworld_fw-herumb/fineweb_last_dump_trafilatura",
+    name="documents/fineweb-small-trafilatura",
     fn=process_fw_dump,
     config=ParquetFWConfig(
         input_path=raw_data,
@@ -25,7 +25,7 @@ transform_trafilatura_step = ExecutorStep(
 )
 
 transform_resiliparse_step = ExecutorStep(
-    name="documents/helloworld_fw-herumb/fineweb_last_dump_resiliparse",
+    name="documents/fineweb-small-resiliparse",
     fn=process_fw_dump,
     config=ParquetFWConfig(
         input_path=raw_data,
@@ -36,7 +36,7 @@ transform_resiliparse_step = ExecutorStep(
 )
 
 transform_readability_step = ExecutorStep(
-    name="documents/helloworld_fw-herumb/fineweb_last_dump_readability",
+    name="documents/fineweb-small-readability",
     fn=process_fw_dump,
     config=ParquetFWConfig(
         input_path=raw_data,
