@@ -73,7 +73,7 @@ import logging
 import os
 import traceback
 from collections.abc import Callable
-from dataclasses import dataclass, fields, is_dataclass, replace
+from dataclasses import dataclass, field, fields, is_dataclass, replace
 from typing import Any
 
 import draccus
@@ -258,7 +258,7 @@ class Executor:
     2. Run each `ExecutorStep` in a proper topological sort order.
     """
 
-    def __init__(self, prefix: str, force_run: list[str] | str | None = None):
+    def __init__(self, prefix: str, force_run: list[str] | None = None):
         self.prefix = prefix
         self.force_run = force_run or []
         self.force_ran = []  # steps that were already ran using force run
@@ -345,14 +345,14 @@ class Executor:
         for i, dep in enumerate(self.dependencies[step]):
             logger.info(f"  {dependency_index_str(i)} = {self.output_paths[dep]}")
         logger.info("")
-        force_run = False
+        force_run_step = False
         if (step.name in self.force_run or "all" in self.force_run) and step.name not in self.force_ran:
             self.force_ran.append(step.name)
-            force_run = True
+            force_run_step = True
             logger.info(f"Force running {step.name}")
 
         # Only start if there's no status
-        should_run = not dry_run and (status is None or force_run)
+        should_run = not dry_run and (status is None or force_run_step)
         dependencies = [self.refs[dep] for dep in self.dependencies[step]]
         name = f"execute_after_dependencies({get_fn_name(step.fn, short=True)})::{step.name})"
         self.refs[step] = execute_after_dependencies.options(name=name).remote(
@@ -422,7 +422,7 @@ def get_fn_name(fn: Callable | ray.remote_function.RemoteFunction, short: bool =
 class ExecutorMainConfig:
     prefix: str = "gs://marin-us-central2"
     dry_run: bool = False
-    force_run: list[str] | str | None = None  # <list of steps name or 'all'>: run list of steps (names) or all
+    force_run: list[str] = field(default_factory=list)  # <list of steps name>: run list of steps (names)
 
 
 @draccus.wrap()
