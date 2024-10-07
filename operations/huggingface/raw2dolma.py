@@ -66,7 +66,7 @@ def load_datasets(config: DatasetConversionConfig) -> list[DatasetWithMetaData]:
     subsets = []
     excludes = []
     for subset in config.subsets:
-        if subset == "*":
+        if subset == "all-subsets":
             # * - is special for you want all
             subsets += get_dataset_config_names(config.input_path)
         elif subset.startswith("exclude:"):
