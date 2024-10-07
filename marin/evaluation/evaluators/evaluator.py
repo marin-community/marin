@@ -1,10 +1,10 @@
 import os
 import shutil
 from abc import ABC, abstractmethod
-from typing import List, Optional
 from dataclasses import dataclass
+from typing import ClassVar
 
-from scripts.evaluation.utils import download_from_gcs, is_remote_path
+from marin.evaluation.utils import download_from_gcs, is_remote_path
 
 
 @dataclass(frozen=True)
@@ -14,7 +14,7 @@ class Dependency:
     name: str
     """The name of the dependency e.g., transformers"""
 
-    version: Optional[str] = None
+    version: str | None = None
     """The version of the dependency e.g., 4.9.2"""
 
     def __str__(self):
@@ -26,12 +26,12 @@ class ModelConfig:
     name: str
     """The name of the model e.g., allenai/olmo-7b"""
 
-    path: Optional[str]
+    path: str | None
     """
     The path to the model checkpoint. Can be a local path or a path on GCS.
     """
 
-    def ensure_downloaded(self, local_path: Optional[str] = None) -> Optional[str]:
+    def ensure_downloaded(self, local_path: str | None = None) -> str | None:
         """
         Ensures that the model checkpoint is downloaded to `local_path` if necessary.
         """
@@ -55,11 +55,11 @@ class ModelConfig:
 class Evaluator(ABC):
 
     _python_version: str
-    _pip_packages: List[Dependency]
-    _py_modules: List[Dependency]
+    _pip_packages: ClassVar[list[Dependency]]
+    _py_modules: ClassVar[list[Dependency]]
 
     @abstractmethod
-    def evaluate(self, model: ModelConfig, evals: List[str], output_path: str, max_eval_instances: int | None) -> None:
+    def evaluate(self, model: ModelConfig, evals: list[str], output_path: str, max_eval_instances: int | None) -> None:
         """
         Runs the evaluator given the model checkpoint, the list of evaluations to run, and the output path.
 
