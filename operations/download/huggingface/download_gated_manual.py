@@ -58,10 +58,10 @@ def construct_hf_url(dataset_id: str, revision: str, file_path: str) -> str:
 
 def download_and_upload_to_gcs(cfg: DownloadConfig) -> None:
 
-    # Parse GCS Bucket, Relative Path from `gcs_output_path`
+    # Parse GCS Bucket, Relative Path from gcs_output_path
     gcs_bucket, gcs_relative_path = split_gcs_path(cfg.gcs_output_path)
 
-    # Use `revision` as "version" for writing to GCS
+    # Use revision as "version" for writing to GCS
     gcs_versioned_relative_path = os.path.join(gcs_relative_path, cfg.revision)
 
     # Construct full GCS path
@@ -97,7 +97,7 @@ def download_and_upload_to_gcs(cfg: DownloadConfig) -> None:
                     hf_urls.append(hf_url)
 
                     # Download file from HuggingFace
-                    local_path = hf_hub_download(repo_id=cfg.hf_dataset_id, filename=file, revision=cfg.revision, token=hf_token, local_dir=temp_dir, repo_type="dataset", 
+                    local_path = hf_hub_download(repo_id=cfg.hf_dataset_id, filename=file, revision=cfg.revision, token=hf_token, local_dir=temp_dir, repo_type="dataset")
 
                     # Prepare GCS path
                     gcs_file_path = os.path.join(gcs_versioned_relative_path, file)
