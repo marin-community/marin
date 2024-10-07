@@ -125,7 +125,7 @@ def test_forcerun():
     executor_initial = Executor(prefix="/tmp")
     executor_initial.run(steps=get_b_list(temp, 4))
 
-    # Re run without force_run
+    # Re-run without force_run
     executor_force = Executor(prefix="/tmp", force_run="all")
     executor_force.run(steps=get_b_list(temp, 5))  # This would run b again so m would be 5
     results = read_temp(temp)
