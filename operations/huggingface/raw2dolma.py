@@ -72,6 +72,7 @@ def load_datasets(config: DatasetConversionConfig) -> list[DatasetWithMetaData]:
                     subset,
                     split,
                 )
+                datasets.append(dataset_w_meta)
             except Exception as e:
                 print(f"Failed to load subset '{subset}' and split '{split}': {e}")
 
@@ -185,12 +186,12 @@ def main(cfg: DatasetConversionConfig):
     # go through (subset,split) pairs and upload file for that (subset,split) producing output JSON specified in config
     for dataset in datasets:
         output_path = os.path.join(
-            cfg.output_prefix, f"{cfg.dataset_name}-{subset}-{split}-{cfg.output_format.value}.jsonl.gz"
+            cfg.output_prefix, f"{cfg.dataset_name}-{dataset.subset}-{dataset.split}-{cfg.output_format.value}.jsonl.gz"
         )
         with fsspec.open(output_path, "wt", compression="gzip") as dolma_file:
             for idx, example in enumerate(dataset.dataset):
                 dolma_json = {
-                    "id": f"{cfg.dataset_name}-{subset}-{split}-{cfg.output_format.value}-{idx}",
+                    "id": f"{cfg.dataset_name}-{dataset.subset}-{dataset.split}-{cfg.output_format.value}-{idx}",
                     "source": cfg.dataset_name,
                     "metadata": {
                         "subset": dataset.subset,
