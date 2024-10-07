@@ -34,7 +34,7 @@ logger = logging.getLogger("ray")
 # Ray will not impose any physical limits on the resources used by the function, these numbers are used for scheduling.
 @ray.remote(memory=1 * 1024 * 1024 * 1024, runtime_env={"pip": ["s3fs", "trafilatura"]}, num_cpus=1)  # 1 GB
 @cached_or_construct_output(success_suffix="SUCCESS")  # We use this decorator to make this function idempotent
-def html_to_md(input_file_path: str, output_file_path: str, extract_method: str, config: ExtractionConfig, text_parser: str) -> bool:
+def html_to_md(input_file_path: str, output_file_path: str, extract_method: str, config: ExtractionConfig) -> bool:
     # The runtime for this function should be low (less than 5-10 min), as the machines are preemptible
     # Example of input_path = gs://marin-data/hello_world_fw/fineweb/fw-v1.0/CC-MAIN-2024-10/000_00000/0_processed_html.jsonl.gz
 
@@ -57,7 +57,7 @@ def html_to_md(input_file_path: str, output_file_path: str, extract_method: str,
             # Convert page can throw exception based on the html content (e.g. invalid html, Empty page)
             try:
                 logger.info(f"Converting line {num_lines}: {id} {url}")
-                md = convert_page(html, url, extract_method, config, text_parser)["content"]
+                md = convert_page(html, url, extract_method, config)["content"]
                 error = None
             except Exception as e:
                 # Failed to convert
@@ -84,14 +84,13 @@ def html_to_md(input_file_path: str, output_file_path: str, extract_method: str,
 class FineWebConfig:
     input_path: str
     output_path: str
-    text_parser: str = "default"
     extract_method: str = "readability"
     config: ExtractionConfig = HtmlToMarkdownConfig.default_config()
 
 
 @ray.remote
 def transform(cfg: FineWebConfig):
-    refs = map_files_in_directory(html_to_md, cfg.input_path, "**/*.jsonl.gz", cfg.output_path, extract_method=cfg.extract_method, config=cfg.config, text_parser=cfg.text_parser)
+    refs = map_files_in_directory(html_to_md, cfg.input_path, "**/*.jsonl.gz", cfg.output_path, extract_method=cfg.extract_method, config=cfg.config)
 
     # Wait for all the tasks to finish.
     # The try and catch is important here as in case html_to_md throws any exception, that exception is passed here,
