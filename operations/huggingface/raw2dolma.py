@@ -35,7 +35,14 @@ class DatasetConversionConfig:
     trust_remote_code: bool = False
 
 
-def load_datasets(config: DatasetConversionConfig) -> list[Dataset]:
+@dataclass
+class DatasetWithMetaData:
+    dataset: Dataset
+    subset: str
+    split: str
+
+
+def load_datasets(config: DatasetConversionConfig) -> list[DatasetWithMetaData]:
     """
     Load the dataset from Hugging Face.
 
@@ -58,10 +65,12 @@ def load_datasets(config: DatasetConversionConfig) -> list[Dataset]:
     for subset in config.subsets:
         for split in config.splits:
             try:
-                datasets.append(
+                dataset_w_meta = DatasetWithMetaData(
                     load_dataset(
                         config.input_path, subset, split=split, token=token, trust_remote_code=config.trust_remote_code
-                    )
+                    ),
+                    subset,
+                    split,
                 )
             except Exception as e:
                 print(f"Failed to load subset '{subset}' and split '{split}': {e}")
@@ -174,18 +183,18 @@ def main(cfg: DatasetConversionConfig):
     datasets = load_datasets(cfg)
 
     # go through (subset,split) pairs and upload file for that (subset,split) producing output JSON specified in config
-    for dataset, subset, split in zip(datasets, cfg.subsets, cfg.splits, strict=True):
+    for dataset in datasets:
         output_path = os.path.join(
             cfg.output_prefix, f"{cfg.dataset_name}-{subset}-{split}-{cfg.output_format.value}.jsonl.gz"
         )
         with fsspec.open(output_path, "wt", compression="gzip") as dolma_file:
-            for idx, example in enumerate(dataset):
+            for idx, example in enumerate(dataset.dataset):
                 dolma_json = {
                     "id": f"{cfg.dataset_name}-{subset}-{split}-{cfg.output_format.value}-{idx}",
                     "source": cfg.dataset_name,
                     "metadata": {
-                        "subset": subset,
-                        "split": split,
+                        "subset": dataset.subset,
+                        "split": dataset.split,
                         "provenance": f"https://huggingface.co/datasets/{cfg.hf_path}",
                     },
                 }
