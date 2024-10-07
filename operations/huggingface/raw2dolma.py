@@ -6,7 +6,7 @@ from typing import Any
 
 import draccus
 import fsspec
-from datasets import Dataset, load_dataset, get_dataset_config_names
+from datasets import Dataset, get_dataset_config_names, load_dataset
 
 
 class OutputFormatOptions(str, Enum):
