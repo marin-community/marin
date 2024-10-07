@@ -1,11 +1,11 @@
-from typing import Dict, List
 import os
 import shutil
 import traceback
+from typing import ClassVar
 
-from scripts.evaluation.evaluator import Dependency, ModelConfig
-from scripts.evaluation.vllm_tpu_evaluator import VllmTpuEvaluator
-from scripts.evaluation.utils import is_remote_path, upload_to_gcs, run_bash_command, write_yaml
+from marin.evaluation.evaluators.evaluator import Dependency, ModelConfig
+from marin.evaluation.evaluators.vllm_tpu_evaluator import VllmTpuEvaluator
+from marin.evaluation.utils import is_remote_path, run_bash_command, upload_to_gcs, write_yaml
 
 
 class HELMEvaluator(VllmTpuEvaluator):
@@ -34,7 +34,8 @@ class HELMEvaluator(VllmTpuEvaluator):
         "https://raw.githubusercontent.com/stanford-crfm/helm/refs/heads/main/src/helm/benchmark/static/{schema_file}"
     )
 
-    _pip_packages: List[Dependency] = VllmTpuEvaluator.DEFAULT_PIP_PACKAGES + [
+    _pip_packages: ClassVar[list[Dependency]] = [
+        *VllmTpuEvaluator.DEFAULT_PIP_PACKAGES,
         Dependency(name="crfm-helm@git+https://github.com/stanford-crfm/helm.git@local_vllm"),
     ]
 
@@ -50,7 +51,7 @@ class HELMEvaluator(VllmTpuEvaluator):
         model_name: str = model.name
         tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
 
-        content: Dict = {
+        content: dict = {
             "model_deployments": [
                 {
                     "name": model_name,
@@ -93,7 +94,7 @@ class HELMEvaluator(VllmTpuEvaluator):
         }
         write_yaml(content, HELMEvaluator.TOKENIZER_CONFIGS_FILE_PATH)
 
-    def run(self, model: ModelConfig, evals: List[str], output_path: str, max_eval_instances: int | None = None) -> None:
+    def run(self, model: ModelConfig, evals: list[str], output_path: str, max_eval_instances: int | None = None) -> None:
         """
         Runs HELM on the specified model and set of evaluations.
 
@@ -108,10 +109,10 @@ class HELMEvaluator(VllmTpuEvaluator):
 
             # Download the run_entries files and schema files for the specified evals
             assert len(evals) > 0, "Please specify at least one eval to run."
-            run_entries_files: List[str] = []
-            schema_files: List[str] = []
-            for eval in evals:
-                run_entries_file: str = f"run_entries_{eval}.conf"
+            run_entries_files: list[str] = []
+            schema_files: list[str] = []
+            for helm_eval in evals:
+                run_entries_file: str = f"run_entries_{helm_eval}.conf"
                 run_entries_url: str = self.RUN_ENTRIES_TEMPLATE.format(run_entries_file=run_entries_file)
                 ensure_file_downloaded(source_url=run_entries_url, target_path=run_entries_file)
                 assert os.path.exists(
@@ -119,7 +120,7 @@ class HELMEvaluator(VllmTpuEvaluator):
                 ), f"Failed to download. Does {run_entries_file} exist at {self.ALL_RUN_ENTRIES_URL}?"
                 run_entries_files.append(run_entries_file)
 
-                schema_file: str = f"schema_{eval}.yaml"
+                schema_file: str = f"schema_{helm_eval}.yaml"
                 schema_url: str = self.SCHEMA_TEMPLATE.format(schema_file=schema_file)
                 ensure_file_downloaded(source_url=schema_url, target_path=schema_file)
                 assert os.path.exists(

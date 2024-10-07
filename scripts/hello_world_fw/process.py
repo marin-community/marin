@@ -27,6 +27,7 @@ from marin.web.convert import convert_page
 
 logger = logging.getLogger("ray")
 
+
 # TODO: move into general utiltiies
 # This function will be executed on the worker nodes. It is important to keep the function idempotent and resumable.
 # default memory is unbound, default runtime_env is empty, default num_cpus is 1
@@ -56,7 +57,7 @@ def html_to_md(input_file_path: str, output_file_path: str, extract_method: str,
 
             # Convert page can throw exception based on the html content (e.g. invalid html, Empty page)
             try:
-                logger.info(f"Converting line {num_lines}: {id} {url}")
+                logger.debug(f"Converting line {num_lines}: {id} {url}")
                 md = convert_page(html, url, extract_method, config)["content"]
                 error = None
             except Exception as e:
@@ -90,7 +91,14 @@ class FineWebConfig:
 
 @ray.remote
 def transform(cfg: FineWebConfig):
-    refs = map_files_in_directory(html_to_md, cfg.input_path, "**/*.jsonl.gz", cfg.output_path, extract_method=cfg.extract_method, config=cfg.config)
+    refs = map_files_in_directory(
+        html_to_md,
+        cfg.input_path,
+        "**/*.jsonl.gz",
+        cfg.output_path,
+        extract_method=cfg.extract_method,
+        config=cfg.config,
+    )
 
     # Wait for all the tasks to finish.
     # The try and catch is important here as in case html_to_md throws any exception, that exception is passed here,
