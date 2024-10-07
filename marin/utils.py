@@ -4,6 +4,7 @@ import os
 import re
 from contextlib import contextmanager
 
+import braceexpand
 import fsspec
 
 logger = logging.getLogger(__name__)
@@ -55,8 +56,10 @@ def fsspec_glob(file_path):
     """
     Get a list of files in a fsspec filesystem that match a pattern.
 
+    We extend fsspec glob to also work with braces, using braceexpand.
+
     Args:
-        file_path (str): The path of the file
+        file_path (str): a file path or pattern, possibly with *, **, ?, or {}'s
 
     Returns:
         list: A list of files that match the pattern. returned files have the protocol prepended to them.
@@ -71,7 +74,13 @@ def fsspec_glob(file_path):
             return f"{protocol}://{file}"
         return file
 
-    return [join_protocol(file) for file in fs.glob(file_path)]
+    out = []
+
+    # glob has to come after braceexpand
+    for file in braceexpand.braceexpand(file_path):
+        out.extend(join_protocol(file) for file in fs.glob(file))
+
+    return out
 
 
 def fsspec_mkdirs(dir_path, exist_ok=True):
