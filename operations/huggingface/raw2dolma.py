@@ -31,7 +31,7 @@ class DatasetConversionConfig:
     answer_label_key: str = ""
     output_labels: list[str] = field(default_factory=list)
     options_key: str = ""
-    token: str | bool = True
+    token: str | bool = False
     trust_remote_code: bool = False
 
 
