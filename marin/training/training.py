@@ -5,14 +5,14 @@ from copy import deepcopy
 from dataclasses import dataclass, replace
 
 import draccus
-import levanter.infra.cli_helpers
 import ray
 from google.api_core.exceptions import Forbidden as GcpForbiddenException
-from levanter.infra.ray_tpu import run_on_pod_resumable
-from levanter.main import train_lm
 from mergedeep import mergedeep
 from ray.runtime_env import RuntimeEnv
 
+import levanter.infra.cli_helpers
+from levanter.infra.ray_tpu import run_on_pod_resumable
+from levanter.main import train_lm
 from marin.utilities.dataclass_utils import shallow_asdict
 from marin.utilities.gcs_utils import get_bucket_location, get_vm_region
 
@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class TrainLmOnPodConfig(train_lm.TrainLmConfig):
     # Inheritance so we can easily use existing TrainLmConfig configs.
-    out_path: str | None = None
+    output_path: str | None = None
     """
     Base output directory to be used for training, mainly for use with executor framework.
 
@@ -43,7 +43,7 @@ class TrainLmOnPodConfig(train_lm.TrainLmConfig):
     """Environment variables to set in the training pod."""
     bypass_path_checks: bool = False
     """If True, don't check that paths are set and are in the same region as the VM."""
-    impute_run_id_from_out_path: bool = True
+    impute_run_id_from_output_path: bool = True
     """
     If true and out_path is not None, the run id will be set to the basename of the out_path plus a random string.
 
@@ -66,18 +66,18 @@ def _update_config_to_use_out_path(config: TrainLmOnPodConfig):
 
     This is useful when running with the executor framework, where the output path is set by the executor.
     """
-    if config.out_path is None:
+    if config.output_path is None:
         return config
 
     trainer = replace(
         config.trainer,
         checkpointer=replace(
             config.trainer.checkpointer,
-            base_path=os.path.join(config.out_path, DEFAULT_CHECKPOINTS_PATH),
+            base_path=os.path.join(config.output_path, DEFAULT_CHECKPOINTS_PATH),
         ),
     )
 
-    return replace(config, trainer=trainer, hf_save_path=os.path.join(config.out_path, DEFAULT_HF_CHECKPOINTS_PATH))
+    return replace(config, trainer=trainer, hf_save_path=os.path.join(config.output_path, DEFAULT_HF_CHECKPOINTS_PATH))
 
 
 def run_levanter_train_lm(config: TrainLmOnPodConfig):
@@ -99,11 +99,12 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
     """
     default_launch_config = levanter.infra.cli_helpers.load_config()
 
-    if config.out_path is not None:
-        logger.info(f"Using out path: {config.out_path}")
+    if config.output_path is not None:
+        logger.info(f"Using output path: {config.output_path}")
         config = _update_config_to_use_out_path(config)
 
-    env = _add_default_env_variables(config.env, default_launch_config.get("env", None))
+    env = _add_default_env_variables(config.env, default_launch_config.get("env"))
+    _check_for_wandb_key(env)
     env = _add_run_env_variables(env)
     config = replace(config, env=env)
 
@@ -125,8 +126,7 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
         train_lm.main(train_config)
 
     if config.tpu_type is not None:
-        # @ray.remote(runtime_env=runtime_env)
-        return ray.get(run_on_pod_resumable(train_lm_task, config.tpu_type))
+        return run_on_pod_resumable(train_lm_task, config.tpu_type)
     else:
         return ray.get(train_lm_task.remote())
 
@@ -136,11 +136,9 @@ def _upcast_trainlm_config(config):
     upcast TrainLmOnPodConfig to TrainLmConfig by stripping the TPU type and env
     """
     dict_config = shallow_asdict(config)
-    del dict_config["out_path"]
-    del dict_config["env"]  # this is the important bit: don't want to leak env vars into the config
-    del dict_config["tpu_type"]
-    del dict_config["bypass_path_checks"]
-    del dict_config["impute_run_id_from_out_path"]
+    fields_to_remote = set(dict_config.keys()) - set(train_lm.TrainLmConfig.__dataclass_fields__.keys())
+    for field in fields_to_remote:
+        del dict_config[field]
     train_config = train_lm.TrainLmConfig(**dict_config)
 
     return train_config
@@ -162,10 +160,9 @@ def _enforce_run_id(config: TrainLmOnPodConfig):
     if run_id is None:
         run_id = config.env.get("RUN_ID", os.environ.get("RUN_ID"))
 
-    if run_id is None and config.impute_run_id_from_out_path and config.out_path is not None:
-        path = config.out_path
-        while path.endswith("/"):
-            path = path[:-1]
+    if run_id is None and config.impute_run_id_from_output_path and config.output_path is not None:
+        path = config.output_path
+        path = path.rstrip("/")
         run_id = os.path.basename(path)
         logger.info(f"Imputing run ID from out path: {run_id}")
 
@@ -259,17 +256,6 @@ def _add_run_env_variables(env: dict):
     - WANDB_API_KEY
     - GIT_COMMIT
     """
-    if env.get("WANDB_API_KEY") is None:
-        key = os.environ.get("WANDB_API_KEY")
-        if key is not None:
-            env["WANDB_API_KEY"] = key
-        else:
-            wandb_disabled = env.get("WANDB_MODE", os.environ.get("WANDB_MODE"))
-            if wandb_disabled is None or wandb_disabled.lower() not in {"disable", "offline", "dryrun"}:
-                raise ValueError(
-                    "WANDB_API_KEY must be set in the environment. Please add it to your .config, export "
-                    "WANDB_API_KEY=..., or add it to the env dict."
-                )
 
     if "GIT_COMMIT" not in env:
         try:
@@ -278,6 +264,20 @@ def _add_run_env_variables(env: dict):
             logger.warning("Could not infer git commit", exc_info=True)
 
     return env
+
+
+def _check_for_wandb_key(env):
+    if env.get("WANDB_API_KEY") is None:
+        key = os.environ.get("WANDB_API_KEY")
+        if key is not None:
+            env["WANDB_API_KEY"] = key
+        else:
+            wandb_disabled = env.get("WANDB_MODE", os.environ.get("WANDB_MODE"))
+            if wandb_disabled is None or wandb_disabled.lower() not in {"disabled", "offline", "dryrun"}:
+                raise ValueError(
+                    "WANDB_API_KEY must be set in the environment. Please add it to your .config, export "
+                    "WANDB_API_KEY=..., or add it to the env dict."
+                )
 
 
 if __name__ == "__main__":
