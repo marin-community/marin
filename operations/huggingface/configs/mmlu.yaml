@@ -1,12 +1,13 @@
 dataset_name: mmlu
-path: all
+input_path: cais/mmlu
 hf_path: cais/mmlu
-file_names:
+subsets:
+  - all
+splits:
   - dev
   - test
   - validation
 prompt_key: question
 options_key: choices
 answer_idx_key: answer
-subject_key: subject
 output_choices: ["A", "B", "C", "D"]
