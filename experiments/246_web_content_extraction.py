@@ -23,7 +23,6 @@ transform_trafilatura_default_step = ExecutorStep(
             deduplicate=versioned(False),
         ),
     ),
-
 )
 
 transform_trafilatura_favor_precision_step = ExecutorStep(
@@ -56,7 +55,7 @@ transform_resiliparse_default_step = ExecutorStep(
         config=ResiliparseConfig(
             preserve_formatting=versioned(False),
             main_content=versioned(True),
-            links=versioned(False),  
+            links=versioned(False),
         ),
     ),
 )
@@ -73,7 +72,7 @@ transform_resiliparse_preserve_formatting_step = ExecutorStep(
         config=ResiliparseConfig(
             preserve_formatting=versioned(True),
             main_content=versioned(True),
-            links=versioned(False),  
+            links=versioned(False),
         ),
     ),
 )
