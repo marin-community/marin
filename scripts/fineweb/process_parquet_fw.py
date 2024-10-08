@@ -270,13 +270,17 @@ def process_fw_dump(cfg: ParquetFWConfig):
             # input_file_name = 000_00000.parquet
             input_file_name = os.path.basename(file)
             
+            output_path_md = cfg.output_path_md.replace(cfg.input_path, os.path.join(cfg.input_path, "cc_dump"))
+            output_path_text = cfg.output_path_text.replace(cfg.input_path, os.path.join(cfg.input_path, "cc_dump"))
+
             output_path = os.path.join(
                 cfg.output_path_text,
                 input_file_name.replace(".parquet", ""),
-            ) # gs://marin-data/processed/000_00000
+            ) # gs://marin-data/processed/CC-MAIN-2024-10/000_00000
+
 
             logger.info(f"Starting Processing for the fw parquet file: {file} in output_path: {output_path}")
-            result_refs.append(process_fw_parquet.remote(file, output_path, cfg.extract_method, cfg.config, cfg.output_path_md, cfg.output_path_text))
+            result_refs.append(process_fw_parquet.remote(file, output_path, cfg.extract_method, cfg.config, output_path_md, output_path_text))
 
             if cfg.max_files and len(result_refs) >= cfg.max_files:
                 break
