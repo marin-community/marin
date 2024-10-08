@@ -1,13 +1,18 @@
-import logging
 import re
+import htmlmin
+import logging
+
+from bs4 import BeautifulSoup
 from dataclasses import asdict
 from urllib.parse import urljoin
 
-import htmlmin
-from bs4 import BeautifulSoup
-
 from marin.markdown import to_markdown
-from marin.schemas.web.convert import ExtractionConfig, HtmlToMarkdownConfig, TrafilaturaConfig
+from marin.schemas.web.convert import (
+    ExtractionConfig,
+    HtmlToMarkdownConfig,
+    ResiliparseConfig,
+    TrafilaturaConfig,
+)
 
 logger = logging.getLogger("ray")
 HTML_CORRECTION_PREFIX = "<!DOCTYPE html>"
@@ -24,6 +29,7 @@ def convert_page_with_trafilatura(
     Parameters:
         html (str): HTML content to convert.
         url (str | None): URL of the page.
+        config (TrafilaturaConfig): Configuration for Trafilatura.
 
     Returns:
         dict[str, str]: Dictionary containing the title, content, and HTML of the page.
@@ -58,7 +64,7 @@ def convert_page_with_trafilatura(
 def convert_page_with_resiliparse(
     html: str,
     url: str | None = None,
-    config: HtmlToMarkdownConfig | None = HtmlToMarkdownConfig.default_config(),
+    config: ResiliparseConfig | None = ResiliparseConfig.default_config(),
 ) -> dict[str, str]:
     """
     Convert HTML to text[non-markdown] using Resiliparse.
@@ -72,6 +78,7 @@ def convert_page_with_resiliparse(
     Parameters:
         html (str): HTML content to convert.
         url (str | None): URL of the page.
+        config (ResiliparseConfig): Configuration for Resiliparse.
 
     Returns:
         dict[str, str]: Dictionary containing the title, content, and HTML of the page.
@@ -82,12 +89,7 @@ def convert_page_with_resiliparse(
     tree = HTMLTree.parse(html)
     title = tree.title or None
 
-    content = extract_plain_text(
-        html,
-        preserve_formatting=False,
-        main_content=True,
-        links=False,
-    )
+    content = extract_plain_text(html, **asdict(config))
 
     if title:
         content = f"{title}\n\n{content}"
@@ -111,6 +113,7 @@ def convert_page_with_readability(
     Parameters:
         html (str): HTML content to convert.
         url (str | None): URL of the page.
+        config (HtmlToMarkdownConfig): Configuration for markdownify.
 
     Returns:
         dict[str, str]: Dictionary containing the title, content, and HTML of the page.
@@ -199,6 +202,7 @@ def convert_page(
         html (str): HTML content to convert.
         url (str | None): URL of the page.
         extract_method (str): Method to use for extraction. Defaults to "readability".
+        config (ExtractionConfig): Configuration for the extraction method.
 
     Returns:
         dict[str, str]: Dictionary containing the title, content, and HTML of the page.
