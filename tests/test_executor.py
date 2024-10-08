@@ -34,7 +34,7 @@ class MyConfig:
 
 def create_log():
     # Note that different steps cannot share variables
-    with tempfile.NamedTemporaryFile(prefix="executor-log-", delete=False) as f:
+    with tempfile.NamedTemporaryFile(prefix="executor-log-") as f:
         return f.name
 
 
@@ -136,6 +136,55 @@ def test_executor():
 
     cleanup_log(log)
     cleanup_executor(executor)
+
+
+def test_forcerun():
+    """Test force run functionality."""
+
+    def get_b_list(log, m):
+        def fn(config: MyConfig | None):
+            append_log(log, config)
+
+        b = ExecutorStep(
+            name="b",
+            fn=fn,
+            config=MyConfig(
+                input_path="/",
+                output_path=this_output_path(),
+                n=versioned(3),
+                m=m,
+            ),
+        )
+
+        return [b]
+
+    log = create_log()
+    dir_temp = create_temp_dir()
+    executor_initial = Executor(prefix=dir_temp, executor_info_base_path=dir_temp)
+    executor_initial.run(steps=get_b_list(log, 4))
+
+    # Re run without force_run
+    executor_non_force = Executor(prefix=dir_temp, executor_info_base_path=dir_temp)
+    executor_non_force.run(steps=get_b_list(log, 5))  # This would not run b again so m would be 4
+    # Check the results
+    results = read_log(log)
+    assert len(results) == 1
+    assert results[0]["n"] == 3
+    assert results[0]["m"] == 4
+
+    log = create_log()
+    executor_initial = Executor(prefix=dir_temp, executor_info_base_path=dir_temp)
+    executor_initial.run(steps=get_b_list(log, 4))
+
+    # Re run without force_run
+    executor_force = Executor(prefix=dir_temp, executor_info_base_path=dir_temp, force_run=["b"])
+    executor_force.run(steps=get_b_list(log, 5))  # This would run b again so m would be 5
+    results = read_log(log)
+    assert len(results) == 1
+    assert results[0]["n"] == 3
+    assert results[0]["m"] == 5
+
+    cleanup_log(log)
 
 
 def test_parallelism():
