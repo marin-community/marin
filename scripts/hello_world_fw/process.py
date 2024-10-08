@@ -14,8 +14,8 @@
 # --input_path gs://marin-us-central2/raw/hello_world_fw/v1.0/CC-MAIN-2024-10/000_00000
 # --output_path gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart/CC-MAIN-2024-10/000_00000
 import json
-from dataclasses import dataclass
 import logging
+from dataclasses import dataclass
 
 import draccus
 import fsspec
