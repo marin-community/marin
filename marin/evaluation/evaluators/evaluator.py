@@ -47,7 +47,7 @@ class ModelConfig:
 
     def destroy(self) -> None:
         """Deletes the model checkpoint."""
-        if os.path.exists(self.path):
+        if self.path and os.path.exists(self.path):
             shutil.rmtree(self.path, ignore_errors=True)
             print(f"Deleted local checkpoint at {self.path}.")
 

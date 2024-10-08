@@ -6,7 +6,6 @@ Usage:
 python3 run.py <Name of evaluator> --model <Path to model or Hugging Face model name> \
 --evals <List of evals to run> --output-path <Where to output logs and results>
 """
-
 import time
 
 import draccus
