@@ -98,10 +98,10 @@ transform_readability_step = ExecutorStep(
 if __name__ == "__main__":
     executor_main(
         steps=[
-            # transform_trafilatura_default_step,
-            # transform_trafilatura_favor_precision_step,
-            # transform_resiliparse_default_step,
+            transform_trafilatura_default_step,
+            transform_trafilatura_favor_precision_step,
+            transform_resiliparse_default_step,
             transform_resiliparse_preserve_formatting_step,
-            # transform_readability_step,
+            transform_readability_step,
         ]
     )
