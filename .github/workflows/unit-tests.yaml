@@ -7,9 +7,10 @@ jobs:
     if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository)
 
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
       matrix:
-        python-version: ["3.10"]
+        python-version: ["3.12"]
         node-version: ["20.10.0"]
         jax-version: [ "0.4.26" ]
 
