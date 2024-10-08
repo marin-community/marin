@@ -18,6 +18,26 @@ class OutputFormatOptions(str, Enum):
 
 @dataclass
 class DatasetConversionConfig:
+    """
+    Configuration class for converting Hugging Face datasets to dolma format.
+
+    Attributes:
+        dataset_name (str): Name of the Hugging Face dataset to convert
+        subsets (list[str]): List of subsets of dataset to convert
+        splits (list[str]): List of splits of dataset to convert
+        input_path (str): HF Hub, local, or GCP path where Hugging Face repo is stored
+        hf_path (str): HF Hub path (e.g. cais/mmlu) for provenance
+        output_prefix (str): where to store output of dolma processing
+        output_format (str): format of output JSON from {decontaminaton, evaluation}
+        prompt_key (str): key in HF data object for the prompt
+        answer_text_key (str): key in HF data object for the answer text (e.g. "Paris")
+        answer_idx_key (str): key in HF data object for the idx of the correct answer (e.g. 0)
+        answer_label_key (str): key in HF data object for the label of the correct answer (e.g. "A")
+        options_key (str): key in HF data object for the options (e.g. ["Rome", "London", "Berlin", "Paris"])
+        output_labels (str): list of labels for an example (e.g. ["A", "B", "C", "D"])
+        token (str): HF Hub token when authentication required, "env" means look at $HF_TOKEN
+        trust_remote_code (str): allow load_dataset to use remote code to build dataset
+    """
     dataset_name: str
     subsets: list[str]
     splits: list[str]
@@ -26,13 +46,11 @@ class DatasetConversionConfig:
     output_prefix: str
     output_format: OutputFormatOptions
     prompt_key: str
-    doc_input_format: str = ""
-    subject_key: str = ""
     answer_text_key: str = ""
     answer_idx_key: str = ""
     answer_label_key: str = ""
-    output_labels: list[str] = field(default_factory=list)
     options_key: str = ""
+    output_labels: list[str] = field(default_factory=list)
     token: str | bool = False
     trust_remote_code: bool = False
 
