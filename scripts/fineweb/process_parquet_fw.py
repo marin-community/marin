@@ -269,9 +269,9 @@ def process_fw_dump(cfg: ParquetFWConfig):
             # Example of file = gs://marin-data/raw/fineweb/fw-v1.0/CC-MAIN-2024-10/000_00000.parquet
             # input_file_name = 000_00000.parquet
             input_file_name = os.path.basename(file)
-            
-            output_path_md = cfg.output_path_md.replace(cfg.input_path, os.path.join(cfg.input_path, "cc_dump"))
-            output_path_text = cfg.output_path_text.replace(cfg.input_path, os.path.join(cfg.input_path, "cc_dump"))
+
+            output_path_md = os.path.join(cfg.output_path_md, cc_dump)
+            output_path_text = os.path.join(cfg.output_path_text, cc_dump)
 
             output_path = os.path.join(
                 cfg.output_path_text,
