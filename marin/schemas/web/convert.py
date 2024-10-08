@@ -99,6 +99,32 @@ class HtmlToMarkdownConfig(ExtractionConfig):
             raise Exception(f"Invalid preset config: {config}. Please use 'default'.")
 
     @property
-    def get_markdownify_kwargs(self) -> dict:
+    def markdownify_kwargs(self) -> dict:
         exclude = {"include_images", "include_links"}
         return {f.name: getattr(self, f.name) for f in fields(self) if f.name not in exclude}
+
+
+@dataclass(frozen=True)
+@ExtractionConfig.register_subclass("resiliparse")
+class ResiliparseConfig(ExtractionConfig):
+    preserve_formatting: bool = False
+    main_content: bool = True
+    links: bool = False
+
+    list_bullets: bool = True
+    alt_texts: bool = False
+    form_fields: bool = False
+    noscript: bool = False
+    comments: bool | None = None
+    skip_elements: list | None = None
+
+    @classmethod
+    def default_config(cls) -> "ResiliparseConfig":
+        return cls()
+
+    @classmethod
+    def get_preset_config(cls, config: str) -> "ResiliparseConfig":
+        if config == "default":
+            return cls.default_config()
+        else:
+            raise Exception(f"Invalid preset config: {config}. Please use 'default'.")
