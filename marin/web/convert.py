@@ -1,10 +1,10 @@
-import re
-import htmlmin
 import logging
-
-from bs4 import BeautifulSoup
+import re
 from dataclasses import asdict
 from urllib.parse import urljoin
+
+import htmlmin
+from bs4 import BeautifulSoup
 
 from marin.markdown import to_markdown
 from marin.schemas.web.convert import (

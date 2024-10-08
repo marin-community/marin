@@ -1,5 +1,4 @@
 from dataclasses import dataclass, field, fields
-from typing import Optional
 
 from draccus.choice_types import ChoiceRegistry
 from markdownify import ASTERISK, SPACES
