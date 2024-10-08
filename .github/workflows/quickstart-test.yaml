@@ -6,9 +6,9 @@ on:
       - main
 
 jobs:
-  build:
-
+  verify:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
       matrix:
         jax-version: [ "0.4.26" ]

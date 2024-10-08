@@ -74,7 +74,7 @@ import logging
 import os
 import traceback
 from collections.abc import Callable
-from dataclasses import asdict, dataclass, fields, is_dataclass, replace
+from dataclasses import asdict, dataclass, field, fields, is_dataclass, replace
 from datetime import datetime
 from typing import Any, Generic, TypeVar
 
@@ -321,11 +321,12 @@ class Executor:
     2. Run each `ExecutorStep` in a proper topological sort order.
     """
 
-    def __init__(self, prefix: str, executor_info_base_path: str):
+    def __init__(self, prefix: str, executor_info_base_path: str, force_run: list[str] | None = None):
         self.prefix = prefix
         self.executor_info_base_path = executor_info_base_path
 
         self.configs: dict[ExecutorStep, dataclass] = {}
+        self.force_run = force_run or []
         self.dependencies: dict[ExecutorStep, list[ExecutorStep]] = {}
         self.versions: dict[ExecutorStep, dict[str, Any]] = {}
         self.output_paths: dict[ExecutorStep, str] = {}
@@ -459,9 +460,13 @@ class Executor:
         for i, dep in enumerate(self.dependencies[step]):
             logger.info(f"  {dependency_index_str(i)} = {self.output_paths[dep]}")
         logger.info("")
+        force_run_step = False
+        if step.name in self.force_run or "all" in self.force_run:
+            force_run_step = True
+            logger.info(f"Force running {step.name}")
 
         # Only start if there's no status
-        should_run = not dry_run and status is None
+        should_run = not dry_run and (status is None or force_run_step)
         dependencies = [self.refs[dep] for dep in self.dependencies[step]]
         name = f"execute_after_dependencies({get_fn_name(step.fn, short=True)})::{step.name})"
         self.refs[step] = execute_after_dependencies.options(name=name).remote(
@@ -553,6 +558,7 @@ class ExecutorMainConfig:
     """Where the executor info should be stored under a file determined by a hash."""
 
     dry_run: bool = False
+    force_run: list[str] = field(default_factory=list)  # <list of steps name>: run list of steps (names)
 
 
 @draccus.wrap()
@@ -560,5 +566,7 @@ def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep]):
     """Main entry point for experiments (to standardize)"""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-    executor = Executor(prefix=config.prefix, executor_info_base_path=config.executor_info_base_path)
+    executor = Executor(
+        prefix=config.prefix, executor_info_base_path=config.executor_info_base_path, force_run=config.force_run
+    )
     executor.run(steps=steps, dry_run=config.dry_run)
