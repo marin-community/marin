@@ -238,9 +238,9 @@ def process_fw_parquet(
 @dataclass
 class ParquetFWConfig:
     input_path: str
-    cc_dumps: list[str]
     output_path_md: str
     output_path_text: str
+    cc_dumps: list[str] | None = None
     extract_method: str = "readability"
     config: ExtractionConfig = HtmlToMarkdownConfig.default_config()
     max_files: int | None = None
@@ -248,7 +248,9 @@ class ParquetFWConfig:
 
 @draccus.wrap()
 def process_fw_dump(cfg: ParquetFWConfig):
-    for cc_dump in cfg.cc_dumps:
+    cc_dumps = cfg.cc_dumps or fsspec_glob(cfg.input_path, "*")
+
+    for cc_dump in cc_dumps:
         files = fsspec_glob(os.path.join(cfg.input_path, cc_dump, "*.parquet"))
         MAX_NUM_PENDING_TASKS = 15  # Max number of parquet files we want to process in pending state
         NUM_TASKS = len(files)
