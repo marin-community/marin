@@ -61,7 +61,7 @@ transform_resiliparse_default_step = ExecutorStep(
 )
 
 transform_resiliparse_preserve_formatting_step = ExecutorStep(
-    name="processed/fineweb-small-resiliparse-preserve-formatting",
+    name="documents/fineweb-small-resiliparse-preserve-formatting",
     fn=process_fw_dump,
     config=ParquetFWConfig(
         input_path=raw_data,
