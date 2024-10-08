@@ -7,24 +7,26 @@ Downloads the following datasets:
 - https://huggingface.co/datasets/mlfoundations/dclm-baseline-1.0
 - https://huggingface.co/datasets/bigcode/the-stack-dedup
 - https://huggingface.co/datasets/EleutherAI/proof-pile-2
-to GCS. These are the other datasets that were used in the DCLM paper (in addition to the actual DCLM-Baseline dataset).
+to GCS. The 2nd and 3rd ones above are the other datasets that were used in the DCLM paper (in addition to
+    the actual DCLM-Baseline dataset).
 """
 
 ############################################################
 # download DCLM-Baseline dataset
-# dclm_baseline_download_step = ExecutorStep(
-#     name="raw/dclm-baseline-1.0",
-#     fn=download,
-#     config=DownloadConfig(
-#         hf_dataset_id="mlfoundations/dclm-baseline-1.0",
-#         revision=versioned("a3b142c"),
-#         gcs_output_path=this_output_path(),
-#         wait_for_completion=True,
-#     ),
-# )
+dclm_baseline_download_step = ExecutorStep(
+    name="raw/dclm-baseline-1.0",
+    fn=download,
+    config=DownloadConfig(
+        hf_dataset_id="mlfoundations/dclm-baseline-1.0",
+        revision=versioned("a3b142c"),
+        gcs_output_path=this_output_path(),
+        wait_for_completion=False,
+    ),
+    override_output_path="gs://marin-us-central2/raw/dclm",  # no versioned path; this had already been downloaded
+)
 
 ############################################################
-# download The Stack dataset
+# download The Stack dataset- this is done manually via `download_and_upload_to_gcs` because the dataset is gated
 the_stack_download_step = ExecutorStep(
     name="raw/the-stack-dedup",
     fn=download_and_upload_to_gcs,
@@ -34,19 +36,21 @@ the_stack_download_step = ExecutorStep(
         gcs_output_path=this_output_path(),
         wait_for_completion=True,
     ),
+    override_output_path="gs://marin-us-central2/raw/the-stack-dedup-4ba450",
 )
 
 ############################################################
 # download Proof Pile 2 dataset
-proofpile_download_step = ExecutorStep(
-    name="raw/proof-pile-2-dummy",
+proofpile_2_download_step = ExecutorStep(
+    name="raw/proof-pile-2",
     fn=download,
     config=DownloadConfig(
         hf_dataset_id="EleutherAI/proof-pile-2",
         revision=versioned("901a927"),
         gcs_output_path=this_output_path(),
-        wait_for_completion=True,
+        wait_for_completion=False,
     ),
+    override_output_path="gs://marin-us-central2/raw/proof-pile-2-f1b1d8",
 )
 
 ############################################################
@@ -54,8 +58,8 @@ proofpile_download_step = ExecutorStep(
 if __name__ == "__main__":
     executor_main(
         steps=[
-            # dclm_baseline_download_step,
+            dclm_baseline_download_step,
             the_stack_download_step,
-            # proofpile_download_step,
+            proofpile_2_download_step,
         ]
     )

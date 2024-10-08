@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 """
-improved_download_gated_hf_dataset.py
-
-An improved script to download a gated HuggingFace dataset and upload it to a specified GCS path,
+An script to download a gated HuggingFace dataset and upload it to a specified GCS path,
 preserving directory structures and handling different file types.
 
 Run with (after setting HF_TOKEN as an environment variable):
@@ -28,7 +26,7 @@ from marin.utilities.validation_utils import write_provenance_json
 from operations.download.huggingface.download import DownloadConfig
 
 # Set up logging
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
 
 
 def ensure_gcs_path_exists(gcs_path: str) -> None:
@@ -39,7 +37,7 @@ def ensure_gcs_path_exists(gcs_path: str) -> None:
     if not bucket.exists():
         raise ValueError(f"GCS bucket {bucket_name} does not exist.")
 
-    print(f"Checking write access to GCS path: gs://{bucket_name}/{blob_prefix}")
+    logger.info(f"Checking write access to GCS path: gs://{bucket_name}/{blob_prefix}")
 
     # Check if we can write to the specified path
     test_blob = bucket.blob(f"{blob_prefix}/test_write_access")
@@ -71,7 +69,7 @@ def download_and_upload_to_gcs(cfg: DownloadConfig) -> None:
     try:
         ensure_gcs_path_exists(full_gcs_path)
     except ValueError as e:
-        logging.error(f"GCS path validation failed: {e!s}")
+        logger.error(f"GCS path validation failed: {e!s}")
         return
 
     # Initialize HuggingFace client
@@ -86,7 +84,7 @@ def download_and_upload_to_gcs(cfg: DownloadConfig) -> None:
     files = hf_client.list_repo_files(repo_id=cfg.hf_dataset_id, revision=cfg.revision, repo_type="dataset")
 
     total_files = len(files)
-    print(f"Total number of files to process: {total_files}")
+    logger.info(f"Total number of files to process: {total_files}")
 
     processed_files = 0
     hf_urls = []
@@ -122,7 +120,7 @@ def download_and_upload_to_gcs(cfg: DownloadConfig) -> None:
                     logging.error(f"Error processing {file}: {e!s}")
 
                 processed_files += 1
-                print(f"Processed {processed_files}/{total_files} files ({processed_files/total_files*100:.2f}%)")
+                logger.info(f"Processed {processed_files}/{total_files} files ({processed_files/total_files*100:.2f}%)")
 
     # Write Provenance JSON
     write_provenance_json(
@@ -131,7 +129,7 @@ def download_and_upload_to_gcs(cfg: DownloadConfig) -> None:
         metadata={"dataset": cfg.hf_dataset_id, "version": cfg.revision, "links": hf_urls},
     )
 
-    print(f"Uploaded all files and wrote provenance JSON; check {cfg.gcs_output_path}.")
+    logger.info(f"Uploaded all files and wrote provenance JSON; check {cfg.gcs_output_path}.")
 
 
 @draccus.wrap()
