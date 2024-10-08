@@ -3,6 +3,8 @@ import os
 from dataclasses import dataclass
 
 import draccus
+from levanter.models.gpt2 import Gpt2Config
+from levanter.trainer import TrainerConfig
 
 from marin.execution.executor import (
     ExecutorMainConfig,
@@ -20,7 +22,9 @@ from marin.processing.classification.fasttext.train_fasttext import (
     train,
 )
 from marin.processing.classification.inference import InferenceConfig, run_inference
+from marin.processing.tokenize import TokenizeConfig, lm_training_config, tokenize
 from marin.schemas.web.convert import HtmlToMarkdownConfig
+from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 from scripts.hello_world_fw.process import FineWebConfig, transform
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -160,6 +164,42 @@ def create_steps(config: QuickstartExecutorConfig) -> list[ExecutorStep]:
         ),
     )
 
+    ############################################################
+    # Tokenize
+
+    tokenize_step = ExecutorStep(
+        name=os.path.join(config.prefix, config.commit_hash, "tokenized"),
+        fn=tokenize,
+        config=TokenizeConfig(
+            train_paths=output_path_of(consolidate_step),
+            validation_paths=[],
+            cache_path=this_output_path(),
+            tokenizer=versioned("gpt2"),
+        ),
+    )
+
+    ############################################################
+    # Train
+
+    train_step = ExecutorStep(
+        name=os.path.join(config.prefix, config.commit_hash, "train"),
+        fn=run_levanter_train_lm,
+        config=TrainLmOnPodConfig(
+            output_path=this_output_path(),
+            data=lm_training_config(tokenize_step),
+            env={"WANDB_API_KEY": None, "WANDB_MODE": "disabled"},  # Running it locally and turning off wandb
+            tpu_type=None,
+            hf_save_steps=1,
+            model=Gpt2Config(
+                num_layers=2,
+                num_heads=2,
+                seq_len=64,
+                hidden_dim=32,
+            ),
+            trainer=TrainerConfig(train_batch_size=1, num_train_steps=2, max_eval_batches=1, require_accelerator=False),
+        ),
+    )
+
     return [
         transform_hq_data_step,
         transform_lq_data_step,
@@ -168,6 +208,8 @@ def create_steps(config: QuickstartExecutorConfig) -> list[ExecutorStep]:
         inference_lq_step,
         dedupe_step,
         consolidate_step,
+        tokenize_step,
+        train_step,
     ]
 
 
@@ -176,7 +218,9 @@ def main(config: QuickstartExecutorConfig):
     try:
         steps = create_steps(config)
         bucket_prefix = "/tmp"
-        config_executor = ExecutorMainConfig(prefix=bucket_prefix)
+        config_executor = ExecutorMainConfig(
+            prefix=bucket_prefix, executor_info_base_path=os.path.join(bucket_prefix, "experiments")
+        )
         executor_main(config_executor, steps=steps)
         logger.info(
             f"Execution completed successfully. All outputs are in {bucket_prefix}/{config.prefix}/{config.commit_hash}"
