@@ -281,7 +281,7 @@ def dolma_dedup(
                 copy_file_out(local_file, output_file)
 
         except Exception as e:
-            print(f"An error occurred during deduplication: {e}")
+            raise RuntimeError(f"An error occurred during deduplication: {e}")
     return "Deduplication process completed"
 
 
