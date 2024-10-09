@@ -38,6 +38,7 @@ class DatasetConversionConfig:
         token (str): HF Hub token when authentication required, "env" means look at $HF_TOKEN
         trust_remote_code (str): allow load_dataset to use remote code to build dataset
     """
+
     dataset_name: str
     subsets: list[str]
     splits: list[str]
