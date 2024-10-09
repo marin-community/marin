@@ -1,6 +1,6 @@
+from marin.evaluation.evaluation_config import EvaluationConfig
+from marin.evaluation.run import evaluate
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
-from scripts.evaluation.evaluation_config import EvaluationConfig
-from scripts.evaluation.run import evaluate
 
 """
 Canonical set of evals.

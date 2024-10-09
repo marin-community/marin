@@ -1,10 +1,10 @@
-from dataclasses import dataclass
-from typing import Dict, List
 import time
 import traceback
+from dataclasses import dataclass
+from typing import ClassVar
 
-from scripts.evaluation.vllm_tpu_evaluator import VllmTpuEvaluator
-from scripts.evaluation.evaluator import ModelConfig
+from marin.evaluation.evaluators.evaluator import ModelConfig
+from marin.evaluation.evaluators.vllm_tpu_evaluator import VllmTpuEvaluator
 
 
 @dataclass(frozen=True)
@@ -13,7 +13,7 @@ class TestPlan:
     A test plan to run with `SimpleEvaluator`.
     """
 
-    prompts: List[str]
+    prompts: list[str]
     num_outputs: int
     max_tokens: int
     temperature: float = 0
@@ -109,7 +109,7 @@ class SimpleEvaluator(VllmTpuEvaluator):
         temperature=1.0,
     )
 
-    NAME_TO_TEST_PLAN: Dict[str, TestPlan] = {
+    NAME_TO_TEST_PLAN: ClassVar[dict[str, TestPlan]] = {
         "quick": QUICK_TEST_PLAN,
         "long": LONG_GENERATION_TEST_PLAN,
         "long_input": LONG_INPUT_TEST_PLAN,
@@ -117,9 +117,7 @@ class SimpleEvaluator(VllmTpuEvaluator):
         "many_outputs": MANY_OUTPUTS_TEST_PLAN,
     }
 
-    def run(
-        self, model: ModelConfig, evals: List[str], output_path: str, max_eval_instances: int | None = None
-    ) -> None:
+    def run(self, model: ModelConfig, evals: list[str], output_path: str, max_eval_instances: int | None = None) -> None:
         try:
             from vllm import LLM, SamplingParams
 
@@ -128,7 +126,7 @@ class SimpleEvaluator(VllmTpuEvaluator):
             model_name_or_path: str = self.download_model(model)
             llm = LLM(model=model_name_or_path, enforce_eager=False, trust_remote_code=True)
 
-            inference_times: Dict[str, float] = {}
+            inference_times: dict[str, float] = {}
             for eval_name in evals:
                 assert eval_name in SimpleEvaluator.NAME_TO_TEST_PLAN, f"Unknown eval: {eval_name}"
                 test_plan: TestPlan = SimpleEvaluator.NAME_TO_TEST_PLAN[eval_name]

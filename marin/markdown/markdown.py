@@ -148,7 +148,7 @@ class MyMarkdownConverter(MarkdownConverter):
         self.include_links = config.include_links
         self.include_images = config.include_images
 
-        kwargs = config.get_markdownify_kwargs
+        kwargs = config.markdownify_kwargs
         super().__init__(**kwargs)
 
     def convert_hn(self, n, el, text, convert_as_inline):
@@ -169,7 +169,7 @@ class MyMarkdownConverter(MarkdownConverter):
         prefix, suffix, text = markdownify.chomp(text)
 
         if not self.include_links:
-            return text
+            return text if len(text) > 1 else ""
 
         if not text:
             return ""
