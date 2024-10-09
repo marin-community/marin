@@ -34,7 +34,7 @@ class QuickstartExecutorConfig:
     prefix: str = "quickstart-tests"
 
     # path to synthetic test data
-    synth_data: str = "./tests/quick-start-tests"
+    synth_data: str = "./tests/quickstart-tests"
 
 
 def create_steps(config: QuickstartExecutorConfig) -> list[ExecutorStep]:
