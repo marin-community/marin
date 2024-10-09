@@ -111,11 +111,11 @@ train_quality_step = ExecutorStep(
     config=TrainFasttextClassifierConfig(
         input_doc_paths=[
             DatasetCurationConfig(
-                input_doc_path=sft_data, label="__label__hq", relative_sampling_rate=0.1, format="dolma_formatted_jsonl"
+                input_doc_path=sft_data, label="hq", relative_sampling_rate=0.1, format="dolma_formatted_jsonl"
             ),
             DatasetCurationConfig(
                 input_doc_path=output_path_of(transform_trafilatura_step),
-                label="__label__lq",
+                label="lq",
                 relative_sampling_rate=1.0,
                 format="dolma_formatted_jsonl",
             ),
