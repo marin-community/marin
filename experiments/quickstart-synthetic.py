@@ -213,7 +213,7 @@ def create_steps(config: QuickstartExecutorConfig) -> list[ExecutorStep]:
         fn=evaluate,
         config=EvaluationConfig(
             evaluator="helm",
-            model_name=model_name,
+            model_name=f"{model_name}/step-1",
             model_path=os.path.join(config.prefix, config.commit_hash, "train", model_name, "hf", model_name, "step-1"),
             evaluation_path=this_output_path(),
             evals=["mmlu"],
