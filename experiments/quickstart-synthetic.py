@@ -183,11 +183,13 @@ def create_steps(config: QuickstartExecutorConfig) -> list[ExecutorStep]:
     ############################################################
     # Train
 
+    model_name = "quickstart-trained-model"
+
     train_step = ExecutorStep(
         name=os.path.join(config.prefix, config.commit_hash, "train"),
         fn=run_levanter_train_lm,
         config=TrainLmOnPodConfig(
-            output_path=this_output_path(),
+            output_path=os.path.join(config.prefix, config.commit_hash, "train", model_name),
             data=lm_training_config(tokenize_step),
             env={"WANDB_API_KEY": None, "WANDB_MODE": "disabled"},  # Running it locally and turning off wandb
             tpu_type=None,
@@ -211,8 +213,8 @@ def create_steps(config: QuickstartExecutorConfig) -> list[ExecutorStep]:
         fn=evaluate,
         config=EvaluationConfig(
             evaluator="helm",
-            model_name="step-1",
-            model_path=output_path_of(train_step),
+            model_name=model_name,
+            model_path=os.path.join(config.prefix, config.commit_hash, "train", model_name, "hf", model_name, "step-1"),
             evaluation_path=this_output_path(),
             evals=["mmlu"],
             launch_with_ray=False,
