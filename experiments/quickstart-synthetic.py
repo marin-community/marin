@@ -204,17 +204,23 @@ def create_steps(config: QuickstartExecutorConfig) -> list[ExecutorStep]:
         ),
     )
 
+    logger.info(
+        f"""Finished training model {model_name} with config: {train_step.config}. Model saved at
+                {os.path.join(config.prefix, config.commit_hash, "train", model_name)}"""
+    )
+
     ############################################################
     # Evaluation
 
-    # take output path of train_step and take only the part of the string after hf/ to get the model name
     eval_step = ExecutorStep(
         name=os.path.join(config.prefix, config.commit_hash, "eval"),
         fn=evaluate,
         config=EvaluationConfig(
             evaluator="helm",
             model_name=f"{model_name}/step-1",
-            model_path=os.path.join(config.prefix, config.commit_hash, "train", model_name, "hf", model_name, "step-1"),
+            model_path=os.path.join(
+                "/tmp", config.prefix, config.commit_hash, "train", model_name, "hf", model_name, "step-1"
+            ),
             evaluation_path=this_output_path(),
             evals=["mmlu"],
             launch_with_ray=False,
