@@ -77,6 +77,7 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass, field, fields, is_dataclass, replace
 from datetime import datetime
 from typing import Any, Generic, TypeVar
+import subprocess
 
 import draccus
 import fsspec
@@ -543,7 +544,7 @@ def get_caller_path() -> str:
 
 
 def get_user() -> str | None:
-    return os.environ.get("USER")
+    return subprocess.check_output("whoami", shell=True).strip().decode('utf-8').split('\\')[-1]
 
 
 ############################################################
