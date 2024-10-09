@@ -72,12 +72,12 @@ import inspect
 import json
 import logging
 import os
+import subprocess
 import traceback
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field, fields, is_dataclass, replace
 from datetime import datetime
 from typing import Any, Generic, TypeVar
-import subprocess
 
 import draccus
 import fsspec
