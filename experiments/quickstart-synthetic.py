@@ -77,13 +77,13 @@ def create_steps(config: QuickstartExecutorConfig) -> list[ExecutorStep]:
             input_doc_paths=[
                 DatasetCurationConfig(
                     input_doc_path=output_path_of(transform_hq_data_step),
-                    label="__label__hq",
+                    label="hq",
                     relative_sampling_rate=1.0,
                     format="dolma_formatted_jsonl",
                 ),
                 DatasetCurationConfig(
                     input_doc_path=output_path_of(transform_lq_data_step),
-                    label="__label__lq",
+                    label="lq",
                     relative_sampling_rate=1.0,
                     format="dolma_formatted_jsonl",
                 ),

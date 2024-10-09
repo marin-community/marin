@@ -22,8 +22,8 @@ class DatasetCurationConfig:
         input_doc_path (str): Path to the input dataset which can be a directory or a file.
             If it is a directory, the function will glob all the files in the directory and sample from each file.
             The files can be formatted in jsonl or fasttext format.
-        label (str): Label for the dataset. This should be in the format "__label__<label>"
-            where <label> is the label for the dataset. For example, "__label__hq" or "__label__lq", respectively.
+        label (str): Label for the dataset. This should be in the format "<label>"
+            where <label> is the label for the dataset. For example, "hq" or "lq", respectively.
         absolute_sampling_rate (Optional[int]): Number of examples to sample from the dataset where each example
             is sampled with probability 1/N.
         relative_sampling_rate (Optional[float]): Fraction of the dataset to sample.
