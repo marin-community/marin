@@ -34,3 +34,8 @@ class EvaluationConfig:
     """
     Maximum number of instances to evaluate on.
     """
+
+    launch_with_ray: bool = True
+    """
+    Whether to launch the evaluation run with Ray.
+    """
