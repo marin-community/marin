@@ -206,13 +206,12 @@ def create_steps(config: QuickstartExecutorConfig) -> list[ExecutorStep]:
     # Evaluation
 
     # take output path of train_step and take only the part of the string after hf/ to get the model name
-    eval_model_name = output_path_of(train_step).split("/hf/")[1]
     eval_step = ExecutorStep(
         name=os.path.join(config.prefix, config.commit_hash, "eval"),
         fn=evaluate,
         config=EvaluationConfig(
             evaluator="helm",
-            model_name=eval_model_name,
+            model_name="step-1",
             model_path=output_path_of(train_step),
             evaluation_path=this_output_path(),
             evals=["mmlu"],
