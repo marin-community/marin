@@ -140,10 +140,12 @@ def clean_ar5iv_html(file, prefix_path, output_path, file_size):
                     "source": "ar5iv",         # MANDATORY: source of the data, such as peS2o, common-crawl, etc.
                     "added": datetime.datetime.now().isoformat(),          # OPTIONAL: timestamp ai2 acquired this data
                 }) + "\n"
-        file_path = pathlib.Path(file)
-        output_path = pathlib.Path(output_path)
-        if file_path.is_relative_to(prefix_path):
-            out_file = output_path / "html_clean" / file_path.relative_to(prefix_path)
+        _file_path = pathlib.Path(file.replace("gs://", ""))
+        _output_path = pathlib.Path(output_path.replace("gs://", ""))
+        if _file_path.is_relative_to(prefix_path.replace("gs://", "")):
+            out_file = _output_path / "html_clean" / _file_path.relative_to(prefix_path.replace("gs://", ""))
+            if output_path.startswith("gs://"):
+                out_file = "gs://" + str(out_file)
         else:
             raise Exception(f"File {file} is not in the prefix path {prefix_path}")
         with fsspec.open(out_file, 'wb', compression='gzip') as outputf:
@@ -166,7 +168,7 @@ def markdownify_ar5iv_html(file,  prefix_path, output_path, file_size):
 
     try:
         outs = ""
-        print(f"Starting Processing for the ar5iv file: {html}")
+        print(f"Starting Processing for the ar5iv file: {file}")
         with fsspec.open(file, 'rb', compression='gzip') as outputf:
             for _ in range(file_size):
                 line = outputf.readline()
@@ -189,10 +191,12 @@ def markdownify_ar5iv_html(file,  prefix_path, output_path, file_size):
                     "source": "ar5iv",         # MANDATORY: source of the data, such as peS2o, common-crawl, etc.
                     "added": datetime.datetime.now().isoformat(),          # OPTIONAL: timestamp ai2 acquired this data
                 }) + "\n"
-        file_path = pathlib.Path(file)
-        output_path = pathlib.Path(output_path)
-        if file_path.is_relative_to(prefix_path):
-            out_file = output_path / "md" / file_path.relative_to(prefix_path)
+        _file_path = pathlib.Path(file.replace("gs://", ""))
+        _output_path = pathlib.Path(output_path.replace("gs://", ""))
+        if _file_path.is_relative_to(prefix_path.replace("gs://", "")):
+            out_file = _output_path / "md" / _file_path.relative_to(prefix_path.replace("gs://", ""))
+            if output_path.startswith("gs://"):
+                out_file = "gs://" + str(out_file)
         else:
             raise Exception(f"File {file} is not in the prefix path {prefix_path}")
         with fsspec.open(out_file, 'wb', compression='gzip') as outputf:
@@ -217,7 +221,7 @@ if __name__ == '__main__':
         fs = fsspec.filesystem("file")
     html_folder = args.input_path
     output_path = args.output_path
-    files = fs.ls(html_folder)
+    files = fs.find(html_folder)
 
     MAX_NUM_PENDING_TASKS = 600  # Max number of html files we want to process in pending state
     ray.init()
@@ -233,12 +237,24 @@ if __name__ == '__main__':
             except Exception as e:
                 print(f"Error processing the group: {e}")
                 continue
-        print(f"Starting Processing for the ar5iv file: {html}")
+        if "gs://" in html_folder:
+            html = "gs://" + html
         result_refs.append(clean_ar5iv_html.remote(html, html_folder, output_path, args.file_size))
+    try:
+        ray.get(result_refs)
+    except Exception as e:
+        print(f"Error processing the group: {e}")
+    
+    result_refs = []
+
+    
+    if args.input_path.startswith("gs://"):
+        fs = fsspec.filesystem("gcs")
+    else:
+        fs = fsspec.filesystem("file")
         
-        
-    clean_html_folder = pathlib.Path(output_path) / "html_clean"
-    files = gfs.ls(clean_html_folder)
+    clean_html_folder = pathlib.Path(output_path.replace("gs://", "")) / "html_clean"
+    files = fs.find(clean_html_folder)
 
     for html in files:
         if len(result_refs) > MAX_NUM_PENDING_TASKS:
@@ -250,6 +266,9 @@ if __name__ == '__main__':
             except Exception as e:
                 print(f"Error processing the group: {e}")
                 continue
+        if "gs://" in html_folder:
+            html = "gs://" + html
+        print(f"Starting Processing for the ar5iv file: {html}")
         result_refs.append(markdownify_ar5iv_html.remote(html, output_path, output_path, args.file_size))
 
     # Wait for all the tasks to finish
