@@ -130,7 +130,7 @@ class VllmTpuEvaluator(Evaluator, ABC):
 
         return runtime_env
 
-    def evaluate(
+    def launch_evaluate_with_ray(
         self, model: ModelConfig, evals: list[str], output_path: str, max_eval_instances: int | None = None
     ) -> None:
         """
@@ -144,10 +144,6 @@ class VllmTpuEvaluator(Evaluator, ABC):
         def launch(
             model: ModelConfig, evals: list[str], output_path: str, max_eval_instances: int | None = None
         ) -> None:
-            self.run(model, evals, output_path, max_eval_instances)
+            self.evaluate(model, evals, output_path, max_eval_instances)
 
         ray.get(launch.remote(model, evals, output_path, max_eval_instances))
-
-    def run(self, model: ModelConfig, evals: list[str], output_path: str, max_eval_instances: int | None = None) -> None:
-        """What gets run on the machine for evaluation"""
-        raise NotImplementedError
