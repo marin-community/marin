@@ -6,8 +6,6 @@ import draccus
 from levanter.models.gpt2 import Gpt2Config
 from levanter.trainer import TrainerConfig
 
-from marin.evaluation.evaluation_config import EvaluationConfig
-from marin.evaluation.run import evaluate
 from marin.execution.executor import (
     ExecutorMainConfig,
     ExecutorStep,
@@ -212,20 +210,20 @@ def create_steps(config: QuickstartExecutorConfig) -> list[ExecutorStep]:
     ############################################################
     # Evaluation
 
-    eval_step = ExecutorStep(
-        name=os.path.join(config.prefix, config.commit_hash, "eval"),
-        fn=evaluate,
-        config=EvaluationConfig(
-            evaluator="helm",
-            model_name=f"{model_name}/step-1",
-            model_path=os.path.join(
-                "/tmp", config.prefix, config.commit_hash, "train", model_name, "hf", model_name, "step-1"
-            ),
-            evaluation_path=this_output_path(),
-            evals=["mmlu"],
-            launch_with_ray=False,
-        ),
-    )
+    # eval_step = ExecutorStep(
+    #     name=os.path.join(config.prefix, config.commit_hash, "eval"),
+    #     fn=evaluate,
+    #     config=EvaluationConfig(
+    #         evaluator="helm",
+    #         model_name=f"{model_name}/step-1",
+    #         model_path=os.path.join(
+    #             "/tmp", config.prefix, config.commit_hash, "train", model_name, "hf", model_name, "step-1"
+    #         ),
+    #         evaluation_path=this_output_path(),
+    #         evals=["mmlu"],
+    #         launch_with_ray=False,
+    #     ),
+    # )
 
     return [
         transform_hq_data_step,
@@ -237,7 +235,7 @@ def create_steps(config: QuickstartExecutorConfig) -> list[ExecutorStep]:
         consolidate_step,
         tokenize_step,
         train_step,
-        eval_step,
+        # eval_step,
     ]
 
 
