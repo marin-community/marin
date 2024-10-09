@@ -544,7 +544,7 @@ def get_caller_path() -> str:
 
 
 def get_user() -> str | None:
-    return subprocess.check_output("whoami", shell=True).strip().decode('utf-8').split('\\')[-1]
+    return subprocess.check_output("whoami", shell=True).strip().decode("utf-8").split("\\")[-1]
 
 
 ############################################################
