@@ -183,13 +183,13 @@ def create_steps(config: QuickstartExecutorConfig) -> list[ExecutorStep]:
     ############################################################
     # Train
 
-    model_name = "quickstart-trained-model"
+    run_id = "test-run"
 
     train_step = ExecutorStep(
         name=os.path.join(config.prefix, config.commit_hash, "train"),
         fn=run_levanter_train_lm,
         config=TrainLmOnPodConfig(
-            output_path=os.path.join("/tmp", config.prefix, config.commit_hash, "train", model_name),
+            output_path=this_output_path(),
             data=lm_training_config(tokenize_step),
             env={"WANDB_API_KEY": None, "WANDB_MODE": "disabled"},  # Running it locally and turning off wandb
             tpu_type=None,
@@ -200,13 +200,10 @@ def create_steps(config: QuickstartExecutorConfig) -> list[ExecutorStep]:
                 seq_len=64,
                 hidden_dim=32,
             ),
-            trainer=TrainerConfig(train_batch_size=1, num_train_steps=2, max_eval_batches=1, require_accelerator=False),
+            trainer=TrainerConfig(
+                train_batch_size=1, num_train_steps=2, max_eval_batches=1, require_accelerator=False, id=run_id
+            ),
         ),
-    )
-
-    logger.info(
-        f"""Finished training model {model_name} with config: {train_step.config}. Model saved at
-                {os.path.join(config.prefix, config.commit_hash, "train", model_name)}"""
     )
 
     ############################################################
@@ -217,10 +214,8 @@ def create_steps(config: QuickstartExecutorConfig) -> list[ExecutorStep]:
         fn=evaluate,
         config=EvaluationConfig(
             evaluator="helm",
-            model_name=f"{model_name}/step-1",
-            model_path=os.path.join(
-                "/tmp", config.prefix, config.commit_hash, "train", model_name, "hf", model_name, "step-1"
-            ),
+            model_name=f"{run_id}/step-1",
+            model_path=os.path.join("/tmp", config.prefix, config.commit_hash, "train", run_id, "hf", run_id, "step-1"),
             evaluation_path=this_output_path(),
             evals=["mmlu"],
             launch_with_ray=False,
