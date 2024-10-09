@@ -14,7 +14,6 @@ class EleutherEvaluator(VllmTpuEvaluator):
     """
 
     RESULTS_PATH: str = os.path.join(VllmTpuEvaluator.CACHE_PATH, "eleuther_results")
-    DEFAULT_MAX_EVAL_INSTANCES: int = 1000
 
     _pip_packages: ClassVar[list[Dependency]] = [
         *VllmTpuEvaluator.DEFAULT_PIP_PACKAGES,
@@ -22,7 +21,9 @@ class EleutherEvaluator(VllmTpuEvaluator):
         Dependency(name="lm-eval[api]"),
     ]
 
-    def run(self, model: ModelConfig, evals: list[str], output_path: str, max_eval_instances: int | None = None) -> None:
+    def evaluate(
+        self, model: ModelConfig, evals: list[str], output_path: str, max_eval_instances: int | None = None
+    ) -> None:
         """
         Runs EleutherAI's lm-eval harness on the specified model and set of  tasks.
 
@@ -38,24 +39,24 @@ class EleutherEvaluator(VllmTpuEvaluator):
             # Download the model from GCS or HuggingFace
             model_name_or_path: str = self.download_model(model)
 
-            max_eval_instances = max_eval_instances or self.DEFAULT_MAX_EVAL_INSTANCES
-            run_bash_command(
-                [
-                    "lm_eval",
-                    "--model",
-                    "vllm",
-                    "--tasks",
-                    ",".join(evals),
-                    "--limit",
-                    str(max_eval_instances),
-                    "--model_args",
-                    f"pretrained={model_name_or_path}",
-                    "--batch_size",
-                    "auto",
-                    "--output_path",
-                    self.RESULTS_PATH,
-                ]
-            )
+            # Construct the command to run lm-eval
+            command: list[str] = [
+                "lm_eval",
+                "--model",
+                "vllm",
+                "--tasks",
+                ",".join(evals),
+                "--model_args",
+                f"pretrained={model_name_or_path}",
+                "--batch_size",
+                "auto",
+                "--output_path",
+                self.RESULTS_PATH,
+            ]
+            if max_eval_instances is not None:
+                # According lm-eval-harness, --limit should only be used for testing purposes
+                command.extend(["--limit", str(max_eval_instances)])
+            run_bash_command(command)
 
             # Upload the results to GCS
             if is_remote_path(output_path):
