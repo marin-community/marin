@@ -38,7 +38,6 @@ dependencies = [
     "regex",
     "requests",
     "warcio",
-    "jax==0.4.31",
     "levanter>=1.2.dev1013",
     "lm-eval",
     "resiliparse",
