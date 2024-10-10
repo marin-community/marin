@@ -65,6 +65,9 @@ class FasttextClassifier(BaseClassifier):
             lock_file = f"/tmp/{model_descriptor}.lock"
             success_file = f"/tmp/{model_descriptor}.success"
 
+            if os.path.exists(success_file) and not os.path.exists(local_filepath):
+                os.unlink(success_file)
+
             with FileLock(lock_file):
                 if not os.path.exists(success_file):
                     fs.makedirs(f"/tmp/{model_descriptor}")
@@ -74,6 +77,8 @@ class FasttextClassifier(BaseClassifier):
 
                     with open(success_file, "w") as f:
                         f.write("success")
+
+                    atexit.register(lambda: os.unlink(success_file))
                 else:
                     print(f"Model already downloaded to {local_filepath}")
 

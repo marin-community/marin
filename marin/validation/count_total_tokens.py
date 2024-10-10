@@ -27,20 +27,20 @@ class TokenCounter:
 
 
 def count_tokens_in_file(filename: str) -> int:
-    import tiktoken
+    from transformers import AutoTokenizer
 
-    enc = tiktoken.encoding_for_model("gpt-4o")
+    tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.1-8B-Instruct")
 
     total_tokens = 0
     with fsspec.open(filename, "rt", compression="gzip") as f:
         for line in f:
             data = json.loads(line)
             if "text" in data:
-                total_tokens += len(enc.encode(data["text"]))
+                total_tokens += len(tokenizer.encode(data["text"]))
     return total_tokens
 
 
-@ray.remote(runtime_env={"pip": ["tiktoken"]})
+@ray.remote
 def process_file(input_filename: str, output_filename: str, token_counter: ray.actor.ActorHandle):
     file_tokens = count_tokens_in_file(input_filename)
     token_counter.add.remote(file_tokens)
