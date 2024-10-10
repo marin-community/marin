@@ -263,7 +263,7 @@ def standardize_options(options):
 
 
 @draccus.wrap()
-def main(cfg: DatasetConversionConfig):
+def create_json(cfg: DatasetConversionConfig) -> None:
 
     # Load config parameters
     datasets = load_datasets(cfg)
@@ -337,4 +337,4 @@ def main(cfg: DatasetConversionConfig):
 
 
 if __name__ == "__main__":
-    main()
+    create_json()
