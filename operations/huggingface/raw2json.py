@@ -328,8 +328,8 @@ def create_json(cfg: DatasetConversionConfig) -> None:
                     else:
                         question_input = question_text + "\n\n"
                         answer_output = answer_text
-                    dolma_json["input"] = question_input
-                    dolma_json["output"] = answer_output
+                    dolma_json["prompt"] = question_input
+                    dolma_json["response"] = answer_output
                 dolma_file.write(json.dumps(dolma_json) + "\n")
 
 
