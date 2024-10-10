@@ -2,6 +2,8 @@ import logging
 import os
 from dataclasses import dataclass, field
 
+import draccus
+
 from marin.execution.executor import (
     ExecutorStep,
     executor_main,
@@ -20,24 +22,22 @@ USER = "chris"
 
 @dataclass
 class ExperimentConfig:
-    experiment_name: str
-    quality_classifier_model_path: str
-
-    # Fixed across experiments
+    experiment_name: str = "eli5-100k-oh-100k-rw-200k"
     input_data_path: list[str] = field(
         default_factory=lambda: [
             "gs://marin-data/processed/fineweb/fw-v1.0/text_fw/CC-MAIN-2020-10/",
-            # "gs://marin-data/processed/fineweb/fw-v1.0/text_fw/CC-MAIN-2020-16/",
-            # "gs://marin-data/processed/fineweb/fw-v1.0/text_fw/CC-MAIN-2020-24/",
-            # "gs://marin-data/processed/fineweb/fw-v1.0/text_fw/CC-MAIN-2020-29/",
+            "gs://marin-data/processed/fineweb/fw-v1.0/text_fw/CC-MAIN-2020-16/",
+            "gs://marin-data/processed/fineweb/fw-v1.0/text_fw/CC-MAIN-2020-24/",
+            "gs://marin-data/processed/fineweb/fw-v1.0/text_fw/CC-MAIN-2020-29/",
         ]
     )
     inference_threshold: float = 0.8
+    quality_classifier_model_path: str = (
+        "gs://marin-us-central2/classifiers/dclm_eli5_100k_oh_100k_rw_200k-4a11ec/model.bin"
+    )
 
 
 def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
-    assert config.experiment_name is not None and config.quality_classifier_model_path is not None
-
     steps = []
     for input_data_path in config.input_data_path:
         # Get the basename of the input directory
@@ -59,11 +59,6 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
             fn=consolidate,
             config=ConsolidateConfig(
                 input_path=input_data_path,
-                # Can't use the versioned output path here because version
-                #  string also takes into account the dependencies
-                # This means that the hash at the end of the path will be different
-                # based on the attribute_path. However,
-                # we ultimately want the output path to be under the same directory for each fineweb dump.
                 output_path=this_output_path(input_basename),
                 filters=[
                     FilterConfig(
@@ -75,7 +70,6 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
                     ),
                 ],
             ),
-            override_output_path=f"gs://marin-us-central2/documents/{config.experiment_name}-{USER}/",
         )
 
         steps.append(inference_step)
@@ -84,26 +78,10 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
     return steps
 
 
-def create_experiment_configs() -> list[ExperimentConfig]:
-    marin_eli5_100k_oh_100k_rw_200k_config = ExperimentConfig(
-        experiment_name="eli5-100k-oh-100k-rw-200k",
-        quality_classifier_model_path="gs://marin-us-central2/classifiers/dclm_eli5_100k_oh_100k_rw_200k-4a11ec/model.bin",
-    )
-
-    original_dclm_quality_classifier_config = ExperimentConfig(
-        experiment_name="original-dclm-quality-classifier",
-        quality_classifier_model_path="mlfoundations/fasttext-oh-eli5",
-    )
-
-    return [marin_eli5_100k_oh_100k_rw_200k_config, original_dclm_quality_classifier_config]
-
-
-def main():
-    global_dag = []
-    for experiment_config in create_experiment_configs():
-        steps = create_steps(experiment_config)
-        global_dag.extend(steps)
-    executor_main(steps=global_dag)
+@draccus.wrap()
+def main(config: ExperimentConfig):
+    steps = create_steps(config)
+    executor_main(steps=steps)
 
 
 if __name__ == "__main__":
