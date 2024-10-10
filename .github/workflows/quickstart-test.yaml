@@ -39,17 +39,13 @@ jobs:
 
       - name: Install vLLM CPU dependencies
         run: |
+          pip install git+https://github.com/stanford-crfm/helm.git@local_vllm
           pip install -v -r requirements-cpu.txt --extra-index-url https://download.pytorch.org/whl/cpu
 
       - name: Build and install vLLM CPU backend
         run: |
           VLLM_TARGET_DEVICE=cpu python setup.py install
-
-      - name: Install additional dependencies
-        run: |
-          pip install . --extra-index-url https://download.pytorch.org/whl/cpu
-          pip install git+https://github.com/stanford-crfm/helm.git@local_vllm
-
+         
       - name: Start Ray cluster locally
         run: |
           ray start --head
