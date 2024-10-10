@@ -25,7 +25,7 @@ jobs:
           pip install .[test] "jax[cpu]==${{ matrix.jax-version }}" "jaxlib==${{ matrix.jax-version }}"
           cd ../
           pip install . --extra-index-url https://download.pytorch.org/whl/cpu
-          pip install vllm crfm-helm
+          pip install vllm git+https://github.com/stanford-crfm/helm.git@local_vllm
   
       - name: Start Ray cluster locally
         run: |
