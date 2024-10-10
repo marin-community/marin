@@ -21,11 +21,10 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -U jax==0.4.31
-          git clone https://github.com/stanford-crfm/levanter.git && cd levanter 
+          git clone https://github.com/stanford-crfm/levanter.git && cd levanter
           pip install .[test] "jax[cpu]==${{ matrix.jax-version }}" "jaxlib==${{ matrix.jax-version }}"
           cd ../
           pip install . --extra-index-url https://download.pytorch.org/whl/cpu
-      
 
       - name: Start Ray cluster locally
         run: |

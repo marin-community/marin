@@ -15,7 +15,7 @@ jobs:
         jax-version: [ "0.4.26" ]
 
     steps:
-      - name: Checkout code 
+      - name: Checkout code
         uses: actions/checkout@v3
 
       - name: Set up Conda
@@ -38,7 +38,7 @@ jobs:
           npm install -g pandiff
           pip install -e ".[dev]" "jax[cpu]==${{ matrix.jax-version }}" "jaxlib==${{ matrix.jax-version }}"
           pip install ray[default] google-api-python-client
-          
+
       - name: Start Ray cluster locally
         shell: bash -l {0}
         run: |
