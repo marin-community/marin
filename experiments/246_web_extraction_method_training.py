@@ -3,7 +3,7 @@ import os
 from dataclasses import dataclass
 
 import draccus
-from levanter.models.gpt2 import Gpt2Config
+from levanter.models.llama import LlamaConfig
 from levanter.trainer import TrainerConfig
 
 from marin.evaluation.evaluation_config import EvaluationConfig
@@ -20,13 +20,21 @@ from marin.processing.tokenize import TokenizeConfig, lm_training_config, tokeni
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("ray")
 
 USER = "herumb"
 
 
 @dataclass
-class QuickstartExecutorConfig:
+class QuickstartExecutorConfig(ExecutorMainConfig):
+    """
+    Configuration for the quickstart executor
+
+    Attributes:
+    - extracted_data: str: The path to the data to train the model on based on the extraction method
+    - extraction_method_name: str: The name of the extraction method
+    """
+
     extracted_data: str
     extraction_method_name: str
 
@@ -42,7 +50,7 @@ def create_steps(config: QuickstartExecutorConfig) -> list[ExecutorStep]:
             train_paths=config.extracted_data,
             validation_paths=[],
             cache_path=this_output_path(),
-            tokenizer=versioned("gpt2"),
+            tokenizer=versioned("llama2"),
         ),
     )
 
@@ -55,21 +63,23 @@ def create_steps(config: QuickstartExecutorConfig) -> list[ExecutorStep]:
         config=TrainLmOnPodConfig(
             output_path=this_output_path(),
             data=lm_training_config(tokenize_step),
-            env={"WANDB_API_KEY": None},
+            env={"WANDB_API_KEY": None},  # Add your wandb key here
             tpu_type=None,
             hf_save_steps=1,
-            model=Gpt2Config(
-                num_layers=2,
-                num_heads=2,
-                seq_len=64,
-                hidden_dim=32,
+            model=LlamaConfig(
+                reference_checkpoint="TRI-ML/DCLM-1B",
+                seq_len=2048,
+                hidden_dim=2048,
+                intermediate_dim=2048,
+                num_layers=24,
+                num_heads=16,
             ),
             trainer=TrainerConfig(train_batch_size=1, num_train_steps=2, max_eval_batches=1, require_accelerator=False),
         ),
     )
 
     evaluate_step = ExecutorStep(
-        name=f"evaluation/hello_world_fw-{USER}",
+        name=f"evaluation/fw-small-{config.extraction_method_name}-{USER}",
         fn=evaluate,
         config=EvaluationConfig(
             evaluator="helm",
@@ -89,19 +99,8 @@ def create_steps(config: QuickstartExecutorConfig) -> list[ExecutorStep]:
 
 @draccus.wrap()
 def main(config: QuickstartExecutorConfig):
-    try:
-        steps = create_steps(config)
-        bucket_prefix = "/tmp"
-        config_executor = ExecutorMainConfig(
-            prefix=bucket_prefix, executor_info_base_path=os.path.join(bucket_prefix, "experiments")
-        )
-        executor_main(config_executor, steps=steps)
-        logger.info(
-            f"Execution completed successfully. All outputs are in {bucket_prefix}/{config.prefix}/{config.commit_hash}"
-        )
-    except Exception as e:
-        logger.error(f"Error in main execution: {e}")
-        raise e
+    steps = create_steps(config)
+    executor_main(config, steps=steps)
 
 
 if __name__ == "__main__":
