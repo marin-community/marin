@@ -119,7 +119,7 @@ def load_datasets(config: DatasetConversionConfig) -> list[DatasetWithMetaData]:
         parsed_url = urlparse(config.input_path)
         bucket = parsed_url.netloc
         gcp_path = parsed_url.path.lstrip("/")
-        dir_name = os.basename(gcp_path)
+        dir_name = os.path.basename(gcp_path)
         # download the repo from GCP path into local directory which is basename of provided path (e.g. mmlu)
         download_directory_from_gcs(bucket, gcp_path, dir_name)
         input_path = dir_name
@@ -136,7 +136,7 @@ def load_datasets(config: DatasetConversionConfig) -> list[DatasetWithMetaData]:
     subsets = []
     excludes = []
     for subset in config.subsets:
-        if subset == "all-subsets":
+        if subset == "*":
             # "all-subsets" - is special for you want all subsets
             subsets += get_dataset_config_names(config.input_path)
         elif subset.startswith("exclude:"):
