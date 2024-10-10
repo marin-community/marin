@@ -37,14 +37,24 @@ jobs:
           pip install .[test] "jax[cpu]==${{ matrix.jax-version }}" "jaxlib==${{ matrix.jax-version }}"
           cd ../
 
-      - name: Install vLLM CPU dependencies
+      - name: Clone and build vLLM
         run: |
-          pip install git+https://github.com/stanford-crfm/helm.git@local_vllm
+          git clone https://github.com/vllm-project/vllm.git
+          cd vllm
           pip install -v -r requirements-cpu.txt --extra-index-url https://download.pytorch.org/whl/cpu
-
-      - name: Build and install vLLM CPU backend
-        run: |
           VLLM_TARGET_DEVICE=cpu python setup.py install
+          cd ..
+
+      - name: Clone and install HELM with local_vllm branch
+        run: |
+          git clone -b local_vllm https://github.com/stanford-crfm/helm.git
+          cd helm
+          pip install .
+          cd ..
+
+      - name: Install additional dependencies
+        run: |
+          pip install . --extra-index-url https://download.pytorch.org/whl/cpu
          
       - name: Start Ray cluster locally
         run: |
