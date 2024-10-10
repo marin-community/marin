@@ -330,7 +330,7 @@ def create_json(cfg: DatasetConversionConfig) -> None:
                         answer_output = answer_text
                     dolma_json["prompt"] = question_input
                     dolma_json["response"] = answer_output
-                dolma_file.write(json.dumps(dolma_json) + "\n")
+                print(json.dumps(dolma_json), file=dolma_file)
 
 
 @draccus.wrap()
