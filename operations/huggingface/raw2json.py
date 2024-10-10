@@ -129,8 +129,8 @@ def load_datasets(config: DatasetConversionConfig) -> list[DatasetWithMetaData]:
         # for now other handled input paths such as local paths and HF Hub paths do not require special processing
         input_path = config.input_path
     datasets = []
-    if config.token == "env":
-        # Setting token to 'env' indicates a request to retrieve the token from the $HF_TOKEN environment variable
+    if not config.token and os.environ["HF_TOKEN"]:
+        # if config.token is not set and there is a token in the standard environment variable use it
         token = os.environ["HF_TOKEN"]
     else:
         token = config.token
