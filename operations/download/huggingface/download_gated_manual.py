@@ -29,7 +29,7 @@ from operations.download.huggingface.download import DownloadConfig
 logger = logging.getLogger(__name__)
 
 
-def ensure_gcs_path_exists(gcs_path: str) -> None:
+def ensure_gcs_path_writable(gcs_path: str) -> None:
     gcs_client = storage.Client()
     bucket_name, blob_prefix = gcs_path.replace("gs://", "").split("/", 1)
     bucket = gcs_client.bucket(bucket_name)
@@ -67,7 +67,7 @@ def download_and_upload_to_gcs(cfg: DownloadConfig) -> None:
 
     # Ensure GCS path exists and is writable
     try:
-        ensure_gcs_path_exists(full_gcs_path)
+        ensure_gcs_path_writable(full_gcs_path)
     except ValueError as e:
         logger.error(f"GCS path validation failed: {e!s}")
         return
