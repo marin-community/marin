@@ -147,7 +147,7 @@ def load_datasets(config: DatasetConversionConfig) -> list[DatasetWithMetaData]:
             subsets.append(subset)
     subsets = [subset for subset in subsets if subset not in excludes]
 
-    for subset in config.subsets:
+    for subset in subsets:
         for split in config.splits:
             try:
                 dataset_w_meta = DatasetWithMetaData(
