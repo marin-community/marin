@@ -2,7 +2,7 @@ dataset_name: mmlu
 input_path: cais/mmlu
 hf_path: cais/mmlu
 subsets:
-  - all-subsets
+  - "*"
   - exclude:all
 splits:
   - dev
