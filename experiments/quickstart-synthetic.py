@@ -39,6 +39,7 @@ class QuickstartExecutorConfig:
 
     # path to synthetic test data
     synth_data: str = "./tests/quickstart-data"
+    dry_run: bool = False
 
 
 def create_steps(config: QuickstartExecutorConfig) -> list[ExecutorStep]:
@@ -219,7 +220,9 @@ def main(config: QuickstartExecutorConfig):
         steps = create_steps(config)
         bucket_prefix = "/tmp"
         config_executor = ExecutorMainConfig(
-            prefix=bucket_prefix, executor_info_base_path=os.path.join(bucket_prefix, "experiments")
+            prefix=bucket_prefix,
+            executor_info_base_path=os.path.join(bucket_prefix, "experiments"),
+            dry_run=config.dry_run,
         )
         executor_main(config_executor, steps=steps)
         logger.info(
