@@ -26,7 +26,7 @@ USER = "herumb"
 
 
 @dataclass
-class QuickstartExecutorConfig(ExecutorMainConfig):
+class WebExtractionMethodConfig(ExecutorMainConfig):
     """
     Configuration for the quickstart executor
 
@@ -39,7 +39,7 @@ class QuickstartExecutorConfig(ExecutorMainConfig):
     extraction_method_name: str
 
 
-def create_steps(config: QuickstartExecutorConfig) -> list[ExecutorStep]:
+def create_steps(config: WebExtractionMethodConfig) -> list[ExecutorStep]:
     ############################################################
     # Tokenize
 
@@ -98,7 +98,7 @@ def create_steps(config: QuickstartExecutorConfig) -> list[ExecutorStep]:
 
 
 @draccus.wrap()
-def main(config: QuickstartExecutorConfig):
+def main(config: WebExtractionMethodConfig):
     steps = create_steps(config)
     executor_main(config, steps=steps)
 
