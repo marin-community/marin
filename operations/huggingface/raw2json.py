@@ -150,14 +150,14 @@ def load_datasets(config: DatasetConversionConfig) -> list[DatasetWithMetaData]:
     for subset in subsets:
         for split in config.splits:
             try:
-                dataset_w_meta = DatasetWithMetaData(
+                dataset_w_metadata = DatasetWithMetaData(
                     load_dataset(
                         input_path, subset, split=split, token=token, trust_remote_code=config.trust_remote_code
                     ),
                     subset,
                     split,
                 )
-                datasets.append(dataset_w_meta)
+                datasets.append(dataset_w_metadata)
             except Exception as e:
                 print(f"Failed to load subset '{subset}' and split '{split}': {e}")
 
