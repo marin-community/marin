@@ -27,7 +27,7 @@ class DatasetConversionConfig:
         splits (list[str]): List of splits of dataset to convert
         input_path (str): HF Hub, local, or GCP path where Hugging Face repo is stored
         hf_path (str): HF Hub path (e.g. cais/mmlu) for provenance
-        output_prefix (str): where to store output of dolma processing
+        output_path (str): where to store output of dolma processing
         output_format (str): format of output JSON from {decontaminaton, evaluation}
         prompt_key (str): key in HF data object for the prompt
         answer_text_key (str): key in HF data object for the answer text (e.g. "Paris")
@@ -44,7 +44,7 @@ class DatasetConversionConfig:
     splits: list[str]
     input_path: str
     hf_path: str
-    output_prefix: str
+    output_path: str
     output_format: OutputFormatOptions
     prompt_key: str
     answer_text_key: str = ""
@@ -271,7 +271,7 @@ def main(cfg: DatasetConversionConfig):
     # go through (subset,split) pairs and upload file for that (subset,split) producing output JSON specified in config
     for dataset in datasets:
         output_path = os.path.join(
-            cfg.output_prefix, f"{cfg.dataset_name}-{dataset.subset}-{dataset.split}-{cfg.output_format.value}.jsonl.gz"
+            cfg.output_path, f"{cfg.dataset_name}-{dataset.subset}-{dataset.split}-{cfg.output_format.value}.jsonl.gz"
         )
         with fsspec.open(output_path, "wt", compression="gzip") as dolma_file:
             for idx, example in enumerate(dataset.dataset):
