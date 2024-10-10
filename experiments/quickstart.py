@@ -1,3 +1,6 @@
+# TODO: should delete this file in favor of quickstart-synthetic.py and a
+# defaults.py which has the best practices.
+
 import dataclasses
 
 import draccus

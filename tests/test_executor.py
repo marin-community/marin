@@ -1,4 +1,3 @@
-# TODO: pytest doesn't work with Ray because these functions cannot be found
 import json
 import os
 import re
