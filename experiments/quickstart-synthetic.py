@@ -32,6 +32,8 @@ from scripts.hello_world_fw.process import FineWebConfig, transform
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
+os.environ["CUDA_VISIBLE_DEVICES"] = ""
+
 
 @dataclass
 class QuickstartExecutorConfig:
