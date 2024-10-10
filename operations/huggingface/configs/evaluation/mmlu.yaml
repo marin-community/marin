@@ -3,7 +3,8 @@ input_path: cais/mmlu
 hf_path: cais/mmlu
 subsets:
   - "*"
-  - exclude:all
+exclude_subsets:
+  - all
 splits:
   - dev
   - test
