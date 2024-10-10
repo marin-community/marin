@@ -262,7 +262,6 @@ def standardize_options(options):
         return sorted_values
 
 
-@draccus.wrap()
 def create_json(cfg: DatasetConversionConfig) -> None:
 
     # Load config parameters
@@ -336,5 +335,10 @@ def create_json(cfg: DatasetConversionConfig) -> None:
                 dolma_file.write(json.dumps(dolma_json) + "\n")
 
 
+@draccus.wrap()
+def main(cfg: DatasetConversionConfig) -> None:
+    create_json(cfg)
+
+
 if __name__ == "__main__":
-    create_json()
+    main()
