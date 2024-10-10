@@ -138,7 +138,7 @@ def load_datasets(config: DatasetConversionConfig) -> list[DatasetWithMetaData]:
     for subset in config.subsets:
         if subset == "*":
             # "all-subsets" - is special for you want all subsets
-            subsets += get_dataset_config_names(config.input_path)
+            subsets += get_dataset_config_names(input_path)
         elif subset.startswith("exclude:"):
             # you might want to exclude something e.g. in mmlu exclude:all
             excludes.append(subset.split("exclude:")[1])
