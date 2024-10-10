@@ -34,7 +34,8 @@ class DatasetConversionConfig:
         answer_idx_key (str): key in HF data object for the idx of the correct answer (e.g. 0)
         answer_label_key (str): key in HF data object for the label of the correct answer (e.g. "A")
         options_key (str): key in HF data object for the options (e.g. ["Rome", "London", "Berlin", "Paris"])
-        output_labels (str): list of labels for an example (e.g. ["A", "B", "C", "D"])
+        output_labels (list[str]): list of labels for an example (e.g. ["A", "B", "C", "D"])
+        exclude_subsets (list[str]): list of subsets to exclude
         token (str): HF Hub token when authentication required, "env" means look at $HF_TOKEN
         trust_remote_code (str): allow load_dataset to use remote code to build dataset
     """
@@ -52,6 +53,7 @@ class DatasetConversionConfig:
     answer_label_key: str = ""
     options_key: str = ""
     output_labels: list[str] = field(default_factory=list)
+    exclude_subsets: list[str] = field(default_factory=list)
     token: str | bool = False
     trust_remote_code: bool = False
 
@@ -134,18 +136,14 @@ def load_datasets(config: DatasetConversionConfig) -> list[DatasetWithMetaData]:
         token = config.token
     # get subsets
     subsets = []
-    excludes = []
     for subset in config.subsets:
         if subset == "*":
             # "all-subsets" - is special for you want all subsets
             subsets += get_dataset_config_names(input_path)
-        elif subset.startswith("exclude:"):
-            # you might want to exclude something e.g. in mmlu exclude:all
-            excludes.append(subset.split("exclude:")[1])
         else:
             # add a typical subset in the iteration
             subsets.append(subset)
-    subsets = [subset for subset in subsets if subset not in excludes]
+    subsets = [subset for subset in subsets if subset not in config.exclude_subsets]
 
     for subset in subsets:
         for split in config.splits:
