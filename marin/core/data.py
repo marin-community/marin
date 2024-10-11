@@ -10,7 +10,7 @@ class MarinDocumentMetadata:
         subset (str): subset of dataset
         split (str): split of dataset
         provenance (str): URL of source of data, usually HF
-        answer_text (str): text of answer
+        answer (str): text of answer
         answer_idx (str): index into list of answer options corresponding to correct answer
         answer_label (str): label of correct answer (e.g. A)
         options (list[str]): list of potential options for multiple choice question
@@ -19,7 +19,7 @@ class MarinDocumentMetadata:
     subset: str | None = None
     split: str | None = None
     provenance: str | None = None
-    answer_text: str | None = None
+    answer: str | None = None
     answer_idx: int | None = None
     answer_label: str | None = None
     options: list[str] | None = None
