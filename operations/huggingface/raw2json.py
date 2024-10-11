@@ -9,6 +9,8 @@ import draccus
 import fsspec
 from datasets import Dataset, get_dataset_config_names, load_dataset
 from google.cloud import storage
+from marin.core.data import MarinDocumentMetadata, MarinDocumentData
+from marin.utilities.data_utils import dataclass_to_dict
 
 
 class OutputFormatOptions(str, Enum):
@@ -272,15 +274,15 @@ def create_json(cfg: DatasetConversionConfig) -> None:
         )
         with fsspec.open(output_path, "wt", compression="gzip") as dolma_file:
             for idx, example in enumerate(dataset.dataset):
-                dolma_json = {
-                    "id": f"{cfg.dataset_name}-{dataset.subset}-{dataset.split}-{cfg.output_format.value}-{idx}",
-                    "source": cfg.dataset_name,
-                    "metadata": {
-                        "subset": dataset.subset,
-                        "split": dataset.split,
-                        "provenance": f"https://huggingface.co/datasets/{cfg.hf_path}",
-                    },
-                }
+                document = MarinDocumentData(
+                    id=f"{cfg.dataset_name}-{dataset.subset}-{dataset.split}-{cfg.output_format.value}-{idx}",
+                    source=cfg.dataset_name,
+                    metadata=MarinDocumentMetadata(
+                        subset=dataset.subset,
+                        split=dataset.split,
+                        provenance=f"https://huggingface.co/datasets/{cfg.hf_path}",
+                    ),
+                )
                 # get the question text
                 question_text = get_nested_item(example, cfg.prompt_key)
                 # get the list of options in standardized form (list of options
@@ -301,21 +303,21 @@ def create_json(cfg: DatasetConversionConfig) -> None:
                         raise ValueError("No answer text was found. Please review config.")
                 if choices:
                     # list of potential answers
-                    dolma_json["metadata"]["options"] = choices
+                    document.metadata.options = choices
                 if answer_idx:
                     # index into list of potential answers of correct answer
-                    dolma_json["metadata"]["answer_idx"] = answer_idx
+                    document.metadata.answer_idx = answer_idx
                 if answer_text:
                     # answer text of correct answer
-                    dolma_json["metadata"]["answer"] = answer_text
+                    document.metadata.answer = answer_text
                 if answer_label:
                     # label of correct answer (e.g. "A")
-                    dolma_json["metadata"]["answer_label"] = answer_label
+                    document.metadata.answer_label = answer_label
                 if cfg.output_labels:
                     # list of potential labels (e.g. ["A", "B", "C", 'D"])
-                    dolma_json["metadata"]["output_labels"] = cfg.output_labels
+                    document.metadata.output_labels = cfg.output_labels
                 if cfg.output_format.value == "decontamination":
-                    dolma_json["text"] = question_text
+                    document.metadata.text = question_text
                 elif cfg.output_format.value == "evaluation":
                     if cfg.output_labels and choices:
                         question_input = (
@@ -328,9 +330,9 @@ def create_json(cfg: DatasetConversionConfig) -> None:
                     else:
                         question_input = question_text + "\n\n"
                         answer_output = answer_text
-                    dolma_json["prompt"] = question_input
-                    dolma_json["response"] = answer_output
-                print(json.dumps(dolma_json), file=dolma_file)
+                    document.prompt = question_input
+                    document.response = answer_output
+                print(json.dumps(dataclass_to_dict(document)), file=dolma_file)
 
 
 @draccus.wrap()
