@@ -48,6 +48,20 @@ slimpajama_raw = output_path_of(
     download_slimpajama, "2d0accd/huggingface.co/datasets/cerebras/SlimPajama-627B/resolve/2d0accd"
 )
 
+download_slimpajama_6b = ExecutorStep(
+    name="raw/SlimPajama-6B",
+    fn=download,
+    config=DownloadConfig(
+        hf_dataset_id=versioned("DKYoon/SlimPajama-6B"),
+        revision=versioned("b5f90f4"),
+        gcs_output_path=this_output_path(),
+        wait_for_completion=True,
+    ),
+)
+slimpajama_6b_raw = output_path_of(
+    download_slimpajama_6b, "2d0accd/huggingface.co/datasets/DKYoon/SlimPajama-6B/resolve/b5f90f4"
+)
+
 download_dolma = ExecutorStep(
     name="raw/dolma",
     fn=download,
@@ -75,6 +89,9 @@ download_dclm_baseline = ExecutorStep(
 ############################################################
 # Train models
 
+slimpajama_6b_tokenized = default_tokenize(name="SlimPajama-6B", dataset=slimpajama_6b_raw, tokenizer=llama3_tokenizer)
+slimpajama_6b_model = default_train(name="SlimPajama-6B-1.4b", tokenized=slimpajama_6b_tokenized, model=llama_1_4b)
+
 slimpajama_tokenized = default_tokenize(name="SlimPajama-627B", dataset=slimpajama_raw, tokenizer=llama3_tokenizer)
 slimpajama_model = default_train(name="SlimPajama-627B-1.4b", tokenized=slimpajama_tokenized, model=llama_1_4b)
 
@@ -88,6 +105,6 @@ if __name__ == "__main__":
         steps=[
             #download_slimpajama,
             #download_fineweb_edu,
-            slimpajama_tokenized,
+            slimpajama_6b_tokenized,
         ]
     )
