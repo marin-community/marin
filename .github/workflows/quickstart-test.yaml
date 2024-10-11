@@ -17,8 +17,15 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+
       - name: Install dependencies
         run: |
+          python -m venv venv
+          source venv/bin/activate
           git clone https://github.com/stanford-crfm/levanter.git && cd levanter
           pip install .[test]
           cd ../
