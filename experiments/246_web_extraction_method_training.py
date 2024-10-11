@@ -55,7 +55,6 @@ def create_steps(config: WebExtractionMethodConfig) -> list[ExecutorStep]:
         ),
     )
 
-
     # ############################################################
     # # Train
 
@@ -91,11 +90,11 @@ def create_steps(config: WebExtractionMethodConfig) -> list[ExecutorStep]:
         ),
     )
 
-    # return [
-    #     tokenize_step,
-    #     train_step,
-    #     evaluate_step,
-    # ]
+    return [
+        tokenize_step,
+        train_step,
+        evaluate_step,
+    ]
 
 
 if __name__ == "__main__":
