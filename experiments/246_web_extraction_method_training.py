@@ -25,7 +25,7 @@ logger = logging.getLogger("ray")
 USER = "herumb"
 
 
-@dataclass
+@dataclass(frozen=True)
 class WebExtractionMethodConfig(ExecutorMainConfig):
     """
     Configuration for the quickstart executor
@@ -35,16 +35,17 @@ class WebExtractionMethodConfig(ExecutorMainConfig):
     - extraction_method_name: str: The name of the extraction method
     """
 
-    extracted_data: str
-    extraction_method_name: str
+    extracted_data: str = ""
+    extraction_method_name: str = ""
 
 
+@draccus.wrap()
 def create_steps(config: WebExtractionMethodConfig) -> list[ExecutorStep]:
     ############################################################
     # Tokenize
 
     tokenize_step = ExecutorStep(
-        name=os.path.join(config.prefix, config.commit_hash, "tokenized"),
+        name=os.path.join(config.prefix, config.extraction_method_name, "tokenized"),
         fn=tokenize,
         config=TokenizeConfig(
             train_paths=config.extracted_data,
@@ -54,8 +55,9 @@ def create_steps(config: WebExtractionMethodConfig) -> list[ExecutorStep]:
         ),
     )
 
-    ############################################################
-    # Train
+
+    # ############################################################
+    # # Train
 
     train_step = ExecutorStep(
         name=os.path.join(config.prefix, config.commit_hash, "train"),
@@ -64,10 +66,9 @@ def create_steps(config: WebExtractionMethodConfig) -> list[ExecutorStep]:
             output_path=this_output_path(),
             data=lm_training_config(tokenize_step),
             env={"WANDB_API_KEY": None},  # Add your wandb key here
-            tpu_type=None,
+            tpu_type="v4-8",
             hf_save_steps=1,
             model=LlamaConfig(
-                reference_checkpoint="TRI-ML/DCLM-1B",
                 seq_len=2048,
                 hidden_dim=2048,
                 intermediate_dim=2048,
@@ -90,18 +91,13 @@ def create_steps(config: WebExtractionMethodConfig) -> list[ExecutorStep]:
         ),
     )
 
-    return [
-        tokenize_step,
-        train_step,
-        evaluate_step,
-    ]
-
-
-@draccus.wrap()
-def main(config: WebExtractionMethodConfig):
-    steps = create_steps(config)
-    executor_main(config, steps=steps)
+    # return [
+    #     tokenize_step,
+    #     train_step,
+    #     evaluate_step,
+    # ]
 
 
 if __name__ == "__main__":
-    main()
+    steps = create_steps()
+    executor_main(steps=steps)
