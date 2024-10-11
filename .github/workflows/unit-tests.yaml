@@ -12,7 +12,6 @@ jobs:
       matrix:
         python-version: ["3.12"]
         node-version: ["20.10.0"]
-        jax-version: [ "0.4.26" ]
 
     steps:
       - name: Checkout code
@@ -36,7 +35,7 @@ jobs:
         run: |
           conda install -c conda-forge pandoc
           npm install -g pandiff
-          pip install -e ".[dev]" "jax[cpu]==${{ matrix.jax-version }}" "jaxlib==${{ matrix.jax-version }}"
+          pip install -e ".[dev]"
           pip install ray[default] google-api-python-client
 
       - name: Start Ray cluster locally
