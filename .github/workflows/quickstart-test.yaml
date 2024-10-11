@@ -9,9 +9,6 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    strategy:
-      matrix:
-        jax-version: [ "0.4.26" ]
 
     steps:
       - name: Checkout code
@@ -34,7 +31,7 @@ jobs:
           pip install wheel packaging ninja "setuptools>=49.4.0" numpy setuptools_scm
           pip install -U jax==0.4.31
           git clone https://github.com/stanford-crfm/levanter.git && cd levanter
-          pip install .[test] "jax[cpu]==${{ matrix.jax-version }}" "jaxlib==${{ matrix.jax-version }}"
+          pip install .[test]
           cd ../
 
       - name: Clone and build vLLM
