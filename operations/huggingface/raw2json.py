@@ -273,6 +273,8 @@ def format_prompt_response(
         question_text (str): The text of the question
         options (list[str]): The list of options for the multiple choice question
         labels (list[str]): The list of labels
+        answer_idx (str): The index of the correct answer
+        answer_text (str): The text of the correct answer
 
     Returns:
         str, str: The formatted prompt and the formatted response
