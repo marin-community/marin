@@ -11,7 +11,7 @@ interacting with it to do lightweight monitoring and reconfiguration. The archit
   [`n2-standard-8` GCP VM](https://cloud.google.com/compute/docs/general-purpose-machines) with 8 CPUs and 32 GB of
   RAM, and a 200 GB disk.
 + **Worker Nodes**: An autoscaling number of TPU v4-8 VMs; a minimum of 4 VMs will be kept alive at all times, with a
-  maximum of 64 VMs alive at once (we can increase this number).
+  maximum of 1024 VMs alive at once (we can increase this number).
 
 **Useful Documentation** -- Time-permitting, consult the official Ray documentation to learn more about how Ray works,
 with helpful examples for working with Clusters and Jobs:
