@@ -30,6 +30,8 @@ llama_1_4b = LlamaConfig(
     num_kv_heads=8,
 )
 
+llama3_tokenizer = "meta-llama/Meta-Llama-3.1-8B"
+
 ############################################################
 # Tokenization
 

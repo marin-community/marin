@@ -3,7 +3,7 @@ Train 1.4B models on standard datasets.
 https://github.com/stanford-crfm/marin/issues/72
 """
 
-from experiments.defaults import llama_1_4b, default_tokenize, default_train
+from experiments.defaults import llama_1_4b, default_tokenize, default_train, llama3_tokenizer
 from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path, versioned
 from operations.download.huggingface.download import DownloadConfig, download
 
@@ -75,10 +75,10 @@ download_dclm_baseline = ExecutorStep(
 ############################################################
 # Train models
 
-slimpajama_tokenized = default_tokenize(name="SlimPajama-627B", dataset=slimpajama_raw, tokenizer="llama2")
+slimpajama_tokenized = default_tokenize(name="SlimPajama-627B", dataset=slimpajama_raw, tokenizer=llama3_tokenizer)
 slimpajama_model = default_train(name="SlimPajama-627B-1.4b", tokenized=slimpajama_tokenized, model=llama_1_4b)
 
-fineweb_edu_tokenized = default_tokenize(name="fineweb-edu", dataset=fineweb_edu_raw, tokenizer="llama2")
+fineweb_edu_tokenized = default_tokenize(name="fineweb-edu", dataset=fineweb_edu_raw, tokenizer=llama3_tokenizer)
 fineweb_edu_model = default_train(name="fineweb-edu-1.4b", tokenized=fineweb_edu_tokenized, model=llama_1_4b)
 
 ############################################################
@@ -86,7 +86,8 @@ fineweb_edu_model = default_train(name="fineweb-edu-1.4b", tokenized=fineweb_edu
 if __name__ == "__main__":
     executor_main(
         steps=[
-            download_fineweb_edu,
-            #slimpajama_model,
+            #download_slimpajama,
+            #download_fineweb_edu,
+            slimpajama_tokenized,
         ]
     )
