@@ -326,6 +326,8 @@ def create_json(cfg: DatasetConversionConfig) -> None:
                         answer_text = choices[answer_idx]
                     else:
                         raise ValueError("No answer text was found. Please review config.")
+                if not answer_label and cfg.output_labels and answer_idx != -1:
+                    answer_label = cfg.output_labels[answer_idx]
                 if choices:
                     # list of potential answers
                     document.metadata.options = choices
@@ -340,7 +342,7 @@ def create_json(cfg: DatasetConversionConfig) -> None:
                     document.metadata.answer_label = answer_label
                 if cfg.output_labels:
                     # list of potential labels (e.g. ["A", "B", "C", 'D"])
-                    document.metadata.output_labels = cfg.output_labels
+                    document.metadata.answer_labels = cfg.output_labels
                 if cfg.output_format.value == "decontamination":
                     # decontamination output format is dolma with text as the key
                     document.text = question_text
