@@ -299,6 +299,7 @@ def create_json(cfg: DatasetConversionConfig) -> None:
         )
         with fsspec.open(output_path, "wt", compression="gzip") as dolma_file:
             for idx, example in enumerate(dataset.dataset):
+                # create base document
                 document = MarinDocumentData(
                     id=f"{cfg.dataset_name}-{dataset.subset}-{dataset.split}-{cfg.output_format.value}-{idx}",
                     source=cfg.dataset_name,
@@ -326,6 +327,7 @@ def create_json(cfg: DatasetConversionConfig) -> None:
                         answer_text = choices[answer_idx]
                     else:
                         raise ValueError("No answer text was found. Please review config.")
+                # set answer label
                 if not answer_label and cfg.output_labels and answer_idx != -1:
                     answer_label = cfg.output_labels[answer_idx]
                 if choices:
@@ -348,7 +350,6 @@ def create_json(cfg: DatasetConversionConfig) -> None:
                     document.text = question_text
                 elif cfg.output_format.value == "evaluation":
                     # evaluation format wants prompt, response
-
                     if cfg.output_labels and choices:
                         prompt, response = format_prompt_response(
                             question_text, choices, cfg.output_labels, answer_idx, answer_text
