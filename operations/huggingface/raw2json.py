@@ -317,7 +317,7 @@ def create_json(cfg: DatasetConversionConfig) -> None:
                     # list of potential labels (e.g. ["A", "B", "C", 'D"])
                     document.metadata.output_labels = cfg.output_labels
                 if cfg.output_format.value == "decontamination":
-                    document.metadata.text = question_text
+                    document.text = question_text
                 elif cfg.output_format.value == "evaluation":
                     if cfg.output_labels and choices:
                         question_input = (
