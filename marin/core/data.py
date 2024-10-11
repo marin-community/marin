@@ -16,6 +16,7 @@ class MarinDocumentMetadata:
         options (list[str]): list of potential options for multiple choice question
         answer_labels (list[str]): list of labels for options (e.g. A,B,C,D)
     """
+
     subset: str | None = None
     split: str | None = None
     provenance: str | None = None
@@ -39,6 +40,7 @@ class MarinDocumentData:
         prompt (str): If document is prompt/response, the prompt component
         response (str): If document is prompt/response, the expected response component
     """
+
     id: str
     source: str
     metadata: MarinDocumentMetadata
