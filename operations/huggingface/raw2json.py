@@ -9,7 +9,8 @@ import draccus
 import fsspec
 from datasets import Dataset, get_dataset_config_names, load_dataset
 from google.cloud import storage
-from marin.core.data import MarinDocumentMetadata, MarinDocumentData
+
+from marin.core.data import MarinDocumentData, MarinDocumentMetadata
 from marin.utilities.data_utils import dataclass_to_dict
 
 
@@ -262,6 +263,30 @@ def standardize_options(options):
         return sorted_values
 
 
+def format_prompt_response(
+    question_text: str, options: list[str], labels: list[str], answer_idx: str, answer_text: str
+) -> tuple[str, str]:
+    """
+    Produce a fully formatted input string from a question, set of options, and labels
+
+    Args:
+        question_text (str): The text of the question
+        options (list[str]): The list of options for the multiple choice question
+        labels (list[str]): The list of labels
+
+    Returns:
+        str, str: The formatted prompt and the formatted response
+    """
+    prompt = (
+        question_text.strip()
+        + "\n"
+        + "\n".join([f"{labels[i]}. {choice}" for i, choice in enumerate(options)])
+        + "\nAnswer:"
+    )
+    response = f"{labels[answer_idx]}. {answer_text}"
+    return prompt, response
+
+
 def create_json(cfg: DatasetConversionConfig) -> None:
 
     # Load config parameters
@@ -317,21 +342,21 @@ def create_json(cfg: DatasetConversionConfig) -> None:
                     # list of potential labels (e.g. ["A", "B", "C", 'D"])
                     document.metadata.output_labels = cfg.output_labels
                 if cfg.output_format.value == "decontamination":
+                    # decontamination output format is dolma with text as the key
                     document.text = question_text
                 elif cfg.output_format.value == "evaluation":
+                    # evaluation format wants prompt, response
+
                     if cfg.output_labels and choices:
-                        question_input = (
-                            question_text.strip()
-                            + "\n"
-                            + "\n".join([f"{cfg.output_labels[i]}. {choice}" for i, choice in enumerate(choices)])
-                            + "\nAnswer:"
+                        prompt, response = format_prompt_response(
+                            question_text, choices, cfg.output_labels, answer_idx, answer_text
                         )
-                        answer_output = f"{cfg.output_labels[answer_idx]}. {answer_text}"
                     else:
-                        question_input = question_text + "\n\n"
-                        answer_output = answer_text
-                    document.prompt = question_input
-                    document.response = answer_output
+                        prompt = question_text + "\n\n"
+                        response = answer_text
+                    document.prompt = prompt
+                    document.response = response
+                # write json to output file
                 print(json.dumps(dataclass_to_dict(document)), file=dolma_file)
 
 
