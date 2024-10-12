@@ -11,7 +11,7 @@ from datasets import Dataset, get_dataset_config_names, load_dataset
 from google.cloud import storage
 
 from marin.core.data import QAExample, QAExampleMetadata
-from marin.utilities.data_utils import dataclass_to_dict
+from marin.utilities.data_utils import dataclass_to_clean_dict
 
 
 class OutputFormatOptions(str, Enum):
@@ -361,7 +361,7 @@ def convert_dataset(cfg: DatasetConversionConfig) -> None:
                     document.prompt = prompt
                     document.response = response
                 # write json to output file
-                print(json.dumps(dataclass_to_dict(document)), file=dolma_file)
+                print(json.dumps(dataclass_to_clean_dict(document)), file=dolma_file)
 
 
 @draccus.wrap()
