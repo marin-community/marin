@@ -31,6 +31,21 @@ jobs:
           sudo apt-get install -y gcc-12 g++-12 libnuma-dev libdnnl-dev
           sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 10 --slave /usr/bin/g++ g++ /usr/bin/g++-12
 
+      - name: Install Python dependencies
+        shell: bash -l {0}
+        run: |
+          conda install -c conda-forge libstdcxx-ng
+          pip install wheel packaging ninja "setuptools>=49.4.0" numpy setuptools_scm
+          pip install -U jax==0.4.31
+          git clone https://github.com/stanford-crfm/levanter.git && cd levanter
+          pip install .[test]
+          cd ../
+
+      - name: Install additional dependencies
+        shell: bash -l {0}
+        run: |
+          pip install . --extra-index-url https://download.pytorch.org/whl/cpu
+
       - name: Start Ray cluster locally
         shell: bash -l {0}
         run: |
