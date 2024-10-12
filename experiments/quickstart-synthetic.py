@@ -244,7 +244,8 @@ def main(config: QuickstartExecutorConfig):
         steps = create_steps(config)
         bucket_prefix = "/tmp"
         config_executor = ExecutorMainConfig(
-            prefix=bucket_prefix, executor_info_base_path=os.path.join(bucket_prefix, "experiments")
+            prefix=bucket_prefix,
+            executor_info_base_path=os.path.join(bucket_prefix, config.prefix, "experiments"),
         )
         executor_main(config_executor, steps=steps)
         logger.info(

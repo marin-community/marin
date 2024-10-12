@@ -455,6 +455,7 @@ class Executor:
         status = get_current_status(statuses)
 
         # Print information about this step
+        logger.info(f"{status_path =}")
         logger.info(f"[{status}] {step.name}: {get_fn_name(step.fn)}")
         logger.info(f"  output_path = {output_path}")
         logger.info(f"  config = {json.dumps(config_version, cls=CustomJsonEncoder)}")
