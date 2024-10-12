@@ -10,7 +10,7 @@ import fsspec
 from datasets import Dataset, get_dataset_config_names, load_dataset
 from google.cloud import storage
 
-from marin.core.data import MarinDocumentData, MarinDocumentMetadata
+from marin.core.data import QAExample, QAExampleMetadata
 from marin.utilities.data_utils import dataclass_to_dict
 
 
@@ -141,7 +141,7 @@ def load_datasets(config: DatasetConversionConfig) -> list[DatasetWithMetaData]:
     subsets = []
     for subset in config.subsets:
         if subset == "*":
-            # "all-subsets" - is special for you want all subsets
+            # "*" - is special for you want all subsets
             subsets += get_dataset_config_names(input_path)
         else:
             # add a typical subset in the iteration
@@ -302,10 +302,10 @@ def create_json(cfg: DatasetConversionConfig) -> None:
         with fsspec.open(output_path, "wt", compression="gzip") as dolma_file:
             for idx, example in enumerate(dataset.dataset):
                 # create base document
-                document = MarinDocumentData(
+                document = QAExample(
                     id=f"{cfg.dataset_name}-{dataset.subset}-{dataset.split}-{cfg.output_format.value}-{idx}",
                     source=cfg.dataset_name,
-                    metadata=MarinDocumentMetadata(
+                    metadata=QAExampleMetadata(
                         subset=dataset.subset,
                         split=dataset.split,
                         provenance=f"https://huggingface.co/datasets/{cfg.hf_path}",
