@@ -105,9 +105,9 @@ def download_directory_from_gcs(bucket_name: str, gcs_directory_path: str, local
 
 def load_datasets(config: DatasetConversionConfig) -> list[DatasetWithMetaData]:
     """
-    Load the dataset from Hugging Face. 
-    This function returns all data for the requested subsets and splits. 
-    A separate dataset is produced for each subset,split pair. 
+    Load the dataset from Hugging Face.
+    This function returns all data for the requested subsets and splits.
+    A separate dataset is produced for each subset,split pair.
     Downstream one file per subset,split pair will be created.
 
     Args:
@@ -351,9 +351,9 @@ def convert_dataset(cfg: DatasetConversionConfig) -> None:
                     document.text = question_text
                 elif cfg.output_format.value == "evaluation":
                     # evaluation format wants prompt, response
-                    if cfg.output_labels and choices:
+                    if cfg.output_labels and options:
                         prompt, response = format_prompt_response(
-                            question_text, choices, cfg.output_labels, answer_idx, answer_text
+                            question_text, options, cfg.output_labels, answer_idx, answer_text
                         )
                     else:
                         prompt = question_text + "\n\n"
