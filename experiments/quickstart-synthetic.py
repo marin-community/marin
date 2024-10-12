@@ -3,9 +3,9 @@ import os
 from dataclasses import dataclass
 
 import draccus
+
 from levanter.models.gpt2 import Gpt2Config
 from levanter.trainer import TrainerConfig
-
 from marin.evaluation.evaluation_config import EvaluationConfig
 from marin.evaluation.run import evaluate
 from marin.execution.executor import (
@@ -198,9 +198,9 @@ def create_steps(config: QuickstartExecutorConfig) -> list[ExecutorStep]:
             hf_save_steps=1,
             model=Gpt2Config(
                 num_layers=2,
-                num_heads=2,
+                num_heads=1,
                 seq_len=64,
-                hidden_dim=32,
+                hidden_dim=64,
             ),
             trainer=TrainerConfig(
                 train_batch_size=1, num_train_steps=2, max_eval_batches=1, require_accelerator=False, id=run_id
