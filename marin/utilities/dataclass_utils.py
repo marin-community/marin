@@ -9,7 +9,7 @@ def shallow_asdict(obj: DataclassInstance) -> dict:
     """
     return {f.name: getattr(obj, f.name) for f in dataclasses.fields(obj)}
 
-def dataclass_to_clean_dict(dataclass):
+def dataclass_to_clean_dict(obj: DataclassInstance) -> dict:
     """Convert dataclass to dictionary, omitting None values."""
     if not dataclasses.is_dataclass(obj):
         raise ValueError(f"Expected dataclass, got '{obj}'")
