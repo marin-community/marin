@@ -60,12 +60,11 @@ jobs:
       - name: Test quickstart pipeline
         run: |
           ray job submit --working-dir . \
-                  --runtime_env runtime_env = {
-                    "working_dir": working_dir,
+                  --runtime-env-json = '{
+                    "working_dir": ".",
                     "excludes": [
-                        "**/.git/**",  # This will exclude all .git directories and their contents
+                        "**/.git/**",
                         ".gitattributes",
                       ]
-                    } \   
-                  -- python experiments/quickstart-synthetic.py \
-                  --commit_hash exp-${{ github.sha }} \
+                    }' \   
+                  -- python experiments/quickstart-synthetic.py --commit_hash exp-${{ github.sha }} \
