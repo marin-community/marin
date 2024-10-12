@@ -25,12 +25,14 @@ jobs:
           auto-activate-base: false
 
       - name: Install system dependencies
+        shell: bash -l {0}
         run: |
           sudo apt-get update -y
           sudo apt-get install -y gcc-12 g++-12 libnuma-dev libdnnl-dev
           sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 10 --slave /usr/bin/g++ g++ /usr/bin/g++-12
 
       - name: Install Python dependencies
+        shell: bash -l {0}
         run: |
           conda install -c conda-forge libstdcxx-ng
           pip install wheel packaging ninja "setuptools>=49.4.0" numpy setuptools_scm
@@ -40,6 +42,7 @@ jobs:
           cd ../
 
       - name: Clone and build vLLM
+        shell: bash -l {0}
         run: |
           git clone https://github.com/vllm-project/vllm.git
           cd vllm
@@ -48,6 +51,7 @@ jobs:
           cd ..
 
       - name: Clone and install HELM with local_vllm branch
+        shell: bash -l {0}
         run: |
           git clone -b local_vllm https://github.com/stanford-crfm/helm.git
           cd helm
@@ -55,15 +59,18 @@ jobs:
           cd ..
 
       - name: Install additional dependencies
+        shell: bash -l {0}
         run: |
           pip install . --extra-index-url https://download.pytorch.org/whl/cpu
 
       - name: Start Ray cluster locally
+        shell: bash -l {0}
         run: |
           ray start --head
 
       - name: Test quickstart pipeline
+        shell: bash -l -c "{0}""
         run: |
           ray job submit --working-dir . \
-                  --runtime-env-json='{"excludes": ["**/.git/**", ".gitattributes"]}' \
+                  --runtime-env-json='{"excludes": ["**/.git/**", ".gitattributes"]}' \   
                   -- python experiments/quickstart-synthetic.py --commit_hash exp-${{ github.sha }}
