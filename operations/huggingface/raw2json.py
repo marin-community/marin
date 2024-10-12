@@ -11,7 +11,7 @@ from datasets import Dataset, get_dataset_config_names, load_dataset
 from google.cloud import storage
 
 from marin.core.data import QAExample, QAExampleMetadata
-from marin.utilities.data_utils import dataclass_to_clean_dict
+from marin.utilities.dataclass_utils import dataclass_to_clean_dict
 
 
 class OutputFormatOptions(str, Enum):
