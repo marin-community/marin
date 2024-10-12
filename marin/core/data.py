@@ -2,7 +2,7 @@ from dataclasses import dataclass
 
 
 @dataclass
-class MarinDocumentMetadata:
+class QAExampleMetadata:
     """
     Dataclass representing metadata for a document.
 
@@ -28,14 +28,14 @@ class MarinDocumentMetadata:
 
 
 @dataclass
-class MarinDocumentData:
+class QAExample:
     """
     Dataclass representing a document
 
     Attributes:
         id (str): Unique identifier for the record.
         source (str): The name of the dataset.
-        metadata (Metadata): Metadata related to the dataset.
+        metadata (MarinDocumentMetadata): Metadata related to the dataset.
         text (str): The text of the document
         prompt (str): If document is prompt/response, the prompt component
         response (str): If document is prompt/response, the expected response component
