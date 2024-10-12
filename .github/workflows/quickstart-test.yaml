@@ -17,15 +17,17 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
+      - name: Set up Conda
+        uses: conda-incubator/setup-miniconda@v2
         with:
+          auto-update-conda: true
           python-version: ${{ matrix.python-version }}
+          activate-environment: marin_unit_test_env
+          auto-activate-base: false
 
       - name: Install dependencies
+        shell: bash -l {0}
         run: |
-          python -m venv venv
-          source venv/bin/activate
           git clone https://github.com/stanford-crfm/levanter.git && cd levanter
           pip install .[test]
           cd ../
