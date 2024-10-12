@@ -63,10 +63,12 @@ jobs:
           pip install . --extra-index-url https://download.pytorch.org/whl/cpu
 
       - name: Start Ray cluster locally
+        shell: bash -l {0}
         run: |
           ray start --head
 
       - name: Test quickstart pipeline
+        shell: bash -l {0}
         run: |
           ray job submit --working-dir . \
                   --runtime-env-json='{"excludes": ["**/.git/**", ".gitattributes"]}' \   
