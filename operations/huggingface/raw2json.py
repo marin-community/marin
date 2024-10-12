@@ -105,11 +105,10 @@ def download_directory_from_gcs(bucket_name: str, gcs_directory_path: str, local
 
 def load_datasets(config: DatasetConversionConfig) -> list[DatasetWithMetaData]:
     """
-    Load the dataset from Hugging Face.
-
-    This function returns all data for the requested subsets and splits.
-
-    A separate dataset is produced for each subset,split pair. Downstream one file per subset,split pair will be created.
+    Load the dataset from Hugging Face. 
+    This function returns all data for the requested subsets and splits. 
+    A separate dataset is produced for each subset,split pair. 
+    Downstream one file per subset,split pair will be created.
 
     Args:
         config (DatasetConversionConfig): The configuration for loading datasets.
@@ -190,7 +189,7 @@ def get_nested_item(data: dict[str, Any], key: str, default_item: Any = None) ->
         return default_item
 
 
-def is_kv_list(lst):
+def is_kv_list(lst: list) -> bool:
     """
     Check if the given list is a list of key-value dictionaries.
 
@@ -289,7 +288,7 @@ def format_prompt_response(
     return prompt, response
 
 
-def create_json(cfg: DatasetConversionConfig) -> None:
+def convert_dataset(cfg: DatasetConversionConfig) -> None:
 
     # Load config parameters
     datasets = load_datasets(cfg)
@@ -314,7 +313,7 @@ def create_json(cfg: DatasetConversionConfig) -> None:
                 # get the question text
                 question_text = get_nested_item(example, cfg.prompt_key)
                 # get the list of options in standardized form (list of options
-                choices = standardize_options(get_nested_item(example, cfg.options_key, []))
+                options = standardize_options(get_nested_item(example, cfg.options_key, []))
                 # if there is a direct key to answer text, use this
                 answer_text = get_nested_item(example, cfg.answer_text_key) if cfg.answer_text_key else ""
                 # if there is a direct key for the idx into choices of correct answer, use this
@@ -323,18 +322,18 @@ def create_json(cfg: DatasetConversionConfig) -> None:
                 answer_label = get_nested_item(example, cfg.answer_label_key) if cfg.answer_label_key else ""
                 # check if you need to get the answer text by using the answer idx
                 if not answer_text:
-                    if answer_label and choices and cfg.output_choices:
+                    if answer_label and options and cfg.output_choices:
                         answer_idx = cfg.output_choices.index(answer_label)
-                    if isinstance(answer_idx, int) and answer_idx != -1 and choices:
-                        answer_text = choices[answer_idx]
+                    if isinstance(answer_idx, int) and answer_idx != -1 and options:
+                        answer_text = options[answer_idx]
                     else:
                         raise ValueError("No answer text was found. Please review config.")
                 # set answer label
                 if not answer_label and cfg.output_labels and answer_idx != -1:
                     answer_label = cfg.output_labels[answer_idx]
-                if choices:
+                if options:
                     # list of potential answers
-                    document.metadata.options = choices
+                    document.metadata.options = options
                 if answer_idx:
                     # index into list of potential answers of correct answer
                     document.metadata.answer_idx = answer_idx
@@ -367,7 +366,7 @@ def create_json(cfg: DatasetConversionConfig) -> None:
 
 @draccus.wrap()
 def main(cfg: DatasetConversionConfig) -> None:
-    create_json(cfg)
+    convert_dataset(cfg)
 
 
 if __name__ == "__main__":
