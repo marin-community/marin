@@ -40,7 +40,7 @@ raw_data = output_path_of(
 ############################################################
 # Transform HTML to text
 
-from marin.schemas.web.convert import TrafilaturaConfig  # noqa
+from marin.schemas.web.convert import ResiliparseConfig, TrafilaturaConfig  # noqa
 from scripts.hello_world_fw.process import FineWebConfig, transform  # noqa
 
 transform_trafilatura_step = ExecutorStep(
@@ -66,6 +66,7 @@ transform_resiliparse_step = ExecutorStep(
         input_path=raw_data,
         output_path=this_output_path(),
         extract_method=versioned("resiliparse"),
+        config=ResiliparseConfig.default_config(),
     ),
 )
 
