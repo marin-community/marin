@@ -3,9 +3,9 @@ import os
 from dataclasses import dataclass
 
 import draccus
+
 from levanter.models.gpt2 import Gpt2Config
 from levanter.trainer import TrainerConfig
-
 from marin.evaluation.evaluation_config import EvaluationConfig
 from marin.evaluation.run import evaluate
 from marin.execution.executor import (
@@ -244,7 +244,9 @@ def main(config: QuickstartExecutorConfig):
         steps = create_steps(config)
         bucket_prefix = "/tmp"
         config_executor = ExecutorMainConfig(
-            prefix=bucket_prefix, executor_info_base_path=os.path.join(bucket_prefix, "experiments")
+            prefix=bucket_prefix,
+            executor_info_base_path=os.path.join(bucket_prefix, config.prefix, "experiments"),
+            force_run=[os.path.join(config.prefix, config.commit_hash, "eval")],
         )
         executor_main(config_executor, steps=steps)
         logger.info(
