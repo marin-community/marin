@@ -35,7 +35,7 @@ class QAExample:
     Attributes:
         id (str): Unique identifier for the record.
         source (str): The name of the dataset.
-        metadata (MarinDocumentMetadata): Metadata related to the dataset.
+        metadata (QAExampleMetadata): Metadata related to the dataset.
         text (str): The text of the document
         prompt (str): If document is prompt/response, the prompt component
         response (str): If document is prompt/response, the expected response component
@@ -43,7 +43,7 @@ class QAExample:
 
     id: str
     source: str
-    metadata: MarinDocumentMetadata
+    metadata: QAExampleMetadata
     text: str | None = None
     prompt: str | None = None
     response: str | None = None
