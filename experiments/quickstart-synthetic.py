@@ -3,9 +3,9 @@ import os
 from dataclasses import dataclass
 
 import draccus
-
 from levanter.models.gpt2 import Gpt2Config
 from levanter.trainer import TrainerConfig
+
 from marin.evaluation.evaluation_config import EvaluationConfig
 from marin.evaluation.run import evaluate
 from marin.execution.executor import (
