@@ -79,6 +79,7 @@ jobs:
         shell: bash -l {0}
         run: |
           pip install . --extra-index-url https://download.pytorch.org/whl/cpu
+          pip install --upgrade transformers tokenizers
 
       - name: Start Ray cluster locally
         shell: bash -l {0}
