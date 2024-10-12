@@ -41,6 +41,23 @@ jobs:
           pip install .[test]
           cd ../
 
+      - name: Clone and build vLLM
+        shell: bash -l {0}
+        run: |
+          git clone https://github.com/vllm-project/vllm.git
+          cd vllm
+          pip install -v -r requirements-cpu.txt --extra-index-url https://download.pytorch.org/whl/cpu
+          VLLM_TARGET_DEVICE=cpu python setup.py install
+          cd ..
+
+      - name: Clone and install HELM with local_vllm branch
+        shell: bash -l {0}
+        run: |
+          git clone -b local_vllm https://github.com/stanford-crfm/helm.git
+          cd helm
+          pip install .
+          cd ..
+
       - name: Install additional dependencies
         shell: bash -l {0}
         run: |
