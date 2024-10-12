@@ -8,3 +8,9 @@ def shallow_asdict(obj: DataclassInstance) -> dict:
     Similar to dataclasses.asdict, but doesn't recurse into nested dataclasses.
     """
     return {f.name: getattr(obj, f.name) for f in dataclasses.fields(obj)}
+
+def dataclass_to_clean_dict(dataclass):
+    """Convert dataclass to dictionary, omitting None values."""
+    if not dataclasses.is_dataclass(obj):
+        raise ValueError(f"Expected dataclass, got '{obj}'")
+    return dataclasses.asdict(obj, dict_factory=lambda x: {k: v for (k, v) in x if v is not None})
