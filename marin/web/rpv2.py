@@ -124,6 +124,7 @@ def iterate_rpv2_file(snapshot, n, lang, part, url_base=_URL_BASE):
     except Exception as e:
         logger.exception(f"Error processing {qs_file}: {e}")
 
+
 def list_rpv2_parts(snapshot, lang):
     for part in ("head", "middle", "tail"):
         for n in range(NUM_SHARDS):
@@ -155,7 +156,8 @@ def gopher_rules_pass_with_rpv2(signals) -> tuple[bool, str]:
     if n_lines_bulletpoint_start / n_lines > 0.9:
         return False, "too many lines start with bullet points"
 
-    # Rule 5: The ratio between characters in the most frequent 2-gram and the total number of characters must be below 0.2
+    # Rule 5: The ratio between characters in the most frequent 2-gram and the total number of characters must
+    #         be below 0.2
     if signals["rps_doc_frac_chars_top_2gram"][0][2] > 0.2:
         return False, "top 2-gram ratio too high"
 
@@ -174,7 +176,6 @@ def gopher_rules_pass_with_rpv2(signals) -> tuple[bool, str]:
             return False, f"top {n}-gram ratio too high"
 
     return True, "ok"
-
 
 
 def all_urls():
@@ -198,15 +199,10 @@ if __name__ == "__main__":
     #     out.writerow([url])
     i = 0
     for snapshot, n, lang, part in list_rpv2_parts("2023-14", "en"):
-        for doc_id, qs in iterate_rpv2_file(snapshot, n, lang, part):
+        for _doc_id, qs in iterate_rpv2_file(snapshot, n, lang, part):
             passes, reason = gopher_rules_pass_with_rpv2(qs["quality_signals"])
             print(passes, reason, qs["metadata"]["url"])
             i += 1
             if i > 400:
                 break
         break
-
-
-
-
-

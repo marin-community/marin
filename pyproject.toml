@@ -10,6 +10,8 @@ license = {file = "LICENSE"}
 
 requires-python = ">=3.10"
 dependencies = [
+    "jax==0.4.31",
+    "dolma",
     "chardet",
     "cryptography",
     "datasets>=2.18.0",
@@ -25,16 +27,23 @@ dependencies = [
     "markdownify==0.12.1",                  # TODO :: Check usage | pin?
     "multiprocess==0.70.16",
     "py7zr",
+    "zstandard==0.23.0",
     "ray[default]==2.34.0",
-    "rbloom==1.5.0",                        # TODO :: Check usage | pin?
-    "readabilipy==0.2.0",                   # TODO :: Check usage | pin?
-    "readability-lxml==0.8.1",              # TODO :: Check usage | pin?
-    "regex==2024.4.16",                     # TODO :: Check usage | pin?
+    "readabilipy",
+    "readability-lxml",
+    "fsspec",
+    "gcsfs",
+    "s3fs",
+    "lxml[html_clean]",
+    "regex",
     "requests",
-    "tqdm",
-    "warcio==1.7.4",                        # TODO :: Check usage | pin?
-    "grip==4.6.2",                          # TODO :: Check usage | pin?
-    "levanter @ git+https://github.com/stanford-crfm/levanter.git"
+    "warcio",
+    "levanter>=1.2.dev1031",
+    "lm-eval",
+    "resiliparse",
+    "trafilatura",
+    "fasttext",
+    "boto3==1.35.23"
 ]
 
 [project.optional-dependencies]
@@ -65,8 +74,7 @@ preview = true
 # Note :: Grow more strict over time!
 extend-exclude = """
 (
-    marin/
-    | scripts/
+    scripts/
 )
 """
 
@@ -75,7 +83,7 @@ line-length = 121
 target-version = "py310"
 
 # Note :: Grow more strict over time!
-extend-exclude = ["marin/", "scripts/"]
+extend-exclude = ["scripts/"]
 
 [tool.ruff.lint]
 select = ["A", "B", "E", "F", "I", "NPY", "RUF", "UP", "W"]

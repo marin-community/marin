@@ -69,11 +69,11 @@ def load_ar5iv_html(input_file_paths, zip_path, counts):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Convert ar5iv to markdown.")
-    parser.add_argument('--input_dir', type=str, help='Path to the ar5iv zip file', required=True)
+    parser.add_argument('--input_path', type=str, help='Path to the ar5iv zip file', required=True)
 
     args = parser.parse_args()
     gfs = fsspec.filesystem("gcs")
-    zip_file = get_gcs_path(args.input_dir)
+    zip_file = get_gcs_path(args.input_path)
     with gfs.open(zip_file, "rb") as f:
         with zipfile.ZipFile(f) as z:
             files = z.namelist()
@@ -96,7 +96,6 @@ if __name__ == '__main__':
     
 
     MAX_NUM_PENDING_TASKS = 450  # Max number of html files we want to process in pending state
-    ray.init()
     result_refs = []
 
     for idx, file in enumerate(all_files):

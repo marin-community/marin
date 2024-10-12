@@ -3,21 +3,18 @@ Usage:
 python3 -m marin.processing.download_gcs_data --output-dir ~/data
 """
 
-import argparse
-import os
-import gzip
-import shutil
 import json
+import os
+from typing import Any
 
 import fsspec
 from google.cloud import storage
-from typing import Any
 from huggingface_hub import hf_hub_download
 
 
-def download_file(filename: str, output_dir: str):
+def download_file(filename: str, output_path: str):
     output_filename = os.path.basename(filename).replace(".gz", "")
-    output_file_path = os.path.join(output_dir, output_filename)
+    output_file_path = os.path.join(output_path, output_filename)
     file_format = os.path.basename(output_filename).split(".")[1]
 
     with fsspec.open(filename, "r", compression="gzip") as f:
