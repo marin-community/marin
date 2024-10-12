@@ -25,7 +25,7 @@ import ray
 
 
 @ray.remote(memory=1 * 1024 * 1024 * 1024)  # 1 GB
-def process_one_dolma_file(input_file_path, output_dir_path, domain, examples_per_file):
+def process_one_dolma_file(input_file_path, output_path_path, domain, examples_per_file):
     """
     Takes in raw Dolma file, splits it into chunks, and writes to a new directory.
     Performs sanity checking to ensure that data is formatted correctly. However,
@@ -43,7 +43,7 @@ def process_one_dolma_file(input_file_path, output_dir_path, domain, examples_pe
                 if out_file_handler:
                     out_file_handler.close()
                 out_file_path = os.path.join(
-                    output_dir_path,
+                    output_path_path,
                     f"{input_file_basename.split('.')[0]}-chunk{idx // examples_per_file:04d}.jsonl.gz",
                 )
                 out_file_handler = gfs.open(out_file_path, "wt", compression="gzip")
@@ -116,7 +116,6 @@ if __name__ == "__main__":
     gfs = fsspec.filesystem("gcs")
     files = gfs.glob(os.path.join(args.dolma_path, f"{args.domain}*.json.gz"))
 
-    ray.init()
     result_refs = []
     for file in files:
         result_refs.append(

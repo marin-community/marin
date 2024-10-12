@@ -1,62 +1,62 @@
 # This is the base configuration for a "normal" levanter run.
 # It is designed to run on a single dataset from scratch
 data:
-  tokenizer: "meta-llama/Llama-2-7b-hf"
-  shuffle_buffer_size: 50000
+  tokenizer: "meta-llama/Meta-Llama-3.1-8B"
+  shuffle: True
   stop_strategy: restart
   configs:
     # we include all the dolma datasets, but the mixture weights are all set to 0.0
     dolma-algebraic-stack:
       train_urls:
-        - gs://marin-data/raw/dolma/dolma-v1.7/algebraic-stack-train-{0000..0015}.json.gz
+        - gs://marin-us-central2/raw/dolma/v1.7/algebraic-stack-train-{0000..0015}.json.gz
     dolma-arxiv:
       train_urls:
-        - gs://marin-data/raw/dolma/dolma-v1.7/arxiv-{0000..0099}.json.gz
+        - gs://marin-us-central2/raw/dolma/v1.7/arxiv-{0000..0099}.json.gz
     dolma-gutenberg:
       train_urls:
-        - gs://marin-data/raw/dolma/dolma-v1.7/books-{0000..0002}.json.gz
+        - gs://marin-us-central2/raw/dolma/v1.7/books-{0000..0002}.json.gz
     dolma-c4:
       train_urls:
-        - gs://marin-data/raw/dolma/dolma-v1.7/c4-{0000..0170}.json.gz
+        - gs://marin-us-central2/raw/dolma/v1.7/c4-{0000..0170}.json.gz
     dolma-cc:
       train_urls:
-        - gs://marin-data/raw/dolma/dolma-v1.7/cc_en_head-{0000..0274}.json.gz
-        - gs://marin-data/raw/dolma/dolma-v1.7/cc_en_middle-{0000..0238}.json.gz # 239 is missing
-        - gs://marin-data/raw/dolma/dolma-v1.7/cc_en_middle-{0240..0379}.json.gz
-        - gs://marin-data/raw/dolma/dolma-v1.7/cc_en_tail-{0000..0152}.json.gz # 153 is missing
-        - gs://marin-data/raw/dolma/dolma-v1.7/cc_en_tail-{0154..0444}.json.gz
+        - gs://marin-us-central2/raw/dolma/v1.7/cc_en_head-{0000..0274}.json.gz
+        - gs://marin-us-central2/raw/dolma/v1.7/cc_en_middle-{0000..0238}.json.gz # 239 is missing
+        - gs://marin-us-central2/raw/dolma/v1.7/cc_en_middle-{0240..0379}.json.gz
+        - gs://marin-us-central2/raw/dolma/v1.7/cc_en_tail-{0000..0152}.json.gz # 153 is missing
+        - gs://marin-us-central2/raw/dolma/v1.7/cc_en_tail-{0154..0444}.json.gz
     dolma-cc-news:
       train_urls:
-        - gs://marin-data/raw/dolma/dolma-v1.7/cc_news_head-{0000..0004}.json.gz
-        - gs://marin-data/raw/dolma/dolma-v1.7/cc_news_middle-{0000..0002}.json.gz
-        - gs://marin-data/raw/dolma/dolma-v1.7/cc_news_tail-0000.json.gz
+        - gs://marin-us-central2/raw/dolma/v1.7/cc_news_head-{0000..0004}.json.gz
+        - gs://marin-us-central2/raw/dolma/v1.7/cc_news_middle-{0000..0002}.json.gz
+        - gs://marin-us-central2/raw/dolma/v1.7/cc_news_tail-0000.json.gz
     dolma-falcon:
       train_urls:
-        - gs://marin-data/raw/dolma/dolma-v1.7/falcon-{0000..0499}.json.gz
+        - gs://marin-us-central2/raw/dolma/v1.7/falcon-{0000..0499}.json.gz
     dolma-megawika:
       train_urls:
-        - gs://marin-data/raw/dolma/dolma-v1.7/megawika-{0000..0261}.json.gz
+        - gs://marin-us-central2/raw/dolma/v1.7/megawika-{0000..0261}.json.gz
     dolma-owmath:
       train_urls:
-        - gs://marin-data/raw/dolma/dolma-v1.7/open-web-math-train-{0000..0012}.json.gz
+        - gs://marin-us-central2/raw/dolma/v1.7/open-web-math-train-{0000..0012}.json.gz
     dolma-pes2o:
       train_urls:
-        - gs://marin-data/raw/dolma/dolma-v1.7/pes2o-{0000..0025}.json.gz
+        - gs://marin-us-central2/raw/dolma/v1.7/pes2o-{0000..0025}.json.gz
     dolma-reddit:
       train_urls:
-        - gs://marin-data/raw/dolma/dolma-v1.7/reddit-{0000..0077}.json.gz
+        - gs://marin-us-central2/raw/dolma/v1.7/reddit-{0000..0077}.json.gz
     dolma-stackexchange:
       train_urls:
-        - gs://marin-data/raw/dolma/dolma-v1.7/stackexchange-{0000..0025}.json.gz
+        - gs://marin-us-central2/raw/dolma/v1.7/stackexchange-{0000..0025}.json.gz
     dolma-starcoder:
       train_urls:
-        - gs://marin-data/raw/dolma/dolma-v1.7/starcoder-{0000..0048}.json.gz
+        - gs://marin-us-central2/raw/dolma/v1.7/starcoder-{0000..0048}.json.gz
     dolma-flan:
       train_urls:
-        - gs://marin-data/raw/dolma/dolma-v1.7/tulu_flan-{0000..0065}.json.gz
+        - gs://marin-us-central2/raw/dolma/v1.7/tulu_flan-{0000..0065}.json.gz
     dolma-wiki:
       train_urls:
-        - gs://marin-data/raw/dolma/dolma-v1.7/wiki-{0000..0001}.json.gz
+        - gs://marin-us-central2/raw/dolma/v1.7/wiki-{0000..0001}.json.gz
     # these are just for eval
     "paloma/4chan":
       validation_urls:

@@ -176,15 +176,14 @@ def clean_ar5iv_html(file):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Convert ar5iv to markdown.")
-    parser.add_argument('--input_dir', type=str, help='Path to the ar5iv html folder', required=True)
+    parser.add_argument('--input_path', type=str, help='Path to the ar5iv html folder', required=True)
 
     args = parser.parse_args()
     gfs = fsspec.filesystem("gcs")
-    html_folder = get_gcs_path(args.input_dir)
+    html_folder = get_gcs_path(args.input_path)
     files = gfs.ls(html_folder)
 
     MAX_NUM_PENDING_TASKS = 600  # Max number of html files we want to process in pending state
-    ray.init()
     result_refs = []
 
     for html in files:
