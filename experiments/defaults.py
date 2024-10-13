@@ -15,7 +15,7 @@ from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 
 from marin.execution.executor import ExecutorStep, InputName, this_output_path, versioned
-from marin.processing.tokenize import TokenizeConfig, tokenize
+from marin.processing.tokenize import TokenizeConfig, tokenize, lm_training_config
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 
 
@@ -52,11 +52,7 @@ def default_train(
         config=TrainLmOnPodConfig(
             output_path=this_output_path(),
             tpu_type=train_config.tpu_type,
-            data=LMDatasetConfig(
-                train_urls=[tokenized],
-                # TODO: add validation sets
-                cache_dir=this_output_path(),
-            ),
+            data=lm_training_config(training_set=tokenized),
             trainer=TrainerConfig(
                 tracker=WandbConfig(
                     project="marin",

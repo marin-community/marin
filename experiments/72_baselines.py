@@ -17,6 +17,7 @@ default_train_config = SimpleTrainConfig(
     weight_decay=0.1,
 )
 
+# Just a small test
 hello_world_fw = "gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart"
 hello_world_fw_tokenized = default_tokenize(name="hello_world_fw", dataset=hello_world_fw, tokenizer=llama3_tokenizer)
 hello_world_fw_model = default_train(
@@ -26,7 +27,6 @@ hello_world_fw_model = default_train(
     train_config=default_train_config,
 )
 
-# TODO: can't tokenize parquet format yet
 slimpajama_6b_tokenized = default_tokenize(name="SlimPajama-6B", dataset=slimpajama_6b, tokenizer=llama3_tokenizer)
 slimpajama_6b_model = default_train(
     name="SlimPajama-6B-1.4b",
