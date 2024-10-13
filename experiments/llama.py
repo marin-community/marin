@@ -88,6 +88,7 @@ def compute_num_parameters(config: LlamaConfig) -> int:
     nonembedding_params = config.num_layers * (attention_params + mlp_params + layer_norm_params)
 
     from transformers import AutoTokenizer
+
     tokenizer = AutoTokenizer.from_pretrained(llama3_tokenizer)
     embedding_params = 2 * tokenizer.vocab_size * config.hidden_dim
 
