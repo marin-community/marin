@@ -9,6 +9,7 @@ from marin.execution.executor import (
     this_output_path,
     versioned,
 )
+from marin.processing.classification.config.inference_config import RuntimeConfig
 from marin.processing.classification.consolidate import ConsolidateConfig, FilterConfig, consolidate
 from marin.processing.classification.inference import InferenceConfig, run_inference
 
@@ -27,12 +28,16 @@ class ExperimentConfig:
     input_data_path: list[str] = field(
         default_factory=lambda: [
             "gs://marin-data/processed/fineweb/fw-v1.0/text_fw/CC-MAIN-2020-10/",
-            # "gs://marin-data/processed/fineweb/fw-v1.0/text_fw/CC-MAIN-2020-16/",
-            # "gs://marin-data/processed/fineweb/fw-v1.0/text_fw/CC-MAIN-2020-24/",
-            # "gs://marin-data/processed/fineweb/fw-v1.0/text_fw/CC-MAIN-2020-29/",
+            "gs://marin-data/processed/fineweb/fw-v1.0/text_fw/CC-MAIN-2020-16/",
+            "gs://marin-data/processed/fineweb/fw-v1.0/text_fw/CC-MAIN-2020-24/",
+            "gs://marin-data/processed/fineweb/fw-v1.0/text_fw/CC-MAIN-2020-29/",
+            "gs://marin-data/processed/fineweb/fw-v1.0/text_fw/CC-MAIN-2020-34/",
+            "gs://marin-data/processed/fineweb/fw-v1.0/text_fw/CC-MAIN-2020-40/",
+            "gs://marin-data/processed/fineweb/fw-v1.0/text_fw/CC-MAIN-2020-45/",
+            "gs://marin-data/processed/fineweb/fw-v1.0/text_fw/CC-MAIN-2020-50/",
         ]
     )
-    inference_threshold: float = 0.8
+    percentile_threshold: float = 80  # Top 20% of documents
 
 
 def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
@@ -51,6 +56,10 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
                 model_name=versioned(config.quality_classifier_model_path),
                 model_type="fasttext",
                 attribute_name=versioned(f"{config.experiment_name}-quality"),
+                runtime=RuntimeConfig(
+                    requirements_filepath="marin/processing/classification/config/dclm_fasttext_requirements.txt",
+                    memory_limit_gb=6,
+                ),
             ),
         )
 
@@ -71,11 +80,13 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
                         attribute_path=output_path_of(inference_step, input_basename),
                         name=versioned(f"{config.experiment_name}-quality"),
                         label="__label__hq",
-                        threshold=versioned(config.inference_threshold),
+                        threshold=versioned(None),
+                        percentile_threshold=versioned(config.percentile_threshold),
                     ),
                 ],
+                max_total_tokens=280000000000,  # 280B tokens
             ),
-            override_output_path=f"gs://marin-us-central2/documents/{config.experiment_name}-{USER}/",
+            override_output_path=f"gs://marin-us-central2/documents/{config.experiment_name}-{USER}",
         )
 
         steps.append(inference_step)
