@@ -7,23 +7,14 @@ python -m marin.validation.count_total_tokens --input_path gs://marin-data/filte
 
 import argparse
 import json
+import os
 
 import fsspec
 import ray
 
-from marin.core.runtime import map_files_in_directory
+from marin.utils import fsspec_glob
 
-
-@ray.remote
-class TokenCounter:
-    def __init__(self):
-        self.total_tokens = 0
-
-    def add(self, count: int):
-        self.total_tokens += count
-
-    def get_total(self) -> int:
-        return self.total_tokens
+MAX_TASKS_IN_FLIGHT = 1000
 
 
 def count_tokens_in_file(filename: str) -> int:
@@ -40,33 +31,31 @@ def count_tokens_in_file(filename: str) -> int:
     return total_tokens
 
 
-@ray.remote
-def process_file(input_filename: str, output_filename: str, token_counter: ray.actor.ActorHandle):
+@ray.remote(memory=500 * 1024 * 1024)
+def process_file(input_filename: str):
     file_tokens = count_tokens_in_file(input_filename)
-    token_counter.add.remote(file_tokens)
+    return file_tokens
 
 
 def count_total_tokens(input_path: str) -> int:
 
-    token_counter = TokenCounter.remote()
+    responses = []
+    tokens = 0
+    input_paths = fsspec_glob(os.path.join(input_path, "**/*.jsonl.gz"))
+    for input_path in input_paths:
+        while len(responses) >= MAX_TASKS_IN_FLIGHT:
+            ready_refs, responses = ray.wait(responses, num_returns=1)
+            for response in ray.get(ready_refs):
+                tokens += response
 
-    responses = map_files_in_directory(
-        process_file.remote,
-        input_path,
-        "**/*.jsonl.gz",
-        "gs://marin-us-central2/scratch/chrisc/count-total-tokens/",  # random output_path, unused
-        None,
-        False,
-        token_counter,
-    )
+        result_ref = process_file.remote(input_path)
+        responses.append(result_ref)
 
     # Wait for all tasks to complete
-    ray.get(responses)
+    for response in ray.get(responses):
+        tokens += response
 
-    # Get the final count
-    total_tokens = ray.get(token_counter.get_total.remote())
-
-    return total_tokens
+    return tokens
 
 
 def main():
