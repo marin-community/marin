@@ -8,14 +8,13 @@ from datetime import timedelta
 
 import jmp
 from levanter.checkpoint import CheckpointerConfig
-from levanter.data.text import LMDatasetConfig
 from levanter.models.lm_model import LmConfig
 from levanter.optim import AdamConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 
 from marin.execution.executor import ExecutorStep, InputName, this_output_path, versioned
-from marin.processing.tokenize import TokenizeConfig, tokenize, lm_training_config
+from marin.processing.tokenize import TokenizeConfig, lm_training_config, tokenize
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 
 
