@@ -10,7 +10,7 @@ from ray.job_submission import JobSubmissionClient
 from marin.run.vars import ENV_VARS, PIP_DEPS, REMOTE_DASHBOARD_URL
 
 # Setup logger
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("ray")
 
 
 def get_dependencies_from_toml(toml_file: str) -> list:
