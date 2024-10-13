@@ -28,18 +28,10 @@ def get_dependencies_from_toml(toml_file: str) -> list:
         return []
 
 
-async def submit_and_track_job(entrypoint: str, dependencies: list, env_vars: dict, no_wait: bool, local_mode: bool):
+async def submit_and_track_job(entrypoint: str, dependencies: list, env_vars: dict, no_wait: bool):
     """Submit a job to Ray and optionally track logs."""
-    current_dir = os.getcwd()
-    if local_mode:
-        # set environment variables
-        for key, value in env_vars.items():
-            os.environ[key] = value
-        os.environ["RAY_RUNTIME_ENV_CREATE_WORKING_DIR"] = current_dir
-        # We are not installing dependencies in local mode as pip does not provide good way to cache dependencies
-        os.system(f"{entrypoint} --local_mode True")
-        return
 
+    current_dir = os.getcwd()
     client = JobSubmissionClient(REMOTE_DASHBOARD_URL)
 
     # Submit the job with runtime environment and entrypoint
@@ -62,7 +54,6 @@ def main():
     parser.add_argument("--no_wait", action="store_true", help="Do not wait for the job to finish.")
     parser.add_argument("--env_vars", type=str, help="Environment variables to set for the job (JSON format).")
     parser.add_argument("--pip_deps", type=list, help="List of pip dependencies to install before running.")
-    parser.add_argument("--local_mode", action="store_true", help="Run the command locally for debugging.")
     parser.add_argument("cmd", help="The command to run in the Ray cluster.", nargs=argparse.REMAINDER)
 
     args = parser.parse_args()
@@ -91,7 +82,7 @@ def main():
     dependencies += PIP_DEPS
 
     # Submit the job and track it asynchronously
-    asyncio.run(submit_and_track_job(full_cmd, dependencies, env_vars, args.no_wait, args.local_mode))
+    asyncio.run(submit_and_track_job(full_cmd, dependencies, env_vars, args.no_wait))
 
 
 if __name__ == "__main__":
