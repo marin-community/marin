@@ -60,10 +60,10 @@ def default_train(
                 mp=jmp.get_policy("p=f32,c=bfloat16"),
                 train_batch_size=train_config.train_batch_size,
                 num_train_steps=train_config.num_train_steps,
-                steps_per_eval=500,
+                steps_per_eval=10000,
                 checkpointer=CheckpointerConfig(
                     save_interval=timedelta(minutes=10),
-                    keep=[dict(every=500)],
+                    keep=[dict(every=10000)],
                 ),
             ),
             model=model_config,
