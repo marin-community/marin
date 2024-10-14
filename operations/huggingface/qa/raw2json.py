@@ -217,7 +217,7 @@ def is_kv_list(lst: list) -> bool:
     return False
 
 
-def standardize_options(options):
+def standardize_options(options: list | dict) -> list:
     """
     Standardize multiple choice options for LLM benchmarks.
 
