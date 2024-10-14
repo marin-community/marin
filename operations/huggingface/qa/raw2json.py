@@ -154,7 +154,7 @@ def load_datasets(config: DatasetConversionConfig) -> list[DatasetWithMetaData]:
         config (DatasetConversionConfig): The configuration for loading datasets.
 
     Returns:
-        List[Dataset]: A list of Hugging Face datasets loaded according to the given configuration.
+        List[DatasetWithMetaData]: A list of Hugging Face datasets loaded according to the given configuration, with their subset and split info.
     """
     # set up input path which can be GCP path, HF Hub path, or local path
     # handle case of gs:// path which requires downloading resource from GCP to local for processing
