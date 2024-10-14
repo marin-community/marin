@@ -328,7 +328,7 @@ def raw2json(cfg: DatasetConversionConfig) -> None:
                         answer_idx = cfg.answer_labels.index(answer_label)
                     elif answer_text and options:
                         # infer answer_idx (e.g. 0) from answer_text and options list
-                        answer_idx = cfg.answer_labels.index(answer_text)
+                        answer_idx = options.index(answer_text)
                 if not answer_label:
                     if answer_idx is not None and isinstance(answer_idx, int) and cfg.answer_labels:
                         # infer answer_label (e.g. A) from answer_label and list of potential labels
