@@ -1,5 +1,5 @@
 from marin.execution.executor import ExecutorStep, executor_main
-from operations.huggingface.qa.raw2json import raw2json, DatasetConversionConfig, OutputFormatOptions
+from operations.huggingface.qa.raw2json import DatasetConversionConfig, OutputFormatOptions, raw2json
 
 """
 Downloads the following datasets
