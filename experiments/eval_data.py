@@ -41,7 +41,7 @@ mmlu_convert_eval_subject = ExecutorStep(
         options_key="choices",
         answer_idx_key="answer",
         answer_labels=["A", "B", "C", "D"],
-        exclude_subsets=["all"]
+        exclude_subsets=["all"],
     ),
 )
 
