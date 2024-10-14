@@ -292,27 +292,27 @@ def raw2json(cfg: DatasetConversionConfig) -> None:
     """
     Converts datasets based on the provided configuration and saves them as JSONL files.
 
-    This function processes datasets according to the configuration specified in the 
-    `DatasetConversionConfig`. It loads the datasets for each subset and split, formats 
-    the data into a structured format, and writes the results to a compressed `.jsonl.gz` 
-    output file. The format of the output depends on the selected `output_format` (either 
+    This function processes datasets according to the configuration specified in the
+    `DatasetConversionConfig`. It loads the datasets for each subset and split, formats
+    the data into a structured format, and writes the results to a compressed `.jsonl.gz`
+    output file. The format of the output depends on the selected `output_format` (either
     'decontamination' or 'evaluation').
 
     Args:
-        cfg (DatasetConversionConfig): The configuration object specifying dataset 
-                                       parameters such as the dataset name, subsets, splits, 
+        cfg (DatasetConversionConfig): The configuration object specifying dataset
+                                       parameters such as the dataset name, subsets, splits,
                                        output path, format, and various metadata keys.
 
     Process Overview:
     - Loads datasets specified in the configuration for each subset and split.
     - Iterates over the dataset examples to construct a `QAExample` object.
-    - Populates question, options, answer text, and other relevant metadata based on 
+    - Populates question, options, answer text, and other relevant metadata based on
       configuration keys.
     - Supports two output formats:
         - **Decontamination**: Writes the question text as the main field.
-        - **Evaluation**: Writes the formatted prompt and response based on the question 
+        - **Evaluation**: Writes the formatted prompt and response based on the question
           and multiple-choice options.
-    - Saves the output as a compressed `.jsonl.gz` file in the specified output path, 
+    - Saves the output as a compressed `.jsonl.gz` file in the specified output path,
       with each example written as a JSON object.
 
     Raises:
@@ -320,7 +320,7 @@ def raw2json(cfg: DatasetConversionConfig) -> None:
                     that there is an issue with the dataset or configuration.
 
     Example:
-        If `cfg.output_format` is 'evaluation', the output JSONL will contain formatted 
+        If `cfg.output_format` is 'evaluation', the output JSONL will contain formatted
         prompts and responses, like so:
 
         {
