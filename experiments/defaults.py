@@ -42,6 +42,15 @@ class SimpleTrainConfig:
     weight_decay: float
 
 
+llama_1_4b_train_config = SimpleTrainConfig(
+    tpu_type="v4-8",
+    train_batch_size=2048,
+    num_train_steps=100000,
+    learning_rate=3e-4,
+    weight_decay=0.1,
+)
+
+
 def default_train(
     name: str, tokenized: InputName | ExecutorStep, model_config: LmConfig, train_config: SimpleTrainConfig
 ) -> ExecutorStep:

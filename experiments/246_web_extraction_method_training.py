@@ -3,12 +3,11 @@ from dataclasses import dataclass
 
 import draccus
 
-from experiments.defaults import SimpleTrainConfig, default_tokenize, default_train
+from experiments.defaults import default_tokenize, default_train, llama_1_4b_train_config
 from experiments.llama import llama3_tokenizer, llama_1_4b
 from marin.evaluation.evaluation_config import EvaluationConfig
 from marin.evaluation.run import evaluate
 from marin.execution.executor import (
-    ExecutorMainConfig,
     ExecutorStep,
     executor_main,
     output_path_of,
@@ -20,17 +19,10 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger("ray")
 
 USER = "herumb"
-train_config = SimpleTrainConfig(
-    tpu_type="v4-8",
-    train_batch_size=64,
-    num_train_steps=1,
-    learning_rate=4e-4,
-    weight_decay=0.1,
-)
 
 
 @dataclass(frozen=True)
-class WebExtractionMethodConfig(ExecutorMainConfig):
+class WebExtractionMethodConfig:
     """
     Configuration for the quickstart executor
 
@@ -54,7 +46,7 @@ def create_steps(config: WebExtractionMethodConfig) -> list[ExecutorStep]:
         name=f"fw-small-100B-1.4b-{config.extraction_method_name}-{USER}",
         tokenized=fw_tokenized,
         model_config=llama_1_4b,
-        train_config=train_config,
+        train_config=llama_1_4b_train_config,
     )
 
     evaluate_step = ExecutorStep(
