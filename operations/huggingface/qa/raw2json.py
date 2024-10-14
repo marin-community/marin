@@ -15,19 +15,19 @@ from marin.utilities.dataclass_utils import asdict_without_nones
 
 
 class OutputFormatOptions(str, Enum):
-   """
+    """
     Enum class for specifying the output format options when converting datasets.
 
     This class defines two output formats:
-    
-    - `decontamination`: This format populates the `text` key and is compatible with 
+
+    - `decontamination`: This format populates the `text` key and is compatible with
       the Dolma decontamination pipeline. It is used when the focus is on decontaminating
       the data by removing sensitive or unwanted text content.
-    
-    - `evaluation`: This format populates the `prompt` and `response` fields, allowing 
-      the generation of structured prompts and correct answers. It is used for internal 
-      evaluation purposes, where the goal is to determine the perplexity (PPL) that a 
-      model assigns to a correct response for a given prompt. This helps assess model 
+
+    - `evaluation`: This format populates the `prompt` and `response` fields, allowing
+      the generation of structured prompts and correct answers. It is used for internal
+      evaluation purposes, where the goal is to determine the perplexity (PPL) that a
+      model assigns to a correct response for a given prompt. This helps assess model
       performance in tasks like multiple-choice or question-answering evaluations.
 
     Attributes:
@@ -37,10 +37,11 @@ class OutputFormatOptions(str, Enum):
     Example:
         When converting datasets, the appropriate output format can be chosen based on
         the desired pipeline:
-        
+
         - For decontamination: `OutputFormatOptions.decontamination`
         - For evaluation: `OutputFormatOptions.evaluation`
     """
+
     decontamination = "decontamination"
     evaluation = "evaluation"
 
@@ -93,7 +94,7 @@ class DatasetWithMetaData:
     A helper dataclass to keep track of a dataset along with its subset and split.
 
     This class is used to store a dataset from Hugging Face, along with metadata
-    about the specific subset and split being processed. It allows easy access to 
+    about the specific subset and split being processed. It allows easy access to
     the dataset and its associated metadata for downstream processing.
 
     Attributes:
@@ -101,6 +102,7 @@ class DatasetWithMetaData:
         subset (str): The name of the subset of the dataset (e.g., 'all', 'philosophy', etc.).
         split (str): The split of the dataset (e.g., 'train', 'dev', 'test').
     """
+
     dataset: Dataset
     subset: str
     split: str
