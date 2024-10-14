@@ -1,11 +1,9 @@
+import draccus
 import logging
-import os
 from dataclasses import dataclass
 
-import draccus
-from levanter.models.llama import LlamaConfig
-from levanter.trainer import TrainerConfig
-
+from experiments.llama import llama3_tokenizer, llama_1_4b
+from experiments.defaults import SimpleTrainConfig, default_tokenize, default_train
 from marin.evaluation.evaluation_config import EvaluationConfig
 from marin.evaluation.run import evaluate
 from marin.execution.executor import (
@@ -16,14 +14,18 @@ from marin.execution.executor import (
     this_output_path,
     versioned,
 )
-from marin.processing.tokenize import TokenizeConfig, lm_training_config, tokenize
-from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("ray")
 
 USER = "herumb"
-
+train_config = SimpleTrainConfig(
+    tpu_type="v4-8",
+    train_batch_size=64,
+    num_train_steps=1,
+    learning_rate=4e-4,
+    weight_decay=0.1,
+)
 
 @dataclass(frozen=True)
 class WebExtractionMethodConfig(ExecutorMainConfig):
@@ -41,41 +43,16 @@ class WebExtractionMethodConfig(ExecutorMainConfig):
 
 @draccus.wrap()
 def create_steps(config: WebExtractionMethodConfig) -> list[ExecutorStep]:
-    ############################################################
-    # Tokenize
-
-    tokenize_step = ExecutorStep(
-        name=os.path.join(config.prefix, config.extraction_method_name, "tokenized"),
-        fn=tokenize,
-        config=TokenizeConfig(
-            train_paths=config.extracted_data,
-            validation_paths=[],
-            cache_path=this_output_path(),
-            tokenizer=versioned("llama2"),
-        ),
+    fw_tokenized = default_tokenize(
+        name=f"fw-small-100B-{config.extraction_method_name}-{USER}",
+        dataset=config.extracted_data,
+        tokenizer=llama3_tokenizer,
     )
-
-    # ############################################################
-    # # Train
-
-    train_step = ExecutorStep(
-        name=os.path.join(config.prefix, config.commit_hash, "train"),
-        fn=run_levanter_train_lm,
-        config=TrainLmOnPodConfig(
-            output_path=this_output_path(),
-            data=lm_training_config(tokenize_step),
-            env={"WANDB_API_KEY": None},  # Add your wandb key here
-            tpu_type="v4-8",
-            hf_save_steps=1,
-            model=LlamaConfig(
-                seq_len=2048,
-                hidden_dim=2048,
-                intermediate_dim=2048,
-                num_layers=24,
-                num_heads=16,
-            ),
-            trainer=TrainerConfig(train_batch_size=1, num_train_steps=2, max_eval_batches=1, require_accelerator=False),
-        ),
+    fw_100b_model = default_train(
+        name=f"fw-small-100B-1.4b-{config.extraction_method_name}-{USER}",
+        tokenized=fw_tokenized,
+        model_config=llama_1_4b,
+        train_config=train_config,
     )
 
     evaluate_step = ExecutorStep(
@@ -84,15 +61,15 @@ def create_steps(config: WebExtractionMethodConfig) -> list[ExecutorStep]:
         config=EvaluationConfig(
             evaluator="helm",
             model_name=versioned(config.extraction_method_name),
-            model_path=output_path_of(train_step),
+            model_path=output_path_of(fw_100b_model),
             evaluation_path=this_output_path(),
             evals=["mmlu"],
         ),
     )
 
     return [
-        tokenize_step,
-        train_step,
+        fw_tokenized,
+        fw_100b_model,
         evaluate_step,
     ]
 
