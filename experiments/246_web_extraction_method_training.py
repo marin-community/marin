@@ -1,9 +1,10 @@
-import draccus
 import logging
 from dataclasses import dataclass
 
-from experiments.llama import llama3_tokenizer, llama_1_4b
+import draccus
+
 from experiments.defaults import SimpleTrainConfig, default_tokenize, default_train
+from experiments.llama import llama3_tokenizer, llama_1_4b
 from marin.evaluation.evaluation_config import EvaluationConfig
 from marin.evaluation.run import evaluate
 from marin.execution.executor import (
@@ -26,6 +27,7 @@ train_config = SimpleTrainConfig(
     learning_rate=4e-4,
     weight_decay=0.1,
 )
+
 
 @dataclass(frozen=True)
 class WebExtractionMethodConfig(ExecutorMainConfig):
