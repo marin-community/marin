@@ -89,6 +89,18 @@ class DatasetConversionConfig:
 
 @dataclass
 class DatasetWithMetaData:
+    """
+    A helper dataclass to keep track of a dataset along with its subset and split.
+
+    This class is used to store a dataset from Hugging Face, along with metadata
+    about the specific subset and split being processed. It allows easy access to 
+    the dataset and its associated metadata for downstream processing.
+
+    Attributes:
+        dataset (Dataset): The Hugging Face dataset object.
+        subset (str): The name of the subset of the dataset (e.g., 'all', 'philosophy', etc.).
+        split (str): The split of the dataset (e.g., 'train', 'dev', 'test').
+    """
     dataset: Dataset
     subset: str
     split: str
