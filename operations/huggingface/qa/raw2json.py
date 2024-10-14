@@ -11,7 +11,7 @@ from datasets import Dataset, get_dataset_config_names, load_dataset
 from google.cloud import storage
 
 from marin.core.data import QAExample, QAExampleMetadata
-from marin.utilities.dataclass_utils import dataclass_to_clean_dict
+from marin.utilities.dataclass_utils import asdict_without_nones
 
 
 class OutputFormatOptions(str, Enum):
@@ -370,7 +370,7 @@ def raw2json(cfg: DatasetConversionConfig) -> None:
                     document.prompt = prompt
                     document.response = response
                 # write json to output file
-                print(json.dumps(dataclass_to_clean_dict(document)), file=dolma_file)
+                print(json.dumps(asdict_without_nones(document)), file=dolma_file)
 
 
 @draccus.wrap()
