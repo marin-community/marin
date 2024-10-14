@@ -27,7 +27,7 @@ mmlu_convert_eval_aux = ExecutorStep(
 )
 
 mmlu_convert_eval_subject = ExecutorStep(
-    name="evaluation/mmlu-eval-subj",
+    name="evaluation/mmlu-eval-subject",
     fn=raw2json,
     config=DatasetConversionConfig(
         dataset_name="cais/mmlu",
