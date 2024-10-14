@@ -330,13 +330,13 @@ def raw2json(cfg: DatasetConversionConfig) -> None:
                 "subset": "subset_name",
                 "split": "train",
                 "provenance": "https://huggingface.co/datasets/dataset_name",
-                "options": ["option1", "option2", "option3"],
+                "options": ["London", "Rome", "Paris", "Madrid"],
                 "answer_idx": 2,
                 "answer_label": "C",
-                "answer": "Paris",
+                "answer": "option3",
                 "answer_labels": ["A", "B", "C", "D"]
             },
-            "prompt": "Question text\nA. Option 1\nB. Option 2\nC. Option 3\nAnswer:",
+            "prompt": "Question text\nA. London \nB. Rome \nC. Paris \nD. Madrid \nAnswer:",
             "response": "C. Paris"
         }
 
