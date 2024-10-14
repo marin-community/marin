@@ -288,7 +288,7 @@ def format_prompt_response(
     return prompt, response
 
 
-def convert_dataset(cfg: DatasetConversionConfig) -> None:
+def raw2json(cfg: DatasetConversionConfig) -> None:
 
     # Load config parameters
     datasets = load_datasets(cfg)
@@ -366,7 +366,7 @@ def convert_dataset(cfg: DatasetConversionConfig) -> None:
 
 @draccus.wrap()
 def main(cfg: DatasetConversionConfig) -> None:
-    convert_dataset(cfg)
+    raw2json(cfg)
 
 
 if __name__ == "__main__":
