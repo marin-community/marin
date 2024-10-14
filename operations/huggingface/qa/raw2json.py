@@ -289,7 +289,60 @@ def format_prompt_response(
 
 
 def raw2json(cfg: DatasetConversionConfig) -> None:
+    """
+    Converts datasets based on the provided configuration and saves them as JSONL files.
 
+    This function processes datasets according to the configuration specified in the 
+    `DatasetConversionConfig`. It loads the datasets for each subset and split, formats 
+    the data into a structured format, and writes the results to a compressed `.jsonl.gz` 
+    output file. The format of the output depends on the selected `output_format` (either 
+    'decontamination' or 'evaluation').
+
+    Args:
+        cfg (DatasetConversionConfig): The configuration object specifying dataset 
+                                       parameters such as the dataset name, subsets, splits, 
+                                       output path, format, and various metadata keys.
+
+    Process Overview:
+    - Loads datasets specified in the configuration for each subset and split.
+    - Iterates over the dataset examples to construct a `QAExample` object.
+    - Populates question, options, answer text, and other relevant metadata based on 
+      configuration keys.
+    - Supports two output formats:
+        - **Decontamination**: Writes the question text as the main field.
+        - **Evaluation**: Writes the formatted prompt and response based on the question 
+          and multiple-choice options.
+    - Saves the output as a compressed `.jsonl.gz` file in the specified output path, 
+      with each example written as a JSON object.
+
+    Raises:
+        ValueError: If no valid answer text is found for a particular example, indicating
+                    that there is an issue with the dataset or configuration.
+
+    Example:
+        If `cfg.output_format` is 'evaluation', the output JSONL will contain formatted 
+        prompts and responses, like so:
+
+        {
+            "id": "dataset-subset-split-evaluation-0",
+            "source": "dataset_name",
+            "metadata": {
+                "subset": "subset_name",
+                "split": "train",
+                "provenance": "https://huggingface.co/datasets/dataset_name",
+                "options": ["option1", "option2", "option3"],
+                "answer_idx": 2,
+                "answer_label": "C",
+                "answer": "Paris",
+                "answer_labels": ["A", "B", "C", "D"]
+            },
+            "prompt": "Question text\nA. Option 1\nB. Option 2\nC. Option 3\nAnswer:",
+            "response": "C. Paris"
+        }
+
+    Returns:
+        None
+    """
     # Load config parameters
     datasets = load_datasets(cfg)
 
