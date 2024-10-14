@@ -1,6 +1,6 @@
 import os
 
-from test_utils import check_load_config, parameterize_with_configs
+from .test_utils import check_load_config, parameterize_with_configs
 
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
