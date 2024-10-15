@@ -66,6 +66,7 @@ class DatasetConversionConfig:
         options_key (str): key in HF data object for the options (e.g. ["Rome", "London", "Berlin", "Paris"])
         answer_labels (list[str]): list of labels for an example (e.g. ["A", "B", "C", "D"])
         exclude_subsets (list[str]): list of subsets to exclude
+        revision (str): revision of datasets to download
         token (str): HF Hub token when authentication required, "env" means look at $HF_TOKEN
         trust_remote_code (str): allow load_dataset to use remote code to build dataset
     """
@@ -84,6 +85,7 @@ class DatasetConversionConfig:
     options_key: str = ""
     answer_labels: list[str] = field(default_factory=list)
     exclude_subsets: list[str] = field(default_factory=list)
+    revision: str = "main"
     token: str | bool = False
     trust_remote_code: bool = False
 
@@ -192,7 +194,12 @@ def load_datasets(config: DatasetConversionConfig) -> list[DatasetWithMetaData]:
             try:
                 dataset_w_metadata = DatasetWithMetaData(
                     load_dataset(
-                        input_path, subset, split=split, token=token, trust_remote_code=config.trust_remote_code
+                        input_path,
+                        subset,
+                        split=split,
+                        token=token,
+                        revision=config.revision,
+                        trust_remote_code=config.trust_remote_code,
                     ),
                     subset,
                     split,
