@@ -33,7 +33,6 @@ class WebExtractionMethodConfig:
     extraction_method_name: str
 
 
-@draccus.wrap()
 def create_steps(config: WebExtractionMethodConfig) -> list[ExecutorStep]:
     fw_tokenized = default_tokenize(
         name=f"fw-small-100B-{config.extraction_method_name}",
@@ -67,5 +66,16 @@ def create_steps(config: WebExtractionMethodConfig) -> list[ExecutorStep]:
 
 
 if __name__ == "__main__":
-    steps = create_steps()
-    executor_main(steps=steps)
+    dataset = {
+        "readability": "gs://marin-us-central2/documents/fineweb-small-readability-473448",
+        "resiliparse": "gs://marin-us-central2/documents/fineweb-small-resiliparse-default-bfaf03",
+        "resiliparse_with_preserve_formatting": "gs://marin-us-central2/documents/fineweb-small-resiliparse-preserve-formatting-e8c6ec",
+        "trafilatura": "gs://marin-us-central2/documents/fineweb-small-trafilatura-0465ba",
+        "trafilatura_with_favor_precision": "gs://marin-us-central2/documents/fineweb-small-trafilatura-favor-precision-cf6c34",
+
+    }
+
+    for extraction_method, data_path in dataset.items():
+        steps = create_steps(WebExtractionMethodConfig(extracted_data=data_path, extraction_method_name=extraction_method))
+
+        executor_main(steps=steps)
