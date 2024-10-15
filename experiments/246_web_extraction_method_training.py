@@ -18,8 +18,6 @@ from marin.execution.executor import (
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("ray")
 
-USER = "herumb"
-
 
 @dataclass(frozen=True)
 class WebExtractionMethodConfig:
@@ -38,19 +36,19 @@ class WebExtractionMethodConfig:
 @draccus.wrap()
 def create_steps(config: WebExtractionMethodConfig) -> list[ExecutorStep]:
     fw_tokenized = default_tokenize(
-        name=f"fw-small-100B-{config.extraction_method_name}-{USER}",
+        name=f"fw-small-100B-{config.extraction_method_name}",
         dataset=config.extracted_data,
         tokenizer=llama3_tokenizer,
     )
     fw_100b_model = default_train(
-        name=f"fw-small-100B-1.4b-{config.extraction_method_name}-{USER}",
+        name=f"fw-small-100B-1.4b-{config.extraction_method_name}",
         tokenized=fw_tokenized,
         model_config=llama_1_4b,
         train_config=llama_1_4b_train_config,
     )
 
     evaluate_step = ExecutorStep(
-        name=f"evaluation/fw-small-{config.extraction_method_name}-{USER}",
+        name=f"evaluation/fw-small-{config.extraction_method_name}",
         fn=evaluate,
         config=EvaluationConfig(
             evaluator="helm",
