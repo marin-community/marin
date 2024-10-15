@@ -122,6 +122,10 @@ def view():
         if path.endswith(".json") or path.endswith(".SUCCESS"):
             return jsonify(read_json_file(path))
 
+        # .executor_info files are also rendered as json
+        if path.endswith(".executor_info"):
+            return jsonify(read_json_file(path))
+
         # Assume text file (treated as a list of lines)
         return jsonify(read_text_file(path=path, gzipped=False, get_json=False, offset=offset, count=count))
 
