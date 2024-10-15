@@ -3,6 +3,7 @@ import asyncio
 import json
 import logging
 import os
+import shlex
 
 import toml
 from ray.job_submission import JobSubmissionClient
@@ -59,11 +60,14 @@ def main():
     args = parser.parse_args()
 
     # Combine the remaining arguments to form the full command
-    full_cmd = " ".join(args.cmd).strip()
+    full_cmd = " ".join(shlex.quote(arg) for arg in args.cmd).strip()
     if not full_cmd.startswith("--"):
         logger.error("Command must start with '--'.")
         exit(1)
     full_cmd = full_cmd[2:]
+    import pdb
+
+    pdb.set_trace()
 
     # Load and merge environment variables
     env_vars = {}

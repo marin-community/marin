@@ -11,7 +11,7 @@ def print_installed_packages_and_env():
     pip_result = subprocess.run(["pip", "freeze"], stdout=subprocess.PIPE)
 
     # Decode the output of pip freeze and print it
-    print("Installed PIP Packages:")
+    print("Installed pip packages:")
     print(pip_result.stdout.decode("utf-8"))
 
     # Print all environment variables
