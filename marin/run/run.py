@@ -65,9 +65,6 @@ def main():
         logger.error("Command must start with '--'.")
         exit(1)
     full_cmd = full_cmd[2:]
-    import pdb
-
-    pdb.set_trace()
 
     # Load and merge environment variables
     env_vars = {}
