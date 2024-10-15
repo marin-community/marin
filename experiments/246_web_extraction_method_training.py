@@ -2,6 +2,7 @@ import logging
 
 from experiments.defaults import default_tokenize, default_train, llama_1_4b_train_config
 from experiments.llama import llama3_tokenizer, llama_1_4b
+from experiments.pretraining_datasets import download_fineweb
 from marin.evaluation.evaluation_config import EvaluationConfig
 from marin.evaluation.run import evaluate
 from marin.execution.executor import (
@@ -11,7 +12,6 @@ from marin.execution.executor import (
     this_output_path,
     versioned,
 )
-from experiments.pretraining_datasets import download_fineweb
 from marin.schemas.web.convert import HtmlToMarkdownConfig, ResiliparseConfig, TrafilaturaConfig
 from scripts.fineweb.process_parquet_fw import ParquetFWConfig, process_fw_dump
 
