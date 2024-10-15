@@ -11,6 +11,7 @@ from marin.execution.executor import (
     this_output_path,
     versioned,
 )
+from experiments.pretraining_datasets import download_fineweb
 from marin.schemas.web.convert import HtmlToMarkdownConfig, ResiliparseConfig, TrafilaturaConfig
 from scripts.fineweb.process_parquet_fw import ParquetFWConfig, process_fw_dump
 
@@ -18,15 +19,12 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger("ray")
 
 
-raw_data = "gs://marin-us-central2/raw/fineweb/cd85054/"
-
-
 def get_extraction_steps():
     transform_trafilatura_default_step = ExecutorStep(
         name="documents/fineweb-small-trafilatura",
         fn=process_fw_dump,
         config=ParquetFWConfig(
-            input_path=raw_data,
+            input_path=output_path_of(download_fineweb),
             cc_dumps=versioned(["CC-MAIN-2024-18"]),
             output_path_md=this_output_path("md"),
             output_path_text=this_output_path("text"),
@@ -44,7 +42,7 @@ def get_extraction_steps():
         name="documents/fineweb-small-trafilatura-favor-precision",
         fn=process_fw_dump,
         config=ParquetFWConfig(
-            input_path=raw_data,
+            input_path=output_path_of(download_fineweb),
             cc_dumps=versioned(["CC-MAIN-2024-18"]),
             output_path_md=this_output_path("md"),
             output_path_text=this_output_path("text"),
@@ -62,7 +60,7 @@ def get_extraction_steps():
         name="documents/fineweb-small-resiliparse-default",
         fn=process_fw_dump,
         config=ParquetFWConfig(
-            input_path=raw_data,
+            input_path=output_path_of(download_fineweb),
             cc_dumps=versioned(["CC-MAIN-2024-18"]),
             output_path_md=this_output_path("md"),
             output_path_text=this_output_path("text"),
@@ -79,7 +77,7 @@ def get_extraction_steps():
         name="documents/fineweb-small-resiliparse-preserve-formatting",
         fn=process_fw_dump,
         config=ParquetFWConfig(
-            input_path=raw_data,
+            input_path=output_path_of(download_fineweb),
             cc_dumps=versioned(["CC-MAIN-2024-18"]),
             output_path_md=this_output_path("md"),
             output_path_text=this_output_path("text"),
@@ -96,7 +94,7 @@ def get_extraction_steps():
         name="documents/fineweb-small-readability",
         fn=process_fw_dump,
         config=ParquetFWConfig(
-            input_path=raw_data,
+            input_path=output_path_of(download_fineweb),
             cc_dumps=versioned(["CC-MAIN-2024-18"]),
             output_path_md=this_output_path("md"),
             output_path_text=this_output_path("text"),
