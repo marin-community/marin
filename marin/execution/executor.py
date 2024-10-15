@@ -336,12 +336,19 @@ class Executor:
     2. Run each `ExecutorStep` in a proper topological sort order.
     """
 
-    def __init__(self, prefix: str, executor_info_base_path: str, force_run: list[str] | None = None):
+    def __init__(
+        self,
+        prefix: str,
+        executor_info_base_path: str,
+        force_run: list[str] | None = None,
+        force_run_failed: bool = True,
+    ):
         self.prefix = prefix
         self.executor_info_base_path = executor_info_base_path
 
         self.configs: dict[ExecutorStep, dataclass] = {}
         self.force_run = force_run or []
+        self.force_run_failed = force_run_failed
         self.dependencies: dict[ExecutorStep, list[ExecutorStep]] = {}
         self.versions: dict[ExecutorStep, dict[str, Any]] = {}
         self.output_paths: dict[ExecutorStep, str] = {}
@@ -482,9 +489,9 @@ class Executor:
             logger.info(f"  {dependency_index_str(i)} = {self.output_paths[dep]}")
         logger.info("")
         force_run_step = False
-        if step.name in self.force_run or "all" in self.force_run:
+        if step.name in self.force_run or (self.force_run_failed and status == STATUS_FAILED):
             force_run_step = True
-            logger.info(f"Force running {step.name}")
+            logger.info(f"Force running {step.name}, previous status: {status}")
 
         # Only start if there's no status
         should_run = not dry_run and (status is None or force_run_step)
@@ -580,6 +587,7 @@ class ExecutorMainConfig:
 
     dry_run: bool = False
     force_run: list[str] = field(default_factory=list)  # <list of steps name>: run list of steps (names)
+    force_run_failed: bool = True  # run failed steps
 
 
 @draccus.wrap()
@@ -588,6 +596,9 @@ def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep]):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
     executor = Executor(
-        prefix=config.prefix, executor_info_base_path=config.executor_info_base_path, force_run=config.force_run
+        prefix=config.prefix,
+        executor_info_base_path=config.executor_info_base_path,
+        force_run=config.force_run,
+        force_run_failed=config.force_run_failed,
     )
     executor.run(steps=steps, dry_run=config.dry_run)
