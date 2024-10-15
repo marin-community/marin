@@ -9,11 +9,16 @@ import jax.tree
 import numpy as np
 import ray
 import tensorstore as ts
+import transformers
 from jaxtyping import PyTree
 from levanter.data import BatchProcessor, ShardedDataSource, batched
+from levanter.data.text import BatchTokenizer
 from levanter.store import TreeStore
 from levanter.store.cache import CacheLedger, CacheOptions, _canonicalize_batch
 from levanter.store.jagged_array import JaggedArrayStore, PreparedBatch
+from levanter.utils import fsspec_utils
+
+from .tokenize import TokenizeConfig
 
 T = TypeVar("T")
 
@@ -144,12 +149,15 @@ def tokenize_all_shards(
     logger.info(f"Tokenizing {source} to {temporary_cache_path}.")
 
     futures = [
-        _tokenize_one_shard.options(  # type: ignore
+        ray.remote(_tokenize_one_shard)
+        .options(  # type: ignore
             num_cpus=processor.num_cpus,
             num_gpus=processor.num_gpus,
             resources=processor.resources,
+            memory=1 * 1024 * 1024 * 1024,  # made this up
             name=f"tokenize::{temporary_cache_path}::{shard_name}",
-        ).remote(os.path.join(temporary_cache_path, shard_name), source, shard_name, processor, options)
+        )
+        .remote(os.path.join(temporary_cache_path, shard_name), source, shard_name, processor, options)
         for shard_name in source.shard_names
     ]
 
@@ -275,7 +283,7 @@ def _virtual_offset(base: ts.TensorStore, offset_amount):
 # putting it all together
 
 
-def tokenize_and_concatenate_shards(
+async def tokenize_and_concatenate_shards(
     source: ShardedDataSource,
     processor: BatchProcessor,
     cache_path: str,
@@ -283,5 +291,24 @@ def tokenize_and_concatenate_shards(
 ):
     temporary_cache_path = os.path.join(cache_path, "__temporary")
     ledgers = tokenize_all_shards(temporary_cache_path, source, processor, options)
-    concatenate_stores(cache_path, source, processor, ledgers)
+    ledger = await concatenate_stores(cache_path, source, processor, ledgers)
+    # delete temporary cache
+    # TODO: better to use a STS deletion policy or job for this one.
+    fsspec_utils.remove(temporary_cache_path, recursive=True)
+    return ledger
+
+
+@ray.remote
+def tokenize(config: TokenizeConfig):
+    train_source = config.train_source()
+    tokenizer = transformers.AutoTokenizer.from_pretrained(config.tokenizer)
+    batch_tokenizer = BatchTokenizer(tokenizer, enforce_eos=True)
+
+    ledgers = tokenize_and_concatenate_shards(
+        train_source,
+        batch_tokenizer,
+        config.cache_path,
+        config.cache_options,
+    )
+
     return ledgers

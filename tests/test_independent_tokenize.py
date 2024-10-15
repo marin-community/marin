@@ -75,7 +75,7 @@ def ray_init():
         ray.shutdown()
 
 
-def test_tokenize_one_shard(ray_init):
+def test_tokenize_one_shard():
     with tempfile.TemporaryDirectory() as tmpdir:
         source = SimpleShardSource()
         processor = SimpleProcessor()
@@ -143,23 +143,27 @@ async def test_concatenate_stores():
             assert np.all(item["data"] == processed[i]["data"])
 
 
-def test_tokenize_and_concatenate_shards(ray_init):
+@pytest.mark.asyncio
+async def test_tokenize_and_concatenate_shards(ray_init):
     with tempfile.TemporaryDirectory() as tmpdir:
         source = SimpleShardSource()
         processor = SimpleProcessor()
         options = CacheOptions(batch_size=2, target_size_per_flush=1024)
 
-        ledgers = tokenize_and_concatenate_shards(source, processor, tmpdir, options)
+        final_ledger = await tokenize_and_concatenate_shards(source, processor, tmpdir, options)
 
-        assert len(ledgers) == len(source.shard_names)
-        for path, ledger in ledgers:
-            assert os.path.exists(path)
-            assert isinstance(ledger, CacheLedger)
+        assert os.path.exists(tmpdir)
+        assert isinstance(final_ledger, CacheLedger)
+        assert final_ledger.is_finished
 
-        permanent_cache_path = os.path.join(tmpdir, "permanent")
-        assert os.path.exists(permanent_cache_path)
-        permanent_ledger = CacheLedger.load_or_initialize(permanent_cache_path, source, processor, options)
-        assert permanent_ledger.is_finished
+        # let's make sure it's right
+        cache = TreeStore.open(processor.output_exemplar, tmpdir, mode="r")
+        assert len(cache) == 40
+
+        processed = simple_process(processor, source)
+
+        for i, item in enumerate(cache):
+            assert np.all(item["data"] == processed[i]["data"])
 
 
 if __name__ == "__main__":

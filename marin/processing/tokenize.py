@@ -22,10 +22,13 @@ from collections.abc import Sequence
 
 import draccus
 import fsspec
+import levanter
 import ray
 import transformers
-from levanter.data.sharded_datasource import TextUrlDataSource
+from levanter.data.sharded_datasource import ShardedDataSource, TextUrlDataSource
 from levanter.data.text import LMDatasetConfig, LMDatasetSourceConfig, LMMixtureDatasetConfig
+from levanter.store.cache import CacheOptions
+from ray.runtime_env import RuntimeEnv
 
 from marin.execution.executor import ExecutorStep, output_path_of
 from marin.utils import fsspec_glob, fsspec_isdir
@@ -33,9 +36,8 @@ from marin.utils import fsspec_glob, fsspec_isdir
 logger = logging.getLogger(__name__)
 
 
-@ray.remote
+@ray.remote(runtime_env=RuntimeEnv(env_vars={"JAX_PLATFORM_NAME": "cpu"}))
 def levanter_tokenize(input_paths: list[str] | str, tokenizer_name: str, output_path: str):
-    import levanter
     from levanter.data.metrics_monitor import LoggerMetricsMonitor
     from levanter.data.text import BatchTokenizer
     from levanter.store.cache import build_or_load_cache
@@ -47,20 +49,10 @@ def levanter_tokenize(input_paths: list[str] | str, tokenizer_name: str, output_
     logging.basicConfig(level=logging.INFO)
 
     logger.info(f"Caching {input_paths} to {output_path}.")
+
+    source = create_source(input_paths)
     tokenizer = transformers.AutoTokenizer.from_pretrained(tokenizer_name)
     batch_tokenizer = BatchTokenizer(tokenizer, enforce_eos=True)
-
-    if isinstance(input_paths, str) and not is_probably_path(input_paths):
-        source = levanter.data.datasource_from_hf(input_paths, split="train")
-        source = source.map(lambda d: d["text"])
-    else:
-        if isinstance(input_paths, str):
-            input_paths = [input_paths]
-        jsonls = _get_jsonls(input_paths)
-        if len(jsonls) == 0:
-            raise ValueError(f"No jsonl files found in {input_paths}")
-        logger.info(f"Found {len(jsonls)} jsonl files.")
-        source = TextUrlDataSource(jsonls)
 
     cache = build_or_load_cache(
         cache_dir=output_path,
@@ -74,6 +66,21 @@ def levanter_tokenize(input_paths: list[str] | str, tokenizer_name: str, output_
     logger.info(f"Finished caching {input_paths} to {output_path}.")
 
 
+def create_source(input_paths) -> ShardedDataSource:
+    if isinstance(input_paths, str) and not is_probably_path(input_paths):
+        source = levanter.data.datasource_from_hf(input_paths, split="train")
+        source = source.map(lambda d: d["text"])
+    else:
+        if isinstance(input_paths, str):
+            input_paths = [input_paths]
+        jsonls = _get_jsonls(input_paths)
+        if len(jsonls) == 0:
+            raise ValueError(f"No jsonl files found in {input_paths}")
+        logger.info(f"Found {len(jsonls)} jsonl files.")
+        source = TextUrlDataSource(jsonls)
+    return source
+
+
 @dataclasses.dataclass(frozen=True)
 class TokenizeConfig:
     train_paths: list[str]  # path to training data in jsonl format
@@ -81,6 +88,16 @@ class TokenizeConfig:
     cache_path: str  # base path to save the tokenized files
     tokenizer: str  # tokenizer name. Should be the same as you intend to use in the tokenizer spec for the training run
     tags: list[str] = dataclasses.field(default_factory=list)  # tags to be added to config
+    cache_options: CacheOptions = CacheOptions(  # noqa: RUF009
+        num_shard_groups=1024,
+        prefetch_per_group=16,
+    )
+
+    def train_source(self) -> ShardedDataSource:
+        return create_source(self.train_paths)
+
+    def validation_source(self) -> ShardedDataSource:
+        return create_source(self.validation_paths)
 
     def as_lm_dataset_source_config(self, actual_output_path: str) -> LMDatasetSourceConfig:
         """
