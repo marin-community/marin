@@ -188,11 +188,11 @@ consolidate_step = ExecutorStep(
 ############################################################
 # Tokenize
 
-from marin.processing.tokenize import TokenizeConfig, tokenize, lm_training_config  # noqa
+from marin.processing.tokenize import TokenizeConfig, old_tokenize, lm_training_config  # noqa
 
 tokenize_step = ExecutorStep(
     name=f"tokenized/llama3/hello_world_fw-{USER}",
-    fn=tokenize,
+    fn=old_tokenize,
     config=TokenizeConfig(
         train_paths=[output_path_of(consolidate_step)],
         validation_paths=[],

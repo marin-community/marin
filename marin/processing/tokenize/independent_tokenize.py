@@ -5,6 +5,7 @@ import os
 from collections.abc import Sequence
 from typing import TypeVar
 
+import fsspec
 import jax.tree
 import numpy as np
 import ray
@@ -16,7 +17,7 @@ from levanter.data.text import BatchTokenizer
 from levanter.store import TreeStore
 from levanter.store.cache import CacheLedger, CacheOptions, _canonicalize_batch
 from levanter.store.jagged_array import JaggedArrayStore, PreparedBatch
-from levanter.utils import fsspec_utils
+from ray.runtime_env import RuntimeEnv
 
 from .tokenize import TokenizeConfig
 
@@ -85,7 +86,7 @@ def _tokenize_one_shard(
     import humanfriendly
 
     logger = logging.getLogger(f"_tokenize::{shard_name}")
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     ledger = CacheLedger.load_or_initialize(temporary_cache_path, source, processor, options)
     if ledger.is_finished:
         logger.info(f"Shard {shard_name} already processed.")
@@ -115,8 +116,8 @@ def _tokenize_one_shard(
 
         batch_byte_size = sum(prepared_batch.byte_size for prepared_batch in jax.tree.leaves(prepared_batch))
 
-        if batch_byte_size > options.target_size_per_flush:
-            writer.write_prepared_batch({shard_name: this_batch_size}, batch)
+        if batch_byte_size > options.target_bytes_per_flush:
+            writer.write_prepared_batch(this_batch_size, prepared_batch)
             nice_bytes = humanfriendly.format_size(batch_byte_size)
             logger.info(f"Processed {total_rows} rows. Wrote {this_batch_size} rows to {shard_name}. ({nice_bytes})")
             this_batch_size = 0
@@ -124,8 +125,8 @@ def _tokenize_one_shard(
 
     if prepared_batch is not None:
         batch_byte_size = sum(prepared_batch.byte_size for prepared_batch in jax.tree.leaves(prepared_batch))
-        writer.write_prepared_batch(this_batch_size, prepared_batch)
         nice_bytes = humanfriendly.format_size(batch_byte_size)
+        writer.write_prepared_batch(this_batch_size, prepared_batch)
         logger.info(f"Processed {total_rows} rows. Wrote {this_batch_size} rows to {shard_name}. ({nice_bytes})")
         this_batch_size = 0
         prepared_batch = None
@@ -133,6 +134,8 @@ def _tokenize_one_shard(
     writer.finish_shard(shard_name, total_rows)
 
     writer.finish()
+
+    logger.info(f"Finished processing {shard_name}. Wrote {total_rows} rows.")
 
     return temporary_cache_path, writer.ledger
 
@@ -144,9 +147,9 @@ def tokenize_all_shards(
     options: CacheOptions,
 ):
     logger = logging.getLogger("tokenize_all_shards")
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-    logger.info(f"Tokenizing {source} to {temporary_cache_path}.")
+    logger.info(f"Tokenizing {len(source.shard_names)} shards to {temporary_cache_path}.")
 
     futures = [
         ray.remote(_tokenize_one_shard)
@@ -181,7 +184,7 @@ async def concatenate_stores(
         the ledger of the permanent cache
     """
     logger = logging.getLogger("concatenate_stores")
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
     options = caches[0][1].metadata.options
 
@@ -216,7 +219,19 @@ async def concatenate_stores(
 
     permanent_ledger._serialize_and_commit(permanent_cache_path)
 
+    logger.info(f"Finished concatenating {len(caches)} caches to {permanent_cache_path}.")
+
     return permanent_ledger
+
+
+@ray.remote(num_cpus=8, memory=8 * 1024 * 1024 * 1024)
+def concatenate_stores_remote(
+    permanent_cache_path: str,
+    source: ShardedDataSource,
+    processor: BatchProcessor,
+    caches: list[tuple[str, CacheLedger]],
+) -> CacheLedger:
+    return asyncio.run(concatenate_stores(permanent_cache_path, source, processor, caches))
 
 
 async def concatenate_jagged_arrays(dest: JaggedArrayStore, arrays: Sequence[JaggedArrayStore]):
@@ -231,7 +246,7 @@ async def concatenate_jagged_arrays(dest: JaggedArrayStore, arrays: Sequence[Jag
     data_sizes = np.array([a.data_size for a in arrays])
     data_offsets_per_shard = np.concatenate([np.array([0], dtype=int), np.cumsum(data_sizes)])
 
-    # this is a virtual concatenation of the data arrays. Thank god.
+    # this is a virtual concatenation of the data arrays.
     data_concat = ts.concat(datas, axis=0)
 
     data_write_future = dest.data[0:total_data_size].write(data_concat)
@@ -280,35 +295,46 @@ def _virtual_offset(base: ts.TensorStore, offset_amount):
     return ts.virtual_chunked(do_read, dtype=base.dtype, domain=base.domain, shape=base.shape)
 
 
-# putting it all together
-
-
-async def tokenize_and_concatenate_shards(
+def tokenize_and_concatenate_shards(
     source: ShardedDataSource,
     processor: BatchProcessor,
     cache_path: str,
     options: CacheOptions,
-):
+) -> CacheLedger:
+    """
+
+    Tokenizes the shards of a ShardedDataSource independently and concatenates the results into a single cache.
+
+    Returns:
+        The ledger of the concatenated cache.
+
+    """
     temporary_cache_path = os.path.join(cache_path, "__temporary")
     ledgers = tokenize_all_shards(temporary_cache_path, source, processor, options)
-    ledger = await concatenate_stores(cache_path, source, processor, ledgers)
+    ledger = ray.get(concatenate_stores_remote.remote(cache_path, source, processor, ledgers))
     # delete temporary cache
-    # TODO: better to use a STS deletion policy or job for this one.
-    fsspec_utils.remove(temporary_cache_path, recursive=True)
+    remove(temporary_cache_path, recursive=True)
     return ledger
 
 
-@ray.remote
+def remove(url, *, recursive=False, **kwargs):
+    """Remove a file from a remote filesystem."""
+    # TODO: better to use a STS deletion policy or job for this one.
+    fs, path = fsspec.core.url_to_fs(url, **kwargs)
+    fs.rm(path, recursive=recursive)
+
+
+@ray.remote(runtime_env=RuntimeEnv(env_vars={"JAX_PLATFORM_NAME": "cpu"}))
 def tokenize(config: TokenizeConfig):
     train_source = config.train_source()
     tokenizer = transformers.AutoTokenizer.from_pretrained(config.tokenizer)
     batch_tokenizer = BatchTokenizer(tokenizer, enforce_eos=True)
 
-    ledgers = tokenize_and_concatenate_shards(
+    ledger = tokenize_and_concatenate_shards(
         train_source,
         batch_tokenizer,
         config.cache_path,
         config.cache_options,
     )
 
-    return ledgers
+    return ledger

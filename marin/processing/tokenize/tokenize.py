@@ -220,7 +220,7 @@ def lm_mixture_training_config(
     )
 
 
-def tokenize(config: TokenizeConfig):
+def old_tokenize(config: TokenizeConfig):
     if len(config.train_paths) == 0 and len(config.validation_paths) == 0:
         raise ValueError("No input files specified. Nothing to do.")
     output_path = os.path.join(config.cache_path, "train")
@@ -258,7 +258,7 @@ def is_probably_path(path: str) -> bool:
 
 @draccus.wrap()
 def main(config: TokenizeConfig):
-    tokenize(config)
+    old_tokenize(config)
 
 
 if __name__ == "__main__":

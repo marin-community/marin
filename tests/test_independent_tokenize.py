@@ -8,7 +8,7 @@ from levanter.data import BatchProcessor, ShardedDataSource
 from levanter.store.cache import CacheLedger, CacheOptions
 from levanter.store.tree_store import TreeStore
 
-from marin.processing.independent_tokenize import (
+from marin.processing.tokenize.independent_tokenize import (
     _tokenize_one_shard,
     concatenate_stores,
     tokenize_all_shards,
@@ -79,7 +79,7 @@ def test_tokenize_one_shard():
     with tempfile.TemporaryDirectory() as tmpdir:
         source = SimpleShardSource()
         processor = SimpleProcessor()
-        options = CacheOptions(batch_size=2, target_size_per_flush=1024)
+        options = CacheOptions(batch_size=2, target_size_per_flush="1024")
 
         shard_name = source.shard_names[0]
         temporary_cache_path = os.path.join(tmpdir, shard_name)
@@ -104,7 +104,7 @@ def test_tokenize_all_shards(ray_init):
     with tempfile.TemporaryDirectory() as tmpdir:
         source = SimpleShardSource()
         processor = SimpleProcessor()
-        options = CacheOptions(batch_size=2, target_size_per_flush=1024)
+        options = CacheOptions(batch_size=2, target_size_per_flush="1024")
 
         ledgers = tokenize_all_shards(tmpdir, source, processor, options)
 
@@ -119,7 +119,7 @@ async def test_concatenate_stores():
     with tempfile.TemporaryDirectory() as tmpdir:
         source = SimpleShardSource()
         processor = SimpleProcessor()
-        options = CacheOptions(batch_size=2, target_size_per_flush=1024)
+        options = CacheOptions(batch_size=2, target_size_per_flush="1024")
 
         caches = []
         for shard_name in source.shard_names:
@@ -148,9 +148,9 @@ async def test_tokenize_and_concatenate_shards(ray_init):
     with tempfile.TemporaryDirectory() as tmpdir:
         source = SimpleShardSource()
         processor = SimpleProcessor()
-        options = CacheOptions(batch_size=2, target_size_per_flush=1024)
+        options = CacheOptions(batch_size=2, target_size_per_flush="1024")
 
-        final_ledger = await tokenize_and_concatenate_shards(source, processor, tmpdir, options)
+        final_ledger = tokenize_and_concatenate_shards(source, processor, tmpdir, options)
 
         assert os.path.exists(tmpdir)
         assert isinstance(final_ledger, CacheLedger)
