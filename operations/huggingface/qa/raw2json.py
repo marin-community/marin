@@ -103,11 +103,13 @@ class DatasetWithMetaData:
         dataset (Dataset): The Hugging Face dataset object.
         subset (str): The name of the subset of the dataset (e.g., 'all', 'philosophy', etc.).
         split (str): The split of the dataset (e.g., 'train', 'dev', 'test').
+        revision (str): The revision of the dataset (e.g. "main")
     """
 
     dataset: Dataset
     subset: str
     split: str
+    revision: str
 
 
 def download_directory_from_gcs(bucket_name: str, gcs_directory_path: str, local_directory_path: str) -> None:
@@ -203,6 +205,7 @@ def load_datasets(config: DatasetConversionConfig) -> list[DatasetWithMetaData]:
                     ),
                     subset,
                     split,
+                    config.revision,
                 )
                 datasets.append(dataset_w_metadata)
             except Exception as e:
@@ -407,6 +410,7 @@ def raw2json(cfg: DatasetConversionConfig) -> None:
                     metadata=QAExampleMetadata(
                         subset=dataset.subset,
                         split=dataset.split,
+                        revision=dataset.revision,
                         provenance=f"https://huggingface.co/datasets/{cfg.hf_path}",
                     ),
                 )

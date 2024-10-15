@@ -9,6 +9,7 @@ class QAExampleMetadata:
     Attributes:
         subset (str): subset of dataset
         split (str): split of dataset
+        revision (str): revision of dataset
         provenance (str): URL of source of data, usually HF
         answer (str): text of answer
         answer_idx (str): index into list of answer options corresponding to correct answer
@@ -19,6 +20,7 @@ class QAExampleMetadata:
 
     subset: str | None = None
     split: str | None = None
+    revision: str | None = None
     provenance: str | None = None
     answer: str | None = None
     answer_idx: int | None = None
