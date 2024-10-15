@@ -1,5 +1,4 @@
 import logging
-from dataclasses import dataclass
 
 from experiments.defaults import default_tokenize, default_train, llama_1_4b_train_config
 from experiments.llama import llama3_tokenizer, llama_1_4b
@@ -20,6 +19,7 @@ logger = logging.getLogger("ray")
 
 
 raw_data = "gs://marin-us-central2/raw/fineweb/cd85054/"
+
 
 def get_extraction_steps():
     transform_trafilatura_default_step = ExecutorStep(
@@ -121,10 +121,10 @@ def create_steps() -> list[ExecutorStep]:
     total_steps = []
 
     extraction_steps = get_extraction_steps()
-    
+
     for step in extraction_steps:
         step_name = step.name.split("/", 1)[1]
-        
+
         fw_tokenized = default_tokenize(
             name=f"fw-small-100B-{step_name}",
             dataset=output_path_of(step),
@@ -149,12 +149,7 @@ def create_steps() -> list[ExecutorStep]:
             ),
         )
 
-        total_steps.extend([
-            step,
-            fw_tokenized, 
-            fw_100b_model, 
-            evaluate_step
-        ])
+        total_steps.extend([step, fw_tokenized, fw_100b_model, evaluate_step])
 
     return total_steps
 
