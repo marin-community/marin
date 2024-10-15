@@ -43,7 +43,7 @@ class SimpleTrainConfig:
 
 
 llama_1_4b_train_config = SimpleTrainConfig(
-    tpu_type="v4-8",
+    tpu_type="v4-256",
     train_batch_size=2048,
     num_train_steps=100000,
     learning_rate=3e-4,
