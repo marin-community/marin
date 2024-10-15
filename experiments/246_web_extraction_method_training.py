@@ -31,8 +31,8 @@ class WebExtractionMethodConfig:
     - extraction_method_name: str: The name of the extraction method
     """
 
-    extracted_data: str = ""
-    extraction_method_name: str = ""
+    extracted_data: str
+    extraction_method_name: str
 
 
 @draccus.wrap()
