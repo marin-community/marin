@@ -59,11 +59,6 @@ dev = [
     "types-six",
 ]
 
-eval = [
-    "vllm",
-    "crfm-helm",
-]
-
 [tool.setuptools.packages.find]
 where = ["."]
 exclude = ["cache", "infra"]

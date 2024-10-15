@@ -8,7 +8,7 @@ on:
 jobs:
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 15
     strategy:
       matrix:
         python-version: [3.11]
@@ -24,44 +24,14 @@ jobs:
           activate-environment: marin_quickstart_env
           auto-activate-base: false
 
-      - name: Install system dependencies
+      - name: Install dependencies
         shell: bash -l {0}
         run: |
-          sudo apt-get update -y
-          sudo apt-get install -y gcc-12 g++-12 libnuma-dev libdnnl-dev
-          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 10 --slave /usr/bin/g++ g++ /usr/bin/g++-12
-
-      - name: Install Python dependencies
-        shell: bash -l {0}
-        run: |
-          cd ../
           conda install -c conda-forge libstdcxx-ng
           git clone https://github.com/stanford-crfm/levanter.git && cd levanter
           pip install .[test]
-
-      - name: Clone and build vLLM
-        shell: bash -l {0}
-        run: |
-          cd ..
-          git clone https://github.com/vllm-project/vllm.git
-          cd vllm
-          pip install wheel packaging ninja "setuptools>=49.4.0" numpy setuptools_scm
-          pip install -v -r requirements-cpu.txt --extra-index-url https://download.pytorch.org/whl/cpu
-          VLLM_TARGET_DEVICE=cpu python setup.py install
-
-      - name: Clone and install HELM with local_vllm branch
-        shell: bash -l {0}
-        run: |
-          cd ..
-          git clone -b local_vllm https://github.com/stanford-crfm/helm.git
-          cd helm
-          pip install .
-
-      - name: Install additional dependencies
-        shell: bash -l {0}
-        run: |
+          cd ../
           pip install . --extra-index-url https://download.pytorch.org/whl/cpu
-          pip install --upgrade transformers tokenizers
 
       - name: Start Ray cluster locally
         shell: bash -l {0}

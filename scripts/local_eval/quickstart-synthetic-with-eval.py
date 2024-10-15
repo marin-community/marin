@@ -6,6 +6,8 @@ import draccus
 from levanter.models.gpt2 import Gpt2Config
 from levanter.trainer import TrainerConfig
 
+from marin.evaluation.evaluation_config import EvaluationConfig
+from marin.evaluation.run import evaluate
 from marin.execution.executor import (
     ExecutorMainConfig,
     ExecutorStep,
@@ -30,12 +32,12 @@ from scripts.hello_world_fw.process import FineWebConfig, transform
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
+os.environ["CUDA_VISIBLE_DEVICES"] = ""
+
 
 @dataclass
 class QuickstartExecutorConfig:
-    # all artifacts will be saved in {bucket_prefix}/{prefix}{commit_hash}
-    # bucket_prefix is defined in the main function (e.g. /tmp or gs://marin-us-central2)
-
+    # all artifacts will be saved in gs://marin-us-central2/{prefix}{commit_hash}
     commit_hash: str = ""
     prefix: str = "quickstart-tests"
 
@@ -183,6 +185,8 @@ def create_steps(config: QuickstartExecutorConfig) -> list[ExecutorStep]:
     ############################################################
     # Train
 
+    run_id = "test-run"
+
     train_step = ExecutorStep(
         name=os.path.join(config.prefix, config.commit_hash, "train"),
         fn=run_levanter_train_lm,
@@ -194,11 +198,29 @@ def create_steps(config: QuickstartExecutorConfig) -> list[ExecutorStep]:
             hf_save_steps=1,
             model=Gpt2Config(
                 num_layers=2,
-                num_heads=2,
+                num_heads=1,
                 seq_len=64,
-                hidden_dim=32,
+                hidden_dim=64,
             ),
-            trainer=TrainerConfig(train_batch_size=1, num_train_steps=2, max_eval_batches=1, require_accelerator=False),
+            trainer=TrainerConfig(
+                train_batch_size=1, num_train_steps=2, max_eval_batches=1, require_accelerator=False, id=run_id
+            ),
+        ),
+    )
+
+    ############################################################
+    # Evaluation
+
+    eval_step = ExecutorStep(
+        name=os.path.join(config.prefix, config.commit_hash, "eval"),
+        fn=evaluate,
+        config=EvaluationConfig(
+            evaluator="helm",
+            model_name=f"{run_id}/step-1",
+            model_path=output_path_of(train_step, os.path.join("hf", run_id, "step-1")),
+            evaluation_path=this_output_path(),
+            evals=["mmlu"],
+            launch_with_ray=False,
         ),
     )
 
@@ -212,6 +234,7 @@ def create_steps(config: QuickstartExecutorConfig) -> list[ExecutorStep]:
         consolidate_step,
         tokenize_step,
         train_step,
+        eval_step,
     ]
 
 
@@ -221,7 +244,8 @@ def main(config: QuickstartExecutorConfig):
         steps = create_steps(config)
         bucket_prefix = "/tmp"
         config_executor = ExecutorMainConfig(
-            prefix=bucket_prefix, executor_info_base_path=os.path.join(bucket_prefix, "experiments")
+            prefix=bucket_prefix,
+            executor_info_base_path=os.path.join(bucket_prefix, config.prefix, "experiments"),
         )
         executor_main(config_executor, steps=steps)
         logger.info(
