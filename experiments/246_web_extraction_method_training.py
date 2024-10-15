@@ -1,8 +1,6 @@
 import logging
 from dataclasses import dataclass
 
-import draccus
-
 from experiments.defaults import default_tokenize, default_train, llama_1_4b_train_config
 from experiments.llama import llama3_tokenizer, llama_1_4b
 from marin.evaluation.evaluation_config import EvaluationConfig
@@ -72,10 +70,11 @@ if __name__ == "__main__":
         "resiliparse_with_preserve_formatting": "gs://marin-us-central2/documents/fineweb-small-resiliparse-preserve-formatting-e8c6ec",
         "trafilatura": "gs://marin-us-central2/documents/fineweb-small-trafilatura-0465ba",
         "trafilatura_with_favor_precision": "gs://marin-us-central2/documents/fineweb-small-trafilatura-favor-precision-cf6c34",
-
     }
 
     for extraction_method, data_path in dataset.items():
-        steps = create_steps(WebExtractionMethodConfig(extracted_data=data_path, extraction_method_name=extraction_method))
+        steps = create_steps(
+            WebExtractionMethodConfig(extracted_data=data_path, extraction_method_name=extraction_method)
+        )
 
         executor_main(steps=steps)
