@@ -16,6 +16,7 @@ from marin.utilities.dataclass_utils import asdict_without_nones
 
 logger = logging.getLogger(__name__)
 
+
 class OutputFormatOptions(str, Enum):
     """
     Enum class for specifying the output format options when converting datasets.
