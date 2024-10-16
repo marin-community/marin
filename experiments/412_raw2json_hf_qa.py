@@ -16,7 +16,7 @@ mmlu_convert_eval_aux = ExecutorStep(
         dataset_name="cais/mmlu",
         subsets=["all"],
         splits=["auxiliary_train"],
-        input_path: "gs://marin-us-central2/raw/cais/mmlu/c30699e/huggingface.co/datasets/cais/mmlu/resolve/c30699e",
+        input_path="gs://marin-us-central2/raw/cais/mmlu/c30699e/huggingface.co/datasets/cais/mmlu/resolve/c30699e",
         hf_path="cais/mmlu",
         output_path=this_output_path(),
         output_format=OutputFormatOptions("evaluation"),
