@@ -312,7 +312,7 @@ def _start_data_copies_for_shards(
 
     # SPREAD to take advantage of  the fact that we're copying data from different shards
     # for some reason, this uses a ton of memory
-    @ray.remote(scheduling_strategy="SPREAD", memory=8 * 1024 * 1024 * 1024)
+    @ray.remote(scheduling_strategy="SPREAD")
     def do_copy(path, data_offset_tree):
         logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
         if fsspec_exists(os.path.join(path, ".COPY_SUCCESS")):
@@ -328,8 +328,10 @@ def _start_data_copies_for_shards(
 
         return done
 
-    if ray_utils.is_local_ray_cluster() or os.getenv("CI") == "1":
+    if ray_utils.is_local_ray_cluster() or os.getenv("CI").lower() in {"true", "1"}:
         do_copy = do_copy.options(memory=1 * 1024 * 1024 * 1024)
+    else:
+        do_copy = do_copy.options(memory=10 * 1024 * 1024 * 1024)
 
     futures = [
         do_copy.remote(path, data_offset_tree)

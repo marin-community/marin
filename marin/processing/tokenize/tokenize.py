@@ -158,7 +158,7 @@ def levanter_tokenize(input_paths: list[str] | str, tokenizer_name: str, output_
     logger.info(f"Finished caching {input_paths} to {output_path}.")
 
 
-def _create_source(input_paths) -> ShardedDataSource:
+def _create_source(input_paths: str | list[str]) -> ShardedDataSource:
     if isinstance(input_paths, str) and not _is_probably_path(input_paths):
         source = levanter.data.datasource_from_hf(input_paths, split="train")
         source = source.map(lambda d: d["text"])

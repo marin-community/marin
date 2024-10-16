@@ -1,13 +1,17 @@
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
+import llama
+import pretraining_datasets
+
+from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
 
 
-def tokenize_dclm(tokenizer="meta-llama/Meta-Llama-3.1-8B") -> ExecutorStep:
+def tokenize_dclm(tokenizer=llama.llama3_tokenizer) -> ExecutorStep:
     return ExecutorStep(
         name="tokenized/dclm-baseline-dedup",
         fn=tokenize,
         config=TokenizeConfig(
-            train_paths=versioned("gs://marin-us-central2/raw/dclm/v2024-07-09-baseline-dedup/"),
+            train_paths=output_path_of(pretraining_datasets.dclm_baseline),
+            validation_paths=[],
             cache_path=this_output_path(),
             tokenizer=versioned(tokenizer),
         ),

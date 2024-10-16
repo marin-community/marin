@@ -1,5 +1,7 @@
 import os.path
 
+import llama
+
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
 
@@ -37,7 +39,7 @@ DOLMA_DATASETS = {
 
 
 def tokenize_dolma_steps(
-    base_path="tokenized/", tokenizer="meta-llama/Meta-Llama-3.1-8B"
+    base_path="tokenized/", tokenizer=llama.llama3_tokenizer
 ) -> dict[str, ExecutorStep[TokenizeConfig]]:
     dolma_steps: dict[str, ExecutorStep[TokenizeConfig]] = {}
     for dataset, files in DOLMA_DATASETS.items():
