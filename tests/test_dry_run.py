@@ -1,3 +1,4 @@
+import os
 import subprocess
 import tempfile
 import unittest
@@ -32,6 +33,7 @@ def test_run_dry_runs():
             )
             assert result.returncode == 0, f"Dry run failed for {script}"
             print(f"Output for {script}: {result.stdout}")
+            os.unlink(temp_dir)
     else:
         print("No experiments directory found")
 
