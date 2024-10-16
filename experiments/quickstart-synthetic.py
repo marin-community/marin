@@ -3,9 +3,9 @@ import logging
 import os
 
 import draccus
+
 from levanter.models.gpt2 import Gpt2Config
 from levanter.trainer import TrainerConfig
-
 from marin.execution.executor import (
     ExecutorMainConfig,
     ExecutorStep,
@@ -203,13 +203,14 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
     ]
 
 
-if __name__ == "__main__":
+@draccus.wrap()
+def main(config: ExecutorMainConfig):
     try:
-        config = draccus.parse(ExecutorMainConfig)
         bucket_prefix = "/tmp"
         experiment_prefix = "quickstart-tests"
-        config = dataclasses.replace(config, prefix=bucket_prefix)
-        config = dataclasses.replace(config, executor_info_base_path=os.path.join(bucket_prefix, "experiments"))
+        config = dataclasses.replace(
+            config, prefix=bucket_prefix, executor_info_base_path=os.path.join(bucket_prefix, "experiments")
+        )
 
         # path to synthetic test data
         synth_data: str = "./tests/quickstart-data"
@@ -219,3 +220,7 @@ if __name__ == "__main__":
     except Exception as e:
         logger.error(f"Error in main execution: {e}")
         raise e
+
+
+if __name__ == "__main__":
+    main()
