@@ -1,9 +1,8 @@
-import dataclasses
 import logging
 import os
 
+import dataclasses
 import draccus
-
 from levanter.models.gpt2 import Gpt2Config
 from levanter.trainer import TrainerConfig
 from marin.execution.executor import (
@@ -14,6 +13,7 @@ from marin.execution.executor import (
     this_output_path,
     versioned,
 )
+
 from marin.processing.classification.consolidate import ConsolidateConfig, FilterConfig, consolidate
 from marin.processing.classification.dedupe import DedupeConfig, dedupe
 from marin.processing.classification.fasttext.train_fasttext import (
