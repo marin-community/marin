@@ -310,7 +310,7 @@ def _start_data_copies_for_shards(
         for i in range(len(source.shard_names))
     ]
 
-    # SPREAD to take advantage of  the fact that we're copying data from different shards
+    # SPREAD to take advantage of the fact that we're copying data from different shards
     # for some reason, this uses a ton of memory
     @ray.remote(scheduling_strategy="SPREAD")
     def do_copy(path, data_offset_tree):

@@ -89,7 +89,7 @@ def tokenize(config: TokenizeConfig):
 
     train_source = config.train_source()
     if train_source is not None:
-        ledger = (
+        train_ledger = (
             ray.remote(tokenize_and_concatenate_shards)
             .options(
                 name=f"tokenize::{config.cache_path}", runtime_env=RuntimeEnv(env_vars={"JAX_PLATFORM_NAME": "cpu"})
@@ -102,7 +102,7 @@ def tokenize(config: TokenizeConfig):
             )
         )
     else:
-        ledger = None
+        train_ledger = None
 
     validation_source = config.validation_source()
 
@@ -122,8 +122,8 @@ def tokenize(config: TokenizeConfig):
     else:
         validation_ledger = None
 
-    if ledger is not None:
-        ray.get(ledger)
+    if train_ledger is not None:
+        ray.get(train_ledger)
     if validation_ledger is not None:
         ray.get(validation_ledger)
 
