@@ -1,10 +1,10 @@
 import json
+import logging
 import os
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 from urllib.parse import urlparse
-
 import draccus
 import fsspec
 from datasets import Dataset, get_dataset_config_names, load_dataset
@@ -13,6 +13,7 @@ from google.cloud import storage
 from marin.core.data import QAExample, QAExampleMetadata
 from marin.utilities.dataclass_utils import asdict_without_nones
 
+logger = logging.getLogger(__name__)
 
 class OutputFormatOptions(str, Enum):
     """
@@ -144,7 +145,7 @@ def download_directory_from_gcs(bucket_name: str, gcs_directory_path: str, local
 
         # Download the blob to the local file path
         blob.download_to_filename(local_file_path)
-        print(f"Downloaded {blob.name} to {local_file_path}")
+        logger.info(f"Downloaded {blob.name} to {local_file_path}")
 
 
 def load_datasets(config: DatasetConversionConfig) -> list[DatasetWithMetaData]:
@@ -209,7 +210,7 @@ def load_datasets(config: DatasetConversionConfig) -> list[DatasetWithMetaData]:
                 )
                 datasets.append(dataset_w_metadata)
             except Exception as e:
-                print(f"Failed to load subset '{subset}' and split '{split}': {e}")
+                logger.exception(f"Failed to load subset '{subset}' and split '{split}': {e}")
 
     return datasets
 
