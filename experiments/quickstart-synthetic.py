@@ -3,9 +3,9 @@ import logging
 import os
 
 import draccus
-
 from levanter.models.gpt2 import Gpt2Config
 from levanter.trainer import TrainerConfig
+
 from marin.execution.executor import (
     ExecutorMainConfig,
     ExecutorStep,
