@@ -1,4 +1,4 @@
-from marin.execution.executor import ExecutorStep, executor_main
+from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from operations.huggingface.qa.raw2json import DatasetConversionConfig, OutputFormatOptions, raw2json
 
 """
@@ -17,7 +17,7 @@ mmlu_convert_eval_aux = ExecutorStep(
         splits=["auxiliary_train"],
         input_path="cais/mmlu",
         hf_path="cais/mmlu",
-        output_path="gs://marin-us-central2/eval/mmlu",
+        output_path=this_output_path(),
         output_format=OutputFormatOptions("evaluation"),
         prompt_key="question",
         options_key="choices",
@@ -35,7 +35,7 @@ mmlu_convert_eval_subject = ExecutorStep(
         splits=["dev", "validation"],
         input_path="cais/mmlu",
         hf_path="cais/mmlu",
-        output_path="gs://marin-us-central2/eval/mmlu",
+        output_path=this_output_path(),
         output_format=OutputFormatOptions("evaluation"),
         prompt_key="question",
         options_key="choices",
@@ -47,7 +47,7 @@ mmlu_convert_eval_subject = ExecutorStep(
 
 # Convert mmlu to dolma format
 mmlu_convert_dolma = ExecutorStep(
-    name="evaluation/mmlu-dolma",
+    name="decontamination/mmlu-dolma",
     fn=raw2json,
     config=DatasetConversionConfig(
         dataset_name="cais/mmlu",
@@ -55,7 +55,7 @@ mmlu_convert_dolma = ExecutorStep(
         splits=["dev", "test", "validation"],
         input_path="cais/mmlu",
         hf_path="cais/mmlu",
-        output_path="gs://marin-us-central2/dolma/mmlu",
+        output_path=this_output_path(),
         output_format=OutputFormatOptions("decontamination"),
         prompt_key="question",
         options_key="choices",
