@@ -30,7 +30,8 @@ def process_one_warc_file(
     extract_method: str,
     config: ExtractionConfig,
     output_path_md: str,
-    output_path_text: str
+    output_path_text: str,
+    add_html: bool = False
 ):
     """
     Takes in the input file and processes it to get the html and md content.
@@ -123,9 +124,11 @@ def process_one_warc_file(
                 "text": out_fw["md"],
                 "source": "fineweb",
                 "format": "md",
-                "html": out_fw["html"],
                 "metadata": {f"fw_{key}": value for key, value in out_fw.items() if key not in ("md", "text")},
             }
+
+            if add_html:
+                out_dolma["html"] = out_fw["html"]
 
             f.write(json.dumps(out_dolma) + "\n")
 
@@ -162,7 +165,8 @@ def process_fw_parquet(
     extract_method: str,
     config: ExtractionConfig,
     output_path_md: str,
-    output_path_text: str
+    output_path_text: str,
+    add_html: bool = False
 ):
     """
     Converts fineweb files to html and markdown. This will essentially take in fineweb and split different groups based
@@ -205,7 +209,7 @@ def process_fw_parquet(
         group_df.to_parquet(filename)
         logger.info(f"Processing the group: {filename}, into {output_file_name}")
 
-        ray_waitable.append(process_one_warc_file.remote(filename, output_file_name, extract_method, config, output_path_md, output_path_text))
+        ray_waitable.append(process_one_warc_file.remote(filename, output_file_name, extract_method, config, output_path_md, output_path_text, add_html))
         file_path.append(filename)
 
     was_successful = True
@@ -246,6 +250,7 @@ class ParquetFWConfig:
     extract_method: str = "readability"
     config: ExtractionConfig = HtmlToMarkdownConfig.default_config()
     max_files: int | None = None
+    add_html: bool = False
 
 
 @draccus.wrap()
@@ -284,7 +289,7 @@ def process_fw_dump(cfg: ParquetFWConfig):
 
 
             logger.info(f"Starting Processing for the fw parquet file: {file} in output_path: {output_path}")
-            result_refs.append(process_fw_parquet.remote(file, output_path, cfg.extract_method, cfg.config, output_path_md, output_path_text))
+            result_refs.append(process_fw_parquet.remote(file, output_path, cfg.extract_method, cfg.config, output_path_md, output_path_text, cfg.add_html))
 
             if cfg.max_files and len(result_refs) >= cfg.max_files:
                 break
