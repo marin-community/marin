@@ -14,14 +14,14 @@ from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 
 from marin.execution.executor import ExecutorStep, InputName, this_output_path, versioned
-from marin.processing.tokenize import TokenizeConfig, lm_training_config, old_tokenize
+from marin.processing.tokenize import TokenizeConfig, lm_training_config, tokenize
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 
 
 def default_tokenize(name: str, dataset: InputName | ExecutorStep, tokenizer: str) -> ExecutorStep:
     return ExecutorStep(
         name=os.path.join("tokenized", name),
-        fn=old_tokenize,
+        fn=tokenize,
         config=TokenizeConfig(
             train_paths=[dataset],
             validation_paths=[],

@@ -1,7 +1,7 @@
 import os.path
 
+import marin.processing.tokenize.tokenize
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
-from marin.processing.tokenize import independent_tokenize
 from marin.processing.tokenize.tokenize import TokenizeConfig
 
 """
@@ -44,7 +44,7 @@ def tokenize_dolma_steps(
     for dataset, files in DOLMA_DATASETS.items():
         dolma_steps[dataset] = ExecutorStep(
             name=os.path.join(base_path, "dolma", dataset),
-            fn=independent_tokenize.tokenize,
+            fn=marin.processing.tokenize.tokenize.tokenize,
             config=TokenizeConfig(
                 train_paths=versioned([f"{BASE_DIR_DOLMA}/{file}" for file in files]),
                 validation_paths=versioned([]),

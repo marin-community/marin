@@ -22,7 +22,7 @@ from marin.processing.classification.fasttext.train_fasttext import (
     train,
 )
 from marin.processing.classification.inference import InferenceConfig, run_inference
-from marin.processing.tokenize import TokenizeConfig, lm_training_config, old_tokenize
+from marin.processing.tokenize import TokenizeConfig, lm_training_config, tokenize
 from marin.schemas.web.convert import HtmlToMarkdownConfig
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 from scripts.hello_world_fw.process import FineWebConfig, transform
@@ -169,7 +169,7 @@ def create_steps(config: QuickstartExecutorConfig) -> list[ExecutorStep]:
 
     tokenize_step = ExecutorStep(
         name=os.path.join(config.prefix, config.commit_hash, "tokenized"),
-        fn=old_tokenize,
+        fn=tokenize,
         config=TokenizeConfig(
             train_paths=output_path_of(consolidate_step),
             validation_paths=[],

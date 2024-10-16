@@ -1,8 +1,14 @@
+"""
+Alternative to Levanter's tokenization pipeline that tokenizes shards independently and then concatenates the results.
+This is much more reliable on the Marin cluster. It is also easier to map tokens back to the original data.
+"""
+
 import asyncio
 import copy
 import logging
 import os
 from collections.abc import Sequence
+from functools import partial
 from typing import TypeVar
 
 import fsspec
@@ -10,18 +16,18 @@ import jax.tree
 import numpy as np
 import ray
 import tensorstore as ts
-import transformers
 from jaxtyping import PyTree
 from levanter.data import BatchProcessor, ShardedDataSource, batched
-from levanter.data.text import BatchTokenizer
 from levanter.store import TreeStore
 from levanter.store.cache import CacheLedger, CacheOptions, _canonicalize_batch
 from levanter.store.jagged_array import JaggedArrayStore, PreparedBatch
-from ray.runtime_env import RuntimeEnv
 
-from .tokenize import TokenizeConfig
+from ...utilities import ray_utils
+from ...utils import fsspec_exists
 
 T = TypeVar("T")
+
+logger = logging.getLogger(__name__)
 
 
 class ShardCacheWriter:
@@ -196,18 +202,21 @@ async def concatenate_stores(
         logger.info("Permanent cache already finished.")
         return permanent_ledger
 
+    data_futures = _start_data_copies_for_shards(permanent_cache_path, source, processor, caches)
+
     # ok we try to be smart about this. We have a bunch of tree stores we want to concatenate.
     # each treestore is a PyTree of jagged arrays, and a jagged array is 2-3 tensorstore arrays (offsets, data, shapes?)
     # we want to concatenate these treestores.
     stores = [TreeStore.open(processor.output_exemplar, path, mode="r", cache_metadata=True) for path, _ in caches]
 
-    dest = TreeStore.open(processor.output_exemplar, permanent_cache_path, mode="w", cache_metadata=False)
+    dest = TreeStore.open(processor.output_exemplar, permanent_cache_path, mode="a", cache_metadata=False)
 
     all_futures = jax.tree.map(
-        lambda d_arr, *arrs: concatenate_jagged_arrays(d_arr, arrs), dest.tree, *[s.tree for s in stores]
+        lambda d_arr, *arrs: concatenate_jagged_array_metadata(d_arr, arrs), dest.tree, *[s.tree for s in stores]
     )
 
     await asyncio.gather(*jax.tree.leaves(all_futures))
+    await asyncio.gather(*data_futures)
 
     # ok now make the ledger
     permanent_ledger.total_num_rows = sum(ledger.total_num_rows for _, ledger in caches)
@@ -224,39 +233,37 @@ async def concatenate_stores(
     return permanent_ledger
 
 
-@ray.remote(num_cpus=8, memory=8 * 1024 * 1024 * 1024)
+@ray.remote(num_cpus=8)
 def concatenate_stores_remote(
     permanent_cache_path: str,
     source: ShardedDataSource,
     processor: BatchProcessor,
     caches: list[tuple[str, CacheLedger]],
 ) -> CacheLedger:
+    # Ray doesn't let tasks be async, so we have to do this.
     return asyncio.run(concatenate_stores(permanent_cache_path, source, processor, caches))
 
 
-async def concatenate_jagged_arrays(dest: JaggedArrayStore, arrays: Sequence[JaggedArrayStore]):
+async def concatenate_jagged_array_metadata(dest: JaggedArrayStore, arrays: Sequence[JaggedArrayStore]):
     """
     This function concatenates a sequence of jagged arrays into a single jagged array.
     It relies on knowledge of internals of the JaggedArrayStore class.
     """
-    # TODO: would be good if we didn't expose the full data array since it's enormous (virtually so)
-    datas = [a.data[0 : a.data_size] for a in arrays]
-
-    total_data_size = sum(a.data_size for a in arrays)
     data_sizes = np.array([a.data_size for a in arrays])
     data_offsets_per_shard = np.concatenate([np.array([0], dtype=int), np.cumsum(data_sizes)])
 
-    # this is a virtual concatenation of the data arrays.
-    data_concat = ts.concat(datas, axis=0)
-
-    data_write_future = dest.data[0:total_data_size].write(data_concat)
+    # # this is a virtual concatenation of the data arrays.
+    # this is super slow, so we do the more complicated thing below.
+    # data_concat = ts.concat(datas, axis=0)
+    #
+    # data_write_future = dest.data[0:total_data_size].write(data_concat)
 
     # to concatenate, we need to adjust the indices, so be careful with that one.
 
     row_counts = [a.num_rows for a in arrays]
 
     # we pack the number of rows into the 0'th entry of the indices array.
-    # offsetses = [a.offsets[1:a.num_rows + 1] for a in arrays]
+    # tensorstore doesn't shift indices to 0, so we need to do that ourselves.
     offsetses = [a.offsets[1 : a.num_rows + 1][ts.d[:].translate_to[0]] for a in arrays]
 
     adjusted_offsets = [
@@ -267,7 +274,7 @@ async def concatenate_jagged_arrays(dest: JaggedArrayStore, arrays: Sequence[Jag
 
     offsets_write_future = dest.offsets[1 : offsets_concat.shape[0] + 1].write(offsets_concat)
 
-    futures = [data_write_future, offsets_write_future]
+    futures = [offsets_write_future]
 
     if dest.shapes is not None:
         # this won't be set for tokenization, but for completeness
@@ -281,6 +288,80 @@ async def concatenate_jagged_arrays(dest: JaggedArrayStore, arrays: Sequence[Jag
     await dest.offsets[0].write(np.array(sum(row_counts), dtype=int))
 
     return await asyncio.gather(*futures)
+
+
+def _start_data_copies_for_shards(
+    permanent_cache_path: str,
+    source: ShardedDataSource,
+    processor: BatchProcessor,
+    caches: list[tuple[str, CacheLedger]],
+):
+    sources = [TreeStore.open(processor.output_exemplar, path, mode="r", cache_metadata=True) for path, _ in caches]
+
+    def compute_data_offsets_for_shards(stores: list[JaggedArrayStore]):
+        data_sizes = [a.data_size for a in stores]
+        data_offsets = np.concatenate([np.array([0], dtype=int), np.cumsum(data_sizes)])
+        return data_offsets
+
+    data_offsets = jax.tree.map(lambda *trees: compute_data_offsets_for_shards(trees), *[s.tree for s in sources])
+
+    data_offsets_for_shards = [
+        jax.tree.map(partial(lambda i, offset_array: offset_array[i], i), data_offsets)
+        for i in range(len(source.shard_names))
+    ]
+
+    # SPREAD to take advantage of  the fact that we're copying data from different shards
+    # for some reason, this uses a ton of memory
+    @ray.remote(scheduling_strategy="SPREAD", memory=8 * 1024 * 1024 * 1024)
+    def do_copy(path, data_offset_tree):
+        logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+        if fsspec_exists(os.path.join(path, ".COPY_SUCCESS")):
+            logger.info(f"Data already copied from {path} to {permanent_cache_path}.")
+            return
+
+        done = asyncio.run(
+            _copy_data_from_one_shard_to_permanent_memory(permanent_cache_path, path, processor, data_offset_tree)
+        )
+
+        with open(os.path.join(path, ".COPY_SUCCESS"), "w") as f:
+            f.write("")
+
+        return done
+
+    if ray_utils.is_local_ray_cluster():
+        do_copy = do_copy.options(memory=1 * 1024 * 1024 * 1024)
+
+    futures = [
+        do_copy.remote(path, data_offset_tree)
+        for (path, _), data_offset_tree in zip(caches, data_offsets_for_shards, strict=False)
+    ]
+
+    return futures
+
+
+async def _copy_data_from_one_shard_to_permanent_memory(
+    dest_path: str,
+    source_path: str,
+    processor: BatchProcessor,
+    data_offset_tree: PyTree[int],
+):
+    """Copies **just the data array** from one shard to the permanent cache at a given offset."""
+    logger.info(f"Copying data from {source_path} to {dest_path}.")
+    dest = TreeStore.open(processor.output_exemplar, dest_path, mode="a", cache_metadata=False)
+    source = TreeStore.open(processor.output_exemplar, source_path, mode="r", cache_metadata=True)
+
+    def _copy_one_array(dest_array: JaggedArrayStore, source_array: JaggedArrayStore, data_offset: int):
+        # TODO: it'd be good if we just didn't expose the full data array (but only the used part)
+        data = source_array.data[0 : source_array.data_size]
+        write_future = dest_array.data[data_offset : data_offset + source_array.data_size].write(data)
+
+        return write_future
+
+    futures = jax.tree.map(_copy_one_array, dest.tree, source.tree, data_offset_tree)
+
+    out = await asyncio.gather(*jax.tree.leaves(futures))
+    logger.info(f"Finished copying data from {source_path} to {dest_path}.")
+    return out
 
 
 def _virtual_offset(base: ts.TensorStore, offset_amount):
@@ -322,19 +403,3 @@ def remove(url, *, recursive=False, **kwargs):
     # TODO: better to use a STS deletion policy or job for this one.
     fs, path = fsspec.core.url_to_fs(url, **kwargs)
     fs.rm(path, recursive=recursive)
-
-
-@ray.remote(runtime_env=RuntimeEnv(env_vars={"JAX_PLATFORM_NAME": "cpu"}))
-def tokenize(config: TokenizeConfig):
-    train_source = config.train_source()
-    tokenizer = transformers.AutoTokenizer.from_pretrained(config.tokenizer)
-    batch_tokenizer = BatchTokenizer(tokenizer, enforce_eos=True)
-
-    ledger = tokenize_and_concatenate_shards(
-        train_source,
-        batch_tokenizer,
-        config.cache_path,
-        config.cache_options,
-    )
-
-    return ledger
