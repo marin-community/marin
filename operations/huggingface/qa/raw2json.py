@@ -86,7 +86,7 @@ class DatasetConversionConfig:
     options_key: str = ""
     answer_labels: list[str] = field(default_factory=list)
     exclude_subsets: list[str] = field(default_factory=list)
-    revision: str = "main"
+    revision: str | None = None
     token: str | bool = False
     trust_remote_code: bool = False
 
