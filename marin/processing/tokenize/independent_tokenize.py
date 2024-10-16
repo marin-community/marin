@@ -323,7 +323,7 @@ def _start_data_copies_for_shards(
             _copy_data_from_one_shard_to_permanent_memory(permanent_cache_path, path, processor, data_offset_tree)
         )
 
-        with open(os.path.join(path, ".COPY_SUCCESS"), "w") as f:
+        with fsspec.open(os.path.join(path, ".COPY_SUCCESS"), "w") as f:
             f.write("")
 
         return done
