@@ -30,4 +30,4 @@ jobs:
 
       - name: Test quickstart pipeline
         run: |
-          ray job submit --working-dir . -- python experiments/quickstart-synthetic.py --commit_hash exp-${{ github.sha }}
+          ray job submit --working-dir . -- python experiments/quickstart-synthetic.py
