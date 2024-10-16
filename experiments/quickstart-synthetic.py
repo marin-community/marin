@@ -1,11 +1,11 @@
+import dataclasses
 import logging
 import os
-import dataclasses
 
 import draccus
+
 from levanter.models.gpt2 import Gpt2Config
 from levanter.trainer import TrainerConfig
-
 from marin.execution.executor import (
     ExecutorMainConfig,
     ExecutorStep,
@@ -31,7 +31,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 
-def create_steps(prefix, synth_data) -> list[ExecutorStep]:
+def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
     # ############################################################
     # Transform HTML to text
 
