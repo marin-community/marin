@@ -233,7 +233,7 @@ async def concatenate_stores(
     return permanent_ledger
 
 
-@ray.remote()
+@ray.remote
 def concatenate_stores_remote(
     permanent_cache_path: str,
     source: ShardedDataSource,
