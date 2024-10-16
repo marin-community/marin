@@ -81,6 +81,7 @@ def get_extraction_steps():
             cc_dumps=versioned(["CC-MAIN-2024-18"]),
             md_output_path=this_output_path("md"),
             text_output_path=this_output_path("text"),
+            html_output_path=this_output_path("html"),
             extract_method=versioned("resiliparse"),
             config=ResiliparseConfig(
                 preserve_formatting=versioned(True),
@@ -98,7 +99,6 @@ def get_extraction_steps():
             cc_dumps=versioned(["CC-MAIN-2024-18"]),
             md_output_path=this_output_path("md"),
             text_output_path=this_output_path("text"),
-            html_output_path=this_output_path("html"),
             extract_method=versioned("readability"),
             config=HtmlToMarkdownConfig(
                 include_images=versioned(False),
