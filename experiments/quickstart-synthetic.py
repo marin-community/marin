@@ -1,7 +1,6 @@
 import dataclasses
 import logging
 import os
-from dataclasses import dataclass
 
 import draccus
 
@@ -30,17 +29,6 @@ from scripts.hello_world_fw.process import FineWebConfig, transform
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class QuickstartExecutorConfig:
-    # all artifacts will be saved in gs://marin-us-central2/{prefix}{commit_hash}
-    commit_hash: str = ""
-    prefix: str = "quickstart-tests"
-
-    # path to synthetic test data
-    synth_data: str = "./tests/quickstart-data"
-    dry_run: bool = False
 
 
 def create_steps(prefix, synth_data) -> list[ExecutorStep]:
