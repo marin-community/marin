@@ -1,11 +1,11 @@
-import llama
 import pretraining_datasets
 
+from experiments.llama import llama3_tokenizer
 from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
 
 
-def tokenize_dclm(tokenizer=llama.llama3_tokenizer) -> ExecutorStep:
+def tokenize_dclm(tokenizer=llama3_tokenizer) -> ExecutorStep:
     return ExecutorStep(
         name="tokenized/dclm-baseline-dedup",
         fn=tokenize,
