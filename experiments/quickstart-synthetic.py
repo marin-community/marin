@@ -207,15 +207,15 @@ if __name__ == "__main__":
     try:
         config = draccus.parse(ExecutorMainConfig)
         bucket_prefix = "/tmp"
-        prefix = "quickstart-tests"
+        experiment_prefix = "quickstart-tests"
         config = dataclasses.replace(config, prefix=bucket_prefix)
         config = dataclasses.replace(config, executor_info_base_path=os.path.join(bucket_prefix, "experiments"))
 
         # path to synthetic test data
         synth_data: str = "./tests/quickstart-data"
-        steps = create_steps(prefix, synth_data)
+        steps = create_steps(experiment_prefix, synth_data)
         executor_main(config, steps=steps)
-        logger.info(f"Execution completed successfully. All outputs are in {bucket_prefix}/{config.prefix}")
+        logger.info(f"Execution completed successfully. All outputs are in {bucket_prefix}/{experiment_prefix}")
     except Exception as e:
         logger.error(f"Error in main execution: {e}")
         raise e
