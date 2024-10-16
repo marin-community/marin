@@ -1,7 +1,6 @@
 import os.path
 
-import llama
-
+from experiments.llama import llama3_tokenizer
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
 
@@ -11,6 +10,25 @@ Tokenizes the Dolma 1.7 datasets.
 
 
 BASE_DIR_DOLMA = "gs://marin-us-central2/raw/dolma/v1.7"
+
+# sampling proportion comes from https://huggingface.co/datasets/allenai/dolma
+DOLMA_OLMO_MIXTURE_WEIGHTS = {
+    "dolma/algebraic-stack": 12.6,  # 12.6 * 1.0
+    "dolma/arxiv": 28.0,  # 28.0 * 1.0
+    "dolma/gutenberg": 5.3,  # 5.3 * 1.0
+    "dolma/c4": 124.95,  # 249.9 * 0.5
+    "dolma/cc": 597.75,  # 1,195.5 * 0.5
+    "dolma/cc-news": 14.3,  # 1.0
+    "dolma/falcon": 456.4,  # 1.0, refined web
+    "dolma/megawika": 4.6,  # 1.0
+    "dolma/owmath": 12.6,  # 1.0
+    "dolma/pes2o": 57.2,  # 1.0
+    "dolma/reddit": 79.9,  # 1.0
+    "dolma/stackexchange": 19.6,  # 1.0
+    "dolma/starcoder": 263.8,  # 1.0
+    "dolma/flan": 16.5,  # 6.5 * 1.0
+    "dolma/wiki": 7.4,  # 3.7 * 2.0
+}
 
 
 DOLMA_DATASETS = {
@@ -38,9 +56,7 @@ DOLMA_DATASETS = {
 }
 
 
-def tokenize_dolma_steps(
-    base_path="tokenized/", tokenizer=llama.llama3_tokenizer
-) -> dict[str, ExecutorStep[TokenizeConfig]]:
+def tokenize_dolma_steps(base_path="tokenized/", tokenizer=llama3_tokenizer) -> dict[str, ExecutorStep[TokenizeConfig]]:
     dolma_steps: dict[str, ExecutorStep[TokenizeConfig]] = {}
     for dataset, files in DOLMA_DATASETS.items():
         dolma_steps[dataset] = ExecutorStep(
