@@ -31,7 +31,7 @@ def process_one_warc_file(
     config: ExtractionConfig,
     output_path_md: str,
     output_path_text: str,
-    add_html: bool = False
+    output_path_html: str | None = False,
 ):
     """
     Takes in the input file and processes it to get the html and md content.
@@ -48,6 +48,10 @@ def process_one_warc_file(
 
     md_output_file = os.path.join(output_path_md, base_folder, output_file_name)
     fw_output_file = os.path.join(output_path_text, base_folder, output_file_name)
+    
+    html_output_file = None
+    if output_path_html:
+        html_output_file = os.path.join(output_path_html, base_folder, output_file_name)
 
 
     # Write the output to a file with md information.
@@ -127,12 +131,9 @@ def process_one_warc_file(
                 "metadata": {f"fw_{key}": value for key, value in out_fw.items() if key not in ("md", "text")},
             }
 
-            if add_html:
-                out_dolma["html"] = out_fw["html"]
-
             f.write(json.dumps(out_dolma) + "\n")
 
-    with fsspec.open(fw_output_file, "wt", compression="gzip") as f:  # html output
+    with fsspec.open(fw_output_file, "wt", compression="gzip") as f:  # text output
         for index, row in df.iterrows():
             out_fw = row.to_dict()
             out_dolma = {
@@ -143,6 +144,19 @@ def process_one_warc_file(
                 "metadata": {f"fw_{key}": value for key, value in out_fw.items() if key not in ("md", "html", "text")},
             }
             f.write(json.dumps(out_dolma) + "\n")
+
+    
+    if html_output_file:
+        with fsspec.open(html_output_file, "wt", compression="gzip") as f:  # html output
+            for index, row in df.iterrows():
+                out_fw = row.to_dict()
+                out_dolma = {
+                    "id": out_fw["id"],
+                    "source": "fineweb",
+                    "format": "html",
+                    "html": out_fw["html"],
+                }
+                f.write(json.dumps(out_dolma) + "\n")
 
     # remove the input file
     fsspec_rm(input_path)
@@ -166,7 +180,7 @@ def process_fw_parquet(
     config: ExtractionConfig,
     output_path_md: str,
     output_path_text: str,
-    add_html: bool = False
+    output_path_html: str | None = False
 ):
     """
     Converts fineweb files to html and markdown. This will essentially take in fineweb and split different groups based
@@ -209,7 +223,7 @@ def process_fw_parquet(
         group_df.to_parquet(filename)
         logger.info(f"Processing the group: {filename}, into {output_file_name}")
 
-        ray_waitable.append(process_one_warc_file.remote(filename, output_file_name, extract_method, config, output_path_md, output_path_text, add_html))
+        ray_waitable.append(process_one_warc_file.remote(filename, output_file_name, extract_method, config, output_path_md, output_path_text, output_path_html))
         file_path.append(filename)
 
     was_successful = True
@@ -246,11 +260,11 @@ class ParquetFWConfig:
     input_path: str
     output_path_md: str
     output_path_text: str
+    output_path_html: str | None = None
     cc_dumps: list[str] | None = None
     extract_method: str = "readability"
     config: ExtractionConfig = HtmlToMarkdownConfig.default_config()
     max_files: int | None = None
-    add_html: bool = False
 
 
 @draccus.wrap()
@@ -282,6 +296,10 @@ def process_fw_dump(cfg: ParquetFWConfig):
             output_path_md = os.path.join(cfg.output_path_md, cc_dump)
             output_path_text = os.path.join(cfg.output_path_text, cc_dump)
 
+            output_path_html = None
+            if cfg.output_path_html:
+                output_path_html = os.path.join(cfg.output_path_html, cc_dump)
+
             output_path = os.path.join(
                 cfg.output_path_text,
                 input_file_name.replace(".parquet", ""),
@@ -289,7 +307,7 @@ def process_fw_dump(cfg: ParquetFWConfig):
 
 
             logger.info(f"Starting Processing for the fw parquet file: {file} in output_path: {output_path}")
-            result_refs.append(process_fw_parquet.remote(file, output_path, cfg.extract_method, cfg.config, output_path_md, output_path_text, cfg.add_html))
+            result_refs.append(process_fw_parquet.remote(file, output_path, cfg.extract_method, cfg.config, output_path_md, output_path_text, output_path_html))
 
             if cfg.max_files and len(result_refs) >= cfg.max_files:
                 break
