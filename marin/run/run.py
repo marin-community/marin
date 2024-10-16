@@ -1,6 +1,5 @@
 import argparse
 import asyncio
-import json
 import logging
 import os
 import shlex
@@ -53,7 +52,14 @@ def main():
     """Parse command-line arguments and submit the job."""
     parser = argparse.ArgumentParser(description="Submit Ray jobs using the command-line.")
     parser.add_argument("--no_wait", action="store_true", help="Do not wait for the job to finish.")
-    parser.add_argument("--env_vars", type=str, help="Environment variables to set for the job (JSON format).")
+    parser.add_argument(
+        "--env_vars",
+        action="append",
+        nargs="+",
+        metavar=("KEY", "VALUE"),
+        help="Set environment variables for the job. If only a KEY is provided, "
+        "the VALUE will be set to an empty string.",
+    )
     parser.add_argument("--pip_deps", type=list, help="List of pip dependencies to install before running.")
     parser.add_argument("cmd", help="The command to run in the Ray cluster.", nargs=argparse.REMAINDER)
 
@@ -66,14 +72,24 @@ def main():
         exit(1)
     full_cmd = full_cmd[2:]
 
-    # Load and merge environment variables
+    # Load and merge environment variables from multiple -e options
     env_vars = {}
     if args.env_vars:
-        try:
-            env_vars = json.loads(args.env_vars)
-        except json.JSONDecodeError:
-            logger.error("Invalid JSON format for --env_vars.")
-            exit(1)
+        for item in args.env_vars:
+            if len(item) > 2:
+                logger.error(
+                    f"Too many values provided for environment variable: {' '.join(item)}. "
+                    f"Expected at most 2 (KEY VALUE)."
+                )
+                exit(1)
+            elif len(item) == 1:
+                # If only the key is provided, set its value to an empty string
+                env_vars[item[0]] = ""
+            elif len(item) == 2:
+                # If both key and value are provided, store them as a key-value pair
+                env_vars[item[0]] = item[1]
+
+    # Now env_vars is a dictionary with the environment variables set using -e
 
     env_vars = {**ENV_VARS, **env_vars}
 
