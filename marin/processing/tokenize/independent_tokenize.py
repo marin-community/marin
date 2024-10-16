@@ -328,7 +328,7 @@ def _start_data_copies_for_shards(
 
         return done
 
-    if ray_utils.is_local_ray_cluster():
+    if ray_utils.is_local_ray_cluster() or os.getenv("CI") == "1":
         do_copy = do_copy.options(memory=1 * 1024 * 1024 * 1024)
 
     futures = [
