@@ -2,13 +2,25 @@ name: Verify PR with quickstart.py
 
 on:
   pull_request:
+    types: [opened, reopened, ready_for_review]
     branches:
       - main
+  pull_request_review:
+    types: [submitted, dismissed]
+  issue_comment:
+    types: [created]  
 
 jobs:
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+
+    # Only run on approval for pull_request_review submitted events or specific comment trigger
+    if: |
+      github.event_name != 'pull_request_review' ||
+      github.event.review.state == 'approved' ||
+      github.event.action == 'dismissed' ||
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@run-quickstart-ci'))
 
     steps:
       - name: Checkout code
