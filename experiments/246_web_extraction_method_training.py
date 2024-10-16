@@ -28,7 +28,6 @@ def get_extraction_steps():
             cc_dumps=versioned(["CC-MAIN-2024-18"]),
             md_output_path=this_output_path("md"),
             text_output_path=this_output_path("text"),
-            html_output_path=this_output_path("html"),
             extract_method=versioned("trafilatura"),
             config=TrafilaturaConfig(
                 favor_precision=versioned(False),
@@ -47,7 +46,6 @@ def get_extraction_steps():
             cc_dumps=versioned(["CC-MAIN-2024-18"]),
             md_output_path=this_output_path("md"),
             text_output_path=this_output_path("text"),
-            html_output_path=this_output_path("html"),
             extract_method=versioned("trafilatura"),
             config=TrafilaturaConfig(
                 favor_precision=versioned(True),
@@ -66,7 +64,6 @@ def get_extraction_steps():
             cc_dumps=versioned(["CC-MAIN-2024-18"]),
             md_output_path=this_output_path("md"),
             text_output_path=this_output_path("text"),
-            html_output_path=this_output_path("html"),
             extract_method=versioned("resiliparse"),
             config=ResiliparseConfig(
                 preserve_formatting=versioned(False),
@@ -84,7 +81,6 @@ def get_extraction_steps():
             cc_dumps=versioned(["CC-MAIN-2024-18"]),
             md_output_path=this_output_path("md"),
             text_output_path=this_output_path("text"),
-            html_output_path=this_output_path("html"),
             extract_method=versioned("resiliparse"),
             config=ResiliparseConfig(
                 preserve_formatting=versioned(True),
