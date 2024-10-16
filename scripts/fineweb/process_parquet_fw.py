@@ -102,6 +102,7 @@ def process_one_warc_file(
 
                         markdown = convert_page(html_decoded, url, extract_method, config)
                         df.loc[url_idx_in_df, "md"] = markdown["content"]
+                        df.loc[url_idx_in_df, "html"] = html_decoded
 
                         num_urls_processed += 1
                     except Exception as e:
@@ -122,6 +123,7 @@ def process_one_warc_file(
                 "text": out_fw["md"],
                 "source": "fineweb",
                 "format": "md",
+                "html": out_fw["html"],
                 "metadata": {f"fw_{key}": value for key, value in out_fw.items() if key not in ("md", "text")},
             }
 
