@@ -20,7 +20,8 @@ from jaxtyping import PyTree
 from levanter.data import BatchProcessor, ShardedDataSource, batched
 from levanter.store import TreeStore
 from levanter.store.cache import CacheLedger, CacheOptions, _canonicalize_batch
-from levanter.store.jagged_array import JaggedArrayStore, PreparedBatch
+from levanter.store.jagged_array import DEFAULT_WRITE_CHUNK_SIZE, JaggedArrayStore, PreparedBatch
+from tqdm_loggable.auto import tqdm
 
 from ...utilities import ray_utils
 from ...utils import fsspec_exists
@@ -211,12 +212,12 @@ async def concatenate_stores(
 
     dest = TreeStore.open(processor.output_exemplar, permanent_cache_path, mode="a", cache_metadata=False)
 
-    all_futures = jax.tree.map(
+    metadata_futures = jax.tree.map(
         lambda d_arr, *arrs: concatenate_jagged_array_metadata(d_arr, arrs), dest.tree, *[s.tree for s in stores]
     )
 
-    await asyncio.gather(*jax.tree.leaves(all_futures))
     await asyncio.gather(*data_futures)
+    await asyncio.gather(*jax.tree.leaves(metadata_futures))
 
     # ok now make the ledger
     permanent_ledger.total_num_rows = sum(ledger.total_num_rows for _, ledger in caches)
@@ -233,7 +234,7 @@ async def concatenate_stores(
     return permanent_ledger
 
 
-@ray.remote
+@ray.remote(retry_exceptions=True)
 def concatenate_stores_remote(
     permanent_cache_path: str,
     source: ShardedDataSource,
@@ -258,36 +259,33 @@ async def concatenate_jagged_array_metadata(dest: JaggedArrayStore, arrays: Sequ
     #
     # data_write_future = dest.data[0:total_data_size].write(data_concat)
 
-    # to concatenate, we need to adjust the indices, so be careful with that one.
-
-    row_counts = [a.num_rows for a in arrays]
-
-    # we pack the number of rows into the 0'th entry of the indices array.
-    # tensorstore doesn't shift indices to 0, so we need to do that ourselves.
-    offsetses = [a.offsets[1 : a.num_rows + 1][ts.d[:].translate_to[0]] for a in arrays]
-
-    adjusted_offsets = [
-        _virtual_offset(offsets, offset) for offsets, offset in zip(offsetses, data_offsets_per_shard, strict=False)
-    ]
-
-    offsets_concat = ts.concat(adjusted_offsets, axis=0)
-
-    offsets_write_future = dest.offsets[1 : offsets_concat.shape[0] + 1].write(offsets_concat)
-
-    futures = [offsets_write_future]
+    offsets_write_future = _write_offsets(dest, arrays, data_offsets_per_shard)
 
     if dest.shapes is not None:
         # this won't be set for tokenization, but for completeness
         shapes = [a.shapes[0 : a.num_rows] for a in arrays]
         shapes_concat = ts.concat(shapes, axis=0)
         shapes_write_future = dest.shapes[0 : shapes_concat.shape[0], :].write(shapes_concat)
-        futures.append(shapes_write_future)
+        await shapes_write_future
 
     await offsets_write_future
     # write number of rows
+    row_counts = [a.num_rows for a in arrays]
     await dest.offsets[0].write(np.array(sum(row_counts), dtype=int))
 
-    return await asyncio.gather(*futures)
+    return
+
+
+async def _write_offsets(dest: JaggedArrayStore, arrays: Sequence[JaggedArrayStore], data_offsets_per_shard: np.ndarray):
+    # we pack the number of rows into the 0'th entry of the indices array.
+    # tensorstore doesn't shift indices to 0, so we need to do that ourselves.
+    offsetses = [a.offsets[1 : a.num_rows + 1][ts.d[:].translate_to[0]] for a in arrays]
+    adjusted_offsets = [
+        _virtual_offset(offsets, offset) for offsets, offset in zip(offsetses, data_offsets_per_shard, strict=False)
+    ]
+    offsets_concat = ts.concat(adjusted_offsets, axis=0)
+    offsets_write_future = dest.offsets[1 : offsets_concat.shape[0] + 1].write(offsets_concat)
+    return await offsets_write_future
 
 
 def _start_data_copies_for_shards(
@@ -310,9 +308,16 @@ def _start_data_copies_for_shards(
         for i in range(len(source.shard_names))
     ]
 
+    if ray_utils.is_local_ray_cluster() or os.getenv("CI", "false").lower() in {"true", "1"}:
+        cpus = 1
+        memory = 1 * 1024 * 1024 * 1024
+    else:
+        cpus = 4
+        memory = 16 * 1024 * 1024 * 1024
+
     # SPREAD to take advantage of the fact that we're copying data from different shards
     # for some reason, this uses a ton of memory
-    @ray.remote(scheduling_strategy="SPREAD")
+    @ray.remote(scheduling_strategy="SPREAD", num_cpus=cpus, memory=memory, retry_exceptions=True)
     def do_copy(path, data_offset_tree):
         logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
         if fsspec_exists(os.path.join(path, ".COPY_SUCCESS")):
@@ -328,13 +333,9 @@ def _start_data_copies_for_shards(
 
         return done
 
-    if ray_utils.is_local_ray_cluster() or os.getenv("CI").lower() in {"true", "1"}:
-        do_copy = do_copy.options(memory=1 * 1024 * 1024 * 1024)
-    else:
-        do_copy = do_copy.options(memory=10 * 1024 * 1024 * 1024)
-
     futures = [
         do_copy.remote(path, data_offset_tree)
+        # do_copy(path, data_offset_tree)
         for (path, _), data_offset_tree in zip(caches, data_offsets_for_shards, strict=False)
     ]
 
@@ -354,16 +355,58 @@ async def _copy_data_from_one_shard_to_permanent_memory(
 
     def _copy_one_array(dest_array: JaggedArrayStore, source_array: JaggedArrayStore, data_offset: int):
         # TODO: it'd be good if we just didn't expose the full data array (but only the used part)
-        data = source_array.data[0 : source_array.data_size]
-        write_future = dest_array.data[data_offset : data_offset + source_array.data_size].write(data)
-
-        return write_future
+        # data = source_array.data[0 : source_array.data_size]
+        # write_future = dest_array.data[data_offset : data_offset + source_array.data_size].write(data)
+        #
+        # return write_future
+        return _chunked_copy(source_path, dest_array.data, source_array.data, data_offset, source_array.data_size)
 
     futures = jax.tree.map(_copy_one_array, dest.tree, source.tree, data_offset_tree)
 
     out = await asyncio.gather(*jax.tree.leaves(futures))
     logger.info(f"Finished copying data from {source_path} to {dest_path}.")
     return out
+
+
+def _chunked_copy(desc: str, dest_array: ts.TensorStore, source_array: ts.TensorStore, dest_offset: int, data_size: int):
+    """
+    Tries to do an aligned copy of a source array to a destination array. For some reason TS is using
+    a *ton* of memory to do the naive copy. We try to do something smart/chunked.
+    """
+    # TODO: transactions don't seem to be working?
+
+    itemsize = dest_array.dtype.numpy_dtype.itemsize
+    pbar = tqdm(total=data_size * itemsize, desc=f"Copying data ({desc})", unit="B", unit_scale=True)
+
+    write_alignment = DEFAULT_WRITE_CHUNK_SIZE  # 500MB or so
+    # write_alignment = 64
+    block_size = write_alignment * 4
+
+    # find the first aligned index
+    first_aligned_index = (dest_offset + write_alignment - 1) // write_alignment * write_alignment
+    src_index = 0
+    dest_index = 0
+
+    # copy the initial unaligned part
+    if first_aligned_index != 0:
+        write_length = min(data_size, first_aligned_index - dest_offset)
+        data = source_array[0:write_length].read().result()
+        dest_array[dest_offset : dest_offset + write_length].write(data).result()
+        del data
+        src_index = write_length
+        dest_index = dest_offset + write_length
+        pbar.update(write_length * itemsize)
+
+    while src_index < data_size:
+        write_length = min(block_size, data_size - src_index)
+        data = source_array[src_index : src_index + write_length].read().result()
+        dest_array[dest_index : dest_index + write_length].write(data).result()
+        del data
+        src_index += write_length
+        dest_index += write_length
+        pbar.update(write_length * itemsize)
+
+    return
 
 
 def _virtual_offset(base: ts.TensorStore, offset_amount):
@@ -392,6 +435,14 @@ def tokenize_and_concatenate_shards(
         The ledger of the concatenated cache.
 
     """
+    # first see if we need to do anything
+    try:
+        ledger = CacheLedger.load(cache_path)
+        logger.info(f"Cache already exists at {cache_path}.")
+        return ledger
+    except FileNotFoundError:
+        pass
+
     temporary_cache_path = os.path.join(cache_path, "__temporary")
     ledgers = tokenize_all_shards(temporary_cache_path, source, processor, options)
     ledger = ray.get(concatenate_stores_remote.remote(cache_path, source, processor, ledgers))

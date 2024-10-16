@@ -115,7 +115,7 @@ def test_tokenize_all_shards(ray_init):
 
 
 @pytest.mark.asyncio
-async def test_concatenate_stores():
+async def test_concatenate_stores(ray_init):
     with tempfile.TemporaryDirectory() as tmpdir:
         source = SimpleShardSource()
         processor = SimpleProcessor()
