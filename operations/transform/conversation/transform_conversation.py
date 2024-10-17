@@ -15,10 +15,12 @@ import draccus
 import fsspec
 import ray
 
+from .adapters import OpenAIChatMessage, get_adapter
+
 
 @dataclass
-class TransformConfig:
-    """Configuration to transform a conversation dataset from huggingface json to dolma formatted jsonl.
+class TransformDatasetConfig:
+    """Base configuration to transform a conversation dataset from huggingface json to OpenAI format.
 
     Args:
         input_path (str): The path to the input file.
@@ -48,44 +50,8 @@ class TransformConfig:
     )
     output_path: str = "gs://marin-us-central2/documents/teknium--OpenHermes-2.5/v2024-09-29"
     shard_size: int = 5000
-    source: str = "teknium/OpenHermes-2.5"
-    conversation_column: str = "conversations"
-    role_key: str = "from"
-    user_value: str = "human"
-    assistant_value: str = "gpt"
-    system_value: str = "system"
-    content_key: str = "value"
     metadata_columns: list[str] = field(default_factory=lambda: ["source", "category", "skip_prompt_formatting"])
-
-
-def transform_conversation_to_openai_format(
-    conversation: list[dict[str, str]],
-    role_key: str,
-    user_value: str,
-    assistant_value: str,
-    system_value: str,
-    content_key: str,
-) -> list[dict[str, str]]:
-    """Transform a conversation from the OpenHermes-2.5 dataset to a string.
-
-    Args:
-        conversation (list[dict[str, str]]): A list of messages in the conversation.
-
-    Returns:
-        str: A string representation of the conversation created by concatenating all the messages
-            with a space delimiter.
-    """
-
-    messages = []
-    role_to_openai_role = {
-        user_value: "user",
-        assistant_value: "assistant",
-        system_value: "system",
-    }
-    for conv in conversation:
-        role = role_to_openai_role[conv[role_key]]
-        messages.append({"role": role, "content": conv[content_key]})
-    return messages
+    source: str = "teknium/OpenHermes-2.5"
 
 
 def generate_hash_from_messages(messages: list[dict[str, str]]) -> str:
@@ -100,7 +66,7 @@ def generate_hash_from_messages(messages: list[dict[str, str]]) -> str:
     return hashlib.sha256(str(messages).encode()).hexdigest()
 
 
-def transform_rows(rows: list[dict], cfg: TransformConfig):
+def transform_rows(rows: list[dict], cfg: TransformDatasetConfig):
     """Transform a list of rows from the OpenHermes-2.5 dataset to a list of dolma formatted jsonl rows.
 
     Args:
@@ -110,11 +76,10 @@ def transform_rows(rows: list[dict], cfg: TransformConfig):
         list[dict]: A list of dolma formatted jsonl rows.
     """
     transformed_rows = []
+    adapter = get_adapter(cfg.source)
     for row in rows:
-        row_conversations: list[dict[str, str]] = row[cfg.conversation_column]
-        transformed_row_messages: list[dict[str, str]] = transform_conversation_to_openai_format(
-            row_conversations, cfg.role_key, cfg.user_value, cfg.assistant_value, cfg.system_value, cfg.content_key
-        )
+        transformed_row_messages: list[OpenAIChatMessage] = adapter.transform_conversation_to_openai_format(row)
+        transformed_row_messages = [message.dict() for message in transformed_row_messages]
 
         # Create a unique ID for the row based on the text
         row_idx = generate_hash_from_messages(transformed_row_messages)
@@ -134,7 +99,7 @@ def transform_rows(rows: list[dict], cfg: TransformConfig):
 
 
 @ray.remote(memory=4 * 1024 * 1024 * 1024)
-def transform(cfg: TransformConfig):
+def transform(cfg: TransformDatasetConfig):
     rows = []
     with fsspec.open(cfg.input_path, "rt") as f:
         rows = json.load(f)
@@ -149,7 +114,7 @@ def transform(cfg: TransformConfig):
 
 
 @draccus.wrap()
-def main(cfg: TransformConfig):
+def main(cfg: TransformDatasetConfig):
     response = transform.remote(cfg)
 
     try:
