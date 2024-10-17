@@ -192,7 +192,7 @@ def step_to_lm_training_config(step: TokenizerStep) -> LMDatasetConfig:
     return step.config.as_lm_dataset_task_config(output_path_of(step))
 
 
-def lm_training_config(
+def lm_data_config(
     training_set: TokenizerStep,
     validation_sets: Sequence[TokenizerStep] = (),
     shuffle: bool | int = True,
@@ -234,7 +234,7 @@ def lm_training_config(
     )
 
 
-def lm_mixture_training_config(
+def lm_mixture_data_config(
     components: dict[str, TokenizerStep],
     weights: dict[str, float],
     *,
@@ -256,7 +256,7 @@ def lm_mixture_training_config(
         missing_keys = {k: 0.0 for k in components if k not in weights}
         weights = {**weights, **missing_keys}
 
-    first_name, first_step = next(iter(configs.items()))
+    first_name, first_step = next(iter(components.items()))
     tokenizer = first_step.config.tokenizer
     for name, step in components.items():
         if step.config.tokenizer != tokenizer:
