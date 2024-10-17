@@ -16,17 +16,18 @@ assignees: ''
 (What are you trying to learn or achieve?)
 
 
-### WandB Links
+### Links
+
+(Delete any that aren't applicable)
 
 * WandB Report:  (link)
+* Data Browser: (link)
+* Experiment JSON: (link)
+* (etc.)
 
-* (Optionally include links to relevant WandB runs)
 
 
 ## Results
 
-(What did you find?)
+(What did you find, including relevant evaluation metrics, etc.)
 
-### Evals
-
-(Any evaluation metrics or results you have)
