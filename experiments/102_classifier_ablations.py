@@ -84,7 +84,6 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
                         percentile_threshold=versioned(config.percentile_threshold),
                     ),
                 ],
-                max_total_tokens=280000000000,  # 280B tokens
             ),
             override_output_path=f"gs://marin-us-central2/documents/{config.experiment_name}-{USER}",
         )
