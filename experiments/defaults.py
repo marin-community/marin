@@ -103,7 +103,7 @@ def default_eval(
     (By default the run_id in the training config is the name of the training run).
     """
     return ExecutorStep(
-        name=os.path.join("evaluation", name),
+        name=os.path.join("eval", name),
         fn=evaluate,
         config=EvaluationConfig(
             evaluator=evaluator,
