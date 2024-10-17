@@ -8,6 +8,7 @@ python -m marin.validation.count_total_tokens --input_path gs://marin-data/filte
 import argparse
 import json
 import os
+import time
 
 import fsspec
 import ray
@@ -15,12 +16,19 @@ import ray
 from marin.utils import fsspec_glob
 
 MAX_TASKS_IN_FLIGHT = 1000
+NUM_DOWNLOAD_RETRIES = 5
 
 
 def count_tokens_in_file(filename: str) -> int:
     from transformers import AutoTokenizer
 
-    tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.1-8B-Instruct")
+    while True:
+        try:
+            tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.1-8B-Instruct")
+            break
+        except Exception as e:
+            print(f"Error loading tokenizer: {e}")
+            time.sleep(1)
 
     total_tokens = 0
     with fsspec.open(filename, "rt", compression="gzip") as f:
@@ -31,7 +39,7 @@ def count_tokens_in_file(filename: str) -> int:
     return total_tokens
 
 
-@ray.remote(memory=500 * 1024 * 1024)
+@ray.remote(memory=1 * 1024 * 1024 * 1024)
 def process_file(input_filename: str):
     file_tokens = count_tokens_in_file(input_filename)
     return file_tokens
