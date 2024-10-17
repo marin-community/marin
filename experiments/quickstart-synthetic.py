@@ -22,7 +22,7 @@ from marin.processing.classification.fasttext.train_fasttext import (
     train,
 )
 from marin.processing.classification.inference import InferenceConfig, run_inference
-from marin.processing.tokenize import TokenizeConfig, lm_training_config, tokenize
+from marin.processing.tokenize import TokenizeConfig, lm_data_config, tokenize
 from marin.schemas.web.convert import HtmlToMarkdownConfig
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 from scripts.hello_world_fw.process import FineWebConfig, transform
@@ -186,7 +186,7 @@ def create_steps(config: QuickstartExecutorConfig) -> list[ExecutorStep]:
         fn=run_levanter_train_lm,
         config=TrainLmOnPodConfig(
             output_path=this_output_path(),
-            data=lm_training_config(tokenize_step),
+            data=lm_data_config(tokenize_step),
             env={"WANDB_API_KEY": None, "WANDB_MODE": "disabled"},  # Running it locally and turning off wandb
             tpu_type=None,
             hf_save_steps=1,
