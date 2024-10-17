@@ -45,7 +45,7 @@ class SimpleTrainConfig:
 
 
 def default_train(
-    name: str, tokenized: InputName | ExecutorStep, model_config: LmConfig, train_config: SimpleTrainConfig
+    name: str, run_id: str, tokenized: InputName | ExecutorStep, model_config: LmConfig, train_config: SimpleTrainConfig
 ) -> ExecutorStep:
     return ExecutorStep(
         name=os.path.join("checkpoints", name),
@@ -67,6 +67,7 @@ def default_train(
                     save_interval=timedelta(minutes=10),
                     keep=[dict(every=10000)],
                 ),
+                run_id=run_id,
             ),
             model=model_config,
             optimizer=AdamConfig(
@@ -80,17 +81,25 @@ def default_train(
 
 def default_eval(
     name: str,
-    evalution_config: EvaluationConfig,
+    evaluator: str,
+    model_name: str,
+    model_path: str,
+    evals: list[str],
+    launch_with_ray: bool,
 ) -> ExecutorStep:
+    """
+    Note: model_path has to be of this form: output_path_of(train_step, os.path.join("hf", run_id, "step-{k}")),
+    where run_id is specified in the training config.
+    """
     return ExecutorStep(
         name=os.path.join("evaluation", name),
         fn=evaluate,
         config=EvaluationConfig(
-            evaluator=evalution_config.evaluator,
-            model_name=evalution_config.model_name,
-            model_path=evalution_config.model_path,
+            evaluator=evaluator,
+            model_name=model_name,
+            model_path=model_path,
             evaluation_path=this_output_path(),
-            evals=evalution_config.evals,
-            launch_with_ray=evalution_config.launch_with_ray,
+            evals=evals,
+            launch_with_ray=launch_with_ray,
         ),
     )
