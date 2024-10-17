@@ -190,3 +190,6 @@ archive/
 
 # csv
 *.csv
+
+# wandb logs
+wandb
