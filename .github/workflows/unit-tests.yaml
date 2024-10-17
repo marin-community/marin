@@ -1,27 +1,20 @@
 name: Run unit tests
 
 on: 
-  pull_request:
-    types: [opened, reopened, ready_for_review]
+  push:
     branches:
       - main
-  pull_request_review:
-    types: [submitted, dismissed]
-  issue_comment:
-    types: [created]
-  push:
+  pull_request:
     branches:
       - main
 
 jobs:
   test:
-    if: github.event_name == 'push' || 
-        github.event.review.state == 'approved' && github.event.action == 'submitted' ||
-        github.event.action == 'dismissed' || 
-        (github.event_name == 'issue_comment' && github.event.issue.pull_request && contains(github.event.comment.body, '@run-unit-tests'))
-
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    concurrency:
+      group: ${{ github.ref }}
+      cancel-in-progress: true
     strategy:
       matrix:
         python-version: ["3.12"]
@@ -50,8 +43,7 @@ jobs:
         run: |
           conda install -c conda-forge pandoc
           npm install -g pandiff
-          pip install -e ".[dev]" "jax[cpu]==${{ matrix.jax-version }}" "jaxlib==${{ matrix.jax-version }}"
-          pip install ray[default] google-api-python-client
+          pip install . --extra-index-url https://download.pytorch.org/whl/cpu
           
       - name: Start Ray cluster locally
         shell: bash -l {0}
