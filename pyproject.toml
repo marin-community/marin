@@ -10,6 +10,8 @@ license = {file = "LICENSE"}
 
 requires-python = ">=3.10"
 dependencies = [
+    "jax==0.4.31",
+    "dolma",
     "chardet",
     "cryptography",
     "datasets>=2.18.0",
@@ -29,17 +31,19 @@ dependencies = [
     "ray[default]==2.34.0",
     "readabilipy",
     "readability-lxml",
-    "fsspec~=2024.3",
-    "gcsfs~=2024.3",
-    "ray[default]==2.34.0",
+    "fsspec",
+    "gcsfs",
+    "s3fs",
     "lxml[html_clean]",
     "regex",
     "requests",
     "warcio",
-    "levanter>=1.1.dev992",
+    "levanter>=1.2.dev1031",
     "lm-eval",
     "resiliparse",
-    "trafilatura"
+    "trafilatura",
+    "fasttext",
+    "boto3==1.35.23"
 ]
 
 [project.optional-dependencies]

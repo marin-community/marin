@@ -1,5 +1,5 @@
 FROM rayproject/ray:nightly.240914.bb15a3-py311-cpu
-RUN sudo apt-get update && sudo apt-get install -y clang curl g++ vim libpython3.11 libpython3.11-dev
+RUN sudo apt-get update && sudo apt-get install -y clang curl g++ vim libpython3.11 libpython3.11-dev docker.io
 
 # install rust
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
@@ -16,6 +16,9 @@ RUN conda install conda-forge::google-cloud-sdk -y
 RUN gcloud components install alpha
 
 RUN conda install -c conda-forge ncurses -y
+
+# pytorch is a heavy dependency, so we install it up front to try to cache it
+RUN pip install torch>=2.1 --extra-index-url https://download.pytorch.org/whl/cpu
 
 WORKDIR /tmp/
 ADD pyproject.toml /tmp/
@@ -56,8 +59,21 @@ ENV PYTHONPATH=$PYTHONPATH:$VENV_PATH/lib/python3.11/site-packages
 ENV LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/home/ray/anaconda3/lib
 ENV PATH=$PATH:/home/ray/anaconda3/bin
 
-# We need higher ulimit for tpu https://cloud.google.com/kubernetes-engine/docs/how-to/tpus#privileged-mode
-# see also https://cloud.google.com/kubernetes-engine/docs/troubleshooting/tpus
-RUN ulimit -l 68719476736
+# HACK until https://github.com/ray-project/ray/issues/47769 is resolved
+RUN git clone https://github.com/dlwh/ray.git ~/ray --branch tpu_docker_2.34 --depth 1
+RUN cp ~/ray/python/ray/autoscaler/_private/gcp/tpu_command_runner.py $VENV_PATH/lib/python3.11/site-packages/ray/autoscaler/_private/gcp/tpu_command_runner.py
+RUN rm -rf ~/ray
+
+
+# Setup gcsfuse
+RUN sudo apt install lsb-release -y
+RUN export GCSFUSE_REPO=gcsfuse-`lsb_release -c -s` && echo "deb https://packages.cloud.google.com/apt $GCSFUSE_REPO main" | sudo tee /etc/apt/sources.list.d/gcsfuse.list
+RUN curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo apt-key add -
+RUN sudo apt-get update && sudo apt-get install fuse gcsfuse -y
+RUN sudo mkdir /opt/gcsfuse_mount
+RUN sudo chown -R $(whoami) /opt/gcsfuse_mount
+
+# to run docker containers, we need to be in the docker group
+RUN sudo usermod -aG docker $(whoami)
 
 WORKDIR /opt/marin

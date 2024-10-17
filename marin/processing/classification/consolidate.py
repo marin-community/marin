@@ -1,262 +1,191 @@
+"""
+Consolidate takes a set of documents with corresponding attributes and writes
+out a subset of the documents based on various filters defined with respect to
+the attributes.  Handles two cases:
+- Quality filtering produces attributes (e.g., fasttext-quality) with labels
+  (e.g., __label__hq), filter on threshold.
+- Deduplication produces attributes (e.g., duplicate_text).  Remove duplicates.
+"""
+
 import json
+import logging
 import os
-from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 import draccus
 import fsspec
 import ray
 
-from marin.core.runtime import cached_or_construct_output
 from marin.utils import (
     fsspec_exists,
-    fsspec_get_atomic_directories,
     fsspec_glob,
-    fsspec_isdir,
-    fsspec_mkdirs,
     rebase_file_path,
-    validate_marin_gcp_path,
 )
 
+FILTER_TYPE_CLASSIFY = "classify"
+FILTER_TYPE_REMOVE_SPANS = "remove_spans"
 
-@dataclass
+logger = logging.getLogger("ray")
+
+
+@dataclass(frozen=True)
 class FilterConfig:
     """Config for filtering operation on Marin data"""
 
     type: str
+    """The type of filter to apply."""
+
     attribute_path: str
+    """Base path where the files with the attributes are stored."""
+
     name: str
+    """Name of attribute to use for filtering."""
+
     label: str | None = None
+    """The label under the attribute name."""
+
     threshold: float | None = 0.5
-    min_score: float = 0.0
-    max_score: float = 1e6
-
-    def __post_init__(self):
-        if not (self.min_score < self.threshold < self.max_score):
-            raise ValueError(
-                f"Scores must satisfy: ({self.min_score = }) < ({self.threshold = }) < ({self.max_score = })"
-            )
-
-        if "dedupe" in self.type:
-            self.filter_func = dedupe_filter_func
-        elif "classify" in self.type:
-            self.filter_func = quality_filter_func
-        else:
-            raise ValueError(f"Unknown attribute type: {self.type}")
+    """Keep documents where the value is above this."""
 
 
-@dataclass
+@dataclass(frozen=True)
 class ConsolidateConfig:
     """Config for Consolidation operation on Marin data"""
 
-    input_path: str  # The input path to the Marin data
+    input_path: str
+    """The input path to a directory (recursively) containing documents."""
+
     output_path: str  # The output path to save the consolidated data
-    filters: list[FilterConfig]  # The list of filters to apply
+    """The output path to save the filtered (consolidated) data."""
+
+    filters: list[FilterConfig]
+    """List of filters to apply to the documents."""
 
     max_tasks_in_flight: int = 1000  # The maximum number of flights in a task
 
 
-def is_high_quality(
-    attributes: dict[str, Any], attribute_name: str, threshold: float, label: str, min_score: float, max_score: float
-) -> bool:
-    if attribute_name in attributes:
-        quality_scores = attributes[attribute_name]
-        if label not in quality_scores:
-            raise ValueError(f"Label '{label}' not found in quality scores for attribute '{attribute_name}'!")
-        score = quality_scores.get(label, 0)
-        return min_score <= score <= max_score and score >= threshold
-    else:
-        raise ValueError("No valid attribute found!")
-
-
-def remove_duplicates(input_data: dict[str, Any], duplicate_spans: list[list[int]]) -> dict[str, Any]:
-    text = input_data["text"]
+def remove_spans(text: str, spans: list[list[int]]) -> str:
+    """
+    Return `text` with `spans` removed.
+    Example: text = "hello", spans = [[1, 4]], returns "ho"
+    """
     # Sort spans in reverse order to avoid index shifting
-    sorted_spans = sorted(duplicate_spans, key=lambda x: x[1], reverse=True)
-    # Remove duplicate spans
+    sorted_spans = sorted(spans, key=lambda x: x[1], reverse=True)
+
+    # Remove spans
     for start, end, _ in sorted_spans:
         text = text[:start] + text[end:]
 
-    # return the deduped data
-    input_data["text"] = text
-    return input_data
+    return text
 
 
-def quality_filter_func(
-    input_data: dict[str, Any],
-    attributes_data: dict[str, Any],
-    attribute_name: str,
-    threshold: float,
-    label: str,
-    min_score: float,
-    max_score: float,
-) -> dict[str, Any]:
-    if is_high_quality(attributes_data, attribute_name, threshold, label, min_score, max_score):
-        return input_data
-    return None
+def apply_filter(input_data: dict, doc_filter: FilterConfig, attributes: dict[str, Any]) -> dict | None:
+    if doc_filter.type == FILTER_TYPE_CLASSIFY:
+        # Check attribute >= threshold?
+        scores = attributes[doc_filter.name]
+        score = scores[doc_filter.label]
+        return input_data if score >= doc_filter.threshold else None
 
+    elif doc_filter.type == FILTER_TYPE_REMOVE_SPANS:
+        # Remove spans (e.g., because they are duplicates)
+        new_text = remove_spans(input_data["text"], attributes[doc_filter.name])
+        return dict(input_data, text=new_text)
 
-def dedupe_filter_func(
-    input_data: dict[str, Any],
-    attributes_data: dict[str, Any],
-    attribute_name: str,
-    threshold: float,
-    label: str,
-    min_score: float,
-    max_score: float,
-) -> dict[str, Any]:
-    # Dolma dedupe has a fixed attribute name and a binary decision
-    # So there is no need to check the threshold
-    duplicate_spans = attributes_data.get("attributes", {}).get(attribute_name, [])
-    if duplicate_spans:
-        return remove_duplicates(input_data, duplicate_spans)
-    return input_data
-
-
-def get_filter_func(filter_type: str) -> Callable:
-    if "dedupe" in filter_type:
-        return dedupe_filter_func
-    elif "classify" in filter_type:
-        return quality_filter_func
     else:
-        raise ValueError(f"Unknown attribute name: {filter_type}")
-
-
-def load_all_attributes(attribute_filenames: list[str]) -> dict[str, dict[str, Any]]:
-
-    all_attributes = {}
-    for filename in attribute_filenames:
-        print(f"Loading attributes from {filename}")
-        if not fsspec_exists(filename):
-            print(f"Warning: Attribute file or directory {filename} does not exist. Skipping.")
-            continue
-
-        # If filename is a directory, glob all jsonl.gz files in it and its subdirectories
-        if fsspec_isdir(filename):
-            matching_files = fsspec_glob(os.path.join(filename, "**/*.jsonl.gz"))
-        else:
-            matching_files = [filename]
-
-        for file in matching_files:
-            print(f"Processing file: {file}")
-            with fsspec.open(file, "rt", compression="gzip") as attr_file:
-                for line in attr_file:
-                    attr_data = json.loads(line)
-                    doc_id = attr_data["id"]
-                    if doc_id not in all_attributes:
-                        all_attributes[doc_id] = {}
-                    all_attributes[doc_id].update(attr_data.get("attributes", {}))
-
-    print(f"Loaded attributes for {len(all_attributes)} documents")
-    return all_attributes
-
-
-@cached_or_construct_output(success_suffix="SUCCESS")
-def process_file(
-    input_filename: str,
-    output_filename: str,
-    all_attributes: dict[str, dict[str, Any]],
-    filters: list[tuple[str, float, Callable]],
-):
-    with (
-        fsspec.open(input_filename, "rt", compression="gzip") as input_file,
-        fsspec.open(output_filename, "wt", compression="gzip") as output_file,
-    ):
-        for input_line in input_file:
-
-            input_data = json.loads(input_line)
-            doc_id = input_data["id"]
-
-            if doc_id not in all_attributes:
-                print(f"No attributes found for input ID: {doc_id}")
-                continue
-
-            attributes = all_attributes[doc_id]
-            filtered_data = input_data
-
-            for attr_name, threshold, filter_func, label, min_score, max_score in filters:
-                filtered_data = filter_func(filtered_data, attributes, attr_name, threshold, label, min_score, max_score)
-                if filtered_data is None:
-                    break
-
-            if filtered_data:
-                output_line = json.dumps(filtered_data) + "\n"
-                output_file.write(output_line)
+        raise ValueError(f"Unknown filter type: {doc_filter.type}")
 
 
 @ray.remote
-def process_directory(
-    input_subdir: str,
-    output_subdir: str,
-    all_attributes: dict[str, dict[str, Any]],
-    filters: list[tuple[str, float, Callable]],
-):
-    files = fsspec_glob(os.path.join(input_subdir, "**/*.jsonl.gz"))
-    for input_filename in files:
-        output_filename = rebase_file_path(input_subdir, input_filename, output_subdir)
-        process_file(input_filename, output_filename, all_attributes, filters)
+def process_file(input_path: str, filters: list[FilterConfig], output_path: str):
+    """
+    Read documents from `input_path`, apply the `filters` (involves reading the
+    attributes paths) and writes the subset of documents to `output_path`.
+    """
+
+    logger.info(f"Processing {input_path} and {[doc_filter.attribute_path for doc_filter in filters]}")
+
+    # Open all files simultaneously, and read in parallel.
+    input_file = fsspec.open(input_path, "rt", compression="gzip").open()
+    attribute_files = []
+    for doc_filter in filters:
+        if fsspec_exists(doc_filter.attribute_path):
+            attribute_files.append(fsspec.open(doc_filter.attribute_path, compression="gzip").open())
+        else:
+            logger.warning(f"Attribute file not found: {doc_filter.attribute_path}")
+            attribute_files.append(None)
+    output_file = fsspec.open(output_path, "wt", compression="gzip").open()
+
+    num_kept = 0
+    num_total = 0
+    for input_line in input_file:
+        num_total += 1
+
+        # Read document and attributes for that document
+        input_data = json.loads(input_line)
+        all_attributes = [json.loads(attr_file.readline()) if attr_file else None for attr_file in attribute_files]
+
+        # Apply filters
+        for doc_filter, attributes in zip(filters, all_attributes, strict=True):
+            if attributes is None:
+                continue
+            try:
+                assert attributes["id"] == input_data["id"]
+                input_data = apply_filter(input_data, doc_filter, attributes["attributes"])
+            except Exception as e:
+                logger.error(f"Error applying filter {doc_filter} to line {num_total}: {e}")
+                input_data = None  # Skip this example
+
+            if input_data is None:
+                break
+
+        # Write output
+        if input_data is not None:
+            num_kept += 1
+            print(json.dumps(input_data), file=output_file)
+
+    logger.info(f"Kept {num_kept}/{num_total} from {input_path}")
+
+    # Close all files
+    input_file.close()
+    for attr_file in attribute_files:
+        if attr_file:
+            attr_file.close()
+    output_file.close()
 
 
-def apply_filters(
-    input_path: str,
-    output_path: str,
-    attribute_files: list[str],
-    filters: list[tuple[str, float, Callable]],
-    max_tasks_in_flight: int,
-):
-
-    all_attributes = load_all_attributes(attribute_files)
-
-    subdirectories = fsspec_get_atomic_directories(input_path)
-    print(f"subdirectories: {subdirectories}")
+@ray.remote
+def consolidate(config: ConsolidateConfig):
+    input_paths = fsspec_glob(os.path.join(config.input_path, "**/*.jsonl.gz"))
+    logger.info(f"Consolidating {len(input_paths)} documents")
 
     tasks = []
-    for input_subdir in subdirectories:
-        print(f"Processing {input_subdir}")
-        output_subdir = rebase_file_path(input_path, input_subdir, output_path)
-        fsspec_mkdirs(output_subdir)
+    ready_refs = []
+    for input_path in input_paths:
+        if len(tasks) > config.max_tasks_in_flight:
+            ready_refs, tasks = ray.wait(tasks, num_returns=1)
+            ray.get(ready_refs)
 
-        task = process_directory.remote(input_subdir, output_subdir, all_attributes, filters)
+        filters = [
+            replace(
+                doc_filter, attribute_path=rebase_file_path(config.input_path, input_path, doc_filter.attribute_path)
+            )
+            for doc_filter in config.filters
+        ]
+        output_path = rebase_file_path(config.input_path, input_path, config.output_path)
+
+        task = process_file.remote(input_path, filters, output_path)
         tasks.append(task)
 
-        if len(tasks) >= max_tasks_in_flight:
-            ray.get(tasks.pop(0))
-
-    ray.get(tasks)
-    return output_path
-
-
-@ray.remote
-def main_ray(cfg: ConsolidateConfig):
-    input_path = validate_marin_gcp_path(cfg.input_path)
-    output_path = validate_marin_gcp_path(cfg.output_path)
-
-    attribute_files = []
-    filters = []
-
-    for filter_fn in cfg.filters:
-        attribute_files.append(filter_fn.attribute_path)
-        filters.append(
-            (
-                filter_fn.name,
-                filter_fn.threshold,
-                get_filter_func(filter_fn.type),
-                filter_fn.label,
-                filter_fn.min_score,
-                filter_fn.max_score,
-            )
-        )
-        print(f"Filter enabled: {filter_fn.name} with threshold {filter_fn.threshold})")
-
-    output_path = apply_filters(input_path, output_path, attribute_files, filters, cfg.max_tasks_in_flight)
-    print(f"Processing complete. Final output path: {output_path}")
+    try:
+        ray.get(tasks)
+    except Exception as e:
+        print(f"Error processing: {e}")
 
 
 @draccus.wrap()
 def main(cfg: ConsolidateConfig):
-    ray.init()
-    ray.get(main_ray.remote(cfg))
+    ray.get(consolidate.remote(cfg))
 
 
 if __name__ == "__main__":

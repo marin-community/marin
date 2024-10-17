@@ -1,7 +1,13 @@
+import functools
+import logging
 import os
 import re
+from contextlib import contextmanager
 
+import braceexpand
 import fsspec
+
+logger = logging.getLogger(__name__)
 
 
 def fsspec_exists(file_path):
@@ -50,8 +56,10 @@ def fsspec_glob(file_path):
     """
     Get a list of files in a fsspec filesystem that match a pattern.
 
+    We extend fsspec glob to also work with braces, using braceexpand.
+
     Args:
-        file_path (str): The path of the file
+        file_path (str): a file path or pattern, possibly with *, **, ?, or {}'s
 
     Returns:
         list: A list of files that match the pattern. returned files have the protocol prepended to them.
@@ -66,7 +74,13 @@ def fsspec_glob(file_path):
             return f"{protocol}://{file}"
         return file
 
-    return [join_protocol(file) for file in fs.glob(file_path)]
+    out = []
+
+    # glob has to come after braceexpand
+    for file in braceexpand.braceexpand(file_path):
+        out.extend(join_protocol(file) for file in fs.glob(file))
+
+    return out
 
 
 def fsspec_mkdirs(dir_path, exist_ok=True):
@@ -238,3 +252,56 @@ def get_gcs_path(file_path):
     if file_path.startswith("gs://"):
         return file_path
     return f"gs://{file_path}"
+
+
+def remove_tpu_lockfile_on_exit(fn=None):
+    """
+    Context manager to remove the TPU lockfile on exit. Can be used as a context manager or decorator.
+
+    Example:
+    ```
+    with remove_tpu_lockfile_on_exit():
+        # do something with TPU
+    ```
+
+    """
+    if fn is None:
+        return _remove_tpu_lockfile_on_exit_cm()
+    else:
+
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            with _remove_tpu_lockfile_on_exit_cm():
+                return fn(*args, **kwargs)
+
+        return wrapper
+
+
+@contextmanager
+def _remove_tpu_lockfile_on_exit_cm():
+    try:
+        yield
+    finally:
+        _hacky_remove_tpu_lockfile()
+
+
+def _hacky_remove_tpu_lockfile():
+    """
+    This is a hack to remove the lockfile that TPU pods create on the host filesystem.
+
+    libtpu only allows one process to access the TPU at a time, and it uses a lockfile to enforce this.
+    Ordinarily a lockfile would be removed when the process exits, but in the case of Ray, the process is
+    a long-running daemon that doesn't typically exit until the node is shut down. This means that the lockfile
+    persists across Ray tasks. This doesn't apply to tasks that fork a new process to do the TPU work, but
+    does apply to tasks that run the TPU code in the same process as the Ray worker.
+    """
+    try:
+        os.unlink("/tmp/libtpu_lockfile")
+    except FileNotFoundError:
+        pass
+    except PermissionError:
+        try:
+            os.system("sudo rm -f /tmp/libtpu_lockfile")
+        except Exception:
+            logger.error("Failed to remove lockfile")
+            pass
