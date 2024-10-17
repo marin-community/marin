@@ -13,6 +13,8 @@ from levanter.optim import AdamConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 
+from marin.evaluation.evaluation_config import EvaluationConfig
+from marin.evaluation.run import evaluate
 from marin.execution.executor import ExecutorStep, InputName, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, lm_training_config, tokenize
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
@@ -72,5 +74,23 @@ def default_train(
                 weight_decay=train_config.weight_decay,
             ),
             hf_save_steps=1,
+        ),
+    )
+
+
+def default_eval(
+    name: str,
+    evalution_config: EvaluationConfig,
+) -> ExecutorStep:
+    return ExecutorStep(
+        name=os.path.join("evaluation", name),
+        fn=evaluate,
+        config=EvaluationConfig(
+            evaluator=evalution_config.evaluator,
+            model_name=evalution_config.model_name,
+            model_path=evalution_config.model_path,
+            evaluation_path=this_output_path(),
+            evals=evalution_config.evals,
+            launch_with_ray=evalution_config.launch_with_ray,
         ),
     )
