@@ -126,7 +126,7 @@ def _tokenize_one_shard(
         if batch_byte_size > options.target_bytes_per_flush:
             writer.write_prepared_batch(this_batch_size, prepared_batch)
             nice_bytes = humanfriendly.format_size(batch_byte_size)
-            logger.info(f"Processed {total_rows} rows. Wrote {this_batch_size} rows to {shard_name}. ({nice_bytes})")
+            logger.debug(f"Processed {total_rows} rows. Wrote {this_batch_size} rows to {shard_name}. ({nice_bytes})")
             this_batch_size = 0
             prepared_batch = None
 
@@ -134,7 +134,7 @@ def _tokenize_one_shard(
         batch_byte_size = sum(prepared_batch.byte_size for prepared_batch in jax.tree.leaves(prepared_batch))
         nice_bytes = humanfriendly.format_size(batch_byte_size)
         writer.write_prepared_batch(this_batch_size, prepared_batch)
-        logger.info(f"Processed {total_rows} rows. Wrote {this_batch_size} rows to {shard_name}. ({nice_bytes})")
+        logger.debug(f"Processed {total_rows} rows. Wrote {this_batch_size} rows to {shard_name}. ({nice_bytes})")
         this_batch_size = 0
         prepared_batch = None
 
@@ -152,28 +152,75 @@ def tokenize_all_shards(
     source: ShardedDataSource,
     processor: BatchProcessor,
     options: CacheOptions,
-):
+) -> list[tuple[str, CacheLedger]]:
     logger = logging.getLogger("tokenize_all_shards")
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
     logger.info(f"Tokenizing {len(source.shard_names)} shards to {temporary_cache_path}.")
 
-    futures = [
-        ray.remote(_tokenize_one_shard)
-        .options(  # type: ignore
-            num_cpus=processor.num_cpus,
-            num_gpus=processor.num_gpus,
-            resources=processor.resources,
-            memory=1 * 1024 * 1024 * 1024,  # made this up
-            name=f"tokenize::{temporary_cache_path}::{shard_name}",
-        )
-        .remote(os.path.join(temporary_cache_path, shard_name), source, shard_name, processor, options)
-        for shard_name in source.shard_names
-    ]
+    def _try_load(path):
+        try:
+            ledger = CacheLedger.load(path)
+            if ledger.is_finished:
+                return ledger
+            else:
+                logger.info(f"Cache exists but is not finished at {path}.")
+                return None
+        except FileNotFoundError:
+            return None
 
-    ledgers = ray.get(futures)
+    paths = [os.path.join(temporary_cache_path, shard_name) for shard_name in source.shard_names]
 
-    return ledgers
+    ledgers: list[CacheLedger | None] = []
+    already_finished_paths: list[str] = []
+
+    for path in paths:
+        ledger = _try_load(path)
+        if ledger is not None:
+            already_finished_paths.append(path)
+        ledgers.append(ledger)
+
+    if already_finished_paths:
+        logger.info(f"Found {len(already_finished_paths)} already finished caches.")
+
+    if len(already_finished_paths) < len(source.shard_names):
+        pbar = tqdm(total=len(source.shard_names), desc="Tokenizing", unit="shard", initial=len(already_finished_paths))
+
+        processor_ref = ray.put(processor)
+        source_ref = ray.put(source)
+
+        caches_in_progress: dict[ray.ObjectRef, int] = {}
+        refs: list[ray.ObjectRef] = []
+
+        for i in range(len(ledgers)):
+            if ledgers[i] is not None and ledgers[i].is_finished:
+                continue
+
+            shard_name = source.shard_names[i]
+            ref = (
+                ray.remote(_tokenize_one_shard)
+                .options(  # type: ignore
+                    num_cpus=processor.num_cpus,
+                    num_gpus=processor.num_gpus,
+                    resources=processor.resources,
+                    memory=3 * 1024 * 1024 * 1024,  # made this up
+                    name=f"tokenize::{temporary_cache_path}::{shard_name}",
+                )
+                .remote(os.path.join(temporary_cache_path, shard_name), source_ref, shard_name, processor_ref, options)
+            )
+
+            caches_in_progress[ref] = i
+            refs.append(ref)
+
+        while refs:
+            done, refs = ray.wait(list(refs), num_returns=1)
+            for ref in done:
+                i = caches_in_progress.pop(ref)
+                path, ledger = ray.get(ref)
+                ledgers[i] = ledger
+                pbar.update(1)
+
+    return list(zip(paths, ledgers, strict=False))
 
 
 async def concatenate_stores(
@@ -324,20 +371,23 @@ def _start_data_copies_for_shards(
             logger.info(f"Data already copied from {path} to {permanent_cache_path}.")
             return
 
-        done = asyncio.run(
+        asyncio.run(
             _copy_data_from_one_shard_to_permanent_memory(permanent_cache_path, path, processor, data_offset_tree)
         )
 
         with fsspec.open(os.path.join(path, ".COPY_SUCCESS"), "w") as f:
             f.write("")
 
-        return done
+        return
 
-    futures = [
-        do_copy.remote(path, data_offset_tree)
-        # do_copy(path, data_offset_tree)
-        for (path, _), data_offset_tree in zip(caches, data_offsets_for_shards, strict=False)
-    ]
+    futures: list[ray.ObjectRef] = []
+
+    for (path, _), data_offset_tree in zip(caches, data_offsets_for_shards, strict=False):
+        if fsspec_exists(os.path.join(path, ".COPY_SUCCESS")):
+            logger.info(f"Data already copied from {path} to {permanent_cache_path}.")
+            continue
+
+        futures.append(do_copy.remote(path, data_offset_tree))
 
     return futures
 
@@ -363,9 +413,9 @@ async def _copy_data_from_one_shard_to_permanent_memory(
 
     futures = jax.tree.map(_copy_one_array, dest.tree, source.tree, data_offset_tree)
 
-    out = await asyncio.gather(*jax.tree.leaves(futures))
+    await asyncio.gather(*jax.tree.leaves(futures))
     logger.info(f"Finished copying data from {source_path} to {dest_path}.")
-    return out
+    return
 
 
 def _chunked_copy(desc: str, dest_array: ts.TensorStore, source_array: ts.TensorStore, dest_offset: int, data_size: int):
