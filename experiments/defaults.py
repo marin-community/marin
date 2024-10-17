@@ -54,7 +54,7 @@ llama_1_4b_train_config = SimpleTrainConfig(
 
 
 def default_train(
-    name: str, run_id: str, tokenized: InputName | ExecutorStep, model_config: LmConfig, train_config: SimpleTrainConfig
+    name: str, tokenized: InputName | ExecutorStep, model_config: LmConfig, train_config: SimpleTrainConfig
 ) -> ExecutorStep:
     return ExecutorStep(
         name=os.path.join("checkpoints", name),
@@ -76,7 +76,7 @@ def default_train(
                     save_interval=timedelta(minutes=10),
                     keep=[dict(every=10000)],
                 ),
-                run_id=run_id,
+                run_id=name,
             ),
             model=model_config,
             optimizer=AdamConfig(
@@ -97,8 +97,10 @@ def default_eval(
     launch_with_ray: bool,
 ) -> ExecutorStep:
     """
-    Note: model_path has to be of this form: output_path_of(train_step, os.path.join("hf", run_id, "step-{k}")),
+    Note: model_path below typically has to be of this form:
+    output_path_of(train_step, os.path.join("hf", run_id, "step-{k}")),
     where run_id is specified in the training config.
+    (By default the run_id in the training config is the name of the training run).
     """
     return ExecutorStep(
         name=os.path.join("evaluation", name),
