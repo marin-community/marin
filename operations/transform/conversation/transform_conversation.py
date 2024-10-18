@@ -65,14 +65,12 @@ class TransformDatasetConfig:
         filetype (str): The filetype of the input file. Currently supports jsonl, json, and parquet.
     """
 
-    input_path: str = (
-        "gs://marin-us-central2/raw/teknium--OpenHermes-2.5/b820378/huggingface.co/datasets/teknium/OpenHermes-2.5/resolve/b820378/openhermes2_5.json"
-    )
-    output_path: str = "gs://marin-us-central2/documents/teknium--OpenHermes-2.5/v2024-09-29"
+    input_path: str = ""
+    output_path: str = ""
     shard_size: int = 5000
-    metadata_columns: list[str] = field(default_factory=lambda: ["source", "category", "skip_prompt_formatting"])
-    source: str = "teknium/OpenHermes-2.5"
-    filetype: str = "json"
+    metadata_columns: list[str] = field(default_factory=lambda: [])
+    source: str = ""
+    filetype: str = ""
 
 
 def generate_hash_from_messages(messages: list[dict[str, str]]) -> str:
