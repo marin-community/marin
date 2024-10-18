@@ -33,7 +33,6 @@ jobs:
             ${{ runner.os }}-verify-
 
       - name: Install pip dependencies
-        if: steps.pip-cache.outputs.cache-hit != 'true'
         shell: bash -l {0}
         run: |
           pip install .["dev"] 
