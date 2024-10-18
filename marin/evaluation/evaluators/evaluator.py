@@ -47,7 +47,7 @@ class ModelConfig:
 
     def destroy(self) -> None:
         """Deletes the model checkpoint."""
-        if os.path.exists(self.path):
+        if self.path and os.path.exists(self.path):
             shutil.rmtree(self.path, ignore_errors=True)
             print(f"Deleted local checkpoint at {self.path}.")
 
@@ -59,9 +59,11 @@ class Evaluator(ABC):
     _py_modules: ClassVar[list[Dependency]]
 
     @abstractmethod
-    def evaluate(self, model: ModelConfig, evals: list[str], output_path: str, max_eval_instances: int | None) -> None:
+    def launch_evaluate_with_ray(
+        self, model: ModelConfig, evals: list[str], output_path: str, max_eval_instances: int | None
+    ) -> None:
         """
-        Runs the evaluator given the model checkpoint, the list of evaluations to run, and the output path.
+        Launches the evaluation run with Ray.
 
         Args:
             model (ModelConfig): The model configuration of the model we want to evaluate
@@ -69,4 +71,11 @@ class Evaluator(ABC):
             output_path (str): The path to save the evaluation results.
             max_eval_instances (int | None): The maximum number of evaluation instances to run.
         """
+        pass
+
+    @abstractmethod
+    def evaluate(
+        self, model: ModelConfig, evals: list[str], output_path: str, max_eval_instances: int | None = None
+    ) -> None:
+        """What to run to evaluate."""
         pass

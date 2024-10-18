@@ -10,6 +10,7 @@ license = {file = "LICENSE"}
 
 requires-python = ">=3.10"
 dependencies = [
+    "jax==0.4.31",
     "dolma",
     "chardet",
     "cryptography",
@@ -37,7 +38,7 @@ dependencies = [
     "regex",
     "requests",
     "warcio",
-    "levanter>=1.2.dev1013",
+    "levanter>=1.2.dev1031",
     "lm-eval",
     "resiliparse",
     "trafilatura",

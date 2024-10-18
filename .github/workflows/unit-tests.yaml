@@ -19,10 +19,9 @@ jobs:
       matrix:
         python-version: ["3.12"]
         node-version: ["20.10.0"]
-        jax-version: [ "0.4.26" ]
 
     steps:
-      - name: Checkout code 
+      - name: Checkout code
         uses: actions/checkout@v3
 
       - name: Set up Conda

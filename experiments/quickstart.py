@@ -1,3 +1,6 @@
+# TODO: should delete this file in favor of quickstart-synthetic.py and a
+# defaults.py which has the best practices.
+
 import dataclasses
 
 import draccus
@@ -37,7 +40,7 @@ raw_data = output_path_of(
 ############################################################
 # Transform HTML to text
 
-from marin.schemas.web.convert import TrafilaturaConfig  # noqa
+from marin.schemas.web.convert import ResiliparseConfig, TrafilaturaConfig  # noqa
 from scripts.hello_world_fw.process import FineWebConfig, transform  # noqa
 
 transform_trafilatura_step = ExecutorStep(
@@ -63,6 +66,7 @@ transform_resiliparse_step = ExecutorStep(
         input_path=raw_data,
         output_path=this_output_path(),
         extract_method=versioned("resiliparse"),
+        config=ResiliparseConfig.default_config(),
     ),
 )
 
@@ -108,11 +112,11 @@ train_quality_step = ExecutorStep(
     config=TrainFasttextClassifierConfig(
         input_doc_paths=[
             DatasetCurationConfig(
-                input_doc_path=sft_data, label="__label__hq", relative_sampling_rate=0.1, format="dolma_formatted_jsonl"
+                input_doc_path=sft_data, label="hq", relative_sampling_rate=0.1, format="dolma_formatted_jsonl"
             ),
             DatasetCurationConfig(
                 input_doc_path=output_path_of(transform_trafilatura_step),
-                label="__label__lq",
+                label="lq",
                 relative_sampling_rate=1.0,
                 format="dolma_formatted_jsonl",
             ),
