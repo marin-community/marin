@@ -46,13 +46,17 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-unittest-
 
-      - name: Install dependencies
+      - name: Install pip dependencies
         if: steps.cache.outputs.cache-hit != 'true'
+        shell: bash -l {0}
+        run: |
+          pip install .["dev"] 
+          
+      - name: Other dependencies
         shell: bash -l {0}
         run: |
           conda install -c conda-forge pandoc
           npm install -g pandiff
-          pip install .["dev"] 
           pip install ray[default] google-api-python-client 
           
       - name: Start Ray cluster locally
