@@ -30,6 +30,14 @@ jobs:
           activate-environment: marin_quickstart_env
           auto-activate-base: false
 
+      - name: Cache pip dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-verify-${{ hashFiles('pyproject.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-verify-
+
       - name: Install dependencies
         shell: bash -l {0}
         run: |
