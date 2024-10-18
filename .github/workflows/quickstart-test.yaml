@@ -15,6 +15,9 @@ jobs:
     concurrency:
       group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
       cancel-in-progress: true
+    strategy:
+      matrix:
+        python-version: ["3.11"]
 
     steps:
       - name: Checkout code
@@ -38,7 +41,7 @@ jobs:
       - name: Install pip dependencies
         shell: bash -l {0}
         run: |
-          pip install .["dev"] --extra-index-url https://download.pytorch.org/whl/cpu
+          pip install '.[dev]' --extra-index-url https://download.pytorch.org/whl/cpu
           pip install ray[default]==2.34.0 
 
       - name: Start Ray cluster locally
