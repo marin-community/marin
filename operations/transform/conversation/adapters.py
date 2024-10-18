@@ -27,6 +27,16 @@ class TransformAdapter:
     response_column: str = ""
 
     # Single Column Multi Turn
+    """
+    Example of role_key, user_value, assistant_value, and system_value:
+    In OpenHermes-2.5, a conversation can look like this:
+    [ { "from": "human", "value": "..."},
+      { "from": "gpt", "value": "..."} ]
+
+    In this example, the role_key is "from", the user_value is "human", the assistant_value is "gpt",
+    and the system_value is "system". This helps us map the roles to the correct values in the OpenAI
+    format from "from" -> "role" and "human"/"gpt" -> "user"/"assistant".
+    """
     conversation_column: str = ""
     role_key: str = ""
     user_value: str = ""
