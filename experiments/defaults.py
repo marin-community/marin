@@ -1,6 +1,7 @@
 """
 This file represents the best practices for each stage of the pipeline.
 """
+
 import dataclasses
 import os
 from collections.abc import Sequence
@@ -21,12 +22,12 @@ from marin.processing.tokenize import TokenizeConfig, lm_data_config, tokenize
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 
 
-def default_tokenize(name: str,
-                     dataset: InputName | ExecutorStep,
-                     tokenizer: str,
-                     options: CacheOptions | None = None) -> ExecutorStep:
-    config = TokenizeConfig(train_paths=[dataset], validation_paths=[], cache_path=this_output_path(),
-                            tokenizer=versioned(tokenizer))
+def default_tokenize(
+    name: str, dataset: InputName | ExecutorStep, tokenizer: str, options: CacheOptions | None = None
+) -> ExecutorStep:
+    config = TokenizeConfig(
+        train_paths=[dataset], validation_paths=[], cache_path=this_output_path(), tokenizer=versioned(tokenizer)
+    )
     if options is not None:
         config = dataclasses.replace(config, cache_options=options)
 
