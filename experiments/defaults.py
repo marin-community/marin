@@ -43,6 +43,8 @@ class SimpleTrainConfig:
     learning_rate: float
     weight_decay: float
 
+    # add more fields here (optimizer)
+
 
 llama_1_4b_train_config = SimpleTrainConfig(
     tpu_type="v4-128",
