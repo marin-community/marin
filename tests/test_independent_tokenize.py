@@ -68,7 +68,7 @@ class SimpleShardSource(ShardedDataSource):
 
 @pytest.fixture(scope="module")
 def ray_init():
-    ray.init(ignore_reinit_error=True)
+    ray.init("local", ignore_reinit_error=True)
     try:
         yield
     finally:
@@ -129,7 +129,9 @@ async def test_concatenate_stores(ray_init):
             caches.append(c)
 
         permanent_cache_path = os.path.join(tmpdir, "permanent")
-        ledger = await concatenate_stores(permanent_cache_path, source, processor, list(zip(paths, caches)))
+        ledger = await concatenate_stores(
+            permanent_cache_path, source, processor, list(zip(paths, caches, strict=False))
+        )
 
         assert os.path.exists(permanent_cache_path)
         assert isinstance(ledger, CacheLedger)
@@ -151,6 +153,29 @@ async def test_tokenize_and_concatenate_shards(ray_init):
         source = SimpleShardSource()
         processor = SimpleProcessor()
         options = CacheOptions(batch_size=2, target_size_per_flush="1024")
+
+        final_ledger = tokenize_and_concatenate_shards(source, processor, tmpdir, options)
+
+        assert os.path.exists(tmpdir)
+        assert isinstance(final_ledger, CacheLedger)
+        assert final_ledger.is_finished
+
+        # let's make sure it's right
+        cache = TreeStore.open(processor.output_exemplar, tmpdir, mode="r")
+        assert len(cache) == 40
+
+        processed = simple_process(processor, source)
+
+        for i, item in enumerate(cache):
+            assert np.all(item["data"] == processed[i]["data"])
+
+
+@pytest.mark.asyncio
+async def test_tokenize_and_concatenate_shards_single_group(ray_init):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        source = SimpleShardSource()
+        processor = SimpleProcessor()
+        options = CacheOptions(batch_size=2, target_size_per_flush="1024", num_shard_groups=1)
 
         final_ledger = tokenize_and_concatenate_shards(source, processor, tmpdir, options)
 

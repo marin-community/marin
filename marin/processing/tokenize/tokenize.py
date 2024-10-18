@@ -92,7 +92,8 @@ def tokenize(config: TokenizeConfig):
         train_ledger = (
             ray.remote(tokenize_and_concatenate_shards)
             .options(
-                name=f"tokenize::{config.cache_path}", runtime_env=RuntimeEnv(env_vars={"JAX_PLATFORM_NAME": "cpu"})
+                name=f"tokenize::{config.cache_path}",
+                runtime_env=RuntimeEnv(env_vars={"JAX_PLATFORM_NAME": "cpu", "GCE_METADATA_TIMEOUT": "120"}),
             )
             .remote(
                 train_source,

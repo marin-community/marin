@@ -103,6 +103,7 @@ class _RestrictedShardedDataSource(ShardedDataSource):
     def open_shard_at_row(self, shard_name, row):
         return self._source.open_shard_at_row(shard_name, row)
 
+
 def _tokenize_one_shard_group(
     temporary_cache_path: str,
     source: ShardedDataSource,
@@ -113,18 +114,14 @@ def _tokenize_one_shard_group(
     # ray breaks if this is top level
     import humanfriendly
 
-    if len(shards) == 1:
-        logger = logging.getLogger(f"_tokenize::{shards[0]}")
-    else:
-        logger = logging.getLogger(f"_tokenize::{shards[0]}-{shards[-1]}")
-
+    logger = logging.getLogger("tokenize")
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
     source = _RestrictedShardedDataSource(source, shards)
     ledger = CacheLedger.load_or_initialize(temporary_cache_path, source, processor, options)
 
     if ledger.is_finished:
-        logger.info(f"Shard group already processed.")
+        logger.info("Shard group already processed.")
         return ledger
 
     # restrict shards to the ones we're supposed to process
@@ -141,7 +138,7 @@ def _tokenize_one_shard_group(
             logger.info(f"Shard {shard_name} already processed.")
             continue
 
-        logger.info(f"Processing {shard_name}.")
+        logger.debug(f"Processing {shard_name}.")
 
         rows_this_shard = ledger.shard_rows.get(shard_name, 0)
 
@@ -174,7 +171,9 @@ def _tokenize_one_shard_group(
             if batch_byte_size > options.target_bytes_per_flush:
                 writer.write_prepared_batch(shard_name, this_batch_size, prepared_batch)
                 nice_bytes = humanfriendly.format_size(batch_byte_size)
-                logger.debug(f"Processed {total_rows} rows. Wrote {this_batch_size} rows to {shard_name}. ({nice_bytes})")
+                logger.debug(
+                    f"Processed {rows_this_shard} rows. Wrote {this_batch_size} rows to {shard_name}. ({nice_bytes})"
+                )
                 this_batch_size = 0
                 prepared_batch = None
 
@@ -182,32 +181,32 @@ def _tokenize_one_shard_group(
             batch_byte_size = sum(prepared_batch.byte_size for prepared_batch in jax.tree.leaves(prepared_batch))
             nice_bytes = humanfriendly.format_size(batch_byte_size)
             writer.write_prepared_batch(shard_name, this_batch_size, prepared_batch)
-            logger.debug(f"Processed {total_rows} rows. Wrote {this_batch_size} rows to {shard_name}. ({nice_bytes})")
+            logger.debug(
+                f"Processed {rows_this_shard} rows. Wrote {this_batch_size} rows to {shard_name}. ({nice_bytes})"
+            )
             this_batch_size = 0
             prepared_batch = None
+
+        total_rows += rows_this_shard
 
         writer.finish_shard(shard_name, rows_this_shard)
 
     writer.finish()
 
-    logger.info(f"Finished processing. Wrote {total_rows} rows.")
+    logger.info(f"Finished processing {len(shards)} shards. Wrote {total_rows} rows.")
 
     return writer.ledger
 
 
-def _assign_shards_to_groups(
-    source: ShardedDataSource, num_shards_per_group: int | None
-) -> dict[str, Sequence[str]]:
-    if num_shards_per_group <= source.num_shards or num_shards_per_group is None:
+def _assign_shards_to_groups(source: ShardedDataSource, num_groups: int | None) -> dict[str, Sequence[str]]:
+    if num_groups is None or num_groups >= len(source.shard_names):
         return {shard_name: [shard_name] for shard_name in source.shard_names}
 
     shard_names = source.shard_names
-    num_groups = (len(shard_names) + num_shards_per_group - 1) // num_shards_per_group
+    num_shards_per_group = len(shard_names) // num_groups
     return {
-        f"group_{i}": shard_names[i * num_shards_per_group : (i + 1) * num_shards_per_group]
-        for i in range(num_groups)
+        f"group_{i}": shard_names[i * num_shards_per_group : (i + 1) * num_shards_per_group] for i in range(num_groups)
     }
-
 
 
 def tokenize_all_shards(
@@ -219,29 +218,32 @@ def tokenize_all_shards(
     logger = logging.getLogger("tokenize_all_shards")
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-    logger.info(f"Tokenizing {len(source.shard_names)} shards to {temporary_cache_path}.")
-
     def _try_load(path):
         try:
             ledger = CacheLedger.load(path)
             if ledger.is_finished:
                 return ledger
             else:
-                logger.info(f"Cache exists but is not finished at {path}.")
+                logger.debug(f"Cache exists but is not finished at {path}.")
                 return None
         except FileNotFoundError:
             return None
 
-    if options.num_shard_groups is None:
-        num_shards_per_group = None
-    else:
-        num_shards_per_group = (len(source.shard_names) + options.num_shard_groups - 1) // options.num_shard_groups
+    shard_groups = _assign_shards_to_groups(source, options.num_shard_groups)
 
-    shard_groups = _assign_shards_to_groups(source, num_shards_per_group)
+    logger.info(f"Tokenizing {len(source.shard_names)} shards in {len(shard_groups)} groups to {temporary_cache_path}.")
+
     paths: dict[str, str] = {}
-
     ledgers: dict[str, CacheLedger | None] = {}
     already_finished_paths: list[str] = []
+    caches_in_progress: dict[ray.ObjectRef, str] = {}
+    refs: list[ray.ObjectRef] = []
+
+    unit = "shard" if len(shard_groups) == len(source.shard_names) else "shard group"
+    pbar = tqdm(total=len(shard_groups), desc="Tokenizing", unit=unit)
+
+    processor_ref = ray.put(processor)
+    source_ref = ray.put(source)
 
     for group_name, shards in shard_groups.items():
         path = os.path.join(temporary_cache_path, group_name)
@@ -251,47 +253,37 @@ def tokenize_all_shards(
 
         if ledger is not None:
             already_finished_paths.append(path)
+
         ledgers[group_name] = ledger
 
-    if already_finished_paths:
-        logger.info(f"Found {len(already_finished_paths)} already finished caches.")
+        if ledger is not None and ledger.is_finished:
+            pbar.update(1)
+            continue
 
-    if len(already_finished_paths) < len(source.shard_names):
-        unit = "shard" if len(shard_groups) == len(source.shard_names) else "shard group"
-        pbar = tqdm(total=len(shard_groups), desc="Tokenizing", unit=unit, initial=len(already_finished_paths))
-
-        processor_ref = ray.put(processor)
-        source_ref = ray.put(source)
-
-        caches_in_progress: dict[ray.ObjectRef, str] = {}
-        refs: list[ray.ObjectRef] = []
-
-        for group_name, shards in shard_groups.items():
-            if ledgers[group_name] is not None and ledgers[group_name].is_finished:
-                continue
-
-            ref = (
-                ray.remote(_tokenize_one_shard_group)
-                .options(  # type: ignore
-                    num_cpus=processor.num_cpus,
-                    num_gpus=processor.num_gpus,
-                    resources=processor.resources,
-                    memory=3 * 1024 * 1024 * 1024,  # made this up
-                    name=f"tokenize::{temporary_cache_path}::{group_name}",
-                )
-                .remote(os.path.join(temporary_cache_path, group_name), source_ref, shards, processor_ref, options)
+        ref = (
+            ray.remote(_tokenize_one_shard_group)
+            .options(  # type: ignore
+                num_cpus=processor.num_cpus,
+                num_gpus=processor.num_gpus,
+                resources=processor.resources,
+                memory=3 * 1024 * 1024 * 1024,  # made this up
+                name=f"tokenize::{temporary_cache_path}::{group_name}",
+                retry_exceptions=True,
+                max_retries=10,
             )
+            .remote(os.path.join(temporary_cache_path, group_name), source_ref, shards, processor_ref, options)
+        )
 
-            caches_in_progress[ref] = group_name
-            refs.append(ref)
+        caches_in_progress[ref] = group_name
+        refs.append(ref)
 
-        while refs:
-            done, refs = ray.wait(list(refs), num_returns=1)
-            for ref in done:
-                group_name = caches_in_progress.pop(ref)
-                ledger = ray.get(ref)
-                ledgers[group_name] = ledger
-                pbar.update(1)
+    while refs:
+        done, refs = ray.wait(list(refs), num_returns=1)
+        for ref in done:
+            group_name = caches_in_progress.pop(ref)
+            ledger = ray.get(ref)
+            ledgers[group_name] = ledger
+            pbar.update(1)
 
     assert all(ledger is not None for ledger in ledgers.values())
 
@@ -426,8 +418,7 @@ def _start_data_copies_for_shards(
     data_offsets = jax.tree.map(lambda *trees: compute_data_offsets_for_shards(trees), *[s.tree for s in sources])
 
     data_offsets_for_shards = [
-        jax.tree.map(partial(lambda i, offset_array: offset_array[i], i), data_offsets)
-        for i in range(len(source.shard_names))
+        jax.tree.map(partial(lambda i, offset_array: offset_array[i], i), data_offsets) for i in range(len(caches))
     ]
 
     if ray_utils.is_local_ray_cluster() or os.getenv("CI", "false").lower() in {"true", "1"}:

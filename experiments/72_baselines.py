@@ -2,10 +2,8 @@
 Train 1.4B models on standard datasets.
 https://github.com/stanford-crfm/marin/issues/72
 """
-import dataclasses
-import os
 
-from levanter.store.cache import CacheOptions
+import os
 
 from experiments.defaults import SimpleTrainConfig, default_tokenize, default_train
 from experiments.llama import llama3_tokenizer, llama_1_4b, llama_150m
@@ -51,9 +49,9 @@ slimpajama_tokenized = ExecutorStep(
     ),
 )
 
-slimpajama_6b_model = default_train(
-    name="SlimPajama-6B-1.4b",
-    tokenized=slimpajama_6b_tokenized,
+slimpajama_model = default_train(
+    name="SlimPajama-627B-1.4b",
+    tokenized=slimpajama_tokenized,
     model_config=llama_1_4b,
     train_config=default_train_config,
 )
@@ -71,10 +69,10 @@ fineweb_edu_model = default_train(
 if __name__ == "__main__":
     executor_main(
         steps=[
-            # slimpajama,
             # fineweb_edu,
             # hello_world_fw_model,
+            slimpajama,
             slimpajama_tokenized,
-            slimpajama_6b_model
+            # slimpajama_model,
         ]
     )
