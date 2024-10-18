@@ -90,4 +90,4 @@ def download_main(cfg: DownloadConfig):
 
 
 if __name__ == "__main__":
-    download()
+    download_main()

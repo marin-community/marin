@@ -100,3 +100,34 @@ register_adapter(
         content_key="value",
     )
 )
+
+register_adapter(
+    TransformAdapter(
+        source="meta-math/MetaMathQA",
+        dataset_format=DatasetFormat.INSTRUCTION_RESPONSE,
+        instruction_column="query",
+        response_column="response",
+    )
+)
+
+register_adapter(
+    TransformAdapter(
+        source="allenai/tulu-v2-sft-mixture",
+        dataset_format=DatasetFormat.SINGLE_COLUMN_MULTI_TURN,
+        conversation_column="messages",
+        role_key="role",
+        user_value="user",
+        assistant_value="assistant",
+        system_value="system",
+        content_key="content",
+    )
+)
+
+register_adapter(
+    TransformAdapter(
+        source="openbmb/UltraInteract_sft",
+        dataset_format=DatasetFormat.INSTRUCTION_RESPONSE,
+        instruction_column="instruction",
+        response_column="response",
+    )
+)
