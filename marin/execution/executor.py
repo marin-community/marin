@@ -99,6 +99,7 @@ from marin.utilities.json_encoder import CustomJsonEncoder
 logger = logging.getLogger("ray")
 
 ConfigT = TypeVar("ConfigT", covariant=True, bound=dataclass)
+T_co = TypeVar("T_co", covariant=True)
 
 ExecutorFunction = Callable | ray.remote_function.RemoteFunction | None
 
@@ -169,13 +170,13 @@ def this_output_path(name: str | None = None):
 
 
 @dataclass(frozen=True)
-class VersionedValue:
+class VersionedValue(Generic[T_co]):
     """Wraps a value, to signal that this value (part of a config) should be part of the version."""
 
-    value: Any
+    value: T_co
 
 
-def versioned(value: Any):
+def versioned(value: T_co) -> VersionedValue[T_co]:
     return VersionedValue(value)
 
 

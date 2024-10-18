@@ -3,18 +3,20 @@ This file represents the best practices for each stage of the pipeline.
 """
 
 import os
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import timedelta
 
 import jmp
 from levanter.checkpoint import CheckpointerConfig
+from levanter.data.text import LMDatasetConfig, LMMixtureDatasetConfig
 from levanter.models.lm_model import LmConfig
 from levanter.optim import AdamConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 
 from marin.execution.executor import ExecutorStep, InputName, this_output_path, versioned
-from marin.processing.tokenize import TokenizeConfig, lm_training_config, tokenize
+from marin.processing.tokenize import TokenizeConfig, lm_data_config, tokenize
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 
 
@@ -43,36 +45,46 @@ class SimpleTrainConfig:
 
 
 llama_1_4b_train_config = SimpleTrainConfig(
-    tpu_type="v4-256",
-    train_batch_size=2048,
-    num_train_steps=100000,
+    tpu_type="v4-128",
+    train_batch_size=1024,
+    num_train_steps=75000,  # 4096 * 1024 * 75000 = 314B tokens
     learning_rate=3e-4,
     weight_decay=0.1,
 )
 
 
 def default_train(
-    name: str, tokenized: InputName | ExecutorStep, model_config: LmConfig, train_config: SimpleTrainConfig
+    name: str,
+    tokenized: InputName | ExecutorStep | LMDatasetConfig | LMMixtureDatasetConfig,
+    model_config: LmConfig,
+    train_config: SimpleTrainConfig,
+    tags: Sequence[str] = (),
 ) -> ExecutorStep:
+
+    if isinstance(tokenized, InputName | ExecutorStep):
+        data = lm_data_config(training_set=tokenized)
+    else:
+        data = tokenized
+
     return ExecutorStep(
         name=os.path.join("checkpoints", name),
         fn=run_levanter_train_lm,
         config=TrainLmOnPodConfig(
             output_path=this_output_path(),
             tpu_type=train_config.tpu_type,
-            data=lm_training_config(training_set=tokenized),
+            data=data,
             trainer=TrainerConfig(
                 tracker=WandbConfig(
                     project="marin",
-                    tags=[name],
+                    tags=[name, *tags],
                 ),
                 mp=jmp.get_policy("p=f32,c=bfloat16"),
                 train_batch_size=train_config.train_batch_size,
                 num_train_steps=train_config.num_train_steps,
-                steps_per_eval=10000,
+                steps_per_eval=1000,
                 checkpointer=CheckpointerConfig(
                     save_interval=timedelta(minutes=10),
-                    keep=[dict(every=10000)],
+                    keep=[dict(every=25000)],
                 ),
             ),
             model=model_config,
@@ -80,6 +92,6 @@ def default_train(
                 learning_rate=train_config.learning_rate,
                 weight_decay=train_config.weight_decay,
             ),
-            hf_save_steps=1,
+            hf_save_steps=25000,
         ),
     )

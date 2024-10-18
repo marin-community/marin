@@ -188,7 +188,7 @@ consolidate_step = ExecutorStep(
 ############################################################
 # Tokenize
 
-from marin.processing.tokenize import TokenizeConfig, tokenize, lm_training_config  # noqa
+from marin.processing.tokenize import TokenizeConfig, tokenize, lm_data_config  # noqa
 
 tokenize_step = ExecutorStep(
     name=f"tokenized/llama3/hello_world_fw-{USER}",
@@ -214,7 +214,7 @@ train_step = ExecutorStep(
     config=dataclasses.replace(
         training_config,
         output_path=this_output_path(),
-        data=lm_training_config(tokenize_step),
+        data=lm_data_config(tokenize_step),
         tpu_type="v4-8" if not is_running_locally else None,
     ),
 )
