@@ -22,7 +22,7 @@ jobs:
 
       - name: Install pip dependencies
         run: |
-          pip install -e '.[dev]'
+          pip install '.[dev]'
 
       - name: List installed pip packages
         run: |
