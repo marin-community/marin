@@ -34,7 +34,7 @@ jobs:
         shell: bash -l {0}
         run: |
           pip install .["dev"] --extra-index-url https://download.pytorch.org/whl/cpu
-          pip install ray[default]==2.34.0
+          pip install ray[default]==2.34.0 
           
       - name: Start Ray cluster locally
         shell: bash -l {0}
