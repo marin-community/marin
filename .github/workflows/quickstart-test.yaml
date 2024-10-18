@@ -32,12 +32,17 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-verify-
 
-      - name: Install dependencies
+      - name: Install pip dependencies
         if: steps.pip-cache.outputs.cache-hit != 'true'
         shell: bash -l {0}
         run: |
-          pip install .["dev"] --extra-index-url https://download.pytorch.org/whl/cpu
-          pip install ray[default]==2.34.0 
+          pip install .["dev"] 
+          
+      - name: Install other dependencies
+        shell: bash -l {0}
+        run: |
+          pip install ray[default]==2.34.0 --extra-index-url https://download.pytorch.org/whl/cpu
+          pip install pytest>=8.3.2
           
       - name: Start Ray cluster locally
         shell: bash -l {0}

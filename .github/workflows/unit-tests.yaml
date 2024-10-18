@@ -57,7 +57,7 @@ jobs:
         run: |
           conda install -c conda-forge pandoc
           npm install -g pandiff
-          pip install ray[default] google-api-python-client 
+          pip install ray[default] google-api-python-client pytest>=8.3.2
           
       - name: Start Ray cluster locally
         shell: bash -l {0}
