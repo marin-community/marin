@@ -62,23 +62,10 @@ class TransformDatasetConfig:
         input_path (str): The path to the input file.
         output_path (str): The path to the output file.
         shard_size (int): The number of rows per shard.
-        source (str): The name of the HuggingFace dataset.
-        conversation_column (str): The column in the json containing the conversation.
-        role_key (str): The key in the conversation dictionary that contains the role of the message.
-        user_value (str): The value in the conversation dictionary that indicates the user role.
-        assistant_value (str): The value in the conversation dictionary that indicates the assistant role.
-        system_value (str): The value in the conversation dictionary that indicates the system role.
-        content_key (str): The key in the conversation dictionary that contains the content of the message.
-        metadata_columns (list[str]): The columns to include in the metadata.
-
-    Example of role_key, user_value, assistant_value, and system_value:
-    In OpenHermes-2.5, a conversation can look like this:
-    [ { "from": "human", "value": "..."},
-      { "from": "gpt", "value": "..."} ]
-
-    In this example, the role_key is "from", the user_value is "human", the assistant_value is "gpt",
-    and the system_value is "system". This helps us map the roles to the correct values in the OpenAI
-    format from "from" -> "role" and "human"/"gpt" -> "user"/"assistant".
+        metadata_columns (list[str]): The columns to include in the metadata. Check the HuggingFace dataset
+            for the columns to use.
+        source (str): The name of the HuggingFace dataset. This is used to get the correct adapter.
+        filetype (str): The filetype of the input file. Currently supports jsonl, json, and parquet.
     """
 
     input_path: str = (
