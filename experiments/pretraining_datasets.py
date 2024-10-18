@@ -74,7 +74,7 @@ dclm_baseline = ExecutorStep(
     override_output_path="gs://marin-us-central2/raw/dclm",
 )
 
-the_stack_download_step = ExecutorStep(
+the_stack_dedup = ExecutorStep(
     name="raw/the-stack-dedup",
     fn=download_and_upload_to_gcs,
     config=DownloadConfig(
@@ -86,7 +86,7 @@ the_stack_download_step = ExecutorStep(
     override_output_path="gs://marin-us-central2/raw/the-stack-dedup-4ba450",
 ).cd("17cad72")
 
-proofpile_2_download_step = ExecutorStep(
+proofpile_2 = ExecutorStep(
     name="raw/proof-pile-2",
     fn=download,
     config=DownloadConfig(
