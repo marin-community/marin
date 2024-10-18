@@ -38,6 +38,7 @@ jobs:
           node-version: ${{ matrix.node-version }}
 
       - name: Cache pip dependencies
+        id: cache
         uses: actions/cache@v3
         with:
           path: ~/.cache/pip
@@ -46,6 +47,7 @@ jobs:
             ${{ runner.os }}-unittest-
 
       - name: Install dependencies
+        if: steps.cache.outputs.cache-hit != 'true'
         shell: bash -l {0}
         run: |
           conda install -c conda-forge pandoc

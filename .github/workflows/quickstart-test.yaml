@@ -23,15 +23,9 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: Set up Conda
-        uses: conda-incubator/setup-miniconda@v2
-        with:
-          python-version: ${{ matrix.python-version }}
-          activate-environment: marin_quickstart_env
-          auto-activate-base: false
-
       - name: Cache pip dependencies
         uses: actions/cache@v3
+        id: pip-cache
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-verify-${{ hashFiles('pyproject.toml') }}
@@ -39,6 +33,7 @@ jobs:
             ${{ runner.os }}-verify-
 
       - name: Install dependencies
+        if: steps.pip-cache.outputs.cache-hit != 'true'
         shell: bash -l {0}
         run: |
           pip install .["dev"] --extra-index-url https://download.pytorch.org/whl/cpu
