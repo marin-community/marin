@@ -205,7 +205,7 @@ def delete_jsonl_files(dir_path):
     return files_deleted
 
 
-@ray.remote(runtime_env={"pip": ["dolma"]})
+@ray.remote
 def dolma_dedup(
     input_path,
     output_path,
@@ -281,7 +281,7 @@ def dolma_dedup(
                 copy_file_out(local_file, output_file)
 
         except Exception as e:
-            print(f"An error occurred during deduplication: {e}")
+            raise RuntimeError("An error has occurred during deduplication") from e
     return "Deduplication process completed"
 
 

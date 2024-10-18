@@ -1,8 +1,7 @@
 import unittest
 from datetime import datetime, timedelta
 
-from parse_wandb_runs import check_create_time
-
+from scripts.training.time_to_train.parse_wandb_runs import check_create_time
 
 class TestCheckCreateTime(unittest.TestCase):
     def test_no_date_range(self):

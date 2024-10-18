@@ -52,6 +52,8 @@ def train_model(
 
         shard_paths = fsspec_glob(os.path.join(input_path, "**/*.jsonl.gz"))
 
+        logger.info(f"Received input paths: {shard_paths}")
+
         with tempfile.TemporaryDirectory() as tmp_dir:
             train_path = os.path.join(tmp_dir, "data.train")
             val_path = os.path.join(tmp_dir, "data.val")
