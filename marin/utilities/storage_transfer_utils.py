@@ -10,7 +10,8 @@ from pathlib import Path
 from time import time
 
 import fsspec
-from google.cloud import storage_transfer
+from google.api_core import operations_v1
+from google.cloud import storage_transfer, storage_transfer_v1
 
 
 def create_url_list_tsv_on_gcs(
@@ -104,14 +105,31 @@ def wait_for_transfer_job(job_name: str, timeout: int, poll_interval: int, gcp_p
     """
     print(f"[*] Waiting for Transfer Job :: {job_name}")
 
-    client = storage_transfer.StorageTransferServiceClient()
+    transfer_client = storage_transfer_v1.StorageTransferServiceClient()
+    channel = transfer_client.transport.grpc_channel
+    operations_client = operations_v1.OperationsClient(channel)
     start_time = time()
 
     while time() - start_time < timeout:
         if (time() - start_time) % poll_interval == 0:
-            job = client.get_transfer_job({"job_name": job_name, "project_id": gcp_project_id})
 
-            if job.status == storage_transfer.TransferJob.Status.ENABLED:
+            # Prepare the filter string to get the operations for the job
+            filter_string = f'{{"project_id": "{gcp_project_id}", "job_names": ["{job_name}"]}}'
+            # List transfer operations for the job
+            # Use operations_client to list operations related to this transfer job
+            transfer_operations = operations_client.list_operations("transferOperations", filter_string)
+            # Check the status of all operations
+            operation_statuses = []
+            for operation in transfer_operations:
+                operation_statuses.append(operation.done)
+            complete_operations = operation_statuses.count(True)
+            total_operations = len(operation_statuses)
+            if total_operations > 0:
+                percent_complete = complete_operations / total_operations
+            else:
+                percent_complete = 0
+            print(f"Percent operations complete: {percent_complete} , {complete_operations}/{total_operations}")
+            if percent_complete == 1:
                 print(f"[*] Transfer Job Completed :: {job_name}")
                 return
 
