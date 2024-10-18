@@ -33,7 +33,6 @@ dependencies = [
     "fsspec",
     "gcsfs",
     "s3fs",
-    "ray[default]==2.34.0",
     "lxml[html_clean]",
     "regex",
     "requests",

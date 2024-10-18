@@ -43,7 +43,7 @@ jobs:
         run: |
           conda install -c conda-forge pandoc
           npm install -g pandiff
-          pip install . --extra-index-url https://download.pytorch.org/whl/cpu
+          pip install .["dev"] --extra-index-url https://download.pytorch.org/whl/cpu
           
       - name: Start Ray cluster locally
         shell: bash -l {0}
