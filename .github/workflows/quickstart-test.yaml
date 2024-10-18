@@ -22,17 +22,9 @@ jobs:
 
       - name: Install pip dependencies
         run: |
-          pip install '.[dev]'
+          pip install .["dev"] --extra-index-url https://download.pytorch.org/whl/cpu
+          pip install ray[default]==2.34.0 
 
-      - name: List installed pip packages
-        run: |
-          pip list
-
-      - name: Verify installation
-        run: |
-          python -c "import draccus" || echo 'draccus not installed'
-          python -c "import ray" || echo 'ray not installed'
-          
       - name: Start Ray cluster locally
         run: |
           ray start --head
