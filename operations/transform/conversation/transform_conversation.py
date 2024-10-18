@@ -1,13 +1,10 @@
 """
-This script transforms the OpenHermes-2.5 dataset from huggingface json to OpenAI messages formatted jsonl.
-
-The text in the dataset is a list of conversations, where each conversation is a list of messages
-alternating between user and assistant. We combine each conversation into a single string by
-concatenating all the messages and separating them with a space delimiter.
+Transform any HuggingFace dataset to OpenAI messages format.
 
 Usage Examples:
-1. Register your adapter in adapters.py
-2. Run the script as shown below with the same adapter name as the source you registered.
+1. Download the dataset from HuggingFace which is used in the input_path in the TransformDatasetConfig.
+2. Register your adapter in adapters.py
+3. Run the script as shown below with the same adapter name as the source you registered.
 
 MetamathQA:
 ray job submit --working-dir . -- python -m operations.transform.conversation.transform_conversation \
