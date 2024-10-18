@@ -37,15 +37,6 @@ jobs:
         with:
           node-version: ${{ matrix.node-version }}
 
-      - name: Cache pip dependencies
-        id: cache
-        uses: actions/cache@v3
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-unittest-${{ hashFiles('pyproject.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-unittest-
-
       - name: Install pip dependencies
         shell: bash -l {0}
         run: |

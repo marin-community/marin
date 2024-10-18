@@ -23,25 +23,15 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: Cache pip dependencies
-        uses: actions/cache@v3
-        id: pip-cache
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-verify-${{ hashFiles('pyproject.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-verify-
-
       - name: Install pip dependencies
         shell: bash -l {0}
         run: |
-          pip install .["dev"] 
+          pip install -e .["dev"] 
           
       - name: Install other dependencies
         shell: bash -l {0}
         run: |
-          pip install ray[default]==2.34.0 --extra-index-url https://download.pytorch.org/whl/cpu
-          pip install pytest>=8.3.2
+          pip install ray[default]==2.34.0 pip install pytest>=8.3.2
           
       - name: Start Ray cluster locally
         shell: bash -l {0}
