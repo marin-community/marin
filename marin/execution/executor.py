@@ -37,7 +37,7 @@ We want to compute a *version* for each step.  Here's what the user supplies:
    "method", not default thresholds that don't change).
 
 The version of a step is identified by the name, versioned fields, and the
-versions of all the dependencies, This version is represented as a hash (e.g.,
+versions of all the dependencies. This version is represented as a hash (e.g.,
 8ce902).
 
 ## Output paths
@@ -68,15 +68,19 @@ might be:
 """
 
 import hashlib
+import inspect
 import json
 import logging
 import os
+import subprocess
 import traceback
 from collections.abc import Callable
-from dataclasses import dataclass, fields, is_dataclass, replace
-from typing import Any
+from dataclasses import asdict, dataclass, field, fields, is_dataclass, replace
+from datetime import datetime
+from typing import Any, Generic, TypeVar
 
 import draccus
+import fsspec
 import ray
 import ray.remote_function
 
@@ -90,14 +94,18 @@ from marin.execution.executor_step_status import (
     get_status_path,
     read_events,
 )
+from marin.utilities.json_encoder import CustomJsonEncoder
 
 logger = logging.getLogger("ray")
+
+ConfigT = TypeVar("ConfigT", covariant=True, bound=dataclass)
+T_co = TypeVar("T_co", covariant=True)
 
 ExecutorFunction = Callable | ray.remote_function.RemoteFunction | None
 
 
 @dataclass(frozen=True)
-class ExecutorStep:
+class ExecutorStep(Generic[ConfigT]):
     """
     An `ExecutorStep` represents a single step of a larger pipeline (e.g.,
     transforming HTML to text).  It is specified by:
@@ -117,11 +125,21 @@ class ExecutorStep:
     - `VersionedValue(value)`: a value that should be part of the version
     The `config` is instantiated by replacing these special values with the
     actual paths during execution.
+
+    Note: `step: ExecutorStep` is interpreted as `InputName(step, None)`.
     """
 
     name: str
     fn: ExecutorFunction
-    config: dataclass
+    config: ConfigT
+
+    override_output_path: str | None = None
+    """Specifies the `output_path` that should be used.  Print warning if it
+    doesn't match the automatically computed one."""
+
+    def cd(self, name: str) -> "InputName":
+        """Refer to the `name` under `self`'s output_path."""
+        return InputName(self, name=name)
 
     def __hash__(self):
         """Hash based on the ID (every object is different)."""
@@ -133,10 +151,10 @@ class InputName:
     """To be interpreted as a previous `step`'s output_path joined with `name`."""
 
     step: ExecutorStep
-    name: str = ""
+    name: str | None
 
 
-def output_path_of(step: ExecutorStep, name: str = ""):
+def output_path_of(step: ExecutorStep, name: str | None = None):
     return InputName(step=step, name=name)
 
 
@@ -144,22 +162,74 @@ def output_path_of(step: ExecutorStep, name: str = ""):
 class OutputName:
     """To be interpreted as part of this step's output_path joined with `name`."""
 
-    name: str = ""
+    name: str | None
 
 
-def this_output_path(name: str = ""):
+def this_output_path(name: str | None = None):
     return OutputName(name=name)
 
 
 @dataclass(frozen=True)
-class VersionedValue:
+class VersionedValue(Generic[T_co]):
     """Wraps a value, to signal that this value (part of a config) should be part of the version."""
 
-    value: Any
+    value: T_co
 
 
-def versioned(value: Any):
+def versioned(value: T_co) -> VersionedValue[T_co]:
     return VersionedValue(value)
+
+
+############################################################
+
+
+@dataclass(frozen=True)
+class ExecutorStepInfo:
+    """
+    Contains the information about an `ExecutorStep` that can be serialized into JSON.
+    Note that this conversion is not reversible.
+    """
+
+    name: str
+    """`step.name`."""
+
+    fn_name: str
+    """Rendered string of `step.fn`."""
+
+    config: dataclass
+    """`step.config`, but concretized (no more `InputName`, `OutputName`, or `VersionedValue`)."""
+
+    override_output_path: str | None
+    """`step.override_output_path`."""
+
+    version: dict[str, Any]
+    """`executor.versions[step]`."""
+
+    dependencies: list[str]
+    """Fully realized output_paths of the dependencies."""
+
+    output_path: str
+    """`executor.output_paths[step]`."""
+
+
+@dataclass(frozen=True)
+class ExecutorInfo:
+    """Contains information about an execution."""
+
+    # Metadata related to the launch
+    git_commit: str | None
+    caller_path: str
+    created_date: str
+    user: str | None
+
+    # Information taken from `Executor`
+    prefix: str
+    steps: list[ExecutorStepInfo]
+
+
+def get_info_path(output_path: str) -> str:
+    """Return the `path` of the info file associated with `output_path`."""
+    return os.path.join(output_path, ".executor_info")
 
 
 ############################################################
@@ -185,6 +255,10 @@ def collect_dependencies_and_version(obj: Any, dependencies: list[ExecutorStep],
 
     def recurse(obj: Any, prefix: str):
         new_prefix = prefix + "." if prefix else ""
+
+        if isinstance(obj, ExecutorStep):
+            obj = output_path_of(obj, None)
+
         if isinstance(obj, VersionedValue):
             # Just extract the value
             version[prefix] = obj.value
@@ -205,6 +279,8 @@ def collect_dependencies_and_version(obj: Any, dependencies: list[ExecutorStep],
         elif isinstance(obj, dict):
             # Recurse through dicts
             for i, x in obj.items():
+                if not isinstance(i, str):
+                    raise ValueError(f"dict keys must be strs, but got {i} (type: {type(i)})")
                 recurse(x, new_prefix + i)
 
     recurse(obj, "")
@@ -219,13 +295,20 @@ def instantiate_config(config: dataclass, output_path: str, output_paths: dict[E
     `output_paths`: a dict from `ExecutorStep` to their output paths.
     """
 
+    def join_path(output_path: str, name: str | None) -> str:
+        return os.path.join(output_path, name) if name else output_path
+
     def recurse(obj: Any):
         if obj is None:
             return None
+
+        if isinstance(obj, ExecutorStep):
+            obj = output_path_of(obj)
+
         if isinstance(obj, InputName):
-            return os.path.join(output_paths[obj.step], obj.name)
+            return join_path(output_paths[obj.step], obj.name)
         elif isinstance(obj, OutputName):
-            return os.path.join(output_path, obj.name)
+            return join_path(output_path, obj.name)
         elif isinstance(obj, VersionedValue):
             return obj.value
         elif is_dataclass(obj):
@@ -254,18 +337,33 @@ class Executor:
     2. Run each `ExecutorStep` in a proper topological sort order.
     """
 
-    def __init__(self, prefix: str):
+    def __init__(
+        self,
+        prefix: str,
+        executor_info_base_path: str,
+        force_run: list[str] | None = None,
+        force_run_failed: bool = True,
+    ):
         self.prefix = prefix
+        self.executor_info_base_path = executor_info_base_path
+
+        self.configs: dict[ExecutorStep, dataclass] = {}
+        self.force_run = force_run or []
+        self.force_run_failed = force_run_failed
         self.dependencies: dict[ExecutorStep, list[ExecutorStep]] = {}
         self.versions: dict[ExecutorStep, dict[str, Any]] = {}
         self.output_paths: dict[ExecutorStep, str] = {}
         self.steps: list[ExecutorStep] = []
         self.refs: dict[ExecutorStep, ray.ObjectRef] = {}
 
-    def run(self, steps: list[ExecutorStep], dry_run: bool = False):
+    def run(self, steps: list[ExecutorStep | InputName], dry_run: bool = False):
         # Gather all the steps, compute versions and output paths for all of them.
         for step in steps:
+            if isinstance(step, InputName):  # Interpret InputName as the underlying step
+                step = step.step
             self.compute_version(step)
+
+        self.write_infos()
 
         # Run each step
         for step in self.steps:
@@ -295,29 +393,87 @@ class Executor:
         }
 
         # Compute output path
-        version_str = json.dumps(version, sort_keys=True)
+        version_str = json.dumps(version, sort_keys=True, cls=CustomJsonEncoder)
         hashed_version = hashlib.md5(version_str.encode()).hexdigest()[:6]
         output_path = os.path.join(self.prefix, step.name + "-" + hashed_version)
 
+        # Override output path if specified
+        if step.override_output_path is not None:
+            if output_path != step.override_output_path:
+                logger.warning(
+                    f"Output path {output_path} doesn't match given "
+                    "override {step.override_output_path}, using the latter."
+                )
+                output_path = step.override_output_path
+
         # Record everything
         self.steps.append(step)
+        self.configs[step] = instantiate_config(
+            config=step.config,
+            output_path=output_path,
+            output_paths=self.output_paths,
+        )
         self.dependencies[step] = dependencies
         self.versions[step] = version
         self.output_paths[step] = output_path
 
         return version
 
+    def write_infos(self):
+        """Output JSON files (one for the entire execution, one for each step)."""
+
+        # Compute info for each step
+        step_infos: list[ExecutorStepInfo] = []
+        for step in self.steps:
+            step_infos.append(
+                ExecutorStepInfo(
+                    name=step.name,
+                    fn_name=get_fn_name(step.fn),
+                    config=self.configs[step],
+                    override_output_path=step.override_output_path,
+                    version=self.versions[step],
+                    dependencies=[self.output_paths[dep] for dep in self.dependencies[step]],
+                    output_path=self.output_paths[step],
+                )
+            )
+
+        # Compute info for the entire execution
+        executor_info = ExecutorInfo(
+            git_commit=get_git_commit(),
+            caller_path=get_caller_path(),
+            created_date=datetime.now().isoformat(),
+            user=get_user(),
+            prefix=self.prefix,
+            steps=step_infos,
+        )
+
+        # Set executor_info_path based on hash and caller path name (e.g., 72_baselines-8c2f3a.json)
+        # import pdb; pdb.set_trace()
+        executor_version_str = json.dumps(list(map(asdict, step_infos)), sort_keys=True, cls=CustomJsonEncoder)
+        executor_version_hash = hashlib.md5(executor_version_str.encode()).hexdigest()[:6]
+        name = os.path.basename(executor_info.caller_path).replace(".py", "")
+        self.executor_info_path = os.path.join(
+            self.executor_info_base_path,
+            f"{name}-{executor_version_hash}.json",
+        )
+        logger.info(f"Writing executor info to {self.executor_info_path}")
+
+        # Write out info for each step
+        for step, info in zip(self.steps, step_infos, strict=True):
+            info_path = get_info_path(self.output_paths[step])
+            with fsspec.open(info_path, "w") as f:
+                print(json.dumps(asdict(info), indent=2, cls=CustomJsonEncoder), file=f)
+
+        # Write out info for the entire execution
+        with fsspec.open(self.executor_info_path, "w") as f:
+            print(json.dumps(asdict(executor_info), indent=2, cls=CustomJsonEncoder), file=f)
+
     def run_step(self, step: ExecutorStep, dry_run: bool):
         """
         Return a Ray object reference to the result of running the `step`.
         If `dry_run`, only print out what needs to be done.
         """
-        config = instantiate_config(
-            config=step.config,
-            output_path=self.output_paths[step],
-            output_paths=self.output_paths,
-        )
-
+        config = self.configs[step]
         config_version = self.versions[step]["config"]
         output_path = self.output_paths[step]
 
@@ -329,15 +485,22 @@ class Executor:
         # Print information about this step
         logger.info(f"[{status}] {step.name}: {get_fn_name(step.fn)}")
         logger.info(f"  output_path = {output_path}")
-        logger.info(f"  config = {json.dumps(config_version)}")
+        logger.info(f"  config = {json.dumps(config_version, cls=CustomJsonEncoder)}")
         for i, dep in enumerate(self.dependencies[step]):
             logger.info(f"  {dependency_index_str(i)} = {self.output_paths[dep]}")
         logger.info("")
+        force_run_step = False
+        if step.name in self.force_run or (self.force_run_failed and status == STATUS_FAILED):
+            force_run_step = True
+            logger.info(f"Force running {step.name}, previous status: {status}")
 
         # Only start if there's no status
-        should_run = not dry_run and status is None
+        should_run = not dry_run and (status is None or force_run_step)
         dependencies = [self.refs[dep] for dep in self.dependencies[step]]
-        self.refs[step] = execute_after_dependencies.remote(step.fn, config, dependencies, output_path, should_run)
+        name = f"execute_after_dependencies({get_fn_name(step.fn, short=True)})::{step.name})"
+        self.refs[step] = execute_after_dependencies.options(name=name).remote(
+            step.fn, config, dependencies, output_path, should_run
+        )
 
 
 @ray.remote
@@ -379,14 +542,37 @@ def execute_after_dependencies(
         append_status(status_path, STATUS_SUCCESS)
 
 
-def get_fn_name(fn: Callable | ray.remote_function.RemoteFunction):
+def get_fn_name(fn: Callable | ray.remote_function.RemoteFunction, short: bool = False):
     """Just for debugging: get the name of the function."""
     if fn is None:
         return "None"
     if isinstance(fn, ray.remote_function.RemoteFunction):
-        return f"{fn._function.__module__}.{fn._function.__qualname__}"
+        if short:
+            return f"{fn._function.__name__}"
+        else:
+            return f"{fn._function.__module__}.{fn._function.__qualname__}"
     else:
-        return f"{fn.__module__}.{fn.__qualname__}"
+        if short:
+            return f"{fn.__name__}"
+        else:
+            return f"{fn.__module__}.{fn.__qualname__}"
+
+
+def get_git_commit() -> str | None:
+    """Return the git commit of the current branch (if it can be found)"""
+    if os.path.exists(".git"):
+        return os.popen("git rev-parse HEAD").read().strip()
+    else:
+        return None
+
+
+def get_caller_path() -> str:
+    """Return the path of the file that called this function."""
+    return inspect.stack()[-1].filename
+
+
+def get_user() -> str | None:
+    return subprocess.check_output("whoami", shell=True).strip().decode("utf-8")
 
 
 ############################################################
@@ -395,12 +581,25 @@ def get_fn_name(fn: Callable | ray.remote_function.RemoteFunction):
 @dataclass(frozen=True)
 class ExecutorMainConfig:
     prefix: str = "gs://marin-us-central2"
+    """Attached to every output path that's constructed (e.g., the GCS bucket)."""
+
+    executor_info_base_path: str = "gs://marin-us-central2/experiments"
+    """Where the executor info should be stored under a file determined by a hash."""
+
     dry_run: bool = False
+    force_run: list[str] = field(default_factory=list)  # <list of steps name>: run list of steps (names)
+    force_run_failed: bool = True  # run failed steps
 
 
 @draccus.wrap()
 def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep]):
     """Main entry point for experiments (to standardize)"""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-    executor = Executor(prefix=config.prefix)
+
+    executor = Executor(
+        prefix=config.prefix,
+        executor_info_base_path=config.executor_info_base_path,
+        force_run=config.force_run,
+        force_run_failed=config.force_run_failed,
+    )
     executor.run(steps=steps, dry_run=config.dry_run)

@@ -1,11 +1,29 @@
-from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path, versioned
+# TODO: should delete this file in favor of quickstart-synthetic.py and a
+# defaults.py which has the best practices.
+
+import dataclasses
+
+import draccus
+
+import marin.utilities.ray_utils as ray_utils
+from marin.execution.executor import (
+    ExecutorStep,
+    executor_main,
+    output_path_of,
+    this_output_path,
+    versioned,
+)
+
+is_running_locally = ray_utils.is_local_ray_cluster()
+
+USER = "dlwh"
 
 ############################################################
 # Download the pretraining data
-from operations.download.huggingface.download import DownloadConfig, download
+from operations.download.huggingface.download import DownloadConfig, download  # noqa
 
 raw_download_step = ExecutorStep(
-    name="raw/hello_world_fw-pliang",
+    name=f"raw/hello_world_fw-{USER}",
     fn=download,
     config=DownloadConfig(
         hf_dataset_id="skaramcheti/hello_world_fw",
@@ -13,6 +31,7 @@ raw_download_step = ExecutorStep(
         gcs_output_path=this_output_path(),
         wait_for_completion=True,
     ),
+    override_output_path="gs://marin-us-central2/raw/hello_world_fw-pliang-22232d",
 )
 raw_data = output_path_of(
     raw_download_step, "8fd6e8e/huggingface.co/datasets/skaramcheti/hello_world_fw/resolve/8fd6e8e/data/CC-MAIN-2024-10"
@@ -21,11 +40,11 @@ raw_data = output_path_of(
 ############################################################
 # Transform HTML to text
 
-from marin.schemas.web.convert import TrafilaturaConfig  # noqa
+from marin.schemas.web.convert import ResiliparseConfig, TrafilaturaConfig  # noqa
 from scripts.hello_world_fw.process import FineWebConfig, transform  # noqa
 
 transform_trafilatura_step = ExecutorStep(
-    name="documents/hello_world_fw-pliang-trafilatura",
+    name=f"documents/hello_world_fw-{USER}-trafilatura",
     fn=transform,
     config=FineWebConfig(
         input_path=raw_data,
@@ -41,17 +60,18 @@ transform_trafilatura_step = ExecutorStep(
 )
 
 transform_resiliparse_step = ExecutorStep(
-    name="documents/hello_world_fw-pliang-resiliparse",
+    name=f"documents/hello_world_fw-{USER}-resiliparse",
     fn=transform,
     config=FineWebConfig(
         input_path=raw_data,
         output_path=this_output_path(),
         extract_method=versioned("resiliparse"),
+        config=ResiliparseConfig.default_config(),
     ),
 )
 
 transform_readability_step = ExecutorStep(
-    name="documents/hello_world_fw-pliang-readability",
+    name=f"documents/hello_world_fw-{USER}-readability",
     fn=transform,
     config=FineWebConfig(
         input_path=raw_data,
@@ -80,17 +100,28 @@ sft_data = "gs://marin-us-central2/documents/instruct/v1_olmo_mix/text"
 ############################################################
 # Train quality classifier
 
-from scripts.fasttext.train_fasttext import TrainFasttextClassifierConfig, train  # noqa
+from marin.processing.classification.fasttext.train_fasttext import (  # noqa
+    DatasetCurationConfig,
+    TrainFasttextClassifierConfig,
+    train,
+)
 
 train_quality_step = ExecutorStep(
-    name="classifiers/hello_world_fw-pliang",
+    name=f"classifiers/hello_world_fw-{USER}",
     fn=train,
     config=TrainFasttextClassifierConfig(
-        pos_doc_path=sft_data,
-        neg_doc_path=output_path_of(transform_trafilatura_step),
+        input_doc_paths=[
+            DatasetCurationConfig(
+                input_doc_path=sft_data, label="hq", relative_sampling_rate=0.1, format="dolma_formatted_jsonl"
+            ),
+            DatasetCurationConfig(
+                input_doc_path=output_path_of(transform_trafilatura_step),
+                label="lq",
+                relative_sampling_rate=1.0,
+                format="dolma_formatted_jsonl",
+            ),
+        ],
         output_path=this_output_path(),
-        pos_sampling_rate=0.1,
-        neg_sampling_rate=1.0,
         fasttext_args={"lr": 0.1},
     ),
 )
@@ -101,7 +132,7 @@ train_quality_step = ExecutorStep(
 from marin.processing.classification.inference import InferenceConfig, run_inference  # noqa
 
 inference_quality_step = ExecutorStep(
-    name="attributes/hello_world_fw-pliang",
+    name=f"attributes/hello_world_fw-{USER}",
     fn=run_inference,
     config=InferenceConfig(
         input_path=output_path_of(transform_trafilatura_step),
@@ -118,7 +149,7 @@ inference_quality_step = ExecutorStep(
 from marin.processing.classification.dedupe import DedupeConfig, dedupe  # noqa
 
 dedupe_step = ExecutorStep(
-    name="attributes/hello_world_fw-pliang-dedupe",
+    name=f"attributes/hello_world_fw-{USER}-dedupe",
     fn=dedupe,
     config=DedupeConfig(
         input_path=output_path_of(transform_trafilatura_step),
@@ -132,7 +163,7 @@ dedupe_step = ExecutorStep(
 from marin.processing.classification.consolidate import ConsolidateConfig, FilterConfig, consolidate  # noqa
 
 consolidate_step = ExecutorStep(
-    name="documents/hello_world_fw-pliang-consolidate",
+    name=f"documents/hello_world_fw-{USER}-consolidate",
     fn=consolidate,
     config=ConsolidateConfig(
         input_path=output_path_of(transform_trafilatura_step),
@@ -157,32 +188,45 @@ consolidate_step = ExecutorStep(
 ############################################################
 # Tokenize
 
-from marin.processing.tokenize import TokenizeConfig, tokenize  # noqa
+from marin.processing.tokenize import TokenizeConfig, tokenize, lm_data_config  # noqa
 
 tokenize_step = ExecutorStep(
-    name="tokenized/llama3/hello_world_fw-pliang",
+    name=f"tokenized/llama3/hello_world_fw-{USER}",
     fn=tokenize,
     config=TokenizeConfig(
-        input_path=output_path_of(consolidate_step),
+        train_paths=[output_path_of(consolidate_step)],
+        validation_paths=[],
         cache_path=this_output_path(),
-        dataset_name="hello_world_fw-pliang",  # Does this have to be unique?
-        tokenizer="meta-llama/Meta-Llama-3.1-8B",
+        tokenizer=versioned("meta-llama/Meta-Llama-3.1-8B"),
     ),
 )
 
 ############################################################
 # Training
 
-# TODO: wait for Ray version
+from marin.training import TrainLmOnPodConfig, run_levanter_train_lm  # noqa
+
+training_config = draccus.load(TrainLmOnPodConfig, open("config/training/quickstart_run.yaml"))
+
+train_step = ExecutorStep(
+    name=f"checkpoints/quickstart-{USER}",
+    fn=run_levanter_train_lm,
+    config=dataclasses.replace(
+        training_config,
+        output_path=this_output_path(),
+        data=lm_data_config(tokenize_step),
+        tpu_type="v4-8" if not is_running_locally else None,
+    ),
+)
 
 ############################################################
 # Evaluate
 
-from scripts.evaluation.evaluation_config import EvaluationConfig  # noqa
-from scripts.evaluation.run import evaluate  # noqa
+from marin.evaluation.evaluation_config import EvaluationConfig  # noqa
+from marin.evaluation.run import evaluate  # noqa
 
 evaluate_step = ExecutorStep(
-    name="evaluation/hello_world_fw-pliang",
+    name=f"evaluation/hello_world_fw-{USER}",
     fn=evaluate,
     config=EvaluationConfig(
         evaluator="helm",
@@ -204,6 +248,7 @@ if __name__ == "__main__":
             transform_readability_step,  # Not used
             # train_quality_step,  # Not used  (TODO: fails right now)
             tokenize_step,
+            train_step,
             evaluate_step,
         ]
     )

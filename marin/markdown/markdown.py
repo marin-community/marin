@@ -11,6 +11,8 @@ from bs4 import BeautifulSoup, Comment, Doctype, NavigableString
 from markdownify import MarkdownConverter
 from regex import regex
 
+from marin.schemas.web.convert import HtmlToMarkdownConfig
+
 logger = logging.getLogger(__name__)
 
 # TODOs:
@@ -19,10 +21,10 @@ logger = logging.getLogger(__name__)
 # - [x] add latex math support
 
 
-def to_markdown(html):
+def to_markdown(html, config: HtmlToMarkdownConfig = HtmlToMarkdownConfig.default_config()):
     if isinstance(html, str):
         html = BeautifulSoup(html, "html.parser")
-    text = MyMarkdownConverter().convert_soup(html)
+    text = MyMarkdownConverter(config).convert_soup(html)
     # cleanup: replace nbsp as space
     # this isn't quite right if we preserve html in places, but we currently are not doing that
     text = text.replace("\xa0", " ")
@@ -142,14 +144,11 @@ def _try_convert_int(val, default):
 
 
 class MyMarkdownConverter(MarkdownConverter):
+    def __init__(self, config: HtmlToMarkdownConfig, **kwargs):
+        self.include_links = config.include_links
+        self.include_images = config.include_images
 
-    def __init__(self, **kwargs):
-        kwargs = {
-            "heading_style": "ATX",
-            "keep_inline_images_in": ["li", "p", "td", "th", "h1", "h2", "h3", "h4", "h5", "h6", "a"],
-            # "code_language_callback": self._infer_code_language,
-            **kwargs,
-        }
+        kwargs = config.markdownify_kwargs
         super().__init__(**kwargs)
 
     def convert_hn(self, n, el, text, convert_as_inline):
@@ -168,6 +167,10 @@ class MyMarkdownConverter(MarkdownConverter):
 
     def convert_a(self, el, text, convert_as_inline):
         prefix, suffix, text = markdownify.chomp(text)
+
+        if not self.include_links:
+            return text if len(text) > 1 else ""
+
         if not text:
             return ""
         href = el.get("href")
@@ -212,6 +215,10 @@ class MyMarkdownConverter(MarkdownConverter):
     def convert_img(self, el, text, convert_as_inline):
         # mostly copied from the parent class
         # the gfm spec says that the alt text is markdown, so we need to escape it
+
+        if not self.include_images:
+            return ""
+
         alt = el.attrs.get("alt", None) or ""
         alt = alt.replace("\n", " ")
         alt = self.escape(alt)
@@ -300,7 +307,7 @@ class MyMarkdownConverter(MarkdownConverter):
                     prev_td = prev.findAll("td", recursive=False)
                     i = 0
                     for td in prev_td:
-                        if "rowspan" in td.attrs and int(td["rowspan"]) > count:
+                        if "rowspan" in td.attrs and _try_convert_int(td["rowspan"], 1) > count:
                             rowspan[i] = 1
                         if "colspan" in td.attrs:
                             i += _try_convert_int(td["colspan"], 1)
@@ -309,7 +316,7 @@ class MyMarkdownConverter(MarkdownConverter):
                     prev_th = prev.findAll("th", recursive=False)
                     i = 0
                     for th in prev_th:
-                        if "rowspan" in th.attrs and int(th["rowspan"]) > count:
+                        if "rowspan" in th.attrs and _try_convert_int(th["rowspan"], 1) > count:
                             rowspan[i] = 1
                         if "colspan" in th.attrs:
                             i += _try_convert_int(th["colspan"], 1)

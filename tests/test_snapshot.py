@@ -3,6 +3,7 @@ import subprocess
 
 import pytest
 
+from marin.schemas.web.convert import ResiliparseConfig
 from marin.web.convert import convert_page
 
 my_path = os.path.dirname(os.path.realpath(__file__))
@@ -65,7 +66,7 @@ def test_generate_markdown_from_html_with_readability(input_name):
 
     output = output_dict["content"]
 
-    expected_file = os.path.join(expected_path, f"{input_name}.md")
+    expected_file = os.path.join(expected_path, "readability", f"{input_name}.md")
     output_file = os.path.join(output_path, "readability", f"{input_name}.md")
 
     os.makedirs(f"{output_path}/readability", exist_ok=True)
@@ -82,11 +83,11 @@ def test_generate_markdown_from_html_with_resiliparse(input_name):
     input_file = os.path.join(input_path, f"{input_name}.html")
     input_content = read_file(input_file)
 
-    output_dict = convert_page(input_content, extract_method="resiliparse")
+    output_dict = convert_page(input_content, extract_method="resiliparse", config=ResiliparseConfig.default_config())
 
     output = output_dict["content"]
 
-    expected_file = os.path.join(expected_path, f"{input_name}.md")
+    expected_file = os.path.join(expected_path, "resiliparse", f"{input_name}.md")
     output_file = os.path.join(output_path, "resiliparse", f"{input_name}.md")
 
     os.makedirs(f"{output_path}/resiliparse", exist_ok=True)
@@ -107,7 +108,7 @@ def test_generate_markdown_from_html_with_trafilatura(input_name):
 
     output = output_dict["content"]
 
-    expected_file = os.path.join(expected_path, f"{input_name}.md")
+    expected_file = os.path.join(expected_path, "trafilatura", f"{input_name}.md")
     output_file = os.path.join(output_path, "trafilatura", f"{input_name}.md")
 
     os.makedirs(f"{output_path}/trafilatura", exist_ok=True)
