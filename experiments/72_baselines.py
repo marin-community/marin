@@ -2,11 +2,16 @@
 Train 1.4B models on standard datasets.
 https://github.com/stanford-crfm/marin/issues/72
 """
+import dataclasses
+import os
+
+from levanter.store.cache import CacheOptions
 
 from experiments.defaults import SimpleTrainConfig, default_tokenize, default_train
 from experiments.llama import llama3_tokenizer, llama_1_4b, llama_150m
 from experiments.pretraining_datasets import fineweb_edu, slimpajama, slimpajama_6b
-from marin.execution.executor import executor_main
+from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
+from marin.processing.tokenize import TokenizeConfig, tokenize
 
 # TODO: tune these hyperparameters
 default_train_config = SimpleTrainConfig(
@@ -35,7 +40,17 @@ slimpajama_6b_model = default_train(
     train_config=default_train_config,
 )
 
-slimpajama_tokenized = default_tokenize(name="SlimPajama-627B", dataset=slimpajama, tokenizer=llama3_tokenizer)
+slimpajama_tokenized = ExecutorStep(
+    name=os.path.join("tokenized", "SlimPajama-627B"),
+    fn=tokenize,
+    config=TokenizeConfig(
+        train_paths=[slimpajama.cd("train")],
+        validation_paths=[slimpajama.cd("validation")],
+        cache_path=this_output_path(),
+        tokenizer=versioned(llama3_tokenizer),
+    ),
+)
+
 slimpajama_6b_model = default_train(
     name="SlimPajama-6B-1.4b",
     tokenized=slimpajama_6b_tokenized,
@@ -58,7 +73,8 @@ if __name__ == "__main__":
         steps=[
             # slimpajama,
             # fineweb_edu,
-            hello_world_fw_model,
-            # slimpajama_tokenized,
+            # hello_world_fw_model,
+            slimpajama_tokenized,
+            slimpajama_6b_model
         ]
     )

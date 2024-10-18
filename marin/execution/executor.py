@@ -153,6 +153,9 @@ class InputName:
     step: ExecutorStep
     name: str | None
 
+    def cd(self, name: str) -> "InputName":
+        return InputName(self.step, name=os.path.join(self.name, name) if self.name else name)
+
 
 def output_path_of(step: ExecutorStep, name: str | None = None):
     return InputName(step=step, name=name)

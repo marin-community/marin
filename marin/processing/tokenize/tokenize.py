@@ -44,7 +44,7 @@ class TokenizeConfig:
     cache_path: str  # base path to save the tokenized files
     tokenizer: str  # tokenizer name. Should be the same as you intend to use in the tokenizer spec for the training run
     tags: list[str] = dataclasses.field(default_factory=list)  # tags to be added to config
-    cache_options: CacheOptions = CacheOptions()  # noqa: RUF009
+    cache_options: CacheOptions = CacheOptions(num_shard_groups=1024)  # noqa: RUF009
 
     def train_source(self) -> ShardedDataSource | None:
         if len(self.train_paths) == 0:
