@@ -5,8 +5,13 @@ from operations.download.huggingface.download_gated_manual import download_and_u
 """
 Downloads the following datasets:
 - https://huggingface.co/datasets/mlfoundations/dclm-baseline-1.0
-- https://huggingface.co/datasets/bigcode/the-stack-dedup
 - https://huggingface.co/datasets/EleutherAI/proof-pile-2
+- https://huggingface.co/datasets/bigcode/starcoderdata
+
+[Also has the step for
+- https://huggingface.co/datasets/bigcode/the-stack-dedup (gated) which is not really needed
+but related to StarCoder.]
+
 to GCS. The 2nd and 3rd ones above are the other datasets that were used in the DCLM paper (in addition to
     the actual DCLM-Baseline dataset).
 """
@@ -51,6 +56,19 @@ proofpile_2_download_step = ExecutorStep(
         wait_for_completion=False,
     ),
     override_output_path="gs://marin-us-central2/raw/proof-pile-2-f1b1d8",
+)
+
+############################################################
+# download StarCoder data
+starcoder_download_step = ExecutorStep(
+    name="raw/starcoderdata",
+    fn=download,
+    config=DownloadConfig(
+        hf_dataset_id="bigcode/starcoderdata",
+        revision=versioned("9fc30b5"),
+        gcs_output_path=this_output_path(),
+        wait_for_completion=True,
+    ),
 )
 
 ############################################################
