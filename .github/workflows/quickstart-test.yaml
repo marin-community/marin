@@ -26,7 +26,7 @@ jobs:
       - name: Install pip dependencies
         shell: bash -l {0}
         run: |
-          pip install -e .["dev"] 
+          pip install .["dev"] 
           
       - name: Install other dependencies
         shell: bash -l {0}
