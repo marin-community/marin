@@ -206,11 +206,7 @@ def main(cfg: TransformDatasetConfig):
         transform_dataset.remote, cfg.input_path, f"**/*.{cfg.filetype}", cfg.output_path, TaskConfig(), False, cfg
     )
 
-    try:
-        ray.get(responses)
-    except Exception as e:
-        logger.exception(f"Error processing {cfg.source} dataset: {e}")
-        raise e
+    ray.get(responses)
 
 
 if __name__ == "__main__":
