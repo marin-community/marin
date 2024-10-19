@@ -56,11 +56,11 @@ def levanter_tokenize(input_paths: list[str] | str, tokenizer_name: str, output_
     else:
         if isinstance(input_paths, str):
             input_paths = [input_paths]
-        jsonls = _get_jsonls(input_paths)
-        if len(jsonls) == 0:
-            raise ValueError(f"No jsonl files found in {input_paths}")
-        logger.info(f"Found {len(jsonls)} jsonl files.")
-        source = TextUrlDataSource(jsonls)
+        filepaths_to_tokenize = _get_filepaths_to_tokenize(input_paths)
+        if len(filepaths_to_tokenize) == 0:
+            raise ValueError(f"No valid jsonl/parquet files found in {input_paths}")
+        logger.info(f"Found {len(filepaths_to_tokenize)} files to tokenize.")
+        source = TextUrlDataSource(filepaths_to_tokenize)
 
     cache = build_or_load_cache(
         cache_dir=output_path,
@@ -223,6 +223,26 @@ def _get_jsonls(input_path: list[str]):
             output_paths.extend(fsspec_glob(path))
 
     return output_paths
+
+
+def _get_parquets(input_path: list[str]):
+    output_paths = []
+    for path in input_path:
+        if fsspec_isdir(path) or path.endswith("/"):
+            logger.info(f"Getting all parquet files in {path}")
+            output_paths.extend(fsspec_glob(os.path.join(path, "**/*.parquet")))
+        else:
+            output_paths.extend(fsspec_glob(path))
+
+    return output_paths
+
+
+def _get_filepaths_to_tokenize(input_path: list[str]):
+    if len(input_path) == 0:
+        return []
+
+    # we're only going to have one or the other, but might as well return both
+    return _get_jsonls(input_path) + _get_parquets(input_path)
 
 
 def is_probably_path(path: str) -> bool:
