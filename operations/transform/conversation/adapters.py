@@ -1,32 +1,45 @@
+import dataclasses
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel
+from marin.core.conversation import OpenAIChatMessage
 
 
-class DatasetFormat(str, Enum):
-    """Format of the SFT Dataset"""
+class InputDatasetFormat(str, Enum):
+    """Format of the SFT Dataset
+
+    SINGLE_COLUMN_MULTI_TURN example:
+    In the huggingface dataset, there exists a single column with a list of messages.
+    |                  Messages                 |
+    | ----------------------------------------- |
+    | [{"role": "user", "content": "..."},      |
+    |  {"role": "assistant", "content": "..."}] |
+    | ----------------------------------------- |
+
+
+    INSTRUCTION_RESPONSE example:
+    In the huggingface dataset, there exists two columns with a single message each.
+    |             Instruction              | Response |
+    | ------------------------------------ | -------- |
+    | "What is the capital of France?"     | "Paris"  |
+    | "What is 2 + 2?"                     |   "4"    |
+
+    """
 
     SINGLE_COLUMN_MULTI_TURN: str = "messages"
     INSTRUCTION_RESPONSE: str = "instruction_response"
 
 
-class OpenAIChatMessage(BaseModel):
-    role: str
-    content: str
-
-
 @dataclass
 class TransformAdapter:
     source: str
-    dataset_format: DatasetFormat = DatasetFormat.INSTRUCTION_RESPONSE
+    dataset_format: InputDatasetFormat = InputDatasetFormat.INSTRUCTION_RESPONSE
 
     # Instruction Response
     instruction_column: str = ""
     response_column: str = ""
 
-    # Single Column Multi Turn
     """
     Example of role_key, user_value, assistant_value, and system_value:
     In OpenHermes-2.5, a conversation can look like this:
@@ -48,14 +61,14 @@ class TransformAdapter:
         self,
         row: dict[str, Any],
     ) -> list[OpenAIChatMessage]:
-        if self.dataset_format == DatasetFormat.INSTRUCTION_RESPONSE:
+        if self.dataset_format == InputDatasetFormat.INSTRUCTION_RESPONSE:
             messages = []
             instruction = row[self.instruction_column]
             response = row[self.response_column]
             messages.append(OpenAIChatMessage(role="user", content=instruction))
             messages.append(OpenAIChatMessage(role="assistant", content=response))
             return messages
-        elif self.dataset_format == DatasetFormat.SINGLE_COLUMN_MULTI_TURN:
+        elif self.dataset_format == InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN:
             messages = []
             role_to_openai_role = {
                 self.user_value: "user",
@@ -71,18 +84,7 @@ class TransformAdapter:
             raise ValueError(f"Invalid dataset format: {self.dataset_format}")
 
     def copy(self) -> "TransformAdapter":
-        return TransformAdapter(
-            source=self.source,
-            dataset_format=self.dataset_format,
-            instruction_column=self.instruction_column,
-            response_column=self.response_column,
-            conversation_column=self.conversation_column,
-            role_key=self.role_key,
-            user_value=self.user_value,
-            assistant_value=self.assistant_value,
-            system_value=self.system_value,
-            content_key=self.content_key,
-        )
+        return dataclasses.replace(self)
 
 
 transform_templates: dict[str, TransformAdapter] = {}
@@ -101,7 +103,7 @@ def get_adapter(source: str) -> TransformAdapter:
 register_adapter(
     TransformAdapter(
         source="teknium/OpenHermes-2.5",
-        dataset_format=DatasetFormat.SINGLE_COLUMN_MULTI_TURN,
+        dataset_format=InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN,
         conversation_column="conversations",
         role_key="from",
         user_value="human",
@@ -114,7 +116,7 @@ register_adapter(
 register_adapter(
     TransformAdapter(
         source="meta-math/MetaMathQA",
-        dataset_format=DatasetFormat.INSTRUCTION_RESPONSE,
+        dataset_format=InputDatasetFormat.INSTRUCTION_RESPONSE,
         instruction_column="query",
         response_column="response",
     )
@@ -123,7 +125,7 @@ register_adapter(
 register_adapter(
     TransformAdapter(
         source="allenai/tulu-v2-sft-mixture",
-        dataset_format=DatasetFormat.SINGLE_COLUMN_MULTI_TURN,
+        dataset_format=InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN,
         conversation_column="messages",
         role_key="role",
         user_value="user",
@@ -136,7 +138,7 @@ register_adapter(
 register_adapter(
     TransformAdapter(
         source="openbmb/UltraInteract_sft",
-        dataset_format=DatasetFormat.INSTRUCTION_RESPONSE,
+        dataset_format=InputDatasetFormat.INSTRUCTION_RESPONSE,
         instruction_column="instruction",
         response_column="response",
     )
