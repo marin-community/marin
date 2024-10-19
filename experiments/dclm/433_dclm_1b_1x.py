@@ -1,7 +1,6 @@
-from defaults import SimpleTrainConfig, default_tokenize, default_train
-from pretraining_datasets import dclm_baseline, proofpile_2, starcoderdata
-
+from experiments.defaults import SimpleTrainConfig, default_tokenize, default_train
 from experiments.llama import LlamaConfig
+from experiments.pretraining_datasets import dclm_baseline, proofpile_2, starcoderdata
 from marin.execution.executor import executor_main
 from marin.processing.tokenize import lm_mixture_data_config
 
@@ -26,15 +25,15 @@ proofpile_2_tokenized = default_tokenize(
 )
 
 DCLM_FULL_COMPONENTS = {
-    "dclm-baseline": dclm_baseline_tokenized,
+    "dclm_baseline": dclm_baseline_tokenized,
     "starcoderdata": starcoderdata_tokenized,
-    "proofpile-2": proofpile_2_tokenized,
+    "proofpile_2": proofpile_2_tokenized,
 }
 
 DCLM_MIXTURE_WEIGHTS = {
-    "dclm-baseline": 3.8,  # 3.8 trillion tokens https://huggingface.co/datasets/mlfoundations/dclm-baseline-1.0
+    "dclm_baseline": 3.8,  # 3.8 trillion tokens https://huggingface.co/datasets/mlfoundations/dclm-baseline-1.0
     "starcoderdata": 0.25,  # 250 billion tokens https://huggingface.co/datasets/bigcode/starcoderdata
-    "proofpile-2": 0.05,  # 55 billion tokens https://huggingface.co/datasets/EleutherAI/proof-pile-2
+    "proofpile_2": 0.05,  # 55 billion tokens https://huggingface.co/datasets/EleutherAI/proof-pile-2
 }
 
 EXPERIMENT_TAG = ["433_dclm_1b_1x"]
