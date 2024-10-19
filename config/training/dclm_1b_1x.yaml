@@ -15,7 +15,7 @@ trainer:
     tags: [ "llama", "dclm", "1B" ]
   mp: p=f32,c=bfloat16
   train_batch_size: 256  # 256 * 2048 = 524,288
-  num_train_steps: 54932  # 28,800,000,000/ 524288 ~= 54,932
+  num_train_steps: 54932  # 28,800,000,000 / 524288 ~= 54,932
   steps_per_eval: 1000
   tensor_parallel_axes: [ "mlp", "heads" ]
   fsdp_axis: "embed"

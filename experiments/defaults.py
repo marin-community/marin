@@ -35,15 +35,14 @@ def default_tokenize(name: str, dataset: InputName | ExecutorStep, tokenizer: st
 
 @dataclass(frozen=True)
 class SimpleTrainConfig:
-    """Simplified configuration for training (the things that matter)."""
-
-    tpu_type: str
-    train_batch_size: int
-    num_train_steps: int
-    learning_rate: float
-    weight_decay: float
-
-    # add more fields here (optimizer)
+    tpu_type: str | None = None
+    train_batch_size: int | None = None
+    num_train_steps: int | None = None
+    learning_rate: float | None = None
+    weight_decay: float | None = None
+    min_lr_ratio: float | None = None
+    warmup: int | None = None
+    cooldown: float | None = None
 
 
 llama_1_4b_train_config = SimpleTrainConfig(

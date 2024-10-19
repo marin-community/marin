@@ -62,7 +62,7 @@ proofpile_2_download_step = ExecutorStep(
 # download StarCoder data
 starcoder_download_step = ExecutorStep(
     name="raw/starcoderdata",
-    fn=download,
+    fn=download_and_upload_to_gcs,
     config=DownloadConfig(
         hf_dataset_id="bigcode/starcoderdata",
         revision=versioned("9fc30b5"),
@@ -79,5 +79,6 @@ if __name__ == "__main__":
             dclm_baseline_download_step,
             the_stack_download_step,
             proofpile_2_download_step,
+            starcoder_download_step,
         ]
     )
