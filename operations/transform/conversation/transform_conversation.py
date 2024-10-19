@@ -44,9 +44,10 @@ import fsspec
 import pandas as pd
 import ray
 
+from marin.core.conversation import OpenAIChatMessage
 from marin.core.runtime import TaskConfig, cached_or_construct_output, fsspec_mkdirs, map_files_in_directory
 
-from .adapters import OpenAIChatMessage, TransformAdapter, get_adapter
+from .adapters import TransformAdapter, get_adapter
 
 logger = logging.getLogger("ray")
 
@@ -91,7 +92,6 @@ def transform_row(row: dict, cfg: TransformDatasetConfig, adapter: TransformAdap
 
     # Create a unique ID for the row based on the text
     row_idx = generate_hash_from_messages(transformed_row_messages)
-
     metadata = {col: row.get(col, "") for col in cfg.metadata_columns}
     return {
         "id": row_idx,
@@ -144,7 +144,10 @@ def load_dataset(input_path: str) -> list[dict]:
 
 
 def create_shard_output_directory(output_filename: str) -> str:
-    """Given an output filename, create a directory for the shards.
+    """Given an output filename, remove the suffix of the filename and create a directory for the shards.
+
+    Example:
+        [A] output_filename = "gs://A/B.jsonl.gz" -> [B] output_path = "gs://A/B"
 
     Args:
         output_filename (str): The path to the output file.
