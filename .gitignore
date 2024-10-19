@@ -191,5 +191,5 @@ archive/
 # csv
 *.csv
 
-# Levanter
-.config
+# wandb logs
+wandb

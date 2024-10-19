@@ -8,6 +8,7 @@ import draccus
 import levanter.infra.cli_helpers
 import ray
 from google.api_core.exceptions import Forbidden as GcpForbiddenException
+from levanter.data.text import LMMixtureDatasetConfig
 from levanter.infra.ray_tpu import run_on_pod_resumable
 from levanter.main import train_lm
 from mergedeep import mergedeep
@@ -117,7 +118,11 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
     if not config.bypass_path_checks and config.tpu_type is not None:
         # run this on the Ray cluster to get the right region
         # doesn't need to be a TPU because ray insists that all VMs are in the same region
-        ray.get(ray.remote(_doublecheck_paths).options(runtime_env=runtime_env, num_cpus=0.1).remote(config))
+        ray.get(
+            ray.remote(_doublecheck_paths)
+            .options(runtime_env=runtime_env, num_cpus=0.1)
+            .remote(config, must_save_checkpoints=True)
+        )
 
     train_config = _upcast_trainlm_config(config)
 
@@ -196,7 +201,7 @@ def _suppress_ray_config(config: TrainLmOnPodConfig):
     return config
 
 
-def _doublecheck_paths(config: TrainLmOnPodConfig):
+def _doublecheck_paths(config: TrainLmOnPodConfig, must_save_checkpoints):
     """
     Double-check that we're not using local paths in some of the standard places that Levanter sets defaults.
     Also check that the paths are in the same region as the VM, to avoid performance issues and billing surprises.
@@ -210,7 +215,12 @@ def _doublecheck_paths(config: TrainLmOnPodConfig):
             return
         raise ValueError("Could not determine the region of the VM. This is required for path checks.") from e
 
-    def check(key, path):
+    def check(key, path, none_ok):
+        if path is None:
+            if none_ok:
+                return
+            raise ValueError(f"{key} must be set")
+
         if not path.startswith("gs://"):
             if local_ok:
                 logger.warning(f"{key} is not a GCS path: {path}. This is fine if you're running locally.")
@@ -229,11 +239,15 @@ def _doublecheck_paths(config: TrainLmOnPodConfig):
                 f"Could not check region for {key}. Be sure it's in the same region as the VM.", exc_info=True
             )
 
-    check("data.cache_dir", config.data.cache_dir)
-    check("trainer.checkpointer.base_path", config.trainer.checkpointer.base_path)
+    check("data.cache_dir", config.data.cache_dir, none_ok=True)
+    # now check all subcaches if applicable
+    if isinstance(config.data, LMMixtureDatasetConfig):
+        for key, subcache in config.data.configs.items():
+            check(f"data.configs[{key}].cache_dir", subcache.cache_dir, none_ok=True)
+    check("trainer.checkpointer.base_path", config.trainer.checkpointer.base_path, none_ok=not must_save_checkpoints)
 
     if config.hf_save_path is not None:
-        check("hf_save_path", config.hf_save_path)
+        check("hf_save_path", config.hf_save_path, none_ok=not must_save_checkpoints)
     else:
         logger.warning("hf_save_path is not set. This is fine if you don't want HF checkpoints.")
 
