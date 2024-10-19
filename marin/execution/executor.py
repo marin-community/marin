@@ -591,7 +591,7 @@ class ExecutorMainConfig:
 
     dry_run: bool = False
     force_run: list[str] = field(default_factory=list)  # <list of steps name>: run list of steps (names)
-    force_run_failed: bool = True  # run failed steps
+    force_run_failed: bool = False  # Force run failed steps
 
 
 @draccus.wrap()
