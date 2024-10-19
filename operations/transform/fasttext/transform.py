@@ -10,6 +10,7 @@ Usage:
 
 import hashlib
 import json
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -18,6 +19,9 @@ import fsspec
 import ray
 
 from marin.core.runtime import cached_or_construct_output
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger("fasttext-to-dolma")
 
 
 def generate_id(line: str, line_number: str) -> str:
@@ -62,7 +66,9 @@ def convert_fasttext_to_dolma_format(input_path: str, output_path: str, source: 
             # Split the line to separate the fasttext label and text and remove trailing newline
             try:
                 text = line[line.index(" ") + 1 :].rstrip("\n")
+                text = line.rstrip("\n").split(" ", 1)[1]
             except ValueError:  # skip malformed lines (missing space indicates no label)
+                logger.warning(f"Skipping malformed line {line_number}: {line}")
                 continue
 
             doc = {
@@ -83,7 +89,8 @@ class TransformFasttextToDolmaConfig:
     Attributes:
         input_path (str): The path to the input FastText file.
         output_path (str): The path to the output Dolma JSONL file (compressed with gzip).
-        source (str): The source identifier to include in the output documents.
+        source (str): The source identifier (per Dolma format guidelines) to include in the output documents
+            (e.g., "dclm-fasttext-data").
     """
 
     input_path: str
