@@ -1,3 +1,6 @@
+# TODO: should delete this file in favor of quickstart-synthetic.py and a
+# defaults.py which has the best practices.
+
 import dataclasses
 
 import draccus
@@ -37,7 +40,7 @@ raw_data = output_path_of(
 ############################################################
 # Transform HTML to text
 
-from marin.schemas.web.convert import TrafilaturaConfig  # noqa
+from marin.schemas.web.convert import ResiliparseConfig, TrafilaturaConfig  # noqa
 from scripts.hello_world_fw.process import FineWebConfig, transform  # noqa
 
 transform_trafilatura_step = ExecutorStep(
@@ -63,6 +66,7 @@ transform_resiliparse_step = ExecutorStep(
         input_path=raw_data,
         output_path=this_output_path(),
         extract_method=versioned("resiliparse"),
+        config=ResiliparseConfig.default_config(),
     ),
 )
 
@@ -184,7 +188,7 @@ consolidate_step = ExecutorStep(
 ############################################################
 # Tokenize
 
-from marin.processing.tokenize import TokenizeConfig, tokenize, lm_training_config  # noqa
+from marin.processing.tokenize import TokenizeConfig, tokenize, lm_data_config  # noqa
 
 tokenize_step = ExecutorStep(
     name=f"tokenized/llama3/hello_world_fw-{USER}",
@@ -210,7 +214,7 @@ train_step = ExecutorStep(
     config=dataclasses.replace(
         training_config,
         output_path=this_output_path(),
-        data=lm_training_config(tokenize_step),
+        data=lm_data_config(tokenize_step),
         tpu_type="v4-8" if not is_running_locally else None,
     ),
 )
