@@ -1,5 +1,5 @@
-from defaults import default_tokenize
-from pretraining_datasets import dclm_baseline, proofpile_2, the_stack_dedup
+from defaults import SimpleTrainConfig, default_tokenize, default_train
+from pretraining_datasets import dclm_baseline, proofpile_2, starcoderdata
 
 from experiments.llama import LlamaConfig
 from marin.execution.executor import executor_main
@@ -13,13 +13,11 @@ dclm_baseline_tokenized = default_tokenize(
     tokenizer=gpt_neox_tokenizer,
 )
 
-the_stack_dedup_tokenized = default_tokenize(
-    name="the_stack_dedup",
-    dataset=the_stack_dedup,
+starcoderdata_tokenized = default_tokenize(
+    name="starcoderdata",
+    dataset=starcoderdata,
     tokenizer=gpt_neox_tokenizer,
 )
-
-# starcoder_tokenized =
 
 proofpile_2_tokenized = default_tokenize(
     name="proofpile_2",
@@ -29,25 +27,21 @@ proofpile_2_tokenized = default_tokenize(
 
 DCLM_FULL_COMPONENTS = {
     "dclm-baseline": dclm_baseline_tokenized,
-    "the-stack-dedup": the_stack_dedup_tokenized,
+    "starcoderdata": starcoderdata_tokenized,
     "proofpile-2": proofpile_2_tokenized,
 }
 
 DCLM_MIXTURE_WEIGHTS = {
-    "dclm-baseline": 3.8,
-    "the-stack-dedup": 0.25,  # use https://huggingface.co/datasets/bigcode/starcoderdata
-    "proofpile-2": 0.01,
+    "dclm-baseline": 3.8,  # 3.8 trillion tokens https://huggingface.co/datasets/mlfoundations/dclm-baseline-1.0
+    "starcoderdata": 0.25,  # 250 billion tokens https://huggingface.co/datasets/bigcode/starcoderdata
+    "proofpile-2": 0.05,  # 55 billion tokens https://huggingface.co/datasets/EleutherAI/proof-pile-2
 }
 
 EXPERIMENT_TAG = ["433_dclm_1b_1x"]
 
 mixture_config = lm_mixture_data_config(components=DCLM_FULL_COMPONENTS, weights=DCLM_MIXTURE_WEIGHTS)
 
-# training_config = draccus.load(TrainLmOnPodConfig, open("config/training/dclm_1b_1x.yaml"))
-# model_config = draccus.load(, open("config/training/llama_1_4b.yaml"))
-
-# use this class
-llama_1_4b = LlamaConfig(
+llama_1_4b_dclm = LlamaConfig(
     seq_len=2048,
     hidden_dim=2048,
     intermediate_dim=8192,
@@ -57,23 +51,36 @@ llama_1_4b = LlamaConfig(
     use_flash_attention=True,
 )
 
-# train_step = default_train(
-#     name="dclm_1b_1x",
-#     tokenized=mixture_config,
-#     model_config=llama_1_4b,
-#     train_config=training_config,
-#     tags=EXPERIMENT_TAG,
-# )
+# TODO remove, note to myself to verify calculations:
+# num_train_steps = total tokens / tokens per step
+# = 28.8 billion / (train_batch_size * seq_len)
+# = 28,800,000,000 / (256 * 2048 = 524288)
+# ~= 54,932 training steps
+training_config = SimpleTrainConfig(
+    tpu_type="v4-128",
+    train_batch_size=256,
+    num_train_steps=54932,
+    learning_rate=3e-3,
+    weight_decay=0.033,
+    min_lr_ratio=0.1,
+    warmup=5000,
+    cooldown=3e-5,
+)
 
-# eval_step = default_eval(
-# )
+train_step = default_train(
+    name="dclm_1b_1x",
+    tokenized=mixture_config,
+    model_config=llama_1_4b_dclm,
+    train_config=training_config,
+    tags=EXPERIMENT_TAG,
+)
 
 if __name__ == "__main__":
     executor_main(
         steps=[
             dclm_baseline_tokenized,
-            the_stack_dedup_tokenized,
+            starcoderdata_tokenized,
             proofpile_2_tokenized,
-            # train_step,
+            train_step,
         ]
     )
