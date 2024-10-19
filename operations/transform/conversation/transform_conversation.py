@@ -5,30 +5,6 @@ Usage Examples:
 1. Download the dataset from HuggingFace which is used in the input_path in the TransformDatasetConfig.
 2. Register your adapter in adapters.py
 3. Run the script as shown below with the same adapter name as the source you registered.
-
-MetamathQA:
-ray job submit --working-dir . -- python -m operations.transform.conversation.transform_conversation \
-     --input_path gs://marin-us-central2/raw/metamathqa/aa4f34d/huggingface.co/datasets/ \
-     --output_path gs://marin-us-central2/documents/metamathqa \
-     --source meta-math/MetaMathQA \
-     --metadata_columns ["type"] \
-     --filetype json
-
-Tulu-V2-SFT-Mixture:
-ray job submit --working-dir . -- python -m operations.transform.conversation.transform_conversation \
-     --input_path gs://marin-us-central2/raw/tulu-v2-sft-mixture/6248b17/huggingface.co/datasets/ \
-     --output_path gs://marin-us-central2/documents/tulu-v2-sft-mixture \
-     --source allenai/tulu-v2-sft-mixture \
-     --metadata_columns '["dataset", "id"]' \
-     --filetype parquet
-
-UltraInteract_sft:
-ray job submit --working-dir . -- python -m operations.transform.conversation.transform_conversation \
-     --input_path gs://marin-us-central2/raw/ultrainteract-sft/2b102e4/huggingface.co/datasets/ \
-     --output_path gs://marin-us-central2/documents/ultrainteract-sft \
-     --source openbmb/UltraInteract_sft \
-     --metadata_columns '["task", "dataset"]' \
-     --filetype parquet
 """
 
 import hashlib
@@ -169,7 +145,7 @@ def create_shard_output_directory(output_filename: str) -> str:
 
 @ray.remote(memory=4 * 1024 * 1024 * 1024)
 @cached_or_construct_output(success_suffix="SUCCESS")
-def transform_dataset(input_filename: str, output_filename: str, cfg: TransformDatasetConfig):
+def transform_file(input_filename: str, output_filename: str, cfg: TransformDatasetConfig):
     rows = load_dataset(input_filename)
     logger.info(f"Transforming {len(rows)} rows from {input_filename} to {output_filename}")
 
@@ -185,13 +161,18 @@ def transform_dataset(input_filename: str, output_filename: str, cfg: TransformD
                 f.write(f"{json.dumps(row)}\n")
 
 
-@draccus.wrap()
-def main(cfg: TransformDatasetConfig):
+@ray.remote
+def transform_dataset(cfg: TransformDatasetConfig):
     responses = map_files_in_directory(
-        transform_dataset.remote, cfg.input_path, f"**/*.{cfg.filetype}", cfg.output_path, TaskConfig(), False, cfg
+        transform_file.remote, cfg.input_path, f"**/*.{cfg.filetype}", cfg.output_path, TaskConfig(), False, cfg
     )
 
     ray.get(responses)
+
+
+@draccus.wrap()
+def main(cfg: TransformDatasetConfig):
+    ray.get(transform_dataset.remote(cfg))
 
 
 if __name__ == "__main__":
