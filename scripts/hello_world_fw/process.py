@@ -14,8 +14,8 @@
 # --input_path gs://marin-us-central2/raw/hello_world_fw/v1.0/CC-MAIN-2024-10/000_00000
 # --output_path gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart/CC-MAIN-2024-10/000_00000
 import json
-from dataclasses import dataclass
 import logging
+from dataclasses import dataclass
 
 import draccus
 import fsspec
@@ -35,7 +35,7 @@ logger = logging.getLogger("ray")
 # Ray will not impose any physical limits on the resources used by the function, these numbers are used for scheduling.
 @ray.remote(memory=1 * 1024 * 1024 * 1024, runtime_env={"pip": ["s3fs", "trafilatura"]}, num_cpus=1)  # 1 GB
 @cached_or_construct_output(success_suffix="SUCCESS")  # We use this decorator to make this function idempotent
-def html_to_md(input_file_path: str, output_file_path: str, extract_method: str, config: ExtractionConfig):
+def html_to_md(input_file_path: str, output_file_path: str, extract_method: str, config: ExtractionConfig) -> bool:
     # The runtime for this function should be low (less than 5-10 min), as the machines are preemptible
     # Example of input_path = gs://marin-data/hello_world_fw/fineweb/fw-v1.0/CC-MAIN-2024-10/000_00000/0_processed_html.jsonl.gz
 
