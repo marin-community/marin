@@ -74,8 +74,6 @@ def convert_fasttext_to_dolma_format(input_path: str, output_path: str, source: 
 
             output_jsonl_gz.write(f"{json.dumps(doc)}\n")
 
-    return True
-
 
 @dataclass
 class TransformFasttextToDolmaConfig:
