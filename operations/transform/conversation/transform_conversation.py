@@ -4,7 +4,9 @@ Transform any HuggingFace dataset to OpenAI messages format.
 Usage Examples:
 1. Download the dataset from HuggingFace which is used in the input_path in the TransformDatasetConfig.
 2. Register your adapter in adapters.py
-3. Run the script as shown below with the same adapter name as the source you registered.
+3. Run the script, filling out the TransformDatasetConfig.
+
+Check out experiments/instruction_datasets.py to see how to run this script using the Executor.
 """
 
 import hashlib
