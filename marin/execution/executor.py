@@ -349,9 +349,9 @@ class Executor:
         self,
         prefix: str,
         executor_info_base_path: str,
-        description: str | None,
-        force_run: list[str] | None,
-        force_run_failed: bool,
+        description: str | None = None,
+        force_run: list[str] | None = None,
+        force_run_failed: bool = False,
     ):
         self.prefix = prefix
         self.executor_info_base_path = executor_info_base_path
