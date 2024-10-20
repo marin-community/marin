@@ -124,6 +124,8 @@ class ExecutorStep(Generic[ConfigT]):
     - `VersionedValue(value)`: a value that should be part of the version
     The `config` is instantiated by replacing these special values with the
     actual paths during execution.
+
+    Note: `step: ExecutorStep` is interpreted as `InputName(step, None)`.
     """
 
     name: str
@@ -133,6 +135,10 @@ class ExecutorStep(Generic[ConfigT]):
     override_output_path: str | None = None
     """Specifies the `output_path` that should be used.  Print warning if it
     doesn't match the automatically computed one."""
+
+    def cd(self, name: str) -> "InputName":
+        """Refer to the `name` under `self`'s output_path."""
+        return InputName(self, name=name)
 
     def __hash__(self):
         """Hash based on the ID (every object is different)."""
@@ -248,6 +254,10 @@ def collect_dependencies_and_version(obj: Any, dependencies: list[ExecutorStep],
 
     def recurse(obj: Any, prefix: str):
         new_prefix = prefix + "." if prefix else ""
+
+        if isinstance(obj, ExecutorStep):
+            obj = output_path_of(obj, None)
+
         if isinstance(obj, VersionedValue):
             # Just extract the value
             version[prefix] = obj.value
@@ -290,6 +300,10 @@ def instantiate_config(config: dataclass, output_path: str, output_paths: dict[E
     def recurse(obj: Any):
         if obj is None:
             return None
+
+        if isinstance(obj, ExecutorStep):
+            obj = output_path_of(obj)
+
         if isinstance(obj, InputName):
             return join_path(output_paths[obj.step], obj.name)
         elif isinstance(obj, OutputName):
@@ -334,9 +348,11 @@ class Executor:
         self.steps: list[ExecutorStep] = []
         self.refs: dict[ExecutorStep, ray.ObjectRef] = {}
 
-    def run(self, steps: list[ExecutorStep], dry_run: bool = False):
+    def run(self, steps: list[ExecutorStep | InputName], dry_run: bool = False):
         # Gather all the steps, compute versions and output paths for all of them.
         for step in steps:
+            if isinstance(step, InputName):  # Interpret InputName as the underlying step
+                step = step.step
             self.compute_version(step)
 
         self.write_infos()
@@ -376,7 +392,10 @@ class Executor:
         # Override output path if specified
         if step.override_output_path is not None:
             if output_path != step.override_output_path:
-                logger.warning(f"Output path {output_path} doesn't match {step.override_output_path}, using the latter.")
+                logger.warning(
+                    f"Output path {output_path} doesn't match given "
+                    "override {step.override_output_path}, using the latter."
+                )
                 output_path = step.override_output_path
 
         # Record everything
@@ -429,6 +448,7 @@ class Executor:
             self.executor_info_base_path,
             f"{name}-{executor_version_hash}.json",
         )
+        logger.info(f"Writing executor info to {self.executor_info_path}")
 
         # Write out info for each step
         for step, info in zip(self.steps, step_infos, strict=True):
