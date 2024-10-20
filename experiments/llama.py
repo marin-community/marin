@@ -1,4 +1,5 @@
 """
+# SKIP_DRY_RUN_TEST
 Specifies a sequence of Llama 3 models from small to large.
 """
 
