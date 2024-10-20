@@ -133,8 +133,8 @@ export default ViewPage;
 
 const removeSymbol = "✖";
 
-const upArrow = <span>&uarr;</span>;
-const downArrow = <span>&darr;</span>;
+const upArrow = "↑";
+const downArrow = "↓";
 
 /**
  * Parses the URL parameter `paths`.
@@ -278,14 +278,14 @@ function renderOffsetCount(args) {
 
   // Navigate offset with Prev/Next
   const prev = offset > 0 ?
-    (<button onClick={() => updateUrlParams({offset: offset - count})}>Prev</button>) :
-    <button disabled>Prev</button>;
+    (<Button size="small" onClick={() => updateUrlParams({offset: offset - count})}>Prev</Button>) :
+    <Button size="small" disabled>Prev</Button>;
   const next = actualCount === count ?
-    (<button onClick={() => updateUrlParams({offset: offset + count})}>Next</button>) :
-    <button disabled>Next</button>;
+    (<Button size="small" onClick={() => updateUrlParams({offset: offset + count})}>Next</Button>) :
+    <Button size="small" disabled>Next</Button>;
 
   return (<div>
-    {thisRange} | {prev} {next}
+    {thisRange} <ButtonGroup>{prev}{next}</ButtonGroup>
   </div>);
 }
 
@@ -308,14 +308,12 @@ function renderFilters(filters, updateUrlParams) {
   }
   return (<div>
     Filters:
-    <ul>
       {filters.filters.map((filter, i) => {
         const label = `${renderKey(filter.key)} ${filter.rel} ${JSON.stringify(filter.value)}`;
-        return (<li key={i}>
+        return (<div key={i}>
           <Chip label={label} onDelete={() => removeFromList("filters", filters.filters, i, updateUrlParams)} />
-        </li>);
+        </div>);
       })}
-    </ul>
   </div>);
 }
 
@@ -326,10 +324,12 @@ function renderSort(sort, reverse, updateUrlParams) {
   if (!sort.key) {
     return null;
   }
-  const removeButton = <span className="clickable" onClick={() => updateUrlParams({sort: null, reverse: null})}>{removeSymbol}</span>;
+  const label = `${renderKey(sort.key)} ${reverse ? downArrow : upArrow}`;
   return (<div>
-    Sort: {renderKey(sort.key)}
-    {reverse ? downArrow : upArrow} {removeButton}
+    Sort:
+    <div>
+      <Chip label={label} onDelete={() => updateUrlParams({sort: null, reverse: null})} />
+    </div>
   </div>);
 }
 
@@ -350,16 +350,16 @@ function renderHighlights(highlights, showOnlyHighlights, updateUrlParams) {
     <Button size="small" disabled>Show all</Button>;
 
   return (<Paper className="block">
-    Highlights
+    Highlights &nbsp;
     <ButtonGroup>{showOnlyButton}{showAllButton}</ButtonGroup>
-    <ul>
+    <div>
       {highlights.highlights.map((highlight, i) => {
-        const removeButton = <span className="clickable" onClick={() => removeFromList("highlights", highlights.highlights, i, updateUrlParams)}>{removeSymbol}</span>;
-        return (<li key={i}>
-          {renderKey(highlight)} {removeButton}
-        </li>);
+        const label = renderKey(highlight);
+        return (<div key={i}>
+          <Chip label={label} onDelete={() => removeFromList("highlights", highlights.highlights, i, updateUrlParams)} />
+        </div>);
       })}
-    </ul>
+    </div>
   </Paper>);
 }
 
@@ -584,13 +584,9 @@ function renderItem(args) {
       // Small values we assume can sort by
       const MAX_CLICKABLE_LENGTH = 10;
       const clickable = item.length <= MAX_CLICKABLE_LENGTH ? "clickable" : "";
-      if (clickable) {
-        return (<div className={clickable} onClick={() => onItemClick(itemKey, item, highlights, updateUrlParams)}>
-          {renderText(item)}
-        </div>);
-      } else {
-        return renderText(item);
-      }
+      return (<div className={clickable} onClick={() => onItemClick(itemKey, item, highlights, updateUrlParams)}>
+        {renderText(item)}
+      </div>);
     }
   }
 
@@ -793,7 +789,7 @@ function renderPayloads(args) {
     if (payload.type === "directory") {
       rendered.push(renderDirectory({files: payload.files, paths, index, updateUrlParams}));
     } else if (payload.type === "json") {
-      let item = renderItem({item: payload.data, itemKey: [], updateUrlParams});
+      let item = renderItem({item: payload.data, highlights, itemKey: [], updateUrlParams});
       if (isExperiment(payload.data)) {
         item = (<div>
           <Button href={experimentUrl({path})}>Experiment view</Button>
