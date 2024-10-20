@@ -170,7 +170,7 @@ def _create_source(input_paths: str | list[str]) -> ShardedDataSource:
         filepaths_to_tokenize = _get_filepaths_to_tokenize(input_paths)
 
         if len(filepaths_to_tokenize) == 0:
-            raise ValueError(f"No valid jsonl/parquet files found in {input_paths}")
+            raise ValueError(f"No valid jsonl/parquet files found to tokenize in {input_paths}")
 
         logger.info(f"Found {len(filepaths_to_tokenize)} files to tokenize.")
         source = TextUrlDataSource(filepaths_to_tokenize)
@@ -290,16 +290,16 @@ def _get_files_by_extension(input_paths: list[str], extension: str) -> list[str]
     return output_paths
 
 
-def _get_filepaths_to_tokenize(input_path: list[str]) -> list[str]:
+def _get_filepaths_to_tokenize(input_paths: list[str]) -> list[str]:
     """
     Get all file paths to tokenize from the input paths.
     Handles jsonl.{gz,zst,zstd}, and parquet.
     """
-    if len(input_path) == 0:
+    if len(input_paths) == 0:
         return []
 
     # we're only going to have one or the other, but might as well return both
-    return _get_files_by_extension(input_path, "jsonl.{gz,zst,zstd}") + _get_files_by_extension(input_path, "parquet")
+    return _get_files_by_extension(input_paths, "jsonl.{gz,zst,zstd}") + _get_files_by_extension(input_paths, "parquet")
 
 
 def _is_probably_path(path: str) -> bool:
