@@ -55,7 +55,7 @@ function ExperimentPage() {
     return "Loading...";
   }
 
-  return renderExperiment({experiment, statuses});
+  return renderExperiment({experiment, path, statuses});
 }
 
 export default ExperimentPage;
@@ -73,11 +73,11 @@ function extractRayRelativePath(path) {
  * Render information about an experiment.
  */
 function renderExperiment(args) {
-  const {experiment, statuses} = args;
+  const {experiment, path, statuses} = args;
 
-  const header = renderExperimentHeader({experiment});
+  const header = renderExperimentHeader({experiment, path});
 
-  const steps = experiment.steps.map((step, index) => {
+  const steps = experiment.steps.map((_, index) => {
     return renderExperimentStep({experiment, statuses, index});
   });
 
@@ -88,7 +88,7 @@ function renderExperiment(args) {
 }
 
 function renderExperimentHeader(args) {
-  const {experiment} = args;
+  const {experiment, path} = args;
   const relativePath = extractRayRelativePath(experiment.caller_path);
 
   const links = [];
@@ -96,6 +96,9 @@ function renderExperimentHeader(args) {
   // Link to code on GitHub
   const githubUrl = "https://github.com/stanford-crfm/marin/blob/main/" + relativePath;
   links.push(<a href={githubUrl} target="_blank" rel="noreferrer">[GitHub]</a>);
+
+  // Link to plain data browser
+  links.push(<a href={viewSingleUrl(path)} target="_blank" rel="noreferrer">[JSON]</a>);
 
   // Link to Ray job
   const rayUrl = `http://localhost:8265/#/jobs/${experiment.ray_job_id}`;
@@ -134,14 +137,19 @@ function renderExperimentStep(args) {
     links.push(<a href={wandbUrl} target="_blank" rel="noreferrer">[wandb]</a>);
   }
 
+  const configRows = Object.entries(step.version.config).map(([key, value]) => {
+    return <tr key={key}><td>{key}</td><td>: {value}</td></tr>;
+  });
+
   // Map dependencies (represented by output paths) to the corresponding step indices
   const outputPaths = experiment.steps.map(step => step.output_path);
   const dependencies = step.dependencies.map(dep => `[${outputPaths.indexOf(dep)}]`).join(", ");
 
   return (<div key={index} className="experiment-step">
     <div>[{index}] <a href={viewSingleUrl(step.output_path)}>{step.output_path}</a> := {step.fn_name}({dependencies})</div>
+    <table><tbody>{configRows}</tbody></table>
+    {renderExperimentStatus(events)}
     {links.map((link, i) => <span key={i}>{link}</span>)}
-    <div>{renderExperimentStatus(events)}</div>
   </div>);
 }
 
@@ -150,14 +158,16 @@ function renderExperimentStatus(events) {
     return "[Loading status]";
   }
 
+  const lastEvent = events[events.length - 1];
+
   // If last event is RUNNING, use the current time as the end time
   // Otherwise, use the time of the last event
   const startTime = new Date(events[0].date);
-  const endTime = events[events.length - 1].status === "RUNNING" ? new Date() : new Date(events[events.length - 1].date);
+  const endTime = ["WAITING", "RUNNING"].includes(lastEvent.status) ? new Date() : new Date(lastEvent.date);
 
   const duration = (endTime.getTime() - startTime.getTime()) / 1000;
 
-  const lastStatus = events[events.length - 1].status;
-  const lastMessage = events[events.length - 1].message;
-  return <div>[{lastStatus}{lastMessage ? ": " + lastMessage : ""}] {renderDuration(duration)} {renderDate(events[events.length - 1].date)}</div>;
+  const lastStatus = lastEvent.status;
+  const lastMessage = lastEvent.message;
+  return <div>Status: {lastStatus}{lastMessage ? ": " + lastMessage : ""} {renderDate(lastEvent.date)} &mdash; {renderDuration(duration)}</div>;
 }
