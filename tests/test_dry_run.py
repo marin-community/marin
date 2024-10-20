@@ -1,16 +1,18 @@
+import logging
 import subprocess
 import tempfile
 import time
-import unittest
 from pathlib import Path
 
 import pytest
 import ray
 
+logger = logging.getLogger(__name__)
+
 
 @pytest.fixture
 def ray_start():
-    # (nothing to do for setup)
+    ray.init("local", ignore_reinit_error=True)  # setup
     yield
     ray.shutdown()  # teardown
 
@@ -27,7 +29,7 @@ def test_run_dry_runs():
             with open(script, "r") as file:
                 content = file.read()
                 if skip_marker in content:
-                    print(f"Skipping {script} (contains skip marker)")
+                    logger.info(f"Skipping {script} (contains skip marker)")
                     continue  # Skip this file
 
             with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
@@ -38,10 +40,6 @@ def test_run_dry_runs():
                 )
 
             assert result.returncode == 0, f"Dry run failed for {script}"
-            print(f"Execution time for {script}: {time.time() - start} seconds")
+            logger.info(f"Execution time for {script}: {time.time() - start} seconds")
     else:
-        print("No experiments directory found")
-
-
-if __name__ == "__main__":
-    unittest.main()
+        logger.info("No experiments directory found")
