@@ -4,7 +4,7 @@ import Button from '@mui/material/Button';
 import ButtonGroup from '@mui/material/ButtonGroup';
 import Chip from '@mui/material/Chip';
 import Paper from '@mui/material/Paper';
-import { useLocation, useNavigate, Link } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { apiViewUrl, experimentUrl, renderError, renderLink, renderText, navigateToUrl, isUrl } from './utils';
 
 function ViewPage() {
@@ -130,8 +130,6 @@ function ViewPage() {
 export default ViewPage;
 
 ////////////////////////////////////////////////////////////
-
-const removeSymbol = "✖";
 
 const upArrow = "↑";
 const downArrow = "↓";
