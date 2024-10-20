@@ -66,7 +66,7 @@ training_config = SimpleTrainConfig(
     cooldown=3e-5,
 )
 
-train_step = default_train(
+model = default_train(
     name="dclm_1b_1x",
     tokenized=mixture_config,
     model_config=llama_1_4b_dclm,
