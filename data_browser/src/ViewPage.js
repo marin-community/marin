@@ -790,7 +790,7 @@ function renderPayloads(args) {
       let item = renderItem({item: payload.data, highlights, itemKey: [], updateUrlParams});
       if (isExperiment(payload.data)) {
         item = (<div>
-          <Button variant="contained" size="small" href={experimentUrl({path})}>Experiment view</Button>
+          <Button variant="contained" size="small" href={experimentUrl({path})}>Go to experiment view</Button>
           {item}
         </div>);
       }
