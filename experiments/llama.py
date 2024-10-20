@@ -1,5 +1,4 @@
 """
-# SKIP_DRY_RUN_TEST
 Specifies a sequence of Llama 3 models from small to large.
 """
 
@@ -7,6 +6,7 @@ from levanter.models.llama import LlamaConfig
 
 from experiments.defaults import SimpleTrainConfig
 
+# SKIP_DRY_RUN_TEST
 llama3_tokenizer = "meta-llama/Meta-Llama-3.1-8B"
 
 llama_150m = LlamaConfig(
