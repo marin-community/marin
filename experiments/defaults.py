@@ -59,9 +59,9 @@ def default_train(
     return ExecutorStep(
         name=os.path.join("checkpoints", name),
         description=f"Train a {compute_num_parameters(model_config):,} parameter model for "
-        f"{train_config.num_train_steps} steps * "
-        f"{train_config.train_batch_size} batch_size * "
-        f"{model_config.seq_len} seq_len "
+        f"{train_config.num_train_steps} (steps) * "
+        f"{train_config.train_batch_size} (batch_size) * "
+        f"{model_config.seq_len} (seq_len) "
         f"= {train_config.num_train_steps * train_config.train_batch_size * model_config.seq_len:,} tokens.",
         fn=run_levanter_train_lm,
         config=TrainLmOnPodConfig(
