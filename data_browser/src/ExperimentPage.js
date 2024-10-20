@@ -1,5 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import axios from 'axios';
+import Button from '@mui/material/Button';
+import ButtonGroup from '@mui/material/ButtonGroup';
+import Paper from '@mui/material/Paper';
 import { useLocation } from 'react-router-dom';
 import { apiViewUrl, renderError, renderDuration, renderDate, viewSingleUrl } from './utils';
 
@@ -95,19 +98,22 @@ function renderExperimentHeader(args) {
   
   // Link to code on GitHub
   const githubUrl = "https://github.com/stanford-crfm/marin/blob/main/" + relativePath;
-  links.push(<a href={githubUrl} target="_blank" rel="noreferrer">[GitHub]</a>);
+  links.push(<Button href={githubUrl} color="primary" target="_blank">GitHub</Button>);
 
   // Link to plain data browser
-  links.push(<a href={viewSingleUrl(path)} target="_blank" rel="noreferrer">[JSON]</a>);
+  links.push(<Button href={viewSingleUrl(path)} target="_blank">JSON</Button>);
 
   // Link to Ray job
   const rayUrl = `http://localhost:8265/#/jobs/${experiment.ray_job_id}`;
-  links.push(<a href={rayUrl} target="_blank" rel="noreferrer">[Ray]</a>);
+  links.push(<Button href={rayUrl} target="_blank">Ray</Button>);
 
   return (<div>
     <h3>Experiment: {relativePath}</h3>
-    <div>Created: {renderDate(experiment.created_date)}</div>
-    {links.map((link, i) => <span key={i}>{link}</span>)}
+    <div className="experiment-step-line">Created: {renderDate(experiment.created_date)}</div>
+    <div className="description">{experiment.description}</div>
+    <ButtonGroup>
+      {links.map((link, i) => <span key={i}>{link}</span>)}
+    </ButtonGroup>
   </div>);
 }
 
@@ -121,20 +127,20 @@ function renderExperimentStep(args) {
 
   // Link to the JSON with the information (including config)
   const infoUrl = viewSingleUrl(step.output_path + "/.executor_info");
-  links.push(<a href={infoUrl} target="_blank" rel="noreferrer">[info]</a>);
+  links.push(<Button href={infoUrl} target="_blank">info</Button>);
 
   // Link to the Ray task
   const rayTaskId = events && events[events.length - 1].ray_task_id;
   if (rayTaskId) {
     const rayUrl = `http://localhost:8265/#/jobs/${experiment.ray_job_id}/tasks/${rayTaskId}`;
-    links.push(<a href={rayUrl} target="_blank" rel="noreferrer">[Ray]</a>);
+    links.push(<Button href={rayUrl} target="_blank">Ray</Button>);
   }
 
   // Link to the wandb page (if it's a training run)
   if (step.name.startsWith("checkpoints")) {  // Heuristically guess if this is a training run
     const name = step.output_path.split("/").pop();
     const wandbUrl = `https://wandb.ai/stanford-mercury/marin/runs/${name}`;
-    links.push(<a href={wandbUrl} target="_blank" rel="noreferrer">[wandb]</a>);
+    links.push(<Button href={wandbUrl} target="_blank">wandb</Button>);
   }
 
   const configRows = Object.entries(step.version.config).map(([key, value]) => {
@@ -145,12 +151,18 @@ function renderExperimentStep(args) {
   const outputPaths = experiment.steps.map(step => step.output_path);
   const dependencies = step.dependencies.map(dep => `[${outputPaths.indexOf(dep)}]`).join(", ");
 
-  return (<div key={index} className="experiment-step">
-    <div>[{index}] <a href={viewSingleUrl(step.output_path)}>{step.output_path}</a> := {step.fn_name}({dependencies})</div>
-    <table><tbody>{configRows}</tbody></table>
+  return (<Paper key={index} className="experiment-step">
+    <div>
+      Step [{index}]
+      <span className="description">{step.description}</span>
+    </div>
+    <div className="experiment-step-line"><a href={viewSingleUrl(step.output_path)}>{step.output_path}</a> := {step.fn_name}({dependencies})</div>
+    <table className="experiment-step-config"><tbody>{configRows}</tbody></table>
     {renderExperimentStatus(events)}
-    {links.map((link, i) => <span key={i}>{link}</span>)}
-  </div>);
+    <ButtonGroup>
+      {links.map((link, i) => <span key={i}>{link}</span>)}
+    </ButtonGroup>
+  </Paper>);
 }
 
 function renderExperimentStatus(events) {
@@ -167,7 +179,10 @@ function renderExperimentStatus(events) {
 
   const duration = (endTime.getTime() - startTime.getTime()) / 1000;
 
-  const lastStatus = lastEvent.status;
+  const lastStatus = <span className={"status-" + lastEvent.status}>{lastEvent.status}</span>;
   const lastMessage = lastEvent.message;
-  return <div>Status: {lastStatus}{lastMessage ? ": " + lastMessage : ""} {renderDate(lastEvent.date)} &mdash; {renderDuration(duration)}</div>;
+  return (<div className="experiment-step-status">
+    Status: {lastStatus}{lastMessage ? ": " + lastMessage : ""}&nbsp;
+    {renderDate(lastEvent.date)} &mdash; {renderDuration(duration)}
+  </div>);
 }

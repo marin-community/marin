@@ -131,6 +131,7 @@ class ExecutorStep(Generic[ConfigT]):
     name: str
     fn: ExecutorFunction
     config: ConfigT
+    description: str | None = None
 
     override_output_path: str | None = None
     """Specifies the `output_path` that should be used.  Print warning if it
@@ -201,6 +202,9 @@ class ExecutorStepInfo:
     config: dataclass
     """`step.config`, but concretized (no more `InputName`, `OutputName`, or `VersionedValue`)."""
 
+    description: str | None
+    """`step.description`."""
+
     override_output_path: str | None
     """`step.override_output_path`."""
 
@@ -227,6 +231,7 @@ class ExecutorInfo:
 
     # Information taken from `Executor`
     prefix: str
+    description: str | None
     steps: list[ExecutorStepInfo]
 
 
@@ -344,14 +349,16 @@ class Executor:
         self,
         prefix: str,
         executor_info_base_path: str,
-        force_run: list[str] | None = None,
-        force_run_failed: bool = True,
+        description: str | None,
+        force_run: list[str] | None,
+        force_run_failed: bool,
     ):
         self.prefix = prefix
         self.executor_info_base_path = executor_info_base_path
+        self.description = description
 
         self.configs: dict[ExecutorStep, dataclass] = {}
-        self.force_run = force_run or []
+        self.force_run = force_run
         self.force_run_failed = force_run_failed
         self.dependencies: dict[ExecutorStep, list[ExecutorStep]] = {}
         self.versions: dict[ExecutorStep, dict[str, Any]] = {}
@@ -361,18 +368,20 @@ class Executor:
 
     def run(self, steps: list[ExecutorStep | InputName], dry_run: bool = False):
         # Gather all the steps, compute versions and output paths for all of them.
+        logger.info(f"### Inspecting the {len(steps)} provided steps ###")
         for step in steps:
             if isinstance(step, InputName):  # Interpret InputName as the underlying step
                 step = step.step
             self.compute_version(step)
 
-        # Run each step
+        logger.info(f"### Launching {len(self.steps)} steps ###")
         for step in self.steps:
             self.run_step(step, dry_run=dry_run)
 
+        logger.info(f"### Writing metadata ###")
         self.write_infos()
 
-        # Wait for all steps to finish
+        logger.info(f"### Waiting for all steps to finish ###")
         ray.get(list(self.refs.values()))
 
     def compute_version(self, step: ExecutorStep) -> dict[str, Any]:
@@ -435,6 +444,7 @@ class Executor:
                     name=step.name,
                     fn_name=get_fn_name(step.fn),
                     config=self.configs[step],
+                    description=step.description,
                     override_output_path=step.override_output_path,
                     version=self.versions[step],
                     dependencies=[self.output_paths[dep] for dep in self.dependencies[step]],
@@ -450,12 +460,13 @@ class Executor:
             user=get_user(),
             ray_job_id=ray.get_runtime_context().get_job_id(),
             prefix=self.prefix,
+            description=self.description,
             steps=step_infos,
         )
 
         # Set executor_info_path based on hash and caller path name (e.g., 72_baselines-8c2f3a.json)
         # import pdb; pdb.set_trace()
-        executor_version_str = json.dumps(list(map(asdict, step_infos)), sort_keys=True, cls=CustomJsonEncoder)
+        executor_version_str = json.dumps(list(map(asdict_without_description, step_infos)), sort_keys=True, cls=CustomJsonEncoder)
         executor_version_hash = hashlib.md5(executor_version_str.encode()).hexdigest()[:6]
         name = os.path.basename(executor_info.caller_path).replace(".py", "")
         self.executor_info_path = os.path.join(
@@ -496,7 +507,8 @@ class Executor:
             logger.info(f"  {dependency_index_str(i)} = {self.output_paths[dep]}")
         logger.info("")
         force_run_step = False
-        if step.name in self.force_run or (self.force_run_failed and status == STATUS_FAILED):
+        if (self.force_run and step.name in self.force_run) or \
+           (self.force_run_failed and status == STATUS_FAILED):
             force_run_step = True
             logger.info(f"Force running {step.name}, previous status: {status}")
 
@@ -508,6 +520,12 @@ class Executor:
             step.fn, config, dependencies, output_path, should_run
         )
 
+
+def asdict_without_description(obj: dataclass) -> dict[str, Any]:
+    """Return the `asdict` of an object, but remove the `description` field, because it doesn't affect the semantics."""
+    d = asdict(obj)
+    d.pop("description", None)
+    return d
 
 @ray.remote
 def execute_after_dependencies(
@@ -599,13 +617,14 @@ class ExecutorMainConfig:
 
 
 @draccus.wrap()
-def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep]):
+def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], description: str | None = None):
     """Main entry point for experiments (to standardize)"""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
     executor = Executor(
         prefix=config.prefix,
         executor_info_base_path=config.executor_info_base_path,
+        description=description,
         force_run=config.force_run,
         force_run_failed=config.force_run_failed,
     )

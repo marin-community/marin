@@ -31,7 +31,7 @@ export function renderText(str) {
 }
 
 export function renderDate(date) {
-  return <i>{new Date(date).toLocaleString()}</i>;
+  return <span className="date">{new Date(date).toLocaleString()}</span>;
 }
 
 export function renderDuration(seconds) {
@@ -40,7 +40,7 @@ export function renderDuration(seconds) {
   const minutes = Math.floor(seconds / 60);
   seconds -= minutes * 60;
   return (hours > 0 ? hours + "h" : "") +
-         (minutes > 0 ? " " + minutes + "m" : "") +
+         (minutes > 0 ? minutes + "m" : "") +
          Math.round(seconds) + "s";
 }
 
