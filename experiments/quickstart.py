@@ -1,6 +1,7 @@
 import dataclasses
 import logging
 import os
+import sys
 
 import draccus
 from levanter.models.gpt2 import Gpt2Config
@@ -206,7 +207,12 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
 @draccus.wrap()
 def main(config: ExecutorMainConfig):
     try:
-        bucket_prefix = "/tmp"
+        # Replace this only if it's not in argv
+        if "--prefix" in sys.argv:  # Check if prefix is already provided
+            bucket_prefix = config.prefix
+        else:
+            bucket_prefix = "/tmp"  # Default to a temporary directory
+
         experiment_prefix = "quickstart-tests"
         config = dataclasses.replace(
             config, prefix=bucket_prefix, executor_info_base_path=os.path.join(bucket_prefix, "experiments")

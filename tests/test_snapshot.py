@@ -56,7 +56,6 @@ def parametrize_with_files(fn):
     return pytest.mark.parametrize("input_name", files)(fn)
 
 
-@pytest.mark.skipif(os.getenv("GITHUB_ACTIONS") == "true", reason="Skipping in GitHub CI")  # Skip in CI
 @parametrize_with_files
 def test_generate_markdown_from_html_with_readability(input_name):
     """Test the Markdown generation from HTML and compare outputs using the Readability method."""
@@ -78,7 +77,6 @@ def test_generate_markdown_from_html_with_readability(input_name):
     compare_outputs(input_name, expected_file, output_file)
 
 
-@pytest.mark.skipif(os.getenv("GITHUB_ACTIONS") == "true", reason="Skipping in GitHub CI")  # Skip in CI
 @parametrize_with_files
 def test_generate_markdown_from_html_with_resiliparse(input_name):
     """Test the Markdown generation from HTML and compare outputs using the Resiliparse method[NON MARKDOWN]."""
@@ -100,7 +98,6 @@ def test_generate_markdown_from_html_with_resiliparse(input_name):
     compare_outputs(input_name, expected_file, output_file)
 
 
-@pytest.mark.skipif(os.getenv("GITHUB_ACTIONS") == "true", reason="Skipping in GitHub CI")  # Skip in CI
 @parametrize_with_files
 def test_generate_markdown_from_html_with_trafilatura(input_name):
     """Test the Markdown generation from HTML and compare outputs using the Trafilatura method."""
