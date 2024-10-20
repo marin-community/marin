@@ -1,6 +1,5 @@
 import subprocess
 import tempfile
-import unittest
 
 import pytest
 import ray
@@ -8,7 +7,7 @@ import ray
 
 @pytest.fixture
 def ray_start():
-    # (nothing to do for setup)
+    ray.init("local", ignore_reinit_error=True)  # setup
     yield
     ray.shutdown()  # teardown
 
@@ -23,7 +22,3 @@ def test_quickstart_run():
             text=True,
         )
     assert result.returncode == 0, f"Quickstart run failed: {result.stderr}"
-
-
-if __name__ == "__main__":
-    unittest.main()
