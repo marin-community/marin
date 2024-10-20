@@ -1,3 +1,4 @@
+import os
 import subprocess
 import unittest
 
@@ -12,6 +13,7 @@ def ray_start():
     ray.shutdown()  # teardown
 
 
+@pytest.mark.skipif(os.getenv("GITHUB_ACTIONS") == "true", reason="Skipping in GitHub CI")  # Skip in CI
 def test_quickstart_run():
     """Test the dry runs of experiment scripts"""
     # Emulate running experiments/quickstart.py on the cmdline

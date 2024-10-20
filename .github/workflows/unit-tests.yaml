@@ -64,7 +64,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install uv
           uv pip install . --extra-index-url https://download.pytorch.org/whl/cpu --index-strategy unsafe-best-match --prerelease=allow
-          uv pip install pytest mypy types-PyYAML types-requests types-six pytest-xdist pytest-asyncio
+          uv pip install pytest mypy types-PyYAML types-requests types-six pytest-xdist
 
 
       - name: Start Ray cluster locally
