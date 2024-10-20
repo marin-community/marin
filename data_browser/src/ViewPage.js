@@ -306,15 +306,15 @@ function renderFilters(filters, updateUrlParams) {
   if (filters.filters.length === 0) {
     return null;
   }
-  return (<div>
-    Filters:
+  return (<Paper className="block">
+    Filters
       {filters.filters.map((filter, i) => {
         const label = `${renderKey(filter.key)} ${filter.rel} ${JSON.stringify(filter.value)}`;
         return (<div key={i}>
           <Chip label={label} onDelete={() => removeFromList("filters", filters.filters, i, updateUrlParams)} />
         </div>);
       })}
-  </div>);
+  </Paper>);
 }
 
 function renderSort(sort, reverse, updateUrlParams) {
@@ -325,19 +325,19 @@ function renderSort(sort, reverse, updateUrlParams) {
     return null;
   }
   const label = `${renderKey(sort.key)} ${reverse ? downArrow : upArrow}`;
-  return (<div>
-    Sort:
+  return (<Paper className="block">
+    Sort
     <div>
       <Chip label={label} onDelete={() => updateUrlParams({sort: null, reverse: null})} />
     </div>
-  </div>);
+  </Paper>);
 }
 
 function renderHighlights(highlights, showOnlyHighlights, updateUrlParams) {
   if (highlights.error) {
     return renderError(highlights.error);
   }
-  if (!highlights.highlights.length === 0) {
+  if (highlights.highlights.length === 0) {
     return null;
   }
 
