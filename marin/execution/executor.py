@@ -220,6 +220,7 @@ class ExecutorInfo:
     """Contains information about an execution."""
 
     # Metadata related to the launch
+    ray_job_id: str
     git_commit: str | None
     caller_path: str
     created_date: str
@@ -366,11 +367,13 @@ class Executor:
                 step = step.step
             self.compute_version(step)
 
-        self.write_infos()
-
         # Run each step
         for step in self.steps:
             self.run_step(step, dry_run=dry_run)
+
+        self.write_infos()
+
+        # Wait for all steps to finish
         ray.get(list(self.refs.values()))
 
     def compute_version(self, step: ExecutorStep) -> dict[str, Any]:
@@ -446,6 +449,7 @@ class Executor:
             caller_path=get_caller_path(),
             created_date=datetime.now().isoformat(),
             user=get_user(),
+            ray_job_id=ray.get_runtime_context().get_job_id(),
             prefix=self.prefix,
             steps=step_infos,
         )
@@ -515,15 +519,16 @@ def execute_after_dependencies(
     Only do stuff if `should_run` is True.
     """
     status_path = get_status_path(output_path)
+    ray_task_id = ray.get_runtime_context().get_task_id()
 
     # Ensure that dependencies are all run first
     if should_run:
-        append_status(status_path, STATUS_WAITING)
+        append_status(status_path, STATUS_WAITING, ray_task_id=ray_task_id)
     ray.get(dependencies)
 
     # Call fn(config)
     if should_run:
-        append_status(status_path, STATUS_RUNNING)
+        append_status(status_path, STATUS_WAITING, ray_task_id=ray_task_id)
     try:
         if isinstance(fn, ray.remote_function.RemoteFunction):
             if should_run:
@@ -537,12 +542,12 @@ def execute_after_dependencies(
         # Failed due to some exception
         message = traceback.format_exc()
         if should_run:
-            append_status(status_path, STATUS_FAILED, message=message)
+            append_status(status_path, STATUS_FAILED, message=message, ray_task_id=ray_task_id)
         raise e
 
     # Success!
     if should_run:
-        append_status(status_path, STATUS_SUCCESS)
+        append_status(status_path, STATUS_SUCCESS, ray_task_id=ray_task_id)
 
 
 def get_fn_name(fn: Callable | ray.remote_function.RemoteFunction, short: bool = False):

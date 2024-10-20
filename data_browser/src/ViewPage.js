@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import axios from 'axios';
 import { useLocation, useNavigate, Link } from 'react-router-dom';
-import { apiViewUrl } from './utils';
+import { apiViewUrl, experimentUrl, renderError, renderLink, renderText, navigateToUrl, isUrl } from './utils';
 
 function ViewPage() {
   /**
@@ -212,27 +212,6 @@ function parseHighlights(str) {
   } catch (e) {
     return {highlights: [], error: "Invalid highlights (invalid JSON): " + str};
   }
-}
-
-function renderError(error) {
-  return (<div className="error">{error}</div>);
-}
-
-/**
- * Navigates to a new URL with updated URL parameters (`urlParams + delta`).
- */
-function navigateToUrl(urlParams, delta, location, navigate) {
-  for (const key in delta) {
-    if (delta[key] === null || delta[key] === false) {
-      urlParams.delete(key);
-    } else {
-      urlParams.set(key, delta[key]);
-    }
-  }
-  navigate({
-    pathname: location.pathname,
-    search: urlParams.toString(),
-  });
 }
 
 /**
@@ -480,14 +459,6 @@ function renderDirectory(args) {
   </div>);
 }
 
-function renderText(str) {
-  return str.split("\n").map((line, i) => <div key={i}>{line}</div>);
-}
-
-function isUrl(str) {
-  return str.startsWith("http://") || str.startsWith("https://");
-}
-
 /**
  * When click on an sub-item with `itemKey`, we can ask the user to specify
  * sort/filter to that path.  The user types in a space-separated list of tokens,
@@ -593,9 +564,7 @@ function renderItem(args) {
     if (isUrl(item)) {
       return <a href={item} target="_blank">{item}</a>;
     } else if (item.startsWith("gs://")) {
-      return (<div className="clickable" onClick={() => updateUrlParams({paths: JSON.stringify([item])})}>
-        {renderText(item)}
-      </div>);
+      return renderLink(item, updateUrlParams);
     } else {
       const clickable = item.length < 20 ? "clickable" : "";
       return (<div className={clickable} onClick={() => onItemClick(itemKey, item, highlights, updateUrlParams)}>
@@ -626,11 +595,17 @@ function renderItem(args) {
         <td>{renderItem({item: value, itemKey: newItemKey, highlights, showOnlyHighlights, updateUrlParams})}</td>
       </tr>);
     });
+
     return <table className="item-table"><tbody>{rows}</tbody></table>;
   }
 
   // Fallback - raw string
   return JSON.stringify(item);
+}
+
+function isExperiment(item) {
+  // Return whether `item` (read from a JSON file) represents an instance of `ExecutorMainConfig`.
+  return item.prefix && item.steps;
 }
 
 /**
@@ -796,6 +771,10 @@ function renderPayloads(args) {
     if (payload.type === "directory") {
       rendered.push(renderDirectory({files: payload.files, paths, index, updateUrlParams}));
     } else if (payload.type === "json") {
+      if (isExperiment(payload.data)) {
+        rendered.push(<a href={experimentUrl({path})}>[experiment view]</a>);
+      }
+
       rendered.push(renderItem({item: payload.data, itemKey: [], updateUrlParams}));
     }
   });

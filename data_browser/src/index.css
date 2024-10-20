@@ -74,3 +74,9 @@ tr {
 .disabled {
   color: gray;
 }
+
+.experiment-step {
+  padding: 10px;
+  border: 1px solid lightgray;
+  margin: 10px;
+}
