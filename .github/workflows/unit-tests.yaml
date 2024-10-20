@@ -41,7 +41,9 @@ jobs:
       - name: Cache pip dependencies
         uses: actions/cache@v3
         with:
-          path: ~/.cache/pip
+          path: |
+            ~/.cache/pip
+            ~/.cache/uv
           key: ${{ runner.os }}-${{ matrix.python-version }}-unittest-${{ hashFiles('**/pyproject.toml') }}
           restore-keys: |
             ${{ runner.os }}-${{ matrix.python-version }}-unittest-
@@ -64,7 +66,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install uv
           uv pip install . --extra-index-url https://download.pytorch.org/whl/cpu --index-strategy unsafe-best-match --prerelease=allow
-          uv pip install pytest mypy types-PyYAML types-requests types-six pytest-xdist
+          uv pip install pytest mypy types-PyYAML types-requests types-six
 
 
       - name: Start Ray cluster locally
@@ -76,4 +78,4 @@ jobs:
         shell: bash -l {0}
         run: |
           export CI=true # Set CI environment variable; It's needed for tokenization
-          PYTHONPATH=tests:. pytest --durations=0 -n 4 -s --tb=no -v
+          PYTHONPATH=tests:. pytest --durations=0 -s --tb=no -v
