@@ -44,9 +44,7 @@ jobs:
           path: |
             ~/.cache/pip
             ~/.cache/uv
-          key: ${{ runner.os }}-${{ matrix.python-version }}-unittest-${{ hashFiles('**/pyproject.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-${{ matrix.python-version }}-unittest
+          key: ${{ runner.os }}-${{ matrix.python-version }}-unittest
 
       - name: Set up Google Cloud SDK
         uses: google-github-actions/setup-gcloud@v1
