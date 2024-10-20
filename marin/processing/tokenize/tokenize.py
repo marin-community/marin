@@ -275,36 +275,31 @@ def lm_mixture_data_config(
     )
 
 
-def _get_jsonls(input_path: list[str]):
+def _get_files_by_extension(input_paths: list[str], extension: str) -> list[str]:
+    """
+    Get a list of all filepaths with the specified extension from the input paths.
+    """
     output_paths = []
-    for path in input_path:
+    for path in input_paths:
         if fsspec_isdir(path) or path.endswith("/"):
-            logger.info(f"Getting all jsonl files in {path}")
-            output_paths.extend(fsspec_glob(os.path.join(path, "**/*.jsonl.{gz,zst,zstd}")))
+            logger.info(f"Getting all {extension} files in {path}")
+            output_paths.extend(fsspec_glob(os.path.join(path, f"**/*.{extension}")))
         else:
             output_paths.extend(fsspec_glob(path))
 
     return output_paths
 
 
-def _get_parquets(input_path: list[str]):
-    output_paths = []
-    for path in input_path:
-        if fsspec_isdir(path) or path.endswith("/"):
-            logger.info(f"Getting all parquet files in {path}")
-            output_paths.extend(fsspec_glob(os.path.join(path, "**/*.parquet")))
-        else:
-            output_paths.extend(fsspec_glob(path))
-
-    return output_paths
-
-
-def _get_filepaths_to_tokenize(input_path: list[str]):
+def _get_filepaths_to_tokenize(input_path: list[str]) -> list[str]:
+    """
+    Get all file paths to tokenize from the input paths.
+    Handles jsonl.{gz,zst,zstd}, and parquet.
+    """
     if len(input_path) == 0:
         return []
 
     # we're only going to have one or the other, but might as well return both
-    return _get_jsonls(input_path) + _get_parquets(input_path)
+    return _get_files_by_extension(input_path, "jsonl.{gz,zst,zstd}") + _get_files_by_extension(input_path, "parquet")
 
 
 def _is_probably_path(path: str) -> bool:
