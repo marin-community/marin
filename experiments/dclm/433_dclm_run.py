@@ -80,6 +80,6 @@ if __name__ == "__main__":
             dclm_baseline_tokenized,
             starcoderdata_tokenized,
             proofpile_2_tokenized,
-            train_step,
+            model,
         ]
     )
