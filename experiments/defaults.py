@@ -5,24 +5,23 @@ This file represents the best practices for each stage of the pipeline.
 import dataclasses
 import os
 from collections.abc import Sequence
-from dataclasses import dataclass
 from datetime import timedelta
 
 import jmp
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text import LMDatasetConfig, LMMixtureDatasetConfig
+from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig
 from levanter.optim import AdamConfig
 from levanter.store.cache import CacheOptions
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
-from levanter.models.llama import LlamaConfig
 
+from experiments.llama import compute_num_parameters
+from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import ExecutorStep, InputName, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, lm_data_config, tokenize
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
-from experiments.simple_train_config import SimpleTrainConfig
-from experiments.llama import compute_num_parameters
 
 
 def default_tokenize(
@@ -60,8 +59,10 @@ def default_train(
     return ExecutorStep(
         name=os.path.join("checkpoints", name),
         description=f"Train a {compute_num_parameters(model_config):,} parameter model for "
-                    f"{train_config.num_train_steps} steps * {train_config.train_batch_size} batch_size * {model_config.seq_len} seq_len "
-                    f"= {train_config.num_train_steps * train_config.train_batch_size * model_config.seq_len:,} tokens.",
+        f"{train_config.num_train_steps} steps * "
+        f"{train_config.train_batch_size} batch_size * "
+        f"{model_config.seq_len} seq_len "
+        f"= {train_config.num_train_steps * train_config.train_batch_size * model_config.seq_len:,} tokens.",
         fn=run_levanter_train_lm,
         config=TrainLmOnPodConfig(
             output_path=this_output_path(),

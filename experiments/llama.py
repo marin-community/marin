@@ -79,6 +79,7 @@ llama_1_4b_train_config = SimpleTrainConfig(
     weight_decay=0.1,
 )
 
+
 def compute_num_parameters(config: LlamaConfig) -> int:
     head_size = config.hidden_dim // config.num_heads
     q_params = config.num_heads * head_size * config.hidden_dim

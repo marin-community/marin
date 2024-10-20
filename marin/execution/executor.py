@@ -378,10 +378,10 @@ class Executor:
         for step in self.steps:
             self.run_step(step, dry_run=dry_run)
 
-        logger.info(f"### Writing metadata ###")
+        logger.info("### Writing metadata ###")
         self.write_infos()
 
-        logger.info(f"### Waiting for all steps to finish ###")
+        logger.info("### Waiting for all steps to finish ###")
         ray.get(list(self.refs.values()))
 
     def compute_version(self, step: ExecutorStep) -> dict[str, Any]:
@@ -466,7 +466,9 @@ class Executor:
 
         # Set executor_info_path based on hash and caller path name (e.g., 72_baselines-8c2f3a.json)
         # import pdb; pdb.set_trace()
-        executor_version_str = json.dumps(list(map(asdict_without_description, step_infos)), sort_keys=True, cls=CustomJsonEncoder)
+        executor_version_str = json.dumps(
+            list(map(asdict_without_description, step_infos)), sort_keys=True, cls=CustomJsonEncoder
+        )
         executor_version_hash = hashlib.md5(executor_version_str.encode()).hexdigest()[:6]
         name = os.path.basename(executor_info.caller_path).replace(".py", "")
         self.executor_info_path = os.path.join(
@@ -507,8 +509,7 @@ class Executor:
             logger.info(f"  {dependency_index_str(i)} = {self.output_paths[dep]}")
         logger.info("")
         force_run_step = False
-        if (self.force_run and step.name in self.force_run) or \
-           (self.force_run_failed and status == STATUS_FAILED):
+        if (self.force_run and step.name in self.force_run) or (self.force_run_failed and status == STATUS_FAILED):
             force_run_step = True
             logger.info(f"Force running {step.name}, previous status: {status}")
 
@@ -526,6 +527,7 @@ def asdict_without_description(obj: dataclass) -> dict[str, Any]:
     d = asdict(obj)
     d.pop("description", None)
     return d
+
 
 @ray.remote
 def execute_after_dependencies(

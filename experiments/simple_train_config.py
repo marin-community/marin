@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 
+
 @dataclass(frozen=True)
 class SimpleTrainConfig:
     """Simplified configuration for training (the things that matter)."""
