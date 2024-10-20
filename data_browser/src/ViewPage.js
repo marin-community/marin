@@ -1,5 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import axios from 'axios';
+import Button from '@mui/material/Button';
+import ButtonGroup from '@mui/material/ButtonGroup';
+import Chip from '@mui/material/Chip';
+import Paper from '@mui/material/Paper';
 import { useLocation, useNavigate, Link } from 'react-router-dom';
 import { apiViewUrl, experimentUrl, renderError, renderLink, renderText, navigateToUrl, isUrl } from './utils';
 
@@ -128,7 +132,6 @@ export default ViewPage;
 ////////////////////////////////////////////////////////////
 
 const removeSymbol = "✖";
-const cloneSymbol = "📋";
 
 const upArrow = <span>&uarr;</span>;
 const downArrow = <span>&darr;</span>;
@@ -307,9 +310,9 @@ function renderFilters(filters, updateUrlParams) {
     Filters:
     <ul>
       {filters.filters.map((filter, i) => {
-        const removeButton = <span className="clickable" onClick={() => removeFromList("filters", filters.filters, i, updateUrlParams)}>{removeSymbol}</span>;
+        const label = `${renderKey(filter.key)} ${filter.rel} ${JSON.stringify(filter.value)}`;
         return (<li key={i}>
-          {renderKey(filter.key)} {filter.rel} {JSON.stringify(filter.value)} {removeButton}
+          <Chip label={label} onDelete={() => removeFromList("filters", filters.filters, i, updateUrlParams)} />
         </li>);
       })}
     </ul>
@@ -340,14 +343,15 @@ function renderHighlights(highlights, showOnlyHighlights, updateUrlParams) {
 
   // Toggle showing only highlights or showing all
   const showOnlyButton = showOnlyHighlights ?
-    <span className="disabled">show only highlights</span> :
-    <span className="clickable" onClick={() => updateUrlParams({showOnlyHighlights: true})}>show only highlights</span>;
+    <Button size="small" disabled>Show only highlights</Button> :
+    <Button size="small" onClick={() => updateUrlParams({showOnlyHighlights: true})}>Show only highlights</Button>;
   const showAllButton = showOnlyHighlights ?
-    <span className="clickable" onClick={() => updateUrlParams({showOnlyHighlights: null})}>show all</span> :
-    <span className="disabled">show all</span>;
+    <Button size="small" onClick={() => updateUrlParams({showOnlyHighlights: null})}>Show all</Button> :
+    <Button size="small" disabled>Show all</Button>;
 
-  return (<div>
-    Highlights [{showOnlyButton} | {showAllButton}]:
+  return (<Paper className="block">
+    Highlights
+    <ButtonGroup>{showOnlyButton}{showAllButton}</ButtonGroup>
     <ul>
       {highlights.highlights.map((highlight, i) => {
         const removeButton = <span className="clickable" onClick={() => removeFromList("highlights", highlights.highlights, i, updateUrlParams)}>{removeSymbol}</span>;
@@ -356,7 +360,7 @@ function renderHighlights(highlights, showOnlyHighlights, updateUrlParams) {
         </li>);
       })}
     </ul>
-  </div>);
+  </Paper>);
 }
 
 function updatePath(paths, index, newPath, updateUrlParams) {
@@ -414,29 +418,40 @@ function renderPaths(args) {
     updateUrlParams({paths: JSON.stringify([...paths, newPath])});
   }
 
-  const addButton = (<span onClick={appendNewPath} className="clickable">
-    [add]
-  </span>);
+  const addButton = <Button onClick={appendNewPath}>Add</Button>;
 
-  return (<div>
-    Paths {addButton}:
+  return (<Paper className="block">
+    Paths
     <ul>
       {paths.map((path, index) => {
         const downloadUrl = path.replace("gs://", "https://storage.cloud.google.com/");
-        const downloadLink = <Link to={downloadUrl} title="Download this link.">download</Link>;
-        const cloneButton =
-          <span className="clickable"
-                title="Append this path so you can edit it."
-                onClick={() => updatePath(paths, paths.length, path, updateUrlParams)}>{cloneSymbol}</span>;
-        const removeButton =
-          <span className="clickable"
-                title="Remove this path from the list."
-                onClick={() => removePath(paths, index, updateUrlParams)}>{removeSymbol}</span>;
-        const extra = <span> [{downloadLink}] {cloneButton} {removeButton}</span>;
-        return <li key={index}>{renderPath({paths, index, updateUrlParams})}{extra}</li>;
+        const downloadLink = (
+          <Button title="Download this link."
+                  size="small"
+                  href={downloadUrl}>
+            Download
+          </Button>
+        );
+        const cloneButton = (
+          <Button title="Add this path again at the end (so you can edit it)."
+                  size="small"
+                  onClick={() => updatePath(paths, paths.length, path, updateUrlParams)}>
+            Clone
+          </Button>
+        );
+        const removeButton = (
+          <Button title="Remove this path from the display list (does not delete anything onn disk)."
+                  size="small"
+                  onClick={() => removePath(paths, index, updateUrlParams)}>
+            Remove
+          </Button>
+        );
+        const extra = <ButtonGroup>{downloadLink}{cloneButton}{removeButton}</ButtonGroup>;
+        return <li key={index}>{renderPath({paths, index, updateUrlParams})} {extra}</li>;
       })}
     </ul>
-  </div>);
+    {addButton}
+  </Paper>);
 }
 
 /**
@@ -562,14 +577,20 @@ function renderItem(args) {
 
   if (typeof item === "string") {
     if (isUrl(item)) {
-      return <a href={item} target="_blank">{item}</a>;
+      return <a href={item} target="_blank" rel="noreferrer">{item}</a>;
     } else if (item.startsWith("gs://")) {
       return renderLink(item, updateUrlParams);
     } else {
-      const clickable = item.length < 20 ? "clickable" : "";
-      return (<div className={clickable} onClick={() => onItemClick(itemKey, item, highlights, updateUrlParams)}>
-        {renderText(item)}
-      </div>);
+      // Small values we assume can sort by
+      const MAX_CLICKABLE_LENGTH = 10;
+      const clickable = item.length <= MAX_CLICKABLE_LENGTH ? "clickable" : "";
+      if (clickable) {
+        return (<div className={clickable} onClick={() => onItemClick(itemKey, item, highlights, updateUrlParams)}>
+          {renderText(item)}
+        </div>);
+      } else {
+        return renderText(item);
+      }
     }
   }
 
@@ -592,6 +613,7 @@ function renderItem(args) {
 
       return (<tr key={i}>
         <td>{renderedKey}</td>
+        <td>:</td>
         <td>{renderItem({item: value, itemKey: newItemKey, highlights, showOnlyHighlights, updateUrlParams})}</td>
       </tr>);
     });
@@ -771,16 +793,19 @@ function renderPayloads(args) {
     if (payload.type === "directory") {
       rendered.push(renderDirectory({files: payload.files, paths, index, updateUrlParams}));
     } else if (payload.type === "json") {
+      let item = renderItem({item: payload.data, itemKey: [], updateUrlParams});
       if (isExperiment(payload.data)) {
-        rendered.push(<a href={experimentUrl({path})}>[experiment view]</a>);
+        item = (<div>
+          <Button href={experimentUrl({path})}>Experiment view</Button>
+          {item}
+        </div>);
       }
-
-      rendered.push(renderItem({item: payload.data, itemKey: [], updateUrlParams}));
+      rendered.push(item);
     }
   });
 
   // Case 1: render all the paths with items in one table.
   rendered.push(renderItems({paths, payloads, offset, filters, sort, reverse, highlights, showOnlyHighlights, updateUrlParams}));
 
-  return rendered.map((item, i) => <div key={i}>{item}</div>);
+  return rendered.map((item, i) => <Paper className="block" key={i}>{item}</Paper>);
 }

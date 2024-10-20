@@ -4,7 +4,7 @@ Specifies a sequence of Llama 3 models from small to large.
 
 from levanter.models.llama import LlamaConfig
 
-from experiments.defaults import SimpleTrainConfig
+from experiments.simple_train_config import SimpleTrainConfig
 
 llama3_tokenizer = "meta-llama/Meta-Llama-3.1-8B"
 
@@ -78,7 +78,6 @@ llama_1_4b_train_config = SimpleTrainConfig(
     learning_rate=3e-4,
     weight_decay=0.1,
 )
-
 
 def compute_num_parameters(config: LlamaConfig) -> int:
     head_size = config.hidden_dim // config.num_heads

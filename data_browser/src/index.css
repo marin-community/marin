@@ -75,8 +75,59 @@ tr {
   color: gray;
 }
 
+.date {
+  font-style: italic;
+}
+
 .experiment-step {
   padding: 10px;
+  border: 1px solid gray;
+  margin-top: 10px;
+  margin-bottom: 10px;
+}
+
+.experiment-step-line {
+  margin: 5px;
+  padding: 5px;
+}
+
+.experiment-step-config {
+  padding: 5px;
   border: 1px solid lightgray;
+  margin: 5px;
+}
+
+.experiment-step-status {
+  margin: 5px;
+  padding: 5px;
+}
+
+.description {
+  padding: 10px;
+  font-style: italic;
+}
+
+.status-SUCCESS {
+  font-weight: bold;
+  color: green;
+}
+
+.status-FAILED {
+  font-weight: bold;
+  color: red;
+}
+
+.status-WAITING {
+  font-weight: bold;
+  color: orange;
+}
+
+.status-RUNNING {
+  font-weight: bold;
+  color: blue;
+}
+
+.block {
   margin: 10px;
+  padding: 10px;
 }
