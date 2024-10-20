@@ -792,7 +792,7 @@ function renderPayloads(args) {
       let item = renderItem({item: payload.data, highlights, itemKey: [], updateUrlParams});
       if (isExperiment(payload.data)) {
         item = (<div>
-          <Button href={experimentUrl({path})}>Experiment view</Button>
+          <Button variant="contained" size="small" href={experimentUrl({path})}>Experiment view</Button>
           {item}
         </div>);
       }
@@ -801,7 +801,10 @@ function renderPayloads(args) {
   });
 
   // Case 1: render all the paths with items in one table.
-  rendered.push(renderItems({paths, payloads, offset, filters, sort, reverse, highlights, showOnlyHighlights, updateUrlParams}));
+  const table = renderItems({paths, payloads, offset, filters, sort, reverse, highlights, showOnlyHighlights, updateUrlParams});
+  if (table) {
+    rendered.push(table);
+  }
 
   return rendered.map((item, i) => <Paper className="block" key={i}>{item}</Paper>);
 }
