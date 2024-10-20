@@ -1,13 +1,21 @@
 name: Run unit tests
 
-on: [push, pull_request]
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
 
 jobs:
   test:
-    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository)
-
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+      cancel-in-progress: true
+
     strategy:
       matrix:
         python-version: ["3.12"]
@@ -30,6 +38,14 @@ jobs:
         with:
           node-version: ${{ matrix.node-version }}
 
+      - name: Cache pip dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-${{ matrix.python-version }}-unittest-${{ hashFiles('**/pyproject.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.python-version }}-unittest-
+
       - name: Set up Google Cloud SDK
         uses: google-github-actions/setup-gcloud@v1
         with:
@@ -47,7 +63,8 @@ jobs:
           npm install -g pandiff
           python -m pip install --upgrade pip
           pip install . --extra-index-url https://download.pytorch.org/whl/cpu
-          pip install pytest mypy types-PyYAML types-requests types-six
+          pip install pytest mypy types-PyYAML types-requests types-six pytest-xdist pytest-asyncio
+
 
       - name: Start Ray cluster locally
         shell: bash -l {0}
@@ -57,4 +74,5 @@ jobs:
       - name: Test with pytest
         shell: bash -l {0}
         run: |
-          PYTHONPATH=tests:. pytest --tb=no -v
+          export CI=true # Set CI environment variable; It's needed for tokenization
+          PYTHONPATH=tests:. pytest --durations=0 -n 4 --tb=no -v
