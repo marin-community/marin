@@ -64,7 +64,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install uv
           uv pip install . --extra-index-url https://download.pytorch.org/whl/cpu --index-strategy unsafe-best-match --prerelease=allow
-          uv pip install pytest mypy types-PyYAML types-requests types-six
+          uv pip install pytest mypy types-PyYAML types-requests types-six pytest-xdist
 
 
       - name: Start Ray cluster locally
@@ -76,4 +76,4 @@ jobs:
         shell: bash -l {0}
         run: |
           export CI=true # Set CI environment variable; It's needed for tokenization
-          PYTHONPATH=tests:. pytest --durations=0 -s --tb=no -v
+          PYTHONPATH=tests:. pytest --durations=0 -n 2 -s --tb=no -v
