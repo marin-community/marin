@@ -146,6 +146,8 @@ function renderExperimentStep(args) {
   const configRows = Object.entries(step.version.config).map(([key, value]) => {
     return <tr key={key}><td>{key}</td><td>: {value}</td></tr>;
   });
+  const configTable = configRows.length === 0 ? null :
+    <table className="experiment-step-config"><tbody>{configRows}</tbody></table>;
 
   // Map dependencies (represented by output paths) to the corresponding step indices
   const outputPaths = experiment.steps.map(step => step.output_path);
@@ -157,7 +159,7 @@ function renderExperimentStep(args) {
       <span className="description">{step.description}</span>
     </div>
     <div className="experiment-step-line"><a href={viewSingleUrl(step.output_path)}>{step.output_path}</a> := {step.fn_name}({dependencies})</div>
-    <table className="experiment-step-config"><tbody>{configRows}</tbody></table>
+    {configTable}
     {renderExperimentStatus(events)}
     <ButtonGroup>
       {links.map((link, i) => <span key={i}>{link}</span>)}
