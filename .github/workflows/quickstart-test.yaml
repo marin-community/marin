@@ -41,4 +41,4 @@ jobs:
       - name: Test quickstart pipeline
         shell: bash -l {0}
         run: |
-          ray job submit --working-dir . -- python experiments/quickstart-synthetic.py
+          ray job submit --working-dir . -- python experiments/quickstart.py
