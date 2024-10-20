@@ -2,9 +2,9 @@
 Transform any HuggingFace dataset to OpenAI messages format.
 
 Usage Examples:
-1. Download the dataset from HuggingFace which is used in the input_path in the TransformDatasetConfig.
+1. Download the dataset from HuggingFace which is used in the input_path in the TransformSFTDatasetConfig.
 2. Register your adapter in adapters.py
-3. Run the script, filling out the TransformDatasetConfig.
+3. Run the script, filling out the TransformSFTDatasetConfig.
 
 Check out experiments/instruction_datasets.py to see how to run this script using the Executor.
 """
@@ -13,7 +13,7 @@ import hashlib
 import json
 import logging
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -30,8 +30,8 @@ from .adapters import TransformAdapter, get_adapter
 logger = logging.getLogger("ray")
 
 
-@dataclass
-class TransformDatasetConfig:
+@dataclass(frozen=True)
+class TransformSFTDatasetConfig:
     """Base configuration to transform a conversation dataset from huggingface json to OpenAI format.
 
     Args:
@@ -44,12 +44,12 @@ class TransformDatasetConfig:
         filetype (str): The filetype of the input file. Currently supports jsonl, json, and parquet.
     """
 
-    input_path: str = ""
-    output_path: str = ""
-    shard_size: int = 5000
-    metadata_columns: list[str] = field(default_factory=lambda: [])
-    source: str = ""
-    filetype: str = ""
+    input_path: str
+    output_path: str
+    shard_size: int
+    metadata_columns: list[str]
+    source: str
+    filetype: str
 
 
 def generate_hash_from_messages(messages: list[dict[str, str]]) -> str:
@@ -64,7 +64,7 @@ def generate_hash_from_messages(messages: list[dict[str, str]]) -> str:
     return hashlib.sha256(str(messages).encode()).hexdigest()
 
 
-def transform_row(row: dict, cfg: TransformDatasetConfig, adapter: TransformAdapter):
+def transform_row(row: dict, cfg: TransformSFTDatasetConfig, adapter: TransformAdapter):
     transformed_row_messages: list[OpenAIChatMessage] = adapter.transform_conversation_to_openai_format(row)
     transformed_row_messages = [message.dict() for message in transformed_row_messages]
 
@@ -81,7 +81,7 @@ def transform_row(row: dict, cfg: TransformDatasetConfig, adapter: TransformAdap
     }
 
 
-def transform_rows(rows: list[dict], cfg: TransformDatasetConfig):
+def transform_rows(rows: list[dict], cfg: TransformSFTDatasetConfig):
     """Transform a list of rows from the OpenHermes-2.5 dataset to a list of dolma formatted jsonl rows.
 
     Args:
@@ -147,7 +147,7 @@ def create_shard_output_directory(output_filename: str) -> str:
 
 @ray.remote(memory=4 * 1024 * 1024 * 1024)
 @cached_or_construct_output(success_suffix="SUCCESS")
-def transform_file(input_filename: str, output_filename: str, cfg: TransformDatasetConfig):
+def transform_file(input_filename: str, output_filename: str, cfg: TransformSFTDatasetConfig):
     rows = load_dataset(input_filename)
     logger.info(f"Transforming {len(rows)} rows from {input_filename} to {output_filename}")
 
@@ -164,7 +164,7 @@ def transform_file(input_filename: str, output_filename: str, cfg: TransformData
 
 
 @ray.remote
-def transform_dataset(cfg: TransformDatasetConfig):
+def transform_dataset(cfg: TransformSFTDatasetConfig):
     responses = map_files_in_directory(
         transform_file.remote, cfg.input_path, f"**/*.{cfg.filetype}", cfg.output_path, TaskConfig(), False, cfg
     )
@@ -173,7 +173,7 @@ def transform_dataset(cfg: TransformDatasetConfig):
 
 
 @draccus.wrap()
-def main(cfg: TransformDatasetConfig):
+def main(cfg: TransformSFTDatasetConfig):
     ray.get(transform_dataset.remote(cfg))
 
 

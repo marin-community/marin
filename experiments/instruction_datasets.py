@@ -7,7 +7,7 @@ from marin.execution.executor import (
     this_output_path,
 )
 from operations.download.huggingface.download import DownloadConfig, download
-from operations.transform.conversation.transform_conversation import TransformDatasetConfig, transform_dataset
+from operations.transform.conversation.transform_conversation import TransformSFTDatasetConfig, transform_dataset
 
 
 @dataclass
@@ -64,7 +64,6 @@ def create_steps():
                 gcs_output_path=this_output_path(),
                 wait_for_completion=dataset.wait_for_completion,
             ),
-            override_output_path=f"gs://marin-us-central2/raw/{dataset_name}",
         )
         download_data = output_path_of(
             download_step,
@@ -74,7 +73,7 @@ def create_steps():
         transform_step = ExecutorStep(
             name=f"documents/{dataset_name}",
             fn=transform_dataset,
-            config=TransformDatasetConfig(
+            config=TransformSFTDatasetConfig(
                 input_path=download_data,
                 output_path=this_output_path(),
                 shard_size=5000,
@@ -82,7 +81,6 @@ def create_steps():
                 filetype=dataset.filetype,
                 source=dataset.hf_dataset_id,
             ),
-            override_output_path=f"gs://marin-us-central2/documents/{dataset_name}",
         )
 
         steps.append(download_step)
