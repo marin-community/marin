@@ -53,6 +53,8 @@ dev = [
     "mypy>=1.4.1",
     "pre-commit",
     "pytest>=8.3.2",
+    "pytest-asyncio",
+    "pytest-xdist",
     "ruff>=0.5.7",
     "types-PyYAML",
     "types-requests",

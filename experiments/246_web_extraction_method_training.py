@@ -5,8 +5,8 @@ https://github.com/stanford-crfm/marin/issues/246
 
 import logging
 
-from experiments.defaults import default_tokenize, default_train, llama_1_4b_train_config
-from experiments.llama import llama3_tokenizer, llama_1_4b
+from experiments.defaults import default_tokenize, default_train
+from experiments.llama import llama3_tokenizer, llama_1_4b, llama_1_4b_train_config
 from experiments.pretraining_datasets import download_fineweb
 from marin.evaluation.evaluation_config import EvaluationConfig
 from marin.evaluation.run import evaluate
