@@ -1,6 +1,7 @@
+import dataclasses
 import logging
 import os
-from dataclasses import dataclass
+import sys
 
 import draccus
 from levanter.models.gpt2 import Gpt2Config
@@ -31,25 +32,15 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class QuickstartExecutorConfig:
-    # all artifacts will be saved in gs://marin-us-central2/{prefix}{commit_hash}
-    commit_hash: str = ""
-    prefix: str = "quickstart-tests"
-
-    # path to synthetic test data
-    synth_data: str = "./tests/quickstart-data"
-
-
-def create_steps(config: QuickstartExecutorConfig) -> list[ExecutorStep]:
+def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
     # ############################################################
     # Transform HTML to text
 
     transform_hq_data_step = ExecutorStep(
-        name=os.path.join(config.prefix, config.commit_hash, "hq-transformed"),
+        name=os.path.join(prefix, "hq-transformed"),
         fn=transform,
         config=FineWebConfig(
-            input_path=os.path.join(config.synth_data, "pos"),
+            input_path=os.path.join(synth_data, "pos"),
             output_path=this_output_path(),
             extract_method=versioned("readability"),
             config=HtmlToMarkdownConfig.default_config(),
@@ -57,10 +48,10 @@ def create_steps(config: QuickstartExecutorConfig) -> list[ExecutorStep]:
     )
 
     transform_lq_data_step = ExecutorStep(
-        name=os.path.join(config.prefix, config.commit_hash, "lq-transformed"),
+        name=os.path.join(prefix, "lq-transformed"),
         fn=transform,
         config=FineWebConfig(
-            input_path=os.path.join(config.synth_data, "neg"),
+            input_path=os.path.join(synth_data, "neg"),
             output_path=this_output_path(),
             extract_method=versioned("readability"),
             config=HtmlToMarkdownConfig.default_config(),
@@ -71,7 +62,7 @@ def create_steps(config: QuickstartExecutorConfig) -> list[ExecutorStep]:
     # Train quality classifier
 
     train_quality_step = ExecutorStep(
-        name=os.path.join(config.prefix, config.commit_hash, "quality-classifier"),
+        name=os.path.join(prefix, "quality-classifier"),
         fn=train,
         config=TrainFasttextClassifierConfig(
             input_doc_paths=[
@@ -103,7 +94,7 @@ def create_steps(config: QuickstartExecutorConfig) -> list[ExecutorStep]:
     # Run inference with quality classifier
 
     inference_hq_step = ExecutorStep(
-        name=os.path.join(config.prefix, config.commit_hash, "hq-inference"),
+        name=os.path.join(prefix, "hq-inference"),
         fn=run_inference,
         config=InferenceConfig(
             input_path=output_path_of(transform_hq_data_step),
@@ -115,7 +106,7 @@ def create_steps(config: QuickstartExecutorConfig) -> list[ExecutorStep]:
     )
 
     inference_lq_step = ExecutorStep(
-        name=os.path.join(config.prefix, config.commit_hash, "lq-inference"),
+        name=os.path.join(prefix, "lq-inference"),
         fn=run_inference,
         config=InferenceConfig(
             input_path=output_path_of(transform_lq_data_step),
@@ -130,7 +121,7 @@ def create_steps(config: QuickstartExecutorConfig) -> list[ExecutorStep]:
     # Deduplicate
 
     dedupe_step = ExecutorStep(
-        name=os.path.join(config.prefix, config.commit_hash, "dedupe"),
+        name=os.path.join(prefix, "dedupe"),
         fn=dedupe,
         config=DedupeConfig(
             input_path=output_path_of(transform_hq_data_step),
@@ -142,7 +133,7 @@ def create_steps(config: QuickstartExecutorConfig) -> list[ExecutorStep]:
     # Consolidate
 
     consolidate_step = ExecutorStep(
-        name=os.path.join(config.prefix, config.commit_hash, "consolidate"),
+        name=os.path.join(prefix, "consolidate"),
         fn=consolidate,
         config=ConsolidateConfig(
             input_path=output_path_of(transform_hq_data_step),
@@ -168,7 +159,7 @@ def create_steps(config: QuickstartExecutorConfig) -> list[ExecutorStep]:
     # Tokenize
 
     tokenize_step = ExecutorStep(
-        name=os.path.join(config.prefix, config.commit_hash, "tokenized"),
+        name=os.path.join(prefix, "tokenized"),
         fn=tokenize,
         config=TokenizeConfig(
             train_paths=output_path_of(consolidate_step),
@@ -182,7 +173,7 @@ def create_steps(config: QuickstartExecutorConfig) -> list[ExecutorStep]:
     # Train
 
     train_step = ExecutorStep(
-        name=os.path.join(config.prefix, config.commit_hash, "train"),
+        name=os.path.join(prefix, "train"),
         fn=run_levanter_train_lm,
         config=TrainLmOnPodConfig(
             output_path=this_output_path(),
@@ -214,17 +205,25 @@ def create_steps(config: QuickstartExecutorConfig) -> list[ExecutorStep]:
 
 
 @draccus.wrap()
-def main(config: QuickstartExecutorConfig):
+def main(config: ExecutorMainConfig):
     try:
-        steps = create_steps(config)
-        bucket_prefix = "/tmp"
-        config_executor = ExecutorMainConfig(
-            prefix=bucket_prefix, executor_info_base_path=os.path.join(bucket_prefix, "experiments")
+        # Replace this only if it's not in argv
+        if "--prefix" in sys.argv:  # Check if prefix is already provided
+            bucket_prefix = config.prefix
+        else:
+            bucket_prefix = "/tmp"  # Default to a temporary directory
+
+        experiment_prefix = "quickstart-tests"
+        config = dataclasses.replace(
+            config, prefix=bucket_prefix, executor_info_base_path=os.path.join(bucket_prefix, "experiments")
         )
-        executor_main(config_executor, steps=steps)
-        logger.info(
-            f"Execution completed successfully. All outputs are in {bucket_prefix}/{config.prefix}/{config.commit_hash}"
-        )
+
+        # path to synthetic test data
+        synth_data: str = "./tests/quickstart-data"
+        steps = create_steps(experiment_prefix, synth_data)
+        config = dataclasses.replace(config, force_run=[step.name for step in steps])  # Always force run all steps
+        executor_main(config, steps=steps)
+        logger.info(f"Execution completed successfully. All outputs are in {bucket_prefix}/{experiment_prefix}")
     except Exception as e:
         logger.error(f"Error in main execution: {e}")
         raise e

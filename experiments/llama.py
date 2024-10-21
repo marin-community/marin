@@ -6,6 +6,7 @@ from levanter.models.llama import LlamaConfig
 
 from experiments.simple_train_config import SimpleTrainConfig
 
+# SKIP_DRY_RUN_TEST
 llama3_tokenizer = "meta-llama/Meta-Llama-3.1-8B"
 
 llama_150m = LlamaConfig(
