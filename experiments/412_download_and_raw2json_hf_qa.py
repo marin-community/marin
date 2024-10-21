@@ -1,6 +1,6 @@
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path, output_path_of, versioned
-from operations.raw2json.huggingface.qa.raw2json import DatasetConversionConfig, OutputFormatOptions, raw2json
+from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from operations.download.huggingface.download import DownloadConfig, download
+from operations.raw2json.huggingface.qa.raw2json import DatasetConversionConfig, OutputFormatOptions, raw2json
 
 """
 Downloads the following datasets
@@ -17,7 +17,7 @@ mmlu_download_step = ExecutorStep(
         gcs_output_path=this_output_path(),
         wait_for_completion=True,
     ),
-    override_output_path="gs://marin-us-central2/raw/cais/mmlu", 
+    override_output_path="gs://marin-us-central2/raw/cais/mmlu",
 ).cd("c30699e/huggingface.co/datasets/cais/mmlu/resolve/c30699e")
 
 """
