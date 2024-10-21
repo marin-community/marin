@@ -10,7 +10,7 @@ from datetime import timedelta
 
 import jmp
 from levanter.checkpoint import CheckpointerConfig
-from levanter.data.text import LMDatasetConfig, LMMixtureDatasetConfig
+from levanter.data.text import LMDatasetConfig, LMMixtureDatasetConfig, LMSupervisedDatasetConfig
 from levanter.models.lm_model import LmConfig
 from levanter.optim import AdamConfig
 from levanter.store.cache import CacheOptions
@@ -55,6 +55,7 @@ def default_train(
     model_config: LmConfig,
     train_config: SimpleTrainConfig,
     tags: Sequence[str] = (),
+    supervised_data: LMSupervisedDatasetConfig | None = None
 ) -> ExecutorStep:
 
     if isinstance(tokenized, InputName | ExecutorStep):
@@ -69,6 +70,7 @@ def default_train(
             output_path=this_output_path(),
             tpu_type=train_config.tpu_type,
             data=data,
+            supervised_data=supervised_data,
             trainer=TrainerConfig(
                 tracker=WandbConfig(
                     project="marin",
@@ -91,3 +93,10 @@ def default_train(
             hf_save_steps=25000,
         ),
     )
+
+supervised_data=LMSupervisedDatasetConfig(
+    validation_urls=["gs://marin-us-central2/benchmarks/mmlu/mmlu-*-dev-evaluation.jsonl.gz"],
+    cache_dir="gs://marin-us-central2/benchmarks/tokenized-gpt2/mmlu/",
+    input_field="input",
+    output_field="output",
+),
