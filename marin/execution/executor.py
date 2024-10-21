@@ -99,6 +99,7 @@ from marin.utilities.json_encoder import CustomJsonEncoder
 logger = logging.getLogger("ray")
 
 ConfigT = TypeVar("ConfigT", covariant=True, bound=dataclass)
+T_co = TypeVar("T_co", covariant=True)
 
 ExecutorFunction = Callable | ray.remote_function.RemoteFunction | None
 
@@ -152,6 +153,9 @@ class InputName:
     step: ExecutorStep
     name: str | None
 
+    def cd(self, name: str) -> "InputName":
+        return InputName(self.step, name=os.path.join(self.name, name) if self.name else name)
+
 
 def output_path_of(step: ExecutorStep, name: str | None = None):
     return InputName(step=step, name=name)
@@ -169,13 +173,13 @@ def this_output_path(name: str | None = None):
 
 
 @dataclass(frozen=True)
-class VersionedValue:
+class VersionedValue(Generic[T_co]):
     """Wraps a value, to signal that this value (part of a config) should be part of the version."""
 
-    value: Any
+    value: T_co
 
 
-def versioned(value: Any):
+def versioned(value: T_co) -> VersionedValue[T_co]:
     return VersionedValue(value)
 
 
@@ -587,7 +591,7 @@ class ExecutorMainConfig:
 
     dry_run: bool = False
     force_run: list[str] = field(default_factory=list)  # <list of steps name>: run list of steps (names)
-    force_run_failed: bool = True  # run failed steps
+    force_run_failed: bool = False  # Force run failed steps
 
 
 @draccus.wrap()
