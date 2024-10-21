@@ -95,7 +95,6 @@ def default_train(
         ),
     )
 
-
 def _prepare_data_config(
     tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig, use_default_validation: bool
 ) -> LMMixtureDatasetConfig:
@@ -133,3 +132,10 @@ def _get_tokenizer_for_train(tokenized: InputName | ExecutorStep | LMMixtureData
             raise ValueError(f"Could not determine tokenizer from {tokenized}")
 
     return tokenizer
+
+supervised_data=LMSupervisedDatasetConfig(
+    validation_urls=["gs://marin-us-central2/evaluation/mmlu-eval_aux-2fd8c6/cais/mmlu-all-auxiliary_train-evaluation.jsonl.gz", "gs://marin-us-central2/evaluation/mmlu-eval-subject-2eb39e/cais/mmlu-*-dev-evaluation.jsonl.gz"],
+    cache_dir="gs://marin-us-central2/benchmarks/tokenized-gpt2/mmlu/",
+    input_field="input",
+    output_field="output",
+)
