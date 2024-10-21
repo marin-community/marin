@@ -167,6 +167,7 @@ def attributes_to_dataset(
 
     _, doc_fs_path = fsspec.core.url_to_fs(doc_path)
     output_dataset_path = os.path.join(output_path, "data", doc_fs_path)
+    # TODO: rename to shards and add reservoir sampling
 
     responses = map_files_in_directory(processing_func.remote, doc_path, "**/*.jsonl.gz", output_dataset_path)
     try:

@@ -9,9 +9,8 @@ from dataclasses import dataclass, field
 
 import draccus
 
-from marin.classifiers.fasttext.training import train_model
+from marin.classifiers.bert.training import train_model
 from marin.classifiers.utils import attributes_to_dataset
-from marin.processing.classification.types import DatasetFormat
 
 
 @dataclass(frozen=True)
@@ -27,12 +26,10 @@ class DatasetCurationConfig:
         absolute_sampling_rate (Optional[int]): Number of examples to sample from the dataset where each example
             is sampled with probability 1/N.
         relative_sampling_rate (Optional[float]): Fraction of the dataset to sample.
-        format (DatasetFormat): Format of the dataset.
     """
 
     input_doc_path: str
     label: str
-    format: DatasetFormat
     absolute_sampling_rate: int | None = None
     relative_sampling_rate: float | None = None
 
