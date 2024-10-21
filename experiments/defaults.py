@@ -50,15 +50,6 @@ class SimpleTrainConfig:
     cooldown: float | None = None
 
 
-llama_1_4b_train_config = SimpleTrainConfig(
-    tpu_type="v4-128",
-    train_batch_size=1024,
-    num_train_steps=75000,  # 4096 * 1024 * 75000 = 314B tokens
-    learning_rate=3e-4,
-    weight_decay=0.1,
-)
-
-
 def default_train(
     name: str,
     tokenized: InputName | ExecutorStep | LMDatasetConfig | LMMixtureDatasetConfig,
