@@ -18,9 +18,7 @@ mmlu_download_step = ExecutorStep(
         wait_for_completion=True,
     ),
     override_output_path="gs://marin-us-central2/raw/cais/mmlu", 
-)
-
-mmlu_download_step_output_path = mmlu_download_step.cd("c30699e/huggingface.co/datasets/cais/mmlu/resolve/c30699e")
+).cd("c30699e/huggingface.co/datasets/cais/mmlu/resolve/c30699e")
 
 """
 Converts raw to JSON for:
@@ -36,7 +34,7 @@ mmlu_convert_eval_aux = ExecutorStep(
         dataset_name="cais/mmlu",
         subsets=["all"],
         splits=["auxiliary_train"],
-        input_path="gs://marin-us-central2/raw/cais/mmlu/c30699e/huggingface.co/datasets/cais/mmlu/resolve/c30699e",
+        input_path=mmlu_download_step,
         hf_path="cais/mmlu",
         output_path=this_output_path(),
         output_format=OutputFormatOptions("evaluation"),
@@ -54,7 +52,7 @@ mmlu_convert_eval_subject = ExecutorStep(
         dataset_name="cais/mmlu",
         subsets=["*"],
         splits=["dev", "validation"],
-        input_path="gs://marin-us-central2/raw/cais/mmlu/c30699e/huggingface.co/datasets/cais/mmlu/resolve/c30699e",
+        input_path=mmlu_download_step,
         hf_path="cais/mmlu",
         output_path=this_output_path(),
         output_format=OutputFormatOptions("evaluation"),
@@ -75,7 +73,7 @@ mmlu_convert_dolma = ExecutorStep(
         dataset_name="cais/mmlu",
         subsets=["all"],
         splits=["dev", "test", "validation"],
-        input_path=mmlu_download_step_output_path,
+        input_path=mmlu_download_step,
         hf_path="cais/mmlu",
         output_path=this_output_path(),
         output_format=OutputFormatOptions("decontamination"),
@@ -92,8 +90,8 @@ if __name__ == "__main__":
     executor_main(
         steps=[
             mmlu_download_step,
-            #mmlu_convert_eval_aux,
-            #mmlu_convert_eval_subject,
+            mmlu_convert_eval_aux,
+            mmlu_convert_eval_subject,
             mmlu_convert_dolma,
         ]
     )
