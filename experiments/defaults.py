@@ -142,7 +142,7 @@ supervised_data = (
             "gs://marin-us-central2/evaluation/mmlu-eval-subject-2eb39e/cais/mmlu-*-dev-evaluation.jsonl.gz",
         ],
         cache_dir="gs://marin-us-central2/benchmarks/tokenized-gpt2/mmlu/",
-        input_field="input",
-        output_field="output",
+        input_field="prompt",
+        output_field="response",
     ),
 )
