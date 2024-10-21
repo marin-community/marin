@@ -55,7 +55,7 @@ def default_train(
     model_config: LmConfig,
     train_config: SimpleTrainConfig,
     tags: Sequence[str] = (),
-    supervised_data: LMSupervisedDatasetConfig | None = None
+    supervised_data: LMSupervisedDatasetConfig | None = None,
 ) -> ExecutorStep:
 
     if isinstance(tokenized, InputName | ExecutorStep):
@@ -94,9 +94,15 @@ def default_train(
         ),
     )
 
-supervised_data=LMSupervisedDatasetConfig(
-    validation_urls=["gs://marin-us-central2/evaluation/mmlu-eval_aux-2fd8c6/cais/mmlu-all-auxiliary_train-evaluation.jsonl.gz", "gs://marin-us-central2/evaluation/mmlu-eval-subject-2eb39e/cais/mmlu-*-dev-evaluation.jsonl.gz"],
-    cache_dir="gs://marin-us-central2/benchmarks/tokenized-gpt2/mmlu/",
-    input_field="input",
-    output_field="output",
-),
+
+supervised_data = (
+    LMSupervisedDatasetConfig(
+        validation_urls=[
+            "gs://marin-us-central2/evaluation/mmlu-eval_aux-2fd8c6/cais/mmlu-all-auxiliary_train-evaluation.jsonl.gz",
+            "gs://marin-us-central2/evaluation/mmlu-eval-subject-2eb39e/cais/mmlu-*-dev-evaluation.jsonl.gz",
+        ],
+        cache_dir="gs://marin-us-central2/benchmarks/tokenized-gpt2/mmlu/",
+        input_field="input",
+        output_field="output",
+    ),
+)
