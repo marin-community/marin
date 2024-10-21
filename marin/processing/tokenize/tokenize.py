@@ -44,7 +44,7 @@ class TokenizeConfig:
     cache_path: str  # base path to save the tokenized files
     tokenizer: str  # tokenizer name. Should be the same as you intend to use in the tokenizer spec for the training run
     tags: list[str] = dataclasses.field(default_factory=list)  # tags to be added to config
-    cache_options: CacheOptions = CacheOptions()  # noqa: RUF009
+    cache_options: CacheOptions = CacheOptions(num_shard_groups=1024)  # noqa: RUF009
 
     def train_source(self) -> ShardedDataSource | None:
         if len(self.train_paths) == 0:
@@ -92,7 +92,8 @@ def tokenize(config: TokenizeConfig):
         train_ledger = (
             ray.remote(tokenize_and_concatenate_shards)
             .options(
-                name=f"tokenize::{config.cache_path}", runtime_env=RuntimeEnv(env_vars={"JAX_PLATFORM_NAME": "cpu"})
+                name=f"tokenize::{config.cache_path}",
+                runtime_env=RuntimeEnv(env_vars={"JAX_PLATFORM_NAME": "cpu", "GCE_METADATA_TIMEOUT": "120"}),
             )
             .remote(
                 train_source,
@@ -192,7 +193,7 @@ def step_to_lm_training_config(step: TokenizerStep) -> LMDatasetConfig:
     return step.config.as_lm_dataset_task_config(output_path_of(step))
 
 
-def lm_training_config(
+def lm_data_config(
     training_set: TokenizerStep,
     validation_sets: Sequence[TokenizerStep] = (),
     shuffle: bool | int = True,
@@ -234,7 +235,7 @@ def lm_training_config(
     )
 
 
-def lm_mixture_training_config(
+def lm_mixture_data_config(
     components: dict[str, TokenizerStep],
     weights: dict[str, float],
     *,
@@ -256,7 +257,7 @@ def lm_mixture_training_config(
         missing_keys = {k: 0.0 for k in components if k not in weights}
         weights = {**weights, **missing_keys}
 
-    first_name, first_step = next(iter(configs.items()))
+    first_name, first_step = next(iter(components.items()))
     tokenizer = first_step.config.tokenizer
     for name, step in components.items():
         if step.config.tokenizer != tokenizer:
