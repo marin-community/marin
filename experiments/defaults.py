@@ -9,7 +9,7 @@ from datetime import timedelta
 
 import jmp
 from levanter.checkpoint import CheckpointerConfig
-from levanter.data.text import LMMixtureDatasetConfig
+from levanter.data.text import LMMixtureDatasetConfig, LMSupervisedDatasetConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig
 from levanter.optim import AdamConfig
@@ -54,6 +54,7 @@ def default_train(
     train_config: SimpleTrainConfig,
     tags: Sequence[str] = (),
     use_default_validation: bool = True,
+    supervised_data: LMSupervisedDatasetConfig | None = None,
 ) -> ExecutorStep:
 
     data = _prepare_data_config(tokenized, use_default_validation)
@@ -95,6 +96,7 @@ def default_train(
         ),
     )
 
+
 def _prepare_data_config(
     tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig, use_default_validation: bool
 ) -> LMMixtureDatasetConfig:
@@ -133,9 +135,14 @@ def _get_tokenizer_for_train(tokenized: InputName | ExecutorStep | LMMixtureData
 
     return tokenizer
 
-supervised_data=LMSupervisedDatasetConfig(
-    validation_urls=["gs://marin-us-central2/evaluation/mmlu-eval_aux-2fd8c6/cais/mmlu-all-auxiliary_train-evaluation.jsonl.gz", "gs://marin-us-central2/evaluation/mmlu-eval-subject-2eb39e/cais/mmlu-*-dev-evaluation.jsonl.gz"],
-    cache_dir="gs://marin-us-central2/benchmarks/tokenized-gpt2/mmlu/",
-    input_field="input",
-    output_field="output",
+supervised_data = (
+    LMSupervisedDatasetConfig(
+        validation_urls=[
+            "gs://marin-us-central2/evaluation/mmlu-eval_aux-2fd8c6/cais/mmlu-all-auxiliary_train-evaluation.jsonl.gz",
+            "gs://marin-us-central2/evaluation/mmlu-eval-subject-2eb39e/cais/mmlu-*-dev-evaluation.jsonl.gz",
+        ],
+        cache_dir="gs://marin-us-central2/benchmarks/tokenized-gpt2/mmlu/",
+        input_field="input",
+        output_field="output",
+    ),
 )
