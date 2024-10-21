@@ -95,7 +95,7 @@ def default_train(
     )
 
 supervised_data=LMSupervisedDatasetConfig(
-    validation_urls=["gs://marin-us-central2/benchmarks/mmlu/mmlu-*-dev-evaluation.jsonl.gz"],
+    validation_urls=["gs://marin-us-central2/evaluation/mmlu-eval_aux-2fd8c6/cais/mmlu-all-auxiliary_train-evaluation.jsonl.gz", "gs://marin-us-central2/evaluation/mmlu-eval-subject-2eb39e/cais/mmlu-*-dev-evaluation.jsonl.gz"],
     cache_dir="gs://marin-us-central2/benchmarks/tokenized-gpt2/mmlu/",
     input_field="input",
     output_field="output",
