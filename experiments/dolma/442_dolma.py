@@ -1,4 +1,7 @@
-# train a simple dolma-based model
+"""
+Train Dolma/OLMo models.
+https://github.com/stanford-crfm/marin/issues/442
+"""
 
 from experiments.defaults import default_train, llama_1_4b_train_config
 from experiments.dolma.tokenize_dolma import DOLMA_OLMO_MIXTURE_WEIGHTS, tokenize_dolma_steps
