@@ -8,13 +8,15 @@ this_path = os.path.dirname(os.path.abspath(__file__))
 
 template_path = os.path.join(this_path, "marin-cluster-template.yaml")
 
+DOCKER_TAG = "20241022"
+
 configs = {
     "marin-us-central2": {
         "NAME": "marin-us-central2",
         "REGION": "us-central2",
         "ZONE": "us-central2-b",
         "BUCKET": "marin-us-central2",
-        "DOCKER_TAG": "20241022",
+        "DOCKER_TAG": DOCKER_TAG,
         "tpu_generation": "v4",
     },
     "marin-eu-west4": {
@@ -22,7 +24,7 @@ configs = {
         "REGION": "eu-west4",
         "ZONE": "europe-west4-b",
         "BUCKET": "marin-eu-west4",
-        "DOCKER_TAG": "20241022",
+        "DOCKER_TAG": DOCKER_TAG,
         "tpu_generation": "v5e",
     },
     "marin-us-west4": {
@@ -30,7 +32,7 @@ configs = {
         "REGION": "us-west4",
         "ZONE": "us-west4-a",
         "BUCKET": "marin-us-west4",
-        "DOCKER_TAG": "20241022",
+        "DOCKER_TAG": DOCKER_TAG,
         "tpu_generation": "v5e",
     },
 }
