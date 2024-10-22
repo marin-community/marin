@@ -5,6 +5,7 @@ from marin.execution.executor import (
     executor_main,
     output_path_of,
     this_output_path,
+    versioned,
 )
 from operations.download.huggingface.download import DownloadConfig, download
 from operations.transform.conversation.transform_conversation import TransformSFTDatasetConfig, transform_dataset
@@ -60,7 +61,7 @@ def create_steps():
             fn=download,
             config=DownloadConfig(
                 hf_dataset_id=dataset.hf_dataset_id,
-                revision=dataset.revision,
+                revision=versioned(dataset.revision),
                 gcs_output_path=this_output_path(),
                 wait_for_completion=dataset.wait_for_completion,
             ),
@@ -76,8 +77,8 @@ def create_steps():
             config=TransformSFTDatasetConfig(
                 input_path=download_data,
                 output_path=this_output_path(),
-                shard_size=5000,
-                metadata_columns=dataset.metadata_columns,
+                shard_size=versioned(5000),
+                metadata_columns=versioned(dataset.metadata_columns),
                 filetype=dataset.filetype,
                 source=dataset.hf_dataset_id,
             ),
