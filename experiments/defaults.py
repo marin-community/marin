@@ -17,8 +17,10 @@ from levanter.store.cache import CacheOptions
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 
+from experiments.dolma.paloma import tokenize_paloma_steps
 from marin.execution.executor import ExecutorStep, InputName, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, lm_data_config, tokenize
+from marin.processing.tokenize.tokenize import TokenizerStep
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 
 
@@ -38,6 +40,10 @@ def default_tokenize(
     )
 
 
+def default_validation_sets(tokenizer: str, base_path: str = "tokenized/") -> list[TokenizerStep]:
+    return list(tokenize_paloma_steps(base_path=base_path, tokenizer=tokenizer).values())
+
+
 @dataclass(frozen=True)
 class SimpleTrainConfig:
     """Simplified configuration for training (the things that matter)."""
@@ -55,10 +61,17 @@ def default_train(
     model_config: LmConfig,
     train_config: SimpleTrainConfig,
     tags: Sequence[str] = (),
+    use_default_validation: bool = True,
 ) -> ExecutorStep:
 
+    tokenizer = _get_tokenizer_for_train(tokenized)
+
     if isinstance(tokenized, InputName | ExecutorStep):
-        data = lm_data_config(training_set=tokenized)
+        if use_default_validation:
+            validation_sets = default_validation_sets(tokenizer=tokenizer)
+        else:
+            validation_sets = []
+        data = lm_data_config(training_set=tokenized, validation_sets=validation_sets)
     else:
         data = tokenized
 
@@ -91,3 +104,19 @@ def default_train(
             hf_save_steps=25000,
         ),
     )
+
+
+def _get_tokenizer_for_train(tokenized):
+    match tokenized:
+        case LMDatasetConfig(tokenizer=tokenizer):
+            tokenizer = tokenizer
+        case LMMixtureDatasetConfig(tokenizer=tokenizer):
+            tokenizer = tokenizer
+        case ExecutorStep(config=TokenizeConfig(tokenizer=tokenizer)):
+            tokenizer = tokenizer
+        case InputName(step=ExecutorStep(config=TokenizeConfig(tokenizer=tokenizer))):
+            tokenizer = tokenizer
+        case _:
+            raise ValueError(f"Could not determine tokenizer from {tokenized}")
+
+    return tokenizer

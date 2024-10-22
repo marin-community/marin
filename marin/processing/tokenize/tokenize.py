@@ -30,7 +30,7 @@ from levanter.data.text import BatchTokenizer, LMDatasetConfig, LMDatasetSourceC
 from levanter.store.cache import CacheOptions
 from ray.runtime_env import RuntimeEnv
 
-from marin.execution.executor import ExecutorStep, output_path_of
+from marin.execution.executor import ExecutorStep, InputName, output_path_of
 from marin.processing.tokenize.independent_tokenize import tokenize_and_concatenate_shards
 from marin.utils import fsspec_glob, fsspec_isdir
 
@@ -56,7 +56,7 @@ class TokenizeConfig:
             return None
         return _create_source(self.validation_paths)
 
-    def as_lm_dataset_source_config(self, actual_output_path: str) -> LMDatasetSourceConfig:
+    def as_lm_dataset_source_config(self, actual_output_path: str | InputName) -> LMDatasetSourceConfig:
         """
         For use in Levanter training runs with mixtures of datasets.
         """
@@ -67,7 +67,7 @@ class TokenizeConfig:
             cache_dir=actual_output_path,
         )
 
-    def as_lm_dataset_task_config(self, actual_output_path: str) -> LMDatasetConfig:
+    def as_lm_dataset_task_config(self, actual_output_path: str | InputName) -> LMDatasetConfig:
         """
         For use in Levanter training runs with a single dataset.
         """
@@ -189,12 +189,18 @@ def step_to_lm_mixture_component(step: TokenizerStep) -> LMDatasetSourceConfig:
     return step.config.as_lm_dataset_source_config(output_path_of(step))
 
 
-def step_to_lm_training_config(step: TokenizerStep) -> LMDatasetConfig:
+def step_to_lm_training_config(step: TokenizerStep | InputName) -> LMDatasetConfig:
     """
     Converts a tokenizer step to a Levanter dataset config. This is useful for creating
     data mixture configs.
     """
-    return step.config.as_lm_dataset_task_config(output_path_of(step))
+    if isinstance(step, InputName):
+        base_step = step.step
+        path = step
+    else:
+        base_step = step
+        path = output_path_of(step)
+    return base_step.config.as_lm_dataset_task_config(path)
 
 
 def lm_data_config(
@@ -275,15 +281,16 @@ def lm_mixture_data_config(
     )
 
 
-def _get_files_by_extension(input_paths: list[str], extension: str) -> list[str]:
+def _get_files_by_extensions(input_paths: list[str], extensions: list[str]) -> list[str]:
     """
     Get a list of all filepaths with the specified extension from the input paths.
     """
     output_paths = []
     for path in input_paths:
         if fsspec_isdir(path) or path.endswith("/"):
-            logger.info(f"Getting all {extension} files in {path}")
-            output_paths.extend(fsspec_glob(os.path.join(path, f"**/*.{extension}")))
+            logger.info(f"Getting all {extensions} files in {path}")
+            for ex in extensions:
+                output_paths.extend(fsspec_glob(os.path.join(path, f"**/*.{ex}")))
         else:
             output_paths.extend(fsspec_glob(path))
 
@@ -299,7 +306,7 @@ def _get_filepaths_to_tokenize(input_paths: list[str]) -> list[str]:
         return []
 
     # we're only going to have one or the other, but might as well return both
-    return _get_files_by_extension(input_paths, "jsonl.{gz,zst,zstd}") + _get_files_by_extension(input_paths, "parquet")
+    return _get_files_by_extensions(input_paths, ["jsonl.{gz,zst,zstd}", "parquet"])
 
 
 def _is_probably_path(path: str) -> bool:
