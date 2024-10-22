@@ -21,9 +21,10 @@ import marin.processing.tokenize as tokenize
 from experiments.llama import compute_num_parameters
 from experiments.paloma import paloma_tokenized
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.execution.executor import ExecutorStep, InputName, this_output_path, versioned
+from marin.execution.executor import ExecutorStep, InputName, this_output_path, versioned, output_path_of
 from marin.processing.tokenize import TokenizeConfig, TokenizerStep, lm_data_config
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
+from experiments.raw2json import mmlu_convert_eval_aux, mmlu_convert_eval_subject
 
 
 def default_tokenize(
@@ -138,8 +139,8 @@ def _get_tokenizer_for_train(tokenized: InputName | ExecutorStep | LMMixtureData
 supervised_data = (
     LMSupervisedDatasetConfig(
         validation_urls=[
-            "gs://marin-us-central2/evaluation/mmlu-eval_aux-2fd8c6/cais/mmlu-all-auxiliary_train-evaluation.jsonl.gz",
-            "gs://marin-us-central2/evaluation/mmlu-eval-subject-2eb39e/cais/mmlu-*-dev-evaluation.jsonl.gz",
+            output_path_of(mmlu_convert_eval_aux),
+            output_path_of(mmlu_convert_eval_subject),
         ],
         cache_dir="gs://marin-us-central2/benchmarks/tokenized-gpt2/mmlu/",
         input_field="prompt",
