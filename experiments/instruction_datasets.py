@@ -46,7 +46,7 @@ INSTRUCTION_DATASETS = [
         hf_dataset_id="teknium/OpenHermes-2.5",
         revision="b820378",
         wait_for_completion=True,
-        metadata_columns=["id"],
+        metadata_columns=["id", "category", "source"],
         filetype="json",
     ),
 ]
