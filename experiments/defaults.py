@@ -17,9 +17,10 @@ from levanter.store.cache import CacheOptions
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 
-from marin.execution.executor import ExecutorStep, InputName, this_output_path, versioned
+from marin.execution.executor import ExecutorStep, InputName, this_output_path, versioned, output_path_of
 from marin.processing.tokenize import TokenizeConfig, lm_data_config, tokenize
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
+from experiments.raw2json import mmlu_convert_eval_aux, mmlu_convert_eval_subject
 
 
 def default_tokenize(
@@ -98,8 +99,8 @@ def default_train(
 supervised_data = (
     LMSupervisedDatasetConfig(
         validation_urls=[
-            "gs://marin-us-central2/evaluation/mmlu-eval_aux-2fd8c6/cais/mmlu-all-auxiliary_train-evaluation.jsonl.gz",
-            "gs://marin-us-central2/evaluation/mmlu-eval-subject-2eb39e/cais/mmlu-*-dev-evaluation.jsonl.gz",
+            output_path_of(mmlu_convert_eval_aux),
+            output_path_of(mmlu_convert_eval_subject),
         ],
         cache_dir="gs://marin-us-central2/benchmarks/tokenized-gpt2/mmlu/",
         input_field="prompt",
