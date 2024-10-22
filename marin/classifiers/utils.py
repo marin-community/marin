@@ -15,7 +15,7 @@ import numpy as np
 import ray
 
 from marin.core.runtime import cached_or_construct_output, map_files_in_directory
-from marin.utils import fsspec_glob, rebase_file_path
+from marin.utils import fsspec_cp, fsspec_glob, rebase_file_path
 
 
 @cached_or_construct_output(success_suffix="SUCCESS")
@@ -224,7 +224,7 @@ def attributes_to_dataset(
         if max_sample_size is not None:
             reservoir_sample(tmpfile.name, output_dataset_path, max_sample_size, seed)
         else:
-            fsspec.cp(tmpfile.name, output_dataset_path)
+            fsspec_cp(tmpfile.name, output_dataset_path)
 
 
 def shuffle(input_file_path: str, output_file_path: str, seed: int) -> None:
