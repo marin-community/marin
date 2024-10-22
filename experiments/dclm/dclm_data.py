@@ -12,7 +12,7 @@ to GCS. The 2nd and 3rd ones above are the other datasets that were used in the 
     the actual DCLM-Baseline dataset).
 """
 
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
+from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from operations.download.huggingface.download import DownloadConfig, download
 from operations.download.huggingface.download_gated_manual import download_and_upload_to_gcs
 
