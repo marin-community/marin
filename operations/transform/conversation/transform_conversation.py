@@ -22,7 +22,7 @@ import fsspec
 import pandas as pd
 import ray
 
-from marin.core.conversation import OpenAIChatMessage
+from marin.core.conversation import DolmaConversationOutput, OpenAIChatMessage
 from marin.core.runtime import TaskConfig, cached_or_construct_output, fsspec_mkdirs, map_files_in_directory
 
 from .adapters import TransformAdapter, get_adapter
@@ -71,21 +71,21 @@ def transform_row(row: dict, cfg: TransformSFTDatasetConfig, adapter: TransformA
     # Create a unique ID for the row based on the text
     row_idx = generate_hash_from_messages(transformed_row_messages)
     metadata = {col: row.get(col, "") for col in cfg.metadata_columns}
-    return {
-        "id": row_idx,
-        "source": cfg.source,
-        "messages": transformed_row_messages,
-        "added": datetime.now(timezone.utc).isoformat(),
-        "created": "",  # Not available in the dataset
-        "metadata": metadata,
-    }
+    return DolmaConversationOutput(
+        id=row_idx,
+        source=cfg.source,
+        messages=transformed_row_messages,
+        added=datetime.now(timezone.utc).isoformat(),
+        created="",  # Not available in the dataset
+        metadata=metadata,
+    )
 
 
 def transform_rows(rows: list[dict], cfg: TransformSFTDatasetConfig):
-    """Transform a list of rows from the OpenHermes-2.5 dataset to a list of dolma formatted jsonl rows.
+    """Transform a list of rows from the conversation dataset to a list of formatted OpenAI Messages jsonl rows.
 
     Args:
-        rows (list[dict]): A list of rows from the OpenHermes-2.5 dataset.
+        rows (list[dict]): A list of rows from the conversationdataset.
 
     Returns:
         list[dict]: A list of dolma formatted jsonl rows.
@@ -93,8 +93,8 @@ def transform_rows(rows: list[dict], cfg: TransformSFTDatasetConfig):
     transformed_rows = []
     adapter = get_adapter(cfg.source)
     for row in rows:
-        transformed_row = transform_row(row, cfg, adapter)
-        transformed_rows.append(transformed_row)
+        transformed_row: DolmaConversationOutput = transform_row(row, cfg, adapter)
+        transformed_rows.append(transformed_row.model_dump())
 
     return transformed_rows
 
