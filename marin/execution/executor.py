@@ -74,6 +74,7 @@ import logging
 import os
 import subprocess
 import traceback
+import urllib.parse
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field, fields, is_dataclass, replace
 from datetime import datetime
@@ -475,7 +476,17 @@ class Executor:
             self.executor_info_base_path,
             f"{name}-{executor_version_hash}.json",
         )
+
+        # Print where to find the executor info (experiments JSON)
         logger.info(f"Writing executor info to {self.executor_info_path}")
+        # TODO: don't hardcode this webserver later
+        experimentUrl = "https://marlin-subtle-barnacle.ngrok-free.app/experiment?path=" + urllib.parse.quote(
+            self.executor_info_path
+        )
+        logger.info("To view the experiment page, go to:")
+        logger.info("")
+        logger.info(experimentUrl)
+        logger.info("")
 
         # Write out info for each step
         for step, info in zip(self.steps, step_infos, strict=True):

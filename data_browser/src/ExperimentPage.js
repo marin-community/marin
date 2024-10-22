@@ -97,7 +97,9 @@ function renderExperimentHeader(args) {
   const links = [];
   
   // Link to code on GitHub
-  const githubUrl = "https://github.com/stanford-crfm/marin/blob/main/" + relativePath;
+  const githubUrl = experiment.git_commit ?
+    `https://github.com/stanford-crfm/marin/tree/${experiment.git_commit}/${relativePath}` :
+    `https://github.com/stanford-crfm/marin/blob/main/${relativePath}`;
   links.push(<Button href={githubUrl} color="primary" target="_blank">GitHub</Button>);
 
   // Link to plain data browser
@@ -137,7 +139,8 @@ function renderExperimentStep(args) {
   }
 
   // Link to the wandb page (if it's a training run)
-  if (step.name.startsWith("checkpoints")) {  // Heuristically guess if this is a training run
+  const trainingFunctionNames = ["marin.training.training.run_levanter_train_lm"];
+  if (trainingFunctionNames.includes(step.fn_name)) {
     const name = step.output_path.split("/").pop();
     const wandbUrl = `https://wandb.ai/stanford-mercury/marin/runs/${name}`;
     links.push(<Button href={wandbUrl} target="_blank">wandb</Button>);
