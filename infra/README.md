@@ -120,43 +120,53 @@ handles cases where individual tasks crash or a VM worker gets preempted in the 
 
 # Maintaining a Ray Cluster
 
-The [`cluster.yaml`](./marin-cluster.yaml) file has all the necessary configuration details for the cluster. Some useful
-commands:
+We have 3 Marin clusters, based on where our TPU quota is available:
+
+* `marin-us-central2` (default). v4's
+* `marin-us-west4` v5e's
+* `marin-eu-west4` v5e's
+
+Each config is in a separate file in the `infra` directory.
+
 
 ```bash
+export CLUSTER=us-central2
+
 # Launch the Cluster -- will automatically provision the head node, and start configuring the minimum number of workers
-ray up -y infra/marin-cluster.yaml
+ray up -y infra/marin-$CLUSTER.yaml
 
 # Kill the Cluster (takes a while to gracefully terminate nodes)
-ray down -y infra/marin-cluster.yaml
+ray down -y infra/marin-$CLUSTER.yaml
 
 # Monitor the Ray Autoscaler Logs (in case there are problems spinning up workers)
 #   =>> Note that `exec` lets you run arbitrary commands on the head node!
-ray exec infra/marin-cluster.yaml "tail -n 100 -f /tmp/ray/session_latest/logs/monitor*"
+ray exec infra/marin-$CLUSTER.yaml "tail -n 100 -f /tmp/ray/session_latest/logs/monitor*"
 
 # SSH into the Head Node
-ray attach infra/marin-cluster.yaml
+ray attach infra/marin-$CLUSTER.yaml
 ```
 
-By default, the cluster is set up in availability zone `us-central-2b` with a persistent `n2-standard-8` VM acting as
+By default, each cluster is provisioned with a persistent `n2-standard-8` VM acting as
 the head node. At any given time, there should be a minimum of 4 TPU `v4-8` VMs acting as workers, with an autoscaling
 limit of 1024 VMs (so a maximum of 8 * 1024 = 8,192 total v4 cores or 4,096 v4 chips).
 
 Each TPU `v4-8` VM actually has a surprising amount of CPUs and RAM (~240 CPUs, 200GB+ of RAM). However, Ray doesn't
 actually do anything under the hood to ensure that a job is actually using the number of logical resources specified
-(e.g., a job that on paper requests 1 CPU can use arbitrary cores/RAM). To mitigate this on the scheduler side, the
-`cluster.yaml` file configures each worker with only 120 visible CPUs.
+(e.g., a job that on paper requests 1 CPU can use arbitrary cores/RAM). To mitigate this on the scheduler side,
+the config file configures each worker with only 120 visible CPUs.
 
 ### Restarting the Cluster
 There is currently an error on the Ray autoscaler side with spot-TPU instances, where the Ray autoscaler is not able
 to detect when spot-TPU instances are dead and as a result, we may be left in a state with just the head node and
 no more spot-TPU worker instances starting up. When this state occurs, please message in the #marin-infra slack
-that you are going to restart the cluster (call `ray down infra/marin-cluster.yaml` and then `ray up infra/marin-cluster.yaml`).
+that you are going to restart the cluster (call `ray down infra/marin-$CLUSTER.yaml` and then `ray up infra/marin-$CLUSTER.yaml`).
 
 Please note that after restarting the cluster and queueing the first job, it will likely stall because it takes a while for the head node to actually spin up the worker sometimes (~10min).
 
 
 ### Reconfiguring the Cluster
+
+
 
 In general, for additive operations like increasing the `max_workers` for autoscaling, you can just call `ray up`
 against the already-running cluster.

@@ -27,7 +27,7 @@ issues, contact David Hall or Sidd Karamcheti for help!
 
 Once authenticated for GCP, all other work happens through our
 [Ray Cluster](https://docs.ray.io/en/latest/cluster/getting-started.html). The entire cluster configuration
-is stored in [`infra/marin-cluster.yaml`](./infra/marin-cluster.yaml). **Ray uses this file as the single-source of
+is stored in [`infra/marin-cluster.yaml`](./infra/marin-cluster-template.yaml). **Ray uses this file as the single-source of
 truth for all cluster operations** -- you can think of this file as an alternative to managing your own SSH keys,
 remembering the IP address of the cluster head node, what port the dashboard is running on, etc.
 
