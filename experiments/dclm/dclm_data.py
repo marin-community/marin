@@ -19,7 +19,7 @@ dclm_baseline_download_step = ExecutorStep(
     config=DownloadConfig(
         hf_dataset_id="mlfoundations/dclm-baseline-1.0",
         revision=versioned("a3b142c"),
-        gcs_output_path=this_output_path(),
+        output_path=this_output_path(),
         wait_for_completion=False,
     ),
     override_output_path="gs://marin-us-central2/raw/dclm",  # no versioned path; this had already been downloaded
@@ -33,7 +33,7 @@ the_stack_download_step = ExecutorStep(
     config=DownloadConfig(
         hf_dataset_id="bigcode/the-stack-dedup",
         revision=versioned("17cad72"),
-        gcs_output_path=this_output_path(),
+        output_path=this_output_path(),
         wait_for_completion=True,
     ),
     override_output_path="gs://marin-us-central2/raw/the-stack-dedup-4ba450",
@@ -47,7 +47,7 @@ proofpile_2_download_step = ExecutorStep(
     config=DownloadConfig(
         hf_dataset_id="EleutherAI/proof-pile-2",
         revision=versioned("901a927"),
-        gcs_output_path=this_output_path(),
+        output_path=this_output_path(),
         wait_for_completion=False,
     ),
     override_output_path="gs://marin-us-central2/raw/proof-pile-2-f1b1d8",

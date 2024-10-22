@@ -1,27 +1,27 @@
 #!/usr/bin/env python3
 """
-An script to download a gated HuggingFace dataset and upload it to a specified GCS path,
+A script to download a gated HuggingFace dataset and upload it to a specified fsspec path,
 preserving directory structures and handling different file types.
 
 Run with (after setting HF_TOKEN as an environment variable):
     - [Local] python operations/download/huggingface/download_gated_manual.py \
           --hf_dataset_id EleutherAI/proof-pile-2 --revision main \
-          --gcs_output_path gs://marin-us-central2/raw/proof-pile-manual
+          --output_path fsspec://mybucket/raw/proof-pile-manual
 """
 
 import fnmatch
 import logging
 import os
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.parse import quote
 
 import draccus
-from google.api_core import exceptions as gcp_exceptions
-from google.cloud import storage
+import fsspec
 from huggingface_hub import HfApi, hf_hub_download
+from tqdm_loggable.auto import tqdm
 
-from marin.utilities.gcs_utils import split_gcs_path
 from marin.utilities.validation_utils import write_provenance_json
 from operations.download.huggingface.download import DownloadConfig
 
@@ -29,23 +29,16 @@ from operations.download.huggingface.download import DownloadConfig
 logger = logging.getLogger(__name__)
 
 
-def ensure_gcs_path_writable(gcs_path: str) -> None:
-    gcs_client = storage.Client()
-    bucket_name, blob_prefix = gcs_path.replace("gs://", "").split("/", 1)
-    bucket = gcs_client.bucket(bucket_name)
-
-    if not bucket.exists():
-        raise ValueError(f"GCS bucket {bucket_name} does not exist.")
-
-    logger.info(f"Checking write access to GCS path: gs://{bucket_name}/{blob_prefix}")
-
-    # Check if we can write to the specified path
-    test_blob = bucket.blob(f"{blob_prefix}/test_write_access")
+def ensure_fsspec_path_writable(output_path: str) -> None:
+    """Check if the fsspec path is writable by trying to create and delete a temporary file."""
+    fs, path = fsspec.core.url_to_fs(output_path)
     try:
-        test_blob.upload_from_string("test")
-        test_blob.delete()
-    except gcp_exceptions.Forbidden:
-        raise ValueError(f"No write access to GCS path: gs://{bucket_name}/{blob_prefix}") from None
+        test_path = os.path.join(output_path, "test_write_access")
+        with fs.open(test_path, "w") as f:
+            f.write("test")
+        fs.rm(test_path)
+    except Exception as e:
+        raise ValueError(f"No write access to fsspec path: {output_path} ({e})") from e
 
 
 def construct_hf_url(dataset_id: str, revision: str, file_path: str) -> str:
@@ -54,40 +47,59 @@ def construct_hf_url(dataset_id: str, revision: str, file_path: str) -> str:
     return f"https://huggingface.co/datasets/{dataset_id}/resolve/{revision}/{encoded_file_path}"
 
 
-def download_and_upload_to_gcs(cfg: DownloadConfig) -> None:
+def download_and_upload_to_store(cfg: DownloadConfig) -> None:
+    logging.basicConfig(level=logging.INFO)
 
-    # Parse GCS Bucket, Relative Path from gcs_output_path
-    gcs_bucket, gcs_relative_path = split_gcs_path(cfg.gcs_output_path)
+    # Parse the output path and get the file system
+    fs, _ = fsspec.core.url_to_fs(cfg.output_path)
 
-    # Use revision as "version" for writing to GCS
-    gcs_versioned_relative_path = os.path.join(gcs_relative_path, cfg.revision)
+    # Use revision as "version" for writing to the output path
+    versioned_output_path = os.path.join(cfg.output_path, cfg.revision)
 
-    # Construct full GCS path
-    full_gcs_path = f"gs://{gcs_bucket}/{gcs_versioned_relative_path}"
-
-    # Ensure GCS path exists and is writable
+    # Ensure the output path is writable
     try:
-        ensure_gcs_path_writable(full_gcs_path)
+        ensure_fsspec_path_writable(versioned_output_path)
     except ValueError as e:
-        logger.error(f"GCS path validation failed: {e!s}")
-        return
+        logger.exception(f"Output path validation failed: {e}")
+        raise e
 
     # Initialize HuggingFace client
     hf_token = os.environ.get("HF_TOKEN")
     hf_client = HfApi(token=hf_token)
-
-    # Initialize GCS client
-    gcs_client = storage.Client()
-    bucket = gcs_client.bucket(gcs_bucket)
 
     # Get list of files in the dataset
     files = hf_client.list_repo_files(repo_id=cfg.hf_dataset_id, revision=cfg.revision, repo_type="dataset")
 
     total_files = len(files)
     logger.info(f"Total number of files to process: {total_files}")
+    pbar = tqdm(total=total_files)
 
-    processed_files = 0
+    thread_pool = ThreadPoolExecutor(max_workers=32)
+
+    def put_file(temp_dir, hf_url, fsspec_file_path):
+        try:
+            # Download file from HuggingFace
+            local_path = hf_hub_download(
+                repo_id=cfg.hf_dataset_id,
+                filename=hf_url,
+                revision=cfg.revision,
+                token=hf_token,
+                local_dir=temp_dir,
+                repo_type="dataset",
+            )
+
+            # Upload file using fsspec
+            fs.put(local_path, fsspec_file_path)
+            logging.info(f"Uploaded {file} to fsspec path: {fsspec_file_path}")
+
+            os.remove(local_path)
+        except Exception as e:
+            logging.exception(f"Error processing {file}: {e}")
+
+        pbar.update(1)
+
     hf_urls = []
+    futures = []
     with tempfile.TemporaryDirectory() as temp_dir:
         for file in files:
             if fnmatch.fnmatch(file, cfg.hf_url_glob):
@@ -95,46 +107,32 @@ def download_and_upload_to_gcs(cfg: DownloadConfig) -> None:
                     # Construct HuggingFace URL
                     hf_url = construct_hf_url(cfg.hf_dataset_id, cfg.revision, file)
                     hf_urls.append(hf_url)
+                    fsspec_file_path = os.path.join(versioned_output_path, file)
 
-                    # Download file from HuggingFace
-                    local_path = hf_hub_download(
-                        repo_id=cfg.hf_dataset_id,
-                        filename=file,
-                        revision=cfg.revision,
-                        token=hf_token,
-                        local_dir=temp_dir,
-                        repo_type="dataset",
-                    )
-
-                    # Prepare GCS path
-                    gcs_file_path = os.path.join(gcs_versioned_relative_path, file)
-
-                    # Upload file to GCS
-                    blob = bucket.blob(gcs_file_path)
-                    blob.upload_from_filename(local_path)
-                    logging.info(f"Uploaded {file} to GCS path: {gcs_file_path}, blob {blob.name}")
-
-                    os.remove(local_path)
+                    f = thread_pool.submit(put_file, temp_dir, file, fsspec_file_path)
+                    futures.append((file, f))
 
                 except Exception as e:
-                    logging.error(f"Error processing {file}: {e!s}")
+                    logging.exception(f"Error processing {file}: {e}")
 
-                processed_files += 1
-                logger.info(f"Processed {processed_files}/{total_files} files ({processed_files/total_files*100:.2f}%)")
+        for file, f in futures:
+            try:
+                f.result()
+            except Exception as e:
+                logging.exception(f"Error processing {file}: {e}")
 
     # Write Provenance JSON
     write_provenance_json(
-        Path(gcs_versioned_relative_path),
-        gcs_bucket,
+        Path(versioned_output_path),
         metadata={"dataset": cfg.hf_dataset_id, "version": cfg.revision, "links": hf_urls},
     )
 
-    logger.info(f"Uploaded all files and wrote provenance JSON; check {cfg.gcs_output_path}.")
+    logger.info(f"Uploaded all files and wrote provenance JSON; check {cfg.output_path}.")
 
 
 @draccus.wrap()
 def download_gated_main(cfg: DownloadConfig):
-    download_and_upload_to_gcs(cfg)
+    download_and_upload_to_store(cfg)
 
 
 if __name__ == "__main__":
