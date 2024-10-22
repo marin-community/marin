@@ -7,6 +7,7 @@ Utility functions for building quality classifiers.
 import json
 import logging
 import os
+import tempfile
 from collections.abc import Callable
 
 import fsspec
@@ -14,7 +15,7 @@ import numpy as np
 import ray
 
 from marin.core.runtime import cached_or_construct_output, map_files_in_directory
-from marin.utils import rebase_file_path
+from marin.utils import fsspec_glob, rebase_file_path
 
 
 @cached_or_construct_output(success_suffix="SUCCESS")
@@ -81,38 +82,78 @@ def write_examples(
                 logging.warning(f"Document {data['id']} has no text field.")
 
 
-def merge_shards_and_split(
+def merge_shards(
     shard_paths: list[str],
+    output_path: str,
+) -> None:
+    """
+    Merges multiple shard files into a single dataset file.
+
+    Args:
+        shard_paths (List[str]): List of paths to shard files.
+        output_path (str): Path to the output dataset file.
+    """
+    with fsspec.open(output_path, "wt", compression="gzip") as f_out:
+        for shard_path in shard_paths:
+            with fsspec.open(shard_path, "rt", compression="infer") as f_in:
+                for line in f_in:
+                    f_out.write(line)
+
+
+def split_dataset(
+    input_path: str,
     train_path: str,
     val_path: str,
     val_frac: float,
     seed: int,
-    format_example: Callable[[dict], str],
 ) -> None:
     """
-    Merges multiple shard files into training and validation datasets.
+    Splits a dataset into training and validation datasets.
 
     Args:
-        shard_paths (List[str]): List of paths to shard files.
+        input_path str: Path to input dataset file.
         train_path (str): Path to the output training dataset file.
         val_path (str): Path to the output validation dataset file.
         val_frac (float): Fraction of data to be used for validation.
         seed (int): Seed for random number generator to ensure reproducibility.
-        format_example (Callable[[dict],str]): Function to format example into correct training
-                                               format (e.g., BERT, fastText, etc.).
     """
     rng = np.random.default_rng(seed=seed)
     with fsspec.open(train_path, "wt") as f_train, fsspec.open(val_path, "wt") as f_val:
-        for shard_path in shard_paths:
-            with fsspec.open(shard_path, "rt", compression="gzip") as f_in:
-                for input_line in f_in:
-                    data = json.loads(input_line)
-                    output_line = format_example(data)
+        with fsspec.open(input_path, "rt", compression="infer") as f_in:
+            for line in f_in:
+                if rng.random() < val_frac:
+                    f_val.write(line)
+                else:
+                    f_train.write(line)
 
-                    if rng.random() < val_frac:
-                        f_val.write(output_line + "\n")
-                    else:
-                        f_train.write(output_line + "\n")
+
+def format_dataset(
+    input_path: str,
+    format_example: Callable[[dict], str],
+    output_path: str | None = None,
+) -> None:
+    """
+    Formats a dataset using a custom function.
+
+    Args:
+        input_path (str): Path to the input dataset file.
+        format_example (Callable[[dict], str]): Function to format examples.
+        output_path (str): Path to the output dataset file. If None, the input file is overwritten.
+    """
+    if output_path is None:
+        output_path = input_path
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp_path = os.path.join(tmp_dir, "data.tmp")
+
+        with fsspec.open(input_path, "rt", compression="infer") as f_in, fsspec.open(tmp_path, "wt") as f_tmp:
+            for line in f_in:
+                data = json.loads(line)
+                f_tmp.write(format_example(data) + "\n")
+
+        with fsspec.open(tmp_path, "rt") as f_tmp, fsspec.open(output_path, "wt") as f_out:
+            for line in f_tmp:
+                f_out.write(line)
 
 
 def create_label_attribute(input_doc_path: str, output_attr_path: str, label: str) -> None:
@@ -144,6 +185,7 @@ def attributes_to_dataset(
     sampling_rate: float,
     seed: int,
     get_label: Callable[[dict, dict], str] = lambda data, attribs: attribs["attributes"]["label"],
+    max_sample_size: int | None = None,
 ) -> None:
     """
     Converts documents and attributes to quality classifier training data (text,label) pairs.
@@ -156,6 +198,8 @@ def attributes_to_dataset(
         seed (int): Seed for random number generator to ensure reproducibility.
         get_label (Callable[[dict,dict], str]): Function to extract label from documents and attributes.
                                                 Defaults to get_label.
+        max_sample_size (int): Maximum number of examples to include in the fastText training dataset.
+                               Defaults to None.
     """
     logger = logging.getLogger("ray")
 
@@ -166,15 +210,21 @@ def attributes_to_dataset(
         return write_examples(input_file_path, output_file_path, attr_file_path, sampling_rate, seed, get_label)
 
     _, doc_fs_path = fsspec.core.url_to_fs(doc_path)
-    output_dataset_path = os.path.join(output_path, "data", doc_fs_path)
-    # TODO: rename to shards and add reservoir sampling
+    with tempfile.TemporaryDirectory() as tmp_dir, tempfile.NamedTemporaryFile() as tmpfile:
+        responses = map_files_in_directory(processing_func.remote, doc_path, "**/*.jsonl.gz", tmp_dir)
+        try:
+            ray.get(responses)
+        except Exception as e:
+            logger.exception(f"Error processing {doc_path}: {e}")
+            raise
 
-    responses = map_files_in_directory(processing_func.remote, doc_path, "**/*.jsonl.gz", output_dataset_path)
-    try:
-        ray.get(responses)
-    except Exception as e:
-        logger.exception(f"Error processing {doc_path}: {e}")
-        raise
+        output_dataset_path = os.path.join(output_path, "data", doc_fs_path, "dataset.jsonl.gz")
+        shard_paths = fsspec_glob(os.path.join(tmp_dir, "**/*.jsonl.gz"))
+        merge_shards(shard_paths, tmpfile.name)
+        if max_sample_size is not None:
+            reservoir_sample(tmpfile.name, output_dataset_path, max_sample_size, seed)
+        else:
+            fsspec.cp(tmpfile.name, output_dataset_path)
 
 
 def shuffle(input_file_path: str, output_file_path: str, seed: int) -> None:
@@ -194,8 +244,6 @@ def shuffle(input_file_path: str, output_file_path: str, seed: int) -> None:
         f_out.writelines(lines)
 
 
-@cached_or_construct_output(success_suffix="SUCCESS")
-@ray.remote(memory=16 * 1024 * 1024 * 1024, runtime_env={"pip": ["s3fs"]}, num_cpus=1)
 def reservoir_sample(
     input_dataset_path: str,
     output_dataset_path: str,
