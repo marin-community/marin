@@ -7,8 +7,7 @@ output/*
 outputs/*
 
 # This is mainly for Ray and using submodule
-**/.git
-
+*/**/.git
 
 ### Python template
 # Byte-compiled / optimized / DLL files
