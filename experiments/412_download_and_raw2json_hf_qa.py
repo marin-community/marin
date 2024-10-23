@@ -27,8 +27,10 @@ Converts raw to JSON for:
 ############################################################
 # Convert mmlu to evaluation format (i.e. JSON with "prompt", "response" fields)
 # This is the input for internal evaluation which measures PPL model gives to correct responses to prompts
+
+# This creates a JSON file representing the auxiliary training data subset of MMLU
 mmlu_convert_eval_aux = ExecutorStep(
-    name="evaluation/mmlu-eval_aux",
+    name="evaluation/mmlu-eval-aux",
     fn=raw2json,
     config=DatasetConversionConfig(
         dataset_name="cais/mmlu",
@@ -45,6 +47,7 @@ mmlu_convert_eval_aux = ExecutorStep(
     ),
 )
 
+# This creates one file per subject from MMLU, excluding the all and auxiliary training subsets
 mmlu_convert_eval_subject = ExecutorStep(
     name="evaluation/mmlu-eval-subject",
     fn=raw2json,
