@@ -40,7 +40,7 @@ download_paloma = ExecutorStep(
     config=HfDownloadConfig(
         hf_dataset_id=versioned("allenai/paloma"),
         revision=versioned("65cd6fc"),
-        output_path=this_output_path(),
+        gcs_output_path=this_output_path(),
         wait_for_completion=True,
     ),
 ).cd("65cd6fc")
