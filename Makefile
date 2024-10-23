@@ -25,7 +25,12 @@ autoformat:
 
 
 cluster_docker:
-	gcloud artifacts repositories create --repository-format=docker --location=us-central2 marin || true
+	gcloud artifacts repositories list  --location=us-central2  --filter 'name:marin' > /dev/null || gcloud artifacts repositories create --repository-format=docker --location=us-central2 marin
 	docker buildx build --platform linux/amd64 -t 'marin_cluster:latest' -f docker/marin/Dockerfile.cluster .
 	docker tag 'marin_cluster:latest' 'us-central2-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:latest'
+	# also tag with the commit hash and the date
+	docker tag 'marin_cluster:latest' 'us-central2-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:$(shell git rev-parse --short HEAD)'
+	docker tag 'marin_cluster:latest' 'us-central2-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:$(shell date -u +"%Y%m%d")'
 	docker push 'us-central2-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:latest'
+	docker push 'us-central2-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:$(shell git rev-parse --short HEAD)'
+	docker push 'us-central2-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:$(shell date -u +"%Y%m%d")'

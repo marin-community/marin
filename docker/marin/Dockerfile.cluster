@@ -9,13 +9,16 @@ RUN sudo mkdir -p /opt/marin/
 RUN sudo chown -R $(whoami) /opt/marin/
 # Ray uses conda
 ENV PATH=/home/ray/anaconda3/bin:/home/ray/anaconda3/bin:/home/ray/anaconda3/condabin:$PATH
-RUN pip install -U "jax[tpu]==0.4.30" -f https://storage.googleapis.com/jax-releases/libtpu_releases.html
+RUN pip install -U "jax[tpu]@git+https://github.com/dlwh/jax@retry_refuse" -f https://storage.googleapis.com/jax-releases/libtpu_releases.html
 
 # gcloud
 RUN conda install conda-forge::google-cloud-sdk -y
 RUN gcloud components install alpha
 
 RUN conda install -c conda-forge ncurses -y
+
+# pytorch is a heavy dependency, so we install it up front to try to cache it
+RUN pip install torch>=2.1 --extra-index-url https://download.pytorch.org/whl/cpu
 
 WORKDIR /tmp/
 ADD pyproject.toml /tmp/
