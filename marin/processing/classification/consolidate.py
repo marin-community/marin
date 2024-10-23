@@ -11,7 +11,6 @@ import json
 import logging
 import os
 from dataclasses import dataclass, replace
-from pathlib import Path
 from typing import Any
 
 import draccus
@@ -68,69 +67,7 @@ class ConsolidateConfig:
     filters: list[FilterConfig]
     """List of filters to apply to the documents."""
 
-    max_total_tokens: int | None = None
-    """The maximum total number of tokens to keep. This is measured using a heuristic of 3 bytes per token."""
-
     max_tasks_in_flight: int = 1000  # The maximum number of flights in a task
-
-
-@ray.remote(max_restarts=-1, max_task_retries=-1)
-class TokenCounter:
-    BYTES_PER_TOKEN = 3  # We underestimate the number of bytes per token, so we grab a few extra tokens
-
-    def __init__(self, output_path: str):
-        self.num_tokens = 0
-        self.checkpoint_path = self.get_checkpoint_filename(output_path)
-
-        if fsspec_exists(self.checkpoint_path):
-            with fsspec.open(self.checkpoint_path, "rt") as f:
-                self.num_tokens = int(f.readline())
-        else:
-            self.num_tokens = 0
-
-    def get_checkpoint_filename(self, output_path: str) -> str:
-        _, path = fsspec.core.url_to_fs(output_path)
-        protocol = fsspec.core.split_protocol(output_path)[0]
-        path_without_suffix = Path(path)
-        while path_without_suffix.suffix:
-            path_without_suffix = path_without_suffix.with_suffix("")
-
-        return os.path.join(f"{protocol}://{path_without_suffix}", "Consolidate_Num_Tokens.txt")
-
-    def get_num_tokens(self) -> int:
-        return self.num_tokens
-
-    def add_text(self, text: str, max_total_tokens: int):
-        """
-        Add `text` to the token counter, trimming if necessary to not exceed `max_total_tokens`.
-
-        Returns:
-            The trimmed `text` if necessary, otherwise the original `text`.
-            If the number of tokens exceeds `max_total_tokens`, we return an empty string to signal
-            that the text should not be added.
-        """
-
-        if self.num_tokens >= max_total_tokens:  # Already at max tokens
-            return ""
-        elif self.num_tokens + self.count_tokens(text) > max_total_tokens:  # Exceeding max tokens at this current point
-            text = self.get_trimmed_text(text, max_total_tokens)  # Trim text to max tokens
-            self.num_tokens = max_total_tokens
-        else:  # Not exceeding max tokens
-            self.num_tokens += self.count_tokens(text)
-
-        with fsspec.open(self.checkpoint_path, "wt") as f:
-            f.write(str(self.num_tokens))
-
-        return text
-
-    def count_tokens(self, text: str) -> int:
-        return len(text) // self.BYTES_PER_TOKEN
-
-    def get_trimmed_text(self, text: str, max_total_tokens: int) -> str:
-        """
-        Get the text that has been trimmed to `max_total_tokens`.
-        """
-        return text[: max_total_tokens * self.BYTES_PER_TOKEN]
 
 
 def remove_spans(text: str, spans: list[list[int]]) -> str:
@@ -170,8 +107,6 @@ def process_file(
     input_path: str,
     output_path: str,
     filters: list[FilterConfig],
-    token_counter: TokenCounter,
-    max_total_tokens: int | None = None,
 ):
     """
     Read documents from `input_path`, apply the `filters` (involves reading the
@@ -195,10 +130,6 @@ def process_file(
     num_total = 0
     for input_line in input_file:
         num_total += 1
-        if max_total_tokens is not None:
-            num_tokens = ray.get(token_counter.get_num_tokens.remote())
-            if num_tokens >= max_total_tokens:
-                break
 
         # Read document and attributes for that document
         input_data = json.loads(input_line)
@@ -220,12 +151,6 @@ def process_file(
 
         # Write output
         if input_data is not None:
-            if max_total_tokens is not None:
-                output_text = ray.get(token_counter.add_text.remote(input_data["text"], max_total_tokens))
-                if output_text == "":  # Finished processing
-                    break
-                input_data["text"] = output_text
-
             num_kept += 1
             print(json.dumps(input_data), file=output_file)
 
@@ -259,8 +184,6 @@ def calculate_percentile_threshold(scores: list[list[float]], keep_fraction: flo
 def consolidate(config: ConsolidateConfig):
     input_paths = fsspec_glob(os.path.join(config.input_path, "**/*.jsonl.gz"))
     logger.info(f"Consolidating {len(input_paths)} documents")
-
-    token_counter = TokenCounter.remote(config.output_path)
 
     updated_filters = []
     for doc_filter in config.filters:
@@ -302,15 +225,11 @@ def consolidate(config: ConsolidateConfig):
         ]
         output_path = rebase_file_path(config.input_path, input_path, config.output_path)
 
-        task = process_file.remote(input_path, output_path, filters, token_counter, config.max_total_tokens)
+        task = process_file.remote(input_path, output_path, filters)
         tasks.append(task)
 
     try:
         ray.get(tasks)
-
-        # Count number of tokens in the output
-        num_tokens = ray.get(token_counter.get_num_tokens.remote())
-        logger.info(f"Number of tokens consolidated: {num_tokens}")
     except Exception as e:
         print(f"Error processing: {e}")
 
