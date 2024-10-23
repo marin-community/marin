@@ -54,7 +54,7 @@ def download_and_upload_to_store(cfg: DownloadConfig) -> None:
     fs, _ = fsspec.core.url_to_fs(cfg.output_path)
 
     # Use revision as "version" for writing to the output path
-    versioned_output_path = os.path.join(cfg.output_path, cfg.revision)
+    versioned_output_path = os.path.join(cfg.gcs_output_path, cfg.revision)
 
     # Ensure the output path is writable
     try:
@@ -95,6 +95,8 @@ def download_and_upload_to_store(cfg: DownloadConfig) -> None:
             os.remove(local_path)
         except Exception as e:
             logging.exception(f"Error processing {file}: {e}")
+            # we want to fail the whole operation if any file fails to upload
+            raise
 
         pbar.update(1)
 

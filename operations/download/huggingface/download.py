@@ -27,7 +27,11 @@ logger = logging.getLogger("ray")
 @dataclass
 class DownloadConfig:
     # fmt: off
-    output_path: str                                    # Path to store raw data on GCS (includes gs://$BUCKET/...)
+    gcs_output_path: str
+    """
+    Path to store raw data in persistent storage (e.g. gs://$BUCKET/...).
+    This works with any fsspec-compatible path, but for backwards compatibility, we call it gcs_output_path.
+    """
 
     # HuggingFace Dataset Parameters
     hf_dataset_id: str                                      # HF Dataset to Download (as `$ORG/$DATASET` on HF Hub)
