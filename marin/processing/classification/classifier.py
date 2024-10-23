@@ -66,6 +66,10 @@ class FasttextClassifier(BaseClassifier):
             success_file = f"/tmp/{model_descriptor}.success"
 
             if os.path.exists(success_file) and not os.path.exists(local_filepath):
+                print(
+                    f"Warning: Success file found for {fs_path}, but model file not found. \
+                      Removing stale success file {success_file}"
+                )
                 os.unlink(success_file)
 
             with FileLock(lock_file):
