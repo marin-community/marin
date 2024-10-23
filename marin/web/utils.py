@@ -5,7 +5,7 @@ from marin.markdown.markdown import to_markdown
 from marin.schemas.web.convert import HtmlToMarkdownConfig
 
 
-@ray.remote(pip=["https://github.com/krypticmouse/chatnoir-resiliparse/tree/develop/resiliparse"])
+@ray.remote(runtime_env={"pip": ["https://github.com/krypticmouse/chatnoir-resiliparse/tree/develop/resiliparse"]})
 def extract_content_from_dom(
     html: str,
     kwargs: dict,
