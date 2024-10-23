@@ -138,6 +138,7 @@ def train_model(
             return True
 
         shard_paths = fsspec_glob(os.path.join(input_path, "**/*.jsonl.gz"))
+        logger.info(f"Received input paths: {shard_paths}")
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             merge_path = os.path.join(tmp_dir, "data.full")
@@ -154,8 +155,6 @@ def train_model(
 
             fsspec_rm(merge_path)
             fsspec_cpdir(tmp_dir, output_path)
-
-        return True
 
     response = run.remote()
     try:
