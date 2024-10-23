@@ -22,56 +22,19 @@ from collections.abc import Sequence
 
 import draccus
 import fsspec
+import levanter
 import ray
 import transformers
-from levanter.data.sharded_datasource import TextUrlDataSource
-from levanter.data.text import LMDatasetConfig, LMDatasetSourceConfig, LMMixtureDatasetConfig
+from levanter.data.sharded_datasource import ShardedDataSource, TextUrlDataSource
+from levanter.data.text import BatchTokenizer, LMDatasetConfig, LMDatasetSourceConfig, LMMixtureDatasetConfig
+from levanter.store.cache import CacheOptions
+from ray.runtime_env import RuntimeEnv
 
 from marin.execution.executor import ExecutorStep, output_path_of
+from marin.processing.tokenize.independent_tokenize import tokenize_and_concatenate_shards
 from marin.utils import fsspec_glob, fsspec_isdir
 
 logger = logging.getLogger(__name__)
-
-
-@ray.remote
-def levanter_tokenize(input_paths: list[str] | str, tokenizer_name: str, output_path: str):
-    import levanter
-    from levanter.data.metrics_monitor import LoggerMetricsMonitor
-    from levanter.data.text import BatchTokenizer
-    from levanter.store.cache import build_or_load_cache
-
-    if len(input_paths) == 0:
-        logger.warning("No input files found. Nothing to do.")
-        return
-
-    logging.basicConfig(level=logging.INFO)
-
-    logger.info(f"Caching {input_paths} to {output_path}.")
-    tokenizer = transformers.AutoTokenizer.from_pretrained(tokenizer_name)
-    batch_tokenizer = BatchTokenizer(tokenizer, enforce_eos=True)
-
-    if isinstance(input_paths, str) and not is_probably_path(input_paths):
-        source = levanter.data.datasource_from_hf(input_paths, split="train")
-        source = source.map(lambda d: d["text"])
-    else:
-        if isinstance(input_paths, str):
-            input_paths = [input_paths]
-        jsonls = _get_jsonls(input_paths)
-        if len(jsonls) == 0:
-            raise ValueError(f"No jsonl files found in {input_paths}")
-        logger.info(f"Found {len(jsonls)} jsonl files.")
-        source = TextUrlDataSource(jsonls)
-
-    cache = build_or_load_cache(
-        cache_dir=output_path,
-        input_shards=source,
-        processor=batch_tokenizer,
-        await_finished=False,
-        monitors=[LoggerMetricsMonitor("ray")],
-    )
-
-    cache.await_finished()
-    logger.info(f"Finished caching {input_paths} to {output_path}.")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -81,6 +44,17 @@ class TokenizeConfig:
     cache_path: str  # base path to save the tokenized files
     tokenizer: str  # tokenizer name. Should be the same as you intend to use in the tokenizer spec for the training run
     tags: list[str] = dataclasses.field(default_factory=list)  # tags to be added to config
+    cache_options: CacheOptions = CacheOptions(num_shard_groups=1024)  # noqa: RUF009
+
+    def train_source(self) -> ShardedDataSource | None:
+        if len(self.train_paths) == 0:
+            return None
+        return _create_source(self.train_paths)
+
+    def validation_source(self) -> ShardedDataSource | None:
+        if len(self.validation_paths) == 0:
+            return None
+        return _create_source(self.validation_paths)
 
     def as_lm_dataset_source_config(self, actual_output_path: str) -> LMDatasetSourceConfig:
         """
@@ -106,6 +80,104 @@ class TokenizeConfig:
         )
 
 
+def tokenize(config: TokenizeConfig):
+    if len(config.train_paths) == 0 and len(config.validation_paths) == 0:
+        raise ValueError("No input files specified. Nothing to do.")
+
+    tokenizer = transformers.AutoTokenizer.from_pretrained(config.tokenizer)
+    batch_tokenizer = BatchTokenizer(tokenizer, enforce_eos=True)
+
+    train_source = config.train_source()
+    if train_source is not None:
+        train_ledger = (
+            ray.remote(tokenize_and_concatenate_shards)
+            .options(
+                name=f"tokenize::{config.cache_path}",
+                runtime_env=RuntimeEnv(env_vars={"JAX_PLATFORM_NAME": "cpu", "GCE_METADATA_TIMEOUT": "120"}),
+            )
+            .remote(
+                train_source,
+                batch_tokenizer,
+                os.path.join(config.cache_path, "train"),
+                config.cache_options,
+            )
+        )
+    else:
+        train_ledger = None
+
+    validation_source = config.validation_source()
+
+    if validation_source is not None:
+        validation_ledger = (
+            ray.remote(tokenize_and_concatenate_shards)
+            .options(
+                name=f"tokenize::{config.cache_path}", runtime_env=RuntimeEnv(env_vars={"JAX_PLATFORM_NAME": "cpu"})
+            )
+            .remote(
+                validation_source,
+                batch_tokenizer,
+                os.path.join(config.cache_path, "validation"),
+                config.cache_options,
+            )
+        )
+    else:
+        validation_ledger = None
+
+    if train_ledger is not None:
+        ray.get(train_ledger)
+    if validation_ledger is not None:
+        ray.get(validation_ledger)
+
+
+@ray.remote(runtime_env=RuntimeEnv(env_vars={"JAX_PLATFORM_NAME": "cpu"}))
+def levanter_tokenize(input_paths: list[str] | str, tokenizer_name: str, output_path: str):
+    from levanter.data.metrics_monitor import LoggerMetricsMonitor
+    from levanter.data.text import BatchTokenizer
+    from levanter.store.cache import build_or_load_cache
+
+    if len(input_paths) == 0:
+        logger.warning("No input files found. Nothing to do.")
+        return
+
+    logging.basicConfig(level=logging.INFO)
+
+    logger.info(f"Caching {input_paths} to {output_path}.")
+
+    source = _create_source(input_paths)
+    tokenizer = transformers.AutoTokenizer.from_pretrained(tokenizer_name)
+    batch_tokenizer = BatchTokenizer(tokenizer, enforce_eos=True)
+
+    cache = build_or_load_cache(
+        cache_dir=output_path,
+        input_shards=source,
+        processor=batch_tokenizer,
+        await_finished=False,
+        monitors=[LoggerMetricsMonitor("ray")],
+    )
+
+    cache.await_finished()
+    logger.info(f"Finished caching {input_paths} to {output_path}.")
+
+
+def _create_source(input_paths: str | list[str]) -> ShardedDataSource:
+    if isinstance(input_paths, str) and not _is_probably_path(input_paths):
+        source = levanter.data.datasource_from_hf(input_paths, split="train")
+        source = source.map(lambda d: d["text"])
+    else:
+        if isinstance(input_paths, str):
+            input_paths = [input_paths]
+
+        filepaths_to_tokenize = _get_filepaths_to_tokenize(input_paths)
+
+        if len(filepaths_to_tokenize) == 0:
+            raise ValueError(f"No valid jsonl/parquet files found to tokenize in {input_paths}")
+
+        logger.info(f"Found {len(filepaths_to_tokenize)} files to tokenize.")
+        source = TextUrlDataSource(filepaths_to_tokenize)
+
+    return source
+
+
 TokenizerStep = ExecutorStep[TokenizeConfig]
 
 
@@ -125,7 +197,7 @@ def step_to_lm_training_config(step: TokenizerStep) -> LMDatasetConfig:
     return step.config.as_lm_dataset_task_config(output_path_of(step))
 
 
-def lm_training_config(
+def lm_data_config(
     training_set: TokenizerStep,
     validation_sets: Sequence[TokenizerStep] = (),
     shuffle: bool | int = True,
@@ -167,7 +239,7 @@ def lm_training_config(
     )
 
 
-def lm_mixture_training_config(
+def lm_mixture_data_config(
     components: dict[str, TokenizerStep],
     weights: dict[str, float],
     *,
@@ -189,7 +261,7 @@ def lm_mixture_training_config(
         missing_keys = {k: 0.0 for k in components if k not in weights}
         weights = {**weights, **missing_keys}
 
-    first_name, first_step = next(iter(configs.items()))
+    first_name, first_step = next(iter(components.items()))
     tokenizer = first_step.config.tokenizer
     for name, step in components.items():
         if step.config.tokenizer != tokenizer:
@@ -203,29 +275,34 @@ def lm_mixture_training_config(
     )
 
 
-def tokenize(config: TokenizeConfig):
-    if len(config.train_paths) == 0 and len(config.validation_paths) == 0:
-        raise ValueError("No input files specified. Nothing to do.")
-    output_path = os.path.join(config.cache_path, "train")
-    response_train = levanter_tokenize.remote(config.train_paths, config.tokenizer, output_path)
-    validation_out = os.path.join(config.cache_path, "validation")
-    response_validation = levanter_tokenize.remote(config.validation_paths, config.tokenizer, validation_out)
-    return ray.get([response_train, response_validation])[0]
-
-
-def _get_jsonls(input_path: list[str]):
+def _get_files_by_extension(input_paths: list[str], extension: str) -> list[str]:
+    """
+    Get a list of all filepaths with the specified extension from the input paths.
+    """
     output_paths = []
-    for path in input_path:
+    for path in input_paths:
         if fsspec_isdir(path) or path.endswith("/"):
-            logger.info(f"Getting all jsonl files in {path}")
-            output_paths.extend(fsspec_glob(os.path.join(path, "**/*.jsonl.{gz,zst,zstd}")))
+            logger.info(f"Getting all {extension} files in {path}")
+            output_paths.extend(fsspec_glob(os.path.join(path, f"**/*.{extension}")))
         else:
             output_paths.extend(fsspec_glob(path))
 
     return output_paths
 
 
-def is_probably_path(path: str) -> bool:
+def _get_filepaths_to_tokenize(input_paths: list[str]) -> list[str]:
+    """
+    Get all file paths to tokenize from the input paths.
+    Handles jsonl.{gz,zst,zstd}, and parquet.
+    """
+    if len(input_paths) == 0:
+        return []
+
+    # we're only going to have one or the other, but might as well return both
+    return _get_files_by_extension(input_paths, "jsonl.{gz,zst,zstd}") + _get_files_by_extension(input_paths, "parquet")
+
+
+def _is_probably_path(path: str) -> bool:
     """see if looks like a real path or not, in which case it might be an hf dataset"""
 
     protocol, _ = fsspec.core.split_protocol(path)

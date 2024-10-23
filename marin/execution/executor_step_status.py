@@ -39,6 +39,9 @@ class ExecutorStepEvent:
     message: str | None = None
     """An optional message to provide more context (especially for errors)."""
 
+    ray_task_id: str | None = None
+    """The Ray task ID associated with executing this step."""
+
 
 def get_status_path(output_path: str) -> str:
     """Return the `path` of the status file associated with `output_path`, which contains a list of events."""
@@ -60,12 +63,12 @@ def get_current_status(events: list[ExecutorStepEvent]) -> str | None:
     return events[-1].status if len(events) > 0 else None
 
 
-def append_status(path: str, status: str, message: str | None = None):
+def append_status(path: str, status: str, message: str | None = None, ray_task_id: str | None = None):
     """Append a new event with `status` to the file at `path`."""
     events = read_events(path)
 
     date = datetime.now().isoformat()
-    event = ExecutorStepEvent(date=date, status=status, message=message)
+    event = ExecutorStepEvent(date=date, status=status, message=message, ray_task_id=ray_task_id)
     events.append(event)
 
     # Note: gcs files are immutable so can't append, so have to read everything.
