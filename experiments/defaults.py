@@ -2,55 +2,43 @@
 This file represents the best practices for each stage of the pipeline.
 """
 
+import dataclasses
 import os
 from collections.abc import Sequence
-from dataclasses import dataclass
 from datetime import timedelta
 
 import jmp
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text import LMDatasetConfig, LMMixtureDatasetConfig
+from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig
 from levanter.optim import AdamConfig
+from levanter.store.cache import CacheOptions
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 
+from experiments.llama import compute_num_parameters
+from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import ExecutorStep, InputName, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, lm_data_config, tokenize
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 
 
-def default_tokenize(name: str, dataset: InputName | ExecutorStep, tokenizer: str) -> ExecutorStep:
+def default_tokenize(
+    name: str, dataset: InputName | ExecutorStep, tokenizer: str, options: CacheOptions | None = None
+) -> ExecutorStep:
+    config = TokenizeConfig(
+        train_paths=[dataset], validation_paths=[], cache_path=this_output_path(), tokenizer=versioned(tokenizer)
+    )
+    if options is not None:
+        config = dataclasses.replace(config, cache_options=options)
+
     return ExecutorStep(
         name=os.path.join("tokenized", name),
+        description=f"Tokenize raw text using the {tokenizer} tokenizer.",
         fn=tokenize,
-        config=TokenizeConfig(
-            train_paths=[dataset],
-            validation_paths=[],
-            cache_path=this_output_path(),
-            tokenizer=versioned(tokenizer),
-        ),
+        config=config,
     )
-
-
-@dataclass(frozen=True)
-class SimpleTrainConfig:
-    """Simplified configuration for training (the things that matter)."""
-
-    tpu_type: str
-    train_batch_size: int
-    num_train_steps: int
-    learning_rate: float
-    weight_decay: float
-
-
-llama_1_4b_train_config = SimpleTrainConfig(
-    tpu_type="v4-128",
-    train_batch_size=1024,
-    num_train_steps=75000,  # 4096 * 1024 * 75000 = 314B tokens
-    learning_rate=3e-4,
-    weight_decay=0.1,
-)
 
 
 def default_train(
@@ -66,8 +54,15 @@ def default_train(
     else:
         data = tokenized
 
+    # TODO: right now, assume architecture is a LlamaConfig, generalize this
+    assert isinstance(model_config, LlamaConfig)
     return ExecutorStep(
         name=os.path.join("checkpoints", name),
+        description=f"Train a {compute_num_parameters(model_config):,} parameter model for "
+        f"{train_config.num_train_steps} (steps) * "
+        f"{train_config.train_batch_size} (batch_size) * "
+        f"{model_config.seq_len} (seq_len) "
+        f"= {train_config.num_train_steps * train_config.train_batch_size * model_config.seq_len:,} tokens.",
         fn=run_levanter_train_lm,
         config=TrainLmOnPodConfig(
             output_path=this_output_path(),
