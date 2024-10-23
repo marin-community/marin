@@ -9,7 +9,7 @@ from levanter.store.cache import CacheLedger, CacheOptions
 from levanter.store.tree_store import TreeStore
 
 from marin.processing.tokenize.independent_tokenize import (
-    _tokenize_one_shard,
+    _tokenize_one_shard_group,
     concatenate_stores,
     tokenize_all_shards,
     tokenize_and_concatenate_shards,
@@ -68,7 +68,7 @@ class SimpleShardSource(ShardedDataSource):
 
 @pytest.fixture(scope="module")
 def ray_init():
-    ray.init(ignore_reinit_error=True)
+    ray.init("local", ignore_reinit_error=True)
     try:
         yield
     finally:
@@ -84,10 +84,9 @@ def test_tokenize_one_shard():
         shard_name = source.shard_names[0]
         temporary_cache_path = os.path.join(tmpdir, shard_name)
 
-        result = _tokenize_one_shard(temporary_cache_path, source, shard_name, processor, options)
+        result = _tokenize_one_shard_group(temporary_cache_path, source, [shard_name], processor, options)
 
-        assert result[0] == temporary_cache_path
-        assert isinstance(result[1], CacheLedger)
+        assert isinstance(result, CacheLedger)
 
         # make sure the cache has the right data
         cache = TreeStore.open(processor.output_exemplar, temporary_cache_path, mode="r")
@@ -122,12 +121,17 @@ async def test_concatenate_stores(ray_init):
         options = CacheOptions(batch_size=2, target_size_per_flush="1024")
 
         caches = []
+        paths = []
         for shard_name in source.shard_names:
             temporary_cache_path = os.path.join(tmpdir, shard_name)
-            caches.append(_tokenize_one_shard(temporary_cache_path, source, shard_name, processor, options))
+            paths.append(temporary_cache_path)
+            c = _tokenize_one_shard_group(temporary_cache_path, source, [shard_name], processor, options)
+            caches.append(c)
 
         permanent_cache_path = os.path.join(tmpdir, "permanent")
-        ledger = await concatenate_stores(permanent_cache_path, source, processor, caches)
+        ledger = await concatenate_stores(
+            permanent_cache_path, source, processor, list(zip(paths, caches, strict=False))
+        )
 
         assert os.path.exists(permanent_cache_path)
         assert isinstance(ledger, CacheLedger)
@@ -149,6 +153,29 @@ async def test_tokenize_and_concatenate_shards(ray_init):
         source = SimpleShardSource()
         processor = SimpleProcessor()
         options = CacheOptions(batch_size=2, target_size_per_flush="1024")
+
+        final_ledger = tokenize_and_concatenate_shards(source, processor, tmpdir, options)
+
+        assert os.path.exists(tmpdir)
+        assert isinstance(final_ledger, CacheLedger)
+        assert final_ledger.is_finished
+
+        # let's make sure it's right
+        cache = TreeStore.open(processor.output_exemplar, tmpdir, mode="r")
+        assert len(cache) == 40
+
+        processed = simple_process(processor, source)
+
+        for i, item in enumerate(cache):
+            assert np.all(item["data"] == processed[i]["data"])
+
+
+@pytest.mark.asyncio
+async def test_tokenize_and_concatenate_shards_single_group(ray_init):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        source = SimpleShardSource()
+        processor = SimpleProcessor()
+        options = CacheOptions(batch_size=2, target_size_per_flush="1024", num_shard_groups=1)
 
         final_ledger = tokenize_and_concatenate_shards(source, processor, tmpdir, options)
 
