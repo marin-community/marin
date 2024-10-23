@@ -41,10 +41,20 @@ TODO: add training and evaluation
 python experiments/quickstart-synthetic.py
 ```
 
-## Running tests
+## Dev Notes
 
-To run the tests, run `pytest` in the root directory. This will run the unit
-tests and snapshot tests.
+1. We have linters set up to ensure code quality. You can run them with:
+   ```bash
+   pre-commit run --all-files
+   ```
+2. To run the tests, we recommend you to install `pytest-xdist` as well as `pytest-asyncio` to allow for parallel
+   and async testing:
+   ```bash
+   pip install pytest-xdist pytest-asyncio
+   ```
+3. To run the tests, run `PYTHONPATH=tests:. pytest tests --durations=0 -n 4 --tb=no -v`
+4. When submitting to cluster, we recommend using run script `marin/run/run.py`. See `marin/run/README.md`
+   for more details.
 
 ### Snapshot tests
 
