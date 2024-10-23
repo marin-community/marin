@@ -119,7 +119,7 @@ class ResiliparseConfig(ExtractionConfig):
     skip_elements: list | None = None
 
     use_custom_variant: bool = False
-    markdownify_config: HtmlToMarkdownConfig = HtmlToMarkdownConfig.default_config()
+    markdownify_config: HtmlToMarkdownConfig = field(default_factory=HtmlToMarkdownConfig.default_config)
 
     @classmethod
     def default_config(cls) -> "ResiliparseConfig":
@@ -131,12 +131,12 @@ class ResiliparseConfig(ExtractionConfig):
             return cls.default_config()
         else:
             raise Exception(f"Invalid preset config: {config}. Please use 'default'.")
-        
+
     @property
     def resiliparse_kwargs(self) -> dict:
         exclude = {"use_custom_variant", "markdownify_kwargs"}
         return {f.name: getattr(self, f.name) for f in fields(self) if f.name not in exclude}
-    
+
     @property
     def markdownify_kwargs(self) -> dict:
         exclude = {"use_custom_variant", *list(self.resiliparse_kwargs.keys())}
