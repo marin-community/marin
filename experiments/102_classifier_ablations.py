@@ -80,6 +80,17 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
             ),
         )
 
+        # tokenize_step = ExecutorStep(
+        #     name=f"tokenized/classifier-ablations-experiments/{config.experiment_name}",
+        #     fn=tokenize,
+        #     config=TokenizeConfig(
+        #         train_paths=output_path_of(consolidate_step, input_basename),
+        #         validation_paths=[],
+        #         cache_path=this_output_path(),
+        #         tokenizer=versioned("llama3"),
+        #     ),
+        # )
+
         steps.append(inference_step)
         steps.append(consolidate_step)
 
