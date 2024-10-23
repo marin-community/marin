@@ -15,7 +15,9 @@ import numpy as np
 import ray
 
 from marin.core.runtime import cached_or_construct_output, map_files_in_directory
-from marin.utils import fsspec_cp, fsspec_glob, rebase_file_path
+from marin.utils import fsspec_glob, fsspec_rm, rebase_file_path
+
+logger = logging.getLogger("ray")
 
 
 @cached_or_construct_output(success_suffix="SUCCESS")
@@ -93,7 +95,7 @@ def merge_shards(
         shard_paths (List[str]): List of paths to shard files.
         output_path (str): Path to the output dataset file.
     """
-    with fsspec.open(output_path, "wt", compression="gzip") as f_out:
+    with fsspec.open(output_path, "wt", compression="infer") as f_out:
         for shard_path in shard_paths:
             with fsspec.open(shard_path, "rt", compression="infer") as f_in:
                 for line in f_in:
@@ -118,7 +120,10 @@ def split_dataset(
         seed (int): Seed for random number generator to ensure reproducibility.
     """
     rng = np.random.default_rng(seed=seed)
-    with fsspec.open(train_path, "wt") as f_train, fsspec.open(val_path, "wt") as f_val:
+    with (
+        fsspec.open(train_path, "wt", compression="infer") as f_train,
+        fsspec.open(val_path, "wt", compression="infer") as f_val,
+    ):
         with fsspec.open(input_path, "rt", compression="infer") as f_in:
             for line in f_in:
                 if rng.random() < val_frac:
@@ -151,7 +156,7 @@ def format_dataset(
                 data = json.loads(line)
                 f_tmp.write(format_example(data) + "\n")
 
-        with fsspec.open(tmp_path, "rt") as f_tmp, fsspec.open(output_path, "wt") as f_out:
+        with fsspec.open(tmp_path, "rt") as f_tmp, fsspec.open(output_path, "wt", compression="infer") as f_out:
             for line in f_tmp:
                 f_out.write(line)
 
@@ -175,7 +180,8 @@ def create_label_attribute(input_doc_path: str, output_attr_path: str, label: st
     try:
         ray.get(responses)
     except Exception as e:
-        print(f"Error processing {input_doc_path}: {e}")
+        logger.exception(f"Error processing {input_doc_path}: {e}")
+        raise
 
 
 def attributes_to_dataset(
@@ -201,7 +207,6 @@ def attributes_to_dataset(
         max_sample_size (int): Maximum number of examples to include in the fastText training dataset.
                                Defaults to None.
     """
-    logger = logging.getLogger("ray")
 
     # curry write_fasttext_lines so that we can pass it to map_files_in_directory
     @ray.remote(memory=1 * 1024 * 1024 * 1024, runtime_env={"pip": ["s3fs"]}, num_cpus=1)  # 1 GB
@@ -210,21 +215,25 @@ def attributes_to_dataset(
         return write_examples(input_file_path, output_file_path, attr_file_path, sampling_rate, seed, get_label)
 
     _, doc_fs_path = fsspec.core.url_to_fs(doc_path)
-    with tempfile.TemporaryDirectory() as tmp_dir, tempfile.NamedTemporaryFile() as tmpfile:
-        responses = map_files_in_directory(processing_func.remote, doc_path, "**/*.jsonl.gz", tmp_dir)
-        try:
-            ray.get(responses)
-        except Exception as e:
-            logger.exception(f"Error processing {doc_path}: {e}")
-            raise
+    output_dataset_path = os.path.join(output_path, "data", doc_fs_path, "data.jsonl.gz")
+    shard_path = os.path.join(output_path, "shards", doc_fs_path)
 
-        output_dataset_path = os.path.join(output_path, "data", doc_fs_path, "dataset.jsonl.gz")
-        shard_paths = fsspec_glob(os.path.join(tmp_dir, "**/*.jsonl.gz"))
-        merge_shards(shard_paths, tmpfile.name)
-        if max_sample_size is not None:
+    responses = map_files_in_directory(processing_func.remote, doc_path, "**/*.jsonl.gz", shard_path)
+    try:
+        ray.get(responses)
+    except Exception as e:
+        logger.exception(f"Error processing {doc_path}: {e}")
+        raise
+
+    shard_paths = fsspec_glob(os.path.join(shard_path, "**/*.jsonl.gz"))
+    if max_sample_size is None:
+        merge_shards(shard_paths, output_dataset_path)
+    else:
+        with tempfile.NamedTemporaryFile() as tmpfile:
+            merge_shards(shard_paths, tmpfile.name)
             reservoir_sample(tmpfile.name, output_dataset_path, max_sample_size, seed)
-        else:
-            fsspec_cp(tmpfile.name, output_dataset_path)
+
+    fsspec_rm(shard_path)
 
 
 def shuffle(input_file_path: str, output_file_path: str, seed: int) -> None:
@@ -273,6 +282,6 @@ def reservoir_sample(
             else:
                 reservoir[rng.integers(sample_size)] = line
 
-    with fsspec.open(output_dataset_path, "wt", compression="gzip") as f_out:
+    with fsspec.open(output_dataset_path, "wt", compression="infer") as f_out:
         for line in reservoir:
             f_out.write(line)
