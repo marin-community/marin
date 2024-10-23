@@ -143,6 +143,7 @@ def view():
 
 @app.route("/")
 @app.route("/view")
+@app.route("/experiment")
 def serve():
     return send_from_directory(app.static_folder, "index.html")
 
