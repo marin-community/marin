@@ -4,10 +4,10 @@ Specifies a sequence of Llama 3 models from small to large.
 
 from levanter.models.llama import LlamaConfig
 
-from experiments.defaults import SimpleTrainConfig
+from experiments.simple_train_config import SimpleTrainConfig
 
-# SKIP_DRY_RUN_TEST
 llama3_tokenizer = "meta-llama/Meta-Llama-3.1-8B"
+llama3_tokenizer_vocab_size = 128_256
 
 llama_150m = LlamaConfig(
     seq_len=4096,
@@ -97,11 +97,7 @@ def compute_num_parameters(config: LlamaConfig) -> int:
     mlp_params = gate_params + up_params + down_params
 
     nonembedding_params = config.num_layers * (attention_params + mlp_params + layer_norm_params)
-
-    from transformers import AutoTokenizer
-
-    tokenizer = AutoTokenizer.from_pretrained(llama3_tokenizer)
-    embedding_params = 2 * tokenizer.vocab_size * config.hidden_dim
+    embedding_params = 2 * llama3_tokenizer_vocab_size * config.hidden_dim
 
     return nonembedding_params + embedding_params
 

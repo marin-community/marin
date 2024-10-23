@@ -131,7 +131,8 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
         train_lm.main(train_config)
 
     if config.tpu_type is not None:
-        return run_on_pod_resumable(train_lm_task, config.tpu_type)
+        # mitigate google metadata server issue
+        return run_on_pod_resumable(train_lm_task, config.tpu_type, max_retries_failure=10000)
     else:
         return ray.get(train_lm_task.remote())
 
@@ -275,7 +276,7 @@ def _add_run_env_variables(env: dict):
         try:
             env["GIT_COMMIT"] = levanter.infra.cli_helpers.get_git_commit()
         except:  # noqa
-            logger.warning("Could not infer git commit", exc_info=True)
+            logger.warning("Could not infer git commit.")
 
     return env
 
