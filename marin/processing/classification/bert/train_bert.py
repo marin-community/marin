@@ -65,6 +65,9 @@ def train(cfg: TrainBertClassifierConfig):
         seed=cfg.seed,
     )
 
+    fsspec_rm(pos_attr_path)
+    fsspec_rm(neg_attr_path)
+
     train_model(
         input_path=f"{cfg.output_path}/data",
         output_path=cfg.output_path,
@@ -73,9 +76,6 @@ def train(cfg: TrainBertClassifierConfig):
         memory_req=cfg.memory,
         **cfg.bert_args,
     )
-
-    fsspec_rm(pos_attr_path)
-    fsspec_rm(neg_attr_path)
 
 
 @draccus.wrap()
