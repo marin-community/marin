@@ -5,19 +5,21 @@ This file represents the best practices for each stage of the pipeline.
 import dataclasses
 import os
 from collections.abc import Sequence
-from dataclasses import dataclass
 from datetime import timedelta
 
 import jmp
+from dolma.paloma import tokenize_paloma_steps
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text import LMDatasetConfig, LMMixtureDatasetConfig
+from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig
 from levanter.optim import AdamConfig
 from levanter.store.cache import CacheOptions
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
+from simple_train_config import SimpleTrainConfig
 
-from experiments.dolma.paloma import tokenize_paloma_steps
+from experiments.llama import compute_num_parameters
 from marin.execution.executor import ExecutorStep, InputName, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, lm_data_config, tokenize
 from marin.processing.tokenize.tokenize import TokenizerStep
@@ -35,6 +37,7 @@ def default_tokenize(
 
     return ExecutorStep(
         name=os.path.join("tokenized", name),
+        description=f"Tokenize raw text using the {tokenizer} tokenizer.",
         fn=tokenize,
         config=config,
     )
@@ -42,17 +45,6 @@ def default_tokenize(
 
 def default_validation_sets(tokenizer: str, base_path: str = "tokenized/") -> list[TokenizerStep]:
     return list(tokenize_paloma_steps(base_path=base_path, tokenizer=tokenizer).values())
-
-
-@dataclass(frozen=True)
-class SimpleTrainConfig:
-    """Simplified configuration for training (the things that matter)."""
-
-    tpu_type: str
-    train_batch_size: int
-    num_train_steps: int
-    learning_rate: float
-    weight_decay: float
 
 
 def default_train(
@@ -75,8 +67,15 @@ def default_train(
     else:
         data = tokenized
 
+    # TODO: right now, assume architecture is a LlamaConfig, generalize this
+    assert isinstance(model_config, LlamaConfig)
     return ExecutorStep(
         name=os.path.join("checkpoints", name),
+        description=f"Train a {compute_num_parameters(model_config):,} parameter model for "
+        f"{train_config.num_train_steps} (steps) * "
+        f"{train_config.train_batch_size} (batch_size) * "
+        f"{model_config.seq_len} (seq_len) "
+        f"= {train_config.num_train_steps * train_config.train_batch_size * model_config.seq_len:,} tokens.",
         fn=run_levanter_train_lm,
         config=TrainLmOnPodConfig(
             output_path=this_output_path(),
