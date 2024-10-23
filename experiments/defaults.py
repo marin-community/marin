@@ -8,7 +8,6 @@ from collections.abc import Sequence
 from datetime import timedelta
 
 import jmp
-from dolma.paloma import tokenize_paloma_steps
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text import LMDatasetConfig, LMMixtureDatasetConfig
 from levanter.models.llama import LlamaConfig
@@ -17,9 +16,10 @@ from levanter.optim import AdamConfig
 from levanter.store.cache import CacheOptions
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
-from simple_train_config import SimpleTrainConfig
 
+from experiments.dolma.paloma import tokenize_paloma_steps
 from experiments.llama import compute_num_parameters
+from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import ExecutorStep, InputName, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, lm_data_config, tokenize
 from marin.processing.tokenize.tokenize import TokenizerStep
