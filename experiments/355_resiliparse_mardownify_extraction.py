@@ -42,7 +42,7 @@ def create_steps() -> list[ExecutorStep]:
                 markdownify_config=HtmlToMarkdownConfig(
                     include_images=versioned(False),
                     include_links=versioned(False),
-                )
+                ),
             ),
         ),
     )
