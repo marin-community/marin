@@ -16,8 +16,6 @@ from marin.processing.classification.inference import InferenceConfig, run_infer
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-USER = "chris"
-
 
 @dataclass
 class ExperimentConfig:
@@ -37,7 +35,8 @@ class ExperimentConfig:
             "gs://marin-data/processed/fineweb/fw-v1.0/text_fw/CC-MAIN-2020-50/",
         ]
     )
-    percentile_threshold: float = 80  # Top 20% of documents
+    keep_fraction: float = 0.2  # Keep 20% of the documents
+    max_total_tokens: int = 280 * 1e9  # 280 billion tokens
 
 
 def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
@@ -48,7 +47,7 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
         # Get the basename of the input directory
         input_basename = os.path.basename(os.path.normpath(input_data_path))
         inference_step = ExecutorStep(
-            name=f"attributes/{config.experiment_name}-{USER}",
+            name=f"attributes/classifier-ablations-experiments/{config.experiment_name}",
             fn=run_inference,
             config=InferenceConfig(
                 input_path=input_data_path,
@@ -64,7 +63,7 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
         )
 
         consolidate_step = ExecutorStep(
-            name=f"documents/{config.experiment_name}-{USER}",
+            name=f"documents/classifier-ablations-experiments/{config.experiment_name}",
             fn=consolidate,
             config=ConsolidateConfig(
                 input_path=input_data_path,
@@ -81,11 +80,11 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
                         name=versioned(f"{config.experiment_name}-quality"),
                         label="__label__hq",
                         threshold=versioned(None),
-                        percentile_threshold=versioned(config.percentile_threshold),
+                        keep_fraction=versioned(config.keep_fraction),
                     ),
                 ],
+                max_total_tokens=versioned(config.max_total_tokens),
             ),
-            override_output_path=f"gs://marin-us-central2/documents/{config.experiment_name}-{USER}",
         )
 
         steps.append(inference_step)
@@ -100,20 +99,19 @@ def create_experiment_configs() -> list[ExperimentConfig]:
         quality_classifier_model_path="gs://marin-us-central2/classifiers/dclm_eli5_100k_oh_100k_rw_200k-4a11ec/model.bin",
     )
 
-    original_dclm_quality_classifier_config = ExperimentConfig(
-        experiment_name="original-dclm-quality-classifier",
-        quality_classifier_model_path="mlfoundations/fasttext-oh-eli5",
-    )
+    # original_dclm_quality_classifier_config = ExperimentConfig(
+    #     experiment_name="original-dclm-quality-classifier",
+    #     quality_classifier_model_path="mlfoundations/fasttext-oh-eli5",
+    # )
 
-    return [marin_eli5_100k_oh_100k_rw_200k_config, original_dclm_quality_classifier_config]
+    return [marin_eli5_100k_oh_100k_rw_200k_config]
 
 
 def main():
-    global_dag = []
+    steps = []
     for experiment_config in create_experiment_configs():
-        steps = create_steps(experiment_config)
-        global_dag.extend(steps)
-    executor_main(steps=global_dag)
+        steps.extend(create_steps(experiment_config))
+    executor_main(steps=steps)
 
 
 if __name__ == "__main__":

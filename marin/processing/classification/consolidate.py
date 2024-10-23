@@ -11,13 +11,13 @@ import json
 import logging
 import os
 from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Any
 
 import draccus
 import fsspec
 import numpy as np
 import ray
-from transformers import AutoTokenizer
 
 from marin.core.runtime import cached_or_construct_output
 from marin.utils import (
@@ -51,7 +51,7 @@ class FilterConfig:
     threshold: float | None = 0.5
     """Keep documents where the value is above this."""
 
-    percentile_threshold: float | None = None
+    keep_fraction: float | None = None
     """Keep documents where the score is in the top percentile. Calculates the threshold from the entire dataset."""
 
 
@@ -69,16 +69,33 @@ class ConsolidateConfig:
     """List of filters to apply to the documents."""
 
     max_total_tokens: int | None = None
-    """The maximum total number of tokens to keep. This is measured by llama-3 tokenizer."""
+    """The maximum total number of tokens to keep. This is measured using a heuristic of 3 bytes per token."""
 
     max_tasks_in_flight: int = 1000  # The maximum number of flights in a task
 
 
-@ray.remote
+@ray.remote(max_restarts=-1, max_task_retries=-1)
 class TokenCounter:
-    def __init__(self):
-        self.tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.1-8B-Instruct")
+    BYTES_PER_TOKEN = 3  # We underestimate the number of bytes per token, so we grab a few extra tokens
+
+    def __init__(self, output_path: str):
         self.num_tokens = 0
+        self.checkpoint_path = self.get_checkpoint_filename(output_path)
+
+        if fsspec_exists(self.checkpoint_path):
+            with fsspec.open(self.checkpoint_path, "rt") as f:
+                self.num_tokens = int(f.readline())
+        else:
+            self.num_tokens = 0
+
+    def get_checkpoint_filename(self, output_path: str) -> str:
+        _, path = fsspec.core.url_to_fs(output_path)
+        protocol = fsspec.core.split_protocol(output_path)[0]
+        path_without_suffix = Path(path)
+        while path_without_suffix.suffix:
+            path_without_suffix = path_without_suffix.with_suffix("")
+
+        return os.path.join(f"{protocol}://{path_without_suffix}", "Consolidate_Num_Tokens.txt")
 
     def get_num_tokens(self) -> int:
         return self.num_tokens
@@ -101,16 +118,19 @@ class TokenCounter:
         else:  # Not exceeding max tokens
             self.num_tokens += self.count_tokens(text)
 
+        with fsspec.open(self.checkpoint_path, "wt") as f:
+            f.write(str(self.num_tokens))
+
         return text
 
     def count_tokens(self, text: str) -> int:
-        return len(self.tokenizer.encode(text))
+        return len(text) // self.BYTES_PER_TOKEN
 
     def get_trimmed_text(self, text: str, max_total_tokens: int) -> str:
         """
         Get the text that has been trimmed to `max_total_tokens`.
         """
-        return self.tokenizer.decode(self.tokenizer.encode(text)[:max_total_tokens])
+        return text[: max_total_tokens * self.BYTES_PER_TOKEN]
 
 
 def remove_spans(text: str, spans: list[list[int]]) -> str:
@@ -229,7 +249,8 @@ def get_scores(attribute_filename: str, attribute_name: str, label: str) -> list
     return scores
 
 
-def calculate_percentile_threshold(scores: list[list[float]], percentile: float) -> float:
+def calculate_percentile_threshold(scores: list[list[float]], keep_fraction: float) -> float:
+    percentile = 100 - keep_fraction * 100
     scores = np.concatenate(scores)
     return np.percentile(scores, percentile)
 
@@ -239,16 +260,19 @@ def consolidate(config: ConsolidateConfig):
     input_paths = fsspec_glob(os.path.join(config.input_path, "**/*.jsonl.gz"))
     logger.info(f"Consolidating {len(input_paths)} documents")
 
-    token_counter = TokenCounter.remote()
+    token_counter = TokenCounter.remote(config.output_path)
 
     updated_filters = []
     for doc_filter in config.filters:
         assert (
-            doc_filter.percentile_threshold is None or doc_filter.threshold is None
+            doc_filter.keep_fraction is None or doc_filter.threshold is None
         ), "Cannot specify both percentile threshold and threshold. Please specify only one."
 
-        # Calculate percentile threshold if specified, otherwise use the provided threshold
-        if doc_filter.percentile_threshold is not None:
+        if doc_filter.keep_fraction is not None:
+            assert doc_filter.keep_fraction > 0 and doc_filter.keep_fraction < 1, "Keep fraction must be between 0 and 1"
+
+        # Calculate the minimum threshold required to keep `keep_fraction` of the documents
+        if doc_filter.keep_fraction is not None:
             attribute_paths = [
                 rebase_file_path(config.input_path, input_path, doc_filter.attribute_path) for input_path in input_paths
             ]
@@ -258,8 +282,8 @@ def consolidate(config: ConsolidateConfig):
                     for attribute_path in attribute_paths
                 ]
             )
-            threshold = calculate_percentile_threshold(scores, doc_filter.percentile_threshold)
-            updated_filters.append(replace(doc_filter, threshold=threshold, percentile_threshold=None))
+            threshold = calculate_percentile_threshold(scores, doc_filter.keep_fraction)
+            updated_filters.append(replace(doc_filter, threshold=threshold, keep_fraction=None))
         else:
             updated_filters.append(doc_filter)
 
@@ -283,6 +307,10 @@ def consolidate(config: ConsolidateConfig):
 
     try:
         ray.get(tasks)
+
+        # Count number of tokens in the output
+        num_tokens = ray.get(token_counter.get_num_tokens.remote())
+        logger.info(f"Number of tokens consolidated: {num_tokens}")
     except Exception as e:
         print(f"Error processing: {e}")
 
