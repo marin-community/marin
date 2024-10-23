@@ -28,15 +28,9 @@ class ExperimentConfig:
             "gs://marin-data/processed/fineweb/fw-v1.0/text_fw/CC-MAIN-2020-10/",
             "gs://marin-data/processed/fineweb/fw-v1.0/text_fw/CC-MAIN-2020-16/",
             "gs://marin-data/processed/fineweb/fw-v1.0/text_fw/CC-MAIN-2020-24/",
-            "gs://marin-data/processed/fineweb/fw-v1.0/text_fw/CC-MAIN-2020-29/",
-            "gs://marin-data/processed/fineweb/fw-v1.0/text_fw/CC-MAIN-2020-34/",
-            "gs://marin-data/processed/fineweb/fw-v1.0/text_fw/CC-MAIN-2020-40/",
-            "gs://marin-data/processed/fineweb/fw-v1.0/text_fw/CC-MAIN-2020-45/",
-            "gs://marin-data/processed/fineweb/fw-v1.0/text_fw/CC-MAIN-2020-50/",
         ]
     )
     keep_fraction: float = 0.2  # Keep 20% of the documents
-    max_total_tokens: int = 280 * 1e9  # 280 billion tokens
 
 
 def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
@@ -83,7 +77,6 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
                         keep_fraction=versioned(config.keep_fraction),
                     ),
                 ],
-                max_total_tokens=versioned(config.max_total_tokens),
             ),
         )
 
