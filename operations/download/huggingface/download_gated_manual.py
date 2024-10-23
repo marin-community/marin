@@ -95,6 +95,8 @@ def download_and_upload_to_store(cfg: DownloadConfig) -> None:
             os.remove(local_path)
         except Exception as e:
             logging.exception(f"Error processing {file}: {e}")
+            # we want to fail the whole operation if any file fails to upload
+            raise
 
         pbar.update(1)
 
