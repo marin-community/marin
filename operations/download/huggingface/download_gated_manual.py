@@ -51,10 +51,10 @@ def download_and_upload_to_store(cfg: DownloadConfig) -> None:
     logging.basicConfig(level=logging.INFO)
 
     # Parse the output path and get the file system
-    fs, _ = fsspec.core.url_to_fs(cfg.output_path)
+    fs, _ = fsspec.core.url_to_fs(cfg.gcs_output_path)
 
     # Use revision as "version" for writing to the output path
-    versioned_output_path = os.path.join(cfg.output_path, cfg.revision)
+    versioned_output_path = os.path.join(cfg.gcs_output_path, cfg.revision)
 
     # Ensure the output path is writable
     try:
@@ -127,7 +127,7 @@ def download_and_upload_to_store(cfg: DownloadConfig) -> None:
         metadata={"dataset": cfg.hf_dataset_id, "version": cfg.revision, "links": hf_urls},
     )
 
-    logger.info(f"Uploaded all files and wrote provenance JSON; check {cfg.output_path}.")
+    logger.info(f"Uploaded all files and wrote provenance JSON; check {cfg.gcs_output_path}.")
 
 
 @draccus.wrap()

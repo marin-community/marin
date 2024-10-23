@@ -7,7 +7,7 @@ download_fineweb = ExecutorStep(
     config=DownloadConfig(
         hf_dataset_id="HuggingFaceFW/fineweb",
         revision="cd85054",
-        output_path=this_output_path(),
+        gcs_output_path=this_output_path(),
         wait_for_completion=True,
     ),
     override_output_path="gs://marin-us-central2/raw/fineweb",
@@ -19,7 +19,7 @@ fineweb_edu = ExecutorStep(
     config=DownloadConfig(
         hf_dataset_id="HuggingFaceFW/fineweb-edu",
         revision="3c452cb",
-        output_path=this_output_path(),
+        gcs_output_path=this_output_path(),
         wait_for_completion=True,
     ),
     override_output_path="gs://marin-us-central2/raw/fineweb-edu-c2beb4",
@@ -31,7 +31,7 @@ slimpajama = ExecutorStep(
     config=DownloadConfig(
         hf_dataset_id="cerebras/SlimPajama-627B",
         revision="2d0accd",
-        output_path=this_output_path(),
+        gcs_output_path=this_output_path(),
         wait_for_completion=True,
     ),
     override_output_path="gs://marin-us-central2/raw/SlimPajama-627B-262830",
@@ -43,7 +43,7 @@ slimpajama_6b = ExecutorStep(
     config=DownloadConfig(
         hf_dataset_id="DKYoon/SlimPajama-6B",
         revision="b5f90f4",
-        output_path=this_output_path(),
+        gcs_output_path=this_output_path(),
         wait_for_completion=True,
     ),
     override_output_path="gs://marin-us-central2/raw/SlimPajama-6B-be35b7",
@@ -55,7 +55,7 @@ dolma = ExecutorStep(
     config=DownloadConfig(
         hf_dataset_id="allenai/dolma",
         revision="7f48140",
-        output_path=this_output_path(),
+        gcs_output_path=this_output_path(),
         wait_for_completion=True,
     ),
     override_output_path="gs://marin-us-central2/raw/dolma",
@@ -67,7 +67,7 @@ dclm_baseline = ExecutorStep(
     config=DownloadConfig(
         hf_dataset_id="mlfoundations/dclm-baseline-1.0",
         revision="a3b142c",
-        output_path=this_output_path(),
+        gcs_output_path=this_output_path(),
         wait_for_completion=True,
     ),
     override_output_path="gs://marin-us-central2/raw/dclm",
