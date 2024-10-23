@@ -1,5 +1,4 @@
 import ray
-
 from bs4 import BeautifulSoup
 
 from marin.markdown.markdown import to_markdown
