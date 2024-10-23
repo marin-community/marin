@@ -18,7 +18,6 @@ Usage:
 import dataclasses
 import logging
 import os
-from collections.abc import Sequence
 
 import draccus
 import fsspec
@@ -26,11 +25,11 @@ import levanter
 import ray
 import transformers
 from levanter.data.sharded_datasource import ShardedDataSource, TextUrlDataSource
-from levanter.data.text import BatchTokenizer, LMDatasetConfig, LMDatasetSourceConfig, LMMixtureDatasetConfig
+from levanter.data.text import BatchTokenizer, LMDatasetConfig, LMDatasetSourceConfig
 from levanter.store.cache import CacheOptions
 from ray.runtime_env import RuntimeEnv
 
-from marin.execution.executor import ExecutorStep, InputName, output_path_of
+from marin.execution.executor import InputName
 from marin.processing.tokenize.independent_tokenize import tokenize_and_concatenate_shards
 from marin.utils import fsspec_glob, fsspec_isdir
 
@@ -176,109 +175,6 @@ def _create_source(input_paths: str | list[str]) -> ShardedDataSource:
         source = TextUrlDataSource(filepaths_to_tokenize)
 
     return source
-
-
-TokenizerStep = ExecutorStep[TokenizeConfig]
-
-
-def step_to_lm_mixture_component(step: TokenizerStep) -> LMDatasetSourceConfig:
-    """
-    Converts a tokenizer step to a Levanter dataset source config. This is useful for creating
-    data mixture configs.
-    """
-    return step.config.as_lm_dataset_source_config(output_path_of(step))
-
-
-def step_to_lm_training_config(step: TokenizerStep | InputName) -> LMDatasetConfig:
-    """
-    Converts a tokenizer step to a Levanter dataset config. This is useful for creating
-    data mixture configs.
-    """
-    if isinstance(step, InputName):
-        base_step = step.step
-        path = step
-    else:
-        base_step = step
-        path = output_path_of(step)
-    return base_step.config.as_lm_dataset_task_config(path)
-
-
-def lm_data_config(
-    training_set: TokenizerStep,
-    validation_sets: Sequence[TokenizerStep] = (),
-    shuffle: bool | int = True,
-) -> LMDatasetConfig | LMMixtureDatasetConfig:
-    """
-    Creates a dataset config suitable for Levanter's TrainLMConfig from a single training set
-
-    Args:
-        training_set: The training set to use
-        validation_sets: A sequence of validation sets to use
-        shuffle: Whether to shuffle the data. If int, uses era shuffling.
-    """
-    tokenizer = training_set.config.tokenizer
-
-    if len(validation_sets) == 0:
-        return dataclasses.replace(step_to_lm_training_config(training_set), shuffle=shuffle)
-
-    for step in validation_sets:
-        if step.config.tokenizer != tokenizer:
-            raise ValueError(
-                f"Validation set {step.name} must have same tokenizer as training set's,"
-                f" but got: {step.config.tokenizer} vs {tokenizer}"
-            )
-
-    prefix = os.path.commonprefix([training_set.name, *(dset.name for dset in validation_sets)])
-
-    def _strip_prefix(name):
-        return name[len(prefix) :]
-
-    weights = {_strip_prefix(training_set.name): 1.0, **{_strip_prefix(step.name): 0.0 for step in validation_sets}}
-
-    components = {
-        _strip_prefix(training_set.name): step_to_lm_mixture_component(training_set),
-        **{_strip_prefix(step.name): step_to_lm_mixture_component(step) for step in validation_sets},
-    }
-
-    return LMMixtureDatasetConfig(
-        configs=components, train_weights=weights, tokenizer=tokenizer, cache_dir=None, shuffle=shuffle
-    )
-
-
-def lm_mixture_data_config(
-    components: dict[str, TokenizerStep],
-    weights: dict[str, float],
-    *,
-    shuffle: bool | int = True,
-    missing_weights_are_validation: bool = True,
-):
-    """
-    Creates a training config from a mixture of datasources.
-
-    Args:
-        components: dict from names of datasets to the steps that produced them.
-        weights: dict from names of datasets to their weights.
-        shuffle: shuffling policy. int means era shuffling (~shuffle buffer).
-        missing_weights_are_validation: whether to pad out missing weights with 0's, indicating validation-only sets
-    """
-    configs = {name: step_to_lm_mixture_component(step) for name, step in components.items()}
-
-    if missing_weights_are_validation:
-        missing_keys = {k: 0.0 for k in components if k not in weights}
-        weights = {**weights, **missing_keys}
-
-    first_name, first_step = next(iter(components.items()))
-    tokenizer = first_step.config.tokenizer
-    for name, step in components.items():
-        if step.config.tokenizer != tokenizer:
-            raise ValueError(
-                "All components must have the same tokenizer, but got:"
-                f" {step.config.tokenizer} ({name}) vs {tokenizer} ({name})"
-            )
-
-    return LMMixtureDatasetConfig(
-        configs=configs, train_weights=weights, tokenizer=tokenizer, cache_dir=None, shuffle=shuffle
-    )
 
 
 def _get_files_by_extensions(input_paths: list[str], extensions: list[str]) -> list[str]:

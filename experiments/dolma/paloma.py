@@ -6,9 +6,9 @@ import os.path
 
 # cyclic dependency
 # from experiments.llama import llama3_tokenizer
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
+from marin.execution.executor import ExecutorStep, VersionedValue, executor_main, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
-from marin.processing.tokenize.tokenize import TokenizerStep
+from marin.processing.tokenize.data_configs import TokenizerStep
 from operations.download import HfDownloadConfig, download_hf_gated_manual
 
 llama3_tokenizer = "meta-llama/Meta-Llama-3.1-8B"
@@ -46,7 +46,9 @@ download_paloma = ExecutorStep(
 ).cd("65cd6fc")
 
 
-def tokenize_paloma_steps(*, base_path="tokenized/", tokenizer=llama3_tokenizer) -> dict[str, TokenizerStep]:
+def tokenize_paloma_steps(*, base_path="tokenized/", tokenizer: str | VersionedValue[str]=llama3_tokenizer) -> dict[str, TokenizerStep]:
+    if isinstance(tokenizer, str):
+        tokenizer = versioned(tokenizer)
     paloma_steps: dict[str, ExecutorStep[TokenizeConfig]] = {}
     for dataset, path_part in PALOMA_DATASETS_TO_DIR.items():
         paloma_steps[os.path.join("paloma", dataset)] = ExecutorStep(
@@ -56,7 +58,7 @@ def tokenize_paloma_steps(*, base_path="tokenized/", tokenizer=llama3_tokenizer)
                 train_paths=versioned([]),
                 validation_paths=[download_paloma.cd(f"{path_part}/val/val*.jsonl.gz")],
                 cache_path=this_output_path(),
-                tokenizer=versioned(tokenizer),
+                tokenizer=tokenizer,
             ),
         )
 

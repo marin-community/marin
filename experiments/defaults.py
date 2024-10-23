@@ -17,12 +17,13 @@ from levanter.store.cache import CacheOptions
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 
+import marin.processing.tokenize as tokenize
 from experiments.dolma.paloma import tokenize_paloma_steps
 from experiments.llama import compute_num_parameters
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import ExecutorStep, InputName, this_output_path, versioned
-from marin.processing.tokenize import TokenizeConfig, lm_data_config, tokenize
-from marin.processing.tokenize.tokenize import TokenizerStep
+from marin.processing.tokenize import TokenizeConfig, lm_data_config
+from marin.processing.tokenize import TokenizerStep
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 
 
@@ -43,8 +44,8 @@ def default_tokenize(
     )
 
 
-def default_validation_sets(tokenizer: str, base_path: str = "tokenized/") -> list[TokenizerStep]:
-    return list(tokenize_paloma_steps(base_path=base_path, tokenizer=tokenizer).values())
+def default_validation_sets(tokenizer: str, base_path: str = "tokenized/") -> dict[str, TokenizerStep]:
+    return tokenize_paloma_steps(base_path=base_path, tokenizer=tokenizer)
 
 
 def default_train(
@@ -58,14 +59,22 @@ def default_train(
 
     tokenizer = _get_tokenizer_for_train(tokenized)
 
+    if use_default_validation:
+        validation_sets = default_validation_sets(tokenizer=tokenizer)
+    else:
+        validation_sets = []
+
     if isinstance(tokenized, InputName | ExecutorStep):
-        if use_default_validation:
-            validation_sets = default_validation_sets(tokenizer=tokenizer)
-        else:
-            validation_sets = []
         data = lm_data_config(training_set=tokenized, validation_sets=validation_sets)
     else:
+        # TODO: would be better to expose hooks in levanter instead of relying on mixtures
         data = tokenized
+        if validation_sets:
+            if isinstance(data, LMDatasetConfig):
+                # replace with a mixture
+                data = tokenize.convert_to_mixture_config(data, "train")
+
+            data = tokenize.add_validation_sets_to_mixture(data, validation_sets)
 
     # TODO: right now, assume architecture is a LlamaConfig, generalize this
     assert isinstance(model_config, LlamaConfig)
