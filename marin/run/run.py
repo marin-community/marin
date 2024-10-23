@@ -60,6 +60,7 @@ async def submit_and_track_job(entrypoint: str, dependencies: list, env_vars: di
     current_dir = os.getcwd()
     client = JobSubmissionClient(REMOTE_DASHBOARD_URL)
 
+    logger.info(f"Submitting job with entrypoint: {entrypoint}, \nDependencies: {dependencies}, \nenv_vars: {env_vars}")
     # Submit the job with runtime environment and entrypoint
     submission_id = client.submit_job(
         entrypoint=entrypoint, runtime_env={"pip": dependencies, "working_dir": current_dir, "env_vars": env_vars}
