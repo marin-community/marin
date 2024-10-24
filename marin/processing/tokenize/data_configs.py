@@ -5,7 +5,7 @@ import os
 from levanter.data.text import LMDatasetConfig, LMDatasetSourceConfig, LMMixtureDatasetConfig
 
 from marin.execution.executor import ExecutorStep, InputName, output_path_of
-from marin.processing.tokenize import TokenizeConfig
+from marin.processing.tokenize.tokenize import TokenizeConfig
 
 TokenizerStep = ExecutorStep[TokenizeConfig]
 
