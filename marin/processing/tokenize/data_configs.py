@@ -2,7 +2,7 @@ import dataclasses
 import logging
 import os
 
-from levanter.data.text import LMDatasetConfig, LMDatasetSourceConfig, LMMixtureDatasetConfig
+from levanter.data.text import LMDatasetSourceConfig, LMMixtureDatasetConfig
 
 from marin.execution.executor import ExecutorStep, InputName, output_path_of
 from marin.processing.tokenize.tokenize import TokenizeConfig
@@ -20,25 +20,11 @@ def step_to_lm_mixture_component(step: TokenizerStep) -> LMDatasetSourceConfig:
     return step.config.as_lm_dataset_source_config(output_path_of(step))
 
 
-def step_to_lm_training_config(step: TokenizerStep | InputName) -> LMDatasetConfig:
-    """
-    Converts a tokenizer step to a Levanter dataset config. This is useful for creating
-    data mixture configs.
-    """
-    if isinstance(step, InputName):
-        base_step = step.step
-        path = step
-    else:
-        base_step = step
-        path = output_path_of(step)
-    return base_step.config.as_lm_dataset_task_config(path)
-
-
 def lm_data_config(
-    training_set: TokenizerStep,
+    training_set: TokenizerStep | InputName,
     validation_sets: dict[str, TokenizerStep] = (),
     shuffle: bool | int = True,
-) -> LMDatasetConfig | LMMixtureDatasetConfig:
+) -> LMMixtureDatasetConfig:
     """
     Creates a dataset config suitable for Levanter's TrainLMConfig from a single training set
 
@@ -49,9 +35,6 @@ def lm_data_config(
     """
     tokenizer = training_set.config.tokenizer
 
-    if len(validation_sets) == 0:
-        return dataclasses.replace(step_to_lm_training_config(training_set), shuffle=shuffle)
-
     for name, step in validation_sets.items():
         if step.config.tokenizer != tokenizer:
             raise ValueError(
@@ -61,15 +44,11 @@ def lm_data_config(
 
     train_set_name = os.path.basename(training_set.name)
 
-    weights = {train_set_name: 1.0, **{name: 0.0 for name in validation_sets}}
-
-    components = {
-        train_set_name: step_to_lm_mixture_component(training_set),
-        **{name: step_to_lm_mixture_component(step) for name, step in validation_sets.items()},
-    }
-
-    return LMMixtureDatasetConfig(
-        configs=components, train_weights=weights, tokenizer=tokenizer, cache_dir=None, shuffle=shuffle
+    return lm_mixture_data_config(
+        {train_set_name: training_set, **validation_sets},
+        {train_set_name: 1.0},
+        shuffle=shuffle,
+        missing_weights_are_validation=True,
     )
 
 
@@ -106,35 +85,6 @@ def lm_mixture_data_config(
 
     return LMMixtureDatasetConfig(
         configs=configs, train_weights=weights, tokenizer=tokenizer, cache_dir=None, shuffle=shuffle
-    )
-
-
-def convert_to_mixture_config(config: LMDatasetConfig, name: str) -> LMMixtureDatasetConfig:
-    """
-    Converts a single dataset config to a mixture config with only that dataset.
-    """
-    return LMMixtureDatasetConfig(
-        configs={name: _as_lm_source_config(config)},
-        train_weights={name: 1.0},
-        tokenizer=config.tokenizer,
-        cache_dir=None,
-        shuffle=config.shuffle,
-        enforce_eos=config.enforce_eos,
-        cache_options=config.cache_options,
-        ignore_token_id=config.ignore_token_id,
-    )
-
-
-def _as_lm_source_config(config: LMDatasetConfig) -> LMDatasetSourceConfig:
-    return LMDatasetSourceConfig(
-        tags=config.tags,
-        id=config.id,
-        name=config.name,
-        train_urls=config.train_urls,
-        validation_urls=config.validation_urls,
-        cache_dir=config.cache_dir,
-        plaintext=config.plaintext,
-        text_key=config.text_key,
     )
 
 

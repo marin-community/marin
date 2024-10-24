@@ -1,12 +1,14 @@
 """
 The Paloma eval sets, downloaded and tokenized
+
+https://huggingface.co/datasets/allenai/paloma
 """
 
 import os.path
 
 # cyclic dependency
 # from experiments.llama import llama3_tokenizer
-from marin.execution.executor import ExecutorStep, VersionedValue, executor_main, this_output_path, versioned
+from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
 from marin.processing.tokenize.data_configs import TokenizerStep
 from operations.download import HfDownloadConfig, download_hf_gated_manual
@@ -15,6 +17,7 @@ llama3_tokenizer = "meta-llama/Meta-Llama-3.1-8B"
 
 
 # The datasets in the Paloma eval set and their paths within the HF dataset
+# https://huggingface.co/datasets/allenai/paloma
 PALOMA_DATASETS_TO_DIR = {
     "4chan": "4chan_meta_sep",
     "c4_100_domains": "c4_100_domains",
@@ -34,7 +37,7 @@ PALOMA_DATASETS_TO_DIR = {
     "wikitext_103": "wikitext_103",
 }
 
-download_paloma = ExecutorStep(
+paloma = ExecutorStep(
     name="raw/paloma",
     fn=download_hf_gated_manual,
     config=HfDownloadConfig(
@@ -46,11 +49,10 @@ download_paloma = ExecutorStep(
 ).cd("65cd6fc")
 
 
-def tokenize_paloma_steps(
-    *, base_path="tokenized/", tokenizer: str | VersionedValue[str] = llama3_tokenizer
-) -> dict[str, TokenizerStep]:
-    if isinstance(tokenizer, str):
-        tokenizer = versioned(tokenizer)
+def paloma_tokenized(*, base_path="tokenized/", tokenizer: str = llama3_tokenizer) -> dict[str, TokenizerStep]:
+    """
+    Returns a dictionary of steps to tokenize the Paloma eval sets. Keys are the subset names (with `paloma/` prefix)
+    """
     paloma_steps: dict[str, ExecutorStep[TokenizeConfig]] = {}
     for dataset, path_part in PALOMA_DATASETS_TO_DIR.items():
         paloma_steps[os.path.join("paloma", dataset)] = ExecutorStep(
@@ -58,7 +60,7 @@ def tokenize_paloma_steps(
             fn=tokenize,
             config=TokenizeConfig(
                 train_paths=versioned([]),
-                validation_paths=[download_paloma.cd(f"{path_part}/val/val*.jsonl.gz")],
+                validation_paths=[paloma.cd(f"{path_part}/val/val*.jsonl.gz")],
                 cache_path=this_output_path(),
                 tokenizer=tokenizer,
             ),
@@ -68,4 +70,4 @@ def tokenize_paloma_steps(
 
 
 if __name__ == "__main__":
-    executor_main(steps=[download_paloma, *tokenize_paloma_steps().values()])
+    executor_main(steps=[paloma, *paloma_tokenized().values()])

@@ -9,7 +9,7 @@ from datetime import timedelta
 
 import jmp
 from levanter.checkpoint import CheckpointerConfig
-from levanter.data.text import LMDatasetConfig, LMMixtureDatasetConfig
+from levanter.data.text import LMMixtureDatasetConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig
 from levanter.optim import AdamConfig
@@ -18,8 +18,8 @@ from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 
 import marin.processing.tokenize as tokenize
-from experiments.dolma.paloma import tokenize_paloma_steps
 from experiments.llama import compute_num_parameters
+from experiments.paloma import paloma_tokenized
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import ExecutorStep, InputName, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, TokenizerStep, lm_data_config
@@ -44,12 +44,12 @@ def default_tokenize(
 
 
 def default_validation_sets(tokenizer: str, base_path: str = "tokenized/") -> dict[str, TokenizerStep]:
-    return tokenize_paloma_steps(base_path=base_path, tokenizer=tokenizer)
+    return paloma_tokenized(base_path=base_path, tokenizer=tokenizer)
 
 
 def default_train(
     name: str,
-    tokenized: InputName | ExecutorStep | LMDatasetConfig | LMMixtureDatasetConfig,
+    tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig,
     model_config: LmConfig,
     train_config: SimpleTrainConfig,
     tags: Sequence[str] = (),
@@ -97,8 +97,19 @@ def default_train(
 
 
 def _prepare_data_config(
-    tokenized: InputName | ExecutorStep | LMDatasetConfig | LMMixtureDatasetConfig, use_default_validation: bool
-) -> LMDatasetConfig | LMMixtureDatasetConfig:
+    tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig, use_default_validation: bool
+) -> LMMixtureDatasetConfig:
+    """
+    Prepare a tokenized dataset for training. This is mostly just combining the tokenized data with the validation sets.
+    Args:
+        tokenized:
+        use_default_validation:
+
+    Returns:
+
+        The data config to use for training with any validation sets added.
+
+    """
     tokenizer = _get_tokenizer_for_train(tokenized)
     if use_default_validation:
         validation_sets = default_validation_sets(tokenizer=tokenizer)
@@ -110,24 +121,18 @@ def _prepare_data_config(
         # TODO: would be better to expose hooks in levanter instead of relying on mixtures
         data = tokenized
         if validation_sets:
-            if isinstance(data, LMDatasetConfig):
-                # replace with a mixture
-                data = tokenize.convert_to_mixture_config(data, "train")
-
             data = tokenize.add_validation_sets_to_mixture(data, validation_sets)
     return data
 
 
-def _get_tokenizer_for_train(tokenized):
+def _get_tokenizer_for_train(tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig) -> str:
     match tokenized:
-        case LMDatasetConfig(tokenizer=tokenizer):
-            tokenizer = tokenizer
         case LMMixtureDatasetConfig(tokenizer=tokenizer):
-            tokenizer = tokenizer
+            pass
         case ExecutorStep(config=TokenizeConfig(tokenizer=tokenizer)):
-            tokenizer = tokenizer
+            pass
         case InputName(step=ExecutorStep(config=TokenizeConfig(tokenizer=tokenizer))):
-            tokenizer = tokenizer
+            pass
         case _:
             raise ValueError(f"Could not determine tokenizer from {tokenized}")
 

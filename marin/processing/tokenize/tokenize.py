@@ -25,7 +25,7 @@ import levanter
 import ray
 import transformers
 from levanter.data.sharded_datasource import ShardedDataSource, TextUrlDataSource
-from levanter.data.text import BatchTokenizer, LMDatasetConfig, LMDatasetSourceConfig
+from levanter.data.text import BatchTokenizer, LMDatasetSourceConfig
 from levanter.store.cache import CacheOptions
 from ray.runtime_env import RuntimeEnv
 
@@ -64,18 +64,6 @@ class TokenizeConfig:
             train_urls=self.train_paths,
             validation_urls=self.validation_paths,
             cache_dir=actual_output_path,
-        )
-
-    def as_lm_dataset_task_config(self, actual_output_path: str | InputName) -> LMDatasetConfig:
-        """
-        For use in Levanter training runs with a single dataset.
-        """
-        return LMDatasetConfig(
-            cache_dir=actual_output_path,
-            train_urls=self.train_paths,
-            validation_urls=self.validation_paths,
-            tags=self.tags,
-            tokenizer=self.tokenizer,
         )
 
 
