@@ -46,7 +46,7 @@ def train_model(
     def run():
         if fsspec_exists(os.path.join(output_path, "model.bin")):
             logger.info(f"Model already exists at {output_path}/model.bin. Skipping training.")
-            return True
+            return
 
         import fasttext
 
