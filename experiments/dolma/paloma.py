@@ -46,7 +46,9 @@ download_paloma = ExecutorStep(
 ).cd("65cd6fc")
 
 
-def tokenize_paloma_steps(*, base_path="tokenized/", tokenizer: str | VersionedValue[str]=llama3_tokenizer) -> dict[str, TokenizerStep]:
+def tokenize_paloma_steps(
+    *, base_path="tokenized/", tokenizer: str | VersionedValue[str] = llama3_tokenizer
+) -> dict[str, TokenizerStep]:
     if isinstance(tokenizer, str):
         tokenizer = versioned(tokenizer)
     paloma_steps: dict[str, ExecutorStep[TokenizeConfig]] = {}

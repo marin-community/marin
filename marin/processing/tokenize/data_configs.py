@@ -3,6 +3,7 @@ import logging
 import os
 
 from levanter.data.text import LMDatasetConfig, LMDatasetSourceConfig, LMMixtureDatasetConfig
+
 from marin.execution.executor import ExecutorStep, InputName, output_path_of
 from marin.processing.tokenize import TokenizeConfig
 
@@ -54,7 +55,7 @@ def lm_data_config(
     for name, step in validation_sets.items():
         if step.config.tokenizer != tokenizer:
             raise ValueError(
-                f"Validation set {step.name} must have same tokenizer as training set's,"
+                f"Validation set {name} ({step.name}) must have same tokenizer as training set's,"
                 f" but got: {step.config.tokenizer} vs {tokenizer}"
             )
 
@@ -143,10 +144,17 @@ def add_validation_sets_to_mixture(
     """
     Adds validation sets to a mixture config.
     """
-    valid_configs = {name: step.config.as_lm_dataset_source_config(output_path_of(step)) for name, step in validation_sets.items()}
-    new_configs = {**config.configs, **{name: source for name, source in valid_configs.items() if name not in config.configs}}
+    valid_configs = {
+        name: step.config.as_lm_dataset_source_config(output_path_of(step)) for name, step in validation_sets.items()
+    }
+    new_configs = {
+        **config.configs,
+        **{name: source for name, source in valid_configs.items() if name not in config.configs},
+    }
+
     if any(name in config.train_weights for name in validation_sets):
         overlap = set(config.train_weights) & set(validation_sets)
         logger.warning(f"Validation sets {overlap} already present in mixture. Skipping.")
+
     new_weights = {**config.train_weights, **{name: 0.0 for name in validation_sets if name not in config.train_weights}}
     return dataclasses.replace(config, configs=new_configs, train_weights=new_weights)
