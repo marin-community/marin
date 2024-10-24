@@ -13,9 +13,7 @@ dclm_baseline_tokenized = default_tokenize(
 )
 
 starcoderdata_tokenized = default_tokenize(
-    name="starcoderdata",
-    dataset=starcoderdata,
-    tokenizer=gpt_neox_tokenizer,
+    name="starcoderdata", dataset=starcoderdata, tokenizer=gpt_neox_tokenizer, text_key="content"
 )
 
 proofpile_2_tokenized = default_tokenize(
