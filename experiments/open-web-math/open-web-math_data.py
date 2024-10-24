@@ -9,7 +9,7 @@ from operations.download.huggingface.download import DownloadConfig, download
 
 ############################################################
 # download open-web-math dataset
-open_web_math_download_step = ExecutorStep(
+open_web_math_raw = ExecutorStep(
     name="raw/open-web-math",
     fn=download,
     config=DownloadConfig(
@@ -26,6 +26,6 @@ open_web_math_download_step = ExecutorStep(
 if __name__ == "__main__":
     executor_main(
         steps=[
-            open_web_math_download_step,
+            open_web_math_raw,
         ]
     )
