@@ -19,7 +19,7 @@ from marin.utils import fsspec_exists, fsspec_glob, fsspec_rm
 from marin.schemas.web.convert import ExtractionConfig, HtmlToMarkdownConfig
 
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("ray")
 
 
 @ray.remote(memory=1.5 * 1024 * 1024 * 1024)  # 1.5 GB
@@ -269,7 +269,14 @@ class ParquetFWConfig:
 
 @draccus.wrap()
 def process_fw_dump(cfg: ParquetFWConfig):
-    cc_dumps = cfg.cc_dumps or fsspec_glob(cfg.input_path, "*")
+    file_ctr = 0
+    end_processing = False
+
+    cc_dumps = cfg.cc_dumps or [
+        os.path.basename(d) 
+        for d in fsspec_glob(f"{cfg.input_path}/*") 
+        if fsspec_glob(os.path.join(d, "*.parquet"))
+    ]
 
     for cc_dump in cc_dumps:
         files = fsspec_glob(os.path.join(cfg.input_path, cc_dump, "*.parquet"))
@@ -309,14 +316,19 @@ def process_fw_dump(cfg: ParquetFWConfig):
             logger.info(f"Starting Processing for the fw parquet file: {file} in output_path: {output_path}")
             result_refs.append(process_fw_parquet.remote(file, output_path, cfg.extract_method, cfg.config, md_output_path, text_output_path, html_output_path))
 
-            if cfg.max_files and len(result_refs) >= cfg.max_files:
+            if cfg.max_files and file_ctr >= cfg.max_files:
+                end_processing = True
                 break
+
+            file_ctr += 1
         # Wait for all the tasks to finish
         try:
             ray.get(result_refs)
         except Exception as e:
             logger.exception(f"Error processing the group: {e}")
-
+            
+        if end_processing:
+            break
 
 if __name__=="__main__":
     process_fw_dump()
