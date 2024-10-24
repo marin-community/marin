@@ -9,6 +9,7 @@ import logging
 import os
 import tempfile
 from collections.abc import Callable
+from dataclasses import dataclass
 
 import fsspec
 import numpy as np
@@ -285,3 +286,23 @@ def reservoir_sample(
     with fsspec.open(output_dataset_path, "wt", compression="infer") as f_out:
         for line in reservoir:
             f_out.write(line)
+
+
+@dataclass(frozen=True)
+class DatasetConfig:
+    """Configuration for curating a dataset for training a quality classfier
+
+    Attributes:
+        input_doc_path (str): Path to the input dataset which can be a directory or a file.
+            If it is a directory, the function will glob all the files in the directory and sample from each file.
+            The files can be formatted in jsonl or fasttext format.
+        label (str): Label for the dataset. This should be in the format "<label>"
+            where <label> is the label for the dataset. For example, "hq" or "lq", respectively.
+        sampling_rate (Optional[float]): Subsampling fractioin to construct the dataset.
+        max_sample_size (Optional[int]): Maximum number of examples to include in the dataset.
+    """
+
+    input_doc_path: str
+    label: str
+    sampling_rate: float = 1.0
+    max_sample_size: int | None = None

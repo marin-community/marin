@@ -10,66 +10,49 @@ from dataclasses import dataclass, field
 import draccus
 
 from marin.classifiers.bert.training import train_model
-from marin.classifiers.utils import attributes_to_dataset, create_label_attribute
+from marin.classifiers.utils import DatasetConfig, attributes_to_dataset, create_label_attribute
 from marin.utils import fsspec_rm
 
 
 @dataclass
-class TrainBertClassifierConfig:
+class TrainBertClassifierConfigConfig:
     """
     Configuration class for main process.
 
     Attributes:
-        output__path (str): Path for output data (i.e., gs://$BUCKET/classifiers/$EXPERIMENT).
-        pos_doc_path (str): Path to experiment with positive examples (i.e., gs://$BUCKET/documents/../$EXPERIMENT).
-        neg_doc_path (str): Path to experiment with negative examples (i.e., gs://$BUCKET/documents/../$EXPERIMENT).
-        pos_sampling_rate (float): Fraction of positive examples to include the training dataset.
-        neg_sampling_rate (float): Fraction of negative examples to include the training dataset.
-        bert_args (dict): Arguments for the BERT training process.
+        output_path (str): Path for output data (i.e., gs://$BUCKET/classifiers/$EXPERIMENT).
+        datasets (list[DatasetConfig]): List of configurations for converting Dolma documents into
+            labeled training datasets.
+        bert_args (dict): Arguments for the fastText training process (see fastText docs for list of options).
         seed (int): Seed for random number generator to ensure reproducibility.
         val_frac (float): Fraction of data to be used for validation.
         memory (int): Amount of memory allocated for remote training process (in GB).
-        num_cpus (int): Number of CPUs allocated for remote training process.
     """
 
     output_path: str
-    pos_doc_path: str
-    neg_doc_path: str
-    pos_sampling_rate: float = 1.0
-    neg_sampling_rate: float = 1.0
+    datasets: list[DatasetConfig]
     bert_args: dict = field(default_factory=dict)
     seed: int = 0
     val_frac: float = 0.1
     memory: int = 1
 
 
-def train(cfg: TrainBertClassifierConfig):
-    pos_attr_path = os.path.join(cfg.output_path, "tmp", "positives")
-    neg_attr_path = os.path.join(cfg.output_path, "tmp", "negatives")
+def train(cfg: TrainBertClassifierConfigConfig):
+    for dataset in cfg.datasets:
+        attr_path = os.path.join(cfg.output_path, "tmp")
+        create_label_attribute(input_doc_path=dataset.input_doc_path, output_attr_path=attr_path, label=dataset.label)
+        attributes_to_dataset(
+            output_path=cfg.output_path,
+            doc_path=dataset.input_doc_path,
+            attr_path=attr_path,
+            sampling_rate=dataset.sampling_rate,
+            seed=cfg.seed,
+        )
+        fsspec_rm(attr_path)
 
-    create_label_attribute(input_doc_path=cfg.pos_doc_path, output_attr_path=pos_attr_path, label="hq")
-    attributes_to_dataset(
-        output_path=cfg.output_path,
-        doc_path=cfg.pos_doc_path,
-        attr_path=pos_attr_path,
-        sampling_rate=cfg.pos_sampling_rate,
-        seed=cfg.seed,
-    )
-
-    create_label_attribute(input_doc_path=cfg.neg_doc_path, output_attr_path=neg_attr_path, label="lq")
-    attributes_to_dataset(
-        output_path=cfg.output_path,
-        doc_path=cfg.neg_doc_path,
-        attr_path=neg_attr_path,
-        sampling_rate=cfg.neg_sampling_rate,
-        seed=cfg.seed,
-    )
-
-    fsspec_rm(pos_attr_path)
-    fsspec_rm(neg_attr_path)
-
+    input_dataset_path = os.path.join(cfg.output_path, "data")
     train_model(
-        input_path=f"{cfg.output_path}/data",
+        input_path=input_dataset_path,
         output_path=cfg.output_path,
         seed=cfg.seed,
         val_frac=cfg.val_frac,
@@ -79,7 +62,7 @@ def train(cfg: TrainBertClassifierConfig):
 
 
 @draccus.wrap()
-def main(cfg: TrainBertClassifierConfig):
+def main(cfg: TrainBertClassifierConfigConfig):
     train(cfg)
 
 
