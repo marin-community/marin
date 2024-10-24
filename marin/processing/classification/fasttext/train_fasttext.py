@@ -9,8 +9,9 @@ from dataclasses import dataclass, field
 
 import draccus
 
-from marin.classifiers.bert.training import train_model
-from marin.classifiers.utils import attributes_to_dataset
+from marin.classifiers.fasttext.training import train_model
+from marin.classifiers.utils import attributes_to_dataset, create_label_attribute
+from marin.utils import fsspec_rm
 
 
 @dataclass(frozen=True)
@@ -30,8 +31,8 @@ class DatasetCurationConfig:
 
     input_doc_path: str
     label: str
-    absolute_sampling_rate: int | None = None
-    relative_sampling_rate: float | None = None
+    max_sample_size: int | None = None
+    sampling_rate: float = 1.0
 
 
 @dataclass
@@ -61,15 +62,18 @@ class TrainFasttextClassifierConfig:
 
 def train(cfg: TrainFasttextClassifierConfig):
     for input_doc_path in cfg.input_doc_paths:
+        attr_path = os.path.join(cfg.output_path, "tmp")
+        create_label_attribute(
+            input_doc_path=input_doc_path.input_doc_path, output_attr_path=attr_path, label=input_doc_path.label
+        )
         attributes_to_dataset(
             output_path=cfg.output_path,
             doc_path=input_doc_path.input_doc_path,
-            absolute_sampling_rate=input_doc_path.absolute_sampling_rate,
-            relative_sampling_rate=input_doc_path.relative_sampling_rate,
+            attr_path=attr_path,
+            sampling_rate=input_doc_path.sampling_rate,
             seed=cfg.seed,
-            label=input_doc_path.label,
-            file_format=input_doc_path.format,
         )
+        fsspec_rm(attr_path)
 
     input_dataset_path = os.path.join(cfg.output_path, "data")
     train_model(
