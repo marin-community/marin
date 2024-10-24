@@ -22,8 +22,7 @@ from experiments.dolma.paloma import tokenize_paloma_steps
 from experiments.llama import compute_num_parameters
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import ExecutorStep, InputName, this_output_path, versioned
-from marin.processing.tokenize import TokenizeConfig, lm_data_config
-from marin.processing.tokenize import TokenizerStep
+from marin.processing.tokenize import TokenizeConfig, TokenizerStep, lm_data_config
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 
 
@@ -57,24 +56,7 @@ def default_train(
     use_default_validation: bool = True,
 ) -> ExecutorStep:
 
-    tokenizer = _get_tokenizer_for_train(tokenized)
-
-    if use_default_validation:
-        validation_sets = default_validation_sets(tokenizer=tokenizer)
-    else:
-        validation_sets = []
-
-    if isinstance(tokenized, InputName | ExecutorStep):
-        data = lm_data_config(training_set=tokenized, validation_sets=validation_sets)
-    else:
-        # TODO: would be better to expose hooks in levanter instead of relying on mixtures
-        data = tokenized
-        if validation_sets:
-            if isinstance(data, LMDatasetConfig):
-                # replace with a mixture
-                data = tokenize.convert_to_mixture_config(data, "train")
-
-            data = tokenize.add_validation_sets_to_mixture(data, validation_sets)
+    data = _prepare_data_config(tokenized, use_default_validation)
 
     # TODO: right now, assume architecture is a LlamaConfig, generalize this
     assert isinstance(model_config, LlamaConfig)
@@ -112,6 +94,28 @@ def default_train(
             hf_save_steps=25000,
         ),
     )
+
+
+def _prepare_data_config(
+    tokenized: InputName | ExecutorStep | LMDatasetConfig | LMMixtureDatasetConfig, use_default_validation: bool
+) -> LMDatasetConfig | LMMixtureDatasetConfig:
+    tokenizer = _get_tokenizer_for_train(tokenized)
+    if use_default_validation:
+        validation_sets = default_validation_sets(tokenizer=tokenizer)
+    else:
+        validation_sets = []
+    if isinstance(tokenized, InputName | ExecutorStep):
+        data = lm_data_config(training_set=tokenized, validation_sets=validation_sets)
+    else:
+        # TODO: would be better to expose hooks in levanter instead of relying on mixtures
+        data = tokenized
+        if validation_sets:
+            if isinstance(data, LMDatasetConfig):
+                # replace with a mixture
+                data = tokenize.convert_to_mixture_config(data, "train")
+
+            data = tokenize.add_validation_sets_to_mixture(data, validation_sets)
+    return data
 
 
 def _get_tokenizer_for_train(tokenized):
