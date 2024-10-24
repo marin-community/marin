@@ -7,6 +7,7 @@ import draccus
 from levanter.models.gpt2 import Gpt2Config
 from levanter.trainer import TrainerConfig
 
+from marin.classifiers.utils import DatasetConfig
 from marin.execution.executor import (
     ExecutorMainConfig,
     ExecutorStep,
@@ -22,7 +23,6 @@ from marin.processing.classification.fasttext.train_fasttext import (
     train,
 )
 from marin.processing.classification.inference import InferenceConfig, run_inference
-from marin.processing.classification.utils import DatasetConfig
 from marin.processing.tokenize import TokenizeConfig, lm_data_config, tokenize
 from marin.schemas.web.convert import HtmlToMarkdownConfig
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
