@@ -97,20 +97,9 @@ def prune_fineweb_parquet(cfg: PruningConfig):
         logger.info(f"Processing {cc_dump}")
 
         files = fsspec_glob(os.path.join(cfg.input_path, cc_dump, "*.parquet"))
-        MAX_NUM_PENDING_TASKS = 15  # Max number of parquet files we want to process in pending state
 
         result_refs = []
         for file in files:
-            if len(result_refs) > MAX_NUM_PENDING_TASKS:
-                # update result_refs to only
-                # track the remaining tasks.
-                ready_refs, result_refs = ray.wait(result_refs, num_returns=1)
-                try:
-                    ray.get(ready_refs)
-                except Exception as e:
-                    logger.exception(f"Error processing the group: {e}")
-                    continue
-
             # Get the input file name
             # Example of file = gs://marin-data/raw/fineweb/fw-v1.0/CC-MAIN-2024-10/000_00000.parquet
             # input_file_name = 000_00000.parquet
