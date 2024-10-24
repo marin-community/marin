@@ -22,7 +22,7 @@ def step_to_lm_mixture_component(step: TokenizerStep) -> LMDatasetSourceConfig:
 
 def lm_data_config(
     training_set: TokenizerStep | InputName,
-    validation_sets: dict[str, TokenizerStep] = (),
+    validation_sets: dict[str, TokenizerStep] | None = None,
     shuffle: bool | int = True,
 ) -> LMMixtureDatasetConfig:
     """
@@ -35,17 +35,18 @@ def lm_data_config(
     """
     tokenizer = training_set.config.tokenizer
 
-    for name, step in validation_sets.items():
-        if step.config.tokenizer != tokenizer:
-            raise ValueError(
-                f"Validation set {name} ({step.name}) must have same tokenizer as training set's,"
-                f" but got: {step.config.tokenizer} vs {tokenizer}"
-            )
+    if validation_sets is not None:
+        for name, step in validation_sets.items():
+            if step.config.tokenizer != tokenizer:
+                raise ValueError(
+                    f"Validation set {name} ({step.name}) must have same tokenizer as training set's,"
+                    f" but got: {step.config.tokenizer} vs {tokenizer}"
+                )
 
     train_set_name = os.path.basename(training_set.name)
 
     return lm_mixture_data_config(
-        {train_set_name: training_set, **validation_sets},
+        {train_set_name: training_set, **(validation_sets or {})},
         {train_set_name: 1.0},
         shuffle=shuffle,
         missing_weights_are_validation=True,
@@ -58,7 +59,7 @@ def lm_mixture_data_config(
     *,
     shuffle: bool | int = True,
     missing_weights_are_validation: bool = True,
-):
+) -> LMMixtureDatasetConfig:
     """
     Creates a training config from a mixture of datasources.
 
