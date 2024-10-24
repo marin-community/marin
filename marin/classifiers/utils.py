@@ -205,7 +205,7 @@ def attributes_to_dataset(
         seed (int): Seed for random number generator to ensure reproducibility.
         get_label (Callable[[dict,dict], str]): Function to extract label from documents and attributes.
                                                 Defaults to get_label.
-        max_sample_size (int): Maximum number of examples to include in the fastText training dataset.
+        max_sample_size (Optional[int]): Maximum number of examples to include in the fastText training dataset.
                                Defaults to None.
     """
 
@@ -260,12 +260,7 @@ def reservoir_sample(
     sample_size: int,
     seed: int,
 ) -> None:
-    """Sample a fixed number of examples K from any dataset of size N where K < N
-
-    We use the reservoir sampling algorithm to sample K examples from the dataset of size N where
-    each row in the dataset has a uniform probability of 1/N of being sampled.
-    The dataset can be sharded across multiple files in the directory which we glob together and
-    sample from.
+    """Sample a fixed number of examples K from any dataset of size N where K < N using reservoir sampling.
 
     Args:
         input_dataset_path (str): Path to the input dataset (e.g., output of write_examples).
@@ -293,9 +288,7 @@ class DatasetConfig:
     """Configuration for curating a dataset for training a quality classfier
 
     Attributes:
-        input_doc_path (str): Path to the input dataset which can be a directory or a file.
-            If it is a directory, the function will glob all the files in the directory and sample from each file.
-            The files can be formatted in jsonl or fasttext format.
+        input_doc_path (str): Path to the input dataset directory (Dolma format).
         label (str): Label for the dataset. This should be in the format "<label>"
             where <label> is the label for the dataset. For example, "hq" or "lq", respectively.
         sampling_rate (Optional[float]): Subsampling fractioin to construct the dataset.
