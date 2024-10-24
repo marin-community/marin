@@ -84,6 +84,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
                 "epoch": 25,
                 "wordNgrams": 2,
                 "dim": 50,
+                "thread": 4,
             },
         ),
     )
