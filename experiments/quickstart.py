@@ -65,7 +65,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
         name=os.path.join(prefix, "quality-classifier"),
         fn=train,
         config=TrainFasttextClassifierConfig(
-            input_doc_paths=[
+            datasets=[
                 DatasetConfig(
                     input_doc_path=output_path_of(transform_hq_data_step),
                     label="hq",
