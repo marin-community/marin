@@ -13,12 +13,12 @@ max_workers: 1024
 # Configure GCP
 provider:
   type: gcp
-  region: eu-west4
+  region: europe-west4
   availability_zone: europe-west4-b
   project_id: hai-gcp-models
 
 docker:
-    image: "eu-west4-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:20241022"
+    image: "europe-west4-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:20241024"
     container_name: "ray_docker"
     pull_before_run: true
     worker_run_options:
@@ -35,7 +35,7 @@ docker:
 
 
 initialization_commands:
-  - yes | gcloud auth configure-docker eu-west4-docker.pkg.dev
+  - yes | gcloud auth configure-docker europe-west4-docker.pkg.dev
   - which docker || (curl -fsSL https://get.docker.com -o get-docker.sh; sudo sh get-docker.sh; sudo usermod -aG docker $USER; sudo systemctl restart docker -f)
   # always run this because ray doesn't run with sudo
   - sudo usermod -aG docker $USER
@@ -46,7 +46,7 @@ initialization_commands:
 setup_commands:
   # set the GCP project because it's not injected by default
   - gcloud config set project hai-gcp-models
-  - gcloud config set compute/region eu-west4
+  - gcloud config set compute/region europe-west4
   - gcloud config set compute/zone europe-west4-b
   - mkdir $HOME/.cache/huggingface -p
   - gcloud secrets versions access latest --secret=HF_TOKEN > $HOME/.cache/huggingface/token
@@ -82,7 +82,6 @@ available_node_types:
 
             # Set Source Image =>> Ubuntu 22.04 Base VM
             sourceImage: projects/ubuntu-os-cloud/global/images/family/ubuntu-2204-lts
-
   tpu_worker:
     max_workers: 1024
     min_workers: 4

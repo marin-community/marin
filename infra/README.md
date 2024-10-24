@@ -204,7 +204,7 @@ then bring the cluster back up (`ray up`); note that this will kill all VMs, inc
 
 If you need to make substantive changes to the machine software, you should change the Docker file at
 `docker/marin/Dockerfile.cluster`. Then run `make cluster_docker` to rebuild the Docker image and push it to the
-Google Artifact Registry. This will create a new image and a new tag, of the form
+Google Artifact Registry. (Note that by default this will update the dockers for all clusters; if you only want to update it for one cluster, you can modify `CLUSTER_REPOS` variable in the Makefile). This will create a new image and a new tag, of the form
 `"us-central2-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:<TAG>"`. Tags can include the latest commit hash and the
 date, for example:
 
@@ -216,18 +216,25 @@ TAG_VERSIONS = latest $(shell git rev-parse --short HEAD) $(shell date -u +"%Y%m
 The `cluster_docker` command will handle creating artifact repositories if they don't exist, building the Docker image,
 tagging it, and pushing it to all relevant regions and versions.
 
-After building the Docker image, update the `infra/update-cluster-configs.py` script to point to the new image and
-regenerate the cluster configs:
+After building the Docker image, update the `infra/update-cluster-configs.py` script to point to the new image and regenerate the cluster configs. For instance, if you updated the `europe-west` cluster you can update the tags as below:
 
 ```diff
-- DOCKER_TAG = "20241022"
-+ DOCKER_TAG = "20241023"
+- DOCKER_TAGS = {
+-    "us-central2": "20241022",
+-    "us-west4": "20241022",
+-    "europe-west4": "20241022",
+-}
+DOCKER_TAGS = {
+    "us-central2": "20241022",
+    "us-west4": "20241022",
+    "europe-west4": "20241024",
+}
 ```
 
-Then run `python infra/update-cluster-configs.py` to regenerate the cluster configs. This will update the cluster
-configs in the `infra` directory with the new Docker image tag.
+Then run `python infra/update-cluster-configs.py` to regenerate the cluster configs. This will update each cluster
+config in the `infra` directory with the corresponding new Docker image tag.
 
-After that, you can restart the cluster with `ray down` and `ray up`.
+After that, you can restart each cluster with `ray down` and `ray up`.
 
 If you need to change something else about the cluster, e.g. if you're changing any of the initialization/setup
 commands, it's best to bring the entire cluster down (`ray down`), *then edit the `cluster.yaml`*, and then bring the

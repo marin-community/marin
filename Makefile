@@ -23,12 +23,11 @@ autoformat:
 	ruff check --fix --show-fixes .
 	black .
 
-
-# ChatGPT did this for me.
 CLUSTER_REPOS = us-central2 europe-west4 us-west4
 TAG_VERSIONS = latest $(shell git rev-parse --short HEAD) $(shell date -u +"%Y%m%d")
 
 cluster_docker:
+	@echo "Building and pushing Docker images for clusters $(CLUSTER_REPOS) with tags $(TAG_VERSIONS)"
 	# Create Artifact Repositories if they don't exist
 	$(foreach region,$(CLUSTER_REPOS), \
 		gcloud artifacts repositories list --location=$(region) --filter 'name:marin' > /dev/null || \
