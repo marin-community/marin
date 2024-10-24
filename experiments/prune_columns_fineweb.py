@@ -1,4 +1,4 @@
-"""Convert fineweb to markdown"""
+"""Prune unnecessary columns from FineWeb parquet files."""
 
 import json
 import logging
@@ -16,11 +16,11 @@ from marin.utils import fsspec_exists, fsspec_glob
 logger = logging.getLogger("ray")
 
 
-@ray.remote(memory=10 * 1024 * 1024 * 1024)  # 10 GB
+@ray.remote(memory=10 * 1024 * 1024 * 1024, max_task_retries=5)  # 10 GB
 def prune_file_and_save(
     input_file: str,
     output_file: str,
-    drop_columns: list[str],
+    keep_columns: list[str],
 ):
     """
     Prunes unnecessary columns from a FineWeb parquet file and save the result.
@@ -32,6 +32,7 @@ def prune_file_and_save(
     Args:
         input_file (str): Path to the input FineWeb parquet file.
         output_file (str): Path where the pruned parquet file will be saved.
+        keep_columns (list[str]): Columns to keep in the pruned parquet file.
     """
 
     # Example of input_path = gs://marin-data/raw/fineweb/fw-v1.0/CC-MAIN-2024-10/000_00000.parquet
@@ -51,6 +52,7 @@ def prune_file_and_save(
         raise e
 
     # reserve columns: id, url, file_path, language_score, token_count
+    drop_columns = [col for col in df.columns if col not in keep_columns]
     df.drop(columns=drop_columns, inplace=True)
 
     try:
@@ -81,7 +83,7 @@ class PruningConfig:
     output_path: str
     cc_dumps: list[str] | None = None
     max_files: int | None = None
-    drop_columns: list[str] = field(default_factory=lambda: ["text", "date", "language", "dump"])
+    keep_columns: list[str] = field(default_factory=lambda: ["id", "url", "file_path", "language_score", "token_count"])
 
 
 @draccus.wrap()
@@ -89,14 +91,16 @@ def prune_fineweb_parquet(cfg: PruningConfig):
     file_ctr = 0
     end_processing = False
 
-    cc_dumps = cfg.cc_dumps or [
-        os.path.basename(d) for d in fsspec_glob(f"{cfg.input_path}/*") if fsspec_glob(os.path.join(d, "*.parquet"))
-    ]
+    cc_dumps = cfg.cc_dumps or fsspec_glob(f"{cfg.input_path}/*")
 
     for cc_dump in cc_dumps:
         logger.info(f"Processing {cc_dump}")
 
         files = fsspec_glob(os.path.join(cfg.input_path, cc_dump, "*.parquet"))
+
+        if not files:
+            logger.info(f"No files found in {cc_dump}, Skipping")
+            continue
 
         result_refs = []
         for file in files:
@@ -110,7 +114,7 @@ def prune_fineweb_parquet(cfg: PruningConfig):
                 input_file_name,
             )
 
-            result_refs.append(prune_file_and_save.remote(file, output_file_name, cfg.drop_columns))
+            result_refs.append(prune_file_and_save.remote(file, output_file_name, cfg.keep_columns))
 
             if cfg.max_files and file_ctr >= cfg.max_files:
                 end_processing = True
