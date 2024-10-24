@@ -18,11 +18,11 @@ from marin.execution.executor import (
 from marin.processing.classification.consolidate import ConsolidateConfig, FilterConfig, consolidate
 from marin.processing.classification.dedupe import DedupeConfig, dedupe
 from marin.processing.classification.fasttext.train_fasttext import (
-    DatasetCurationConfig,
     TrainFasttextClassifierConfig,
     train,
 )
 from marin.processing.classification.inference import InferenceConfig, run_inference
+from marin.processing.classification.utils import DatasetConfig
 from marin.processing.tokenize import TokenizeConfig, lm_data_config, tokenize
 from marin.schemas.web.convert import HtmlToMarkdownConfig
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
@@ -66,17 +66,15 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
         fn=train,
         config=TrainFasttextClassifierConfig(
             input_doc_paths=[
-                DatasetCurationConfig(
+                DatasetConfig(
                     input_doc_path=output_path_of(transform_hq_data_step),
                     label="hq",
-                    relative_sampling_rate=1.0,
-                    format="dolma_formatted_jsonl",
+                    sampling_rate=1.0,
                 ),
-                DatasetCurationConfig(
+                DatasetConfig(
                     input_doc_path=output_path_of(transform_lq_data_step),
                     label="lq",
-                    relative_sampling_rate=1.0,
-                    format="dolma_formatted_jsonl",
+                    sampling_rate=1.0,
                 ),
             ],
             output_path=this_output_path(),
