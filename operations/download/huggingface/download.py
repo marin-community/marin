@@ -71,10 +71,10 @@ def _wait_for_job_completion(job_name: str, timeout: int, poll_interval: int) ->
 
 
 def download(cfg: DownloadConfig) -> None | ray.ObjectRef:
-    logger.info(f"[*] Downloading HF Dataset `{cfg.hf_dataset_id}` to `{cfg.output_path}`")
+    logger.info(f"[*] Downloading HF Dataset `{cfg.hf_dataset_id}` to `{cfg.gcs_output_path}`")
 
     job_name, job_url = download_hf_dataset(
-        cfg.hf_dataset_id, cfg.revision, cfg.hf_url_glob, cfg.output_path, cfg.public_gcs_path
+        cfg.hf_dataset_id, cfg.revision, cfg.hf_url_glob, cfg.gcs_output_path, cfg.public_gcs_path
     )
 
     if cfg.wait_for_completion:
