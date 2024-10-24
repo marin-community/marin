@@ -37,7 +37,13 @@ def process_one_warc_file(
     Takes in the input file and processes it to get the html and md content.
     It scans the s3 bucket in input_file and returns the content of the urls in the input_file
     Args:
-    input_path (str): The input file to process
+        input_path (str): The input file to process
+        output_path (str): The output file to write the processed content
+        extract_method (str): The method to use for extracting the content
+        config (ExtractionConfig): The config to use for the extraction
+        md_output_path (str): The output path to write the md content
+        text_output_path (str): The output path to write the text content
+        html_output_path (str): The output path to write the html content
     """
     # input_path = gs://marin-data/processed/000_00000/0.parquet
     # output_path = gs://marin-data/processed/000_00000/0_processed.jsonl.gz
@@ -172,7 +178,7 @@ def process_one_warc_file(
     return True
 
 
-@ray.remote(memory=10 * 1024 * 1024 * 1024, runtime_env={"pip": ["s3fs"]})  # 10 GB
+@ray.remote(memory=10 * 1024 * 1024 * 1024, runtime_env={"pip": ["s3fs"]}, max_retries=5)  # 10 GB
 def process_fw_parquet(
     input_path: str,
     output_path: str,
@@ -272,16 +278,16 @@ def process_fw_dump(cfg: ParquetFWConfig):
     file_ctr = 0
     end_processing = False
 
-    cc_dumps = cfg.cc_dumps or [
-        os.path.basename(d) 
-        for d in fsspec_glob(f"{cfg.input_path}/*") 
-        if fsspec_glob(os.path.join(d, "*.parquet"))
-    ]
+    cc_dumps = cfg.cc_dumps or fsspec_glob(f"{cfg.input_path}/*")
 
     for cc_dump in cc_dumps:
         files = fsspec_glob(os.path.join(cfg.input_path, cc_dump, "*.parquet"))
         MAX_NUM_PENDING_TASKS = 15  # Max number of parquet files we want to process in pending state
         NUM_TASKS = len(files)
+
+        if not files:
+            logger.info(f"No files found in {cc_dump}, Skipping")
+            continue
 
         result_refs = []
         for file in files:
@@ -314,7 +320,8 @@ def process_fw_dump(cfg: ParquetFWConfig):
 
 
             logger.info(f"Starting Processing for the fw parquet file: {file} in output_path: {output_path}")
-            result_refs.append(process_fw_parquet.remote(file, output_path, cfg.extract_method, cfg.config, md_output_path, text_output_path, html_output_path))
+            result_refs.append(
+                process_fw_parquet.remote(file, output_path, cfg.extract_method, cfg.config, md_output_path, text_output_path, html_output_path))
 
             if cfg.max_files and file_ctr >= cfg.max_files:
                 end_processing = True
@@ -325,7 +332,7 @@ def process_fw_dump(cfg: ParquetFWConfig):
         try:
             ray.get(result_refs)
         except Exception as e:
-            logger.exception(f"Error processing the group: {e}")
+            raise Exception(f"Error processing the group: {e}")
             
         if end_processing:
             break
