@@ -1,18 +1,17 @@
 """Convert fineweb to markdown"""
 
-import os
-import ray
 import json
-import fsspec
-import draccus
 import logging
-import pandas as pd
-
-from datetime import datetime
+import os
 from dataclasses import dataclass, field
+from datetime import datetime
+
+import draccus
+import fsspec
+import pandas as pd
+import ray
 
 from marin.utils import fsspec_exists, fsspec_glob
-
 
 logger = logging.getLogger("ray")
 
@@ -50,7 +49,7 @@ def prune_file_and_save(
     except FileNotFoundError as e:
         logger.exception(f"Error reading the parquet file: {e}")
         raise e
-    
+
     # reserve columns: id, url, file_path, language_score, token_count
     df.drop(columns=drop_columns, inplace=True)
 
@@ -59,7 +58,7 @@ def prune_file_and_save(
     except Exception as e:
         logger.exception(f"Error processing the file {input_file}: {e}")
         return False
-    
+
     logger.info(f"Processed {input_file} and saved to {output_file}")
 
     datetime_end = datetime.utcnow()
@@ -82,9 +81,7 @@ class PruningConfig:
     output_path: str
     cc_dumps: list[str] | None = None
     max_files: int | None = None
-    drop_columns: list[str] = field(
-        default_factory=lambda: ["text", "date", "language", "dump"]
-    )
+    drop_columns: list[str] = field(default_factory=lambda: ["text", "date", "language", "dump"])
 
 
 @draccus.wrap()
@@ -93,9 +90,7 @@ def prune_fineweb_parquet(cfg: PruningConfig):
     end_processing = False
 
     cc_dumps = cfg.cc_dumps or [
-        os.path.basename(d) 
-        for d in fsspec_glob(f"{cfg.input_path}/*") 
-        if fsspec_glob(os.path.join(d, "*.parquet"))
+        os.path.basename(d) for d in fsspec_glob(f"{cfg.input_path}/*") if fsspec_glob(os.path.join(d, "*.parquet"))
     ]
 
     for cc_dump in cc_dumps:
@@ -138,10 +133,10 @@ def prune_fineweb_parquet(cfg: PruningConfig):
             ray.get(result_refs)
         except Exception as e:
             logger.exception(f"Error processing the group: {e}")
-        
+
         if end_processing:
             break
 
 
-if __name__=="__main__":
+if __name__ == "__main__":
     prune_fineweb_parquet()
