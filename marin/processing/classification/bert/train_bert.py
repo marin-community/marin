@@ -15,7 +15,7 @@ from marin.utils import fsspec_rm
 
 
 @dataclass
-class TrainBertClassifierConfigConfig:
+class TrainBertClassifierConfig:
     """
     Configuration class for main process.
 
@@ -37,7 +37,7 @@ class TrainBertClassifierConfigConfig:
     memory: int = 1
 
 
-def train(cfg: TrainBertClassifierConfigConfig):
+def train(cfg: TrainBertClassifierConfig):
     for dataset in cfg.datasets:
         attr_path = os.path.join(cfg.output_path, "tmp")
         create_label_attribute(input_doc_path=dataset.input_doc_path, output_attr_path=attr_path, label=dataset.label)
@@ -62,7 +62,7 @@ def train(cfg: TrainBertClassifierConfigConfig):
 
 
 @draccus.wrap()
-def main(cfg: TrainBertClassifierConfigConfig):
+def main(cfg: TrainBertClassifierConfig):
     train(cfg)
 
 
