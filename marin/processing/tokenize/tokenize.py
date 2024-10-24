@@ -166,11 +166,15 @@ def _create_source(input_paths: str | list[str]) -> ShardedDataSource:
     else:
         if isinstance(input_paths, str):
             input_paths = [input_paths]
-        jsonls = _get_jsonls(input_paths)
-        if len(jsonls) == 0:
-            raise ValueError(f"No jsonl files found in {input_paths}")
-        logger.info(f"Found {len(jsonls)} jsonl files.")
-        source = TextUrlDataSource(jsonls)
+
+        filepaths_to_tokenize = _get_filepaths_to_tokenize(input_paths)
+
+        if len(filepaths_to_tokenize) == 0:
+            raise ValueError(f"No valid jsonl/parquet files found to tokenize in {input_paths}")
+
+        logger.info(f"Found {len(filepaths_to_tokenize)} files to tokenize.")
+        source = TextUrlDataSource(filepaths_to_tokenize)
+
     return source
 
 
@@ -271,16 +275,31 @@ def lm_mixture_data_config(
     )
 
 
-def _get_jsonls(input_path: list[str]):
+def _get_files_by_extension(input_paths: list[str], extension: str) -> list[str]:
+    """
+    Get a list of all filepaths with the specified extension from the input paths.
+    """
     output_paths = []
-    for path in input_path:
+    for path in input_paths:
         if fsspec_isdir(path) or path.endswith("/"):
-            logger.info(f"Getting all jsonl files in {path}")
-            output_paths.extend(fsspec_glob(os.path.join(path, "**/*.jsonl.{gz,zst,zstd}")))
+            logger.info(f"Getting all {extension} files in {path}")
+            output_paths.extend(fsspec_glob(os.path.join(path, f"**/*.{extension}")))
         else:
             output_paths.extend(fsspec_glob(path))
 
     return output_paths
+
+
+def _get_filepaths_to_tokenize(input_paths: list[str]) -> list[str]:
+    """
+    Get all file paths to tokenize from the input paths.
+    Handles jsonl.{gz,zst,zstd}, and parquet.
+    """
+    if len(input_paths) == 0:
+        return []
+
+    # we're only going to have one or the other, but might as well return both
+    return _get_files_by_extension(input_paths, "jsonl.{gz,zst,zstd}") + _get_files_by_extension(input_paths, "parquet")
 
 
 def _is_probably_path(path: str) -> bool:
