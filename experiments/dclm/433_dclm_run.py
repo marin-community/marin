@@ -57,15 +57,16 @@ training_config = SimpleTrainConfig(
     tpu_type="v4-128",
     train_batch_size=256,
     num_train_steps=54932,
-    learning_rate=3e-3,
+    learning_rate=3e-4,
     weight_decay=0.033,
-    min_lr_ratio=0.1,
+    min_lr_ratio=0.05,
     warmup=5000,
     cooldown=3e-5,
+    z_loss_weight=1e-4,
 )
 
 model = default_train(
-    name="dclm_1b_1x",
+    name="dclm_1b_1x_oct25",
     tokenized=mixture_config,
     model_config=llama_1_4b_dclm,
     train_config=training_config,

@@ -11,3 +11,4 @@ class SimpleTrainConfig:
     min_lr_ratio: float | None = None
     warmup: int | None = None
     cooldown: float | None = None
+    z_loss_weight: float | None = None
