@@ -101,12 +101,8 @@ def _prepare_data_config(
 ) -> LMMixtureDatasetConfig:
     """
     Prepare a tokenized dataset for training. This is mostly just combining the tokenized data with the validation sets.
-    Args:
-        tokenized:
-        use_default_validation:
 
     Returns:
-
         The data config to use for training with any validation sets added.
 
     """
