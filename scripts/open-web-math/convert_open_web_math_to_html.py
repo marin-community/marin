@@ -35,6 +35,7 @@ from marin.core.runtime import cached_or_construct_output
 from marin.utils import fsspec_exists, fsspec_glob, fsspec_rm
 
 
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 
