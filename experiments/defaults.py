@@ -90,6 +90,7 @@ def default_train(
                     keep=[dict(every=25000)],
                 ),
             ),
+            z_loss_weight=train_config.z_loss_weight,
             model=model_config,
             optimizer=AdamConfig(
                 learning_rate=train_config.learning_rate,

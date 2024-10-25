@@ -1,6 +1,6 @@
 from marin.execution.executor import ExecutorStep, this_output_path
 from operations.download.huggingface.download import DownloadConfig, download
-from operations.download.huggingface.download_gated_manual import download_and_upload_to_gcs
+from operations.download.huggingface.download_gated_manual import download_and_upload_to_store
 
 download_fineweb = ExecutorStep(
     name="raw/fineweb",
@@ -76,7 +76,7 @@ dclm_baseline = ExecutorStep(
 
 the_stack_dedup = ExecutorStep(
     name="raw/the-stack-dedup",
-    fn=download_and_upload_to_gcs,
+    fn=download_and_upload_to_store,
     config=DownloadConfig(
         hf_dataset_id="bigcode/the-stack-dedup",
         revision="17cad72",
@@ -102,7 +102,7 @@ proofpile_2 = ExecutorStep(
 
 starcoderdata = ExecutorStep(
     name="raw/starcoderdata",
-    fn=download_and_upload_to_gcs,
+    fn=download_and_upload_to_store,
     config=DownloadConfig(
         hf_dataset_id="bigcode/starcoderdata",
         revision="9fc30b5",
