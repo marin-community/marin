@@ -192,7 +192,8 @@ def group_open_web_math_by_warc(input_paths: list[str], output_path: str):
 def process_open_web_math(cfg: ParquetOpenWebMathConfig):
     files = fsspec_glob(os.path.join(cfg.input_path, "*.parquet"))
     # Group open-web-math examples by their source WARC
-    shard_paths_to_process = group_open_web_math_by_warc.remote(files, cfg.html_output_path)
+    groupby_ref = group_open_web_math_by_warc.remote(files, cfg.html_output_path)
+    shard_paths_to_process = ray.get(groupby_ref)
 
     # Process each of the example shards by downloading the original WARC
     # and picking out the HTML for the URLs of interest
