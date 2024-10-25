@@ -234,7 +234,7 @@ class ParquetOpenWebMathConfig:
 @draccus.wrap()
 def process_open_web_math(cfg: ParquetOpenWebMathConfig):
     files = fsspec_glob(os.path.join(cfg.input_path, "*.parquet"))
-    MAX_NUM_PENDING_TASKS = 15  # Max number of parquet files we want to process in pending state
+    MAX_NUM_PENDING_TASKS = 5  # Max number of parquet files we want to process in pending state
 
     result_refs = []
     for file in files:
