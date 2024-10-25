@@ -28,11 +28,12 @@ import pandas as pd
 
 import hashlib
 
+from datetime import datetime
 from dataclasses import dataclass
 from warcio import ArchiveIterator
 
 from marin.core.runtime import cached_or_construct_output
-from marin.utils import fsspec_glob, fsspec_rm
+from marin.utils import fsspec_glob, fsspec_exists
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -135,9 +136,6 @@ def process_one_shard(
             }
             print(json.dumps(out_dolma), file=f)
 
-    # remove the input file
-    fsspec_rm(input_path)
-
     # num_urls_found should be equal to length_url_inp_list
     logger.info(
         f"Found: {num_urls_found}, Processed: {num_urls_processed}, out of {length_url_inp_list} urls, "
@@ -165,8 +163,14 @@ def group_open_web_math_by_warc(input_paths: list[str], output_path: str):
     output_path (str): Path to the output folder where we will write the open-web-math examples,
                        grouped by their source WARC.
     """
+    success_file_path = os.path.join(output_path, f"_warc_examples_success")
+    if fsspec_exists(success_file_path):
+        logger.info(f"Already grouped open-web-math by WARC, skipping...")
+        return
+
     logger.info(f"Grouping examples at {input_paths} by their source WARC")
 
+    datetime_start = datetime.utcnow()
     try:
         # Load open-web-math into a single df
         df = pd.concat([pd.read_parquet(file) for file in input_paths], ignore_index=True)
@@ -184,8 +188,20 @@ def group_open_web_math_by_warc(input_paths: list[str], output_path: str):
         # Save the group to a parquet file
         output_file = os.path.join(output_path, f"{index}_warc_examples.parquet")
         group_df.to_parquet(output_file)
+        logger.info(f"Wrote shard {output_file}")
         shard_paths.append(output_file)
-    return shard_paths
+
+    datetime_end = datetime.utcnow()
+
+    # Create the success fiel
+    with fsspec.open(success_file_path, "w") as f:
+        metadata = {
+            "input_paths": input_paths,
+            "output_path": output_path,
+            "datetime_start": str(datetime_start),
+            "datetime_end": str(datetime_end),
+        }
+        print(json.dumps(metadata), file=f)
 
 
 @draccus.wrap()
