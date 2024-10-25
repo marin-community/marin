@@ -23,40 +23,42 @@ import fsspec
 import draccus
 import logging
 import traceback
+import random
 import pandas as pd
 
 import hashlib
 
-from datetime import datetime
 from dataclasses import dataclass
 from warcio import ArchiveIterator
 
 from marin.core.runtime import cached_or_construct_output
-from marin.utils import fsspec_exists, fsspec_glob, fsspec_rm
+from marin.utils import fsspec_glob, fsspec_rm
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 
-@ray.remote(memory=1.5 * 1024 * 1024 * 1024)  # 1.5 GB
+def extract_warc_path_from_open_web_math_metadata(metadata_str):
+    metadata_dict = json.loads(metadata_str)
+    return metadata_dict["warc_path"]
+
+
+@ray.remote(memory=2 * 1024 * 1024 * 1024)  # 2 GB
 @cached_or_construct_output(success_suffix="SUCCESS")  # We use this decorator to make this function idempotent
-def process_one_warc_file(
+def process_one_shard(
     input_path: str,
     output_path: str,
-    html_output_path: str,
 ):
     """
     Takes in the input file and processes it to get the html content.
-    It scans the s3 bucket in input_file and returns the content of the urls in the input_file
-    Args:
-    input_path (str): The input file to process
-    """
-    base_folder = os.path.dirname(output_path).split("/")[-1]
-    output_file_name = os.path.basename(output_path)
-    html_output_file = os.path.join(html_output_path, base_folder, output_file_name)
+    Download the WARC path in input_path and returns the content of the urls in the input_path
 
-    logger.info(f"Writing to {html_output_file = }")
+    Args:
+    input_path (str): The input parquet shard to process
+    output_path (str): Path to write gzipped JSONL with HTML for URLs in the input parquet shard
+    """
+    logger.info(f"Processing {input_path}, writing to {output_path}")
 
     try:
         df = pd.read_parquet(input_path)
@@ -65,7 +67,7 @@ def process_one_warc_file(
         raise e
 
     urls = df["url"].tolist()
-    # All frames will have same file_path be design
+    # All frames will have same file_path, by design
     s3_url = df["file_path"].iloc[0]
     index = df.index.tolist()
 
@@ -75,7 +77,6 @@ def process_one_warc_file(
     num_urls_processed = 0
     length_url_inp_list = len(urls)
 
-    # Logging variables
     logger.info(f"Processing {s3_url} in {input_path}")
     length_warc = 0
     # NOTE: make sure s3 keys are setup, either on the cluster
@@ -110,7 +111,6 @@ def process_one_warc_file(
                         content = record.content_stream().read()
                         html_decoded = content.decode(errors="ignore")
                         df.loc[url_idx_in_df, "html"] = html_decoded
-
                         num_urls_processed += 1
                     except Exception as e:
                         # We are just ignoring the error and moving forward as these errors are generally not a lot
@@ -122,12 +122,12 @@ def process_one_warc_file(
         f"{length_warc / length_url_inp_list} ratio"
     )
 
-    with fsspec.open(html_output_file, "wt", compression="gzip") as f:  # html output
+    with fsspec.open(output_path, "wt", compression="gzip") as f:  # html output
         for index, row in df.iterrows():
             out_open_web_math = row.to_dict()
             out_dolma = {
-                # NOTE: open-web-math doesn't have an ID field, so we take the md5
-                # hash of its url and the date
+                # NOTE: open-web-math doesn't have an ID field, so we
+                # take the md5hash of its url and the date
                 "id": hashlib.md5((str(out_open_web_math["url"]) + str(out_open_web_math["date"])).encode()).hexdigest(),
                 "source": "open-web-math",
                 "format": "html",
@@ -149,119 +149,84 @@ def process_one_warc_file(
     return True
 
 
-def extract_warc_path_from_open_web_math_metadata(metadata_str):
-    metadata_dict = json.loads(metadata_str)
-    return metadata_dict["warc_path"]
-
-
-@ray.remote(memory=10 * 1024 * 1024 * 1024, runtime_env={"pip": ["s3fs"]})  # 10 GB
-def process_open_web_math_parquet(input_path: str, output_path: str, html_output_path: str):
-    """
-    Converts open-web-math files to html. This will essentially take in open-web-math and split different groups based
-    on the document's original WARC path and write all those file paths to a new folder and then run ray for each group
-
-    Parameters:
-    input_path (str): Path to the open-web-math parquet file
-    output_path (str): Path to the output folder where we will write the processed files
-    """
-    logger.info(f"Processing {input_path}")
-    success_file = output_path + "/_SUCCESS"
-    datetime_start = datetime.utcnow()
-
-    if fsspec_exists(success_file):
-        logger.info(f"Output file already processed. Skipping {input_path}")
-        return True
-
-    try:
-        df = pd.read_parquet(input_path)
-    except FileNotFoundError as e:
-        logger.exception(f"Error reading the parquet file: {e}")
-        raise e
-
-    ray_waitable = []
-    file_path = []
-    # Extract the file_path from the metadata and put it into a separate column.
-    # file_path is s3 url
-    df["file_path"] = df["metadata"].apply(lambda x: json.loads(x)["warc_path"])
-    grouped = df.groupby("file_path")
-
-    for index, (file_url, group_df) in enumerate(grouped):
-        filename = os.path.join(output_path, f"{index}.parquet")
-
-        output_file_name = filename.replace(".parquet", "_processed.jsonl.gz")
-
-        # Save the group to a parquet file
-        group_df.to_parquet(filename)
-        logger.info(f"Processing the group: {filename}, into {output_file_name}")
-
-        ray_waitable.append(process_one_warc_file.remote(filename, output_file_name, html_output_path))
-        file_path.append(filename)
-
-    was_successful = True
-
-    for waitable, filename in zip(ray_waitable, file_path):
-        try:
-            ray.get(waitable)
-        except Exception as e:
-            logger.exception(f"Error processing {filename = }, Error: {e}")
-            was_successful = False
-        finally:
-            # We should still remove the filename
-            fsspec_rm(filename)
-
-    datetime_end = datetime.utcnow()
-
-    if not was_successful:
-        return False
-
-    with fsspec.open(success_file, "w") as f:
-        metadata = {
-            "input_path": input_path,
-            "output_file_path": output_path,
-            "datetime_start": str(datetime_start),
-            "datetime_end": str(datetime_end),
-        }
-        print(json.dumps(metadata), file=f)
-
-    return True
-
-
 @dataclass
 class ParquetOpenWebMathConfig:
     input_path: str
     html_output_path: str
 
 
+@ray.remote(memory=256 * 1024 * 1024 * 1024)
+def group_open_web_math_by_warc(input_paths: list[str], output_path: str):
+    """
+    Given open-web-math files, group the examples by their source WARC.
+
+    Parameters:
+    input_paths (str): Path to the open-web-math parquet files
+    output_path (str): Path to the output folder where we will write the open-web-math examples,
+                       grouped by their source WARC.
+    """
+    logger.info(f"Grouping examples at {input_paths} by their source WARC")
+
+    try:
+        # Load open-web-math into a single df
+        df = pd.concat([pd.read_parquet(file) for file in input_paths], ignore_index=True)
+    except FileNotFoundError as e:
+        logger.exception(f"Error reading the parquet file: {e}")
+        raise e
+
+    # Extract the file_path from the metadata and put it into a separate column.
+    # file_path is s3 url
+    df["file_path"] = df["metadata"].apply(lambda x: json.loads(x)["warc_path"])
+    grouped = df.groupby("file_path")
+
+    shard_paths = []
+    for index, (_, group_df) in enumerate(grouped):
+        # Save the group to a parquet file
+        output_file = os.path.join(output_path, f"{index}_warc_examples.parquet")
+        group_df.to_parquet(output_file)
+        shard_paths.append(output_file)
+    return shard_paths
+
+
 @draccus.wrap()
 def process_open_web_math(cfg: ParquetOpenWebMathConfig):
     files = fsspec_glob(os.path.join(cfg.input_path, "*.parquet"))
-    MAX_NUM_PENDING_TASKS = 5  # Max number of parquet files we want to process in pending state
+    # Group open-web-math examples by their source WARC
+    shard_paths_to_process = group_open_web_math_by_warc.remote(files, cfg.html_output_path)
 
-    result_refs = []
-    for file in files:
-        if len(result_refs) > MAX_NUM_PENDING_TASKS:
-            # update result_refs to only
-            # track the remaining tasks.
-            ready_refs, result_refs = ray.wait(result_refs, num_returns=1)
-            try:
-                ray.get(ready_refs)
-            except Exception as e:
-                logger.exception(f"Error processing the group: {e}")
-                continue
-        input_file_name = os.path.basename(file)
+    # Process each of the example shards by downloading the original WARC
+    # and picking out the HTML for the URLs of interest
+    # Set a limit on the number of concurrent tasks so we don't overwhelm CC
+    MAX_CONCURRENT_TASKS = 500
 
-        output_path = os.path.join(
-            cfg.html_output_path,
-            input_file_name.replace(".parquet", ""),
-        )
+    # Shuffle to encourage different workers to hit different AWS prefixes,
+    # so we don't run into per-prefix rate limits.
+    random.shuffle(shard_paths_to_process)
 
-        logger.info(f"Starting processing for the open-web-math parquet file: {file} in output_path: {output_path}")
-        result_refs.append(process_open_web_math_parquet.remote(file, output_path, cfg.html_output_path))
-    # Wait for all the tasks to finish
-    try:
-        ray.get(result_refs)
-    except Exception as e:
-        logger.exception(f"Error processing the group: {e}")
+    # Launch the initial MAX_CONCURRENT_TASKS batch of tasks
+    unfinished = []
+    for _ in range(min(MAX_CONCURRENT_TASKS, len(shard_paths_to_process))):
+        # shard_to_process is of form gs://<html_output_path>/0_warc_examples.parquet
+        shard_to_process = shard_paths_to_process.pop()
+        # shard_output_path is of form gs://<html_output_path>/0.parquet
+        shard_output_path = shard_to_process.replace("_warc_examples.parquet", ".jsonl.gz")
+        unfinished.append(process_one_shard.remote(shard_to_process, shard_output_path))
+
+    while unfinished:
+        # Returns the first ObjectRef that is ready.
+        finished, unfinished = ray.wait(unfinished, num_returns=1)
+        try:
+            _ = ray.get(finished[0])
+        except Exception as e:
+            logger.exception(f"Error processing shard: {e}")
+
+        # If we have more shard paths left to process, add them to the unfinished queue.
+        if shard_paths_to_process:
+            # shard_to_process is of form gs://<html_output_path>/0_warc_examples.parquet
+            shard_to_process = shard_paths_to_process.pop()
+            # shard_output_path is of form gs://<html_output_path>/0.jsonl.gz
+            shard_output_path = shard_to_process.replace("_warc_examples.parquet", ".jsonl.gz")
+            unfinished.append(process_one_shard.remote(shard_to_process, shard_output_path))
 
 
 if __name__ == "__main__":
