@@ -12,7 +12,6 @@ from marin.execution.executor import ExecutorStep, executor_main, this_output_pa
 from marin.processing.tokenize import TokenizeConfig, tokenize
 
 slimpajama_6b_tokenized = default_tokenize(name="SlimPajama-6B", dataset=slimpajama_6b, tokenizer=llama3_tokenizer)
-
 slimpajama_6b_model = default_train(
     name="SlimPajama-6B-1.4b",
     tokenized=slimpajama_6b_tokenized,
@@ -30,7 +29,6 @@ slimpajama_tokenized = ExecutorStep(
         tokenizer=versioned(llama3_tokenizer),
     ),
 )
-
 slimpajama_model = default_train(
     name="SlimPajama-627B-1.4b",
     tokenized=slimpajama_tokenized,
@@ -39,7 +37,6 @@ slimpajama_model = default_train(
 )
 
 fineweb_edu_tokenized = default_tokenize(name="fineweb-edu", dataset=fineweb_edu, tokenizer=llama3_tokenizer)
-
 fineweb_edu_model = default_train(
     name="fineweb-edu-1.4b",
     tokenized=fineweb_edu_tokenized,
@@ -52,9 +49,9 @@ fineweb_edu_model = default_train(
 if __name__ == "__main__":
     executor_main(
         steps=[
-            # TODO: parquet not supported yet
-            # slimpajama_6b_model,
-            # slimpajama_model,
+            #slimpajama_6b_model,
+            #slimpajama_model,
             fineweb_edu_model,
-        ]
+        ],
+        description="Train 1.4B models on standard datasets (SlimPajama 6B, SlimPajama, FineWebEdu).",
     )
