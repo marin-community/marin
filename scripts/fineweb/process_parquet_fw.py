@@ -22,7 +22,7 @@ from marin.schemas.web.convert import ExtractionConfig, HtmlToMarkdownConfig
 logger = logging.getLogger("ray")
 
 
-@ray.remote(memory=1.5 * 1024 * 1024 * 1024)  # 1.5 GB
+@ray.remote(memory=1.5 * 1024 * 1024 * 1024, max_retries=5)  # 1.5 GB
 @cached_or_construct_output(success_suffix="SUCCESS")  # We use this decorator to make this function idempotent
 def process_one_warc_file(
     input_path: str,
@@ -45,8 +45,8 @@ def process_one_warc_file(
         text_output_path (str): The output path to write the text content
         html_output_path (str): The output path to write the html content
     """
-    # input_path = gs://marin-data/processed/000_00000/0.parquet
-    # output_path = gs://marin-data/processed/000_00000/0_processed.jsonl.gz
+    # input_path = gs://marin-us-central2/processed/000_00000/0.parquet
+    # output_path = gs://marin-us-central2/processed/000_00000/0_processed.jsonl.gz
 
     # We use different output files for md and fineweb, we do not store the html content
     base_folder = os.path.dirname(output_path).split("/")[-1]
@@ -197,8 +197,8 @@ def process_fw_parquet(
     output_path (str): Path to the output folder where we will write the processed files
     """
 
-    # Example of input_path = gs://marin-data/raw/fineweb/fw-v1.0/CC-MAIN-2024-10/000_00000.parquet
-    # Example of output_path = gs://marin-data/processed/000_00000
+    # Example of input_path = gs://marin-us-central2/raw/fineweb/fw-v1.0/CC-MAIN-2024-10/000_00000.parquet
+    # Example of output_path = gs://marin-us-central2/processed/000_00000
     logger.info(f"Processing {input_path}")
     success_file = output_path + "/_SUCCESS"
     datetime_start = datetime.utcnow()
@@ -220,10 +220,10 @@ def process_fw_parquet(
 
     for index, (file_url, group_df) in enumerate(grouped):
         filename = os.path.join(output_path, f"{index}.parquet")
-        # filename = gs://marin-data/processed/000_00000/0.parquet
+        # filename = gs://marin-us-central2/processed/000_00000/0.parquet
 
         output_file_name = filename.replace(".parquet", "_processed.jsonl.gz")
-        # output_file_name = gs://marin-data/processed/000_00000/0_processed.jsonl.gz
+        # output_file_name = gs://marin-us-central2/processed/000_00000/0_processed.jsonl.gz
 
         # Save the group to a parquet file
         group_df.to_parquet(filename)
@@ -275,7 +275,7 @@ class ParquetFWConfig:
 
 @draccus.wrap()
 def process_fw_dump(cfg: ParquetFWConfig):
-    file_ctr = 0
+    num_files = 0
     end_processing = False
 
     cc_dumps = cfg.cc_dumps or fsspec_glob(f"{cfg.input_path}/*")
@@ -302,7 +302,7 @@ def process_fw_dump(cfg: ParquetFWConfig):
                     continue
 
             # Get the input file name
-            # Example of file = gs://marin-data/raw/fineweb/fw-v1.0/CC-MAIN-2024-10/000_00000.parquet
+            # Example of file = gs://marin-us-central2/raw/fineweb/fw-v1.0/CC-MAIN-2024-10/000_00000.parquet
             # input_file_name = 000_00000.parquet
             input_file_name = os.path.basename(file)
 
@@ -316,18 +316,18 @@ def process_fw_dump(cfg: ParquetFWConfig):
             output_path = os.path.join(
                 cfg.text_output_path,
                 input_file_name.replace(".parquet", ""),
-            ) # gs://marin-data/processed/CC-MAIN-2024-10/000_00000
+            ) # gs://marin-us-central2/processed/CC-MAIN-2024-10/000_00000
 
 
             logger.info(f"Starting Processing for the fw parquet file: {file} in output_path: {output_path}")
             result_refs.append(
                 process_fw_parquet.remote(file, output_path, cfg.extract_method, cfg.config, md_output_path, text_output_path, html_output_path))
 
-            if cfg.max_files and file_ctr >= cfg.max_files:
+            if cfg.max_files and num_files >= cfg.max_files:
                 end_processing = True
                 break
 
-            file_ctr += 1
+            num_files += 1
         # Wait for all the tasks to finish
         try:
             ray.get(result_refs)
