@@ -2,7 +2,8 @@ from experiments.defaults import SimpleTrainConfig, default_tokenize, default_tr
 from experiments.llama import LlamaConfig
 from experiments.pretraining_datasets import dclm_baseline, proofpile_2, starcoderdata
 from marin.execution.executor import executor_main
-from marin.processing.tokenize import lm_mixture_data_config
+from marin.processing.tokenize import tokenize, TokenizeConfig
+from marin.processing.tokenize.data_configs import lm_mixture_data_config
 
 gpt_neox_tokenizer = "EleutherAI/gpt-neox-20b"
 
@@ -57,16 +58,16 @@ training_config = SimpleTrainConfig(
     tpu_type="v4-128",
     train_batch_size=256,
     num_train_steps=54932,
-    learning_rate=3e-4,
+    learning_rate=3e-3,
     weight_decay=0.033,
-    min_lr_ratio=0.05,
+    min_lr_ratio=0.1,
     warmup=5000,
     cooldown=3e-5,
     z_loss_weight=1e-4,
 )
 
 model = default_train(
-    name="dclm_1b_1x_oct25",
+    name="dclm_1b_1x_replication",
     tokenized=mixture_config,
     model_config=llama_1_4b_dclm,
     train_config=training_config,
