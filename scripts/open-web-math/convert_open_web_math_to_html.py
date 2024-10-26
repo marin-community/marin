@@ -187,13 +187,26 @@ def group_open_web_math_by_warc(input_paths: list[str], output_path: str):
     for index, (_, group_df) in enumerate(grouped):
         # Save the group to a parquet file
         output_file = os.path.join(output_path, f"{index}_warc_examples.parquet")
+        group_success_file = os.path.join(output_path, f"{index}_warc_examples.success")
+
+        if fsspec_exists(group_success_file):
+            logger.info(f"Shard {output_file} already exists, skipping...")
+            continue
+
         group_df.to_parquet(output_file)
+        # Create the group success file
+        with fsspec.open(group_success_file, "w") as f:
+            metadata = {
+                "datetime": str(datetime.utcnow()),
+            }
+            print(json.dumps(metadata), file=f)
+
         logger.info(f"Wrote shard {output_file}")
         shard_paths.append(output_file)
 
     datetime_end = datetime.utcnow()
 
-    # Create the success fiel
+    # Create the overall success file
     with fsspec.open(success_file_path, "w") as f:
         metadata = {
             "input_paths": input_paths,
