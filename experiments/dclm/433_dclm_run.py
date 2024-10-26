@@ -2,7 +2,6 @@ from experiments.defaults import SimpleTrainConfig, default_tokenize, default_tr
 from experiments.llama import LlamaConfig
 from experiments.pretraining_datasets import dclm_baseline, proofpile_2, starcoderdata
 from marin.execution.executor import executor_main
-from marin.processing.tokenize import tokenize, TokenizeConfig
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
 
 gpt_neox_tokenizer = "EleutherAI/gpt-neox-20b"

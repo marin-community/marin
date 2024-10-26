@@ -17,12 +17,13 @@ from levanter.store.cache import CacheOptions
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 
-import marin.processing.tokenize as tokenize
+from marin.processing.tokenize import tokenize
 from experiments.llama import compute_num_parameters
 from experiments.paloma import paloma_tokenized
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import ExecutorStep, InputName, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, TokenizerStep, lm_data_config
+from marin.processing.tokenize.data_configs import add_validation_sets_to_mixture
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 
 
@@ -99,6 +100,9 @@ def default_train(
             optimizer=AdamConfig(
                 learning_rate=train_config.learning_rate,
                 weight_decay=train_config.weight_decay,
+                warmup=train_config.warmup,
+                cooldown=train_config.cooldown,
+                min_lr_ration=train_config.min_lr_ratio,
             ),
             hf_save_steps=25000,
         ),
@@ -126,7 +130,7 @@ def _prepare_data_config(
         # TODO: would be better to expose hooks in levanter instead of relying on mixtures
         data = tokenized
         if validation_sets:
-            data = tokenize.add_validation_sets_to_mixture(data, validation_sets)
+            data = add_validation_sets_to_mixture(data, validation_sets)
     return data
 
 
