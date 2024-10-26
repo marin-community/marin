@@ -12,10 +12,6 @@ from datasets import Dataset, IterableDataset, load_dataset
 logger = logging.getLogger("ray")
 
 
-def gen_from_iterable_dataset(iterable_ds):
-    yield from iterable_ds
-
-
 @ray.remote(memory=10 * 1024 * 1024 * 1024, max_retries=5)  # 10 GB
 def prune_stream_and_save(dataset: IterableDataset, keep_columns: list[str], output_path: str):
     """
@@ -34,7 +30,7 @@ def prune_stream_and_save(dataset: IterableDataset, keep_columns: list[str], out
     dataset = dataset.remove_columns(drop_columns)
 
     logger.info(f"Pruned dataset to columns: {keep_columns}")
-    dataset = Dataset.from_generator(partial(gen_from_iterable_dataset, dataset), features=dataset.features)
+    dataset = Dataset.from_generator(lambda: (yield from dataset), features=dataset.features)
 
     try:
         logger.info(f"Saving pruned dataset to {output_path}")
