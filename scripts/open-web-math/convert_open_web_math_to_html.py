@@ -199,7 +199,6 @@ def group_open_web_math_by_warc(input_paths: list[str], output_path: str):
     df["file_path"] = df["metadata"].apply(lambda x: json.loads(x)["warc_path"])
     grouped = df.groupby("file_path")
 
-    shard_paths = []
     remote_refs = []
 
     # Using Ray to parallelize the writing of groups
@@ -209,7 +208,6 @@ def group_open_web_math_by_warc(input_paths: list[str], output_path: str):
 
         # Queue up remote task for writing this group
         remote_refs.append(write_group_to_parquet.remote(output_file, group_df, group_success_file))
-        shard_paths.append(output_file)
 
     # Wait for all groups to be written
     ray.get(remote_refs)
