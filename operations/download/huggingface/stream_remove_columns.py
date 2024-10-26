@@ -33,6 +33,7 @@ def filter_stream_and_save(dataset: IterableDataset, keep_columns: list[str], ou
     drop_columns = [col for col in dataset.column_names if col not in keep_columns]
     dataset = dataset.remove_columns(drop_columns)
 
+    logger.info(f"Filtered dataset to columns: {keep_columns}")
     dataset = Dataset.from_generator(partial(gen_from_iterable_dataset, dataset), features=dataset.features)
 
     try:
