@@ -144,8 +144,6 @@ def process_one_shard(
         f"Found {length_warc} records in the WARC file"
     )
 
-    return True
-
 
 @dataclass
 class ParquetOpenWebMathConfig:
