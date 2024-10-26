@@ -49,6 +49,8 @@ setup_commands:
   - mkdir $HOME/.cache/openai -p
   - gcloud secrets versions access latest --secret=OPENAI_API_KEY > $HOME/.cache/openai/token
   - gcsfuse --only-dir gcsfuse_mount marin-us-central2 /opt/gcsfuse_mount || true
+  - mkdir $HOME/.config/gcloud -p
+  - gcloud secrets versions access latest --secret=RAY_GCP_CREDENTIALS > $HOME/.config/gcloud/application_default_credentials.json
 
 # Set Head Node == `ray_head_default`
 head_node_type: head_default
