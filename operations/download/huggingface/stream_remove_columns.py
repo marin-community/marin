@@ -12,42 +12,64 @@ logger = logging.getLogger("ray")
 
 
 @ray.remote(memory=10 * 1024 * 1024 * 1024, max_retries=5)  # 10 GB
-def prune_stream_and_save(dataset: IterableDataset, keep_columns: list[str], output_path: str):
+def prune_stream_and_save(
+    dataset: IterableDataset, keep_columns: list[str], output_path: str, chunk_size: int = 1000000
+):
     """
     Prunes and saves a streaming dataset by removing un-specified columns.
 
     This function takes a streaming dataset, removes columns not specified in keep_columns,
-    and saves the pruned dataset to disk in parquet format.
-
-    NOTE:
-    Data is being streamed and the column removal is done streamingly too, but to save the
-    dataset we need to convert it to a cached dataset, while doing this we fit the dataset in memory.
-
-    However since we removed some columns the subset will be smaller. so it doesn't need as
-    much memory as the full subset.
-
-    The memory needed for this operation should atleast be the size of the dataset
-    in memory after removing the columns.
+    and saves the pruned dataset to disk in parquet format. The dataset is processed and saved
+    in chunks to avoid memory issues with large subsets.
 
     Args:
         dataset (IterableDataset): The input streaming dataset to prune
         keep_columns (list[str]): List of column names to retain
         output_path (str): Path where the pruned dataset will be saved
+        chunk_size (int): Number of rows to process and save in each chunk (default: 10000)
     """
-
     drop_columns = [col for col in dataset.column_names if col not in keep_columns]
     dataset = dataset.remove_columns(drop_columns)
 
     logger.info(f"Pruned dataset to columns: {keep_columns}")
-    dataset = Dataset.from_generator(lambda: (yield from dataset), features=dataset.features)
+
+    # Create output directory if it doesn't exist
+    os.makedirs(output_path, exist_ok=True)
 
     try:
-        logger.info(f"Saving pruned dataset to {output_path}")
-        dataset.save_to_disk(output_path, format="parquet")
-        logger.info("Successfully saved pruned dataset")
-    except Exception:
-        raise Exception(f"Failed to save dataset to {output_path}")  # noqa
-    return True
+        chunk_buffer = []
+        chunk_idx = 0
+
+        for item in dataset:
+            chunk_buffer.append(item)
+
+            if len(chunk_buffer) >= chunk_size:
+                # Convert chunk to Dataset and save
+                chunk_dataset = Dataset.from_list(chunk_buffer, features=dataset.features)
+                shard_idx = chunk_idx // 50
+                sub_idx = chunk_idx % 50
+                chunk_path = os.path.join(output_path, f"{shard_idx:03d}_{sub_idx:05d}.parquet")
+                logger.info(f"Saving chunk {chunk_idx} to {chunk_path}")
+                chunk_dataset.to_parquet(chunk_path)
+
+                # Clear buffer and increment counter
+                chunk_buffer = []
+                chunk_idx += 1
+
+        # Save any remaining items in the final chunk
+        if chunk_buffer:
+            chunk_dataset = Dataset.from_list(chunk_buffer, features=dataset.features)
+            shard_idx = chunk_idx // 50
+            sub_idx = chunk_idx % 50
+            chunk_path = os.path.join(output_path, f"{shard_idx:03d}_{sub_idx:03d}.parquet")
+            logger.info(f"Saving final chunk {chunk_idx} to {chunk_path}")
+            chunk_dataset.to_parquet(chunk_path)
+
+        logger.info("Successfully saved all chunks of pruned dataset")
+        return True
+
+    except Exception as e:
+        raise Exception(f"Failed to save dataset to {output_path}: {str(e)}")  # noqa
 
 
 @ray.remote(memory=10 * 1024 * 1024 * 1024, max_retries=5)  # 10 GB
@@ -85,6 +107,7 @@ def process_hf_subset(
             logger.info("Successfully processed split")
         except Exception as e:
             logger.exception(f"Error processing split for {output_path}: {e!s}")
+            raise e
 
 
 @dataclass
