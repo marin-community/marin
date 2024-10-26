@@ -12,6 +12,28 @@ logger = logging.getLogger("ray")
 
 
 @ray.remote(memory=10 * 1024 * 1024 * 1024, max_retries=5)  # 10 GB
+def save_parquet_to_gcs(
+    chunk_buffer: list[dict], output_path: str, shard_idx: int, sub_idx: int
+):
+    """
+    Save a chunk of data to a parquet file on GCS.
+
+    Args:
+        chunk_buffer (list[dict]): The chunk of data to save
+        output_path (str): The output path to save the parquet file
+        shard_idx (int): The shard index of the parquet file
+        sub_idx (int): The sub-index of the parquet file
+    """
+    try:
+        chunk_dataset = Dataset.from_dict(chunk_buffer)
+        chunk_path = os.path.join(output_path, f"{shard_idx:03d}_{sub_idx:05d}.parquet")
+        logger.info(f"Saving chunk {shard_idx}_{sub_idx} to {chunk_path}")
+        chunk_dataset.to_parquet(chunk_path)
+        return True
+    except Exception as e:
+        raise Exception(f"Failed to save dataset to {output_path}: {str(e)}")
+
+@ray.remote(memory=10 * 1024 * 1024 * 1024, max_retries=5)  # 10 GB
 def prune_stream_and_save(
     dataset: IterableDataset, keep_columns: list[str], output_path: str, chunk_size: int = 1000000
 ):
@@ -34,40 +56,39 @@ def prune_stream_and_save(
     logger.info(f"Pruned dataset to columns: {keep_columns}")
 
     # Create output directory if it doesn't exist
+    ray_chunk_refs = []
     os.makedirs(output_path, exist_ok=True)
 
-    try:
-        chunk_buffer = []
-        chunk_idx = 0
+    chunk_buffer = []
+    chunk_idx = 0
 
-        for item in dataset:
-            chunk_buffer.append(item)
+    for item in dataset:
+        chunk_buffer.append(item)
 
-            if len(chunk_buffer) >= chunk_size:
-                # Convert chunk to Dataset and save
-                chunk_dataset = Dataset.from_list(chunk_buffer, features=dataset.features)
-                shard_idx = chunk_idx // 50
-                sub_idx = chunk_idx % 50
-                chunk_path = os.path.join(output_path, f"{shard_idx:03d}_{sub_idx:05d}.parquet")
-                logger.info(f"Saving chunk {chunk_idx} to {chunk_path}")
-                chunk_dataset.to_parquet(chunk_path)
-
-                # Clear buffer and increment counter
-                chunk_buffer = []
-                chunk_idx += 1
-
-        # Save any remaining items in the final chunk
-        if chunk_buffer:
-            chunk_dataset = Dataset.from_list(chunk_buffer, features=dataset.features)
+        if len(chunk_buffer) >= chunk_size:
             shard_idx = chunk_idx // 50
             sub_idx = chunk_idx % 50
-            chunk_path = os.path.join(output_path, f"{shard_idx:03d}_{sub_idx:03d}.parquet")
-            logger.info(f"Saving final chunk {chunk_idx} to {chunk_path}")
-            chunk_dataset.to_parquet(chunk_path)
+            
+            ray_chunk_refs.append(
+                save_parquet_to_gcs.remote(chunk_buffer, output_path, shard_idx, sub_idx)
+            )
 
-        logger.info("Successfully saved all chunks of pruned dataset")
-        return True
+            # Clear buffer and increment counter
+            chunk_buffer = []
+            chunk_idx += 1
 
+    # Save any remaining items in the final chunk
+    if chunk_buffer:
+        shard_idx = chunk_idx // 50
+        sub_idx = chunk_idx % 50
+
+        ray_chunk_refs.append(
+            save_parquet_to_gcs.remote(chunk_buffer, output_path, shard_idx, sub_idx)
+        )
+
+    try:
+        ray.get(ray_chunk_refs)
+        logger.info("Successfully saved the chunk")
     except Exception as e:
         raise Exception(f"Failed to save dataset to {output_path}: {str(e)}")  # noqa
 
