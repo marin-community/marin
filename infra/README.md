@@ -236,6 +236,8 @@ config in the `infra` directory with the corresponding new Docker image tag.
 
 After that, you can restart each cluster with `ray down` and `ray up`.
 
+**If you use a cluster, please use the corresponding bucket, as data transfer costs between regions are high**
+
 If you need to change something else about the cluster, e.g. if you're changing any of the initialization/setup
 commands, it's best to bring the entire cluster down (`ray down`), *then edit the `cluster.yaml`*, and then bring the
 cluster back up (`ray up`); note that this will kill all VMs, including the head node (nothing lasts forever).
@@ -243,6 +245,7 @@ cluster back up (`ray up`); note that this will kill all VMs, including the head
 **Word of Warning**: Ray looks at the actual `cluster_name` and various worker names/configs to "identify" existing/new
 clusters. To prevent orphaned states, do not change the names of the clusters without first bringing
 the cluster down!
+
 
 
 #### Environment Variables

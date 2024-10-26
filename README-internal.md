@@ -26,10 +26,9 @@ issues, contact David Hall or Sidd Karamcheti for help!
 ## Ray Cluster + Job Submission
 
 Once authenticated for GCP, all other work happens through our
-[Ray Cluster](https://docs.ray.io/en/latest/cluster/getting-started.html). The entire cluster configuration
-is stored in [`infra/marin-cluster.yaml`](./infra/marin-cluster-template.yaml). **Ray uses this file as the single-source of
+[Ray Cluster](https://docs.ray.io/en/latest/cluster/getting-started.html). The entire cluster configuration template is stored in [`infra/marin-cluster-template.yaml`](./infra/marin-cluster-template.yaml). **Ray uses this file as the single-source of
 truth for all cluster operations** -- you can think of this file as an alternative to managing your own SSH keys,
-remembering the IP address of the cluster head node, what port the dashboard is running on, etc.
+remembering the IP address of the cluster head node, what port the dashboard is running on, etc. For more info about this template and connecting to specific clusters, see [`infra/README.md`](./infra/REEADME.md).
 
 There are two steps necessary for 1) establishing a connection to the cluster and 2) submitting/monitoring jobs on the
 cluster. **You will need at least two terminal processes running for the following steps** (make sure to activate your
