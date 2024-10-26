@@ -1,10 +1,13 @@
 """Keep only specified columns from FineWeb parquet files."""
 
-from marin.execution.executor import ExecutorStep, executor_main, versioned
+from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from operations.download.huggingface.stream_remove_columns import DatasetConfig, prune_hf_dataset
 
 
 def filter_fineweb_parquet():
+    # FineWeb subsets to keep, complete "main" subset list present at: https://huggingface.co/datasets/HuggingFaceFW/fineweb/tree/main/data
+    # sample subsets present at: https://huggingface.co/datasets/HuggingFaceFW/fineweb/tree/main/sample, we exclude these
+    # and "default" subset
     subsets = [
         "CC-MAIN-2013-20",
         "CC-MAIN-2013-48",
@@ -105,14 +108,14 @@ def filter_fineweb_parquet():
     ]
 
     filtered_fineweb = ExecutorStep(
-        name="raw/cais/mmlu",
+        name="raw/fineweb-urls",
         fn=prune_hf_dataset,
         config=DatasetConfig(
             hf_dataset_id="HuggingFaceFW/fineweb",
             revision=versioned("main"),
             subsets=subsets,
             splits=["train"],
-            output_path="gs://marin-us-central2/raw/fineweb-stream-pruned/",
+            output_path=this_output_path(),
             keep_columns=[
                 "id",
                 "url",
@@ -121,10 +124,9 @@ def filter_fineweb_parquet():
                 "token_count",
             ],
         ),
-        override_output_path="gs://marin-us-central2/raw/fineweb-stream-pruned/",
     )
 
-    return [filtered_fineweb]
+    return filtered_fineweb
 
 
 if __name__ == "__main__":
