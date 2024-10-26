@@ -1,7 +1,9 @@
 """Keep only specified columns from FineWeb parquet files."""
 
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
+from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path, versioned
+from marin.schemas.web.convert import ResiliparseConfig
 from operations.download.huggingface.stream_remove_columns import DatasetConfig, prune_hf_dataset
+from scripts.fineweb.process_parquet_fw import ParquetFWConfig, process_fw_dump
 
 
 def filter_fineweb_parquet():
@@ -126,7 +128,28 @@ def filter_fineweb_parquet():
         ),
     )
 
-    return filtered_fineweb
+    transform_resiliparse_preserve_formatting = ExecutorStep(
+        name="documents/fineweb-urls-small-resiliparse-preserve-formatting",
+        fn=process_fw_dump,
+        config=ParquetFWConfig(
+            input_path=output_path_of(filtered_fineweb),
+            cc_dumps=versioned(["CC-MAIN-2024-18"]),
+            md_output_path=this_output_path("md"),
+            text_output_path=this_output_path("text"),
+            html_output_path=this_output_path("html"),
+            extract_method=versioned("resiliparse"),
+            config=ResiliparseConfig(
+                preserve_formatting=versioned(True),
+                main_content=versioned(True),
+                links=versioned(False),
+            ),
+        ),
+    )
+
+    return [
+        filtered_fineweb,
+        transform_resiliparse_preserve_formatting,
+    ]
 
 
 if __name__ == "__main__":
