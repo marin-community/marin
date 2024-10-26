@@ -153,6 +153,25 @@ class ParquetOpenWebMathConfig:
     html_output_path: str
 
 
+@ray.remote(memory=1 * 1024 * 1024 * 1024)
+def write_group_to_parquet(output_file, group_df, group_success_file):
+    # Check if the success file already exists
+    if fsspec_exists(group_success_file):
+        logger.info(f"Shard {output_file} already exists, skipping...")
+        return output_file
+
+    # Save the group to a parquet file
+    group_df.to_parquet(output_file)
+    # Create the group success file
+    with fsspec.open(group_success_file, "w") as f:
+        metadata = {
+            "datetime": str(datetime.utcnow()),
+        }
+        print(json.dumps(metadata), file=f)
+
+    return output_file
+
+
 @ray.remote(memory=256 * 1024 * 1024 * 1024)
 def group_open_web_math_by_warc(input_paths: list[str], output_path: str):
     """
@@ -169,40 +188,31 @@ def group_open_web_math_by_warc(input_paths: list[str], output_path: str):
         return
 
     logger.info(f"Grouping examples at {input_paths} by their source WARC")
-
     datetime_start = datetime.utcnow()
+
     try:
-        # Load open-web-math into a single df
         df = pd.concat([pd.read_parquet(file) for file in input_paths], ignore_index=True)
     except FileNotFoundError as e:
         logger.exception(f"Error reading the parquet file: {e}")
         raise e
 
-    # Extract the file_path from the metadata and put it into a separate column.
-    # file_path is s3 url
     df["file_path"] = df["metadata"].apply(lambda x: json.loads(x)["warc_path"])
     grouped = df.groupby("file_path")
 
     shard_paths = []
+    remote_refs = []
+
+    # Using Ray to parallelize the writing of groups
     for index, (_, group_df) in enumerate(grouped):
-        # Save the group to a parquet file
         output_file = os.path.join(output_path, f"{index}_warc_examples.parquet")
         group_success_file = os.path.join(output_path, f"{index}_warc_examples.success")
 
-        if fsspec_exists(group_success_file):
-            logger.info(f"Shard {output_file} already exists, skipping...")
-            continue
-
-        group_df.to_parquet(output_file)
-        # Create the group success file
-        with fsspec.open(group_success_file, "w") as f:
-            metadata = {
-                "datetime": str(datetime.utcnow()),
-            }
-            print(json.dumps(metadata), file=f)
-
-        logger.info(f"Wrote shard {output_file}")
+        # Queue up remote task for writing this group
+        remote_refs.append(write_group_to_parquet.remote(output_file, group_df, group_success_file))
         shard_paths.append(output_file)
+
+    # Wait for all groups to be written
+    ray.get(remote_refs)
 
     datetime_end = datetime.utcnow()
 
