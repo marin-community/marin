@@ -5,47 +5,49 @@ https://github.com/stanford-crfm/marin/issues/72
 
 import os
 
+from marin.processing.tokenize import tokenize, TokenizeConfig
+from marin.processing.tokenize.data_configs import TokenizerStep
 from experiments.defaults import default_tokenize, default_train
 from experiments.llama import llama3_tokenizer, llama_1_4b, llama_1_4b_train_config
 from experiments.pretraining_datasets import fineweb_edu, slimpajama, slimpajama_6b
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
-from marin.processing.tokenize import TokenizeConfig, tokenize
+#from marin.processing.tokenize import TokenizeConfig, tokenize
 
 slimpajama_6b_tokenized = default_tokenize(name="SlimPajama-6B", dataset=slimpajama_6b, tokenizer=llama3_tokenizer)
 
-slimpajama_6b_model = default_train(
-    name="SlimPajama-6B-1.4b",
-    tokenized=slimpajama_6b_tokenized,
-    model_config=llama_1_4b,
-    train_config=llama_1_4b_train_config,
-)
+#slimpajama_6b_model = default_train(
+#    name="SlimPajama-6B-1.4b",
+#    tokenized=slimpajama_6b_tokenized,
+#    model_config=llama_1_4b,
+#    train_config=llama_1_4b_train_config,
+#)
 
-slimpajama_tokenized = ExecutorStep(
-    name=os.path.join("tokenized", "SlimPajama-627B"),
-    fn=tokenize,
-    config=TokenizeConfig(
-        train_paths=[slimpajama.cd("train")],
-        validation_paths=[slimpajama.cd("validation")],
-        cache_path=this_output_path(),
-        tokenizer=versioned(llama3_tokenizer),
-    ),
-)
+#slimpajama_tokenized = ExecutorStep(
+#    name=os.path.join("tokenized", "SlimPajama-627B"),
+#    fn=tokenize,
+#    config=TokenizeConfig(
+#        train_paths=[slimpajama.cd("train")],
+#        validation_paths=[slimpajama.cd("validation")],
+#        cache_path=this_output_path(),
+#        tokenizer=versioned(llama3_tokenizer),
+#    ),
+#)
 
-slimpajama_model = default_train(
-    name="SlimPajama-627B-1.4b",
-    tokenized=slimpajama_tokenized,
-    model_config=llama_1_4b,
-    train_config=llama_1_4b_train_config,
-)
+#slimpajama_model = default_train(
+#    name="SlimPajama-627B-1.4b",
+#    tokenized=slimpajama_tokenized,
+#    model_config=llama_1_4b,
+#    train_config=llama_1_4b_train_config,
+#)
 
-fineweb_edu_tokenized = default_tokenize(name="fineweb-edu", dataset=fineweb_edu, tokenizer=llama3_tokenizer)
+#fineweb_edu_tokenized = default_tokenize(name="fineweb-edu", dataset=fineweb_edu, tokenizer=llama3_tokenizer)
 
-fineweb_edu_model = default_train(
-    name="fineweb-edu-1.4b",
-    tokenized=fineweb_edu_tokenized,
-    model_config=llama_1_4b,
-    train_config=llama_1_4b_train_config,
-)
+#fineweb_edu_model = default_train(
+#    name="fineweb-edu-1.4b",
+#    tokenized=fineweb_edu_tokenized,
+#    model_config=llama_1_4b,
+#    train_config=llama_1_4b_train_config,
+#)
 
 ############################################################
 
@@ -55,6 +57,7 @@ if __name__ == "__main__":
             # TODO: parquet not supported yet
             # slimpajama_6b_model,
             # slimpajama_model,
-            fineweb_edu_model,
+            # fineweb_edu_model,
+            slimpajama_6b_tokenized,
         ]
     )
