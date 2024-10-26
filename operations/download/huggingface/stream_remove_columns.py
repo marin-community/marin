@@ -12,9 +12,7 @@ logger = logging.getLogger("ray")
 
 
 @ray.remote(memory=10 * 1024 * 1024 * 1024, max_retries=5)  # 10 GB
-def save_parquet_to_gcs(
-    chunk_buffer: list[dict], output_path: str, shard_idx: int, sub_idx: int
-):
+def save_parquet_to_gcs(chunk_buffer: list[dict], output_path: str, shard_idx: int, sub_idx: int):
     """
     Save a chunk of data to a parquet file on GCS.
 
@@ -27,11 +25,15 @@ def save_parquet_to_gcs(
     try:
         chunk_dataset = Dataset.from_dict(chunk_buffer)
         chunk_path = os.path.join(output_path, f"{shard_idx:03d}_{sub_idx:05d}.parquet")
+
         logger.info(f"Saving chunk {shard_idx}_{sub_idx} to {chunk_path}")
         chunk_dataset.to_parquet(chunk_path)
+
         return True
-    except Exception as e:
-        raise Exception(f"Failed to save dataset to {output_path}: {str(e)}")
+
+    except Exception:
+        raise Exception(f"Failed to save dataset to {output_path}")  # noqa
+
 
 @ray.remote(memory=10 * 1024 * 1024 * 1024, max_retries=5)  # 10 GB
 def prune_stream_and_save(
@@ -68,10 +70,8 @@ def prune_stream_and_save(
         if len(chunk_buffer) >= chunk_size:
             shard_idx = chunk_idx // 50
             sub_idx = chunk_idx % 50
-            
-            ray_chunk_refs.append(
-                save_parquet_to_gcs.remote(chunk_buffer, output_path, shard_idx, sub_idx)
-            )
+
+            ray_chunk_refs.append(save_parquet_to_gcs.remote(chunk_buffer, output_path, shard_idx, sub_idx))
 
             # Clear buffer and increment counter
             chunk_buffer = []
@@ -82,9 +82,7 @@ def prune_stream_and_save(
         shard_idx = chunk_idx // 50
         sub_idx = chunk_idx % 50
 
-        ray_chunk_refs.append(
-            save_parquet_to_gcs.remote(chunk_buffer, output_path, shard_idx, sub_idx)
-        )
+        ray_chunk_refs.append(save_parquet_to_gcs.remote(chunk_buffer, output_path, shard_idx, sub_idx))
 
     try:
         ray.get(ray_chunk_refs)
