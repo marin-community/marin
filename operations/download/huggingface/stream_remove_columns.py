@@ -3,7 +3,6 @@
 import logging
 import os
 from dataclasses import dataclass
-from functools import partial
 
 import draccus
 import ray
