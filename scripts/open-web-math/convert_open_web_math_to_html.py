@@ -230,7 +230,8 @@ def process_open_web_math(cfg: ParquetOpenWebMathConfig):
     groupby_ref = group_open_web_math_by_warc.remote(files, cfg.html_output_path)
     _ = ray.get(groupby_ref)
     shard_paths_to_process = fsspec_glob(os.path.join(cfg.html_output_path, "*_warc_examples.parquet"))
-    logger.info(f"Found {len(shard_paths_to_process)} shards to fetch HTML for")
+    num_total_shards = len(shard_paths_to_process)
+    logger.info(f"Found {num_total_shards} shards to fetch HTML for")
 
     # Process each of the example shards by downloading the original WARC
     # and picking out the HTML for the URLs of interest
@@ -241,6 +242,8 @@ def process_open_web_math(cfg: ParquetOpenWebMathConfig):
     # so we don't run into per-prefix rate limits.
     random.shuffle(shard_paths_to_process)
 
+    num_shards_submitted = 0
+
     # Launch the initial MAX_CONCURRENT_TASKS batch of tasks
     unfinished = []
     for _ in range(min(MAX_CONCURRENT_TASKS, len(shard_paths_to_process))):
@@ -249,6 +252,12 @@ def process_open_web_math(cfg: ParquetOpenWebMathConfig):
         # shard_output_path is of form gs://<html_output_path>/0.parquet
         shard_output_path = shard_to_process.replace("_warc_examples.parquet", ".jsonl.gz")
         unfinished.append(process_one_shard.remote(shard_to_process, shard_output_path))
+        num_shards_submitted += 1
+        if num_shards_submitted % 1000 == 0:
+            logger.info(
+                f"Submitted {num_shards_submitted} / {num_total_shards} shards "
+                f"({num_shards_submitted / num_total_shards})"
+            )
 
     while unfinished:
         # Wait until all the unfinished tasks are up or 5 seconds (whichever comes first)
@@ -267,6 +276,12 @@ def process_open_web_math(cfg: ParquetOpenWebMathConfig):
             # shard_output_path is of form gs://<html_output_path>/0.jsonl.gz
             shard_output_path = shard_to_process.replace("_warc_examples.parquet", ".jsonl.gz")
             unfinished.append(process_one_shard.remote(shard_to_process, shard_output_path))
+            num_shards_submitted += 1
+            if num_shards_submitted % 1000 == 0:
+                logger.info(
+                    f"Submitted {num_shards_submitted} / {num_total_shards} shards "
+                    f"({num_shards_submitted / num_total_shards})"
+                )
 
 
 if __name__ == "__main__":
