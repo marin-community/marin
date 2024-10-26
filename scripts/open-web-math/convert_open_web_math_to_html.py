@@ -253,15 +253,17 @@ def process_open_web_math(cfg: ParquetOpenWebMathConfig):
         unfinished.append(process_one_shard.remote(shard_to_process, shard_output_path))
 
     while unfinished:
-        # Returns the first ObjectRef that is ready.
-        finished, unfinished = ray.wait(unfinished, num_returns=1)
+        # Wait until all the unfinished tasks are up or 5 seconds (whichever comes first)
+        # and return the finished and unfinished refs
+        finished, unfinished = ray.wait(unfinished, num_returns=len(unfinished), timeout=5)
         try:
-            _ = ray.get(finished[0])
+            _ = ray.get(finished)
         except Exception as e:
             logger.exception(f"Error processing shard: {e}")
 
-        # If we have more shard paths left to process, add them to the unfinished queue.
-        if shard_paths_to_process:
+        # If we have more shard paths left to process and we haven't hit the max
+        # number of concurrent tasks, add tasks to the unfinished queue.
+        while shard_paths_to_process and len(unfinished) < MAX_CONCURRENT_TASKS:
             # shard_to_process is of form gs://<html_output_path>/0_warc_examples.parquet
             shard_to_process = shard_paths_to_process.pop()
             # shard_output_path is of form gs://<html_output_path>/0.jsonl.gz
