@@ -237,7 +237,7 @@ def process_open_web_math(cfg: ParquetOpenWebMathConfig):
     # Process each of the example shards by downloading the original WARC
     # and picking out the HTML for the URLs of interest
     # Set a limit on the number of concurrent tasks so we don't overwhelm CC
-    MAX_CONCURRENT_TASKS = 500
+    MAX_CONCURRENT_TASKS = 1000
 
     # Shuffle to encourage different workers to hit different AWS prefixes,
     # so we don't run into per-prefix rate limits.
