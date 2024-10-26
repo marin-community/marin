@@ -17,29 +17,29 @@ def gen_from_iterable_dataset(iterable_ds):
 
 
 @ray.remote(memory=10 * 1024 * 1024 * 1024, max_retries=5)  # 10 GB
-def filter_stream_and_save(dataset: IterableDataset, keep_columns: list[str], output_path: str):
+def prune_stream_and_save(dataset: IterableDataset, keep_columns: list[str], output_path: str):
     """
-    Filters and saves a streaming dataset by removing unnecessary columns.
+    Prunes and saves a streaming dataset by removing un-specified columns.
 
     This function takes a streaming dataset, removes columns not specified in keep_columns,
-    and saves the filtered dataset to disk in parquet format.
+    and saves the pruned dataset to disk in parquet format.
 
     Args:
-        dataset (IterableDataset): The input streaming dataset to filter
+        dataset (IterableDataset): The input streaming dataset to prune
         keep_columns (list[str]): List of column names to retain
-        output_path (str): Path where the filtered dataset will be saved
+        output_path (str): Path where the pruned dataset will be saved
     """
 
     drop_columns = [col for col in dataset.column_names if col not in keep_columns]
     dataset = dataset.remove_columns(drop_columns)
 
-    logger.info(f"Filtered dataset to columns: {keep_columns}")
+    logger.info(f"Pruned dataset to columns: {keep_columns}")
     dataset = Dataset.from_generator(partial(gen_from_iterable_dataset, dataset), features=dataset.features)
 
     try:
-        logger.info(f"Saving filtered dataset to {output_path}")
+        logger.info(f"Saving pruned dataset to {output_path}")
         dataset.save_to_disk(output_path, format="parquet")
-        logger.info("Successfully saved filtered dataset")
+        logger.info("Successfully saved pruned dataset")
     except Exception:
         raise Exception(f"Failed to save dataset to {output_path}")  # noqa
     return True
@@ -50,15 +50,15 @@ def process_hf_subset(
     hf_dataset_id: str, revision, subset: str, splits: list[str], output_path: str, keep_columns: list[str]
 ):
     """
-    Process a subset of a HuggingFace dataset by filtering columns and saving to disk.
+    Process a subset of a HuggingFace dataset by pruning columns and saving to disk.
 
     Args:
         hf_dataset_id (str): The HuggingFace dataset ID to load
         revision (str): The revision of the dataset to load
         subset (str): The subset of the dataset to process
         splits (list[str]): The splits of the dataset to process
-        output_path (str): The output path to save the filtered dataset
-        keep_columns (list[str]): The columns to keep in the filtered dataset
+        output_path (str): The output path to save the pruned dataset
+        keep_columns (list[str]): The columns to keep in the pruned dataset
     """
 
     logger.info(f"Loading dataset {hf_dataset_id} subset {subset} revision {revision}")
@@ -72,7 +72,7 @@ def process_hf_subset(
             split_output_path = os.path.join(output_path, split)
 
         logger.info(f"Processing split {split} to {split_output_path}")
-        ray_waitables.append(filter_stream_and_save.remote(dataset[split], keep_columns, split_output_path))
+        ray_waitables.append(prune_stream_and_save.remote(dataset[split], keep_columns, split_output_path))
 
     for ray_waitable in ray_waitables:
         try:
@@ -93,8 +93,8 @@ class DatasetConfig:
 
 
 @draccus.wrap()
-def filter_hf_dataset(cfg: DatasetConfig):
-    logger.info(f"Starting dataset filtering for {cfg.hf_dataset_id}")
+def prune_hf_dataset(cfg: DatasetConfig):
+    logger.info(f"Starting dataset pruneing for {cfg.hf_dataset_id}")
     result_refs = []
 
     for subset in cfg.subsets:
