@@ -1,8 +1,8 @@
 """Keep only specified columns from FineWeb parquet files."""
 
-
 from marin.execution.executor import ExecutorStep, executor_main, versioned
-from operations.download.huggingface.stream_remove_columns import filter_hf_dataset, DatasetConfig
+from operations.download.huggingface.stream_remove_columns import DatasetConfig, filter_hf_dataset
+
 
 def filter_fineweb_parquet():
     subsets = [
@@ -101,7 +101,7 @@ def filter_fineweb_parquet():
         "CC-MAIN-2023-40",
         "CC-MAIN-2023-50",
         "CC-MAIN-2024-10",
-        "CC-MAIN-2024-18"
+        "CC-MAIN-2024-18",
     ]
 
     filtered_fineweb = ExecutorStep(

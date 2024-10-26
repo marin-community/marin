@@ -1,14 +1,13 @@
 """Remove unnecessary columns while streaming data from huggingface."""
 
-from functools import partial
 import logging
 import os
+from dataclasses import dataclass
+from functools import partial
 
 import draccus
 import ray
-
-from dataclasses import dataclass
-from datasets import load_dataset, IterableDataset, Dataset
+from datasets import Dataset, IterableDataset, load_dataset
 
 logger = logging.getLogger("ray")
 
@@ -18,11 +17,7 @@ def gen_from_iterable_dataset(iterable_ds):
 
 
 @ray.remote(memory=10 * 1024 * 1024 * 1024, max_retries=5)  # 10 GB
-def filter_stream_and_save(
-    dataset: IterableDataset,
-    keep_columns: list[str],
-    output_path: str
-):
+def filter_stream_and_save(dataset: IterableDataset, keep_columns: list[str], output_path: str):
     """
     Filters and saves a streaming dataset by removing unnecessary columns.
 
@@ -34,7 +29,7 @@ def filter_stream_and_save(
         keep_columns (list[str]): List of column names to retain
         output_path (str): Path where the filtered dataset will be saved
     """
-    
+
     drop_columns = [col for col in dataset.column_names if col not in keep_columns]
     dataset = dataset.remove_columns(drop_columns)
 
@@ -44,13 +39,15 @@ def filter_stream_and_save(
         logger.info(f"Saving filtered dataset to {output_path}")
         dataset.save_to_disk(output_path, format="parquet")
         logger.info("Successfully saved filtered dataset")
-    except Exception as e:
-        raise Exception(f"Failed to save dataset to {output_path}: {str(e)}")
+    except Exception:
+        raise Exception(f"Failed to save dataset to {output_path}")  # noqa
     return True
 
 
 @ray.remote(memory=10 * 1024 * 1024 * 1024, max_retries=5)  # 10 GB
-def process_hf_subset(hf_dataset_id: str, revision, subset: str, splits: list[str], output_path: str, keep_columns: list[str]):
+def process_hf_subset(
+    hf_dataset_id: str, revision, subset: str, splits: list[str], output_path: str, keep_columns: list[str]
+):
     """
     Process a subset of a HuggingFace dataset by filtering columns and saving to disk.
 
@@ -72,22 +69,16 @@ def process_hf_subset(hf_dataset_id: str, revision, subset: str, splits: list[st
         split_output_path = output_path
         if len(splits) > 1:
             split_output_path = os.path.join(output_path, split)
-        
+
         logger.info(f"Processing split {split} to {split_output_path}")
-        ray_waitables.append(
-            filter_stream_and_save.remote(
-                dataset[split],
-                keep_columns,
-                split_output_path
-            )
-        )
+        ray_waitables.append(filter_stream_and_save.remote(dataset[split], keep_columns, split_output_path))
 
     for ray_waitable in ray_waitables:
         try:
             ray.get(ray_waitable)
             logger.info("Successfully processed split")
         except Exception as e:
-            logger.exception(f"Error processing split for {output_path}: {str(e)}")
+            logger.exception(f"Error processing split for {output_path}: {e!s}")
 
 
 @dataclass
@@ -111,10 +102,12 @@ def filter_hf_dataset(cfg: DatasetConfig):
 
         try:
             result_refs.append(
-                process_hf_subset.remote(cfg.hf_dataset_id, cfg.revision, subset, cfg.splits, output_path, cfg.keep_columns)
+                process_hf_subset.remote(
+                    cfg.hf_dataset_id, cfg.revision, subset, cfg.splits, output_path, cfg.keep_columns
+                )
             )
         except Exception as e:
-            logger.exception(f"Error processing subset {subset}: {str(e)}")
+            logger.exception(f"Error processing subset {subset}: {e!s}")
             continue
 
     try:
@@ -122,4 +115,4 @@ def filter_hf_dataset(cfg: DatasetConfig):
         ray.get(result_refs)
         logger.info("Successfully processed all subsets")
     except Exception as e:
-        logger.exception(f"Error in final processing: {str(e)}")
+        logger.exception(f"Error in final processing: {e!s}")
