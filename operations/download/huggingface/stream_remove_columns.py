@@ -19,6 +19,16 @@ def prune_stream_and_save(dataset: IterableDataset, keep_columns: list[str], out
     This function takes a streaming dataset, removes columns not specified in keep_columns,
     and saves the pruned dataset to disk in parquet format.
 
+    NOTE:
+    Data is being streamed and the column removal is done streamingly too, but to save the
+    dataset we need to convert it to a cached dataset, while doing this we fit the dataset in memory.
+
+    However since we removed some columns the subset will be smaller. so it doesn't need as
+    much memory as the full subset.
+
+    The memory needed for this operation should atleast be the size of the dataset
+    in memory after removing the columns.
+
     Args:
         dataset (IterableDataset): The input streaming dataset to prune
         keep_columns (list[str]): List of column names to retain
