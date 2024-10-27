@@ -5,12 +5,16 @@ Helpful functions for programmatically creating and verifying GCS Storage Transf
 HuggingFace, external blob-stores like S3, as well as other GCS buckets).
 """
 
+import logging
 import urllib.parse
 from pathlib import Path
 from time import time
 
 import fsspec
-from google.cloud import storage_transfer
+from google.api_core import operations_v1
+from google.cloud import storage_transfer, storage_transfer_v1
+
+logger = logging.getLogger(__name__)
 
 
 def create_url_list_tsv_on_gcs(
@@ -53,7 +57,7 @@ def create_gcs_transfer_job_from_tsv(
 
     Writes a file to "raw/ar5iv/v04.2024/data.fau.de/share/zEkvNxgWQ6W/ar5iv-04-2024-no-problem.zip" on GCS.
     """
-    print(f"[*] Creating Storage Transfer Job :: Download `{tsv_url}` to `gs://{gcs_bucket}/{gcs_output_path}`")
+    logger.info(f"[*] Creating Storage Transfer Job :: Download `{tsv_url}` to `gs://{gcs_bucket}/{gcs_output_path}`")
     client = storage_transfer.StorageTransferServiceClient()
 
     # Create a Transfer Job Specification with an HTTP Data "Source", and GCS Bucket "Sink"
@@ -102,17 +106,31 @@ def wait_for_transfer_job(job_name: str, timeout: int, poll_interval: int, gcp_p
     Raises:
         TimeoutError: If the Transfer Job does not complete within the specified `timeout`.
     """
-    print(f"[*] Waiting for Transfer Job :: {job_name}")
+    logger.info(f"[*] Waiting for Transfer Job :: {job_name}")
 
-    client = storage_transfer.StorageTransferServiceClient()
+    transfer_client = storage_transfer_v1.StorageTransferServiceClient()
+    channel = transfer_client.transport.grpc_channel
+    operations_client = operations_v1.OperationsClient(channel)
     start_time = time()
 
     while time() - start_time < timeout:
         if (time() - start_time) % poll_interval == 0:
-            job = client.get_transfer_job({"job_name": job_name, "project_id": gcp_project_id})
-
-            if job.status == storage_transfer.TransferJob.Status.ENABLED:
-                print(f"[*] Transfer Job Completed :: {job_name}")
+            # Prepare the filter string to get the operations for the job
+            filter_string = f'{{"project_id": "{gcp_project_id}", "job_names": ["{job_name}"]}}'
+            # List transfer operations for the job
+            # Use operations_client to list operations related to this transfer job
+            transfer_operations = operations_client.list_operations("transferOperations", filter_string)
+            # Check the status of all operations
+            operation_statuses = [operation.done for operation in transfer_operations]
+            complete_operations = operation_statuses.count(True)
+            total_operations = len(operation_statuses)
+            if total_operations > 0:
+                percent_complete = (complete_operations / total_operations) * 100
+            else:
+                percent_complete = 0
+            logger.info(f"{complete_operations}/{total_operations} ({percent_complete}%) complete")
+            if percent_complete == 100:
+                logger.info(f"[*] Transfer Job Completed :: {job_name}")
                 return
 
     raise TimeoutError(f"Transfer Job did not complete within {timeout} seconds; check status for {job_name}")
