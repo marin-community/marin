@@ -66,7 +66,7 @@ training_config = SimpleTrainConfig(
 )
 
 model = default_train(
-    name="dclm_1b_1x_replication",
+    name="dclm_1b_1x_replication_oct26",
     tokenized=mixture_config,
     model_config=llama_1_4b_dclm,
     train_config=training_config,

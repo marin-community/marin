@@ -102,7 +102,7 @@ def default_train(
                 weight_decay=train_config.weight_decay,
                 warmup=train_config.warmup,
                 cooldown=train_config.cooldown,
-                min_lr_ration=train_config.min_lr_ratio,
+                min_lr_ratio=train_config.min_lr_ratio,
             ),
             hf_save_steps=25000,
         ),
