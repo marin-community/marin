@@ -33,7 +33,7 @@ def save_parquet_to_gcs(chunk_buffer: list[dict], output_path: str, shard_idx: i
         return True
 
     except Exception as e:
-        raise e  # noqa
+        raise e
 
 
 @ray.remote(memory=10 * 1024 * 1024 * 1024, max_retries=5)  # 10 GB
