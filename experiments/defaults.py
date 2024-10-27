@@ -17,12 +17,11 @@ from levanter.store.cache import CacheOptions
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 
-from marin.processing.tokenize import tokenize
 from experiments.llama import compute_num_parameters
 from experiments.paloma import paloma_tokenized
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import ExecutorStep, InputName, this_output_path, versioned
-from marin.processing.tokenize import TokenizeConfig, TokenizerStep, lm_data_config
+from marin.processing.tokenize import TokenizeConfig, TokenizerStep, lm_data_config, tokenize
 from marin.processing.tokenize.data_configs import add_validation_sets_to_mixture
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 
