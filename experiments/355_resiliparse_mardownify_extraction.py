@@ -7,7 +7,7 @@ import logging
 
 from experiments.defaults import default_tokenize, default_train
 from experiments.llama import llama3_tokenizer, llama_1_4b, llama_1_4b_train_config
-from experiments.pretraining_datasets import download_fineweb
+from experiments.pretraining_datasets import fineweb
 from marin.evaluation.evaluation_config import EvaluationConfig
 from marin.evaluation.run import evaluate
 from marin.execution.executor import (
@@ -20,16 +20,15 @@ from marin.execution.executor import (
 from marin.schemas.web.convert import HtmlToMarkdownConfig, ResiliparseConfig
 from scripts.fineweb.process_parquet_fw import ParquetFWConfig, process_fw_dump
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("ray")
 
 
 def create_steps() -> list[ExecutorStep]:
-    transform_resiliparse_custom_fork_step = ExecutorStep(
+    transform_resiliparse_custom_fork = ExecutorStep(
         name="documents/fineweb-small-resiliparse-custom-fork",
         fn=process_fw_dump,
         config=ParquetFWConfig(
-            input_path=output_path_of(download_fineweb),
+            input_path=output_path_of(fineweb),
             cc_dumps=versioned(["CC-MAIN-2024-18"]),
             md_output_path=this_output_path("md"),
             text_output_path=this_output_path("text"),
@@ -50,18 +49,18 @@ def create_steps() -> list[ExecutorStep]:
     step_name = "fineweb-small-resiliparse-custom-fork"
 
     fw_tokenized = default_tokenize(
-        name=f"fw-small-100B-{step_name}",
-        dataset=output_path_of(transform_resiliparse_custom_fork_step),
+        name=f"fw-small-{step_name}",
+        dataset=transform_resiliparse_custom_fork,
         tokenizer=llama3_tokenizer,
     )
     fw_100b_model = default_train(
-        name=f"fw-small-100B-1.4b-{step_name}",
+        name=f"fw-small-1.4b-{step_name}",
         tokenized=fw_tokenized,
         model_config=llama_1_4b,
         train_config=llama_1_4b_train_config,
     )
 
-    evaluate_step = ExecutorStep(
+    evaluate_model = ExecutorStep(
         name=f"evaluation/fw-small-{step_name}",
         fn=evaluate,
         config=EvaluationConfig(
@@ -74,11 +73,11 @@ def create_steps() -> list[ExecutorStep]:
     )
 
     return [
-        download_fineweb,
-        transform_resiliparse_custom_fork_step,
+        fineweb,
+        transform_resiliparse_custom_fork,
         fw_tokenized,
         fw_100b_model,
-        evaluate_step,
+        evaluate_model,
     ]
 
 

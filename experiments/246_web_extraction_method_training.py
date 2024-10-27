@@ -7,7 +7,7 @@ import logging
 
 from experiments.defaults import default_tokenize, default_train
 from experiments.llama import llama3_tokenizer, llama_1_4b, llama_1_4b_train_config
-from experiments.pretraining_datasets import download_fineweb
+from experiments.pretraining_datasets import fineweb
 from marin.evaluation.evaluation_config import EvaluationConfig
 from marin.evaluation.run import evaluate
 from marin.execution.executor import (
@@ -25,11 +25,11 @@ logger = logging.getLogger("ray")
 
 
 def get_extraction_steps():
-    transform_trafilatura_default_step = ExecutorStep(
+    transform_trafilatura_default = ExecutorStep(
         name="documents/fineweb-small-trafilatura",
         fn=process_fw_dump,
         config=ParquetFWConfig(
-            input_path=output_path_of(download_fineweb),
+            input_path=output_path_of(fineweb),
             cc_dumps=versioned(["CC-MAIN-2024-18"]),
             md_output_path=this_output_path("md"),
             text_output_path=this_output_path("text"),
@@ -43,11 +43,11 @@ def get_extraction_steps():
         ),
     )
 
-    transform_trafilatura_favor_precision_step = ExecutorStep(
+    transform_trafilatura_favor_precision = ExecutorStep(
         name="documents/fineweb-small-trafilatura-favor-precision",
         fn=process_fw_dump,
         config=ParquetFWConfig(
-            input_path=output_path_of(download_fineweb),
+            input_path=output_path_of(fineweb),
             cc_dumps=versioned(["CC-MAIN-2024-18"]),
             md_output_path=this_output_path("md"),
             text_output_path=this_output_path("text"),
@@ -61,11 +61,11 @@ def get_extraction_steps():
         ),
     )
 
-    transform_resiliparse_default_step = ExecutorStep(
+    transform_resiliparse_default = ExecutorStep(
         name="documents/fineweb-small-resiliparse-default",
         fn=process_fw_dump,
         config=ParquetFWConfig(
-            input_path=output_path_of(download_fineweb),
+            input_path=output_path_of(fineweb),
             cc_dumps=versioned(["CC-MAIN-2024-18"]),
             md_output_path=this_output_path("md"),
             text_output_path=this_output_path("text"),
@@ -78,11 +78,11 @@ def get_extraction_steps():
         ),
     )
 
-    transform_resiliparse_preserve_formatting_step = ExecutorStep(
+    transform_resiliparse_preserve_formatting = ExecutorStep(
         name="documents/fineweb-small-resiliparse-preserve-formatting",
         fn=process_fw_dump,
         config=ParquetFWConfig(
-            input_path=output_path_of(download_fineweb),
+            input_path=output_path_of(fineweb),
             cc_dumps=versioned(["CC-MAIN-2024-18"]),
             md_output_path=this_output_path("md"),
             text_output_path=this_output_path("text"),
@@ -96,11 +96,11 @@ def get_extraction_steps():
         ),
     )
 
-    transform_readability_step = ExecutorStep(
+    transform_readability = ExecutorStep(
         name="documents/fineweb-small-readability",
         fn=process_fw_dump,
         config=ParquetFWConfig(
-            input_path=output_path_of(download_fineweb),
+            input_path=output_path_of(fineweb),
             cc_dumps=versioned(["CC-MAIN-2024-18"]),
             md_output_path=this_output_path("md"),
             text_output_path=this_output_path("text"),
@@ -113,11 +113,11 @@ def get_extraction_steps():
     )
 
     return [
-        transform_trafilatura_default_step,
-        transform_trafilatura_favor_precision_step,
-        transform_resiliparse_default_step,
-        transform_resiliparse_preserve_formatting_step,
-        transform_readability_step,
+        transform_trafilatura_default,
+        transform_trafilatura_favor_precision,
+        transform_resiliparse_default,
+        transform_resiliparse_preserve_formatting,
+        transform_readability,
     ]
 
 
@@ -129,31 +129,31 @@ def create_steps() -> list[ExecutorStep]:
     for step in extraction_steps:
         step_name = step.name.split("/", 1)[1]
 
-        fw_tokenized = default_tokenize(
-            name=f"fw-small-100B-{step_name}",
-            dataset=output_path_of(step),
+        fineweb_tokenized = default_tokenize(
+            name=f"fineweb-small-{step_name}",
+            dataset=step,
             tokenizer=llama3_tokenizer,
         )
-        fw_100b_model = default_train(
-            name=f"fw-small-100B-1.4b-{step_name}",
-            tokenized=fw_tokenized,
+        fineweb_100b_model = default_train(
+            name=f"fineweb-small-1.4b-{step_name}",
+            tokenized=fineweb_tokenized,
             model_config=llama_1_4b,
             train_config=llama_1_4b_train_config,
         )
 
-        evaluate_step = ExecutorStep(
+        evaluate_model = ExecutorStep(
             name=f"evaluation/fw-small-{step_name}",
             fn=evaluate,
             config=EvaluationConfig(
                 evaluator="helm",
                 model_name=versioned(step_name),
-                model_path=output_path_of(fw_100b_model),
+                model_path=output_path_of(fineweb_100b_model),
                 evaluation_path=this_output_path(),
                 evals=["mmlu"],
             ),
         )
 
-        total_steps.extend([step, fw_tokenized, fw_100b_model, evaluate_step])
+        total_steps.extend([step, fineweb_tokenized, fineweb_100b_model, evaluate_model])
 
     return total_steps
 

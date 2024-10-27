@@ -25,11 +25,15 @@ def extract_content_from_dom(
 
     Returns:
         str: Markdown content of the main content DOM.
+
+    NOTE: This method is using as custom fork of Resiliparse that is not meant to be merged into the main repository of
+    Resiliparse. This is a custom modification for the purpose of this experiment. So, this method will not work with
+    the main Resiliparse package. No plans to merge this into the main Resiliparse package yet.
     """
 
-    from resiliparse.extract.html2text import extract_plain_text
+    from resiliparse.extract.html2text import extract_main_dom_tree
 
-    tree = extract_plain_text(html, **kwargs)
+    tree = extract_main_dom_tree(html, **kwargs)
     tree = BeautifulSoup(tree, "html.parser")
 
     # convert to markdown
