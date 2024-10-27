@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import draccus
 import ray
 from datasets import Dataset, IterableDataset, load_dataset
+from tqdm import tqdm
 
 logger = logging.getLogger("ray")
 
@@ -23,7 +24,7 @@ def save_parquet_to_gcs(chunk_buffer: list[dict], output_path: str, shard_idx: i
         sub_idx (int): The sub-index of the parquet file
     """
     try:
-        chunk_dataset = Dataset.from_dict(chunk_buffer)
+        chunk_dataset = Dataset.from_list(chunk_buffer)
         chunk_path = os.path.join(output_path, f"{shard_idx:03d}_{sub_idx:05d}.parquet")
 
         logger.info(f"Saving chunk {shard_idx}_{sub_idx} to {chunk_path}")
@@ -31,8 +32,8 @@ def save_parquet_to_gcs(chunk_buffer: list[dict], output_path: str, shard_idx: i
 
         return True
 
-    except Exception:
-        raise Exception(f"Failed to save dataset to {output_path}")  # noqa
+    except Exception as e:
+        raise e  # noqa
 
 
 @ray.remote(memory=10 * 1024 * 1024 * 1024, max_retries=5)  # 10 GB
@@ -64,7 +65,7 @@ def prune_stream_and_save(
     chunk_buffer = []
     chunk_idx = 0
 
-    for item in dataset:
+    for item in tqdm(dataset):
         chunk_buffer.append(item)
 
         if len(chunk_buffer) >= chunk_size:
