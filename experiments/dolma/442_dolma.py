@@ -3,11 +3,11 @@ Train Dolma/OLMo models.
 https://github.com/stanford-crfm/marin/issues/442
 """
 
-from experiments.defaults import default_train, llama_1_4b_train_config
+from experiments.defaults import default_train
 from experiments.dolma.tokenize_dolma import DOLMA_OLMO_MIXTURE_WEIGHTS, tokenize_dolma_steps
-from experiments.llama import llama_1_4b
+from experiments.llama import llama_1_4b, llama_1_4b_train_config
 from marin.execution.executor import executor_main
-from marin.processing.tokenize import lm_mixture_data_config
+from marin.processing.tokenize.data_configs import lm_mixture_data_config
 
 EXPERIMENT_TAG = ["442_dolma"]
 
