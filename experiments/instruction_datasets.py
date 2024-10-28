@@ -42,6 +42,38 @@ class InstructionDatasetConfig:
     filetype: str
 
 
+INSTRUCTION_DATASET_NAME_TO_CONFIG = {
+    "meta-math/MetaMathQA": InstructionDatasetConfig(
+        hf_dataset_id="meta-math/MetaMathQA",
+        revision="aa4f34d",
+        wait_for_completion=True,
+        metadata_columns=["type"],
+        filetype="json",
+    ),
+    "allenai/tulu-v2-sft-mixture": InstructionDatasetConfig(
+        hf_dataset_id="allenai/tulu-v2-sft-mixture",
+        revision="6248b17",
+        wait_for_completion=True,
+        metadata_columns=["dataset", "id"],
+        filetype="parquet",
+    ),
+    "openbmb/UltraInteract_sft": InstructionDatasetConfig(
+        hf_dataset_id="openbmb/UltraInteract_sft",
+        revision="2b102e4",
+        wait_for_completion=True,
+        metadata_columns=["task", "dataset"],
+        filetype="parquet",
+    ),
+    "teknium/OpenHermes-2.5": InstructionDatasetConfig(
+        hf_dataset_id="teknium/OpenHermes-2.5",
+        revision="b820378",
+        wait_for_completion=True,
+        metadata_columns=["id", "category", "source"],
+        filetype="json",
+    ),
+}
+
+
 def download_dataset_step(dataset: InstructionDatasetConfig) -> ExecutorStep:
     dataset_name = dataset.hf_dataset_id.replace("/", "--")
     download_step = ExecutorStep(
@@ -82,41 +114,10 @@ def transform_dataset_step(dataset: InstructionDatasetConfig, download_step: Exe
 
 def get_instruction_dataset(hf_dataset_id: str) -> ExecutorStep:
     assert hf_dataset_id in INSTRUCTION_DATASET_NAME_TO_CONFIG, f"Unknown instruction dataset: {hf_dataset_id}"
-    return INSTRUCTION_DATASET_NAME_TO_TRANSFORMED_DATASET_STEP[hf_dataset_id]
+    download_step = download_dataset_step(INSTRUCTION_DATASET_NAME_TO_CONFIG[hf_dataset_id])
+    transform_step = transform_dataset_step(INSTRUCTION_DATASET_NAME_TO_CONFIG[hf_dataset_id], download_step)
+    return transform_step
 
-
-INSTRUCTION_DATASET_NAME_TO_CONFIG = {
-    "meta-math/MetaMathQA": InstructionDatasetConfig(
-        hf_dataset_id="meta-math/MetaMathQA",
-        revision="aa4f34d",
-        wait_for_completion=True,
-        metadata_columns=["type"],
-        filetype="json",
-    ),
-    "allenai/tulu-v2-sft-mixture": InstructionDatasetConfig(
-        hf_dataset_id="allenai/tulu-v2-sft-mixture",
-        revision="6248b17",
-        wait_for_completion=True,
-        metadata_columns=["dataset", "id"],
-        filetype="parquet",
-    ),
-    "openbmb/UltraInteract_sft": InstructionDatasetConfig(
-        hf_dataset_id="openbmb/UltraInteract_sft",
-        revision="2b102e4",
-        wait_for_completion=True,
-        metadata_columns=["task", "dataset"],
-        filetype="parquet",
-    ),
-    "teknium/OpenHermes-2.5": InstructionDatasetConfig(
-        hf_dataset_id="teknium/OpenHermes-2.5",
-        revision="b820378",
-        wait_for_completion=True,
-        metadata_columns=["id", "category", "source"],
-        filetype="json",
-    ),
-}
-
-INSTRUCTION_DATASET_NAME_TO_TRANSFORMED_DATASET_STEP = {}
 
 if __name__ == "__main__":
     all_steps = []
@@ -125,6 +126,5 @@ if __name__ == "__main__":
         all_steps.append(downloaded_dataset)
         transformed_dataset = transform_dataset_step(config, downloaded_dataset)
         all_steps.append(transformed_dataset)
-        INSTRUCTION_DATASET_NAME_TO_TRANSFORMED_DATASET_STEP[config.hf_dataset_id] = transformed_dataset
 
     executor_main(steps=all_steps)
