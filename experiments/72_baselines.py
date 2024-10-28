@@ -6,7 +6,7 @@ https://github.com/stanford-crfm/marin/issues/72
 import os
 
 from experiments.defaults import default_tokenize, default_train
-from experiments.llama import llama3_tokenizer, llama_300m, llama_300m_train_config, llama_1_4b, llama_1_4b_train_config
+from experiments.llama import llama3_tokenizer, llama_1_4b, llama_1_4b_train_config, llama_300m, llama_300m_train_config
 from experiments.pretraining_datasets import fineweb_edu, slimpajama, slimpajama_6b
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
