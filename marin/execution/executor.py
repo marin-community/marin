@@ -181,6 +181,8 @@ class VersionedValue(Generic[T_co]):
 
 
 def versioned(value: T_co) -> VersionedValue[T_co]:
+    if isinstance(value, VersionedValue):
+        raise ValueError("Can't nest VersionedValue")
     return VersionedValue(value)
 
 
