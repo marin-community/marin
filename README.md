@@ -38,7 +38,7 @@ it, trains a quality classifer, filters the data, and performs deduplication.
 TODO: add training and evaluation
 
 ```bash
-python experiments/quickstart-synthetic.py
+python experiments/quickstart.py
 ```
 
 ## Dev Notes
