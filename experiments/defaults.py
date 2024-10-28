@@ -38,7 +38,7 @@ def default_tokenize(
     return ExecutorStep(
         name=os.path.join("tokenized", name),
         description=f"Tokenize raw text using the {tokenizer} tokenizer.",
-        fn=tokenize,
+        fn=tokenize.tokenize,
         config=config,
     )
 
@@ -97,7 +97,9 @@ def default_train(
 
 
 def _prepare_data_config(
-    tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig, weights: dict[str, float], use_default_validation: bool
+    tokenized: InputName | ExecutorStep | dict[str, ExecutorStep] | LMMixtureDatasetConfig,
+    weights: dict[str, float],
+    use_default_validation: bool,
 ) -> LMMixtureDatasetConfig:
     """
     Prepare a tokenized dataset for training. This is mostly just combining the tokenized data with the validation sets.
@@ -114,7 +116,8 @@ def _prepare_data_config(
     if isinstance(tokenized, InputName | ExecutorStep):
         data = lm_data_config(training_set=tokenized, validation_sets=validation_sets)
     elif isinstance(tokenized, dict):
-        data = lm_mixture_data_config(components=tokenized, weights=weights, validation_sets=validation_sets)
+        tokenized.update(validation_sets)
+        data = lm_mixture_data_config(components=tokenized, weights=weights)
     else:
         # TODO: would be better to expose hooks in levanter instead of relying on mixtures
         data = tokenized
@@ -123,7 +126,9 @@ def _prepare_data_config(
     return data
 
 
-def _get_tokenizer_for_train(tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig) -> str:
+def _get_tokenizer_for_train(
+    tokenized: InputName | ExecutorStep | dict[str, ExecutorStep] | LMMixtureDatasetConfig,
+) -> str:
     match tokenized:
         case LMMixtureDatasetConfig(tokenizer=tokenizer):
             pass
@@ -131,6 +136,9 @@ def _get_tokenizer_for_train(tokenized: InputName | ExecutorStep | LMMixtureData
             pass
         case InputName(step=ExecutorStep(config=TokenizeConfig(tokenizer=tokenizer))):
             pass
+        case dict():
+            first_executor_step = next(iter(tokenized.values()))
+            tokenizer = _get_tokenizer_for_train(first_executor_step)
         case _:
             raise ValueError(f"Could not determine tokenizer from {tokenized}")
 

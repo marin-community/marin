@@ -1,6 +1,6 @@
 import logging
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from experiments.defaults import default_tokenize, default_train
 from experiments.llama import llama3_tokenizer, llama_1_4b, llama_1_4b_train_config
@@ -63,11 +63,6 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
             fn=consolidate,
             config=ConsolidateConfig(
                 input_path=input_data_path,
-                # Can't use the versioned output path here because version
-                #  string also takes into account the dependencies
-                # This means that the hash at the end of the path will be different
-                # based on the attribute_path. However,
-                # we ultimately want the output path to be under the same directory for each fineweb dump.
                 output_path=this_output_path(input_basename),
                 filters=[
                     FilterConfig(
@@ -94,11 +89,15 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
         tokenized[input_data_source] = tokenize_step
         weights[input_data_source] = 1.0
 
+    llama_1_4b_100b_tokens_train_config = replace(
+        llama_1_4b_train_config, num_train_steps=23842
+    )  # 100B / (4096 * 1024) = 23842
+
     train_step = default_train(
         name=config.experiment_name,
         tokenized=tokenized,
         model_config=llama_1_4b,
-        train_config=llama_1_4b_train_config,
+        train_config=llama_1_4b_100b_tokens_train_config,
         weights=weights,
     )
 
