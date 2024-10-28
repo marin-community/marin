@@ -74,6 +74,7 @@ import logging
 import os
 import subprocess
 import traceback
+import urllib.parse
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field, fields, is_dataclass, replace
 from datetime import datetime
@@ -86,7 +87,6 @@ import ray.remote_function
 
 from marin.execution.executor_step_status import (
     STATUS_FAILED,
-    STATUS_RUNNING,
     STATUS_SUCCESS,
     STATUS_WAITING,
     append_status,
@@ -132,6 +132,7 @@ class ExecutorStep(Generic[ConfigT]):
     name: str
     fn: ExecutorFunction
     config: ConfigT
+    description: str | None = None
 
     override_output_path: str | None = None
     """Specifies the `output_path` that should be used.  Print warning if it
@@ -152,6 +153,9 @@ class InputName:
 
     step: ExecutorStep
     name: str | None
+
+    def cd(self, name: str) -> "InputName":
+        return InputName(self.step, name=os.path.join(self.name, name) if self.name else name)
 
 
 def output_path_of(step: ExecutorStep, name: str | None = None):
@@ -177,6 +181,8 @@ class VersionedValue(Generic[T_co]):
 
 
 def versioned(value: T_co) -> VersionedValue[T_co]:
+    if isinstance(value, VersionedValue):
+        raise ValueError("Can't nest VersionedValue")
     return VersionedValue(value)
 
 
@@ -199,6 +205,9 @@ class ExecutorStepInfo:
     config: dataclass
     """`step.config`, but concretized (no more `InputName`, `OutputName`, or `VersionedValue`)."""
 
+    description: str | None
+    """`step.description`."""
+
     override_output_path: str | None
     """`step.override_output_path`."""
 
@@ -217,6 +226,7 @@ class ExecutorInfo:
     """Contains information about an execution."""
 
     # Metadata related to the launch
+    ray_job_id: str
     git_commit: str | None
     caller_path: str
     created_date: str
@@ -224,6 +234,7 @@ class ExecutorInfo:
 
     # Information taken from `Executor`
     prefix: str
+    description: str | None
     steps: list[ExecutorStepInfo]
 
 
@@ -341,14 +352,16 @@ class Executor:
         self,
         prefix: str,
         executor_info_base_path: str,
+        description: str | None = None,
         force_run: list[str] | None = None,
-        force_run_failed: bool = True,
+        force_run_failed: bool = False,
     ):
         self.prefix = prefix
         self.executor_info_base_path = executor_info_base_path
+        self.description = description
 
         self.configs: dict[ExecutorStep, dataclass] = {}
-        self.force_run = force_run or []
+        self.force_run = force_run
         self.force_run_failed = force_run_failed
         self.dependencies: dict[ExecutorStep, list[ExecutorStep]] = {}
         self.versions: dict[ExecutorStep, dict[str, Any]] = {}
@@ -358,16 +371,20 @@ class Executor:
 
     def run(self, steps: list[ExecutorStep | InputName], dry_run: bool = False):
         # Gather all the steps, compute versions and output paths for all of them.
+        logger.info(f"### Inspecting the {len(steps)} provided steps ###")
         for step in steps:
             if isinstance(step, InputName):  # Interpret InputName as the underlying step
                 step = step.step
             self.compute_version(step)
 
-        self.write_infos()
-
-        # Run each step
+        logger.info(f"### Launching {len(self.steps)} steps ###")
         for step in self.steps:
             self.run_step(step, dry_run=dry_run)
+
+        logger.info("### Writing metadata ###")
+        self.write_infos()
+
+        logger.info("### Waiting for all steps to finish ###")
         ray.get(list(self.refs.values()))
 
     def compute_version(self, step: ExecutorStep) -> dict[str, Any]:
@@ -430,6 +447,7 @@ class Executor:
                     name=step.name,
                     fn_name=get_fn_name(step.fn),
                     config=self.configs[step],
+                    description=step.description,
                     override_output_path=step.override_output_path,
                     version=self.versions[step],
                     dependencies=[self.output_paths[dep] for dep in self.dependencies[step]],
@@ -443,20 +461,34 @@ class Executor:
             caller_path=get_caller_path(),
             created_date=datetime.now().isoformat(),
             user=get_user(),
+            ray_job_id=ray.get_runtime_context().get_job_id(),
             prefix=self.prefix,
+            description=self.description,
             steps=step_infos,
         )
 
         # Set executor_info_path based on hash and caller path name (e.g., 72_baselines-8c2f3a.json)
         # import pdb; pdb.set_trace()
-        executor_version_str = json.dumps(list(map(asdict, step_infos)), sort_keys=True, cls=CustomJsonEncoder)
+        executor_version_str = json.dumps(
+            list(map(asdict_without_description, step_infos)), sort_keys=True, cls=CustomJsonEncoder
+        )
         executor_version_hash = hashlib.md5(executor_version_str.encode()).hexdigest()[:6]
         name = os.path.basename(executor_info.caller_path).replace(".py", "")
         self.executor_info_path = os.path.join(
             self.executor_info_base_path,
             f"{name}-{executor_version_hash}.json",
         )
+
+        # Print where to find the executor info (experiments JSON)
         logger.info(f"Writing executor info to {self.executor_info_path}")
+        # TODO: don't hardcode this webserver later
+        experimentUrl = "https://marlin-subtle-barnacle.ngrok-free.app/experiment?path=" + urllib.parse.quote(
+            self.executor_info_path
+        )
+        logger.info("To view the experiment page, go to:")
+        logger.info("")
+        logger.info(experimentUrl)
+        logger.info("")
 
         # Write out info for each step
         for step, info in zip(self.steps, step_infos, strict=True):
@@ -490,7 +522,7 @@ class Executor:
             logger.info(f"  {dependency_index_str(i)} = {self.output_paths[dep]}")
         logger.info("")
         force_run_step = False
-        if step.name in self.force_run or (self.force_run_failed and status == STATUS_FAILED):
+        if (self.force_run and step.name in self.force_run) or (self.force_run_failed and status == STATUS_FAILED):
             force_run_step = True
             logger.info(f"Force running {step.name}, previous status: {status}")
 
@@ -503,6 +535,13 @@ class Executor:
         )
 
 
+def asdict_without_description(obj: dataclass) -> dict[str, Any]:
+    """Return the `asdict` of an object, but remove the `description` field, because it doesn't affect the semantics."""
+    d = asdict(obj)
+    d.pop("description", None)
+    return d
+
+
 @ray.remote
 def execute_after_dependencies(
     fn: ExecutorFunction, config: dataclass, dependencies: list[ray.ObjectRef], output_path: str, should_run: bool
@@ -512,15 +551,16 @@ def execute_after_dependencies(
     Only do stuff if `should_run` is True.
     """
     status_path = get_status_path(output_path)
+    ray_task_id = ray.get_runtime_context().get_task_id()
 
     # Ensure that dependencies are all run first
     if should_run:
-        append_status(status_path, STATUS_WAITING)
+        append_status(status_path, STATUS_WAITING, ray_task_id=ray_task_id)
     ray.get(dependencies)
 
     # Call fn(config)
     if should_run:
-        append_status(status_path, STATUS_RUNNING)
+        append_status(status_path, STATUS_WAITING, ray_task_id=ray_task_id)
     try:
         if isinstance(fn, ray.remote_function.RemoteFunction):
             if should_run:
@@ -534,12 +574,12 @@ def execute_after_dependencies(
         # Failed due to some exception
         message = traceback.format_exc()
         if should_run:
-            append_status(status_path, STATUS_FAILED, message=message)
+            append_status(status_path, STATUS_FAILED, message=message, ray_task_id=ray_task_id)
         raise e
 
     # Success!
     if should_run:
-        append_status(status_path, STATUS_SUCCESS)
+        append_status(status_path, STATUS_SUCCESS, ray_task_id=ray_task_id)
 
 
 def get_fn_name(fn: Callable | ray.remote_function.RemoteFunction, short: bool = False):
@@ -588,17 +628,18 @@ class ExecutorMainConfig:
 
     dry_run: bool = False
     force_run: list[str] = field(default_factory=list)  # <list of steps name>: run list of steps (names)
-    force_run_failed: bool = True  # run failed steps
+    force_run_failed: bool = False  # Force run failed steps
 
 
 @draccus.wrap()
-def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep]):
+def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], description: str | None = None):
     """Main entry point for experiments (to standardize)"""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
     executor = Executor(
         prefix=config.prefix,
         executor_info_base_path=config.executor_info_base_path,
+        description=description,
         force_run=config.force_run,
         force_run_failed=config.force_run_failed,
     )
