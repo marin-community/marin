@@ -38,6 +38,8 @@ EXPERIMENT_TAG = ["433_dclm_1b_1x"]
 
 mixture_config = lm_mixture_data_config(components=DCLM_FULL_COMPONENTS, weights=DCLM_MIXTURE_WEIGHTS)
 
+
+# hyperparams and numebrs below are chosen to replicate the numbers in https://arxiv.org/abs/2406.11794
 llama_1_4b_dclm = LlamaConfig(
     seq_len=2048,
     hidden_dim=2048,
@@ -48,15 +50,13 @@ llama_1_4b_dclm = LlamaConfig(
     use_flash_attention=True,
 )
 
-# TODO remove, note to myself to verify calculations:
-# num_train_steps = total tokens / tokens per step
-# = 28.8 billion / (train_batch_size * seq_len)
-# = 28,800,000,000 / (256 * 2048 = 524288)
-# ~= 54,932 training steps
+NUM_TRAIN_TOKENS = 28800000000  # 28.8 billion tokens
+NUM_TRAIN_STEPS = NUM_TRAIN_TOKENS // (256 * 2048)  # 256 is the batch size, 2048 is the sequence length
+
 training_config = SimpleTrainConfig(
     tpu_type="v4-128",
     train_batch_size=256,
-    num_train_steps=54932,
+    num_train_steps=NUM_TRAIN_STEPS,
     learning_rate=3e-3,
     weight_decay=0.033,
     min_lr_ratio=0.1,
