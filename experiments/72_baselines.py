@@ -6,7 +6,7 @@ https://github.com/stanford-crfm/marin/issues/72
 import os
 
 from experiments.defaults import default_tokenize, default_train
-from experiments.llama import llama3_tokenizer, llama_1_4b, llama_1_4b_train_config
+from experiments.llama import llama3_tokenizer, llama_300m, llama_300m_train_config, llama_1_4b, llama_1_4b_train_config
 from experiments.pretraining_datasets import fineweb_edu, slimpajama, slimpajama_6b
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
@@ -15,8 +15,8 @@ slimpajama_6b_tokenized = default_tokenize(name="SlimPajama-6B", dataset=slimpaj
 slimpajama_6b_model = default_train(
     name="SlimPajama-6B-1.4b",
     tokenized=slimpajama_6b_tokenized,
-    model_config=llama_1_4b,
-    train_config=llama_1_4b_train_config,
+    model_config=llama_300m,
+    train_config=llama_300m_train_config,
 )
 
 slimpajama_tokenized = ExecutorStep(
@@ -49,8 +49,8 @@ fineweb_edu_model = default_train(
 if __name__ == "__main__":
     executor_main(
         steps=[
-            #slimpajama_6b_model,
-            #slimpajama_model,
+            slimpajama_6b_model,
+            slimpajama_model,
             fineweb_edu_model,
         ],
         description="Train 1.4B models on standard datasets (SlimPajama 6B, SlimPajama, FineWebEdu).",
