@@ -104,7 +104,9 @@ def download(cfg: DownloadConfig) -> None:
     )
 
     # Write Provenance JSON
-    write_provenance_json(gcs_versioned_relative_path, gcs_bucket, metadata=ar5iv_url_cfg)
+    # TODO: convert this script to fsspec
+    gcs_path = f"gs://{gcs_bucket}/{gcs_versioned_relative_path}"
+    write_provenance_json(gcs_path, metadata=ar5iv_url_cfg)
 
     # Finalize
     print(f"[*] Launched Transfer Job & wrote `provenance.json`; check Transfer Job status at:\n\t=> {job_url}")

@@ -49,7 +49,7 @@ def get_hf_dataset_urls(hf_dataset_id: str, revision: str, hf_url_glob: str) -> 
 
 def download_hf_dataset(
     hf_dataset_id: str, revision: str, hf_url_glob: str, gcs_output_path: str, public_gcs_path: str
-) -> str:
+) -> tuple[str, str]:
     """Create & Launch a Google Cloud Storage Transfer Job to Download a (Public) HuggingFace Dataset."""
     hf_urls = get_hf_dataset_urls(hf_dataset_id, revision, hf_url_glob)
 
@@ -75,9 +75,9 @@ def download_hf_dataset(
     )
 
     # Write Provenance JSON
+    gcs_output_path = f"gs://{gcs_bucket}/{gcs_versioned_relative_path}"
     write_provenance_json(
-        gcs_versioned_relative_path,
-        gcs_bucket,
+        gcs_output_path,
         metadata={"dataset": hf_dataset_id, "version": revision, "links": hf_urls},
     )
 

@@ -7,7 +7,7 @@ import os.path
 from experiments.llama import llama3_tokenizer
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
-from marin.processing.tokenize.tokenize import TokenizerStep
+from marin.processing.tokenize.data_configs import TokenizerStep
 
 BASE_DIR_DOLMA = "gs://marin-us-central2/raw/dolma/v1.7"
 

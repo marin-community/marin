@@ -1,3 +1,4 @@
+import os
 import subprocess
 import tempfile
 
@@ -13,11 +14,12 @@ def ray_start():
 
 
 def test_quickstart_run():
+    MARIN_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
     """Test the dry runs of experiment scripts"""
     # Emulate running experiments/quickstart.py on the cmdline
     with tempfile.TemporaryDirectory(prefix="executor-quickstart") as temp_dir:
         result = subprocess.run(
-            ["python", "experiments/quickstart.py", "--prefix", temp_dir],
+            ["python", os.path.join(MARIN_ROOT, "experiments/quickstart.py"), "--prefix", temp_dir],
             capture_output=True,
             text=True,
         )
