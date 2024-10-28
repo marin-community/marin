@@ -64,7 +64,9 @@ class AlpacaEvaluator(VllmTpuEvaluator):
         with open(os.path.expanduser("~/.cache/openai/token"), "r") as f:
             os.environ["OPENAI_API_KEY"] = f.read().strip()
 
-    def run(self, model: ModelConfig, evals: list[str], output_path: str, max_eval_instances: int | None = None) -> None:
+    def evaluate(
+        self, model: ModelConfig, evals: list[str], output_path: str, max_eval_instances: int | None = None
+    ) -> None:
         """
         Runs AlpacaEval on the specified model.
 

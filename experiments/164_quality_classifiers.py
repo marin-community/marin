@@ -1,3 +1,9 @@
+"""
+Train quality classifiers on different subsets similar to DCLM's classifiers.
+https://github.com/stanford-crfm/marin/issues/164
+TODO: apply these quality classifiers on FineWeb (or DCLM, but that's larger), train models.
+"""
+
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from marin.processing.classification.fasttext.train_fasttext import (
     DatasetCurationConfig,
@@ -13,13 +19,13 @@ train_dclm_eli5_200k_rw_200k_step = ExecutorStep(
         input_doc_paths=[
             DatasetCurationConfig(
                 input_doc_path=versioned("gs://marin-us-central2/documents/dclm/explainlikeimfive"),
-                label="__label__hq",
+                label="hq",
                 absolute_sampling_rate=versioned(200000),
                 format=DatasetFormat.DOLMA_FORMATTED_JSONL,
             ),
             DatasetCurationConfig(
                 input_doc_path=versioned("gs://marin-us-central2/documents/dclm/negative_examples.txt"),
-                label="__label__lq",
+                label="lq",
                 relative_sampling_rate=versioned(1.0),
                 format=DatasetFormat.FASTTEXT,
             ),
@@ -36,19 +42,19 @@ train_dclm_eli5_100k_oh_100k_rw_200k_step = ExecutorStep(
         input_doc_paths=[
             DatasetCurationConfig(
                 input_doc_path=versioned("gs://marin-us-central2/documents/dclm/explainlikeimfive"),
-                label="__label__hq",
+                label="hq",
                 absolute_sampling_rate=versioned(100000),
                 format=DatasetFormat.DOLMA_FORMATTED_JSONL,
             ),
             DatasetCurationConfig(
                 input_doc_path=versioned("gs://marin-us-central2/documents/dclm/oh_100k.txt"),
-                label="__label__hq",
+                label="hq",
                 absolute_sampling_rate=versioned(100000),
                 format=DatasetFormat.FASTTEXT,
             ),
             DatasetCurationConfig(
                 input_doc_path=versioned("gs://marin-us-central2/documents/dclm/negative_examples.txt"),
-                label="__label__lq",
+                label="lq",
                 relative_sampling_rate=versioned(1.0),
                 format=DatasetFormat.FASTTEXT,
             ),

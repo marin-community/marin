@@ -29,8 +29,9 @@ def process_one_warc_file(
     output_path: str,
     extract_method: str,
     config: ExtractionConfig,
-    output_path_md: str,
-    output_path_text: str
+    md_output_path: str,
+    text_output_path: str,
+    html_output_path: str | None = False,
 ):
     """
     Takes in the input file and processes it to get the html and md content.
@@ -45,8 +46,12 @@ def process_one_warc_file(
     base_folder = os.path.dirname(output_path).split("/")[-1]
     output_file_name = os.path.basename(output_path)
 
-    md_output_file = os.path.join(output_path_md, base_folder, output_file_name)
-    fw_output_file = os.path.join(output_path_text, base_folder, output_file_name)
+    md_output_file = os.path.join(md_output_path, base_folder, output_file_name)
+    fw_output_file = os.path.join(text_output_path, base_folder, output_file_name)
+    
+    html_output_file = None
+    if html_output_path:
+        html_output_file = os.path.join(html_output_path, base_folder, output_file_name)
 
 
     # Write the output to a file with md information.
@@ -102,6 +107,7 @@ def process_one_warc_file(
 
                         markdown = convert_page(html_decoded, url, extract_method, config)
                         df.loc[url_idx_in_df, "md"] = markdown["content"]
+                        df.loc[url_idx_in_df, "html"] = html_decoded
 
                         num_urls_processed += 1
                     except Exception as e:
@@ -124,10 +130,10 @@ def process_one_warc_file(
                 "format": "md",
                 "metadata": {f"fw_{key}": value for key, value in out_fw.items() if key not in ("md", "text")},
             }
+            
+            print(json.dumps(out_dolma), file=f)
 
-            f.write(json.dumps(out_dolma) + "\n")
-
-    with fsspec.open(fw_output_file, "wt", compression="gzip") as f:  # html output
+    with fsspec.open(fw_output_file, "wt", compression="gzip") as f:  # text output
         for index, row in df.iterrows():
             out_fw = row.to_dict()
             out_dolma = {
@@ -137,7 +143,20 @@ def process_one_warc_file(
                 "format": "text",
                 "metadata": {f"fw_{key}": value for key, value in out_fw.items() if key not in ("md", "html", "text")},
             }
-            f.write(json.dumps(out_dolma) + "\n")
+            print(json.dumps(out_dolma), file=f)
+
+    
+    if html_output_file:
+        with fsspec.open(html_output_file, "wt", compression="gzip") as f:  # html output
+            for index, row in df.iterrows():
+                out_fw = row.to_dict()
+                out_dolma = {
+                    "id": out_fw["id"],
+                    "source": "fineweb",
+                    "format": "html",
+                    "html": out_fw["html"],
+                }
+                print(json.dumps(out_dolma), file=f)
 
     # remove the input file
     fsspec_rm(input_path)
@@ -159,8 +178,9 @@ def process_fw_parquet(
     output_path: str,
     extract_method: str,
     config: ExtractionConfig,
-    output_path_md: str,
-    output_path_text: str
+    md_output_path: str,
+    text_output_path: str,
+    html_output_path: str | None = False
 ):
     """
     Converts fineweb files to html and markdown. This will essentially take in fineweb and split different groups based
@@ -203,7 +223,7 @@ def process_fw_parquet(
         group_df.to_parquet(filename)
         logger.info(f"Processing the group: {filename}, into {output_file_name}")
 
-        ray_waitable.append(process_one_warc_file.remote(filename, output_file_name, extract_method, config, output_path_md, output_path_text))
+        ray_waitable.append(process_one_warc_file.remote(filename, output_file_name, extract_method, config, md_output_path, text_output_path, html_output_path))
         file_path.append(filename)
 
     was_successful = True
@@ -230,7 +250,7 @@ def process_fw_parquet(
             "datetime_start": str(datetime_start),
             "datetime_end": str(datetime_end),
         }
-        f.write(json.dumps(metadata))
+        print(json.dumps(metadata), file=f)
 
     return True
 
@@ -238,8 +258,10 @@ def process_fw_parquet(
 @dataclass
 class ParquetFWConfig:
     input_path: str
-    output_path_md: str
-    output_path_text: str
+    md_output_path: str
+    text_output_path: str
+    html_output_path: str | None = None
+    cc_dumps: list[str] | None = None
     extract_method: str = "readability"
     config: ExtractionConfig = HtmlToMarkdownConfig.default_config()
     max_files: int | None = None
@@ -247,42 +269,53 @@ class ParquetFWConfig:
 
 @draccus.wrap()
 def process_fw_dump(cfg: ParquetFWConfig):
-    files = fsspec_glob(os.path.join(cfg.input_path, "*.parquet"))
-    MAX_NUM_PENDING_TASKS = 15  # Max number of parquet files we want to process in pending state
-    NUM_TASKS = len(files)
+    cc_dumps = cfg.cc_dumps or fsspec_glob(cfg.input_path, "*")
 
-    result_refs = []
-    for file in files:
-        if len(result_refs) > MAX_NUM_PENDING_TASKS:
-            # update result_refs to only
-            # track the remaining tasks.
-            ready_refs, result_refs = ray.wait(result_refs, num_returns=1)
-            try:
-                ray.get(ready_refs)
-            except Exception as e:
-                logger.exception(f"Error processing the group: {e}")
-                continue
+    for cc_dump in cc_dumps:
+        files = fsspec_glob(os.path.join(cfg.input_path, cc_dump, "*.parquet"))
+        MAX_NUM_PENDING_TASKS = 15  # Max number of parquet files we want to process in pending state
+        NUM_TASKS = len(files)
 
-        # Get the input file name
-        # Example of file = gs://marin-data/raw/fineweb/fw-v1.0/CC-MAIN-2024-10/000_00000.parquet
-        # input_file_name = 000_00000.parquet
-        input_file_name = os.path.basename(file)
-        
-        output_path = os.path.join(
-            cfg.output_path_text,
-            input_file_name.replace(".parquet", ""),
-        ) # gs://marin-data/processed/000_00000
+        result_refs = []
+        for file in files:
+            if len(result_refs) > MAX_NUM_PENDING_TASKS:
+                # update result_refs to only
+                # track the remaining tasks.
+                ready_refs, result_refs = ray.wait(result_refs, num_returns=1)
+                try:
+                    ray.get(ready_refs)
+                except Exception as e:
+                    logger.exception(f"Error processing the group: {e}")
+                    continue
 
-        logger.info(f"Starting Processing for the fw parquet file: {file} in output_path: {output_path}")
-        result_refs.append(process_fw_parquet.remote(file, output_path, cfg.extract_method, cfg.config, cfg.output_path_md, cfg.output_path_text))
+            # Get the input file name
+            # Example of file = gs://marin-data/raw/fineweb/fw-v1.0/CC-MAIN-2024-10/000_00000.parquet
+            # input_file_name = 000_00000.parquet
+            input_file_name = os.path.basename(file)
 
-        if cfg.max_files and len(result_refs) >= cfg.max_files:
-            break
-    # Wait for all the tasks to finish
-    try:
-        ray.get(result_refs)
-    except Exception as e:
-        logger.exception(f"Error processing the group: {e}")
+            md_output_path = os.path.join(cfg.md_output_path, cc_dump)
+            text_output_path = os.path.join(cfg.text_output_path, cc_dump)
+
+            html_output_path = None
+            if cfg.html_output_path:
+                html_output_path = os.path.join(cfg.html_output_path, cc_dump)
+
+            output_path = os.path.join(
+                cfg.text_output_path,
+                input_file_name.replace(".parquet", ""),
+            ) # gs://marin-data/processed/CC-MAIN-2024-10/000_00000
+
+
+            logger.info(f"Starting Processing for the fw parquet file: {file} in output_path: {output_path}")
+            result_refs.append(process_fw_parquet.remote(file, output_path, cfg.extract_method, cfg.config, md_output_path, text_output_path, html_output_path))
+
+            if cfg.max_files and len(result_refs) >= cfg.max_files:
+                break
+        # Wait for all the tasks to finish
+        try:
+            ray.get(result_refs)
+        except Exception as e:
+            logger.exception(f"Error processing the group: {e}")
 
 
 if __name__=="__main__":

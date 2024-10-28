@@ -7,14 +7,21 @@ import htmlmin
 from bs4 import BeautifulSoup
 
 from marin.markdown import to_markdown
-from marin.schemas.web.convert import ExtractionConfig, HtmlToMarkdownConfig, TrafilaturaConfig
+from marin.schemas.web.convert import (
+    ExtractionConfig,
+    HtmlToMarkdownConfig,
+    ResiliparseConfig,
+    TrafilaturaConfig,
+)
 
 logger = logging.getLogger("ray")
 HTML_CORRECTION_PREFIX = "<!DOCTYPE html>"
 
 
 def convert_page_with_trafilatura(
-    html: str, url: str | None = None, config: ExtractionConfig = TrafilaturaConfig.default_config()
+    html: str,
+    url: str | None = None,
+    config: ExtractionConfig = TrafilaturaConfig.default_config(),
 ) -> dict[str, str]:
     """
     Convert HTML to text[non-markdown] using Trafilatura.
@@ -22,6 +29,7 @@ def convert_page_with_trafilatura(
     Parameters:
         html (str): HTML content to convert.
         url (str | None): URL of the page.
+        config (TrafilaturaConfig): Configuration for Trafilatura.
 
     Returns:
         dict[str, str]: Dictionary containing the title, content, and HTML of the page.
@@ -53,7 +61,11 @@ def convert_page_with_trafilatura(
     return out
 
 
-def convert_page_with_resiliparse(html: str, url: str | None = None) -> dict[str, str]:
+def convert_page_with_resiliparse(
+    html: str,
+    url: str | None = None,
+    config: ResiliparseConfig | None = ResiliparseConfig.default_config(),
+) -> dict[str, str]:
     """
     Convert HTML to text[non-markdown] using Resiliparse.
 
@@ -66,6 +78,7 @@ def convert_page_with_resiliparse(html: str, url: str | None = None) -> dict[str
     Parameters:
         html (str): HTML content to convert.
         url (str | None): URL of the page.
+        config (ResiliparseConfig): Configuration for Resiliparse.
 
     Returns:
         dict[str, str]: Dictionary containing the title, content, and HTML of the page.
@@ -76,12 +89,7 @@ def convert_page_with_resiliparse(html: str, url: str | None = None) -> dict[str
     tree = HTMLTree.parse(html)
     title = tree.title or None
 
-    content = extract_plain_text(
-        html,
-        preserve_formatting=False,
-        main_content=True,
-        links=False,
-    )
+    content = extract_plain_text(html, **asdict(config))
 
     if title:
         content = f"{title}\n\n{content}"
@@ -95,7 +103,9 @@ def convert_page_with_resiliparse(html: str, url: str | None = None) -> dict[str
 
 
 def convert_page_with_readability(
-    html: str, url: str | None = None, config: HtmlToMarkdownConfig = HtmlToMarkdownConfig.default_config()
+    html: str,
+    url: str | None = None,
+    config: HtmlToMarkdownConfig = HtmlToMarkdownConfig.default_config(),
 ) -> dict[str, str]:
     """
     Convert HTML to text[markdown] using Readability and markdownify.
@@ -103,6 +113,7 @@ def convert_page_with_readability(
     Parameters:
         html (str): HTML content to convert.
         url (str | None): URL of the page.
+        config (HtmlToMarkdownConfig): Configuration for markdownify.
 
     Returns:
         dict[str, str]: Dictionary containing the title, content, and HTML of the page.
@@ -191,6 +202,7 @@ def convert_page(
         html (str): HTML content to convert.
         url (str | None): URL of the page.
         extract_method (str): Method to use for extraction. Defaults to "readability".
+        config (ExtractionConfig): Configuration for the extraction method.
 
     Returns:
         dict[str, str]: Dictionary containing the title, content, and HTML of the page.
@@ -202,7 +214,7 @@ def convert_page(
         case "readability":
             return convert_page_with_readability(html, url, config)
         case "resiliparse":
-            return convert_page_with_resiliparse(html, url)
+            return convert_page_with_resiliparse(html, url, config)
         case "legacy":
             return convert_page_legacy(html, url)
         case _:
