@@ -253,3 +253,19 @@ the cluster down!
 We are currently using Google Secret Manager to store the environment variables that are needed to run the cluster.
 You can edit those secrets by going to the Google Cloud Console and navigating to the Secret Manager. Once you add
 a new version, you can cause the changes to propagate by killing the workers or restarting the cluster.
+
+
+### Adding TPU Nodes Manually to the Cluster
+
+Ray only supports on demand and preemptible TPUs. For reserved nodes, we need to add them manually to the cluster.
+
+We have a modified version of the Levanter launch script that mostly automates this process. For example:
+
+```bash
+python infra/manual_ray_worker_launch.py --head <IP of ray head> --cluster_yaml infra/marin-cluster.yaml --reserved --tpu_type v4-128
+```
+
+If you want to change that to, say, two v4-64s, you need to delete the TPU node (using the GCP console) and then run the
+command again with the new TPU type.
+
+To get the IP of the ray head, it's easiest (to me) to go to the GCP console and find the VM and gets its *internal* IP.
