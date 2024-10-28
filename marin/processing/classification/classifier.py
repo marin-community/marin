@@ -1,11 +1,12 @@
 import atexit
+import hashlib
 import os
 import time
 import urllib.parse
 from typing import Any, ClassVar
 
 import fsspec
-from huggingface_hub import hf_hub_download
+from huggingface_hub import hf_hub_download, repo_exists
 
 
 class BaseClassifier:
@@ -51,60 +52,67 @@ class FasttextClassifier(BaseClassifier):
         from filelock import FileLock
 
         # Classifier is stored in a remote storage.
-        if urllib.parse.urlparse(self.model_name).scheme or os.path.exists(self.model_name):
-            fs, fs_path = fsspec.core.url_to_fs(self.model_name)
 
-            if not fs_path.endswith(".bin"):
-                fs_path = os.path.join(fs_path, "model.bin")
+        is_remote_or_local_path: bool = urllib.parse.urlparse(self.model_name).scheme or os.path.exists(self.model_name)
+        is_huggingface_path: bool = not os.path.exists(self.model_name) and repo_exists(self.model_name)
 
-            model_descriptor = fs.checksum(fs_path)
-            model_basename = os.path.basename(fs_path)
+        fs, fs_path = fsspec.core.url_to_fs(self.model_name)
 
+        if not fs_path.endswith(".bin"):
+            fs_path = os.path.join(fs_path, "model.bin")
+
+        model_descriptor = hashlib.md5(self.model_name.encode()).hexdigest()
+        lock_file = f"/tmp/{model_descriptor}.lock"
+        success_file = f"/tmp/{model_descriptor}.success"
+
+        model_basename = os.path.basename(fs_path)
+
+        if is_remote_or_local_path:
             local_filepath = f"/tmp/{model_descriptor}/{model_basename}"
-
-            lock_file = f"/tmp/{model_descriptor}.lock"
-            success_file = f"/tmp/{model_descriptor}.success"
-
-            if os.path.exists(success_file) and not os.path.exists(local_filepath):
-                print(
-                    f"Warning: Success file found for {fs_path}, but model file not found. \
-                      Removing stale success file {success_file}"
-                )
-                os.unlink(success_file)
-
-            with FileLock(lock_file):
-                if not os.path.exists(success_file):
-                    fs.makedirs(f"/tmp/{model_descriptor}")
-                    fs.get(fs_path, local_filepath)
-                    atexit.register(lambda: os.unlink(local_filepath))
-                    print(f"Downloaded model from {fs_path} to {local_filepath}")
-
-                    with open(success_file, "w") as f:
-                        f.write("success")
-
-                    atexit.register(lambda: os.unlink(success_file))
-                else:
-                    print(f"Model already downloaded to {local_filepath}")
-
-            # Wait for the file to be ready, with a timeout
-            timeout_s = 300  # 5 minutes
-            start_time = time.time()
-            while not os.path.exists(success_file):
-                if time.time() - start_time > timeout_s:
-                    raise TimeoutError(f"Timeout waiting for {success_file}")
-                time.sleep(1)
-
-            assert os.path.exists(success_file) and os.path.exists(
-                local_filepath
-            ), f"Model file {local_filepath} not found"
-
-            model = _FastText(local_filepath)
         else:
-            # Classifier is stored in HuggingFace Hub.
-            model_path = hf_hub_download(
-                repo_id=self.model_name, filename=self._MODEL_NAME_TO_MODEL_FILENAME_DICT[self.model_name]
+            local_filepath = f"/tmp/{model_descriptor}/{self._MODEL_NAME_TO_MODEL_FILENAME_DICT[self.model_name]}"
+
+        if os.path.exists(success_file) and not os.path.exists(local_filepath):
+            print(
+                f"Warning: Success file found for {fs_path}, but model file not found. \
+                    Removing stale success file {success_file}"
             )
-            model = _FastText(model_path)
+            os.unlink(success_file)
+
+        with FileLock(lock_file):
+            if not os.path.exists(success_file):
+                fs.makedirs(f"/tmp/{model_descriptor}", exist_ok=True)
+
+                if is_remote_or_local_path:
+                    fs.get(fs_path, local_filepath)
+                elif is_huggingface_path:
+                    hf_hub_download(
+                        repo_id=self.model_name,
+                        filename=self._MODEL_NAME_TO_MODEL_FILENAME_DICT[self.model_name],
+                        local_dir=f"/tmp/{model_descriptor}",
+                    )
+
+                atexit.register(lambda: os.unlink(local_filepath))
+                print(f"Downloaded model from {fs_path} to {local_filepath}")
+
+                with open(success_file, "w") as f:
+                    f.write("success")
+
+                atexit.register(lambda: os.unlink(success_file))
+            else:
+                print(f"Model already downloaded to {local_filepath}")
+
+        # Wait for the file to be ready, with a timeout
+        timeout_s = 300  # 5 minutes
+        start_time = time.time()
+        while not os.path.exists(success_file):
+            if time.time() - start_time > timeout_s:
+                raise TimeoutError(f"Timeout waiting for {success_file}")
+            time.sleep(1)
+
+        assert os.path.exists(success_file) and os.path.exists(local_filepath), f"Model file {local_filepath} not found"
+
+        model = _FastText(local_filepath)
 
         return model
 

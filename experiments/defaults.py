@@ -20,7 +20,7 @@ from levanter.trainer import TrainerConfig
 from experiments.llama import compute_num_parameters
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import ExecutorStep, InputName, this_output_path, versioned
-from marin.processing.tokenize import TokenizeConfig, lm_data_config, tokenize
+from marin.processing.tokenize import TokenizeConfig, lm_data_config, lm_mixture_data_config, tokenize
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 
 
@@ -43,14 +43,17 @@ def default_tokenize(
 
 def default_train(
     name: str,
-    tokenized: InputName | ExecutorStep | LMDatasetConfig | LMMixtureDatasetConfig,
+    tokenized: InputName | ExecutorStep | dict[str, ExecutorStep] | LMDatasetConfig | LMMixtureDatasetConfig,
     model_config: LmConfig,
     train_config: SimpleTrainConfig,
     tags: Sequence[str] = (),
+    weights: dict[str, float] | None = None,
 ) -> ExecutorStep:
 
     if isinstance(tokenized, InputName | ExecutorStep):
         data = lm_data_config(training_set=tokenized)
+    elif isinstance(tokenized, dict):
+        data = lm_mixture_data_config(components=tokenized, weights=weights)
     else:
         data = tokenized
 
