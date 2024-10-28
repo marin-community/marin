@@ -16,6 +16,7 @@ ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- \
 ```
 """
 
+from io import BytesIO
 import os
 import ray
 import json
@@ -45,7 +46,7 @@ def extract_warc_path_from_open_web_math_metadata(metadata_str):
     return metadata_dict["warc_path"]
 
 
-@ray.remote(memory=2 * 1024 * 1024 * 1024)  # 2 GB
+@ray.remote(memory=4 * 1024 * 1024 * 1024)  # 4 GB
 @cached_or_construct_output(success_suffix="SUCCESS")  # We use this decorator to make this function idempotent
 def process_one_shard(
     input_path: str,
@@ -86,37 +87,44 @@ def process_one_shard(
     s3_fs = fsspec.filesystem(
         "s3",
         anon=False,
+        # 5 GB, so we only need to make 1 request to fetch a WARC (~1 GB).
+        # Else, s3fs will make multiple requests. This is undesirable because
+        # if one of them fails (likely, due to CC request rate limits), the entire
+        # process fails.
+        default_block_size=5 * 2**30,
     )
 
     with s3_fs.open(s3_url, mode="rb") as file_stream:
-        for record in ArchiveIterator(file_stream):
-            if num_urls_found == length_url_inp_list:
-                break
+        # Load entire file into memory
+        file_content = BytesIO(file_stream.read())
+    for record in ArchiveIterator(file_content):
+        if num_urls_found == length_url_inp_list:
+            break
 
-            # Check if it's a response record
-            if record.rec_type == "response":
-                # Process the record
-                url = record.rec_headers.get_header("WARC-Target-URI")
-                length_warc += 1
+        # Check if it's a response record
+        if record.rec_type == "response":
+            # Process the record
+            url = record.rec_headers.get_header("WARC-Target-URI")
+            length_warc += 1
 
-                if url in url_dict:
-                    num_urls_found += 1
-                    url_idx_in_df = url_dict[url]
-                    if num_urls_found % 100 == 0:
-                        logger.info(
-                            f"Found Url {num_urls_found = }, Processed Url {num_urls_processed = }, "
-                            f"length of warc {length_warc = }"
-                        )
+            if url in url_dict:
+                num_urls_found += 1
+                url_idx_in_df = url_dict[url]
+                if num_urls_found % 100 == 0:
+                    logger.info(
+                        f"Found Url {num_urls_found = }, Processed Url {num_urls_processed = }, "
+                        f"length of warc {length_warc = }"
+                    )
 
-                    try:
-                        content = record.content_stream().read()
-                        html_decoded = content.decode(errors="ignore")
-                        df.loc[url_idx_in_df, "html"] = html_decoded
-                        num_urls_processed += 1
-                    except Exception as e:
-                        # We are just ignoring the error and moving forward as these errors are generally not a lot
-                        logger.exception(f"Error processing {url} in {s3_url} for {input_path}: {e}")
-                        traceback.print_exc()
+                try:
+                    content = record.content_stream().read()
+                    html_decoded = content.decode(errors="ignore")
+                    df.loc[url_idx_in_df, "html"] = html_decoded
+                    num_urls_processed += 1
+                except Exception as e:
+                    # We are just ignoring the error and moving forward as these errors are generally not a lot
+                    logger.exception(f"Error processing {url} in {s3_url} for {input_path}: {e}")
+                    traceback.print_exc()
 
     logger.info(
         f"Processed {input_path}, found {length_warc} records, {length_url_inp_list} urls, "
