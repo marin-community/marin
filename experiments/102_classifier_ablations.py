@@ -2,6 +2,8 @@ import logging
 import os
 from dataclasses import dataclass, field
 
+from experiments.defaults import default_tokenize, default_train
+from experiments.llama import llama3_tokenizer, llama_1_4b, llama_1_4b_train_config
 from marin.execution.executor import (
     ExecutorStep,
     executor_main,
@@ -21,14 +23,12 @@ logger = logging.getLogger(__name__)
 class ExperimentConfig:
     experiment_name: str
     quality_classifier_model_path: str
-
-    # Fixed across experiments
-    input_data_path: list[str] = field(
-        default_factory=lambda: [
-            "gs://marin-data/processed/fineweb/fw-v1.0/text_fw/CC-MAIN-2020-10/",
-            "gs://marin-data/processed/fineweb/fw-v1.0/text_fw/CC-MAIN-2020-16/",
-            "gs://marin-data/processed/fineweb/fw-v1.0/text_fw/CC-MAIN-2020-24/",
-        ]
+    input_data_source_to_path: dict[str, str] = field(
+        default_factory=lambda: {
+            "fineweb_2020_10": "gs://marin-data/processed/fineweb/fw-v1.0/text_fw/CC-MAIN-2020-10/",
+            "fineweb_2020_16": "gs://marin-data/processed/fineweb/fw-v1.0/text_fw/CC-MAIN-2020-16/",
+            "fineweb_2020_24": "gs://marin-data/processed/fineweb/fw-v1.0/text_fw/CC-MAIN-2020-24/",
+        }
     )
     keep_fraction: float = 0.2  # Keep 20% of the documents
 
@@ -37,11 +37,13 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
     assert config.experiment_name is not None and config.quality_classifier_model_path is not None
 
     steps = []
-    for input_data_path in config.input_data_path:
+    tokenized: dict[str, ExecutorStep] = {}
+    weights: dict[str, float] = {}
+    for input_data_source, input_data_path in config.input_data_source_to_path.items():
         # Get the basename of the input directory
         input_basename = os.path.basename(os.path.normpath(input_data_path))
         inference_step = ExecutorStep(
-            name=f"attributes/classifier-ablations-experiments/{config.experiment_name}",
+            name=f"attributes/{config.experiment_name}/{input_data_source}",
             fn=run_inference,
             config=InferenceConfig(
                 input_path=input_data_path,
@@ -57,7 +59,7 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
         )
 
         consolidate_step = ExecutorStep(
-            name=f"documents/classifier-ablations-experiments/{config.experiment_name}",
+            name=f"documents/{config.experiment_name}/{input_data_source}",
             fn=consolidate,
             config=ConsolidateConfig(
                 input_path=input_data_path,
@@ -80,19 +82,27 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
             ),
         )
 
-        # tokenize_step = ExecutorStep(
-        #     name=f"tokenized/classifier-ablations-experiments/{config.experiment_name}",
-        #     fn=tokenize,
-        #     config=TokenizeConfig(
-        #         train_paths=output_path_of(consolidate_step, input_basename),
-        #         validation_paths=[],
-        #         cache_path=this_output_path(),
-        #         tokenizer=versioned("llama3"),
-        #     ),
-        # )
+        tokenize_step = default_tokenize(
+            name=f"{config.experiment_name}/{input_data_source}",
+            dataset=output_path_of(consolidate_step),
+            tokenizer=llama3_tokenizer,
+        )
 
         steps.append(inference_step)
         steps.append(consolidate_step)
+        steps.append(tokenize_step)
+        tokenized[input_data_source] = tokenize_step
+        weights[input_data_source] = 1.0
+
+    train_step = default_train(
+        name=config.experiment_name,
+        tokenized=tokenized,
+        model_config=llama_1_4b,
+        train_config=llama_1_4b_train_config,
+        weights=weights,
+    )
+
+    steps.append(train_step)
 
     return steps
 
@@ -103,12 +113,27 @@ def create_experiment_configs() -> list[ExperimentConfig]:
         quality_classifier_model_path="gs://marin-us-central2/classifiers/dclm_eli5_100k_oh_100k_rw_200k-4a11ec/model.bin",
     )
 
-    # original_dclm_quality_classifier_config = ExperimentConfig(
-    #     experiment_name="original-dclm-quality-classifier",
-    #     quality_classifier_model_path="mlfoundations/fasttext-oh-eli5",
-    # )
+    marin_eli5_200k_rw_200k_config = ExperimentConfig(
+        experiment_name="eli5-200k-rw-200k",
+        quality_classifier_model_path="gs://marin-us-central2/classifiers/dclm_eli5_200k_rw_200k-139db0/model.bin",
+    )
 
-    return [marin_eli5_100k_oh_100k_rw_200k_config]
+    marin_oh_200k_rw_200k_config = ExperimentConfig(
+        experiment_name="oh-200k-rw-200k",
+        quality_classifier_model_path="gs://marin-us-central2/classifiers/dclm_oh_200k_rw_200k-725b11/model.bin",
+    )
+
+    original_dclm_quality_classifier_config = ExperimentConfig(
+        experiment_name="original-dclm-quality-classifier",
+        quality_classifier_model_path="mlfoundations/fasttext-oh-eli5",
+    )
+
+    return [
+        marin_eli5_100k_oh_100k_rw_200k_config,
+        marin_eli5_200k_rw_200k_config,
+        marin_oh_200k_rw_200k_config,
+        original_dclm_quality_classifier_config,
+    ]
 
 
 def main():
