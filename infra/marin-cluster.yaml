@@ -14,7 +14,7 @@ provider:
   project_id: hai-gcp-models
 
 docker:
-    image: "us-central2-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:latest"
+    image: "us-central2-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:20241020"
     container_name: "ray_docker"
     pull_before_run: true
     worker_run_options:
@@ -49,6 +49,8 @@ setup_commands:
   - mkdir $HOME/.cache/openai -p
   - gcloud secrets versions access latest --secret=OPENAI_API_KEY > $HOME/.cache/openai/token
   - gcsfuse --only-dir gcsfuse_mount marin-us-central2 /opt/gcsfuse_mount || true
+  - mkdir $HOME/.config/gcloud -p
+  - gcloud secrets versions access latest --secret=RAY_GCP_CREDENTIALS > $HOME/.config/gcloud/application_default_credentials.json
 
 # Set Head Node == `ray_head_default`
 head_node_type: head_default

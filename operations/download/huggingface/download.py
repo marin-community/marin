@@ -1,7 +1,7 @@
 """
 huggingface/download.py
 
-Download script for arbitrary datasets hosted on HuggingFace (supports both public and gated HF Datasets); this script
+Download script for arbitrary datasets hosted on HuggingFace (supports public HF Datasets); this script
 requires a pointer to the dataset repository URL, and a revision (Git SHA from the HF Dataset page). Given this, we
 will automatically launch a Google Storage Transfer Service (STS) job to download the appropriate files to GCS.
 
@@ -27,7 +27,11 @@ logger = logging.getLogger("ray")
 @dataclass
 class DownloadConfig:
     # fmt: off
-    gcs_output_path: str                                    # Path to store raw data on GCS (includes gs://$BUCKET/...)
+    gcs_output_path: str
+    """
+    Path to store raw data in persistent storage (e.g. gs://$BUCKET/...).
+    This works with any fsspec-compatible path, but for backwards compatibility, we call it gcs_output_path.
+    """
 
     # HuggingFace Dataset Parameters
     hf_dataset_id: str                                      # HF Dataset to Download (as `$ORG/$DATASET` on HF Hub)
@@ -42,7 +46,7 @@ class DownloadConfig:
         "gs://hf_dataset_transfer_bucket"
     )
 
-    # Job Control Parameters
+    # Job Control Parameters, used only for non-gated dataset transfers done via STS
     wait_for_completion: bool = False                       # if True, will block until job completes
     timeout: int = 1800                                     # Maximum time to wait for job completion (in seconds)
     poll_interval: int = 10                                 # Time to wait between polling job status (in seconds)
