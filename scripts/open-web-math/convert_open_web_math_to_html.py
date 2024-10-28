@@ -87,7 +87,7 @@ def process_one_shard(
     s3_fs = fsspec.filesystem(
         "s3",
         anon=False,
-        # 5 GB, so we only need to make 1 request to fetch a WARC (~1 GB).
+        # 5 GB, so we only need to make 1 request to fetch a WARC (~1 GB compressed).
         # Else, s3fs will make multiple requests. This is undesirable because
         # if one of them fails (likely, due to CC request rate limits), the entire
         # process fails.
