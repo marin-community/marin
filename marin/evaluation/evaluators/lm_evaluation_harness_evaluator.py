@@ -8,7 +8,7 @@ from marin.evaluation.utils import is_remote_path, run_bash_command, upload_to_g
 
 
 # TODO: this currently doesn't work on TPUs: https://github.com/vllm-project/vllm/issues/8499
-class EleutherEvaluator(VllmTpuEvaluator):
+class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
     """
     Evaluator that runs lm-eval: https://github.com/EleutherAI/lm-evaluation-harness
     """
