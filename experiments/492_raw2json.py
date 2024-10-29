@@ -1,6 +1,14 @@
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
+from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned, output_path_of
 from operations.download.huggingface.download import DownloadConfig, download
 from operations.raw2json.huggingface.qa.raw2json import DatasetConversionConfig, OutputFormatOptions, raw2json
+from levanter.data.text import LMSupervisedDatasetConfig
+from marin.processing.tokenize import TokenizeConfig, tokenize, levanter_tokenize_supervised
+from experiments.defaults import default_train
+from experiments.dolma.tokenize_dolma import DOLMA_OLMO_MIXTURE_WEIGHTS, tokenize_dolma_steps
+from experiments.llama import llama_150m, llama_1_4b_train_config, llama3_tokenizer
+from marin.execution.executor import executor_main
+from marin.processing.tokenize import lm_mixture_data_config
+
 
 """
 Downloads the following datasets
@@ -84,6 +92,50 @@ mmlu_convert_dolma = ExecutorStep(
     ),
 )
 
+supervised_data_config = LMSupervisedDatasetConfig(
+        validation_urls=[
+            output_path_of(mmlu_convert_eval_aux),
+            output_path_of(mmlu_convert_eval_subject),
+        ],
+        cache_dir=this_output_path(),
+        input_field="prompt",
+        output_field="response",
+    )
+
+supervised_data_cache = ExecutorStep(
+    name="supervised/mmlu-cache",
+    fn=levanter_tokenize_supervised,
+    config=supervised_data_config
+)
+
+EXPERIMENT_TAG = ["456-llama-eval"]
+
+mixture_config = lm_mixture_data_config(
+    components=tokenize_dolma_steps(),
+    weights=DOLMA_OLMO_MIXTURE_WEIGHTS,
+)
+
+supervised_data_config = LMSupervisedDatasetConfig(
+    validation_urls=[
+        output_path_of(mmlu_convert_eval_aux),
+        output_path_of(mmlu_convert_eval_subject),
+    ],
+    cache_dir=output_path_of(supervised_data_cache),
+    input_field="prompt",
+    output_field="response",
+)
+
+
+train_step = default_train(
+    name="llama-150m-supervised-eval",
+    tokenized=mixture_config,
+    model_config=llama_150m,
+    train_config=llama_1_4b_train_config,
+    tags=EXPERIMENT_TAG,
+    supervised_data=supervised_data_config,
+)
+
+
 ############################################################
 
 if __name__ == "__main__":
@@ -93,5 +145,8 @@ if __name__ == "__main__":
             mmlu_convert_eval_aux,
             mmlu_convert_eval_subject,
             mmlu_convert_dolma,
+            supervised_data_cache,
+            *tokenize_dolma_steps().values(),
+            train_step
         ]
     )
