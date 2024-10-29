@@ -13,6 +13,32 @@ from marin.run.vars import ENV_VARS, PIP_DEPS, REMOTE_DASHBOARD_URL
 logger = logging.getLogger("ray")
 
 
+def generate_pythonpath(base_dir="submodules"):
+    # List to hold all the paths
+    paths = []
+
+    if not os.path.exists(base_dir):
+        logger.warning(f"Base directory {base_dir} does not exist.")
+        return ""
+
+    # Iterate through the directories inside submodules
+    for submodule in os.listdir(base_dir):
+        submodule_path = os.path.join(base_dir, submodule)
+
+        # Check if it's a directory
+        if os.path.isdir(submodule_path):
+            # Add both submodule and submodule/src paths
+            paths.append(submodule_path)
+            src_path = os.path.join(submodule_path, "src")
+            if os.path.isdir(src_path):
+                paths.append(src_path)
+
+    # Add "." for the current directory to make sure the imports are working properly
+    # Join the paths with ':'
+    pythonpath = ":".join(paths)
+    return pythonpath
+
+
 def get_dependencies_from_toml(toml_file: str) -> list:
     """Extract dependencies from the pyproject.toml file and return them as a list."""
     try:
@@ -92,6 +118,8 @@ def main():
     # Now env_vars is a dictionary with the environment variables set using -e
 
     env_vars = {**ENV_VARS, **env_vars}
+
+    env_vars["PYTHONPATH"] = generate_pythonpath() + ":" + env_vars.get("PYTHONPATH", "")
 
     # Convert pyproject.toml to requirements.txt before submission
     pyproject_toml = "pyproject.toml"
