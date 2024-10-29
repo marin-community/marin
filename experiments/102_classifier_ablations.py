@@ -1,9 +1,16 @@
 import logging
 import os
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 
 from experiments.defaults import default_tokenize, default_train
 from experiments.llama import llama3_tokenizer, llama_1_4b, llama_1_4b_train_config
+from experiments.quality_classifiers import (
+    dclm_eli5_100k_oh_100k_rw_200k,
+    dclm_eli5_100k_oh_100k_rw_200k_seed_1,
+    dclm_eli5_100k_oh_100k_rw_200k_seed_2,
+    dclm_eli5_200k_rw_200k,
+    teknium_oh_200k_rw_200k,
+)
 from marin.execution.executor import (
     ExecutorStep,
     executor_main,
@@ -22,7 +29,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ExperimentConfig:
     experiment_name: str
-    quality_classifier_model_path: str
+    quality_classifier_model_path: str | ExecutorStep
     input_data_source_to_path: dict[str, str] = field(
         default_factory=lambda: {
             "fineweb_2020_10": "gs://marin-data/processed/fineweb/fw-v1.0/text_fw/CC-MAIN-2020-10/",
@@ -31,6 +38,12 @@ class ExperimentConfig:
         }
     )
     keep_fraction: float = 0.2  # Keep 20% of the documents
+
+
+def get_model_path(model_path: str | ExecutorStep):
+    if isinstance(model_path, ExecutorStep):
+        return output_path_of(model_path)
+    return versioned(model_path)
 
 
 def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
@@ -89,15 +102,11 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
         tokenized[input_data_source] = tokenize_step
         weights[input_data_source] = 1.0
 
-    llama_1_4b_100b_tokens_train_config = replace(
-        llama_1_4b_train_config, num_train_steps=23842
-    )  # 100B / (4096 * 1024) = 23842
-
     train_step = default_train(
         name=config.experiment_name,
         tokenized=tokenized,
         model_config=llama_1_4b,
-        train_config=llama_1_4b_100b_tokens_train_config,
+        train_config=llama_1_4b_train_config,
         weights=weights,
     )
 
@@ -109,17 +118,27 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
 def create_experiment_configs() -> list[ExperimentConfig]:
     marin_eli5_100k_oh_100k_rw_200k_config = ExperimentConfig(
         experiment_name="eli5-100k-oh-100k-rw-200k",
-        quality_classifier_model_path="gs://marin-us-central2/classifiers/dclm_eli5_100k_oh_100k_rw_200k-4a11ec/model.bin",
+        quality_classifier_model_path=dclm_eli5_100k_oh_100k_rw_200k,
+    )
+
+    marin_eli5_100k_oh_100k_rw_200k_seed_1_config = ExperimentConfig(
+        experiment_name="eli5-100k-oh-100k-rw-200k-seed-1",
+        quality_classifier_model_path=dclm_eli5_100k_oh_100k_rw_200k_seed_1,
+    )
+
+    marin_eli5_100k_oh_100k_rw_200k_seed_2_config = ExperimentConfig(
+        experiment_name="eli5-100k-oh-100k-rw-200k-seed-2",
+        quality_classifier_model_path=dclm_eli5_100k_oh_100k_rw_200k_seed_2,
     )
 
     marin_eli5_200k_rw_200k_config = ExperimentConfig(
         experiment_name="eli5-200k-rw-200k",
-        quality_classifier_model_path="gs://marin-us-central2/classifiers/dclm_eli5_200k_rw_200k-139db0/model.bin",
+        quality_classifier_model_path=dclm_eli5_200k_rw_200k,
     )
 
     marin_oh_200k_rw_200k_config = ExperimentConfig(
         experiment_name="oh-200k-rw-200k",
-        quality_classifier_model_path="gs://marin-us-central2/classifiers/dclm_oh_200k_rw_200k-725b11/model.bin",
+        quality_classifier_model_path=teknium_oh_200k_rw_200k,
     )
 
     original_dclm_quality_classifier_config = ExperimentConfig(
@@ -129,6 +148,8 @@ def create_experiment_configs() -> list[ExperimentConfig]:
 
     return [
         marin_eli5_100k_oh_100k_rw_200k_config,
+        marin_eli5_100k_oh_100k_rw_200k_seed_1_config,
+        marin_eli5_100k_oh_100k_rw_200k_seed_2_config,
         marin_eli5_200k_rw_200k_config,
         marin_oh_200k_rw_200k_config,
         original_dclm_quality_classifier_config,
