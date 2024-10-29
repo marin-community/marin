@@ -2,6 +2,8 @@
 
 SESSION_NAME="marin"
 CONDA_ENV="marin"
+# if we don't specify a cluster assume us-central2
+CLUSTER=${1:-us-central2}
 
 # Check if Session Exists
 SESSION_EXISTS=$(tmux list-sessions | grep $SESSION_NAME)
@@ -25,7 +27,7 @@ then
   tmux send-keys -t $SESSION_NAME:0.1 "conda activate ${CONDA_ENV}" C-m C-l
 
   # Launch Ray Dashboard (Right Pane)
-  tmux send-keys -t $SESSION_NAME:0.1 "ray dashboard infra/marin-cluster.yaml" C-m
+  tmux send-keys -t $SESSION_NAME:0.1 "ray dashboard infra/marin-${CLUSTER}.yaml" C-m
 
   # Set Active (Left Pane)
   tmux select-pane -t $SESSION_NAME:0.0
