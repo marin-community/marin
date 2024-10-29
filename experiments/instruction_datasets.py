@@ -74,8 +74,14 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
 }
 
 
+def get_directory_friendly_dataset_name(hf_dataset_id: str) -> str:
+    dataset_name = hf_dataset_id.replace("/", "--")
+    dataset_name = dataset_name.replace(".", "-")
+    return dataset_name
+
+
 def download_dataset_step(dataset: InstructionDatasetConfig) -> ExecutorStep:
-    dataset_name = dataset.hf_dataset_id.replace("/", "--")
+    dataset_name = get_directory_friendly_dataset_name(dataset.hf_dataset_id)
     download_step = ExecutorStep(
         name=f"raw/{dataset_name}",
         fn=download,
@@ -91,7 +97,7 @@ def download_dataset_step(dataset: InstructionDatasetConfig) -> ExecutorStep:
 
 
 def transform_dataset_step(dataset: InstructionDatasetConfig, download_step: ExecutorStep) -> ExecutorStep:
-    dataset_name = dataset.hf_dataset_id.replace("/", "--")
+    dataset_name = get_directory_friendly_dataset_name(dataset.hf_dataset_id)
     download_data = output_path_of(
         download_step,
         f"{dataset.revision}/huggingface.co/datasets/{dataset.hf_dataset_id}/resolve/{dataset.revision}",
