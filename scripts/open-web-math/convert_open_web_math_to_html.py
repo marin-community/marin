@@ -237,9 +237,22 @@ def process_open_web_math(cfg: ParquetOpenWebMathConfig):
     # Group open-web-math examples by their source WARC
     groupby_ref = group_open_web_math_by_warc.remote(files, cfg.html_output_path)
     _ = ray.get(groupby_ref)
-    shard_paths_to_process = fsspec_glob(os.path.join(cfg.html_output_path, "*_warc_examples.parquet"))
-    num_total_shards = len(shard_paths_to_process)
-    logger.info(f"Found {num_total_shards} shards to fetch HTML for")
+
+    all_shard_paths = fsspec_glob(os.path.join(cfg.html_output_path, "*_warc_examples.parquet"))
+    num_total_shards = len(all_shard_paths)
+    already_processed_shard_paths = set(fsspec_glob(os.path.join(cfg.html_output_path, "*.jsonl.gz.SUCCESS")))
+    num_already_processed_shards = len(already_processed_shard_paths)
+
+    shard_paths_to_process = [
+        path
+        for path in all_shard_paths
+        if path.replace("_warc_examples.parquet", "*.jsonl.gz.SUCCESS") not in already_processed_shard_paths
+    ]
+
+    logger.info(
+        f"Found {len(shard_paths_to_process)} shards to fetch HTML for ("
+        f"{num_total_shards} total shards, {num_already_processed_shards}) already finished."
+    )
 
     # Process each of the example shards by downloading the original WARC
     # and picking out the HTML for the URLs of interest
