@@ -247,7 +247,6 @@ clusters. To prevent orphaned states, do not change the names of the clusters wi
 the cluster down!
 
 
-
 #### Environment Variables
 
 We are currently using Google Secret Manager to store the environment variables that are needed to run the cluster.
@@ -262,8 +261,12 @@ Ray only supports on demand and preemptible TPUs. For reserved nodes, we need to
 We have a modified version of the Levanter launch script that mostly automates this process. For example:
 
 ```bash
-python infra/manual_ray_worker_launch.py --head <IP of ray head> --cluster_yaml infra/marin-cluster.yaml --reserved --tpu_type v4-128
+python infra/manual_ray_worker_launch.py --head <IP of ray head> --cluster_yaml infra/marin-us-central2.yaml \
+       --reserved --tpu_type v4-128
 ```
+
+This command will take a couple of minutes to run and then exit. You don't need to run this in a tmux or anything like
+that. You can run it from your laptop.
 
 If you want to change that to, say, two v4-64s, you need to delete the TPU node (using the GCP console) and then run the
 command again with the new TPU type.

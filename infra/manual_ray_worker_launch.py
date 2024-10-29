@@ -1,7 +1,8 @@
 #!/usr/bin/python
 # This script manually spins up a TPU slice and connects it to the provided Ray cluster head node.
 # Usage: python infra/manual_ray_worker_launch.py --cluster_yaml <cluster_yaml> --head <head-node-ip>\
-#          --tpu_type <tpu_type> [--project <project> --zone <zone> --tpu_name <tpu_name> --version <version>]
+#          --tpu_type <tpu_type> [--project <project> --zone <zone> --tpu_name <tpu_name> --version <version>]\
+#          [--reserved | --preemptible | --best_effort]
 
 import argparse
 import tempfile
