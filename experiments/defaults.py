@@ -21,7 +21,7 @@ import marin.processing.tokenize as tokenize
 from experiments.llama import compute_num_parameters
 from experiments.paloma import paloma_tokenized
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.execution.executor import ExecutorStep, InputName, this_output_path, versioned, output_path_of
+from marin.execution.executor import ExecutorStep, InputName, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, TokenizerStep, lm_data_config
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 
@@ -134,15 +134,3 @@ def _get_tokenizer_for_train(tokenized: InputName | ExecutorStep | LMMixtureData
             raise ValueError(f"Could not determine tokenizer from {tokenized}")
 
     return tokenizer
-
-supervised_data = (
-    LMSupervisedDatasetConfig(
-        validation_urls=[
-            output_path_of(mmlu_convert_eval_aux),
-            output_path_of(mmlu_convert_eval_subject),
-        ],
-        cache_dir="gs://marin-us-central2/benchmarks/tokenized-gpt2/mmlu/",
-        input_field="prompt",
-        output_field="response",
-    ),
-)

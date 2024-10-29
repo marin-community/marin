@@ -5,7 +5,7 @@ https://github.com/stanford-crfm/marin/issues/456
 
 from experiments.defaults import default_train, supervised_data
 from experiments.dolma.tokenize_dolma import DOLMA_OLMO_MIXTURE_WEIGHTS, tokenize_dolma_steps
-from experiments.llama import llama_150m, llama_1_4b_train_config
+from experiments.llama import llama_1_4b_train_config, llama_150m
 from marin.execution.executor import executor_main
 from marin.processing.tokenize import lm_mixture_data_config
 

@@ -115,6 +115,7 @@ def tokenize(config: TokenizeConfig):
     if validation_ledger is not None:
         ray.get(validation_ledger)
 
+
 @ray.remote(runtime_env=RuntimeEnv(env_vars={"JAX_PLATFORM_NAME": "cpu"}))
 def levanter_tokenize_supervised(config: LMSupervisedDatasetConfig):
     logging.basicConfig(level=logging.INFO)
