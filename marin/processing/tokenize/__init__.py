@@ -8,4 +8,5 @@ from .data_configs import (
 from .tokenize import (
     TokenizeConfig,
     tokenize,
+    levanter_tokenize_supervised,
 )

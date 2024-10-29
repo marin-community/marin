@@ -25,7 +25,7 @@ import levanter
 import ray
 import transformers
 from levanter.data.sharded_datasource import ShardedDataSource, TextUrlDataSource
-from levanter.data.text import BatchTokenizer, LMDatasetSourceConfig
+from levanter.data.text import BatchTokenizer, LMDatasetSourceConfig, LMSupervisedDatasetConfig, mk_supervised_dataset
 from levanter.store.cache import CacheOptions
 from ray.runtime_env import RuntimeEnv
 
@@ -114,6 +114,17 @@ def tokenize(config: TokenizeConfig):
         ray.get(train_ledger)
     if validation_ledger is not None:
         ray.get(validation_ledger)
+
+@ray.remote(runtime_env=RuntimeEnv(env_vars={"JAX_PLATFORM_NAME": "cpu"}))
+def levanter_tokenize_supervised(config: LMSupervisedDatasetConfig):
+    logging.basicConfig(level=logging.INFO)
+
+    logger.info(f"Caching {config.validation_urls} to {config.cache_dir}.")
+
+    tokenizer = transformers.AutoTokenizer.from_pretrained("meta-llama/Meta-Llama-3.1-8B")
+
+    mk_supervised_dataset(config, tokenizer)
+    logger.info(f"Finished caching supervised dataset to {config.cache_dir}.")
 
 
 @ray.remote(runtime_env=RuntimeEnv(env_vars={"JAX_PLATFORM_NAME": "cpu"}))

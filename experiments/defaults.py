@@ -24,7 +24,6 @@ from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import ExecutorStep, InputName, this_output_path, versioned, output_path_of
 from marin.processing.tokenize import TokenizeConfig, TokenizerStep, lm_data_config
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
-from experiments.raw2json import mmlu_convert_eval_aux, mmlu_convert_eval_subject
 
 
 def default_tokenize(
