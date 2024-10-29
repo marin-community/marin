@@ -32,10 +32,18 @@ from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 
 
 def default_tokenize(
-    name: str, dataset: InputName | ExecutorStep, tokenizer: str, options: CacheOptions | None = None
+    name: str,
+    dataset: InputName | ExecutorStep,
+    tokenizer: str,
+    options: CacheOptions | None = None,
+    text_key: str = "text",
 ) -> ExecutorStep:
     config = TokenizeConfig(
-        train_paths=[dataset], validation_paths=[], cache_path=this_output_path(), tokenizer=versioned(tokenizer)
+        train_paths=[dataset],
+        validation_paths=[],
+        cache_path=this_output_path(),
+        tokenizer=versioned(tokenizer),
+        text_key=text_key,
     )
     if options is not None:
         config = dataclasses.replace(config, cache_options=options)
@@ -91,10 +99,14 @@ def default_train(
                     keep=[dict(every=25000)],
                 ),
             ),
+            z_loss_weight=train_config.z_loss_weight,
             model=model_config,
             optimizer=AdamConfig(
                 learning_rate=train_config.learning_rate,
                 weight_decay=train_config.weight_decay,
+                warmup=train_config.warmup,
+                cooldown=train_config.cooldown,
+                min_lr_ratio=train_config.min_lr_ratio,
             ),
             hf_save_steps=25000,
         ),
