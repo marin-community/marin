@@ -1,4 +1,6 @@
 from dataclasses import dataclass
+from typing import Literal, TypeAlias
+
 
 
 @dataclass(frozen=True)
