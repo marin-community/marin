@@ -73,7 +73,7 @@ llama_8b = LlamaConfig(
 )
 
 llama_300m_train_config = SimpleTrainConfig(
-    tpu_type="v4-128",
+    tpu_type="v4-32",
     train_batch_size=1024,
     num_train_steps=2000,  # 4096 * 1024 * 2000 = 8.4B tokens
     learning_rate=3e-4,
