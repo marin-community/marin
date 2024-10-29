@@ -1,6 +1,6 @@
 from marin.evaluation.evaluation_config import EvaluationConfig
 from marin.evaluation.evaluators.alpaca_evaluator import AlpacaEvaluator
-from marin.evaluation.evaluators.eleuther_evaluator import EleutherEvaluator
+from marin.evaluation.evaluators.lm_evaluation_harness_evaluator import LMEvaluationHarnessEvaluator
 from marin.evaluation.evaluators.evaluator import Evaluator
 from marin.evaluation.evaluators.helm_evaluator import HELMEvaluator
 from marin.evaluation.evaluators.simple_evaluator import SimpleEvaluator
@@ -10,7 +10,7 @@ NAME_TO_EVALUATOR = {
     "alpaca": AlpacaEvaluator,
     "helm": HELMEvaluator,
     "debug": SimpleEvaluator,
-    "eleuther": EleutherEvaluator,
+    "lm_evaluation_harness": LMEvaluationHarnessEvaluator,
 }
 
 
