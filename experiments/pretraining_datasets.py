@@ -1,5 +1,6 @@
 from marin.execution.executor import ExecutorStep, this_output_path
 from operations.download.huggingface.download import DownloadConfig, download
+from operations.download.huggingface.download_gated_manual import download_and_upload_to_store
 
 download_fineweb = ExecutorStep(
     name="raw/fineweb",
@@ -72,3 +73,41 @@ dclm_baseline = ExecutorStep(
     ),
     override_output_path="gs://marin-us-central2/raw/dclm",
 )
+
+the_stack_dedup = ExecutorStep(
+    name="raw/the-stack-dedup",
+    fn=download_and_upload_to_store,
+    config=DownloadConfig(
+        hf_dataset_id="bigcode/the-stack-dedup",
+        revision="17cad72",
+        gcs_output_path=this_output_path(),
+        wait_for_completion=True,
+    ),
+    override_output_path="gs://marin-us-central2/raw/the-stack-dedup-4ba450",
+).cd("17cad72")
+
+
+proofpile_2 = ExecutorStep(
+    name="raw/proof-pile-2",
+    fn=download,
+    config=DownloadConfig(
+        hf_dataset_id="EleutherAI/proof-pile-2",
+        revision="901a927",
+        gcs_output_path=this_output_path(),
+        wait_for_completion=False,
+    ),
+    override_output_path="gs://marin-us-central2/raw/proof-pile-2-f1b1d8",
+).cd("901a927/huggingface.co/datasets/EleutherAI/proof-pile-2/resolve/901a927")
+
+
+starcoderdata = ExecutorStep(
+    name="raw/starcoderdata",
+    fn=download_and_upload_to_store,
+    config=DownloadConfig(
+        hf_dataset_id="bigcode/starcoderdata",
+        revision="9fc30b5",
+        gcs_output_path=this_output_path(),
+        wait_for_completion=True,
+    ),
+    override_output_path="gs://marin-us-central2/raw/starcoderdata-720c8c",
+).cd("9fc30b5")
