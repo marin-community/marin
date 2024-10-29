@@ -87,15 +87,16 @@ def process_one_shard(
     s3_fs = fsspec.filesystem(
         "s3",
         anon=False,
-        # 5 GB, so we only need to make 1 request to fetch a WARC (~1 GB compressed).
+        # 2 GB, so we only need to make 1 request to fetch a WARC (~1 GB compressed).
         # Else, s3fs will make multiple requests. This is undesirable because
         # if one of them fails (likely, due to CC request rate limits), the entire
         # process fails.
-        default_block_size=5 * 2**30,
+        default_block_size=2 * 2**30,
     )
 
     with s3_fs.open(s3_url, mode="rb") as file_stream:
-        # Load entire file into memory
+        # Load entire file into memory, so we don't have to make
+        # multiple requests
         file_content = BytesIO(file_stream.read())
     for record in ArchiveIterator(file_content):
         if num_urls_found == length_url_inp_list:
@@ -231,16 +232,11 @@ def group_open_web_math_by_warc(input_paths: list[str], output_path: str):
         print(json.dumps(metadata), file=f)
 
 
-@draccus.wrap()
-def process_open_web_math(cfg: ParquetOpenWebMathConfig):
-    files = fsspec_glob(os.path.join(cfg.input_path, "*.parquet"))
-    # Group open-web-math examples by their source WARC
-    groupby_ref = group_open_web_math_by_warc.remote(files, cfg.html_output_path)
-    _ = ray.get(groupby_ref)
-
-    all_shard_paths = fsspec_glob(os.path.join(cfg.html_output_path, "*_warc_examples.parquet"))
+@ray.remote(memory=32 * 1024 * 1024 * 1024)
+def get_shards_to_process(shard_path: str):
+    all_shard_paths = fsspec_glob(os.path.join(shard_path, "*_warc_examples.parquet"))
     num_total_shards = len(all_shard_paths)
-    already_processed_shard_paths = set(fsspec_glob(os.path.join(cfg.html_output_path, "*.jsonl.gz.SUCCESS")))
+    already_processed_shard_paths = set(fsspec_glob(os.path.join(shard_path, "*.jsonl.gz.SUCCESS")))
     num_already_processed_shards = len(already_processed_shard_paths)
 
     shard_paths_to_process = [
@@ -248,11 +244,23 @@ def process_open_web_math(cfg: ParquetOpenWebMathConfig):
         for path in all_shard_paths
         if path.replace("_warc_examples.parquet", "*.jsonl.gz.SUCCESS") not in already_processed_shard_paths
     ]
-
     logger.info(
         f"Found {len(shard_paths_to_process)} shards to fetch HTML for ("
         f"{num_total_shards} total shards, {num_already_processed_shards}) already finished."
     )
+    return shard_paths_to_process
+
+
+@draccus.wrap()
+def process_open_web_math(cfg: ParquetOpenWebMathConfig):
+    files = fsspec_glob(os.path.join(cfg.input_path, "*.parquet"))
+    # Group open-web-math examples by their source WARC
+    groupby_ref = group_open_web_math_by_warc.remote(files, cfg.html_output_path)
+    _ = ray.get(groupby_ref)
+
+    shard_paths_to_process_ref = get_shards_to_process.remote(cfg.html_output_path)
+    shard_paths_to_process = ray.get(shard_paths_to_process_ref)
+    num_shards_to_process = len(shard_paths_to_process)
 
     # Process each of the example shards by downloading the original WARC
     # and picking out the HTML for the URLs of interest
@@ -276,8 +284,8 @@ def process_open_web_math(cfg: ParquetOpenWebMathConfig):
         num_shards_submitted += 1
         if num_shards_submitted % 1000 == 0:
             logger.info(
-                f"Submitted {num_shards_submitted} / {num_total_shards} shards "
-                f"({num_shards_submitted / num_total_shards})"
+                f"Submitted {num_shards_submitted} / {num_shards_to_process} shards "
+                f"({num_shards_submitted / num_shards_to_process})"
             )
 
     while unfinished:
@@ -300,8 +308,8 @@ def process_open_web_math(cfg: ParquetOpenWebMathConfig):
             num_shards_submitted += 1
             if num_shards_submitted % 1000 == 0:
                 logger.info(
-                    f"Submitted {num_shards_submitted} / {num_total_shards} shards "
-                    f"({num_shards_submitted / num_total_shards})"
+                    f"Submitted {num_shards_submitted} / {num_shards_to_process} shards "
+                    f"({num_shards_submitted / num_shards_to_process})"
                 )
 
 
