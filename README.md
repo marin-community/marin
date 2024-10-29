@@ -57,13 +57,8 @@ npm install -g pandiff
    ```bash
    pre-commit run --all-files
    ```
-2. To run the tests, we recommend you to install `pytest-xdist` as well as `pytest-asyncio` to allow for parallel
-   and async testing:
-   ```bash
-   pip install pytest-xdist pytest-asyncio
-   ```
-3. To run the tests, run `PYTHONPATH=tests:. pytest tests --durations=0 -n 4 --tb=no -v`
-4. When submitting to cluster, we recommend using run script `marin/run/run.py`. See `marin/run/README.md`
+2. To run the tests, run `PYTHONPATH=tests:. pytest tests --durations=0 -n 4 --tb=no -v`
+3. When submitting to cluster, we recommend using run script `marin/run/run.py`. See `marin/run/README.md`
    for more details.
 
 
