@@ -139,17 +139,18 @@ def process_one_warc_file(
             
             print(json.dumps(out_dolma), file=f)
 
-    with fsspec.open(fw_output_file, "wt", compression="gzip") as f:  # text output
-        for index, row in df.iterrows():
-            out_fw = row.to_dict()
-            out_dolma = {
-                "id": out_fw["id"],
-                "text": out_fw["text"],
-                "source": "fineweb",
-                "format": "text",
-                "metadata": {f"fw_{key}": value for key, value in out_fw.items() if key not in ("md", "html", "text")},
-            }
-            print(json.dumps(out_dolma), file=f)
+    if text_output_path and "text" in df.columns:
+        with fsspec.open(fw_output_file, "wt", compression="gzip") as f:  # text output
+            for index, row in df.iterrows():
+                out_fw = row.to_dict()
+                out_dolma = {
+                    "id": out_fw["id"],
+                    "text": out_fw["text"],
+                    "source": "fineweb",
+                    "format": "text",
+                    "metadata": {f"fw_{key}": value for key, value in out_fw.items() if key not in ("md", "html", "text")},
+                }
+                print(json.dumps(out_dolma), file=f)
 
     
     if html_output_file:
