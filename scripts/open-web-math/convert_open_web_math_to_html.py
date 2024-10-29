@@ -242,7 +242,7 @@ def get_shards_to_process(shard_path: str):
     shard_paths_to_process = [
         path
         for path in all_shard_paths
-        if path.replace("_warc_examples.parquet", "*.jsonl.gz.SUCCESS") not in already_processed_shard_paths
+        if path.replace("_warc_examples.parquet", ".jsonl.gz.SUCCESS") not in already_processed_shard_paths
     ]
     logger.info(
         f"Found {len(shard_paths_to_process)} shards to fetch HTML for ("
