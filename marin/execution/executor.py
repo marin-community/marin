@@ -94,6 +94,7 @@ from marin.execution.executor_step_status import (
     get_status_path,
     read_events,
 )
+from marin.utilities.executor_utils import compare_dicts
 from marin.utilities.json_encoder import CustomJsonEncoder
 
 logger = logging.getLogger("ray")
@@ -368,6 +369,8 @@ class Executor:
         self.output_paths: dict[ExecutorStep, str] = {}
         self.steps: list[ExecutorStep] = []
         self.refs: dict[ExecutorStep, ray.ObjectRef] = {}
+        self.step_infos: list[ExecutorStepInfo] = []
+        self.executor_info: ExecutorInfo | None = None
 
     def run(self, steps: list[ExecutorStep | InputName], dry_run: bool = False):
         # Gather all the steps, compute versions and output paths for all of them.
@@ -377,6 +380,7 @@ class Executor:
                 step = step.step
             self.compute_version(step)
 
+        self.get_infos()
         logger.info(f"### Launching {len(self.steps)} steps ###")
         for step in self.steps:
             self.run_step(step, dry_run=dry_run)
@@ -436,13 +440,11 @@ class Executor:
 
         return version
 
-    def write_infos(self):
-        """Output JSON files (one for the entire execution, one for each step)."""
-
+    def get_infos(self):
+        """Calculates info files for each step and also entire execution"""
         # Compute info for each step
-        step_infos: list[ExecutorStepInfo] = []
         for step in self.steps:
-            step_infos.append(
+            self.step_infos.append(
                 ExecutorStepInfo(
                     name=step.name,
                     fn_name=get_fn_name(step.fn),
@@ -456,7 +458,7 @@ class Executor:
             )
 
         # Compute info for the entire execution
-        executor_info = ExecutorInfo(
+        self.executor_info = ExecutorInfo(
             git_commit=get_git_commit(),
             caller_path=get_caller_path(),
             created_date=datetime.now().isoformat(),
@@ -464,16 +466,19 @@ class Executor:
             ray_job_id=ray.get_runtime_context().get_job_id(),
             prefix=self.prefix,
             description=self.description,
-            steps=step_infos,
+            steps=self.step_infos,
         )
+
+    def write_infos(self):
+        """Output JSON files (one for the entire execution, one for each step)."""
 
         # Set executor_info_path based on hash and caller path name (e.g., 72_baselines-8c2f3a.json)
         # import pdb; pdb.set_trace()
         executor_version_str = json.dumps(
-            list(map(asdict_without_description, step_infos)), sort_keys=True, cls=CustomJsonEncoder
+            list(map(asdict_without_description, self.step_infos)), sort_keys=True, cls=CustomJsonEncoder
         )
         executor_version_hash = hashlib.md5(executor_version_str.encode()).hexdigest()[:6]
-        name = os.path.basename(executor_info.caller_path).replace(".py", "")
+        name = os.path.basename(self.executor_info.caller_path).replace(".py", "")
         self.executor_info_path = os.path.join(
             self.executor_info_base_path,
             f"{name}-{executor_version_hash}.json",
@@ -491,14 +496,14 @@ class Executor:
         logger.info("")
 
         # Write out info for each step
-        for step, info in zip(self.steps, step_infos, strict=True):
+        for step, info in zip(self.steps, self.step_infos, strict=True):
             info_path = get_info_path(self.output_paths[step])
             with fsspec.open(info_path, "w") as f:
                 print(json.dumps(asdict(info), indent=2, cls=CustomJsonEncoder), file=f)
 
         # Write out info for the entire execution
         with fsspec.open(self.executor_info_path, "w") as f:
-            print(json.dumps(asdict(executor_info), indent=2, cls=CustomJsonEncoder), file=f)
+            print(json.dumps(asdict(self.executor_info), indent=2, cls=CustomJsonEncoder), file=f)
 
     def run_step(self, step: ExecutorStep, dry_run: bool):
         """
@@ -530,9 +535,26 @@ class Executor:
         should_run = not dry_run and (status is None or force_run_step)
         dependencies = [self.refs[dep] for dep in self.dependencies[step]]
         name = f"execute_after_dependencies({get_fn_name(step.fn, short=True)})::{step.name})"
+        if not should_run:
+            # Compare the info files too and print the diff
+            info_path = get_info_path(output_path)
+            with fsspec.open(info_path, "r") as f:
+                previous_info = json.load(f)
+            step_idx = self.steps.index(step)
+            current_info = json.loads(json.dumps(asdict(self.step_infos[step_idx]), indent=2, cls=CustomJsonEncoder))
+            logger.info(f"Comparing previous info with current info for {step.name}:")
+            if compare_dicts(previous_info, current_info):
+                logger.warning("The 2 info files are not same and we will overide the previous one.")
+
         self.refs[step] = execute_after_dependencies.options(name=name).remote(
             step.fn, config, dependencies, output_path, should_run
         )
+
+        # Write out info for each step
+        for step, info in zip(self.steps, self.step_infos, strict=True):
+            info_path = get_info_path(self.output_paths[step])
+            with fsspec.open(info_path, "w") as f:
+                print(json.dumps(asdict(info), indent=2, cls=CustomJsonEncoder), file=f)
 
 
 def asdict_without_description(obj: dataclass) -> dict[str, Any]:
