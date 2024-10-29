@@ -28,10 +28,12 @@ DCLM_FULL_COMPONENTS = {
     "proofpile_2": proofpile_2_tokenized,
 }
 
+# weights are from page 11 of https://arxiv.org/abs/2406.11794. Sampling is done uniformly over tokens.
+# the 7B model was trained on 4.1T tokens, and the 1.4B model's data mixture weights are scaled accordingly.
 DCLM_MIXTURE_WEIGHTS = {
     "dclm_baseline": 3.8,  # 3.8 trillion tokens https://huggingface.co/datasets/mlfoundations/dclm-baseline-1.0
     "starcoderdata": 0.25,  # 250 billion tokens https://huggingface.co/datasets/bigcode/starcoderdata
-    "proofpile_2": 0.05,  # 55 billion tokens https://huggingface.co/datasets/EleutherAI/proof-pile-2
+    "proofpile_2": 0.055,  # 55 billion tokens https://huggingface.co/datasets/EleutherAI/proof-pile-2
 }
 
 EXPERIMENT_TAG = ["433_dclm_1b_1x"]
@@ -39,7 +41,8 @@ EXPERIMENT_TAG = ["433_dclm_1b_1x"]
 mixture_config = lm_mixture_data_config(components=DCLM_FULL_COMPONENTS, weights=DCLM_MIXTURE_WEIGHTS)
 
 
-# hyperparams and numebrs below are chosen to replicate the numbers in https://arxiv.org/abs/2406.11794
+# hyperparams and numbers below are chosen to replicate the numbers in https://arxiv.org/abs/2406.11794.
+# Table 1 (page 5) has # model parameters and # training tokens. Table 11, page 43 has the hyperparameters.
 llama_1_4b_dclm = LlamaConfig(
     seq_len=2048,
     hidden_dim=2048,
@@ -50,7 +53,7 @@ llama_1_4b_dclm = LlamaConfig(
     use_flash_attention=True,
 )
 
-NUM_TRAIN_TOKENS = 28800000000  # 28.8 billion tokens
+NUM_TRAIN_TOKENS = int(28.8e9)  # 28.8 billion tokens
 NUM_TRAIN_STEPS = NUM_TRAIN_TOKENS // (256 * 2048)  # 256 is the batch size, 2048 is the sequence length
 
 training_config = SimpleTrainConfig(
