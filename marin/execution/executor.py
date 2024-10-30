@@ -75,8 +75,8 @@ import os
 import subprocess
 import traceback
 import urllib.parse
-from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field, fields, is_dataclass, replace
 from datetime import datetime
 from typing import Any, Generic, TypeVar
@@ -388,9 +388,7 @@ class Executor:
 
         logger.info(f"### Launching {len(self.steps)} steps ###")
         for step in self.steps:
-            self.run_step(
-                step, dry_run=dry_run, force_run=force_run, force_run_failed=force_run_failed
-            )
+            self.run_step(step, dry_run=dry_run, force_run=force_run, force_run_failed=force_run_failed)
 
         logger.info("### Writing metadata ###")
         self.write_infos()
@@ -525,6 +523,7 @@ class Executor:
 
     def read_statuses(self):
         """Read the statuses of all the steps in parallel."""
+
         def get_status(step: ExecutorStep):
             status_path = get_status_path(self.output_paths[step])
             statuses = read_events(status_path)
@@ -534,9 +533,7 @@ class Executor:
         with ThreadPoolExecutor(max_workers=16) as executor:
             executor.map(get_status, self.steps)
 
-    def run_step(
-        self, step: ExecutorStep, dry_run: bool, force_run: list[str] | None, force_run_failed: bool
-    ):
+    def run_step(self, step: ExecutorStep, dry_run: bool, force_run: list[str] | None, force_run_failed: bool):
         """
         Return a Ray object reference to the result of running the `step`.
         If `dry_run`, only print out what needs to be done.
