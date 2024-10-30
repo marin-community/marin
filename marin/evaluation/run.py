@@ -30,7 +30,6 @@ def evaluate(config: EvaluationConfig) -> None:
             evals=config.evals,
             output_path=config.evaluation_path,
             max_eval_instances=config.max_eval_instances,
-            use_gpu=config.use_gpu,
         )
     else:
         evaluator.evaluate(
