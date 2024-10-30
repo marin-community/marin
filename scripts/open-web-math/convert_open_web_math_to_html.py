@@ -60,8 +60,6 @@ def process_one_shard(
     input_path (str): The input parquet shard to process
     output_path (str): Path to write gzipped JSONL with HTML for URLs in the input parquet shard
     """
-    logger.info(f"Processing {input_path}, writing to {output_path}")
-
     try:
         df = pd.read_parquet(input_path)
     except FileNotFoundError as e:
@@ -79,7 +77,6 @@ def process_one_shard(
     num_urls_processed = 0
     length_url_inp_list = len(urls)
 
-    logger.info(f"Processing {s3_url} in {input_path}")
     length_warc = 0
     # NOTE: make sure s3 keys are setup, either on the cluster
     # or by manually initializing with:
@@ -111,11 +108,6 @@ def process_one_shard(
             if url in url_dict:
                 num_urls_found += 1
                 url_idx_in_df = url_dict[url]
-                if num_urls_found % 100 == 0:
-                    logger.info(
-                        f"Found Url {num_urls_found = }, Processed Url {num_urls_processed = }, "
-                        f"length of warc {length_warc = }"
-                    )
 
                 try:
                     content = record.content_stream().read()
@@ -126,11 +118,6 @@ def process_one_shard(
                     # We are just ignoring the error and moving forward as these errors are generally not a lot
                     logger.exception(f"Error processing {url} in {s3_url} for {input_path}: {e}")
                     traceback.print_exc()
-
-    logger.info(
-        f"Processed {input_path}, found {length_warc} records, {length_url_inp_list} urls, "
-        f"{length_warc / length_url_inp_list} ratio"
-    )
 
     with fsspec.open(output_path, "wt", compression="gzip") as f:  # html output
         for index, row in df.iterrows():
