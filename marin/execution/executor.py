@@ -355,16 +355,12 @@ class Executor:
         prefix: str,
         executor_info_base_path: str,
         description: str | None = None,
-        force_run: list[str] | None = None,
-        force_run_failed: bool = False,
     ):
         self.prefix = prefix
         self.executor_info_base_path = executor_info_base_path
         self.description = description
 
         self.configs: dict[ExecutorStep, dataclass] = {}
-        self.force_run = force_run
-        self.force_run_failed = force_run_failed
         self.dependencies: dict[ExecutorStep, list[ExecutorStep]] = {}
         self.versions: dict[ExecutorStep, dict[str, Any]] = {}
         self.version_strs: dict[ExecutorStep, str] = {}
@@ -568,7 +564,10 @@ class Executor:
         should_run = not dry_run and (status is None or should_force_run)
         dependencies = [self.refs[dep] for dep in self.dependencies[step]]
         name = f"execute_after_dependencies({get_fn_name(step.fn, short=True)})::{step.name})"
-        if not should_run:
+        if status is not None:
+            # We skip running a step if we find a SUCCESS file for a step, but here we compare the complete info
+            # to show if previous info and current info match so we aren't accidentally using the wrong version.
+            # This is important since we aren't versioning everything
             # Compare the info files too and print the diff
             info_path = get_info_path(output_path)
             with fsspec.open(info_path, "r") as f:
@@ -576,8 +575,8 @@ class Executor:
             step_idx = self.steps.index(step)
             current_info = json.loads(json.dumps(asdict(self.step_infos[step_idx]), indent=2, cls=CustomJsonEncoder))
             logger.info(f"Comparing previous info with current info for {step.name}:")
-            if compare_dicts(previous_info, current_info):
-                logger.warning("The 2 info files are not same and we will overide the previous one.")
+            if not compare_dicts(previous_info, current_info):
+                logger.warning("The 2 info files are not same and executor will override the previous info-file.")
 
         self.refs[step] = execute_after_dependencies.options(name=name).remote(
             step.fn, config, dependencies, output_path, should_run
