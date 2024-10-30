@@ -1,4 +1,5 @@
 import os
+import shutil
 import traceback
 from typing import ClassVar
 
@@ -59,7 +60,9 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
             if max_eval_instances is not None:
                 # According lm-eval-harness, --limit should only be used for testing purposes
                 command.extend(["--limit", str(max_eval_instances)])
-            run_bash_command(command)
+
+            run_bash_command(command, check=False)
+            assert os.path.exists(self.RESULTS_PATH), f"Results path {self.RESULTS_PATH} does not exist."
 
             # Upload the results to GCS
             if is_remote_path(output_path):
@@ -69,3 +72,4 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
             raise RuntimeError("lm-eval failed. Please check the logs for more information.") from e
         finally:
             self.cleanup(model)
+            shutil.rmtree(self.RESULTS_PATH, ignore_errors=True)
