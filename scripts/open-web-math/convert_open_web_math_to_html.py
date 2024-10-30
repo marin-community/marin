@@ -229,16 +229,16 @@ def get_shards_to_process(shard_path: str):
     already_processed_shard_paths = set(fsspec_glob(os.path.join(shard_path, "*.jsonl.gz.SUCCESS")))
     num_already_processed_shards = len(already_processed_shard_paths)
 
-    shard_paths_to_process = [
-        path
+    shard_indices_to_process = [
+        int(os.path.basename(path).replace("_warc_examples.parquet", ""))
         for path in all_shard_paths
         if path.replace("_warc_examples.parquet", ".jsonl.gz.SUCCESS") not in already_processed_shard_paths
     ]
     logger.info(
-        f"Found {len(shard_paths_to_process)} shards to fetch HTML for ("
+        f"Found {len(shard_indices_to_process)} shards to fetch HTML for ("
         f"{num_total_shards} total shards, {num_already_processed_shards}) already finished."
     )
-    return shard_paths_to_process
+    return shard_indices_to_process
 
 
 @draccus.wrap()
@@ -248,9 +248,9 @@ def process_open_web_math(cfg: ParquetOpenWebMathConfig):
     groupby_ref = group_open_web_math_by_warc.remote(files, cfg.html_output_path)
     _ = ray.get(groupby_ref)
 
-    shard_paths_to_process_ref = get_shards_to_process.remote(cfg.html_output_path)
-    shard_paths_to_process = ray.get(shard_paths_to_process_ref)
-    num_shards_to_process = len(shard_paths_to_process)
+    shard_indices_to_process_ref = get_shards_to_process.remote(cfg.html_output_path)
+    shard_indices_to_process = ray.get(shard_indices_to_process_ref)
+    num_shards_to_process = len(shard_indices_to_process)
 
     # Process each of the example shards by downloading the original WARC
     # and picking out the HTML for the URLs of interest
@@ -259,18 +259,19 @@ def process_open_web_math(cfg: ParquetOpenWebMathConfig):
 
     # Shuffle to encourage different workers to hit different AWS prefixes,
     # so we don't run into per-prefix rate limits.
-    random.shuffle(shard_paths_to_process)
+    random.shuffle(shard_indices_to_process)
 
     num_shards_submitted = 0
 
     # Launch the initial MAX_CONCURRENT_TASKS batch of tasks
     unfinished = []
-    for _ in range(min(MAX_CONCURRENT_TASKS, len(shard_paths_to_process))):
-        # shard_to_process is of form gs://<html_output_path>/0_warc_examples.parquet
-        shard_to_process = shard_paths_to_process.pop()
+    for _ in range(min(MAX_CONCURRENT_TASKS, len(shard_indices_to_process))):
+        shard_index_to_process = shard_indices_to_process.pop()
+        # shard_path_to_process is of form gs://<html_output_path>/0_warc_examples.parquet
+        shard_path_to_process = os.path.join(cfg.html_output_path, f"{shard_index_to_process}_warc_examples.parquet")
         # shard_output_path is of form gs://<html_output_path>/0.parquet
-        shard_output_path = shard_to_process.replace("_warc_examples.parquet", ".jsonl.gz")
-        unfinished.append(process_one_shard.remote(shard_to_process, shard_output_path))
+        shard_output_path = shard_path_to_process.replace("_warc_examples.parquet", ".jsonl.gz")
+        unfinished.append(process_one_shard.remote(shard_path_to_process, shard_output_path))
         num_shards_submitted += 1
         if num_shards_submitted % 1000 == 0:
             logger.info(
@@ -289,12 +290,13 @@ def process_open_web_math(cfg: ParquetOpenWebMathConfig):
 
         # If we have more shard paths left to process and we haven't hit the max
         # number of concurrent tasks, add tasks to the unfinished queue.
-        while shard_paths_to_process and len(unfinished) < MAX_CONCURRENT_TASKS:
-            # shard_to_process is of form gs://<html_output_path>/0_warc_examples.parquet
-            shard_to_process = shard_paths_to_process.pop()
-            # shard_output_path is of form gs://<html_output_path>/0.jsonl.gz
-            shard_output_path = shard_to_process.replace("_warc_examples.parquet", ".jsonl.gz")
-            unfinished.append(process_one_shard.remote(shard_to_process, shard_output_path))
+        while shard_indices_to_process and len(unfinished) < MAX_CONCURRENT_TASKS:
+            shard_index_to_process = shard_indices_to_process.pop()
+            # shard_path_to_process is of form gs://<html_output_path>/0_warc_examples.parquet
+            shard_path_to_process = os.path.join(cfg.html_output_path, f"{shard_index_to_process}_warc_examples.parquet")
+            # shard_output_path is of form gs://<html_output_path>/0.parquet
+            shard_output_path = shard_path_to_process.replace("_warc_examples.parquet", ".jsonl.gz")
+            unfinished.append(process_one_shard.remote(shard_path_to_process, shard_output_path))
             num_shards_submitted += 1
             if num_shards_submitted % 1000 == 0:
                 logger.info(
