@@ -88,8 +88,15 @@ def apply_filter(input_data: dict, doc_filter: FilterConfig, attributes: dict[st
         return input_data if score >= doc_filter.threshold else None
 
     elif doc_filter.type == FILTER_TYPE_REMOVE_SPANS:
+
         # Remove spans (e.g., because they are duplicates)
         new_text = remove_spans(input_data["text"], attributes[doc_filter.name])
+
+        # if the deduped text doesn't have actual content, we can skip this document
+        # this is to avoid cases where there are just newlines or spaces
+        if new_text.strip() == "":
+            return None
+
         return dict(input_data, text=new_text)
 
     else:
