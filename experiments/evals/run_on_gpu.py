@@ -8,8 +8,9 @@ For evals that need to be run on GPUs (e.g. LM Evaluation Harness).
 executor_main_config = ExecutorMainConfig()
 steps = [
     evaluate_lm_evaluation_harness(
-        model_name="dclm_7b0828/step-479999",
-        model_path="gs://marin-us-central2/checkpoints/dclm_7b2x/hf/dclm_7b0828/dclm_7b0828/step-479999",
+        model_name="pf5pe4ut/step-600",
+        model_path="gs://marin-us-central2/checkpoints/quickstart_single_script_docker_test_09_18/"
+        "pf5pe4ut/hf/pf5pe4ut/step-600",
         evals=["mmlu"],
     ),
 ]

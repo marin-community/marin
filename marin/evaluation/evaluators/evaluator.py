@@ -65,7 +65,6 @@ class Evaluator(ABC):
         evals: list[str],
         output_path: str,
         max_eval_instances: int | None,
-        use_gpu: bool = False,
     ) -> None:
         """
         Launches the evaluation run with Ray.
@@ -75,7 +74,6 @@ class Evaluator(ABC):
             evals (List[str]): The list of evaluations to run.
             output_path (str): The path to save the evaluation results.
             max_eval_instances (int | None): The maximum number of evaluation instances to run.
-            use_gpu (bool): Whether to use GPUs for evaluation.
         """
         pass
 

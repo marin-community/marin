@@ -82,3 +82,12 @@ def kill_process_on_port(port: int) -> None:
                     print(f"Process {proc.info['pid']} no longer exists.")
                 except Exception as e:
                     print(f"Error killing process: {e}")
+
+
+def set_cuda_visible_devices():
+    """Sets the CUDA_VISIBLE_DEVICES environment variable based on available GPUs."""
+    import torch
+
+    available_gpus: list[str] = [str(i) for i in range(torch.cuda.device_count()) if torch.cuda.get_device_properties(i)]
+    os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(available_gpus)
+    print(f"Auto-selected GPUs: {os.environ['CUDA_VISIBLE_DEVICES']}")
