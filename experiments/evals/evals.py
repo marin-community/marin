@@ -47,7 +47,8 @@ def evaluate_lm_evaluation_harness(model_name: str, model_path: str, evals: list
             model_path=model_path,
             evaluation_path=this_output_path(),
             evals=evals,
-            launch_with_ray=False,
+            # LM Evaluation Harness only works on GPUs
+            use_gpu=True,
         ),
     )
 

@@ -39,3 +39,8 @@ class EvaluationConfig:
     """
     Whether to launch the evaluation run with Ray.
     """
+
+    use_gpu: bool = False
+    """
+    Whether to use GPUs for evaluation.
+    """
