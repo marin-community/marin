@@ -261,8 +261,10 @@ def test_versioning():
 
 def test_dedup_version():
     """Make sure that two `ExecutorStep`s resolve to the same."""
+
     def fn(config: MyConfig | None):
         pass
+
     def create_step():
         a = ExecutorStep(name="a", fn=fn, config=None)
         b = ExecutorStep(
@@ -276,6 +278,7 @@ def test_dedup_version():
             ),
         )
         return b
+
     b1 = create_step()
     b2 = create_step()
 
