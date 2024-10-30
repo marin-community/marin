@@ -17,20 +17,33 @@ from levanter.store.cache import CacheOptions
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 
-import marin.processing.tokenize as tokenize
 from experiments.llama import compute_num_parameters
 from experiments.paloma import paloma_tokenized
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import ExecutorStep, InputName, this_output_path, versioned
-from marin.processing.tokenize import TokenizeConfig, TokenizerStep, lm_data_config
+from marin.processing.tokenize import (
+    TokenizeConfig,
+    TokenizerStep,
+    add_validation_sets_to_mixture,
+    lm_data_config,
+    tokenize,
+)
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 
 
 def default_tokenize(
-    name: str, dataset: InputName | ExecutorStep, tokenizer: str, options: CacheOptions | None = None
+    name: str,
+    dataset: InputName | ExecutorStep,
+    tokenizer: str,
+    options: CacheOptions | None = None,
+    text_key: str = "text",
 ) -> ExecutorStep:
     config = TokenizeConfig(
-        train_paths=[dataset], validation_paths=[], cache_path=this_output_path(), tokenizer=versioned(tokenizer)
+        train_paths=[dataset],
+        validation_paths=[],
+        cache_path=this_output_path(),
+        tokenizer=versioned(tokenizer),
+        text_key=text_key,
     )
     if options is not None:
         config = dataclasses.replace(config, cache_options=options)
@@ -86,10 +99,14 @@ def default_train(
                     keep=[dict(every=25000)],
                 ),
             ),
+            z_loss_weight=train_config.z_loss_weight,
             model=model_config,
             optimizer=AdamConfig(
                 learning_rate=train_config.learning_rate,
                 weight_decay=train_config.weight_decay,
+                warmup=train_config.warmup,
+                cooldown=train_config.cooldown,
+                min_lr_ratio=train_config.min_lr_ratio,
             ),
             hf_save_steps=25000,
         ),
@@ -117,7 +134,7 @@ def _prepare_data_config(
         # TODO: would be better to expose hooks in levanter instead of relying on mixtures
         data = tokenized
         if validation_sets:
-            data = tokenize.add_validation_sets_to_mixture(data, validation_sets)
+            data = add_validation_sets_to_mixture(data, validation_sets)
     return data
 
 
