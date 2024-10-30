@@ -9,9 +9,9 @@ TODO: to test with model_path: str = "gs://marin-us-central2/checkpoints/quickst
 """
 
 
-def create_helm_executor_step(model_name: str, model_path: str, evals: list[str]) -> ExecutorStep:
+def evaluate_helm(model_name: str, model_path: str, evals: list[str]) -> ExecutorStep:
     """
-    Create a step to evaluate the model using HELM.
+    Create an ExecutorStep to evaluate the model using HELM.
 
     Args:
         model_name (str): Name of the model.
@@ -19,7 +19,7 @@ def create_helm_executor_step(model_name: str, model_path: str, evals: list[str]
         evals (list[str]): List of evaluations to run with HELM, e.g, ["mmlu", "lite"].
     """
     return ExecutorStep(
-        name="helm-eval",
+        name=f"evaluation/helm/{model_name}",
         fn=evaluate,
         config=EvaluationConfig(
             evaluator="helm",
@@ -31,9 +31,9 @@ def create_helm_executor_step(model_name: str, model_path: str, evals: list[str]
     )
 
 
-def create_lm_evaluation_harness_executor_step(model_name: str, model_path: str, evals: list[str]) -> ExecutorStep:
+def evaluate_lm_evaluation_harness(model_name: str, model_path: str, evals: list[str]) -> ExecutorStep:
     """
-    Create a step to evaluate the model using LM Evaluation Harness.
+    Create an ExecutorStep to evaluate the model using LM Evaluation Harness.
 
     Args:
         model_name (str): Name of the model.
@@ -41,7 +41,7 @@ def create_lm_evaluation_harness_executor_step(model_name: str, model_path: str,
         evals (list[str]): List of evaluations to run with LM Evaluation Harness, e.g, ["mmlu"].
     """
     return ExecutorStep(
-        name="lm-eval",
+        name=f"evaluation/lm_evaluation_harness/{model_name}",
         fn=evaluate,
         config=EvaluationConfig(
             evaluator="lm_evaluation_harness",
@@ -54,16 +54,16 @@ def create_lm_evaluation_harness_executor_step(model_name: str, model_path: str,
     )
 
 
-def create_alpaca_eval_executor_step(model_name: str, model_path: str) -> ExecutorStep:
+def evaluate_alpaca_eval(model_name: str, model_path: str) -> ExecutorStep:
     """
-    Create a step to evaluate the model using AlpacaEval.
+    Create an ExecutorStep to evaluate the model using AlpacaEval.
 
     Args:
         model_name (str): Name of the model.
         model_path (str): Path to the model.
     """
     return ExecutorStep(
-        name="alpaca-eval",
+        name=f"evaluation/alpaca_eval/{model_name}",
         fn=evaluate,
         config=EvaluationConfig(
             evaluator="alpaca",
