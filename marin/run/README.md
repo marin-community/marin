@@ -19,7 +19,7 @@ Now you can run the same command with
 python marin/run/ray_run.py -- python experiments/check_pip_packages_env_variables.py
 ```
 
-You can also specify depependencies and env variables like this:
+You can also specify dependencies and env variables like this:
 
 ```bash
 python marin/run/ray_run.py --env_vars HF_TOKEN hf_abcd --pip_deps s3fs,fsspec
@@ -27,7 +27,7 @@ python marin/run/ray_run.py --env_vars HF_TOKEN hf_abcd --pip_deps s3fs,fsspec
 ```
 
 The script will also automatically append submodules directory to the PYTHONPATH, so you can import them
-directly in your scripts.
+directly in your scripts. This is especially useful when you are co-developing with another submodule (like levanter).
 
 ## Additional Notes
 
