@@ -56,8 +56,10 @@ def run_bash_command(command: list[str], check: bool = True) -> None:
     """Runs a bash command."""
     print(" ".join(command))
     start_time: float = time.time()
-    subprocess.run(command, check=check)  # Pass list directly, remove shell=True
+    result = subprocess.run(command, check=check, capture_output=True, text=True)  # Capture output
     elapsed_time_seconds: float = time.time() - start_time
+    print(result.stdout)  # Print captured stdout
+    print(result.stderr)  # Print captured stderr if any
     print(f"Completed: {' '.join(command)} ({elapsed_time_seconds}s)")
 
 
