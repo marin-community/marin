@@ -257,3 +257,27 @@ def test_versioning():
         assert_diff_version(name="bar")
         assert_diff_version(b_n=2)
         assert_same_version(b_m=2)
+
+
+def test_dedup_version():
+    """Make sure that two `ExecutorStep`s resolve to the same."""
+    def create_step():
+        a = ExecutorStep(name="a", fn=fn, config=None)
+        b = ExecutorStep(
+            name="b",
+            fn=fn,
+            config=MyConfig(
+                input_path=output_path_of(a, "sub"),
+                output_path=this_output_path(),
+                n=versioned(3),
+                m=4,
+            ),
+        )
+        return b
+    b1 = create_step()
+    b2 = create_step()
+
+    with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
+        executor = create_executor(temp_dir)
+        executor.run(steps=[b1, b2])
+        assert len(executor.steps) == 2
