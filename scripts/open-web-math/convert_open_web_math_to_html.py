@@ -1,6 +1,5 @@
 """
-Convert open-web-math to HTML:
-
+Convert open-web-math to HTML.
 
 ```
 python scripts/open-web-math/convert_open_web_math_to_html.py \
@@ -269,7 +268,7 @@ def process_open_web_math(cfg: ParquetOpenWebMathConfig):
         shard_index_to_process = shard_indices_to_process.pop()
         # shard_path_to_process is of form gs://<html_output_path>/0_warc_examples.parquet
         shard_path_to_process = os.path.join(cfg.html_output_path, f"{shard_index_to_process}_warc_examples.parquet")
-        # shard_output_path is of form gs://<html_output_path>/0.parquet
+        # shard_output_path is of form gs://<html_output_path>/0.jsonl.gz
         shard_output_path = shard_path_to_process.replace("_warc_examples.parquet", ".jsonl.gz")
         unfinished.append(process_one_shard.remote(shard_path_to_process, shard_output_path))
         num_shards_submitted += 1
@@ -294,7 +293,7 @@ def process_open_web_math(cfg: ParquetOpenWebMathConfig):
             shard_index_to_process = shard_indices_to_process.pop()
             # shard_path_to_process is of form gs://<html_output_path>/0_warc_examples.parquet
             shard_path_to_process = os.path.join(cfg.html_output_path, f"{shard_index_to_process}_warc_examples.parquet")
-            # shard_output_path is of form gs://<html_output_path>/0.parquet
+            # shard_output_path is of form gs://<html_output_path>/0.jsonl.gz
             shard_output_path = shard_path_to_process.replace("_warc_examples.parquet", ".jsonl.gz")
             unfinished.append(process_one_shard.remote(shard_path_to_process, shard_output_path))
             num_shards_submitted += 1
