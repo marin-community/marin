@@ -127,6 +127,11 @@ def process_one_shard(
                 "source": "open-web-math",
                 "format": "html",
                 "html": out_open_web_math["html"],
+                "metadata": {
+                    "url": str(out_open_web_math["url"]),
+                    "date": str(out_open_web_math["date"]),
+                    "file_path": str(out_open_web_math["file_path"]),
+                },
             }
             print(json.dumps(out_dolma), file=f)
 
