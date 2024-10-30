@@ -131,15 +131,21 @@ class VllmTpuEvaluator(Evaluator, ABC):
         return runtime_env
 
     def launch_evaluate_with_ray(
-        self, model: ModelConfig, evals: list[str], output_path: str, max_eval_instances: int | None = None
+        self,
+        model: ModelConfig,
+        evals: list[str],
+        output_path: str,
+        max_eval_instances: int | None = None,
+        use_gpu: bool = False,
     ) -> None:
         """
         Launches the evaluation run with Ray.
         """
 
-        @ray.remote(
-            memory=64 * 1024 * 1024 * 1024, resources={"TPU": 1, "TPU-v4-8-head": 1}, runtime_env=self.get_runtime_env()
-        )
+        # Dynamically set resources based on the `use_gpu` flag
+        resources = {"GPU": 1} if use_gpu else {"TPU": 1, "TPU-v4-8-head": 1}
+
+        @ray.remote(memory=64 * 1024 * 1024 * 1024, resources=resources, runtime_env=self.get_runtime_env())
         @remove_tpu_lockfile_on_exit
         def launch(
             model: ModelConfig, evals: list[str], output_path: str, max_eval_instances: int | None = None
