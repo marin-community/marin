@@ -133,3 +133,11 @@ from marin.utils import remove_tpu_lockfile_on_exit
 def my_tpu_job():
     ...
 ```
+
+## Running Evals on NLP Cluster
+
+We run evaluations on the NLP cluster because lm-evaluation-harness does not support TPUs yet.
+
+```bash
+
+```
