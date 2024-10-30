@@ -143,7 +143,7 @@ class VllmTpuEvaluator(Evaluator, ABC):
         """
 
         # Dynamically set resources based on the `use_gpu` flag
-        resources = {"GPU": 1} if use_gpu else {"TPU": 1, "TPU-v4-8-head": 1}
+        resources = {"num_gpus": 1} if use_gpu else {"TPU": 1, "TPU-v4-8-head": 1}
 
         @ray.remote(memory=64 * 1024 * 1024 * 1024, resources=resources, runtime_env=self.get_runtime_env())
         @remove_tpu_lockfile_on_exit
