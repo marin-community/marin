@@ -2,6 +2,10 @@ from marin.execution.executor import ExecutorMainConfig, executor_main
 from experiments.evals.evals import evaluate_lm_evaluation_harness
 
 
+"""
+For evals that need to be run on GPUs (e.g. LM Evaluation Harness).
+"""
+
 executor_main_config = ExecutorMainConfig()
 steps = [
     evaluate_lm_evaluation_harness(

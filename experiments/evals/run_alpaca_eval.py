@@ -1,5 +1,5 @@
 from marin.execution.executor import ExecutorMainConfig, executor_main
-from .evals import evaluate_alpaca_eval
+from experiments.evals.evals import evaluate_alpaca_eval
 
 
 executor_main_config = ExecutorMainConfig()

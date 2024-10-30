@@ -3,9 +3,7 @@ from marin.evaluation.run import evaluate
 from marin.execution.executor import ExecutorStep, this_output_path
 
 """
-Canonical set of evals and their ExecutorSteps.
-
-TODO: to test with model_path: str = "gs://marin-us-central2/checkpoints/quickstart_single_script_docker_test_09_18/pf5pe4ut/hf/pf5pe4ut/step-600"
+Canonical set of evals.
 """
 
 
