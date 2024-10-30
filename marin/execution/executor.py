@@ -75,6 +75,7 @@ import os
 import subprocess
 import traceback
 import urllib.parse
+from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field, fields, is_dataclass, replace
 from datetime import datetime
@@ -365,13 +366,13 @@ class Executor:
         self.version_str_to_step: dict[str, ExecutorStep] = {}
         self.output_paths: dict[ExecutorStep, str] = {}
         self.steps: list[ExecutorStep] = []
+        self.statuses: dict[ExecutorStep, str] = {}
         self.refs: dict[ExecutorStep, ray.ObjectRef] = {}
 
     def run(
         self,
         steps: list[ExecutorStep | InputName],
         dry_run: bool = False,
-        skip_status: bool = False,
         force_run: list[str] | None = None,
         force_run_failed: bool = False,
     ):
@@ -382,10 +383,13 @@ class Executor:
                 step = step.step
             self.compute_version(step)
 
+        logger.info(f"### Reading {len(self.steps)} statuses ###")
+        self.read_statuses()
+
         logger.info(f"### Launching {len(self.steps)} steps ###")
         for step in self.steps:
             self.run_step(
-                step, dry_run=dry_run, skip_status=skip_status, force_run=force_run, force_run_failed=force_run_failed
+                step, dry_run=dry_run, force_run=force_run, force_run_failed=force_run_failed
             )
 
         logger.info("### Writing metadata ###")
@@ -519,8 +523,19 @@ class Executor:
         with fsspec.open(self.executor_info_path, "w") as f:
             print(json.dumps(asdict(executor_info), indent=2, cls=CustomJsonEncoder), file=f)
 
+    def read_statuses(self):
+        """Read the statuses of all the steps in parallel."""
+        def get_status(step: ExecutorStep):
+            status_path = get_status_path(self.output_paths[step])
+            statuses = read_events(status_path)
+            status = get_current_status(statuses)
+            self.statuses[step] = status
+
+        with ThreadPoolExecutor(max_workers=16) as executor:
+            executor.map(get_status, self.steps)
+
     def run_step(
-        self, step: ExecutorStep, dry_run: bool, skip_status: bool, force_run: list[str] | None, force_run_failed: bool
+        self, step: ExecutorStep, dry_run: bool, force_run: list[str] | None, force_run_failed: bool
     ):
         """
         Return a Ray object reference to the result of running the `step`.
@@ -529,14 +544,7 @@ class Executor:
         config = self.configs[step]
         config_version = self.versions[step]["config"]
         output_path = self.output_paths[step]
-
-        # Figure out the status of this step
-        if not skip_status:
-            status_path = get_status_path(output_path)
-            statuses = read_events(status_path)
-            status = get_current_status(statuses)
-        else:
-            status = "???"
+        status = self.statuses[step]
 
         # Print information about this step
         logger.info(f"[{status}] {step.name}: {get_fn_name(step.fn)}")
@@ -650,7 +658,6 @@ class ExecutorMainConfig:
     """Where the executor info should be stored under a file determined by a hash."""
 
     dry_run: bool = False
-    skip_status: bool = False
     force_run: list[str] = field(default_factory=list)  # <list of steps name>: run list of steps (names)
     force_run_failed: bool = False  # Force run failed steps
 
@@ -667,7 +674,6 @@ def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], descrip
     )
     executor.run(
         steps=steps,
-        skip_status=config.skip_status,
         dry_run=config.dry_run,
         force_run=config.force_run,
         force_run_failed=config.force_run_failed,
