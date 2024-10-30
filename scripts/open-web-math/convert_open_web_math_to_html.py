@@ -45,7 +45,7 @@ def extract_warc_path_from_open_web_math_metadata(metadata_str):
 
 
 @ray.remote(memory=4 * 1024 * 1024 * 1024)  # 4 GB
-@cached_or_construct_output(success_suffix="SUCCESS")  # We use this decorator to make this function idempotent
+@cached_or_construct_output(success_suffix="success")  # We use this decorator to make this function idempotent
 def process_one_shard(
     input_path: str,
     output_path: str,
@@ -226,13 +226,13 @@ def group_open_web_math_by_warc(input_paths: list[str], output_path: str):
 def get_shards_to_process(shard_path: str):
     all_shard_paths = fsspec_glob(os.path.join(shard_path, "*_warc_examples.parquet"))
     num_total_shards = len(all_shard_paths)
-    already_processed_shard_paths = set(fsspec_glob(os.path.join(shard_path, "*.jsonl.gz.SUCCESS")))
+    already_processed_shard_paths = set(fsspec_glob(os.path.join(shard_path, "*.jsonl.gz.success")))
     num_already_processed_shards = len(already_processed_shard_paths)
 
     shard_indices_to_process = [
         int(os.path.basename(path).replace("_warc_examples.parquet", ""))
         for path in all_shard_paths
-        if path.replace("_warc_examples.parquet", ".jsonl.gz.SUCCESS") not in already_processed_shard_paths
+        if path.replace("_warc_examples.parquet", ".jsonl.gz.success") not in already_processed_shard_paths
     ]
     logger.info(
         f"Found {len(shard_indices_to_process)} shards to fetch HTML for ("
