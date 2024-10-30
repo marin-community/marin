@@ -86,8 +86,15 @@ def kill_process_on_port(port: int) -> None:
 
 def set_cuda_visible_devices():
     """Sets the CUDA_VISIBLE_DEVICES environment variable based on available GPUs."""
-    import torch
+    # Run `nvidia-smi` to get the number of available GPUs
+    result = subprocess.run(['nvidia-smi', '--list-gpus'], stdout=subprocess.PIPE, text=True)
+    gpu_list = result.stdout.strip().split('\n')
 
-    available_gpus: list[str] = [str(i) for i in range(torch.cuda.device_count()) if torch.cuda.get_device_properties(i)]
-    os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(available_gpus)
-    print(f"Auto-selected GPUs: {os.environ['CUDA_VISIBLE_DEVICES']}")
+    # Get the indices of all detected GPUs
+    available_gpus = [str(i) for i in range(len(gpu_list))]
+
+    if available_gpus:
+        os.environ['CUDA_VISIBLE_DEVICES'] = ",".join(available_gpus)
+        print(f"Auto-selected GPUs: {os.environ['CUDA_VISIBLE_DEVICES']}")
+    else:
+        print("No available GPUs found.")
