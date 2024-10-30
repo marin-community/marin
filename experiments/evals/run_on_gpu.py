@@ -1,5 +1,5 @@
 from marin.execution.executor import ExecutorMainConfig, executor_main
-from .evals import evaluate_lm_evaluation_harness
+from experiments.evals.evals import evaluate_lm_evaluation_harness
 
 
 executor_main_config = ExecutorMainConfig()
