@@ -353,23 +353,28 @@ class Executor:
         prefix: str,
         executor_info_base_path: str,
         description: str | None = None,
-        force_run: list[str] | None = None,
-        force_run_failed: bool = False,
     ):
         self.prefix = prefix
         self.executor_info_base_path = executor_info_base_path
         self.description = description
 
         self.configs: dict[ExecutorStep, dataclass] = {}
-        self.force_run = force_run
-        self.force_run_failed = force_run_failed
         self.dependencies: dict[ExecutorStep, list[ExecutorStep]] = {}
         self.versions: dict[ExecutorStep, dict[str, Any]] = {}
+        self.version_strs: dict[ExecutorStep, str] = {}
+        self.version_str_to_step: dict[str, ExecutorStep] = {}
         self.output_paths: dict[ExecutorStep, str] = {}
         self.steps: list[ExecutorStep] = []
         self.refs: dict[ExecutorStep, ray.ObjectRef] = {}
 
-    def run(self, steps: list[ExecutorStep | InputName], dry_run: bool = False):
+    def run(
+        self,
+        steps: list[ExecutorStep | InputName],
+        dry_run: bool = False,
+        skip_status: bool = False,
+        force_run: list[str] | None = None,
+        force_run_failed: bool = False,
+    ):
         # Gather all the steps, compute versions and output paths for all of them.
         logger.info(f"### Inspecting the {len(steps)} provided steps ###")
         for step in steps:
@@ -379,7 +384,9 @@ class Executor:
 
         logger.info(f"### Launching {len(self.steps)} steps ###")
         for step in self.steps:
-            self.run_step(step, dry_run=dry_run)
+            self.run_step(
+                step, dry_run=dry_run, skip_status=skip_status, force_run=force_run, force_run_failed=force_run_failed
+            )
 
         logger.info("### Writing metadata ###")
         self.write_infos()
@@ -387,9 +394,9 @@ class Executor:
         logger.info("### Waiting for all steps to finish ###")
         ray.get(list(self.refs.values()))
 
-    def compute_version(self, step: ExecutorStep) -> dict[str, Any]:
+    def compute_version(self, step: ExecutorStep):
         if step in self.versions:
-            return self.versions[step]
+            return
 
         # Collect dependencies and the config version
         dependencies: list[ExecutorStep] = []
@@ -424,17 +431,30 @@ class Executor:
                 output_path = step.override_output_path
 
         # Record everything
-        self.steps.append(step)
+        # Multiple `ExecutorStep`s can have the same version, so only keep one
+        # of them.  Note that some `ExecutorStep`s might have depenedencies that
+        # are not part of `self.steps`, but there will be some step with the
+        # same version.
+        if version_str not in self.version_str_to_step:
+            self.steps.append(step)
+            self.version_str_to_step[version_str] = step
+        else:
+            logger.warning(
+                f"Multiple `ExecutorStep`s (named {step.name}) have the same version; try to instantiate only once."
+            )
         self.configs[step] = instantiate_config(
             config=step.config,
             output_path=output_path,
             output_paths=self.output_paths,
         )
-        self.dependencies[step] = dependencies
+        self.dependencies[step] = list(map(self.canonicalize, dependencies))
         self.versions[step] = version
+        self.version_strs[step] = version_str
         self.output_paths[step] = output_path
 
-        return version
+    def canonicalize(self, step: ExecutorStep) -> ExecutorStep:
+        """Multiple instances of `ExecutorStep` might have the same version."""
+        return self.version_str_to_step[self.version_strs[step]]
 
     def write_infos(self):
         """Output JSON files (one for the entire execution, one for each step)."""
@@ -468,7 +488,6 @@ class Executor:
         )
 
         # Set executor_info_path based on hash and caller path name (e.g., 72_baselines-8c2f3a.json)
-        # import pdb; pdb.set_trace()
         executor_version_str = json.dumps(
             list(map(asdict_without_description, step_infos)), sort_keys=True, cls=CustomJsonEncoder
         )
@@ -500,7 +519,9 @@ class Executor:
         with fsspec.open(self.executor_info_path, "w") as f:
             print(json.dumps(asdict(executor_info), indent=2, cls=CustomJsonEncoder), file=f)
 
-    def run_step(self, step: ExecutorStep, dry_run: bool):
+    def run_step(
+        self, step: ExecutorStep, dry_run: bool, skip_status: bool, force_run: list[str] | None, force_run_failed: bool
+    ):
         """
         Return a Ray object reference to the result of running the `step`.
         If `dry_run`, only print out what needs to be done.
@@ -510,9 +531,12 @@ class Executor:
         output_path = self.output_paths[step]
 
         # Figure out the status of this step
-        status_path = get_status_path(output_path)
-        statuses = read_events(status_path)
-        status = get_current_status(statuses)
+        if not skip_status:
+            status_path = get_status_path(output_path)
+            statuses = read_events(status_path)
+            status = get_current_status(statuses)
+        else:
+            status = "???"
 
         # Print information about this step
         logger.info(f"[{status}] {step.name}: {get_fn_name(step.fn)}")
@@ -521,13 +545,12 @@ class Executor:
         for i, dep in enumerate(self.dependencies[step]):
             logger.info(f"  {dependency_index_str(i)} = {self.output_paths[dep]}")
         logger.info("")
-        force_run_step = False
-        if (self.force_run and step.name in self.force_run) or (self.force_run_failed and status == STATUS_FAILED):
-            force_run_step = True
+        should_force_run = (force_run and step.name in force_run) or (force_run_failed and status == STATUS_FAILED)
+        if should_force_run:
             logger.info(f"Force running {step.name}, previous status: {status}")
 
         # Only start if there's no status
-        should_run = not dry_run and (status is None or force_run_step)
+        should_run = not dry_run and (status is None or should_force_run)
         dependencies = [self.refs[dep] for dep in self.dependencies[step]]
         name = f"execute_after_dependencies({get_fn_name(step.fn, short=True)})::{step.name})"
         self.refs[step] = execute_after_dependencies.options(name=name).remote(
@@ -627,6 +650,7 @@ class ExecutorMainConfig:
     """Where the executor info should be stored under a file determined by a hash."""
 
     dry_run: bool = False
+    skip_status: bool = False
     force_run: list[str] = field(default_factory=list)  # <list of steps name>: run list of steps (names)
     force_run_failed: bool = False  # Force run failed steps
 
@@ -640,7 +664,11 @@ def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], descrip
         prefix=config.prefix,
         executor_info_base_path=config.executor_info_base_path,
         description=description,
+    )
+    executor.run(
+        steps=steps,
+        skip_status=config.skip_status,
+        dry_run=config.dry_run,
         force_run=config.force_run,
         force_run_failed=config.force_run_failed,
     )
-    executor.run(steps=steps, dry_run=config.dry_run)
