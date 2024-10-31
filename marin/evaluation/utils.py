@@ -54,13 +54,12 @@ def upload_to_gcs(local_path: str, gcs_path: str) -> None:
 
 def run_bash_command(command: list[str], check: bool = True) -> None:
     """Runs a bash command."""
-    print(" ".join(command))
+    command_str: str = " ".join(command)
+    print(f"RUNNING: {command_str}")
     start_time: float = time.time()
-    result = subprocess.run(command, check=check, capture_output=True, text=True)  # Capture output
+    os.system(command_str)
     elapsed_time_seconds: float = time.time() - start_time
-    print(result.stdout)  # Print captured stdout
-    print(result.stderr)  # Print captured stderr if any
-    print(f"Completed: {' '.join(command)} ({elapsed_time_seconds}s)")
+    print(f"COMPLETED: {command_str} ({elapsed_time_seconds}s)")
 
 
 def write_yaml(content: dict, output_path: str) -> None:
