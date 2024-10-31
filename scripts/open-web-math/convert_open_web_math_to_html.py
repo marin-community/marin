@@ -175,7 +175,7 @@ def write_group_to_parquet(output_file, group_df, group_success_file):
     return output_file
 
 
-@ray.remote(memory=256 * 1024 * 1024 * 1024)
+@ray.remote(memory=32 * 1024 * 1024 * 1024)
 def group_open_web_math_by_warc(input_paths: list[str], output_path: str):
     """
     Given open-web-math files, group the examples by their source WARC.
