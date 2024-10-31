@@ -25,8 +25,9 @@ import logging
 import os
 import random
 import traceback
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime
+from typing import Any
 
 import draccus
 import fsspec
@@ -116,20 +117,21 @@ def process_one_shard(
     with fsspec.open(output_path, "wt", compression="gzip") as f:  # html output
         for index, row in df.iterrows():
             out_open_web_math = row.to_dict()
-            out_dolma = {
+            out_dolma = DolmaFormattedOpenWebMathRecord(
                 # NOTE: open-web-math doesn't have an ID field, so we
                 # take the md5hash of its url and the date
-                "id": hashlib.md5((str(out_open_web_math["url"]) + str(out_open_web_math["date"])).encode()).hexdigest(),
-                "source": "open-web-math",
-                "format": "html",
-                "html": out_open_web_math["html"],
-                "metadata": {
+                id=hashlib.md5((str(out_open_web_math["url"]) + str(out_open_web_math["date"])).encode()).hexdigest(),
+                source="open-web-math",
+                format="html",
+                html=out_open_web_math["html"],
+                metadata={
                     "url": str(out_open_web_math["url"]),
                     "date": str(out_open_web_math["date"]),
                     "file_path": str(out_open_web_math["file_path"]),
                 },
-            }
-            print(json.dumps(out_dolma), file=f)
+            )
+
+            print(json.dumps(asdict(out_dolma)), file=f)
 
     # num_urls_found should be equal to num_urls_to_find
     logger.info(
@@ -138,6 +140,15 @@ def process_one_shard(
         f"AWS URL: {s3_url}"
         f"Found {length_warc} records in the WARC file"
     )
+
+
+@dataclass
+class DolmaFormattedOpenWebMathRecord:
+    id: str
+    source: str
+    format: str
+    html: str
+    metadata: dict[str, Any]
 
 
 @dataclass
