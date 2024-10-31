@@ -37,7 +37,6 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
         # From https://github.com/EleutherAI/lm-evaluation-harness?tab=readme-ov-file#model-apis-and-inference-servers
         # Run lm_eval with the model and the specified evals
         try:
-            # Set CUDA visible devices
             set_cuda_visible_devices()
 
             # Download the model from GCS or HuggingFace
@@ -72,4 +71,5 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
             raise RuntimeError("lm-eval failed. Please check the logs for more information.") from e
         finally:
             self.cleanup(model)
-            shutil.rmtree(self.RESULTS_PATH, ignore_errors=True)
+            if os.path.exists(self.RESULTS_PATH):
+                shutil.rmtree(self.RESULTS_PATH)
