@@ -73,7 +73,7 @@ def process_one_shard(
     url_dict = {url: idx for idx, url in zip(index, urls)}
     num_urls_found = 0  # Used to early terminate
     num_urls_processed = 0
-    length_url_inp_list = len(urls)
+    num_urls_to_find = len(urls)
 
     length_warc = 0
     # NOTE: make sure s3 keys are setup, either on the cluster
@@ -86,7 +86,7 @@ def process_one_shard(
 
     with s3_fs.open(s3_url, mode="rb") as file_stream:
         for record in ArchiveIterator(file_stream):
-            if num_urls_found == length_url_inp_list:
+            if num_urls_found == num_urls_to_find:
                 break
 
             # Check if it's a response record
@@ -127,9 +127,9 @@ def process_one_shard(
             }
             print(json.dumps(out_dolma), file=f)
 
-    # num_urls_found should be equal to length_url_inp_list
+    # num_urls_found should be equal to num_urls_to_find
     logger.info(
-        f"Found: {num_urls_found}, Processed: {num_urls_processed}, out of {length_url_inp_list} urls, "
+        f"Found: {num_urls_found}, Processed: {num_urls_processed}, out of {num_urls_to_find} urls, "
         f"in {input_path}"
         f"AWS URL: {s3_url}"
         f"Found {length_warc} records in the WARC file"
