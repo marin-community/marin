@@ -1,5 +1,6 @@
 import argparse
 import asyncio
+import json
 import logging
 import os
 import shlex
@@ -59,11 +60,17 @@ async def submit_and_track_job(entrypoint: str, dependencies: list, env_vars: di
 
     current_dir = os.getcwd()
     client = JobSubmissionClient(REMOTE_DASHBOARD_URL)
+    runtime_dict = {"pip": dependencies, "working_dir": current_dir, "env_vars": env_vars}
 
-    # Submit the job with runtime environment and entrypoint
-    submission_id = client.submit_job(
-        entrypoint=entrypoint, runtime_env={"pip": dependencies, "working_dir": current_dir, "env_vars": env_vars}
+    logger.info(f"Submitting job with entrypoint: {entrypoint}")
+    logger.info(f"Dependencies: {json.dumps(dependencies, indent=4)}")
+    logger.info(f"env_vars: {json.dumps(env_vars, indent=4)}")
+
+    logger.info(
+        f"Terminal command: \n" f"ray job submit " f"--runtime-env-json '{json.dumps(runtime_dict)}'" f" -- {entrypoint}"
     )
+    # Submit the job with runtime environment and entrypoint
+    submission_id = client.submit_job(entrypoint=entrypoint, runtime_env=runtime_dict)
     logger.info(f"Job submitted with ID: {submission_id}")
 
     if no_wait:
