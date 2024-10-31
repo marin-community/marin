@@ -27,7 +27,6 @@ import random
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from typing import Any
-from tqdm_loggable.auto import tqdm
 
 import draccus
 import fsspec
@@ -253,7 +252,7 @@ def process_open_web_math(cfg: ParquetOpenWebMathConfig):
 
     shard_indices_to_process_ref = get_shards_to_process.remote(cfg.html_output_path)
     shard_indices_to_process = ray.get(shard_indices_to_process_ref)
-    pbar = tqdm(total=len(shard_indices_to_process), desc="Submitting shards")
+    num_shards_to_process = len(shard_indices_to_process)
 
     # Set a limit on the number of concurrent tasks so we don't overwhelm CC
     MAX_CONCURRENT_TASKS = 1000
@@ -272,7 +271,12 @@ def process_open_web_math(cfg: ParquetOpenWebMathConfig):
         # shard_output_path is of form gs://<html_output_path>/0.jsonl.gz
         shard_output_path = shard_path.replace("_warc_examples.parquet", ".jsonl.gz")
         unfinished.append(process_one_shard.remote(shard_path, shard_output_path))
-        pbar.update(1)
+        num_shards_submitted += 1
+        if num_shards_submitted % 1000 == 0:
+            logger.info(
+                f"Submitted {num_shards_submitted} / {num_shards_to_process} shards "
+                f"({num_shards_submitted / num_shards_to_process})"
+            )
 
     # Launch the initial MAX_CONCURRENT_TASKS batch of tasks
     for _ in range(min(MAX_CONCURRENT_TASKS, len(shard_indices_to_process))):
