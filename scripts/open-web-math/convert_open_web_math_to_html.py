@@ -284,8 +284,6 @@ def process_open_web_math(cfg: ParquetOpenWebMathConfig):
         submit_shard_task(shard_indices_to_process.pop())
 
     while unfinished:
-        # Wait until all the unfinished tasks are up or 5 seconds (whichever comes first)
-        # and return the finished and unfinished refs
         finished, unfinished = ray.wait(unfinished, num_returns=len(unfinished), timeout=5)
         try:
             _ = ray.get(finished)
