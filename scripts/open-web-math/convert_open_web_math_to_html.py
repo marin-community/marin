@@ -44,7 +44,9 @@ def extract_warc_path_from_open_web_math_metadata(metadata_str):
 
 
 @ray.remote(memory=4 * 1024 * 1024 * 1024)  # 4 GB
-@cached_or_construct_output(success_suffix="success")  # We use this decorator to make this function idempotent
+@cached_or_construct_output(
+    success_suffix="success", verbose=False
+)  # We use this decorator to make this function idempotent
 def process_one_shard(
     input_path: str,
     output_path: str,
