@@ -42,11 +42,6 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 
-def extract_warc_path_from_open_web_math_metadata(metadata_str):
-    metadata_dict = json.loads(metadata_str)
-    return metadata_dict["warc_path"]
-
-
 @ray.remote(memory=4 * 1024 * 1024 * 1024)  # 4 GB
 @cached_or_construct_output(
     success_suffix="success", verbose=False
