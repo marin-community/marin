@@ -23,14 +23,29 @@ autoformat:
 	ruff check --fix --show-fixes .
 	black .
 
+CLUSTER_REPOS = us-central2 europe-west4 us-west4
+TAG_VERSIONS = latest $(shell git rev-parse --short HEAD) $(shell date -u +"%Y%m%d")
 
 cluster_docker:
-	gcloud artifacts repositories list  --location=us-central2  --filter 'name:marin' > /dev/null || gcloud artifacts repositories create --repository-format=docker --location=us-central2 marin
+	@echo "Building and pushing Docker images for clusters $(CLUSTER_REPOS) with tags $(TAG_VERSIONS)"
+	# Create Artifact Repositories if they don't exist
+	$(foreach region,$(CLUSTER_REPOS), \
+		gcloud artifacts repositories list --location=$(region) --filter 'name:marin' > /dev/null || \
+		gcloud artifacts repositories create --repository-format=docker --location=$(region) marin;)
+
+	# Build Docker image
 	docker buildx build --platform linux/amd64 -t 'marin_cluster:latest' -f docker/marin/Dockerfile.cluster .
-	docker tag 'marin_cluster:latest' 'us-central2-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:latest'
-	# also tag with the commit hash and the date
-	docker tag 'marin_cluster:latest' 'us-central2-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:$(shell git rev-parse --short HEAD)'
-	docker tag 'marin_cluster:latest' 'us-central2-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:$(shell date -u +"%Y%m%d")'
-	docker push 'us-central2-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:latest'
-	docker push 'us-central2-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:$(shell git rev-parse --short HEAD)'
-	docker push 'us-central2-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:$(shell date -u +"%Y%m%d")'
+
+	# Tag the Docker image for each region and version
+	$(foreach region,$(CLUSTER_REPOS), \
+		$(foreach version,$(TAG_VERSIONS), \
+			docker tag 'marin_cluster:latest' '$(region)-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:$(version)';))
+
+	# Push the Docker images for each region and version
+	$(foreach region,$(CLUSTER_REPOS), \
+		$(foreach version,$(TAG_VERSIONS), \
+			docker push '$(region)-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:$(version)';))
+
+	@echo "##################################################################"
+	@echo "Don't forget to update the tags in infra/update-cluster-configs.py"
+	@echo "##################################################################"

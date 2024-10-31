@@ -38,13 +38,29 @@ it, trains a quality classifer, filters the data, and performs deduplication.
 TODO: add training and evaluation
 
 ```bash
-python experiments/quickstart-synthetic.py
+python experiments/quickstart.py
 ```
 
-## Running tests
+## Dev Notes
 
-To run the tests, run `pytest` in the root directory. This will run the unit
-tests and snapshot tests.
+To run the tests locally, first run `export RAY_ADDRESS=` to run Ray in local mode.
+
+NOTE: The first time you run tests locally, you will need install `pandiff` to run the snapshot tests. This is a one-time install that can be done using the following commands:
+
+```bash
+brew install node
+conda install -c conda-forge pandoc
+npm install -g pandiff
+```
+
+1. We have linters set up to ensure code quality. You can run them with:
+   ```bash
+   pre-commit run --all-files
+   ```
+2. To run the tests, run `PYTHONPATH=tests:. pytest tests --durations=0 -n 4 --tb=no -v`
+3. When submitting to cluster, we recommend using run script `marin/run/run.py`. See `marin/run/README.md`
+   for more details.
+
 
 ### Snapshot tests
 
