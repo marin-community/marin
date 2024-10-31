@@ -24,7 +24,6 @@ import json
 import logging
 import os
 import random
-import traceback
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from typing import Any
@@ -112,7 +111,6 @@ def process_one_shard(
                     except Exception as e:
                         # We are just ignoring the error and moving forward as these errors are generally not a lot
                         logger.exception(f"Error processing {url} in {s3_url} for {input_path}: {e}")
-                        traceback.print_exc()
 
     with fsspec.open(output_path, "wt", compression="gzip") as f:  # html output
         for index, row in df.iterrows():
