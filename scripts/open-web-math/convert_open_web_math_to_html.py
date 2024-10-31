@@ -64,7 +64,7 @@ def process_one_shard(
     output_path (str): Path to write gzipped JSONL with HTML for URLs in the input parquet shard
     """
     try:
-        df = pd.read_parquet(input_path)
+        df = pd.read_parquet(input_path, columns=["url", "file_path", "date"])
     except FileNotFoundError as e:
         logger.exception(f"Error reading the parquet file: {e}")
         raise e
@@ -195,7 +195,9 @@ def group_open_web_math_by_warc(input_paths: list[str], output_path: str):
     datetime_start = datetime.utcnow()
 
     try:
-        df = pd.concat([pd.read_parquet(file) for file in input_paths], ignore_index=True)
+        df = pd.concat(
+            [pd.read_parquet(file, columns=["url", "date", "metadata"]) for file in input_paths], ignore_index=True
+        )
     except FileNotFoundError as e:
         logger.exception(f"Error reading the parquet file: {e}")
         raise e
