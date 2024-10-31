@@ -23,7 +23,6 @@ import random
 import traceback
 from dataclasses import dataclass
 from datetime import datetime
-from io import BytesIO
 
 import draccus
 import fsspec
