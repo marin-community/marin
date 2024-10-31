@@ -38,7 +38,7 @@ class DownloadConfig:
 
     # Note: when just specifying main, the revision that gets saved on GCS won't actually autofetch the underlying SHA
     # (it will just say main, which isn't useful if the dataset repo gets updated later)
-    revision: str                                           # (Short) Commit Hash (from HF Dataset Repo; 7 characters)
+    revision: str = "main"  # (Short) Commit Hash (from HF Dataset Repo; 7 characters)
     hf_url_glob: str = "*"                                  # Glob Pattern to Match Files in HF Dataset
 
     # Additional GCS Parameters
@@ -71,6 +71,11 @@ def _wait_for_job_completion(job_name: str, timeout: int, poll_interval: int) ->
 
 
 def download(cfg: DownloadConfig) -> None | ray.ObjectRef:
+    logging.warning(
+        "DEPRECATED: This function is deprecated and will be removed in a future release."
+        "Consider using download_ray_hf"
+    )
+
     logger.info(f"[*] Downloading HF Dataset `{cfg.hf_dataset_id}` to `{cfg.gcs_output_path}`")
 
     job_name, job_url = download_hf_dataset(
