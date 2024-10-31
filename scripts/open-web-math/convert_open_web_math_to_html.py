@@ -1,5 +1,8 @@
 """
-Convert open-web-math to HTML.
+Convert open-web-math to HTML. Given the parquet shards from the raw
+open-web-math dataset, we take each example and fetch its corresponding HTML
+source from common crawl. The output is written as sharded JSONL files, where
+each record is a Dolma-format open-web-math example in HTML.
 
 ```
 python scripts/open-web-math/convert_open_web_math_to_html.py \
@@ -13,6 +16,7 @@ ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- \
     --input_path gs://marin-us-central2/raw/open-web-math-fde8ef8/fde8ef8/huggingface.co/datasets/open-web-math/open-web-math/resolve/fde8ef8/data/ \
     --html_output_path gs://marin-us-central2/documents/open-web-math-fde8ef8/html/
 ```
+
 """
 
 import hashlib
