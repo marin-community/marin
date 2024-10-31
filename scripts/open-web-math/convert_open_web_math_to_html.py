@@ -83,40 +83,32 @@ def process_one_shard(
     s3_fs = fsspec.filesystem(
         "s3",
         anon=False,
-        # 2 GB, so we only need to make 1 request to fetch a WARC (~1 GB compressed).
-        # Else, s3fs will make multiple requests. This is undesirable because
-        # if one of them fails (likely, due to CC request rate limits), the entire
-        # process fails.
-        default_block_size=2 * 2**30,
     )
 
     with s3_fs.open(s3_url, mode="rb") as file_stream:
-        # Load entire file into memory, so we don't have to make
-        # multiple requests
-        file_content = BytesIO(file_stream.read())
-    for record in ArchiveIterator(file_content):
-        if num_urls_found == length_url_inp_list:
-            break
+        for record in ArchiveIterator(file_stream):
+            if num_urls_found == length_url_inp_list:
+                break
 
-        # Check if it's a response record
-        if record.rec_type == "response":
-            # Process the record
-            url = record.rec_headers.get_header("WARC-Target-URI")
-            length_warc += 1
+            # Check if it's a response record
+            if record.rec_type == "response":
+                # Process the record
+                url = record.rec_headers.get_header("WARC-Target-URI")
+                length_warc += 1
 
-            if url in url_dict:
-                num_urls_found += 1
-                url_idx_in_df = url_dict[url]
+                if url in url_dict:
+                    num_urls_found += 1
+                    url_idx_in_df = url_dict[url]
 
-                try:
-                    content = record.content_stream().read()
-                    html_decoded = content.decode(errors="ignore")
-                    df.loc[url_idx_in_df, "html"] = html_decoded
-                    num_urls_processed += 1
-                except Exception as e:
-                    # We are just ignoring the error and moving forward as these errors are generally not a lot
-                    logger.exception(f"Error processing {url} in {s3_url} for {input_path}: {e}")
-                    traceback.print_exc()
+                    try:
+                        content = record.content_stream().read()
+                        html_decoded = content.decode(errors="ignore")
+                        df.loc[url_idx_in_df, "html"] = html_decoded
+                        num_urls_processed += 1
+                    except Exception as e:
+                        # We are just ignoring the error and moving forward as these errors are generally not a lot
+                        logger.exception(f"Error processing {url} in {s3_url} for {input_path}: {e}")
+                        traceback.print_exc()
 
     with fsspec.open(output_path, "wt", compression="gzip") as f:  # html output
         for index, row in df.iterrows():
