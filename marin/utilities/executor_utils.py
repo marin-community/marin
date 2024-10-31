@@ -22,17 +22,5 @@ def compare_dicts(dict1: dict[str, Any], dict2: dict[str, Any]) -> bool:
     if not diff:
         return True
     else:
-        # Process additions
-        for path, value in diff.get("dictionary_item_added", {}).items():
-            logger.warning(f"+ {path}: {value}")
-
-        # Process deletions
-        for path, value in diff.get("dictionary_item_removed", {}).items():
-            logger.warning(f"- {path}: {value}")
-
-        # Process changed values
-        for path, change in diff.get("values_changed", {}).items():
-            logger.warning(f'- {path}: {change["old_value"]}')
-            logger.warning(f'+ {path}: {change["new_value"]}')
-
+        logger.warning(diff.pretty())  # Log the differences
         return False

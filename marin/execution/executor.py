@@ -576,7 +576,10 @@ class Executor:
             current_info = json.loads(json.dumps(asdict(self.step_infos[step_idx]), indent=2, cls=CustomJsonEncoder))
             logger.info(f"Comparing previous info with current info for {step.name}:")
             if not compare_dicts(previous_info, current_info):
-                logger.warning("The 2 info files are not same and executor will override the previous info-file.")
+                logger.warning(
+                    f"The current and previous info files are not same for {step.name} "
+                    f"and executor will override the previous info-file."
+                )
 
         self.refs[step] = execute_after_dependencies.options(name=name).remote(
             step.fn, config, dependencies, output_path, should_run
