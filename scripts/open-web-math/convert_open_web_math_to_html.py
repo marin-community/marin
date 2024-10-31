@@ -259,32 +259,33 @@ def process_open_web_math(cfg: ParquetOpenWebMathConfig):
     shard_indices_to_process = ray.get(shard_indices_to_process_ref)
     num_shards_to_process = len(shard_indices_to_process)
 
-    # Process each of the example shards by downloading the original WARC
-    # and picking out the HTML for the URLs of interest
     # Set a limit on the number of concurrent tasks so we don't overwhelm CC
     MAX_CONCURRENT_TASKS = 1000
 
     # Shuffle to encourage different workers to hit different AWS prefixes,
     # so we don't run into per-prefix rate limits.
     random.shuffle(shard_indices_to_process)
-
     num_shards_submitted = 0
-
-    # Launch the initial MAX_CONCURRENT_TASKS batch of tasks
     unfinished = []
-    for _ in range(min(MAX_CONCURRENT_TASKS, len(shard_indices_to_process))):
-        shard_index_to_process = shard_indices_to_process.pop()
+
+    def submit_shard_task(shard_index):
+        """Submit a shard processing task and log progress every 1000 shards."""
+        nonlocal num_shards_submitted
         # shard_path_to_process is of form gs://<html_output_path>/0_warc_examples.parquet
-        shard_path_to_process = os.path.join(cfg.html_output_path, f"{shard_index_to_process}_warc_examples.parquet")
+        shard_path = os.path.join(cfg.html_output_path, f"{shard_index}_warc_examples.parquet")
         # shard_output_path is of form gs://<html_output_path>/0.jsonl.gz
-        shard_output_path = shard_path_to_process.replace("_warc_examples.parquet", ".jsonl.gz")
-        unfinished.append(process_one_shard.remote(shard_path_to_process, shard_output_path))
+        shard_output_path = shard_path.replace("_warc_examples.parquet", ".jsonl.gz")
+        unfinished.append(process_one_shard.remote(shard_path, shard_output_path))
         num_shards_submitted += 1
         if num_shards_submitted % 1000 == 0:
             logger.info(
                 f"Submitted {num_shards_submitted} / {num_shards_to_process} shards "
                 f"({num_shards_submitted / num_shards_to_process})"
             )
+
+    # Launch the initial MAX_CONCURRENT_TASKS batch of tasks
+    for _ in range(min(MAX_CONCURRENT_TASKS, len(shard_indices_to_process))):
+        submit_shard_task(shard_indices_to_process.pop())
 
     while unfinished:
         # Wait until all the unfinished tasks are up or 5 seconds (whichever comes first)
@@ -298,18 +299,7 @@ def process_open_web_math(cfg: ParquetOpenWebMathConfig):
         # If we have more shard paths left to process and we haven't hit the max
         # number of concurrent tasks, add tasks to the unfinished queue.
         while shard_indices_to_process and len(unfinished) < MAX_CONCURRENT_TASKS:
-            shard_index_to_process = shard_indices_to_process.pop()
-            # shard_path_to_process is of form gs://<html_output_path>/0_warc_examples.parquet
-            shard_path_to_process = os.path.join(cfg.html_output_path, f"{shard_index_to_process}_warc_examples.parquet")
-            # shard_output_path is of form gs://<html_output_path>/0.jsonl.gz
-            shard_output_path = shard_path_to_process.replace("_warc_examples.parquet", ".jsonl.gz")
-            unfinished.append(process_one_shard.remote(shard_path_to_process, shard_output_path))
-            num_shards_submitted += 1
-            if num_shards_submitted % 1000 == 0:
-                logger.info(
-                    f"Submitted {num_shards_submitted} / {num_shards_to_process} shards "
-                    f"({num_shards_submitted / num_shards_to_process})"
-                )
+            submit_shard_task(shard_indices_to_process.pop())
 
 
 if __name__ == "__main__":
