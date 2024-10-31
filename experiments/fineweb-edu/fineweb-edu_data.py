@@ -18,7 +18,7 @@ fineweb_edu_raw = ExecutorStep(
         gcs_output_path=this_output_path(),
         wait_for_completion=False,
     ),
-    override_output_path="gs://marin-us-central2/raw/fineweb-edu-fde8ef8",
+    override_output_path="gs://marin-us-central2/raw/fineweb-edu-651a648",
 )
 
 ############################################################
