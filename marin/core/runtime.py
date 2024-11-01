@@ -24,7 +24,7 @@ class RayConfig:
         ray.init(address=self.address)
 
 
-def cached_or_construct_output(success_suffix="success"):
+def cached_or_construct_output(success_suffix="success", verbose=True):
     """
     Decorator to make a function idempotent. This decorator will check if the success file exists, if it does then it
     will skip the function. If the success file does not exist, then it will execute the function and write
@@ -33,6 +33,7 @@ def cached_or_construct_output(success_suffix="success"):
     Args:
         success_suffix: The suffix of the success file.
                         The path for the success file will be output_file_path + "." + success_suffix
+        verbose: If true, print logs for each function invocation.
     """
 
     def decorator(func):
@@ -43,12 +44,14 @@ def cached_or_construct_output(success_suffix="success"):
 
             # If the ledger file exists, then we do not process the file again
             if fsspec_exists(success_file):
-                logger.info(f"Output file already processed. Skipping {input_file_path}")
+                if verbose:
+                    logger.info(f"Output file already processed. Skipping {input_file_path}")
                 return True
 
             datetime_start = datetime.utcnow()
             # Execute the main function
-            logger.info(f"Processing {input_file_path} to {output_file_path}")
+            if verbose:
+                logger.info(f"Processing {input_file_path} to {output_file_path}")
             response = func(input_file_path, output_file_path, *args, **kwargs)
             datetime_end = datetime.utcnow()
 
@@ -62,7 +65,8 @@ def cached_or_construct_output(success_suffix="success"):
                 }
                 f.write(json.dumps(metadata))
 
-            logger.info(f"Processed {input_file_path}")
+            if verbose:
+                logger.info(f"Processed {input_file_path}")
             return response
 
         return wrapper
