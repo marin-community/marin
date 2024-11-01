@@ -22,9 +22,9 @@ dependencies = [
     "gcsfs>=2024.2,<2024.7",
     "google-api-python-client~=2.0",
     "google-cloud-storage-transfer~=1.0",
-    "html2text==2024.2.26",                 # TODO :: Check pin?
-    "htmlmin==0.1.12",                      # TODO :: Check usage | pin?
-    "markdownify==0.12.1",                  # TODO :: Check usage | pin?
+    "html2text==2024.2.26", # TODO :: Check pin?
+    "htmlmin==0.1.12", # TODO :: Check usage | pin?
+    "markdownify==0.12.1", # TODO :: Check usage | pin?
     "multiprocess==0.70.16",
     "py7zr",
     "zstandard==0.23.0",
