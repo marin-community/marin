@@ -75,9 +75,8 @@ def process_one_shard(
     num_urls_to_find = len(urls)
 
     length_warc = 0
-    # NOTE: make sure s3 keys are setup, either on the cluster
-    # or by manually initializing with:
-    # fsspec.filesystem("s3", anon=False, key="...", secret="...")
+    # NOTE: make sure s3 keys are set up by passing them as
+    # environment variables when submitting the job
     s3_fs = fsspec.filesystem(
         "s3",
         anon=False,
