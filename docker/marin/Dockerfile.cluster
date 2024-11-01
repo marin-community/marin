@@ -56,6 +56,10 @@ RUN rm -rf $VENV_PATH/lib/python3.11/site-packages/ray/autoscaler
 RUN ln -s /opt/abhi-ray/ray/python/ray/autoscaler $VENV_PATH/lib/python3.11/site-packages/ray/autoscaler
 
 ENV PYTHONPATH=$PYTHONPATH:$VENV_PATH/lib/python3.11/site-packages
+# Add /usr/lib/x86_64-linux-gnu/ to LD_LIBRARY_PATH so that bash prefers the systems
+# libtinfo.so over the conda-provided version. Using the conda-provided libtinfo.so
+# outputs a noisy warning because it doesn't include version information.
+ENV LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/lib/x86_64-linux-gnu/
 ENV LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/home/ray/anaconda3/lib
 ENV PATH=$PATH:/home/ray/anaconda3/bin
 
