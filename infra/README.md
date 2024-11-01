@@ -214,9 +214,15 @@ TAG_VERSIONS = latest $(shell git rev-parse --short HEAD) $(shell date -u +"%Y%m
 ```
 
 The `cluster_docker` command will handle creating artifact repositories if they don't exist, building the Docker image,
-tagging it, and pushing it to all relevant regions and versions.
+tagging it, and pushing it to all relevant regions and versions. If you run into a permissions error (e.g., 403) when pushing the Docker image, you may need to authenticate to the repo:
 
-After building the Docker image, update the `infra/update-cluster-configs.py` script to point to the new image and regenerate the cluster configs. For instance, if you updated the `europe-west` cluster you can update the tags as below:
+``` diff
+gcloud auth configure-docker us-central2-docker.pkg.dev
+gcloud auth configure-docker europe-west4-docker.pkg.dev
+gcloud auth configure-docker us-west4-docker.pkg.dev
+```
+
+After building the Docker image and pushing it to the relevant regions and versions, update the `infra/update-cluster-configs.py` script to point to the new image and regenerate the cluster configs. For instance, if you updated the `europe-west` cluster you can update the tags as below:
 
 ```diff
 - DOCKER_TAGS = {
