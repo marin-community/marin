@@ -40,7 +40,6 @@ EXPERIMENT_TAG = ["433_dclm_1b_1x"]
 
 mixture_config = lm_mixture_data_config(components=DCLM_FULL_COMPONENTS, weights=DCLM_MIXTURE_WEIGHTS)
 
-
 # hyperparams and numbers below are chosen to replicate the numbers in https://arxiv.org/abs/2406.11794.
 # Table 1 (page 5) has # model parameters and # training tokens. Table 11, page 43 has the hyperparameters.
 llama_1_4b_dclm = LlamaConfig(
