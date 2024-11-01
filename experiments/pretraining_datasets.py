@@ -86,7 +86,6 @@ the_stack_dedup = ExecutorStep(
     override_output_path="gs://marin-us-central2/raw/the-stack-dedup-4ba450",
 ).cd("17cad72")
 
-
 proofpile_2 = ExecutorStep(
     name="raw/proof-pile-2",
     fn=download,
@@ -98,7 +97,6 @@ proofpile_2 = ExecutorStep(
     ),
     override_output_path="gs://marin-us-central2/raw/proof-pile-2-f1b1d8",
 ).cd("901a927/huggingface.co/datasets/EleutherAI/proof-pile-2/resolve/901a927")
-
 
 starcoderdata = ExecutorStep(
     name="raw/starcoderdata",
