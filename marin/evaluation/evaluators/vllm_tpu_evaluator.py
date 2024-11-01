@@ -131,7 +131,11 @@ class VllmTpuEvaluator(Evaluator, ABC):
         return runtime_env
 
     def launch_evaluate_with_ray(
-        self, model: ModelConfig, evals: list[str], output_path: str, max_eval_instances: int | None = None
+        self,
+        model: ModelConfig,
+        evals: list[str],
+        output_path: str,
+        max_eval_instances: int | None = None,
     ) -> None:
         """
         Launches the evaluation run with Ray.
