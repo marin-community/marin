@@ -222,6 +222,8 @@ gcloud auth configure-docker europe-west4-docker.pkg.dev
 gcloud auth configure-docker us-west4-docker.pkg.dev
 ```
 
+(`make cluster_docker` ought to do those steps for you, but just in case.)
+
 After building the Docker image and pushing it to the relevant regions and versions, update the `infra/update-cluster-configs.py` script to point to the new image and regenerate the cluster configs. For instance, if you updated the `europe-west` cluster you can update the tags as below:
 
 ```diff
