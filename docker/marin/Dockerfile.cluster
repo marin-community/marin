@@ -9,7 +9,7 @@ RUN sudo mkdir -p /opt/marin/
 RUN sudo chown -R $(whoami) /opt/marin/
 # Ray uses conda
 ENV PATH=/home/ray/anaconda3/bin:/home/ray/anaconda3/bin:/home/ray/anaconda3/condabin:$PATH
-RUN pip install -U "jax[tpu]@git+https://github.com/dlwh/jax@retry_refuse" -f https://storage.googleapis.com/jax-releases/libtpu_releases.html
+RUN pip install --no-cache-dir -U "jax[tpu]@git+https://github.com/dlwh/jax@retry_refuse" -f https://storage.googleapis.com/jax-releases/libtpu_releases.html
 
 # gcloud
 RUN conda install conda-forge::google-cloud-sdk -y
@@ -18,11 +18,11 @@ RUN gcloud components install alpha
 RUN conda install -c conda-forge ncurses -y
 
 # pytorch is a heavy dependency, so we install it up front to try to cache it
-RUN pip install torch>=2.1 --extra-index-url https://download.pytorch.org/whl/cpu
+RUN pip install --no-cache-dir torch>=2.1 --extra-index-url https://download.pytorch.org/whl/cpu
 
 WORKDIR /tmp/
 ADD pyproject.toml /tmp/
-RUN pip install . --extra-index-url https://download.pytorch.org/whl/cpu
+RUN pip install --no-cache-dir . --extra-index-url https://download.pytorch.org/whl/cpu
 
 
 # Our weird fork of OLMo
@@ -31,19 +31,19 @@ RUN pip install . --extra-index-url https://download.pytorch.org/whl/cpu
 # which causes the following error:
 # ValueError: 'olmo' is already used by a Transformers config, pick another name.
 # Use the following dependency instead where the issue is fixed.
-RUN pip install git+https://github.com/teetone/OLMo.git@main
+RUN pip install --no-cache-dir git+https://github.com/teetone/OLMo.git@main
 
 # Install vllm for TPU
 # cf https://github.com/vllm-project/vllm/blob/main/Dockerfile.tpu
-RUN pip install torch_xla[tpu] -f https://storage.googleapis.com/libtpu-releases/index.html
-RUN pip install torch_xla[pallas] -f https://storage.googleapis.com/jax-releases/jax_nightly_releases.html -f https://storage.googleapis.com/jax-releases/jaxlib_nightly_releases.html
+RUN pip install --no-cache-dir torch_xla[tpu] -f https://storage.googleapis.com/libtpu-releases/index.html
+RUN pip install --no-cache-dir torch_xla[pallas] -f https://storage.googleapis.com/jax-releases/jax_nightly_releases.html -f https://storage.googleapis.com/jax-releases/jaxlib_nightly_releases.html
 
 RUN sudo mkdir -p /opt/vllm
 RUN sudo chown -R $(whoami) /opt/vllm
 RUN cd /opt/vllm && git clone https://github.com/vllm-project/vllm.git /opt/vllm
 WORKDIR /opt/vllm/
 RUN git checkout tags/v0.5.3.post1
-RUN pip install -r requirements-tpu.txt
+RUN pip install --no-cache-dir -r requirements-tpu.txt
 RUN VLLM_TARGET_DEVICE="tpu" python3 setup.py develop
 
 # copy in the autoscaler hacks
