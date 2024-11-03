@@ -9,6 +9,6 @@ class SimpleTrainConfig:
     learning_rate: float
     weight_decay: float | None = None
     min_lr_ratio: float | None = None
-    warmup: int | None = None
+    warmup: float | None = None
     cooldown: float | None = None
     z_loss_weight: float | None = None
