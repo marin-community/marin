@@ -40,7 +40,6 @@ from urllib.parse import urljoin, urlparse
 import draccus
 import fsspec
 import pyarrow as pa
-import pyarrow.parquet as pq
 import ray
 from bs4 import BeautifulSoup
 
@@ -94,29 +93,14 @@ def process_one_batch(html_paths_batch: list[str], output_path: str):
 
     Args:
     html_paths_batch (list[str]): Paths of HTML files to extract outlinks from.
-    output_path (str): Path to write Parquet file with outlinks.
+    output_path (str): Path to write JSONL file with outlinks.
     """
     from resiliparse_dom.extract.html2text import extract_main_dom_tree
     from courlan import check_url
     import w3lib.url
 
-    # Define schema
-    schema = pa.schema(
-        [
-            ("page_url", pa.string()),
-            ("link_target", pa.string()),
-            ("is_internal_link", pa.bool_()),
-            ("in_main_content", pa.bool_()),
-        ]
-    )
-
     # Open the ParquetWriter
-    with fsspec.open(output_path, "wb") as f:
-        writer = pq.ParquetWriter(f, schema)
-
-        records = []
-        batch_size = 1000  # Adjust batch size as needed
-
+    with fsspec.open(output_path, "w") as fout:
         for html_path in html_paths_batch:
             with fsspec.open(html_path, "rt", compression="gzip") as fin:
                 for line in fin:
@@ -156,11 +140,15 @@ def process_one_batch(html_paths_batch: list[str], output_path: str):
                             outbound_links.add(link)
 
                     # Now, get all of the outbound links in the main text
-                    main_text = extract_main_dom_tree(
-                        html_str,
-                        main_content=True,
+                    # Need to convert to string here, since bs4 can't directly
+                    # use the resiliparse.parse.html.HTMLTree
+                    main_text_dom_str = str(
+                        extract_main_dom_tree(
+                            html_str,
+                            main_content=True,
+                        )
                     )
-                    main_text_with_links = BeautifulSoup(main_text, "html.parser")
+                    main_text_with_links = BeautifulSoup(main_text_dom_str, "html.parser")
                     main_text_outbound_links = set()
                     for link in main_text_with_links.find_all("a", href=True):
                         href = link.get("href")
@@ -177,26 +165,17 @@ def process_one_batch(html_paths_batch: list[str], output_path: str):
                     for link in outbound_links:
                         is_internal = is_internal_link(url, link)
                         in_main_content = link in main_text_outbound_links
-                        records.append(
-                            {
-                                "page_url": url,
-                                "link_target": link,
-                                "is_internal_link": is_internal,
-                                "in_main_content": in_main_content,
-                            }
+                        fout.write(
+                            json.dumps(
+                                {
+                                    "page_url": url,
+                                    "link_target": link,
+                                    "is_internal_link": is_internal,
+                                    "in_main_content": in_main_content,
+                                }
+                                + "\n"
+                            )
                         )
-
-                    # Write records in batches to minimize memory usage
-                    if len(records) >= batch_size:
-                        table = pa.Table.from_pylist(records, schema=schema)
-                        writer.write_table(table)
-                        records = []
-
-        # Write any remaining records
-        if records:
-            table = pa.Table.from_pylist(records, schema=schema)
-            writer.write_table(table)
-        writer.close()
 
 
 def batched(iterable, n=1):
@@ -216,7 +195,7 @@ def get_outlinks_from_html(cfg: OutlinksExtractionConfig):
     # open-web-math has ~3M WARCs in total, which yields 3000 resharded chunks
     refs = []
     for i, html_path_batch in enumerate(batched(html_paths, 1000)):
-        output_path = os.path.join(cfg.outlinks_output_path, f"{i}_links.parquet")
+        output_path = os.path.join(cfg.outlinks_output_path, f"{i}_links.jsonl.gz")
         refs.append(process_one_batch.remote(html_path_batch, output_path))
     logger.info(f"Submitted {len(refs)} tasks")
 
