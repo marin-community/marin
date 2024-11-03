@@ -110,6 +110,8 @@ def process_one_batch(html_paths_batch: list[str], output_path: str):
 
     # Open the ParquetWriter
     with fsspec.open(output_path, "w") as fout:
+        num_failed_to_parse = 0
+        num_total = 0
         for html_path in html_paths_batch:
             with fsspec.open(html_path, "rt", compression="gzip") as fin:
                 for line in fin:
@@ -120,8 +122,14 @@ def process_one_batch(html_paths_batch: list[str], output_path: str):
                     if not html_str or not url:
                         continue
 
+                    num_total += 1
                     # Get all the outbound links in the HTML
-                    parsed_html = BeautifulSoup(html_str, "html.parser")
+                    try:
+                        parsed_html = BeautifulSoup(html_str, "html.parser")
+                    except Exception:
+                        # Skip documents that don't parse
+                        num_failed_to_parse += 1
+                        continue
                     unfiltered_outbound_links = set()
                     for link in parsed_html.find_all("a", href=True):
                         href = link.get("href")
@@ -157,7 +165,16 @@ def process_one_batch(html_paths_batch: list[str], output_path: str):
                             main_content=True,
                         )
                     )
-                    main_text_with_links = BeautifulSoup(main_text_dom_str, "html.parser")
+                    if not main_text_dom_str:
+                        continue
+
+                    # Get all the outbound links in the HTML
+                    try:
+                        main_text_with_links = BeautifulSoup(main_text_dom_str, "html.parser")
+                    except Exception:
+                        # Skip documents that don't parse
+                        num_failed_to_parse += 1
+                        continue
                     main_text_outbound_links = set()
                     for link in main_text_with_links.find_all("a", href=True):
                         href = link.get("href")
@@ -185,6 +202,7 @@ def process_one_batch(html_paths_batch: list[str], output_path: str):
                             )
                             + "\n"
                         )
+        logger.info(f"Failed to parse {num_failed_to_parse} out of {num_total} records")
 
 
 def batched(iterable, n=1):
