@@ -127,7 +127,7 @@ def process_one_shard(
                 format="html",
                 html=out_fineweb_edu["html"],
                 metadata={
-                    "url": str(out_fineweb_edu["url"]),
+                    "url": out_fineweb_edu["url"],
                     "file_path": str(out_fineweb_edu["file_path"]),
                 },
             )
