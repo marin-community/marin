@@ -1,5 +1,23 @@
 FROM rayproject/ray:nightly.240914.bb15a3-py311-cpu
-RUN sudo apt-get update && sudo apt-get install -y clang curl g++ vim libpython3.11 libpython3.11-dev docker.io
+
+# Install general dependencies
+RUN sudo apt-get update && sudo apt-get install -y clang curl g++ vim libpython3.11 libpython3.11-dev docker.io cmake
+
+# Install resiliparse build dependencies (requires libre2-dev>=2022-04-01)
+RUN sudo apt-get install -y build-essential zlib1g-dev liblz4-dev libuchardet-dev libre2-dev
+# Install lexbor from source, since the apt package for jammy is corrupted
+RUN set && curl -Lf https://github.com/lexbor/lexbor/archive/refs/tags/v2.3.0.tar.gz > lexbor.tar.gz \
+    && tar -xf lexbor.tar.gz \
+    && (cd lexbor-* && mkdir build \
+        && cmake \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=/usr \
+            -DLEXBOR_BUILD_SHARED=ON \
+            -DLEXBOR_BUILD_STATIC=OFF \
+            -DLEXBOR_OPTIMIZATION_LEVEL=-O3 \
+            -B build \
+        && sudo cmake --build build -j$(nproc) --target install) \
+    && rm -rf lexbor*
 
 # install rust
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
