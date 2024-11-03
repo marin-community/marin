@@ -212,18 +212,31 @@ def batched(iterable, n=1):
         yield iterable[ndx : min(ndx + n, l)]
 
 
-@draccus.wrap()
-def get_outlinks_from_html(cfg: OutlinksExtractionConfig):
+@ray.remote(memory=32 * 1024 * 1024 * 1024)
+def get_shards_indices_to_process(shard_path: str):
     # Get the HTML files (of form <int index>.jsonl.gz) and sort by the integer index.
     # We sort to ensure that the sharding is reproducible.
-    html_paths = fsspec_glob(os.path.join(cfg.html_input_path, "*.jsonl.gz"))
-    html_paths.sort(key=lambda x: int(pathlib.Path(x).name.removesuffix(".jsonl.gz")))
+    html_path_indices: list[int] = [
+        int(pathlib.Path(path).name.removesuffix(".jsonl.gz"))
+        for path in fsspec_glob(os.path.join(shard_path, "*.jsonl.gz"))
+    ]
+    html_path_indices: list[int] = sorted(html_path_indices)
+    return html_path_indices
+
+
+@draccus.wrap()
+def get_outlinks_from_html(cfg: OutlinksExtractionConfig):
+    get_shards_ref = get_shards_indices_to_process.remote(cfg.html_input_path)
+    shard_indices = ray.get(get_shards_ref)
 
     # Group into chunks of 1000 WARCs each
     # open-web-math has ~3M WARCs in total, which yields 3000 resharded chunks
     refs = []
-    for i, html_path_batch in enumerate(batched(html_paths, 1000)):
+    for i, html_shard_indices_batch in enumerate(batched(shard_indices, 1000)):
         output_path = os.path.join(cfg.outlinks_output_path, f"{i}_links.jsonl.gz")
+        html_path_batch = [
+            os.path.join(cfg.html_input_path, f"{shard_index}.jsonl.gz") for shard_index in html_shard_indices_batch
+        ]
         refs.append(process_one_batch.remote(html_path_batch, output_path))
     logger.info(f"Submitted {len(refs)} tasks")
 
