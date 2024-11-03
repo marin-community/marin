@@ -33,15 +33,17 @@ done
 import json
 import logging
 import os
-from urllib.parse import urljoin, urlparse
 import pathlib
 from dataclasses import dataclass
-from bs4 import BeautifulSoup
+from urllib.parse import urljoin, urlparse
 
 import draccus
 import fsspec
+import pyarrow as pa
+import pyarrow.parquet as pq
 import ray
 import w3lib.url
+from bs4 import BeautifulSoup
 
 from marin.core.runtime import cached_or_construct_output
 from marin.utils import fsspec_glob
@@ -77,7 +79,7 @@ def is_internal_link(base_url, target_url):
 @ray.remote(
     memory=4 * 1024 * 1024 * 1024,
     runtime_env={"pip": ["https://github.com/krypticmouse/chatnoir-resiliparse/tree/develop/resiliparse", "courlan"]},
-)  # 4 GB
+)  # 4 GB  # 4 GB
 @cached_or_construct_output(success_suffix="SUCCESS")  # We use this decorator to make this function idempotent
 def process_one_batch(html_paths_batch: list[str], output_path: str):
     """
@@ -85,69 +87,108 @@ def process_one_batch(html_paths_batch: list[str], output_path: str):
 
     Args:
     html_paths_batch (list[str]): Paths of HTML files to extract outlinks from.
-    output_path (str): Path to write gzipped JSONL with outlinks.
+    output_path (str): Path to write Parquet file with outlinks.
     """
     from resiliparse.extract.html2text import extract_main_dom_tree as resiliparse_extract_main_dom_tree
-    from courlan import check_url, validate_url
+    from courlan import check_url
 
-    with fsspec.open(output_path, "w", compression="gzip") as fout:
+    # Define schema
+    schema = pa.schema(
+        [
+            ("page_url", pa.string()),
+            ("link_target", pa.string()),
+            ("is_internal_link", pa.bool_()),
+            ("in_main_content", pa.bool_()),
+        ]
+    )
+
+    # Open the ParquetWriter
+    with fsspec.open(output_path, "wb") as f:
+        writer = pq.ParquetWriter(f, schema)
+
+        records = []
+        batch_size = 1000  # Adjust batch size as needed
+
         for html_path in html_paths_batch:
-            with fsspec.open(html_path, "r", compression="gzip") as fin:
+            with fsspec.open(html_path, "rt", compression="gzip") as fin:
                 for line in fin:
                     record = json.loads(line)
-                    html_str = record["html"]
-                    url = record["metadata"]["url"]
+                    html_str = record.get("html", "")
+                    url = record.get("metadata", {}).get("url", "")
 
-                    if not html_str:
+                    if not html_str or not url:
                         continue
 
                     # Get all the outbound links in the HTML
                     parsed_html = BeautifulSoup(html_str, "html.parser")
                     unfiltered_outbound_links = set()
                     for link in parsed_html.find_all("a", href=True):
-                        if link["href"]:
-                            # Make sure the link is absolute
-                            absolute_link_target = urljoin(url, link["href"])
-                            unfiltered_outbound_links.add(w3lib.url.canonicalize_url(absolute_link_target))
+                        href = link.get("href")
+                        if href:
+                            absolute_link_target = urljoin(url, href)
+                            canonical_link = w3lib.url.canonicalize_url(absolute_link_target)
+                            unfiltered_outbound_links.add(canonical_link)
 
                     # Heuristically filter the outbound_links
                     outbound_links = set()
                     for link in unfiltered_outbound_links:
-                        if check_url(link) is not None and validate_url(link)[0]:
+                        # check_url removes invalid links (e.g., http://666.0.0.1/)
+                        # and those that don't point to HTML (e.g., .mp3 extension, etc.)
+                        if (
+                            check_url(
+                                link,
+                                strict=False,
+                                with_redirects=False,
+                                language=None,
+                                with_nav=True,
+                                trailing_slash=True,
+                            )
+                            is not None
+                        ):
                             outbound_links.add(link)
 
                     # Now, get all of the outbound links in the main text
-                    main_text_with_links = BeautifulSoup(
-                        resiliparse_extract_main_dom_tree(
-                            html_str,
-                            main_content=True,
-                        ),
-                        "html.parser",
+                    main_text = resiliparse_extract_main_dom_tree(
+                        html_str,
+                        main_content=True,
                     )
+                    main_text_with_links = BeautifulSoup(main_text, "html.parser")
                     main_text_outbound_links = set()
                     for link in main_text_with_links.find_all("a", href=True):
-                        if link["href"]:
-                            # Make sure the link is absolute
-                            absolute_link_target = urljoin(url, link["href"])
-                            main_text_outbound_links.add(w3lib.url.canonicalize_url(absolute_link_target))
-                    # Write out the links to file
-                    allowed_protocols = set(["http", "https"])
+                        href = link.get("href")
+                        if href:
+                            absolute_link_target = urljoin(url, href)
+                            canonical_link = w3lib.url.canonicalize_url(absolute_link_target)
+                            main_text_outbound_links.add(canonical_link)
+
+                    # Filter outbound_links to allowed protocols
+                    allowed_protocols = {"http", "https"}
                     outbound_links = [link for link in outbound_links if urlparse(link).scheme in allowed_protocols]
-                    fout.write(
-                        json.dumps(
+
+                    # Prepare the list of outbound link records
+                    for link in outbound_links:
+                        is_internal = is_internal_link(url, link)
+                        in_main_content = link in main_text_outbound_links
+                        records.append(
                             {
                                 "page_url": url,
-                                "outbound_links": [
-                                    {
-                                        "link_target": link,
-                                        "is_internal_link": is_internal_link(url, link),
-                                        "in_main_content": link in main_text_outbound_links,
-                                    }
-                                    for link in outbound_links
-                                ],
+                                "link_target": link,
+                                "is_internal_link": is_internal,
+                                "in_main_content": in_main_content,
                             }
                         )
-                    )
+
+                    # Write records in batches to minimize memory usage
+                    if len(records) >= batch_size:
+                        table = pa.Table.from_pylist(records, schema=schema)
+                        writer.write_table(table)
+                        records = []
+
+        # Write any remaining records
+        if records:
+            table = pa.Table.from_pylist(records, schema=schema)
+            writer.write_table(table)
+        writer.close()
 
 
 def batched(iterable, n=1):
