@@ -36,6 +36,7 @@ import os
 import pathlib
 from dataclasses import dataclass
 from urllib.parse import urljoin, urlparse
+from tqdm_loggable.auto import tqdm
 
 import draccus
 import fsspec
@@ -108,11 +109,13 @@ def process_one_batch(html_paths_batch: list[str], output_path: str):
     from courlan import check_url
     import w3lib.url
 
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
     # Open the ParquetWriter
     with fsspec.open(output_path, "w") as fout:
         num_failed_to_parse = 0
         num_total = 0
-        for html_path in html_paths_batch:
+        for html_path in tqdm(html_paths_batch):
             with fsspec.open(html_path, "rt", compression="gzip") as fin:
                 for line in fin:
                     record = json.loads(line)
