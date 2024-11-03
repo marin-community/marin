@@ -98,9 +98,7 @@ def tokenize(config: TokenizeConfig):
     if validation_source is not None:
         validation_ledger = (
             ray.remote(tokenize_and_concatenate_shards)
-            .options(
-                name=f"tokenize::{config.cache_path}", runtime_env=RuntimeEnv(env_vars={"JAX_PLATFORM_NAME": "cpu"})
-            )
+            .options(name=f"tokenize::{config.cache_path}", runtime_env=RuntimeEnv(env_vars={"JAX_PLATFORMS": "cpu"}))
             .remote(
                 validation_source,
                 batch_tokenizer,
@@ -131,7 +129,7 @@ def levanter_tokenize(input_paths: list[str] | str, tokenizer_name: str, output_
 
     logger.info(f"Caching {input_paths} to {output_path}.")
 
-    source = _create_source(input_paths)
+    source = _create_source(input_paths, "text")
     tokenizer = transformers.AutoTokenizer.from_pretrained(tokenizer_name)
     batch_tokenizer = BatchTokenizer(tokenizer, enforce_eos=True)
 
