@@ -54,11 +54,12 @@ def upload_to_gcs(local_path: str, gcs_path: str) -> None:
 
 def run_bash_command(command: list[str], check: bool = True) -> None:
     """Runs a bash command."""
-    print(" ".join(command))
+    command_str: str = " ".join(command)
+    print(f"RUNNING: {command_str}")
     start_time: float = time.time()
-    subprocess.run(command, check=check)  # Pass list directly, remove shell=True
+    os.system(command_str)
     elapsed_time_seconds: float = time.time() - start_time
-    print(f"Completed: {' '.join(command)} ({elapsed_time_seconds}s)")
+    print(f"COMPLETED: {command_str} ({elapsed_time_seconds}s)")
 
 
 def write_yaml(content: dict, output_path: str) -> None:
@@ -80,3 +81,19 @@ def kill_process_on_port(port: int) -> None:
                     print(f"Process {proc.info['pid']} no longer exists.")
                 except Exception as e:
                     print(f"Error killing process: {e}")
+
+
+def set_cuda_visible_devices():
+    """Sets the CUDA_VISIBLE_DEVICES environment variable based on available GPUs."""
+    # Run `nvidia-smi` to get the number of available GPUs
+    result = subprocess.run(["nvidia-smi", "--list-gpus"], stdout=subprocess.PIPE, text=True)
+    gpu_list = result.stdout.strip().split("\n")
+
+    # Get the indices of all detected GPUs
+    available_gpus = [str(i) for i in range(len(gpu_list))]
+
+    if available_gpus:
+        os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(available_gpus)
+        print(f"Auto-selected GPUs: {os.environ['CUDA_VISIBLE_DEVICES']}")
+    else:
+        print("No available GPUs found.")

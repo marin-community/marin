@@ -60,7 +60,11 @@ class Evaluator(ABC):
 
     @abstractmethod
     def launch_evaluate_with_ray(
-        self, model: ModelConfig, evals: list[str], output_path: str, max_eval_instances: int | None
+        self,
+        model: ModelConfig,
+        evals: list[str],
+        output_path: str,
+        max_eval_instances: int | None,
     ) -> None:
         """
         Launches the evaluation run with Ray.
