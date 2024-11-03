@@ -74,6 +74,15 @@ def is_internal_link(base_url, target_url):
     return base_host == target_host
 
 
+def is_parseable(link):
+    try:
+        result = urlparse(link)
+        # Check if the URL has a valid scheme and netloc
+        return all([result.scheme, result.netloc])
+    except ValueError:
+        return False
+
+
 @ray.remote(
     memory=4 * 1024 * 1024 * 1024,
     runtime_env={
@@ -116,7 +125,7 @@ def process_one_batch(html_paths_batch: list[str], output_path: str):
                     unfiltered_outbound_links = set()
                     for link in parsed_html.find_all("a", href=True):
                         href = link.get("href")
-                        if href:
+                        if href and is_parseable(link):
                             absolute_link_target = urljoin(url, href)
                             canonical_link = w3lib.url.canonicalize_url(absolute_link_target)
                             unfiltered_outbound_links.add(canonical_link)
@@ -152,7 +161,7 @@ def process_one_batch(html_paths_batch: list[str], output_path: str):
                     main_text_outbound_links = set()
                     for link in main_text_with_links.find_all("a", href=True):
                         href = link.get("href")
-                        if href:
+                        if href and is_parseable(link):
                             absolute_link_target = urljoin(url, href)
                             canonical_link = w3lib.url.canonicalize_url(absolute_link_target)
                             main_text_outbound_links.add(canonical_link)
