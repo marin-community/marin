@@ -36,11 +36,9 @@ import os
 import pathlib
 from dataclasses import dataclass
 from urllib.parse import urljoin, urlparse
-from tqdm_loggable.auto import tqdm
 
 import draccus
 import fsspec
-import pyarrow as pa
 import ray
 from bs4 import BeautifulSoup
 
@@ -105,9 +103,9 @@ def process_one_batch(html_paths_batch: list[str], output_path: str):
     html_paths_batch (list[str]): Paths of HTML files to extract outlinks from.
     output_path (str): Path to write JSONL file with outlinks.
     """
-    from resiliparse_dom.extract.html2text import extract_main_dom_tree
-    from courlan import check_url
     import w3lib.url
+    from courlan import check_url
+    from resiliparse_dom.extract.html2text import extract_main_dom_tree
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
@@ -115,7 +113,7 @@ def process_one_batch(html_paths_batch: list[str], output_path: str):
     with fsspec.open(output_path, "w") as fout:
         num_failed_to_parse = 0
         num_total = 0
-        for html_path in tqdm(html_paths_batch):
+        for html_path in html_paths_batch:
             with fsspec.open(html_path, "rt", compression="gzip") as fin:
                 for line in fin:
                     record = json.loads(line)
