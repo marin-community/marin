@@ -22,10 +22,10 @@ Running on FineWeb-Edu:
 ```
 for fineweb_edu_dump_html_path in $(gcloud storage ls gs://marin-us-central2/documents/fineweb-edu/html); do
     dump_name=$(basename -- ${fineweb_edu_dump_html_path})
-    ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- \
+    echo "ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- \
     python scripts/crawl/get_outlinks_from_html.py \
     --html_input_path ${fineweb_edu_dump_html_path} \
-    --outlinks_output_path gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu/${dump_name} \
+    --outlinks_output_path gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu/${dump_name}"
 done
 ```
 """
@@ -42,7 +42,6 @@ import fsspec
 import pyarrow as pa
 import pyarrow.parquet as pq
 import ray
-import w3lib.url
 from bs4 import BeautifulSoup
 
 from marin.core.runtime import cached_or_construct_output
@@ -78,9 +77,17 @@ def is_internal_link(base_url, target_url):
 
 @ray.remote(
     memory=4 * 1024 * 1024 * 1024,
-    runtime_env={"pip": ["https://github.com/krypticmouse/chatnoir-resiliparse/tree/develop/resiliparse", "courlan"]},
+    runtime_env={
+        "pip": [
+            "resiliparse_dom @ git+https://github.com/nelson-liu/chatnoir-resiliparse@58247de82b4d881223435113f1a07a86ad66494c#egg=resiliparse_dom&subdirectory=resiliparse_dom",
+            "courlan",
+            "w3lib",
+        ]
+    },
 )  # 4 GB  # 4 GB
-@cached_or_construct_output(success_suffix="SUCCESS")  # We use this decorator to make this function idempotent
+@cached_or_construct_output(
+    success_suffix="SUCCESS", verbose=False
+)  # We use this decorator to make this function idempotent
 def process_one_batch(html_paths_batch: list[str], output_path: str):
     """
     Takes in a batch of input files, extracts the outlinks, and writes them to output_path.
@@ -89,8 +96,9 @@ def process_one_batch(html_paths_batch: list[str], output_path: str):
     html_paths_batch (list[str]): Paths of HTML files to extract outlinks from.
     output_path (str): Path to write Parquet file with outlinks.
     """
-    from resiliparse.extract.html2text import extract_main_dom_tree as resiliparse_extract_main_dom_tree
+    from resiliparse_dom.extract.html2text import extract_main_dom_tree
     from courlan import check_url
+    import w3lib.url
 
     # Define schema
     schema = pa.schema(
@@ -148,7 +156,7 @@ def process_one_batch(html_paths_batch: list[str], output_path: str):
                             outbound_links.add(link)
 
                     # Now, get all of the outbound links in the main text
-                    main_text = resiliparse_extract_main_dom_tree(
+                    main_text = extract_main_dom_tree(
                         html_str,
                         main_content=True,
                     )
@@ -199,10 +207,10 @@ def batched(iterable, n=1):
 
 @draccus.wrap()
 def get_outlinks_from_html(cfg: OutlinksExtractionConfig):
-    # Get the HTML files (of form <int index>.jsonl.gz) and sort by the integer index
-    html_paths = fsspec_glob(os.path.join(cfg.html_input_path, "*.jsonl.gz")).sort(
-        key=lambda x: int(pathlib.Path(x).name.removesuffix(".jsonl.gz"))
-    )
+    # Get the HTML files (of form <int index>.jsonl.gz) and sort by the integer index.
+    # We sort to ensure that the sharding is reproducible.
+    html_paths = fsspec_glob(os.path.join(cfg.html_input_path, "*.jsonl.gz"))
+    html_paths.sort(key=lambda x: int(pathlib.Path(x).name.removesuffix(".jsonl.gz")))
 
     # Group into chunks of 1000 WARCs each
     # open-web-math has ~3M WARCs in total, which yields 3000 resharded chunks
