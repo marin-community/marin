@@ -173,8 +173,8 @@ def process_one_batch(html_paths_batch: list[str], output_path: str):
                                     "is_internal_link": is_internal,
                                     "in_main_content": in_main_content,
                                 }
-                                + "\n"
                             )
+                            + "\n"
                         )
 
 
