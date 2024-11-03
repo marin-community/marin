@@ -125,7 +125,7 @@ def process_one_batch(html_paths_batch: list[str], output_path: str):
                     unfiltered_outbound_links = set()
                     for link in parsed_html.find_all("a", href=True):
                         href = link.get("href")
-                        if href and is_parseable(link):
+                        if href and is_parseable(href):
                             absolute_link_target = urljoin(url, href)
                             canonical_link = w3lib.url.canonicalize_url(absolute_link_target)
                             unfiltered_outbound_links.add(canonical_link)
@@ -161,7 +161,7 @@ def process_one_batch(html_paths_batch: list[str], output_path: str):
                     main_text_outbound_links = set()
                     for link in main_text_with_links.find_all("a", href=True):
                         href = link.get("href")
-                        if href and is_parseable(link):
+                        if href and is_parseable(href):
                             absolute_link_target = urljoin(url, href)
                             canonical_link = w3lib.url.canonicalize_url(absolute_link_target)
                             main_text_outbound_links.add(canonical_link)
