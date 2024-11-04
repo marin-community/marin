@@ -32,10 +32,18 @@ from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 
 
 def default_tokenize(
-    name: str, dataset: InputName | ExecutorStep, tokenizer: str, options: CacheOptions | None = None
+    name: str,
+    dataset: InputName | ExecutorStep,
+    tokenizer: str,
+    options: CacheOptions | None = None,
+    text_key: str = "text",
 ) -> ExecutorStep:
     config = TokenizeConfig(
-        train_paths=[dataset], validation_paths=[], cache_path=this_output_path(), tokenizer=versioned(tokenizer)
+        train_paths=[dataset],
+        validation_paths=[],
+        cache_path=this_output_path(),
+        tokenizer=versioned(tokenizer),
+        text_key=text_key,
     )
     if options is not None:
         config = dataclasses.replace(config, cache_options=options)
@@ -91,10 +99,18 @@ def default_train(
                     keep=[dict(every=25000)],
                 ),
             ),
+            z_loss_weight=train_config.z_loss_weight,
             model=model_config,
             optimizer=AdamConfig(
                 learning_rate=train_config.learning_rate,
-                weight_decay=train_config.weight_decay,
+                weight_decay=(
+                    train_config.weight_decay if train_config.weight_decay is not None else AdamConfig().weight_decay
+                ),
+                warmup=train_config.warmup if train_config.warmup is not None else AdamConfig().warmup,
+                cooldown=train_config.cooldown if train_config.cooldown is not None else AdamConfig().cooldown,
+                min_lr_ratio=(
+                    train_config.min_lr_ratio if train_config.min_lr_ratio is not None else AdamConfig().min_lr_ratio
+                ),
             ),
             hf_save_steps=25000,
         ),
