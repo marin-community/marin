@@ -27,7 +27,7 @@ def write_label_attribute(input_file_path: str, output_file_path: str, label: st
     Creates an attribute "label" from input label for each document.
 
     Args:
-        input_file_path (str): Path to the input JSONL file (gzip compressed).
+        input_file_path (str): Path to the input JSONL file in Dolma format (gzip compressed).
         output_file_path (str): Path to the output attribute JSONL file (gzip compressed).
         label (str): Quality classifier label.
     """
