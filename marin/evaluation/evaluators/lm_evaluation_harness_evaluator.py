@@ -1,14 +1,15 @@
 import os
+import shutil
 import traceback
 from typing import ClassVar
 
 from marin.evaluation.evaluators.evaluator import Dependency, ModelConfig
 from marin.evaluation.evaluators.vllm_tpu_evaluator import VllmTpuEvaluator
-from marin.evaluation.utils import is_remote_path, run_bash_command, upload_to_gcs
+from marin.evaluation.utils import is_remote_path, run_bash_command, set_cuda_visible_devices, upload_to_gcs
 
 
 # TODO: this currently doesn't work on TPUs: https://github.com/vllm-project/vllm/issues/8499
-class EleutherEvaluator(VllmTpuEvaluator):
+class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
     """
     Evaluator that runs lm-eval: https://github.com/EleutherAI/lm-evaluation-harness
     """
@@ -36,6 +37,8 @@ class EleutherEvaluator(VllmTpuEvaluator):
         # From https://github.com/EleutherAI/lm-evaluation-harness?tab=readme-ov-file#model-apis-and-inference-servers
         # Run lm_eval with the model and the specified evals
         try:
+            set_cuda_visible_devices()
+
             # Download the model from GCS or HuggingFace
             model_name_or_path: str = self.download_model(model)
 
@@ -56,7 +59,9 @@ class EleutherEvaluator(VllmTpuEvaluator):
             if max_eval_instances is not None:
                 # According lm-eval-harness, --limit should only be used for testing purposes
                 command.extend(["--limit", str(max_eval_instances)])
-            run_bash_command(command)
+
+            run_bash_command(command, check=False)
+            assert os.path.exists(self.RESULTS_PATH), f"Results path {self.RESULTS_PATH} does not exist."
 
             # Upload the results to GCS
             if is_remote_path(output_path):
@@ -66,3 +71,5 @@ class EleutherEvaluator(VllmTpuEvaluator):
             raise RuntimeError("lm-eval failed. Please check the logs for more information.") from e
         finally:
             self.cleanup(model)
+            if os.path.exists(self.RESULTS_PATH):
+                shutil.rmtree(self.RESULTS_PATH)
