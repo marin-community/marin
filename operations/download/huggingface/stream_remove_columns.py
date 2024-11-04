@@ -5,20 +5,17 @@ import os
 from dataclasses import dataclass
 
 import draccus
-import ray
 import pandas as pd
 import pyarrow.parquet as pq
+import ray
 from huggingface_hub import HfFileSystem
-
 
 fs = HfFileSystem()
 logger = logging.getLogger("ray")
 
 
 @ray.remote(memory=10 * 1024 * 1024 * 1024, max_retries=5)  # 10 GB
-def prune_stream_and_save(
-    input_file: str, output_file: str, keep_columns: list[str]
-):
+def prune_stream_and_save(input_file: str, output_file: str, keep_columns: list[str]):
     """
     Prunes and saves a streaming dataset by removing un-specified columns.
 
@@ -34,7 +31,7 @@ def prune_stream_and_save(
     try:
         parquet_file = pq.ParquetFile(fs.open(input_file))
 
-        full_df_list = []    
+        full_df_list = []
         for batch in parquet_file.iter_batches(batch_size=10000):
             df = batch.to_pandas()
 
@@ -52,9 +49,7 @@ def prune_stream_and_save(
 
 
 @ray.remote(memory=10 * 1024 * 1024 * 1024, max_retries=5)  # 10 GB
-def process_hf_subset(
-    hf_path: str, output_path: str, keep_columns: list[str]
-):
+def process_hf_subset(hf_path: str, output_path: str, keep_columns: list[str]):
     """
     Process a subset of a HuggingFace dataset by pruning columns and saving to disk.
 
@@ -94,7 +89,7 @@ class DatasetConfig:
 @draccus.wrap()
 def prune_hf_dataset(cfg: DatasetConfig):
     logger.info(f"Starting dataset pruning for {cfg.hf_paths}")
-    
+
     result_refs = []
 
     for path in cfg.hf_paths:
@@ -104,11 +99,7 @@ def prune_hf_dataset(cfg: DatasetConfig):
         output_path = os.path.join(cfg.output_path, path)
 
         try:
-            result_refs.append(
-                process_hf_subset.remote(
-                    hf_path, output_path, cfg.keep_columns
-                )
-            )
+            result_refs.append(process_hf_subset.remote(hf_path, output_path, cfg.keep_columns))
         except Exception as e:
             logger.exception(f"Error processing subset {hf_path}: {e!s}")
             continue
