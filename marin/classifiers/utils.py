@@ -189,9 +189,9 @@ def attributes_to_dataset(
     output_path: str,
     doc_path: str,
     attr_path: str,
-    sampling_rate: float,
     seed: int,
     get_label: Callable[[dict, dict], str] = lambda data, attribs: attribs["attributes"]["label"],
+    sampling_rate: float = 1.0,
     max_sample_size: int | None = None,
 ) -> None:
     """
@@ -201,12 +201,12 @@ def attributes_to_dataset(
         output_path (str): Path for output data (i.e., gs://$BUCKET/classifiers/$EXPERIMENT).
         doc_path (str): Path to input documents (i.e., gs://$BUCKET/documents/reddit/v0/<doc_experiment>).
         attr_path (str): Path to input attributes (i.e., gs://$BUCKET/attributes/reddit/v0/<attr_experiment>).
-        sampling_rate (float): Fraction of documents from the dataset to add to fastText training dataset.
         seed (int): Seed for random number generator to ensure reproducibility.
         get_label (Callable[[dict,dict], str]): Function to extract label from documents and attributes.
                                                 Defaults to get_label.
-        max_sample_size (Optional[int]): Maximum number of examples to include in the fastText training dataset.
-                               Defaults to None.
+        sampling_rate (float): Fraction of documents from the dataset to add to quality classifier training dataset.
+        max_sample_size (Optional[int]): Maximum number of examples to include in the quality classifier
+                                         training dataset. Defaults to None.
     """
 
     # curry write_fasttext_lines so that we can pass it to map_files_in_directory
