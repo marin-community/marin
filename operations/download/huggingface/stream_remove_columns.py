@@ -6,39 +6,18 @@ from dataclasses import dataclass
 
 import draccus
 import ray
-from datasets import Dataset, IterableDataset, load_dataset
-from tqdm import tqdm
+import pandas as pd
+import pyarrow.parquet as pq
+from huggingface_hub import HfFileSystem
 
+
+fs = HfFileSystem()
 logger = logging.getLogger("ray")
 
 
 @ray.remote(memory=10 * 1024 * 1024 * 1024, max_retries=5)  # 10 GB
-def save_parquet_to_gcs(chunk_buffer: list[dict], output_path: str, shard_idx: int, sub_idx: int):
-    """
-    Save a chunk of data to a parquet file on GCS.
-
-    Args:
-        chunk_buffer (list[dict]): The chunk of data to save
-        output_path (str): The output path to save the parquet file
-        shard_idx (int): The shard index of the parquet file
-        sub_idx (int): The sub-index of the parquet file
-    """
-    try:
-        chunk_dataset = Dataset.from_list(chunk_buffer)
-        chunk_path = os.path.join(output_path, f"{shard_idx:03d}_{sub_idx:05d}.parquet")
-
-        logger.info(f"Saving chunk {shard_idx}_{sub_idx} to {chunk_path}")
-        chunk_dataset.to_parquet(chunk_path)
-
-        return True
-
-    except Exception as e:
-        raise e
-
-
-@ray.remote(memory=10 * 1024 * 1024 * 1024, max_retries=5)  # 10 GB
 def prune_stream_and_save(
-    dataset: IterableDataset, keep_columns: list[str], output_path: str, chunk_size: int = 1000000
+    input_file: str, output_file: str, keep_columns: list[str]
 ):
     """
     Prunes and saves a streaming dataset by removing un-specified columns.
@@ -51,75 +30,48 @@ def prune_stream_and_save(
         dataset (IterableDataset): The input streaming dataset to prune
         keep_columns (list[str]): List of column names to retain
         output_path (str): Path where the pruned dataset will be saved
-        chunk_size (int): Number of rows to process and save in each chunk (default: 10000)
     """
-    drop_columns = [col for col in dataset.column_names if col not in keep_columns]
-    dataset = dataset.remove_columns(drop_columns)
-
-    logger.info(f"Pruned dataset to columns: {keep_columns}")
-
-    # Create output directory if it doesn't exist
-    ray_chunk_refs = []
-    os.makedirs(output_path, exist_ok=True)
-
-    chunk_buffer = []
-    chunk_idx = 0
-
-    for item in tqdm(dataset):
-        chunk_buffer.append(item)
-
-        if len(chunk_buffer) >= chunk_size:
-            shard_idx = chunk_idx // 50
-            sub_idx = chunk_idx % 50
-
-            ray_chunk_refs.append(save_parquet_to_gcs.remote(chunk_buffer, output_path, shard_idx, sub_idx))
-
-            # Clear buffer and increment counter
-            chunk_buffer = []
-            chunk_idx += 1
-
-    # Save any remaining items in the final chunk
-    if chunk_buffer:
-        shard_idx = chunk_idx // 50
-        sub_idx = chunk_idx % 50
-
-        ray_chunk_refs.append(save_parquet_to_gcs.remote(chunk_buffer, output_path, shard_idx, sub_idx))
-
     try:
-        ray.get(ray_chunk_refs)
-        logger.info("Successfully saved the chunk")
+        parquet_file = pq.ParquetFile(fs.open(input_file))
+
+        full_df_list = []    
+        for batch in parquet_file.iter_batches(batch_size=10000):
+            df = batch.to_pandas()
+
+            drop_columns = [col for col in df.columns if col not in keep_columns]
+            df = df.drop(columns=drop_columns)
+
+            full_df_list.append(df)
+
+        full_df = pd.concat(full_df_list)
+        logger.info(f"Saving pruned dataset of shape {full_df.shape} to {output_file}")
+        full_df.to_parquet(output_file, index=False)
     except Exception as e:
-        raise Exception(f"Failed to save dataset to {output_path}: {str(e)}")  # noqa
+        logger.exception(f"Error processing {input_file}")
+        raise e
 
 
 @ray.remote(memory=10 * 1024 * 1024 * 1024, max_retries=5)  # 10 GB
 def process_hf_subset(
-    hf_dataset_id: str, revision, subset: str, splits: list[str], output_path: str, keep_columns: list[str]
+    hf_path: str, output_path: str, keep_columns: list[str]
 ):
     """
     Process a subset of a HuggingFace dataset by pruning columns and saving to disk.
 
     Args:
-        hf_dataset_id (str): The HuggingFace dataset ID to load
-        revision (str): The revision of the dataset to load
-        subset (str): The subset of the dataset to process
-        splits (list[str]): The splits of the dataset to process
+        hf_path (str): The HuggingFace dataset path to load
         output_path (str): The output path to save the pruned dataset
         keep_columns (list[str]): The columns to keep in the pruned dataset
     """
 
-    logger.info(f"Loading dataset {hf_dataset_id} subset {subset} revision {revision}")
-    dataset = load_dataset(hf_dataset_id, subset, streaming=True, revision=revision)
-    logger.info(f"Successfully loaded dataset {hf_dataset_id} subset {subset}")
+    logger.info(f"Loading dataset from {hf_path}")
+    parquet_list = fs.glob(f"{hf_path}/*.parquet")
 
     ray_waitables = []
-    for split in splits:
-        split_output_path = output_path
-        if len(splits) > 1:
-            split_output_path = os.path.join(output_path, split)
 
-        logger.info(f"Processing split {split} to {split_output_path}")
-        ray_waitables.append(prune_stream_and_save.remote(dataset[split], keep_columns, split_output_path))
+    for file in parquet_list:
+        output_file = os.path.join(output_path, os.path.basename(file))
+        ray_waitables.append(prune_stream_and_save.remote(file, output_file, keep_columns))
 
     for ray_waitable in ray_waitables:
         try:
@@ -132,31 +84,33 @@ def process_hf_subset(
 
 @dataclass
 class DatasetConfig:
-    hf_dataset_id: str
-    revision: str
-    subsets: list[str]
-    splits: list[str]
+    hf_repo_id: str
+    hf_revision: str
+    hf_paths: list[str]
     output_path: str
     keep_columns: list[str]
 
 
 @draccus.wrap()
 def prune_hf_dataset(cfg: DatasetConfig):
-    logger.info(f"Starting dataset pruneing for {cfg.hf_dataset_id}")
+    logger.info(f"Starting dataset pruning for {cfg.hf_paths}")
+    
     result_refs = []
 
-    for subset in cfg.subsets:
-        output_path = os.path.join(cfg.output_path, subset)
-        logger.info(f"Processing subset {subset} to {output_path}")
+    for path in cfg.hf_paths:
+        # HF Path form: hf://[<repo_type_prefix>]<repo_id>[@<revision>]/<path/in/repo>
+        hf_path = f"hf://datasets/{cfg.hf_repo_id}@{cfg.hf_revision}/{path}"
+        logger.info(f"Processing subset {hf_path}")
+        output_path = os.path.join(cfg.output_path, path)
 
         try:
             result_refs.append(
                 process_hf_subset.remote(
-                    cfg.hf_dataset_id, cfg.revision, subset, cfg.splits, output_path, cfg.keep_columns
+                    hf_path, output_path, cfg.keep_columns
                 )
             )
         except Exception as e:
-            logger.exception(f"Error processing subset {subset}: {e!s}")
+            logger.exception(f"Error processing subset {hf_path}: {e!s}")
             continue
 
     try:
