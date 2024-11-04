@@ -22,7 +22,7 @@ from marin.utilities.validation_utils import write_provenance_json
 from operations.download.huggingface.download import DownloadConfig
 
 # Set up logging
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("ray")
 
 
 def ensure_fsspec_path_writable(output_path: str) -> None:
@@ -44,8 +44,8 @@ def construct_hf_url(dataset_id: str, revision: str, file_path: str) -> str:
 
 
 @ray.remote
-def put_file(cfg, temp_dir, hf_url, fsspec_file_path):
-    """Ray task to download and upload a file."""
+def put_file(cfg: DownloadConfig, temp_dir: os.PathLike, hf_url: str, fsspec_file_path: os.PathLike):
+    """Ray task to download repo onto local disk before uploading it onto remote."""
     fs, _ = fsspec.core.url_to_fs(cfg.gcs_output_path)
     hf_token = os.environ.get("HF_TOKEN")
 
