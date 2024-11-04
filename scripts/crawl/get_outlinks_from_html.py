@@ -165,7 +165,7 @@ def process_one_batch(html_paths_batch: list[str], output_path: str):
                             html_str,
                             main_content=True,
                         )
-                    )
+                    ).strip()
                     if not main_text_dom_str:
                         continue
 
