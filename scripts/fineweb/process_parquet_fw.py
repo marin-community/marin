@@ -131,10 +131,10 @@ def process_one_warc_file(
             out_fw = row.to_dict()
             out_dolma = {
                 "id": out_fw["id"],
-                "text": out_fw["md"],
+                "text": out_fw["md"] if out_fw["md"] else "",
                 "source": "fineweb",
                 "format": "md",
-                "metadata": {f"fw_{key}": value for key, value in out_fw.items() if key not in ("md", "text")},
+                "metadata": {f"fw_{key}": value for key, value in out_fw.items() if key not in ("md", "html", "text")},
             }
             
             print(json.dumps(out_dolma), file=f)
