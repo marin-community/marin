@@ -216,8 +216,8 @@ def attributes_to_dataset(
         return write_examples(input_file_path, output_file_path, attr_file_path, sampling_rate, seed, get_label)
 
     _, doc_fs_path = fsspec.core.url_to_fs(doc_path)
-    output_dataset_path = os.path.join(output_path, "data", doc_fs_path, "data.jsonl.gz")
-    shard_path = os.path.join(output_path, "shards", doc_fs_path)
+    output_dataset_path = os.path.join(output_path, "data", doc_fs_path.lstrip("/"), "data.jsonl.gz")
+    shard_path = os.path.join(output_path, "shards", doc_fs_path.lstrip("/"))
 
     responses = map_files_in_directory(processing_func.remote, doc_path, "**/*.jsonl.gz", shard_path)
     try:
