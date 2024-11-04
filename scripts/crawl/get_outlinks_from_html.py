@@ -22,10 +22,10 @@ Running on FineWeb-Edu:
 ```
 for fineweb_edu_dump_html_path in $(gcloud storage ls gs://marin-us-central2/documents/fineweb-edu/html); do
     dump_name=$(basename -- ${fineweb_edu_dump_html_path})
-    echo "ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- \
+    ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- \
     python scripts/crawl/get_outlinks_from_html.py \
     --html_input_path ${fineweb_edu_dump_html_path} \
-    --outlinks_output_path gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu/${dump_name}"
+    --outlinks_output_path gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu/${dump_name}
 done
 ```
 """
@@ -37,10 +37,11 @@ import pathlib
 from dataclasses import dataclass
 from urllib.parse import urljoin, urlparse
 
+from bs4 import BeautifulSoup
 import draccus
 import fsspec
 import ray
-from bs4 import BeautifulSoup
+from tqdm_loggable.auto import tqdm
 
 from marin.core.runtime import cached_or_construct_output
 from marin.utils import fsspec_glob
@@ -112,7 +113,7 @@ def process_one_batch(html_paths_batch: list[str], output_path: str):
     with fsspec.open(output_path, "w", compression="gzip") as fout:
         num_failed_to_parse = 0
         num_total = 0
-        for html_path in html_paths_batch:
+        for html_path in tqdm(html_paths_batch):
             with fsspec.open(html_path, "rt", compression="gzip") as fin:
                 for line in fin:
                     record = json.loads(line)
