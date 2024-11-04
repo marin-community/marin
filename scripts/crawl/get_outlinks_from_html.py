@@ -203,8 +203,7 @@ def process_one_batch(html_paths_batch: list[str], output_path: str):
                             )
                             + "\n"
                         )
-        if num_failed_to_parse:
-            logger.info(f"Failed to parse {num_failed_to_parse} out of {num_total} records")
+        logger.info(f"Failed to parse {num_failed_to_parse} out of {num_total} records")
 
 
 def batched(iterable, n=1):
