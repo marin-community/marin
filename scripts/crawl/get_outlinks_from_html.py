@@ -110,7 +110,7 @@ def process_one_batch(html_paths_batch: list[str], output_path: str):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
     # Open the ParquetWriter
-    with fsspec.open(output_path, "w") as fout:
+    with fsspec.open(output_path, "w", compression="gzip") as fout:
         num_failed_to_parse = 0
         num_total = 0
         for html_path in html_paths_batch:
