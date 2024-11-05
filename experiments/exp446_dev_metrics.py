@@ -24,6 +24,7 @@ eval_step = evaluate_helm(
 if __name__ == "__main__":
     executor_main(
         steps=[
+            fineweb_edu_tokenized,
             fineweb_edu_model,
             eval_step,
         ],
