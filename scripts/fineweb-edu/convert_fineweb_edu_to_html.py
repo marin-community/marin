@@ -257,8 +257,7 @@ def process_fineweb_edu(cfg: ParquetFineWebEduConfig):
     groupby_ref = group_fineweb_edu_by_warc.remote(files, cfg.html_output_path)
     _ = ray.get(groupby_ref)
 
-    shard_indices_to_process_ref = get_shards_to_process.remote(cfg.html_output_path)
-    shard_indices_to_process = ray.get(shard_indices_to_process_ref)
+    shard_indices_to_process = ray.get(get_shards_to_process.remote(cfg.html_output_path))
     num_shards_to_process = len(shard_indices_to_process)
 
     # Set a limit on the number of concurrent tasks so we don't overwhelm CC
