@@ -37,10 +37,14 @@ arc_challenge_download_step = ExecutorStep(
 #     "answerKey": "B",
 #     "choices": {
 #         "label": ["A", "B", "C", "D"],
-#         "text": ["Shady areas increased.", "Food sources increased.", "Oxygen levels increased.", "Available water increased."]
+#         "text": ["Shady areas increased.", "Food sources increased.",
+#                  "Oxygen levels increased.", "Available water increased."]
 #     },
 #     "id": "Mercury_SC_405487",
-#     "question": "One year, the oak trees in a park began producing more acorns than usual. The next year, the population of chipmunks in the park also increased. Which best explains why there were more chipmunks the next year?"
+#     "question": "One year, the oak trees in a park began producing more
+#                  acorns than usual. The next year, the population of chipmunks
+#                  in the park also increased. Which best explains why there
+#                  were more chipmunks the next year?"
 # }
 
 arch_challenge_convert_eval = ExecutorStep(
