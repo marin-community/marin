@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-A script to download a gated HuggingFace dataset and upload it to a specified fsspec path,
+A script to download a HuggingFace dataset and upload it to a specified fsspec path,
 using HfFileSystem for direct streaming of data transfer.
 """
 
@@ -35,7 +35,7 @@ def ensure_fsspec_path_writable(output_path: str) -> None:
 
 
 @ray.remote
-def stream_file_to_fsspec(cfg, hf_fs, file_path, fsspec_file_path):
+def stream_file_to_fsspec(cfg: DownloadConfig, hf_fs: HfFileSystem, file_path: str, fsspec_file_path: str):
     """Ray task to stream a file from HfFileSystem to another fsspec path."""
     target_fs, _ = fsspec.core.url_to_fs(cfg.gcs_output_path)
 
@@ -51,10 +51,7 @@ def stream_file_to_fsspec(cfg, hf_fs, file_path, fsspec_file_path):
 
 
 @draccus.wrap()
-def download_ray_hf(cfg: DownloadConfig) -> None:
-    import pdb
-
-    pdb.set_trace()
+def download_hf(cfg: DownloadConfig) -> None:
     logging.basicConfig(level=logging.INFO)
 
     # Parse the output path and get the file system
