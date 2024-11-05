@@ -26,7 +26,10 @@ def evaluate(config: EvaluationConfig) -> None:
     start_time: float = time.time()
     if config.launch_with_ray:
         evaluator.launch_evaluate_with_ray(
-            model, evals=config.evals, output_path=config.evaluation_path, max_eval_instances=config.max_eval_instances
+            model,
+            evals=config.evals,
+            output_path=config.evaluation_path,
+            max_eval_instances=config.max_eval_instances,
         )
     else:
         evaluator.evaluate(

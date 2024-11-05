@@ -103,10 +103,14 @@ def default_train(
             model=model_config,
             optimizer=AdamConfig(
                 learning_rate=train_config.learning_rate,
-                weight_decay=train_config.weight_decay,
-                warmup=train_config.warmup,
-                cooldown=train_config.cooldown,
-                min_lr_ratio=train_config.min_lr_ratio,
+                weight_decay=(
+                    train_config.weight_decay if train_config.weight_decay is not None else AdamConfig().weight_decay
+                ),
+                warmup=train_config.warmup if train_config.warmup is not None else AdamConfig().warmup,
+                cooldown=train_config.cooldown if train_config.cooldown is not None else AdamConfig().cooldown,
+                min_lr_ratio=(
+                    train_config.min_lr_ratio if train_config.min_lr_ratio is not None else AdamConfig().min_lr_ratio
+                ),
             ),
             hf_save_steps=25000,
         ),
