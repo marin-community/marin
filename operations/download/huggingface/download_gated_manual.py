@@ -51,8 +51,7 @@ def download_and_upload_to_store(cfg: DownloadConfig) -> None:
     logging.basicConfig(level=logging.INFO)
 
     logging.warning(
-        "DEPRECATED: This function is deprecated and will be removed in a future release."
-        "Consider using download_ray_hf"
+        "DEPRECATED: This function is deprecated and will be removed in a future release." "Consider using download_hf"
     )
 
     # Parse the output path and get the file system
