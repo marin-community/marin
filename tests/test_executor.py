@@ -121,7 +121,7 @@ def test_executor():
     cleanup_log(log)
 
 
-def test_forcerun():
+def test_force_run():
     """Test force run functionality."""
 
     def get_b_list(log, m):
@@ -146,7 +146,7 @@ def test_forcerun():
         executor_initial = Executor(prefix=temp_dir, executor_info_base_path=temp_dir)
         executor_initial.run(steps=get_b_list(log, 4))
 
-        # Re run without force_run
+        # Re-run without force_run
         executor_non_force = Executor(prefix=temp_dir, executor_info_base_path=temp_dir)
         executor_non_force.run(steps=get_b_list(log, 5))  # This would not run b again so m would be 4
         # Check the results
@@ -160,8 +160,8 @@ def test_forcerun():
         executor_initial.run(steps=get_b_list(log, 4))
 
         # Re run without force_run
-        executor_force = Executor(prefix=temp_dir, executor_info_base_path=temp_dir, force_run=["b"])
-        executor_force.run(steps=get_b_list(log, 5))  # This would run b again so m would be 5
+        executor_force = Executor(prefix=temp_dir, executor_info_base_path=temp_dir)
+        executor_force.run(steps=get_b_list(log, 5), force_run=["b"])  # This would run b again so m would be 5
         results = read_log(log)
         assert len(results) == 1
         assert results[0]["n"] == 3
@@ -257,3 +257,32 @@ def test_versioning():
         assert_diff_version(name="bar")
         assert_diff_version(b_n=2)
         assert_same_version(b_m=2)
+
+
+def test_dedup_version():
+    """Make sure that two `ExecutorStep`s resolve to the same."""
+
+    def fn(config: MyConfig | None):
+        pass
+
+    def create_step():
+        a = ExecutorStep(name="a", fn=fn, config=None)
+        b = ExecutorStep(
+            name="b",
+            fn=fn,
+            config=MyConfig(
+                input_path=output_path_of(a, "sub"),
+                output_path=this_output_path(),
+                n=versioned(3),
+                m=4,
+            ),
+        )
+        return b
+
+    b1 = create_step()
+    b2 = create_step()
+
+    with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
+        executor = create_executor(temp_dir)
+        executor.run(steps=[b1, b2])
+        assert len(executor.steps) == 2
