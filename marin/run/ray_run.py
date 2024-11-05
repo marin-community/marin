@@ -87,6 +87,7 @@ def main():
     parser.add_argument("--no_wait", action="store_true", help="Do not wait for the job to finish.")
     parser.add_argument(
         "--env_vars",
+        "-e",
         action="append",
         nargs="+",
         metavar=("KEY", "VALUE"),
