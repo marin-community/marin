@@ -8,6 +8,7 @@ import os
 from typing import Any
 
 import fsspec
+import numpy as np
 from google.cloud import storage
 from huggingface_hub import hf_hub_download
 
@@ -51,6 +52,15 @@ def is_json_serializable(value: Any) -> bool:
         return False
 
 
+def convert_floats(obj: np.float32 | np.float64 | float) -> Any:
+    """Convert numpy floats to native python floats
+    This is necessary because the json module cannot serialize numpy floats.
+    """
+    if isinstance(obj, np.float32) or isinstance(obj, np.float64):
+        return float(obj)
+    return obj
+
+
 def make_serializable(obj: Any) -> Any:
     if isinstance(obj, dict):
         return {key: make_serializable(value) for key, value in obj.items()}
@@ -59,5 +69,10 @@ def make_serializable(obj: Any) -> Any:
     elif isinstance(obj, tuple):
         return tuple(make_serializable(element) for element in obj)
     elif not is_json_serializable(obj):
+        if isinstance(obj, np.float32) or isinstance(obj, np.float64):
+            return convert_floats(obj)
+
+        # If the object is not serializable, convert it to a string as a catch-all
         return str(obj)
+
     return obj

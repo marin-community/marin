@@ -11,6 +11,7 @@ from experiments.quality_classifiers import (
     dclm_eli5_200k_rw_200k,
     teknium_oh_200k_rw_200k,
 )
+from marin.core.runtime import TaskConfig
 from marin.execution.executor import (
     ExecutorStep,
     executor_main,
@@ -32,9 +33,7 @@ class ExperimentConfig:
     quality_classifier_model_path: str | ExecutorStep
     input_data_source_to_path: dict[str, str] = field(
         default_factory=lambda: {
-            "fineweb_2020_10": "gs://marin-data/processed/fineweb/fw-v1.0/text_fw/CC-MAIN-2020-10/",
-            "fineweb_2020_16": "gs://marin-data/processed/fineweb/fw-v1.0/text_fw/CC-MAIN-2020-16/",
-            "fineweb_2020_24": "gs://marin-data/processed/fineweb/fw-v1.0/text_fw/CC-MAIN-2020-24/",
+            "fineweb_2020_10": "gs://marin-us-central2/raw/fineweb/cd85054/CC-MAIN-2020-10/",
         }
     )
     keep_fraction: float = 0.2  # Keep 20% of the documents
@@ -42,7 +41,7 @@ class ExperimentConfig:
 
 def get_model_path(model_path: str | ExecutorStep):
     if isinstance(model_path, ExecutorStep):
-        return output_path_of(model_path)
+        return output_path_of(model_path, "model.bin")
     return versioned(model_path)
 
 
@@ -61,13 +60,15 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
             config=InferenceConfig(
                 input_path=input_data_path,
                 output_path=this_output_path(input_basename),
-                model_name=versioned(config.quality_classifier_model_path),
+                model_name=get_model_path(config.quality_classifier_model_path),
                 model_type="fasttext",
                 attribute_name=versioned(f"{config.experiment_name}-quality"),
+                filetype="parquet",
                 runtime=RuntimeConfig(
                     requirements_filepath="marin/processing/classification/config/dclm_fasttext_requirements.txt",
-                    memory_limit_gb=6,
+                    memory_limit_gb=40,
                 ),
+                task=TaskConfig(max_in_flight=500),
             ),
         )
 
@@ -77,6 +78,7 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
             config=ConsolidateConfig(
                 input_path=input_data_path,
                 output_path=this_output_path(input_basename),
+                filetype="parquet",
                 filters=[
                     FilterConfig(
                         type=versioned("classify"),
@@ -85,8 +87,11 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
                         label="__label__hq",
                         threshold=versioned(None),
                         keep_fraction=versioned(config.keep_fraction),
+                        filetype="parquet",
                     ),
                 ],
+                max_tasks_in_flight=500,
+                memory_limit_gb=40,
             ),
         )
 
@@ -110,6 +115,7 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
         weights=weights,
     )
 
+    # TODO: Uncomment this when WANDBAPI error fixed
     steps.append(train_step)
 
     return steps

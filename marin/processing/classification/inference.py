@@ -6,12 +6,12 @@ python -m marin.processing.classification.inference \
     --config_path marin/processing/classification/config/dclm_fasttext.yaml
 """
 
-import json
 import os
 
 import datasets
 import draccus
 import fsspec
+import pandas as pd
 import ray
 from ray.data.datasource import FilenameProvider
 from ray.runtime_env import RuntimeEnv
@@ -69,61 +69,86 @@ def process_file_using_actor_pool(input_path: str, output_path: str, model_name_
     )
 
 
+def read_dataset(input_filename: str, filetype: str):
+    datasets.disable_caching()
+    datasets.logging.set_verbosity_warning()
+    # We use pandas to read in the file so that we don't have to materialize
+    # the entire dataset in disk. Huggingface datasets loads the dataset into
+    # disk first.
+    if filetype == "jsonl.gz":
+        df = pd.read_json(input_filename, compression="gzip", lines=True)
+        dataset = datasets.Dataset.from_pandas(df)
+        return dataset
+    elif filetype == "parquet":
+        df = pd.read_parquet(input_filename)
+        dataset = datasets.Dataset.from_pandas(df)
+        return dataset
+    else:
+        raise ValueError(f"Unsupported filetype: {filetype}")
+
+
+def write_dataset(dataset: datasets.Dataset, output_filename: str):
+    if output_filename.endswith(".jsonl.gz"):
+        dataset.to_json(output_filename, compression="gzip")
+    elif output_filename.endswith(".parquet"):
+        dataset.to_parquet(output_filename)
+    else:
+        raise ValueError(f"Unsupported filetype: {output_filename}")
+
+
 @ray.remote
 @cached_or_construct_output(success_suffix="SUCCESS")
 def process_file_ray(
-    input_filename: str, output_filename: str, model_name_or_path: str, attribute_name: str, model_type: str | None
+    input_filename: str,
+    output_filename: str,
+    model_name_or_path: str,
+    attribute_name: str,
+    model_type: str | None,
+    filetype: str,
 ):
     print(f"[*] Read in dataset {input_filename}")
 
     quality_classifier = AutoClassifier.from_model_path(model_name_or_path, attribute_name, model_type=model_type)
 
-    json_list = []
-    with fsspec.open(input_filename, "rt", compression="gzip") as f_in:
-        for line in f_in:
-            json_list.append(json.loads(line))
+    dataset = read_dataset(input_filename, filetype)
 
-    dataset = datasets.Dataset.from_list(json_list)
+    dataset = dataset.select_columns(["text", "id"])
+    dataset = dataset.map(lambda batch: quality_classifier(batch), batched=True, batch_size=1024)
+    dataset = dataset.select_columns(["id", "attributes"])
 
-    dataset = dataset.select_columns(["text", "id", "source"])
-    predicted_dataset = dataset.map(lambda batch: quality_classifier(batch), batched=True, batch_size=1024)
-
-    with fsspec.open(output_filename, "wt", compression="gzip") as f_out:
-        for row in predicted_dataset:
-            res = {"id": row["id"], "source": row["source"], "attributes": row["attributes"]}
-            json_row = json.dumps(res)
-            f_out.write(json_row + "\n")
+    write_dataset(dataset, output_filename)
 
 
 @cached_or_construct_output(success_suffix="SUCCESS")
-def process_file_with_quality_classifier(input_filename: str, output_filename: str, quality_classifier: BaseClassifier):
-    json_list = []
-    with fsspec.open(input_filename, "rt", compression="gzip") as f_in:
-        for line in f_in:
-            json_list.append(json.loads(line))
+def process_file_with_quality_classifier(
+    input_filename: str, output_filename: str, quality_classifier: BaseClassifier, filetype: str
+):
+    dataset = read_dataset(input_filename, filetype)
 
-    dataset = datasets.Dataset.from_list(json_list)
+    dataset = dataset.select_columns(["text", "id"])
+    dataset = dataset.map(lambda batch: quality_classifier(batch), batched=True, batch_size=512)
+    dataset = dataset.select_columns(["id", "attributes"])
 
-    dataset = dataset.select_columns(["text", "id", "source"])
-    predicted_dataset = dataset.map(lambda batch: quality_classifier(batch), batched=True, batch_size=512)
-
-    with fsspec.open(output_filename, "wt", compression="gzip") as f_out:
-        for row in predicted_dataset:
-            res = {"id": row["id"], "source": row["source"], "attributes": row["attributes"]}
-            json_row = json.dumps(res)
-            f_out.write(json_row + "\n")
+    write_dataset(dataset, output_filename)
 
 
 @ray.remote
 @cached_or_construct_output(success_suffix="SUCCESS")
-def process_dir(input_path: str, output_path: str, model_name_or_path: str, attribute_name: str, model_type: str | None):
-    files = fsspec_glob(os.path.join(input_path, "**/*.jsonl.gz"))
+def process_dir(
+    input_path: str,
+    output_path: str,
+    model_name_or_path: str,
+    attribute_name: str,
+    model_type: str | None,
+    filetype: str,
+):
+    files = fsspec_glob(os.path.join(input_path, f"**/*.{filetype}"))
 
     quality_classifier = AutoClassifier.from_model_path(model_name_or_path, attribute_name, model_type=model_type)
 
     for input_filename in files:
         output_filename = rebase_file_path(input_path, input_filename, output_path)
-        process_file_with_quality_classifier(input_filename, output_filename, quality_classifier)
+        process_file_with_quality_classifier(input_filename, output_filename, quality_classifier, filetype)
 
 
 def get_process_filepath_func(subdirectories: list[str]):
@@ -139,9 +164,20 @@ def get_filepaths_and_process_filepath_func(inference_config: InferenceConfig):
 
     # This is the case where the directory has no subdirectories. So, we are iterating through files and not directories
     if len(filepaths) == 0:
-        filepaths = fsspec_glob(os.path.join(inference_config.input_path, "**/*.jsonl.gz"))
+        filepaths = fsspec_glob(os.path.join(inference_config.input_path, f"**/*.{inference_config.filetype}"))
 
     return filepaths, process_filepath_func
+
+
+def convert_to_jsonl_gz_path(filename: str, filetype: str):
+    fs = fsspec.filesystem(filename.split("://")[0] if "://" in filename else "file")
+
+    if fs.isdir(filename):
+        return filename
+
+    # Strip any existing extension and add .jsonl.gz
+    if filename.endswith(f".{filetype}"):
+        return filename.replace(f".{filetype}", ".jsonl.gz")
 
 
 @ray.remote
@@ -157,6 +193,7 @@ def run_inference(inference_config: InferenceConfig):
             ray.get(ready_refs)
 
         output_filepath = rebase_file_path(input_path, input_filepath, output_path)
+        # output_filepath = convert_to_jsonl_gz_path(output_filepath, inference_config.filetype)
         fsspec_mkdirs(os.path.dirname(output_filepath))
 
         result_ref = process_filepath_func.options(
@@ -171,6 +208,7 @@ def run_inference(inference_config: InferenceConfig):
             inference_config.model_name,
             inference_config.attribute_name,
             inference_config.model_type,
+            inference_config.filetype,
         )
 
         responses.append(result_ref)
