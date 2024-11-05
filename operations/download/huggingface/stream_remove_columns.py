@@ -8,8 +8,8 @@ import draccus
 import pandas as pd
 import pyarrow.parquet as pq
 import ray
-from tqdm import tqdm
 from huggingface_hub import HfFileSystem
+from tqdm import tqdm
 
 fs = HfFileSystem()
 logger = logging.getLogger("ray")
@@ -102,7 +102,7 @@ def prune_hf_dataset(cfg: DatasetConfig):
 
         try:
             result_refs.append(process_hf_subset.remote(hf_path, output_path, cfg.keep_columns))
-            
+
             # Wait for a task to complete if we hit the worker limit
             if len(result_refs) >= MAX_CONCURRENT_WORKERS:
                 done, result_refs = ray.wait(result_refs, num_returns=1)
@@ -112,7 +112,7 @@ def prune_hf_dataset(cfg: DatasetConfig):
                 except Exception as e:
                     logger.exception(f"Error processing subset: {e!s}")
                     raise e
-                    
+
         except Exception as e:
             logger.exception(f"Error processing subset {hf_path}: {e!s}")
             continue
