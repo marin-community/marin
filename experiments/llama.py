@@ -6,8 +6,8 @@ from levanter.models.llama import LlamaConfig
 
 from experiments.simple_train_config import SimpleTrainConfig
 
+# SKIP_DRY_RUN_TEST
 llama3_tokenizer = "meta-llama/Meta-Llama-3.1-8B"
-llama3_tokenizer_vocab_size = 128_256
 
 llama_150m = LlamaConfig(
     seq_len=4096,
@@ -73,7 +73,7 @@ llama_8b = LlamaConfig(
 )
 
 llama_1_4b_train_config = SimpleTrainConfig(
-    tpu_type="v4-128",
+    tpu_type="v4-32",
     train_batch_size=1024,
     num_train_steps=75000,  # 4096 * 1024 * 75000 = 314B tokens
     learning_rate=3e-4,
@@ -97,7 +97,11 @@ def compute_num_parameters(config: LlamaConfig) -> int:
     mlp_params = gate_params + up_params + down_params
 
     nonembedding_params = config.num_layers * (attention_params + mlp_params + layer_norm_params)
-    embedding_params = 2 * llama3_tokenizer_vocab_size * config.hidden_dim
+
+    from transformers import AutoTokenizer
+
+    tokenizer = AutoTokenizer.from_pretrained(llama3_tokenizer)
+    embedding_params = 2 * tokenizer.vocab_size * config.hidden_dim
 
     return nonembedding_params + embedding_params
 

@@ -6,6 +6,7 @@ import sys
 import draccus
 from levanter.models.gpt2 import Gpt2Config
 from levanter.trainer import TrainerConfig
+from levanter.data.text import LMSupervisedDatasetConfig
 
 from marin.execution.executor import (
     ExecutorMainConfig,
@@ -23,10 +24,11 @@ from marin.processing.classification.fasttext.train_fasttext import (
     train,
 )
 from marin.processing.classification.inference import InferenceConfig, run_inference
-from marin.processing.tokenize import TokenizeConfig, lm_data_config, tokenize
+from marin.processing.tokenize import TokenizeConfig, lm_data_config, tokenize, levanter_tokenize_supervised
 from marin.schemas.web.convert import HtmlToMarkdownConfig
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 from scripts.hello_world_fw.process import FineWebConfig, transform
+from experiments.raw2json import mmlu_convert_eval_aux, mmlu_convert_eval_subject
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -169,6 +171,30 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
         ),
     )
 
+    supervised_data_cache = ExecutorStep(
+        name="supervised/mmlu-cache", fn=levanter_tokenize_supervised, config=TokenizeConfig(
+        train_paths=[],
+        validation_paths=[
+            output_path_of(mmlu_convert_eval_aux).cd("cais/*.jsonl.gz"),
+            output_path_of(mmlu_convert_eval_subject).cd("cais/*.jsonl.gz"),
+        ],
+        cache_path=this_output_path(),
+        input_field="prompt",
+        output_field="response",
+        tokenizer=versioned("gpt2"),
+    )
+    )
+
+    supervised_data_config = LMSupervisedDatasetConfig(
+        validation_urls=[
+            output_path_of(mmlu_convert_eval_aux).cd("cais/*.jsonl.gz"),
+            output_path_of(mmlu_convert_eval_subject).cd("cais/*.jsonl.gz"),
+        ],
+        cache_dir=output_path_of(supervised_data_cache),
+        input_field="prompt",
+        output_field="response",
+    )
+
     ############################################################
     # Train
 
@@ -178,6 +204,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
         config=TrainLmOnPodConfig(
             output_path=this_output_path(),
             data=lm_data_config(tokenize_step),
+            supervised_data=supervised_data_config,
             env={"WANDB_API_KEY": None, "WANDB_MODE": "disabled"},  # Running it locally and turning off wandb
             tpu_type=None,
             hf_save_steps=1,

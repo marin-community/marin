@@ -44,6 +44,8 @@ class TokenizeConfig:
     tokenizer: str  # tokenizer name. Should be the same as you intend to use in the tokenizer spec for the training run
     tags: list[str] = dataclasses.field(default_factory=list)  # tags to be added to config
     cache_options: CacheOptions = CacheOptions(num_shard_groups=1024)  # noqa: RUF009
+    input_field: str = ""
+    output_field: str = ""
 
     def train_source(self) -> ShardedDataSource | None:
         if len(self.train_paths) == 0:
@@ -117,15 +119,19 @@ def tokenize(config: TokenizeConfig):
 
 
 @ray.remote(runtime_env=RuntimeEnv(env_vars={"JAX_PLATFORM_NAME": "cpu"}))
-def levanter_tokenize_supervised(config: LMSupervisedDatasetConfig):
+def levanter_tokenize_supervised(config: TokenizeConfig):
+    supervised_config = LMSupervisedDatasetConfig(validation_urls=config.validation_paths,
+                                                  cache_dir=config.cache_path,
+                                                  input_field=config.input_field,
+                                                  output_field=config.output_field)
     logging.basicConfig(level=logging.INFO)
 
-    logger.info(f"Caching {config.validation_urls} to {config.cache_dir}.")
+    logger.info(f"Caching {config.validation_paths} to {config.cache_path}.")
 
-    tokenizer = transformers.AutoTokenizer.from_pretrained("meta-llama/Meta-Llama-3.1-8B")
+    tokenizer = transformers.AutoTokenizer.from_pretrained(config.tokenizer)
 
-    mk_supervised_dataset(config, tokenizer)
-    logger.info(f"Finished caching supervised dataset to {config.cache_dir}.")
+    mk_supervised_dataset(supervised_config, tokenizer)
+    logger.info(f"Finished caching supervised dataset to {config.cache_path}.")
 
 
 @ray.remote(runtime_env=RuntimeEnv(env_vars={"JAX_PLATFORM_NAME": "cpu"}))

@@ -9,7 +9,7 @@ from datetime import timedelta
 
 import jmp
 from levanter.checkpoint import CheckpointerConfig
-from levanter.data.text import LMMixtureDatasetConfig, LMSupervisedDatasetConfig
+from levanter.data.text import LMMixtureDatasetConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig
 from levanter.optim import AdamConfig

@@ -631,7 +631,7 @@ class ExecutorMainConfig:
     force_run_failed: bool = False  # Force run failed steps
 
 
-@draccus.wrap()
+# @draccus.wrap()
 def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], description: str | None = None):
     """Main entry point for experiments (to standardize)"""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")

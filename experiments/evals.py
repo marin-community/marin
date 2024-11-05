@@ -2,6 +2,7 @@ from marin.evaluation.evaluation_config import EvaluationConfig
 from marin.evaluation.run import evaluate
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 
+
 """
 Canonical set of evals.
 
@@ -43,8 +44,6 @@ alpaca_evaluate_step = ExecutorStep(
         evaluation_path=this_output_path(),
     ),
 )
-
-############################################################
 
 if __name__ == "__main__":
     executor_main(
