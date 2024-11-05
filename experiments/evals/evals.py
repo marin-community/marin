@@ -29,7 +29,9 @@ def evaluate_helm(model_name: str, model_path: str, evals: list[str]) -> Executo
     )
 
 
-def evaluate_helm_on_step(step: ExecutorStep | InputName, evals: list[str]) -> ExecutorStep:
+def evaluate_helm_on_step(
+    step: ExecutorStep | InputName, evals: list[str], max_eval_instances: int | None = None
+) -> ExecutorStep:
     """
     Create an ExecutorStep to evaluate the model using HELM on a step.
 
@@ -51,6 +53,7 @@ def evaluate_helm_on_step(step: ExecutorStep | InputName, evals: list[str]) -> E
             evaluation_path=this_output_path(),
             evals=evals,
             discover_latest_checkpoint=True,
+            max_eval_instances=max_eval_instances,
         ),
     )
 

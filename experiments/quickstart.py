@@ -4,7 +4,6 @@ import os
 import sys
 
 import draccus
-from evals.evals import evaluate_helm_on_step
 from levanter.models.gpt2 import Gpt2Config
 from levanter.trainer import TrainerConfig
 
@@ -27,6 +26,7 @@ from marin.processing.classification.inference import InferenceConfig, run_infer
 from marin.processing.tokenize import TokenizeConfig, lm_data_config, tokenize
 from marin.schemas.web.convert import HtmlToMarkdownConfig
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
+from marin.utilities.ray_utils import is_local_ray_cluster
 from marin.utils import is_in_ci
 from scripts.hello_world_fw.process import FineWebConfig, transform
 
@@ -172,7 +172,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
 
     ############################################################
 
-    if not is_in_ci():
+    if not is_in_ci() and not is_local_ray_cluster():
         tpu_type = "v4-8"
     else:
         tpu_type = None
@@ -202,7 +202,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
 
     ##### Evaluate
 
-    evaluate_step = evaluate_helm_on_step(train_step, ["mmlu"])
+    # evaluate_step = evaluate_helm_on_step(train_step, ["mmlu"], max_eval_instances=10)
 
     return [
         transform_hq_data_step,
@@ -214,7 +214,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
         consolidate_step,
         tokenize_step,
         train_step,
-        evaluate_step,
+        # evaluate_step,
     ]
 
 
