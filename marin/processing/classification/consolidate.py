@@ -7,18 +7,19 @@ the attributes.  Handles two cases:
 - Deduplication produces attributes (e.g., duplicate_text).  Remove duplicates.
 """
 
-import json
 import logging
 import os
 from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Any
 
 import draccus
-import fsspec
 import numpy as np
+import psutil
 import ray
 
 from marin.core.runtime import cached_or_construct_output
+from marin.processing.classification.inference import read_dataset, write_dataset
 from marin.utils import (
     fsspec_exists,
     fsspec_glob,
@@ -44,6 +45,9 @@ class FilterConfig:
     name: str
     """Name of attribute to use for filtering."""
 
+    filetype: str
+    """The filetype of the input attribute file."""
+
     label: str | None = None
     """The label under the attribute name."""
 
@@ -67,7 +71,13 @@ class ConsolidateConfig:
     filters: list[FilterConfig]
     """List of filters to apply to the documents."""
 
+    filetype: str
+    """The filetype of the input data."""
+
     max_tasks_in_flight: int = 1000  # The maximum number of flights in a task
+
+    memory_limit_gb: float = 0.5
+    """The memory limit for the task in GB."""
 
 
 def remove_spans(text: str, spans: list[list[int]]) -> str:
@@ -85,12 +95,17 @@ def remove_spans(text: str, spans: list[list[int]]) -> str:
     return text
 
 
-def apply_filter(input_data: dict, doc_filter: FilterConfig, attributes: dict[str, Any]) -> dict | None:
+def apply_filter(input_data: dict, doc_filter: FilterConfig, id_to_attributes: dict[str, Any]) -> dict | None:
+    attributes = id_to_attributes[input_data["id"]]
     if doc_filter.type == FILTER_TYPE_CLASSIFY:
         # Check attribute >= threshold?
         scores = attributes[doc_filter.name]
         score = scores[doc_filter.label]
-        return input_data if score >= doc_filter.threshold else None
+
+        if score >= doc_filter.threshold:
+            return True
+
+        return False
 
     elif doc_filter.type == FILTER_TYPE_REMOVE_SPANS:
         # Remove spans (e.g., because they are duplicates)
@@ -99,6 +114,42 @@ def apply_filter(input_data: dict, doc_filter: FilterConfig, attributes: dict[st
 
     else:
         raise ValueError(f"Unknown filter type: {doc_filter.type}")
+
+
+def apply_filter_batch_func(doc_filter, id_to_attributes):
+    # The huggingface dataset map API passes a batch of data to the function and returns a batch of data.
+    # We have additional data to pass in such as doc_filter and id_to_attributes, so we define a wrapper
+    # function here.
+    def apply_filter_func(batch):
+        return apply_filter(batch, doc_filter, id_to_attributes)
+
+    return apply_filter_func
+
+
+def load_dataset_as_dict(input_filename: str, filetype: str) -> dict[str, Any]:
+    """
+    Convert to a format like:
+    {
+        <id>: <attributes>
+    }
+    """
+    table = read_dataset(input_filename, filetype)
+    data = {}
+    for row_id, attr in zip(table["id"], table["attributes"], strict=True):
+        data[row_id] = attr
+    return data
+
+
+def get_filetype(input_path: str):
+    filename = input_path.split("/")[-1]
+    filetype = "".join(Path(filename).suffixes)
+    filetype = filetype.lstrip(".")
+    return filetype
+
+
+def get_memory_usage():
+    process = psutil.Process(os.getpid())
+    return process.memory_info().rss / (1024 * 1024 * 1024)  # Convert to GB
 
 
 @ray.remote
@@ -116,61 +167,81 @@ def process_file(
     logger.info(f"Processing {input_path} and {[doc_filter.attribute_path for doc_filter in filters]}")
 
     # Open all files simultaneously, and read in parallel.
-    input_file = fsspec.open(input_path, "rt", compression="gzip").open()
     attribute_files = []
     for doc_filter in filters:
         if fsspec_exists(doc_filter.attribute_path):
-            attribute_files.append(fsspec.open(doc_filter.attribute_path, compression="gzip").open())
+            attribute_files.append(load_dataset_as_dict(doc_filter.attribute_path, doc_filter.filetype))
         else:
             logger.warning(f"Attribute file not found: {doc_filter.attribute_path}")
             attribute_files.append(None)
-    output_file = fsspec.open(output_path, "wt", compression="gzip").open()
 
-    num_kept = 0
-    num_total = 0
-    for input_line in input_file:
-        num_total += 1
+    input_filetype = get_filetype(input_path)
+    dataset = read_dataset(input_path, input_filetype)
 
-        # Read document and attributes for that document
-        input_data = json.loads(input_line)
-        all_attributes = [json.loads(attr_file.readline()) if attr_file else None for attr_file in attribute_files]
+    total_examples = len(dataset)
 
-        # Apply filters
-        for doc_filter, attributes in zip(filters, all_attributes, strict=True):
-            if attributes is None:
-                continue
-            try:
-                assert attributes["id"] == input_data["id"]
-                input_data = apply_filter(input_data, doc_filter, attributes["attributes"])
-            except Exception as e:
-                logger.error(f"Error applying filter {doc_filter} to line {num_total}: {e}")
-                input_data = None  # Skip this example
+    logger.info(f"Memory usage before filtering: {get_memory_usage()} GB")
+    for doc_filter, id_to_attributes in zip(filters, attribute_files, strict=True):
+        if id_to_attributes is None:
+            continue
 
-            if input_data is None:
-                break
+        apply_filter_func = apply_filter_batch_func(doc_filter, id_to_attributes)
 
-        # Write output
-        if input_data is not None:
-            num_kept += 1
-            print(json.dumps(input_data), file=output_file)
+        if doc_filter.type == FILTER_TYPE_CLASSIFY:
+            dataset = dataset.filter(apply_filter_func)
+        elif doc_filter.type == FILTER_TYPE_REMOVE_SPANS:
+            dataset = dataset.map(apply_filter_func)
+        else:
+            raise ValueError(f"Unknown filter type: {doc_filter.type}")
 
-    logger.info(f"Kept {num_kept}/{num_total} from {input_path}")
+    # TODO(Chris): Remove this after debugging
+    logger.info(f"Memory usage after filtering: {get_memory_usage()} GB")
+    write_dataset(dataset, output_path)
+
+    total_kept = len(dataset)
+
+    logger.info(f"Kept {total_kept}/{total_examples} from {input_path}")
+
+    # for input_line in input_file:
+    #     num_total += 1
+
+    #     # Read document and attributes for that document
+    #     input_data = json.loads(input_line)
+    #     all_attributes = [json.loads(attr_file.readline()) if attr_file else None for attr_file in attribute_files]
+
+    #     # Apply filters
+    #     for doc_filter, attributes in zip(filters, all_attributes, strict=True):
+    #         if attributes is None:
+    #             continue
+    #         try:
+    #             assert attributes["id"] == input_data["id"]
+    #             input_data = apply_filter(input_data, doc_filter, attributes["attributes"])
+    #         except Exception as e:
+    #             logger.error(f"Error applying filter {doc_filter} to line {num_total}: {e}")
+    #             input_data = None  # Skip this example
+
+    #         if input_data is None:
+    #             break
+
+    #     # Write output
+    #     if input_data is not None:
+    #         num_kept += 1
+    #         print(json.dumps(input_data), file=output_file)
 
     # Close all files
-    input_file.close()
-    for attr_file in attribute_files:
-        if attr_file:
-            attr_file.close()
-    output_file.close()
+    # input_file.close()
+    # for attr_file in attribute_files:
+    #     if attr_file:
+    #         attr_file.close()
+    # output_file.close()
 
 
 @ray.remote
-def get_scores(attribute_filename: str, attribute_name: str, label: str) -> list[float]:
+def get_scores(attribute_filename: str, attribute_name: str, label: str, filetype: str) -> list[float]:
     scores = []
-    with fsspec.open(attribute_filename, "rt", compression="gzip") as f:
-        for line in f:
-            attributes = json.loads(line)
-            scores.append(attributes["attributes"][attribute_name][label])
+    attributes = load_dataset_as_dict(attribute_filename, filetype)
+    for _, attr in attributes.items():
+        scores.append(attr[attribute_name][label])
     return scores
 
 
@@ -182,7 +253,7 @@ def calculate_percentile_threshold(scores: list[list[float]], keep_fraction: flo
 
 @ray.remote
 def consolidate(config: ConsolidateConfig):
-    input_paths = fsspec_glob(os.path.join(config.input_path, "**/*.jsonl.gz"))
+    input_paths = fsspec_glob(os.path.join(config.input_path, f"**/*.{config.filetype}"))
     logger.info(f"Consolidating {len(input_paths)} documents")
 
     updated_filters = []
@@ -195,13 +266,13 @@ def consolidate(config: ConsolidateConfig):
             assert doc_filter.keep_fraction > 0 and doc_filter.keep_fraction < 1, "Keep fraction must be between 0 and 1"
 
         # Calculate the minimum threshold required to keep `keep_fraction` of the documents
-        if doc_filter.keep_fraction is not None:
+        if doc_filter.keep_fraction is not None and doc_filter.type == FILTER_TYPE_CLASSIFY:
             attribute_paths = [
                 rebase_file_path(config.input_path, input_path, doc_filter.attribute_path) for input_path in input_paths
             ]
             scores = ray.get(
                 [
-                    get_scores.remote(attribute_path, doc_filter.name, doc_filter.label)
+                    get_scores.remote(attribute_path, doc_filter.name, doc_filter.label, doc_filter.filetype)
                     for attribute_path in attribute_paths
                 ]
             )
@@ -225,7 +296,9 @@ def consolidate(config: ConsolidateConfig):
         ]
         output_path = rebase_file_path(config.input_path, input_path, config.output_path)
 
-        task = process_file.remote(input_path, output_path, filters)
+        task = process_file.options(memory=config.memory_limit_gb * 1024 * 1024 * 1024, num_cpus=2).remote(
+            input_path, output_path, filters
+        )
         tasks.append(task)
 
     try:

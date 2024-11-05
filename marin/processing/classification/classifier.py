@@ -54,7 +54,14 @@ class FasttextClassifier(BaseClassifier):
         # Classifier is stored in a remote storage.
 
         is_remote_or_local_path: bool = urllib.parse.urlparse(self.model_name).scheme or os.path.exists(self.model_name)
-        is_huggingface_path: bool = not os.path.exists(self.model_name) and repo_exists(self.model_name)
+        try:
+            is_huggingface_path: bool = not os.path.exists(self.model_name) and repo_exists(self.model_name)
+        except Exception as e:
+            print(
+                f"Error checking if {self.model_name} is a Hugging Face path: {e} \
+                This is normal for remote paths. Setting is_huggingface_path to False"
+            )
+            is_huggingface_path = False
 
         fs, fs_path = fsspec.core.url_to_fs(self.model_name)
 
@@ -140,7 +147,7 @@ class FasttextClassifier(BaseClassifier):
             fasttext_quality_dict = dict(zip(label_arr[i], score_arr[i], strict=False))
             attributes_arr.append({self.attribute_name: fasttext_quality_dict})
 
-        res = {"id": batch["id"], "source": batch["source"], "attributes": attributes_arr}
+        res = {"id": batch["id"], "attributes": attributes_arr}
         batch.update({"attributes": attributes_arr})
 
         return res

@@ -522,7 +522,9 @@ class Executor:
             logger.info(f"  {dependency_index_str(i)} = {self.output_paths[dep]}")
         logger.info("")
         force_run_step = False
-        if (self.force_run and step.name in self.force_run) or (self.force_run_failed and status == STATUS_FAILED):
+        if (self.force_run and step.name in self.force_run) or (
+            self.force_run_failed and status == STATUS_FAILED or status == STATUS_WAITING
+        ):
             force_run_step = True
             logger.info(f"Force running {step.name}, previous status: {status}")
 
