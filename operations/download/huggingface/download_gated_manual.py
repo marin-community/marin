@@ -50,6 +50,10 @@ def construct_hf_url(dataset_id: str, revision: str, file_path: str) -> str:
 def download_and_upload_to_store(cfg: DownloadConfig) -> None:
     logging.basicConfig(level=logging.INFO)
 
+    logging.warning(
+        "DEPRECATED: This function is deprecated and will be removed in a future release." "Consider using download_hf"
+    )
+
     # Parse the output path and get the file system
     fs, _ = fsspec.core.url_to_fs(cfg.gcs_output_path)
 
@@ -102,6 +106,7 @@ def download_and_upload_to_store(cfg: DownloadConfig) -> None:
 
     hf_urls = []
     futures = []
+
     with tempfile.TemporaryDirectory() as temp_dir:
         for file in files:
             if fnmatch.fnmatch(file, cfg.hf_url_glob):
