@@ -132,7 +132,7 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
 
     if config.tpu_type is not None:
         # mitigate google metadata server issue
-        return run_on_pod_resumable(train_lm_task, config.tpu_type, max_retries_failure=10000)
+        return run_on_pod_resumable(train_lm_task, config.tpu_type, max_retries_failure=10)
     else:
         return ray.get(train_lm_task.remote())
 
