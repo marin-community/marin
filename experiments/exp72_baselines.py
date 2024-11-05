@@ -44,22 +44,14 @@ fineweb_edu_model = default_train(
     train_config=llama_1_4b_train_config,
 )
 
-fineweb_edu_model_350m = default_train(
-    name="fineweb-edu-350m",
-    tokenized=fineweb_edu_tokenized,
-    model_config=llama_300m,
-    train_config=llama_300m_train_config,
-)
-
 ############################################################
 
 if __name__ == "__main__":
     executor_main(
         steps=[
-            # slimpajama_6b_model,
-            # slimpajama_model,
-            # fineweb_edu_model,
-            fineweb_edu_model_350m,
+            slimpajama_6b_model,
+            slimpajama_model,
+            fineweb_edu_model,
         ],
         description="Train 1.4B models on standard datasets (SlimPajama 6B, SlimPajama, FineWebEdu).",
     )
