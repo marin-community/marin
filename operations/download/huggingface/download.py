@@ -70,8 +70,7 @@ def _wait_for_job_completion(job_name: str, timeout: int, poll_interval: int) ->
 
 def download(cfg: DownloadConfig) -> None | ray.ObjectRef:
     logging.warning(
-        "DEPRECATED: This function is deprecated and will be removed in a future release."
-        "Consider using download_ray_hf"
+        "DEPRECATED: This function is deprecated and will be removed in a future release." "Consider using download_hf"
     )
 
     logger.info(f"[*] Downloading HF Dataset `{cfg.hf_dataset_id}` to `{cfg.gcs_output_path}`")
