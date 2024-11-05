@@ -62,7 +62,7 @@ def process_one_shard(
     output_path: str,
 ):
     """
-    Takes in the input file and processes it to get the html content.
+    Takes an parquet with FineWeb records as input and processes it to get the html content.
     Download the WARC path in input_path and returns the content of the urls in the input_path.
 
     Args:
