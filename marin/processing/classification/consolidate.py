@@ -45,7 +45,7 @@ class FilterConfig:
     name: str
     """Name of attribute to use for filtering."""
 
-    filetype: str
+    filetype: str = "jsonl.gz"
     """The filetype of the input attribute file."""
 
     label: str | None = None
@@ -71,7 +71,7 @@ class ConsolidateConfig:
     filters: list[FilterConfig]
     """List of filters to apply to the documents."""
 
-    filetype: str
+    filetype: str = "jsonl.gz"
     """The filetype of the input data."""
 
     max_tasks_in_flight: int = 1000  # The maximum number of flights in a task
