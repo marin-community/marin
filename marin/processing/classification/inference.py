@@ -10,7 +10,6 @@ import os
 
 import datasets
 import draccus
-import fsspec
 import pandas as pd
 import ray
 from ray.data.datasource import FilenameProvider
@@ -69,22 +68,22 @@ def process_file_using_actor_pool(input_path: str, output_path: str, model_name_
     )
 
 
-def read_dataset(input_filename: str, filetype: str):
+def read_dataset(input_filename: str):
     datasets.disable_caching()
     datasets.logging.set_verbosity_warning()
     # We use pandas to read in the file so that we don't have to materialize
     # the entire dataset in disk. Huggingface datasets loads the dataset into
     # disk first.
-    if filetype == "jsonl.gz":
+    if input_filename.endswith(".jsonl.gz"):
         df = pd.read_json(input_filename, compression="gzip", lines=True)
         dataset = datasets.Dataset.from_pandas(df)
         return dataset
-    elif filetype == "parquet":
+    elif input_filename.endswith(".parquet"):
         df = pd.read_parquet(input_filename)
         dataset = datasets.Dataset.from_pandas(df)
         return dataset
     else:
-        raise ValueError(f"Unsupported filetype: {filetype}")
+        raise ValueError(f"Unsupported filetype: {input_filename}")
 
 
 def write_dataset(dataset: datasets.Dataset, output_filename: str):
@@ -104,13 +103,12 @@ def process_file_ray(
     model_name_or_path: str,
     attribute_name: str,
     model_type: str | None,
-    filetype: str,
 ):
     print(f"[*] Read in dataset {input_filename}")
 
     quality_classifier = AutoClassifier.from_model_path(model_name_or_path, attribute_name, model_type=model_type)
 
-    dataset = read_dataset(input_filename, filetype)
+    dataset = read_dataset(input_filename)
 
     dataset = dataset.select_columns(["text", "id"])
     dataset = dataset.map(lambda batch: quality_classifier(batch), batched=True, batch_size=1024)
@@ -120,10 +118,8 @@ def process_file_ray(
 
 
 @cached_or_construct_output(success_suffix="SUCCESS")
-def process_file_with_quality_classifier(
-    input_filename: str, output_filename: str, quality_classifier: BaseClassifier, filetype: str
-):
-    dataset = read_dataset(input_filename, filetype)
+def process_file_with_quality_classifier(input_filename: str, output_filename: str, quality_classifier: BaseClassifier):
+    dataset = read_dataset(input_filename)
 
     dataset = dataset.select_columns(["text", "id"])
     dataset = dataset.map(lambda batch: quality_classifier(batch), batched=True, batch_size=512)
@@ -148,7 +144,7 @@ def process_dir(
 
     for input_filename in files:
         output_filename = rebase_file_path(input_path, input_filename, output_path)
-        process_file_with_quality_classifier(input_filename, output_filename, quality_classifier, filetype)
+        process_file_with_quality_classifier(input_filename, output_filename, quality_classifier)
 
 
 def get_process_filepath_func(subdirectories: list[str]):
@@ -169,17 +165,6 @@ def get_filepaths_and_process_filepath_func(inference_config: InferenceConfig):
     return filepaths, process_filepath_func
 
 
-def convert_to_jsonl_gz_path(filename: str, filetype: str):
-    fs = fsspec.filesystem(filename.split("://")[0] if "://" in filename else "file")
-
-    if fs.isdir(filename):
-        return filename
-
-    # Strip any existing extension and add .jsonl.gz
-    if filename.endswith(f".{filetype}"):
-        return filename.replace(f".{filetype}", ".jsonl.gz")
-
-
 @ray.remote
 def run_inference(inference_config: InferenceConfig):
     filepaths, process_filepath_func = get_filepaths_and_process_filepath_func(inference_config)
@@ -193,7 +178,6 @@ def run_inference(inference_config: InferenceConfig):
             ray.get(ready_refs)
 
         output_filepath = rebase_file_path(input_path, input_filepath, output_path)
-        # output_filepath = convert_to_jsonl_gz_path(output_filepath, inference_config.filetype)
         fsspec_mkdirs(os.path.dirname(output_filepath))
 
         result_ref = process_filepath_func.options(

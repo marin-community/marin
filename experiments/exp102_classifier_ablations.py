@@ -31,9 +31,12 @@ logger = logging.getLogger(__name__)
 class ExperimentConfig:
     experiment_name: str
     quality_classifier_model_path: str | ExecutorStep
+    # NOTE(chris): This path is from Herumb's best run for html -> text
+    # maybe, change this to an ExecutorStep once Herumb refactors 246 so
+    # we can directly import.
     input_data_source_to_path: dict[str, str] = field(
         default_factory=lambda: {
-            "fineweb_2020_10": "gs://marin-us-central2/raw/fineweb/cd85054/CC-MAIN-2020-10/",
+            "fineweb_2024_18": "gs://marin-us-central2/documents/fineweb-small-resiliparse-preserve-formatting-e8c6ec/md/CC-MAIN-2024-18",
         }
     )
     keep_fraction: float = 0.2  # Keep 20% of the documents
@@ -63,10 +66,9 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
                 model_name=get_model_path(config.quality_classifier_model_path),
                 model_type="fasttext",
                 attribute_name=versioned(f"{config.experiment_name}-quality"),
-                filetype="parquet",
                 runtime=RuntimeConfig(
                     requirements_filepath="marin/processing/classification/config/dclm_fasttext_requirements.txt",
-                    memory_limit_gb=40,
+                    memory_limit_gb=12,
                 ),
                 task=TaskConfig(max_in_flight=500),
             ),
@@ -78,7 +80,6 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
             config=ConsolidateConfig(
                 input_path=input_data_path,
                 output_path=this_output_path(input_basename),
-                filetype="parquet",
                 filters=[
                     FilterConfig(
                         type=versioned("classify"),
@@ -87,11 +88,9 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
                         label="__label__hq",
                         threshold=versioned(None),
                         keep_fraction=versioned(config.keep_fraction),
-                        filetype="parquet",
                     ),
                 ],
-                max_tasks_in_flight=500,
-                memory_limit_gb=40,
+                memory_limit_gb=12,
             ),
         )
 
