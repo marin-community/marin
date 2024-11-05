@@ -77,8 +77,8 @@ model = default_train(
 )
 
 mmlu_eval = evaluate_helm(
-    model_name="dclm_1b_1x_replication_oct26",
-    model_path=output_path_of(model, "checkpoints/{model_name}/step-54860"),
+    model_name="dclm_1b_1x_replication_oct26-a28b1e/step-54931",
+    model_path="gs://marin-us-central2/checkpoints/dclm_1b_1x_replication_oct26-a28b1e/hf/dclm_1b_1x_replication_oct26-a28b1e/step-54931",
     evals=["mmlu"],
 )
 
