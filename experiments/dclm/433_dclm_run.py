@@ -1,7 +1,8 @@
 from experiments.defaults import SimpleTrainConfig, default_tokenize, default_train
+from experiments.evals.evals import evaluate_helm
 from experiments.llama import LlamaConfig
 from experiments.pretraining_datasets import dclm_baseline, proofpile_2, starcoderdata
-from marin.execution.executor import executor_main
+from marin.execution.executor import executor_main, output_path_of
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
 
 gpt_neox_tokenizer = "EleutherAI/gpt-neox-20b"
@@ -75,6 +76,12 @@ model = default_train(
     tags=EXPERIMENT_TAG,
 )
 
+mmlu_eval = evaluate_helm(
+    model_name="dclm_1b_1x_replication_oct26",
+    model_path=output_path_of(model, "checkpoints/{model_name}/step-54860"),
+    evals=["mmlu"],
+)
+
 if __name__ == "__main__":
     executor_main(
         steps=[
@@ -82,5 +89,6 @@ if __name__ == "__main__":
             starcoderdata_tokenized,
             proofpile_2_tokenized,
             model,
+            mmlu_eval,
         ]
     )
