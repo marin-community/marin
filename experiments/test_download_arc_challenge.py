@@ -19,7 +19,7 @@ arc_challenge_download_step = ExecutorStep(
         revision=versioned("210d026"),
         gcs_output_path=this_output_path(),
         wait_for_completion=True,
-        hf_url_glob= versioned("ARC-Challenge/*")
+        hf_url_glob=versioned("ARC-Challenge/*"),
     ),
 )
 
@@ -38,8 +38,8 @@ arch_challenge_convert_eval = ExecutorStep(
     fn=raw2json,
     config=DatasetConversionConfig(
         dataset_name="allenai/ai2_arc",
-        subsets=["*"], # There should be no subsets, check here first if script crashes
-        splits=["train"], # We test with the train split
+        subsets=["*"],  # There should be no subsets, check here first if script crashes
+        splits=["train"],  # We test with the train split
         input_path=arc_challenge_download_step,
         hf_path="allenai/ai2_arc",
         output_path=this_output_path(),
