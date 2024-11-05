@@ -6,6 +6,7 @@ import dataclasses
 import os
 from collections.abc import Sequence
 from datetime import timedelta
+from functools import lru_cache
 
 import jmp
 from levanter.checkpoint import CheckpointerConfig
@@ -56,6 +57,7 @@ def default_tokenize(
     )
 
 
+@lru_cache  # the executor complains if this is not cached
 def default_validation_sets(tokenizer: str, base_path: str = "tokenized/") -> dict[str, TokenizerStep]:
     return paloma_tokenized(base_path=base_path, tokenizer=tokenizer)
 

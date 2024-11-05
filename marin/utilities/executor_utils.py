@@ -15,6 +15,10 @@ logger = logging.getLogger("ray")  # Initialize logger
 def compare_dicts(dict1: dict[str, Any], dict2: dict[str, Any]) -> bool:
     """Given 2 dictionaries, compare them and print the differences."""
 
+    # DeepDiff is slow, so we only use it if the dictionaries are different
+    if dict1 == dict2:
+        return True
+
     # Use DeepDiff to compare the two dictionaries
     diff = DeepDiff(dict1, dict2, ignore_order=True, verbose_level=2)
 
