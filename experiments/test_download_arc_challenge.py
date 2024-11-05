@@ -51,26 +51,26 @@ arch_challenge_convert_eval = ExecutorStep(
     ),
 )
 
-# ############################################################
-# # Convert mmlu to dolma format (i.e. JSON with "text" field)
-# # This is used as input to the decontamination pipeline so documents with MMLU content are removed
-# mmlu_convert_dolma = ExecutorStep(
-#     name="decontamination/mmlu-dolma",
-#     fn=raw2json,
-#     config=DatasetConversionConfig(
-#         dataset_name="cais/mmlu",
-#         subsets=["all"],
-#         splits=["dev", "test", "validation"],
-#         input_path=mmlu_download_step,
-#         hf_path="cais/mmlu",
-#         output_path=this_output_path(),
-#         output_format=OutputFormatOptions("decontamination"),
-#         prompt_key="question",
-#         options_key="choices",
-#         answer_idx_key="answer",
-#         answer_labels=["A", "B", "C", "D"],
-#     ),
-# )
+############################################################
+# Convert data to dolma format (i.e. JSON with "text" field)
+# This is used as input to the decontamination pipeline so documents with dataset content are removed
+arc_challenge_convert_dolma = ExecutorStep(
+    name="decontamination/arc_challenge",
+    fn=raw2json,
+    config=DatasetConversionConfig(
+        dataset_name="allenai/ai2_arc",
+        subsets=["*"],
+        splits=["train", "test", "validation"],
+        input_path=arc_challenge_download_step,
+        hf_path="allenai/ai2_arc",
+        output_path=this_output_path(),
+        output_format=OutputFormatOptions("decontamination"),
+        prompt_key="question",
+        options_key="choices",
+        answer_idx_key="answerKey",
+        answer_labels=["A", "B", "C", "D"],
+    ),
+)
 
 ############################################################
 
@@ -79,5 +79,6 @@ if __name__ == "__main__":
         steps=[
             arc_challenge_download_step,
             arch_challenge_convert_eval,
+            arc_challenge_convert_dolma,
         ]
     )
