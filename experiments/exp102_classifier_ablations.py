@@ -3,14 +3,14 @@ import os
 from dataclasses import dataclass, field
 
 from experiments.defaults import default_tokenize, default_train
-from experiments.llama import llama3_tokenizer, llama_1_4b, llama_1_4b_train_config
-from experiments.quality_classifiers import (
+from experiments.exp164_quality_classifiers import (
     dclm_eli5_100k_oh_100k_rw_200k,
     dclm_eli5_100k_oh_100k_rw_200k_seed_1,
     dclm_eli5_100k_oh_100k_rw_200k_seed_2,
     dclm_eli5_200k_rw_200k,
     teknium_oh_200k_rw_200k,
 )
+from experiments.llama import llama3_tokenizer, llama_1_4b, llama_1_4b_train_config
 from marin.core.runtime import TaskConfig
 from marin.execution.executor import (
     ExecutorStep,
