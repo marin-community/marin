@@ -159,7 +159,7 @@ class ParquetFineWebEduConfig:
 
 
 @ray.remote(memory=1 * 1024 * 1024 * 1024)
-def write_group_to_parquet(output_file, group_df, group_success_file):
+def write_group_to_parquet(output_file: str, group_df: pd.DataFrame, group_success_file: str):
     # Check if the success file already exists
     if fsspec_exists(group_success_file):
         logger.info(f"Shard {output_file} already exists, skipping...")
