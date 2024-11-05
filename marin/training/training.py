@@ -210,7 +210,6 @@ def _doublecheck_paths(config: TrainLmOnPodConfig, must_save_checkpoints):
     Double-check that we're not using local paths in some of the standard places that Levanter sets defaults.
     Also check that the paths are in the same region as the VM, to avoid performance issues and billing surprises.
     """
-    print("KEY: " + os.getenv("WANDB_API_KEY"))
     local_ok = config.bypass_path_checks or config.tpu_type is None
     try:
         region = get_vm_region()
