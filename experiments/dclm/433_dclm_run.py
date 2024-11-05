@@ -1,0 +1,86 @@
+from experiments.defaults import SimpleTrainConfig, default_tokenize, default_train
+from experiments.llama import LlamaConfig
+from experiments.pretraining_datasets import dclm_baseline, proofpile_2, starcoderdata
+from marin.execution.executor import executor_main
+from marin.processing.tokenize.data_configs import lm_mixture_data_config
+
+gpt_neox_tokenizer = "EleutherAI/gpt-neox-20b"
+
+dclm_baseline_tokenized = default_tokenize(
+    name="dclm_baseline",
+    dataset=dclm_baseline,
+    tokenizer=gpt_neox_tokenizer,
+)
+
+starcoderdata_tokenized = default_tokenize(
+    name="starcoderdata", dataset=starcoderdata, tokenizer=gpt_neox_tokenizer, text_key="content"
+)
+
+proofpile_2_tokenized = default_tokenize(
+    name="proofpile_2",
+    dataset=proofpile_2,
+    tokenizer=gpt_neox_tokenizer,
+)
+
+DCLM_FULL_COMPONENTS = {
+    "dclm_baseline": dclm_baseline_tokenized,
+    "starcoderdata": starcoderdata_tokenized,
+    "proofpile_2": proofpile_2_tokenized,
+}
+
+# weights are from page 11 of https://arxiv.org/abs/2406.11794. Sampling is done uniformly over tokens.
+# the 7B model was trained on 4.1T tokens, and the 1.4B model's data mixture weights are scaled accordingly.
+DCLM_MIXTURE_WEIGHTS = {
+    "dclm_baseline": 3.8,  # 3.8 trillion tokens https://huggingface.co/datasets/mlfoundations/dclm-baseline-1.0
+    "starcoderdata": 0.25,  # 250 billion tokens https://huggingface.co/datasets/bigcode/starcoderdata
+    "proofpile_2": 0.055,  # 55 billion tokens https://huggingface.co/datasets/EleutherAI/proof-pile-2
+}
+
+EXPERIMENT_TAG = ["433_dclm_1b_1x"]
+
+mixture_config = lm_mixture_data_config(components=DCLM_FULL_COMPONENTS, weights=DCLM_MIXTURE_WEIGHTS)
+
+# hyperparams and numbers below are chosen to replicate the numbers in https://arxiv.org/abs/2406.11794.
+# Table 1 (page 5) has # model parameters and # training tokens. Table 11, page 43 has the hyperparameters.
+llama_1_4b_dclm = LlamaConfig(
+    seq_len=2048,
+    hidden_dim=2048,
+    intermediate_dim=8192,
+    num_heads=16,
+    num_kv_heads=16,
+    num_layers=24,
+    use_flash_attention=True,
+)
+
+NUM_TRAIN_TOKENS = int(28.8e9)  # 28.8 billion tokens
+NUM_TRAIN_STEPS = NUM_TRAIN_TOKENS // (256 * 2048)  # 256 is the batch size, 2048 is the sequence length
+
+training_config = SimpleTrainConfig(
+    tpu_type="v4-128",
+    train_batch_size=256,
+    num_train_steps=NUM_TRAIN_STEPS,
+    learning_rate=3e-3,
+    weight_decay=0.033,
+    min_lr_ratio=0.1,
+    warmup=5000,
+    cooldown=3e-5,
+    z_loss_weight=1e-4,
+)
+
+model = default_train(
+    name="dclm_1b_1x_replication_oct26",
+    tokenized=mixture_config,
+    model_config=llama_1_4b_dclm,
+    train_config=training_config,
+    tags=EXPERIMENT_TAG,
+)
+
+if __name__ == "__main__":
+    executor_main(
+        steps=[
+            dclm_baseline_tokenized,
+            starcoderdata_tokenized,
+            proofpile_2_tokenized,
+            model,
+        ]
+    )
