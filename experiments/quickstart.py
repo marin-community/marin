@@ -7,6 +7,7 @@ import draccus
 from levanter.models.gpt2 import Gpt2Config
 from levanter.trainer import TrainerConfig
 
+from marin.classifiers.utils import DatasetConfig
 from marin.execution.executor import (
     ExecutorMainConfig,
     ExecutorStep,
@@ -18,7 +19,6 @@ from marin.execution.executor import (
 from marin.processing.classification.consolidate import ConsolidateConfig, FilterConfig, consolidate
 from marin.processing.classification.dedupe import DedupeConfig, dedupe
 from marin.processing.classification.fasttext.train_fasttext import (
-    DatasetCurationConfig,
     TrainFasttextClassifierConfig,
     train,
 )
@@ -65,18 +65,16 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
         name=os.path.join(prefix, "quality-classifier"),
         fn=train,
         config=TrainFasttextClassifierConfig(
-            input_doc_paths=[
-                DatasetCurationConfig(
+            datasets=[
+                DatasetConfig(
                     input_doc_path=output_path_of(transform_hq_data_step),
                     label="hq",
-                    relative_sampling_rate=1.0,
-                    format="dolma_formatted_jsonl",
+                    sampling_rate=1.0,
                 ),
-                DatasetCurationConfig(
+                DatasetConfig(
                     input_doc_path=output_path_of(transform_lq_data_step),
                     label="lq",
-                    relative_sampling_rate=1.0,
-                    format="dolma_formatted_jsonl",
+                    sampling_rate=1.0,
                 ),
             ],
             output_path=this_output_path(),
@@ -86,6 +84,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
                 "epoch": 25,
                 "wordNgrams": 2,
                 "dim": 50,
+                "thread": 1,
             },
         ),
     )
