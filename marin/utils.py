@@ -3,6 +3,7 @@ import logging
 import os
 import re
 from contextlib import contextmanager
+from datetime import datetime
 
 import braceexpand
 import fsspec
@@ -187,6 +188,13 @@ def fsspec_size(file_path: str) -> int:
     return fs.size(file_path)
 
 
+def fsspec_mtime(file_path: str) -> datetime:
+    """Get file modification time (in seconds since epoch) of a file on an `fsspec` filesystem."""
+    fs = fsspec.core.url_to_fs(file_path)[0]
+
+    return fs.modified(file_path)
+
+
 def validate_marin_gcp_path(path: str) -> str:
     """
     Validate the given path according to the marin GCP convention.
@@ -318,3 +326,13 @@ def _hacky_remove_tpu_lockfile():
         except Exception:
             logger.error("Failed to remove lockfile")
             pass
+
+
+def is_in_ci() -> bool:
+    """
+    Check if the code is running in a CI environment.
+
+    Returns:
+        bool: True if running in CI, False otherwise.
+    """
+    return "CI" in os.environ
