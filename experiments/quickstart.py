@@ -26,6 +26,8 @@ from marin.processing.classification.inference import InferenceConfig, run_infer
 from marin.processing.tokenize import TokenizeConfig, lm_data_config, tokenize
 from marin.schemas.web.convert import HtmlToMarkdownConfig
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
+from marin.utilities.ray_utils import is_local_ray_cluster
+from marin.utils import is_in_ci
 from scripts.hello_world_fw.process import FineWebConfig, transform
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -169,7 +171,11 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
     )
 
     ############################################################
-    # Train
+
+    if not is_in_ci() and not is_local_ray_cluster():
+        tpu_type = "v4-8"
+    else:
+        tpu_type = None
 
     train_step = ExecutorStep(
         name=os.path.join(prefix, "train"),
@@ -177,8 +183,12 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
         config=TrainLmOnPodConfig(
             output_path=this_output_path(),
             data=lm_data_config(tokenize_step),
-            env={"WANDB_API_KEY": None, "WANDB_MODE": "disabled"},  # Running it locally and turning off wandb
-            tpu_type=None,
+            env={
+                "WANDB_API_KEY": None,
+                "WANDB_MODE": "disabled",
+                "JAX_PLATFORMS": "cpu",
+            },  # Running it locally and turning off wandb
+            tpu_type=tpu_type,
             hf_save_steps=1,
             model=Gpt2Config(
                 num_layers=2,
@@ -186,9 +196,13 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
                 seq_len=64,
                 hidden_dim=32,
             ),
-            trainer=TrainerConfig(train_batch_size=1, num_train_steps=2, max_eval_batches=1, require_accelerator=False),
+            trainer=TrainerConfig(train_batch_size=8, num_train_steps=2, max_eval_batches=1, require_accelerator=False),
         ),
     )
+
+    ##### Evaluate
+
+    # evaluate_step = evaluate_helm_on_step(train_step, ["mmlu"], max_eval_instances=10)
 
     return [
         transform_hq_data_step,
@@ -200,6 +214,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
         consolidate_step,
         tokenize_step,
         train_step,
+        # evaluate_step,
     ]
 
 
