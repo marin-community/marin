@@ -7,14 +7,14 @@ from marin.execution.executor import executor_main, output_path_of
 
 fineweb_edu_tokenized = default_tokenize(name="fineweb-edu", dataset=fineweb_edu, tokenizer=llama3_tokenizer)
 fineweb_edu_model = default_train(
-    name="fineweb-edu-1.4b",
+    name="exp446-fineweb-edu-1.4b",
     tokenized=fineweb_edu_tokenized,
     model_config=llama_1_4b,
     train_config=llama_1_4b_train_config,
 )
 
 eval_step = evaluate_helm(
-    model_name="fineweb-edu-1.4b",
+    model_name="exp446-fineweb-edu-1.4b",
     model_path=output_path_of(fineweb_edu_model),
     evals=["mmlu"],
 )
