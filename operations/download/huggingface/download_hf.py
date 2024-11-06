@@ -6,7 +6,6 @@ using HfFileSystem for direct streaming of data transfer.
 
 import logging
 import os
-from pathlib import Path
 
 import draccus
 import fsspec
@@ -97,7 +96,7 @@ def download_hf(cfg: DownloadConfig) -> None:
 
     # Write Provenance JSON
     write_provenance_json(
-        Path(versioned_output_path),
+        versioned_output_path,
         metadata={"dataset": cfg.hf_dataset_id, "version": cfg.revision, "links": files},
     )
 
