@@ -7,6 +7,7 @@ import draccus
 from levanter.models.gpt2 import Gpt2Config
 from levanter.trainer import TrainerConfig
 
+from marin.classifiers.utils import DatasetConfig
 from marin.execution.executor import (
     ExecutorMainConfig,
     ExecutorStep,
@@ -18,7 +19,6 @@ from marin.execution.executor import (
 from marin.processing.classification.consolidate import ConsolidateConfig, FilterConfig, consolidate
 from marin.processing.classification.dedupe import DedupeConfig, dedupe
 from marin.processing.classification.fasttext.train_fasttext import (
-    DatasetCurationConfig,
     TrainFasttextClassifierConfig,
     train,
 )
@@ -26,6 +26,8 @@ from marin.processing.classification.inference import InferenceConfig, run_infer
 from marin.processing.tokenize import TokenizeConfig, lm_data_config, tokenize
 from marin.schemas.web.convert import HtmlToMarkdownConfig
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
+from marin.utilities.ray_utils import is_local_ray_cluster
+from marin.utils import is_in_ci
 from scripts.hello_world_fw.process import FineWebConfig, transform
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -65,18 +67,16 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
         name=os.path.join(prefix, "quality-classifier"),
         fn=train,
         config=TrainFasttextClassifierConfig(
-            input_doc_paths=[
-                DatasetCurationConfig(
+            datasets=[
+                DatasetConfig(
                     input_doc_path=output_path_of(transform_hq_data_step),
                     label="hq",
-                    relative_sampling_rate=1.0,
-                    format="dolma_formatted_jsonl",
+                    sampling_rate=1.0,
                 ),
-                DatasetCurationConfig(
+                DatasetConfig(
                     input_doc_path=output_path_of(transform_lq_data_step),
                     label="lq",
-                    relative_sampling_rate=1.0,
-                    format="dolma_formatted_jsonl",
+                    sampling_rate=1.0,
                 ),
             ],
             output_path=this_output_path(),
@@ -86,6 +86,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
                 "epoch": 25,
                 "wordNgrams": 2,
                 "dim": 50,
+                "thread": 1,
             },
         ),
     )
@@ -170,7 +171,11 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
     )
 
     ############################################################
-    # Train
+
+    if not is_in_ci() and not is_local_ray_cluster():
+        tpu_type = "v4-8"
+    else:
+        tpu_type = None
 
     train_step = ExecutorStep(
         name=os.path.join(prefix, "train"),
@@ -178,8 +183,12 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
         config=TrainLmOnPodConfig(
             output_path=this_output_path(),
             data=lm_data_config(tokenize_step),
-            env={"WANDB_API_KEY": None, "WANDB_MODE": "disabled"},  # Running it locally and turning off wandb
-            tpu_type=None,
+            env={
+                "WANDB_API_KEY": None,
+                "WANDB_MODE": "disabled",
+                "JAX_PLATFORMS": "cpu",
+            },  # Running it locally and turning off wandb
+            tpu_type=tpu_type,
             hf_save_steps=1,
             model=Gpt2Config(
                 num_layers=2,
@@ -187,9 +196,13 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
                 seq_len=64,
                 hidden_dim=32,
             ),
-            trainer=TrainerConfig(train_batch_size=1, num_train_steps=2, max_eval_batches=1, require_accelerator=False),
+            trainer=TrainerConfig(train_batch_size=8, num_train_steps=2, max_eval_batches=1, require_accelerator=False),
         ),
     )
+
+    ##### Evaluate
+
+    # evaluate_step = evaluate_helm_on_step(train_step, ["mmlu"], max_eval_instances=10)
 
     return [
         transform_hq_data_step,
@@ -201,6 +214,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
         consolidate_step,
         tokenize_step,
         train_step,
+        # evaluate_step,
     ]
 
 
