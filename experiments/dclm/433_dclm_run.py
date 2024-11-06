@@ -1,5 +1,5 @@
 from experiments.defaults import SimpleTrainConfig, default_tokenize, default_train
-from experiments.evals.evals import evaluate_helm
+from experiments.evals.evals import evaluate_helm_on_step, evaluate_helm
 from experiments.llama import LlamaConfig
 from experiments.pretraining_datasets import dclm_baseline, proofpile_2, starcoderdata
 from marin.execution.executor import executor_main, output_path_of
@@ -75,6 +75,11 @@ model = default_train(
     train_config=training_config,
     tags=EXPERIMENT_TAG,
 )
+
+#mmlu_eval = evaluate_helm_on_step(
+#    model,    
+#    evals=["mmlu"],
+#)
 
 mmlu_eval = evaluate_helm(
     model_name="dclm_1b_1x_replication_oct26-a28b1e/step-54931",
