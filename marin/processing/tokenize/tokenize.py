@@ -198,12 +198,12 @@ def _is_probably_path(path: str) -> bool:
     protocol, _ = fsspec.core.split_protocol(path)
 
     if protocol is not None:
-        return False
+        return True
 
     if fsspec_isdir(path):
-        return False
+        return True
 
-    return True
+    return False
 
 
 @draccus.wrap()
