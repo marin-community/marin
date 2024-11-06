@@ -6,10 +6,13 @@ class EvaluationConfig:
     evaluator: str
     """Name of the evaluator to run."""
 
-    model_name: str
+    model_name: str | None
     """
     Can be a name of the model in Hugging Face (e.g, google/gemma-2b) or
     a name given to the model checkpoint (e.g., $RUN/$CHECKPOINT).
+
+    If None, the model_path should be provided and the name will be imputed from the path,
+     using Levanter's path conventions. (i.e. $RUN/hf/step-$STEP --> $RUN-$STEP)
     """
 
     evaluation_path: str = "tmp/output"
@@ -28,6 +31,11 @@ class EvaluationConfig:
     model_path: str | None = None
     """
     Optional: Path to the model. Can be a path on GCS.
+    """
+
+    discover_latest_checkpoint: bool = False
+    """
+    Whether to discover the latest HF checkpoint in the model path.
     """
 
     max_eval_instances: int | None = None
