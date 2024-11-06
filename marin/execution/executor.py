@@ -161,7 +161,7 @@ class InputName:
         return InputName(self.step, name=os.path.join(self.name, name) if self.name else name)
 
 
-def output_path_of(step: ExecutorStep, name: str | None = None):
+def output_path_of(step: ExecutorStep, name: str | None = None) -> InputName:
     return InputName(step=step, name=name)
 
 
