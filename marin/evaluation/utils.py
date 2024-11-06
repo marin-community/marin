@@ -7,6 +7,8 @@ import psutil
 import yaml
 from fsspec.implementations.local import LocalFileSystem
 
+from marin.utils import fsspec_exists, fsspec_glob, fsspec_mtime
+
 
 def authenticate_with_hf(hf_auth_token: str | None) -> None:
     """Authenticates with the Hugging Face API using the given token."""
@@ -54,11 +56,12 @@ def upload_to_gcs(local_path: str, gcs_path: str) -> None:
 
 def run_bash_command(command: list[str], check: bool = True) -> None:
     """Runs a bash command."""
-    print(" ".join(command))
+    command_str: str = " ".join(command)
+    print(f"RUNNING: {command_str}")
     start_time: float = time.time()
-    subprocess.run(command, check=check)  # Pass list directly, remove shell=True
+    os.system(command_str)
     elapsed_time_seconds: float = time.time() - start_time
-    print(f"Completed: {' '.join(command)} ({elapsed_time_seconds}s)")
+    print(f"COMPLETED: {command_str} ({elapsed_time_seconds}s)")
 
 
 def write_yaml(content: dict, output_path: str) -> None:
@@ -80,3 +83,44 @@ def kill_process_on_port(port: int) -> None:
                     print(f"Process {proc.info['pid']} no longer exists.")
                 except Exception as e:
                     print(f"Error killing process: {e}")
+
+
+def set_cuda_visible_devices():
+    """Sets the CUDA_VISIBLE_DEVICES environment variable based on available GPUs."""
+    # Run `nvidia-smi` to get the number of available GPUs
+    result = subprocess.run(["nvidia-smi", "--list-gpus"], stdout=subprocess.PIPE, text=True)
+    gpu_list = result.stdout.strip().split("\n")
+
+    # Get the indices of all detected GPUs
+    available_gpus = [str(i) for i in range(len(gpu_list))]
+
+    if available_gpus:
+        os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(available_gpus)
+        print(f"Auto-selected GPUs: {os.environ['CUDA_VISIBLE_DEVICES']}")
+    else:
+        print("No available GPUs found.")
+
+
+def discover_hf_checkpoints(base_path: str):
+    """
+    Discover the Hugging Face checkpoints in the given path, sorted by the last modified time. (Most recent last)
+    Args:
+        base_path:  Fsspec Path to the directory containing the checkpoints, possibly in nested directories.
+    Returns:
+        List of paths to the checkpoints, sorted by the last modified time.
+    """
+
+    def _is_checkpoint_dir(path):
+        return fsspec_exists(os.path.join(path, "config.json")) and fsspec_exists(
+            os.path.join(path, "tokenizer_config.json")
+        )
+
+    paths = fsspec_glob(os.path.join(base_path, "**/config.json"))
+
+    # sort by modified time
+    paths.sort(key=lambda path: fsspec_mtime(path))
+
+    # Filter out the paths that are not checkpoint directories
+    checkpoint_paths = [os.path.dirname(path) for path in paths if _is_checkpoint_dir(os.path.dirname(path))]
+
+    return checkpoint_paths

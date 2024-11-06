@@ -10,11 +10,11 @@ license = {file = "LICENSE"}
 
 requires-python = ">=3.10"
 dependencies = [
-    "jax@git+https://github.com/dlwh/jax@retry_refuse",
+    "jax>=0.4.34",
     "dolma",
     "chardet",
     "cryptography",
-    "datasets>=2.18.0",
+    "datasets>=3.1.0,<3.2.0",
     "dill",
     "draccus>=0.8.0",
     "fastparquet",
@@ -22,9 +22,9 @@ dependencies = [
     "gcsfs>=2024.2,<2024.7",
     "google-api-python-client~=2.0",
     "google-cloud-storage-transfer~=1.0",
-    "html2text==2024.2.26",                 # TODO :: Check pin?
-    "htmlmin==0.1.12",                      # TODO :: Check usage | pin?
-    "markdownify==0.12.1",                  # TODO :: Check usage | pin?
+    "html2text==2024.2.26", # TODO :: Check pin?
+    "htmlmin==0.1.12", # TODO :: Check usage | pin?
+    "markdownify==0.12.1", # TODO :: Check usage | pin?
     "multiprocess==0.70.16",
     "py7zr",
     "zstandard==0.23.0",
@@ -38,7 +38,7 @@ dependencies = [
     "regex",
     "requests",
     "warcio",
-    "levanter>=1.2.dev1043",
+    "levanter>=1.2.dev1054",
     "lm-eval",
     "resiliparse",
     "trafilatura",
