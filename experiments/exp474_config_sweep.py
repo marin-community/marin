@@ -1,12 +1,14 @@
 # https://github.com/stanford-crfm/marin/issues/474
 # Sweep to determine optimal training config
 import dataclasses
-import functools
 import logging
 import math
 from collections.abc import Sequence
 
 import numpy as np
+import ray
+
+import marin.training.training
 from levanter.models.llama import LlamaConfig
 
 from experiments.defaults import default_train
@@ -21,7 +23,7 @@ from marin.execution.executor import ExecutorStep, executor_main
 logger = logging.getLogger("ray")
 
 # Sweep to determine optimal training config
-LR_CHOICES = [1e-3, 3e-3, 1e-2]
+LR_CHOICES = [1e-4, 1e-3, 3e-3]
 WD_CHOICES = [0.05, 0.1, 0.25]
 TPU_TYPES_150m = ["v4-32", "v4-64"]
 TPU_TYPES_300m = ["v4-64"]
@@ -89,20 +91,16 @@ def format_train_config(prefix: str, config: SimpleTrainConfig):
     return f"{prefix}-bs={config.train_batch_size}-step={config.num_train_steps}-lr={config.learning_rate}-wd{config.weight_decay}"
 
 
-def _failure_ok(fn):
+def _failure_ok_train(*args, **kwargs):
     """
-    Decorator to catch exceptions and log them, but not fail the whole sweep.
+    Wrapper to catch exceptions and log them, but not fail the whole sweep. We do this because some batch sizes are too
+    big.
     """
-
-    @functools.wraps(fn)
-    def wrapper(*args, **kwargs):
-        try:
-            return fn(*args, **kwargs)
-        except Exception:
-            logger.exception(f"Failed to run {fn.__name__} with {args=} {kwargs=}")
-            return None
-
-    return wrapper
+    try:
+        return ray.get(marin.training.training.run_levanter_train_lm.remote(*args, **kwargs))
+    except Exception as e:
+        logger.exception("Failed to run training", exc_info=e)
+        return None
 
 
 def make_sweep_steps(
@@ -124,8 +122,7 @@ def make_sweep_steps(
             tags=tags,
         )
 
-        # because a lot of batch sizes are too big (for now) and we don't want to fail the whole sweep
-        step = dataclasses.replace(step, fn=_failure_ok(step.fn))
+        step = dataclasses.replace(step, fn=_failure_ok_train)
 
         steps.append(step)
     return steps

@@ -609,13 +609,11 @@ def execute_after_dependencies(
     """
     status_path = get_status_path(output_path)
     ray_task_id = ray.get_runtime_context().get_task_id()
-    logger.info(f"Running {fn} with config {config} at {output_path}")
 
     # Ensure that dependencies are all run first
     if should_run:
         append_status(status_path, STATUS_WAITING, ray_task_id=ray_task_id)
     ray.get(dependencies)
-    logger.info(f"Dependencies finished for {fn} with config {config} at {output_path}")
 
     # Call fn(config)
     if should_run:
