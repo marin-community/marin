@@ -14,8 +14,8 @@ fineweb_edu_model = default_train(
 )
 
 eval_step = evaluate_helm(
-    model_name="exp446-fineweb-edu-1.4b",
-    model_path=output_path_of(fineweb_edu_model),
+    model_name="exp446-fineweb-edu-1.4b-step-9999",
+    model_path="gs://marin-us-central2/checkpoints/exp446-fineweb-edu-1.4b-9e4be7/hf/step-9999",
     evals=["mmlu"],
 )
 
