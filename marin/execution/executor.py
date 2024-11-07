@@ -116,7 +116,7 @@ class ExecutorStep(Generic[ConfigT]):
      - a function `fn` (Ray remote), and
      - a configuration `config` which gets passed into `fn`.
      - a pip dependencies list (Optional[list[str]]) which are the pip dependencies required for the step.
-     These can be keys of project.optional-dependencies in the project's pyproject.toml file or any other package.
+     These can be keys of project.optional-dependencies in the project's pyproject.toml file or any other pip package.
 
     When a step is run, we compute the following two things for each step:
     - `version`: represents all the upstream dependencies of the step
@@ -590,8 +590,7 @@ class Executor:
             pip_dependencies = get_pip_dependencies(step.pip_dependencies)
         else:
             pip_dependencies = []
-        print("Pip dependencies for the step:", pip_dependencies)
-        # import pdb; pdb.set_trace()
+
         self.refs[step] = execute_after_dependencies.options(
             name=name,
             runtime_env=RuntimeEnv(
