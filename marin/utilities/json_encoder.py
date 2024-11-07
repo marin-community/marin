@@ -3,7 +3,9 @@ import logging
 from datetime import timedelta
 from pathlib import Path
 
-from jax.numpy import bfloat16, float32
+# Todo(Percy, dlwh): Can we remove this jax dependency?
+# from jax.numpy import bfloat16, float32
+from numpy import float32
 
 logger = logging.getLogger("ray")
 
@@ -14,7 +16,7 @@ class CustomJsonEncoder(json.JSONEncoder):
             return {"days": obj.days, "seconds": obj.seconds, "microseconds": obj.microseconds}
         if isinstance(obj, Path):
             return str(obj)
-        if obj in (float32, bfloat16):
+        if obj in (float32):
             return str(obj)
         try:
             return super().default(obj)
