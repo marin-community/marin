@@ -155,7 +155,7 @@ def _prepare_data_config(
     tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig,
     use_default_validation: bool,
     use_default_supervised: bool,
-) -> LMMixtureDatasetConfig:
+) -> tuple[LMMixtureDatasetConfig, LMSupervisedDatasetConfig | None]:
     """
     Prepare a tokenized dataset for training. This is mostly just combining the tokenized data with the validation sets.
 
