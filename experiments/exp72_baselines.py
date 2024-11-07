@@ -13,7 +13,7 @@ from marin.processing.tokenize import TokenizeConfig, tokenize
 
 slimpajama_6b_tokenized = default_tokenize(name="SlimPajama-6B", dataset=slimpajama_6b, tokenizer=llama3_tokenizer)
 slimpajama_6b_model = default_train(
-    name="SlimPajama-6B-1.4b",
+    name="SlimPajama-6B-300m",
     tokenized=slimpajama_6b_tokenized,
     model_config=llama_300m,
     train_config=llama_300m_train_config,
@@ -49,8 +49,8 @@ fineweb_edu_model = default_train(
 if __name__ == "__main__":
     executor_main(
         steps=[
-            slimpajama_6b_model,
-            slimpajama_model,
+            # slimpajama_6b_model,
+            # slimpajama_model,
             fineweb_edu_model,
         ],
         description="Train 1.4B models on standard datasets (SlimPajama 6B, SlimPajama, FineWebEdu).",

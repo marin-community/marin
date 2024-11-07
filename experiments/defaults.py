@@ -6,6 +6,7 @@ import dataclasses
 import os
 from collections.abc import Sequence
 from datetime import timedelta
+from functools import lru_cache
 
 import jmp
 from levanter.checkpoint import CheckpointerConfig
@@ -58,10 +59,12 @@ def default_tokenize(
     )
 
 
+@lru_cache  # LRU to make the executor happier
 def default_validation_sets(tokenizer: str, base_path: str = "tokenized/") -> dict[str, TokenizerStep]:
     return paloma_tokenized(base_path=base_path, tokenizer=tokenizer)
 
 
+@lru_cache  # LRU to make the executor happier
 def default_supervised_data(tokenizer):
     supervised_data_cache = ExecutorStep(
         name="supervised/mmlu-cache",
@@ -75,7 +78,7 @@ def default_supervised_data(tokenizer):
             cache_path=this_output_path(),
             input_field="prompt",
             output_field="response",
-            tokenizer=versioned(tokenizer),
+            tokenizer=tokenizer,
         ),
     )
 
@@ -100,6 +103,19 @@ def default_train(
     use_default_validation: bool = True,
     use_default_supervised: bool = True,
 ) -> ExecutorStep:
+    """
+    Train a language model using the default configuration.
+
+    Args:
+        name:  The name of the training run. Will form the basis of the output path for the executor step.
+        tokenized:  The tokenized data to train on. This can be an InputName, ExecutorStep, or LMMixtureDatasetConfig.
+        model_config: Levanter LmConfig for the model to train.
+        train_config: SimpleTrainConfig for the training run.
+        tags: Any additional tags to add to the Wandb tracker.
+        use_default_validation: Whether to use the default validation sets (currently Paloma).
+        use_default_supervised: Whether to use the default supervised validation data (currently MMLU).
+
+    """
 
     data, supervised_data = _prepare_data_config(tokenized, use_default_validation, use_default_supervised)
 
