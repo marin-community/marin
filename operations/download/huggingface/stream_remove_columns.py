@@ -9,6 +9,7 @@ import pandas as pd
 import pyarrow.parquet as pq
 import ray
 from huggingface_hub import HfFileSystem
+from tqdm import tqdm
 
 fs = HfFileSystem()
 logger = logging.getLogger("ray")
@@ -32,7 +33,7 @@ def prune_stream_and_save(input_file: str, output_file: str, keep_columns: list[
         parquet_file = pq.ParquetFile(fs.open(input_file))
 
         full_df_list = []
-        for batch in parquet_file.iter_batches(batch_size=10000):
+        for batch in tqdm(parquet_file.iter_batches(batch_size=10000), desc=f"Processing {input_file}"):
             df = batch.to_pandas()
 
             drop_columns = [col for col in df.columns if col not in keep_columns]
@@ -91,6 +92,7 @@ def prune_hf_dataset(cfg: DatasetConfig):
     logger.info(f"Starting dataset pruning for {cfg.hf_paths}")
 
     result_refs = []
+    MAX_CONCURRENT_WORKERS = 1
 
     for path in cfg.hf_paths:
         # HF Path form: hf://[<repo_type_prefix>]<repo_id>[@<revision>]/<path/in/repo>
@@ -100,6 +102,17 @@ def prune_hf_dataset(cfg: DatasetConfig):
 
         try:
             result_refs.append(process_hf_subset.remote(hf_path, output_path, cfg.keep_columns))
+
+            # Wait for a task to complete if we hit the worker limit
+            if len(result_refs) >= MAX_CONCURRENT_WORKERS:
+                done, result_refs = ray.wait(result_refs, num_returns=1)
+                try:
+                    ray.get(done)
+                    logger.info("Successfully processed one subset")
+                except Exception as e:
+                    logger.exception(f"Error processing subset: {e!s}")
+                    raise e
+
         except Exception as e:
             logger.exception(f"Error processing subset {hf_path}: {e!s}")
             continue
