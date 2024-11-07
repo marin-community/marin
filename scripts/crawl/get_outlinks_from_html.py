@@ -92,7 +92,7 @@ def is_parseable(link):
             "w3lib",
         ]
     },
-)  # 4 GB  # 4 GB
+)  # 4 GB
 @cached_or_construct_output(
     success_suffix="SUCCESS", verbose=False
 )  # We use this decorator to make this function idempotent
