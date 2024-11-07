@@ -8,6 +8,7 @@ from collections.abc import Sequence
 from datetime import timedelta
 
 import jmp
+import levanter_tokenize_supervised
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text import LMMixtureDatasetConfig, LMSupervisedDatasetConfig
 from levanter.models.llama import LlamaConfig
@@ -17,14 +18,14 @@ from levanter.store.cache import CacheOptions
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 
-import marin.processing.tokenize as tokenize, levanter_tokenize_supervised
+import marin.processing.tokenize as tokenize
 from experiments.llama import compute_num_parameters
 from experiments.paloma import paloma_tokenized
+from experiments.raw2json import mmlu_convert_eval_aux, mmlu_convert_eval_subject
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.execution.executor import ExecutorStep, InputName, this_output_path, versioned, output_path_of
+from marin.execution.executor import ExecutorStep, InputName, output_path_of, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, TokenizerStep, lm_data_config
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
-from experiments.raw2json import mmlu_convert_eval_aux, mmlu_convert_eval_subject
 
 
 def default_tokenize(
@@ -47,19 +48,22 @@ def default_tokenize(
 def default_validation_sets(tokenizer: str, base_path: str = "tokenized/") -> dict[str, TokenizerStep]:
     return paloma_tokenized(base_path=base_path, tokenizer=tokenizer)
 
+
 def default_supervised_data(tokenizer):
     supervised_data_cache = ExecutorStep(
-        name="supervised/mmlu-cache", fn=levanter_tokenize_supervised, config=TokenizeConfig(
-        train_paths=[],
-        validation_paths=[
-            output_path_of(mmlu_convert_eval_aux).cd("cais/*.jsonl.gz"),
-            output_path_of(mmlu_convert_eval_subject).cd("cais/*.jsonl.gz"),
-        ],
-        cache_path=this_output_path(),
-        input_field="prompt",
-        output_field="response",
-        tokenizer=versioned(tokenizer),
-        )
+        name="supervised/mmlu-cache",
+        fn=levanter_tokenize_supervised,
+        config=TokenizeConfig(
+            train_paths=[],
+            validation_paths=[
+                output_path_of(mmlu_convert_eval_aux).cd("cais/*.jsonl.gz"),
+                output_path_of(mmlu_convert_eval_subject).cd("cais/*.jsonl.gz"),
+            ],
+            cache_path=this_output_path(),
+            input_field="prompt",
+            output_field="response",
+            tokenizer=versioned(tokenizer),
+        ),
     )
 
     supervised_data_config = LMSupervisedDatasetConfig(
@@ -127,7 +131,9 @@ def default_train(
 
 
 def _prepare_data_config(
-    tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig, use_default_validation: bool, use_default_supervised: bool
+    tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig,
+    use_default_validation: bool,
+    use_default_supervised: bool,
 ) -> LMMixtureDatasetConfig:
     """
     Prepare a tokenized dataset for training. This is mostly just combining the tokenized data with the validation sets.

@@ -4,10 +4,11 @@ import os
 import sys
 
 import draccus
+from levanter.data.text import LMSupervisedDatasetConfig
 from levanter.models.gpt2 import Gpt2Config
 from levanter.trainer import TrainerConfig
-from levanter.data.text import LMSupervisedDatasetConfig
 
+from experiments.raw2json import mmlu_convert_eval_aux, mmlu_convert_eval_subject
 from marin.execution.executor import (
     ExecutorMainConfig,
     ExecutorStep,
@@ -24,11 +25,10 @@ from marin.processing.classification.fasttext.train_fasttext import (
     train,
 )
 from marin.processing.classification.inference import InferenceConfig, run_inference
-from marin.processing.tokenize import TokenizeConfig, lm_data_config, tokenize, levanter_tokenize_supervised
+from marin.processing.tokenize import TokenizeConfig, levanter_tokenize_supervised, lm_data_config, tokenize
 from marin.schemas.web.convert import HtmlToMarkdownConfig
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 from scripts.hello_world_fw.process import FineWebConfig, transform
-from experiments.raw2json import mmlu_convert_eval_aux, mmlu_convert_eval_subject
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -173,17 +173,19 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
     )
 
     supervised_data_cache = ExecutorStep(
-        name="supervised/mmlu-cache", fn=levanter_tokenize_supervised, config=TokenizeConfig(
-        train_paths=[],
-        validation_paths=[
-            output_path_of(mmlu_convert_eval_aux).cd("cais/*.jsonl.gz"),
-            output_path_of(mmlu_convert_eval_subject).cd("cais/*.jsonl.gz"),
-        ],
-        cache_path=this_output_path(),
-        input_field="prompt",
-        output_field="response",
-        tokenizer=versioned(tokenizer),
-        )
+        name="supervised/mmlu-cache",
+        fn=levanter_tokenize_supervised,
+        config=TokenizeConfig(
+            train_paths=[],
+            validation_paths=[
+                output_path_of(mmlu_convert_eval_aux).cd("cais/*.jsonl.gz"),
+                output_path_of(mmlu_convert_eval_subject).cd("cais/*.jsonl.gz"),
+            ],
+            cache_path=this_output_path(),
+            input_field="prompt",
+            output_field="response",
+            tokenizer=versioned(tokenizer),
+        ),
     )
 
     supervised_data_config = LMSupervisedDatasetConfig(
