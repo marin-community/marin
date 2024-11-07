@@ -161,6 +161,7 @@ def _prepare_data_config(
 
     Returns:
         The data config to use for training with any validation sets added.
+        The supervised data config for internal evaluation.
 
     """
     tokenizer = _get_tokenizer_for_train(tokenized)
