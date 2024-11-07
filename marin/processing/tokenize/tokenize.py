@@ -116,10 +116,12 @@ def tokenize(config: TokenizeConfig):
 
 @ray.remote(runtime_env=RuntimeEnv(env_vars={"JAX_PLATFORM_NAME": "cpu"}))
 def levanter_tokenize_supervised(config: TokenizeConfig):
-    supervised_config = LMSupervisedDatasetConfig(validation_urls=config.validation_paths,
-                                                  cache_dir=config.cache_path,
-                                                  input_field=config.input_field,
-                                                  output_field=config.output_field)
+    supervised_config = LMSupervisedDatasetConfig(
+        validation_urls=config.validation_paths,
+        cache_dir=config.cache_path,
+        input_field=config.input_field,
+        output_field=config.output_field,
+    )
     logging.basicConfig(level=logging.INFO)
 
     logger.info(f"Caching {config.validation_paths} to {config.cache_path}.")
