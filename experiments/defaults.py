@@ -99,7 +99,6 @@ def default_train(
     tags: Sequence[str] = (),
     use_default_validation: bool = True,
     use_default_supervised: bool = True,
-    supervised_data: LMSupervisedDatasetConfig | None = None,
 ) -> ExecutorStep:
 
     data, supervised_data = _prepare_data_config(tokenized, use_default_validation, use_default_supervised)
