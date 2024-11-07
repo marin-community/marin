@@ -12,7 +12,7 @@ import json
 import os
 import tempfile
 
-from utils import download_from_gcs, is_remote_path
+from marin.evaluation.utils import download_from_gcs, is_remote_path
 
 
 def process_mmlu_results_local(local_results_path: str) -> float:
