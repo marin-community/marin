@@ -228,7 +228,6 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
 
 @draccus.wrap()
 def main(config: ExecutorMainConfig):
-    # ray.init(local_mode=True)
     try:
         # Replace this only if it's not in argv
         if "--prefix" in sys.argv:  # Check if prefix is already provided
