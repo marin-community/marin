@@ -159,6 +159,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
 
     ############################################################
     # Tokenize
+    tokenizer = "gpt2"
 
     tokenize_step = ExecutorStep(
         name=os.path.join(prefix, "tokenized"),
@@ -167,7 +168,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
             train_paths=output_path_of(consolidate_step),
             validation_paths=[],
             cache_path=this_output_path(),
-            tokenizer=versioned("gpt2"),
+            tokenizer=versioned(tokenizer),
         ),
     )
 
@@ -181,8 +182,8 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
         cache_path=this_output_path(),
         input_field="prompt",
         output_field="response",
-        tokenizer=versioned("gpt2"),
-    )
+        tokenizer=versioned(tokenizer),
+        )
     )
 
     supervised_data_config = LMSupervisedDatasetConfig(
