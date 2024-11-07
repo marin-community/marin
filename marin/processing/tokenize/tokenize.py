@@ -38,24 +38,25 @@ logger = logging.getLogger(__name__)
 
 @dataclasses.dataclass(frozen=True)
 class TokenizeConfig:
-    train_paths: list[str]  # path to training data in jsonl format
-    validation_paths: list[str]  # path to validation data in jsonl format
+    train_paths: list[str]  # path to training data
+    validation_paths: list[str]  # path to validation data
     cache_path: str  # base path to save the tokenized files
     tokenizer: str  # tokenizer name. Should be the same as you intend to use in the tokenizer spec for the training run
     tags: list[str] = dataclasses.field(default_factory=list)  # tags to be added to config
     cache_options: CacheOptions = CacheOptions(num_shard_groups=1024)  # noqa: RUF009
     input_field: str = ""
     output_field: str = ""
+    text_key: str = "text"
 
     def train_source(self) -> ShardedDataSource | None:
         if len(self.train_paths) == 0:
             return None
-        return _create_source(self.train_paths)
+        return _create_source(self.train_paths, self.text_key)
 
     def validation_source(self) -> ShardedDataSource | None:
         if len(self.validation_paths) == 0:
             return None
-        return _create_source(self.validation_paths)
+        return _create_source(self.validation_paths, self.text_key)
 
     def as_lm_dataset_source_config(self, actual_output_path: str | InputName) -> LMDatasetSourceConfig:
         """
@@ -80,10 +81,7 @@ def tokenize(config: TokenizeConfig):
     if train_source is not None:
         train_ledger = (
             ray.remote(tokenize_and_concatenate_shards)
-            .options(
-                name=f"tokenize::{config.cache_path}",
-                runtime_env=RuntimeEnv(env_vars={"JAX_PLATFORM_NAME": "cpu", "GCE_METADATA_TIMEOUT": "120"}),
-            )
+            .options(name=f"tokenize::{config.cache_path}", runtime_env=RuntimeEnv(env_vars={"JAX_PLATFORMS": "cpu"}))
             .remote(
                 train_source,
                 batch_tokenizer,
@@ -99,9 +97,7 @@ def tokenize(config: TokenizeConfig):
     if validation_source is not None:
         validation_ledger = (
             ray.remote(tokenize_and_concatenate_shards)
-            .options(
-                name=f"tokenize::{config.cache_path}", runtime_env=RuntimeEnv(env_vars={"JAX_PLATFORM_NAME": "cpu"})
-            )
+            .options(name=f"tokenize::{config.cache_path}", runtime_env=RuntimeEnv(env_vars={"JAX_PLATFORMS": "cpu"}))
             .remote(
                 validation_source,
                 batch_tokenizer,
@@ -148,7 +144,7 @@ def levanter_tokenize(input_paths: list[str] | str, tokenizer_name: str, output_
 
     logger.info(f"Caching {input_paths} to {output_path}.")
 
-    source = _create_source(input_paths)
+    source = _create_source(input_paths, "text")
     tokenizer = transformers.AutoTokenizer.from_pretrained(tokenizer_name)
     batch_tokenizer = BatchTokenizer(tokenizer, enforce_eos=True)
 
@@ -164,7 +160,7 @@ def levanter_tokenize(input_paths: list[str] | str, tokenizer_name: str, output_
     logger.info(f"Finished caching {input_paths} to {output_path}.")
 
 
-def _create_source(input_paths: str | list[str]) -> ShardedDataSource:
+def _create_source(input_paths: str | list[str], text_key) -> ShardedDataSource:
     if isinstance(input_paths, str) and not _is_probably_path(input_paths):
         source = levanter.data.datasource_from_hf(input_paths, split="train")
         source = source.map(lambda d: d["text"])
@@ -178,7 +174,7 @@ def _create_source(input_paths: str | list[str]) -> ShardedDataSource:
             raise ValueError(f"No valid jsonl/parquet files found to tokenize in {input_paths}")
 
         logger.info(f"Found {len(filepaths_to_tokenize)} files to tokenize.")
-        source = TextUrlDataSource(filepaths_to_tokenize)
+        source = TextUrlDataSource(filepaths_to_tokenize, text_key=text_key)
 
     return source
 
@@ -217,12 +213,12 @@ def _is_probably_path(path: str) -> bool:
     protocol, _ = fsspec.core.split_protocol(path)
 
     if protocol is not None:
-        return False
+        return True
 
     if fsspec_isdir(path):
-        return False
+        return True
 
-    return True
+    return False
 
 
 @draccus.wrap()

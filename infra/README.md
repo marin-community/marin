@@ -214,9 +214,17 @@ TAG_VERSIONS = latest $(shell git rev-parse --short HEAD) $(shell date -u +"%Y%m
 ```
 
 The `cluster_docker` command will handle creating artifact repositories if they don't exist, building the Docker image,
-tagging it, and pushing it to all relevant regions and versions.
+tagging it, and pushing it to all relevant regions and versions. If you run into a permissions error (e.g., 403) when pushing the Docker image, you may need to authenticate to the repo:
 
-After building the Docker image, update the `infra/update-cluster-configs.py` script to point to the new image and regenerate the cluster configs. For instance, if you updated the `europe-west` cluster you can update the tags as below:
+``` diff
+gcloud auth configure-docker us-central2-docker.pkg.dev
+gcloud auth configure-docker europe-west4-docker.pkg.dev
+gcloud auth configure-docker us-west4-docker.pkg.dev
+```
+
+(`make cluster_docker` ought to do those steps for you, but just in case.)
+
+After building the Docker image and pushing it to the relevant regions and versions, update the `infra/update-cluster-configs.py` script to point to the new image and regenerate the cluster configs. For instance, if you updated the `europe-west` cluster you can update the tags as below:
 
 ```diff
 - DOCKER_TAGS = {
@@ -247,9 +255,28 @@ clusters. To prevent orphaned states, do not change the names of the clusters wi
 the cluster down!
 
 
-
 #### Environment Variables
 
 We are currently using Google Secret Manager to store the environment variables that are needed to run the cluster.
 You can edit those secrets by going to the Google Cloud Console and navigating to the Secret Manager. Once you add
 a new version, you can cause the changes to propagate by killing the workers or restarting the cluster.
+
+
+### Adding TPU Nodes Manually to the Cluster
+
+Ray only supports on demand and preemptible TPUs. For reserved nodes, we need to add them manually to the cluster.
+
+We have a modified version of the Levanter launch script that mostly automates this process. For example:
+
+```bash
+python infra/manual_ray_worker_launch.py --head <IP of ray head> --cluster_yaml infra/marin-us-central2.yaml \
+       --reserved --tpu_type v4-128
+```
+
+This command will take a couple of minutes to run and then exit. You don't need to run this in a tmux or anything like
+that. You can run it from your laptop.
+
+If you want to change that to, say, two v4-64s, you need to delete the TPU node (using the GCP console) and then run the
+command again with the new TPU type.
+
+To get the IP of the ray head, it's easiest (to me) to go to the GCP console and find the VM and gets its *internal* IP.

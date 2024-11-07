@@ -28,6 +28,10 @@ TAG_VERSIONS = latest $(shell git rev-parse --short HEAD) $(shell date -u +"%Y%m
 
 cluster_docker:
 	@echo "Building and pushing Docker images for clusters $(CLUSTER_REPOS) with tags $(TAG_VERSIONS)"
+	# Authenticate for each region
+	$(foreach region,$(CLUSTER_REPOS), \
+		gcloud auth configure-docker $(region)-docker.pkg.dev;)
+
 	# Create Artifact Repositories if they don't exist
 	$(foreach region,$(CLUSTER_REPOS), \
 		gcloud artifacts repositories list --location=$(region) --filter 'name:marin' > /dev/null || \

@@ -23,6 +23,7 @@ class VllmTpuEvaluator(Evaluator, ABC):
         Dependency(name="click", version="8.1.3"),
         Dependency(name="jsonschema", version="4.23.0"),
         Dependency(name="packaging"),
+        Dependency(name="pynvml", version="11.5.3"),
         Dependency(name="starlette", version="0.37.2"),
         Dependency(name="tokenizers", version="0.19.1"),
         Dependency(name="transformers", version="4.44.0"),
@@ -131,7 +132,11 @@ class VllmTpuEvaluator(Evaluator, ABC):
         return runtime_env
 
     def launch_evaluate_with_ray(
-        self, model: ModelConfig, evals: list[str], output_path: str, max_eval_instances: int | None = None
+        self,
+        model: ModelConfig,
+        evals: list[str],
+        output_path: str,
+        max_eval_instances: int | None = None,
     ) -> None:
         """
         Launches the evaluation run with Ray.

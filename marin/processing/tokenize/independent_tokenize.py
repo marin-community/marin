@@ -20,7 +20,7 @@ from jaxtyping import PyTree
 from levanter.data import BatchProcessor, ShardedDataSource, batched
 from levanter.store import TreeStore
 from levanter.store.cache import CacheLedger, CacheOptions, _canonicalize_batch
-from levanter.store.jagged_array import DEFAULT_WRITE_CHUNK_SIZE, JaggedArrayStore, PreparedBatch
+from levanter.store.jagged_array import JaggedArrayStore, PreparedBatch
 from tqdm_loggable.auto import tqdm
 
 from ...utilities import ray_utils
@@ -118,7 +118,7 @@ def _tokenize_one_shard_group(
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
     source = _RestrictedShardedDataSource(source, shards)
-    ledger = CacheLedger.load_or_initialize(temporary_cache_path, source, processor, options)
+    ledger = CacheLedger.load_or_initialize(temporary_cache_path, source, processor)
 
     if ledger.is_finished:
         logger.info("Shard group already processed.")
@@ -307,11 +307,9 @@ async def concatenate_stores(
     logger = logging.getLogger("concatenate_stores")
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-    options = caches[0][1].metadata.options
-
     logger.info(f"Concatenating {len(caches)} caches to {permanent_cache_path}.")
 
-    permanent_ledger = CacheLedger.load_or_initialize(permanent_cache_path, source, processor, options)
+    permanent_ledger = CacheLedger.load_or_initialize(permanent_cache_path, source, processor)
 
     if permanent_ledger.is_finished:
         logger.info("Permanent cache already finished.")
@@ -471,57 +469,19 @@ async def _copy_data_from_one_shard_to_permanent_memory(
 
     def _copy_one_array(dest_array: JaggedArrayStore, source_array: JaggedArrayStore, data_offset: int):
         # TODO: it'd be good if we just didn't expose the full data array (but only the used part)
-        # data = source_array.data[0 : source_array.data_size]
+        data = source_array.data[0 : source_array.data_size]
         # write_future = dest_array.data[data_offset : data_offset + source_array.data_size].write(data)
-        #
-        # return write_future
-        return _chunked_copy(source_path, dest_array.data, source_array.data, data_offset, source_array.data_size)
+        with ts.Transaction() as txn:
+            dest = dest_array.data
+            out_end = data_offset + source_array.data_size
+            write_future = dest.with_transaction(txn)[data_offset:out_end].write(data)
+
+        return write_future
 
     futures = jax.tree.map(_copy_one_array, dest.tree, source.tree, data_offset_tree)
 
     await asyncio.gather(*jax.tree.leaves(futures))
     logger.info(f"Finished copying data from {source_path} to {dest_path}.")
-    return
-
-
-def _chunked_copy(desc: str, dest_array: ts.TensorStore, source_array: ts.TensorStore, dest_offset: int, data_size: int):
-    """
-    Tries to do an aligned copy of a source array to a destination array. For some reason TS is using
-    a *ton* of memory to do the naive copy. We try to do something smart/chunked.
-    """
-    # TODO: transactions don't seem to be working?
-
-    itemsize = dest_array.dtype.numpy_dtype.itemsize
-    pbar = tqdm(total=data_size * itemsize, desc=f"Copying data ({desc})", unit="B", unit_scale=True)
-
-    write_alignment = DEFAULT_WRITE_CHUNK_SIZE  # 500MB or so
-    # write_alignment = 64
-    block_size = write_alignment * 4
-
-    # find the first aligned index
-    first_aligned_index = (dest_offset + write_alignment - 1) // write_alignment * write_alignment
-    src_index = 0
-    dest_index = 0
-
-    # copy the initial unaligned part
-    if first_aligned_index != 0:
-        write_length = min(data_size, first_aligned_index - dest_offset)
-        data = source_array[0:write_length].read().result()
-        dest_array[dest_offset : dest_offset + write_length].write(data).result()
-        del data
-        src_index = write_length
-        dest_index = dest_offset + write_length
-        pbar.update(write_length * itemsize)
-
-    while src_index < data_size:
-        write_length = min(block_size, data_size - src_index)
-        data = source_array[src_index : src_index + write_length].read().result()
-        dest_array[dest_index : dest_index + write_length].write(data).result()
-        del data
-        src_index += write_length
-        dest_index += write_length
-        pbar.update(write_length * itemsize)
-
     return
 
 
