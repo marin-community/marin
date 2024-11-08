@@ -38,7 +38,7 @@ dataset_type: chat_jsonl
 chat_train_urls:
   - "gs://marin-us-central2/documents/allenai--tulu-v2-sft-mixture-0ba27c/data/**/*.jsonl.gz"
 supervised_data:
-  cache_dir: "gs://levanter-checkpoints/marin/sft_cache/chat-data"
+  cache_dir: "gs://marin-us-central2/tokenized/sft_cache/chat-data"
 messages_field: "messages"
 input_role: "user"
 output_role: "assistant"
