@@ -88,6 +88,7 @@ import ray.remote_function
 
 from marin.execution.executor_step_status import (
     STATUS_FAILED,
+    STATUS_RUNNING,
     STATUS_SUCCESS,
     STATUS_WAITING,
     append_status,
@@ -160,7 +161,7 @@ class InputName:
         return InputName(self.step, name=os.path.join(self.name, name) if self.name else name)
 
 
-def output_path_of(step: ExecutorStep, name: str | None = None):
+def output_path_of(step: ExecutorStep, name: str | None = None) -> InputName:
     return InputName(step=step, name=name)
 
 
@@ -617,7 +618,7 @@ def execute_after_dependencies(
 
     # Call fn(config)
     if should_run:
-        append_status(status_path, STATUS_WAITING, ray_task_id=ray_task_id)
+        append_status(status_path, STATUS_RUNNING, ray_task_id=ray_task_id)
     try:
         if isinstance(fn, ray.remote_function.RemoteFunction):
             if should_run:
