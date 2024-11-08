@@ -13,6 +13,7 @@ from marin.schemas.web.convert import (
     ResiliparseConfig,
     TrafilaturaConfig,
 )
+from marin.web.utils import extract_content_from_dom
 
 logger = logging.getLogger("ray")
 HTML_CORRECTION_PREFIX = "<!DOCTYPE html>"
@@ -89,10 +90,21 @@ def convert_page_with_resiliparse(
     tree = HTMLTree.parse(html)
     title = tree.title or None
 
-    content = extract_plain_text(html, **asdict(config))
+    content = None
+    if not config.use_custom_variant:
+        content = extract_plain_text(html, **config.resiliparse_kwargs)
 
-    if title:
-        content = f"{title}\n\n{content}"
+        if title:
+            content = f"{title}\n\n{content}"
+
+    else:
+        # We override the existing resiliparse package with our custom fork in the worker
+        # environment. So we call the remote function with `pip` argument in decorator to
+        # install the custom package.
+        content = extract_content_from_dom(html, config.resiliparse_kwargs, config.markdownify_config)
+
+        if title:
+            content = f"# {title}\n\n{content}"
 
     out = {"title": title, "content": content, "html": html}
 
