@@ -4,7 +4,6 @@ from dataclasses import asdict
 from urllib.parse import urljoin
 
 import htmlmin
-import ray
 from bs4 import BeautifulSoup
 
 from marin.markdown import to_markdown
