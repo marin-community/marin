@@ -88,6 +88,7 @@ import ray.remote_function
 
 from marin.execution.executor_step_status import (
     STATUS_FAILED,
+    STATUS_RUNNING,
     STATUS_SUCCESS,
     STATUS_WAITING,
     append_status,
@@ -617,7 +618,7 @@ def execute_after_dependencies(
 
     # Call fn(config)
     if should_run:
-        append_status(status_path, STATUS_WAITING, ray_task_id=ray_task_id)
+        append_status(status_path, STATUS_RUNNING, ray_task_id=ray_task_id)
     try:
         if isinstance(fn, ray.remote_function.RemoteFunction):
             if should_run:
