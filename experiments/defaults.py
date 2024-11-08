@@ -84,6 +84,7 @@ def default_train(
         config=TrainLmOnPodConfig(
             output_path=this_output_path(),
             tpu_type=train_config.tpu_type,
+            node_count=train_config.node_count,
             data=data,
             trainer=TrainerConfig(
                 tracker=WandbConfig(
