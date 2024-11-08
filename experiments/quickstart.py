@@ -173,8 +173,8 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
         ),
     )
 
-    supervised_data_cache = ExecutorStep(
-        name="supervised/mmlu-cache",
+    evaluation_data_cache = ExecutorStep(
+        name="tokenized/evaluation/mmlu",
         fn=levanter_tokenize_supervised,
         config=TokenizeConfig(
             train_paths=[],
@@ -188,12 +188,12 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
         ),
     )
 
-    supervised_data_config = LMSupervisedDatasetConfig(
+    evaluation_data_config = LMSupervisedDatasetConfig(
         validation_urls=[
             output_path_of(mmlu_convert_eval_aux).cd("cais/*.jsonl.gz"),
             output_path_of(mmlu_convert_eval_subject).cd("cais/*.jsonl.gz"),
         ],
-        cache_dir=output_path_of(supervised_data_cache),
+        cache_dir=output_path_of(evaluation_data_cache),
         input_field="prompt",
         output_field="response",
     )
@@ -211,7 +211,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
         config=TrainLmOnPodConfig(
             output_path=this_output_path(),
             data=lm_data_config(tokenize_step),
-            supervised_data=supervised_data_config,
+            supervised_data=evaluation_data_config,
             env={
                 "WANDB_API_KEY": None,
                 "WANDB_MODE": "disabled",
