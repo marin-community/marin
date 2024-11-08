@@ -8,8 +8,6 @@ import logging
 from experiments.defaults import default_tokenize, default_train
 from experiments.llama import llama3_tokenizer, llama_1_4b, llama_1_4b_train_config
 from experiments.pretraining_datasets import fineweb
-from marin.evaluation.evaluation_config import EvaluationConfig
-from marin.evaluation.run import evaluate
 from marin.execution.executor import (
     ExecutorStep,
     executor_main,
@@ -19,7 +17,6 @@ from marin.execution.executor import (
 )
 from marin.schemas.web.convert import HtmlToMarkdownConfig, ResiliparseConfig, TrafilaturaConfig
 from scripts.fineweb.process_parquet_fw import ParquetFWConfig, process_fw_dump
-
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("ray")
