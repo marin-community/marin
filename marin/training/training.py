@@ -9,7 +9,7 @@ import levanter.infra.cli_helpers
 import ray
 from google.api_core.exceptions import Forbidden as GcpForbiddenException
 from levanter.data.text import LMMixtureDatasetConfig
-from levanter.infra.ray_tpu import run_on_pod_resumable, run_on_pod_multislice_resumable
+from levanter.infra.ray_tpu import run_on_pod_multislice_resumable, run_on_pod_resumable
 from levanter.main import train_lm
 from mergedeep import mergedeep
 from ray.runtime_env import RuntimeEnv
@@ -137,7 +137,9 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
         if config.node_count == 1:
             return run_on_pod_resumable(train_lm_task, config.tpu_type, max_retries_failure=10)
         else:
-            return run_on_pod_multislice_resumable(train_lm_task, config.tpu_type, config.node_count, max_retries_failure=10)
+            return run_on_pod_multislice_resumable(
+                train_lm_task, config.tpu_type, config.node_count, max_retries_failure=10
+            )
     else:
         return ray.get(train_lm_task.remote())
 
