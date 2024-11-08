@@ -2,7 +2,7 @@ from marin.execution.executor import ExecutorStep, this_output_path
 from operations.download.huggingface.download import DownloadConfig, download
 from operations.download.huggingface.download_gated_manual import download_and_upload_to_store
 
-download_fineweb = ExecutorStep(
+fineweb = ExecutorStep(
     name="raw/fineweb",
     fn=download,
     config=DownloadConfig(
