@@ -41,7 +41,6 @@ from bs4 import BeautifulSoup
 import draccus
 import fsspec
 import ray
-from resiliparse.process_guard import time_guard, ExecutionTimeout
 from tqdm_loggable.auto import tqdm
 
 from marin.core.runtime import cached_or_construct_output
@@ -105,6 +104,10 @@ def process_one_batch(html_paths_batch: list[str], output_path: str):
     html_paths_batch (list[str]): Paths of HTML files to extract outlinks from.
     output_path (str): Path to write JSONL file with outlinks.
     """
+    import w3lib.url
+    from courlan import check_url
+    from resiliparse_dom.extract.html2text import extract_main_dom_tree
+
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
     with fsspec.open(output_path, "w", compression="gzip") as fout:
@@ -113,113 +116,94 @@ def process_one_batch(html_paths_batch: list[str], output_path: str):
         for html_path in tqdm(html_paths_batch):
             with fsspec.open(html_path, "rt", compression="gzip") as fin:
                 for line in fin:
-                    num_total += 1
                     record = json.loads(line)
-                    with time_guard(timeout=20 * 60):
-                        try:
-                            outbound_links = get_links_from_record(record)
-                        except ExecutionTimeout:
-                            logger.info(f'Execution timed out for url: {record.get("metadata", {}).get("url", "")}')
-                            outbound_links = None
+                    html_str = record.get("html", "")
+                    url = record.get("metadata", {}).get("url", "")
 
-                    if outbound_links is None:
+                    if not html_str or not url:
+                        continue
+
+                    num_total += 1
+                    # Get all the outbound links in the HTML
+                    try:
+                        parsed_html = BeautifulSoup(html_str, "html.parser")
+                    except Exception:
+                        # Skip documents that don't parse
                         num_failed_to_parse += 1
-                    else:
-                        for link in outbound_links:
-                            fout.write(json.dumps(link) + "\n")
+                        continue
+                    unfiltered_outbound_links = set()
+                    for link in parsed_html.find_all("a", href=True):
+                        href = link.get("href")
+                        if href and is_parseable(href):
+                            absolute_link_target = urljoin(url, href)
+                            canonical_link = w3lib.url.canonicalize_url(absolute_link_target)
+                            unfiltered_outbound_links.add(canonical_link)
+
+                    # Heuristically filter the outbound_links
+                    outbound_links = set()
+                    for link in unfiltered_outbound_links:
+                        # check_url removes invalid links (e.g., http://666.0.0.1/)
+                        # and those that don't point to HTML (e.g., .mp3 extension, etc.)
+                        if (
+                            check_url(
+                                link,
+                                strict=False,
+                                with_redirects=False,
+                                language=None,
+                                with_nav=True,
+                                trailing_slash=True,
+                            )
+                            is not None
+                        ):
+                            outbound_links.add(link)
+
+                    # Now, get all of the outbound links in the main text
+                    # Need to convert to string here, since bs4 can't directly
+                    # use the resiliparse.parse.html.HTMLTree
+                    main_text_dom_str = str(
+                        extract_main_dom_tree(
+                            html_str,
+                            main_content=True,
+                        )
+                    ).strip()
+                    if not main_text_dom_str:
+                        continue
+
+                    # Get all the outbound links in the HTML
+                    try:
+                        main_text_with_links = BeautifulSoup(main_text_dom_str, "html.parser")
+                    except Exception:
+                        # Skip documents that don't parse
+                        num_failed_to_parse += 1
+                        continue
+                    main_text_outbound_links = set()
+                    for link in main_text_with_links.find_all("a", href=True):
+                        href = link.get("href")
+                        if href and is_parseable(href):
+                            absolute_link_target = urljoin(url, href)
+                            canonical_link = w3lib.url.canonicalize_url(absolute_link_target)
+                            main_text_outbound_links.add(canonical_link)
+
+                    # Filter outbound_links to allowed protocols
+                    allowed_protocols = {"http", "https"}
+                    outbound_links = [link for link in outbound_links if urlparse(link).scheme in allowed_protocols]
+
+                    # Prepare the list of outbound link records
+                    for link in outbound_links:
+                        is_internal = is_internal_link(url, link)
+                        in_main_content = link in main_text_outbound_links
+                        fout.write(
+                            json.dumps(
+                                {
+                                    "page_url": url,
+                                    "link_target": link,
+                                    "is_internal_link": is_internal,
+                                    "in_main_content": in_main_content,
+                                }
+                            )
+                            + "\n"
+                        )
         logger.info(f"Failed to parse {num_failed_to_parse} out of {num_total} records")
-
-
-def get_links_from_record(record: dict) -> list | None:
-    """
-    Given an HTML example, extract the outbound links. If we cannot parse
-    the HTML, return None.
-    """
-    import w3lib.url
-    from courlan import check_url
-    from resiliparse_dom.extract.html2text import extract_main_dom_tree
-
-    html_str = record.get("html", "")
-    url = record.get("metadata", {}).get("url", "")
-
-    if not html_str or not url:
-        return []
-    # Get all the outbound links in the HTML
-    try:
-        parsed_html = BeautifulSoup(html_str, "html.parser")
-    except Exception:
-        # Skip documents that don't parse
-        return None
-    unfiltered_outbound_links = set()
-    for link in parsed_html.find_all("a", href=True):
-        href = link.get("href")
-        if href and is_parseable(href):
-            absolute_link_target = urljoin(url, href)
-            canonical_link = w3lib.url.canonicalize_url(absolute_link_target)
-            unfiltered_outbound_links.add(canonical_link)
-
-    # Heuristically filter the outbound_links
-    outbound_links = set()
-    for link in unfiltered_outbound_links:
-        # check_url removes invalid links (e.g., http://666.0.0.1/)
-        # and those that don't point to HTML (e.g., .mp3 extension, etc.)
-        if (
-            check_url(
-                link,
-                strict=False,
-                with_redirects=False,
-                language=None,
-                with_nav=True,
-                trailing_slash=True,
-            )
-            is not None
-        ):
-            outbound_links.add(link)
-
-    # Now, get all of the outbound links in the main text
-    # Need to convert to string here, since bs4 can't directly
-    # use the resiliparse.parse.html.HTMLTree
-    main_text_dom_str = str(
-        extract_main_dom_tree(
-            html_str,
-            main_content=True,
-        )
-    ).strip()
-    if not main_text_dom_str:
-        return []
-
-    # Get all the outbound links in the HTML
-    try:
-        main_text_with_links = BeautifulSoup(main_text_dom_str, "html.parser")
-    except Exception:
-        # Skip documents that don't parse
-        return None
-    main_text_outbound_links = set()
-    for link in main_text_with_links.find_all("a", href=True):
-        href = link.get("href")
-        if href and is_parseable(href):
-            absolute_link_target = urljoin(url, href)
-            canonical_link = w3lib.url.canonicalize_url(absolute_link_target)
-            main_text_outbound_links.add(canonical_link)
-
-    # Filter outbound_links to allowed protocols
-    allowed_protocols = {"http", "https"}
-    outbound_links = [link for link in outbound_links if urlparse(link).scheme in allowed_protocols]
-
-    # Prepare the list of outbound link records
-    links_to_return = []
-    for link in outbound_links:
-        is_internal = is_internal_link(url, link)
-        in_main_content = link in main_text_outbound_links
-        links_to_return.append(
-            {
-                "page_url": url,
-                "link_target": link,
-                "is_internal_link": is_internal,
-                "in_main_content": in_main_content,
-            }
-        )
-    return links_to_return
 
 
 def batched(iterable, n=1):
