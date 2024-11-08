@@ -5,7 +5,6 @@ from marin.markdown.markdown import to_markdown
 from marin.schemas.web.convert import HtmlToMarkdownConfig
 
 
-@ray.remote(runtime_env={"pip": ["https://github.com/krypticmouse/chatnoir-resiliparse/tree/develop/resiliparse"]})
 def extract_content_from_dom(
     html: str,
     kwargs: dict,
@@ -31,10 +30,10 @@ def extract_content_from_dom(
     the main Resiliparse package. No plans to merge this into the main Resiliparse package yet.
     """
 
-    from resiliparse.extract.html2text import extract_main_dom_tree
-
+    from resiliparse_dom.extract.html2text import extract_main_dom_tree
+    
     tree = extract_main_dom_tree(html, **kwargs)
-    tree = BeautifulSoup(tree, "html.parser")
+    tree = BeautifulSoup(str(tree), "html.parser")
 
     # convert to markdown
     markdown = to_markdown(tree, markdownify_config)

@@ -92,7 +92,7 @@ def convert_page_with_resiliparse(
     title = tree.title or None
 
     content = None
-    if config.use_custom_variant:
+    if not config.use_custom_variant:
         content = extract_plain_text(html, **config.resiliparse_kwargs)
 
         if title:
@@ -102,8 +102,7 @@ def convert_page_with_resiliparse(
         # We override the existing resiliparse package with our custom fork in the worker
         # environment. So we call the remote function with `pip` argument in decorator to
         # install the custom package.
-        future = ray.remote(extract_content_from_dom).remote(html, config.resiliparse_kwargs, config.markdownify_config)
-        content = ray.get(future)
+        content = extract_content_from_dom(html, config.resiliparse_kwargs, config.markdownify_config)
 
         if title:
             content = f"# {title}\n\n{content}"
