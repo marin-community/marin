@@ -31,7 +31,6 @@ def create_steps() -> list[ExecutorStep]:
             input_path=output_path_of(fineweb),
             cc_dumps=versioned(["CC-MAIN-2024-18"]),
             md_output_path=this_output_path("md"),
-            text_output_path=this_output_path("text"),
             extract_method=versioned("resiliparse"),
             config=ResiliparseConfig(
                 preserve_formatting=versioned(False),
@@ -60,24 +59,11 @@ def create_steps() -> list[ExecutorStep]:
         train_config=llama_1_4b_train_config,
     )
 
-    evaluate_model = ExecutorStep(
-        name=f"evaluation/fw-small-{step_name}",
-        fn=evaluate,
-        config=EvaluationConfig(
-            evaluator="helm",
-            model_name=versioned(step_name),
-            model_path=output_path_of(fw_100b_model),
-            evaluation_path=this_output_path(),
-            evals=["mmlu"],
-        ),
-    )
-
     return [
         fineweb,
         transform_resiliparse_custom_fork,
         fw_tokenized,
         fw_100b_model,
-        evaluate_model,
     ]
 
 
