@@ -38,9 +38,9 @@ class TrainSFTOnPodConfig(sft.SFTConfig):
     # Add defaults matching your YAML structure
     dataset_type: DatasetType = DatasetType.CHAT_JSONL  # Note the CHAT_JSONL default
     chat_train_urls: List[str] = dataclasses.field(default_factory=list)
-    supervised_data: dict = dataclasses.field(default_factory=lambda: {
-        "cache_dir": "gs://levanter-checkpoints/marin/sft_cache/chat-data"
-    })
+    # supervised_data: dict = dataclasses.field(default_factory=lambda: {
+    #     "cache_dir": "gs://levanter-checkpoints/marin/sft_cache/chat-data"
+    # })
     messages_field: str = "messages"
     input_role: str = "user"
     output_role: str = "assistant"
@@ -322,8 +322,8 @@ def _doublecheck_paths_sft(config: TrainSFTOnPodConfig, must_save_checkpoints):
             check("chat_train_urls", url, none_ok=False)
 
     # Check supervised data cache directory
-    if config.supervised_data and "cache_dir" in config.supervised_data:
-        check("supervised_data.cache_dir", config.supervised_data["cache_dir"], none_ok=True)
+    if config.supervised_data:
+        check("supervised_data.cache_dir", config.supervised_data.cache_dir, none_ok=True)
 
     # Common checks for checkpointing
     check("trainer.checkpointer.base_path", config.trainer.checkpointer.base_path, none_ok=not must_save_checkpoints)
