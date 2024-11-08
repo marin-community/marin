@@ -10,11 +10,11 @@ license = {file = "LICENSE"}
 
 requires-python = ">=3.10"
 dependencies = [
-    "jax@git+https://github.com/dlwh/jax@retry_refuse",
+    "jax>=0.4.34",
     "dolma",
     "chardet",
     "cryptography",
-    "datasets>=2.18.0,<3.1.0",
+    "datasets>=3.1.0,<3.2.0",
     "dill",
     "draccus>=0.8.0",
     "fastparquet",
@@ -38,7 +38,7 @@ dependencies = [
     "regex",
     "requests",
     "warcio",
-    "levanter>=1.2.dev1043",
+    "levanter>=1.2.dev1074",
     "lm-eval",
     "resiliparse",
     "trafilatura",
