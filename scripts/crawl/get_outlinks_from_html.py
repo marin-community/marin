@@ -90,6 +90,7 @@ def is_parseable(link):
             "resiliparse_dom @ git+https://github.com/nelson-liu/chatnoir-resiliparse@58247de82b4d881223435113f1a07a86ad66494c#egg=resiliparse_dom&subdirectory=resiliparse_dom",
             "courlan",
             "w3lib",
+            "cchardet",
         ]
     },
 )  # 4 GB
@@ -104,9 +105,10 @@ def process_one_batch(html_paths_batch: list[str], output_path: str):
     html_paths_batch (list[str]): Paths of HTML files to extract outlinks from.
     output_path (str): Path to write JSONL file with outlinks.
     """
-    import w3lib.url
+    import cchardet
     from courlan import check_url
     from resiliparse_dom.extract.html2text import extract_main_dom_tree
+    import w3lib.url
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
@@ -126,7 +128,7 @@ def process_one_batch(html_paths_batch: list[str], output_path: str):
                     num_total += 1
                     # Get all the outbound links in the HTML
                     try:
-                        parsed_html = BeautifulSoup(html_str, "html.parser")
+                        parsed_html = BeautifulSoup(html_str, "lxml")
                     except Exception:
                         # Skip documents that don't parse
                         num_failed_to_parse += 1
@@ -171,7 +173,7 @@ def process_one_batch(html_paths_batch: list[str], output_path: str):
 
                     # Get all the outbound links in the HTML
                     try:
-                        main_text_with_links = BeautifulSoup(main_text_dom_str, "html.parser")
+                        main_text_with_links = BeautifulSoup(main_text_dom_str, "lxml")
                     except Exception:
                         # Skip documents that don't parse
                         num_failed_to_parse += 1
