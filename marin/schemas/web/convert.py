@@ -118,7 +118,7 @@ class ResiliparseConfig(ExtractionConfig):
     comments: bool | None = None
     skip_elements: list | None = None
 
-    use_custom_variant: bool = False
+    use_custom_variant: bool = False  # If True, it'll use our custom fork of Resiliparse for extraction.
     markdownify_config: HtmlToMarkdownConfig = field(default_factory=HtmlToMarkdownConfig.default_config)
 
     @classmethod
