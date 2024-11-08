@@ -115,7 +115,7 @@ def process_one_batch(html_paths_batch: list[str], output_path: str):
                 for line in fin:
                     num_total += 1
                     record = json.loads(line)
-                    with time_guard(timeout=20 * 60, check_interval=1000 * 15):
+                    with time_guard(timeout=20 * 60):
                         try:
                             outbound_links = get_links_from_record(record)
                         except ExecutionTimeout:
