@@ -49,8 +49,8 @@ fineweb_edu_model = default_train(
 if __name__ == "__main__":
     executor_main(
         steps=[
-            # slimpajama_6b_model,
-            # slimpajama_model,
+            slimpajama_6b_model,
+            slimpajama_model,
             fineweb_edu_model,
         ],
         description="Train 1.4B models on standard datasets (SlimPajama 6B, SlimPajama, FineWebEdu).",
