@@ -128,7 +128,10 @@ def levanter_tokenize_supervised(config: TokenizeConfig):
 
     tokenizer = transformers.AutoTokenizer.from_pretrained(config.tokenizer)
 
-    mk_supervised_dataset(supervised_config, tokenizer)
+    import haliax
+
+    # this axis doesn't actually matter for just building the cache
+    mk_supervised_dataset(supervised_config, tokenizer, haliax.Axis("position", 2048))
     logger.info(f"Finished caching supervised dataset to {config.cache_path}.")
 
 

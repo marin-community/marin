@@ -179,8 +179,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
         config=TokenizeConfig(
             train_paths=[],
             validation_paths=[
-                output_path_of(mmlu_convert_eval_aux).cd("cais/*.jsonl.gz"),
-                output_path_of(mmlu_convert_eval_subject).cd("cais/*.jsonl.gz"),
+                output_path_of(mmlu_convert_eval_subject).cd("cais/mmlu-virology-dev-evaluation.jsonl.gz"),
             ],
             cache_path=this_output_path(),
             input_field="prompt",
