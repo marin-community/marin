@@ -1,4 +1,3 @@
-import ray
 from bs4 import BeautifulSoup
 
 from marin.markdown.markdown import to_markdown
@@ -31,7 +30,7 @@ def extract_content_from_dom(
     """
 
     from resiliparse_dom.extract.html2text import extract_main_dom_tree
-    
+
     tree = extract_main_dom_tree(html, **kwargs)
     tree = BeautifulSoup(str(tree), "html.parser")
 
