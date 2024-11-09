@@ -241,6 +241,7 @@ def group_open_web_math_by_warc(input_paths: list[str], output_path: str):
 
 @ray.remote(memory=32 * 1024 * 1024 * 1024)
 def get_shards_to_process(shard_path: str):
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     all_shard_paths = fsspec_glob(os.path.join(shard_path, "*_warc_examples.parquet"))
     num_total_shards = len(all_shard_paths)
     already_processed_shard_paths = set(fsspec_glob(os.path.join(shard_path, "*.jsonl.gz.SUCCESS")))
