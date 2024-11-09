@@ -56,9 +56,9 @@ class FasttextClassifier(BaseClassifier):
         is_remote_or_local_path: bool = urllib.parse.urlparse(self.model_name).scheme or os.path.exists(self.model_name)
         try:
             is_huggingface_path: bool = not os.path.exists(self.model_name) and repo_exists(self.model_name)
-        except Exception as e:
+        except Exception:
             print(
-                f"Error checking if {self.model_name} is a Hugging Face path: {e} \
+                f"Exception checking if {self.model_name} is a Hugging Face path. \
                 This is normal for remote paths. Setting is_huggingface_path to False"
             )
             is_huggingface_path = False
