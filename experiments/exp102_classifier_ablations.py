@@ -22,6 +22,7 @@ from marin.execution.executor import (
 from marin.processing.classification.config.inference_config import RuntimeConfig
 from marin.processing.classification.consolidate import ConsolidateConfig, FilterConfig, consolidate
 from marin.processing.classification.inference import InferenceConfig, run_inference
+from marin.processing.tokenize import lm_mixture_data_config
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -106,15 +107,15 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
         tokenized[input_data_source] = tokenize_step
         weights[input_data_source] = 1.0
 
+    data_config = lm_mixture_data_config(components=tokenized, weights=weights)
+
     train_step = default_train(
         name=config.experiment_name,
-        tokenized=tokenized,
+        tokenized=data_config,
         model_config=llama_1_4b,
         train_config=llama_1_4b_train_config,
-        weights=weights,
     )
 
-    # TODO: Uncomment this when WANDBAPI error fixed
     steps.append(train_step)
 
     return steps

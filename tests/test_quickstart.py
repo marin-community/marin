@@ -20,7 +20,7 @@ def test_quickstart_run():
     with tempfile.TemporaryDirectory(prefix="executor-quickstart") as temp_dir:
         result = subprocess.run(
             ["python", os.path.join(MARIN_ROOT, "experiments/quickstart.py"), "--prefix", temp_dir],
-            capture_output=True,
+            capture_output=False,
             text=True,
         )
     assert result.returncode == 0, f"Quickstart run failed: {result.stderr}"
