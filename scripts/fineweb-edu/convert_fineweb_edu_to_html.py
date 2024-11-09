@@ -69,11 +69,7 @@ def process_one_shard(
     input_path (str): The input parquet shard to process.
     output_path (str): Path to write gzipped JSONL with HTML for URLs in the input parquet shard.
     """
-    try:
-        df = pd.read_parquet(input_path, columns=["url", "file_path", "id"])
-    except FileNotFoundError as e:
-        logger.exception(f"Error reading the parquet file: {e}")
-        raise e
+    df = pd.read_parquet(input_path, columns=["url", "file_path", "id"])
 
     urls = df["url"].tolist()
     # All frames will have same file_path, by design
@@ -109,14 +105,10 @@ def process_one_shard(
                     num_urls_found += 1
                     url_idx_in_df = url_dict[url]
 
-                    try:
-                        content = record.content_stream().read()
-                        html_decoded = content.decode(errors="ignore")
-                        df.loc[url_idx_in_df, "html"] = html_decoded
-                        num_urls_processed += 1
-                    except Exception as e:
-                        # We are just ignoring the error and moving forward as these errors are generally not a lot
-                        logger.exception(f"Error processing {url} in {s3_url} for {input_path}: {e}")
+                    content = record.content_stream().read()
+                    html_decoded = content.decode(errors="ignore")
+                    df.loc[url_idx_in_df, "html"] = html_decoded
+                    num_urls_processed += 1
 
     with fsspec.open(output_path, "wt", compression="gzip") as f:  # html output
         for index, row in df.iterrows():
@@ -195,13 +187,9 @@ def group_fineweb_edu_by_warc(input_paths: list[str], output_path: str):
     logger.info(f"Grouping examples at {input_paths} by their source WARC")
     datetime_start = datetime.utcnow()
 
-    try:
-        df = pd.concat(
-            [pd.read_parquet(file, columns=["url", "file_path", "id"]) for file in input_paths], ignore_index=True
-        )
-    except FileNotFoundError as e:
-        logger.exception(f"Error reading the parquet file: {e}")
-        raise e
+    df = pd.concat(
+        [pd.read_parquet(file, columns=["url", "file_path", "id"]) for file in input_paths], ignore_index=True
+    )
 
     grouped = df.groupby("file_path")
 
@@ -290,10 +278,7 @@ def process_fineweb_edu(cfg: ParquetFineWebEduConfig):
 
     while unfinished:
         finished, unfinished = ray.wait(unfinished, num_returns=len(unfinished), timeout=5)
-        try:
-            _ = ray.get(finished)
-        except Exception as e:
-            logger.exception(f"Error processing shard: {e}")
+        _ = ray.get(finished)
 
         # If we have more shard paths left to process and we haven't hit the max
         # number of concurrent tasks, add tasks to the unfinished queue.
