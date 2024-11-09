@@ -10,7 +10,6 @@ the attributes.  Handles two cases:
 import logging
 import os
 from dataclasses import dataclass, replace
-from pathlib import Path
 from typing import Any
 
 import draccus
@@ -91,7 +90,16 @@ def remove_spans(text: str, spans: list[list[int]]) -> str:
     return text
 
 
-def apply_filter(input_data: dict, doc_filter: FilterConfig, id_to_attributes: dict[str, Any]) -> bool | dict | None:
+def apply_filter(input_data: dict, doc_filter: FilterConfig, id_to_attributes: dict[str, Any]) -> bool | dict:
+    """Apply a filter to a single document
+
+    Currently, we support two types of filters:
+    - classify: filter based on a classification score. This is a filter-based operation where we return
+    True if the document should be kept and False otherwise.
+    - remove_spans: remove spans from the text - used in deduplication. This is a map-based operation where
+    we return a new document with the spans removed. However, if we don't want to keep the document,
+    we set the "keep" key to False. If we want to keep the document, we set the "keep" key to True.
+    """
     attributes = id_to_attributes[input_data["id"]]
     if doc_filter.type == FILTER_TYPE_CLASSIFY:
         # Check attribute >= threshold?
@@ -127,13 +135,6 @@ def apply_filter_batch_func(doc_filter, id_to_attributes):
         return apply_filter(batch, doc_filter, id_to_attributes)
 
     return apply_filter_func
-
-
-def get_filetype(input_path: str):
-    filename = input_path.split("/")[-1]
-    filetype = "".join(Path(filename).suffixes)
-    filetype = filetype.lstrip(".")
-    return filetype
 
 
 def read_attributes_as_dict(attribute_filename: str) -> dict[str, Any]:
