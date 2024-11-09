@@ -91,7 +91,7 @@ def remove_spans(text: str, spans: list[list[int]]) -> str:
     return text
 
 
-def apply_filter(input_data: dict, doc_filter: FilterConfig, id_to_attributes: dict[str, Any]) -> dict | None:
+def apply_filter(input_data: dict, doc_filter: FilterConfig, id_to_attributes: dict[str, Any]) -> bool | dict | None:
     attributes = id_to_attributes[input_data["id"]]
     if doc_filter.type == FILTER_TYPE_CLASSIFY:
         # Check attribute >= threshold?
@@ -111,7 +111,7 @@ def apply_filter(input_data: dict, doc_filter: FilterConfig, id_to_attributes: d
         # if the deduped text doesn't have actual content, we can skip this document
         # this is to avoid cases where there are just newlines or spaces
         if new_text.strip() == "":
-            return None
+            return dict(input_data, keep=False)
 
         return dict(input_data, text=new_text)
 
@@ -192,6 +192,9 @@ def process_file(
             dataset = dataset.map(apply_filter_func)
         else:
             raise ValueError(f"Unknown filter type: {doc_filter.type}")
+
+    # In the previous map step, we set the "keep" key for documents that should be removed
+    dataset = dataset.filter(lambda x: x["keep"])
 
     write_dataset(dataset, output_path)
 
