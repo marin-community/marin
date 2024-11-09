@@ -15,7 +15,6 @@ from typing import Any
 
 import draccus
 import numpy as np
-import psutil
 import ray
 
 from marin.core.runtime import cached_or_construct_output
@@ -44,9 +43,6 @@ class FilterConfig:
 
     name: str
     """Name of attribute to use for filtering."""
-
-    filetype: str = "jsonl.gz"
-    """The filetype of the input attribute file."""
 
     label: str | None = None
     """The label under the attribute name."""
@@ -133,20 +129,6 @@ def apply_filter_batch_func(doc_filter, id_to_attributes):
     return apply_filter_func
 
 
-def load_dataset_as_dict(input_filename: str, filetype: str) -> dict[str, Any]:
-    """
-    Convert to a format like:
-    {
-        <id>: <attributes>
-    }
-    """
-    table = read_dataset(input_filename, filetype)
-    data = {}
-    for row_id, attr in zip(table["id"], table["attributes"], strict=True):
-        data[row_id] = attr
-    return data
-
-
 def get_filetype(input_path: str):
     filename = input_path.split("/")[-1]
     filetype = "".join(Path(filename).suffixes)
@@ -154,9 +136,20 @@ def get_filetype(input_path: str):
     return filetype
 
 
-def get_memory_usage():
-    process = psutil.Process(os.getpid())
-    return process.memory_info().rss / (1024 * 1024 * 1024)  # Convert to GB
+def read_attributes_as_dict(attribute_filename: str) -> dict[str, Any]:
+    """Given some attribute filename, return a dictionary mapping from id to attributes
+
+    Inputs:
+        attribute_filename: str
+            The path to the attribute file
+        filetype: str
+            The filetype of the attribute file
+    """
+    table = read_dataset(attribute_filename)
+    data = {}
+    for row_id, attr in zip(table["id"], table["attributes"], strict=True):
+        data[row_id] = attr
+    return data
 
 
 @ray.remote
@@ -177,7 +170,7 @@ def process_file(
     attribute_files = []
     for doc_filter in filters:
         if fsspec_exists(doc_filter.attribute_path):
-            attribute_files.append(load_dataset_as_dict(doc_filter.attribute_path, doc_filter.filetype))
+            attribute_files.append(read_attributes_as_dict(doc_filter.attribute_path))
         else:
             logger.warning(f"Attribute file not found: {doc_filter.attribute_path}")
             attribute_files.append(None)
@@ -187,7 +180,6 @@ def process_file(
 
     total_examples = len(dataset)
 
-    logger.info(f"Memory usage before filtering: {get_memory_usage()} GB")
     for doc_filter, id_to_attributes in zip(filters, attribute_files, strict=True):
         if id_to_attributes is None:
             continue
@@ -201,52 +193,17 @@ def process_file(
         else:
             raise ValueError(f"Unknown filter type: {doc_filter.type}")
 
-    # TODO(Chris): Remove this after debugging
-    logger.info(f"Memory usage after filtering: {get_memory_usage()} GB")
     write_dataset(dataset, output_path)
 
     total_kept = len(dataset)
 
     logger.info(f"Kept {total_kept}/{total_examples} from {input_path}")
 
-    # for input_line in input_file:
-    #     num_total += 1
-
-    #     # Read document and attributes for that document
-    #     input_data = json.loads(input_line)
-    #     all_attributes = [json.loads(attr_file.readline()) if attr_file else None for attr_file in attribute_files]
-
-    #     # Apply filters
-    #     for doc_filter, attributes in zip(filters, all_attributes, strict=True):
-    #         if attributes is None:
-    #             continue
-    #         try:
-    #             assert attributes["id"] == input_data["id"]
-    #             input_data = apply_filter(input_data, doc_filter, attributes["attributes"])
-    #         except Exception as e:
-    #             logger.error(f"Error applying filter {doc_filter} to line {num_total}: {e}")
-    #             input_data = None  # Skip this example
-
-    #         if input_data is None:
-    #             break
-
-    #     # Write output
-    #     if input_data is not None:
-    #         num_kept += 1
-    #         print(json.dumps(input_data), file=output_file)
-
-    # Close all files
-    # input_file.close()
-    # for attr_file in attribute_files:
-    #     if attr_file:
-    #         attr_file.close()
-    # output_file.close()
-
 
 @ray.remote
-def get_scores(attribute_filename: str, attribute_name: str, label: str, filetype: str) -> list[float]:
+def get_scores(attribute_filename: str, attribute_name: str, label: str) -> list[float]:
     scores = []
-    attributes = load_dataset_as_dict(attribute_filename, filetype)
+    attributes = read_attributes_as_dict(attribute_filename)
     for _, attr in attributes.items():
         scores.append(attr[attribute_name][label])
     return scores
@@ -279,7 +236,7 @@ def consolidate(config: ConsolidateConfig):
             ]
             scores = ray.get(
                 [
-                    get_scores.remote(attribute_path, doc_filter.name, doc_filter.label, doc_filter.filetype)
+                    get_scores.remote(attribute_path, doc_filter.name, doc_filter.label)
                     for attribute_path in attribute_paths
                 ]
             )

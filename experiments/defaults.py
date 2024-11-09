@@ -198,9 +198,7 @@ def _prepare_data_config(
     return pretraining_data, evaluation_data
 
 
-def _get_tokenizer_for_train(
-    tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig,
-) -> str:
+def _get_tokenizer_for_train(tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig) -> str:
     match tokenized:
         case LMMixtureDatasetConfig(tokenizer=tokenizer):
             pass
