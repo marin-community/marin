@@ -75,7 +75,7 @@ def decode_html(html: bytes) -> str | None:
 
 
 @ray.remote(memory=4 * 1024 * 1024 * 1024)  # 4 GB
-@cached_or_construct_output(success_suffix="success", verbose=False)
+@cached_or_construct_output(success_suffix="SUCCESS", verbose=False)
 def process_one_shard(
     input_path: str,
     output_path: str,
