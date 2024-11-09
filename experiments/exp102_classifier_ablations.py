@@ -50,6 +50,12 @@ def get_model_path(model_path: str | ExecutorStep):
 
 
 def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
+    """Create the steps for a single experiment.
+
+    The experiment consists of taking a fineweb dump, filtering for high-quality documents,
+    tokenizing the documents, and training a model. The only difference between the experiments
+    is the quality classifier used to filter the documents.
+    """
     assert config.experiment_name is not None and config.quality_classifier_model_path is not None
 
     steps = []
