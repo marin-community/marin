@@ -46,6 +46,7 @@ import draccus
 import fsspec
 import pandas as pd
 import ray
+from resiliparse.parse.encoding import detect_encoding, bytes_to_str
 from warcio import ArchiveIterator
 
 from marin.core.runtime import cached_or_construct_output
@@ -53,6 +54,24 @@ from marin.utils import fsspec_exists, fsspec_glob
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
+
+
+def decode_html(html: bytes) -> str | None:
+    """
+    Given HTML (bytes), decode it into a string if possible. First try with
+    utf-8. If that doesn't work, try to detect the encoding.
+    """
+    try:
+        html = bytes_to_str(html, "utf-8")
+    except Exception:
+        encoding = detect_encoding(html)
+        if encoding is None or encoding == "utf-8":
+            return
+        try:
+            html = bytes_to_str(html, encoding)
+        except Exception:
+            return
+    return html
 
 
 @ray.remote(memory=4 * 1024 * 1024 * 1024)  # 4 GB
@@ -69,6 +88,7 @@ def process_one_shard(
     input_path (str): The input parquet shard to process.
     output_path (str): Path to write gzipped JSONL with HTML for URLs in the input parquet shard.
     """
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     df = pd.read_parquet(input_path, columns=["url", "file_path", "id"])
 
     urls = df["url"].tolist()
@@ -80,6 +100,7 @@ def process_one_shard(
     url_dict = {url: idx for idx, url in zip(index, urls)}
     num_urls_found = 0  # Used to early terminate
     num_urls_processed = 0
+    num_urls_failed_decoding = 0
     num_urls_to_find = len(urls)
 
     length_warc = 0
@@ -106,13 +127,21 @@ def process_one_shard(
                     url_idx_in_df = url_dict[url]
 
                     content = record.content_stream().read()
-                    html_decoded = content.decode(errors="ignore")
-                    df.loc[url_idx_in_df, "html"] = html_decoded
+                    html_decoded: str | None = decode_html(content)
+
+                    if html_decoded:
+                        df.loc[url_idx_in_df, "html"] = html_decoded
+                    else:
+                        df.loc[url_idx_in_df, "html"] = ""
+                        num_urls_failed_decoding += 1
                     num_urls_processed += 1
 
     with fsspec.open(output_path, "wt", compression="gzip") as f:  # html output
         for index, row in df.iterrows():
             out_fineweb_edu = row.to_dict()
+            # If this example failed decoding, don't write it out
+            if not out_fineweb_edu["html"]:
+                continue
             out_dolma = DolmaFormattedFineWebEduRecord(
                 id=out_fineweb_edu["id"],
                 source="fineweb-edu",
@@ -129,7 +158,7 @@ def process_one_shard(
     # num_urls_found should be equal to num_urls_to_find
     logger.info(
         f"Found: {num_urls_found}, Processed: {num_urls_processed}, out of {num_urls_to_find} urls, "
-        f"in {input_path}"
+        f"in {input_path} . {num_urls_failed_decoding} failed HTML decoding "
         f"AWS URL: {s3_url}"
         f"Found {length_warc} records in the WARC file"
     )
