@@ -180,6 +180,7 @@ def process_file(
     total_examples = len(dataset)
 
     for doc_filter, id_to_attributes in zip(filters, attribute_files, strict=True):
+        print(f"Applying filter {doc_filter.name} with label {doc_filter.label} with dataset length {len(dataset)}")
         if id_to_attributes is None:
             continue
 
