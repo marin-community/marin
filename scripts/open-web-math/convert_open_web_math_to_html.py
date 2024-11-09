@@ -97,7 +97,9 @@ def process_one_shard(
     s3_fs = fsspec.filesystem(
         "s3",
         anon=False,
+        default_block_size=100 * 2**20,
     )
+    s3_fs.retries = 10
 
     with s3_fs.open(s3_url, mode="rb") as file_stream:
         for record in ArchiveIterator(file_stream):
@@ -271,7 +273,7 @@ def process_open_web_math(cfg: ParquetOpenWebMathConfig):
     num_shards_to_process = len(shard_indices_to_process)
 
     # Set a limit on the number of concurrent tasks so we don't overwhelm CC
-    MAX_CONCURRENT_TASKS = 1000
+    MAX_CONCURRENT_TASKS = 500
 
     # Shuffle to encourage different workers to hit different AWS prefixes,
     # so we don't run into per-prefix rate limits.
