@@ -45,7 +45,7 @@ output_role: "assistant"
 
 # Additional settings
 tokenizer: "EleutherAI/gpt-neox-20b"
-max_tune_length: 2048
+max_seq_len: 2048
 epoch: 0
 
 initialize_from_hf: false

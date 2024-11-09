@@ -38,12 +38,10 @@ class TrainSFTOnPodConfig(sft.SFTConfig):
     # Add defaults matching your YAML structure
     dataset_type: DatasetType = DatasetType.CHAT_JSONL  # Note the CHAT_JSONL default
     chat_train_urls: List[str] = dataclasses.field(default_factory=list)
-    # supervised_data: dict = dataclasses.field(default_factory=lambda: {
-    #     "cache_dir": "gs://levanter-checkpoints/marin/sft_cache/chat-data"
-    # })
     messages_field: str = "messages"
     input_role: str = "user"
     output_role: str = "assistant"
+    max_seq_len: int = 2048
 
 @ray.remote(num_cpus=0.1, runtime_env={"pip": ["levanter>=1.2.dev1074"]})
 def run_levanter_sft(config: TrainSFTOnPodConfig):
