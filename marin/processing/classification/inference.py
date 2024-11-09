@@ -69,11 +69,21 @@ def process_file_using_actor_pool(input_path: str, output_path: str, model_name_
 
 
 def read_dataset(input_filename: str):
+    """Read in a dataset and return as a Huggingface Dataset
+
+    Args:
+        input_filename: str
+            The path to the input file. Currently supports .jsonl.gz and .parquet
+
+    Returns:
+        datasets.Dataset: A Huggingface Dataset in-memory without using the disk
+    """
+
     datasets.disable_caching()
     datasets.logging.set_verbosity_warning()
     # We use pandas to read in the file so that we don't have to materialize
-    # the entire dataset in disk. Huggingface datasets loads the dataset into
-    # disk first.
+    # the entire dataset in disk since we have limited disk space.
+    # Huggingface datasets loads the dataset into disk first and mmaps.
     if input_filename.endswith(".jsonl.gz"):
         df = pd.read_json(input_filename, compression="gzip", lines=True)
         dataset = datasets.Dataset.from_pandas(df)
@@ -87,6 +97,7 @@ def read_dataset(input_filename: str):
 
 
 def write_dataset(dataset: datasets.Dataset, output_filename: str):
+    """Writes a Huggingface Dataset to a file (remote or local)"""
     if output_filename.endswith(".jsonl.gz"):
         dataset.to_json(output_filename, compression="gzip")
     elif output_filename.endswith(".parquet"):
