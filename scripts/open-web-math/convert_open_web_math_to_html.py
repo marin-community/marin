@@ -148,7 +148,7 @@ def process_one_shard(
     # num_urls_found should be equal to num_urls_to_find
     logger.info(
         f"Found: {num_urls_found}, Processed: {num_urls_processed}, out of {num_urls_to_find} urls, "
-        f"in {input_path} . {num_urls_failed_decoding} failed HTMl decoding "
+        f"in {input_path} . {num_urls_failed_decoding} failed HTML decoding "
         f"AWS URL: {s3_url}"
         f"Found {length_warc} records in the WARC file"
     )
