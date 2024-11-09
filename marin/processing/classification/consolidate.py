@@ -175,8 +175,7 @@ def process_file(
             logger.warning(f"Attribute file not found: {doc_filter.attribute_path}")
             attribute_files.append(None)
 
-    input_filetype = get_filetype(input_path)
-    dataset = read_dataset(input_path, input_filetype)
+    dataset = read_dataset(input_path)
 
     total_examples = len(dataset)
 
