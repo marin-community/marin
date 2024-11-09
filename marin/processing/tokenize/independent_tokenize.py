@@ -118,7 +118,7 @@ def _tokenize_one_shard_group(
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
     source = _RestrictedShardedDataSource(source, shards)
-    ledger = CacheLedger.load_or_initialize(temporary_cache_path, source, processor, options)
+    ledger = CacheLedger.load_or_initialize(temporary_cache_path, source, processor)
 
     if ledger.is_finished:
         logger.info("Shard group already processed.")
@@ -307,11 +307,9 @@ async def concatenate_stores(
     logger = logging.getLogger("concatenate_stores")
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-    options = caches[0][1].metadata.options
-
     logger.info(f"Concatenating {len(caches)} caches to {permanent_cache_path}.")
 
-    permanent_ledger = CacheLedger.load_or_initialize(permanent_cache_path, source, processor, options)
+    permanent_ledger = CacheLedger.load_or_initialize(permanent_cache_path, source, processor)
 
     if permanent_ledger.is_finished:
         logger.info("Permanent cache already finished.")
