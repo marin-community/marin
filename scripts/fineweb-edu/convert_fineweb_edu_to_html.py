@@ -252,15 +252,16 @@ def group_fineweb_edu_by_warc(input_paths: list[str], output_path: str):
 
 @ray.remote(memory=32 * 1024 * 1024 * 1024)
 def get_shards_to_process(shard_path: str):
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     all_shard_paths = fsspec_glob(os.path.join(shard_path, "*_warc_examples.parquet"))
     num_total_shards = len(all_shard_paths)
-    already_processed_shard_paths = set(fsspec_glob(os.path.join(shard_path, "*.jsonl.gz.success")))
+    already_processed_shard_paths = set(fsspec_glob(os.path.join(shard_path, "*.jsonl.gz.SUCCESS")))
     num_already_processed_shards = len(already_processed_shard_paths)
 
     shard_indices_to_process = [
         int(os.path.basename(path).replace("_warc_examples.parquet", ""))
         for path in all_shard_paths
-        if path.replace("_warc_examples.parquet", ".jsonl.gz.success") not in already_processed_shard_paths
+        if path.replace("_warc_examples.parquet", ".jsonl.gz.SUCCESS") not in already_processed_shard_paths
     ]
     logger.info(
         f"Found {len(shard_indices_to_process)} shards to fetch HTML for ("
