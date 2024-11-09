@@ -113,7 +113,7 @@ def apply_filter(input_data: dict, doc_filter: FilterConfig, id_to_attributes: d
         if new_text.strip() == "":
             return dict(input_data, keep=False)
 
-        return dict(input_data, text=new_text)
+        return dict(input_data, text=new_text, keep=True)
 
     else:
         raise ValueError(f"Unknown filter type: {doc_filter.type}")
