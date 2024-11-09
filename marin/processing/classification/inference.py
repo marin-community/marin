@@ -106,28 +106,6 @@ def write_dataset(dataset: datasets.Dataset, output_filename: str):
         raise ValueError(f"Unsupported filetype: {output_filename}")
 
 
-@ray.remote
-@cached_or_construct_output(success_suffix="SUCCESS")
-def process_file_ray(
-    input_filename: str,
-    output_filename: str,
-    model_name_or_path: str,
-    attribute_name: str,
-    model_type: str | None,
-):
-    print(f"[*] Read in dataset {input_filename}")
-
-    quality_classifier = AutoClassifier.from_model_path(model_name_or_path, attribute_name, model_type=model_type)
-
-    dataset = read_dataset(input_filename)
-
-    dataset = dataset.select_columns(["text", "id"])
-    dataset = dataset.map(lambda batch: quality_classifier(batch), batched=True, batch_size=1024)
-    dataset = dataset.select_columns(["id", "attributes"])
-
-    write_dataset(dataset, output_filename)
-
-
 @cached_or_construct_output(success_suffix="SUCCESS")
 def process_file_with_quality_classifier(input_filename: str, output_filename: str, quality_classifier: BaseClassifier):
     dataset = read_dataset(input_filename)
@@ -137,6 +115,22 @@ def process_file_with_quality_classifier(input_filename: str, output_filename: s
     dataset = dataset.select_columns(["id", "attributes"])
 
     write_dataset(dataset, output_filename)
+
+
+@ray.remote
+def process_file_ray(
+    input_filename: str,
+    output_filename: str,
+    model_name_or_path: str,
+    attribute_name: str,
+    model_type: str | None,
+    filetype: str,
+):
+    print(f"[*] Read in dataset {input_filename}")
+
+    quality_classifier = AutoClassifier.from_model_path(model_name_or_path, attribute_name, model_type=model_type)
+
+    process_file_with_quality_classifier(input_filename, output_filename, quality_classifier)
 
 
 @ray.remote
