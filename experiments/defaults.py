@@ -199,7 +199,7 @@ def _prepare_data_config(
 
 
 def _get_tokenizer_for_train(
-    tokenized: InputName | ExecutorStep | dict[str, ExecutorStep] | LMMixtureDatasetConfig,
+    tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig,
 ) -> str:
     match tokenized:
         case LMMixtureDatasetConfig(tokenizer=tokenizer):
@@ -208,9 +208,6 @@ def _get_tokenizer_for_train(
             pass
         case InputName(step=ExecutorStep(config=TokenizeConfig(tokenizer=tokenizer))):
             pass
-        case dict():
-            first_executor_step = next(iter(tokenized.values()))
-            tokenizer = _get_tokenizer_for_train(first_executor_step)
         case _:
             raise ValueError(f"Could not determine tokenizer from {tokenized}")
 
