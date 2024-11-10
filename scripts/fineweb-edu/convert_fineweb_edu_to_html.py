@@ -310,7 +310,10 @@ def process_fineweb_edu(cfg: ParquetFineWebEduConfig):
 
     while unfinished:
         finished, unfinished = ray.wait(unfinished, num_returns=len(unfinished), timeout=5)
-        _ = ray.get(finished)
+        try:
+            _ = ray.get(finished)
+        except Exception as e:
+            logger.exception(f"Error processing shard: {e}")
 
         # If we have more shard paths left to process and we haven't hit the max
         # number of concurrent tasks, add tasks to the unfinished queue.
