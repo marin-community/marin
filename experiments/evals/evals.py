@@ -1,6 +1,6 @@
 from marin.evaluation.evaluation_config import EvaluationConfig
 from marin.evaluation.run import evaluate
-from marin.execution.executor import ExecutorStep, this_output_path
+from marin.execution.executor import ExecutorStep, InputName, output_path_of, this_output_path
 
 """
 Canonical set of evals.
@@ -25,6 +25,35 @@ def evaluate_helm(model_name: str, model_path: str, evals: list[str]) -> Executo
             model_path=model_path,
             evaluation_path=this_output_path(),
             evals=evals,
+        ),
+    )
+
+
+def evaluate_helm_on_step(
+    step: ExecutorStep | InputName, evals: list[str], max_eval_instances: int | None = None
+) -> ExecutorStep:
+    """
+    Create an ExecutorStep to evaluate the model using HELM on a step.
+
+    Args:
+        step (ExecutorStep | InputName): Executor Step to evaluate.
+        evals (list[str]): List of evaluations to run with HELM, e.g, ["mmlu", "lite"].
+    """
+    # TODO: support evaluating all checkpoints in a run
+    if isinstance(step, ExecutorStep):
+        step = output_path_of(step)
+
+    return ExecutorStep(
+        name=f"evaluation/helm/{step.name}",
+        fn=evaluate,
+        config=EvaluationConfig(
+            evaluator="helm",
+            model_name=None,
+            model_path=step,  # type: ignore
+            evaluation_path=this_output_path(),
+            evals=evals,
+            discover_latest_checkpoint=True,
+            max_eval_instances=max_eval_instances,
         ),
     )
 
