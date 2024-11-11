@@ -37,7 +37,6 @@ class TrainSFTOnPodConfig(sft.SFTConfig):
     bypass_path_checks: bool = False
     impute_run_id_from_output_path: bool = True
 
-    # Add defaults matching your YAML structure
     dataset_type: DatasetType = DatasetType.CHAT_JSONL  # Note the CHAT_JSONL default
     chat_train_urls: list[str] = dataclasses.field(default_factory=list)
     messages_field: str = "messages"
