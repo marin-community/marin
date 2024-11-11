@@ -1,7 +1,11 @@
 from dataclasses import dataclass, field, fields
 
 from draccus.choice_types import ChoiceRegistry
-from markdownify import ASTERISK, SPACES
+
+# from markdownify import ASTERISK, SPACES
+# TODO(Herumb): Can we remove this import. We don't want any imports in the configs. We want configs inline.
+ASTERISK = "*"
+SPACES = "spaces"
 
 
 @dataclass(frozen=True)
