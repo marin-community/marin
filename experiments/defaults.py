@@ -6,10 +6,11 @@ import dataclasses
 import os
 from collections.abc import Sequence
 from datetime import timedelta
+from functools import lru_cache
 
 import jmp
 from levanter.checkpoint import CheckpointerConfig
-from levanter.data.text import LMMixtureDatasetConfig
+from levanter.data.text import LMMixtureDatasetConfig, LMSupervisedDatasetConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig
 from levanter.optim import AdamConfig
@@ -19,12 +20,14 @@ from levanter.trainer import TrainerConfig
 
 from experiments.llama import compute_num_parameters
 from experiments.paloma import paloma_tokenized
+from experiments.raw2json import mmlu_convert_eval_aux, mmlu_convert_eval_subject
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.execution.executor import ExecutorStep, InputName, this_output_path, versioned
+from marin.execution.executor import ExecutorStep, InputName, output_path_of, this_output_path, versioned
 from marin.processing.tokenize import (
     TokenizeConfig,
     TokenizerStep,
     add_validation_sets_to_mixture,
+    levanter_tokenize_supervised,
     lm_data_config,
     tokenize,
 )
@@ -56,8 +59,39 @@ def default_tokenize(
     )
 
 
+@lru_cache  # LRU to make the executor happier
 def default_validation_sets(tokenizer: str, base_path: str = "tokenized/") -> dict[str, TokenizerStep]:
     return paloma_tokenized(base_path=base_path, tokenizer=tokenizer)
+
+
+@lru_cache  # LRU to make the executor happier
+def default_evaluation_data(tokenizer: str) -> LMSupervisedDatasetConfig:
+    evaluation_data_cache = ExecutorStep(
+        name="tokenized/evaluation/mmlu",
+        fn=levanter_tokenize_supervised,
+        config=TokenizeConfig(
+            train_paths=[],
+            validation_paths=[
+                output_path_of(mmlu_convert_eval_aux).cd("cais/*.jsonl.gz"),
+                output_path_of(mmlu_convert_eval_subject).cd("cais/*.jsonl.gz"),
+            ],
+            cache_path=this_output_path(),
+            input_field="prompt",
+            output_field="response",
+            tokenizer=tokenizer,
+        ),
+    )
+
+    evaluation_data_config = LMSupervisedDatasetConfig(
+        validation_urls=[
+            output_path_of(mmlu_convert_eval_aux).cd("cais/*.jsonl.gz"),
+            output_path_of(mmlu_convert_eval_subject).cd("cais/*.jsonl.gz"),
+        ],
+        cache_dir=output_path_of(evaluation_data_cache),
+        input_field="prompt",
+        output_field="response",
+    )
+    return evaluation_data_config
 
 
 def default_train(
@@ -67,9 +101,23 @@ def default_train(
     train_config: SimpleTrainConfig,
     tags: Sequence[str] = (),
     use_default_validation: bool = True,
+    use_default_evaluation: bool = True,
 ) -> ExecutorStep:
+    """
+    Train a language model using the default configuration.
 
-    data = _prepare_data_config(tokenized, use_default_validation)
+    Args:
+        name:  The name of the training run. Will form the basis of the output path for the executor step.
+        tokenized:  The tokenized data to train on. This can be an InputName, ExecutorStep, or LMMixtureDatasetConfig.
+        model_config: Levanter LmConfig for the model to train.
+        train_config: SimpleTrainConfig for the training run.
+        tags: Any additional tags to add to the Wandb tracker.
+        use_default_validation: Whether to use the default validation sets (currently Paloma).
+        use_default_evaluation: Whether to use the default supervised validation data (currently MMLU).
+
+    """
+
+    pretraining_data, evaluation_data = _prepare_data_config(tokenized, use_default_validation, use_default_evaluation)
 
     # TODO: right now, assume architecture is a LlamaConfig, generalize this
     assert isinstance(model_config, LlamaConfig)
@@ -85,7 +133,8 @@ def default_train(
             output_path=this_output_path(),
             tpu_type=train_config.tpu_type,
             node_count=train_config.node_count,
-            data=data,
+            data=pretraining_data,
+            supervised_data=evaluation_data,
             trainer=TrainerConfig(
                 tracker=WandbConfig(
                     project="marin",
@@ -119,13 +168,16 @@ def default_train(
 
 
 def _prepare_data_config(
-    tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig, use_default_validation: bool
-) -> LMMixtureDatasetConfig:
+    tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig,
+    use_default_validation: bool,
+    use_default_evaluation: bool,
+) -> tuple[LMMixtureDatasetConfig, LMSupervisedDatasetConfig | None]:
     """
     Prepare a tokenized dataset for training. This is mostly just combining the tokenized data with the validation sets.
 
     Returns:
         The data config to use for training with any validation sets added.
+        The evaluation data config for internal evaluation.
 
     """
     tokenizer = _get_tokenizer_for_train(tokenized)
@@ -133,14 +185,18 @@ def _prepare_data_config(
         validation_sets = default_validation_sets(tokenizer=tokenizer)
     else:
         validation_sets = []
+    if use_default_evaluation:
+        evaluation_data = default_evaluation_data(tokenizer)
+    else:
+        evaluation_data = None
     if isinstance(tokenized, InputName | ExecutorStep):
-        data = lm_data_config(training_set=tokenized, validation_sets=validation_sets)
+        pretraining_data = lm_data_config(training_set=tokenized, validation_sets=validation_sets)
     else:
         # TODO: would be better to expose hooks in levanter instead of relying on mixtures
-        data = tokenized
+        pretraining_data = tokenized
         if validation_sets:
-            data = add_validation_sets_to_mixture(data, validation_sets)
-    return data
+            pretraining_data = add_validation_sets_to_mixture(pretraining_data, validation_sets)
+    return pretraining_data, evaluation_data
 
 
 def _get_tokenizer_for_train(tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig) -> str:
