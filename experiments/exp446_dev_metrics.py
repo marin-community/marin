@@ -1,10 +1,10 @@
-from evals.evals import evaluate_helm
-
 from experiments.defaults import default_tokenize, default_train
 from experiments.llama import llama3_tokenizer, llama_1_4b, llama_1_4b_train_config
 from experiments.pretraining_datasets import fineweb_edu
-from marin.execution.executor import executor_main
+from marin.execution.executor import ExecutorStep, executor_main
+from marin.utilities.metrics_utils import upload_metrics_to_gcs
 
+# Train a default 1.4B model on 42B tokens with internal evals, so that we can track relevant metrics.
 fineweb_edu_tokenized = default_tokenize(name="fineweb-edu", dataset=fineweb_edu, tokenizer=llama3_tokenizer)
 fineweb_edu_model = default_train(
     name="exp446-fineweb-edu-1.4b",
@@ -13,10 +13,15 @@ fineweb_edu_model = default_train(
     train_config=llama_1_4b_train_config,
 )
 
-eval_step = evaluate_helm(
-    model_name="exp446-fineweb-edu-1.4b-step-9999",
-    model_path="gs://marin-us-central2/checkpoints/exp446-fineweb-edu-1.4b-9e4be7/hf/step-9999",
-    evals=["mmlu"],
+dev_metrics = ExecutorStep(
+    name="dev-metrics",
+    fn=upload_metrics_to_gcs,
+    config={
+        # TODO (WIP)
+        # Here we'd somehow specify the config for metrics we want to
+        # track/upload- wandb metrics, GitHub API metadata, GCS info, etc.
+        # this can include evals for the model from the previous step
+    },
 )
 
 ############################################################
@@ -26,7 +31,7 @@ if __name__ == "__main__":
         steps=[
             fineweb_edu_tokenized,
             fineweb_edu_model,
-            eval_step,
+            dev_metrics,
         ],
-        description="Train 1.4B model on standard datasets for tracking dev metrics.",
+        description="Simple experiment for tracking dev metrics.",
     )
