@@ -10,40 +10,25 @@ license = {file = "LICENSE"}
 
 requires-python = ">=3.10"
 dependencies = [
-    "jax>=0.4.34",
-    "dolma",
-    "chardet",
-    "cryptography",
-    "datasets>=3.1.0,<3.2.0",
-    "dill",
     "draccus>=0.8.0",
-    "fastparquet",
-    "fsspec[http]>=2024.2,<2024.7",
-    "gcsfs>=2024.2,<2024.7",
     "google-api-python-client~=2.0",
-    "google-cloud-storage-transfer~=1.0",
-    "html2text==2024.2.26", # TODO :: Check pin?
-    "htmlmin==0.1.12", # TODO :: Check usage | pin?
-    "markdownify==0.12.1", # TODO :: Check usage | pin?
-    "multiprocess==0.70.16",
-    "py7zr",
-    "zstandard==0.23.0",
     "ray[default]==2.34.0",
-    "readabilipy",
-    "readability-lxml",
-    "fsspec",
     "gcsfs",
     "s3fs",
-    "lxml[html_clean]",
     "regex",
     "requests",
-    "warcio",
+    "numpy",
+    "torch",
+    "braceexpand",
+    "deepdiff",
+    "tqdm",
+    "toml",
+    "pandas", # Only needed by Fileprovider in inference.py
+    "pyarrow", # # Only needed by Fileprovider in inference.py
+    # We are keeping levanter deps for now. @TODO :: Remove them
+    "jax>=0.4.34",
+    "multiprocess==0.70.16",
     "levanter>=1.2.dev1074",
-    "lm-eval",
-    "resiliparse",
-    "trafilatura",
-    "fasttext",
-    "boto3==1.35.23"
 ]
 
 [project.optional-dependencies]
@@ -61,6 +46,45 @@ dev = [
     "types-six",
 ]
 
+download_transform = [
+    "chardet",
+    "datasets>=2.18.0",
+    "fastparquet",
+    "google-cloud-storage-transfer~=1.0",
+    "html2text==2024.2.26", # TODO :: Check pin?
+    "htmlmin==0.1.12", # TODO :: Check usage | pin?
+    "markdownify==0.12.1", # TODO :: Check usage | pin?
+    "py7zr",
+    "readabilipy",
+    "readability-lxml",
+    "lxml[html_clean]",
+    "warcio",
+    "resiliparse",
+    "trafilatura",
+    "boto3==1.35.23",
+    "htmlmin"
+]
+
+quality_dedup_consolidate = [
+    "dolma",
+    "fasttext",
+    "huggingface_hub",
+    "datasets",
+    "transformers",
+]
+tokenize_train = [
+    "jax>=0.4.34",
+    "multiprocess==0.70.16",
+    "levanter>=1.2.dev1054",
+]
+
+data_browser = [
+    "zstandard==0.23.0",
+]
+
+eval = [
+    "lm-eval",
+]
 [tool.setuptools.packages.find]
 where = ["."]
 exclude = ["cache", "infra"]
