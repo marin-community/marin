@@ -25,7 +25,14 @@ import levanter
 import ray
 import transformers
 from levanter.data.sharded_datasource import ShardedDataSource, TextUrlDataSource
-from levanter.data.text import BatchTokenizer, LMDatasetSourceConfig, LMSupervisedDatasetConfig, ChatSFTDatasetConfig, mk_supervised_dataset, mk_chat_sft_dataset
+from levanter.data.text import (
+    BatchTokenizer,
+    ChatSFTDatasetConfig,
+    LMDatasetSourceConfig,
+    LMSupervisedDatasetConfig,
+    mk_chat_sft_dataset,
+    mk_supervised_dataset,
+)
 from levanter.store.cache import CacheOptions
 from ray.runtime_env import RuntimeEnv
 
@@ -114,33 +121,34 @@ def tokenize(config: TokenizeConfig):
     if validation_ledger is not None:
         ray.get(validation_ledger)
 
+
 @ray.remote(runtime_env=RuntimeEnv(env_vars={"JAX_PLATFORM_NAME": "cpu"}))
 def levanter_tokenize_sft(config: TokenizeConfig):
     """
     Tokenize chat SFT data using the mk_chat_sft_dataset function.
     """
     logging.basicConfig(level=logging.INFO)
-    
-    tokenizer = transformers.AutoTokenizer.from_pretrained(config.tokenizer,
-                                                           model_max_length=config.seq_len,
-                                                           padding_side="right",
-                                                           trust_remote_code=True)
-    
+
+    tokenizer = transformers.AutoTokenizer.from_pretrained(
+        config.tokenizer, model_max_length=config.seq_len, padding_side="right", trust_remote_code=True
+    )
+
     # Create ChatSFTDatasetConfig
     sft_config = ChatSFTDatasetConfig(
         train_urls=config.train_paths,
         cache_dir=config.cache_path,
         messages_field="messages",  # Adjust these fields based on your data format
         input_role="user",
-        output_role="assistant"
+        output_role="assistant",
     )
-    
+
     logger.info(f"Caching SFT data to {config.cache_path}")
-    
+
     # Use the existing mk_chat_sft_dataset function
     mk_chat_sft_dataset(sft_config, tokenizer)
-    
+
     logger.info(f"Finished caching SFT dataset to {config.cache_path}")
+
 
 @ray.remote(runtime_env=RuntimeEnv(env_vars={"JAX_PLATFORM_NAME": "cpu"}))
 def levanter_tokenize_supervised(config: TokenizeConfig):
