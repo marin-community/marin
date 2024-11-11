@@ -13,8 +13,6 @@ dependencies = [
     "draccus>=0.8.0",
     "google-api-python-client~=2.0",
     "ray[default]==2.34.0",
-    "fsspec", # Todo(Abhi): Is it possible to remove all these fsspec?
-    "fsspec[http]>=2024.2,<2024.7",
     "gcsfs",
     "s3fs",
     "regex",
@@ -25,7 +23,11 @@ dependencies = [
     "deepdiff",
     "tqdm",
     "pandas", # Only needed by Fileprovider in inference.py
-    "pyarrow" # # Only needed by Fileprovider in inference.py
+    "pyarrow", # # Only needed by Fileprovider in inference.py
+    # We are keeping levanter deps for now. @TODO :: Remove them
+    "jax>=0.4.34",
+    "multiprocess==0.70.16",
+    "levanter>=1.2.dev1074",
 ]
 
 [project.optional-dependencies]

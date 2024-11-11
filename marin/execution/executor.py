@@ -143,7 +143,7 @@ class ExecutorStep(Generic[ConfigT]):
     """Specifies the `output_path` that should be used.  Print warning if it
     doesn't match the automatically computed one."""
 
-    pip_dependencies: list[str] | None = None
+    pip_dependency_groups: list[str] | None = None
 
     def cd(self, name: str) -> "InputName":
         """Refer to the `name` under `self`'s output_path."""
@@ -586,8 +586,8 @@ class Executor:
                     f"and executor will override the previous info-file."
                 )
 
-        if step.pip_dependencies is not None:
-            pip_dependencies = get_pip_dependencies(step.pip_dependencies)
+        if step.pip_dependency_groups is not None:
+            pip_dependencies = get_pip_dependencies(step.pip_dependency_groups)
         else:
             pip_dependencies = []
 
