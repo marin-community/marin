@@ -3,6 +3,7 @@ import logging
 from datetime import timedelta
 from pathlib import Path
 
+# Todo(Percy, dlwh): Can we remove this jax dependency?
 from jax.numpy import bfloat16, float32
 
 logger = logging.getLogger("ray")
