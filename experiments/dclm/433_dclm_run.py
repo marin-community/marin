@@ -1,5 +1,4 @@
 from experiments.defaults import SimpleTrainConfig, default_tokenize, default_train
-from experiments.evals.evals import evaluate_helm_on_step
 from experiments.llama import LlamaConfig
 from experiments.pretraining_datasets import dclm_baseline, proofpile_2, starcoderdata
 from marin.execution.executor import executor_main
@@ -76,7 +75,7 @@ model = default_train(
     tags=EXPERIMENT_TAG,
 )
 
-mmlu_eval = evaluate_helm_on_step(model, evals=["mmlu"])
+# mmlu_eval = evaluate_helm_on_step(model, evals=["mmlu"])
 
 if __name__ == "__main__":
     executor_main(
@@ -85,6 +84,6 @@ if __name__ == "__main__":
             starcoderdata_tokenized,
             proofpile_2_tokenized,
             model,
-            mmlu_eval,
+            # mmlu_eval,
         ]
     )
