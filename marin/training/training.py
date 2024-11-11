@@ -4,15 +4,16 @@ import os
 from copy import deepcopy
 from dataclasses import dataclass, replace
 
-from typing import List
 import draccus
 import levanter.infra.cli_helpers
 import ray
 from google.api_core.exceptions import Forbidden as GcpForbiddenException
 from levanter.data.text import LMMixtureDatasetConfig
 from levanter.infra.ray_tpu import run_on_pod_resumable
-from levanter.main import train_lm
-from levanter.main import sft  # If sft.py is meant to be imported directly
+from levanter.main import (
+    sft,  # If sft.py is meant to be imported directly
+    train_lm,
+)
 from levanter.main.sft import DatasetType
 from mergedeep import mergedeep
 from ray.runtime_env import RuntimeEnv
@@ -27,6 +28,7 @@ logger = logging.getLogger(__name__)
 # - create a train-from-scratch config given a model config/path, data config/path, and tokenizer
 # - create a llama3-style data ablating config given a model config/path, data config/path, and tokenizer
 
+
 @dataclass
 class TrainSFTOnPodConfig(sft.SFTConfig):
     output_path: str | None = None
@@ -37,17 +39,18 @@ class TrainSFTOnPodConfig(sft.SFTConfig):
 
     # Add defaults matching your YAML structure
     dataset_type: DatasetType = DatasetType.CHAT_JSONL  # Note the CHAT_JSONL default
-    chat_train_urls: List[str] = dataclasses.field(default_factory=list)
+    chat_train_urls: list[str] = dataclasses.field(default_factory=list)
     messages_field: str = "messages"
     input_role: str = "user"
     output_role: str = "assistant"
     max_seq_len: int = 2048
 
+
 @ray.remote(num_cpus=0.1, runtime_env={"pip": ["levanter>=1.2.dev1074"]})
 def run_levanter_sft(config: TrainSFTOnPodConfig):
     """
     Run the Levanter SFT training function on a Ray cluster.
-    
+
     Similar to run_levanter_train_lm but for SFT training.
     """
     default_launch_config = levanter.infra.cli_helpers.load_config()
@@ -84,6 +87,7 @@ def run_levanter_sft(config: TrainSFTOnPodConfig):
         return run_on_pod_resumable(sft_task, config.tpu_type, max_retries_failure=10)
     else:
         return ray.get(sft_task.remote())
+
 
 def _upcast_sft_config(config):
     """
@@ -276,6 +280,7 @@ def _suppress_ray_config(config: TrainLmOnPodConfig):
         )
     return config
 
+
 def _doublecheck_paths_sft(config: TrainSFTOnPodConfig, must_save_checkpoints):
     """
     Double-check paths specifically for SFT training configs.
@@ -325,13 +330,14 @@ def _doublecheck_paths_sft(config: TrainSFTOnPodConfig, must_save_checkpoints):
 
     # Common checks for checkpointing
     check("trainer.checkpointer.base_path", config.trainer.checkpointer.base_path, none_ok=not must_save_checkpoints)
-    
+
     if config.hf_save_path is not None:
         check("hf_save_path", config.hf_save_path, none_ok=not must_save_checkpoints)
     else:
         logger.warning("hf_save_path is not set. This is fine if you don't want HF checkpoints.")
 
     return config
+
 
 def _doublecheck_paths(config: TrainLmOnPodConfig, must_save_checkpoints):
     """
