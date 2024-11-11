@@ -7,5 +7,6 @@ from .data_configs import (
 )
 from .tokenize import (
     TokenizeConfig,
+    levanter_tokenize_supervised,
     tokenize,
 )
