@@ -281,6 +281,29 @@ def _suppress_ray_config(config: TrainLmOnPodConfig):
     return config
 
 
+def check(key, path, none_ok, region, local_ok):
+    if path is None:
+        if none_ok:
+            return
+        raise ValueError(f"{key} must be set")
+
+    if not path.startswith("gs://"):
+        if local_ok:
+            logger.warning(f"{key} is not a GCS path: {path}. This is fine if you're running locally.")
+            return
+        else:
+            raise ValueError(f"{key} must be a GCS path, not {path}")
+    try:
+        bucket_region = get_bucket_location(path)
+        if region.lower() != bucket_region.lower():
+            raise ValueError(
+                f"{key} is not in the same region ({bucket_region}) as the VM ({region}). "
+                f"This can cause performance issues and billing surprises."
+            )
+    except GcpForbiddenException:
+        logger.warning(f"Could not check region for {key}. Be sure it's in the same region as the VM.", exc_info=True)
+
+
 def _doublecheck_paths_sft(config: TrainSFTOnPodConfig, must_save_checkpoints):
     """
     Double-check paths specifically for SFT training configs.
@@ -295,44 +318,28 @@ def _doublecheck_paths_sft(config: TrainSFTOnPodConfig, must_save_checkpoints):
             return
         raise ValueError("Could not determine the region of the VM. This is required for path checks.") from e
 
-    def check(key, path, none_ok):
-        if path is None:
-            if none_ok:
-                return
-            raise ValueError(f"{key} must be set")
-
-        if not path.startswith("gs://"):
-            if local_ok:
-                logger.warning(f"{key} is not a GCS path: {path}. This is fine if you're running locally.")
-                return
-            else:
-                raise ValueError(f"{key} must be a GCS path, not {path}")
-        try:
-            bucket_region = get_bucket_location(path)
-            if region.lower() != bucket_region.lower():
-                raise ValueError(
-                    f"{key} is not in the same region ({bucket_region}) as the VM ({region}). "
-                    f"This can cause performance issues and billing surprises."
-                )
-        except GcpForbiddenException:
-            logger.warning(
-                f"Could not check region for {key}. Be sure it's in the same region as the VM.", exc_info=True
-            )
-
     # Check chat_train_urls
     if config.chat_train_urls:
         for url in config.chat_train_urls:
-            check("chat_train_urls", url, none_ok=False)
+            check("chat_train_urls", url, none_ok=False, region=region, local_ok=local_ok)
 
     # Check supervised data cache directory
     if config.supervised_data:
-        check("supervised_data.cache_dir", config.supervised_data.cache_dir, none_ok=True)
+        check(
+            "supervised_data.cache_dir", config.supervised_data.cache_dir, none_ok=True, region=region, local_ok=local_ok
+        )
 
     # Common checks for checkpointing
-    check("trainer.checkpointer.base_path", config.trainer.checkpointer.base_path, none_ok=not must_save_checkpoints)
+    check(
+        "trainer.checkpointer.base_path",
+        config.trainer.checkpointer.base_path,
+        none_ok=not must_save_checkpoints,
+        region=region,
+        local_ok=local_ok,
+    )
 
     if config.hf_save_path is not None:
-        check("hf_save_path", config.hf_save_path, none_ok=not must_save_checkpoints)
+        check("hf_save_path", config.hf_save_path, none_ok=not must_save_checkpoints, region=region, local_ok=local_ok)
     else:
         logger.warning("hf_save_path is not set. This is fine if you don't want HF checkpoints.")
 
@@ -353,39 +360,21 @@ def _doublecheck_paths(config: TrainLmOnPodConfig, must_save_checkpoints):
             return
         raise ValueError("Could not determine the region of the VM. This is required for path checks.") from e
 
-    def check(key, path, none_ok):
-        if path is None:
-            if none_ok:
-                return
-            raise ValueError(f"{key} must be set")
-
-        if not path.startswith("gs://"):
-            if local_ok:
-                logger.warning(f"{key} is not a GCS path: {path}. This is fine if you're running locally.")
-                return
-            else:
-                raise ValueError(f"{key} must be a GCS path, not {path}")
-        try:
-            bucket_region = get_bucket_location(path)
-            if region.lower() != bucket_region.lower():
-                raise ValueError(
-                    f"{key} is not in the same region ({bucket_region}) as the VM ({region}). "
-                    f"This can cause performance issues and billing surprises."
-                )
-        except GcpForbiddenException:
-            logger.warning(
-                f"Could not check region for {key}. Be sure it's in the same region as the VM.", exc_info=True
-            )
-
-    check("data.cache_dir", config.data.cache_dir, none_ok=True)
+    check("data.cache_dir", config.data.cache_dir, none_ok=True, region=region, local_ok=local_ok)
     # now check all subcaches if applicable
     if isinstance(config.data, LMMixtureDatasetConfig):
         for key, subcache in config.data.configs.items():
-            check(f"data.configs[{key}].cache_dir", subcache.cache_dir, none_ok=True)
-    check("trainer.checkpointer.base_path", config.trainer.checkpointer.base_path, none_ok=not must_save_checkpoints)
+            check(f"data.configs[{key}].cache_dir", subcache.cache_dir, none_ok=True, region=region, local_ok=local_ok)
+    check(
+        "trainer.checkpointer.base_path",
+        config.trainer.checkpointer.base_path,
+        none_ok=not must_save_checkpoints,
+        region=region,
+        local_ok=local_ok,
+    )
 
     if config.hf_save_path is not None:
-        check("hf_save_path", config.hf_save_path, none_ok=not must_save_checkpoints)
+        check("hf_save_path", config.hf_save_path, none_ok=not must_save_checkpoints, region=region, local_ok=local_ok)
     else:
         logger.warning("hf_save_path is not set. This is fine if you don't want HF checkpoints.")
 

@@ -34,9 +34,6 @@ executor = Executor(prefix="gs://marin-us-central2", executor_info_base_path="gs
 executor.compute_version(instruction_dataset)  # This will populate output_paths
 actual_gcs_path = executor.output_paths[instruction_dataset]
 
-
-print(f"Instruction dataset path: {actual_gcs_path}")
-
 # Add tokenization step
 tokenize_step = ExecutorStep(
     name="tokenized/tulu_sft_3eps",
