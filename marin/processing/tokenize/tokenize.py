@@ -25,7 +25,7 @@ import levanter
 import ray
 import transformers
 from levanter.data.sharded_datasource import ShardedDataSource, TextUrlDataSource
-from levanter.data.text import BatchTokenizer, LMDatasetSourceConfig
+from levanter.data.text import BatchTokenizer, LMDatasetSourceConfig, LMSupervisedDatasetConfig, mk_supervised_dataset
 from levanter.store.cache import CacheOptions
 from ray.runtime_env import RuntimeEnv
 
@@ -44,6 +44,8 @@ class TokenizeConfig:
     tokenizer: str  # tokenizer name. Should be the same as you intend to use in the tokenizer spec for the training run
     tags: list[str] = dataclasses.field(default_factory=list)  # tags to be added to config
     cache_options: CacheOptions = CacheOptions(num_shard_groups=1024)  # noqa: RUF009
+    input_field: str = ""
+    output_field: str = ""
     text_key: str = "text"
 
     def train_source(self) -> ShardedDataSource | None:
@@ -79,10 +81,7 @@ def tokenize(config: TokenizeConfig):
     if train_source is not None:
         train_ledger = (
             ray.remote(tokenize_and_concatenate_shards)
-            .options(
-                name=f"tokenize::{config.cache_path}",
-                runtime_env=RuntimeEnv(env_vars={"JAX_PLATFORM_NAME": "cpu", "GCE_METADATA_TIMEOUT": "120"}),
-            )
+            .options(name=f"tokenize::{config.cache_path}", runtime_env=RuntimeEnv(env_vars={"JAX_PLATFORMS": "cpu"}))
             .remote(
                 train_source,
                 batch_tokenizer,
@@ -113,6 +112,27 @@ def tokenize(config: TokenizeConfig):
         ray.get(train_ledger)
     if validation_ledger is not None:
         ray.get(validation_ledger)
+
+
+@ray.remote(runtime_env=RuntimeEnv(env_vars={"JAX_PLATFORM_NAME": "cpu"}))
+def levanter_tokenize_supervised(config: TokenizeConfig):
+    supervised_config = LMSupervisedDatasetConfig(
+        validation_urls=config.validation_paths,
+        cache_dir=config.cache_path,
+        input_field=config.input_field,
+        output_field=config.output_field,
+    )
+    logging.basicConfig(level=logging.INFO)
+
+    logger.info(f"Caching {config.validation_paths} to {config.cache_path}.")
+
+    tokenizer = transformers.AutoTokenizer.from_pretrained(config.tokenizer)
+
+    import haliax
+
+    # this axis doesn't actually matter for just building the cache
+    mk_supervised_dataset(supervised_config, tokenizer, haliax.Axis("position", 2048))
+    logger.info(f"Finished caching supervised dataset to {config.cache_path}.")
 
 
 @ray.remote(runtime_env=RuntimeEnv(env_vars={"JAX_PLATFORM_NAME": "cpu"}))
