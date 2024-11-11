@@ -91,7 +91,6 @@ from marin.execution.executor_step_status import (
     STATUS_RUNNING,
     STATUS_SUCCESS,
     STATUS_WAITING,
-    STATUS_RUNNING,
     append_status,
     get_current_status,
     get_status_path,

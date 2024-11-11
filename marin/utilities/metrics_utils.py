@@ -1,7 +1,11 @@
+import json
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+import fsspec
 import wandb
+
+METRICS_GCS_PATH = "gs://marin-us-central2/metrics"
 
 
 def get_wandb_run_metrics(
@@ -30,11 +34,13 @@ def get_wandb_run_metrics(
 
         assert run is not None, f"Run {run_id} not found."
 
-        metrics_dict = {}
+        metrics_dict = {"run_id": run_id}
         for metric in metrics:
             # Retrieve the metric value for the run
             value = run.summary.get(metric, None)
             metrics_dict[metric] = value
+
+        print("Run metrics: ", metrics_dict)
 
         return metrics_dict
 
@@ -57,7 +63,7 @@ def get_flops_usage_over_period(num_days=7, entity="stanford-mercury", project="
     - project (str): The name of the WandB project.
 
     Returns:
-    - float: The total FLOPs used in the past week.
+    - dict: a dict with keys num_days, num_runs_counted, and total_flops
     """
     # Initialize the WandB API
     api = wandb.Api()
@@ -84,9 +90,12 @@ def get_flops_usage_over_period(num_days=7, entity="stanford-mercury", project="
                 total_flops += gflops * 1e9
                 num_runs += 1
 
-        print(f"Total runs in the past week: {num_runs}")
+        flops_stats = {"num_days": num_days, "num_runs_counted": num_runs, "total_flops": total_flops}
 
-        return total_flops
+        print(f"FLOPs stats: {flops_stats} flops")
+        print(f"In TFLOPS: {flops_stats["total_flops"] / 1e12} TFLOPs")
+
+        return flops_stats
 
     except wandb.errors.CommError as e:
         print("Failed to retrieve run data:", e)
@@ -97,9 +106,24 @@ def get_flops_usage_over_period(num_days=7, entity="stanford-mercury", project="
         return None
 
 
-if __name__ == "__main__":
-    run_metrics = get_wandb_run_metrics("exp446-fineweb-edu-1.4b-9e4be7")
-    print(run_metrics)
+def upload_metrics_to_gcs(run_id: str, num_days: int = 7, output_name: str = "metrics") -> dict[str, Any]:
+    run_metrics = get_wandb_run_metrics(run_id)
+    flops_usage = get_flops_usage_over_period(num_days=num_days)
+    metrics = {"run_metrics": run_metrics, "flops_usage": flops_usage}
 
-    flops_usage = get_flops_usage_over_period()
-    print(f"FLOPs used in the past week: {flops_usage} flops or {flops_usage / 1e9} GFLOPs")
+    metrics_json = json.dumps(metrics)
+
+    # Write JSON to GCS using fsspec with gcsfs
+    current_datetime = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    full_path = f"{METRICS_GCS_PATH}/{current_datetime}-{output_name}.json"
+
+    with fsspec.open(full_path, "w") as f:
+        f.write(metrics_json)
+
+    print(f"Metrics successfully uploaded to {full_path}")
+
+    return metrics
+
+
+if __name__ == "__main__":
+    upload_metrics_to_gcs("exp446-fineweb-edu-1.4b-9e4be7", num_days=7)
