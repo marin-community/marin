@@ -32,7 +32,7 @@ print(f"Instruction dataset path: {actual_gcs_path}")
 
 # Add tokenization step
 tokenize_step = ExecutorStep(
-    name="tokenized_tulu_sft",
+    name="tokenized/tulu_sft_3eps",
     fn=levanter_tokenize_sft,
     config=TokenizeConfig(
         train_paths=[f"{actual_gcs_path}/**/*.jsonl.gz"],
@@ -47,15 +47,17 @@ tokenize_step = ExecutorStep(
 )
 
 train_step = ExecutorStep(
-    name=f"tulu_sft",
+    name=f"checkpoints/tulu_sft_3eps",
     fn=run_levanter_sft,
     config=dataclasses.replace(
         training_config,
         output_path=this_output_path(),
         tpu_type="v4-128",
+        # number of epochs over the dataset set to reproduce Olmo SFT
+        epoch=3,
         supervised_data=dataclasses.replace(
             training_config.supervised_data,
-            cache_dir=output_path_of(tokenize_step),
+            cache_dir=training_config.supervised_data.cache_dir,
         ),
         # Modify the nested trainer config by creating a new one
         trainer=dataclasses.replace(
@@ -64,7 +66,7 @@ train_step = ExecutorStep(
                 project="marin",
             ),
             mp=jmp.get_policy("p=f32,c=bfloat16"),
-            train_batch_size=128,
+            train_batch_size=1024,
             checkpointer=CheckpointerConfig(
                 save_interval=timedelta(minutes=10),
                 keep=[dict(every=25000)],
@@ -73,6 +75,13 @@ train_step = ExecutorStep(
         ),
     ),
 )
+
+"""
+export to have with
+export HF_TOKEN=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  && python -m levanter.main.export_lm_to_hf --output_dir "gs://marin-us-central2/checkpoints/tulu_sft_3epshf/" --checkpoint_path "gs://marin-us-central2/checkpoints/tulu_sft_3eps-4e30ee/checkpoints/step-938/" --config_path levanter/config/llama_sft_hf_ckpt.yaml
+
+"""
+
 
 if __name__ == "__main__":
     executor_main(
