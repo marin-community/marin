@@ -1,20 +1,27 @@
 """
 python marin/run/ray_run.py --env_vars HF_TOKEN -- python experiments/227_sft.py --force_run '["olmo_sft"]'
+
+export to HF format with
+export HF_TOKEN=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  && python -m levanter.main.export_lm_to_hf
+--output_dir "gs://marin-us-central2/checkpoints/tulu_sft_3epshf/"
+--checkpoint_path "gs://marin-us-central2/checkpoints/tulu_sft_3eps-4e30ee/checkpoints/step-938/"
+--config_path levanter/config/llama_sft_hf_ckpt.yaml
 """
-import jmp
+
 import dataclasses
-import draccus
-from marin.execution.executor import Executor, ExecutorStep, executor_main, this_output_path, output_path_of
-from marin.training.training import TrainSFTOnPodConfig, run_levanter_sft
-from marin.processing.tokenize.tokenize import levanter_tokenize_sft, TokenizeConfig
-from levanter.checkpoint import CheckpointerConfig
-from instruction_datasets import get_instruction_dataset
 from datetime import timedelta
 
+import draccus
+import jmp
+from instruction_datasets import get_instruction_dataset
+from levanter.checkpoint import CheckpointerConfig
 from levanter.tracker.wandb import WandbConfig
-from levanter.trainer import TrainerConfig
 
-# Load base config 
+from marin.execution.executor import Executor, ExecutorStep, executor_main, output_path_of, this_output_path
+from marin.processing.tokenize.tokenize import TokenizeConfig, levanter_tokenize_sft
+from marin.training.training import TrainSFTOnPodConfig, run_levanter_sft
+
+# Load base config
 training_config = draccus.load(TrainSFTOnPodConfig, open("config/training/standard_sft.yaml"))
 
 # Get instruction dataset
@@ -43,11 +50,11 @@ tokenize_step = ExecutorStep(
         output_field=training_config.output_role,  # Or whatever tokenizer you're using
         seq_len=training_config.max_seq_len,
     ),
-    description="Tokenize chat SFT data"
+    description="Tokenize chat SFT data",
 )
 
 train_step = ExecutorStep(
-    name=f"checkpoints/tulu_sft_3eps",
+    name="checkpoints/tulu_sft_3eps",
     fn=run_levanter_sft,
     config=dataclasses.replace(
         training_config,
@@ -71,22 +78,16 @@ train_step = ExecutorStep(
                 save_interval=timedelta(minutes=10),
                 keep=[dict(every=25000)],
             ),
-            initialize_from="gs://levanter-checkpoints/marin/olmoish7b_v4_1024_0627/dlwh_7b0627/step-510000/",  # Add initialize_from here
+            initialize_from="gs://levanter-checkpoints/marin/olmoish7b_v4_1024_0627/dlwh_7b0627/step-510000/",
         ),
     ),
 )
 
 """
-export to have with
-export HF_TOKEN=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  && python -m levanter.main.export_lm_to_hf --output_dir "gs://marin-us-central2/checkpoints/tulu_sft_3epshf/" --checkpoint_path "gs://marin-us-central2/checkpoints/tulu_sft_3eps-4e30ee/checkpoints/step-938/" --config_path levanter/config/llama_sft_hf_ckpt.yaml
+
 
 """
 
 
 if __name__ == "__main__":
-    executor_main(
-        steps=[
-            tokenize_step,
-            train_step
-        ]
-    )
+    executor_main(steps=[tokenize_step, train_step])
