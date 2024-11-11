@@ -4,9 +4,9 @@ import os
 import sys
 
 import draccus
+from levanter.models.gpt2 import Gpt2Config
+from levanter.trainer import TrainerConfig
 
-# from levanter.models.gpt2 import Gpt2Config
-# from levanter.trainer import TrainerConfig
 from marin.classifiers.utils import DatasetConfig
 from marin.execution.executor import (
     ExecutorMainConfig,
@@ -23,11 +23,11 @@ from marin.processing.classification.fasttext.train_fasttext import (
     train,
 )
 from marin.processing.classification.inference import InferenceConfig, run_inference
-
-# from marin.processing.tokenize import TokenizeConfig, lm_data_config, tokenize
+from marin.processing.tokenize import TokenizeConfig, lm_data_config, tokenize
 from marin.schemas.web.convert import HtmlToMarkdownConfig
-
-# from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
+from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
+from marin.utilities.ray_utils import is_local_ray_cluster
+from marin.utils import is_in_ci
 from scripts.hello_world_fw.process import FineWebConfig, transform
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -47,7 +47,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
             extract_method=versioned("readability"),
             config=HtmlToMarkdownConfig.default_config(),
         ),
-        pip_dependencies=["download_transform"],
+        pip_dependency_groups=["download_transform"],
     )
 
     transform_lq_data_step = ExecutorStep(
@@ -59,7 +59,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
             extract_method=versioned("readability"),
             config=HtmlToMarkdownConfig.default_config(),
         ),
-        pip_dependencies=["download_transform"],
+        pip_dependency_groups=["download_transform"],
     )
 
     # ############################################################
@@ -91,7 +91,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
                 "thread": 1,
             },
         ),
-        pip_dependencies=["quality_dedup_consolidate"],
+        pip_dependency_groups=["quality_dedup_consolidate"],
     )
 
     ############################################################
@@ -107,7 +107,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
             model_type="fasttext",
             attribute_name="quickstart-fasttext-quality-hq",
         ),
-        pip_dependencies=["quality_dedup_consolidate"],
+        pip_dependency_groups=["quality_dedup_consolidate"],
     )
 
     inference_lq_step = ExecutorStep(
@@ -120,7 +120,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
             model_type="fasttext",
             attribute_name="quickstart-fasttext-quality-lq",
         ),
-        pip_dependencies=["quality_dedup_consolidate"],
+        pip_dependency_groups=["quality_dedup_consolidate"],
     )
 
     ############################################################
@@ -133,7 +133,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
             input_path=output_path_of(transform_hq_data_step),
             output_path=this_output_path(),
         ),
-        pip_dependencies=["quality_dedup_consolidate"],
+        pip_dependency_groups=["quality_dedup_consolidate"],
     )
 
     ############################################################
@@ -160,53 +160,52 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
                 ),
             ],
         ),
-        pip_dependencies=["quality_dedup_consolidate"],
+        pip_dependency_groups=["quality_dedup_consolidate"],
     )
 
     ############################################################
     # Tokenize
 
-    # tokenize_step = ExecutorStep(
-    #     name=os.path.join(prefix, "tokenized"),
-    #     fn=tokenize,
-    #     config=TokenizeConfig(
-    #         train_paths=output_path_of(consolidate_step),
-    #         validation_paths=[],
-    #         cache_path=this_output_path(),
-    #         tokenizer=versioned("gpt2"),
-    #     ),
-    # )
-    #
+    tokenize_step = ExecutorStep(
+        name=os.path.join(prefix, "tokenized"),
+        fn=tokenize,
+        config=TokenizeConfig(
+            train_paths=output_path_of(consolidate_step),
+            validation_paths=[],
+            cache_path=this_output_path(),
+            tokenizer=versioned("gpt2"),
+        ),
+    )
+
     # ############################################################
-    #
-    # if not is_in_ci() and not is_local_ray_cluster():
-    #     tpu_type = "v4-8"
-    # else:
-    #     tpu_type = None
-    #
-    # train_step = ExecutorStep(
-    #     name=os.path.join(prefix, "train"),
-    #     fn=run_levanter_train_lm,
-    #     config=TrainLmOnPodConfig(
-    #         output_path=this_output_path(),
-    #         data=lm_data_config(tokenize_step),
-    #         env={
-    #             "WANDB_API_KEY": None,
-    #             "WANDB_MODE": "disabled",
-    #             "JAX_PLATFORMS": "cpu",
-    #         },  # Running it locally and turning off wandb
-    #         tpu_type=tpu_type,
-    #         hf_save_steps=1,
-    #         model=Gpt2Config(
-    #             num_layers=2,
-    #             num_heads=2,
-    #             seq_len=64,
-    #             hidden_dim=32,
-    #         ),
-    #         trainer=TrainerConfig(train_batch_size=8, num_train_steps=2, max_eval_batches=1,
-    #         require_accelerator=False),
-    #     ),
-    # )
+    # Training
+    if not is_in_ci() and not is_local_ray_cluster():
+        tpu_type = "v4-8"
+    else:
+        tpu_type = None
+
+    train_step = ExecutorStep(
+        name=os.path.join(prefix, "train"),
+        fn=run_levanter_train_lm,
+        config=TrainLmOnPodConfig(
+            output_path=this_output_path(),
+            data=lm_data_config(tokenize_step),
+            env={
+                "WANDB_API_KEY": None,
+                "WANDB_MODE": "disabled",
+                "JAX_PLATFORMS": "cpu",
+            },  # Running it locally and turning off wandb
+            tpu_type=tpu_type,
+            hf_save_steps=1,
+            model=Gpt2Config(
+                num_layers=2,
+                num_heads=2,
+                seq_len=64,
+                hidden_dim=32,
+            ),
+            trainer=TrainerConfig(train_batch_size=8, num_train_steps=2, max_eval_batches=1, require_accelerator=False),
+        ),
+    )
 
     ##### Evaluate
 
@@ -220,8 +219,8 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
         inference_lq_step,
         dedupe_step,
         consolidate_step,
-        # tokenize_step,
-        # train_step,
+        tokenize_step,
+        train_step,
         # evaluate_step,
     ]
 
