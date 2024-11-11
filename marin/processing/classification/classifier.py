@@ -5,7 +5,6 @@ import urllib.parse
 from typing import Any, ClassVar
 
 import fsspec
-from huggingface_hub import hf_hub_download
 
 
 class BaseClassifier:
@@ -49,6 +48,7 @@ class FasttextClassifier(BaseClassifier):
     def load_model(self):
         from fasttext.FastText import _FastText
         from filelock import FileLock
+        from huggingface_hub import hf_hub_download
 
         # Classifier is stored in a remote storage.
         if urllib.parse.urlparse(self.model_name).scheme or os.path.exists(self.model_name):
