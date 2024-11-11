@@ -88,6 +88,7 @@ import ray.remote_function
 
 from marin.execution.executor_step_status import (
     STATUS_FAILED,
+    STATUS_RUNNING,
     STATUS_SUCCESS,
     STATUS_WAITING,
     STATUS_RUNNING,
