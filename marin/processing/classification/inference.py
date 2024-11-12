@@ -8,11 +8,11 @@ python -m marin.processing.classification.inference \
 
 import os
 
-import datasets
 import draccus
 import pandas as pd
 import ray
-from ray.data.datasource import FilenameProvider
+
+# TODO(Chris): Can we remove this import, it needs pyarrow and pandas
 from ray.runtime_env import RuntimeEnv
 
 from marin.core.runtime import cached_or_construct_output
@@ -29,45 +29,6 @@ from marin.utils import (
 )
 
 
-class JsonFilenameProvider(FilenameProvider):
-
-    def __init__(self, files: list[str], input_path: str):
-        self.files = files
-        self.input_path = input_path
-
-    def get_filename_for_block(self, block, task_index, block_index):
-        input_filename = self.files[task_index]
-        output_filename = os.path.basename(input_filename)
-        return output_filename
-
-
-@ray.remote
-def process_file_using_actor_pool(input_path: str, output_path: str, model_name_or_path: str):
-    ctx = ray.data.DataContext.get_current()
-    ctx.execution_options.preserve_order = True
-
-    print(f"[*] Reading in dataset {input_path}")
-    print(f"[*] Output directory is {output_path}")
-
-    files = fsspec_glob(os.path.join(input_path, "**/*.jsonl.gz"))
-
-    ray.data.read_json(
-        files,
-        arrow_open_stream_args={"compression": "gzip"},
-        override_num_blocks=len(files),
-    ).map_batches(
-        AutoClassifier,
-        # concurrency=(1,16),
-        concurrency=(1, len(files)),
-        fn_constructor_args=(model_name_or_path),
-        batch_size=None,
-    ).write_json(
-        output_path,
-        filename_provider=JsonFilenameProvider(files, input_path),
-        arrow_open_stream_args={"compression": "gzip"},
-    )
-
-
 def read_dataset(input_filename: str):
     """Read in a dataset and return as a Huggingface Dataset
 
@@ -78,6 +39,7 @@ def read_dataset(input_filename: str):
     Returns:
         datasets.Dataset: A Huggingface Dataset in-memory without using the disk
     """
+    import datasets
 
     datasets.disable_caching()
     datasets.logging.set_verbosity_warning()
@@ -96,7 +58,7 @@ def read_dataset(input_filename: str):
         raise ValueError(f"Unsupported filetype: {input_filename}")
 
 
-def write_dataset(dataset: datasets.Dataset, output_filename: str):
+def write_dataset(dataset, output_filename: str):
     """Writes a Huggingface Dataset to a file (remote or local)"""
     if output_filename.endswith(".jsonl.gz"):
         dataset.to_json(output_filename, compression="gzip")
