@@ -88,15 +88,6 @@ llama_1_4b_train_config = SimpleTrainConfig(
     weight_decay=0.1,
 )
 
-llama_1_4b_multislice_train_config = SimpleTrainConfig(
-    tpu_type="v4-128",
-    node_count=2,
-    train_batch_size=1024,
-    num_train_steps=5000,  # 4096 * 1024 * 5000 * 2 = 42B tokens
-    learning_rate=3e-4,
-    weight_decay=0.1,
-)
-
 
 def compute_num_parameters(config: LlamaConfig) -> int:
     head_size = config.hidden_dim // config.num_heads
