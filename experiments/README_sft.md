@@ -32,7 +32,7 @@ In `tokenize_step`, key parameters to customize:
 - `seq_len`: Maximum sequence length (typically 2048)
 - `input_field`/`output_field`: Match your data format (default "user"/"assistant")
 
-### 4. Training Configuration 
+### 4. Training Configuration
 In `train_step`, essential parameters:
 - `name`: `"checkpoints/your_experiment_name"`
 - `tpu_type`: e.g., "v4-8", "v4-128" based on needs
@@ -96,4 +96,4 @@ start with the prefix `tokenized/`
 - Ensure GCS paths are accessible
 - Monitor memory usage with large batch sizes
 
-Need help? Check docs or reach out to Ahmed
+Reach out to Ahmed with questions
