@@ -47,6 +47,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
             extract_method=versioned("readability"),
             config=HtmlToMarkdownConfig.default_config(),
         ),
+        pip_dependency_groups=["download_transform"],
     )
 
     transform_lq_data_step = ExecutorStep(
@@ -58,6 +59,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
             extract_method=versioned("readability"),
             config=HtmlToMarkdownConfig.default_config(),
         ),
+        pip_dependency_groups=["download_transform"],
     )
 
     # ############################################################
@@ -89,6 +91,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
                 "thread": 1,
             },
         ),
+        pip_dependency_groups=["quality_dedup_consolidate"],
     )
 
     ############################################################
@@ -116,6 +119,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
             model_type="fasttext",
             attribute_name="quickstart-fasttext-quality-lq",
         ),
+        pip_dependency_groups=["quality_dedup_consolidate"],
     )
 
     ############################################################
@@ -128,6 +132,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
             input_path=output_path_of(transform_hq_data_step),
             output_path=this_output_path(),
         ),
+        pip_dependency_groups=["quality_dedup_consolidate"],
     )
 
     ############################################################
@@ -154,6 +159,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
                 ),
             ],
         ),
+        pip_dependency_groups=["quality_dedup_consolidate"],
     )
 
     ############################################################
@@ -230,9 +236,7 @@ def main(config: ExecutorMainConfig):
 
         experiment_prefix = "quickstart-tests"
         config = dataclasses.replace(
-            config,
-            prefix=bucket_prefix,
-            executor_info_base_path=os.path.join(bucket_prefix, "experiments"),
+            config, prefix=bucket_prefix, executor_info_base_path=os.path.join(bucket_prefix, "experiments")
         )
 
         # path to synthetic test data

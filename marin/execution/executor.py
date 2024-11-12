@@ -87,6 +87,7 @@ import draccus
 import fsspec
 import ray
 import ray.remote_function
+from ray.runtime_env import RuntimeEnv
 
 from marin.execution.executor_step_status import (
     STATUS_FAILED,
@@ -99,7 +100,7 @@ from marin.execution.executor_step_status import (
     get_status_with_previous_job_info,
     read_events,
 )
-from marin.utilities.executor_utils import compare_dicts
+from marin.utilities.executor_utils import compare_dicts, get_pip_dependencies
 from marin.utilities.json_encoder import CustomJsonEncoder
 from marin.utils import fsspec_exists
 
@@ -119,6 +120,8 @@ class ExecutorStep(Generic[ConfigT]):
      - a name (str), which is used to determine the `output_path`.
      - a function `fn` (Ray remote), and
      - a configuration `config` which gets passed into `fn`.
+     - a pip dependencies list (Optional[list[str]]) which are the pip dependencies required for the step.
+     These can be keys of project.optional-dependencies in the project's pyproject.toml file or any other pip package.
 
     When a step is run, we compute the following two things for each step:
     - `version`: represents all the upstream dependencies of the step
@@ -144,6 +147,8 @@ class ExecutorStep(Generic[ConfigT]):
     override_output_path: str | None = None
     """Specifies the `output_path` that should be used.  Print warning if it
     doesn't match the automatically computed one."""
+
+    pip_dependency_groups: list[str] | None = None
 
     def cd(self, name: str) -> "InputName":
         """Refer to the `name` under `self`'s output_path."""
@@ -631,9 +636,17 @@ class Executor:
                     f"and executor will override the previous info-file."
                 )
 
-        self.refs[step] = execute_after_dependencies.options(name=name).remote(
-            step.fn, config, dependencies, output_path, should_run
-        )
+        if step.pip_dependency_groups is not None:
+            pip_dependencies = get_pip_dependencies(step.pip_dependency_groups)
+        else:
+            pip_dependencies = []
+
+        self.refs[step] = execute_after_dependencies.options(
+            name=name,
+            runtime_env=RuntimeEnv(
+                pip=pip_dependencies,
+            ),
+        ).remote(step.fn, config, dependencies, output_path, should_run)
 
         # Write out info for each step
         for step, info in zip(self.steps, self.step_infos, strict=True):
