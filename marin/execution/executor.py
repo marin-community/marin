@@ -400,7 +400,7 @@ class Executor:
             self.compute_version(step)
 
         self.get_infos()
-        self.check_and_start_hb()
+        self._check_and_start_hb()
         logger.info(f"### Reading {len(self.steps)} statuses ###")
         self.read_statuses()
 
@@ -414,7 +414,7 @@ class Executor:
         logger.info("### Waiting for all steps to finish ###")
         ray.get(list(self.refs.values()))
 
-    def check_and_start_hb(self):
+    def _check_and_start_hb(self):
         """This function checks if the last heartbeat was within timeout. If yes then it terminates this process to
         avoid any data corruption. If not then it starts the heartbeat process."""
         hb_path = os.path.join(
@@ -436,9 +436,9 @@ class Executor:
                 self.prev_run_failed = True
 
         # Start the heartbeat process
-        self.start_hb(hb_path)
+        self._start_hb(hb_path)
 
-    def start_hb(self, hb_path: str):
+    def _start_hb(self, hb_path: str):
         """This function writes the heartbeat to the file at the specified interval."""
 
         def write_hb():
