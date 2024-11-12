@@ -271,7 +271,7 @@ def main(config: ExecutorMainConfig):
         # config = dataclasses.replace(config)  # Always force run all steps
         executor_main(config, steps=steps)
         logger.info(f"Execution completed successfully. All outputs are in {bucket_prefix}/{experiment_prefix}")
-    except SystemExit as e:
+    except Exception as e:
         logger.error(f"Error in main execution: {e}")
         raise e
 
