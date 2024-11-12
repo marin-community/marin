@@ -53,12 +53,13 @@ tokenize_step = ExecutorStep(
 
 
 train_step = ExecutorStep(
-    name="checkpoints/tulu_sft_3eps-retry",
+    name="checkpoints/tulu_sft_3eps-tokenizer",
     fn=run_levanter_sft,
     config=TrainSFTOnPodConfig(
         output_path=this_output_path(),
         tpu_type="v4-128",
         # number of epochs over the dataset set to reproduce Olmo SFT
+        tokenizer="EleutherAI/gpt-neox-20b",
         epoch=3,
         chat_train_urls=[f"{actual_gcs_path}/**/*.jsonl.gz"],
         supervised_data=LMSupervisedDatasetConfig(cache_dir=sft_cache_dir, input_field="user", output_field="assistant"),
@@ -76,7 +77,7 @@ train_step = ExecutorStep(
             initialize_from="gs://levanter-checkpoints/marin/olmoish7b_v4_1024_0627/dlwh_7b0627/step-510000/",
         ),
         model=LlamaConfig(
-            seq_len=4096,  # Customize sequence length
+            seq_len=2048,  # Seq len set to reproduce Olmo SFT
             hidden_dim=4096,
             intermediate_dim=11008,
             num_layers=32,
@@ -85,6 +86,8 @@ train_step = ExecutorStep(
             use_bias=False,
             use_layer_norm_weight=False,
             initializer_range=0.02,
+            use_flash_attention=True,
+            flash_attention_block_size=512,
         ),
     ),
 )
