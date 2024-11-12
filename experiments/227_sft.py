@@ -1,8 +1,8 @@
 """
 python marin/run/ray_run.py --env_vars HF_TOKEN -- python experiments/227_sft.py --force_run '["olmo_sft"]'
 
-export to HF format with
-export HF_TOKEN=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  && python -m levanter.main.export_lm_to_hf
+export to HF format with:
+export HF_TOKEN=${HF_TOKEN}  && python -m levanter.main.export_lm_to_hf
 --output_dir "gs://marin-us-central2/checkpoints/tulu_sft_3epshf/"
 --checkpoint_path "gs://marin-us-central2/checkpoints/tulu_sft_3eps-4e30ee/checkpoints/step-938/"
 --config_path levanter/config/llama_sft_hf_ckpt.yaml
@@ -10,11 +10,11 @@ export HF_TOKEN=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  && python -m levanter.mai
 
 from datetime import timedelta
 
-import draccus
 import jmp
 from instruction_datasets import get_instruction_dataset
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text import LMSupervisedDatasetConfig
+from levanter.models.llama import LlamaConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 
@@ -31,6 +31,7 @@ dataset_path = output_path_of(instruction_dataset)
 executor = Executor(prefix="gs://marin-us-central2", executor_info_base_path="gs://marin-us-central2/experiments")
 executor.compute_version(instruction_dataset)  # This will populate output_paths
 actual_gcs_path = executor.output_paths[instruction_dataset]
+sft_cache_dir = "gs://marin-us-central2/tokenized/sft_cache/tulu-v2/"
 
 # Add tokenization step
 tokenize_step = ExecutorStep(
@@ -39,7 +40,7 @@ tokenize_step = ExecutorStep(
     config=TokenizeConfig(
         train_paths=[f"{actual_gcs_path}/**/*.jsonl.gz"],
         validation_paths=[],
-        cache_path="gs://marin-us-central2/tokenized/sft_cache/tulu-v2",
+        cache_path=sft_cache_dir,
         tokenizer="EleutherAI/gpt-neox-20b",
         # fixed to OAI chat format
         input_field="user",
@@ -52,16 +53,15 @@ tokenize_step = ExecutorStep(
 
 
 train_step = ExecutorStep(
-    name="checkpoints/tulu_sft_3eps",
+    name="checkpoints/tulu_sft_3eps-retry",
     fn=run_levanter_sft,
     config=TrainSFTOnPodConfig(
         output_path=this_output_path(),
-        tpu_type="v4-64",
+        tpu_type="v4-128",
         # number of epochs over the dataset set to reproduce Olmo SFT
         epoch=3,
-        supervised_data=LMSupervisedDatasetConfig(
-            cache_dir="gs://marin-us-central2/tokenized/sft_cache/tulu-v2", input_field="user", output_field="assistant"
-        ),
+        chat_train_urls=[f"{actual_gcs_path}/**/*.jsonl.gz"],
+        supervised_data=LMSupervisedDatasetConfig(cache_dir=sft_cache_dir, input_field="user", output_field="assistant"),
         # Modify the nested trainer config by creating a new one
         trainer=TrainerConfig(
             tracker=WandbConfig(
@@ -74,6 +74,17 @@ train_step = ExecutorStep(
                 keep=[dict(every=25000)],
             ),
             initialize_from="gs://levanter-checkpoints/marin/olmoish7b_v4_1024_0627/dlwh_7b0627/step-510000/",
+        ),
+        model=LlamaConfig(
+            seq_len=4096,  # Customize sequence length
+            hidden_dim=4096,
+            intermediate_dim=11008,
+            num_layers=32,
+            num_heads=32,
+            num_kv_heads=32,
+            use_bias=False,
+            use_layer_norm_weight=False,
+            initializer_range=0.02,
         ),
     ),
 )
