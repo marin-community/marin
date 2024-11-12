@@ -4,11 +4,9 @@ import os
 import sys
 
 import draccus
-from levanter.data.text import LMSupervisedDatasetConfig
 from levanter.models.gpt2 import Gpt2Config
 from levanter.trainer import TrainerConfig
 
-from experiments.raw2json import mmlu_convert_eval_aux, mmlu_convert_eval_subject
 from marin.classifiers.utils import DatasetConfig
 from marin.execution.executor import (
     ExecutorMainConfig,
@@ -25,7 +23,7 @@ from marin.processing.classification.fasttext.train_fasttext import (
     train,
 )
 from marin.processing.classification.inference import InferenceConfig, run_inference
-from marin.processing.tokenize import TokenizeConfig, levanter_tokenize_supervised, lm_data_config, tokenize
+from marin.processing.tokenize import TokenizeConfig, lm_data_config, tokenize
 from marin.schemas.web.convert import HtmlToMarkdownConfig
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 from marin.utilities.ray_utils import is_local_ray_cluster
@@ -173,31 +171,6 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
         ),
     )
 
-    evaluation_data_cache = ExecutorStep(
-        name="tokenized/evaluation/mmlu",
-        fn=levanter_tokenize_supervised,
-        config=TokenizeConfig(
-            train_paths=[],
-            validation_paths=[
-                output_path_of(mmlu_convert_eval_subject).cd("cais/mmlu-virology-dev-evaluation.jsonl.gz"),
-            ],
-            cache_path=this_output_path(),
-            input_field="prompt",
-            output_field="response",
-            tokenizer=versioned(tokenizer),
-        ),
-    )
-
-    evaluation_data_config = LMSupervisedDatasetConfig(
-        validation_urls=[
-            output_path_of(mmlu_convert_eval_aux).cd("cais/*.jsonl.gz"),
-            output_path_of(mmlu_convert_eval_subject).cd("cais/*.jsonl.gz"),
-        ],
-        cache_dir=output_path_of(evaluation_data_cache),
-        input_field="prompt",
-        output_field="response",
-    )
-
     ############################################################
 
     if not is_in_ci() and not is_local_ray_cluster():
@@ -211,7 +184,6 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
         config=TrainLmOnPodConfig(
             output_path=this_output_path(),
             data=lm_data_config(tokenize_step),
-            supervised_data=evaluation_data_config,
             env={
                 "WANDB_API_KEY": None,
                 "WANDB_MODE": "disabled",
