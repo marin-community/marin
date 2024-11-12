@@ -73,6 +73,8 @@ import json
 import logging
 import os
 import subprocess
+import threading
+import time
 import traceback
 import urllib.parse
 from collections.abc import Callable
@@ -94,10 +96,12 @@ from marin.execution.executor_step_status import (
     append_status,
     get_current_status,
     get_status_path,
+    get_status_with_previous_job_info,
     read_events,
 )
 from marin.utilities.executor_utils import compare_dicts
 from marin.utilities.json_encoder import CustomJsonEncoder
+from marin.utils import fsspec_exists
 
 logger = logging.getLogger("ray")
 
@@ -355,10 +359,12 @@ class Executor:
         self,
         prefix: str,
         executor_info_base_path: str,
+        executor_hearts_base_path: str,
         description: str | None = None,
     ):
         self.prefix = prefix
         self.executor_info_base_path = executor_info_base_path
+        self.executor_hearts_base_path = executor_hearts_base_path
         self.description = description
 
         self.configs: dict[ExecutorStep, dataclass] = {}
@@ -372,6 +378,12 @@ class Executor:
         self.refs: dict[ExecutorStep, ray.ObjectRef] = {}
         self.step_infos: list[ExecutorStepInfo] = []
         self.executor_info: ExecutorInfo | None = None
+        self.caller_name: str | None = None
+        self.executor_version_hash: str | None = None
+        self.hb_time_interval: int = 5  # in seconds, write at this duration
+        self.hb_timeout: int = 10  # in seconds, consider the last heartbeat
+        self.prev_run_failed: bool = False
+        self.hb_thread: threading.Thread | None = None
 
     def run(
         self,
@@ -388,6 +400,7 @@ class Executor:
             self.compute_version(step)
 
         self.get_infos()
+        self.check_and_start_hb()
         logger.info(f"### Reading {len(self.steps)} statuses ###")
         self.read_statuses()
 
@@ -400,6 +413,43 @@ class Executor:
 
         logger.info("### Waiting for all steps to finish ###")
         ray.get(list(self.refs.values()))
+
+    def check_and_start_hb(self):
+        """This function checks if the last heartbeat was within timeout. If yes then it terminates this process to
+        avoid any data corruption. If not then it starts the heartbeat process."""
+        hb_path = os.path.join(
+            self.executor_hearts_base_path,
+            f"{self.caller_name}-{self.executor_version_hash}.hb",
+        )
+        if fsspec_exists(hb_path):
+            with fsspec.open(hb_path, "r") as f:
+                last_hb = json.load(f)
+            last_hb_time = last_hb["time"]
+            if (datetime.now() - datetime.fromisoformat(last_hb_time)).seconds < self.hb_timeout:
+                logger.error(
+                    f"Last heartbeat was at {last_hb_time}. Terminating the process to avoid data corruption."
+                    f"Please see experiment info file {self.caller_name}-{self.executor_version_hash}.json"
+                    f" at {self.executor_info_base_path} for more details."
+                )
+                raise SystemExit(1)
+            else:
+                self.prev_run_failed = True
+
+        # Start the heartbeat process
+        self.start_hb(hb_path)
+
+    def start_hb(self, hb_path: str):
+        """This function writes the heartbeat to the file at the specified interval."""
+
+        def write_hb():
+            while True:
+                with fsspec.open(hb_path, "w") as f:
+                    json.dump({"time": datetime.now().isoformat()}, f)
+
+                time.sleep(self.hb_time_interval)
+
+        self.hb_thread = threading.Thread(target=write_hb, daemon=True)
+        self.hb_thread.start()
 
     def compute_version(self, step: ExecutorStep):
         if step in self.versions:
@@ -491,20 +541,19 @@ class Executor:
             description=self.description,
             steps=self.step_infos,
         )
+        # Set executor_info_path based on hash and caller path name (e.g., 72_baselines-8c2f3a.json)
+        executor_version_str = json.dumps(
+            list(map(asdict_without_description, self.step_infos)), sort_keys=True, cls=CustomJsonEncoder
+        )
+        self.executor_version_hash = hashlib.md5(executor_version_str.encode()).hexdigest()[:6]
+        self.caller_name = os.path.basename(self.executor_info.caller_path).replace(".py", "")
 
     def write_infos(self):
         """Output JSON files (one for the entire execution, one for each step)."""
 
-        # Set executor_info_path based on hash and caller path name (e.g., 72_baselines-8c2f3a.json)
-        # import pdb; pdb.set_trace()
-        executor_version_str = json.dumps(
-            list(map(asdict_without_description, self.step_infos)), sort_keys=True, cls=CustomJsonEncoder
-        )
-        executor_version_hash = hashlib.md5(executor_version_str.encode()).hexdigest()[:6]
-        name = os.path.basename(self.executor_info.caller_path).replace(".py", "")
         self.executor_info_path = os.path.join(
             self.executor_info_base_path,
-            f"{name}-{executor_version_hash}.json",
+            f"{self.caller_name}-{self.executor_version_hash}.json",
         )
 
         # Print where to find the executor info (experiments JSON)
@@ -549,7 +598,7 @@ class Executor:
         config_version = self.versions[step]["config"]
         output_path = self.output_paths[step]
         status = self.statuses[step]
-
+        status = get_status_with_previous_job_info(status, self.prev_run_failed)
         # Print information about this step
         logger.info(f"[{status}] {step.name}: {get_fn_name(step.fn)}")
         logger.info(f"  output_path = {output_path}")
@@ -684,6 +733,9 @@ class ExecutorMainConfig:
     executor_info_base_path: str = "gs://marin-us-central2/experiments"
     """Where the executor info should be stored under a file determined by a hash."""
 
+    executor_hearts_base_path: str = "/tmp/hbs"
+    """Where the executor hearts should be stored under a file determined by a hash."""
+
     dry_run: bool = False
     force_run: list[str] = field(default_factory=list)  # <list of steps name>: run list of steps (names)
     force_run_failed: bool = False  # Force run failed steps
@@ -697,6 +749,7 @@ def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], descrip
     executor = Executor(
         prefix=config.prefix,
         executor_info_base_path=config.executor_info_base_path,
+        executor_hearts_base_path=config.executor_hearts_base_path,
         description=description,
     )
     executor.run(

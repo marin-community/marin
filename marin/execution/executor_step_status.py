@@ -58,6 +58,13 @@ def read_events(path: str) -> list[ExecutorStepEvent]:
     return events
 
 
+def get_status_with_previous_job_info(status: str, prev_run_failed: bool) -> str:
+    """Get the status with previous job info."""
+    if status == STATUS_SUCCESS:
+        return status
+    return STATUS_FAILED if prev_run_failed else status
+
+
 def get_current_status(events: list[ExecutorStepEvent]) -> str | None:
     """Get the most recent status (last event)."""
     return events[-1].status if len(events) > 0 else None

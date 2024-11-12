@@ -258,16 +258,20 @@ def main(config: ExecutorMainConfig):
 
         experiment_prefix = "quickstart-tests"
         config = dataclasses.replace(
-            config, prefix=bucket_prefix, executor_info_base_path=os.path.join(bucket_prefix, "experiments")
+            config,
+            prefix=bucket_prefix,
+            executor_info_base_path=os.path.join(bucket_prefix, "experiments"),
+            force_run_failed=True,
         )
 
         # path to synthetic test data
         synth_data: str = "./tests/quickstart-data"
         steps = create_steps(experiment_prefix, synth_data)
-        config = dataclasses.replace(config, force_run=[step.name for step in steps])  # Always force run all steps
+        # config = dataclasses.replace(config, force_run=[step.name for step in steps])  # Always force run all steps
+        # config = dataclasses.replace(config)  # Always force run all steps
         executor_main(config, steps=steps)
         logger.info(f"Execution completed successfully. All outputs are in {bucket_prefix}/{experiment_prefix}")
-    except Exception as e:
+    except SystemExit as e:
         logger.error(f"Error in main execution: {e}")
         raise e
 
