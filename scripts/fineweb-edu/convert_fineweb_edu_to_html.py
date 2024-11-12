@@ -38,6 +38,7 @@ import json
 import logging
 import os
 import random
+import re
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from typing import Any
@@ -111,7 +112,15 @@ def process_one_shard(
         anon=False,
         default_block_size=100 * 2**20,
     )
-    s3_fs.retries = 10
+    s3_fs.retries = 100
+
+    # HACK: some of the fineweb-edu filepaths are invalid (seem to point to files on
+    # HF local disk), but they be easily re-written to the corresponding s3 WARCs.
+    pattern = r"^/fsx/guilherme/cc2023-50/r\d+/input/"
+    if re.match(pattern, s3_url):
+        logger.info(f"Found invalid s3 URL {s3_url}")
+        s3_url = re.sub(pattern, "s3://commoncrawl/crawl-data/CC-MAIN-2023-50/segments/", s3_url)
+        logger.info(f"Re-wrote s3 URL as {s3_url}")
 
     with s3_fs.open(s3_url, mode="rb") as file_stream:
         for record in ArchiveIterator(file_stream):
