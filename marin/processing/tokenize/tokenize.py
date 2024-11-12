@@ -143,9 +143,10 @@ def levanter_tokenize_sft(config: TokenizeConfig):
     )
 
     logger.info(f"Caching SFT data to {config.cache_path}")
+    import haliax
 
     # Use the existing mk_chat_sft_dataset function
-    mk_chat_sft_dataset(sft_config, tokenizer)
+    mk_chat_sft_dataset(sft_config, tokenizer, haliax.Axis("position", 2048))
 
     logger.info(f"Finished caching SFT dataset to {config.cache_path}")
 
