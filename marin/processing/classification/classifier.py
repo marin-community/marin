@@ -6,7 +6,6 @@ import urllib.parse
 from typing import Any, ClassVar
 
 import fsspec
-from huggingface_hub import hf_hub_download, repo_exists
 
 
 class BaseClassifier:
@@ -50,6 +49,7 @@ class FasttextClassifier(BaseClassifier):
     def load_model(self):
         from fasttext.FastText import _FastText
         from filelock import FileLock
+        from huggingface_hub import hf_hub_download, repo_exists
 
         # Classifier is stored in a remote storage.
 
