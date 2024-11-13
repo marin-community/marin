@@ -97,7 +97,7 @@ def do_dedup(
     bloom_filter_size,
     estimated_doc_count,
     false_positive_rate,
-    ngram=False,
+    ngram,
     ngram_config,
     processes,
     read_only=False,
