@@ -22,8 +22,8 @@ mmlu_download_step = ExecutorStep(
 ).cd("c30699e/huggingface.co/datasets/cais/mmlu/resolve/c30699e")
 
 ############################################################
-# download arc-easy dataset
-arc_easy_download_step = ExecutorStep(
+# download arc dataset
+arc_download_step = ExecutorStep(
     name="raw/allenai/ai2_arc",
     fn=download,
     config=DownloadConfig(
@@ -39,6 +39,7 @@ arc_easy_download_step = ExecutorStep(
 Converts raw to JSON for:
 - mmlu
 - arc-easy
+- arc-challenge
 """
 ############################################################
 # Convert mmlu to evaluation format (i.e. JSON with "prompt", "response" fields)
@@ -83,6 +84,7 @@ mmlu_convert_eval_subject = ExecutorStep(
     ),
 )
 
+# This creates a JSON file representing the evaluation data subset of ARC-Easy
 arc_easy_convert_eval = ExecutorStep(
     name="evaluation/arc-easy",
     fn=raw2json,
@@ -90,7 +92,26 @@ arc_easy_convert_eval = ExecutorStep(
         dataset_name="allenai/ai2_arc",
         subsets=["ARC-Easy"],
         splits=["train", "validation"],
-        input_path=arc_easy_download_step,
+        input_path=arc_download_step,
+        hf_path="allenai/ai2_arc",
+        output_path=this_output_path(),
+        output_format=OutputFormatOptions("evaluation"),
+        prompt_key="question",
+        options_key="choices.text",
+        answer_labels_key="choices.label",
+        answer_label_key="answerKey",
+    ),
+)
+
+# This creates a JSON file representing the evaluation data subset of ARC-Challenge
+arc_challenge_convert_eval = ExecutorStep(
+    name="evaluation/arc-challenge",
+    fn=raw2json,
+    config=DatasetConversionConfig(
+        dataset_name="allenai/ai2_arc",
+        subsets=["ARC-Challenge"],
+        splits=["train", "validation"],
+        input_path=arc_download_step,
         hf_path="allenai/ai2_arc",
         output_path=this_output_path(),
         output_format=OutputFormatOptions("evaluation"),
@@ -132,5 +153,6 @@ if __name__ == "__main__":
             mmlu_convert_eval_subject,
             mmlu_convert_dolma,
             arc_easy_convert_eval,
+            arc_challenge_convert_eval,
         ]
     )
