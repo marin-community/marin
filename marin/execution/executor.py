@@ -364,7 +364,7 @@ class Executor:
         self,
         prefix: str,
         executor_info_base_path: str,
-        executor_hearts_base_path: str,
+        executor_hearts_base_path: str | None = None,
         description: str | None = None,
     ):
         self.prefix = prefix
@@ -422,6 +422,9 @@ class Executor:
     def _check_and_start_hb(self):
         """This function checks if the last heartbeat was within timeout. If yes then it terminates this process to
         avoid any data corruption. If not then it starts the heartbeat process."""
+        if self.executor_hearts_base_path is None:
+            return
+
         hb_path = os.path.join(
             self.executor_hearts_base_path,
             f"{self.caller_name}-{self.executor_version_hash}.hb",

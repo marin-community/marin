@@ -143,11 +143,11 @@ def test_force_run():
 
     log = create_log()
     with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
-        executor_initial = Executor(prefix=temp_dir, executor_info_base_path=temp_dir)
+        executor_initial = create_executor(temp_dir)
         executor_initial.run(steps=get_b_list(log, 4))
 
         # Re-run without force_run
-        executor_non_force = Executor(prefix=temp_dir, executor_info_base_path=temp_dir)
+        executor_non_force = create_executor(temp_dir)
         executor_non_force.run(steps=get_b_list(log, 5))  # This would not run b again so m would be 4
         # Check the results
         results = read_log(log)
@@ -156,11 +156,11 @@ def test_force_run():
         assert results[0]["m"] == 4
 
         log = create_log()
-        executor_initial = Executor(prefix=temp_dir, executor_info_base_path=temp_dir)
+        executor_initial = create_executor(temp_dir)
         executor_initial.run(steps=get_b_list(log, 4))
 
         # Re run without force_run
-        executor_force = Executor(prefix=temp_dir, executor_info_base_path=temp_dir)
+        executor_force = create_executor(temp_dir)
         executor_force.run(steps=get_b_list(log, 5), force_run=["b"])  # This would run b again so m would be 5
         results = read_log(log)
         assert len(results) == 1
