@@ -5,6 +5,7 @@ from operations.raw2json.huggingface.qa.raw2json import DatasetConversionConfig,
 """
 Downloads the following datasets
 - mmlu
+- arc-easy
 """
 ############################################################
 # download mmlu dataset
@@ -20,9 +21,24 @@ mmlu_download_step = ExecutorStep(
     override_output_path="gs://marin-us-central2/raw/cais/mmlu",
 ).cd("c30699e/huggingface.co/datasets/cais/mmlu/resolve/c30699e")
 
+############################################################
+# download arc-easy dataset
+arc_easy_download_step = ExecutorStep(
+    name="raw/allenai/ai2_arc",
+    fn=download,
+    config=DownloadConfig(
+        hf_dataset_id="allenai/ai2_arc",
+        revision=versioned("210d026"),
+        gcs_output_path=this_output_path(),
+        wait_for_completion=True,
+    ),
+    override_output_path="gs://marin-us-central2/raw/allenai/ai2_arc",
+).cd("210d026/huggingface.co/datasets/allenai/ai2_arc/resolve/210d026")
+
 """
 Converts raw to JSON for:
 - mmlu
+- arc-easy
 """
 ############################################################
 # Convert mmlu to evaluation format (i.e. JSON with "prompt", "response" fields)
@@ -66,6 +82,25 @@ mmlu_convert_eval_subject = ExecutorStep(
         exclude_subsets=["all", "auxiliary_train"],
     ),
 )
+
+arc_easy_convert_eval = ExecutorStep(
+    name="evaluation/arc-easy",
+    fn=raw2json,
+    config=DatasetConversionConfig(
+        dataset_name="allenai/ai2_arc",
+        subsets=["ARC-Easy"],
+        splits=["train", "validation"],
+        input_path=arc_easy_download_step,
+        hf_path="allenai/ai2_arc",
+        output_path=this_output_path(),
+        output_format=OutputFormatOptions("evaluation"),
+        prompt_key="question",
+        options_key="choices.text",
+        answer_labels_key="choices.label",
+        answer_label_key="answerKey"
+    ),
+)
+
 ############################################################
 # Convert mmlu to dolma format (i.e. JSON with "text" field)
 # This is used as input to the decontamination pipeline so documents with MMLU content are removed
@@ -96,5 +131,6 @@ if __name__ == "__main__":
             mmlu_convert_eval_aux,
             mmlu_convert_eval_subject,
             mmlu_convert_dolma,
+            arc_easy_convert_eval
         ]
     )
