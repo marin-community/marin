@@ -216,6 +216,7 @@ def batched(iterable, n=1):
 
 @ray.remote(memory=32 * 1024 * 1024 * 1024)
 def get_shards_indices_to_process(shard_path: str):
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     # Get the HTML files (of form <int index>.jsonl.gz) and sort by the integer index.
     # We sort to ensure that the sharding is reproducible.
     html_path_indices: list[int] = [
@@ -223,6 +224,7 @@ def get_shards_indices_to_process(shard_path: str):
         for path in fsspec_glob(os.path.join(shard_path, "*.jsonl.gz"))
     ]
     html_path_indices: list[int] = sorted(html_path_indices)
+    logger.info(f"Found {len(html_path_indices)} shards to process")
     return html_path_indices
 
 
