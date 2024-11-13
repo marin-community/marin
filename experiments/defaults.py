@@ -148,6 +148,7 @@ def default_train(
                     save_interval=timedelta(minutes=10),
                     keep=[dict(every=25000)],
                 ),
+                replica_dcn_axis_size=-1,
             ),
             z_loss_weight=train_config.z_loss_weight,
             model=model_config,
