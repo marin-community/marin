@@ -9,7 +9,6 @@ from experiments.llama import llama_1_4b
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import executor_main
 
-
 llama_1_4b_multislice_train_config = SimpleTrainConfig(
     tpu_type="v4-128",
     node_count=2,
