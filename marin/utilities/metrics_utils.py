@@ -34,7 +34,7 @@ def get_wandb_run_metrics(
 
         assert run is not None, f"Run {run_id} not found."
 
-        metrics_dict = {"run_id": run_id}
+        metrics_dict = {}
         for metric in metrics:
             # Retrieve the metric value for the run
             value = run.summary.get(metric, None)
@@ -53,69 +53,133 @@ def get_wandb_run_metrics(
         return None
 
 
-def get_flops_usage_over_period(num_days=7, entity="stanford-mercury", project="marin") -> float:
+def get_all_runs_over_period(num_days=7, entity="stanford-mercury", project="marin") -> dict[str, Any]:
     """
-    Calculates the total FLOPs used across all runs in the past week (or given time window).
-
-    Args:
-    - num_days (int): The number of days to look back for FLOPs usage.
-    - entity (str): The WandB entity (user or organization).
-    - project (str): The name of the WandB project.
-
-    Returns:
-    - dict: a dict with keys num_days, num_runs_counted, and total_flops
+    Retrieves all runs created within the past week (or given time window).
     """
     # Initialize the WandB API
     api = wandb.Api()
 
     # Define the time window (one week ago from now)
-    one_week_ago = datetime.now(timezone.utc) - timedelta(days=num_days)
+    time_window = datetime.now(timezone.utc) - timedelta(days=num_days)
 
-    # Initialize total FLOP usage
-    total_flops = 0.0
+    # Initialize the list of runs
+    runs_list = []
 
     try:
+
+        # Check if project exists first
+        try:
+            api.project(entity, project)
+        except wandb.errors.CommError:
+            print(f"Project '{project}' not found in entity '{entity}'")
+            return None
+
         # Fetch all runs for the project
         runs = api.runs(f"{entity}/{project}")
 
-        # Filter and sum FLOP usage for runs created within the past week
-        num_runs = 0
-        for run in runs:
-            run_created_at = datetime.strptime(run.created_at, "%Y-%m-%dT%H:%M:%S%z")
+        print(runs)
 
-            # if run was created in the past week
-            if run_created_at >= one_week_ago:
+        # Filter runs by creation date
+        runs_list = [run for run in runs if datetime.strptime(run.created_at, "%Y-%m-%dT%H:%M:%S%z") >= time_window]
 
-                gflops = run.summary.get("throughput/total_gflops", 0.0)
-                total_flops += gflops * 1e9
-                num_runs += 1
+        print(f"Successfully retrieved {len(runs_list)} runs from the past {num_days} days")
 
-        flops_stats = {"num_days": num_days, "num_runs_counted": num_runs, "total_flops": total_flops}
-
-        print(f"FLOPs stats: {flops_stats} flops")
-        print(f"In TFLOPS: {flops_stats["total_flops"] / 1e12} TFLOPs")
-
-        return flops_stats
+        return runs_list
 
     except wandb.errors.CommError as e:
         print("Failed to retrieve run data:", e)
         return None
 
     except Exception as e:
-        print(f"An unexpected error occurred when trying to get FLOPs info from WandB: {e}")
+        print(f"An unexpected error occurred when trying to get runs from WandB: {e}")
         return None
 
 
-def upload_metrics_to_gcs(run_id: str, num_days: int = 7, output_name: str = "metrics") -> dict[str, Any]:
-    run_metrics = get_wandb_run_metrics(run_id)
-    flops_usage = get_flops_usage_over_period(num_days=num_days)
-    metrics = {"run_metrics": run_metrics, "flops_usage": flops_usage}
+def count_params_for_run(run_id: str, entity="stanford-mercury", project="marin") -> int:
+    """
+    Retrieves the number of parameters for a specific WandB run.
+    """
+    from experiments.llama import compute_num_parameters
+
+    # Initialize the WandB API
+    api = wandb.Api()
+
+    try:
+        # Fetch the specified run
+        run = api.run(f"{entity}/{project}/{run_id}")
+
+        assert run is not None, f"Run {run_id} not found."
+
+        # Calculate the number of parameters for the run
+        if run.config.data.tokenizer == "EleutherAI/gpt-neox-20b":
+            vocab_size = 50_257
+        elif run.config.data.tokenizer == "meta-llama/Meta-Llama-3.1-8B":
+            vocab_size = 128_256
+        elif run.config.data.tokenizer == "meta-llama/Llama-2-7b":
+            vocab_size = 32_000
+
+        num_parameters = compute_num_parameters(config=run.config.model, vocab_size=vocab_size)
+
+        print(f"Number of parameters for run {run_id}: {num_parameters}")
+
+        return num_parameters
+
+    except wandb.errors.CommError as e:
+        print("Failed to retrieve run data:", e)
+        return None
+
+    except Exception as e:
+        print(f"An unexpected error occurred when trying to retrieve run data: {e}")
+        return None
+
+
+def calculate_and_upload_metrics_to_gcs(num_days: int = 7) -> dict[str, Any]:
+
+    # get all runs from past num_days
+    runs = get_all_runs_over_period(num_days=num_days)
+
+    # get metrics for each run
+    run_metrics = {}
+    for run in runs:
+        run_id = run.id
+        run_metrics[run_id] = get_wandb_run_metrics(run_id)
+
+        # get parameter count for the run and add to metrics
+        run_metrics[run_id]["num_parameters"] = count_params_for_run(run_id)
+
+    # get the model with best bpb eval for each group in 1b parameter scale
+    best_bpb = {"1b": None, "7b": None}
+    for run_id, metrics in run_metrics.items():
+        if metrics["eval/paloma/c4_en/bpb"] is not None:
+            num_parameters = metrics["num_parameters"]
+
+            # if num_parameters is below 2 billion and bpb is better than current best, update best_bpb
+            if num_parameters < 2_000_000_000 and (
+                best_bpb["1b"] is None or metrics["eval/paloma/c4_en/bpb"] < best_bpb["1b"]
+            ):
+                best_bpb["1b"] = run_id
+
+            # if num_parameters is above 6 billion and bpb is better than current best, update best_bpb
+            if num_parameters > 6_000_000_000 and (
+                best_bpb["7b"] is None or metrics["eval/paloma/c4_en/bpb"] < best_bpb["7b"]
+            ):
+                best_bpb["7b"] = run_id
+
+    metrics = {
+        "num_runs": len(run_metrics),
+        "best_c4_en_bpb": {
+            "1b": {"run_id": best_bpb["1b"], "run_metrics": run_metrics[best_bpb["1b"]]},
+            "7b": {"run_id": best_bpb["7b"], "run_metrics": run_metrics[best_bpb["7b"]]},
+        },
+        "total_gflops_across_runs": sum([metrics["throughput/total_gflops"] for metrics in run_metrics.values()]),
+    }
 
     metrics_json = json.dumps(metrics)
 
     # Write JSON to GCS using fsspec with gcsfs
     current_datetime = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    full_path = f"{METRICS_GCS_PATH}/{current_datetime}-{output_name}.json"
+    full_path = f"{METRICS_GCS_PATH}/{current_datetime}-metrics.json"
 
     with fsspec.open(full_path, "w") as f:
         f.write(metrics_json)
@@ -126,4 +190,4 @@ def upload_metrics_to_gcs(run_id: str, num_days: int = 7, output_name: str = "me
 
 
 if __name__ == "__main__":
-    upload_metrics_to_gcs("exp446-fineweb-edu-1.4b-9e4be7", num_days=7)
+    calculate_and_upload_metrics_to_gcs()
