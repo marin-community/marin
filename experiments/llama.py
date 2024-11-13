@@ -89,7 +89,7 @@ llama_1_4b_train_config = SimpleTrainConfig(
 )
 
 
-def compute_num_parameters(config: LlamaConfig, vocab_size: int = llama3_tokenizer_vocab_size) -> int:
+def compute_num_parameters(config: LlamaConfig, vocab_size: int = 128_256) -> int:
     head_size = config.hidden_dim // config.num_heads
     q_params = config.num_heads * head_size * config.hidden_dim
     k_params = config.num_kv_heads * head_size * config.hidden_dim
