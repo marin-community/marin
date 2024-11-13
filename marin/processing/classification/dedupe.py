@@ -11,6 +11,7 @@ from tqdm import tqdm
 from marin.core.runtime import cached_or_construct_output
 from marin.utils import fsspec_glob, fsspec_mkdirs, fsspec_rm, rebase_file_path
 
+
 @dataclass
 class NGramConfig:
     """
@@ -31,6 +32,7 @@ class NGramConfig:
         stride (int): Step size when moving through string to generate ngrams
         threshold (float): Percentage of duplicate ngrams for a paragraph to be considered duplicate
     """
+
     length: int = 8
     stride: int | None = None
     threshold: float = 0.7
@@ -55,7 +57,7 @@ class DedupeConfig:
     def __post_init__(self):
         # if ngram mode but no ngram settings, set up default ngram config
         if self.ngram and not self.ngram_config:
-            self.ngram_config = NGramConfig() 
+            self.ngram_config = NGramConfig()
 
 
 def copy_files_in(input_path, local_base_dir):
@@ -150,7 +152,6 @@ def do_dedup(
                 str(ngram_config.stride),
             ]
         )
-         
 
     process = subprocess.Popen(
         " ".join(command),
