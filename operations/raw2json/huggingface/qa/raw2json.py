@@ -68,6 +68,7 @@ class DatasetConversionConfig:
         answer_label_key (str): key in HF data object for the label of the correct answer (e.g. "A")
         options_key (str): key in HF data object for the options (e.g. ["Rome", "London", "Berlin", "Paris"])
         answer_labels (list[str]): list of labels for an example (e.g. ["A", "B", "C", "D"])
+        answer_labels_key (str): key in HF data object for list of labels for an example (e.g. ["A", "B", "C", "D"])
         exclude_subsets (list[str]): list of subsets to exclude
         revision (str): revision of datasets to download
         token (str): HF Hub token when authentication required, "env" means look at $HF_TOKEN
@@ -87,6 +88,7 @@ class DatasetConversionConfig:
     answer_label_key: str = ""
     options_key: str = ""
     answer_labels: list[str] = field(default_factory=list)
+    answer_labels_key: str = ""
     exclude_subsets: list[str] = field(default_factory=list)
     revision: str | None = None
     token: str | bool = False
@@ -419,6 +421,8 @@ def raw2json(cfg: DatasetConversionConfig) -> None:
                 )
                 # get the question text
                 question_text = get_nested_item(example, cfg.prompt_key)
+                # get answer labels
+                answer_labels = get_nested_item(example, cfg.answer_labels_key, cfg.answer_labels)
                 # get the list of options in standardized form (list of options)
                 options = standardize_options(get_nested_item(example, cfg.options_key, []))
                 # first pass attempt to populate answer_text, answer_idx, answer_label
@@ -430,16 +434,16 @@ def raw2json(cfg: DatasetConversionConfig) -> None:
                 answer_label = get_nested_item(example, cfg.answer_label_key) if cfg.answer_label_key else ""
                 # try to populate answer_text, answer_idx, answer_label based on initial retrieved values
                 if not answer_idx:
-                    if answer_label and cfg.answer_labels:
+                    if answer_label and answer_labels:
                         # infer answer_idx (e.g. 0) from answer_label and list of potential labels
-                        answer_idx = cfg.answer_labels.index(answer_label)
+                        answer_idx = answer_labels.index(answer_label)
                     elif answer_text and options:
                         # infer answer_idx (e.g. 0) from answer_text and options list
                         answer_idx = options.index(answer_text)
                 if not answer_label:
                     if answer_idx is not None and isinstance(answer_idx, int) and cfg.answer_labels:
                         # infer answer_label (e.g. A) from answer_label and list of potential labels
-                        answer_label = cfg.answer_labels[answer_idx]
+                        answer_label = answer_labels[answer_idx]
                 if not answer_text:
                     if answer_idx is not None and isinstance(answer_idx, int) and options:
                         # infer answer text (e.g. Paris) from answer_idx and options list
@@ -459,17 +463,17 @@ def raw2json(cfg: DatasetConversionConfig) -> None:
                 if answer_text:
                     # answer text of correct answer
                     document.metadata.answer = answer_text
-                if cfg.answer_labels:
+                if answer_labels:
                     # list of potential labels (e.g. ["A", "B", "C", 'D"])
-                    document.metadata.answer_labels = cfg.answer_labels
+                    document.metadata.answer_labels = answer_labels
                 if cfg.output_format.value == "decontamination":
                     # decontamination output format is dolma with text as the key
                     document.text = question_text
                 elif cfg.output_format.value == "evaluation":
                     # evaluation format wants prompt, response
-                    if cfg.answer_labels and options:
+                    if answer_labels and options:
                         prompt, response = format_prompt_response(
-                            question_text, options, cfg.answer_labels, answer_idx, answer_text
+                            question_text, options, answer_labels, answer_idx, answer_text
                         )
                     else:
                         prompt = question_text + "\n\n"
