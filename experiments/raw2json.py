@@ -21,17 +21,19 @@ mmlu_download_step = ExecutorStep(
     override_output_path="gs://marin-us-central2/raw/cais/mmlu",
 ).cd("c30699e/huggingface.co/datasets/cais/mmlu/resolve/c30699e")
 
+############################################################
+# download hellaswag dataset
 hellaswag_download_step = ExecutorStep(
     name="raw/Rowan/hellaswag",
     fn=download,
     config=DownloadConfig(
         hf_dataset_id="Rowan/hellaswag",
-        revision=versioned("6002345"),
+        revision=versioned("50441ce"),
         gcs_output_path=this_output_path(),
         wait_for_completion=True,
     ),
     override_output_path="gs://marin-us-central2/raw/Rowan/hellaswag",
-).cd("6002345/huggingface.co/datasets/Rowan/hellaswag/resolve/6002345")
+).cd("50441ce/huggingface.co/datasets/Rowan/hellaswag/resolve/50441ce")
 
 """
 Converts raw to JSON for:
@@ -95,6 +97,7 @@ hellaswag_convert_eval = ExecutorStep(
         output_format=OutputFormatOptions("evaluation"),
         prompt_key="ctx",
         options_key="endings",
+        answer_labels=["A", "B", "C", "D"],
         answer_idx_key="label",
     ),
 )
