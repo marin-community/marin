@@ -54,7 +54,7 @@ class DedupeConfig:
 
     def __post_init__(self):
         # if ngram mode but no ngram settings, set up default ngram config
-        if self.ngram and not ngram_config:
+        if self.ngram and not self.ngram_config:
             self.ngram_config = NGramConfig() 
 
 
