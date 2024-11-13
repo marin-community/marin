@@ -510,7 +510,8 @@ class Executor:
         logger.info(f"Writing executor info to {self.executor_info_path}")
         # TODO: don't hardcode this webserver later
         experimentUrl = "https://marlin-subtle-barnacle.ngrok-free.app/experiment?path=" + urllib.parse.quote(
-            self.executor_info_path
+            self.executor_info_path,
+            safe="",
         )
         logger.info("To view the experiment page, go to:")
         logger.info("")
