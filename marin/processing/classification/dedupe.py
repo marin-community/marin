@@ -286,7 +286,7 @@ def dolma_dedup(
                     ngram_config,
                     processes,
                     read_only=False,
-                    bloom_filter_file="decotaminated_bloom_filter.bin",
+                    bloom_filter_file="decontaminated_bloom_filter.bin",
                 )
 
                 # Delete all JSONL files in the temporary directory since we have bloom filter
@@ -305,7 +305,7 @@ def dolma_dedup(
                     ngram_config,
                     processes,
                     read_only=True,
-                    bloom_filter_file="decotaminated_bloom_filter.bin",
+                    bloom_filter_file="decontaminated_bloom_filter.bin",
                 )
             else:
                 copy_files_in(input_path, tmpdir)
