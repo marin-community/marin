@@ -20,9 +20,24 @@ mmlu_download_step = ExecutorStep(
     override_output_path="gs://marin-us-central2/raw/cais/mmlu",
 ).cd("c30699e/huggingface.co/datasets/cais/mmlu/resolve/c30699e")
 
+# download boolq dataset
+boolq_download_step = ExecutorStep(
+    name="raw/google/boolq",
+    fn=download,
+    config=DownloadConfig(
+        hf_dataset_id="google/boolq",
+        revision=versioned("35b264d"),
+        gcs_output_path=this_output_path(),
+        wait_for_completion=True,
+    ),
+    override_output_path="gs://marin-us-central2/raw/google/boolq",
+).cd("35b264d/huggingface.co/datasets/google/boolq/resolve/35b264d")
+
+
 """
 Converts raw to JSON for:
 - mmlu
+- boolq
 """
 ############################################################
 # Convert mmlu to evaluation format (i.e. JSON with "prompt", "response" fields)
@@ -66,6 +81,25 @@ mmlu_convert_eval_subject = ExecutorStep(
         exclude_subsets=["all", "auxiliary_train"],
     ),
 )
+
+# This creates a JSON file representing the train and validation data subset of boolq
+boolq_convert_eval = ExecutorStep(
+    name="evaluation/boolq-eval",
+    fn=raw2json,
+    config=DatasetConversionConfig(
+        dataset_name="google/boolq",
+        subsets=["*"],
+        splits=["train", "validation"],
+        input_path=boolq_download_step,
+        hf_path="google/boolq",
+        output_path=this_output_path(),
+        output_format=OutputFormatOptions("evaluation"),
+        prompt_key="question",
+        answer_label_key="answer",
+        answer_labels=[True, False],
+        answer_text_ignore=True,
+    ),
+)
 ############################################################
 # Convert mmlu to dolma format (i.e. JSON with "text" field)
 # This is used as input to the decontamination pipeline so documents with MMLU content are removed
@@ -96,5 +130,6 @@ if __name__ == "__main__":
             mmlu_convert_eval_aux,
             mmlu_convert_eval_subject,
             mmlu_convert_dolma,
+            boolq_convert_eval
         ]
     )
