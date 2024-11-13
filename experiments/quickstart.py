@@ -49,6 +49,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
             extract_method=versioned("readability"),
             config=HtmlToMarkdownConfig.default_config(),
         ),
+        pip_dependency_groups=["download_transform"],
     )
 
     transform_lq_data_step = ExecutorStep(
@@ -60,6 +61,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
             extract_method=versioned("readability"),
             config=HtmlToMarkdownConfig.default_config(),
         ),
+        pip_dependency_groups=["download_transform"],
     )
 
     # ############################################################
@@ -91,6 +93,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
                 "thread": 1,
             },
         ),
+        pip_dependency_groups=["quality_dedup_consolidate"],
     )
 
     ############################################################
@@ -106,6 +109,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
             model_type="fasttext",
             attribute_name="quickstart-fasttext-quality-hq",
         ),
+        pip_dependency_groups=["quality_dedup_consolidate"],
     )
 
     inference_lq_step = ExecutorStep(
@@ -118,6 +122,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
             model_type="fasttext",
             attribute_name="quickstart-fasttext-quality-lq",
         ),
+        pip_dependency_groups=["quality_dedup_consolidate"],
     )
 
     ############################################################
@@ -130,6 +135,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
             input_path=output_path_of(transform_hq_data_step),
             output_path=this_output_path(),
         ),
+        pip_dependency_groups=["quality_dedup_consolidate"],
     )
 
     ############################################################
@@ -156,6 +162,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
                 ),
             ],
         ),
+        pip_dependency_groups=["quality_dedup_consolidate"],
     )
 
     ############################################################
@@ -198,8 +205,8 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
         output_field="response",
     )
 
-    ############################################################
-
+    # ############################################################
+    # Training
     if not is_in_ci() and not is_local_ray_cluster():
         tpu_type = "v4-8"
     else:
