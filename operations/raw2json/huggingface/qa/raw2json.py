@@ -86,6 +86,7 @@ class DatasetConversionConfig:
     answer_text_key: str = ""
     answer_idx_key: str = ""
     answer_label_key: str = ""
+    answer_text_ignore: bool = False
     options_key: str = ""
     answer_labels: list[str] = field(default_factory=list)
     answer_labels_key: str = ""
@@ -434,7 +435,7 @@ def raw2json(cfg: DatasetConversionConfig) -> None:
                 answer_label = get_nested_item(example, cfg.answer_label_key) if cfg.answer_label_key else ""
                 # try to populate answer_text, answer_idx, answer_label based on initial retrieved values
                 if not answer_idx:
-                    if answer_label and answer_labels:
+                    if answer_label is not None and answer_labels:
                         # infer answer_idx (e.g. 0) from answer_label and list of potential labels
                         answer_idx = answer_labels.index(answer_label)
                     elif answer_text and options:
@@ -448,6 +449,9 @@ def raw2json(cfg: DatasetConversionConfig) -> None:
                     if answer_idx is not None and isinstance(answer_idx, int) and options:
                         # infer answer text (e.g. Paris) from answer_idx and options list
                         answer_text = options[answer_idx]
+                    elif cfg.answer_text_ignore:
+                        answer_text = ""
+                        options = ["" for _ in range(len(cfg.answer_labels))]
                     else:
                         raise ValueError("No answer text was found. Please review config.")
                 # set various metadata
