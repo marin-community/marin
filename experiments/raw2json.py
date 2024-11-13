@@ -97,7 +97,7 @@ arc_easy_convert_eval = ExecutorStep(
         prompt_key="question",
         options_key="choices.text",
         answer_labels_key="choices.label",
-        answer_label_key="answerKey"
+        answer_label_key="answerKey",
     ),
 )
 
@@ -131,6 +131,6 @@ if __name__ == "__main__":
             mmlu_convert_eval_aux,
             mmlu_convert_eval_subject,
             mmlu_convert_dolma,
-            arc_easy_convert_eval
+            arc_easy_convert_eval,
         ]
     )
