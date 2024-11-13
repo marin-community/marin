@@ -9,10 +9,11 @@ python -m marin.processing.classification.inference \
 import json
 import os
 
-import datasets
 import draccus
 import fsspec
 import ray
+
+# TODO(Chris): Can we remove this import, it needs pyarrow and pandas
 from ray.data.datasource import FilenameProvider
 from ray.runtime_env import RuntimeEnv
 
@@ -74,6 +75,8 @@ def process_file_using_actor_pool(input_path: str, output_path: str, model_name_
 def process_file_ray(
     input_filename: str, output_filename: str, model_name_or_path: str, attribute_name: str, model_type: str | None
 ):
+    import datasets
+
     print(f"[*] Read in dataset {input_filename}")
 
     quality_classifier = AutoClassifier.from_model_path(model_name_or_path, attribute_name, model_type=model_type)
@@ -97,6 +100,8 @@ def process_file_ray(
 
 @cached_or_construct_output(success_suffix="SUCCESS")
 def process_file_with_quality_classifier(input_filename: str, output_filename: str, quality_classifier: BaseClassifier):
+    import datasets
+
     json_list = []
     with fsspec.open(input_filename, "rt", compression="gzip") as f_in:
         for line in f_in:
