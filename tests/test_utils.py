@@ -63,7 +63,7 @@ def check_load_config(config_class: type, config_file: str) -> None:
         raise Exception(f"failed to parse {config_file}") from e
 
 
-def check_wandb_api_functionality():
+def test_wandb_api_functionality():
     from marin.utilities.metrics_utils import get_flops_usage_over_period, get_wandb_run_metrics
 
     # Test get_flops_usage_over_period
