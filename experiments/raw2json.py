@@ -36,6 +36,7 @@ hellaswag_download_step = ExecutorStep(
 """
 Converts raw to JSON for:
 - mmlu
+- hellaswag
 """
 ############################################################
 # Convert mmlu to evaluation format (i.e. JSON with "prompt", "response" fields)
@@ -80,7 +81,7 @@ mmlu_convert_eval_subject = ExecutorStep(
     ),
 )
 
-# This creates a JSON file representing the auxiliary training data subset of MMLU
+# This creates a JSON file representing the auxiliary training data subset of hellaswag
 hellaswag_convert_eval = ExecutorStep(
     name="evaluation/hellaswag-eval",
     fn=raw2json,
@@ -128,6 +129,6 @@ if __name__ == "__main__":
             mmlu_convert_eval_aux,
             mmlu_convert_eval_subject,
             mmlu_convert_dolma,
-            hellaswag_convert_eval
+            hellaswag_convert_eval,
         ]
     )
