@@ -36,6 +36,7 @@ openbookqa_download_step = ExecutorStep(
 """
 Converts raw to JSON for:
 - mmlu
+- openbookqa
 """
 ############################################################
 # Convert mmlu to evaluation format (i.e. JSON with "prompt", "response" fields)
