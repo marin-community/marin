@@ -11,6 +11,30 @@ from tqdm import tqdm
 from marin.core.runtime import cached_or_construct_output
 from marin.utils import fsspec_glob, fsspec_mkdirs, fsspec_rm, rebase_file_path
 
+@dataclass
+class NGramConfig:
+    """
+    Configuration class for Dolma deduplication n-gram settings.
+    Dolma dedupe pipeline has an ngram match mode which is an alternative to exact match.
+    Paragraphs are newline delimited text in the document.
+    For each paragraph, all ngrams are produced with a given stride.
+    So for 3-gram with 0 stride, 'The cat sat on the mat.' produces:
+    'The cat sat', 'cat sat on', 'sat on the', 'on the mat', and 'the mat.'
+    If you don't want the ngrams to overlap, you can increase stride.
+    Stride is how many tokens to skip when moving through the string to produce ngrams.
+    The ngrams are run through a bloom filter which contains all seen ngrams.
+    The paragraph is considered a duplicate if the percentage of found ngrams is above a threshold.
+    In short, a paragraph is considered a duplicate if its ngrams are typically duplicates.
+
+    Attributes:
+        length (int): Size of the ngram (e.g. 8)
+        stride (int): Step size when moving through string to generate ngrams
+        threshold (float): Percentage of duplicate ngrams for a paragraph to be considered duplicate
+    """
+    length: int = 8
+    stride: int | None = None
+    threshold: float = 0.7
+
 
 @dataclass
 class DedupeConfig:
@@ -22,9 +46,16 @@ class DedupeConfig:
     bloom_filter_size: int | None = None  # default to 0 to use estimated_doc_count and false_positive_rate
     estimated_doc_count: int = 1000000
     false_positive_rate: float = 0.001
+    ngram: bool = False
+    ngram_config: NGramConfig | None = None
     processes: int = 1
     decontaminate: bool = False
     decontaminate_path: str | None = None
+
+    def __post_init__(self):
+        # if ngram mode but no ngram settings, set up default ngram config
+        if self.ngram and not ngram_config:
+            self.ngram_config = NGramConfig() 
 
 
 def copy_files_in(input_path, local_base_dir):
@@ -66,6 +97,8 @@ def do_dedup(
     bloom_filter_size,
     estimated_doc_count,
     false_positive_rate,
+    ngram=False,
+    ngram_config,
     processes,
     read_only=False,
     bloom_filter_file="deduper_bloom_filter.bin",
@@ -104,6 +137,20 @@ def do_dedup(
 
     # for decontamination bloom filter is read only
     command.append("--bloom_filter.read_only" if read_only else "--no-bloom_filter.read_only")
+
+    # add ngram settings to dolma dedupe command if in ngram matching mode
+    if ngram:
+        command.extend(
+            [
+                "--dedupe.paragraphs.by_ngram.ngram_length",
+                str(ngram_config.length),
+                "--dedupe.paragraphs.by_ngram.overlap_threshold",
+                str(ngram_config.threshold),
+                "--dedupe.paragraphs.by_ngram.stride",
+                str(ngram_config.stride),
+            ]
+        )
+         
 
     process = subprocess.Popen(
         " ".join(command),
@@ -215,6 +262,8 @@ def dolma_dedup(
     bloom_filter_size,
     estimated_doc_count,
     false_positive_rate,
+    ngram,
+    ngram_config,
     processes,
     decomtaminate_dir,
     decontaminate,
@@ -233,6 +282,8 @@ def dolma_dedup(
                     bloom_filter_size,
                     estimated_doc_count,
                     false_positive_rate,
+                    ngram,
+                    ngram_config,
                     processes,
                     read_only=False,
                     bloom_filter_file="decotaminated_bloom_filter.bin",
@@ -250,6 +301,8 @@ def dolma_dedup(
                     bloom_filter_size,
                     estimated_doc_count,
                     false_positive_rate,
+                    ngram,
+                    ngram_config,
                     processes,
                     read_only=True,
                     bloom_filter_file="decotaminated_bloom_filter.bin",
@@ -264,6 +317,8 @@ def dolma_dedup(
                     bloom_filter_size,
                     estimated_doc_count,
                     false_positive_rate,
+                    ngram,
+                    ngram_config,
                     processes,
                 )
 
@@ -303,6 +358,8 @@ def dedupe(config: DedupeConfig):
             config.bloom_filter_size,
             config.estimated_doc_count,
             config.false_positive_rate,
+            config.ngram,
+            config.ngram_config,
             config.processes,
             config.decontaminate_path,
             config.decontaminate,
