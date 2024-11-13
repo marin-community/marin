@@ -16,7 +16,7 @@ from warcio import ArchiveIterator
 from marin.web.convert import convert_page
 from marin.core.runtime import cached_or_construct_output
 from marin.utils import fsspec_exists, fsspec_glob, fsspec_rm
-from marin.schemas.web.convert import ExtractionConfig, HtmlToMarkdownConfig
+from marin.schemas.web.convert import ExtractionConfig, HtmlToMarkdownConfig, ResiliparseConfig
 
 
 logger = logging.getLogger("ray")
@@ -30,8 +30,8 @@ def process_one_warc_file(
     extract_method: str,
     config: ExtractionConfig,
     md_output_path: str,
-    text_output_path: str,
-    html_output_path: str | None = False,
+    text_output_path: str | None = None,
+    html_output_path: str | None = None,
 ):
     """
     Takes in the input file and processes it to get the html and md content.
@@ -53,7 +53,10 @@ def process_one_warc_file(
     output_file_name = os.path.basename(output_path)
 
     md_output_file = os.path.join(md_output_path, base_folder, output_file_name)
-    fw_output_file = os.path.join(text_output_path, base_folder, output_file_name)
+
+    text_output_file = None
+    if text_output_path:
+        text_output_file = os.path.join(text_output_path, base_folder, output_file_name)
     
     html_output_file = None
     if html_output_path:
@@ -61,7 +64,7 @@ def process_one_warc_file(
 
 
     # Write the output to a file with md information.
-    logger.info(f"Writing to {md_output_file = }, {fw_output_file = }")
+    logger.info(f"Writing to {md_output_file = }, {text_output_file = }")
 
     try:
         df = pd.read_parquet(input_path)
@@ -139,8 +142,8 @@ def process_one_warc_file(
             
             print(json.dumps(out_dolma), file=f)
 
-    if text_output_path and "text" in df.columns:
-        with fsspec.open(fw_output_file, "wt", compression="gzip") as f:  # text output
+    if text_output_file and "text" in df.columns:
+        with fsspec.open(text_output_file, "wt", compression="gzip") as f:  # text output
             for index, row in df.iterrows():
                 out_fw = row.to_dict()
                 out_dolma = {
@@ -186,8 +189,8 @@ def process_fw_parquet(
     extract_method: str,
     config: ExtractionConfig,
     md_output_path: str,
-    text_output_path: str,
-    html_output_path: str | None = False
+    text_output_path: str | None = None,
+    html_output_path: str | None = None,
 ):
     """
     Converts fineweb files to html and markdown. This will essentially take in fineweb and split different groups based
@@ -230,7 +233,21 @@ def process_fw_parquet(
         group_df.to_parquet(filename)
         logger.info(f"Processing the group: {filename}, into {output_file_name}")
 
-        ray_waitable.append(process_one_warc_file.remote(filename, output_file_name, extract_method, config, md_output_path, text_output_path, html_output_path))
+        if isinstance(config, ResiliparseConfig) and config.use_custom_variant:
+            logger.info("Using custom variant of resiliparse")
+            ray_waitable.append(
+                process_one_warc_file.options(
+                    runtime_env={
+                        "pip": [
+                            "resiliparse_dom @ git+https://github.com/nelson-liu/chatnoir-resiliparse@58247de82b4d881223435113f1a07a86ad66494c#egg=resiliparse_dom&subdirectory=resiliparse_dom"
+                        ]
+                    }
+                ).remote(
+                    filename, output_file_name, extract_method, config, md_output_path, text_output_path, html_output_path
+                )
+            )
+        else:
+            ray_waitable.append(process_one_warc_file.remote(filename, output_file_name, extract_method, config, md_output_path, text_output_path, html_output_path))
         file_path.append(filename)
 
     was_successful = True
@@ -266,7 +283,7 @@ def process_fw_parquet(
 class ParquetFWConfig:
     input_path: str
     md_output_path: str
-    text_output_path: str
+    text_output_path: str | None = None
     html_output_path: str | None = None
     cc_dumps: list[str] | None = None
     extract_method: str = "readability"
@@ -308,14 +325,16 @@ def process_fw_dump(cfg: ParquetFWConfig):
             input_file_name = os.path.basename(file)
 
             md_output_path = os.path.join(cfg.md_output_path, cc_dump)
-            text_output_path = os.path.join(cfg.text_output_path, cc_dump)
+            text_output_path = None
+            if cfg.text_output_path:
+                text_output_path = os.path.join(cfg.text_output_path, cc_dump)
 
             html_output_path = None
             if cfg.html_output_path:
                 html_output_path = os.path.join(cfg.html_output_path, cc_dump)
 
             output_path = os.path.join(
-                cfg.text_output_path,
+                cfg.md_output_path,
                 input_file_name.replace(".parquet", ""),
             ) # gs://marin-us-central2/processed/CC-MAIN-2024-10/000_00000
 
@@ -324,11 +343,11 @@ def process_fw_dump(cfg: ParquetFWConfig):
             result_refs.append(
                 process_fw_parquet.remote(file, output_path, cfg.extract_method, cfg.config, md_output_path, text_output_path, html_output_path))
 
+            num_files += 1
+            
             if cfg.max_files and num_files >= cfg.max_files:
                 end_processing = True
                 break
-
-            num_files += 1
         # Wait for all the tasks to finish
         try:
             ray.get(result_refs)
