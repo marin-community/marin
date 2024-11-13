@@ -16,7 +16,7 @@ llama3_model = default_train(
     train_config=llama_1_4b_train_config,
 )
 
-llama2_tokenized = default_tokenize(name="fineweb-edu", dataset=fineweb_edu, tokenizer="meta-llama/Llama-2-7b")
+llama2_tokenized = default_tokenize(name="fineweb-edu", dataset=fineweb_edu, tokenizer="meta-llama/Llama-2-7b-hf")
 llama2_model = default_train(
     name="llama2-tokenizer",
     tokenized=llama2_tokenized,
@@ -42,5 +42,5 @@ if __name__ == "__main__":
             llama2_model,
             neox_model,
         ],
-        description="Train 1.4B models on Fineweb Edu with three different tokenizers ( llama3, llama3, neox).",
+        description="Train 1.4B models on Fineweb Edu with three different tokenizers (llama3, llama3, neox).",
     )
