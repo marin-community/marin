@@ -5,6 +5,7 @@ from operations.raw2json.huggingface.qa.raw2json import DatasetConversionConfig,
 """
 Downloads the following datasets
 - mmlu
+- hellaswag
 """
 ############################################################
 # download mmlu dataset
@@ -19,6 +20,18 @@ mmlu_download_step = ExecutorStep(
     ),
     override_output_path="gs://marin-us-central2/raw/cais/mmlu",
 ).cd("c30699e/huggingface.co/datasets/cais/mmlu/resolve/c30699e")
+
+hellaswag_download_step = ExecutorStep(
+    name="raw/Rowan/hellaswag",
+    fn=download,
+    config=DownloadConfig(
+        hf_dataset_id="Rowan/hellaswag",
+        revision=versioned("6002345"),
+        gcs_output_path=this_output_path(),
+        wait_for_completion=True,
+    ),
+    override_output_path="gs://marin-us-central2/raw/Rowan/hellaswag",
+).cd("6002345/huggingface.co/datasets/Rowan/hellaswag/resolve/6002345")
 
 """
 Converts raw to JSON for:
@@ -66,6 +79,25 @@ mmlu_convert_eval_subject = ExecutorStep(
         exclude_subsets=["all", "auxiliary_train"],
     ),
 )
+
+# This creates a JSON file representing the auxiliary training data subset of MMLU
+hellaswag_convert_eval = ExecutorStep(
+    name="evaluation/hellaswag-eval",
+    fn=raw2json,
+    config=DatasetConversionConfig(
+        dataset_name="Rowan/hellaswag",
+        subsets=["*"],
+        splits=["train", "validation"],
+        input_path=hellaswag_download_step,
+        hf_path="Rowan/hellaswag",
+        output_path=this_output_path(),
+        output_format=OutputFormatOptions("evaluation"),
+        prompt_key="ctx",
+        options_key="endings",
+        answer_idx_key="label",
+    ),
+)
+
 ############################################################
 # Convert mmlu to dolma format (i.e. JSON with "text" field)
 # This is used as input to the decontamination pipeline so documents with MMLU content are removed
@@ -96,5 +128,6 @@ if __name__ == "__main__":
             mmlu_convert_eval_aux,
             mmlu_convert_eval_subject,
             mmlu_convert_dolma,
+            hellaswag_convert_eval
         ]
     )
