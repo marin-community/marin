@@ -5,7 +5,7 @@ from operations.raw2json.huggingface.qa.raw2json import DatasetConversionConfig,
 """
 Downloads the following datasets
 - mmlu
-- arc-easy
+- arc
 """
 ############################################################
 # download mmlu dataset
