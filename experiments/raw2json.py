@@ -20,7 +20,7 @@ mmlu_download_step = ExecutorStep(
     override_output_path="gs://marin-us-central2/raw/cais/mmlu",
 ).cd("c30699e/huggingface.co/datasets/cais/mmlu/resolve/c30699e")
 
-# download mmlu dataset
+# download openbookqa dataset
 openbookqa_download_step = ExecutorStep(
     name="raw/allenai/openbookqa",
     fn=download,
