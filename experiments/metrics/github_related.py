@@ -1,17 +1,17 @@
 import json
+import os
 from dataclasses import dataclass
+from datetime import datetime
 
 import fsspec
 import requests
-import os
-from datetime import datetime, timedelta
 
 
 @dataclass
 class GITHUB_API_CONFIG:
     GITHUB_TOKEN: str
     output_path: str
-    TIME_SINCE: str = (datetime.now() - timedelta(days=7)).isoformat()
+    TIME_SINCE: str
     REPO_NAME: str = "marin"
     REPO_OWNER: str = "stanford-crfm"
     headers: dict = None
