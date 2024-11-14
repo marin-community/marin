@@ -61,3 +61,21 @@ def check_load_config(config_class: type, config_file: str) -> None:
         draccus.parse(config_class, config_file, args=[])
     except Exception as e:
         raise Exception(f"failed to parse {config_file}") from e
+
+
+def test_wandb_api_functionality():
+    from marin.utilities.metrics_utils import get_flops_usage_over_period, get_wandb_run_metrics
+
+    # Test get_flops_usage_over_period
+    flops_usage = get_flops_usage_over_period(num_days=7)
+    assert isinstance(flops_usage, dict)
+    assert "num_days" in flops_usage
+    assert "num_runs_counted" in flops_usage
+    assert "total_flops" in flops_usage
+
+    # Test get_wandb_run_metrics with a specific run ID
+    TEST_RUN_ID = "exp446-fineweb-edu-1.4b-9e4be7"
+    metrics = get_wandb_run_metrics(run_id=TEST_RUN_ID)
+    assert isinstance(metrics, dict)
+    assert "run_id" in metrics
+    assert metrics["run_id"] == TEST_RUN_ID
