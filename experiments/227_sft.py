@@ -1,13 +1,3 @@
-"""
-python marin/run/ray_run.py --env_vars HF_TOKEN -- python experiments/227_sft.py --force_run '["olmo_sft"]'
-
-export to HF format with:
-export HF_TOKEN=${HF_TOKEN}  && python -m levanter.main.export_lm_to_hf
---output_dir "gs://marin-us-central2/checkpoints/tulu_sft_3epshf/"
---checkpoint_path "gs://marin-us-central2/checkpoints/tulu_sft_3eps-4e30ee/checkpoints/step-938/"
---config_path levanter/config/llama_sft_hf_ckpt.yaml
-"""
-
 from datetime import timedelta
 
 import jmp
@@ -57,7 +47,7 @@ train_step = ExecutorStep(
     fn=run_levanter_sft,
     config=TrainSFTOnPodConfig(
         output_path=this_output_path(),
-        tpu_type="v4-128",
+        tpu_type="v4-64",
         # number of epochs over the dataset set to reproduce Olmo SFT
         tokenizer="EleutherAI/gpt-neox-20b",
         epoch=3,
@@ -69,7 +59,7 @@ train_step = ExecutorStep(
                 project="marin",
             ),
             mp=jmp.get_policy("p=f32,c=bfloat16"),
-            train_batch_size=1024,
+            train_batch_size=512,
             checkpointer=CheckpointerConfig(
                 save_interval=timedelta(minutes=10),
                 keep=[dict(every=25000)],
@@ -89,6 +79,7 @@ train_step = ExecutorStep(
             use_flash_attention=True,
             flash_attention_block_size=512,
         ),
+        hf_save_steps=200,
     ),
 )
 

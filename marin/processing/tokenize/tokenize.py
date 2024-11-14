@@ -27,7 +27,7 @@ import transformers
 from levanter.data.sharded_datasource import ShardedDataSource, TextUrlDataSource
 from levanter.data.text import (
     BatchTokenizer,
-    ChatSFTDatasetConfig,
+    ChatUrlDataSourceConfig,
     LMDatasetSourceConfig,
     LMSupervisedDatasetConfig,
     mk_chat_sft_dataset,
@@ -133,8 +133,7 @@ def levanter_tokenize_sft(config: TokenizeConfig):
         config.tokenizer, model_max_length=config.seq_len, padding_side="right", trust_remote_code=True
     )
 
-    # Create ChatSFTDatasetConfig
-    sft_config = ChatSFTDatasetConfig(
+    sft_config = ChatUrlDataSourceConfig(
         train_urls=config.train_paths,
         cache_dir=config.cache_path,
         messages_field="messages",  # Adjust these fields based on your data format
@@ -145,7 +144,7 @@ def levanter_tokenize_sft(config: TokenizeConfig):
     logger.info(f"Caching SFT data to {config.cache_path}")
     import haliax
 
-    # Use the existing mk_chat_sft_dataset function
+    # Use the existing mk_chat_sft_dataset function, position axis is arbitrary
     mk_chat_sft_dataset(sft_config, tokenizer, haliax.Axis("position", 2048))
 
     logger.info(f"Finished caching SFT dataset to {config.cache_path}")
