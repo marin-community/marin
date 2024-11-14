@@ -17,10 +17,7 @@ class GITHUB_API_CONFIG:
     headers: dict = None
 
     def __post_init__(self):
-        self.headers = {
-            "Authorization": f"Bearer {self.GITHUB_TOKEN}",
-            "Accept": "application/vnd.github+json"
-        }
+        self.headers = {"Authorization": f"Bearer {self.GITHUB_TOKEN}", "Accept": "application/vnd.github+json"}
 
 
 def get_average_duration_for_all_workflows(config: GITHUB_API_CONFIG) -> dict[str, float]:
@@ -33,8 +30,8 @@ def get_average_duration_for_all_workflows(config: GITHUB_API_CONFIG) -> dict[st
 
     average_times = {}
     for workflow in workflows:
-        workflow_id = workflow['id']
-        workflow_name = workflow['name']
+        workflow_id = workflow["id"]
+        workflow_name = workflow["name"]
         average_duration = get_average_duration(config, workflow_id)
         if average_duration is not None:
             average_times[workflow_name] = average_duration
@@ -58,7 +55,7 @@ def get_average_duration(config: GITHUB_API_CONFIG, workflow_id: int) -> float |
         params = {
             "created": f">={config.TIME_SINCE}",  # Filter for runs created in the past week
             "per_page": 100,
-            "page": page
+            "page": page,
         }
 
         response = requests.get(url, headers=config.headers, params=params)
@@ -85,9 +82,11 @@ def get_average_duration(config: GITHUB_API_CONFIG, workflow_id: int) -> float |
     else:
         return None
 
+
 @dataclass
 class GITHUB_ISSUE_CONFIG(GITHUB_API_CONFIG):
     LABEL: str = ""
+
 
 def get_closed_issues_with_label(config: GITHUB_ISSUE_CONFIG) -> int:
     """Fetch issues closed with the label as label."""
@@ -96,13 +95,7 @@ def get_closed_issues_with_label(config: GITHUB_ISSUE_CONFIG) -> int:
     issues_url = f"https://api.github.com/repos/{config.REPO_OWNER}/{config.REPO_NAME}/issues"
     while True:
         # Request issues page by page
-        params = {
-            "state": "closed",
-            "labels": config.LABEL,
-            "since": config.TIME_SINCE,
-            "per_page": 100,
-            "page": page
-        }
+        params = {"state": "closed", "labels": config.LABEL, "since": config.TIME_SINCE, "per_page": 100, "page": page}
 
         response = requests.get(issues_url, headers=config.headers, params=params)
         response.raise_for_status()
@@ -114,8 +107,9 @@ def get_closed_issues_with_label(config: GITHUB_ISSUE_CONFIG) -> int:
 
         # Count the closed issues
         for issue in issues:
-            if ("closed_at" in issue and
-                    datetime.fromisoformat(issue["closed_at"][:-1]) >= datetime.fromisoformat(config.TIME_SINCE)):
+            if "closed_at" in issue and datetime.fromisoformat(issue["closed_at"][:-1]) >= datetime.fromisoformat(
+                config.TIME_SINCE
+            ):
                 closed_issues_count += 1
 
         # Move to the next page
@@ -126,8 +120,9 @@ def get_closed_issues_with_label(config: GITHUB_ISSUE_CONFIG) -> int:
 
     return closed_issues_count
 
+
 # Run the main function
 if __name__ == "__main__":
-    config = GITHUB_API_CONFIG(os.getenv('GITHUB_TOKEN'))
+    config = GITHUB_API_CONFIG(os.getenv("GITHUB_TOKEN"))
     print(get_average_duration_for_all_workflows(config))
     print(get_closed_issues_with_label(config, "infrastructure"))
