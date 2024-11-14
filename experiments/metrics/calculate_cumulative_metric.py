@@ -1,4 +1,5 @@
 import os
+from datetime import datetime, timedelta
 
 from experiments.metrics.gcp_related import NUM_RESTART_CONFIG, get_number_of_restarts
 from experiments.metrics.github_related import (
@@ -13,7 +14,11 @@ from marin.utilities.metrics_utils import MergeConfig, merge
 average_duration = ExecutorStep(
     name=os.path.join("metrics", "github", "average_duration"),
     fn=get_average_duration_for_all_workflows,
-    config=GITHUB_API_CONFIG(GITHUB_TOKEN=os.getenv("GITHUB_TOKEN"), output_path=this_output_path()),
+    config=GITHUB_API_CONFIG(
+        GITHUB_TOKEN=os.getenv("GITHUB_TOKEN"),
+        output_path=this_output_path(),
+        TIME_SINCE=(datetime.now() - timedelta(days=7)).isoformat(),
+    ),
 )
 
 closed_issues = ExecutorStep(
@@ -22,6 +27,7 @@ closed_issues = ExecutorStep(
     config=GITHUB_ISSUE_CONFIG(
         GITHUB_TOKEN=os.getenv("GITHUB_TOKEN"),
         output_path=this_output_path(),
+        TIME_SINCE=(datetime.now() - timedelta(days=7)).isoformat(),
         LABEL="experiments",
     ),
 )
