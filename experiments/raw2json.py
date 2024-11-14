@@ -83,7 +83,7 @@ mmlu_convert_eval_subject = ExecutorStep(
     ),
 )
 
-# This creates a JSON file representing the auxiliary training data subset of hellaswag
+# This creates a JSON file representing the training and validation splits for hellaswag
 hellaswag_convert_eval = ExecutorStep(
     name="evaluation/hellaswag-eval",
     fn=raw2json,
