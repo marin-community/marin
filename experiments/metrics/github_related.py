@@ -1,5 +1,7 @@
+import json
 from dataclasses import dataclass
 
+import fsspec
 import requests
 import os
 from datetime import datetime, timedelta
@@ -8,6 +10,7 @@ from datetime import datetime, timedelta
 @dataclass
 class GITHUB_API_CONFIG:
     GITHUB_TOKEN: str
+    output_path: str
     TIME_SINCE: str = (datetime.now() - timedelta(days=7)).isoformat()
     REPO_NAME: str = "marin"
     REPO_OWNER: str = "stanford-crfm"
@@ -35,6 +38,9 @@ def get_average_duration_for_all_workflows(config: GITHUB_API_CONFIG) -> dict[st
         average_duration = get_average_duration(config, workflow_id)
         if average_duration is not None:
             average_times[workflow_name] = average_duration
+
+    with fsspec.open(os.path.join(config.output_path, "metric.json"), "w") as f:
+        print(json.dumps({"Workflow Times per workflow": average_times}), file=f)
 
     return average_times
 
@@ -79,8 +85,11 @@ def get_average_duration(config: GITHUB_API_CONFIG, workflow_id: int) -> float |
     else:
         return None
 
+@dataclass
+class GITHUB_ISSUE_CONFIG(GITHUB_API_CONFIG):
+    LABEL: str = ""
 
-def get_closed_issues_with_label(config: GITHUB_API_CONFIG, label: str) -> int:
+def get_closed_issues_with_label(config: GITHUB_ISSUE_CONFIG) -> int:
     """Fetch issues closed with the label as label."""
     closed_issues_count = 0
     page = 1
@@ -89,7 +98,7 @@ def get_closed_issues_with_label(config: GITHUB_API_CONFIG, label: str) -> int:
         # Request issues page by page
         params = {
             "state": "closed",
-            "labels": label,
+            "labels": config.LABEL,
             "since": config.TIME_SINCE,
             "per_page": 100,
             "page": page
@@ -112,14 +121,10 @@ def get_closed_issues_with_label(config: GITHUB_API_CONFIG, label: str) -> int:
         # Move to the next page
         page += 1
 
+    with fsspec.open(os.path.join(config.output_path, "metric.json"), "w") as f:
+        print(json.dumps({f"Closed Issues with label {config.LABEL}": closed_issues_count}), file=f)
+
     return closed_issues_count
-
-def post_comment_on_issue(config: GITHUB_API_CONFIG, issue_number: int, comment: str):
-    """Post a comment on a specific issue."""
-    url = f"https://api.github.com/repos/{config.REPO_OWNER}/{config.REPO_NAME}/issues/{issue_number}/comments"
-    response = requests.post(url, headers=config.headers, json={"body": comment})
-    response.raise_for_status()
-
 
 # Run the main function
 if __name__ == "__main__":
