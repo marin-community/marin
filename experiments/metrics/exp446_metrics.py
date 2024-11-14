@@ -8,6 +8,7 @@ from experiments.metrics.github_related import (
     get_average_duration_for_all_workflows,
     get_closed_issues_with_label,
 )
+from experiments.metrics.wandb_related import WANDB_METRICS_CONFIG, get_wandb_run_metrics
 from marin.execution.executor import ExecutorMainConfig, ExecutorStep, executor_main, output_path_of, this_output_path
 from marin.utilities.metrics_utils import MergeConfig, merge
 
@@ -39,8 +40,20 @@ number_of_restarts = ExecutorStep(
     pip_dependency_groups=["google-cloud-logging"],
 )
 
-merge = ExecutorStep(
-    name=os.path.join("metrics", "merge"),
+
+experiments_metrics = ExecutorStep(
+    name=os.path.join("metrics", "wandb", "experiments_metrics"),
+    fn=get_wandb_run_metrics,
+    config=WANDB_METRICS_CONFIG(
+        output_path=this_output_path(),
+        num_days=7,  # number of days before today to get metrics for
+        entity="stanford-mercury",
+        project="marin",
+    ),
+)
+
+merge_step = ExecutorStep(
+    name=os.path.join("metrics", "merged"),
     fn=merge,
     config=MergeConfig(
         output_path=this_output_path(),
@@ -48,11 +61,15 @@ merge = ExecutorStep(
             output_path_of(average_duration),
             output_path_of(closed_issues),
             output_path_of(number_of_restarts),
+            output_path_of(experiments_metrics),
         ],
     ),
 )
+
 if __name__ == "__main__":
     executor_main(
-        ExecutorMainConfig(force_run=[closed_issues.name, number_of_restarts.name, merge.name, average_duration.name]),
-        [average_duration, closed_issues, number_of_restarts, merge],
+        ExecutorMainConfig(
+            force_run=[closed_issues.name, number_of_restarts.name, merge_step.name, average_duration.name]
+        ),
+        [average_duration, closed_issues, number_of_restarts, merge_step, experiments_metrics],
     )
