@@ -140,3 +140,53 @@ We run evaluations on the NLP cluster because lm-evaluation-harness does not sup
 ```bash
 nlprun --job-name marin-evaluation --machine sphinx3 -w /nlp/scr4/nlp/crfm/benchmarking/marin -a marin-evaluation -g 1 -c 4 --memory 64g 'python3 experiments/evals/run_on_gpu.py > eval.log 2>&1'
 ```
+
+## Submitting jobs to Ray cluster
+
+The Ray cluster only has the core ray and vllm packages installed.
+We are still keeping vllm as it requires significant time to build.
+If you run an experiment directly on ray, expect missing dependencies.
+To resolve this, you can now install dependencies in a fine-grained way using [ray_run.py](../marin/run/ray_run.py) or
+using pip_dependency_groups argument in `ExecutorStep`
+
+Dependency Management:
+
+1. Use [ray_run.py](../marin/run/ray_run.py) to handle dependencies across an entire experiment.
+Just add any extra packages you need with `--pip_deps`. Core dependencies (levanter, draccus, fspsec, etc.)
+are automatically installed from [pyproject.toml](../pyproject.toml).
+2. For step-specific dependencies, use `pip_dependency_groups` in `ExecutorStep`.
+This takes a list where each item is either (1) A key from `project.optional-dependencies` dictionary in pyproject.toml
+or (2) A specific pip package. Check out [quickstart.py](../experiments/quickstart.py) for an example.
+
+Example usage:
+
+If you earlier used the command
+
+```bash
+ray job submit --working-dir . -- python experiments/check_pip_packages_env_variables.py
+```
+
+Now you can run the same command with
+
+```bash
+python marin/run/ray_run.py --env_vars HF_TOKEN hf_abcd --pip_deps trafilatura,dolma
+-- python experiments/check_pip_packages_env_variables.py
+```
+
+The new command will:
+1. Install all the core dependencies in pyproject.toml
+2. Install `trafilatura` and `dolma` as additional dependencies
+
+Example for using `pip_dependency_groups` in `ExecutorStep`:
+
+```python
+number_of_restarts = ExecutorStep(
+    name=...,
+    fn=...,
+    config=...,
+    pip_dependency_groups=["quality_dedup_consolidate", "google-cloud-logging"],
+)
+```
+
+This will install the dependencies specified in the `quality_dedup_consolidate` groups
+and also pip install `google-cloud-logging`.
