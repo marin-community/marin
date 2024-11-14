@@ -77,6 +77,7 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
 def get_directory_friendly_dataset_name(hf_dataset_id: str) -> str:
     dataset_name = hf_dataset_id.replace("/", "--")
     dataset_name = dataset_name.replace(".", "-")
+    dataset_name = dataset_name.replace("#", "-")
     return dataset_name
 
 
