@@ -12,3 +12,4 @@ class SimpleTrainConfig:
     warmup: float | None = None
     cooldown: float | None = None
     z_loss_weight: float | None = None
+    node_count: int = 1
