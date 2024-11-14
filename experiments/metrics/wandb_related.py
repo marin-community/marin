@@ -11,9 +11,9 @@ import wandb
 @dataclass
 class WANDB_METRICS_CONFIG:
 
-    entity: str = "stanford-mercury"
-    project: str = "marin"
-    num_days: int = 7  # number of days before today to get metrics for
+    entity: str
+    project: str
+    num_days: int  # number of days before today to get metrics for
     output_path: str
 
 

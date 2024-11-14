@@ -69,7 +69,13 @@ merge_step = ExecutorStep(
 if __name__ == "__main__":
     executor_main(
         ExecutorMainConfig(
-            force_run=[closed_issues.name, number_of_restarts.name, merge_step.name, average_duration.name]
+            force_run=[
+                closed_issues.name,
+                number_of_restarts.name,
+                merge_step.name,
+                average_duration.name,
+                experiments_metrics.name,
+            ]
         ),
-        [average_duration, closed_issues, number_of_restarts, merge_step, experiments_metrics],
+        [average_duration, closed_issues, number_of_restarts, experiments_metrics, merge_step],
     )
