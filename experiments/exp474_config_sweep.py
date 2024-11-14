@@ -1,6 +1,7 @@
 # https://github.com/stanford-crfm/marin/issues/474
 # Sweep to determine optimal training configs for small models
 import dataclasses
+import itertools
 import logging
 import math
 from collections.abc import Sequence
@@ -25,12 +26,20 @@ LR_CHOICES = [1e-4, 1e-3, 3e-3, 1e-2]  # 3e-3 is best, 1e-2 diverges at 300m
 WD_CHOICES = [0.1]
 TPU_TYPES_150m = ["v4-32"]
 TPU_TYPES_300m = ["v4-64"]
-TOKEN_TARGETS = np.array([3, 6, 10, 18, 30]) * 1_000_000_000
+TOKEN_TARGETS = np.array([1, 3, 6, 10, 18, 30]) * 1_000_000_000
 # shockingly, 512 and 256 have highest throughput. I think this is because of
 # Levanter's naive FA implementation. (Splash attention doesn't work with headsize 64)
 BATCH_SIZE = [256, 512, 1024, 2048, 4096]
 # ATM None is best, but 512 is best of the non-None
 CE_BLOCK_SIZE = [256, 512, 2048, 4096, 32000, 64000, None]
+HEAD_SIZE = [128]
+
+
+def all_combos(**kwargs):
+    keys = kwargs.keys()
+    values = kwargs.values()
+    for combo in itertools.product(*values):
+        yield dict(zip(keys, combo, strict=False))
 
 
 def step_target(token_target, batch_size, seq_len):
@@ -41,59 +50,55 @@ def step_target(token_target, batch_size, seq_len):
 
 train_configs_150m = []
 
-for lr in LR_CHOICES:
-    for wd in WD_CHOICES:
-        for tpu_type in TPU_TYPES_150m:
-            for batch_size in BATCH_SIZE:
-                for token_target in TOKEN_TARGETS:
-                    num_train_steps = step_target(token_target, batch_size, llama_150m.seq_len)
-                    if num_train_steps <= 1000:
-                        print(
-                            "Skipping comically small number of steps:"
-                            f" {num_train_steps} {token_target=}, {batch_size=}"
-                        )
-                        continue
+for combo in all_combos(
+    lr=LR_CHOICES, wd=WD_CHOICES, tpu_type=TPU_TYPES_150m, batch_size=BATCH_SIZE, token_target=TOKEN_TARGETS
+):
+    num_train_steps = step_target(combo["token_target"], combo["batch_size"], llama_150m.seq_len)
+    if num_train_steps <= 1000:
+        print(
+            "Skipping comically small number of steps:"
+            f" {num_train_steps} {combo['token_target']=}, {combo['batch_size']=}"
+        )
+        continue
 
-                    train_configs_150m.append(
-                        SimpleTrainConfig(
-                            tpu_type=versioned(tpu_type),
-                            train_batch_size=batch_size,
-                            num_train_steps=num_train_steps,
-                            learning_rate=lr,
-                            weight_decay=wd,
-                        )
-                    )
+    train_configs_150m.append(
+        SimpleTrainConfig(
+            tpu_type=versioned(combo["tpu_type"]),
+            train_batch_size=combo["batch_size"],
+            num_train_steps=num_train_steps,
+            learning_rate=combo["lr"],
+            weight_decay=combo["wd"],
+        )
+    )
 
 
 train_configs_300m = []
 
-for lr in LR_CHOICES:
-    for wd in WD_CHOICES:
-        for tpu_type in TPU_TYPES_300m:
-            for batch_size in BATCH_SIZE:
-                for token_target in TOKEN_TARGETS:
-                    num_train_steps = step_target(token_target, batch_size, llama_300m.seq_len)
-                    if num_train_steps <= 1000:
-                        print(
-                            "Skipping comically small number of steps:"
-                            f" {num_train_steps} {token_target=}, {batch_size=}"
-                        )
-                        continue
+for combo in all_combos(
+    lr=LR_CHOICES, wd=WD_CHOICES, tpu_type=TPU_TYPES_300m, batch_size=BATCH_SIZE, token_target=TOKEN_TARGETS
+):
+    num_train_steps = step_target(combo["token_target"], combo["batch_size"], llama_300m.seq_len)
+    if num_train_steps <= 1000:
+        print(
+            "Skipping comically small number of steps:"
+            f" {num_train_steps} {combo['token_target']=}, {combo['batch_size']=}"
+        )
+        continue
 
-                    train_configs_300m.append(
-                        SimpleTrainConfig(
-                            tpu_type=versioned(tpu_type),
-                            train_batch_size=batch_size,
-                            num_train_steps=num_train_steps,
-                            learning_rate=lr,
-                            weight_decay=wd,
-                        )
-                    )
+    train_configs_300m.append(
+        SimpleTrainConfig(
+            tpu_type=versioned(combo["tpu_type"]),
+            train_batch_size=combo["batch_size"],
+            num_train_steps=num_train_steps,
+            learning_rate=combo["lr"],
+            weight_decay=combo["wd"],
+        )
+    )
 
 
-def format_train_config(prefix: str, config: SimpleTrainConfig, ce_bs):
+def format_train_config(prefix: str, config: SimpleTrainConfig, ce_bs, hs):
     return (
-        f"{prefix}-ce={ce_bs}-bs={config.train_batch_size}-step={config.num_train_steps}"
+        f"{prefix}-hs={hs}-ce={ce_bs}-bs={config.train_batch_size}-step={config.num_train_steps}"
         f"-lr={config.learning_rate}-wd{config.weight_decay}"
     )
 
@@ -122,20 +127,27 @@ def make_sweep_steps(
     steps = []
     for train_config in train_configs:
         for ce_block_size in CE_BLOCK_SIZE:
-            model_config = dataclasses.replace(model_config, cross_entropy_block_size=ce_block_size)
-            name = format_train_config(prefix, train_config, ce_block_size)
+            for head_size in HEAD_SIZE:
+                num_heads = model_config.hidden_dim // head_size
+                model_config = dataclasses.replace(
+                    model_config,
+                    cross_entropy_block_size=ce_block_size,
+                    num_heads=num_heads,
+                    num_kv_heads=num_heads,
+                )
+                name = format_train_config(prefix, train_config, ce_block_size, head_size)
 
-            step = default_train(
-                name=name,
-                train_config=train_config,
-                model_config=model_config,
-                tokenized=tokenized_data,
-                tags=tags,
-            )
+                step = default_train(
+                    name=name,
+                    train_config=train_config,
+                    model_config=model_config,
+                    tokenized=tokenized_data,
+                    tags=tags,
+                )
 
-            step = dataclasses.replace(step, fn=_failure_ok_train)
+                step = dataclasses.replace(step, fn=_failure_ok_train)
 
-            steps.append(step)
+                steps.append(step)
     return steps
 
 
