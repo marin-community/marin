@@ -5,6 +5,7 @@ from instruction_datasets import get_instruction_dataset
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text import LMSupervisedDatasetConfig
 from levanter.models.llama import LlamaConfig
+from levanter.optim import AdamConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 
@@ -47,7 +48,7 @@ train_step = ExecutorStep(
     fn=run_levanter_sft,
     config=TrainSFTOnPodConfig(
         output_path=this_output_path(),
-        tpu_type="v4-64",
+        tpu_type="v4-128",
         # number of epochs over the dataset set to reproduce Olmo SFT
         tokenizer="EleutherAI/gpt-neox-20b",
         epoch=3,
@@ -59,7 +60,7 @@ train_step = ExecutorStep(
                 project="marin",
             ),
             mp=jmp.get_policy("p=f32,c=bfloat16"),
-            train_batch_size=512,
+            train_batch_size=128,
             checkpointer=CheckpointerConfig(
                 save_interval=timedelta(minutes=10),
                 keep=[dict(every=25000)],
@@ -78,6 +79,20 @@ train_step = ExecutorStep(
             initializer_range=0.02,
             use_flash_attention=True,
             flash_attention_block_size=512,
+        ),
+        # Reproduce OLMO SFT Linear warmup for the first 3% of total training time, then cooldown to 0
+        optimizer=AdamConfig(
+            learning_rate=2e-6,  #  2x10^-6
+            weight_decay=0.0,
+            warmup=0.03,
+            stable=0.0,
+            cooldown=0.97,
+            min_lr_ratio=0.0,
+            lr_schedule="linear",
+            max_grad_norm=None,
+            haps=None,
+            weight_decay_modules=None,
+            default_weight_decay_mask=None,
         ),
         hf_save_steps=200,
     ),
