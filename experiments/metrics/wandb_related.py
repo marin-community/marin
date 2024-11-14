@@ -10,7 +10,6 @@ import wandb
 
 @dataclass
 class WANDB_METRICS_CONFIG:
-
     entity: str
     project: str
     num_days: int  # number of days before today to get metrics for
@@ -111,7 +110,7 @@ def count_params_for_run(run_id: str, entity="stanford-mercury", project="marin"
     """
     Retrieves the number of parameters for a specific WandB run.
     """
-    from experiments.llama import compute_num_parameters
+    from experiments.llama import LlamaConfig, compute_num_parameters
 
     # Initialize the WandB API
     api = wandb.Api()
@@ -131,10 +130,17 @@ def count_params_for_run(run_id: str, entity="stanford-mercury", project="marin"
         elif tokenizer == "meta-llama/Llama-2-7b":
             vocab_size = 32_000
 
-        model_config = run.config.get("model", {})
+        model_dict = run.config.get("model", {})
+        llama_config = LlamaConfig(
+            hidden_dim=model_dict.get("hidden_dim"),
+            num_heads=model_dict.get("num_heads"),
+            num_kv_heads=model_dict.get("num_kv_heads"),
+            intermediate_dim=model_dict.get("intermediate_dim"),
+            num_layers=model_dict.get("num_layers"),
+        )
 
-        num_parameters = compute_num_parameters(config=model_config, vocab_size=vocab_size)
-
+        print(f"Tokenizer: {tokenizer}, model config: {llama_config}, vocab size: {vocab_size}")
+        num_parameters = compute_num_parameters(llama_config, vocab_size=vocab_size)
         print(f"Number of parameters for run {run_id}: {num_parameters}")
 
         return num_parameters
