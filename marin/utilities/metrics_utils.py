@@ -1,208 +1,32 @@
 import json
-from datetime import datetime, timedelta, timezone
+import os.path
+from dataclasses import dataclass
 from typing import Any
 
 import fsspec
-import wandb
-
-METRICS_GCS_PATH = "gs://marin-us-central2/metrics"
 
 
-def get_wandb_run_metrics(
-    run_id: str, metrics=None, entity: str = "stanford-mercury", project: str = "marin"
-) -> dict[str, Any]:
+@dataclass
+class MergeConfig:
+    output_path: str  # Path where we write the merged metric.json
+    merge_paths: list[str]  # Paths where we read metric.jsons from and merge and write to output path
+
+
+def merge(metrics_config: MergeConfig) -> dict[str, Any]:
     """
-    Retrieves key metrics for a specific WandB run.
-
-    Args:
-    - run_id (str): The ID of the WandB run.
-    - entity (str): The WandB entity (user or organization).
-    - project (str): The name of the WandB project.
-
-    Returns:
-    - dict: A dictionary containing relevant metrics for the run.
+    Merges multiple metric.json files into a single metric.json file.
     """
-    if metrics is None:
-        metrics = ["eval/paloma/c4_en/bpb", "throughput/total_gflops", "_runtime"]
+    # Initialize the merged metrics dictionary
+    merged_metrics = {}
 
-    # Initialize the WandB API
-    api = wandb.Api()
+    # Read metrics from each path and merge them
+    for path in metrics_config.merge_paths:
+        with fsspec.open(os.path.join(path, "metric.json"), "r") as f:
+            metrics = json.load(f)
+            merged_metrics.update(metrics)
 
-    try:
-        # Fetch the specified run
-        run = api.run(f"{entity}/{project}/{run_id}")
+    # Write the merged metrics to the output path
+    with fsspec.open(os.path.join(metrics_config.output_path, "metric.json"), "w") as f:
+        json.dump(merged_metrics, f)
 
-        assert run is not None, f"Run {run_id} not found."
-
-        metrics_dict = {}
-        for metric in metrics:
-            # Retrieve the metric value for the run
-            value = run.summary.get(metric, None)
-            if value is None:
-                print(f"Metric '{metric}' not found for run {run_id}")
-            metrics_dict[metric] = value
-
-        print("Run metrics: ", metrics_dict)
-
-        return metrics_dict
-
-    except wandb.errors.CommError as e:
-        print("Failed to retrieve run data:", e)
-        return None
-
-    except Exception as e:
-        print(f"An unexpected error occurred when trying to retrieve run data: {e}")
-        return None
-
-
-def get_all_runs_over_period(num_days=7, entity="stanford-mercury", project="marin") -> dict[str, Any]:
-    """
-    Retrieves all runs created within the past week (or given time window).
-    """
-    # Initialize the WandB API
-    api = wandb.Api()
-
-    # Define the time window (one week ago from now)
-    time_window = datetime.now(timezone.utc) - timedelta(days=num_days)
-
-    # Initialize the list of runs
-    runs_list = []
-
-    try:
-
-        # Check if project exists first
-        try:
-            api.project(entity, project)
-        except wandb.errors.CommError:
-            print(f"Project '{project}' not found in entity '{entity}'")
-            return None
-
-        # Fetch all runs for the project
-        runs = api.runs(f"{entity}/{project}")
-
-        print(runs)
-
-        # Filter runs by creation date
-        runs_list = [run for run in runs if datetime.strptime(run.created_at, "%Y-%m-%dT%H:%M:%S%z") >= time_window]
-
-        print(f"Successfully retrieved {len(runs_list)} runs from the past {num_days} days")
-
-        return runs_list
-
-    except wandb.errors.CommError as e:
-        print("Failed to retrieve run data:", e)
-        return None
-
-    except Exception as e:
-        print(f"An unexpected error occurred when trying to get runs from WandB: {e}")
-        return None
-
-
-def count_params_for_run(run_id: str, entity="stanford-mercury", project="marin") -> int:
-    """
-    Retrieves the number of parameters for a specific WandB run.
-    """
-    from experiments.llama import compute_num_parameters, LlamaConfig
-
-    # Initialize the WandB API
-    api = wandb.Api()
-
-    try:
-        # Fetch the specified run
-        run = api.run(f"{entity}/{project}/{run_id}")
-
-        assert run is not None, f"Run {run_id} not found."
-
-        # Calculate the number of parameters for the run
-        tokenizer = run.config.get('data', {}).get('tokenizer')
-        if tokenizer == "EleutherAI/gpt-neox-20b":
-            vocab_size = 50_257
-        elif tokenizer == "meta-llama/Meta-Llama-3.1-8B":
-            vocab_size = 128_256
-        elif tokenizer == "meta-llama/Llama-2-7b":
-            vocab_size = 32_000
-
-        model_dict = run.config.get('model', {})
-        llama_config = LlamaConfig(
-            hidden_dim=model_dict.get('hidden_dim'),
-            num_heads=model_dict.get('num_heads'),
-            num_kv_heads=model_dict.get('num_kv_heads'),
-            intermediate_dim=model_dict.get('intermediate_dim'),
-            num_layers=model_dict.get('num_layers')
-        )
-
-        print(f"Tokenizer: {tokenizer}, model config: {llama_config}, vocab size: {vocab_size}")
-        num_parameters = compute_num_parameters(llama_config, vocab_size=vocab_size)
-        print(f"Number of parameters for run {run_id}: {num_parameters}")
-
-        return num_parameters
-
-    except wandb.errors.CommError as e:
-        print("Failed to retrieve run data:", e)
-        return None
-
-    except Exception as e:
-        print(f"An unexpected error occurred when trying to retrieve run data: {e}")
-        return None
-
-
-def calculate_and_upload_metrics_to_gcs(num_days: int = 7) -> dict[str, Any]:
-
-    # get all runs from past num_days
-    runs = get_all_runs_over_period(num_days=num_days)
-
-    # get metrics for each run
-    run_metrics = {}
-    for run in runs:
-        run_id = run.id
-        run_metrics[run_id] = get_wandb_run_metrics(run_id)
-
-        # get parameter count for the run and add to metrics
-        run_metrics[run_id]["num_parameters"] = count_params_for_run(run_id)
-
-    # get the model with best bpb eval for each group in 1b parameter scale
-    best_bpb_1b, best_bpb_7b = None, None
-    best_bpb1b_run_id, best_bpb7b_run_id = None, None
-    for run_id, metrics in run_metrics.items():
-        if metrics["eval/paloma/c4_en/bpb"] is not None:
-            num_parameters = metrics["num_parameters"]
-
-            # if num_parameters is below 2 billion and bpb is better than current best, update best_bpb
-            if num_parameters < 2_000_000_000 and (
-                best_bpb_1b is None or metrics["eval/paloma/c4_en/bpb"] < best_bpb_1b
-            ):
-                best_bpb_1b = metrics["eval/paloma/c4_en/bpb"]
-                best_bpb1b_run_id = run_id
-
-            # if num_parameters is above 6 billion and bpb is better than current best, update best_bpb
-            if num_parameters > 6_000_000_000 and (
-                best_bpb_7b is None or metrics["eval/paloma/c4_en/bpb"] < best_bpb_7b
-            ):
-                best_bpb_7b = metrics["eval/paloma/c4_en/bpb"]
-                best_bpb7b_run_id = run_id
-
-    metrics = {
-        "num_runs": len(run_metrics),
-        "best_c4_en_bpb": {
-            "1b": {"run_id": best_bpb1b_run_id, "run_metrics": run_metrics[best_bpb1b_run_id] if best_bpb1b_run_id else None},
-            "7b": {"run_id": best_bpb7b_run_id, "run_metrics": run_metrics[best_bpb7b_run_id] if best_bpb7b_run_id else None},
-        },
-        "total_gflops_across_runs": sum([metrics["throughput/total_gflops"] for metrics in run_metrics.values() if metrics["throughput/total_gflops"] is not None]),
-    }
-
-    metrics_json = json.dumps(metrics)
-
-    # Write JSON to GCS using fsspec with gcsfs
-    current_datetime = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    full_path = f"{METRICS_GCS_PATH}/{current_datetime}-metrics.json"
-
-    with fsspec.open(full_path, "w") as f:
-        f.write(metrics_json)
-
-    print(f"Metrics successfully uploaded to {full_path}")
-
-    return metrics
-
-
-if __name__ == "__main__":
-    calculate_and_upload_metrics_to_gcs(num_days=1)
+    return merged_metrics
