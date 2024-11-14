@@ -62,10 +62,8 @@ jobs:
           conda install -c conda-forge pandoc
           npm install -g pandiff
           python -m pip install --upgrade pip
-          pip install uv
-          uv pip install . --extra-index-url https://download.pytorch.org/whl/cpu --index-strategy unsafe-best-match --prerelease=allow
-          uv pip install pytest mypy types-PyYAML types-requests types-six
-
+          pip install uv toml
+          python scripts/install_all_pip_dep.py
 
       - name: Start Ray cluster locally
         shell: bash -l {0}

@@ -132,6 +132,7 @@ def default_train(
         config=TrainLmOnPodConfig(
             output_path=this_output_path(),
             tpu_type=train_config.tpu_type,
+            node_count=train_config.node_count,
             data=pretraining_data,
             supervised_data=evaluation_data,
             trainer=TrainerConfig(
@@ -147,6 +148,7 @@ def default_train(
                     save_interval=timedelta(minutes=10),
                     keep=[dict(every=25000)],
                 ),
+                replica_dcn_axis_size=-1,
             ),
             z_loss_weight=train_config.z_loss_weight,
             model=model_config,
