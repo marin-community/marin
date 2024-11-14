@@ -89,7 +89,7 @@ llama_1_4b_train_config = SimpleTrainConfig(
 )
 
 
-def compute_num_parameters(config: LlamaConfig, vocab_size: int = 128_256) -> int:
+def compute_num_parameters(config: LlamaConfig) -> int:
     head_size = config.hidden_dim // config.num_heads
     q_params = config.num_heads * head_size * config.hidden_dim
     k_params = config.num_kv_heads * head_size * config.hidden_dim
@@ -105,7 +105,7 @@ def compute_num_parameters(config: LlamaConfig, vocab_size: int = 128_256) -> in
     mlp_params = gate_params + up_params + down_params
 
     nonembedding_params = config.num_layers * (attention_params + mlp_params + layer_norm_params)
-    embedding_params = 2 * vocab_size * config.hidden_dim
+    embedding_params = 2 * llama3_tokenizer_vocab_size * config.hidden_dim
 
     return nonembedding_params + embedding_params
 
