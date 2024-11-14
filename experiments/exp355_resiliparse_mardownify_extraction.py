@@ -26,7 +26,7 @@ def create_steps() -> list[ExecutorStep]:
         name="documents/fineweb-small-resiliparse-custom-fork",
         fn=process_fw_dump,
         config=ParquetFWConfig(
-            input_path=output_path_of(fineweb),
+            input_path="gs://marin-us-central2/raw/fineweb-urls-c82fcd/data",
             cc_dumps=versioned(["CC-MAIN-2024-18"]),
             md_output_path=this_output_path("md"),
             extract_method=versioned("resiliparse"),
@@ -46,20 +46,20 @@ def create_steps() -> list[ExecutorStep]:
     step_name = "fineweb-small-resiliparse-custom-fork"
 
     fw_tokenized = default_tokenize(
-        name=f"fw-small-{step_name}",
-        dataset=transform_resiliparse_custom_fork,
+        name=step_name,
+        dataset="gs://marin-us-central2/documents/fineweb-small-resiliparse-custom-fork-ca2156/md/CC-MAIN-2024-18",
         tokenizer=llama3_tokenizer,
     )
     fw_100b_model = default_train(
-        name=f"fw-small-1.4b-{step_name}",
+        name=f"{step_name}-1.4b",
         tokenized=fw_tokenized,
         model_config=llama_1_4b,
         train_config=llama_1_4b_train_config,
     )
 
     return [
-        fineweb,
-        transform_resiliparse_custom_fork,
+        # fineweb,
+        # transform_resiliparse_custom_fork,
         fw_tokenized,
         fw_100b_model,
     ]
