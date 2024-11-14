@@ -691,15 +691,18 @@ def get_user() -> str | None:
 
 @dataclass(frozen=True)
 class ExecutorMainConfig:
-    prefix: str = "gs://marin-us-central2"
+    prefix: str | None = None
     """Attached to every output path that's constructed (e.g., the GCS bucket)."""
 
-    executor_info_base_path: str = "gs://marin-us-central2/experiments"
+    executor_info_base_path: str | None = None
     """Where the executor info should be stored under a file determined by a hash."""
 
     dry_run: bool = False
     force_run: list[str] = field(default_factory=list)  # <list of steps name>: run list of steps (names)
     force_run_failed: bool = False  # Force run failed steps
+
+    run_only: list[str] = field(default_factory=list)
+    """Run these steps and their dependencies only. If empty, run all steps."""
 
 
 @draccus.wrap()
@@ -707,11 +710,41 @@ def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], descrip
     """Main entry point for experiments (to standardize)"""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
+    prefix = config.prefix
+    if prefix is None:
+        # infer from the environment
+        if "MARIN_PREFIX" in os.environ:
+            prefix = os.environ["MARIN_PREFIX"]
+        else:
+            raise ValueError("Must specify a prefix or set the MARIN_PREFIX environment variable")
+
+    executor_info_base_path = config.executor_info_base_path
+    if executor_info_base_path is None:
+        # infer from prefix
+        executor_info_base_path = os.path.join(prefix, "experiments")
+
     executor = Executor(
-        prefix=config.prefix,
-        executor_info_base_path=config.executor_info_base_path,
+        prefix=prefix,
+        executor_info_base_path=executor_info_base_path,
         description=description,
     )
+
+    if config.run_only:
+        steps_to_run = [step for step in steps if step.name in config.run_only]
+        if len(steps_to_run) != len(config.run_only):
+            logger.error(
+                f"Only {len(steps_to_run)} out of {len(config.run_only)} steps to run found:\n  -"
+                f"{'  - '.join(step.name for step in steps_to_run)}\n"
+                "The following steps are available:\n  -"
+                f"{'  - '.join(step.name for step in steps)}"
+            )
+        if steps_to_run != steps:
+            logger.info(f"Running only {len(steps_to_run)} steps: {', '.join(step.name for step in steps_to_run)}")
+        elif not steps_to_run:
+            logger.warning("No steps to run.")
+
+        steps = steps_to_run
+
     executor.run(
         steps=steps,
         dry_run=config.dry_run,
