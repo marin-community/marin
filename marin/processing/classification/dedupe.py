@@ -40,6 +40,27 @@ class NGramConfig:
 
 @dataclass
 class DedupeConfig:
+    """
+    Configuration class for running dolma deduplication on docs.
+
+    Deduplication will identify spans of text in documents that are duplicate.
+
+    Attributes:
+        input_path (str): Path of files to apply deduplication to.
+        output_path (str): Path for storing results of deduplication (char spans in docs that are duplicate)
+        attribute_name (str): Name for key to store duplicate span info in json
+        min_length (int): min length of document to be deduplicated
+        min_words (int): min number of words to be deduplicated
+        bloom_filter_size (int): set size of Bloom filter in bytes
+        estimated_doc_count (int): estimated number of docs to deduplicate
+        false_positive_rate (float): false positive rate for Bloom filter
+        ngram (bool): use percentage of duplicated ngrams instead of exact match for determining duplication
+        ngram_config (NGramConfig): settings for ngram matching including length, match threshold, and stride
+        processes (int): number of processes to use for deduplication
+        decontaminate (bool): run in decontamination mode (don't add non benchmark text to Bloom filter)
+        decontaminate_path (str): path of decontamination set text
+    """
+
     input_path: str
     output_path: str
     attribute_name: str = "duplicate_text"
