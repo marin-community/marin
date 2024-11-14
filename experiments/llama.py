@@ -72,13 +72,23 @@ llama_8b = LlamaConfig(
     num_layers=32,
 )
 
-llama_300m_train_config = SimpleTrainConfig(
+llama_150m_train_config = SimpleTrainConfig(
     tpu_type="v4-32",
-    train_batch_size=1024,
-    num_train_steps=2000,  # 4096 * 1024 * 2000 = 8.4B tokens
-    learning_rate=3e-4,
+    train_batch_size=512,
+    num_train_steps=20000,  # 1024 * 1024 * 20000 = 20B tokens
+    learning_rate=3e-3,
     weight_decay=0.1,
 )
+# (18B is way overtrained, but...)
+
+llama_300m_train_config = SimpleTrainConfig(
+    tpu_type="v4-64",
+    train_batch_size=1024,
+    num_train_steps=18000,  # 1024 * 1024 * 18000 = 18B tokens
+    learning_rate=3e-3,
+    weight_decay=0.1,
+)
+# (18B is way overtrained, but...)
 
 llama_1_4b_train_config = SimpleTrainConfig(
     tpu_type="v4-128",
@@ -89,7 +99,7 @@ llama_1_4b_train_config = SimpleTrainConfig(
 )
 
 
-def compute_num_parameters(config: LlamaConfig) -> int:
+def compute_num_parameters(config: LlamaConfig, vocab_size=llama3_tokenizer_vocab_size) -> int:
     head_size = config.hidden_dim // config.num_heads
     q_params = config.num_heads * head_size * config.hidden_dim
     k_params = config.num_kv_heads * head_size * config.hidden_dim
@@ -105,7 +115,7 @@ def compute_num_parameters(config: LlamaConfig) -> int:
     mlp_params = gate_params + up_params + down_params
 
     nonembedding_params = config.num_layers * (attention_params + mlp_params + layer_norm_params)
-    embedding_params = 2 * llama3_tokenizer_vocab_size * config.hidden_dim
+    embedding_params = 2 * vocab_size * config.hidden_dim
 
     return nonembedding_params + embedding_params
 
