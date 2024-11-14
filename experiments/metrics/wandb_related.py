@@ -212,3 +212,8 @@ def calculate_wandb_metrics(config: WANDB_METRICS_CONFIG) -> tuple[dict[str, Any
 
     with fsspec.open(os.path.join(config.output_path, "metric.json"), "w") as f:
         print(json.dumps(metrics), file=f)
+
+
+if __name__ == "__main__":
+    config = WANDB_METRICS_CONFIG(entity="stanford-mercury", project="marin", num_days=7, output_path=".")
+    calculate_wandb_metrics(config)
