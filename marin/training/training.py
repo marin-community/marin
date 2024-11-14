@@ -9,7 +9,7 @@ import levanter.infra.cli_helpers
 import ray
 from google.api_core.exceptions import Forbidden as GcpForbiddenException
 from levanter.data.text import LMMixtureDatasetConfig
-from levanter.infra.ray_tpu import run_on_pod_resumable
+from levanter.infra.ray_tpu import run_on_pod_multislice_resumable, run_on_pod_resumable
 from levanter.main import (
     sft,  # If sft.py is meant to be imported directly
     train_lm,
@@ -117,6 +117,8 @@ class TrainLmOnPodConfig(train_lm.TrainLmConfig):
 
     Note that trainer.id and the RUN_ID env variable take precedence, in that order.
     """
+    node_count: int = 1
+    """Number of TPU slices for training."""
 
 
 DEFAULT_CHECKPOINTS_PATH = "checkpoints"
@@ -199,7 +201,12 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
         train_lm.main(train_config)
 
     if config.tpu_type is not None:
-        return run_on_pod_resumable(train_lm_task, config.tpu_type, max_retries_failure=10)
+        if config.node_count == 1:
+            return run_on_pod_resumable(train_lm_task, config.tpu_type, max_retries_failure=10)
+        else:
+            return run_on_pod_multislice_resumable(
+                train_lm_task, config.tpu_type, config.node_count, max_retries_failure=10
+            )
     else:
         return ray.get(train_lm_task.remote())
 
