@@ -6,12 +6,17 @@ The default doc reproduces OLMO SFT
 
 ## Key Steps
 
-### 1. Create Experiment File
-Create `experiments/my_sft.py` with standard imports:
-```python
-from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path
-from marin.processing.tokenize.tokenize import TokenizeConfig, levanter_tokenize_sft
-from marin.training.training import TrainSFTOnPodConfig, run_levanter_sft
+### 1. Basic Commands
+# run Olmo sft with
+```
+python marin/run/ray_run.py --env_vars HF_TOKEN -- python experiments/227_sft.py
+```
+# export to HF format within levanter:
+```
+export HF_TOKEN=${HF_TOKEN}  && python -m levanter.main.export_lm_to_hf
+--output_dir "gs://marin-us-central2/checkpoints/tulu_sft_3epshf/"
+--checkpoint_path "gs://marin-us-central2/checkpoints/tulu_sft_3eps-4e30ee/checkpoints/step-938/"
+--config_path levanter/config/llama_sft_hf_ckpt.yaml
 ```
 
 ### 2. Configure Dataset

@@ -14,7 +14,6 @@ from levanter.main import (
     sft,  # If sft.py is meant to be imported directly
     train_lm,
 )
-from levanter.main.sft import DatasetType
 from mergedeep import mergedeep
 from ray.runtime_env import RuntimeEnv
 
@@ -36,13 +35,6 @@ class TrainSFTOnPodConfig(sft.SFTConfig):
     env: dict = dataclasses.field(default_factory=dict)
     bypass_path_checks: bool = False
     impute_run_id_from_output_path: bool = True
-
-    dataset_type: DatasetType = DatasetType.CHAT_JSONL  # Note the CHAT_JSONL default
-    chat_train_urls: list[str] = dataclasses.field(default_factory=list)
-    messages_field: str = "messages"
-    input_role: str = "user"
-    output_role: str = "assistant"
-    max_seq_len: int = 2048
 
 
 @ray.remote(num_cpus=0.1, runtime_env={"pip": ["levanter>=1.2.dev1074"]})
