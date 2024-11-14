@@ -32,6 +32,7 @@ import draccus
 import fsspec
 import pandas as pd
 import ray
+from resiliparse.parse.encoding import detect_encoding, bytes_to_str
 from warcio import ArchiveIterator
 
 from marin.core.runtime import cached_or_construct_output
@@ -41,9 +42,27 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 
+def decode_html(html: bytes) -> str | None:
+    """
+    Given HTML (bytes), decode it into a string if possible. First try with
+    utf-8. If that doesn't work, try to detect the encoding.
+    """
+    try:
+        html = bytes_to_str(html, "utf-8")
+    except Exception:
+        encoding = detect_encoding(html)
+        if encoding is None or encoding == "utf-8":
+            return
+        try:
+            html = bytes_to_str(html, encoding)
+        except Exception:
+            return
+    return html
+
+
 @ray.remote(memory=4 * 1024 * 1024 * 1024)  # 4 GB
 @cached_or_construct_output(
-    success_suffix="success", verbose=False
+    success_suffix="SUCCESS", verbose=False
 )  # We use this decorator to make this function idempotent
 def process_one_shard(
     input_path: str,
@@ -57,11 +76,8 @@ def process_one_shard(
     input_path (str): The input parquet shard to process
     output_path (str): Path to write gzipped JSONL with HTML for URLs in the input parquet shard
     """
-    try:
-        df = pd.read_parquet(input_path, columns=["url", "file_path", "date"])
-    except FileNotFoundError as e:
-        logger.exception(f"Error reading the parquet file: {e}")
-        raise e
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+    df = pd.read_parquet(input_path, columns=["url", "file_path", "date"])
 
     urls = df["url"].tolist()
     # All frames will have same file_path, by design
@@ -72,6 +88,7 @@ def process_one_shard(
     url_dict = {url: idx for idx, url in zip(index, urls)}
     num_urls_found = 0  # Used to early terminate
     num_urls_processed = 0
+    num_urls_failed_decoding = 0
     num_urls_to_find = len(urls)
 
     length_warc = 0
@@ -80,7 +97,9 @@ def process_one_shard(
     s3_fs = fsspec.filesystem(
         "s3",
         anon=False,
+        default_block_size=100 * 2**20,
     )
+    s3_fs.retries = 10
 
     with s3_fs.open(s3_url, mode="rb") as file_stream:
         for record in ArchiveIterator(file_stream):
@@ -97,18 +116,21 @@ def process_one_shard(
                     num_urls_found += 1
                     url_idx_in_df = url_dict[url]
 
-                    try:
-                        content = record.content_stream().read()
-                        html_decoded = content.decode(errors="ignore")
+                    content = record.content_stream().read()
+                    html_decoded: str | None = decode_html(content)
+                    if html_decoded:
                         df.loc[url_idx_in_df, "html"] = html_decoded
-                        num_urls_processed += 1
-                    except Exception as e:
-                        # We are just ignoring the error and moving forward as these errors are generally not a lot
-                        logger.exception(f"Error processing {url} in {s3_url} for {input_path}: {e}")
+                    else:
+                        df.loc[url_idx_in_df, "html"] = ""
+                        num_urls_failed_decoding += 1
+                    num_urls_processed += 1
 
     with fsspec.open(output_path, "wt", compression="gzip") as f:  # html output
         for index, row in df.iterrows():
             out_open_web_math = row.to_dict()
+            # If this example failed decoding, don't write it out
+            if not out_open_web_math["html"]:
+                continue
             out_dolma = DolmaFormattedOpenWebMathRecord(
                 # NOTE: open-web-math doesn't have an ID field, so we
                 # take the md5hash of its url and the date
@@ -128,7 +150,7 @@ def process_one_shard(
     # num_urls_found should be equal to num_urls_to_find
     logger.info(
         f"Found: {num_urls_found}, Processed: {num_urls_processed}, out of {num_urls_to_find} urls, "
-        f"in {input_path}"
+        f"in {input_path} . {num_urls_failed_decoding} failed HTML decoding "
         f"AWS URL: {s3_url}"
         f"Found {length_warc} records in the WARC file"
     )
@@ -186,13 +208,9 @@ def group_open_web_math_by_warc(input_paths: list[str], output_path: str):
     logger.info(f"Grouping examples at {input_paths} by their source WARC")
     datetime_start = datetime.utcnow()
 
-    try:
-        df = pd.concat(
-            [pd.read_parquet(file, columns=["url", "date", "metadata"]) for file in input_paths], ignore_index=True
-        )
-    except FileNotFoundError as e:
-        logger.exception(f"Error reading the parquet file: {e}")
-        raise e
+    df = pd.concat(
+        [pd.read_parquet(file, columns=["url", "date", "metadata"]) for file in input_paths], ignore_index=True
+    )
 
     df["file_path"] = df["metadata"].apply(lambda x: json.loads(x)["warc_path"])
     grouped = df.groupby("file_path")
@@ -225,15 +243,16 @@ def group_open_web_math_by_warc(input_paths: list[str], output_path: str):
 
 @ray.remote(memory=32 * 1024 * 1024 * 1024)
 def get_shards_to_process(shard_path: str):
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     all_shard_paths = fsspec_glob(os.path.join(shard_path, "*_warc_examples.parquet"))
     num_total_shards = len(all_shard_paths)
-    already_processed_shard_paths = set(fsspec_glob(os.path.join(shard_path, "*.jsonl.gz.success")))
+    already_processed_shard_paths = set(fsspec_glob(os.path.join(shard_path, "*.jsonl.gz.SUCCESS")))
     num_already_processed_shards = len(already_processed_shard_paths)
 
     shard_indices_to_process = [
         int(os.path.basename(path).replace("_warc_examples.parquet", ""))
         for path in all_shard_paths
-        if path.replace("_warc_examples.parquet", ".jsonl.gz.success") not in already_processed_shard_paths
+        if path.replace("_warc_examples.parquet", ".jsonl.gz.SUCCESS") not in already_processed_shard_paths
     ]
     logger.info(
         f"Found {len(shard_indices_to_process)} shards to fetch HTML for ("
@@ -254,7 +273,7 @@ def process_open_web_math(cfg: ParquetOpenWebMathConfig):
     num_shards_to_process = len(shard_indices_to_process)
 
     # Set a limit on the number of concurrent tasks so we don't overwhelm CC
-    MAX_CONCURRENT_TASKS = 1000
+    MAX_CONCURRENT_TASKS = 500
 
     # Shuffle to encourage different workers to hit different AWS prefixes,
     # so we don't run into per-prefix rate limits.
