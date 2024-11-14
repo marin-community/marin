@@ -48,7 +48,7 @@ class DedupeConfig:
     bloom_filter_size: int | None = None  # default to 0 to use estimated_doc_count and false_positive_rate
     estimated_doc_count: int = 1000000
     false_positive_rate: float = 0.001
-    ngram: bool = False # use the ngram matching features instead of exact match for deduplication
+    ngram: bool = False  # use the ngram matching features instead of exact match for deduplication
     ngram_config: NGramConfig | None = None
     processes: int = 1
     decontaminate: bool = False
