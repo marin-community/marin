@@ -122,6 +122,8 @@ def count_params_for_run(run_id: str, entity="stanford-mercury", project="marin"
         assert run is not None, f"Run {run_id} not found."
 
         # Calculate the number of parameters for the run
+        # TODO: actually can this just be replaced by getting the parameter_count from the run?
+        # there seems be some discrepancy in the parameter count between the two methods
         tokenizer = run.config.get("data", {}).get("tokenizer")
         if tokenizer == "EleutherAI/gpt-neox-20b":
             vocab_size = 50_257
@@ -129,6 +131,8 @@ def count_params_for_run(run_id: str, entity="stanford-mercury", project="marin"
             vocab_size = 128_256
         elif tokenizer == "meta-llama/Llama-2-7b":
             vocab_size = 32_000
+        elif tokenizer == "gpt2":
+            vocab_size = 50_257
 
         model_dict = run.config.get("model", {})
         llama_config = LlamaConfig(
