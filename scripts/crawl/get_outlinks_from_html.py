@@ -229,7 +229,7 @@ def get_outlinks_from_html(cfg: OutlinksExtractionConfig):
 
     refs = []
     for i, html_shard_index in enumerate(shard_indices):
-        input_path = f"{cfg.prefix}_{html_shard_index}.jsonl.gz"
+        input_path = os.path.join(cfg.html_input_path, f"{cfg.prefix}_{html_shard_index}.jsonl.gz")
         output_path = os.path.join(cfg.outlinks_output_path, f"{i}_links.jsonl.gz")
         refs.append(process_one_batch.remote(input_path, output_path))
     logger.info(f"Submitted {len(refs)} tasks")
