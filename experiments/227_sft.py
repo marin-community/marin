@@ -14,7 +14,7 @@ from marin.processing.tokenize.tokenize import TokenizeConfig, levanter_tokenize
 from marin.training.training import TrainSFTOnPodConfig, run_levanter_sft
 
 # Get instruction dataset
-instruction_dataset = get_instruction_dataset("allenai/tulu-v2-sft-mixture")
+instruction_dataset = get_instruction_dataset("allenai/tulu-v2-sft-mixture-olmo-4096")
 dataset_path = output_path_of(instruction_dataset)
 
 
@@ -22,29 +22,30 @@ dataset_path = output_path_of(instruction_dataset)
 executor = Executor(prefix="gs://marin-us-central2", executor_info_base_path="gs://marin-us-central2/experiments")
 executor.compute_version(instruction_dataset)  # This will populate output_paths
 actual_gcs_path = executor.output_paths[instruction_dataset]
-sft_cache_dir = "gs://marin-us-central2/tokenized/sft_cache/tulu-v2/"
+
+print(f"Resolved dataset path: {actual_gcs_path}")
 
 # Add tokenization step
 tokenize_step = ExecutorStep(
-    name="tokenized/tulu_sft_3eps",
+    name="tokenized/olmo702024_sft_4096_3eps",
     fn=levanter_tokenize_sft,
     config=TokenizeConfig(
         train_paths=[f"{actual_gcs_path}/**/*.jsonl.gz"],
         validation_paths=[],
-        cache_path=sft_cache_dir,
+        cache_path=this_output_path(),
         tokenizer="EleutherAI/gpt-neox-20b",
         # fixed to OAI chat format
         input_field="user",
         output_field="assistant",  # Or whatever tokenizer you're using
         # OLMO SFT uses 2048 as max length
-        seq_len=2048,
+        seq_len=4096,
     ),
     description="Tokenize chat SFT data",
 )
 
 
 train_step = ExecutorStep(
-    name="checkpoints/tulu_sft_3eps-tokenizer",
+    name="checkpoints/olmo7_072024_sft_4096",
     fn=run_levanter_sft,
     config=TrainSFTOnPodConfig(
         output_path=this_output_path(),
@@ -53,7 +54,9 @@ train_step = ExecutorStep(
         tokenizer="EleutherAI/gpt-neox-20b",
         epoch=3,
         chat_train_urls=[f"{actual_gcs_path}/**/*.jsonl.gz"],
-        supervised_data=LMSupervisedDatasetConfig(cache_dir=sft_cache_dir, input_field="user", output_field="assistant"),
+        supervised_data=LMSupervisedDatasetConfig(
+            cache_dir=output_path_of(tokenize_step), input_field="user", output_field="assistant"
+        ),
         # Modify the nested trainer config by creating a new one
         trainer=TrainerConfig(
             tracker=WandbConfig(
@@ -68,7 +71,7 @@ train_step = ExecutorStep(
             initialize_from="gs://levanter-checkpoints/marin/olmoish7b_v4_1024_0627/dlwh_7b0627/step-510000/",
         ),
         model=LlamaConfig(
-            seq_len=2048,  # Seq len set to reproduce Olmo SFT
+            seq_len=4096,  # Seq len set to reproduce Olmo SFT
             hidden_dim=4096,
             intermediate_dim=11008,
             num_layers=32,
@@ -94,7 +97,7 @@ train_step = ExecutorStep(
             weight_decay_modules=None,
             default_weight_decay_mask=None,
         ),
-        hf_save_steps=200,
+        hf_save_steps=1000,
     ),
 )
 
