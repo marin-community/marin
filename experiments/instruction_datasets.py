@@ -71,6 +71,13 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         metadata_columns=["id", "category", "source"],
         filetype="json",
     ),
+    "allenai/tulu-v2-sft-mixture-olmo-4096": InstructionDatasetConfig(
+        hf_dataset_id="allenai/tulu-v2-sft-mixture-olmo-4096",
+        revision="7a7c388",  # The revision hash shown in the image
+        wait_for_completion=True,
+        metadata_columns=["dataset", "id"],  # Keeping these metadata columns
+        filetype="jsonl",  # Corrected from parquet to jsonl based on the file extension
+    ),
 }
 
 
