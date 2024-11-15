@@ -32,10 +32,12 @@ evaluate_resiliparse_preserve_formatting = evaluate_lm_evaluation_harness(
 )
 
 if __name__ == "__main__":
-    executor_main(steps=[
-        evaluate_readability,
-        evaluate_trafilatura_default,
-        evaluate_trafilatura_favor_precision,
-        evaluate_resiliparse_default,
-        evaluate_resiliparse_preserve_formatting,
-    ])
+    executor_main(
+        steps=[
+            evaluate_readability,
+            evaluate_trafilatura_default,
+            evaluate_trafilatura_favor_precision,
+            evaluate_resiliparse_default,
+            evaluate_resiliparse_preserve_formatting,
+        ]
+    )
