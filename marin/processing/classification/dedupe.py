@@ -70,7 +70,7 @@ class DedupeConfig:
     estimated_doc_count: int = 1000000
     false_positive_rate: float = 0.001
     ngram: bool = False  # use the ngram matching features instead of exact match for deduplication
-    ngram_config: NGramConfig = field(default_factory=NGramConfig) # settings for the ngram matching feature
+    ngram_config: NGramConfig = field(default_factory=NGramConfig)  # settings for the ngram matching feature
     processes: int = 1
     decontaminate: bool = False
     decontaminate_path: str | None = None
