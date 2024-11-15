@@ -88,7 +88,10 @@ def batched(iterable, n=1):
 
 
 @ray.remote(memory=32 * 1024 * 1024 * 1024)
-def get_shards_indices_to_process(shard_path: str):
+@cached_or_construct_output(
+    success_suffix="SUCCESS", verbose=False
+)  # We use this decorator to make this function idempotent
+def get_shards_indices_to_process(shard_path: str, output_path: str):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     # Get the HTML files (of form <int index>.jsonl.gz) and sort by the integer index.
     # We sort to ensure that the sharding is reproducible.
@@ -98,12 +101,19 @@ def get_shards_indices_to_process(shard_path: str):
     ]
     html_path_indices: list[int] = sorted(html_path_indices)
     logger.info(f"Found {len(html_path_indices)} shards to process")
-    return html_path_indices
+
+    with fsspec.open(output_path, "w", compression="gzip") as fout:
+        json.dump(html_path_indices, fout)
 
 
 @draccus.wrap()
 def consolidate_html(cfg: ConsolidationConfig):
-    shard_indices = ray.get(get_shards_indices_to_process.remote(cfg.input_path))
+    shard_indices_to_process_path = os.path.join(cfg.input_path, "shard_indices.jsonl.gz")
+    # Write the shard indices to process to `shard_indices_to_process_path`, or skip
+    # if it already exists.
+    _ = ray.get(get_shards_indices_to_process.remote(cfg.input_path, shard_indices_to_process_path))
+    with fsspec.open(shard_indices_to_process_path, "rt", compression="gzip") as f:
+        shard_indices = json.load(f)
 
     # Group into chunks of 1000 WARCs each
     # open-web-math has ~3M WARCs in total, which yields 3000 resharded chunks.
