@@ -11,8 +11,6 @@ import os
 import draccus
 import pandas as pd
 import ray
-
-# TODO(Chris): Can we remove this import, it needs pyarrow and pandas
 from ray.runtime_env import RuntimeEnv
 
 from marin.core.runtime import cached_or_construct_output
@@ -97,7 +95,7 @@ def process_file_ray(
 
 @ray.remote
 @cached_or_construct_output(success_suffix="SUCCESS")
-def process_dir(
+def _process_dir(
     input_path: str,
     output_path: str,
     model_name_or_path: str,
@@ -105,6 +103,12 @@ def process_dir(
     model_type: str | None,
     filetype: str,
 ):
+    """Perform quality classification on a directory of files
+
+    We assume that the input_path is a directory of files. Using _process_dir is more
+    efficient than process_file_ray because it avoids the overhead of spawning a new
+    Ray task for each file and instead processes all files in a single task.
+    """
     files = fsspec_glob(os.path.join(input_path, f"**/*.{filetype}"))
 
     quality_classifier = AutoClassifier.from_model_path(model_name_or_path, attribute_name, model_type=model_type)
@@ -116,7 +120,7 @@ def process_dir(
 
 def get_process_filepath_func(subdirectories: list[str]):
     if len(subdirectories) > 0:
-        return process_dir
+        return _process_dir
     else:
         return process_file_ray
 
