@@ -60,5 +60,4 @@ def make_serializable(obj: Any) -> Any:
         return tuple(make_serializable(element) for element in obj)
     elif not is_json_serializable(obj):
         return str(obj)
-
     return obj
