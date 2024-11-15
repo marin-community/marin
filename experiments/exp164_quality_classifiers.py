@@ -6,6 +6,7 @@ TODO: apply these quality classifiers on FineWeb (or DCLM, but that's larger), t
 
 import dataclasses
 
+from experiments.exp412_download_and_raw2json_hf_qa import mmlu_convert_eval_subject
 from experiments.instruction_datasets import get_directory_friendly_dataset_name, get_instruction_dataset
 from marin.classifiers.utils import DatasetConfig
 from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path, versioned
@@ -14,6 +15,7 @@ from marin.processing.classification.fasttext.train_fasttext import (
     train,
 )
 from operations.transform.conversation.conversation_to_dolma import ConversationToDolmaConfig, process_dataset
+from operations.transform.evaluation.eval_to_dolma import ConvertEvalToDolmaConfig, convert_eval_to_dolma
 from operations.transform.fasttext.transform import TransformFasttextToDolmaConfig
 from operations.transform.fasttext.transform import main as fasttext_to_dolma_format
 
@@ -43,6 +45,15 @@ dclm_oh_100k_in_dolma_format = ExecutorStep(
         input_path=versioned("gs://marin-us-central2/documents/dclm/oh_100k.txt"),
         output_path=this_output_path(),
         source="dclm",
+    ),
+)
+
+mmlu_eval_in_dolma_format = ExecutorStep(
+    name="documents/mmlu_eval",
+    fn=convert_eval_to_dolma,
+    config=ConvertEvalToDolmaConfig(
+        input_path=output_path_of(mmlu_convert_eval_subject),
+        output_path=this_output_path(),
     ),
 )
 
