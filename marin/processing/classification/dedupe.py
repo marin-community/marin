@@ -54,8 +54,7 @@ class DedupeConfig:
         bloom_filter_size (int): set size of Bloom filter in bytes
         estimated_doc_count (int): estimated number of docs to deduplicate
         false_positive_rate (float): false positive rate for Bloom filter
-        ngram (bool): use percentage of duplicated ngrams instead of exact match for determining duplication
-        ngram_config (NGramConfig): settings for ngram matching including length, match threshold, and stride
+        ngram (NGramConfig): settings for ngram matching including length, match threshold, and stride
         processes (int): number of processes to use for deduplication
         decontaminate (bool): run in decontamination mode (don't add non benchmark text to Bloom filter)
         decontaminate_path (str): path of decontamination set text
@@ -69,7 +68,7 @@ class DedupeConfig:
     bloom_filter_size: int | None = None  # default to 0 to use estimated_doc_count and false_positive_rate
     estimated_doc_count: int = 1000000
     false_positive_rate: float = 0.001
-    ngram: NGramConfig | None = None
+    ngram: NGramConfig | None = None # use ngram matching if ngram settings provided
     processes: int = 1
     decontaminate: bool = False
     decontaminate_path: str | None = None
