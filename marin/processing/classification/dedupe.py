@@ -33,9 +33,9 @@ class NGramConfig:
         threshold (float): Percentage of duplicate ngrams for a paragraph to be considered duplicate
     """
 
-    length: int = 8
-    stride: int | None = None
-    threshold: float = 0.7
+    ngram_length: int = 8
+    stride: int | None = None # None means stride=0
+    overlap_threshold: float = 0.7
 
 
 @dataclass
@@ -158,9 +158,9 @@ def do_dedup(
         command.extend(
             [
                 "--dedupe.paragraphs.by_ngram.ngram_length",
-                str(ngram.length),
+                str(ngram.ngram_length),
                 "--dedupe.paragraphs.by_ngram.overlap_threshold",
-                str(ngram.threshold),
+                str(ngram.overlap_threshold),
                 "--dedupe.paragraphs.by_ngram.stride",
                 str(ngram.stride),
             ]
