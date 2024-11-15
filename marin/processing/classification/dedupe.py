@@ -34,7 +34,7 @@ class NGramConfig:
     """
 
     ngram_length: int = 8
-    stride: int | None = None # None means stride=0
+    stride: int | None = None  # None means stride=0
     overlap_threshold: float = 0.7
 
 
