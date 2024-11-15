@@ -28,8 +28,8 @@ def map_row(row: dict):
 @cached_or_construct_output(success_suffix="SUCCESS")
 def _process_file(input_filename: str, output_filename: str):
     """Convert an evaluation file with "prompt" and "response" fields to Dolma format with a "text" field."""
-    with fsspec.open(input_filename, "rt") as f_in:
-        with fsspec.open(output_filename, "wt") as f_out:
+    with fsspec.open(input_filename, "rt", compression="gzip") as f_in:
+        with fsspec.open(output_filename, "wt", compression="gzip") as f_out:
             for line in f_in:
                 row = json.loads(line)
                 dolma_row = map_row(row)
@@ -38,7 +38,7 @@ def _process_file(input_filename: str, output_filename: str):
 
 @draccus.wrap()
 def convert_eval_to_dolma(cfg: ConvertEvalToDolmaConfig):
-    ray.get(map_files_in_directory.remote(_process_file.remote, cfg.input_path, "**/*.jsonl.gz", cfg.output_path))
+    ray.get(map_files_in_directory(_process_file.remote, cfg.input_path, "**/*.jsonl.gz", cfg.output_path))
 
 
 if __name__ == "__main__":
