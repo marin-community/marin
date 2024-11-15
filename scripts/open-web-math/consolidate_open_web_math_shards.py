@@ -27,6 +27,9 @@ for fineweb_edu_dump_html_path in $(gcloud storage ls gs://marin-us-central2/doc
     --prefix fineweb_edu
 done
 ```
+
+Creates files in gs://marin-us-central2/documents/fineweb-edu/html/<dump_name> of the form
+`fineweb_edu_{index}.jsonl.gz`.
 """
 
 import json
