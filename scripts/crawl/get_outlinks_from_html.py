@@ -31,6 +31,17 @@ for fineweb_edu_dump_html_path in $(gcloud storage ls gs://marin-us-central2/doc
     --outlinks_output_path gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu/${dump_name}
 done
 ```
+
+```
+for fineweb_edu_dump_html_path in $(gcloud storage ls gs://marin-us-central2/documents/fineweb-edu/html | grep 2017); do
+    dump_name=$(basename -- ${fineweb_edu_dump_html_path})
+    ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- \
+    python scripts/crawl/get_outlinks_from_html.py \
+    --html_input_path ${fineweb_edu_dump_html_path} \
+    --prefix fineweb_edu \
+    --outlinks_output_path gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu/${dump_name}
+done
+```
 """
 
 import json
@@ -44,7 +55,6 @@ from bs4 import BeautifulSoup
 import draccus
 import fsspec
 import ray
-from tqdm_loggable.auto import tqdm
 
 from marin.core.runtime import cached_or_construct_output
 from marin.utils import fsspec_glob
