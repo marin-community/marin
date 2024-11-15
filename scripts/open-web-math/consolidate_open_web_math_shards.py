@@ -114,6 +114,7 @@ def consolidate_html(cfg: ConsolidationConfig):
     _ = ray.get(get_shards_indices_to_process.remote(cfg.input_path, shard_indices_to_process_path))
     with fsspec.open(shard_indices_to_process_path, "rt", compression="gzip") as f:
         shard_indices = json.load(f)
+    logger.info(f"Found {len(shard_indices)} to process")
 
     # Group into chunks of 1000 WARCs each
     # open-web-math has ~3M WARCs in total, which yields 3000 resharded chunks.
