@@ -1,11 +1,31 @@
 #!/usr/bin/env python3
 """
-Consolidate open-web-math shards, so we reduce the number of files we have on GCS.
+Consolidate open-web-math and FineWeb-Edu shards, so we reduce the number of
+files we have on GCS.
+
+Running:
 
 ```
 ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- \
     python scripts/open-web-math/consolidate_open_web_math_shards.py \
-    --input_path gs://marin-us-central2/documents/open-web-math-fde8ef8/html/
+    --input_path gs://marin-us-central2/documents/open-web-math-fde8ef8/html/ \
+    --prefix openwebmath
+```
+
+Creates files in gs://marin-us-central2/documents/open-web-math-fde8ef8/html/ of the form
+`openwebmath_{index}.jsonl.gz`.
+
+
+Running on FineWeb-Edu:
+
+```
+for fineweb_edu_dump_html_path in $(gcloud storage ls gs://marin-us-central2/documents/fineweb-edu/html); do
+    dump_name=$(basename -- ${fineweb_edu_dump_html_path})
+    ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- \
+    python scripts/open-web-math/consolidate_open_web_math_shards.py \
+    --input_path ${fineweb_edu_dump_html_path} \
+    --prefix fineweb_edu
+done
 ```
 """
 
@@ -30,6 +50,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ConsolidationConfig:
     input_path: str
+    prefix: str
 
 
 @ray.remote(memory=4 * 1024 * 1024 * 1024)
@@ -82,7 +103,7 @@ def consolidate_html(cfg: ConsolidationConfig):
     # open-web-math has ~3M WARCs in total, which yields 3000 resharded chunks.
     refs = []
     for i, html_shard_indices_batch in enumerate(batched(shard_indices, 1000)):
-        output_path = os.path.join(cfg.input_path, f"openwebmath_{i}.jsonl.gz")
+        output_path = os.path.join(cfg.input_path, f"{cfg.prefix}_{i}.jsonl.gz")
         html_path_batch = [
             os.path.join(cfg.input_path, f"{shard_index}.jsonl.gz") for shard_index in html_shard_indices_batch
         ]
