@@ -9,46 +9,29 @@ from marin.execution.executor import ExecutorStep
 # tasks to run (corresponding to lm_eval_harness tasks)
 # from page 43 of the DCLM paper: https://arxiv.org/pdf/2406.11794
 CORE_TASKS = [
-    ("agieval_lsat_ar", 3, None)(  # 3-shot tests in legal domain
-        "arc_easy", 10, None
-    )(  # 10-shot, four-way MCQ questions involving grade 3-9 basic science
-        "arc_challenge", 10, None
-    )  # a (harder) version of arc_easy
+    ("agieval_lsat_ar", 3, None),  # 3-shot tests in legal domain
+    ("arc_easy", 10, None),  # 10-shot, four-way MCQ questions involving grade 3-9 basic science
+    ("arc_challenge", 10, None),  # a (harder) version of arc_easy
     # these are all from BigBench
-    ("qa_wikidata", 10, None)(  # requires completing factual statements with the correct answer
-        "dyck_languages", 10, None
-    )(  # requires completing a partially balanced expression consisting of parentheses and braces
-        "operators", 10, None
-    )(  # compute the output from some expression with newly defined operators
-        "repeat_copy_logic", 10, None
-    )(  # differentiate instructions from text-to-copy and to perform a sequence of operations
-        "cs_algorithms", 10, None
-    )(  # requires executing algorithms such as recursion and dynamic programming
-        "language_identification", 10, None
-    )(  # identify the language of given text
-        "boolq", 10, None
-    )(  # answer yes/no questions based on a passage
-        "commonsense_qa", 10, None
-    )(  # 5-way multiple-choice questions based on common-sense, everyday scenarios
-        "copa", 0, None
-    )(  # use causal reasoning to predict the correct outcome of a given scenario
-        "coqa", 0, None
-    )(  # conversational question-answering based on a passage
-        "hellaswag", 0, None
-    )(  # 4-way multiple choice commonsense reasoning dataset
-        "hellaswag", 10, None
-    )  # 4-way multiple choice commonsense reasoning dataset
+    ("qa_wikidata", 10, None),  # requires completing factual statements with the correct answer
+    ("dyck_languages", 10, None),  # requires completing partially balanced expression consisting of parentheses & braces
+    ("operators", 10, None),  # compute the output from some expression with newly defined operators
+    ("repeat_copy_logic", 10, None),  # differentiate instructions from text-to-copy & to perform sequence of operations
+    ("cs_algorithms", 10, None),  # requires executing algorithms such as recursion and dynamic programming
+    ("language_identification", 10, None),  # identify the language of given text
+    ("boolq", 10, None),  # answer yes/no questions based on a passage
+    ("commonsense_qa", 10, None),  # 5-way multiple-choice questions based on common-sense, everyday scenarios
+    ("copa", 0, None),  # use causal reasoning to predict the correct outcome of a given scenario
+    ("coqa", 0, None),  # conversational question-answering based on a passage
+    ("hellaswag", 0, None),  # 4-way multiple choice commonsense reasoning dataset
+    ("hellaswag", 10, None),  # 4-way multiple choice commonsense reasoning dataset
     # ("jeopardy", 10, None) # not in lm_eval_harness right now :(
-    ("lambada", 0, None)(  # predict the endings of text passages
-        "openbookqa", 0, None
-    )(  # 4-way multiple choice question answering task that requires multi-step reasoning
-        "piqa", 10, None
-    )(  # answer questions based on a passage
-        "squadv2", 10, None
-    ),  # reading comprehension benchmark
-    ("wsc273", 0, None)(  # Winograd Schema Challenge
-        "winogrande", 0, None
-    ),  # Winograd challenge, extended to more domains
+    ("lambada", 0, None),  # predict the endings of text passages
+    ("openbookqa", 0, None),  # 4-way multiple choice question answering task that requires multi-step reasoning
+    ("piqa", 10, None),  # answer questions based on a passage
+    ("squadv2", 10, None),  # reading comprehension benchmark
+    ("wsc273", 0, None),  # Winograd Schema Challenge
+    ("winogrande", 0, None),  # Winograd challenge, extended to more domains
 ]
 
 
