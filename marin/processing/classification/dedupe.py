@@ -70,15 +70,10 @@ class DedupeConfig:
     estimated_doc_count: int = 1000000
     false_positive_rate: float = 0.001
     ngram: bool = False  # use the ngram matching features instead of exact match for deduplication
-    ngram_config: NGramConfig | None = None
+    ngram_config: NGramConfig = NGramConfig() # settings for the ngram matching feature
     processes: int = 1
     decontaminate: bool = False
     decontaminate_path: str | None = None
-
-    def __post_init__(self):
-        # if ngram mode but no ngram settings, set up default ngram config
-        if self.ngram and not self.ngram_config:
-            self.ngram_config = NGramConfig()
 
 
 def copy_files_in(input_path, local_base_dir):
