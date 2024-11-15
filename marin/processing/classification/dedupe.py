@@ -1,7 +1,7 @@
 import os
 import subprocess
 import tempfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import draccus
 import fsspec
@@ -68,7 +68,7 @@ class DedupeConfig:
     bloom_filter_size: int | None = None  # default to 0 to use estimated_doc_count and false_positive_rate
     estimated_doc_count: int = 1000000
     false_positive_rate: float = 0.001
-    ngram: NGramConfig | None = None # use ngram matching if ngram settings provided
+    ngram: NGramConfig | None = None  # use ngram matching if ngram settings provided
     processes: int = 1
     decontaminate: bool = False
     decontaminate_path: str | None = None
