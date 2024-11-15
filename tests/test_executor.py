@@ -7,6 +7,7 @@ from dataclasses import asdict, dataclass
 
 import pytest
 import ray
+from draccus.utils import Dataclass
 
 from marin.execution.executor import Executor, ExecutorStep, get_info_path, output_path_of, this_output_path, versioned
 from marin.execution.executor_step_status import STATUS_SUCCESS, get_current_status, get_status_path, read_events
@@ -286,3 +287,48 @@ def test_dedup_version():
         executor = create_executor(temp_dir)
         executor.run(steps=[b1, b2])
         assert len(executor.steps) == 2
+
+
+def test_run_only_some_steps():
+    """Make sure that only some steps are run."""
+    log = create_log()
+
+    def fn(config: Dataclass | None):
+        append_log(log, config)
+
+    @dataclass(frozen=True)
+    class CConfig:
+        m: 10
+
+    a = ExecutorStep(name="a", fn=fn, config=None)
+    c = ExecutorStep(name="c", fn=fn, config=CConfig(m=10))
+    b = ExecutorStep(
+        name="b",
+        fn=fn,
+        config=MyConfig(
+            input_path=output_path_of(a, "sub"),
+            output_path=this_output_path(),
+            n=versioned(3),
+            m=4,
+        ),
+    )
+
+    with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
+        executor = create_executor(temp_dir)
+        executor.run(steps=[b, c], run_only=["b"])
+
+        results = read_log(log)
+        assert len(results) == 2
+        assert results[0] is None
+        assert results[1]["m"] == 4
+
+    cleanup_log(log)
+
+    with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
+        executor = create_executor(temp_dir)
+        executor.run(steps=[a, b, c], run_only=["a", "c"])
+
+        results = read_log(log)
+        assert len(results) == 2
+        assert results[0] is None
+        assert results[1]["m"] == 10

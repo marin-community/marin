@@ -72,12 +72,13 @@ import inspect
 import json
 import logging
 import os
+import re
 import subprocess
 import traceback
 import urllib.parse
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict, dataclass, field, fields, is_dataclass, replace
+from dataclasses import asdict, dataclass, fields, is_dataclass, replace
 from datetime import datetime
 from typing import Any, Generic, TypeVar
 
@@ -381,10 +382,20 @@ class Executor:
     def run(
         self,
         steps: list[ExecutorStep | InputName],
+        *,
         dry_run: bool = False,
-        force_run: list[str] | None = None,
-        force_run_failed: bool = False,
+        run_only: list[str] | None = None,
+        force_run: bool = False,
     ):
+        """
+        Run the pipeline of `ExecutorStep`s.
+
+        Args:
+            step: The step to run.
+            dry_run: If True, only print out what needs to be done.
+            run_only: If not None, only run the steps in the list and their dependencies. Matches steps' names as regex
+            force_run: If True, run steps even if they have already been run (including if they failed
+        """
         # Gather all the steps, compute versions and output paths for all of them.
         logger.info(f"### Inspecting the {len(steps)} provided steps ###")
         for step in steps:
@@ -396,15 +407,69 @@ class Executor:
         logger.info(f"### Reading {len(self.steps)} statuses ###")
         self.read_statuses()
 
-        logger.info(f"### Launching {len(self.steps)} steps ###")
-        for step in self.steps:
-            self.run_step(step, dry_run=dry_run, force_run=force_run, force_run_failed=force_run_failed)
+        if run_only is not None:
+            steps_to_run = self._compute_transitive_deps(self.steps, run_only)
+        else:
+            steps_to_run = self.steps
+
+        if steps_to_run != self.steps:
+            logger.info(f"### Running {len(steps_to_run)} steps out of {len(self.steps)} ###")
+
+        logger.info(f"### Launching {len(steps_to_run)} steps ###")
+        for step in steps_to_run:
+            self.run_step(step, dry_run=dry_run, force_run=force_run)
 
         logger.info("### Writing metadata ###")
         self.write_infos()
 
         logger.info("### Waiting for all steps to finish ###")
         ray.get(list(self.refs.values()))
+
+    def _compute_transitive_deps(self, steps: list[ExecutorStep], run_steps: list[str]) -> list[ExecutorStep]:
+        """
+        Compute the transitive dependencies of the steps that match the run_steps list.
+
+        Returns steps in topological order.
+        """
+        regexes = [re.compile(run_step) for run_step in run_steps]
+        used_regexes: set[int] = set()
+
+        def matches(step: ExecutorStep) -> bool:
+            # track which regexes have been used
+            for i, regex in enumerate(regexes):
+                if regex.search(step.name):
+                    used_regexes.add(i)
+                    return True
+
+        # Compute the transitive dependencies of the steps that match the run_steps list
+        to_run: list[ExecutorStep] = []
+        visited: set[ExecutorStep] = set()
+        in_stack: set[ExecutorStep] = set()  # cycle detection
+
+        def dfs(step: ExecutorStep):
+            if step in in_stack:
+                raise ValueError(f"Cycle detected in {step.name}")
+
+            if step in visited:
+                return
+
+            visited.add(step)
+            in_stack.add(step)
+
+            for dep in self.dependencies[step]:
+                dfs(dep)
+            to_run.append(step)
+            in_stack.remove(step)
+
+        for step in steps:
+            if matches(step):
+                dfs(step)
+
+        if used_regexes != set(range(len(regexes))):
+            unused_regexes = [regexes[i].pattern for i in set(range(len(regexes))) - used_regexes]
+            logger.warning(f"Regexes {unused_regexes} did not match any steps")
+
+        return to_run
 
     def compute_version(self, step: ExecutorStep):
         if step in self.versions:
@@ -545,10 +610,16 @@ class Executor:
         with ThreadPoolExecutor(max_workers=16) as executor:
             executor.map(get_status, self.steps)
 
-    def run_step(self, step: ExecutorStep, dry_run: bool, force_run: list[str] | None, force_run_failed: bool):
+    def run_step(self, step: ExecutorStep, dry_run: bool, force_run: bool):
         """
         Return a Ray object reference to the result of running the `step`.
-        If `dry_run`, only print out what needs to be done.
+
+        If the step has already been run, returns the result of the previous run.
+
+        Args:
+            step: The step to run.
+            dry_run: If True, only print out what needs to be done.
+            force_run: If True, run step even if is already ran (including if it failed)
         """
         config = self.configs[step]
         config_version = self.versions[step]["config"]
@@ -561,13 +632,11 @@ class Executor:
         logger.info(f"  config = {json.dumps(config_version, cls=CustomJsonEncoder)}")
         for i, dep in enumerate(self.dependencies[step]):
             logger.info(f"  {dependency_index_str(i)} = {self.output_paths[dep]}")
-        logger.info("")
-        should_force_run = (force_run and step.name in force_run) or (force_run_failed and status == STATUS_FAILED)
-        if should_force_run:
+        if force_run:
             logger.info(f"Force running {step.name}, previous status: {status}")
 
         # Only start if there's no status
-        should_run = not dry_run and (status is None or should_force_run)
+        should_run = not dry_run and (status is None or force_run)
         dependencies = [self.refs[dep] for dep in self.dependencies[step]]
         name = f"execute_after_dependencies({get_fn_name(step.fn, short=True)})::{step.name})"
         if status is not None:
@@ -599,11 +668,7 @@ class Executor:
             ),
         ).remote(step.fn, config, dependencies, output_path, should_run)
 
-        # Write out info for each step
-        for step, info in zip(self.steps, self.step_infos, strict=True):
-            info_path = get_info_path(self.output_paths[step])
-            with fsspec.open(info_path, "w") as f:
-                print(json.dumps(asdict(info), indent=2, cls=CustomJsonEncoder), file=f)
+        return self.refs[step]
 
 
 def asdict_without_description(obj: dataclass) -> dict[str, Any]:
@@ -698,11 +763,9 @@ class ExecutorMainConfig:
     """Where the executor info should be stored under a file determined by a hash."""
 
     dry_run: bool = False
-    force_run: list[str] = field(default_factory=list)  # <list of steps name>: run list of steps (names)
-    force_run_failed: bool = False  # Force run failed steps
-
-    run_only: list[str] = field(default_factory=list)
-    """Run these steps and their dependencies only. If empty, run all steps."""
+    force_run: bool = False  # Force run failed steps
+    run_only: list[str] | None = None
+    """Run these steps (matched by regex.search) and their dependencies only. If None, run all steps."""
 
 
 @draccus.wrap()
@@ -729,25 +792,9 @@ def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], descrip
         description=description,
     )
 
-    if config.run_only:
-        steps_to_run = [step for step in steps if step.name in config.run_only]
-        if len(steps_to_run) != len(config.run_only):
-            logger.error(
-                f"Only {len(steps_to_run)} out of {len(config.run_only)} steps to run found:\n  -"
-                f"{'  - '.join(step.name for step in steps_to_run)}\n"
-                "The following steps are available:\n  -"
-                f"{'  - '.join(step.name for step in steps)}"
-            )
-        if steps_to_run != steps:
-            logger.info(f"Running only {len(steps_to_run)} steps: {', '.join(step.name for step in steps_to_run)}")
-        elif not steps_to_run:
-            logger.warning("No steps to run.")
-
-        steps = steps_to_run
-
     executor.run(
         steps=steps,
         dry_run=config.dry_run,
         force_run=config.force_run,
-        force_run_failed=config.force_run_failed,
+        run_only=config.run_only,
     )
