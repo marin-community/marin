@@ -780,6 +780,12 @@ def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], descrip
             prefix = os.environ["MARIN_PREFIX"]
         else:
             raise ValueError("Must specify a prefix or set the MARIN_PREFIX environment variable")
+    elif "MARIN_PREFIX" in os.environ:
+        if prefix != os.environ["MARIN_PREFIX"]:
+            logger.warning(
+                f"MARIN_PREFIX environment variable ({os.environ['MARIN_PREFIX']}) is different from the "
+                f"specified prefix ({prefix})"
+            )
 
     executor_info_base_path = config.executor_info_base_path
     if executor_info_base_path is None:
