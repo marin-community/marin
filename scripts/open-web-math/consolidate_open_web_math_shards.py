@@ -73,9 +73,12 @@ def process_one_batch(html_paths_batch: list[str], output_path: str):
     with fsspec.open(output_path, "w", compression="gzip") as fout:
         for html_path in tqdm(html_paths_batch):
             with fsspec.open(html_path, "rt", compression="gzip") as fin:
-                for line in fin:
-                    record = json.loads(line)
-                    fout.write(json.dumps(record) + "\n")
+                # Try to read everything at once, to prevent fsspec from
+                # making many small calls to GCS.
+                # This file should already end with a newline, so we can
+                # directly write it as-is to the output file.
+                file_data = fin.read()
+                fout.write(file_data)
 
 
 def batched(iterable, n=1):
