@@ -2,6 +2,20 @@ from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True)
+class EvalTaskConfig:
+    name: str
+    """Name of the evaluation task."""
+
+    num_fewshot: int
+    """Number of few-shot examples to evaluate on."""
+
+    max_eval_instances: int | None = None
+    """
+    Maximum number of instances to evaluate on.
+    """
+
+
+@dataclass(frozen=True)
 class EvaluationConfig:
     evaluator: str
     """Name of the evaluator to run."""
@@ -21,11 +35,13 @@ class EvaluationConfig:
     a path on GCS (e.g., gs://bucket/path/to/output).
     """
 
-    evals: list[str] = field(default_factory=list)
+    evals: list[EvalTaskConfig] = field(default_factory=list)
     """
-    Which specific evals within an evaluation harness to run. This would be a list of
+    List of specific evals within an evaluation harness to run. This would be a list of
     tasks in for EleutherAI's lm-evaluation-harness or a list of evals from HELM (e.g., mmlu, lite, etc.).
-    See https://github.com/stanford-crfm/helm/tree/main/src/helm/benchmark/presentation for the full list.
+    See https://github.com/stanford-crfm/helm/tree/main/src/helm/benchmark/presentation, or
+    https://github.com/EleutherAI/lm-evaluation-harness/tree/main/lm_eval/tasks
+    for the full list.
     """
 
     model_path: str | None = None
@@ -36,11 +52,6 @@ class EvaluationConfig:
     discover_latest_checkpoint: bool = False
     """
     Whether to discover the latest HF checkpoint in the model path.
-    """
-
-    max_eval_instances: int | None = None
-    """
-    Maximum number of instances to evaluate on.
     """
 
     launch_with_ray: bool = True

@@ -1,4 +1,4 @@
-from marin.evaluation.evaluation_config import EvaluationConfig
+from marin.evaluation.evaluation_config import EvalTaskConfig, EvaluationConfig
 from marin.evaluation.run import evaluate
 from marin.execution.executor import ExecutorStep, InputName, this_output_path
 
@@ -58,14 +58,14 @@ def evaluate_helm_on_step(
     )
 
 
-def evaluate_lm_evaluation_harness(model_name: str, model_path: str, evals: list[str]) -> ExecutorStep:
+def evaluate_lm_evaluation_harness(model_name: str, model_path: str, evals: list[EvalTaskConfig]) -> ExecutorStep:
     """
     Create an ExecutorStep to evaluate the model using LM Evaluation Harness.
 
     Args:
         model_name (str): Name of the model.
         model_path (str): Path to the model.
-        evals (list[str]): List of evaluations to run with LM Evaluation Harness, e.g, ["mmlu"].
+        evals (list[EvalTaskConfig]): List of evaluations to run with LM Evaluation Harness.
     """
     return ExecutorStep(
         name=f"evaluation/lm_evaluation_harness/{model_name}",
