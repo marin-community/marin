@@ -128,16 +128,6 @@ def apply_filter(input_data: dict, doc_filter: FilterConfig, id_to_attributes: d
         raise ValueError(f"Unknown filter type: {doc_filter.type}")
 
 
-def apply_filter_batch_func(doc_filter, id_to_attributes):
-    # The huggingface dataset map API passes a batch of data to the function and returns a batch of data.
-    # We have additional data to pass in such as doc_filter and id_to_attributes, so we define a wrapper
-    # function here.
-    def apply_filter_func(batch):
-        return apply_filter(batch, doc_filter, id_to_attributes)
-
-    return apply_filter_func
-
-
 def read_attributes_as_dict(attribute_filename: str) -> dict[str, Any]:
     """Given some attribute filename, return a dictionary mapping from id to attributes
 
