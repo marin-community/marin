@@ -10,6 +10,7 @@ the attributes.  Handles two cases:
 import logging
 import os
 from dataclasses import dataclass, replace
+from functools import partial
 from typing import Any
 
 import draccus
@@ -185,12 +186,10 @@ def process_file(
         if id_to_attributes is None:
             continue
 
-        apply_filter_func = apply_filter_batch_func(doc_filter, id_to_attributes)
-
         if doc_filter.type == FILTER_TYPE_CLASSIFY:
-            dataset = dataset.filter(apply_filter_func)
+            dataset = dataset.filter(partial(apply_filter, doc_filter=doc_filter, id_to_attributes=id_to_attributes))
         elif doc_filter.type == FILTER_TYPE_REMOVE_SPANS:
-            dataset = dataset.map(apply_filter_func)
+            dataset = dataset.map(partial(apply_filter, doc_filter=doc_filter, id_to_attributes=id_to_attributes))
         else:
             raise ValueError(f"Unknown filter type: {doc_filter.type}")
 
@@ -205,11 +204,11 @@ def process_file(
 
 
 @ray.remote
-def get_scores(attribute_filename: str, attribute_name: str, label: str) -> list[float]:
-    scores = []
+def get_scores(attribute_filename: str, attribute_name: str, label: str) -> np.ndarray:
+    scores = np.array([])
     attributes = read_attributes_as_dict(attribute_filename)
     for _, attr in attributes.items():
-        scores.append(attr[attribute_name][label])
+        scores = np.append(scores, attr[attribute_name][label])
     return scores
 
 
@@ -219,8 +218,10 @@ def calculate_percentile_threshold(scores: list[list[float]], keep_fraction: flo
     return np.percentile(scores, percentile)
 
 
-@ray.remote
+@ray.remote(runtime_env={"pip": ["ddsketch"]})
 def consolidate(config: ConsolidateConfig):
+    from ddsketch import DDSketch
+
     input_paths = fsspec_glob(os.path.join(config.input_path, f"**/*.{config.filetype}"))
     logger.info(f"Consolidating {len(input_paths)} documents")
 
@@ -238,13 +239,18 @@ def consolidate(config: ConsolidateConfig):
             attribute_paths = [
                 rebase_file_path(config.input_path, input_path, doc_filter.attribute_path) for input_path in input_paths
             ]
-            scores = ray.get(
-                [
-                    get_scores.remote(attribute_path, doc_filter.name, doc_filter.label)
-                    for attribute_path in attribute_paths
-                ]
-            )
-            threshold = calculate_percentile_threshold(scores, doc_filter.keep_fraction)
+            scores_refs = [
+                get_scores.remote(attribute_path, doc_filter.name, doc_filter.label)
+                for attribute_path in attribute_paths
+            ]
+
+            sketch = DDSketch()
+            for scores_ref in scores_refs:
+                scores = ray.get(scores_ref)
+                for score in scores:
+                    sketch.add(score)
+
+            threshold = sketch.get_quantile_value(1 - doc_filter.keep_fraction)
             updated_filters.append(replace(doc_filter, threshold=threshold, keep_fraction=None))
         else:
             updated_filters.append(doc_filter)
