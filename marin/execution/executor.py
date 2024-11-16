@@ -427,7 +427,9 @@ class Executor:
         logger.info("### Waiting for all steps to finish ###")
         ray.get(list(self.refs.values()))
 
-    def _compute_transitive_deps(self, steps: list[ExecutorStep], run_steps: list[str]) -> list[ExecutorStep]:
+    def _compute_transitive_deps(self,
+                                 steps: list[ExecutorStep],
+                                 run_steps: list[str]) -> list[ExecutorStep]:
         """
         Compute the transitive dependencies of the steps that match the run_steps list.
 
@@ -616,7 +618,7 @@ class Executor:
         with ThreadPoolExecutor(max_workers=16) as executor:
             executor.map(get_status, self.steps)
 
-    def run_step(self, step: ExecutorStep, dry_run: bool, force_run_failed: bool):
+    def run_step(self, step: ExecutorStep, dry_run: bool, force_run_failed: bool, force_run: bool):
         """
         Return a Ray object reference to the result of running the `step`.
 
@@ -626,6 +628,7 @@ class Executor:
             step: The step to run.
             dry_run: If True, only print out what needs to be done.
             force_run_failed: If True, run step even if is already ran (including if it failed)
+            force_run: If True, run the step even if it has already been run.
         """
         config = self.configs[step]
         config_version = self.versions[step]["config"]
@@ -640,7 +643,7 @@ class Executor:
             logger.info(f"  {dependency_index_str(i)} = {self.output_paths[dep]}")
 
         should_run = status is None
-        if force_run_failed and is_failure(status):
+        if force_run or (force_run_failed and is_failure(status)):
             logger.info(f"Force running {step.name}, previous status: {status}")
             should_run = True
 
