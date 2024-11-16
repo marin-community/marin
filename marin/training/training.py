@@ -279,7 +279,7 @@ def _suppress_ray_config(config: TrainLmOnPodConfig):
     return config
 
 
-def check(key, path, none_ok, region, local_ok):
+def _check_path_in_region(key, path, none_ok, region, local_ok):
     if path is None:
         if none_ok:
             return
@@ -319,16 +319,16 @@ def _doublecheck_paths_sft(config: TrainSFTOnPodConfig, must_save_checkpoints):
     # Check chat_train_urls
     if config.chat_train_urls:
         for url in config.chat_train_urls:
-            check("chat_train_urls", url, none_ok=False, region=region, local_ok=local_ok)
+            _check_path_in_region("chat_train_urls", url, none_ok=False, region=region, local_ok=local_ok)
 
     # Check supervised data cache directory
     if config.supervised_data:
-        check(
+        _check_path_in_region(
             "supervised_data.cache_dir", config.supervised_data.cache_dir, none_ok=True, region=region, local_ok=local_ok
         )
 
     # Common checks for checkpointing
-    check(
+    _check_path_in_region(
         "trainer.checkpointer.base_path",
         config.trainer.checkpointer.base_path,
         none_ok=not must_save_checkpoints,
@@ -337,7 +337,9 @@ def _doublecheck_paths_sft(config: TrainSFTOnPodConfig, must_save_checkpoints):
     )
 
     if config.hf_save_path is not None:
-        check("hf_save_path", config.hf_save_path, none_ok=not must_save_checkpoints, region=region, local_ok=local_ok)
+        _check_path_in_region(
+            "hf_save_path", config.hf_save_path, none_ok=not must_save_checkpoints, region=region, local_ok=local_ok
+        )
     else:
         logger.warning("hf_save_path is not set. This is fine if you don't want HF checkpoints.")
 
@@ -358,12 +360,14 @@ def _doublecheck_paths(config: TrainLmOnPodConfig, must_save_checkpoints):
             return
         raise ValueError("Could not determine the region of the VM. This is required for path checks.") from e
 
-    check("data.cache_dir", config.data.cache_dir, none_ok=True, region=region, local_ok=local_ok)
+    _check_path_in_region("data.cache_dir", config.data.cache_dir, none_ok=True, region=region, local_ok=local_ok)
     # now check all subcaches if applicable
     if isinstance(config.data, LMMixtureDatasetConfig):
         for key, subcache in config.data.configs.items():
-            check(f"data.configs[{key}].cache_dir", subcache.cache_dir, none_ok=True, region=region, local_ok=local_ok)
-    check(
+            _check_path_in_region(
+                f"data.configs[{key}].cache_dir", subcache.cache_dir, none_ok=True, region=region, local_ok=local_ok
+            )
+    _check_path_in_region(
         "trainer.checkpointer.base_path",
         config.trainer.checkpointer.base_path,
         none_ok=not must_save_checkpoints,
@@ -372,7 +376,9 @@ def _doublecheck_paths(config: TrainLmOnPodConfig, must_save_checkpoints):
     )
 
     if config.hf_save_path is not None:
-        check("hf_save_path", config.hf_save_path, none_ok=not must_save_checkpoints, region=region, local_ok=local_ok)
+        _check_path_in_region(
+            "hf_save_path", config.hf_save_path, none_ok=not must_save_checkpoints, region=region, local_ok=local_ok
+        )
     else:
         logger.warning("hf_save_path is not set. This is fine if you don't want HF checkpoints.")
 
