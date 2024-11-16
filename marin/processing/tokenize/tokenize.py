@@ -54,7 +54,6 @@ class TokenizeConfig:
     input_field: str = ""
     output_field: str = ""
     text_key: str = "text"
-    seq_len: int = 2048
 
     def train_source(self) -> ShardedDataSource | None:
         if len(self.train_paths) == 0:
@@ -130,7 +129,7 @@ def levanter_tokenize_sft(config: TokenizeConfig):
     logging.basicConfig(level=logging.INFO)
 
     tokenizer = transformers.AutoTokenizer.from_pretrained(
-        config.tokenizer, model_max_length=config.seq_len, padding_side="right", trust_remote_code=True
+        config.tokenizer, padding_side="right", trust_remote_code=True
     )
 
     sft_config = ChatUrlDataSourceConfig(
@@ -145,6 +144,7 @@ def levanter_tokenize_sft(config: TokenizeConfig):
     import haliax
 
     # Use the existing mk_chat_sft_dataset function, position axis is arbitrary
+    # it shouldn't matter what the value is during cache creation
     mk_chat_sft_dataset(sft_config, tokenizer, haliax.Axis("position", 2048))
 
     logger.info(f"Finished caching SFT dataset to {config.cache_path}")
