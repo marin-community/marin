@@ -31,17 +31,6 @@ for fineweb_edu_dump_html_path in $(gcloud storage ls gs://marin-us-central2/doc
     --outlinks_output_path gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu/${dump_name}
 done
 ```
-
-```
-for fineweb_edu_dump_html_path in $(gcloud storage ls gs://marin-us-central2/documents/fineweb-edu/html | grep 2017); do
-    dump_name=$(basename -- ${fineweb_edu_dump_html_path})
-    ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- \
-    python scripts/crawl/get_outlinks_from_html.py \
-    --html_input_path ${fineweb_edu_dump_html_path} \
-    --prefix fineweb_edu \
-    --outlinks_output_path gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu/${dump_name}
-done
-```
 """
 
 import json
@@ -51,10 +40,10 @@ import pathlib
 from dataclasses import dataclass
 from urllib.parse import urljoin, urlparse
 
-from bs4 import BeautifulSoup
 import draccus
 import fsspec
 import ray
+from bs4 import BeautifulSoup
 
 from marin.core.runtime import cached_or_construct_output
 from marin.utils import fsspec_glob
@@ -120,9 +109,9 @@ def process_one_batch(input_path: str, output_path: str):
     output_path (str): Path to write JSONL file with outlinks.
     """
     import cchardet
+    import w3lib.url
     from courlan import check_url
     from resiliparse_dom.extract.html2text import extract_main_dom_tree
-    import w3lib.url
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
