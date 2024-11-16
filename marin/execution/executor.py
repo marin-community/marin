@@ -89,6 +89,7 @@ import ray.remote_function
 from ray.runtime_env import RuntimeEnv
 
 from marin.execution.executor_step_status import (
+    STATUS_DEP_FAILED,
     STATUS_FAILED,
     STATUS_RUNNING,
     STATUS_SUCCESS,
@@ -96,6 +97,7 @@ from marin.execution.executor_step_status import (
     append_status,
     get_current_status,
     get_status_path,
+    is_failure,
     read_events,
 )
 from marin.utilities.executor_utils import compare_dicts, get_pip_dependencies
@@ -385,7 +387,7 @@ class Executor:
         *,
         dry_run: bool = False,
         run_only: list[str] | None = None,
-        force_run: bool = False,
+        force_run_failed: bool = False,
     ):
         """
         Run the pipeline of `ExecutorStep`s.
@@ -394,7 +396,7 @@ class Executor:
             step: The step to run.
             dry_run: If True, only print out what needs to be done.
             run_only: If not None, only run the steps in the list and their dependencies. Matches steps' names as regex
-            force_run: If True, run steps even if they have already been run (including if they failed
+            force_run_failed: If True, run steps even if they have already been run (including if they failed)
         """
         # Gather all the steps, compute versions and output paths for all of them.
         logger.info(f"### Inspecting the {len(steps)} provided steps ###")
@@ -417,7 +419,7 @@ class Executor:
 
         logger.info(f"### Launching {len(steps_to_run)} steps ###")
         for step in steps_to_run:
-            self.run_step(step, dry_run=dry_run, force_run=force_run)
+            self.run_step(step, dry_run=dry_run, force_run_failed=force_run_failed)
 
         logger.info("### Writing metadata ###")
         self.write_infos()
@@ -430,6 +432,10 @@ class Executor:
         Compute the transitive dependencies of the steps that match the run_steps list.
 
         Returns steps in topological order.
+
+        Args:
+            steps: The list of all steps.
+            run_steps: The list of step names to run. The names are matched as regex.
         """
         regexes = [re.compile(run_step) for run_step in run_steps]
         used_regexes: set[int] = set()
@@ -610,7 +616,7 @@ class Executor:
         with ThreadPoolExecutor(max_workers=16) as executor:
             executor.map(get_status, self.steps)
 
-    def run_step(self, step: ExecutorStep, dry_run: bool, force_run: bool):
+    def run_step(self, step: ExecutorStep, dry_run: bool, force_run_failed: bool):
         """
         Return a Ray object reference to the result of running the `step`.
 
@@ -619,7 +625,7 @@ class Executor:
         Args:
             step: The step to run.
             dry_run: If True, only print out what needs to be done.
-            force_run: If True, run step even if is already ran (including if it failed)
+            force_run_failed: If True, run step even if is already ran (including if it failed)
         """
         config = self.configs[step]
         config_version = self.versions[step]["config"]
@@ -632,11 +638,14 @@ class Executor:
         logger.info(f"  config = {json.dumps(config_version, cls=CustomJsonEncoder)}")
         for i, dep in enumerate(self.dependencies[step]):
             logger.info(f"  {dependency_index_str(i)} = {self.output_paths[dep]}")
-        if force_run:
+
+        should_run = status is None
+        if force_run_failed and is_failure(status):
             logger.info(f"Force running {step.name}, previous status: {status}")
+            should_run = True
 
         # Only start if there's no status
-        should_run = not dry_run and (status is None or force_run)
+        should_run = not dry_run and should_run
         dependencies = [self.refs[dep] for dep in self.dependencies[step]]
         name = f"execute_after_dependencies({get_fn_name(step.fn, short=True)})::{step.name})"
         if status is not None:
@@ -692,7 +701,14 @@ def execute_after_dependencies(
     # Ensure that dependencies are all run first
     if should_run:
         append_status(status_path, STATUS_WAITING, ray_task_id=ray_task_id)
-    ray.get(dependencies)
+    try:
+        ray.get(dependencies)
+    except Exception as e:
+        # Failed due to some exception
+        message = traceback.format_exc()
+        if should_run:
+            append_status(status_path, STATUS_DEP_FAILED, message=message, ray_task_id=ray_task_id)
+        raise e
 
     # Call fn(config)
     if should_run:
@@ -763,7 +779,7 @@ class ExecutorMainConfig:
     """Where the executor info should be stored under a file determined by a hash."""
 
     dry_run: bool = False
-    force_run: bool = False  # Force run failed steps
+    force_run_failed: bool = False  # Force run failed steps
     run_only: list[str] | None = None
     """Run these steps (matched by regex.search) and their dependencies only. If None, run all steps."""
 
@@ -798,9 +814,4 @@ def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], descrip
         description=description,
     )
 
-    executor.run(
-        steps=steps,
-        dry_run=config.dry_run,
-        force_run=config.force_run,
-        run_only=config.run_only,
-    )
+    executor.run(steps=steps, dry_run=config.dry_run, run_only=config.run_only)
