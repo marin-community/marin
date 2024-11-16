@@ -378,7 +378,11 @@ class Executor:
         dry_run: bool = False,
         force_run: list[str] | None = None,
         force_run_failed: bool = False,
+        devices: list[str] | None = None,
     ):
+        if devices is None:
+            devices = []
+
         # Gather all the steps, compute versions and output paths for all of them.
         logger.info(f"### Inspecting the {len(steps)} provided steps ###")
         for step in steps:
@@ -392,7 +396,7 @@ class Executor:
 
         logger.info(f"### Launching {len(self.steps)} steps ###")
         for step in self.steps:
-            self.run_step(step, dry_run=dry_run, force_run=force_run, force_run_failed=force_run_failed)
+            self.run_step(step, dry_run=dry_run, force_run=force_run, force_run_failed=force_run_failed, devices=devices)
 
         logger.info("### Writing metadata ###")
         self.write_infos()
@@ -539,10 +543,18 @@ class Executor:
         with ThreadPoolExecutor(max_workers=16) as executor:
             executor.map(get_status, self.steps)
 
-    def run_step(self, step: ExecutorStep, dry_run: bool, force_run: list[str] | None, force_run_failed: bool):
+    def run_step(
+        self,
+        step: ExecutorStep,
+        dry_run: bool,
+        force_run: list[str] | None,
+        force_run_failed: bool,
+        devices: list[str],
+    ):
         """
         Return a Ray object reference to the result of running the `step`.
         If `dry_run`, only print out what needs to be done.
+        If devices are specified, check if one of those devices is available and run the step on that device.
         """
         config = self.configs[step]
         config_version = self.versions[step]["config"]
@@ -672,6 +684,43 @@ def get_user() -> str | None:
     return subprocess.check_output("whoami", shell=True).strip().decode("utf-8")
 
 
+def are_any_devices_available(self, devices: list[str]) -> bool:
+    """
+    Check if any device in the specified subset is available.
+    Returns True if at least one device is available, otherwise False.
+    """
+    for device in devices:
+        if self.is_device_available(device):
+            logger.info(f"Device '{device}' is available.")
+            return True
+    logger.info("No devices in the specified subset are available.")
+    return False
+
+
+def is_device_available(self, device_type: str) -> bool:
+    """
+    Check the availability of a specific device.
+    Supported devices: 'gpu', 'tpu', 'cpu'.
+    """
+    if device_type not in ["cpu", "gpu", "tpu"]:
+        raise ValueError(f"Invalid device type: {device_type}. Must be one of ['cpu', 'gpu', 'tpu']")
+
+    try:
+        import jax
+
+        devices = jax.devices()
+        available_devices = [device for device in devices if device_type.upper() in device.device_kind]
+        if available_devices:
+            print(f"Available {device_type.upper()} devices: {available_devices}")
+            return True
+        else:
+            print(f"No {device_type.upper()} devices found.")
+            return False
+    except Exception as e:
+        print(f"Error checking {device_type.upper()} availability with JAX: {e}")
+        return False
+
+
 ############################################################
 
 
@@ -686,6 +735,9 @@ class ExecutorMainConfig:
     dry_run: bool = False
     force_run: list[str] = field(default_factory=list)  # <list of steps name>: run list of steps (names)
     force_run_failed: bool = False  # Force run failed steps
+
+    # list of gpu, tpu, and/or None. None means it can be run locally.
+    devices: list[str] = field(default_factory=list)
 
 
 @draccus.wrap()
@@ -703,4 +755,5 @@ def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], descrip
         dry_run=config.dry_run,
         force_run=config.force_run,
         force_run_failed=config.force_run_failed,
+        devices=config.devices if config.devices is not None else [],
     )
