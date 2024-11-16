@@ -55,7 +55,7 @@ for combo in all_combos(
 ):
     num_train_steps = step_target(combo["token_target"], combo["batch_size"], llama_150m.seq_len)
     if num_train_steps <= 1000:
-        print(
+        logger.warning(
             "Skipping comically small number of steps:"
             f" {num_train_steps} {combo['token_target']=}, {combo['batch_size']=}"
         )
@@ -79,7 +79,7 @@ for combo in all_combos(
 ):
     num_train_steps = step_target(combo["token_target"], combo["batch_size"], llama_300m.seq_len)
     if num_train_steps <= 1000:
-        print(
+        logger.warning(
             "Skipping comically small number of steps:"
             f" {num_train_steps} {combo['token_target']=}, {combo['batch_size']=}"
         )
