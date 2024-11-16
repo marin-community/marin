@@ -56,24 +56,6 @@ python marin/run/ray_run.py --env_vars HF_TOKEN -- python experiments/my_sft.py
 python marin/run/ray_run.py --env_vars HF_TOKEN -- python experiments/my_sft.py --force_run '["your_step_name"]'
 ```
 
-### 6. Export to HF (After Training)
-```bash
-python -m levanter.main.export_lm_to_hf \
-    --output_dir "gs://your-bucket/checkpoints/your_experiment_hf/" \
-    --checkpoint_path "gs://your-bucket/checkpoints/your_experiment/checkpoints/step-XXXX/" \
-    --config_path levanter/config/llama_sft_hf_ckpt.yaml
-```
-
-## Quick Reference: Common Configurations
-
-### Dataset Formats
-```json
-{
-    "user": "What is the capital of France?",
-    "assistant": "The capital of France is Paris."
-}
-```
-
 ### Storage Paths
 
 All experiment names should follow the convention below, which is specifying the top level

@@ -37,8 +37,6 @@ tokenize_step = ExecutorStep(
         # fixed to OAI chat format
         input_field="user",
         output_field="assistant",  # Or whatever tokenizer you're using
-        # OLMO SFT uses 2048 as max length
-        seq_len=4096,
     ),
     description="Tokenize chat SFT data",
 )
