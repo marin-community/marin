@@ -145,7 +145,6 @@ def process_one_batch(input_path: str, output_path: str):
                     {
                         "url": example["url"],
                         "canonicalized_url": example["canonicalized_url"],
-                        "extracted_text": example["extracted_text"],
                         "score": example_score,
                     }
                 )
