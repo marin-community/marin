@@ -106,8 +106,10 @@ def process_one_batch(input_path: str, output_path: str):
     tokenizer = AutoTokenizer.from_pretrained("HuggingFaceFW/fineweb-edu-classifier")
     logger.info("Loaded quality classifier...")
 
+    logger.info("Reading input path")
     with fsspec.open(input_path, "rt", compression="gzip") as fin:
         input_lines = fin.readlines()
+        logger.info("Finished reading input path")
 
     num_examples_skipped = 0
     examples_to_classify = []
