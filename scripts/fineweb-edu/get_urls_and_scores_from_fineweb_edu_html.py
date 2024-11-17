@@ -113,12 +113,11 @@ def process_one_batch(input_path: str, output_path: str):
 
     num_examples_skipped = 0
     examples_to_classify = []
-    with ProcessPoolExecutor(max_workers=8) as executor:
-        for result in tqdm(executor.map(process_line, input_lines), total=len(input_lines), desc="Processing lines"):
-            if result is None:
-                num_examples_skipped += 1
-            else:
-                examples_to_classify.append(result)
+    for result in tqdm(map(process_line, input_lines), total=len(input_lines), desc="Processing lines"):
+        if result is None:
+            num_examples_skipped += 1
+        else:
+            examples_to_classify.append(result)
 
     logger.info(
         f"Got {len(examples_to_classify)} examples to classify."
