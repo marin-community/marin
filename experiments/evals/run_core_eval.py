@@ -4,7 +4,7 @@ Code for running the CORE evaluation benchmark from the DCLM paper.
 
 from evals import evaluate_lm_evaluation_harness
 from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.execution.executor import ExecutorStep
+from marin.execution.executor import ExecutorStep, ExecutorMainConfig, executor_main
 
 # tasks to run (corresponding to lm_eval_harness tasks)
 # from page 43 of the DCLM paper: https://arxiv.org/pdf/2406.11794
@@ -42,7 +42,7 @@ def create_core_eval_configs(core_tasks: list[tuple[str, int, int | None]]) -> l
     Args:
         core_tasks (list[tuple[str, int, int | None]]): List of CORE tasks to run.
     """
-    return [EvalTaskConfig(name=task[0], num_few_shots=task[1], max_eval_instances=task[2]) for task in core_tasks]
+    return [EvalTaskConfig(name=task[0], num_fewshot=task[1], max_eval_instances=task[2]) for task in core_tasks]
 
 
 def run_core_evaluations(model_name: str, model_path: str) -> ExecutorStep:
@@ -57,3 +57,15 @@ def run_core_evaluations(model_name: str, model_path: str) -> ExecutorStep:
 
     core_evals = create_core_eval_configs(CORE_TASKS)
     return evaluate_lm_evaluation_harness(model_name, model_path, core_evals)
+
+
+steps = [
+    run_core_evaluations(
+        model_name="core-eval-benchmark/dclm_baseline_1b_1x_replication_nov12-b182e8",
+        model_path="gs://marin-us-central2/checkpoints/dclm_baseline_1b_1x_replication_nov12-b182e8/hf/step-54930",
+    ),
+]
+
+if __name__ == "__main__":
+    executor_main_config = ExecutorMainConfig()
+    executor_main(executor_main_config, steps=steps)
