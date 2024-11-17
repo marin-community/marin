@@ -16,11 +16,11 @@ for fineweb_edu_dump_html_path in $(gcloud storage ls gs://marin-us-central2/doc
 done
 ```
 """
-
 import json
 import logging
 import os
 import pathlib
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from marin.utils import remove_tpu_lockfile_on_exit
 from ray.runtime_env import RuntimeEnv
@@ -51,6 +51,31 @@ def batched(iterable, n=1):
         yield iterable[ndx : min(ndx + n, l)]
 
 
+def process_line(line):
+    from trafilatura import extract
+    import w3lib.url
+
+    record = json.loads(line)
+    html_str = record.get("html", "").strip()
+    url = record.get("metadata", {}).get("url", "")
+
+    if not html_str or not url:
+        return None
+
+    canonicalized_url = w3lib.url.canonicalize_url(url)
+
+    extracted_text = extract(
+        html_str,
+        favor_precision=True,
+        include_comments=False,
+        deduplicate=True,
+    )
+    if not extracted_text:
+        return None
+
+    return {"url": url, "canonicalized_url": canonicalized_url, "extracted_text": extracted_text}
+
+
 @ray.remote(
     memory=16 * 1024 * 1024 * 1024,
     num_cpus=8,
@@ -71,8 +96,6 @@ def process_one_batch(input_path: str, output_path: str):
     """
     from transformers import AutoTokenizer, FlaxAutoModelForSequenceClassification
     import trafilatura
-    from trafilatura import extract
-    import w3lib.url
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
@@ -88,30 +111,13 @@ def process_one_batch(input_path: str, output_path: str):
 
     num_examples_skipped = 0
     examples_to_classify = []
-    for line in tqdm(input_lines, desc="Extracting text"):
-        record = json.loads(line)
-        html_str = record.get("html", "").strip()
-        url = record.get("metadata", {}).get("url", "")
+    with ProcessPoolExecutor(max_workers=8) as executor:
+        for result in tqdm(executor.map(process_line, input_lines), total=len(input_lines), desc="Processing lines"):
+            if result is None:
+                num_examples_skipped += 1
+            else:
+                examples_to_classify.append(result)
 
-        if not html_str or not url:
-            num_examples_skipped += 1
-            continue
-
-        canonicalized_url = w3lib.url.canonicalize_url(url)
-
-        extracted_text = extract(
-            html_str,
-            favor_precision=True,
-            include_comments=False,
-            deduplicate=True,
-        )
-        if not extracted_text:
-            num_examples_skipped += 1
-            continue
-
-        examples_to_classify.append(
-            {"url": url, "canonicalized_url": canonicalized_url, "extracted_text": extracted_text}
-        )
     logger.info(
         f"Got {len(examples_to_classify)} examples to classify."
         f"{len(input_lines)} examples in total, "
