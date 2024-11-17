@@ -83,59 +83,57 @@ def process_one_batch(input_path: str, output_path: str):
     tokenizer = AutoTokenizer.from_pretrained("HuggingFaceFW/fineweb-edu-classifier")
     logger.info("Loaded quality classifier...")
 
-    with fsspec.open(output_path, "w", compression="gzip") as fout:
-        examples_to_classify = []
-        total_num_examples = 0
-        num_examples_skipped = 0
+    with fsspec.open(input_path, "rt", compression="gzip") as fin:
+        input_lines = fin.readlines()
 
-        with fsspec.open(input_path, "rt", compression="gzip") as fin:
-            for line in tqdm(fin, desc="Extracting text"):
-                total_num_examples += 1
+    num_examples_skipped = 0
+    examples_to_classify = []
+    for line in tqdm(input_lines, desc="Extracting text"):
+        record = json.loads(line)
+        html_str = record.get("html", "").strip()
+        url = record.get("metadata", {}).get("url", "")
 
-                record = json.loads(line)
-                html_str = record.get("html", "").strip()
-                url = record.get("metadata", {}).get("url", "")
+        if not html_str or not url:
+            num_examples_skipped += 1
+            continue
 
-                if not html_str or not url:
-                    num_examples_skipped += 1
-                    continue
+        canonicalized_url = w3lib.url.canonicalize_url(url)
 
-                canonicalized_url = w3lib.url.canonicalize_url(url)
-
-                extracted_text = extract(
-                    html_str,
-                    favor_precision=True,
-                    include_comments=False,
-                    deduplicate=True,
-                )
-                if not extracted_text:
-                    num_examples_skipped += 1
-                    continue
-
-                examples_to_classify.append(
-                    {"url": url, "canonicalized_url": canonicalized_url, "extracted_text": extracted_text}
-                )
-        logger.info(
-            f"Got {len(examples_to_classify)} examples to classify."
-            f"{total_num_examples} examples in total, "
-            f"{num_examples_skipped} examples skipped due to failed extraction"
+        extracted_text = extract(
+            html_str,
+            favor_precision=True,
+            include_comments=False,
+            deduplicate=True,
         )
+        if not extracted_text:
+            num_examples_skipped += 1
+            continue
 
-        # Classify all of the examples in the shard
-        examples_scores = []
-        for examples_batch in tqdm(
-            batched(examples_to_classify, 512), desc="Classifying text", total=math.ceil(len(examples_to_classify) / 512)
-        ):
-            documents = [ex["extracted_text"] for ex in examples_batch]
-            inputs = tokenizer(documents, return_tensors="jax", padding="longest", truncation=True)
-            outputs = model(**inputs)
-            logits = outputs.logits.squeeze(-1)
-            logits_list = logits.tolist()
-            examples_scores.extend(logits_list)
+        examples_to_classify.append(
+            {"url": url, "canonicalized_url": canonicalized_url, "extracted_text": extracted_text}
+        )
+    logger.info(
+        f"Got {len(examples_to_classify)} examples to classify."
+        f"{len(input_lines)} examples in total, "
+        f"{num_examples_skipped} examples skipped due to failed extraction"
+    )
 
-        assert len(examples_scores) == len(examples_to_classify)
-        logger.info(f"Ran quality classifier on {len(examples_to_classify)} examples")
+    # Classify all of the examples in the shard
+    examples_scores = []
+    for examples_batch in tqdm(
+        batched(examples_to_classify, 512), desc="Classifying text", total=math.ceil(len(examples_to_classify) / 512)
+    ):
+        documents = [ex["extracted_text"] for ex in examples_batch]
+        inputs = tokenizer(documents, return_tensors="jax", padding="longest", truncation=True)
+        outputs = model(**inputs)
+        logits = outputs.logits.squeeze(-1)
+        logits_list = logits.tolist()
+        examples_scores.extend(logits_list)
 
+    assert len(examples_scores) == len(examples_to_classify)
+    logger.info(f"Ran quality classifier on {len(examples_to_classify)} examples")
+
+    with fsspec.open(output_path, "w", compression="gzip") as fout:
         for (
             example,
             example_score,
