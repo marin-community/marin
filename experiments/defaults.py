@@ -119,11 +119,13 @@ def default_train(
 
     pretraining_data, evaluation_data = _prepare_data_config(tokenized, use_default_validation, use_default_evaluation)
 
+    vocab_size = pretraining_data.the_tokenizer.vocab_size
+
     # TODO: right now, assume architecture is a LlamaConfig, generalize this
     assert isinstance(model_config, LlamaConfig)
     return ExecutorStep(
         name=os.path.join("checkpoints", name),
-        description=f"Train a {compute_num_parameters(model_config):,} parameter model for "
+        description=f"Train a {compute_num_parameters(model_config, vocab_size) :,} parameter model for "
         f"{train_config.num_train_steps} (steps) * "
         f"{train_config.train_batch_size} (batch_size) * "
         f"{model_config.seq_len} (seq_len) "
