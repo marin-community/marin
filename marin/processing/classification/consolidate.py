@@ -202,12 +202,6 @@ def get_scores(attribute_filename: str, attribute_name: str, label: str) -> np.n
     return scores
 
 
-def calculate_percentile_threshold(scores: list[list[float]], keep_fraction: float) -> float:
-    percentile = 100 - keep_fraction * 100
-    scores = np.concatenate(scores)
-    return np.percentile(scores, percentile)
-
-
 @ray.remote(runtime_env={"pip": ["ddsketch"]})
 def consolidate(config: ConsolidateConfig):
     from ddsketch import DDSketch
