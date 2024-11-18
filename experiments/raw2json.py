@@ -1,5 +1,6 @@
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
-from operations.download.huggingface.download import DownloadConfig, download
+from operations.download.huggingface.download import DownloadConfig
+from operations.download.huggingface.download_hf import download_hf
 from operations.raw2json.huggingface.qa.raw2json import DatasetConversionConfig, OutputFormatOptions, raw2json
 
 """
@@ -12,41 +13,44 @@ Downloads the following datasets
 # download mmlu dataset
 mmlu_download_step = ExecutorStep(
     name="raw/cais/mmlu",
-    fn=download,
+    fn=download_hf,
     config=DownloadConfig(
         hf_dataset_id="cais/mmlu",
         revision=versioned("c30699e"),
         gcs_output_path=this_output_path(),
         wait_for_completion=True,
+        hf_url_glob="**/*.parquet",
     ),
     override_output_path="gs://marin-us-central2/raw/cais/mmlu",
-).cd("c30699e/huggingface.co/datasets/cais/mmlu/resolve/c30699e")
+)
 
 # download piqa dataset
 piqa_download_step = ExecutorStep(
     name="raw/ybisk/piqa",
-    fn=download,
+    fn=download_hf,
     config=DownloadConfig(
         hf_dataset_id="ybisk/piqa",
         revision=versioned("142c512"),
         gcs_output_path=this_output_path(),
         wait_for_completion=True,
+        hf_url_glob="**/*.parquet",
     ),
     override_output_path="gs://marin-us-central2/raw/ybisk/piqa",
-).cd("142c512/huggingface.co/datasets/ybisk/piqa/resolve/142c512")
+)
 
 # download winogrande dataset
 winogrande_download_step = ExecutorStep(
     name="raw/allenai/winogrande",
-    fn=download,
+    fn=download_hf,
     config=DownloadConfig(
         hf_dataset_id="allenai/winogrande",
         revision=versioned("ebf71e3"),
         gcs_output_path=this_output_path(),
         wait_for_completion=True,
+        hf_url_glob="**/*.parquet",
     ),
     override_output_path="gs://marin-us-central2/raw/allenai/winogrande",
-).cd("ebf71e3/huggingface.co/datasets/allenai/winogrande/resolve/ebf71e3")
+)
 
 """
 Converts raw to JSON for:
