@@ -42,6 +42,8 @@ def evaluate_helm_on_step(
     # TODO: support evaluating all checkpoints in a run
     if isinstance(step, ExecutorStep):
         step = output_path_of(step)
+    elif isinstance(step, InputName):
+        step = step.name
 
     return ExecutorStep(
         name=f"evaluation/helm/{step.name}",
@@ -78,6 +80,40 @@ def evaluate_lm_evaluation_harness(model_name: str, model_path: str, evals: list
             evals=evals,
             launch_with_ray=False,
         ),
+        required_device="gpu",
+    )
+
+
+def evaluate_lm_evaluation_harness_on_step(
+    step: ExecutorStep | InputName, evals: list[str], max_eval_instances: int | None = None
+) -> ExecutorStep:
+    """
+    Create an ExecutorStep to evaluate the model using LM Evaluation Harness on a step.
+
+    Args:
+        step (ExecutorStep | InputName): Executor Step to evaluate.
+        evals (list[str]): List of evaluations to run with LM Evaluation Harness, e.g, ["mmlu"].
+    """
+
+    if isinstance(step, ExecutorStep):
+        step = output_path_of(step)
+    elif isinstance(step, InputName):
+        step = step.name
+
+    return ExecutorStep(
+        name=f"evaluation/lm_evaluation_harness/{step.name}",
+        fn=evaluate,
+        config=EvaluationConfig(
+            evaluator="lm_evaluation_harness",
+            model_name=None,
+            model_path=step,  # type: ignore
+            evaluation_path=this_output_path(),
+            evals=evals,
+            discover_latest_checkpoint=True,
+            max_eval_instances=max_eval_instances,
+            launch_with_ray=False,
+        ),
+        required_device="gpu",
     )
 
 

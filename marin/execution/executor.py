@@ -146,6 +146,9 @@ class ExecutorStep(Generic[ConfigT]):
 
     pip_dependency_groups: list[str] | None = None
 
+    required_device: str | None = None
+    """Device required for this step ('gpu', 'tpu', or None)"""
+
     def cd(self, name: str) -> "InputName":
         """Refer to the `name` under `self`'s output_path."""
         return InputName(self, name=name)
@@ -384,7 +387,6 @@ class Executor:
         dry_run: bool = False,
         force_run: list[str] | None = None,
         force_run_failed: bool = False,
-        requires_device: str | None = None,
     ):
         # Gather all the steps, compute versions and output paths for all of them.
         logger.info(f"### Inspecting the {len(steps)} provided steps ###")
@@ -404,7 +406,6 @@ class Executor:
                 dry_run=dry_run,
                 force_run=force_run,
                 force_run_failed=force_run_failed,
-                requires_device=requires_device,
             )
 
         logger.info("### Writing metadata ###")
@@ -558,20 +559,12 @@ class Executor:
         dry_run: bool,
         force_run: list[str] | None,
         force_run_failed: bool,
-        device: str | None = None,
     ):
         """
         Return a Ray object reference to the result of running the `step`.
         If `dry_run`, only print out what needs to be done.
         If device is specified, check if it is available and (if so) run the step on that device.
         """
-
-        # Check if the device is available
-        if device is not None:
-            if check_device_available(device):
-                logger.info(f"Running {step.name} on {device}")
-            else:
-                return
 
         config = self.configs[step]
         config_version = self.versions[step]["config"]
@@ -588,6 +581,14 @@ class Executor:
         should_force_run = (force_run and step.name in force_run) or (force_run_failed and status == STATUS_FAILED)
         if should_force_run:
             logger.info(f"Force running {step.name}, previous status: {status}")
+
+        # Check if required device is available
+        if step.required_device is not None:
+            if not check_device_available(step.required_device):
+                logger.error(
+                    f"Required device {step.required_device} not available for step {step.name}. Skipping this step."
+                )
+                return
 
         # Only start if there's no status
         should_run = not dry_run and (status is None or should_force_run)
@@ -724,7 +725,7 @@ def check_device_available(device_type: str) -> bool:
         future = is_device_available.remote(device_type)
         return ray.get(future, timeout=10.0)
     except Exception as e:
-        logger.error(f"Error checking device availability: {e!s}")
+        logger.error(f"Error checking device availability on worker: {e!s}")
         return False
 
 
@@ -734,6 +735,7 @@ def is_device_available(device_type: str) -> bool:
     Check the availability of a specific device.
     Device can be: 'gpu' or 'tpu'.
     """
+
     if device_type not in ["gpu", "tpu"]:
         raise ValueError(f"Invalid device type: {device_type}. Must be one of ['gpu', 'tpu']")
 
@@ -778,9 +780,6 @@ class ExecutorMainConfig:
     force_run: list[str] = field(default_factory=list)  # <list of steps name>: run list of steps (names)
     force_run_failed: bool = False  # Force run failed steps
 
-    # "gpu", "tpu", or None. None means we don't require a specific device.
-    requires_device: str | None = None
-
 
 @draccus.wrap()
 def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], description: str | None = None):
@@ -797,5 +796,4 @@ def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], descrip
         dry_run=config.dry_run,
         force_run=config.force_run,
         force_run_failed=config.force_run_failed,
-        requires_device=config.requires_device,
     )
