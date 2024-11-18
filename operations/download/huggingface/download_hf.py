@@ -7,6 +7,7 @@ using HfFileSystem for direct streaming of data transfer.
 import logging
 import os
 
+import draccus
 import fsspec
 import ray
 from huggingface_hub import HfFileSystem
