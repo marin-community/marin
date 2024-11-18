@@ -84,7 +84,7 @@ mmlu_convert_eval_subject = ExecutorStep(
     ),
 )
 
-# This creates a JSON file representing the evaluation data subset of ARC-Easy
+# This creates a JSON file representing the train and validation splits of ARC-Easy
 arc_easy_convert_eval = ExecutorStep(
     name="evaluation/arc-easy",
     fn=raw2json,
@@ -103,7 +103,7 @@ arc_easy_convert_eval = ExecutorStep(
     ),
 )
 
-# This creates a JSON file representing the evaluation data subset of ARC-Challenge
+# This creates a JSON file representing the train and validation splits of ARC-Challenge
 arc_challenge_convert_eval = ExecutorStep(
     name="evaluation/arc-challenge",
     fn=raw2json,
