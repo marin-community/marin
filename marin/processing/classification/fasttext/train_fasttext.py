@@ -10,31 +10,8 @@ from dataclasses import dataclass, field
 import draccus
 
 from marin.classifiers.fasttext.training import train_model
-from marin.classifiers.utils import attributes_to_dataset
-from marin.processing.classification.types import DatasetFormat
-
-
-@dataclass(frozen=True)
-class DatasetCurationConfig:
-    """Configuration for curating a dataset for training a quality classfier
-
-    Attributes:
-        input_doc_path (str): Path to the input dataset which can be a directory or a file.
-            If it is a directory, the function will glob all the files in the directory and sample from each file.
-            The files can be formatted in jsonl or fasttext format.
-        label (str): Label for the dataset. This should be in the format "<label>"
-            where <label> is the label for the dataset. For example, "hq" or "lq", respectively.
-        absolute_sampling_rate (Optional[int]): Number of examples to sample from the dataset where each example
-            is sampled with probability 1/N.
-        relative_sampling_rate (Optional[float]): Fraction of the dataset to sample.
-        format (DatasetFormat): Format of the dataset.
-    """
-
-    input_doc_path: str
-    label: str
-    format: DatasetFormat
-    absolute_sampling_rate: int | None = None
-    relative_sampling_rate: float | None = None
+from marin.classifiers.utils import DatasetConfig, attributes_to_dataset, create_label_attribute
+from marin.utils import fsspec_rm
 
 
 @dataclass
@@ -44,18 +21,16 @@ class TrainFasttextClassifierConfig:
 
     Attributes:
         output_path (str): Path for output data (i.e., gs://$BUCKET/classifiers/$EXPERIMENT).
-        input_doc_paths (list[DatasetCurationConfig]): List of configurations for converting input datasets into
-            labeled datasets. The input datasets can be a directory or a file.
-            If it is a directory, the function will glob all the files in the directory and sample from each file.
-            The files can be formatted in jsonl or fasttext format.
+        datasets (list[DatasetConfig]): List of configurations for converting Dolma documents into
+            labeled training datasets.
         fasttext_args (dict): Arguments for the fastText training process (see fastText docs for list of options).
         seed (int): Seed for random number generator to ensure reproducibility.
         val_frac (float): Fraction of data to be used for validation.
         memory (int): Amount of memory allocated for remote training process (in GB).
     """
 
-    output_path: str
-    input_doc_paths: list[DatasetCurationConfig]
+    output_path: str | None = field(default=None)
+    datasets: list[DatasetConfig] = field(default_factory=list)
     fasttext_args: dict = field(default_factory=dict)
     seed: int = 0
     val_frac: float = 0.1
@@ -63,16 +38,18 @@ class TrainFasttextClassifierConfig:
 
 
 def train(cfg: TrainFasttextClassifierConfig):
-    for input_doc_path in cfg.input_doc_paths:
+    for dataset in cfg.datasets:
+        attr_path = os.path.join(cfg.output_path, "tmp")
+        create_label_attribute(input_doc_path=dataset.input_doc_path, output_attr_path=attr_path, label=dataset.label)
         attributes_to_dataset(
             output_path=cfg.output_path,
-            doc_path=input_doc_path.input_doc_path,
-            absolute_sampling_rate=input_doc_path.absolute_sampling_rate,
-            relative_sampling_rate=input_doc_path.relative_sampling_rate,
+            doc_path=dataset.input_doc_path,
+            attr_path=attr_path,
+            sampling_rate=dataset.sampling_rate,
             seed=cfg.seed,
-            label=input_doc_path.label,
-            file_format=input_doc_path.format,
+            max_sample_size=dataset.max_sample_size,
         )
+        fsspec_rm(attr_path)
 
     input_dataset_path = os.path.join(cfg.output_path, "data")
     train_model(

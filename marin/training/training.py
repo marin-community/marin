@@ -9,7 +9,7 @@ import levanter.infra.cli_helpers
 import ray
 from google.api_core.exceptions import Forbidden as GcpForbiddenException
 from levanter.data.text import LMMixtureDatasetConfig
-from levanter.infra.ray_tpu import run_on_pod_resumable
+from levanter.infra.ray_tpu import run_on_pod_multislice_resumable, run_on_pod_resumable
 from levanter.main import train_lm
 from mergedeep import mergedeep
 from ray.runtime_env import RuntimeEnv
@@ -50,6 +50,8 @@ class TrainLmOnPodConfig(train_lm.TrainLmConfig):
 
     Note that trainer.id and the RUN_ID env variable take precedence, in that order.
     """
+    node_count: int = 1
+    """Number of TPU slices for training."""
 
 
 DEFAULT_CHECKPOINTS_PATH = "checkpoints"
@@ -81,6 +83,7 @@ def _update_config_to_use_out_path(config: TrainLmOnPodConfig):
     return replace(config, trainer=trainer, hf_save_path=os.path.join(config.output_path, DEFAULT_HF_CHECKPOINTS_PATH))
 
 
+@ray.remote(num_cpus=0.1, runtime_env={"pip": ["levanter>=1.2.dev1074"]})
 def run_levanter_train_lm(config: TrainLmOnPodConfig):
     """
     Run the Levanter training main function on a Ray cluster.
@@ -113,7 +116,7 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
     config = _enforce_run_id(config)
     logger.info(f"Using run ID: {config.trainer.id}")
 
-    runtime_env = RuntimeEnv(env_vars=config.env)
+    runtime_env = RuntimeEnv(env_vars=config.env, pip=["levanter>=1.2.dev1074"])
 
     if not config.bypass_path_checks and config.tpu_type is not None:
         # run this on the Ray cluster to get the right region
@@ -131,8 +134,12 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
         train_lm.main(train_config)
 
     if config.tpu_type is not None:
-        # mitigate google metadata server issue
-        return run_on_pod_resumable(train_lm_task, config.tpu_type, max_retries_failure=10)
+        if config.node_count == 1:
+            return run_on_pod_resumable(train_lm_task, config.tpu_type, max_retries_failure=10)
+        else:
+            return run_on_pod_multislice_resumable(
+                train_lm_task, config.tpu_type, config.node_count, max_retries_failure=10
+            )
     else:
         return ray.get(train_lm_task.remote())
 
@@ -176,7 +183,10 @@ def _enforce_run_id(config: TrainLmOnPodConfig):
         run_id = levanter.infra.cli_helpers.default_run_id()
         logger.warning(f"Run ID not set. Using default: {run_id}")
 
-    return replace(config, trainer=replace(config.trainer, id=run_id))
+    append_id_to_checkpoints = not config.impute_run_id_from_output_path
+    checkpointer_config = replace(config.trainer.checkpointer, append_run_id_to_base_path=append_id_to_checkpoints)
+
+    return replace(config, trainer=replace(config.trainer, id=run_id, checkpointer=checkpointer_config))
 
 
 def _suppress_ray_config(config: TrainLmOnPodConfig):

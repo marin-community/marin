@@ -18,8 +18,8 @@ from torch.utils.data import DataLoader
 from transformers import AdamW, BertForSequenceClassification, BertTokenizer
 
 from marin.classifiers.bert.utils import BertDataset, format_example
-from marin.classifiers.utils import merge_shards_and_split, shuffle
-from marin.utils import fsspec_cpdir, fsspec_exists, fsspec_glob
+from marin.classifiers.utils import format_dataset, merge_shards, shuffle, split_dataset
+from marin.utils import fsspec_cpdir, fsspec_exists, fsspec_glob, fsspec_rm
 
 
 def train_epochs(
@@ -138,20 +138,23 @@ def train_model(
             return True
 
         shard_paths = fsspec_glob(os.path.join(input_path, "**/*.jsonl.gz"))
+        logger.info(f"Received input paths: {shard_paths}")
 
         with tempfile.TemporaryDirectory() as tmp_dir:
+            merge_path = os.path.join(tmp_dir, "data.full")
             train_path = os.path.join(tmp_dir, "data.train")
             val_path = os.path.join(tmp_dir, "data.val")
             model_path = os.path.join(tmp_dir, "model.bin")
 
-            merge_shards_and_split(shard_paths, train_path, val_path, val_frac, seed, format_example)
+            merge_shards(shard_paths, merge_path)
+            format_dataset(merge_path, format_example)
+            split_dataset(merge_path, train_path, val_path, val_frac, seed)
             shuffle(train_path, train_path, seed)
 
             xmp.spawn(_mp_fn, args=(hf_model, train_path, model_path, lr, batch_size, num_epochs))
 
+            fsspec_rm(merge_path)
             fsspec_cpdir(tmp_dir, output_path)
-
-        return True
 
     response = run.remote()
     try:
