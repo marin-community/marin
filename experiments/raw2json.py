@@ -11,6 +11,7 @@ Downloads the following datasets
 - winogrande
 - arc
 - openbookqa
+- hellaswag
 """
 ############################################################
 # download mmlu dataset
@@ -40,6 +41,20 @@ boolq_download_step = ExecutorStep(
     ),
     override_output_path="gs://marin-us-central2/raw/google/boolq",
 ).cd("35b264d")
+
+# download hellaswag dataset
+hellaswag_download_step = ExecutorStep(
+    name="raw/Rowan/hellaswag",
+    fn=download_hf,
+    config=DownloadConfig(
+        hf_dataset_id="Rowan/hellaswag",
+        revision=versioned("50441ce"),
+        gcs_output_path=this_output_path(),
+        wait_for_completion=True,
+        hf_urls_glob=["**/*.parquet"],
+    ),
+    override_output_path="gs://marin-us-central2/raw/Rowan/hellaswag",
+).cd("50441ce")
 
 # download piqa dataset
 piqa_download_step = ExecutorStep(
@@ -106,6 +121,7 @@ Converts raw to JSON for:
 - arc-easy
 - arc-challenge
 - openbookqa
+- hellaswag
 """
 ############################################################
 # Convert mmlu to evaluation format (i.e. JSON with "prompt", "response" fields)
@@ -264,6 +280,25 @@ openbookqa_convert_eval = ExecutorStep(
     ),
 )
 
+# This creates a JSON file representing the training and validation splits for hellaswag
+hellaswag_convert_eval = ExecutorStep(
+    name="evaluation/hellaswag-eval",
+    fn=raw2json,
+    config=DatasetConversionConfig(
+        dataset_name="Rowan/hellaswag",
+        subsets=["*"],
+        splits=["train", "validation"],
+        input_path=hellaswag_download_step,
+        hf_path="Rowan/hellaswag",
+        output_path=this_output_path(),
+        output_format=OutputFormatOptions("evaluation"),
+        prompt_key="ctx",
+        options_key="endings",
+        answer_labels=["A", "B", "C", "D"],
+        answer_idx_key="label",
+    ),
+)
+
 ############################################################
 # Convert mmlu to dolma format (i.e. JSON with "text" field)
 # This is used as input to the decontamination pipeline so documents with MMLU content are removed
@@ -294,7 +329,6 @@ if __name__ == "__main__":
             mmlu_convert_eval_aux,
             mmlu_convert_eval_subject,
             mmlu_convert_dolma,
-<<<<<<< HEAD
             boolq_download_step,
             boolq_convert_eval,
             piqa_download_step,
@@ -305,5 +339,6 @@ if __name__ == "__main__":
             arc_challenge_convert_eval,
             openbookqa_download_step,
             openbookqa_convert_eval,
+            hellaswag_convert_eval,
         ]
     )
