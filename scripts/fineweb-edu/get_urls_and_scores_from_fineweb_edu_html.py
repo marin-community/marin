@@ -82,12 +82,11 @@ def process_line(line):
     runtime_env=RuntimeEnv(pip="scripts/fineweb-edu/get_urls_and_scores_from_fineweb_edu_html_requirements.txt"),
 )
 @remove_tpu_lockfile_on_exit
-@cached_or_construct_output(
-    success_suffix="SUCCESS", verbose=False
-)  # We use this decorator to make this function idempotent
+@cached_or_construct_output(success_suffix="SUCCESS", verbose=False)
 def process_one_batch(input_path: str, output_path: str):
     """
-    Takes in an input file, extracts the outlinks, and writes them to output_path.
+    Takes in an input file, get the URLs and the quality classifier scores from the text,
+    and writes them to output_path.
 
     Args:
     input_path (str): Path of HTML file (Dolma-format JSONL) to extract outlinks from.
