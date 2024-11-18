@@ -97,7 +97,7 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
                         keep_fraction=versioned(config.keep_fraction),
                     ),
                 ],
-                memory_limit_gb=12,
+                ray_memory_limit_gb=12,
             ),
         )
 
