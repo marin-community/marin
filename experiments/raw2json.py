@@ -134,6 +134,7 @@ if __name__ == "__main__":
             mmlu_convert_eval_aux,
             mmlu_convert_eval_subject,
             mmlu_convert_dolma,
+            boolq_download_step,
             boolq_convert_eval,
         ]
     )
