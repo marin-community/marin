@@ -20,7 +20,6 @@ import json
 import logging
 import os
 import pathlib
-from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from marin.utils import remove_tpu_lockfile_on_exit
 from ray.runtime_env import RuntimeEnv
@@ -56,7 +55,7 @@ def process_line(line):
     import w3lib.url
 
     record = json.loads(line)
-    html_str = record.get("html", "").strip()
+    html_str = str(record.get("html", "")).strip()
     url = record.get("metadata", {}).get("url", "")
 
     if not html_str or not url:
