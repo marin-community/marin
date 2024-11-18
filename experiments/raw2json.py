@@ -9,6 +9,7 @@ Downloads the following datasets
 - boolq
 - piqa
 - winogrande
+- arc
 """
 ############################################################
 # download mmlu dataset
@@ -25,7 +26,6 @@ mmlu_download_step = ExecutorStep(
     override_output_path="gs://marin-us-central2/raw/cais/mmlu",
 ).cd("c30699e")
 
-<<<<<<< HEAD
 # download boolq dataset
 boolq_download_step = ExecutorStep(
     name="raw/google/boolq",
@@ -33,6 +33,10 @@ boolq_download_step = ExecutorStep(
     config=DownloadConfig(
         hf_dataset_id="google/boolq",
         revision=versioned("35b264d"),
+        gcs_output_path=this_output_path(),
+        wait_for_completion=True,
+        hf_urls_glob=["**/*.parquet"],
+    ),
     override_output_path="gs://marin-us-central2/raw/google/boolq",
 ).cd("35b264d")
 
@@ -63,7 +67,21 @@ winogrande_download_step = ExecutorStep(
     ),
     override_output_path="gs://marin-us-central2/raw/allenai/winogrande",
 ).cd("ebf71e3")
->>>>>>> ksalahi/winogrande
+
+# download arc dataset
+arc_download_step = ExecutorStep(
+    name="raw/allenai/ai2_arc",
+    fn=download_hf,
+    config=DownloadConfig(
+        hf_dataset_id="allenai/ai2_arc",
+        revision=versioned("210d026"),
+        gcs_output_path=this_output_path(),
+        wait_for_completion=True,
+        hf_urls_glob=["**/*.parquet", "*.md"],
+    ),
+    override_output_path="gs://marin-us-central2/raw/allenai/ai2_arc",
+).cd("210d026")
+
 
 """
 Converts raw to JSON for:
@@ -71,6 +89,8 @@ Converts raw to JSON for:
 - boolq
 - piqa
 - winogrande
+- arc-easy
+- arc-challenge
 """
 ############################################################
 # Convert mmlu to evaluation format (i.e. JSON with "prompt", "response" fields)
@@ -114,6 +134,7 @@ mmlu_convert_eval_subject = ExecutorStep(
         exclude_subsets=["all", "auxiliary_train"],
     ),
 )
+
 
 # This creates a JSON file representing the train and validation data subset of boolq
 boolq_convert_eval = ExecutorStep(
@@ -171,6 +192,45 @@ winogrande_convert_eval = ExecutorStep(
         answer_labels=["1", "2"],
     ),
 )
+
+# This creates a JSON file representing the train and validation splits of ARC-Easy
+arc_easy_convert_eval = ExecutorStep(
+    name="evaluation/arc-easy",
+    fn=raw2json,
+    config=DatasetConversionConfig(
+        dataset_name="allenai/ai2_arc",
+        subsets=["ARC-Easy"],
+        splits=["train", "validation"],
+        input_path=arc_download_step,
+        hf_path="allenai/ai2_arc",
+        output_path=this_output_path(),
+        output_format=OutputFormatOptions("evaluation"),
+        prompt_key="question",
+        options_key="choices.text",
+        answer_labels_key="choices.label",
+        answer_label_key="answerKey",
+    ),
+)
+
+# This creates a JSON file representing the train and validation splits of ARC-Challenge
+arc_challenge_convert_eval = ExecutorStep(
+    name="evaluation/arc-challenge",
+    fn=raw2json,
+    config=DatasetConversionConfig(
+        dataset_name="allenai/ai2_arc",
+        subsets=["ARC-Challenge"],
+        splits=["train", "validation"],
+        input_path=arc_download_step,
+        hf_path="allenai/ai2_arc",
+        output_path=this_output_path(),
+        output_format=OutputFormatOptions("evaluation"),
+        prompt_key="question",
+        options_key="choices.text",
+        answer_labels_key="choices.label",
+        answer_label_key="answerKey",
+    ),
+)
+
 ############################################################
 # Convert mmlu to dolma format (i.e. JSON with "text" field)
 # This is used as input to the decontamination pipeline so documents with MMLU content are removed
@@ -207,5 +267,7 @@ if __name__ == "__main__":
             piqa_convert_eval,
             winogrande_download_step,
             winogrande_convert_eval,
+            arc_easy_convert_eval,
+            arc_challenge_convert_eval,
         ]
     )
