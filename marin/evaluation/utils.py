@@ -59,9 +59,17 @@ def run_bash_command(command: list[str], check: bool = True) -> None:
     command_str: str = " ".join(command)
     print(f"RUNNING: {command_str}")
     start_time: float = time.time()
-    os.system(command_str)
-    elapsed_time_seconds: float = time.time() - start_time
-    print(f"COMPLETED: {command_str} ({elapsed_time_seconds}s)")
+    
+    try:
+        result = subprocess.run(command, check=check, text=True, capture_output=True)
+        elapsed_time_seconds: float = time.time() - start_time
+        print(f"COMPLETED: {command_str} ({elapsed_time_seconds}s)")
+        print(f"STDOUT:\n{result.stdout}")
+        print(f"STDERR:\n{result.stderr}")
+    except subprocess.CalledProcessError as e:
+        print(f"FAILED: {command_str}")
+        print(f"ERROR:\n{e.stderr}")
+        raise
 
 
 def write_yaml(content: dict, output_path: str) -> None:
