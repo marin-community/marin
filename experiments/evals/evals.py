@@ -7,7 +7,7 @@ Canonical set of evals.
 """
 
 
-def evaluate_helm(model_name: str, model_path: str, evals: list[str]) -> ExecutorStep:
+def evaluate_helm(model_name: str, model_path: str, evals: list[EvalTaskConfig]) -> ExecutorStep:
     """
     Create an ExecutorStep to evaluate the model using HELM.
 
@@ -30,7 +30,7 @@ def evaluate_helm(model_name: str, model_path: str, evals: list[str]) -> Executo
 
 
 def evaluate_helm_on_step(
-    step: ExecutorStep | InputName, evals: list[str], max_eval_instances: int | None = None
+    step: ExecutorStep | InputName, evals: list[EvalTaskConfig], max_eval_instances: int | None = None
 ) -> ExecutorStep:
     """
     Create an ExecutorStep to evaluate the model using HELM on a step.

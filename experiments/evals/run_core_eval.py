@@ -4,7 +4,7 @@ Code for running the CORE evaluation benchmark from the DCLM paper.
 
 from evals import evaluate_lm_evaluation_harness
 from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.execution.executor import ExecutorStep, ExecutorMainConfig, executor_main
+from marin.execution.executor import ExecutorMainConfig, ExecutorStep, executor_main
 
 # tasks to run (corresponding to lm_eval_harness tasks)
 # from page 43 of the DCLM paper: https://arxiv.org/pdf/2406.11794
@@ -13,12 +13,18 @@ CORE_TASKS = [
     ("arc_easy", 10, None),  # 10-shot, four-way MCQ questions involving grade 3-9 basic science
     ("arc_challenge", 10, None),  # a (harder) version of arc_easy
     # these are all from BigBench
-    ("bigbench_qa_wikidata_generate_until", 10, None),  # requires completing factual statements with the correct answer
-    ("bigbench_dyck_languages_multiple_choice", 10, None),  # requires completing partially balanced expression consisting of parentheses & braces
-    ("bigbench_operators_generate_until", 10, None),  # compute the output from some expression with newly defined operators
-    ("bigbench_repeat_copy_logic_generate_until", 10, None),  # differentiate instructions from text-to-copy & to perform sequence of operations
-    ("bigbench_cs_algorithms_multiple_choice", 10, None),  # requires executing algorithms such as recursion and dynamic programming
-    ("bigbench_language_identification_multiple_choice", 10, None),  # identify the language of given text
+    # requires completing factual statements with the correct answer
+    ("bigbench_qa_wikidata_generate_until", 10, None),
+    # requires completing partially balanced expression consisting of parentheses & braces
+    ("bigbench_dyck_languages_multiple_choice", 10, None),
+    # compute the output from some expression with newly defined operators
+    ("bigbench_operators_generate_until", 10, None),
+    # differentiate instructions from text-to-copy & to perform sequence of operations
+    ("bigbench_repeat_copy_logic_generate_until", 10, None),
+    # requires executing algorithms such as recursion and dynamic programming
+    ("bigbench_cs_algorithms_multiple_choice", 10, None),
+    # identify the language of given text
+    ("bigbench_language_identification_multiple_choice", 10, None),
     ("boolq", 10, None),  # answer yes/no questions based on a passage
     ("commonsense_qa", 10, None),  # 5-way multiple-choice questions based on common-sense, everyday scenarios
     ("copa", 0, None),  # use causal reasoning to predict the correct outcome of a given scenario
