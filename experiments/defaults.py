@@ -10,6 +10,7 @@ from functools import lru_cache
 
 import jmp
 from levanter.checkpoint import CheckpointerConfig
+from levanter.compat.hf_checkpoints import load_tokenizer
 from levanter.data.text import LMMixtureDatasetConfig, LMSupervisedDatasetConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig
@@ -22,7 +23,7 @@ from experiments.llama import compute_num_parameters
 from experiments.paloma import paloma_tokenized
 from experiments.raw2json import mmlu_convert_eval_aux, mmlu_convert_eval_subject
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.execution.executor import ExecutorStep, InputName, output_path_of, this_output_path, versioned
+from marin.execution.executor import ExecutorStep, InputName, VersionedValue, output_path_of, this_output_path, versioned
 from marin.processing.tokenize import (
     TokenizeConfig,
     TokenizerStep,
@@ -119,11 +120,17 @@ def default_train(
 
     pretraining_data, evaluation_data = _prepare_data_config(tokenized, use_default_validation, use_default_evaluation)
 
+    if isinstance(pretraining_data.tokenizer, VersionedValue):
+        tokenizer = pretraining_data.tokenizer.value
+    else:
+        tokenizer = pretraining_data.tokenizer
+    vocab_size = load_tokenizer(tokenizer).vocab_size
+
     # TODO: right now, assume architecture is a LlamaConfig, generalize this
     assert isinstance(model_config, LlamaConfig)
     return ExecutorStep(
         name=os.path.join("checkpoints", name),
-        description=f"Train a {compute_num_parameters(model_config):,} parameter model for "
+        description=f"Train a {compute_num_parameters(model_config, vocab_size) :,} parameter model for "
         f"{train_config.num_train_steps} (steps) * "
         f"{train_config.train_batch_size} (batch_size) * "
         f"{model_config.seq_len} (seq_len) "
@@ -132,6 +139,7 @@ def default_train(
         config=TrainLmOnPodConfig(
             output_path=this_output_path(),
             tpu_type=train_config.tpu_type,
+            node_count=train_config.node_count,
             data=pretraining_data,
             supervised_data=evaluation_data,
             trainer=TrainerConfig(
@@ -147,6 +155,7 @@ def default_train(
                     save_interval=timedelta(minutes=10),
                     keep=[dict(every=25000)],
                 ),
+                replica_dcn_axis_size=-1,
             ),
             z_loss_weight=train_config.z_loss_weight,
             model=model_config,

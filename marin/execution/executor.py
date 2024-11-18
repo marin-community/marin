@@ -599,11 +599,11 @@ class Executor:
             ),
         ).remote(step.fn, config, dependencies, output_path, should_run)
 
-        # Write out info for each step
-        for step, info in zip(self.steps, self.step_infos, strict=True):
-            info_path = get_info_path(self.output_paths[step])
-            with fsspec.open(info_path, "w") as f:
-                print(json.dumps(asdict(info), indent=2, cls=CustomJsonEncoder), file=f)
+        # # Write out info for each step
+        # for step, info in zip(self.steps, self.step_infos, strict=True):
+        #     info_path = get_info_path(self.output_paths[step])
+        #     with fsspec.open(info_path, "w") as f:
+        #         print(json.dumps(asdict(info), indent=2, cls=CustomJsonEncoder), file=f)
 
 
 def asdict_without_description(obj: dataclass) -> dict[str, Any]:
