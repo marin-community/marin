@@ -126,11 +126,37 @@ def levanter_tokenize_sft(config: TokenizeConfig):
     """
     Tokenize chat SFT data using the mk_chat_sft_dataset function.
     """
+
+    def add_special_tokens(tokenizer, use_unk_instead_of_adding=False):
+        special_tokens_dict = dict()
+        if use_unk_instead_of_adding:
+            if tokenizer.unk_token is None:
+                raise ValueError("use_unk_instead_of_add is True but tokenizer doesn't have an unk token")
+
+        unk = tokenizer.unk_token if use_unk_instead_of_adding else None
+
+        if tokenizer.pad_token is None:
+            logger.info(f"Adding pad token to {tokenizer}")
+            special_tokens_dict["pad_token"] = "[PAD]" if not use_unk_instead_of_adding else unk
+        if tokenizer.eos_token is None:
+            logger.info(f"Adding eos token to {tokenizer}")
+            special_tokens_dict["eos_token"] = "</s>" if not use_unk_instead_of_adding else unk
+        if tokenizer.bos_token is None:
+            logger.info(f"Adding bos token to {tokenizer}")
+            special_tokens_dict["bos_token"] = "<s>" if not use_unk_instead_of_adding else unk
+        if tokenizer.unk_token is None:
+            logger.info(f"Adding unk token to {tokenizer}")
+            special_tokens_dict["unk_token"] = "<unk>"
+
+        return tokenizer.add_special_tokens(special_tokens_dict)
+
     logging.basicConfig(level=logging.INFO)
 
     tokenizer = transformers.AutoTokenizer.from_pretrained(
         config.tokenizer, padding_side="right", trust_remote_code=True
     )
+    num_new_tokens = add_special_tokens(tokenizer)
+    logger.info(f"Added {num_new_tokens} special tokens to tokenizer")
 
     sft_config = ChatUrlDataSourceConfig(
         train_urls=config.train_paths,
