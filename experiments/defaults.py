@@ -10,6 +10,7 @@ from functools import lru_cache
 
 import jmp
 from levanter.checkpoint import CheckpointerConfig
+from levanter.compat.hf_checkpoints import load_tokenizer
 from levanter.data.text import LMMixtureDatasetConfig, LMSupervisedDatasetConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig
@@ -22,7 +23,7 @@ from experiments.llama import compute_num_parameters
 from experiments.paloma import paloma_tokenized
 from experiments.raw2json import mmlu_convert_eval_aux, mmlu_convert_eval_subject
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.execution.executor import ExecutorStep, InputName, output_path_of, this_output_path, versioned
+from marin.execution.executor import ExecutorStep, InputName, VersionedValue, output_path_of, this_output_path, versioned
 from marin.processing.tokenize import (
     TokenizeConfig,
     TokenizerStep,
@@ -119,7 +120,11 @@ def default_train(
 
     pretraining_data, evaluation_data = _prepare_data_config(tokenized, use_default_validation, use_default_evaluation)
 
-    vocab_size = pretraining_data.the_tokenizer.vocab_size
+    if isinstance(pretraining_data.tokenizer, VersionedValue):
+        tokenizer = pretraining_data.tokenizer.value
+    else:
+        tokenizer = pretraining_data.tokenizer
+    vocab_size = load_tokenizer(tokenizer).vocab_size
 
     # TODO: right now, assume architecture is a LlamaConfig, generalize this
     assert isinstance(model_config, LlamaConfig)
