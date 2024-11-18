@@ -47,7 +47,7 @@ winogrande_download_step = ExecutorStep(
         revision=versioned("ebf71e3"),
         gcs_output_path=this_output_path(),
         wait_for_completion=True,
-        hf_urls_glob=["winogrande_xl/*.parquet"],
+        hf_urls_glob=["winogrande_xl/**/*.parquet"],
     ),
     override_output_path="gs://marin-us-central2/raw/allenai/winogrande",
 ).cd("ebf71e3")
