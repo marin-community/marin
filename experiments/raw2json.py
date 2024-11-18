@@ -10,6 +10,7 @@ Downloads the following datasets
 - piqa
 - winogrande
 - arc
+- openbookqa
 """
 ############################################################
 # download mmlu dataset
@@ -82,6 +83,19 @@ arc_download_step = ExecutorStep(
     override_output_path="gs://marin-us-central2/raw/allenai/ai2_arc",
 ).cd("210d026")
 
+# download openbookqa dataset
+openbookqa_download_step = ExecutorStep(
+    name="raw/allenai/openbookqa",
+    fn=download_hf,
+    config=DownloadConfig(
+        hf_dataset_id="allenai/openbookqa",
+        revision=versioned("388097e"),
+        gcs_output_path=this_output_path(),
+        wait_for_completion=True,
+        hf_urls_glob=["**/*.parquet", "*.md"],
+    ),
+    override_output_path="gs://marin-us-central2/raw/allenai/openbookqa",
+).cd("388097e")
 
 """
 Converts raw to JSON for:
@@ -91,6 +105,7 @@ Converts raw to JSON for:
 - winogrande
 - arc-easy
 - arc-challenge
+- openbookqa
 """
 ############################################################
 # Convert mmlu to evaluation format (i.e. JSON with "prompt", "response" fields)
@@ -134,7 +149,6 @@ mmlu_convert_eval_subject = ExecutorStep(
         exclude_subsets=["all", "auxiliary_train"],
     ),
 )
-
 
 # This creates a JSON file representing the train and validation data subset of boolq
 boolq_convert_eval = ExecutorStep(
@@ -231,6 +245,25 @@ arc_challenge_convert_eval = ExecutorStep(
     ),
 )
 
+# This creates a JSON file for the train and validation subsets of OpenBookQA
+openbookqa_convert_eval = ExecutorStep(
+    name="evaluation/openbookqa-eval",
+    fn=raw2json,
+    config=DatasetConversionConfig(
+        dataset_name="allenai/openbookqa",
+        subsets=["main"],
+        splits=["train", "validation"],
+        input_path=openbookqa_download_step,
+        hf_path="allenai/openbookqa",
+        output_path=this_output_path(),
+        output_format=OutputFormatOptions("evaluation"),
+        prompt_key="question_stem",
+        options_key="choices.text",
+        answer_label_key="answerKey",
+        answer_labels_key="choices.label",
+    ),
+)
+
 ############################################################
 # Convert mmlu to dolma format (i.e. JSON with "text" field)
 # This is used as input to the decontamination pipeline so documents with MMLU content are removed
@@ -261,6 +294,7 @@ if __name__ == "__main__":
             mmlu_convert_eval_aux,
             mmlu_convert_eval_subject,
             mmlu_convert_dolma,
+<<<<<<< HEAD
             boolq_download_step,
             boolq_convert_eval,
             piqa_download_step,
@@ -269,5 +303,7 @@ if __name__ == "__main__":
             winogrande_convert_eval,
             arc_easy_convert_eval,
             arc_challenge_convert_eval,
+            openbookqa_download_step,
+            openbookqa_convert_eval,
         ]
     )
