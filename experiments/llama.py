@@ -10,7 +10,7 @@ llama3_tokenizer = "meta-llama/Meta-Llama-3.1-8B"
 llama3_tokenizer_vocab_size = 128_256
 
 llama_150m = LlamaConfig(
-    seq_len=4096,
+    seq_len=1024,
     hidden_dim=512,
     intermediate_dim=1792,
     num_heads=8,
@@ -19,7 +19,7 @@ llama_150m = LlamaConfig(
 )
 
 llama_300m = LlamaConfig(
-    seq_len=4096,
+    seq_len=1024,
     hidden_dim=768,
     intermediate_dim=2688,
     num_heads=12,
@@ -28,7 +28,7 @@ llama_300m = LlamaConfig(
 )
 
 llama_600m = LlamaConfig(
-    seq_len=4096,
+    seq_len=1024,
     hidden_dim=1024,
     intermediate_dim=3584,
     num_heads=16,
@@ -72,13 +72,23 @@ llama_8b = LlamaConfig(
     num_layers=32,
 )
 
-llama_300m_train_config = SimpleTrainConfig(
+llama_150m_train_config = SimpleTrainConfig(
     tpu_type="v4-32",
-    train_batch_size=1024,
-    num_train_steps=2000,  # 4096 * 1024 * 2000 = 8.4B tokens
-    learning_rate=3e-4,
+    train_batch_size=512,
+    num_train_steps=20000,  # 1024 * 1024 * 20000 = 20B tokens
+    learning_rate=3e-3,
     weight_decay=0.1,
 )
+# (18B is way overtrained, but...)
+
+llama_300m_train_config = SimpleTrainConfig(
+    tpu_type="v4-64",
+    train_batch_size=1024,
+    num_train_steps=18000,  # 1024 * 1024 * 18000 = 18B tokens
+    learning_rate=3e-3,
+    weight_decay=0.1,
+)
+# (18B is way overtrained, but...)
 
 llama_1_4b_train_config = SimpleTrainConfig(
     tpu_type="v4-128",
@@ -89,7 +99,7 @@ llama_1_4b_train_config = SimpleTrainConfig(
 )
 
 
-def compute_num_parameters(config: LlamaConfig) -> int:
+def compute_num_parameters(config: LlamaConfig, vocab_size) -> int:
     head_size = config.hidden_dim // config.num_heads
     q_params = config.num_heads * head_size * config.hidden_dim
     k_params = config.num_kv_heads * head_size * config.hidden_dim
@@ -105,7 +115,7 @@ def compute_num_parameters(config: LlamaConfig) -> int:
     mlp_params = gate_params + up_params + down_params
 
     nonembedding_params = config.num_layers * (attention_params + mlp_params + layer_norm_params)
-    embedding_params = 2 * llama3_tokenizer_vocab_size * config.hidden_dim
+    embedding_params = 2 * vocab_size * config.hidden_dim
 
     return nonembedding_params + embedding_params
 
@@ -116,4 +126,4 @@ scaling_llamas = [llama_150m, llama_300m, llama_600m, llama_1_4b, llama_1_9b, ll
 
 if __name__ == "__main__":
     for llama in scaling_llamas:
-        print(f"{compute_num_parameters(llama):,}")
+        print(f"{compute_num_parameters(llama, llama3_tokenizer_vocab_size) :,}")
