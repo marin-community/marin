@@ -50,7 +50,7 @@ winogrande_download_step = ExecutorStep(
         hf_urls_glob=["winogrande_xl/*.parquet"],
     ),
     override_output_path="gs://marin-us-central2/raw/allenai/winogrande",
-).cdd("ebf71e3")
+).cd("ebf71e3")
 
 """
 Converts raw to JSON for:
