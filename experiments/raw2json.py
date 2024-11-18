@@ -5,6 +5,7 @@ from operations.raw2json.huggingface.qa.raw2json import DatasetConversionConfig,
 """
 Downloads the following datasets
 - mmlu
+- boolq
 """
 ############################################################
 # download mmlu dataset
