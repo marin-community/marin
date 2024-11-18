@@ -72,7 +72,7 @@ class ConsolidateConfig:
 
     max_tasks_in_flight: int = 1000  # The maximum number of flights in a task
 
-    memory_limit_gb: float = 0.5
+    ray_memory_limit_gb: float = 0.5
     """The memory limit for the task in GB."""
 
 
@@ -91,41 +91,31 @@ def remove_spans(text: str, spans: list[list[int]]) -> str:
     return text
 
 
-def apply_filter(input_data: dict, doc_filter: FilterConfig, id_to_attributes: dict[str, Any]) -> bool | dict:
-    """Apply a filter to a single document
-
-    Currently, we support two types of filters:
-    - classify: filter based on a classification score. This is a filter-based operation where we return
-    True if the document should be kept and False otherwise.
-    - remove_spans: remove spans from the text - used in deduplication. This is a map-based operation where
-    we return a new document with the spans removed. However, if we don't want to keep the document,
-    we set the "keep" key to False. If we want to keep the document, we set the "keep" key to True.
-    """
+def apply_filter_remove_spans(
+    input_data: dict, doc_filter: FilterConfig, id_to_attributes: dict[str, Any]
+) -> dict | None:
     attributes = id_to_attributes[input_data["id"]]
-    if doc_filter.type == FILTER_TYPE_CLASSIFY:
-        # Check attribute >= threshold?
-        scores = attributes[doc_filter.name]
-        score = scores[doc_filter.label]
+    # Remove spans (e.g., because they are duplicates)
+    new_text = remove_spans(input_data["text"], attributes[doc_filter.name])
 
-        if score >= doc_filter.threshold:
-            return True
+    # if the deduped text doesn't have actual content, we can skip this document
+    # this is to avoid cases where there are just newlines or spaces
+    if new_text.strip() == "":
+        return dict(input_data, keep=False)
 
-        return False
+    return dict(input_data, text=new_text, keep=True)
 
-    elif doc_filter.type == FILTER_TYPE_REMOVE_SPANS:
 
-        # Remove spans (e.g., because they are duplicates)
-        new_text = remove_spans(input_data["text"], attributes[doc_filter.name])
+def apply_filter_classify(input_data: dict, doc_filter: FilterConfig, id_to_attributes: dict[str, Any]) -> bool:
+    attributes = id_to_attributes[input_data["id"]]
+    # Check attribute >= threshold?
+    scores = attributes[doc_filter.name]
+    score = scores[doc_filter.label]
 
-        # if the deduped text doesn't have actual content, we can skip this document
-        # this is to avoid cases where there are just newlines or spaces
-        if new_text.strip() == "":
-            return dict(input_data, keep=False)
+    if score >= doc_filter.threshold:
+        return True
 
-        return dict(input_data, text=new_text, keep=True)
-
-    else:
-        raise ValueError(f"Unknown filter type: {doc_filter.type}")
+    return False
 
 
 def read_attributes_as_dict(attribute_filename: str) -> dict[str, Any]:
@@ -177,9 +167,13 @@ def process_file(
             continue
 
         if doc_filter.type == FILTER_TYPE_CLASSIFY:
-            dataset = dataset.filter(partial(apply_filter, doc_filter=doc_filter, id_to_attributes=id_to_attributes))
+            dataset = dataset.filter(
+                partial(apply_filter_classify, doc_filter=doc_filter, id_to_attributes=id_to_attributes)
+            )
         elif doc_filter.type == FILTER_TYPE_REMOVE_SPANS:
-            dataset = dataset.map(partial(apply_filter, doc_filter=doc_filter, id_to_attributes=id_to_attributes))
+            dataset = dataset.map(
+                partial(apply_filter_remove_spans, doc_filter=doc_filter, id_to_attributes=id_to_attributes)
+            )
         else:
             raise ValueError(f"Unknown filter type: {doc_filter.type}")
 
@@ -202,10 +196,32 @@ def get_scores(attribute_filename: str, attribute_name: str, label: str) -> np.n
     return scores
 
 
-@ray.remote(runtime_env={"pip": ["ddsketch"]})
-def consolidate(config: ConsolidateConfig):
+def calculate_percentile_threshold(
+    base_input_path: str,
+    input_paths: list[str],
+    attribute_path: str,
+    attribute_name: str,
+    label: str,
+    keep_fraction: float,
+) -> float:
     from ddsketch import DDSketch
 
+    attribute_paths = [rebase_file_path(base_input_path, input_path, attribute_path) for input_path in input_paths]
+    scores_refs = [get_scores.remote(attribute_path, attribute_name, label) for attribute_path in attribute_paths]
+
+    sketch = DDSketch()
+    for scores_ref in scores_refs:
+        scores = ray.get(scores_ref)
+        for score in scores:
+            sketch.add(score)
+
+    threshold = sketch.get_quantile_value(1 - keep_fraction)
+
+    return threshold
+
+
+@ray.remote(runtime_env={"pip": ["ddsketch"]})
+def consolidate(config: ConsolidateConfig):
     input_paths = fsspec_glob(os.path.join(config.input_path, f"**/*.{config.filetype}"))
     logger.info(f"Consolidating {len(input_paths)} documents")
 
@@ -220,21 +236,14 @@ def consolidate(config: ConsolidateConfig):
 
         # Calculate the minimum threshold required to keep `keep_fraction` of the documents
         if doc_filter.keep_fraction is not None and doc_filter.type == FILTER_TYPE_CLASSIFY:
-            attribute_paths = [
-                rebase_file_path(config.input_path, input_path, doc_filter.attribute_path) for input_path in input_paths
-            ]
-            scores_refs = [
-                get_scores.remote(attribute_path, doc_filter.name, doc_filter.label)
-                for attribute_path in attribute_paths
-            ]
-
-            sketch = DDSketch()
-            for scores_ref in scores_refs:
-                scores = ray.get(scores_ref)
-                for score in scores:
-                    sketch.add(score)
-
-            threshold = sketch.get_quantile_value(1 - doc_filter.keep_fraction)
+            threshold = calculate_percentile_threshold(
+                config.input_path,
+                input_paths,
+                doc_filter.attribute_path,
+                doc_filter.name,
+                doc_filter.label,
+                doc_filter.keep_fraction,
+            )
             updated_filters.append(replace(doc_filter, threshold=threshold, keep_fraction=None))
         else:
             updated_filters.append(doc_filter)
@@ -254,7 +263,7 @@ def consolidate(config: ConsolidateConfig):
         ]
         output_path = rebase_file_path(config.input_path, input_path, config.output_path)
 
-        task = process_file.options(memory=config.memory_limit_gb * 1024 * 1024 * 1024, num_cpus=2).remote(
+        task = process_file.options(memory=config.ray_memory_limit_gb * 1024 * 1024 * 1024, num_cpus=2).remote(
             input_path, output_path, filters
         )
         tasks.append(task)
