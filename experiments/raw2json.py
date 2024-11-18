@@ -132,6 +132,7 @@ if __name__ == "__main__":
             mmlu_convert_eval_aux,
             mmlu_convert_eval_subject,
             mmlu_convert_dolma,
+            openbookqa_download_step,
             openbookqa_convert_eval,
         ]
     )
