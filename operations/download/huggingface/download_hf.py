@@ -49,7 +49,6 @@ def stream_file_to_fsspec(cfg: DownloadConfig, hf_fs: HfFileSystem, file_path: s
         raise
 
 
-@draccus.wrap()
 def download_hf(cfg: DownloadConfig) -> None:
     logging.basicConfig(level=logging.INFO)
 
