@@ -127,7 +127,7 @@ def read_attributes_as_dict(attribute_filename: str) -> dict[str, Any]:
         filetype: str
             The filetype of the attribute file
     """
-    table = read_dataset(attribute_filename)
+    table = read_dataset(attribute_filename, columns=["id", "attributes"])
     data = {}
     for row_id, attr in zip(table["id"], table["attributes"], strict=True):
         data[row_id] = attr
