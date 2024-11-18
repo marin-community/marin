@@ -47,6 +47,7 @@ def train(cfg: TrainFasttextClassifierConfig):
             attr_path=attr_path,
             sampling_rate=dataset.sampling_rate,
             seed=cfg.seed,
+            max_sample_size=dataset.max_sample_size,
         )
         fsspec_rm(attr_path)
 
