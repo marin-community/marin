@@ -135,6 +135,7 @@ if __name__ == "__main__":
             mmlu_convert_eval_aux,
             mmlu_convert_eval_subject,
             mmlu_convert_dolma,
+            hellaswag_download_step,
             hellaswag_convert_eval,
         ]
     )
