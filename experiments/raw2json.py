@@ -1,5 +1,6 @@
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
-from operations.download.huggingface.download import DownloadConfig, download
+from operations.download.huggingface.download import DownloadConfig
+from operations.download.huggingface.download_hf import download_hf
 from operations.raw2json.huggingface.qa.raw2json import DatasetConversionConfig, OutputFormatOptions, raw2json
 
 """
@@ -11,7 +12,7 @@ Downloads the following datasets
 # download mmlu dataset
 mmlu_download_step = ExecutorStep(
     name="raw/cais/mmlu",
-    fn=download,
+    fn=download_hf,
     config=DownloadConfig(
         hf_dataset_id="cais/mmlu",
         revision=versioned("c30699e"),
@@ -21,11 +22,10 @@ mmlu_download_step = ExecutorStep(
     override_output_path="gs://marin-us-central2/raw/cais/mmlu",
 ).cd("c30699e/huggingface.co/datasets/cais/mmlu/resolve/c30699e")
 
-############################################################
 # download hellaswag dataset
 hellaswag_download_step = ExecutorStep(
     name="raw/Rowan/hellaswag",
-    fn=download,
+    fn=download_hf,
     config=DownloadConfig(
         hf_dataset_id="Rowan/hellaswag",
         revision=versioned("50441ce"),
