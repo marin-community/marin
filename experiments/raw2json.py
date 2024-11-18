@@ -18,10 +18,10 @@ mmlu_download_step = ExecutorStep(
         revision=versioned("c30699e"),
         gcs_output_path=this_output_path(),
         wait_for_completion=True,
-        hf_url_glob="**/*.parquet",
+        hf_urls_glob=["**/*.parquet"],
     ),
     override_output_path="gs://marin-us-central2/raw/cais/mmlu",
-)
+).cd("c30699e")
 
 # download boolq dataset
 boolq_download_step = ExecutorStep(
@@ -32,10 +32,10 @@ boolq_download_step = ExecutorStep(
         revision=versioned("35b264d"),
         gcs_output_path=this_output_path(),
         wait_for_completion=True,
-        hf_url_glob="**/*.parquet",
+        hf_urls_glob=["**/*.parquet"],
     ),
     override_output_path="gs://marin-us-central2/raw/google/boolq",
-)
+).cd("35b264d")
 
 
 """
