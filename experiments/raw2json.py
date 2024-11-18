@@ -6,6 +6,7 @@ from operations.raw2json.huggingface.qa.raw2json import DatasetConversionConfig,
 Downloads the following datasets
 - mmlu
 - piqa
+- winogrande
 """
 ############################################################
 # download mmlu dataset
@@ -34,10 +35,24 @@ piqa_download_step = ExecutorStep(
     override_output_path="gs://marin-us-central2/raw/ybisk/piqa",
 ).cd("142c512/huggingface.co/datasets/ybisk/piqa/resolve/142c512")
 
+# download winogrande dataset
+winogrande_download_step = ExecutorStep(
+    name="raw/allenai/winogrande",
+    fn=download,
+    config=DownloadConfig(
+        hf_dataset_id="allenai/winogrande",
+        revision=versioned("ebf71e3"),
+        gcs_output_path=this_output_path(),
+        wait_for_completion=True,
+    ),
+    override_output_path="gs://marin-us-central2/raw/allenai/winogrande",
+).cd("ebf71e3/huggingface.co/datasets/allenai/winogrande/resolve/ebf71e3")
+
 """
 Converts raw to JSON for:
 - mmlu
 - piqa
+- winogrande
 """
 ############################################################
 # Convert mmlu to evaluation format (i.e. JSON with "prompt", "response" fields)
@@ -100,6 +115,25 @@ piqa_convert_eval = ExecutorStep(
         answer_labels=["1", "2"],
     ),
 )
+
+# This creates a JSON file representing the training and validation data subset of winogrande_xl
+winogrande_convert_eval = ExecutorStep(
+    name="evaluation/winogrande",
+    fn=raw2json,
+    config=DatasetConversionConfig(
+        dataset_name="allenai/winogrande",
+        subsets=["default"],
+        splits=["train", "validation"],
+        input_path=winogrande_download_step,
+        hf_path="allenai/winogrande",
+        output_path=this_output_path(),
+        output_format=OutputFormatOptions("evaluation"),
+        prompt_key="sentence",
+        options_keys=["option1", "option2"],
+        answer_label_key="answer",
+        answer_labels=["1", "2"],
+    ),
+)
 ############################################################
 # Convert mmlu to dolma format (i.e. JSON with "text" field)
 # This is used as input to the decontamination pipeline so documents with MMLU content are removed
@@ -132,5 +166,7 @@ if __name__ == "__main__":
             mmlu_convert_dolma,
             piqa_download_step,
             piqa_convert_eval,
+            winogrande_download_step,
+            winogrande_convert_eval,
         ]
     )
