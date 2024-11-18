@@ -33,7 +33,7 @@ arc_download_step = ExecutorStep(
         revision=versioned("210d026"),
         gcs_output_path=this_output_path(),
         wait_for_completion=True,
-        hf_urls_glob=["**/*.parquet"],
+        hf_urls_glob=["**/*.parquet", "*.md"],
     ),
     override_output_path="gs://marin-us-central2/raw/allenai/ai2_arc",
 ).cd("210d026")
