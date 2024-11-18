@@ -17,10 +17,10 @@ mmlu_download_step = ExecutorStep(
         revision=versioned("c30699e"),
         gcs_output_path=this_output_path(),
         wait_for_completion=True,
-        hf_url_glob="**/*.parquet",
+        hf_urls_glob=["**/*.parquet"],
     ),
     override_output_path="gs://marin-us-central2/raw/cais/mmlu",
-)
+).cd("c30699e")
 
 # download openbookqa dataset
 openbookqa_download_step = ExecutorStep(
@@ -31,10 +31,10 @@ openbookqa_download_step = ExecutorStep(
         revision=versioned("388097e"),
         gcs_output_path=this_output_path(),
         wait_for_completion=True,
-        hf_url_glob="**/*.parquet",
+        hf_urls_glob=["**/*.parquet", "*.md"],
     ),
     override_output_path="gs://marin-us-central2/raw/allenai/openbookqa",
-)
+).cd("388097e")
 
 """
 Converts raw to JSON for:
@@ -90,7 +90,7 @@ openbookqa_convert_eval = ExecutorStep(
     fn=raw2json,
     config=DatasetConversionConfig(
         dataset_name="allenai/openbookqa",
-        subsets=["default"],
+        subsets=["main"],
         splits=["train", "validation"],
         input_path=openbookqa_download_step,
         hf_path="allenai/openbookqa",
