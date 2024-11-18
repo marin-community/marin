@@ -18,10 +18,10 @@ mmlu_download_step = ExecutorStep(
         revision=versioned("c30699e"),
         gcs_output_path=this_output_path(),
         wait_for_completion=True,
-        hf_url_glob="**/*.parquet",
+        hf_urls_glob=["**/*.parquet"],
     ),
     override_output_path="gs://marin-us-central2/raw/cais/mmlu",
-)
+).cd("c30699e")
 
 ############################################################
 # download hellaswag dataset
@@ -33,10 +33,10 @@ hellaswag_download_step = ExecutorStep(
         revision=versioned("50441ce"),
         gcs_output_path=this_output_path(),
         wait_for_completion=True,
-        hf_url_glob="**/*.parquet",
+        hf_urls_glob=["**/*.parquet"],
     ),
     override_output_path="gs://marin-us-central2/raw/Rowan/hellaswag",
-)
+).cd("50441ce")
 
 """
 Converts raw to JSON for:
@@ -135,7 +135,6 @@ if __name__ == "__main__":
             mmlu_convert_eval_aux,
             mmlu_convert_eval_subject,
             mmlu_convert_dolma,
-            hellaswag_download_step,
             hellaswag_convert_eval,
         ]
     )
