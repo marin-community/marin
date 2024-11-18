@@ -23,9 +23,7 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
         Dependency(name="lm-eval[api]"),
     ]
 
-    def evaluate(
-        self, model: ModelConfig, evals: list[EvalTaskConfig], output_path: str
-    ) -> None:
+    def evaluate(self, model: ModelConfig, evals: list[EvalTaskConfig], output_path: str) -> None:
         """
         Runs EleutherAI's lm-eval harness on the specified model and set of  tasks.
 
