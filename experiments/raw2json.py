@@ -19,10 +19,10 @@ mmlu_download_step = ExecutorStep(
         revision=versioned("c30699e"),
         gcs_output_path=this_output_path(),
         wait_for_completion=True,
-        hf_url_glob="**/*.parquet",
+        hf_urls_glob=["**/*.parquet"],
     ),
     override_output_path="gs://marin-us-central2/raw/cais/mmlu",
-)
+).cd("c30699e")
 
 # download piqa dataset
 piqa_download_step = ExecutorStep(
@@ -33,10 +33,10 @@ piqa_download_step = ExecutorStep(
         revision=versioned("142c512"),
         gcs_output_path=this_output_path(),
         wait_for_completion=True,
-        hf_url_glob="**/*.parquet",
+        hf_urls_glob=["**/*.parquet"],
     ),
     override_output_path="gs://marin-us-central2/raw/ybisk/piqa",
-)
+).cd("142c512")
 
 # download winogrande dataset
 winogrande_download_step = ExecutorStep(
@@ -47,10 +47,10 @@ winogrande_download_step = ExecutorStep(
         revision=versioned("ebf71e3"),
         gcs_output_path=this_output_path(),
         wait_for_completion=True,
-        hf_url_glob="**/*.parquet",
+        hf_urls_glob=["winogrande_xl/*.parquet"],
     ),
     override_output_path="gs://marin-us-central2/raw/allenai/winogrande",
-)
+).cdd("ebf71e3")
 
 """
 Converts raw to JSON for:
