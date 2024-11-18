@@ -10,6 +10,7 @@ the attributes.  Handles two cases:
 import logging
 import os
 from dataclasses import dataclass, replace
+from functools import partial
 from typing import Any
 
 import draccus
@@ -71,7 +72,7 @@ class ConsolidateConfig:
 
     max_tasks_in_flight: int = 1000  # The maximum number of flights in a task
 
-    memory_limit_gb: float = 0.5
+    ray_memory_limit_gb: float = 0.5
     """The memory limit for the task in GB."""
 
 
@@ -90,51 +91,31 @@ def remove_spans(text: str, spans: list[list[int]]) -> str:
     return text
 
 
-def apply_filter(input_data: dict, doc_filter: FilterConfig, id_to_attributes: dict[str, Any]) -> bool | dict:
-    """Apply a filter to a single document
-
-    Currently, we support two types of filters:
-    - classify: filter based on a classification score. This is a filter-based operation where we return
-    True if the document should be kept and False otherwise.
-    - remove_spans: remove spans from the text - used in deduplication. This is a map-based operation where
-    we return a new document with the spans removed. However, if we don't want to keep the document,
-    we set the "keep" key to False. If we want to keep the document, we set the "keep" key to True.
-    """
+def apply_filter_remove_spans(
+    input_data: dict, doc_filter: FilterConfig, id_to_attributes: dict[str, Any]
+) -> dict | None:
     attributes = id_to_attributes[input_data["id"]]
-    if doc_filter.type == FILTER_TYPE_CLASSIFY:
-        # Check attribute >= threshold?
-        scores = attributes[doc_filter.name]
-        score = scores[doc_filter.label]
+    # Remove spans (e.g., because they are duplicates)
+    new_text = remove_spans(input_data["text"], attributes[doc_filter.name])
 
-        if score >= doc_filter.threshold:
-            return True
+    # if the deduped text doesn't have actual content, we can skip this document
+    # this is to avoid cases where there are just newlines or spaces
+    if new_text.strip() == "":
+        return dict(input_data, keep=False)
 
-        return False
-
-    elif doc_filter.type == FILTER_TYPE_REMOVE_SPANS:
-
-        # Remove spans (e.g., because they are duplicates)
-        new_text = remove_spans(input_data["text"], attributes[doc_filter.name])
-
-        # if the deduped text doesn't have actual content, we can skip this document
-        # this is to avoid cases where there are just newlines or spaces
-        if new_text.strip() == "":
-            return dict(input_data, keep=False)
-
-        return dict(input_data, text=new_text, keep=True)
-
-    else:
-        raise ValueError(f"Unknown filter type: {doc_filter.type}")
+    return dict(input_data, text=new_text, keep=True)
 
 
-def apply_filter_batch_func(doc_filter, id_to_attributes):
-    # The huggingface dataset map API passes a batch of data to the function and returns a batch of data.
-    # We have additional data to pass in such as doc_filter and id_to_attributes, so we define a wrapper
-    # function here.
-    def apply_filter_func(batch):
-        return apply_filter(batch, doc_filter, id_to_attributes)
+def apply_filter_classify(input_data: dict, doc_filter: FilterConfig, id_to_attributes: dict[str, Any]) -> bool:
+    attributes = id_to_attributes[input_data["id"]]
+    # Check attribute >= threshold?
+    scores = attributes[doc_filter.name]
+    score = scores[doc_filter.label]
 
-    return apply_filter_func
+    if score >= doc_filter.threshold:
+        return True
+
+    return False
 
 
 def read_attributes_as_dict(attribute_filename: str) -> dict[str, Any]:
@@ -146,7 +127,7 @@ def read_attributes_as_dict(attribute_filename: str) -> dict[str, Any]:
         filetype: str
             The filetype of the attribute file
     """
-    table = read_dataset(attribute_filename)
+    table = read_dataset(attribute_filename, columns=["id", "attributes"])
     data = {}
     for row_id, attr in zip(table["id"], table["attributes"], strict=True):
         data[row_id] = attr
@@ -185,12 +166,14 @@ def process_file(
         if id_to_attributes is None:
             continue
 
-        apply_filter_func = apply_filter_batch_func(doc_filter, id_to_attributes)
-
         if doc_filter.type == FILTER_TYPE_CLASSIFY:
-            dataset = dataset.filter(apply_filter_func)
+            dataset = dataset.filter(
+                partial(apply_filter_classify, doc_filter=doc_filter, id_to_attributes=id_to_attributes)
+            )
         elif doc_filter.type == FILTER_TYPE_REMOVE_SPANS:
-            dataset = dataset.map(apply_filter_func)
+            dataset = dataset.map(
+                partial(apply_filter_remove_spans, doc_filter=doc_filter, id_to_attributes=id_to_attributes)
+            )
         else:
             raise ValueError(f"Unknown filter type: {doc_filter.type}")
 
@@ -205,21 +188,39 @@ def process_file(
 
 
 @ray.remote
-def get_scores(attribute_filename: str, attribute_name: str, label: str) -> list[float]:
-    scores = []
+def get_scores(attribute_filename: str, attribute_name: str, label: str) -> np.ndarray:
+    scores = np.array([])
     attributes = read_attributes_as_dict(attribute_filename)
     for _, attr in attributes.items():
-        scores.append(attr[attribute_name][label])
+        scores = np.append(scores, attr[attribute_name][label])
     return scores
 
 
-def calculate_percentile_threshold(scores: list[list[float]], keep_fraction: float) -> float:
-    percentile = 100 - keep_fraction * 100
-    scores = np.concatenate(scores)
-    return np.percentile(scores, percentile)
+def calculate_percentile_threshold(
+    base_input_path: str,
+    input_paths: list[str],
+    attribute_path: str,
+    attribute_name: str,
+    label: str,
+    keep_fraction: float,
+) -> float:
+    from ddsketch import DDSketch
+
+    attribute_paths = [rebase_file_path(base_input_path, input_path, attribute_path) for input_path in input_paths]
+    scores_refs = [get_scores.remote(attribute_path, attribute_name, label) for attribute_path in attribute_paths]
+
+    sketch = DDSketch()
+    for scores_ref in scores_refs:
+        scores = ray.get(scores_ref)
+        for score in scores:
+            sketch.add(score)
+
+    threshold = sketch.get_quantile_value(1 - keep_fraction)
+
+    return threshold
 
 
-@ray.remote
+@ray.remote(runtime_env={"pip": ["ddsketch"]})
 def consolidate(config: ConsolidateConfig):
     input_paths = fsspec_glob(os.path.join(config.input_path, f"**/*.{config.filetype}"))
     logger.info(f"Consolidating {len(input_paths)} documents")
@@ -235,16 +236,14 @@ def consolidate(config: ConsolidateConfig):
 
         # Calculate the minimum threshold required to keep `keep_fraction` of the documents
         if doc_filter.keep_fraction is not None and doc_filter.type == FILTER_TYPE_CLASSIFY:
-            attribute_paths = [
-                rebase_file_path(config.input_path, input_path, doc_filter.attribute_path) for input_path in input_paths
-            ]
-            scores = ray.get(
-                [
-                    get_scores.remote(attribute_path, doc_filter.name, doc_filter.label)
-                    for attribute_path in attribute_paths
-                ]
+            threshold = calculate_percentile_threshold(
+                config.input_path,
+                input_paths,
+                doc_filter.attribute_path,
+                doc_filter.name,
+                doc_filter.label,
+                doc_filter.keep_fraction,
             )
-            threshold = calculate_percentile_threshold(scores, doc_filter.keep_fraction)
             updated_filters.append(replace(doc_filter, threshold=threshold, keep_fraction=None))
         else:
             updated_filters.append(doc_filter)
@@ -264,7 +263,7 @@ def consolidate(config: ConsolidateConfig):
         ]
         output_path = rebase_file_path(config.input_path, input_path, config.output_path)
 
-        task = process_file.options(memory=config.memory_limit_gb * 1024 * 1024 * 1024, num_cpus=2).remote(
+        task = process_file.options(memory=config.ray_memory_limit_gb * 1024 * 1024 * 1024, num_cpus=2).remote(
             input_path, output_path, filters
         )
         tasks.append(task)
