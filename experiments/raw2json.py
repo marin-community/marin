@@ -7,6 +7,8 @@ from operations.raw2json.huggingface.qa.raw2json import DatasetConversionConfig,
 Downloads the following datasets
 - mmlu
 - boolq
+- piqa
+- winogrande
 """
 ############################################################
 # download mmlu dataset
@@ -23,6 +25,7 @@ mmlu_download_step = ExecutorStep(
     override_output_path="gs://marin-us-central2/raw/cais/mmlu",
 ).cd("c30699e")
 
+<<<<<<< HEAD
 # download boolq dataset
 boolq_download_step = ExecutorStep(
     name="raw/google/boolq",
@@ -30,18 +33,44 @@ boolq_download_step = ExecutorStep(
     config=DownloadConfig(
         hf_dataset_id="google/boolq",
         revision=versioned("35b264d"),
+    override_output_path="gs://marin-us-central2/raw/google/boolq",
+).cd("35b264d")
+
+# download piqa dataset
+piqa_download_step = ExecutorStep(
+    name="raw/ybisk/piqa",
+    fn=download_hf,
+    config=DownloadConfig(
+        hf_dataset_id="ybisk/piqa",
+        revision=versioned("142c512"),
         gcs_output_path=this_output_path(),
         wait_for_completion=True,
         hf_urls_glob=["**/*.parquet"],
     ),
-    override_output_path="gs://marin-us-central2/raw/google/boolq",
-).cd("35b264d")
+    override_output_path="gs://marin-us-central2/raw/ybisk/piqa",
+).cd("142c512")
 
+# download winogrande dataset
+winogrande_download_step = ExecutorStep(
+    name="raw/allenai/winogrande",
+    fn=download_hf,
+    config=DownloadConfig(
+        hf_dataset_id="allenai/winogrande",
+        revision=versioned("ebf71e3"),
+        gcs_output_path=this_output_path(),
+        wait_for_completion=True,
+        hf_urls_glob=["winogrande_xl/**/*.parquet"],
+    ),
+    override_output_path="gs://marin-us-central2/raw/allenai/winogrande",
+).cd("ebf71e3")
+>>>>>>> ksalahi/winogrande
 
 """
 Converts raw to JSON for:
 - mmlu
 - boolq
+- piqa
+- winogrande
 """
 ############################################################
 # Convert mmlu to evaluation format (i.e. JSON with "prompt", "response" fields)
@@ -104,6 +133,44 @@ boolq_convert_eval = ExecutorStep(
         answer_text_ignore=True,
     ),
 )
+
+# This creates a JSON file representing the training and validation data subset of piqa
+piqa_convert_eval = ExecutorStep(
+    name="evaluation/piqa",
+    fn=raw2json,
+    config=DatasetConversionConfig(
+        dataset_name="ybisk/piqa",
+        subsets=["*"],
+        splits=["train", "validation"],
+        input_path=piqa_download_step,
+        hf_path="ybisk/piqa",
+        output_path=this_output_path(),
+        output_format=OutputFormatOptions("evaluation"),
+        prompt_key="goal",
+        options_keys=["sol1", "sol2"],
+        answer_idx_key="label",
+        answer_labels=["1", "2"],
+    ),
+)
+
+# This creates a JSON file representing the training and validation data subset of winogrande_xl
+winogrande_convert_eval = ExecutorStep(
+    name="evaluation/winogrande",
+    fn=raw2json,
+    config=DatasetConversionConfig(
+        dataset_name="allenai/winogrande",
+        subsets=["default"],
+        splits=["train", "validation"],
+        input_path=winogrande_download_step,
+        hf_path="allenai/winogrande",
+        output_path=this_output_path(),
+        output_format=OutputFormatOptions("evaluation"),
+        prompt_key="sentence",
+        options_keys=["option1", "option2"],
+        answer_label_key="answer",
+        answer_labels=["1", "2"],
+    ),
+)
 ############################################################
 # Convert mmlu to dolma format (i.e. JSON with "text" field)
 # This is used as input to the decontamination pipeline so documents with MMLU content are removed
@@ -136,5 +203,9 @@ if __name__ == "__main__":
             mmlu_convert_dolma,
             boolq_download_step,
             boolq_convert_eval,
+            piqa_download_step,
+            piqa_convert_eval,
+            winogrande_download_step,
+            winogrande_convert_eval,
         ]
     )

@@ -67,6 +67,7 @@ class DatasetConversionConfig:
         answer_idx_key (str): key in HF data object for the idx of the correct answer (e.g. 0)
         answer_label_key (str): key in HF data object for the label of the correct answer (e.g. "A")
         options_key (str): key in HF data object for the options (e.g. ["Rome", "London", "Berlin", "Paris"])
+        options_keys (list[str]): list of keys in HF data object for the options (e.g. ["sol1", "sol2"])
         answer_labels (list[str]): list of labels for an example (e.g. ["A", "B", "C", "D"])
         answer_labels_key (str): key in HF data object for list of labels for an example (e.g. ["A", "B", "C", "D"])
         exclude_subsets (list[str]): list of subsets to exclude
@@ -88,6 +89,7 @@ class DatasetConversionConfig:
     answer_label_key: str = ""
     answer_text_ignore: bool = False
     options_key: str = ""
+    options_keys: list[str] = field(default_factory=list)
     answer_labels: list[str] = field(default_factory=list)
     answer_labels_key: str = ""
     exclude_subsets: list[str] = field(default_factory=list)
@@ -425,7 +427,11 @@ def raw2json(cfg: DatasetConversionConfig) -> None:
                 # get answer labels
                 answer_labels = get_nested_item(example, cfg.answer_labels_key, cfg.answer_labels)
                 # get the list of options in standardized form (list of options)
-                options = standardize_options(get_nested_item(example, cfg.options_key, []))
+                options = standardize_options(
+                    get_nested_item(
+                        example, cfg.options_key, [get_nested_item(example, key, {}) for key in cfg.options_keys]
+                    )
+                )
                 # first pass attempt to populate answer_text, answer_idx, answer_label
                 # if there is a direct key to answer text, use this
                 answer_text = get_nested_item(example, cfg.answer_text_key) if cfg.answer_text_key else ""
