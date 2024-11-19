@@ -50,7 +50,7 @@ def batched(iterable, n=1):
         yield iterable[ndx : min(ndx + n, l)]
 
 
-def process_line(line):
+def extract_text_from_line(line):
     from trafilatura import extract
     import w3lib.url
 
@@ -78,6 +78,47 @@ def process_line(line):
 @ray.remote(
     memory=16 * 1024 * 1024 * 1024,
     num_cpus=8,
+    runtime_env={"pip": ["w3lib"]},
+)
+@cached_or_construct_output(success_suffix="SUCCESS", verbose=False)
+def extract_text(input_path: str, output_path: str):
+    """
+    Takes in an input file, extracts the text from the HTML, and writes it to the output path.
+
+    Args:
+    input_path (str): Path of HTML file (Dolma-format JSONL) to extract outlinks from.
+    output_path (str): Path to write JSONL file with outlinks.
+    """
+    import trafilatura
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+    logger.info(f"Using trafilatura version {trafilatura.__version__}")
+    logger.info("Reading input path with HTML")
+    with fsspec.open(input_path, "rt", compression="gzip") as fin:
+        input_lines = fin.readlines()
+    logger.info("Finished reading input path with HTML")
+
+    num_examples_skipped = 0
+    examples_to_classify = []
+    for result in tqdm(map(extract_text_from_line, input_lines), total=len(input_lines), desc="Extracting text"):
+        if result is None:
+            num_examples_skipped += 1
+        else:
+            examples_to_classify.append(result)
+
+    with fsspec.open(output_path, "w", compression="gzip") as fout:
+        json.dump(examples_to_classify, fout)
+
+    logger.info(
+        f"Got {len(examples_to_classify)} examples to classify."
+        f"{len(input_lines)} examples in total, "
+        f"{num_examples_skipped} examples skipped due to failed extraction"
+    )
+
+
+@ray.remote(
+    memory=16 * 1024 * 1024 * 1024,
+    num_cpus=8,
     resources={"TPU": 4, "TPU-v4-8-head": 1},
     runtime_env=RuntimeEnv(pip="scripts/fineweb-edu/get_urls_and_scores_from_fineweb_edu_html_requirements.txt"),
 )
@@ -93,35 +134,19 @@ def process_one_batch(input_path: str, output_path: str):
     output_path (str): Path to write JSONL file with outlinks.
     """
     from transformers import AutoTokenizer, FlaxAutoModelForSequenceClassification
-    import trafilatura
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-    logger.info(f"Using trafilatura version {trafilatura.__version__}")
     logger.info("Loading quality classifier...")
     # Load the quality classifier
     model = FlaxAutoModelForSequenceClassification.from_pretrained("HuggingFaceFW/fineweb-edu-classifier")
     tokenizer = AutoTokenizer.from_pretrained("HuggingFaceFW/fineweb-edu-classifier")
     logger.info("Loaded quality classifier...")
 
-    logger.info("Reading input path")
+    logger.info("Reading input path with extracted text")
     with fsspec.open(input_path, "rt", compression="gzip") as fin:
-        input_lines = fin.readlines()
-    logger.info("Finished reading input path")
-
-    num_examples_skipped = 0
-    examples_to_classify = []
-    for result in tqdm(map(process_line, input_lines), total=len(input_lines), desc="Processing lines"):
-        if result is None:
-            num_examples_skipped += 1
-        else:
-            examples_to_classify.append(result)
-
-    logger.info(
-        f"Got {len(examples_to_classify)} examples to classify."
-        f"{len(input_lines)} examples in total, "
-        f"{num_examples_skipped} examples skipped due to failed extraction"
-    )
+        examples_to_classify = json.load(fin)
+    logger.info("Finished reading input path with extracted text")
 
     # Classify all of the examples in the shard
     examples_scores = []
@@ -174,9 +199,19 @@ def get_urls_and_scores_from_html(cfg: UrlsAndScoresExtractionConfig):
     refs = []
     for i, html_shard_index in enumerate(shard_indices):
         input_path = os.path.join(cfg.html_input_path, f"{cfg.prefix}_{html_shard_index}.jsonl.gz")
+        output_path = os.path.join(cfg.output_path, f"{i}_extracted_text.json.gz")
+        refs.append(extract_text.remote(input_path, output_path))
+    logger.info(f"Submitted {len(refs)} tasks to extract text")
+
+    # Wait for the tasks to finish
+    _ = ray.get(refs)
+
+    refs = []
+    for i, html_shard_index in enumerate(shard_indices):
+        input_path = os.path.join(cfg.output_path, f"{i}_extracted_text.json.gz")
         output_path = os.path.join(cfg.output_path, f"{i}_urls_and_quality_classifier_scores.jsonl.gz")
         refs.append(process_one_batch.remote(input_path, output_path))
-    logger.info(f"Submitted {len(refs)} tasks")
+    logger.info(f"Submitted {len(refs)} tasks to run quality classifier")
 
     # Wait for the tasks to finish
     _ = ray.get(refs)
