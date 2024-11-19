@@ -1,7 +1,6 @@
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from operations.download.wikipedia.download import DownloadConfig, download
 
-
 transfer_wikipedia_dump = ExecutorStep(
     name="raw/wikipedia",
     fn=download,
