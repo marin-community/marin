@@ -3,5 +3,3 @@
 jax[tpu]
 flax
 transformers
-# For canonicalizing links
-w3lib
