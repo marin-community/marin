@@ -10,6 +10,7 @@ from experiments.exp164_quality_classifiers import (
     dclm_eli5_200k_rw_200k,
     teknium_oh_200k_rw_200k,
 )
+from experiments.exp246_web_extraction_method_training import transform_resiliparse_preserve_formatting
 from experiments.llama import llama3_tokenizer, llama_1_4b, llama_1_4b_train_config
 from marin.core.runtime import TaskConfig
 from marin.execution.executor import (
@@ -35,9 +36,9 @@ class ExperimentConfig:
     # NOTE(chris): This path is from Herumb's best run for html -> text
     # maybe, change this to an ExecutorStep once Herumb refactors 246 so
     # we can directly import.
-    input_data_source_to_path: dict[str, str] = field(
+    input_data_source_to_path: dict[str, ExecutorStep] = field(
         default_factory=lambda: {
-            "fineweb_2024_18": "gs://marin-us-central2/documents/fineweb-small-resiliparse-preserve-formatting-e8c6ec/md/CC-MAIN-2024-18",
+            "fineweb_2024_18": output_path_of(transform_resiliparse_preserve_formatting),
         }
     )
     keep_fraction: float = 0.2  # Keep 20% of the documents
