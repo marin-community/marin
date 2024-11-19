@@ -33,9 +33,6 @@ logger = logging.getLogger(__name__)
 class ExperimentConfig:
     experiment_name: str
     quality_classifier_model_path: str | ExecutorStep
-    # NOTE(chris): This path is from Herumb's best run for html -> text
-    # maybe, change this to an ExecutorStep once Herumb refactors 246 so
-    # we can directly import.
     input_data_source_to_path: dict[str, ExecutorStep] = field(
         default_factory=lambda: {
             "fineweb_2024_18": output_path_of(transform_resiliparse_preserve_formatting),
