@@ -33,11 +33,20 @@ linting, and debugging dependencies (e.g., `pytest`).
 
 ## Quickstart
 
-To get started, you can run a toy example which starts with raw HTML, processes
-it, trains a quality classifer, filters the data, and performs deduplication.
-TODO: add training and evaluation
+To get started, you can run a toy example which:
+
+* starts with raw HTML
+* processes it into text
+* trains a quality classifer
+* filters the data with that classifier
+* performs deduplication
+* tokenizes the deduped data
+* trains a model on the tokenized data
+
+TODO: add evaluation
 
 ```bash
+export MARIN_PREFIX="/path/to/storage/marin"  # or s3:// or gs:// etc.
 python experiments/quickstart.py
 ```
 
