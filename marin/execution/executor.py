@@ -647,14 +647,15 @@ class Executor:
             logger.info(f"Attempting to force run {step.name}, previous status: {status}")
             should_run = True
 
-        # Run only if required device is available
+        # We want to track if the required device is available for the step
+        device_available = True
         if step.required_device is not None:
             if not check_device_available(step.required_device):
                 logger.info(
-                    f"Required device {step.required_device} not available for step {step.name}. Skipping this step."
+                    f"""Required device {step.required_device} not available for step {step.name}.
+                    This step will be skipped and marked as failed."""
                 )
-                should_run = False
-                return
+                device_available = False
 
         # Only start if there's no status
         should_run = not dry_run and should_run
@@ -687,7 +688,7 @@ class Executor:
             runtime_env=RuntimeEnv(
                 pip=pip_dependencies,
             ),
-        ).remote(step.fn, config, dependencies, output_path, should_run)
+        ).remote(step.fn, config, dependencies, output_path, should_run, device_available)
 
         return self.refs[step]
 
@@ -701,14 +702,23 @@ def asdict_without_description(obj: dataclass) -> dict[str, Any]:
 
 @ray.remote
 def execute_after_dependencies(
-    fn: ExecutorFunction, config: dataclass, dependencies: list[ray.ObjectRef], output_path: str, should_run: bool
+    fn: ExecutorFunction,
+    config: dataclass,
+    dependencies: list[ray.ObjectRef],
+    output_path: str,
+    should_run: bool,
+    device_available: bool,
 ):
     """
     Run a function `fn` with the given `config`, after all the `dependencies` have finished.
-    Only do stuff if `should_run` is True.
+    Only do stuff if `should_run` is True. If required device is not available, skip the step.
     """
     status_path = get_status_path(output_path)
     ray_task_id = ray.get_runtime_context().get_task_id()
+
+    if not device_available:
+        append_status(status_path, STATUS_FAILED, message="Required device not available", ray_task_id=ray_task_id)
+        return
 
     # Ensure that dependencies are all run first
     if should_run:
