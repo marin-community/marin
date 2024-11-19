@@ -133,10 +133,15 @@ def my_tpu_job():
     ...
 ```
 
-## Running Evals on NLP Cluster
+## Running Evals on GPU
 
-We run evaluations on the NLP cluster because lm-evaluation-harness does not support TPUs yet.
+We run evaluations that use `lm-evaluation-harness` on the NLP cluster because does it not support TPUs yet.
 
 ```bash
-nlprun --job-name marin-evaluation --machine sphinx3 -w /nlp/scr4/nlp/crfm/benchmarking/marin -a marin-evaluation -g 1 -c 4 --memory 64g 'python3 experiments/evals/run_on_gpu.py > eval.log 2>&1'
+nlprun --job-name marin-evaluation --machine sphinx3 -w /nlp/scr4/nlp/crfm/benchmarking/marin -a marin-evaluation -g 1 -c 4 --memory 64g 'python3 experiments/<your_experiment_file>.py > eval.log 2>&1'
 ```
+
+If you're using `evaluate_lm_evaluation_harness` or `evaluate_lm_evaluation_harness_on_step`, these have
+flags that allow those steps to only run on GPU. This means while evals need to run on GPU, you can still put them inside experiment files as usual; they will be skipped if GPUs aren't available.
+
+One convenient workflow for a full experiment could be to run both training (via `ray_run`, using GCP TPU cluster) and evals (via the above command) from the NLP cluster, one after the other, so that evals can run on GPUs. This needs two separate commands, but no additional modifications are needed to get the checkpoint/path in between these commands.
