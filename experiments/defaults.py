@@ -90,9 +90,9 @@ def default_evaluation_data(tokenizer: str) -> dict[str, SupervisedSourceConfig]
 
     eval_dataconfigs = {}
 
-    for dataset in eval_datasets:
-        org, dataset = dataset.split("/")
-        validation_paths = [output_path_of(step).cd(f"{org}/*.jsonl.gz") for step in eval_datasets[dataset]]
+    for data_path in eval_datasets:
+        org, dataset = data_path.split("/")
+        validation_paths = [output_path_of(step).cd(f"{org}/*.jsonl.gz") for step in eval_datasets[data_path]]
 
         cache = ExecutorStep(
             name=f"tokenized/evaluation/{dataset}",
@@ -104,6 +104,7 @@ def default_evaluation_data(tokenizer: str) -> dict[str, SupervisedSourceConfig]
                 input_field="prompt",
                 output_field="response",
                 tokenizer=tokenizer,
+                tags=["core"],
             ),
         )
 
