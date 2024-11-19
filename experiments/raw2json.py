@@ -1,28 +1,127 @@
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
-from operations.download.huggingface.download import DownloadConfig, download
+from operations.download.huggingface.download import DownloadConfig
+from operations.download.huggingface.download_hf import download_hf
 from operations.raw2json.huggingface.qa.raw2json import DatasetConversionConfig, OutputFormatOptions, raw2json
 
 """
 Downloads the following datasets
 - mmlu
+- boolq
+- piqa
+- winogrande
+- arc
+- openbookqa
+- hellaswag
 """
 ############################################################
 # download mmlu dataset
 mmlu_download_step = ExecutorStep(
     name="raw/cais/mmlu",
-    fn=download,
+    fn=download_hf,
     config=DownloadConfig(
         hf_dataset_id="cais/mmlu",
         revision=versioned("c30699e"),
         gcs_output_path=this_output_path(),
         wait_for_completion=True,
+        hf_urls_glob=["**/*.parquet", "*.md"],
     ),
-    override_output_path="gs://marin-us-central2/raw/cais/mmlu",
-).cd("c30699e/huggingface.co/datasets/cais/mmlu/resolve/c30699e")
+    override_output_path="gs://marin-us-central2/raw/cais/mmluhf",
+).cd("c30699e")
+
+# download boolq dataset
+boolq_download_step = ExecutorStep(
+    name="raw/google/boolq",
+    fn=download_hf,
+    config=DownloadConfig(
+        hf_dataset_id="google/boolq",
+        revision=versioned("35b264d"),
+        gcs_output_path=this_output_path(),
+        wait_for_completion=True,
+        hf_urls_glob=["**/*.parquet"],
+    ),
+    override_output_path="gs://marin-us-central2/raw/google/boolqhf",
+).cd("35b264d")
+
+# download hellaswag dataset
+hellaswag_download_step = ExecutorStep(
+    name="raw/Rowan/hellaswag",
+    fn=download_hf,
+    config=DownloadConfig(
+        hf_dataset_id="Rowan/hellaswag",
+        revision=versioned("50441ce"),
+        gcs_output_path=this_output_path(),
+        wait_for_completion=True,
+        hf_urls_glob=["**/*.parquet"],
+    ),
+    override_output_path="gs://marin-us-central2/raw/Rowan/hellaswaghf",
+).cd("50441ce")
+
+# download piqa dataset
+piqa_download_step = ExecutorStep(
+    name="raw/ybisk/piqa",
+    fn=download_hf,
+    config=DownloadConfig(
+        hf_dataset_id="ybisk/piqa",
+        revision=versioned("142c512"),
+        gcs_output_path=this_output_path(),
+        wait_for_completion=True,
+        hf_urls_glob=["**/*.parquet"],
+    ),
+    override_output_path="gs://marin-us-central2/raw/ybisk/piqahf",
+).cd("142c512")
+
+# download winogrande dataset
+winogrande_download_step = ExecutorStep(
+    name="raw/allenai/winogrande",
+    fn=download_hf,
+    config=DownloadConfig(
+        hf_dataset_id="allenai/winogrande",
+        revision=versioned("ebf71e3"),
+        gcs_output_path=this_output_path(),
+        wait_for_completion=True,
+        hf_urls_glob=["winogrande_xl/**/*.parquet"],
+    ),
+    override_output_path="gs://marin-us-central2/raw/allenai/winograndehf",
+).cd("ebf71e3")
+
+# download arc dataset
+arc_download_step = ExecutorStep(
+    name="raw/allenai/ai2_arc",
+    fn=download_hf,
+    config=DownloadConfig(
+        hf_dataset_id="allenai/ai2_arc",
+        revision=versioned("210d026"),
+        gcs_output_path=this_output_path(),
+        wait_for_completion=True,
+        hf_urls_glob=["**/*.parquet", "*.md"],
+    ),
+    override_output_path="gs://marin-us-central2/raw/allenai/ai2_archf",
+).cd("210d026")
+
+# download openbookqa dataset
+openbookqa_download_step = ExecutorStep(
+    name="raw/allenai/openbookqa",
+    fn=download_hf,
+    config=DownloadConfig(
+        hf_dataset_id="allenai/openbookqa",
+        revision=versioned("388097e"),
+        gcs_output_path=this_output_path(),
+        wait_for_completion=True,
+        hf_urls_glob=["**/*.parquet", "*.md"],
+    ),
+    override_output_path="gs://marin-us-central2/raw/allenai/openbookqahf",
+).cd("388097e")
 
 """
 Converts raw to JSON for:
 - mmlu
+- boolq
+- piqa
+- winogrande
+- arc-easy
+- arc-challenge
+- openbookqa
+- hellaswag
 """
 ############################################################
 # Convert mmlu to evaluation format (i.e. JSON with "prompt", "response" fields)
@@ -66,6 +165,140 @@ mmlu_convert_eval_subject = ExecutorStep(
         exclude_subsets=["all", "auxiliary_train"],
     ),
 )
+
+# This creates a JSON file representing the train and validation data subset of boolq
+boolq_convert_eval = ExecutorStep(
+    name="evaluation/boolq-eval",
+    fn=raw2json,
+    config=DatasetConversionConfig(
+        dataset_name="google/boolq",
+        subsets=["*"],
+        splits=["train", "validation"],
+        input_path=boolq_download_step,
+        hf_path="google/boolq",
+        output_path=this_output_path(),
+        output_format=OutputFormatOptions("evaluation"),
+        prompt_key="question",
+        answer_label_key="answer",
+        answer_labels=[True, False],
+        answer_text_ignore=True,
+    ),
+)
+
+# This creates a JSON file representing the training and validation data subset of piqa
+piqa_convert_eval = ExecutorStep(
+    name="evaluation/piqa",
+    fn=raw2json,
+    config=DatasetConversionConfig(
+        dataset_name="ybisk/piqa",
+        subsets=["*"],
+        splits=["train", "validation"],
+        input_path=piqa_download_step,
+        hf_path="ybisk/piqa",
+        output_path=this_output_path(),
+        output_format=OutputFormatOptions("evaluation"),
+        prompt_key="goal",
+        options_keys=["sol1", "sol2"],
+        answer_idx_key="label",
+        answer_labels=["1", "2"],
+    ),
+)
+
+# This creates a JSON file representing the training and validation data subset of winogrande_xl
+winogrande_convert_eval = ExecutorStep(
+    name="evaluation/winogrande",
+    fn=raw2json,
+    config=DatasetConversionConfig(
+        dataset_name="allenai/winogrande",
+        subsets=["default"],
+        splits=["train", "validation"],
+        input_path=winogrande_download_step,
+        hf_path="allenai/winogrande",
+        output_path=this_output_path(),
+        output_format=OutputFormatOptions("evaluation"),
+        prompt_key="sentence",
+        options_keys=["option1", "option2"],
+        answer_label_key="answer",
+        answer_labels=["1", "2"],
+    ),
+)
+
+# This creates a JSON file representing the train and validation splits of ARC-Easy
+arc_easy_convert_eval = ExecutorStep(
+    name="evaluation/arc-easy",
+    fn=raw2json,
+    config=DatasetConversionConfig(
+        dataset_name="allenai/ai2_arc",
+        subsets=["ARC-Easy"],
+        splits=["train", "validation"],
+        input_path=arc_download_step,
+        hf_path="allenai/ai2_arc",
+        output_path=this_output_path(),
+        output_format=OutputFormatOptions("evaluation"),
+        prompt_key="question",
+        options_key="choices.text",
+        answer_labels_key="choices.label",
+        answer_label_key="answerKey",
+    ),
+)
+
+# This creates a JSON file representing the train and validation splits of ARC-Challenge
+arc_challenge_convert_eval = ExecutorStep(
+    name="evaluation/arc-challenge",
+    fn=raw2json,
+    config=DatasetConversionConfig(
+        dataset_name="allenai/ai2_arc",
+        subsets=["ARC-Challenge"],
+        splits=["train", "validation"],
+        input_path=arc_download_step,
+        hf_path="allenai/ai2_arc",
+        output_path=this_output_path(),
+        output_format=OutputFormatOptions("evaluation"),
+        prompt_key="question",
+        options_key="choices.text",
+        answer_labels_key="choices.label",
+        answer_label_key="answerKey",
+    ),
+)
+
+# This creates a JSON file for the train and validation subsets of OpenBookQA
+openbookqa_convert_eval = ExecutorStep(
+    name="evaluation/openbookqa-eval",
+    fn=raw2json,
+    config=DatasetConversionConfig(
+        dataset_name="allenai/openbookqa",
+        subsets=["main"],
+        splits=["train", "validation"],
+        input_path=openbookqa_download_step,
+        hf_path="allenai/openbookqa",
+        output_path=this_output_path(),
+        output_format=OutputFormatOptions("evaluation"),
+        prompt_key="question_stem",
+        options_key="choices.text",
+        answer_label_key="answerKey",
+        answer_labels_key="choices.label",
+    ),
+)
+
+# This creates a JSON file representing the training and validation splits for hellaswag
+hellaswag_convert_eval = ExecutorStep(
+    name="evaluation/hellaswag-eval",
+    fn=raw2json,
+    config=DatasetConversionConfig(
+        dataset_name="Rowan/hellaswag",
+        subsets=["*"],
+        splits=["train", "validation"],
+        input_path=hellaswag_download_step,
+        hf_path="Rowan/hellaswag",
+        output_path=this_output_path(),
+        output_format=OutputFormatOptions("evaluation"),
+        prompt_key="ctx",
+        options_key="endings",
+        answer_labels=["A", "B", "C", "D"],
+        answer_idx_key="label",
+    ),
+)
+
 ############################################################
 # Convert mmlu to dolma format (i.e. JSON with "text" field)
 # This is used as input to the decontamination pipeline so documents with MMLU content are removed
@@ -96,5 +329,17 @@ if __name__ == "__main__":
             mmlu_convert_eval_aux,
             mmlu_convert_eval_subject,
             mmlu_convert_dolma,
+            boolq_download_step,
+            boolq_convert_eval,
+            piqa_download_step,
+            piqa_convert_eval,
+            winogrande_download_step,
+            winogrande_convert_eval,
+            arc_easy_convert_eval,
+            arc_challenge_convert_eval,
+            openbookqa_download_step,
+            openbookqa_convert_eval,
+            hellaswag_download_step,
+            hellaswag_convert_eval,
         ]
     )
