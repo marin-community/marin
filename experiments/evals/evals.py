@@ -101,7 +101,7 @@ def evaluate_lm_evaluation_harness_on_step(
         step = step.name
 
     return ExecutorStep(
-        name=f"evaluation/lm_evaluation_harness/{step.name}",
+        name=f"evaluation/lm_evaluation_harness/{step.name}-duplicate",
         fn=evaluate,
         config=EvaluationConfig(
             evaluator="lm_evaluation_harness",

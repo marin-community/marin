@@ -1,5 +1,3 @@
-import random
-
 from experiments.defaults import SimpleTrainConfig, default_tokenize, default_train
 from experiments.evals.evals import evaluate_lm_evaluation_harness_on_step
 from experiments.llama import LlamaConfig
@@ -77,7 +75,6 @@ training_config = SimpleTrainConfig(
     train_batch_size=256,
     num_train_steps=NUM_TRAIN_STEPS,
     learning_rate=3e-3,
-    data_seed=random.randint(0, 2**32 - 1),
     weight_decay=0.033,
     min_lr_ratio=0.1,
     warmup=5000,
@@ -99,7 +96,7 @@ dclm_mixture_model = default_train(
 )
 
 dclm_baseline_only_model = default_train(
-    name=f"dclm_baseline_1b_1x_replication_nov12_{training_config.data_seed}seed",
+    name="dclm_baseline_1b_1x_replication_nov12",
     tokenized=dclm_baseline_only_config,
     model_config=llama_1_4b_dclm,
     train_config=training_config,
