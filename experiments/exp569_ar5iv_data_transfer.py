@@ -1,5 +1,5 @@
-from operations.download.ar5iv.download import DownloadConfig, download
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
+from operations.download.ar5iv.download import DownloadConfig, download
 
 transfer_ar5iv_no_problem = ExecutorStep(
     name="raw/ar5iv/ar5iv-04-2024-no-problem",
@@ -20,7 +20,9 @@ transfer_ar5iv_warnings = ExecutorStep(
 )
 
 if __name__ == "__main__":
-    executor_main(steps=[
-        transfer_ar5iv_no_problem,
-        transfer_ar5iv_warnings,
-    ])
+    executor_main(
+        steps=[
+            transfer_ar5iv_no_problem,
+            transfer_ar5iv_warnings,
+        ]
+    )
