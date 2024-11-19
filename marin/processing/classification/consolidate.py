@@ -220,7 +220,7 @@ def calculate_percentile_threshold(
     return threshold
 
 
-@ray.remote(runtime_env={"pip": ["ddsketch"]})
+@ray.remote
 def consolidate(config: ConsolidateConfig):
     input_paths = fsspec_glob(os.path.join(config.input_path, f"**/*.{config.filetype}"))
     logger.info(f"Consolidating {len(input_paths)} documents")
