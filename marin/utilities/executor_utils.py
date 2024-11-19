@@ -54,6 +54,6 @@ def get_pip_dependencies(
         logger.error(f"Failed to parse {pyproject_path}.")
 
     if include_parents_pip:
-        dependencies.extend(ray.get_runtime_context().runtime_env["pip"]["packages"])
+        dependencies.extend(ray.get_runtime_context().runtime_env.get("pip", {}).get("packages", []))
 
     return dependencies
