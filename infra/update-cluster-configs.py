@@ -66,7 +66,7 @@ def make_tpu_slice_config(generation, count) -> dict[str, dict]:
         name: {
             "min_workers": 0,
             "max_workers": 1024,
-            "resources": {"CPU": 120, "TPU": generation_configs[generation]["num_tpus"], "node_type": "worker"},
+            "resources": {"CPU": 120, "TPU": generation_configs[generation]["num_tpus"]},
             "node_config": {
                 "acceleratorType": f"{slice_gen_name}-{count}",
                 "runtimeVersion": generation_configs[generation]["runtime_version"],
