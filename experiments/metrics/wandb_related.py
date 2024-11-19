@@ -123,14 +123,20 @@ def count_params_for_run(run_id: str, entity="stanford-mercury", project="marin"
 
         # Calculate the number of parameters for the run
         tokenizer = run.config.get("data", {}).get("tokenizer")
+        print("Tokenizer: ", tokenizer)
         if tokenizer == "EleutherAI/gpt-neox-20b":
             vocab_size = 50_257
         elif tokenizer == "meta-llama/Meta-Llama-3.1-8B":
             vocab_size = 128_256
         elif tokenizer == "meta-llama/Llama-2-7b":
             vocab_size = 32_000
+        elif tokenizer == "gpt2":
+            vocab_size == 50_257
+
+        print("Vocab size: ", vocab_size)
 
         model_dict = run.config.get("model", {})
+        print("Model dict: ", model_dict)
         llama_config = LlamaConfig(
             hidden_dim=model_dict.get("hidden_dim"),
             num_heads=model_dict.get("num_heads"),
@@ -139,9 +145,8 @@ def count_params_for_run(run_id: str, entity="stanford-mercury", project="marin"
             num_layers=model_dict.get("num_layers"),
         )
 
-        print(f"Tokenizer: {tokenizer}, model config: {llama_config}, vocab size: {vocab_size}")
         num_parameters = compute_num_parameters(llama_config, vocab_size=vocab_size)
-        print(f"Number of parameters for run {run_id}: {num_parameters}")
+        print(f"Number of parameters for run {run_id}: {num_parameters}\n")
 
         return num_parameters
 
@@ -222,4 +227,6 @@ def calculate_wandb_metrics(config: WANDB_METRICS_CONFIG) -> tuple[dict[str, Any
 
 if __name__ == "__main__":
     config = WANDB_METRICS_CONFIG(entity="stanford-mercury", project="marin", num_days=7, output_path=".")
-    calculate_wandb_metrics(config)
+    #calculate_wandb_metrics(config)
+
+    count_params_for_run(run_id="sweep474-150m-hs=128-ce=64000-bs=256-step=4000-lr=0.001-wd0.1-e08ba6")
