@@ -668,7 +668,7 @@ class Executor:
         if step.pip_dependency_groups is not None:
             pip_dependencies = get_pip_dependencies(step.pip_dependency_groups)
         else:
-            pip_dependencies = []
+            pip_dependencies = None
 
         self.refs[step] = execute_after_dependencies.options(
             name=name,
