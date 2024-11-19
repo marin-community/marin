@@ -19,19 +19,11 @@ from levanter.store.cache import CacheOptions
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 
+from experiments.eval_datasets import (
+    eval_datasets,
+)
 from experiments.llama import compute_num_parameters
 from experiments.paloma import paloma_tokenized
-from experiments.raw2json import (
-    arc_challenge_convert_eval,
-    arc_easy_convert_eval,
-    boolq_convert_eval,
-    hellaswag_convert_eval,
-    mmlu_convert_eval_aux,
-    mmlu_convert_eval_subject,
-    openbookqa_convert_eval,
-    piqa_convert_eval,
-    winogrande_convert_eval,
-)
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import ExecutorStep, InputName, VersionedValue, output_path_of, this_output_path, versioned
 from marin.processing.tokenize import (
@@ -77,26 +69,14 @@ def default_validation_sets(tokenizer: str, base_path: str = "tokenized/") -> di
 
 @lru_cache  # LRU to make the executor happier
 def default_evaluation_data(tokenizer: str) -> dict[str, SupervisedSourceConfig]:
-    # [ [step, ...], [tags]]
-    eval_datasets = {
-        "cais/mmlu": [[mmlu_convert_eval_aux, mmlu_convert_eval_subject], []],
-        "google/boolq": [[boolq_convert_eval], ["core"]],
-        "Rowan/hellaswag": [[hellaswag_convert_eval], ["core"]],
-        "ybisk/piqa": [[piqa_convert_eval], ["core"]],
-        "allenai/winogrande": [[winogrande_convert_eval], ["core"]],
-        "allenai/ai2_arc_easy": [[arc_easy_convert_eval], ["core", "arc"]],
-        "allenai/ai2_arc_challenge": [[arc_challenge_convert_eval], ["core", "arc"]],
-        "allenai/openbookqa": [[openbookqa_convert_eval], ["core"]],
-    }
 
     eval_dataconfigs = {}
 
-    for data_path, (steps, tags) in eval_datasets.items():
-        org, dataset = data_path.split("/")
-        validation_paths = [output_path_of(step).cd(f"{org}/*.jsonl.gz") for step in steps]
+    for dataset in eval_datasets:
+        validation_paths = [output_path_of(step).cd(f"{dataset.org}/*.jsonl.gz") for step in dataset.steps]
 
         cache = ExecutorStep(
-            name=f"tokenized/evaluation/{dataset}",
+            name=f"tokenized/evaluation/{dataset.name}",
             fn=levanter_tokenize_supervised,
             config=TokenizeConfig(
                 train_paths=[],
@@ -105,16 +85,16 @@ def default_evaluation_data(tokenizer: str) -> dict[str, SupervisedSourceConfig]
                 input_field="prompt",
                 output_field="response",
                 tokenizer=tokenizer,
-                tags=tags,
+                tags=dataset.tags,
             ),
         )
 
-        eval_dataconfigs[dataset] = SupervisedUrlSourceConfig(
+        eval_dataconfigs[dataset.name] = SupervisedUrlSourceConfig(
             validation_urls=validation_paths,
             cache_dir=output_path_of(cache),
             input_field="prompt",
             output_field="response",
-            tags=tags,
+            tags=dataset.tags,
         )
     return eval_dataconfigs
 
