@@ -6,7 +6,6 @@ TODO: apply these quality classifiers on FineWeb (or DCLM, but that's larger), t
 
 import dataclasses
 
-from experiments.exp412_download_and_raw2json_hf_qa import mmlu_convert_eval_aux
 from experiments.instruction_datasets import get_directory_friendly_dataset_name, get_instruction_dataset
 from marin.classifiers.utils import DatasetConfig
 from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path, versioned
@@ -15,7 +14,6 @@ from marin.processing.classification.fasttext.train_fasttext import (
     train,
 )
 from operations.transform.conversation.conversation_to_dolma import ConversationToDolmaConfig, process_dataset
-from operations.transform.evaluation.eval_to_dolma import ConvertEvalToDolmaConfig, convert_eval_to_dolma
 from operations.transform.fasttext.transform import TransformFasttextToDolmaConfig
 from operations.transform.fasttext.transform import main as fasttext_to_dolma_format
 
@@ -45,15 +43,6 @@ dclm_oh_100k_in_dolma_format = ExecutorStep(
         input_path=versioned("gs://marin-us-central2/documents/dclm/oh_100k.txt"),
         output_path=this_output_path(),
         source="dclm",
-    ),
-)
-
-mmlu_eval_aux_in_dolma_format = ExecutorStep(
-    name="documents/mmlu_eval_aux",
-    fn=convert_eval_to_dolma,
-    config=ConvertEvalToDolmaConfig(
-        input_path=output_path_of(mmlu_convert_eval_aux),
-        output_path=this_output_path(),
     ),
 )
 
@@ -151,31 +140,6 @@ def get_classifier_with_different_seed(classifier_step: ExecutorStep, seed: int)
 dclm_eli5_100k_oh_100k_rw_200k_seed_1 = get_classifier_with_different_seed(dclm_eli5_100k_oh_100k_rw_200k, 1)
 dclm_eli5_100k_oh_100k_rw_200k_seed_2 = get_classifier_with_different_seed(dclm_eli5_100k_oh_100k_rw_200k, 2)
 
-marin_mmlu_100k_rw_100k = ExecutorStep(
-    name="classifiers/marin_mmlu_100k_rw_100k",
-    fn=train,
-    config=TrainFasttextClassifierConfig(
-        datasets=[
-            DatasetConfig(
-                input_doc_path=output_path_of(mmlu_eval_aux_in_dolma_format),
-                label="hq",
-                sampling_rate=1.0,
-                max_sample_size=versioned(100000),
-            ),
-            DatasetConfig(
-                input_doc_path=output_path_of(dclm_negative_examples_in_dolma_format),
-                label="lq",
-                sampling_rate=1.0,
-                max_sample_size=versioned(100000),
-            ),
-        ],
-        output_path=this_output_path(),
-        fasttext_args={"lr": versioned(0.1), "thread": 4, "wordNgrams": 2},
-        val_frac=versioned(0.0),
-        seed=versioned(0),
-    ),
-)
-
 if __name__ == "__main__":
     executor_main(
         steps=[
@@ -187,6 +151,5 @@ if __name__ == "__main__":
             teknium_oh_200k_rw_200k,
             dclm_eli5_100k_oh_100k_rw_200k_seed_1,
             dclm_eli5_100k_oh_100k_rw_200k_seed_2,
-            marin_mmlu_100k_rw_100k,
         ]
     )
