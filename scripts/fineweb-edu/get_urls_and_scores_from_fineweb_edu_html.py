@@ -93,10 +93,10 @@ def extract_text(input_path: str, output_path: str):
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     logger.info(f"Using trafilatura version {trafilatura.__version__}")
-    logger.info("Reading input path with HTML")
+    logger.info(f"Reading input path {input_path} with HTML")
     with fsspec.open(input_path, "rt", compression="gzip") as fin:
         input_lines = fin.readlines()
-    logger.info("Finished reading input path with HTML")
+    logger.info(f"Finished reading input path {input_path} with HTML")
 
     num_examples_skipped = 0
     examples_to_classify = []
@@ -124,7 +124,7 @@ def extract_text(input_path: str, output_path: str):
 )
 @remove_tpu_lockfile_on_exit
 @cached_or_construct_output(success_suffix="SUCCESS", verbose=False)
-def process_one_batch(input_path: str, output_path: str):
+def score_quality(input_path: str, output_path: str):
     """
     Takes in an input file, get the URLs and the quality classifier scores from the text,
     and writes them to output_path.
@@ -143,10 +143,10 @@ def process_one_batch(input_path: str, output_path: str):
     tokenizer = AutoTokenizer.from_pretrained("HuggingFaceFW/fineweb-edu-classifier")
     logger.info("Loaded quality classifier...")
 
-    logger.info("Reading input path with extracted text")
+    logger.info(f"Reading input path {input_path} with extracted text")
     with fsspec.open(input_path, "rt", compression="gzip") as fin:
         examples_to_classify = json.load(fin)
-    logger.info("Finished reading input path with extracted text")
+    logger.info(f"Finished reading input path {input_path} with extracted text")
 
     # Classify all of the examples in the shard
     examples_scores = []
@@ -198,20 +198,14 @@ def get_urls_and_scores_from_html(cfg: UrlsAndScoresExtractionConfig):
 
     refs = []
     for i, html_shard_index in enumerate(shard_indices):
-        input_path = os.path.join(cfg.html_input_path, f"{cfg.prefix}_{html_shard_index}.jsonl.gz")
-        output_path = os.path.join(cfg.output_path, f"{i}_extracted_text.json.gz")
-        refs.append(extract_text.remote(input_path, output_path))
-    logger.info(f"Submitted {len(refs)} tasks to extract text")
-
-    # Wait for the tasks to finish
-    _ = ray.get(refs)
-
-    refs = []
-    for i, html_shard_index in enumerate(shard_indices):
-        input_path = os.path.join(cfg.output_path, f"{i}_extracted_text.json.gz")
-        output_path = os.path.join(cfg.output_path, f"{i}_urls_and_quality_classifier_scores.jsonl.gz")
-        refs.append(process_one_batch.remote(input_path, output_path))
-    logger.info(f"Submitted {len(refs)} tasks to run quality classifier")
+        extract_text_input_path = os.path.join(cfg.html_input_path, f"{cfg.prefix}_{html_shard_index}.jsonl.gz")
+        extract_text_output_path = os.path.join(cfg.output_path, f"{i}_extracted_text.json.gz")
+        extract_text_ref = extract_text.remote(extract_text_input_path, extract_text_output_path)
+        refs.append(extract_text_ref)
+        score_output_path = os.path.join(cfg.output_path, f"{i}_urls_and_quality_classifier_scores.jsonl.gz")
+        score_output_ref = score_quality.remote(extract_text_output_path, score_output_path)
+        refs.append(score_output_ref)
+    logger.info(f"Submitted {len(refs)} tasks")
 
     # Wait for the tasks to finish
     _ = ray.get(refs)
