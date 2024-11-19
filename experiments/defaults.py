@@ -11,7 +11,7 @@ from functools import lru_cache
 import jmp
 from levanter.checkpoint import CheckpointerConfig
 from levanter.compat.hf_checkpoints import load_tokenizer
-from levanter.data.text import LMMixtureDatasetConfig, SupervisedSourceConfig
+from levanter.data.text import LMMixtureDatasetConfig, SupervisedSourceConfig, SupervisedUrlSourceConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig
 from levanter.optim import AdamConfig
@@ -107,7 +107,7 @@ def default_evaluation_data(tokenizer: str) -> dict[str, SupervisedSourceConfig]
             ),
         )
 
-        eval_dataconfigs[dataset] = SupervisedSourceConfig(
+        eval_dataconfigs[dataset] = SupervisedUrlSourceConfig(
             validation_urls=validation_paths,
             cache_dir=output_path_of(cache),
             input_field="prompt",
