@@ -22,10 +22,17 @@ class InferenceConfig:
     # The type of the model. Currently: fasttext, fineweb, or None.
     model_type: str | None = None
     output_path: str | None = None
+
+    # Ray runtime config.
     runtime: RuntimeConfig = field(
         default_factory=lambda: RuntimeConfig(
             requirements_filepath="marin/processing/classification/config/dclm_fasttext_requirements.txt",
             memory_limit_gb=0.1,
         )
     )
+
+    # Ray task config.
     task: TaskConfig = field(default_factory=TaskConfig)
+
+    # The filetype of the input data.
+    filetype: str = "jsonl.gz"
