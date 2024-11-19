@@ -122,9 +122,7 @@ def test_executor():
     cleanup_log(log)
 
 
-def test_force_run():
-    """Test force run functionality."""
-
+def test_force_run_failed():
     log = create_log()
 
     temp_file_to_mark_failure = tempfile.NamedTemporaryFile(prefix="executor-fail-", delete=False)
