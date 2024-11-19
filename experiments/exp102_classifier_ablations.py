@@ -35,7 +35,7 @@ class ExperimentConfig:
     quality_classifier_model_path: str | ExecutorStep
     input_data_source_to_path: dict[str, ExecutorStep] = field(
         default_factory=lambda: {
-            "fineweb_2024_18": output_path_of(transform_resiliparse_preserve_formatting),
+            "fineweb_2024_18": transform_resiliparse_preserve_formatting,
         }
     )
     keep_fraction: float = 0.2  # Keep 20% of the documents
@@ -61,12 +61,12 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
     weights: dict[str, float] = {}
     for input_data_source, input_data_path in config.input_data_source_to_path.items():
         # Get the basename of the input directory
-        input_basename = os.path.basename(os.path.normpath(input_data_path))
+        input_basename = os.path.basename(os.path.normpath(input_data_path.name))
         inference_step = ExecutorStep(
             name=f"attributes/quality_filtering/{config.experiment_name}/{input_data_source}",
             fn=run_inference,
             config=InferenceConfig(
-                input_path=input_data_path,
+                input_path=output_path_of(input_data_path),
                 output_path=this_output_path(input_basename),
                 model_name=get_model_path(config.quality_classifier_model_path),
                 model_type="fasttext",
@@ -83,7 +83,7 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
             name=f"documents/quality_filtering/{config.experiment_name}/{input_data_source}",
             fn=consolidate,
             config=ConsolidateConfig(
-                input_path=input_data_path,
+                input_path=output_path_of(input_data_path),
                 output_path=this_output_path(input_basename),
                 filters=[
                     FilterConfig(
