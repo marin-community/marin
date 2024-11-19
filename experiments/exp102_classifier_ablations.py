@@ -60,7 +60,7 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
     weights: dict[str, float] = {}
     for input_data_source, input_data_path in config.input_data_source_to_path.items():
         # Get the basename of the input directory
-        input_basename = os.path.basename(os.path.normpath(input_data_path.name))
+        input_basename = os.path.basename(os.path.normpath(input_data_path))
         inference_step = ExecutorStep(
             name=f"attributes/quality_filtering/{config.experiment_name}/{input_data_source}",
             fn=run_inference,
