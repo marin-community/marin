@@ -84,7 +84,7 @@ new output. You should review these changes before committing them.
 
 ## Submitting jobs to Ray cluster
 
-The Ray cluster only has the core ray and vllm packages installed.
+The Ray cluster only has the core ray and vllm packages installed, along with a cpu build of pytorch.
 We are still keeping vllm as it requires significant time to build.
 If you run an experiment directly on ray, expect missing dependencies.
 To resolve this, you can now install dependencies in a fine-grained way using [ray_run.py](../marin/run/ray_run.py) or
