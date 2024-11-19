@@ -94,7 +94,7 @@ Dependency Management:
 
 1. Use [ray_run.py](../marin/run/ray_run.py) to handle dependencies across an entire experiment.
 Just add any extra packages you need with `--pip_deps`. Core dependencies (levanter, draccus, fspsec, etc.)
-are automatically installed from [pyproject.toml](../pyproject.toml).
+are automatically installed from [pyproject.toml](pyproject.toml).
 2. For step-specific dependencies, use `pip_dependency_groups` in `ExecutorStep`.
 This takes a list where each item is either (1) A key from `project.optional-dependencies` dictionary in pyproject.toml
 or (2) A specific pip package. Check out [quickstart.py](experiments/quickstart.py) for an example.
