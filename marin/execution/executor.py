@@ -721,48 +721,29 @@ def check_device_available(device_type: str) -> bool:
         bool: True if device is available
     """
 
-    try:
-        future = is_device_available.remote(device_type)
-        return ray.get(future, timeout=10.0)
-    except Exception as e:
-        logger.error(f"Error checking device availability on worker: {e!s}")
-        return False
-
-
-@ray.remote(resources={"node_type": "worker"})
-def is_device_available(device_type: str) -> bool:
     """
-    Check the availability of a specific device.
-    Device can be: 'gpu' or 'tpu'.
-    """
+    Check if a specific device type is available based on Ray's available resources.
 
+    Args:
+        device_type: Type of device to check ('gpu' or 'tpu')
+
+    Returns:
+        bool: True if device is available
+    """
     if device_type not in ["gpu", "tpu"]:
         raise ValueError(f"Invalid device type: {device_type}. Must be one of ['gpu', 'tpu']")
 
     try:
-        import jax
+        # cluster_resources() returns all resources in cluster, even if those are temporarily in use/unavailable
+        resources = ray.cluster_resources()
+        logger.info(f"Available resources in cluster: {resources}")
 
-        devices = jax.devices()
-        available_devices = [device for device in devices if device_type.upper() in device.device_kind]
-        if available_devices:
-            logger.info(f"Available {device_type.upper()} devices: {available_devices}")
-            return True
+        resource_key = device_type.upper()
+        return resource_key in resources and resources[resource_key] > 0
+
     except Exception as e:
-        print(f"Error checking {device_type.upper()} availability with JAX: {e}")
-
-    # Backup checks if JAX fails (eg. on NLP cluster)
-    if device_type.lower() == "gpu":
-        try:
-            import torch
-
-            if torch.cuda.is_available():
-                logger.info(f"Found {torch.cuda.device_count()} GPU(s) via PyTorch")
-                return True
-        except Exception:
-            pass
-
-    logger.info(f"No {device_type.upper()} devices found")
-    return False
+        logger.error(f"Error checking {device_type} availability: {e!s}")
+        return False
 
 
 ############################################################
