@@ -23,9 +23,9 @@ mmlu_download_step = ExecutorStep(
         revision=versioned("c30699e"),
         gcs_output_path=this_output_path(),
         wait_for_completion=True,
-        hf_urls_glob=["**/*.parquet"],
+        hf_urls_glob=["**/*.parquet", "*.md"],
     ),
-    override_output_path="gs://marin-us-central2/raw/cais/mmlu",
+    override_output_path="gs://marin-us-central2/raw/cais/mmluhf",
 ).cd("c30699e")
 
 # download boolq dataset
@@ -39,7 +39,7 @@ boolq_download_step = ExecutorStep(
         wait_for_completion=True,
         hf_urls_glob=["**/*.parquet"],
     ),
-    override_output_path="gs://marin-us-central2/raw/google/boolq",
+    override_output_path="gs://marin-us-central2/raw/google/boolqhf",
 ).cd("35b264d")
 
 # download hellaswag dataset
@@ -53,7 +53,7 @@ hellaswag_download_step = ExecutorStep(
         wait_for_completion=True,
         hf_urls_glob=["**/*.parquet"],
     ),
-    override_output_path="gs://marin-us-central2/raw/Rowan/hellaswag",
+    override_output_path="gs://marin-us-central2/raw/Rowan/hellaswaghf",
 ).cd("50441ce")
 
 # download piqa dataset
@@ -67,7 +67,7 @@ piqa_download_step = ExecutorStep(
         wait_for_completion=True,
         hf_urls_glob=["**/*.parquet"],
     ),
-    override_output_path="gs://marin-us-central2/raw/ybisk/piqa",
+    override_output_path="gs://marin-us-central2/raw/ybisk/piqahf",
 ).cd("142c512")
 
 # download winogrande dataset
@@ -81,7 +81,7 @@ winogrande_download_step = ExecutorStep(
         wait_for_completion=True,
         hf_urls_glob=["winogrande_xl/**/*.parquet"],
     ),
-    override_output_path="gs://marin-us-central2/raw/allenai/winogrande",
+    override_output_path="gs://marin-us-central2/raw/allenai/winograndehf",
 ).cd("ebf71e3")
 
 # download arc dataset
@@ -95,7 +95,7 @@ arc_download_step = ExecutorStep(
         wait_for_completion=True,
         hf_urls_glob=["**/*.parquet", "*.md"],
     ),
-    override_output_path="gs://marin-us-central2/raw/allenai/ai2_arc",
+    override_output_path="gs://marin-us-central2/raw/allenai/ai2_archf",
 ).cd("210d026")
 
 # download openbookqa dataset
@@ -109,7 +109,7 @@ openbookqa_download_step = ExecutorStep(
         wait_for_completion=True,
         hf_urls_glob=["**/*.parquet", "*.md"],
     ),
-    override_output_path="gs://marin-us-central2/raw/allenai/openbookqa",
+    override_output_path="gs://marin-us-central2/raw/allenai/openbookqahf",
 ).cd("388097e")
 
 """
@@ -339,6 +339,7 @@ if __name__ == "__main__":
             arc_challenge_convert_eval,
             openbookqa_download_step,
             openbookqa_convert_eval,
+            hellaswag_download_step,
             hellaswag_convert_eval,
         ]
     )
