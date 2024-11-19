@@ -11,7 +11,7 @@ from functools import lru_cache
 import jmp
 from levanter.checkpoint import CheckpointerConfig
 from levanter.compat.hf_checkpoints import load_tokenizer
-from levanter.data.text import LMMixtureDatasetConfig, LMSupervisedDatasetConfig
+from levanter.data.text import LMMixtureDatasetConfig, SupervisedSourceConfig, SupervisedUrlSourceConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig
 from levanter.optim import AdamConfig
@@ -19,9 +19,11 @@ from levanter.store.cache import CacheOptions
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 
+from experiments.eval_datasets import (
+    eval_datasets,
+)
 from experiments.llama import compute_num_parameters
 from experiments.paloma import paloma_tokenized
-from experiments.raw2json import mmlu_convert_eval_aux, mmlu_convert_eval_subject
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import ExecutorStep, InputName, VersionedValue, output_path_of, this_output_path, versioned
 from marin.processing.tokenize import (
@@ -66,33 +68,35 @@ def default_validation_sets(tokenizer: str, base_path: str = "tokenized/") -> di
 
 
 @lru_cache  # LRU to make the executor happier
-def default_evaluation_data(tokenizer: str) -> LMSupervisedDatasetConfig:
-    evaluation_data_cache = ExecutorStep(
-        name="tokenized/evaluation/mmlu",
-        fn=levanter_tokenize_supervised,
-        config=TokenizeConfig(
-            train_paths=[],
-            validation_paths=[
-                output_path_of(mmlu_convert_eval_aux).cd("cais/*.jsonl.gz"),
-                output_path_of(mmlu_convert_eval_subject).cd("cais/*.jsonl.gz"),
-            ],
-            cache_path=this_output_path(),
+def default_evaluation_data(tokenizer: str) -> dict[str, SupervisedSourceConfig]:
+
+    eval_dataconfigs = {}
+
+    for dataset in eval_datasets:
+        validation_paths = [output_path_of(step).cd(f"{dataset.org}/*.jsonl.gz") for step in dataset.steps]
+
+        cache = ExecutorStep(
+            name=f"tokenized/evaluation/{dataset.name}",
+            fn=levanter_tokenize_supervised,
+            config=TokenizeConfig(
+                train_paths=[],
+                validation_paths=validation_paths,
+                cache_path=this_output_path(),
+                input_field="prompt",
+                output_field="response",
+                tokenizer=tokenizer,
+                tags=dataset.tags,
+            ),
+        )
+
+        eval_dataconfigs[dataset.name] = SupervisedUrlSourceConfig(
+            validation_urls=validation_paths,
+            cache_dir=output_path_of(cache),
             input_field="prompt",
             output_field="response",
-            tokenizer=tokenizer,
-        ),
-    )
-
-    evaluation_data_config = LMSupervisedDatasetConfig(
-        validation_urls=[
-            output_path_of(mmlu_convert_eval_aux).cd("cais/*.jsonl.gz"),
-            output_path_of(mmlu_convert_eval_subject).cd("cais/*.jsonl.gz"),
-        ],
-        cache_dir=output_path_of(evaluation_data_cache),
-        input_field="prompt",
-        output_field="response",
-    )
-    return evaluation_data_config
+            tags=dataset.tags,
+        )
+    return eval_dataconfigs
 
 
 def default_train(
@@ -130,11 +134,13 @@ def default_train(
     assert isinstance(model_config, LlamaConfig)
     return ExecutorStep(
         name=os.path.join("checkpoints", name),
-        description=f"Train a {compute_num_parameters(model_config, vocab_size) :,} parameter model for "
-        f"{train_config.num_train_steps} (steps) * "
-        f"{train_config.train_batch_size} (batch_size) * "
-        f"{model_config.seq_len} (seq_len) "
-        f"= {train_config.num_train_steps * train_config.train_batch_size * model_config.seq_len:,} tokens.",
+        description=(
+            f"Train a {compute_num_parameters(model_config, vocab_size) :,} parameter model for "
+            f"{train_config.num_train_steps} (steps) * "
+            f"{train_config.train_batch_size} (batch_size) * "
+            f"{model_config.seq_len} (seq_len) "
+            f"= {train_config.num_train_steps * train_config.train_batch_size * model_config.seq_len:,} tokens."
+        ),
         fn=run_levanter_train_lm,
         config=TrainLmOnPodConfig(
             output_path=this_output_path(),
@@ -179,7 +185,7 @@ def _prepare_data_config(
     tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig,
     use_default_validation: bool,
     use_default_evaluation: bool,
-) -> tuple[LMMixtureDatasetConfig, LMSupervisedDatasetConfig | None]:
+) -> tuple[LMMixtureDatasetConfig, dict[str, SupervisedSourceConfig] | None]:
     """
     Prepare a tokenized dataset for training. This is mostly just combining the tokenized data with the validation sets.
 
