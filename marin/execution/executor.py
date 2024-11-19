@@ -100,6 +100,7 @@ from marin.execution.executor_step_status import (
     is_failure,
     read_events,
 )
+from marin.execution.status_actor import StatusActor
 from marin.utilities.executor_utils import compare_dicts, get_pip_dependencies
 from marin.utilities.json_encoder import CustomJsonEncoder
 
@@ -380,6 +381,8 @@ class Executor:
         self.refs: dict[ExecutorStep, ray.ObjectRef] = {}
         self.step_infos: list[ExecutorStepInfo] = []
         self.executor_info: ExecutorInfo | None = None
+        self.status_actors: StatusActor = StatusActor.options(name="status_actor", get_if_exists=True,
+                                                              lifetime="detached").remote()
 
     def run(
         self,
@@ -608,10 +611,9 @@ class Executor:
         """Read the statuses of all the steps in parallel."""
 
         def get_status(step: ExecutorStep):
-            status_path = get_status_path(self.output_paths[step])
-            statuses = read_events(status_path)
-            status = get_current_status(statuses)
-            self.statuses[step] = status
+
+
+            self.statuses[step] = ray.get(self.status_actors.get_status.remote(self.output_paths[step]))
 
         with ThreadPoolExecutor(max_workers=16) as executor:
             executor.map(get_status, self.steps)
@@ -787,6 +789,8 @@ class ExecutorMainConfig:
 @draccus.wrap()
 def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], description: str | None = None):
     """Main entry point for experiments (to standardize)"""
+    ray.init(namespace="marin") # We need to init ray here to make sure we have the correct namespace
+
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
     prefix = config.prefix
