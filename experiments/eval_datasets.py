@@ -1,7 +1,22 @@
+import dataclasses
+
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from operations.download.huggingface.download import DownloadConfig
 from operations.download.huggingface.download_hf import download_hf
 from operations.raw2json.huggingface.qa.raw2json import DatasetConversionConfig, OutputFormatOptions, raw2json
+
+"""
+This script downloads HF datasets for various tasks and converts them to prompt/response JSONL format for log prob
+evaluation. It also converts them to dolma "text" format for decontamination.
+
+To adda new dataset, you need to:
+1. Download the dataset (in the download section)
+2. Convert the dataset to evaluation format (in the conversion section)
+3. Add the dataset to the eval_datasets list
+4. (Optional) Convert the dataset to dolma format (in the conversion section)
+
+TODO: group together the download and conversion steps for each dataset
+"""
 
 """
 Downloads the following datasets
@@ -12,10 +27,11 @@ Downloads the following datasets
 - arc
 - openbookqa
 - hellaswag
+
 """
 ############################################################
 # download mmlu dataset
-mmlu_download_step = ExecutorStep(
+mmlu_raw = ExecutorStep(
     name="raw/cais/mmlu",
     fn=download_hf,
     config=DownloadConfig(
@@ -29,7 +45,7 @@ mmlu_download_step = ExecutorStep(
 ).cd("c30699e")
 
 # download boolq dataset
-boolq_download_step = ExecutorStep(
+boolq_raw = ExecutorStep(
     name="raw/google/boolq",
     fn=download_hf,
     config=DownloadConfig(
@@ -43,7 +59,7 @@ boolq_download_step = ExecutorStep(
 ).cd("35b264d")
 
 # download hellaswag dataset
-hellaswag_download_step = ExecutorStep(
+hellaswag_raw = ExecutorStep(
     name="raw/Rowan/hellaswag",
     fn=download_hf,
     config=DownloadConfig(
@@ -57,7 +73,7 @@ hellaswag_download_step = ExecutorStep(
 ).cd("50441ce")
 
 # download piqa dataset
-piqa_download_step = ExecutorStep(
+piqa_raw = ExecutorStep(
     name="raw/ybisk/piqa",
     fn=download_hf,
     config=DownloadConfig(
@@ -71,7 +87,7 @@ piqa_download_step = ExecutorStep(
 ).cd("142c512")
 
 # download winogrande dataset
-winogrande_download_step = ExecutorStep(
+winogrande_raw = ExecutorStep(
     name="raw/allenai/winogrande",
     fn=download_hf,
     config=DownloadConfig(
@@ -85,7 +101,7 @@ winogrande_download_step = ExecutorStep(
 ).cd("ebf71e3")
 
 # download arc dataset
-arc_download_step = ExecutorStep(
+arc_raw = ExecutorStep(
     name="raw/allenai/ai2_arc",
     fn=download_hf,
     config=DownloadConfig(
@@ -99,7 +115,7 @@ arc_download_step = ExecutorStep(
 ).cd("210d026")
 
 # download openbookqa dataset
-openbookqa_download_step = ExecutorStep(
+openbookqa_raw = ExecutorStep(
     name="raw/allenai/openbookqa",
     fn=download_hf,
     config=DownloadConfig(
@@ -127,15 +143,28 @@ Converts raw to JSON for:
 # Convert mmlu to evaluation format (i.e. JSON with "prompt", "response" fields)
 # This is the input for internal evaluation which measures PPL model gives to correct responses to prompts
 
+
+@dataclasses.dataclass(frozen=True)
+class EvalDataset:
+    """
+    A dataset for log prob evaluation. The steps should point to the data in prompt/response JSONL format.
+    """
+
+    org: str
+    name: str
+    steps: list[ExecutorStep]
+    tags: list[str] = dataclasses.field(default_factory=list)
+
+
 # This creates a JSON file representing the auxiliary training data subset of MMLU
-mmlu_convert_eval_aux = ExecutorStep(
+mmlu_aux_eval = ExecutorStep(
     name="evaluation/mmlu-eval-aux",
     fn=raw2json,
     config=DatasetConversionConfig(
         dataset_name="cais/mmlu",
         subsets=["all"],
         splits=["auxiliary_train"],
-        input_path=mmlu_download_step,
+        input_path=mmlu_raw,
         hf_path="cais/mmlu",
         output_path=this_output_path(),
         output_format=OutputFormatOptions("evaluation"),
@@ -147,14 +176,14 @@ mmlu_convert_eval_aux = ExecutorStep(
 )
 
 # This creates one file per subject from MMLU, excluding the all and auxiliary training subsets
-mmlu_convert_eval_subject = ExecutorStep(
+mmlu_subject_eval = ExecutorStep(
     name="evaluation/mmlu-eval-subject",
     fn=raw2json,
     config=DatasetConversionConfig(
         dataset_name="cais/mmlu",
         subsets=["*"],
         splits=["dev", "validation"],
-        input_path=mmlu_download_step,
+        input_path=mmlu_raw,
         hf_path="cais/mmlu",
         output_path=this_output_path(),
         output_format=OutputFormatOptions("evaluation"),
@@ -167,14 +196,14 @@ mmlu_convert_eval_subject = ExecutorStep(
 )
 
 # This creates a JSON file representing the train and validation data subset of boolq
-boolq_convert_eval = ExecutorStep(
+boolq_eval = ExecutorStep(
     name="evaluation/boolq-eval",
     fn=raw2json,
     config=DatasetConversionConfig(
         dataset_name="google/boolq",
         subsets=["*"],
         splits=["train", "validation"],
-        input_path=boolq_download_step,
+        input_path=boolq_raw,
         hf_path="google/boolq",
         output_path=this_output_path(),
         output_format=OutputFormatOptions("evaluation"),
@@ -186,14 +215,14 @@ boolq_convert_eval = ExecutorStep(
 )
 
 # This creates a JSON file representing the training and validation data subset of piqa
-piqa_convert_eval = ExecutorStep(
+piqa_eval = ExecutorStep(
     name="evaluation/piqa",
     fn=raw2json,
     config=DatasetConversionConfig(
         dataset_name="ybisk/piqa",
         subsets=["*"],
         splits=["train", "validation"],
-        input_path=piqa_download_step,
+        input_path=piqa_raw,
         hf_path="ybisk/piqa",
         output_path=this_output_path(),
         output_format=OutputFormatOptions("evaluation"),
@@ -205,14 +234,14 @@ piqa_convert_eval = ExecutorStep(
 )
 
 # This creates a JSON file representing the training and validation data subset of winogrande_xl
-winogrande_convert_eval = ExecutorStep(
+winogrande_eval = ExecutorStep(
     name="evaluation/winogrande",
     fn=raw2json,
     config=DatasetConversionConfig(
         dataset_name="allenai/winogrande",
         subsets=["default"],
         splits=["train", "validation"],
-        input_path=winogrande_download_step,
+        input_path=winogrande_raw,
         hf_path="allenai/winogrande",
         output_path=this_output_path(),
         output_format=OutputFormatOptions("evaluation"),
@@ -224,14 +253,14 @@ winogrande_convert_eval = ExecutorStep(
 )
 
 # This creates a JSON file representing the train and validation splits of ARC-Easy
-arc_easy_convert_eval = ExecutorStep(
+arc_easy_eval = ExecutorStep(
     name="evaluation/arc-easy",
     fn=raw2json,
     config=DatasetConversionConfig(
         dataset_name="allenai/ai2_arc",
         subsets=["ARC-Easy"],
         splits=["train", "validation"],
-        input_path=arc_download_step,
+        input_path=arc_raw,
         hf_path="allenai/ai2_arc",
         output_path=this_output_path(),
         output_format=OutputFormatOptions("evaluation"),
@@ -243,14 +272,14 @@ arc_easy_convert_eval = ExecutorStep(
 )
 
 # This creates a JSON file representing the train and validation splits of ARC-Challenge
-arc_challenge_convert_eval = ExecutorStep(
+arc_challenge_eval = ExecutorStep(
     name="evaluation/arc-challenge",
     fn=raw2json,
     config=DatasetConversionConfig(
         dataset_name="allenai/ai2_arc",
         subsets=["ARC-Challenge"],
         splits=["train", "validation"],
-        input_path=arc_download_step,
+        input_path=arc_raw,
         hf_path="allenai/ai2_arc",
         output_path=this_output_path(),
         output_format=OutputFormatOptions("evaluation"),
@@ -262,14 +291,14 @@ arc_challenge_convert_eval = ExecutorStep(
 )
 
 # This creates a JSON file for the train and validation subsets of OpenBookQA
-openbookqa_convert_eval = ExecutorStep(
+openbookqa_eval = ExecutorStep(
     name="evaluation/openbookqa-eval",
     fn=raw2json,
     config=DatasetConversionConfig(
         dataset_name="allenai/openbookqa",
         subsets=["main"],
         splits=["train", "validation"],
-        input_path=openbookqa_download_step,
+        input_path=openbookqa_raw,
         hf_path="allenai/openbookqa",
         output_path=this_output_path(),
         output_format=OutputFormatOptions("evaluation"),
@@ -281,14 +310,14 @@ openbookqa_convert_eval = ExecutorStep(
 )
 
 # This creates a JSON file representing the training and validation splits for hellaswag
-hellaswag_convert_eval = ExecutorStep(
+hellaswag_eval = ExecutorStep(
     name="evaluation/hellaswag-eval",
     fn=raw2json,
     config=DatasetConversionConfig(
         dataset_name="Rowan/hellaswag",
         subsets=["*"],
         splits=["train", "validation"],
-        input_path=hellaswag_download_step,
+        input_path=hellaswag_raw,
         hf_path="Rowan/hellaswag",
         output_path=this_output_path(),
         output_format=OutputFormatOptions("evaluation"),
@@ -298,6 +327,20 @@ hellaswag_convert_eval = ExecutorStep(
         answer_idx_key="label",
     ),
 )
+
+
+eval_datasets = [
+    # these tags are used to group datasets together for averaging
+    EvalDataset("cais", "mmlu", [mmlu_aux_eval, mmlu_subject_eval]),
+    EvalDataset("google", "boolq", [boolq_eval], ["core"]),
+    EvalDataset("Rowan", "hellaswag", [hellaswag_eval], ["core"]),
+    EvalDataset("ybisk", "piqa", [piqa_eval], ["core"]),
+    EvalDataset("allenai", "winogrande", [winogrande_eval], ["core"]),
+    EvalDataset("allenai", "ai2_arc_easy", [arc_easy_eval], ["core", "arc"]),
+    EvalDataset("allenai", "ai2_arc_challenge", [arc_challenge_eval], ["core", "arc"]),
+    EvalDataset("allenai", "openbookqa", [openbookqa_eval], ["core"]),
+]
+
 
 ############################################################
 # Convert mmlu to dolma format (i.e. JSON with "text" field)
@@ -309,7 +352,7 @@ mmlu_convert_dolma = ExecutorStep(
         dataset_name="cais/mmlu",
         subsets=["all"],
         splits=["dev", "test", "validation"],
-        input_path=mmlu_download_step,
+        input_path=mmlu_raw,
         hf_path="cais/mmlu",
         output_path=this_output_path(),
         output_format=OutputFormatOptions("decontamination"),
@@ -325,21 +368,7 @@ mmlu_convert_dolma = ExecutorStep(
 if __name__ == "__main__":
     executor_main(
         steps=[
-            mmlu_download_step,
-            mmlu_convert_eval_aux,
-            mmlu_convert_eval_subject,
             mmlu_convert_dolma,
-            boolq_download_step,
-            boolq_convert_eval,
-            piqa_download_step,
-            piqa_convert_eval,
-            winogrande_download_step,
-            winogrande_convert_eval,
-            arc_easy_convert_eval,
-            arc_challenge_convert_eval,
-            openbookqa_download_step,
-            openbookqa_convert_eval,
-            hellaswag_download_step,
-            hellaswag_convert_eval,
+            *[step for ds in eval_datasets for step in ds.steps],
         ]
     )
