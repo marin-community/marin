@@ -440,7 +440,7 @@ def raw2json(cfg: DatasetConversionConfig) -> None:
                 # if there is a direct key for the label of the correct answer, use this
                 answer_label = get_nested_item(example, cfg.answer_label_key) if cfg.answer_label_key else ""
                 # try to populate answer_text, answer_idx, answer_label based on initial retrieved values
-                if not answer_idx:
+                if answer_idx is None:
                     if answer_label is not None and answer_labels:
                         # infer answer_idx (e.g. 0) from answer_label and list of potential labels
                         answer_idx = answer_labels.index(answer_label)
