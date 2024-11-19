@@ -336,7 +336,7 @@ def test_run_only_some_steps():
 
     with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
         executor = create_executor(temp_dir)
-        executor.run(steps=[b, c], run_only=["b"])
+        executor.run(steps=[b, c], run_only=["^b$"])
 
         results = read_log(log)
         assert len(results) == 2
