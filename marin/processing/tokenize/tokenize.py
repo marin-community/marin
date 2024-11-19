@@ -121,7 +121,7 @@ def tokenize(config: TokenizeConfig):
         ray.get(validation_ledger)
 
 
-@ray.remote(runtime_env=RuntimeEnv(env_vars={"JAX_PLATFORM_NAME": "cpu"}))
+@ray.remote(runtime_env=RuntimeEnv(env_vars={"JAX_PLATFORMS": "cpu"}))
 def levanter_tokenize_sft(config: TokenizeConfig):
     """
     Tokenize chat SFT data using the mk_chat_sft_dataset function.
@@ -176,7 +176,7 @@ def levanter_tokenize_sft(config: TokenizeConfig):
     logger.info(f"Finished caching SFT dataset to {config.cache_path}")
 
 
-@ray.remote(runtime_env=RuntimeEnv(env_vars={"JAX_PLATFORM_NAME": "cpu"}))
+@ray.remote(runtime_env=RuntimeEnv(env_vars={"JAX_PLATFORMS": "cpu"}))
 def levanter_tokenize_supervised(config: TokenizeConfig):
     supervised_config = LMSupervisedDatasetConfig(
         validation_urls=config.validation_paths,
@@ -193,7 +193,7 @@ def levanter_tokenize_supervised(config: TokenizeConfig):
     import haliax
 
     # this axis doesn't actually matter for just building the cache
-    mk_supervised_dataset(supervised_config, tokenizer, haliax.Axis("position", 2048))
+    mk_supervised_dataset(supervised_config, "validation", tokenizer, haliax.Axis("position", 2048))
     logger.info(f"Finished caching supervised dataset to {config.cache_path}.")
 
 
