@@ -66,7 +66,7 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
         # Get the basename of the input directory
         input_basename = os.path.basename(os.path.normpath(input_data_path))
         inference_step = ExecutorStep(
-            name=f"attributes/{config.experiment_name}/{input_data_source}",
+            name=f"attributes/quality_filtering/{config.experiment_name}/{input_data_source}",
             fn=run_inference,
             config=InferenceConfig(
                 input_path=input_data_path,
@@ -83,7 +83,7 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
         )
 
         consolidate_step = ExecutorStep(
-            name=f"documents/{config.experiment_name}/{input_data_source}",
+            name=f"documents/quality_filtering/{config.experiment_name}/{input_data_source}",
             fn=consolidate,
             config=ConsolidateConfig(
                 input_path=input_data_path,
@@ -103,7 +103,7 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
         )
 
         tokenize_step = default_tokenize(
-            name=f"{config.experiment_name}/{input_data_source}",
+            name=f"quality_filtering/{config.experiment_name}/{input_data_source}",
             dataset=output_path_of(consolidate_step),
             tokenizer=llama3_tokenizer,
         )
@@ -117,7 +117,7 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
     data_config = lm_mixture_data_config(components=tokenized, weights=weights)
 
     train_step = default_train(
-        name=config.experiment_name,
+        name=f"quality_filtering/{config.experiment_name}",
         tokenized=data_config,
         model_config=llama_1_4b,
         train_config=llama_1_4b_train_config,
