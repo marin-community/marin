@@ -7,6 +7,7 @@ from dataclasses import asdict, dataclass
 
 import pytest
 import ray
+from draccus.utils import Dataclass
 
 from marin.execution.executor import Executor, ExecutorStep, get_info_path, output_path_of, this_output_path, versioned
 from marin.execution.executor_step_status import STATUS_SUCCESS, get_current_status, get_status_path, read_events
@@ -121,51 +122,72 @@ def test_executor():
     cleanup_log(log)
 
 
-def test_force_run():
-    """Test force run functionality."""
+def test_force_run_failed():
+    log = create_log()
 
-    def get_b_list(log, m):
-        def fn(config: MyConfig | None):
+    temp_file_to_mark_failure = tempfile.NamedTemporaryFile(prefix="executor-fail-", delete=False)
+    # make sure it exists
+    temp_file_to_mark_failure.write(b"hello")
+    temp_file_to_mark_failure.close()
+
+    path = temp_file_to_mark_failure.name
+    assert os.path.exists(path)
+
+    def fn(config: MyConfig | None):
+        print(config.input_path, os.path.exists(config.input_path), flush=True)
+        if os.path.exists(config.input_path):
+            raise Exception("Failed")
+        else:
             append_log(log, config)
 
-        b = ExecutorStep(
-            name="b",
-            fn=fn,
-            config=MyConfig(
-                input_path="/",
-                output_path=this_output_path(),
-                n=versioned(3),
-                m=m,
-            ),
-        )
+    def fn_pass(config: MyConfig | None):
+        append_log(log, config)
 
-        return [b]
+    b = ExecutorStep(
+        name="b",
+        fn=fn,
+        config=MyConfig(
+            input_path=path,
+            output_path=this_output_path(),
+            n=1,
+            m=1,
+        ),
+    )
 
-    log = create_log()
+    a = ExecutorStep(
+        name="a",
+        fn=fn_pass,
+        config=MyConfig(
+            input_path=output_path_of(b, "sub"),
+            output_path=this_output_path(),
+            n=2,
+            m=2,
+        ),
+    )
+
     with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
         executor_initial = Executor(prefix=temp_dir, executor_info_base_path=temp_dir)
-        executor_initial.run(steps=get_b_list(log, 4))
+        with pytest.raises(Exception, match="Failed"):
+            executor_initial.run(steps=[a])
+
+        with pytest.raises(FileNotFoundError):
+            read_log(log)
+
+        # remove the file to say we're allowed to run
+        os.unlink(temp_file_to_mark_failure.name)
 
         # Re-run without force_run
         executor_non_force = Executor(prefix=temp_dir, executor_info_base_path=temp_dir)
-        executor_non_force.run(steps=get_b_list(log, 5))  # This would not run b again so m would be 4
-        # Check the results
-        results = read_log(log)
-        assert len(results) == 1
-        assert results[0]["n"] == 3
-        assert results[0]["m"] == 4
+        executor_non_force.run(steps=[a])
+        # should still be failed
+        with pytest.raises(FileNotFoundError):
+            read_log(log)
 
-        log = create_log()
-        executor_initial = Executor(prefix=temp_dir, executor_info_base_path=temp_dir)
-        executor_initial.run(steps=get_b_list(log, 4))
-
-        # Re run without force_run
+        # Rerun with force_run_failed
         executor_force = Executor(prefix=temp_dir, executor_info_base_path=temp_dir)
-        executor_force.run(steps=get_b_list(log, 5), force_run=["b"])  # This would run b again so m would be 5
+        executor_force.run(steps=[a], force_run_failed=True)
         results = read_log(log)
-        assert len(results) == 1
-        assert results[0]["n"] == 3
-        assert results[0]["m"] == 5
+        assert len(results) == 2
 
     cleanup_log(log)
 
@@ -286,3 +308,48 @@ def test_dedup_version():
         executor = create_executor(temp_dir)
         executor.run(steps=[b1, b2])
         assert len(executor.steps) == 2
+
+
+def test_run_only_some_steps():
+    """Make sure that only some steps are run."""
+    log = create_log()
+
+    def fn(config: Dataclass | None):
+        append_log(log, config)
+
+    @dataclass(frozen=True)
+    class CConfig:
+        m: 10
+
+    a = ExecutorStep(name="a", fn=fn, config=None)
+    c = ExecutorStep(name="c", fn=fn, config=CConfig(m=10))
+    b = ExecutorStep(
+        name="b",
+        fn=fn,
+        config=MyConfig(
+            input_path=output_path_of(a, "sub"),
+            output_path=this_output_path(),
+            n=versioned(3),
+            m=4,
+        ),
+    )
+
+    with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
+        executor = create_executor(temp_dir)
+        executor.run(steps=[b, c], run_only=["b"])
+
+        results = read_log(log)
+        assert len(results) == 2
+        assert results[0] is None
+        assert results[1]["m"] == 4
+
+    cleanup_log(log)
+
+    with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
+        executor = create_executor(temp_dir)
+        executor.run(steps=[a, b, c], run_only=["a", "c"])
+
+        results = read_log(log)
+        assert len(results) == 2
+        assert results[0] is None
+        assert results[1]["m"] == 10
