@@ -381,8 +381,8 @@ class Executor:
         self.refs: dict[ExecutorStep, ray.ObjectRef] = {}
         self.step_infos: list[ExecutorStepInfo] = []
         self.executor_info: ExecutorInfo | None = None
-        self.status_actors: StatusActor = StatusActor.options(name="status_actor", get_if_exists=True,
-                                                              lifetime="detached").remote()
+        self.status_actor: StatusActor = StatusActor.options(name="status_actor", get_if_exists=True,
+                                                             lifetime="detached").remote()
 
     def run(
         self,
@@ -611,9 +611,7 @@ class Executor:
         """Read the statuses of all the steps in parallel."""
 
         def get_status(step: ExecutorStep):
-
-
-            self.statuses[step] = ray.get(self.status_actors.get_status.remote(self.output_paths[step]))
+            self.statuses[step] = ray.get(self.status_actor.get_status.remote(self.output_paths[step]))
 
         with ThreadPoolExecutor(max_workers=16) as executor:
             executor.map(get_status, self.steps)
@@ -677,7 +675,7 @@ class Executor:
             runtime_env=RuntimeEnv(
                 pip=pip_dependencies,
             ),
-        ).remote(step.fn, config, dependencies, output_path, should_run)
+        ).remote(step.fn, config, dependencies, output_path, should_run, self.status_actor)
 
         return self.refs[step]
 
@@ -691,7 +689,8 @@ def asdict_without_description(obj: dataclass) -> dict[str, Any]:
 
 @ray.remote
 def execute_after_dependencies(
-    fn: ExecutorFunction, config: dataclass, dependencies: list[ray.ObjectRef], output_path: str, should_run: bool
+    fn: ExecutorFunction, config: dataclass, dependencies: list[ray.ObjectRef], output_path: str, should_run: bool,
+        status_actor: StatusActor
 ):
     """
     Run a function `fn` with the given `config`, after all the `dependencies` have finished.
@@ -702,6 +701,7 @@ def execute_after_dependencies(
 
     # Ensure that dependencies are all run first
     if should_run:
+        status_actor.add_update_status.remote(status_path, STATUS_WAITING, ray_task_id=ray_task_id)
         append_status(status_path, STATUS_WAITING, ray_task_id=ray_task_id)
     try:
         ray.get(dependencies)
