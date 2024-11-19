@@ -427,9 +427,7 @@ class Executor:
         logger.info("### Waiting for all steps to finish ###")
         ray.get(list(self.refs.values()))
 
-    def _compute_transitive_deps(self,
-                                 steps: list[ExecutorStep],
-                                 run_steps: list[str]) -> list[ExecutorStep]:
+    def _compute_transitive_deps(self, steps: list[ExecutorStep], run_steps: list[str]) -> list[ExecutorStep]:
         """
         Compute the transitive dependencies of the steps that match the run_steps list.
 
