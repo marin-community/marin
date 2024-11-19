@@ -644,15 +644,16 @@ class Executor:
 
         should_run = status is None
         if force_run_failed and is_failure(status):
-            logger.info(f"Force running {step.name}, previous status: {status}")
+            logger.info(f"Attempting to force run {step.name}, previous status: {status}")
             should_run = True
 
         # Run only if required device is available
         if step.required_device is not None:
             if not check_device_available(step.required_device):
-                logger.error(
+                logger.info(
                     f"Required device {step.required_device} not available for step {step.name}. Skipping this step."
                 )
+                should_run = False
                 return
 
         # Only start if there's no status
