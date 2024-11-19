@@ -72,12 +72,13 @@ import inspect
 import json
 import logging
 import os
+import re
 import subprocess
 import traceback
 import urllib.parse
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict, dataclass, field, fields, is_dataclass, replace
+from dataclasses import asdict, dataclass, fields, is_dataclass, replace
 from datetime import datetime
 from typing import Any, Generic, TypeVar
 
@@ -88,6 +89,7 @@ import ray.remote_function
 from ray.runtime_env import RuntimeEnv
 
 from marin.execution.executor_step_status import (
+    STATUS_DEP_FAILED,
     STATUS_FAILED,
     STATUS_RUNNING,
     STATUS_SUCCESS,
@@ -95,6 +97,7 @@ from marin.execution.executor_step_status import (
     append_status,
     get_current_status,
     get_status_path,
+    is_failure,
     read_events,
 )
 from marin.utilities.executor_utils import compare_dicts, get_pip_dependencies
@@ -381,10 +384,20 @@ class Executor:
     def run(
         self,
         steps: list[ExecutorStep | InputName],
+        *,
         dry_run: bool = False,
-        force_run: list[str] | None = None,
+        run_only: list[str] | None = None,
         force_run_failed: bool = False,
     ):
+        """
+        Run the pipeline of `ExecutorStep`s.
+
+        Args:
+            step: The step to run.
+            dry_run: If True, only print out what needs to be done.
+            run_only: If not None, only run the steps in the list and their dependencies. Matches steps' names as regex
+            force_run_failed: If True, run steps even if they have already been run (including if they failed)
+        """
         # Gather all the steps, compute versions and output paths for all of them.
         logger.info(f"### Inspecting the {len(steps)} provided steps ###")
         for step in steps:
@@ -396,15 +409,73 @@ class Executor:
         logger.info(f"### Reading {len(self.steps)} statuses ###")
         self.read_statuses()
 
-        logger.info(f"### Launching {len(self.steps)} steps ###")
-        for step in self.steps:
-            self.run_step(step, dry_run=dry_run, force_run=force_run, force_run_failed=force_run_failed)
+        if run_only is not None:
+            steps_to_run = self._compute_transitive_deps(self.steps, run_only)
+        else:
+            steps_to_run = self.steps
+
+        if steps_to_run != self.steps:
+            logger.info(f"### Running {len(steps_to_run)} steps out of {len(self.steps)} ###")
+
+        logger.info(f"### Launching {len(steps_to_run)} steps ###")
+        for step in steps_to_run:
+            self.run_step(step, dry_run=dry_run, force_run_failed=force_run_failed)
 
         logger.info("### Writing metadata ###")
         self.write_infos()
 
         logger.info("### Waiting for all steps to finish ###")
         ray.get(list(self.refs.values()))
+
+    def _compute_transitive_deps(self, steps: list[ExecutorStep], run_steps: list[str]) -> list[ExecutorStep]:
+        """
+        Compute the transitive dependencies of the steps that match the run_steps list.
+
+        Returns steps in topological order.
+
+        Args:
+            steps: The list of all steps.
+            run_steps: The list of step names to run. The names are matched as regex.
+        """
+        regexes = [re.compile(run_step) for run_step in run_steps]
+        used_regexes: set[int] = set()
+
+        def matches(step: ExecutorStep) -> bool:
+            # track which regexes have been used
+            for i, regex in enumerate(regexes):
+                if regex.search(step.name):
+                    used_regexes.add(i)
+                    return True
+
+        # Compute the transitive dependencies of the steps that match the run_steps list
+        to_run: list[ExecutorStep] = []
+        visited: set[ExecutorStep] = set()
+        in_stack: set[ExecutorStep] = set()  # cycle detection
+
+        def dfs(step: ExecutorStep):
+            if step in in_stack:
+                raise ValueError(f"Cycle detected in {step.name}")
+
+            if step in visited:
+                return
+
+            visited.add(step)
+            in_stack.add(step)
+
+            for dep in self.dependencies[step]:
+                dfs(dep)
+            to_run.append(step)
+            in_stack.remove(step)
+
+        for step in steps:
+            if matches(step):
+                dfs(step)
+
+        if used_regexes != set(range(len(regexes))):
+            unused_regexes = [regexes[i].pattern for i in set(range(len(regexes))) - used_regexes]
+            logger.warning(f"Regexes {unused_regexes} did not match any steps")
+
+        return to_run
 
     def compute_version(self, step: ExecutorStep):
         if step in self.versions:
@@ -545,10 +616,16 @@ class Executor:
         with ThreadPoolExecutor(max_workers=16) as executor:
             executor.map(get_status, self.steps)
 
-    def run_step(self, step: ExecutorStep, dry_run: bool, force_run: list[str] | None, force_run_failed: bool):
+    def run_step(self, step: ExecutorStep, dry_run: bool, force_run_failed: bool):
         """
         Return a Ray object reference to the result of running the `step`.
-        If `dry_run`, only print out what needs to be done.
+
+        If the step has already been run, returns the result of the previous run.
+
+        Args:
+            step: The step to run.
+            dry_run: If True, only print out what needs to be done.
+            force_run_failed: If True, run step even if is already ran (including if it failed)
         """
         config = self.configs[step]
         config_version = self.versions[step]["config"]
@@ -561,13 +638,14 @@ class Executor:
         logger.info(f"  config = {json.dumps(config_version, cls=CustomJsonEncoder)}")
         for i, dep in enumerate(self.dependencies[step]):
             logger.info(f"  {dependency_index_str(i)} = {self.output_paths[dep]}")
-        logger.info("")
-        should_force_run = (force_run and step.name in force_run) or (force_run_failed and status == STATUS_FAILED)
-        if should_force_run:
+
+        should_run = status is None
+        if force_run_failed and is_failure(status):
             logger.info(f"Force running {step.name}, previous status: {status}")
+            should_run = True
 
         # Only start if there's no status
-        should_run = not dry_run and (status is None or should_force_run)
+        should_run = not dry_run and should_run
         dependencies = [self.refs[dep] for dep in self.dependencies[step]]
         name = f"execute_after_dependencies({get_fn_name(step.fn, short=True)})::{step.name})"
         if status is not None:
@@ -599,11 +677,7 @@ class Executor:
             ),
         ).remote(step.fn, config, dependencies, output_path, should_run)
 
-        # # Write out info for each step
-        # for step, info in zip(self.steps, self.step_infos, strict=True):
-        #     info_path = get_info_path(self.output_paths[step])
-        #     with fsspec.open(info_path, "w") as f:
-        #         print(json.dumps(asdict(info), indent=2, cls=CustomJsonEncoder), file=f)
+        return self.refs[step]
 
 
 def asdict_without_description(obj: dataclass) -> dict[str, Any]:
@@ -627,7 +701,14 @@ def execute_after_dependencies(
     # Ensure that dependencies are all run first
     if should_run:
         append_status(status_path, STATUS_WAITING, ray_task_id=ray_task_id)
-    ray.get(dependencies)
+    try:
+        ray.get(dependencies)
+    except Exception as e:
+        # Failed due to some exception
+        message = traceback.format_exc()
+        if should_run:
+            append_status(status_path, STATUS_DEP_FAILED, message=message, ray_task_id=ray_task_id)
+        raise e
 
     # Call fn(config)
     if should_run:
@@ -691,15 +772,16 @@ def get_user() -> str | None:
 
 @dataclass(frozen=True)
 class ExecutorMainConfig:
-    prefix: str = "gs://marin-us-central2"
+    prefix: str | None = None
     """Attached to every output path that's constructed (e.g., the GCS bucket)."""
 
-    executor_info_base_path: str = "gs://marin-us-central2/experiments"
+    executor_info_base_path: str | None = None
     """Where the executor info should be stored under a file determined by a hash."""
 
     dry_run: bool = False
-    force_run: list[str] = field(default_factory=list)  # <list of steps name>: run list of steps (names)
     force_run_failed: bool = False  # Force run failed steps
+    run_only: list[str] | None = None
+    """Run these steps (matched by regex.search) and their dependencies only. If None, run all steps."""
 
 
 @draccus.wrap()
@@ -707,14 +789,29 @@ def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], descrip
     """Main entry point for experiments (to standardize)"""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
+    prefix = config.prefix
+    if prefix is None:
+        # infer from the environment
+        if "MARIN_PREFIX" in os.environ:
+            prefix = os.environ["MARIN_PREFIX"]
+        else:
+            raise ValueError("Must specify a prefix or set the MARIN_PREFIX environment variable")
+    elif "MARIN_PREFIX" in os.environ:
+        if prefix != os.environ["MARIN_PREFIX"]:
+            logger.warning(
+                f"MARIN_PREFIX environment variable ({os.environ['MARIN_PREFIX']}) is different from the "
+                f"specified prefix ({prefix})"
+            )
+
+    executor_info_base_path = config.executor_info_base_path
+    if executor_info_base_path is None:
+        # infer from prefix
+        executor_info_base_path = os.path.join(prefix, "experiments")
+
     executor = Executor(
-        prefix=config.prefix,
-        executor_info_base_path=config.executor_info_base_path,
+        prefix=prefix,
+        executor_info_base_path=executor_info_base_path,
         description=description,
     )
-    executor.run(
-        steps=steps,
-        dry_run=config.dry_run,
-        force_run=config.force_run,
-        force_run_failed=config.force_run_failed,
-    )
+
+    executor.run(steps=steps, dry_run=config.dry_run, run_only=config.run_only)
