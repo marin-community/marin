@@ -66,3 +66,6 @@ class StatusActor:
             else: # No status file, so it's a new step
                 self.value_to_reference_status[output_path] = (None, None)
                 return None
+
+    def get_all_status(self) -> List[tuple[str,str]]:
+        return self.value_to_reference_status.items()
