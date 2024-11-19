@@ -28,7 +28,11 @@ import math
 import draccus
 import fsspec
 import ray
+import trafilatura
+from trafilatura import extract
+from transformers import AutoTokenizer, FlaxAutoModelForSequenceClassification
 from tqdm_loggable.auto import tqdm
+import w3lib.url
 
 from marin.core.runtime import cached_or_construct_output
 from marin.utils import fsspec_glob
@@ -51,9 +55,6 @@ def batched(iterable, n=1):
 
 
 def extract_text_from_line(line):
-    from trafilatura import extract
-    import w3lib.url
-
     record = json.loads(line)
     html_str = str(record.get("html", "")).strip()
     url = record.get("metadata", {}).get("url", "")
@@ -76,9 +77,8 @@ def extract_text_from_line(line):
 
 
 @ray.remote(
-    memory=16 * 1024 * 1024 * 1024,
+    memory=32 * 1024 * 1024 * 1024,
     num_cpus=4,
-    runtime_env={"pip": ["w3lib"]},
 )
 @cached_or_construct_output(success_suffix="SUCCESS", verbose=False)
 def extract_text(input_path: str, output_path: str):
@@ -89,8 +89,6 @@ def extract_text(input_path: str, output_path: str):
     input_path (str): Path of HTML file (Dolma-format JSONL) to extract outlinks from.
     output_path (str): Path to write JSONL file with outlinks.
     """
-    import trafilatura
-
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     logger.info(f"Using trafilatura version {trafilatura.__version__}")
     logger.info("Reading input path with HTML")
@@ -117,10 +115,9 @@ def extract_text(input_path: str, output_path: str):
 
 
 @ray.remote(
-    memory=16 * 1024 * 1024 * 1024,
+    memory=32 * 1024 * 1024 * 1024,
     num_cpus=8,
     resources={"TPU": 4, "TPU-v4-8-head": 1},
-    runtime_env=RuntimeEnv(pip="scripts/fineweb-edu/get_urls_and_scores_from_fineweb_edu_html_requirements.txt"),
 )
 @remove_tpu_lockfile_on_exit
 @cached_or_construct_output(success_suffix="SUCCESS", verbose=False)
@@ -133,8 +130,6 @@ def process_one_batch(input_path: str, output_path: str):
     input_path (str): Path of HTML file (Dolma-format JSONL) to extract outlinks from.
     output_path (str): Path to write JSONL file with outlinks.
     """
-    from transformers import AutoTokenizer, FlaxAutoModelForSequenceClassification
-
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
     logger.info("Loading quality classifier...")
