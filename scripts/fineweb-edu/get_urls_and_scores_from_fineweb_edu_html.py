@@ -77,7 +77,7 @@ def extract_text_from_line(line):
 
 @ray.remote(
     memory=16 * 1024 * 1024 * 1024,
-    num_cpus=8,
+    num_cpus=4,
     runtime_env={"pip": ["w3lib"]},
 )
 @cached_or_construct_output(success_suffix="SUCCESS", verbose=False)
