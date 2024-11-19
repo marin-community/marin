@@ -7,6 +7,7 @@ Helpful functions for the executor
 import logging
 from typing import Any
 
+import ray
 import toml
 from deepdiff import DeepDiff
 
@@ -31,9 +32,12 @@ def compare_dicts(dict1: dict[str, Any], dict2: dict[str, Any]) -> bool:
         return False
 
 
-def get_pip_dependencies(pip_dep: list[str], pyproject_path="pyproject.toml") -> list[str]:
+def get_pip_dependencies(
+    pip_dep: list[str], pyproject_path: str = "pyproject.toml", include_parents_pip: bool = True
+) -> list[str]:
     """Given a list of pip dependencies, this function searches keys of project.optional-dependencies in pyproject.toml,
-    If key is not found it is considered a pacaakge name. Finally return a list of all dependencies."""
+    If key is not found it is considered a pacakge name. include_parents_pip: include the parent pip packages.
+    Finally return a list of all dependencies."""
     dependencies = []
     try:
         with open(pyproject_path, "r") as f:
@@ -48,4 +52,8 @@ def get_pip_dependencies(pip_dep: list[str], pyproject_path="pyproject.toml") ->
         logger.error(f"File {pyproject_path} not found.")
     except toml.TomlDecodeError:
         logger.error(f"Failed to parse {pyproject_path}.")
+
+    if include_parents_pip:
+        dependencies.extend(ray.get_runtime_context().runtime_env.pip)
+
     return dependencies
