@@ -172,6 +172,8 @@ def default_train(
             ),
             hf_save_steps=25000,
         ),
+        # prevents training steps from running on NLP cluster
+        required_device="tpu",
     )
 
 

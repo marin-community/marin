@@ -43,7 +43,7 @@ def evaluate_helm_on_step(
     if isinstance(step, ExecutorStep):
         step = output_path_of(step)
     elif isinstance(step, InputName):
-        step = step.name
+        step = step.step
 
     return ExecutorStep(
         name=f"evaluation/helm/{step.name}",
@@ -98,10 +98,10 @@ def evaluate_lm_evaluation_harness_on_step(
     if isinstance(step, ExecutorStep):
         step = output_path_of(step)
     elif isinstance(step, InputName):
-        step = step.name
+        step = step.step
 
     return ExecutorStep(
-        name=f"evaluation/lm_evaluation_harness/{step.name}-duplicate",
+        name=f"evaluation/lm_evaluation_harness/{step.name}",
         fn=evaluate,
         config=EvaluationConfig(
             evaluator="lm_evaluation_harness",

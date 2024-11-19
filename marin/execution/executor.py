@@ -627,7 +627,11 @@ class Executor:
     ):
         """
         Return a Ray object reference to the result of running the `step`.
-        If `dry_run`, only print out what needs to be done.
+        If the step has already been run, returns the result of the previous run.
+        Args:
+            step: The step to run.
+            dry_run: If True, only print out what needs to be done.
+            force_run_failed: If True, run step even if is already ran (including if it failed)
         """
 
         config = self.configs[step]
