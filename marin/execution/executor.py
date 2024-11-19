@@ -582,7 +582,7 @@ class Executor:
         if should_force_run:
             logger.info(f"Force running {step.name}, previous status: {status}")
 
-        # Check if required device is available
+        # Run only if required device is available
         if step.required_device is not None:
             if not check_device_available(step.required_device):
                 logger.error(
