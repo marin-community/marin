@@ -71,11 +71,11 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
                 model_type="fasttext",
                 attribute_name=versioned(f"{config.experiment_name}-quality"),
                 runtime=RuntimeConfig(
-                    requirements_filepath="marin/processing/classification/config/dclm_fasttext_requirements.txt",
                     memory_limit_gb=12,
                 ),
                 task=TaskConfig(max_in_flight=500),
             ),
+            pip_dependency_groups=["fasttext", "datasets", "filelock"],
         )
 
         consolidate_step = ExecutorStep(
