@@ -349,7 +349,7 @@ def test_run_only_some_steps():
         executor = create_executor(temp_dir)
         executor.run(steps=[a, b, c], run_only=["a", "c"])
 
+        # these can execute in any order
         results = read_log(log)
         assert len(results) == 2
-        assert results[0] is None
-        assert results[1]["m"] == 10
+        assert (results[0] is None and results[1]["m"] == 10) or (results[1] is None and results[0]["m"] == 10)
