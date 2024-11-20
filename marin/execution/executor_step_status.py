@@ -77,6 +77,7 @@ def append_status(path: str, status: str, message: str | None = None, ray_task_i
         for event in events:
             print(json.dumps(asdict(event)), file=f)
 
+
 def append_status_event(output_path: str, executor_step_event: ExecutorStepEvent):
     # Write to GCS
     path = get_status_path(output_path)
@@ -87,5 +88,10 @@ def append_status_event(output_path: str, executor_step_event: ExecutorStepEvent
         for event in events:
             print(json.dumps(asdict(event)), file=f)
 
+
 def is_failure(status):
     return status in [STATUS_FAILED, STATUS_DEP_FAILED]
+
+
+def is_running_or_waiting(status):
+    return status in [STATUS_WAITING, STATUS_RUNNING]
