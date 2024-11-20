@@ -58,7 +58,9 @@ def evaluate_helm_on_step(
     )
 
 
-def evaluate_lm_evaluation_harness(model_name: str, model_path: str, evals: list[EvalTaskConfig]) -> ExecutorStep:
+def evaluate_lm_evaluation_harness(
+    model_name: str, model_path: str, evals: list[EvalTaskConfig], max_eval_instances: int | None = None
+) -> ExecutorStep:
     """
     Create an ExecutorStep to evaluate the model using LM Evaluation Harness.
 
@@ -76,6 +78,7 @@ def evaluate_lm_evaluation_harness(model_name: str, model_path: str, evals: list
             model_path=model_path,
             evaluation_path=this_output_path(),
             evals=evals,
+            max_eval_instances=max_eval_instances,
             launch_with_ray=False,
         ),
     )

@@ -9,11 +9,6 @@ class EvalTaskConfig:
     num_fewshot: int
     """Number of few-shot examples to evaluate on."""
 
-    max_eval_instances: int | None = None
-    """
-    Maximum number of instances to evaluate on.
-    """
-
 
 @dataclass(frozen=True)
 class EvaluationConfig:
