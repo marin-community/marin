@@ -668,7 +668,7 @@ class Executor:
         if step.pip_dependency_groups is not None:
             pip_dependencies = get_pip_dependencies(step.pip_dependency_groups)
         else:
-            pip_dependencies = []
+            pip_dependencies = None
 
         self.refs[step] = execute_after_dependencies.options(
             name=name,
@@ -814,4 +814,4 @@ def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], descrip
         description=description,
     )
 
-    executor.run(steps=steps, dry_run=config.dry_run, run_only=config.run_only)
+    executor.run(steps=steps, dry_run=config.dry_run, run_only=config.run_only, force_run_failed=config.force_run_failed)
