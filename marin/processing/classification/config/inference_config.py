@@ -5,7 +5,6 @@ from marin.core.runtime import TaskConfig
 
 @dataclass
 class RuntimeConfig:
-    requirements_filepath: str
     memory_limit_gb: int
     resources: dict = field(default_factory=dict)
 
