@@ -11,22 +11,13 @@ The default doc reproduces OLMO SFT
 ```
 python marin/run/ray_run.py --env_vars HF_TOKEN -- python experiments/227_sft.py
 ```
-# export to HF format within levanter:
-```
-export HF_TOKEN=${HF_TOKEN}  && python -m levanter.main.export_lm_to_hf
---output_dir "gs://marin-us-central2/checkpoints/tulu_sft_3epshf/"
---checkpoint_path "gs://marin-us-central2/checkpoints/tulu_sft_3eps-4e30ee/checkpoints/step-938/"
---config_path levanter/config/llama_sft_hf_ckpt.yaml
-```
 
 ### 2. Configure Dataset
 ```python
-# Option 1: Use helper function for HF dataset formatted for marin
 instruction_dataset = get_instruction_dataset("your/dataset")  # e.g., "allenai/tulu-v2-sft-mixture"
-
-# Option 2: Use custom data in this OAI format:
-# {"user": "instruction", "assistant": "response"}
 ```
+
+Please look at `instruction_datasets.py` for examples on how to process SFT datasets.
 
 ### 3. Tokenization Configuration
 In `tokenize_step`, key parameters to customize:
