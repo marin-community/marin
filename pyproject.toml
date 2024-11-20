@@ -24,6 +24,7 @@ dependencies = [
     "braceexpand",
     "deepdiff",
     "tqdm",
+    "tqdm-loggable",
     "toml",
     "pandas", # Only needed by Fileprovider in inference.py
     "pyarrow", # # Only needed by Fileprovider in inference.py
