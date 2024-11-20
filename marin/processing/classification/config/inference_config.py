@@ -25,7 +25,6 @@ class InferenceConfig:
     # Ray runtime config.
     runtime: RuntimeConfig = field(
         default_factory=lambda: RuntimeConfig(
-            requirements_filepath="marin/processing/classification/config/dclm_fasttext_requirements.txt",
             memory_limit_gb=0.1,
         )
     )
