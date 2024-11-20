@@ -94,11 +94,8 @@ from marin.execution.executor_step_status import (
     STATUS_RUNNING,
     STATUS_SUCCESS,
     STATUS_WAITING,
-    append_status,
-    get_current_status,
-    get_status_path,
     is_failure,
-    read_events,
+    is_running_or_waiting,
 )
 from marin.execution.status_actor import StatusActor
 from marin.utilities.executor_utils import compare_dicts, get_pip_dependencies
@@ -381,9 +378,9 @@ class Executor:
         self.refs: dict[ExecutorStep, ray.ObjectRef] = {}
         self.step_infos: list[ExecutorStepInfo] = []
         self.executor_info: ExecutorInfo | None = None
-        self.status_actor: StatusActor = StatusActor.options(name="status_actor", get_if_exists=True,
-                                                             lifetime="detached").remote()
-        print(ray.get(self.status_actor.get_all_status.remote()))
+        self.status_actor: StatusActor = StatusActor.options(
+            name="status_actor", get_if_exists=True, lifetime="detached"
+        ).remote()
 
     def run(
         self,
@@ -671,12 +668,27 @@ class Executor:
         else:
             pip_dependencies = []
 
-        self.refs[step] = execute_after_dependencies.options(
-            name=name,
-            runtime_env=RuntimeEnv(
-                pip=pip_dependencies,
-            ),
-        ).remote(step.fn, config, dependencies, output_path, should_run, self.status_actor)
+        if is_running_or_waiting(status):
+            if should_run:
+                logger.error(
+                    f"Step {step.name} is already running or  waiting (probably by another script). ,"
+                    f"We cannot run it again."
+                )
+                raise ValueError(
+                    f"Step {step.name} is already running or  waiting (probably by another script). ,"
+                    f"We cannot run it again."
+                )
+            else:
+                self.refs[step] = ray.get(self.status_actor.get_reference.remote(output_path))
+        else:
+            logger.info(f"Should run: {should_run}")
+            self.refs[step] = execute_after_dependencies.options(
+                name=name,
+                runtime_env=RuntimeEnv(
+                    pip=pip_dependencies,
+                ),
+            ).remote(step.fn, config, dependencies, output_path, should_run, self.status_actor)
+            self.status_actor.add_update_reference.remote(output_path=output_path, reference=[self.refs[step]])
 
         return self.refs[step]
 
@@ -690,34 +702,37 @@ def asdict_without_description(obj: dataclass) -> dict[str, Any]:
 
 @ray.remote
 def execute_after_dependencies(
-    fn: ExecutorFunction, config: dataclass, dependencies: list[ray.ObjectRef], output_path: str, should_run: bool,
-        status_actor: StatusActor
+    fn: ExecutorFunction,
+    config: dataclass,
+    dependencies: list[ray.ObjectRef],
+    output_path: str,
+    should_run: bool,
+    status_actor: StatusActor,
 ):
     """
     Run a function `fn` with the given `config`, after all the `dependencies` have finished.
     Only do stuff if `should_run` is True.
     """
-    status_path = get_status_path(output_path)
+    status_path = output_path
     ray_task_id = ray.get_runtime_context().get_task_id()
 
     # Ensure that dependencies are all run first
     if should_run:
         status_actor.add_update_status.remote(status_path, STATUS_WAITING, ray_task_id=ray_task_id)
-        # append_status(status_path, STATUS_WAITING, ray_task_id=ray_task_id)
     try:
         ray.get(dependencies)
     except Exception as e:
         # Failed due to some exception
         message = traceback.format_exc()
         if should_run:
-            status_actor.add_update_status.remote(status_path, STATUS_DEP_FAILED, message=message, ray_task_id=ray_task_id)
-            # append_status(status_path, STATUS_DEP_FAILED, message=message, ray_task_id=ray_task_id)
+            status_actor.add_update_status.remote(
+                status_path, STATUS_DEP_FAILED, message=message, ray_task_id=ray_task_id
+            )
         raise e
 
     # Call fn(config)
     if should_run:
         status_actor.add_update_status.remote(status_path, STATUS_RUNNING, ray_task_id=ray_task_id)
-        # append_status(status_path, STATUS_RUNNING, ray_task_id=ray_task_id)
     try:
         if isinstance(fn, ray.remote_function.RemoteFunction):
             if should_run:
@@ -732,13 +747,11 @@ def execute_after_dependencies(
         message = traceback.format_exc()
         if should_run:
             status_actor.add_update_status.remote(status_path, STATUS_FAILED, message=message, ray_task_id=ray_task_id)
-            # append_status(status_path, STATUS_FAILED, message=message, ray_task_id=ray_task_id)
         raise e
 
     # Success!
     if should_run:
         status_actor.add_update_status.remote(status_path, STATUS_SUCCESS, ray_task_id=ray_task_id)
-        # append_status(status_path, STATUS_SUCCESS, ray_task_id=ray_task_id)
 
 
 def get_fn_name(fn: Callable | ray.remote_function.RemoteFunction, short: bool = False):
@@ -794,7 +807,7 @@ class ExecutorMainConfig:
 @draccus.wrap()
 def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], description: str | None = None):
     """Main entry point for experiments (to standardize)"""
-    ray.init(namespace="marin") # We need to init ray here to make sure we have the correct namespace
+    ray.init(namespace="marin")  # We need to init ray here to make sure we have the correct namespace
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
