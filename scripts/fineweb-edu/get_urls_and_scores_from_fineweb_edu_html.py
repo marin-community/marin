@@ -18,24 +18,22 @@ done
 """
 import json
 import logging
+import math
 import os
 import pathlib
 from dataclasses import dataclass
-from marin.utils import remove_tpu_lockfile_on_exit
-from ray.runtime_env import RuntimeEnv
-import math
 
 import draccus
 import fsspec
 import ray
 import trafilatura
+import w3lib.url
+from tqdm_loggable.auto import tqdm
 from trafilatura import extract
 from transformers import AutoTokenizer, FlaxAutoModelForSequenceClassification
-from tqdm_loggable.auto import tqdm
-import w3lib.url
 
 from marin.core.runtime import cached_or_construct_output
-from marin.utils import fsspec_glob
+from marin.utils import fsspec_glob, remove_tpu_lockfile_on_exit
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
