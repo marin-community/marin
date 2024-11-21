@@ -7,71 +7,80 @@ python -m marin.validation.count_total_tokens --input_path gs://marin-data/filte
 
 import argparse
 import json
+import os
+import time
 
 import fsspec
 import ray
 
-from marin.core.runtime import map_files_in_directory
+from marin.utils import fsspec_glob
+
+MAX_TASKS_IN_FLIGHT = 1000
+NUM_DOWNLOAD_RETRIES = 5
 
 
-@ray.remote
-class ByteCounter:
-    def __init__(self):
-        self.total_bytes = 0
+def count_tokens_in_file(filename: str, tokenizer_name: str) -> int:
+    from transformers import AutoTokenizer
 
-    def add(self, count: int):
-        self.total_bytes += count
+    tokenizer = None
+    for _ in range(NUM_DOWNLOAD_RETRIES):
+        try:
+            tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+            break
+        except Exception as e:
+            print(f"Error loading tokenizer: {e}")
+            time.sleep(1)
 
-    def get_total(self) -> int:
-        return self.total_bytes
+    if tokenizer is None:
+        raise RuntimeError(f"Failed to load tokenizer {tokenizer_name} after {NUM_DOWNLOAD_RETRIES} retries")
 
-
-def count_bytes_in_file(filename: str) -> int:
-    total_bytes = 0
+    total_tokens = 0
     with fsspec.open(filename, "rt", compression="gzip") as f:
         for line in f:
             data = json.loads(line)
             if "text" in data:
-                total_bytes += len(data["text"].encode("utf-8"))
-    return total_bytes
+                total_tokens += len(tokenizer.encode(data["text"]))
+    return total_tokens
 
 
-@ray.remote
-def process_file(input_filename: str, output_filename: str, byte_counter: ray.actor.ActorHandle):
-    file_bytes = count_bytes_in_file(input_filename)
-    byte_counter.add.remote(file_bytes)
+@ray.remote(memory=1 * 1024 * 1024 * 1024)
+def process_file(input_filename: str, tokenizer_name: str):
+    file_tokens = count_tokens_in_file(input_filename, tokenizer_name)
+    return file_tokens
 
 
-def count_total_bytes(input_path: str) -> int:
+def count_total_tokens(input_path: str, tokenizer_name: str) -> int:
 
-    byte_counter = ByteCounter.remote()
+    responses = []
+    tokens = 0
+    input_paths = fsspec_glob(os.path.join(input_path, "**/*.jsonl.gz"))
+    for input_path in input_paths:
+        while len(responses) >= MAX_TASKS_IN_FLIGHT:
+            ready_refs, responses = ray.wait(responses, num_returns=1)
+            for response in ray.get(ready_refs):
+                tokens += response
 
-    responses = map_files_in_directory(
-        process_file.remote,
-        input_path,
-        "**/*.jsonl.gz",
-        "gs://marin-data/scratch/chrisc/count-total-tokens/",  # random output_path, unused
-        None,
-        byte_counter,
-    )
+        result_ref = process_file.remote(input_path, tokenizer_name)
+        responses.append(result_ref)
 
     # Wait for all tasks to complete
-    ray.get(responses)
+    for response in ray.get(responses):
+        tokens += response
 
-    # Get the final count
-    total_bytes = ray.get(byte_counter.get_total.remote())
-
-    return total_bytes
+    return tokens
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Count total bytes in 'text' fields of jsonl.gz files.")
+    parser = argparse.ArgumentParser(description="Count total tokens in 'text' fields of jsonl.gz files.")
     parser.add_argument("--input_path", type=str, required=True, help="Input directory containing jsonl.gz files")
+    parser.add_argument(
+        "--tokenizer_name", type=str, default="meta-llama/Llama-3.1-8B-Instruct", help="Name of the tokenizer to use"
+    )
 
     args = parser.parse_args()
 
-    total_bytes = count_total_bytes(args.input_path)
-    print(f"Total bytes in 'text' fields: {total_bytes}")
+    total_tokens = count_total_tokens(args.input_path, args.tokenizer_name)
+    print(f"Total tokens in 'text' fields: {total_tokens}")
 
 
 if __name__ == "__main__":
