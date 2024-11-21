@@ -15,9 +15,6 @@ import fsspec
 import requests
 from tqdm import tqdm
 
-fs_http = fsspec.filesystem("http")
-fs_gcs = fsspec.filesystem("gcs")
-
 
 @dataclass
 class DownloadConfig:
