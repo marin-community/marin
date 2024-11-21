@@ -210,7 +210,7 @@ def get_urls_and_scores_from_warcs(cfg: CCUrlsAndScoresExtractionConfig):
     refs = []
     for warc_path in warc_paths:
         warc_name = os.path.basename(warc_path)
-        input_path = os.path.join(cfg.output_path, f"{warc_name}_extracted_text.json.gz")
+        input_path = os.path.join(cfg.output_path, f"{warc_name}_extracted_text.jsonl.gz")
         output_path = os.path.join(cfg.output_path, f"{warc_name}_urls_and_quality_classifier_scores.jsonl.gz")
         refs.append(process_one_batch.remote(input_path, output_path))
     logger.info(f"Submitted {len(refs)} tasks to run quality classifier")
