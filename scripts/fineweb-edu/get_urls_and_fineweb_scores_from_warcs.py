@@ -8,7 +8,7 @@ FineWeb-Edu quality classifier.
 for fineweb_edu_dump_html_path in $(gcloud storage ls gs://marin-us-central2/documents/fineweb-edu/html); do
     dump_name=$(basename -- ${fineweb_edu_dump_html_path})
     python marin/run/ray_run.py \
-    --pip_deps '--find-links https://storage.googleapis.com/jax-releases/libtpu_releases.html,w3lib,trafilatura,jax[tpu],flax,transformers,requests' \
+    --pip_deps '--find-links https://storage.googleapis.com/jax-releases/libtpu_releases.html,w3lib,trafilatura,jax[tpu],flax,transformers,requests,warcio,resiliparse' \
     --no_wait -- \
     python scripts/fineweb-edu/get_urls_and_fineweb_scores_from_warcs.py \
     --cc_dump ${dump_name} \
@@ -91,6 +91,8 @@ def extract_text_from_warc(warc_path: str, output_path: str):
     file_in_memory = BytesIO(response.content)
 
     # Iterate through the WARC, decompressing as we go.
+    num_records_saved = 0
+    num_records_skipped = 0
     with gzip.open(file_in_memory, "rb") as file_stream, fsspec.open(output_path, "w", compression="gzip") as fout:
         for record in tqdm(ArchiveIterator(file_stream)):
             if record.rec_type == "response":
@@ -98,6 +100,7 @@ def extract_text_from_warc(warc_path: str, output_path: str):
                 content = record.content_stream().read()
                 html_decoded: str | None = decode_html(content)
                 if not html_decoded:
+                    num_records_skipped += 1
                     continue
                 canonicalized_url = w3lib.url.canonicalize_url(record_url)
 
@@ -108,6 +111,7 @@ def extract_text_from_warc(warc_path: str, output_path: str):
                     deduplicate=True,
                 )
                 if not extracted_text:
+                    num_records_skipped += 1
                     continue
 
                 fout.write(
@@ -116,6 +120,8 @@ def extract_text_from_warc(warc_path: str, output_path: str):
                     )
                     + "\n"
                 )
+                num_records_saved += 1
+    logger.info(f"Saved {num_records_saved} records from WARC, skipped {num_records_skipped} records")
 
 
 @ray.remote(
@@ -176,7 +182,7 @@ def get_warc_paths_to_process(cc_dump: str, num_warcs_to_sample):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     # Download the WARC paths for the specified CC dump
     warc_paths = []
-    with fsspec.open(f"https://data.commoncrawl.org/crawl-data/{cc_dump}/warc.paths.gz", compression="infer") as f:
+    with fsspec.open(f"https://data.commoncrawl.org/crawl-data/{cc_dump}/warc.paths.gz", "rt", compression="infer") as f:
         for line in f:
             warc_paths.append(line.strip())
     # Seed for reproducibility
@@ -195,7 +201,7 @@ def get_urls_and_scores_from_warcs(cfg: CCUrlsAndScoresExtractionConfig):
     for warc_path in warc_paths:
         warc_name = os.path.basename(warc_path)
         output_path = os.path.join(cfg.output_path, f"{warc_name}_extracted_text.jsonl.gz")
-        refs.append(extract_text_from_warc.remote(warc_name, output_path))
+        refs.append(extract_text_from_warc.remote(warc_path, output_path))
     logger.info(f"Submitted {len(refs)} tasks to extract text")
 
     # Wait for the tasks to finish
