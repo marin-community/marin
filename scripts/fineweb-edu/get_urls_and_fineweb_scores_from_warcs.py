@@ -141,8 +141,10 @@ def process_one_batch(input_path: str, output_path: str):
     logger.info("Loaded quality classifier...")
 
     logger.info("Reading input path with extracted text")
+    examples_to_classify = []
     with fsspec.open(input_path, "rt", compression="gzip") as fin:
-        examples_to_classify = json.load(fin)
+        for line in fin:
+            examples_to_classify.append(json.loads(line))
     logger.info("Finished reading input path with extracted text")
 
     # Classify all of the examples in the shard
