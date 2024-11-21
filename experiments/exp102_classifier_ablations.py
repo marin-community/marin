@@ -10,7 +10,6 @@ from experiments.exp164_quality_classifiers import (
     dclm_eli5_200k_rw_200k,
     teknium_oh_200k_rw_200k,
 )
-from experiments.exp246_web_extraction_method_training import transform_resiliparse_preserve_formatting
 from experiments.llama import llama3_tokenizer, llama_1_4b, llama_1_4b_train_config
 from marin.core.runtime import TaskConfig
 from marin.execution.executor import (
@@ -33,9 +32,9 @@ logger = logging.getLogger(__name__)
 class ExperimentConfig:
     experiment_name: str
     quality_classifier_model_path: str | ExecutorStep
-    input_data_source_to_path: dict[str, ExecutorStep] = field(
+    input_data_source_to_path: dict[str, str] = field(
         default_factory=lambda: {
-            "fineweb_2024_18": output_path_of(transform_resiliparse_preserve_formatting),
+            "fineweb_2024_18": "gs://marin-us-central2/documents/fineweb-small-resiliparse-preserve-formatting-e8c6ec/md/CC-MAIN-2024-18",
         }
     )
     keep_fraction: float = 0.2  # Keep 20% of the documents
@@ -72,11 +71,11 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
                 model_type="fasttext",
                 attribute_name=versioned(f"{config.experiment_name}-quality"),
                 runtime=RuntimeConfig(
-                    requirements_filepath="marin/processing/classification/config/dclm_fasttext_requirements.txt",
                     memory_limit_gb=12,
                 ),
                 task=TaskConfig(max_in_flight=500),
             ),
+            pip_dependency_groups=["fasttext", "datasets", "filelock"],
         )
 
         consolidate_step = ExecutorStep(
@@ -97,6 +96,7 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
                 ],
                 ray_memory_limit_gb=12,
             ),
+            pip_dependency_groups=["ddsketch"],
         )
 
         tokenize_step = default_tokenize(
