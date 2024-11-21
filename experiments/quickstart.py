@@ -242,8 +242,11 @@ def main(config: ExecutorMainConfig):
 
         # path to synthetic test data
         synth_data: str = "./tests/quickstart-data"
+        # delete all previous runs
+        if os.path.exists(os.path.join(bucket_prefix, experiment_prefix)):
+            os.system(f"rm -rf {os.path.join(bucket_prefix, experiment_prefix)}")
         steps = create_steps(experiment_prefix, synth_data)
-        config = dataclasses.replace(config, force_run=[step.name for step in steps])  # Always force run all steps
+        config = dataclasses.replace(config)
         executor_main(config, steps=steps)
         logger.info(f"Execution completed successfully. All outputs are in {bucket_prefix}/{experiment_prefix}")
     except Exception as e:
