@@ -10,7 +10,10 @@ import ray
 from google.api_core.exceptions import Forbidden as GcpForbiddenException
 from levanter.data.text import LMMixtureDatasetConfig
 from levanter.infra.ray_tpu import run_on_pod_multislice_resumable, run_on_pod_resumable
-from levanter.main import train_lm
+from levanter.main import (
+    sft,  # If sft.py is meant to be imported directly
+    train_lm,
+)
 from mergedeep import mergedeep
 from ray.runtime_env import RuntimeEnv
 
@@ -23,6 +26,70 @@ logger = logging.getLogger(__name__)
 # Examples:
 # - create a train-from-scratch config given a model config/path, data config/path, and tokenizer
 # - create a llama3-style data ablating config given a model config/path, data config/path, and tokenizer
+
+
+@dataclass
+class TrainSFTOnPodConfig(sft.SFTConfig):
+    output_path: str | None = None
+    tpu_type: str | None = None
+    env: dict = dataclasses.field(default_factory=dict)
+    bypass_path_checks: bool = False
+    impute_run_id_from_output_path: bool = True
+
+
+@ray.remote(num_cpus=0.1, runtime_env={"pip": ["levanter>=1.2.dev1074"]})
+def run_levanter_sft(config: TrainSFTOnPodConfig):
+    """
+    Run the Levanter SFT training function on a Ray cluster.
+
+    Similar to run_levanter_train_lm but for SFT training.
+    """
+    default_launch_config = levanter.infra.cli_helpers.load_config()
+
+    if config.output_path is not None:
+        logger.info(f"Using output path: {config.output_path}")
+        config = _update_config_to_use_out_path(config)
+
+    env = _add_default_env_variables(config.env, default_launch_config.get("env"))
+    _check_for_wandb_key(env)
+    env = _add_run_env_variables(env)
+    config = replace(config, env=env)
+
+    config = _suppress_ray_config(config)
+    config = _enforce_run_id(config)
+    logger.info(f"Using run ID: {config.trainer.id}")
+
+    runtime_env = RuntimeEnv(env_vars=config.env, pip=["levanter>=1.2.dev1074"])
+
+    if not config.bypass_path_checks and config.tpu_type is not None:
+        ray.get(
+            ray.remote(_doublecheck_paths_sft)
+            .options(runtime_env=runtime_env, num_cpus=0.1)
+            .remote(config, must_save_checkpoints=True)
+        )
+
+    sft_config = _upcast_sft_config(config)
+
+    @ray.remote(runtime_env=runtime_env)
+    def sft_task():
+        sft.train(sft_config)
+
+    if config.tpu_type is not None:
+        return run_on_pod_resumable(sft_task, config.tpu_type, max_retries_failure=10)
+    else:
+        return ray.get(sft_task.remote())
+
+
+def _upcast_sft_config(config):
+    """
+    upcast TrainSFTOnPodConfig to SFTConfig by stripping the TPU type and env
+    """
+    dict_config = shallow_asdict(config)
+    fields_to_remote = set(dict_config.keys()) - set(sft.SFTConfig.__dataclass_fields__.keys())
+    for field in fields_to_remote:
+        del dict_config[field]
+    sft_config = sft.SFTConfig(**dict_config)
+    return sft_config
 
 
 @dataclass
@@ -212,6 +279,73 @@ def _suppress_ray_config(config: TrainLmOnPodConfig):
     return config
 
 
+def _check_path_in_region(key, path, none_ok, region, local_ok):
+    if path is None:
+        if none_ok:
+            return
+        raise ValueError(f"{key} must be set")
+
+    if not path.startswith("gs://"):
+        if local_ok:
+            logger.warning(f"{key} is not a GCS path: {path}. This is fine if you're running locally.")
+            return
+        else:
+            raise ValueError(f"{key} must be a GCS path, not {path}")
+    try:
+        bucket_region = get_bucket_location(path)
+        if region.lower() != bucket_region.lower():
+            raise ValueError(
+                f"{key} is not in the same region ({bucket_region}) as the VM ({region}). "
+                f"This can cause performance issues and billing surprises."
+            )
+    except GcpForbiddenException:
+        logger.warning(f"Could not check region for {key}. Be sure it's in the same region as the VM.", exc_info=True)
+
+
+def _doublecheck_paths_sft(config: TrainSFTOnPodConfig, must_save_checkpoints):
+    """
+    Double-check paths specifically for SFT training configs.
+    Handles chat_jsonl dataset configurations.
+    """
+    local_ok = config.bypass_path_checks or config.tpu_type is None
+    try:
+        region = get_vm_region()
+    except ValueError as e:
+        if local_ok:
+            logger.warning("Could not determine the region of the VM. This is fine if you're running locally.")
+            return
+        raise ValueError("Could not determine the region of the VM. This is required for path checks.") from e
+
+    # Check chat_train_urls
+    if config.chat_train_urls:
+        for url in config.chat_train_urls:
+            _check_path_in_region("chat_train_urls", url, none_ok=False, region=region, local_ok=local_ok)
+
+    # Check supervised data cache directory
+    if config.supervised_data:
+        _check_path_in_region(
+            "supervised_data.cache_dir", config.supervised_data.cache_dir, none_ok=True, region=region, local_ok=local_ok
+        )
+
+    # Common checks for checkpointing
+    _check_path_in_region(
+        "trainer.checkpointer.base_path",
+        config.trainer.checkpointer.base_path,
+        none_ok=not must_save_checkpoints,
+        region=region,
+        local_ok=local_ok,
+    )
+
+    if config.hf_save_path is not None:
+        _check_path_in_region(
+            "hf_save_path", config.hf_save_path, none_ok=not must_save_checkpoints, region=region, local_ok=local_ok
+        )
+    else:
+        logger.warning("hf_save_path is not set. This is fine if you don't want HF checkpoints.")
+
+    return config
+
+
 def _doublecheck_paths(config: TrainLmOnPodConfig, must_save_checkpoints):
     """
     Double-check that we're not using local paths in some of the standard places that Levanter sets defaults.
@@ -226,39 +360,25 @@ def _doublecheck_paths(config: TrainLmOnPodConfig, must_save_checkpoints):
             return
         raise ValueError("Could not determine the region of the VM. This is required for path checks.") from e
 
-    def check(key, path, none_ok):
-        if path is None:
-            if none_ok:
-                return
-            raise ValueError(f"{key} must be set")
-
-        if not path.startswith("gs://"):
-            if local_ok:
-                logger.warning(f"{key} is not a GCS path: {path}. This is fine if you're running locally.")
-                return
-            else:
-                raise ValueError(f"{key} must be a GCS path, not {path}")
-        try:
-            bucket_region = get_bucket_location(path)
-            if region.lower() != bucket_region.lower():
-                raise ValueError(
-                    f"{key} is not in the same region ({bucket_region}) as the VM ({region}). "
-                    f"This can cause performance issues and billing surprises."
-                )
-        except GcpForbiddenException:
-            logger.warning(
-                f"Could not check region for {key}. Be sure it's in the same region as the VM.", exc_info=True
-            )
-
-    check("data.cache_dir", config.data.cache_dir, none_ok=True)
+    _check_path_in_region("data.cache_dir", config.data.cache_dir, none_ok=True, region=region, local_ok=local_ok)
     # now check all subcaches if applicable
     if isinstance(config.data, LMMixtureDatasetConfig):
         for key, subcache in config.data.configs.items():
-            check(f"data.configs[{key}].cache_dir", subcache.cache_dir, none_ok=True)
-    check("trainer.checkpointer.base_path", config.trainer.checkpointer.base_path, none_ok=not must_save_checkpoints)
+            _check_path_in_region(
+                f"data.configs[{key}].cache_dir", subcache.cache_dir, none_ok=True, region=region, local_ok=local_ok
+            )
+    _check_path_in_region(
+        "trainer.checkpointer.base_path",
+        config.trainer.checkpointer.base_path,
+        none_ok=not must_save_checkpoints,
+        region=region,
+        local_ok=local_ok,
+    )
 
     if config.hf_save_path is not None:
-        check("hf_save_path", config.hf_save_path, none_ok=not must_save_checkpoints)
+        _check_path_in_region(
+            "hf_save_path", config.hf_save_path, none_ok=not must_save_checkpoints, region=region, local_ok=local_ok
+        )
     else:
         logger.warning("hf_save_path is not set. This is fine if you don't want HF checkpoints.")
 
