@@ -12,8 +12,10 @@ requires-python = ">=3.10"
 dependencies = [
     "draccus>=0.8.0",
     "google-api-python-client~=2.0",
-    "ray[default]==2.34.0",
+    "ray",
     "gcsfs",
+    "google-cloud-storage",
+    "google-cloud-storage-transfer",
     "s3fs",
     "regex",
     "requests",
@@ -22,6 +24,7 @@ dependencies = [
     "braceexpand",
     "deepdiff",
     "tqdm",
+    "tqdm-loggable",
     "toml",
     "pandas", # Only needed by Fileprovider in inference.py
     "pyarrow", # # Only needed by Fileprovider in inference.py

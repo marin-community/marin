@@ -94,7 +94,9 @@ def main():
         help="Set environment variables for the job. If only a KEY is provided, "
         "the VALUE will be set to an empty string.",
     )
-    parser.add_argument("--pip_deps", type=list, help="List of pip dependencies to install before running.")
+    parser.add_argument(
+        "--pip_deps", type=lambda x: x.split(","), help="List of pip dependencies to " "install before running."
+    )
     parser.add_argument("cmd", help="The command to run in the Ray cluster.", nargs=argparse.REMAINDER)
 
     args = parser.parse_args()
@@ -133,6 +135,7 @@ def main():
     pyproject_toml = "pyproject.toml"
     dependencies = get_dependencies_from_toml(pyproject_toml)
     dependencies += PIP_DEPS
+    dependencies += args.pip_deps if args.pip_deps else []
 
     # Submit the job and track it asynchronously
     asyncio.run(submit_and_track_job(full_cmd, dependencies, env_vars, args.no_wait))

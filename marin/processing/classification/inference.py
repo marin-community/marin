@@ -27,7 +27,7 @@ from marin.utils import (
 )
 
 
-def read_dataset(input_filename: str):
+def read_dataset(input_filename: str, columns: list[str] | None = None):
     """Read in a dataset and return as a Huggingface Dataset
 
     Args:
@@ -49,7 +49,7 @@ def read_dataset(input_filename: str):
         dataset = datasets.Dataset.from_pandas(df)
         return dataset
     elif input_filename.endswith(".parquet"):
-        df = pd.read_parquet(input_filename)
+        df = pd.read_parquet(input_filename, columns=columns)
         dataset = datasets.Dataset.from_pandas(df)
         return dataset
     else:
