@@ -12,7 +12,7 @@ for fineweb_edu_dump_html_path in $(gcloud storage ls gs://marin-us-central2/doc
     --no_wait -- \
     python scripts/fineweb-edu/get_urls_and_fineweb_scores_from_warcs.py \
     --cc_dump ${dump_name} \
-    --num_warcs_to_sample 100 \
+    --num_warcs_to_sample 500 \
     --output_path gs://marin-us-central2/scratch/nfliu/urls_and_scores/fineweb-edu-cc/${dump_name}
 done
 ```
