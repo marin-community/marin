@@ -19,7 +19,7 @@ from marin.execution.executor_step_status import (
 class StatusActor:
 
     def __init__(self, cache_size: int = 10_000):
-        self.value_to_reference_status: dict[str, tuple[str, ObjectRef]] = {}
+        self.value_to_status_reference: dict[str, tuple[str, ObjectRef]] = {}
         self.lru_cache: OrderedDict[str, None] = OrderedDict()  # lru_cache to keep dict size to cache_size
         self.cache_size = cache_size
 
@@ -34,7 +34,7 @@ class StatusActor:
             return
         elif reference is None:
             # Status is being updated, We need to write this to GCP too
-            reference = self.value_to_reference_status.get(output_path, (None, None))[1]
+            reference = self.value_to_status_reference.get(output_path, (None, None))[1]
             append_status_event(output_path, executor_step_event)
             status = executor_step_event.status
 
@@ -47,7 +47,7 @@ class StatusActor:
             append_status_event(output_path, executor_step_event)
             reference = reference[0]
 
-        self.value_to_reference_status[output_path] = (status, reference)
+        self.value_to_status_reference[output_path] = (status, reference)
 
         # Manage LRU cache for statuses that are SUCCESS or FAILED
         if status in {STATUS_SUCCESS, STATUS_FAILED}:
@@ -57,7 +57,7 @@ class StatusActor:
             if len(self.lru_cache) > self.cache_size:
                 # Evict the least recently used item
                 oldest = self.lru_cache.popitem(last=False)
-                del self.value_to_reference_status[oldest[0]]
+                del self.value_to_status_reference[oldest[0]]
 
     def add_update_status(
         self, output_path: str, status: str, message: str | None = None, ray_task_id: str | None = None
@@ -76,28 +76,28 @@ class StatusActor:
         self._add_status_and_reference(output_path, None, reference)
 
     def get_status_and_reference(self, output_path: str) -> tuple[str, ObjectRef]:
-        return self.value_to_reference_status[output_path]
+        return self.value_to_status_reference[output_path]
 
     def get_status(self, output_path: str) -> str | None:
         """If a key is present in the ACTOR then we return the status else we go to GCP and check,
         if it's SUCCESS or FAILED, it's true status, else it's a stale status and we don't consider it
         and return None"""
 
-        if output_path in self.value_to_reference_status:
-            return self.value_to_reference_status[output_path][0]
+        if output_path in self.value_to_status_reference:
+            return self.value_to_status_reference[output_path][0]
         else:
             status_path = get_status_path(output_path)
             events = read_events(status_path)
             if len(events) > 0:
                 if is_failure(events[-1].status) or events[-1].status == STATUS_SUCCESS:
-                    self.value_to_reference_status[output_path] = (events[-1].status, None)
+                    self.value_to_status_reference[output_path] = (events[-1].status, None)
                     return events[-1].status
             else:  # No status file, so it's a new step
-                self.value_to_reference_status[output_path] = (None, None)
+                self.value_to_status_reference[output_path] = (None, None)
                 return None
 
     def get_reference(self, output_path: str) -> ObjectRef | None:
-        return self.value_to_reference_status[output_path][1]
+        return self.value_to_status_reference[output_path][1]
 
     def get_all_status(self) -> dict[str, tuple[str, ObjectRef]]:
-        return self.value_to_reference_status.copy()
+        return self.value_to_status_reference.copy()
