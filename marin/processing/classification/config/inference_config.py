@@ -5,7 +5,6 @@ from marin.core.runtime import TaskConfig
 
 @dataclass
 class RuntimeConfig:
-    requirements_filepath: str
     memory_limit_gb: int
     resources: dict = field(default_factory=dict)
 
@@ -26,7 +25,6 @@ class InferenceConfig:
     # Ray runtime config.
     runtime: RuntimeConfig = field(
         default_factory=lambda: RuntimeConfig(
-            requirements_filepath="marin/processing/classification/config/dclm_fasttext_requirements.txt",
             memory_limit_gb=0.1,
         )
     )
