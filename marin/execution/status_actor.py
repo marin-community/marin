@@ -1,4 +1,5 @@
 from collections import OrderedDict
+from dataclasses import dataclass
 from datetime import datetime
 
 import ray
@@ -15,22 +16,49 @@ from marin.execution.executor_step_status import (
 )
 
 
+@dataclass
+class RayObjectRef:
+    """This class wrap a ray object reference to pass it by reference. If we just pass the object reference, it will be
+    passed by value and ray would try to resolve it before passing it to the function.
+
+
+        @ray.remote
+        class Actor:
+            def add(self, ref):
+                return ref
+
+        @ray.remote
+        def f():
+            return "Hello"
+
+        actor = Actor.remote()
+        print(ray.get(actor.add.remote(f.remote())))
+
+        The above code will print "Hello"
+
+    """
+
+    ref: ObjectRef | None
+
+
 @ray.remote
 class StatusActor:
 
     def __init__(self, cache_size: int = 10_000):
-        self.value_to_status_reference: dict[str, tuple[str, ObjectRef]] = {}
+        self.value_to_status_reference: dict[str, tuple[str | None, ObjectRef | None]] = {}
         self.lru_cache: OrderedDict[str, None] = OrderedDict()  # lru_cache to keep dict size to cache_size
         self.cache_size = cache_size
 
     def _add_status_and_reference(
-        self, output_path: str, executor_step_event: ExecutorStepEvent | None, reference: list[ObjectRef] | None
+        self, output_path: str, executor_step_event: ExecutorStepEvent | None, reference: RayObjectRef
     ):
         """
-        Main function to update the status and reference of a output path. Ray Object Reference
-        is passed by reference using a list.
+        Main function to update the status and reference of an output path.
+        reference is a RayObjectRef object that wraps the reference to pass it by reference.
         If either one of status or reference is None, we use the previous value.
         """
+
+        reference = reference.ref
         if reference is None and executor_step_event is None:
             return
         elif reference is None:
@@ -41,12 +69,10 @@ class StatusActor:
 
         elif executor_step_event is None:
             status = self.get_status(output_path)
-            reference = reference[0]
 
         else:
             status = executor_step_event.status
             append_status_event(output_path, executor_step_event)
-            reference = reference[0]
 
         self.value_to_status_reference[output_path] = (status, reference)
 
@@ -64,15 +90,15 @@ class StatusActor:
         self, output_path: str, status: str, message: str | None = None, ray_task_id: str | None = None
     ):
         """
-        Update the status of a output path. We also write the output to GCP.
+        Update the status of an output path. We also write the output to GCP.
         """
         date = datetime.now().isoformat()
         event = ExecutorStepEvent(date=date, status=status, message=message, ray_task_id=ray_task_id)
-        self._add_status_and_reference(output_path, event, None)
+        self._add_status_and_reference(output_path, event, RayObjectRef(None))
 
-    def add_update_reference(self, output_path: str, reference: list[ObjectRef]):
+    def add_update_reference(self, output_path: str, reference: RayObjectRef):
         """
-        We update the reference for a output path. We need to pass reference as a list to ensure we pass by reference
+        We update the reference for an output path. We need to pass reference as a list to ensure we pass by reference
         """
         self._add_status_and_reference(output_path, None, reference)
 

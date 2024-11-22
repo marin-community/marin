@@ -97,7 +97,7 @@ from marin.execution.executor_step_status import (
     is_failure,
     is_running_or_waiting,
 )
-from marin.execution.status_actor import StatusActor
+from marin.execution.status_actor import RayObjectRef, StatusActor
 from marin.utilities.executor_utils import compare_dicts, get_pip_dependencies
 from marin.utilities.json_encoder import CustomJsonEncoder
 
@@ -688,7 +688,9 @@ class Executor:
                     pip=pip_dependencies,
                 ),
             ).remote(step.fn, config, dependencies, output_path, should_run, self.status_actor)
-            self.status_actor.add_update_reference.remote(output_path=output_path, reference=[self.refs[step]])
+            self.status_actor.add_update_reference.remote(
+                output_path=output_path, reference=RayObjectRef(self.refs[step])
+            )
 
         return self.refs[step]
 
