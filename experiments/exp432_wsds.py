@@ -9,7 +9,6 @@ from experiments.llama import llama_1_4b
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import executor_main
 
-
 llama_1_4b_wsds_train_config = SimpleTrainConfig(
     tpu_type="v4-128",
     node_count=2,
@@ -17,8 +16,8 @@ llama_1_4b_wsds_train_config = SimpleTrainConfig(
     num_train_steps=10000,  # 4096 * 1024 * 10000 = 42B tokens
     learning_rate=3e-4,
     weight_decay=0.1,
-    warmup=0.05,            # 5%  * 2000 = 100 steps
-    decay=0.1,              # 10% * 2000 = 200 steps
+    warmup=0.05,  # 5%  * 2000 = 100 steps
+    decay=0.1,  # 10% * 2000 = 200 steps
     lr_schedule="inv",
     cycles=[2e3, 4e3, 6e3, 8e3],
     steps_per_eval=2000,
