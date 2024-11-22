@@ -45,10 +45,10 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
 
             for eval_task in evals:
 
+                result_filepath = os.path.join(self.RESULTS_PATH, f"{eval_task.name}_{eval_task.num_fewshot}shot.jsonl")
+
                 # Create the output directory
-                output_dir = os.path.dirname(
-                    os.path.join(self.RESULTS_PATH, f"{eval_task.name}_{eval_task.num_fewshot}shot.jsonl")
-                )
+                output_dir = os.path.dirname(result_filepath)
                 os.makedirs(output_dir, exist_ok=True)
 
                 command = [
@@ -64,7 +64,7 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
                     "--batch_size",
                     "auto",
                     "--output_path",
-                    os.path.join(self.RESULTS_PATH, f"{eval_task.name}_{eval_task.num_fewshot}shot.jsonl"),
+                    result_filepath,
                 ]
 
                 if max_eval_instances is not None:
@@ -73,7 +73,7 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
 
                 # run the command and check if the results file exists
                 run_bash_command(command, check=False)
-                assert os.path.exists(self.RESULTS_PATH, f"{eval_task.name}_{eval_task.num_fewshot}shot.jsonl")
+                assert os.path.exists(result_filepath), f"Results file {result_filepath} does not exist."
 
             # Upload the results to GCS
             if is_remote_path(output_path):
