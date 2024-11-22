@@ -671,11 +671,11 @@ class Executor:
         if is_running_or_waiting(status):
             if should_run:
                 logger.error(
-                    f"Step {step.name} is already running or  waiting (probably by another script). ,"
+                    f"Step {step.name} is already running or waiting (probably by another script). ,"
                     f"We cannot run it again."
                 )
                 raise ValueError(
-                    f"Step {step.name} is already running or  waiting (probably by another script). ,"
+                    f"Step {step.name} is already running or waiting (probably by another script). ,"
                     f"We cannot run it again."
                 )
             else:
