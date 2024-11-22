@@ -89,9 +89,9 @@ def append_status_event(output_path: str, executor_step_event: ExecutorStepEvent
             print(json.dumps(asdict(event)), file=f)
 
 
-def is_failure(status):
+def is_failure(status: str):
     return status in [STATUS_FAILED, STATUS_DEP_FAILED]
 
 
-def is_running_or_waiting(status):
+def is_running_or_waiting(status: str):
     return status in [STATUS_WAITING, STATUS_RUNNING]
