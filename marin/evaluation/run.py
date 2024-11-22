@@ -33,8 +33,7 @@ def evaluate(config: EvaluationConfig) -> None:
             output_path=config.evaluation_path,
         )
     else:
-        evaluator.evaluate(
-            model, evals=config.evals, output_path=config.evaluation_path)
+        evaluator.evaluate(model, evals=config.evals, output_path=config.evaluation_path)
 
     # process and print eval results
     try:
