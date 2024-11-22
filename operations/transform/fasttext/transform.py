@@ -11,6 +11,7 @@ Usage:
 import hashlib
 import json
 import logging
+import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -100,6 +101,12 @@ class TransformFasttextToDolmaConfig:
 
 @draccus.wrap()
 def main(cfg: TransformFasttextToDolmaConfig):
+    # Currently Executor framework passes in directory names, but we are converting a singular
+    # Fasttext file to Dolma format, so in the case that the output path is a directory, we need to
+    # append the output filename to it.
+    if not cfg.output_path.endswith(".jsonl.gz"):
+        cfg.output_path = os.path.join(cfg.output_path, "text.jsonl.gz")
+
     ray.get(convert_fasttext_to_dolma_format.remote(cfg.input_path, cfg.output_path, cfg.source))
 
 

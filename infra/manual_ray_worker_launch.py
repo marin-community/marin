@@ -51,8 +51,11 @@ def main():
         cluster_yaml = yaml.safe_load(f)
 
     image_id = cluster_yaml["docker"]["image"]
+    container_name = cluster_yaml["docker"].get("container_name", "ray")
+    worker_run_options = cluster_yaml["docker"].get("worker_run_options", ["-v", "/tmp:/tmp"])
 
-    setup_commands = [line for line in cluster_yaml.get("setup_commands", [])]
+    initialization_commands = cluster_yaml.get("initialization_commands", [])
+    setup_commands = cluster_yaml.get("setup_commands", [])
 
     entry_command = f"ray start --address={head}:6379 --block"
     # TODO: would be friendlier to also sniff out the head and docker image from the cluster yaml
@@ -71,7 +74,7 @@ def main():
         zone=zone,
         node_count=1,
     )
-    tpu_ssh(tpu_name, zone, 1, "docker rm -f ray || true")
+    tpu_ssh(tpu_name, zone, 1, f"docker rm -f {container_name} || true")
 
     # first we want to make a new entrypoint that starts ray and runs the setup commands
     print(f"Running on tpu_name... {tpu_name}")
@@ -88,24 +91,29 @@ def main():
         run_command(
             *(f"gcloud compute tpus tpu-vm scp {f.name} {tpu_name}:/tmp/entry.sh --zone={zone} --worker=all".split(" "))
         )
-        # chmod the entrypoint
         tpu_ssh(tpu_name, zone, 1, "chmod a+rwx /tmp/entry.sh")
+
+        # run all initialization commands
+        for command in initialization_commands:
+            tpu_ssh(tpu_name, zone, 1, command)
 
         docker_command = [
             "docker",
             "run",
             "-d",
-            "--name=ray",
-            "--privileged",
-            "--shm-size=32gb",
             "--net=host",
+            f"--name={container_name}",
             "--init",
-            "-v",
-            "/tmp:/tmp",
+            "--privileged",
+            # "-v",
+            # "/tmp:/tmp",
+            *worker_run_options,
             image_id,
             "/bin/bash",  # Use bash as entrypoint to set up entry.sh
             "/tmp/entry.sh",
         ]
+
+        print(docker_command)
 
         tpu_ssh(tpu_name, zone, 1, *docker_command)
 
