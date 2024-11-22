@@ -27,7 +27,8 @@ class StatusActor:
         self, output_path: str, executor_step_event: ExecutorStepEvent | None, reference: list[ObjectRef] | None
     ):
         """
-        Main function to update the status and reference of a output path. Reference is passed by reference as a list.
+        Main function to update the status and reference of a output path. Ray Object Reference
+        is passed by reference using a list.
         If either one of status or reference is None, we use the previous value.
         """
         if reference is None and executor_step_event is None:
@@ -75,13 +76,11 @@ class StatusActor:
         """
         self._add_status_and_reference(output_path, None, reference)
 
-    def get_status_and_reference(self, output_path: str) -> tuple[str, ObjectRef]:
-        return self.value_to_status_reference[output_path]
-
     def get_status(self, output_path: str) -> str | None:
-        """If a key is present in the ACTOR then we return the status else we go to GCP and check,
-        if it's SUCCESS or FAILED, it's true status, else it's a stale status and we don't consider it
-        and return None"""
+        """Returns the step's status, if known.
+        If this actor knows about it (e.g. it's currently running or recently failed), we return that.
+        Otherwise, we check against the .executor_status file to see. If it has a "final" status (SUCCESS or FAILED),
+        then we return that. Otherwise, return None."""
 
         if output_path in self.value_to_status_reference:
             return self.value_to_status_reference[output_path][0]
