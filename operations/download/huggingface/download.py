@@ -12,6 +12,7 @@ Run with:
         --revision="8fd6e8e"
 """
 
+import dataclasses
 import logging
 from dataclasses import dataclass
 
@@ -37,7 +38,8 @@ class DownloadConfig:
     hf_dataset_id: str                                      # HF Dataset to Download (as `$ORG/$DATASET` on HF Hub)
 
     revision: str  # (Short) Commit Hash (from HF Dataset Repo; 7 characters)
-    hf_url_glob: str = "*"                                  # Glob Pattern to Match Files in HF Dataset
+    hf_urls_glob: list[str] = dataclasses.field(default_factory=list)
+    # List of Glob Patterns to Match Files in HF Dataset, If empty we get all the files in a hf repo
 
     # Additional GCS Parameters
     public_gcs_path: str = (                                # Path to Publicly Readable Bucket (for Storage Transfer)
@@ -76,7 +78,7 @@ def download(cfg: DownloadConfig) -> None | ray.ObjectRef:
     logger.info(f"[*] Downloading HF Dataset `{cfg.hf_dataset_id}` to `{cfg.gcs_output_path}`")
 
     job_name, job_url = download_hf_dataset(
-        cfg.hf_dataset_id, cfg.revision, cfg.hf_url_glob, cfg.gcs_output_path, cfg.public_gcs_path
+        cfg.hf_dataset_id, cfg.revision, cfg.hf_urls_glob, cfg.gcs_output_path, cfg.public_gcs_path
     )
 
     if cfg.wait_for_completion:
