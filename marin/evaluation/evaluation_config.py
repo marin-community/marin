@@ -53,3 +53,8 @@ class EvaluationConfig:
     """
     Whether to launch the evaluation run with Ray.
     """
+
+    max_eval_instances: int | None = None
+    """
+    Maximum number of evaluation instances to run.
+    """
