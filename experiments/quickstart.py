@@ -47,6 +47,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
             extract_method=versioned("readability"),
             config=HtmlToMarkdownConfig.default_config(),
         ),
+        pip_dependency_groups=["download_transform"],
     )
 
     transform_lq_data_step = ExecutorStep(
@@ -58,6 +59,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
             extract_method=versioned("readability"),
             config=HtmlToMarkdownConfig.default_config(),
         ),
+        pip_dependency_groups=["download_transform"],
     )
 
     # ############################################################
@@ -89,6 +91,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
                 "thread": 1,
             },
         ),
+        pip_dependency_groups=["quality_dedup_consolidate"],
     )
 
     ############################################################
@@ -104,6 +107,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
             model_type="fasttext",
             attribute_name="quickstart-fasttext-quality-hq",
         ),
+        pip_dependency_groups=["quality_dedup_consolidate"],
     )
 
     inference_lq_step = ExecutorStep(
@@ -116,6 +120,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
             model_type="fasttext",
             attribute_name="quickstart-fasttext-quality-lq",
         ),
+        pip_dependency_groups=["quality_dedup_consolidate"],
     )
 
     ############################################################
@@ -128,6 +133,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
             input_path=output_path_of(transform_hq_data_step),
             output_path=this_output_path(),
         ),
+        pip_dependency_groups=["quality_dedup_consolidate"],
     )
 
     ############################################################
@@ -154,10 +160,12 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
                 ),
             ],
         ),
+        pip_dependency_groups=["quality_dedup_consolidate"],
     )
 
     ############################################################
     # Tokenize
+    tokenizer = "gpt2"
 
     tokenize_step = ExecutorStep(
         name=os.path.join(prefix, "tokenized"),
@@ -166,12 +174,12 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
             train_paths=output_path_of(consolidate_step),
             validation_paths=[],
             cache_path=this_output_path(),
-            tokenizer=versioned("gpt2"),
+            tokenizer=versioned(tokenizer),
         ),
     )
 
-    ############################################################
-
+    # ############################################################
+    # Training
     if not is_in_ci() and not is_local_ray_cluster():
         tpu_type = "v4-8"
     else:
@@ -234,8 +242,11 @@ def main(config: ExecutorMainConfig):
 
         # path to synthetic test data
         synth_data: str = "./tests/quickstart-data"
+        # delete all previous runs
+        if os.path.exists(os.path.join(bucket_prefix, experiment_prefix)):
+            os.system(f"rm -rf {os.path.join(bucket_prefix, experiment_prefix)}")
         steps = create_steps(experiment_prefix, synth_data)
-        config = dataclasses.replace(config, force_run=[step.name for step in steps])  # Always force run all steps
+        config = dataclasses.replace(config)
         executor_main(config, steps=steps)
         logger.info(f"Execution completed successfully. All outputs are in {bucket_prefix}/{experiment_prefix}")
     except Exception as e:

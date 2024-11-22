@@ -1,13 +1,13 @@
 from marin.evaluation.evaluation_config import EvalTaskConfig, EvaluationConfig
 from marin.evaluation.run import evaluate
-from marin.execution.executor import ExecutorStep, InputName, this_output_path
+from marin.execution.executor import ExecutorStep, InputName, output_path_of, this_output_path
 
 """
 Canonical set of evals.
 """
 
 
-def evaluate_helm(model_name: str, model_path: str, evals: list[str]) -> ExecutorStep:
+def evaluate_helm(model_name: str, model_path: str, evals: list[EvalTaskConfig]) -> ExecutorStep:
     """
     Create an ExecutorStep to evaluate the model using HELM.
 
@@ -30,7 +30,7 @@ def evaluate_helm(model_name: str, model_path: str, evals: list[str]) -> Executo
 
 
 def evaluate_helm_on_step(
-    step: ExecutorStep | InputName, evals: list[str], max_eval_instances: int | None = None
+    step: ExecutorStep | InputName, evals: list[EvalTaskConfig], max_eval_instances: int | None = None
 ) -> ExecutorStep:
     """
     Create an ExecutorStep to evaluate the model using HELM on a step.
@@ -58,7 +58,9 @@ def evaluate_helm_on_step(
     )
 
 
-def evaluate_lm_evaluation_harness(model_name: str, model_path: str, evals: list[EvalTaskConfig]) -> ExecutorStep:
+def evaluate_lm_evaluation_harness(
+    model_name: str, model_path: str, evals: list[EvalTaskConfig], max_eval_instances: int | None = None
+) -> ExecutorStep:
     """
     Create an ExecutorStep to evaluate the model using LM Evaluation Harness.
 
@@ -76,6 +78,39 @@ def evaluate_lm_evaluation_harness(model_name: str, model_path: str, evals: list
             model_path=model_path,
             evaluation_path=this_output_path(),
             evals=evals,
+            max_eval_instances=max_eval_instances,
+            launch_with_ray=False,
+        ),
+    )
+
+
+def evaluate_lm_evaluation_harness_on_step(
+    step: ExecutorStep | InputName, evals: list[str], max_eval_instances: int | None = None
+) -> ExecutorStep:
+    """
+    Create an ExecutorStep to evaluate the model using LM Evaluation Harness on a step.
+
+    Args:
+        step (ExecutorStep | InputName): Executor Step to evaluate.
+        evals (list[str]): List of evaluations to run with LM Evaluation Harness, e.g, ["mmlu"].
+    """
+
+    if isinstance(step, ExecutorStep):
+        model_step_path = output_path_of(step)
+    elif isinstance(step, InputName):
+        model_step_path = output_path_of(step.step)
+
+    return ExecutorStep(
+        name=f"evaluation/lm_evaluation_harness/{step.name}",
+        fn=evaluate,
+        config=EvaluationConfig(
+            evaluator="lm_evaluation_harness",
+            model_name=None,
+            model_path=model_step_path,  # type: ignore
+            evaluation_path=this_output_path(),
+            evals=evals,
+            discover_latest_checkpoint=True,
+            max_eval_instances=max_eval_instances,
             launch_with_ray=False,
         ),
     )
