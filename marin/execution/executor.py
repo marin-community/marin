@@ -713,12 +713,11 @@ def execute_after_dependencies(
     Run a function `fn` with the given `config`, after all the `dependencies` have finished.
     Only do stuff if `should_run` is True.
     """
-    status_path = output_path
     ray_task_id = ray.get_runtime_context().get_task_id()
 
     # Ensure that dependencies are all run first
     if should_run:
-        status_actor.add_update_status.remote(status_path, STATUS_WAITING, ray_task_id=ray_task_id)
+        status_actor.add_update_status.remote(output_path, STATUS_WAITING, ray_task_id=ray_task_id)
     try:
         ray.get(dependencies)
     except Exception as e:
@@ -726,13 +725,13 @@ def execute_after_dependencies(
         message = traceback.format_exc()
         if should_run:
             status_actor.add_update_status.remote(
-                status_path, STATUS_DEP_FAILED, message=message, ray_task_id=ray_task_id
+                output_path, STATUS_DEP_FAILED, message=message, ray_task_id=ray_task_id
             )
         raise e
 
     # Call fn(config)
     if should_run:
-        status_actor.add_update_status.remote(status_path, STATUS_RUNNING, ray_task_id=ray_task_id)
+        status_actor.add_update_status.remote(output_path, STATUS_RUNNING, ray_task_id=ray_task_id)
     try:
         if isinstance(fn, ray.remote_function.RemoteFunction):
             if should_run:
@@ -746,12 +745,12 @@ def execute_after_dependencies(
         # Failed due to some exception
         message = traceback.format_exc()
         if should_run:
-            status_actor.add_update_status.remote(status_path, STATUS_FAILED, message=message, ray_task_id=ray_task_id)
+            status_actor.add_update_status.remote(output_path, STATUS_FAILED, message=message, ray_task_id=ray_task_id)
         raise e
 
     # Success!
     if should_run:
-        status_actor.add_update_status.remote(status_path, STATUS_SUCCESS, ray_task_id=ray_task_id)
+        status_actor.add_update_status.remote(output_path, STATUS_SUCCESS, ray_task_id=ray_task_id)
 
 
 def get_fn_name(fn: Callable | ray.remote_function.RemoteFunction, short: bool = False):
