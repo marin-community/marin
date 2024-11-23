@@ -139,7 +139,7 @@ def train_model(
     # run training on remote worker, not head node
     @ray.remote(
         memory=memory_req * 1024 * 1024 * 1024,
-        resources={"TPU": 4},
+        resources={"TPU": 4, "TPU-v4-8-head": 1},
     )
     def run():
         if fsspec_exists(f"{output_path}/model.bin"):
