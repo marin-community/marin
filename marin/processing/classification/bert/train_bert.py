@@ -23,7 +23,7 @@ class TrainBertClassifierConfig:
         output_path (str): Path for output data (i.e., gs://$BUCKET/classifiers/$EXPERIMENT).
         datasets (list[DatasetConfig]): List of configurations for converting Dolma documents into
             labeled training datasets.
-        bert_args (dict): Arguments for the fastText training process (see fastText docs for list of options).
+        bert_args (dict): Arguments for the BERT training process.
         seed (int): Seed for random number generator to ensure reproducibility.
         val_frac (float): Fraction of data to be used for validation.
         memory (int): Amount of memory allocated for remote training process (in GB).
