@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Given a CC dump, randomly sample the specified number of WARCs from this
-dump. Then, extract the URL and text of each record and score the text with the
-FineWeb-Edu quality classifier.
+Given a pattern of files with records containing URLs and their scores,
+split the records into train and test by domain and resample the train set
+to ensure that the distribution of scores is uniform.
 
 ```
 for fineweb_edu_dump_html_path in $(gcloud storage ls gs://marin-us-central2/documents/fineweb-edu/html); do
@@ -11,7 +11,8 @@ for fineweb_edu_dump_html_path in $(gcloud storage ls gs://marin-us-central2/doc
     --no_wait -- \
     python scripts/fineweb-edu/resample_fineweb_edu_urls_by_quality_score.py \
     --input_pattern gs://marin-us-central2/scratch/nfliu/urls_and_scores/fineweb-edu*/CC*/*_urls_and_quality_classifier_scores.jsonl.gz
-    --output_path gs://marin-us-central2/scratch/nfliu/urls_and_scores/fineweb-edu-cc/${dump_name}
+    --train_output_path gs://marin-us-central2/scratch/nfliu/datasets/url_scoring/fineweb-edu/train.parquet \
+    --test_output_path gs://marin-us-central2/scratch/nfliu/datasets/url_scoring/fineweb-edu/test.parquet \
 done
 ```
 """
@@ -21,7 +22,8 @@ import logging
 from dataclasses import dataclass
 import random
 from urllib.parse import urlparse
-
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 import draccus
 import fsspec
@@ -37,12 +39,15 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ResamplingConfig:
     input_pattern: str
-    output_path: str
+    train_output_path: str
+    test_output_path: str
+    test_size: float = 0.2
 
 
 @ray.remote(memory=64 * 1024 * 1024 * 1024, num_cpus=8)
 def resample_urls_remote(input_pattern: str, train_output_path: str, test_output_path: str, test_size: float = 0.2):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+    logger = logging.getLogger(__name__)
 
     # Set the random seed for reproducibility
     random.seed(0)
@@ -117,25 +122,32 @@ def resample_urls_remote(input_pattern: str, train_output_path: str, test_output
     # Resample train examples
     resampled_train_examples = bucket_and_resample(train_examples)
 
-    # Write the resampled train examples to the output path
-    with fsspec.open(train_output_path, "wt", compression="infer") as f:
-        for example in tqdm(resampled_train_examples, desc="Writing train output"):
-            f.write(json.dumps(example) + "\n")
+    # Convert resampled train examples to a PyArrow Table
+    train_table = pa.Table.from_pylist(resampled_train_examples)
+    # Get filesystem and path for the train output
+    fs_train, train_path_in_fs = fsspec.core.url_to_fs(train_output_path)
+    # Write the resampled train examples to the output path as Parquet
+    pq.write_table(train_table, train_path_in_fs, filesystem=fs_train, compression="snappy")
 
-    # Write all test examples to the output path (without resampling)
-    with fsspec.open(test_output_path, "wt", compression="infer") as f:
-        for example in tqdm(test_examples, desc="Writing test output"):
-            f.write(json.dumps(example) + "\n")
+    # Convert all test examples to a PyArrow Table
+    test_table = pa.Table.from_pylist(test_examples)
+    # Get filesystem and path for the test output
+    fs_test, test_path_in_fs = fsspec.core.url_to_fs(test_output_path)
+    # Write all test examples to the output path as Parquet (without resampling)
+    pq.write_table(test_table, test_path_in_fs, filesystem=fs_test, compression="snappy")
 
+    # Write success files indicating the number of examples written
     with fsspec.open(train_success_path, "wt", compression="infer") as f:
-        f.write({"num_examples": len(resampled_train_examples)})
+        f.write(json.dumps({"num_examples": len(resampled_train_examples)}))
     with fsspec.open(test_success_path, "wt", compression="infer") as f:
-        f.write({"num_examples": len(test_examples)})
+        f.write(json.dumps({"num_examples": len(test_examples)}))
 
 
 @draccus.wrap()
 def resample_urls(cfg: ResamplingConfig):
-    _ = ray.get(resample_urls_remote.remote(cfg.input_pattern, cfg.output_path))
+    _ = ray.get(
+        resample_urls_remote.remote(cfg.input_pattern, cfg.train_output_path, cfg.test_output_path, cfg.test_size)
+    )
 
 
 if __name__ == "__main__":
