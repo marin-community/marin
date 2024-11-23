@@ -16,10 +16,10 @@ llama_1_4b_wsds_train_config = SimpleTrainConfig(
     num_train_steps=10000,  # 4096 * 1024 * 10000 = 42B tokens
     learning_rate=3e-4,
     weight_decay=0.1,
+    cycles=[2e3, 4e3, 6e3, 8e3],  # 5 cycles with 2000 steps/cycle
     warmup=0.05,  # 5%  * 2000 = 100 steps
     decay=0.1,  # 10% * 2000 = 200 steps
     lr_schedule="inv",
-    cycles=[2e3, 4e3, 6e3, 8e3],
     steps_per_eval=2000,
 )
 
