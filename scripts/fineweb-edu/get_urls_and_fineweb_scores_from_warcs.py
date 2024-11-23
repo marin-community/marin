@@ -77,8 +77,8 @@ def batched(iterable, n=1):
 
 
 @ray.remote(
-    memory=32 * 1024 * 1024 * 1024,
-    num_cpus=120,
+    memory=64 * 1024 * 1024 * 1024,
+    num_cpus=4,
 )
 @cached_or_construct_output(success_suffix="SUCCESS", verbose=False)
 def extract_text_from_warc(warc_path: str, output_path: str):
@@ -126,7 +126,7 @@ def extract_text_from_warc(warc_path: str, output_path: str):
 
 @ray.remote(
     memory=32 * 1024 * 1024 * 1024,
-    num_cpus=120,
+    num_cpus=8,
     resources={"TPU": 4, "TPU-v4-8-head": 1},
 )
 @remove_tpu_lockfile_on_exit
