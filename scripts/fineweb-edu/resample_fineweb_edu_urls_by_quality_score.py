@@ -8,7 +8,7 @@ to ensure that the distribution of scores is uniform.
 python marin/run/ray_run.py \
     --no_wait -- \
     python scripts/fineweb-edu/resample_fineweb_edu_urls_by_quality_score.py \
-    --input_pattern gs://marin-us-central2/scratch/nfliu/urls_and_scores/fineweb-edu*/CC*/*_urls_and_quality_classifier_scores.jsonl.gz
+    --input_pattern 'gs://marin-us-central2/scratch/nfliu/urls_and_scores/fineweb-edu*/CC*/*_urls_and_quality_classifier_scores.jsonl.gz' \
     --train_output_path gs://marin-us-central2/scratch/nfliu/datasets/url_scoring/fineweb-edu/train.parquet \
     --test_output_path gs://marin-us-central2/scratch/nfliu/datasets/url_scoring/fineweb-edu/test.parquet
 ```
@@ -41,7 +41,7 @@ class ResamplingConfig:
     test_size: float = 0.2
 
 
-@ray.remote(memory=64 * 1024 * 1024 * 1024, num_cpus=8)
+@ray.remote(memory=256 * 1024 * 1024 * 1024, num_cpus=8)
 def resample_urls_remote(input_pattern: str, train_output_path: str, test_output_path: str, test_size: float = 0.2):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     logger = logging.getLogger(__name__)
@@ -80,13 +80,18 @@ def resample_urls_remote(input_pattern: str, train_output_path: str, test_output
         url = example["url"]
         domain = urlparse(url).netloc
         domain_examples[domain].append(example)
+    logger.info(f"Found {len(domain_examples)} unique domains in the input examples")
 
     # Split domains into train and test sets
+    logger.info("Splitting domains into train and test")
     domains = list(domain_examples.keys())
+    logger.info("Shuffling domains")
     random.shuffle(domains)
+    logger.info("Shuffled domains")
     test_domains_count = int(len(domains) * test_size)
     test_domains = set(domains[:test_domains_count])
     train_domains = set(domains[test_domains_count:])
+    logger.info("Split domains into train and test")
 
     # Assign examples to train and test sets based on domains
     train_examples = []
