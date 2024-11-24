@@ -9,8 +9,19 @@ python marin/run/ray_run.py \
     --no_wait -- \
     python scripts/fineweb-edu/resample_fineweb_edu_urls_by_quality_score.py \
     --input_pattern 'gs://marin-us-central2/scratch/nfliu/urls_and_scores/fineweb-edu*/CC*/*_urls_and_quality_classifier_scores.jsonl.gz' \
+    --resample True \
     --train_output_path gs://marin-us-central2/scratch/nfliu/datasets/url_scoring/fineweb-edu/train.parquet \
     --test_output_path gs://marin-us-central2/scratch/nfliu/datasets/url_scoring/fineweb-edu/test.parquet
+```
+
+```
+python marin/run/ray_run.py \
+    --no_wait -- \
+    python scripts/fineweb-edu/resample_fineweb_edu_urls_by_quality_score.py \
+    --input_pattern 'gs://marin-us-central2/scratch/nfliu/urls_and_scores/fineweb-edu-cc/CC*/*_urls_and_quality_classifier_scores.jsonl.gz' \
+    --resample False \
+    --train_output_path gs://marin-us-central2/scratch/nfliu/datasets/url_scoring/fineweb-edu-cc/train.parquet \
+    --test_output_path gs://marin-us-central2/scratch/nfliu/datasets/url_scoring/fineweb-edu-cc/test.parquet
 ```
 """
 import json
@@ -38,11 +49,14 @@ class ResamplingConfig:
     input_pattern: str
     train_output_path: str
     test_output_path: str
+    resample: bool
     test_size: float = 0.2
 
 
 @ray.remote(memory=256 * 1024 * 1024 * 1024, num_cpus=8)
-def resample_urls_remote(input_pattern: str, train_output_path: str, test_output_path: str, test_size: float = 0.2):
+def resample_urls_remote(
+    input_pattern: str, train_output_path: str, test_output_path: str, resample: bool, test_size: float = 0.2
+):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     logger = logging.getLogger(__name__)
 
@@ -142,9 +156,12 @@ def resample_urls_remote(input_pattern: str, train_output_path: str, test_output
         return resampled_examples
 
     # Resample train examples
-    resampled_train_examples = bucket_and_resample(train_examples)
+    if resample:
+        resampled_train_examples = bucket_and_resample(train_examples)
+    else:
+        resampled_train_examples = train_examples
 
-    # Convert resampled train examples to a PyArrow Table
+    # Convert train examples to a PyArrow Table
     train_table = pa.Table.from_pylist(resampled_train_examples)
     # Get filesystem and path for the train output
     fs_train, train_path_in_fs = fsspec.core.url_to_fs(train_output_path)
@@ -172,7 +189,9 @@ def resample_urls_remote(input_pattern: str, train_output_path: str, test_output
 @draccus.wrap()
 def resample_urls(cfg: ResamplingConfig):
     _ = ray.get(
-        resample_urls_remote.remote(cfg.input_pattern, cfg.train_output_path, cfg.test_output_path, cfg.test_size)
+        resample_urls_remote.remote(
+            cfg.input_pattern, cfg.train_output_path, cfg.test_output_path, cfg.resample, cfg.test_size
+        )
     )
 
 
