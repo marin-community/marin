@@ -5,32 +5,29 @@ split the records into train and test by domain and resample the train set
 to ensure that the distribution of scores is uniform.
 
 ```
-for fineweb_edu_dump_html_path in $(gcloud storage ls gs://marin-us-central2/documents/fineweb-edu/html); do
-    dump_name=$(basename -- ${fineweb_edu_dump_html_path})
-    python marin/run/ray_run.py \
-    --no_wait -- \
-    python scripts/fineweb-edu/resample_fineweb_edu_urls_by_quality_score.py \
-    --input_pattern gs://marin-us-central2/scratch/nfliu/urls_and_scores/fineweb-edu*/CC*/*_urls_and_quality_classifier_scores.jsonl.gz
-    --train_output_path gs://marin-us-central2/scratch/nfliu/datasets/url_scoring/fineweb-edu/train.parquet \
-    --test_output_path gs://marin-us-central2/scratch/nfliu/datasets/url_scoring/fineweb-edu/test.parquet \
-done
+python marin/run/ray_run.py \
+--no_wait -- \
+python scripts/fineweb-edu/resample_fineweb_edu_urls_by_quality_score.py \
+--input_pattern gs://marin-us-central2/scratch/nfliu/urls_and_scores/fineweb-edu*/CC*/*_urls_and_quality_classifier_scores.jsonl.gz
+--train_output_path gs://marin-us-central2/scratch/nfliu/datasets/url_scoring/fineweb-edu/train.parquet \
+--test_output_path gs://marin-us-central2/scratch/nfliu/datasets/url_scoring/fineweb-edu/test.parquet \
 ```
 """
-from collections import defaultdict
 import json
 import logging
-from dataclasses import dataclass
 import random
+from collections import defaultdict
+from dataclasses import dataclass
 from urllib.parse import urlparse
-import pyarrow as pa
-import pyarrow.parquet as pq
 
 import draccus
 import fsspec
+import pyarrow as pa
+import pyarrow.parquet as pq
 import ray
 from tqdm_loggable.auto import tqdm
 
-from marin.utils import fsspec_glob, fsspec_exists
+from marin.utils import fsspec_exists, fsspec_glob
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
