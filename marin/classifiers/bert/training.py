@@ -60,7 +60,7 @@ def train_epochs(
         print(f"Epoch {epoch + 1}/{num_epochs}, Loss: {total_loss/len(data_loader):.4f}")
 
 
-def _mp_fn(index, hf_model, train_path, save_path, lr, batch_size, num_epochs, num_labels=None):
+def _mp_fn(index, hf_model, train_path, save_path, lr, batch_size, num_epochs):
     """
     Function to run on each TPU device for BERT classifier training.
 
@@ -72,24 +72,18 @@ def _mp_fn(index, hf_model, train_path, save_path, lr, batch_size, num_epochs, n
         lr (float): Learning rate for training.
         batch_size (int): Batch size for training.
         num_epochs (int): Number of epochs to train for.
-        num_labels (int, optional): Number of labels in the training dataset.
-            If `None`, defaults to `train_dataset.num_labels`.
 
     Returns:
         bool: True if the process is successful.
     """
-
     tokenizer = BertTokenizer.from_pretrained(hf_model)
     train_dataset = BertDataset(train_path, tokenizer)
     train_loader = DataLoader(train_dataset, batch_size=batch_size)
 
-    if num_labels is None:
-        num_labels = train_dataset.num_labels
-
     device = xm.xla_device()
     device_loader = pl.MpDeviceLoader(train_loader, device)
 
-    model = BertForSequenceClassification.from_pretrained(hf_model, num_labels=num_labels).to(device)
+    model = BertForSequenceClassification.from_pretrained(hf_model, num_labels=train_dataset.num_labels).to(device)
     optimizer = AdamW(model.parameters(), lr=lr)
     xm.broadcast_master_param(model)
 
@@ -110,10 +104,9 @@ def train_model(
     lr: float = 2e-5,
     hf_model: str = "bert-base-uncased",
     num_epochs: int = 1,
-    num_labels: int | None = None,
 ) -> None:
     """
-    Train a BERT model.
+    Train a fastText model.
 
     Args:
         input_path (str): Path for input training data.
@@ -125,8 +118,6 @@ def train_model(
         lr (float): Learning rate for training.
         hf_model (str): Pretrained BERT model to use (from Huggingface).
         num_epochs (int): Number of epochs to train for.
-        num_labels (int, optional): Number of labels in the training dataset.
-            If `None`, defaults to `train_dataset.num_labels`.
 
     Returns:
         None: No return value.
@@ -160,7 +151,7 @@ def train_model(
             split_dataset(merge_path, train_path, val_path, val_frac, seed)
             shuffle(train_path, train_path, seed)
 
-            xmp.spawn(_mp_fn, args=(hf_model, train_path, model_path, lr, batch_size, num_epochs, num_labels))
+            xmp.spawn(_mp_fn, args=(hf_model, train_path, model_path, lr, batch_size, num_epochs))
 
             fsspec_rm(merge_path)
             fsspec_cpdir(tmp_dir, output_path)
