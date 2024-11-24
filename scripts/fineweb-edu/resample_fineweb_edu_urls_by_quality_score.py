@@ -6,11 +6,11 @@ to ensure that the distribution of scores is uniform.
 
 ```
 python marin/run/ray_run.py \
---no_wait -- \
-python scripts/fineweb-edu/resample_fineweb_edu_urls_by_quality_score.py \
---input_pattern gs://marin-us-central2/scratch/nfliu/urls_and_scores/fineweb-edu*/CC*/*_urls_and_quality_classifier_scores.jsonl.gz
---train_output_path gs://marin-us-central2/scratch/nfliu/datasets/url_scoring/fineweb-edu/train.parquet \
---test_output_path gs://marin-us-central2/scratch/nfliu/datasets/url_scoring/fineweb-edu/test.parquet \
+    --no_wait -- \
+    python scripts/fineweb-edu/resample_fineweb_edu_urls_by_quality_score.py \
+    --input_pattern gs://marin-us-central2/scratch/nfliu/urls_and_scores/fineweb-edu*/CC*/*_urls_and_quality_classifier_scores.jsonl.gz
+    --train_output_path gs://marin-us-central2/scratch/nfliu/datasets/url_scoring/fineweb-edu/train.parquet \
+    --test_output_path gs://marin-us-central2/scratch/nfliu/datasets/url_scoring/fineweb-edu/test.parquet
 ```
 """
 import json
@@ -60,12 +60,19 @@ def resample_urls_remote(input_pattern: str, train_output_path: str, test_output
 
     # Load all examples into memory
     all_examples = []
+    seen_urls = set()
     for filepath in tqdm(input_filepaths, desc="Reading input filepaths"):
         with fsspec.open(filepath, "rt", compression="infer") as f:
             # Use readlines to encourage fsspec to load everything into memory
             # at once, rather than making multiple requests to GCS.
             for line in f.readlines():
-                all_examples.append(json.loads(line))
+                parsed_line = json.loads(line)
+                if parsed_line["url"] not in seen_urls:
+                    all_examples.append(parsed_line)
+                    seen_urls.add(parsed_line["url"])
+    # Delete the set of all URLs, since we won't need it past this point
+    del seen_urls
+    logger.info(f"Read {len(all_examples)} deduplicated examples")
 
     # Build a mapping from domain to examples
     domain_examples = defaultdict(list)
