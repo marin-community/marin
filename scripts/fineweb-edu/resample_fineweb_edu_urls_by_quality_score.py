@@ -61,18 +61,27 @@ def resample_urls_remote(input_pattern: str, train_output_path: str, test_output
     # Load all examples into memory
     all_examples = []
     seen_urls = set()
+    num_skipped = 0
     for filepath in tqdm(input_filepaths, desc="Reading input filepaths"):
         with fsspec.open(filepath, "rt", compression="infer") as f:
             # Use readlines to encourage fsspec to load everything into memory
             # at once, rather than making multiple requests to GCS.
             for line in f.readlines():
                 parsed_line = json.loads(line)
-                if parsed_line["url"] not in seen_urls:
-                    all_examples.append(parsed_line)
-                    seen_urls.add(parsed_line["url"])
+                if parsed_line["score"] > 5 or parsed_line["score"] < 0:
+                    num_skipped += 1
+                    continue
+                if parsed_line["url"] in seen_urls:
+                    num_skipped += 1
+                    continue
+                all_examples.append(parsed_line)
+                seen_urls.add(parsed_line["url"])
+
     # Delete the set of all URLs, since we won't need it past this point
     del seen_urls
-    logger.info(f"Read {len(all_examples)} deduplicated examples")
+    logger.info(
+        f"Read {len(all_examples)} deduplicated examples, " f"{num_skipped} skipped (due to invalid score or duplicate)"
+    )
 
     # Build a mapping from domain to examples
     domain_examples = defaultdict(list)
