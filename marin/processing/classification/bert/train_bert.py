@@ -10,8 +10,7 @@ from dataclasses import dataclass, field
 import draccus
 
 from marin.classifiers.bert.training import train_model
-from marin.classifiers.utils import DatasetConfig, attributes_to_dataset, create_label_attribute
-from marin.utils import fsspec_rm
+from marin.classifiers.utils import DatasetConfig
 
 
 @dataclass
@@ -29,8 +28,8 @@ class TrainBertClassifierConfig:
         memory (int): Amount of memory allocated for remote training process (in GB).
     """
 
-    output_path: str
-    datasets: list[DatasetConfig]
+    output_path: str | None = field(default=None)
+    datasets: list[DatasetConfig] = field(default_factory=list)
     bert_args: dict = field(default_factory=dict)
     seed: int = 0
     val_frac: float = 0.1
@@ -38,17 +37,17 @@ class TrainBertClassifierConfig:
 
 
 def train(cfg: TrainBertClassifierConfig):
-    for dataset in cfg.datasets:
-        attr_path = os.path.join(cfg.output_path, "tmp")
-        create_label_attribute(input_doc_path=dataset.input_doc_path, output_attr_path=attr_path, label=dataset.label)
-        attributes_to_dataset(
-            output_path=cfg.output_path,
-            doc_path=dataset.input_doc_path,
-            attr_path=attr_path,
-            sampling_rate=dataset.sampling_rate,
-            seed=cfg.seed,
-        )
-        fsspec_rm(attr_path)
+    # for dataset in cfg.datasets:
+    #     attr_path = os.path.join(cfg.output_path, "tmp")
+    #     create_label_attribute(input_doc_path=dataset.input_doc_path, output_attr_path=attr_path, label=dataset.label)
+    #     attributes_to_dataset(
+    #         output_path=cfg.output_path,
+    #         doc_path=dataset.input_doc_path,
+    #         attr_path=attr_path,
+    #         sampling_rate=dataset.sampling_rate,
+    #         seed=cfg.seed,
+    #     )
+    #     fsspec_rm(attr_path)
 
     input_dataset_path = os.path.join(cfg.output_path, "data")
     train_model(
