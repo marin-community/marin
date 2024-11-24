@@ -66,15 +66,15 @@ def train_epochs(
 
         logger.info("starting actual TRAINING")
         iteration_start_time = time.time()
-        for _batch, t in zip(data_loader, range(len(data_loader)), strict=False):
-            # for t in range(len(data_loader)):
+        # for _batch, t in zip(data_loader, range(len(data_loader)), strict=False):
+        for t in range(len(data_loader)):
 
             iteration_load_time = time.time() - iteration_start_time
             recent_load_times.append(iteration_load_time)
 
-            input_ids = _batch["input_ids"]  # .to(device)
-            attention_mask = _batch["attention_mask"]  # .to(device)
-            labels = _batch["labels"]  # .to(device)
+            # input_ids = _batch["input_ids"]  # .to(device)
+            # attention_mask = _batch["attention_mask"]  # .to(device)
+            # labels = _batch["labels"]  # .to(device)
 
             optimizer.zero_grad()
             outputs = model(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
