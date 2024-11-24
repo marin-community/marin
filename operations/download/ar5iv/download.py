@@ -12,6 +12,7 @@ import zipfile
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
+from collections import defaultdict
 
 import draccus
 import fsspec
@@ -31,16 +32,20 @@ class DownloadConfig:
 
 
 @ray.remote(memory=2 * 1024 * 1024 * 1024)
-def process_shard(shard_list, shard_idx, output_path):
-    gcs_path = f"{output_path}/{shard_idx}.jsonl.gz"
-    with fsspec.open(f"gs://{gcs_path}", "wt", compression="gzip") as f:
-        for data in shard_list:
-            try:
-                print(json.dumps(data), file=f)
-            except Exception as e:
-                logger.exception(f"Error processing file {data['filename']}: {e}")
+def process_shard(shard_list: dict, shard_idx: str, output_path: str):
+    try:
+        gcs_path = f"{output_path}/{shard_idx}.jsonl.gz"
+        with fsspec.open(f"gs://{gcs_path}", "wt", compression="gzip") as f:
+            for data in shard_list:
+                try:
+                    print(json.dumps(data), file=f)
+                except Exception as e:
+                    logger.exception(f"Error processing file {data['filename']}: {e}")
 
-    logger.info(f"Shard {shard_idx} with {len(shard_list)} files uploaded to {gcs_path}")
+        logger.info(f"Shard {shard_idx} with {len(shard_list)} files uploaded to {gcs_path}")
+    except Exception as e:
+        logger.exception(f"Error processing shard {shard_idx}: {e}")
+        raise
 
 
 def get_file_size(url):
@@ -73,6 +78,7 @@ def download(cfg: DownloadConfig) -> None:
                 pbar.update(len(chunk))
 
         zip_content.seek(0)
+        shard_dict = defaultdict(list)
 
         # Process and upload files
         with zipfile.ZipFile(zip_content) as zip_ref:
@@ -82,15 +88,12 @@ def download(cfg: DownloadConfig) -> None:
             file_list.sort(key=lambda x: x.filename.split("/")[-2])
 
             if cfg.max_files:
-                file_list = file_list[: cfg.max_files]
-                # Start of Selection
-                from collections import defaultdict
+                file_list = file_list[:cfg.max_files]
 
-                shard_dict = defaultdict(list)
-                for file_info in file_list:
-                    # Extract shard id from file path
-                    shard_id = file_info.filename.split("/")[-2]
-                    shard_dict[shard_id].append(file_info)
+            for file_info in file_list:
+                # Extract shard id from file path
+                shard_id = file_info.filename.split("/")[-2]
+                shard_dict[shard_id].append(file_info)
 
             print(f"\nExtracting and uploading {len(file_list)} files...")
 
