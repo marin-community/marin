@@ -9,10 +9,10 @@ Home Page: https://sigmathling.kwarc.info/resources/ar5iv-dataset-2024/
 import json
 import logging
 import zipfile
+from collections import defaultdict
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
-from collections import defaultdict
 
 import draccus
 import fsspec
@@ -88,7 +88,7 @@ def download(cfg: DownloadConfig) -> None:
             file_list.sort(key=lambda x: x.filename.split("/")[-2])
 
             if cfg.max_files:
-                file_list = file_list[:cfg.max_files]
+                file_list = file_list[: cfg.max_files]
 
             for file_info in file_list:
                 # Extract shard id from file path
