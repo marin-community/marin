@@ -105,10 +105,14 @@ def resample_urls_remote(input_pattern: str, train_output_path: str, test_output
     # Assign examples to train and test sets based on domains
     train_examples = []
     test_examples = []
+    logger.info("Building train dataset")
     for domain in train_domains:
         train_examples.extend(domain_examples[domain])
+    logger.info("Built train dataset")
+    logger.info("Building test dataset")
     for domain in test_domains:
         test_examples.extend(domain_examples[domain])
+    logger.info("Built test dataset")
 
     # Function to bucket and resample examples
     def bucket_and_resample(examples):
