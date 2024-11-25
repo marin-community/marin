@@ -124,11 +124,9 @@ def default_train(
 
     pretraining_data, evaluation_data = _prepare_data_config(tokenized, use_default_validation, use_default_evaluation)
 
-    if isinstance(pretraining_data.tokenizer, VersionedValue):
-        tokenizer = pretraining_data.tokenizer.value
-    else:
-        tokenizer = pretraining_data.tokenizer
-    vocab_size = load_tokenizer(tokenizer).vocab_size
+    vocab_size = _get_vocab_size(pretraining_data)
+
+    steps_per_export = train_config.steps_per_export if train_config.steps_per_export is not None else 1000
 
     # TODO: right now, assume architecture is a LlamaConfig, generalize this
     assert isinstance(model_config, LlamaConfig)
@@ -159,7 +157,7 @@ def default_train(
                 steps_per_eval=train_config.steps_per_eval if train_config.steps_per_eval is not None else 1000,
                 checkpointer=CheckpointerConfig(
                     save_interval=timedelta(minutes=10),
-                    keep=[dict(every=25000)],
+                    keep=[dict(every=steps_per_export)],
                 ),
                 replica_dcn_axis_size=-1,
             ),
@@ -178,9 +176,18 @@ def default_train(
                     train_config.min_lr_ratio if train_config.min_lr_ratio is not None else AdamConfig().min_lr_ratio
                 ),
             ),
-            hf_save_steps=25000,
+            hf_save_steps=steps_per_export,
         ),
     )
+
+
+def _get_vocab_size(pretraining_data):
+    if isinstance(pretraining_data.tokenizer, VersionedValue):
+        tokenizer = pretraining_data.tokenizer.value
+    else:
+        tokenizer = pretraining_data.tokenizer
+    vocab_size = load_tokenizer(tokenizer).vocab_size
+    return vocab_size
 
 
 def _prepare_data_config(

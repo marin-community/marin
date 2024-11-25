@@ -18,7 +18,7 @@ def tokenize_dclm(tokenizer=llama3_tokenizer) -> ExecutorStep:
     )
 
 
-tokenize_dclm_llama3_step = tokenize_dclm()
+dclm_tokenized_llama3 = tokenize_dclm(llama3_tokenizer)
 
 if __name__ == "__main__":
-    executor_main(steps=[tokenize_dclm_llama3_step])
+    executor_main(steps=[dclm_tokenized_llama3])

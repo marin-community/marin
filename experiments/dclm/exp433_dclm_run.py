@@ -38,7 +38,7 @@ DCLM_MIXTURE_WEIGHTS = {
 
 EXPERIMENT_TAG = ["433_dclm_1b_1x"]
 
-mixture_config = lm_mixture_data_config(components=DCLM_FULL_COMPONENTS, weights=DCLM_MIXTURE_WEIGHTS)
+dclm_mixture_config = lm_mixture_data_config(components=DCLM_FULL_COMPONENTS, weights=DCLM_MIXTURE_WEIGHTS)
 
 # hyperparams and numbers below are chosen to replicate the numbers in https://arxiv.org/abs/2406.11794.
 # Table 1 (page 5) has # model parameters and # training tokens. Table 11, page 43 has the hyperparameters.
@@ -63,13 +63,12 @@ training_config = SimpleTrainConfig(
     weight_decay=0.033,
     min_lr_ratio=0.1,
     warmup=5000,
-    cooldown=3e-5,
     z_loss_weight=1e-4,
 )
 
 model = default_train(
     name="dclm_1b_1x_replication_oct26",
-    tokenized=mixture_config,
+    tokenized=dclm_mixture_config,
     model_config=llama_1_4b_dclm,
     train_config=training_config,
     tags=EXPERIMENT_TAG,
