@@ -80,7 +80,7 @@ def resample_urls_remote(
         with fsspec.open(filepath, "rt", compression="infer") as f:
             # Use readlines to encourage fsspec to load everything into memory
             # at once, rather than making multiple requests to GCS.
-            for line in f.readlines():
+            for line in tqdm(f.readlines(), desc="Reading input filepath"):
                 parsed_line = json.loads(line)
                 if parsed_line["score"] > 5 or parsed_line["score"] < 0:
                     num_skipped += 1
