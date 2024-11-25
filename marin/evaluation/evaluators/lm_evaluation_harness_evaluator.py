@@ -45,7 +45,7 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
 
             for eval_task in evals:
 
-                result_filepath = os.path.join(self.RESULTS_PATH, f"{eval_task.name}_{eval_task.num_fewshot}shot.jsonl")
+                result_filepath = os.path.join(self.RESULTS_PATH, f"{eval_task.name}_{eval_task.num_fewshot}shot")
 
                 # Create the output directory
                 output_dir = os.path.dirname(result_filepath)
@@ -60,9 +60,10 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
                     "--num_fewshot",
                     str(eval_task.num_fewshot),
                     "--model_args",
-                    f"pretrained={model_name_or_path},trust_remote_code=True",
+                    f"pretrained={model_name_or_path}",
                     "--batch_size",
                     "auto",
+                    "--trust_remote_code",
                     "--output_path",
                     result_filepath,
                 ]

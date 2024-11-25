@@ -12,23 +12,25 @@ CORE_TASKS = [
     EvalTaskConfig("agieval_lsat_ar", 3),  # 3-shot tests in legal domain
     EvalTaskConfig("arc_easy", 10),  # 10-shot, four-way MCQ questions involving grade 3-9 basic science
     EvalTaskConfig("arc_challenge", 10),  # a (harder) version of arc_easy
-    # these are all from BigBench
+    
+    # these are all from BigBench- they don't work yet....(throws error in lm-eval parsing the task config)
     # requires completing factual statements with the correct answer
-    EvalTaskConfig("bigbench_qa_wikidata_generate_until", 10),
+    #EvalTaskConfig("bigbench_qa_wikidata_generate_until", 10),
     # requires completing partially balanced expression consisting of parentheses & braces
-    EvalTaskConfig("bigbench_dyck_languages_multiple_choice", 10),
+    #EvalTaskConfig("bigbench_dyck_languages_multiple_choice", 10),
     # compute the output from some expression with newly defined operators
-    EvalTaskConfig("bigbench_operators_generate_until", 10),
+    #EvalTaskConfig("bigbench_operators_generate_until", 10),
     # differentiate instructions from text-to-copy & to perform sequence of operations
-    EvalTaskConfig("bigbench_repeat_copy_logic_generate_until", 10),
+    #EvalTaskConfig("bigbench_repeat_copy_logic_generate_until", 10),
     # requires executing algorithms such as recursion and dynamic programming
-    EvalTaskConfig("bigbench_cs_algorithms_multiple_choice", 10),
+    #EvalTaskConfig("bigbench_cs_algorithms_multiple_choice", 10),
     # identify the language of given text
-    EvalTaskConfig("bigbench_language_identification_multiple_choice", 10),
+    #EvalTaskConfig("bigbench_language_identification_multiple_choice", 10),
+    
     EvalTaskConfig("boolq", 10),  # answer yes/no questions based on a passage
     EvalTaskConfig("commonsense_qa", 10),  # 5-way multiple-choice questions based on common-sense, everyday scenarios
     EvalTaskConfig("copa", 0),  # use causal reasoning to predict the correct outcome of a given scenario
-    EvalTaskConfig("coqa", 0),  # conversational question-answering based on a passage
+    #EvalTaskConfig("coqa", 0),  # conversational question-answering based on a passage
     EvalTaskConfig("hellaswag", 0),  # 4-way multiple choice commonsense reasoning dataset
     EvalTaskConfig("hellaswag", 10),  # 4-way multiple choice commonsense reasoning dataset
     # ("jeopardy", 10, None) # not in lm_eval_harness right now :(
@@ -57,7 +59,7 @@ def run_core_evaluations(model_name: str, model_path: str) -> ExecutorStep:
 
 steps = [
     run_core_evaluations(
-        model_name="core-eval-benchmark/dclm_baseline_1b_1x_replication_nov12-b182e8",
+        model_name="core-eval-benchmark-nov25/dclm_baseline_1b_1x_replication_nov12-b182e8",
         model_path="gs://marin-us-central2/checkpoints/dclm_baseline_1b_1x_replication_nov12-b182e8/hf/step-54930",
     ),
 ]
