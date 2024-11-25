@@ -42,7 +42,7 @@ stackexchange_qa_vote_geq_5_rm_duplicate_200k_rw_200k = ExecutorStep(
         val_frac=versioned(0.0),
         seed=versioned(0),
     ),
-    pip_dependency_groups=["fsspec==2024.9.0"],
+    pip_dependency_groups=["fasttext"],
 )
 
 if __name__ == "__main__":
