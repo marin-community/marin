@@ -23,6 +23,16 @@ python marin/run/ray_run.py \
     --train_output_path gs://marin-us-central2/scratch/nfliu/datasets/url_scoring/fineweb-edu-cc/train.parquet \
     --test_output_path gs://marin-us-central2/scratch/nfliu/datasets/url_scoring/fineweb-edu-cc/test.parquet
 ```
+
+```
+python marin/run/ray_run.py \
+    --no_wait -- \
+    python scripts/fineweb-edu/resample_fineweb_edu_urls_by_quality_score.py \
+    --input_pattern 'gs://marin-us-central2/scratch/nfliu/urls_and_scores/fineweb-edu*/CC*/*_urls_and_quality_classifier_scores.jsonl.gz' \
+    --resample False \
+    --train_output_path gs://marin-us-central2/scratch/nfliu/datasets/url_scoring/fineweb-edu-no-resample/train.parquet \
+    --test_output_path gs://marin-us-central2/scratch/nfliu/datasets/url_scoring/fineweb-edu-no-resample/test.parquet
+```
 """
 import json
 import logging
