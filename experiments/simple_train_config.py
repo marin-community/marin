@@ -12,7 +12,7 @@ class SimpleTrainConfig:
     warmup: float | None = None
     decay: float | None = None
     lr_schedule: str | None = None
-    cycles: int | list[int] | None = None
+    cycle_length: int | list[int] | None = None
     z_loss_weight: float | None = None
     steps_per_eval: int | None = None
     node_count: int = 1

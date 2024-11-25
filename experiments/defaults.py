@@ -173,7 +173,7 @@ def default_train(
                 warmup=train_config.warmup if train_config.warmup is not None else AdamConfig().warmup,
                 decay=train_config.decay if train_config.decay is not None else AdamConfig().decay,
                 lr_schedule=train_config.lr_schedule if train_config.lr_schedule is not None else AdamConfig.lr_schedule,
-                cycles=train_config.cycles,
+                cycle_length=train_config.cycle_length,
                 min_lr_ratio=(
                     train_config.min_lr_ratio if train_config.min_lr_ratio is not None else AdamConfig().min_lr_ratio
                 ),
