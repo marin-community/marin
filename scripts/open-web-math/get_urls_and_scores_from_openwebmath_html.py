@@ -7,7 +7,7 @@ Running on open-web-math:
 
 ```
 python marin/run/ray_run.py --no_wait \
-    --pip_deps 'resiliparse,fasttext,lxml,py-asciimath,tabulate' \
+    --pip_deps 'resiliparse,fasttext,lxml,py-asciimath,tabulate,w3lib' \
     -- \
     python scripts/open-web-math/get_urls_and_scores_from_openwebmath_html.py \
     --html_input_path gs://marin-us-central2/documents/open-web-math-fde8ef8/html/ \
@@ -107,7 +107,7 @@ def process_one_batch(input_path: str, output_path: str):
     num_examples_written = 0
     num_examples_skipped = 0
 
-    randomized_config = OpenWebMathConfig("configs/randomized_all.yaml")
+    randomized_config = OpenWebMathConfig(os.path.join(os.path.dirname(__file__), "configs", "randomized_all.yaml"))
     with fsspec.open(output_path, "w", compression="gzip") as fout:
         for result in tqdm(
             map(lambda line: score_line(line, mathscore_model, randomized_config), input_lines),
