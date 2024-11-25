@@ -59,7 +59,7 @@ def run_bash_command(command: list[str], check: bool = True) -> None:
     command_str: str = " ".join(command)
     print(f"RUNNING: {command_str}")
     start_time: float = time.time()
-    
+
     try:
         result = subprocess.run(command, check=check, text=True, capture_output=True)
         elapsed_time_seconds: float = time.time() - start_time

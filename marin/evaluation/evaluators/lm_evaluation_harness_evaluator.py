@@ -72,17 +72,25 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
                     command.extend(["--limit", str(max_eval_instances)])
 
                 # run the command and check if the results file exists
-                run_bash_command(command, check=False)
+                run_bash_command(command, check=True)
                 assert os.path.exists(result_filepath), f"Results file {result_filepath} does not exist."
-
-            # Upload the results to GCS
-            if is_remote_path(output_path):
-                upload_to_gcs(self.RESULTS_PATH, output_path)
 
         except Exception as e:
             traceback.print_exc()
             raise RuntimeError("lm-eval failed. Please check the logs for more information.") from e
+
         finally:
+
+            # this is in the finally block so even in the case of exceptions we will
+            # write what has been saved
+            if is_remote_path(output_path):
+                try:
+                    print("Uploading eval results to GCS...")
+                    upload_to_gcs(self.RESULTS_PATH, output_path)
+                    print("Upload completed successfully.")
+                except Exception as upload_error:
+                    print(f"Failed to upload results to GCS: {upload_error}")
+
             self.cleanup(model)
             if os.path.exists(self.RESULTS_PATH):
                 shutil.rmtree(self.RESULTS_PATH)
