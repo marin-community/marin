@@ -78,8 +78,7 @@ def fsspec_glob(file_path):
     out = []
 
     # glob has to come after braceexpand
-    brace_expanded_files = braceexpand.braceexpand(file_path)
-    for file in brace_expanded_files:
+    for file in braceexpand.braceexpand(file_path):
         out.extend(join_protocol(file) for file in fs.glob(file))
 
     return out
