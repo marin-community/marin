@@ -23,26 +23,29 @@ def get_hf_dataset_urls(hf_dataset_id: str, revision: str, hf_url_glob: str) -> 
     except GatedRepoError as err:
         raise NotImplementedError(f"Unable to automatically download gated dataset `{hf_dataset_id}`") from err
 
-    url_list = []
-    base_dir = f"hf://datasets/{hf_dataset_id}"
-    for fpath in fs.find(base_dir, revision=revision):
-        if ".git" in fpath:
-            continue
+    try:
+        url_list = []
+        base_dir = f"hf://datasets/{hf_dataset_id}"
+        for fpath in fs.find(base_dir, revision=revision):
+            if ".git" in fpath:
+                continue
 
-        # Continue if the file does not match the hf_url_glob pattern
-        if not fs.glob(f"{base_dir}/{hf_url_glob}"):
-            continue
+            # Continue if the file does not match the hf_url_glob pattern
+            if not fs.glob(f"{base_dir}/{hf_url_glob}"):
+                continue
 
-        # Resolve to HF Path =>> grab URL
-        resolved_fpath = fs.resolve_path(fpath)
-        url_list.append(
-            hf_hub_url(
-                resolved_fpath.repo_id,
-                resolved_fpath.path_in_repo,
-                revision=resolved_fpath.revision,
-                repo_type=resolved_fpath.repo_type,
+            # Resolve to HF Path =>> grab URL
+            resolved_fpath = fs.resolve_path(fpath)
+            url_list.append(
+                hf_hub_url(
+                    resolved_fpath.repo_id,
+                    resolved_fpath.path_in_repo,
+                    revision=resolved_fpath.revision,
+                    repo_type=resolved_fpath.repo_type,
+                )
             )
-        )
+    except Exception as err:
+        raise ValueError(f"Unable to download dataset `{hf_dataset_id}`. Problem with glob {hf_url_glob}") from err
 
     return url_list
 
