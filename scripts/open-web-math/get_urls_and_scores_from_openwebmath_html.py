@@ -66,14 +66,18 @@ def score_line(line, mathscore_model, randomized_config):
     if not html_str or not url:
         return None
 
-    canonicalized_url = w3lib.url.canonicalize_url(url)
-
     randomized_config_sample = randomized_config.sample()
-    extraction_result = extract_text(html_str, randomized_config_sample, fast=True)
+    try:
+        extraction_result = extract_text(html_str, randomized_config_sample, fast=True)
+    except Exception:
+        return None
+
     if extraction_result is None:
         return None
+
     extracted_text, _ = extraction_result
     score = score_text(extracted_text, mathscore_model)
+    canonicalized_url = w3lib.url.canonicalize_url(url)
 
     return {"url": url, "canonicalized_url": canonicalized_url, "score": score}
 
@@ -121,7 +125,7 @@ def process_one_batch(input_path: str, output_path: str):
             num_examples_written += 1
 
     logger.info(
-        f"Got {num_examples_written} (url, score) pairs."
+        f"Got {num_examples_written} (url, score) pairs. "
         f"{len(input_lines)} examples in total, "
         f"{num_examples_skipped} examples skipped due to failed extraction"
     )
