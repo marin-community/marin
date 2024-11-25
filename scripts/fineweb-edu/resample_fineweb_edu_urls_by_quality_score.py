@@ -168,7 +168,7 @@ def resample_urls_remote(
     # Write the resampled train examples to the output path as Parquet
     logger.info(f"Writing {len(train_examples)} train examples")
     pq.write_table(train_table, train_path_in_fs, filesystem=fs_train, compression="snappy")
-    logger.info(f"Wrote {len(test_examples)} test examples")
+    logger.info(f"Wrote {len(train_examples)} train examples")
 
     # Convert all test examples to a PyArrow Table
     test_table = pa.Table.from_pylist(test_examples)
