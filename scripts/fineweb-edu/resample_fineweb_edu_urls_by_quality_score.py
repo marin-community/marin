@@ -141,27 +141,24 @@ def resample_urls_remote(
     # Function to bucket and resample examples
     def bucket_and_resample(examples):
         # Each example has `url`, `canonicalized_url`, and `score`.
-        # Scores range from 0 - 5. We want to resample the examples such that there's
-        # an even number of examples for each bucket. Buckets are defined
-        # in increments of 0.5 (i.e., 0-0.5, 0.5-1.0, 1.0-1.5, etc.)
-        bucket_size = 0.5
-        max_score = 5.0
-        num_buckets = int(max_score / bucket_size)
-        buckets = {i: [] for i in range(num_buckets)}
+        # Labels are computed using np.round(score).clip(0, 5).astype(int).
+        # We will bucket examples based on these labels to ensure even distribution.
+        buckets = defaultdict(list)
         for example in examples:
             score = example["score"]
-            bucket_index = min(int(score / bucket_size), num_buckets - 1)
-            buckets[bucket_index].append(example)
+            # Compute the label as per the discretization logic
+            label = int(min(max(round(score), 0), 5))
+            buckets[label].append(example)
 
-        logger.info("Bucketing complete. Counts per bucket:")
-        for bucket_index in sorted(buckets):
-            logger.info(f"Bucket {bucket_index}: {len(buckets[bucket_index])}")
+        logger.info("Bucketing complete. Counts per label:")
+        for label in sorted(buckets):
+            logger.info(f"Label {label}: {len(buckets[label])}")
 
-        # Resample to ensure even distribution
-        max_samples_per_bucket = min(len(bucket) for bucket in buckets.values())
+        # Resample to ensure even distribution across labels
+        max_samples_per_label = min(len(bucket) for bucket in buckets.values())
         resampled_examples = []
-        for bucket_index, bucket in buckets.items():
-            resampled_examples.extend(random.sample(bucket, k=max_samples_per_bucket))
+        for label, bucket in buckets.items():
+            resampled_examples.extend(random.sample(bucket, k=max_samples_per_label))
         logger.info(f"Resampling complete, got {len(resampled_examples)} examples in total")
         return resampled_examples
 
