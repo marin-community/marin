@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import html
 import json
+import logging
 import os
 import re
 from urllib.parse import unquote
@@ -8,6 +9,8 @@ from urllib.parse import unquote
 from lxml import etree as ET
 from py_asciimath.translator.translator import ASCIIMath2Tex
 from resiliparse.parse.html import traverse_dom
+
+logging.getLogger().setLevel(logging.INFO)
 
 color_regex = re.compile(r"\\textcolor\[.*?\]\{.*?\}")
 
