@@ -156,7 +156,7 @@ def default_train(
                 mp=jmp.get_policy("p=f32,c=bfloat16"),
                 train_batch_size=train_config.train_batch_size,
                 num_train_steps=train_config.num_train_steps,
-                steps_per_eval=1000,
+                steps_per_eval=train_config.steps_per_eval if train_config.steps_per_eval is not None else 1000,
                 checkpointer=CheckpointerConfig(
                     save_interval=timedelta(minutes=10),
                     keep=[dict(every=25000)],
@@ -171,7 +171,9 @@ def default_train(
                     train_config.weight_decay if train_config.weight_decay is not None else AdamConfig().weight_decay
                 ),
                 warmup=train_config.warmup if train_config.warmup is not None else AdamConfig().warmup,
-                cooldown=train_config.cooldown if train_config.cooldown is not None else AdamConfig().cooldown,
+                decay=train_config.decay if train_config.decay is not None else AdamConfig().decay,
+                lr_schedule=train_config.lr_schedule if train_config.lr_schedule is not None else AdamConfig.lr_schedule,
+                cycle_length=train_config.cycle_length,
                 min_lr_ratio=(
                     train_config.min_lr_ratio if train_config.min_lr_ratio is not None else AdamConfig().min_lr_ratio
                 ),
