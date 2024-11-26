@@ -75,11 +75,11 @@ def score_line(line, mathscore_model, randomized_config):
     if extraction_result is None:
         return None
 
-    extracted_text, _ = extraction_result
+    extracted_text, extraction_metadata = extraction_result
     score = score_text(extracted_text, mathscore_model)
     canonicalized_url = w3lib.url.canonicalize_url(url)
-
-    return {"url": url, "canonicalized_url": canonicalized_url, "score": score}
+    found_math = extraction_metadata["extraction_info"]["found_math"]
+    return {"url": url, "canonicalized_url": canonicalized_url, "score": score, "found_math": found_math}
 
 
 @ray.remote(
