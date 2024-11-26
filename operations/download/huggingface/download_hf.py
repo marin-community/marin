@@ -10,7 +10,7 @@ import os
 import fsspec
 import ray
 from huggingface_hub import HfFileSystem
-from tqdm_loggable.auto import tqdm
+from tqdm_loggable.tqdm_logging import tqdm_logging
 
 from marin.core.runtime import simple_backpressure
 from marin.utilities.validation_utils import write_provenance_json
@@ -77,6 +77,9 @@ def download_hf(cfg: DownloadConfig) -> None:
             pattern = f"datasets/{cfg.hf_dataset_id}/{hf_url_glob}"
             files += hf_fs.glob(pattern, revision=cfg.revision)
 
+    if not files:
+        raise ValueError(f"No files found for dataset `{cfg.hf_dataset_id}. Used glob patterns: {cfg.hf_urls_glob}")
+
     task_generator = []
 
     for file in files:
@@ -89,7 +92,7 @@ def download_hf(cfg: DownloadConfig) -> None:
 
     total_files = len(task_generator)
     logger.info(f"Total number of files to process: {total_files}")
-    pbar = tqdm(total=total_files)
+    pbar = tqdm_logging(total=total_files)
 
     for ref in simple_backpressure(stream_file_to_fsspec, iter(task_generator), max_in_flight=32, fetch_local=True):
         try:
@@ -97,6 +100,7 @@ def download_hf(cfg: DownloadConfig) -> None:
             pbar.update(1)
         except Exception as e:
             logging.exception(f"Error during task execution: {e}")
+            raise e
 
     # Write Provenance JSON
     write_provenance_json(
