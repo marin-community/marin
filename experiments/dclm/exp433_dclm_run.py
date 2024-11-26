@@ -1,5 +1,3 @@
-import random
-
 from experiments.defaults import SimpleTrainConfig, default_tokenize, default_train
 from experiments.llama import LlamaConfig
 from experiments.pretraining_datasets import dclm_baseline, proofpile_2, starcoderdata
@@ -76,7 +74,6 @@ training_config = SimpleTrainConfig(
     train_batch_size=256,
     num_train_steps=NUM_TRAIN_STEPS,
     learning_rate=3e-3,
-    data_seed=random.randint(0, 2**32 - 1),
     weight_decay=0.033,
     min_lr_ratio=0.1,
     warmup=5000,
@@ -98,14 +95,12 @@ dclm_mixture_model = default_train(
 )
 
 dclm_baseline_only_model = default_train(
-    name=f"dclm_baseline_1b_1x_replication_nov12_{training_config.data_seed}seed",
+    name="dclm_baseline_1b_1x_replication_nov12",
     tokenized=dclm_baseline_only_config,
     model_config=llama_1_4b_dclm,
     train_config=training_config,
     tags=EXPERIMENT_TAG_BASELINE_ONLY,
 )
-
-# mmlu_eval = evaluate_helm_on_step(model, evals=["mmlu"])
 
 if __name__ == "__main__":
     executor_main(
