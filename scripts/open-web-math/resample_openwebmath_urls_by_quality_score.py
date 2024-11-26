@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class ResamplingConfig:
-    input_pattern: str
+    input_patterns: list[str]
     train_output_path: str
     test_output_path: str
     resample: bool
@@ -45,7 +45,7 @@ class ResamplingConfig:
 
 @ray.remote(memory=256 * 1024 * 1024 * 1024, num_cpus=8)
 def resample_urls_remote(
-    input_pattern: str, train_output_path: str, test_output_path: str, resample: bool, test_size: float = 0.2
+    input_patterns: list[str], train_output_path: str, test_output_path: str, resample: bool, test_size: float = 0.2
 ):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     logger = logging.getLogger(__name__)
@@ -59,7 +59,10 @@ def resample_urls_remote(
     if fsspec_exists(train_success_path) and fsspec_exists(test_success_path):
         return
 
-    input_filepaths = fsspec_glob(input_pattern)
+    input_filepaths = set()
+    logger.info(f"Reading from input patterns: {input_patterns}")
+    for input_pattern in input_patterns:
+        input_filepaths.update(fsspec_glob(input_pattern))
     logger.info(f"Found {len(input_filepaths)} input files with URLs and scores")
 
     # Load all examples into memory
@@ -180,7 +183,7 @@ def resample_urls_remote(
 def resample_urls(cfg: ResamplingConfig):
     _ = ray.get(
         resample_urls_remote.remote(
-            cfg.input_pattern, cfg.train_output_path, cfg.test_output_path, cfg.resample, cfg.test_size
+            cfg.input_patterns, cfg.train_output_path, cfg.test_output_path, cfg.resample, cfg.test_size
         )
     )
 
