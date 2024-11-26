@@ -103,8 +103,12 @@ class HELMEvaluator(VllmTpuEvaluator):
 
         Args:
             model (ModelConfig): The model configuration of the model we want to evaluate
+
             evals (List[EvalTaskConfig]): The list of evaluations to run.
+                As of now we don't use num_fewshot from the EvalTaskConfig.
+
             output_path (str): The path to save the evaluation results.
+
             max_eval_instances (int | None): The maximum number of evaluation instances to run.
         """
         try:
@@ -139,8 +143,6 @@ class HELMEvaluator(VllmTpuEvaluator):
 
             # Write the model configuration files necessary for HELM
             self.write_model_config_files(model)
-
-            # TODO: convert this to use EvalTaskConfig fields instead of string evals
 
             # Run HELM with the model and the specified evals
             # This commands evaluates the model on the specified evals and outputs the results to RESULTS_PATH
