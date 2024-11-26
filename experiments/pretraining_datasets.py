@@ -1,6 +1,7 @@
 from marin.execution.executor import ExecutorStep, this_output_path
 from operations.download.huggingface.download import DownloadConfig, download
 from operations.download.huggingface.download_gated_manual import download_and_upload_to_store
+from operations.download.huggingface.download_hf import download_hf
 
 fineweb = ExecutorStep(
     name="raw/fineweb",
@@ -70,6 +71,7 @@ dclm_baseline = ExecutorStep(
         revision="a3b142c",
         gcs_output_path=this_output_path(),
         wait_for_completion=True,
+        timeout=24 * 60 * 60,
     ),
     override_output_path="raw/dclm",
 )
@@ -93,14 +95,14 @@ proofpile_2 = ExecutorStep(
         hf_dataset_id="EleutherAI/proof-pile-2",
         revision="901a927",
         gcs_output_path=this_output_path(),
-        wait_for_completion=False,
+        wait_for_completion=True,
     ),
     override_output_path="raw/proof-pile-2-f1b1d8",
 ).cd("901a927/huggingface.co/datasets/EleutherAI/proof-pile-2/resolve/901a927")
 
 starcoderdata = ExecutorStep(
     name="raw/starcoderdata",
-    fn=download_and_upload_to_store,
+    fn=download_hf,
     config=DownloadConfig(
         hf_dataset_id="bigcode/starcoderdata",
         revision="9fc30b5",
