@@ -6,7 +6,6 @@ open-web-math quality classifier.
 
 ```
 for dump_name in CC-MAIN-2022-05 CC-MAIN-2022-21 CC-MAIN-2022-27 CC-MAIN-2022-33 CC-MAIN-2022-40 CC-MAIN-2022-49 CC-MAIN-2023-06 CC-MAIN-2023-14; do
-for dump_name in CC-MAIN-2022-05; do
     python marin/run/ray_run.py \
     --pip_deps 'resiliparse,fasttext,lxml,py-asciimath,tabulate,w3lib,warcio' \
     --no_wait -- \
@@ -144,12 +143,22 @@ def process_one_batch(warc_path: str, output_path: str):
                     num_records_skipped += 1
                     continue
 
-                extracted_text, _ = extraction_result
+                extracted_text, extraction_metadata = extraction_result
                 score = score_text(extracted_text, mathscore_model)
                 canonicalized_url = w3lib.url.canonicalize_url(record_url)
 
+                found_math = extraction_metadata["extraction_info"]["found_math"]
+
                 fout.write(
-                    json.dumps({"url": record_url, "canonicalized_url": canonicalized_url, "score": score}) + "\n"
+                    json.dumps(
+                        {
+                            "url": record_url,
+                            "canonicalized_url": canonicalized_url,
+                            "score": score,
+                            "found_math": found_math,
+                        }
+                    )
+                    + "\n"
                 )
                 num_records_saved += 1
     logger.info(f"Saved {num_records_saved} records from WARC, skipped {num_records_skipped} records")
