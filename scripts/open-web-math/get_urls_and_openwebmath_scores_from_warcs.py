@@ -90,10 +90,6 @@ def score_text(text, score_model):
 @cached_or_construct_output(success_suffix="SUCCESS", verbose=False)
 def process_one_batch(warc_path: str, output_path: str):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-    logger.info(f"Using trafilatura version {trafilatura.__version__}")
-
     response = requests.get(warc_path)
     response.raise_for_status()
     # Load the response content into memory
