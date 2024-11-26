@@ -79,6 +79,8 @@ def fsspec_glob(file_path):
 
     # glob has to come after braceexpand
     for file in braceexpand.braceexpand(file_path):
+        print(f"file: {file}", flush=True)
+        print(f"Using fsspec version: {fsspec.__version__}")
         out.extend(join_protocol(file) for file in fs.glob(file))
 
     return out
