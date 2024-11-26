@@ -18,6 +18,11 @@ class FilterStackExchangeConfig:
 @ray.remote
 @cached_or_construct_output
 def _process_file(input_file_path: str, output_file_path: str, config: FilterStackExchangeConfig):
+    """Filters the stackexchange dataset by votes and removes duplicate questions.
+
+    Accepts and outputs a dolma formatted file.
+    """
+
     df = pd.read_json(input_file_path, lines=True)
     df["votes"] = df["metadata"].apply(lambda x: x["votes"])
     df["question_id"] = df["metadata"].apply(lambda x: x["id"])

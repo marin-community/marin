@@ -113,13 +113,8 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
 
     data_config = lm_mixture_data_config(components=tokenized, weights=weights)
 
-    train_name = f"quality_filtering/{config.experiment_name}"
-
-    # Max length of 64 characters for WANDB run is 64 characters
-    train_name = train_name[:64]
-
     train_step = default_train(
-        name=train_name,
+        name=f"quality_filtering/{config.experiment_name}",
         tokenized=data_config,
         model_config=llama_1_4b,
         train_config=llama_1_4b_train_config,
