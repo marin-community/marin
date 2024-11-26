@@ -47,7 +47,7 @@ class DownloadConfig:
     )
 
     # Job Control Parameters, used only for non-gated dataset transfers done via STS
-    wait_for_completion: bool = False                       # if True, will block until job completes
+    wait_for_completion: bool = True                        # if True, will block until job completes
     timeout: int = 1800                                     # Maximum time to wait for job completion (in seconds)
     poll_interval: int = 10                                 # Time to wait between polling job status (in seconds)
 
