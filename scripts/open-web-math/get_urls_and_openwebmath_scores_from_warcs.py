@@ -103,13 +103,13 @@ def process_one_batch(warc_path: str, output_path: str):
             # Exit loop if successful
             break
         except requests.exceptions.RequestException as e:
-            logging.warning(f"Attempt {attempt} failed with error: {e}")
+            logger.warning(f"Attempt {attempt} failed with error: {e}")
             if attempt == max_retries:
-                logging.error(f"All {max_retries} attempts failed. Exiting.")
+                logger.error(f"All {max_retries} attempts failed. Exiting.")
                 raise
             else:
                 sleep_time = backoff_time * (2 ** (attempt - 1))
-                logging.info(f"Retrying in {sleep_time} seconds...")
+                logger.info(f"Retrying in {sleep_time} seconds...")
                 time.sleep(sleep_time)
 
     logger.info("Loading mathscore model")
