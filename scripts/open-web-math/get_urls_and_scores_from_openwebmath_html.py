@@ -76,7 +76,6 @@ def score_line(line, mathscore_model, randomized_config):
         return None
 
     extracted_text, extraction_metadata = extraction_result
-    print("extraction metadata", extraction_metadata)
     score = score_text(extracted_text, mathscore_model)
     canonicalized_url = w3lib.url.canonicalize_url(url)
     found_math = extraction_metadata["found_math"]
