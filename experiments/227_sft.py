@@ -48,13 +48,12 @@ tokenize_step = ExecutorStep(
 
 
 train_step = ExecutorStep(
-    name="checkpoints/olmo7_072024_sft_4096_debugtoken_final",
+    name="checkpoints/olmo7_072024_sft_4096_3eps",
     fn=run_levanter_sft,
     config=TrainSFTOnPodConfig(
         output_path=this_output_path(),
         tpu_type="v4-128",
         tokenizer="EleutherAI/gpt-neox-20b",
-        epoch=0,
         chat_train_urls=[f"{actual_gcs_path}/**/*.jsonl.gz"],
         supervised_data=LMSupervisedDatasetConfig(
             cache_dir=output_path_of(tokenize_step), input_field="user", output_field="assistant"
