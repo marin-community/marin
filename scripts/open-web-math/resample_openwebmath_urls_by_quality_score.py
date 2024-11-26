@@ -10,8 +10,20 @@ python marin/run/ray_run.py \
     python scripts/open-web-math/resample_openwebmath_urls_by_quality_score.py \
     --input_patterns '["gs://marin-us-central2/scratch/nfliu/urls_and_scores/open-web-math-cc/CC*/*_urls_and_quality_classifier_scores.jsonl.gz", "gs://marin-us-central2/scratch/nfliu/urls_and_scores/open-web-math/*_urls_and_quality_classifier_scores.jsonl.gz"]' \
     --resample True \
+    --regex_adjusted False \
     --train_output_path gs://marin-us-central2/scratch/nfliu/datasets/url_scoring/open-web-math/train.parquet \
     --test_output_path gs://marin-us-central2/scratch/nfliu/datasets/url_scoring/open-web-math/test.parquet
+```
+
+```
+python marin/run/ray_run.py \
+    --no_wait -- \
+    python scripts/open-web-math/resample_openwebmath_urls_by_quality_score.py \
+    --input_patterns '["gs://marin-us-central2/scratch/nfliu/urls_and_scores/open-web-math-cc/CC*/*_urls_and_quality_classifier_scores.jsonl.gz", "gs://marin-us-central2/scratch/nfliu/urls_and_scores/open-web-math/*_urls_and_quality_classifier_scores.jsonl.gz"]' \
+    --resample True \
+    --regex_adjusted True \
+    --train_output_path gs://marin-us-central2/scratch/nfliu/datasets/url_scoring/open-web-math-regex-adjusted/train.parquet \
+    --test_output_path gs://marin-us-central2/scratch/nfliu/datasets/url_scoring/open-web-math-regex-adjusted/test.parquet
 ```
 """
 import json
@@ -40,12 +52,22 @@ class ResamplingConfig:
     train_output_path: str
     test_output_path: str
     resample: bool
+    regex_adjusted: bool
     test_size: float = 0.2
+
+
+def clip(minimum, x, maximum):
+    return max(minimum, min(x, maximum))
 
 
 @ray.remote(memory=256 * 1024 * 1024 * 1024, num_cpus=8)
 def resample_urls_remote(
-    input_patterns: list[str], train_output_path: str, test_output_path: str, resample: bool, test_size: float = 0.2
+    input_patterns: list[str],
+    train_output_path: str,
+    test_output_path: str,
+    resample: bool,
+    regex_adjusted: bool,
+    test_size: float = 0.2,
 ):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     logger = logging.getLogger(__name__)
@@ -75,12 +97,15 @@ def resample_urls_remote(
             # at once, rather than making multiple requests to GCS.
             for line in tqdm(f.readlines(), desc="Reading input filepath"):
                 parsed_line = json.loads(line)
-                if parsed_line["score"] > 5 or parsed_line["score"] < 0:
-                    num_skipped += 1
-                    continue
+                parsed_line["score"] = clip(0.0, parsed_line["score"], 1.0)
                 if parsed_line["url"] in seen_urls:
                     num_skipped += 1
                     continue
+                if regex_adjusted:
+                    parsed_line["regex_adjusted_score"] = (
+                        parsed_line["score"] + 0.65 if parsed_line["found_math"] else parsed_line["score"]
+                    )
+                    parsed_line["regex_adjusted_score"] = clip(0.0, parsed_line["regex_adjusted_score"], 1.0)
                 all_examples.append(parsed_line)
                 seen_urls.add(parsed_line["url"])
 
@@ -122,13 +147,13 @@ def resample_urls_remote(
     logger.info("Built test dataset")
 
     # Function to bucket and resample examples
-    def bucket_and_resample(examples):
+    def bucket_and_resample(examples, target_column):
         # Each example has `url`, `canonicalized_url`, `score`, and `found_math`.
         # Scores range from 0.0 to 1.0.
         # Fixed bucketing logic to bucket examples in increments of 0.1
         buckets = defaultdict(list)
         for example in examples:
-            score = example["score"]
+            score = example[target_column]
             # Compute the bucket index based on score in increments of 0.1
             # Ensure that score=1.0 falls into the last bucket
             bucket_index = min(int(score / 0.1), 9)
@@ -150,7 +175,9 @@ def resample_urls_remote(
 
     # Resample train examples
     if resample:
-        resampled_train_examples = bucket_and_resample(train_examples)
+        resampled_train_examples = bucket_and_resample(
+            train_examples, target_column="regex_adjusted_score" if regex_adjusted else "score"
+        )
     else:
         resampled_train_examples = train_examples
 
@@ -183,7 +210,12 @@ def resample_urls_remote(
 def resample_urls(cfg: ResamplingConfig):
     _ = ray.get(
         resample_urls_remote.remote(
-            cfg.input_patterns, cfg.train_output_path, cfg.test_output_path, cfg.resample, cfg.test_size
+            cfg.input_patterns,
+            cfg.train_output_path,
+            cfg.test_output_path,
+            cfg.resample,
+            cfg.regex_adjusted,
+            cfg.test_size,
         )
     )
 
