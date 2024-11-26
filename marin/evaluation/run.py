@@ -14,7 +14,6 @@ import draccus
 from marin.evaluation.evaluation_config import EvaluationConfig
 from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
 from marin.evaluation.evaluators.evaluator_factory import get_evaluator
-from marin.evaluation.process_mmlu_results import compute_and_print_mmlu_stats
 from marin.evaluation.utils import discover_hf_checkpoints
 
 
@@ -34,13 +33,6 @@ def evaluate(config: EvaluationConfig) -> None:
         )
     else:
         evaluator.evaluate(model, evals=config.evals, output_path=config.evaluation_path)
-
-    # process and print eval results
-    try:
-        if "mmlu" in config.evals:
-            compute_and_print_mmlu_stats(config.evaluation_path)
-    except Exception as e:
-        print(f"Error computing MMLU stats: {e}")
 
     print(f"Done (total time: {time.time() - start_time} seconds)")
 
