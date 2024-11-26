@@ -25,7 +25,7 @@ fineweb_edu = ExecutorStep(
         wait_for_completion=True,
     ),
     override_output_path="raw/fineweb-edu-c2beb4",
-).cd("3c452cb")
+).cd("3c452cb/huggingface.co/datasets/HuggingFaceFW/fineweb-edu/resolve/3c452cb")
 
 slimpajama = ExecutorStep(
     name="raw/SlimPajama-627B",
@@ -37,7 +37,7 @@ slimpajama = ExecutorStep(
         wait_for_completion=True,
     ),
     override_output_path="raw/SlimPajama-627B-262830",
-).cd("2d0accd")
+).cd("2d0accd/huggingface.co/datasets/cerebras/SlimPajama-627B/resolve/2d0accd")
 
 slimpajama_6b = ExecutorStep(
     name="raw/SlimPajama-6B",
@@ -49,11 +49,11 @@ slimpajama_6b = ExecutorStep(
         wait_for_completion=True,
     ),
     override_output_path="raw/SlimPajama-6B-be35b7",
-).cd("b5f90f4")
+).cd("b5f90f4/huggingface.co/datasets/DKYoon/SlimPajama-6B/resolve/b5f90f4")
 
 dolma = ExecutorStep(
     name="raw/dolma",
-    fn=download_and_upload_to_store,
+    fn=download,
     config=DownloadConfig(
         hf_dataset_id="allenai/dolma",
         revision="7f48140",
