@@ -90,6 +90,9 @@ RUN git clone https://github.com/dlwh/ray.git ~/ray --branch tpu_docker_2.34 --d
 RUN cp ~/ray/python/ray/autoscaler/_private/gcp/tpu_command_runner.py $VENV_PATH/lib/python3.11/site-packages/ray/autoscaler/_private/gcp/tpu_command_runner.py
 RUN rm -rf ~/ray
 
+# Install updated fsspec version
+RUN pip install --no-cache-dir fsspec==2024.9.0
+
 # Add /usr/lib/x86_64-linux-gnu/ to LD_LIBRARY_PATH so that bash prefers the systems
 # libtinfo.so over the conda-provided version. Using the conda-provided libtinfo.so
 # outputs a noisy warning because it doesn't include version information.
