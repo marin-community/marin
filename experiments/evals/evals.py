@@ -41,16 +41,20 @@ def evaluate_helm_on_step(
         evals (list[str]): List of evaluations to run with HELM, e.g, ["mmlu", "lite"].
     """
     # TODO: support evaluating all checkpoints in a run
-    if isinstance(step, InputName):
-        step = step.step  # if it is an InputName, get the `step` attribute
+    if isinstance(step, ExecutorStep):
+        model_step_path = output_path_of(step)
+        executor_step = step
+    elif isinstance(step, InputName):
+        model_step_path = output_path_of(step.step)
+        executor_step = step.step
 
     return ExecutorStep(
-        name=f"evaluation/helm/{step.name}",
+        name=f"evaluation/helm/{executor_step.name}",
         fn=evaluate,
         config=EvaluationConfig(
             evaluator="helm",
             model_name=None,
-            model_path=step,  # type: ignore
+            model_path=model_step_path,  # type: ignore
             evaluation_path=this_output_path(),
             evals=evals,
             discover_latest_checkpoint=True,
