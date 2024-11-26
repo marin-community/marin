@@ -23,6 +23,7 @@ import logging
 import os
 from dataclasses import dataclass
 import random
+import time
 from io import BytesIO
 
 import draccus
@@ -90,10 +91,26 @@ def score_text(text, score_model):
 @cached_or_construct_output(success_suffix="SUCCESS", verbose=False)
 def process_one_batch(warc_path: str, output_path: str):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-    response = requests.get(warc_path)
-    response.raise_for_status()
-    # Load the response content into memory
-    file_in_memory = BytesIO(response.content)
+    max_retries = 10
+    backoff_time = 1  # initial backoff time in seconds
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            response = requests.get(warc_path)
+            response.raise_for_status()
+            # Load the response content into memory
+            file_in_memory = BytesIO(response.content)
+            # Exit loop if successful
+            break
+        except requests.exceptions.RequestException as e:
+            logging.warning(f"Attempt {attempt} failed with error: {e}")
+            if attempt == max_retries:
+                logging.error(f"All {max_retries} attempts failed. Exiting.")
+                raise
+            else:
+                sleep_time = backoff_time * (2 ** (attempt - 1))
+                logging.info(f"Retrying in {sleep_time} seconds...")
+                time.sleep(sleep_time)
 
     logger.info("Loading mathscore model")
     # Load the model
