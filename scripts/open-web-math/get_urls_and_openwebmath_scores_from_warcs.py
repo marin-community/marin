@@ -147,7 +147,7 @@ def process_one_batch(warc_path: str, output_path: str):
                 score = score_text(extracted_text, mathscore_model)
                 canonicalized_url = w3lib.url.canonicalize_url(record_url)
 
-                found_math = extraction_metadata["extraction_info"]["found_math"]
+                found_math = extraction_metadata["found_math"]
 
                 fout.write(
                     json.dumps(
