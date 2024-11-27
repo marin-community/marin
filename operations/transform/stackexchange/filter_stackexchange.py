@@ -20,7 +20,8 @@ class FilterStackExchangeConfig:
 def _process_file(input_file_path: str, output_file_path: str, config: FilterStackExchangeConfig):
     """Filters the stackexchange dataset by votes and removes duplicate questions.
 
-    Accepts and outputs a dolma formatted file.
+    Accepts and outputs a dolma formatted file. We filter on a dataset of question-answer pairs.
+    If the dataset is not question-answer pair, then we consider question and answers independently.
     """
 
     df = pd.read_json(input_file_path, lines=True)
