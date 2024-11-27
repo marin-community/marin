@@ -12,6 +12,7 @@ stackexchange_qa_vote_geq_5_rm_duplicate = ExecutorStep(
     name="documents/stackexchange-qa-vote-geq-5-rm-duplicate",
     fn=filter_stackexchange,
     config=FilterStackExchangeConfig(
+        # Check out operations/download/stackexchange/README.md for how to download this dataset
         input_path="gs://marin-us-central2/documents/stackexchange/v2024-04-02/md-qa-pair/",
         output_path=this_output_path(),
         min_vote_threshold=8,
