@@ -25,6 +25,17 @@ python marin/run/ray_run.py \
     --train_output_path gs://marin-us-central2/scratch/nfliu/datasets/url_scoring/open-web-math-regex-adjusted/train.parquet \
     --test_output_path gs://marin-us-central2/scratch/nfliu/datasets/url_scoring/open-web-math-regex-adjusted/test.parquet
 ```
+
+```
+python marin/run/ray_run.py \
+    --no_wait -- \
+    python scripts/open-web-math/resample_openwebmath_urls_by_quality_score.py \
+    --input_patterns '["gs://marin-us-central2/scratch/nfliu/urls_and_scores/open-web-math-cc/CC*/*_urls_and_quality_classifier_scores.jsonl.gz", "gs://marin-us-central2/scratch/nfliu/urls_and_scores/open-web-math/*_urls_and_quality_classifier_scores.jsonl.gz"]' \
+    --resample False \
+    --regex_adjusted True \
+    --train_output_path gs://marin-us-central2/scratch/nfliu/datasets/url_scoring/open-web-math-regex-adjusted-no-resampling/train.parquet \
+    --test_output_path gs://marin-us-central2/scratch/nfliu/datasets/url_scoring/open-web-math-regex-adjusted-no-resampling/test.parquet
+```
 """
 import json
 import logging
