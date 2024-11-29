@@ -68,6 +68,8 @@ RUN pip install --no-cache-dir torch_xla[pallas] -f https://storage.googleapis.c
 RUN pip install --no-cache-dir git+https://github.com/teetone/OLMo.git@main  --extra-index-url https://download.pytorch.org/whl/cpu
 
 
+RUN pip install -U jax[tpu]==0.4.35 -f https://storage.googleapis.com/jax-releases/libtpu_releases.html
+
 # NOTE: Try to keep as much "heavy" stuff as possible before this line to avoid re-installing
 
 # (not installing pyproject.toml because it interferes with Ray's RuntimeEnv deps)
