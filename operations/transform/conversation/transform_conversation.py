@@ -148,6 +148,9 @@ def create_shard_output_directory(output_filename: str) -> str:
 @ray.remote(memory=4 * 1024 * 1024 * 1024)
 @cached_or_construct_output(success_suffix="SUCCESS")
 def transform_file(input_filename: str, output_filename: str, cfg: TransformSFTDatasetConfig):
+    # ignore the provenance file
+    if "provenance.json" in input_filename:
+        return
     rows = load_dataset(input_filename)
     logger.info(f"Transforming {len(rows)} rows from {input_filename} to {output_filename}")
 
