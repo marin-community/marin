@@ -19,7 +19,7 @@ from marin.execution.executor import (
     this_output_path,
     versioned,
 )
-from operations.download.huggingface.download import DownloadConfig, download
+from operations.download.huggingface.download import DownloadConfig
 from operations.download.huggingface.download_hf import download_hf
 from operations.transform.conversation.transform_conversation import TransformSFTDatasetConfig, transform_dataset
 
@@ -79,6 +79,13 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         metadata_columns=["dataset", "id"],  # Keeping these metadata columns
         filetype="jsonl",  # Corrected from parquet to jsonl based on the file extension
     ),
+    "allenai/tulu-3-sft-mixture": InstructionDatasetConfig(
+        hf_dataset_id="allenai/tulu-3-sft-mixture",
+        revision="55e9fd6",  # The revision hash shown in the image
+        wait_for_completion=True,
+        metadata_columns=["dataset", "id"],  # Keeping these metadata columns
+        filetype="parquet",  # Corrected from parquet to jsonl based on the file extension
+    ),
 }
 
 
@@ -124,7 +131,6 @@ def transform_dataset_step(dataset: InstructionDatasetConfig, download_step: Exe
             filetype=dataset.filetype,
             source=dataset.hf_dataset_id,
         ),
-        pip_dependency_groups=["download_transform"],
     )
 
     return transform_step
