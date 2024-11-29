@@ -124,6 +124,7 @@ def transform_dataset_step(dataset: InstructionDatasetConfig, download_step: Exe
             filetype=dataset.filetype,
             source=dataset.hf_dataset_id,
         ),
+        pip_dependency_groups=["download_transform"],
     )
 
     return transform_step
