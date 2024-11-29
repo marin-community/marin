@@ -467,22 +467,49 @@ async def _copy_data_from_one_shard_to_permanent_memory(
     dest = TreeStore.open(processor.output_exemplar, dest_path, mode="a", cache_metadata=False)
     source = TreeStore.open(processor.output_exemplar, source_path, mode="r", cache_metadata=True)
 
-    def _copy_one_array(dest_array: JaggedArrayStore, source_array: JaggedArrayStore, data_offset: int):
+    async def _copy_one_array(dest_array: JaggedArrayStore, source_array: JaggedArrayStore, data_offset: int):
+        """Copies **just the data array** from one shard to the permanent cache at a given offset."""
         # TODO: it'd be good if we just didn't expose the full data array (but only the used part)
-        data = source_array.data[0 : source_array.data_size]
-        # write_future = dest_array.data[data_offset : data_offset + source_array.data_size].write(data)
-        with ts.Transaction() as txn:
-            dest = dest_array.data
-            out_end = data_offset + source_array.data_size
-            write_future = dest.with_transaction(txn)[data_offset:out_end].write(data)
+        data_size = source_array.data_size
+        data = source_array.data[0:data_size]
 
-        return write_future
+        # To prevent OOM, copy in smaller batches
+        MAX_ELEMS = 1024 * 1024 * 1024
+        f = await _copy_in_batches(dest_array.data, data_offset, data, data_size, MAX_ELEMS)
+
+        if f is None:
+            return
+
+        return await f
 
     futures = jax.tree.map(_copy_one_array, dest.tree, source.tree, data_offset_tree)
 
     await asyncio.gather(*jax.tree.leaves(futures))
     logger.info(f"Finished copying data from {source_path} to {dest_path}.")
     return
+
+
+
+async def _copy_in_batches(dest_array, dest_offset, src_array, src_len, elems_per_batch) -> ts.Future | None:
+    """
+    Copies the data from one array to another in batches.
+    """
+    last_future: ts.Future | None = None
+    start = 0
+    out_start = dest_offset
+    while start < src_len:
+        if last_future is not None:
+            await last_future
+        async with ts.Transaction() as txn:
+            num_to_copy = min(elems_per_batch, src_len - start)
+            end = start + num_to_copy
+            out_end = out_start + num_to_copy
+
+            last_future = dest_array.with_transaction(txn)[out_start:out_end].write(src_array[start:end])
+            start += num_to_copy
+            out_start += num_to_copy
+
+    return last_future
 
 
 def _virtual_offset(base: ts.TensorStore, offset_amount):
