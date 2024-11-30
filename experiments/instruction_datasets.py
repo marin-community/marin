@@ -84,7 +84,7 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         revision="55e9fd6",  # The revision hash shown in the image
         wait_for_completion=True,
         metadata_columns=["dataset", "id"],  # Keeping these metadata columns
-        filetype="parquet",  # Corrected from parquet to jsonl based on the file extension
+        filetype="parquet", 
     ),
 }
 
