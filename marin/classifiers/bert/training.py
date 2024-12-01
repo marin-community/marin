@@ -16,6 +16,7 @@ import torch_xla.core.xla_model as xm
 import torch_xla.distributed.parallel_loader as pl
 import torch_xla.distributed.xla_multiprocessing as xmp
 from torch.utils.data import DataLoader
+from torch.utils.data.distributed import DistributedSampler
 from transformers import AdamW, BertForSequenceClassification, BertTokenizer
 
 from marin.classifiers.bert.utils import BertDataset, format_example
@@ -30,7 +31,6 @@ def train_epochs(
     optimizer: torch.optim.Optimizer,
     data_loader: torch.utils.data.DataLoader,
     num_epochs: int,
-    index: int,
 ) -> bool:
     """
     Train a model for a number of epochs.
@@ -46,35 +46,15 @@ def train_epochs(
     """
     model.train()
     for epoch in range(num_epochs):
+        start = time.time()
+
         logger.info("Training epoch %d", epoch)
         total_loss = 0
-        start = time.time()
-        recent_losses = []
-        recent_times = []
-        recent_load_times = []
-        stats_window = 1
 
-        device = xm.xla_device()
-
-        for batch, t in zip(data_loader, range(len(data_loader)), strict=False):
-            if t > 0:
-                break
-
-            input_ids = batch["input_ids"].to(device)
-            attention_mask = batch["attention_mask"].to(device)
-            labels = batch["labels"].to(device)
-
-        logger.info("starting actual TRAINING")
-        iteration_start_time = time.time()
-        # for _batch, t in zip(data_loader, range(len(data_loader)), strict=False):
-        for t in range(len(data_loader)):
-
-            iteration_load_time = time.time() - iteration_start_time
-            recent_load_times.append(iteration_load_time)
-
-            # input_ids = _batch["input_ids"]  # .to(device)
-            # attention_mask = _batch["attention_mask"]  # .to(device)
-            # labels = _batch["labels"]  # .to(device)
+        for t, batch in enumerate(data_loader):
+            input_ids = batch["input_ids"]
+            attention_mask = batch["attention_mask"]
+            labels = batch["labels"]
 
             optimizer.zero_grad()
             outputs = model(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
@@ -82,56 +62,15 @@ def train_epochs(
             loss.backward()
 
             xm.optimizer_step(optimizer)
+            xm.mark_step()
 
-            # iteration_step_time = time.time()
-
-            loss = torch.tensor(0.0)
             total_loss += loss.item()
-
-            recent_losses.append(loss.item())
-            iteration_total_time = time.time() - iteration_start_time
-            recent_times.append(iteration_total_time)
-
-            if len(recent_losses) > stats_window:
-                recent_losses.pop(0)
-                recent_times.pop(0)
-                recent_load_times.pop(0)
-
-            if t % stats_window == 0:
-                # logger.info(f"Epoch {epoch + 1}/{num_epochs}, Batch {t}/{len(data_loader)}, Loss: {loss.item():.4f}")
-
-                avg_time = sum(recent_times) / len(recent_times)
-                # max_time = max(recent_times)
-                # min_time = min(recent_times)
-
-                avg_load_time = sum(recent_load_times) / len(recent_load_times)
-                # max_load_time = max(recent_load_times)
-                # min_load_time = min(recent_load_times)
-
-                logger.info(
-                    f"Total Time: {avg_time:.4f} s, Load Time: {avg_load_time:.4f} s, Iteration: {t}, \
-                        Device: {index}, Shape: {input_ids.shape}"
-                )
-
-                # logger.info(
-                #     f"Step taken at time \
-                # {datetime.fromtimestamp(iteration_step_time).strftime('%Y-%m-%d %H:%M:%S.%f')} \
-                #     for Iteration {t} on Device {index}"
-                # )
-
-                # logger.info(
-                #     f"Model parameter at Iteration {t} on Device {index} \
-                # is {model.state_dict()['classifier.weight'][0][0]}"
-                # )
-
-            if t >= 50:
-                return
-
-            iteration_start_time = time.time()
+            if t % 10 == 0:
+                logger.info(f"Step {t}, Loss: {loss.item()}")
 
         end = time.time()
-        print(f"Epoch {epoch + 1}/{num_epochs}, Loss: {total_loss/len(data_loader):.4f}")
-        print(f"Took {end - start} time")
+        logger.info(f"Epoch {epoch + 1}/{num_epochs}, Loss: {total_loss/len(data_loader):.4f}")
+        logger.info(f"Took {end - start} time")
 
 
 def _mp_fn(index, hf_model, train_path, save_path, lr, batch_size, num_epochs):
@@ -150,13 +89,21 @@ def _mp_fn(index, hf_model, train_path, save_path, lr, batch_size, num_epochs):
     Returns:
         bool: True if the process is successful.
     """
-    logger.info(f"Training on TPU device {index}")
 
     tokenizer = BertTokenizer.from_pretrained(hf_model)
     train_dataset = BertDataset(train_path, tokenizer)
-    train_loader = DataLoader(train_dataset, batch_size=batch_size)
-
-    logger.info("Loading model and optimizer")
+    train_sampler = DistributedSampler(
+        train_dataset,
+        num_replicas=xm.xrt_world_size(),
+        rank=xm.get_ordinal(),
+    )
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        sampler=train_sampler,
+        num_workers=8,
+        prefetch_factor=4,
+    )
 
     device = xm.xla_device()
     device_loader = pl.MpDeviceLoader(train_loader, device)
@@ -164,8 +111,6 @@ def _mp_fn(index, hf_model, train_path, save_path, lr, batch_size, num_epochs):
     model = BertForSequenceClassification.from_pretrained(hf_model, num_labels=train_dataset.num_labels).to(device)
     optimizer = AdamW(model.parameters(), lr=lr)
     xm.broadcast_master_param(model)
-
-    logger.info("Model loaded")
 
     train_epochs(model, optimizer, device_loader, num_epochs, index)
 
@@ -214,7 +159,7 @@ def train_model(
     def run():
         if fsspec_exists(f"{output_path}/model.bin"):
             logger.info(f"Model already exists at {output_path}/model.bin. Skipping training.")
-            # return
+            # return # TODO: uncomment this line
 
         shard_paths = fsspec_glob(os.path.join(input_path, "**/*.jsonl.gz"))
         logger.info(f"Received input paths: {shard_paths}")
@@ -230,11 +175,7 @@ def train_model(
             split_dataset(merge_path, train_path, val_path, val_frac, seed)
             shuffle(train_path, train_path, seed)
 
-            logger.info("About to spawn XMP processes")
-            logger.info(f"TPU ENV: {[env for env in os.environ if 'TPU' in env]}")
             xmp.spawn(_mp_fn, args=(hf_model, train_path, model_path, lr, batch_size, num_epochs))
-
-            logger.info("Spawning XMP processes complete")
 
             fsspec_rm(merge_path)
             fsspec_cpdir(tmp_dir, output_path)
