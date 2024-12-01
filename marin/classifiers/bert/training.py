@@ -31,6 +31,7 @@ def train_epochs(
     optimizer: torch.optim.Optimizer,
     data_loader: torch.utils.data.DataLoader,
     num_epochs: int,
+    index: int | None = None,
 ) -> bool:
     """
     Train a model for a number of epochs.
@@ -40,6 +41,7 @@ def train_epochs(
         optimizer (torch.optim.Optimizer): Optimizer to use for training.
         data_loader (torch.utils.data.DataLoader): DataLoader for training data.
         num_epochs (int): Number of epochs to train for.
+        index: (Optional[int]): Index of the TPU device (if called from _mp_fn).
 
     Returns:
         bool: True if the process is successful.
@@ -66,14 +68,24 @@ def train_epochs(
 
             total_loss += loss.item()
             if t % 10 == 0:
-                logger.info(f"Step {t}, Loss: {loss.item()}")
+                logger.info(f"Step {t} on device {index}, Loss: {loss.item()}")
 
         end = time.time()
         logger.info(f"Epoch {epoch + 1}/{num_epochs}, Loss: {total_loss/len(data_loader):.4f}")
         logger.info(f"Took {end - start} time")
 
 
-def _mp_fn(index, hf_model, train_path, save_path, lr, batch_size, num_epochs):
+def _mp_fn(
+    index: int,
+    hf_model: str,
+    train_path: str,
+    save_path: str,
+    lr: float,
+    batch_size: int,
+    num_epochs: int,
+    num_workers: int = 8,
+    prefetch_factor: int = 4,
+):
     """
     Function to run on each TPU device for BERT classifier training.
 
@@ -85,6 +97,8 @@ def _mp_fn(index, hf_model, train_path, save_path, lr, batch_size, num_epochs):
         lr (float): Learning rate for training.
         batch_size (int): Batch size for training.
         num_epochs (int): Number of epochs to train for.
+        num_workers (int): Number of workers for DataLoader.
+        prefetch_factor (int): Prefetch factor for DataLoader.
 
     Returns:
         bool: True if the process is successful.
@@ -101,8 +115,8 @@ def _mp_fn(index, hf_model, train_path, save_path, lr, batch_size, num_epochs):
         train_dataset,
         batch_size=batch_size,
         sampler=train_sampler,
-        num_workers=8,
-        prefetch_factor=4,
+        num_workers=num_workers,
+        prefetch_factor=prefetch_factor,
     )
 
     device = xm.xla_device()
