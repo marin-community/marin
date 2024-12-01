@@ -173,7 +173,7 @@ def train_model(
     def run():
         if fsspec_exists(f"{output_path}/model.bin"):
             logger.info(f"Model already exists at {output_path}/model.bin. Skipping training.")
-            # return # TODO: uncomment this line
+            return
 
         shard_paths = fsspec_glob(os.path.join(input_path, "**/*.jsonl.gz"))
         logger.info(f"Received input paths: {shard_paths}")
