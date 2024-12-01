@@ -1,6 +1,7 @@
 from marin.execution.executor import ExecutorStep, this_output_path
 from operations.download.huggingface.download import DownloadConfig, download
 from operations.download.huggingface.download_gated_manual import download_and_upload_to_store
+from operations.download.huggingface.download_hf import download_hf
 
 fineweb = ExecutorStep(
     name="raw/fineweb",
@@ -11,7 +12,7 @@ fineweb = ExecutorStep(
         gcs_output_path=this_output_path(),
         wait_for_completion=True,
     ),
-    override_output_path="gs://marin-us-central2/raw/fineweb",
+    override_output_path="raw/fineweb",
 )
 
 fineweb_edu = ExecutorStep(
@@ -23,7 +24,7 @@ fineweb_edu = ExecutorStep(
         gcs_output_path=this_output_path(),
         wait_for_completion=True,
     ),
-    override_output_path="gs://marin-us-central2/raw/fineweb-edu-c2beb4",
+    override_output_path="raw/fineweb-edu-c2beb4",
 ).cd("3c452cb/huggingface.co/datasets/HuggingFaceFW/fineweb-edu/resolve/3c452cb")
 
 slimpajama = ExecutorStep(
@@ -35,7 +36,7 @@ slimpajama = ExecutorStep(
         gcs_output_path=this_output_path(),
         wait_for_completion=True,
     ),
-    override_output_path="gs://marin-us-central2/raw/SlimPajama-627B-262830",
+    override_output_path="raw/SlimPajama-627B-262830",
 ).cd("2d0accd/huggingface.co/datasets/cerebras/SlimPajama-627B/resolve/2d0accd")
 
 slimpajama_6b = ExecutorStep(
@@ -47,7 +48,7 @@ slimpajama_6b = ExecutorStep(
         gcs_output_path=this_output_path(),
         wait_for_completion=True,
     ),
-    override_output_path="gs://marin-us-central2/raw/SlimPajama-6B-be35b7",
+    override_output_path="raw/SlimPajama-6B-be35b7",
 ).cd("b5f90f4/huggingface.co/datasets/DKYoon/SlimPajama-6B/resolve/b5f90f4")
 
 dolma = ExecutorStep(
@@ -59,7 +60,7 @@ dolma = ExecutorStep(
         gcs_output_path=this_output_path(),
         wait_for_completion=True,
     ),
-    override_output_path="gs://marin-us-central2/raw/dolma",
+    override_output_path="raw/dolma",
 )
 
 dclm_baseline = ExecutorStep(
@@ -70,8 +71,9 @@ dclm_baseline = ExecutorStep(
         revision="a3b142c",
         gcs_output_path=this_output_path(),
         wait_for_completion=True,
+        timeout=24 * 60 * 60,
     ),
-    override_output_path="gs://marin-us-central2/raw/dclm",
+    override_output_path="raw/dclm",
 )
 
 the_stack_dedup = ExecutorStep(
@@ -83,7 +85,7 @@ the_stack_dedup = ExecutorStep(
         gcs_output_path=this_output_path(),
         wait_for_completion=True,
     ),
-    override_output_path="gs://marin-us-central2/raw/the-stack-dedup-4ba450",
+    override_output_path="raw/the-stack-dedup-4ba450",
 ).cd("17cad72")
 
 proofpile_2 = ExecutorStep(
@@ -93,19 +95,19 @@ proofpile_2 = ExecutorStep(
         hf_dataset_id="EleutherAI/proof-pile-2",
         revision="901a927",
         gcs_output_path=this_output_path(),
-        wait_for_completion=False,
+        wait_for_completion=True,
     ),
-    override_output_path="gs://marin-us-central2/raw/proof-pile-2-f1b1d8",
+    override_output_path="raw/proof-pile-2-f1b1d8",
 ).cd("901a927/huggingface.co/datasets/EleutherAI/proof-pile-2/resolve/901a927")
 
 starcoderdata = ExecutorStep(
     name="raw/starcoderdata",
-    fn=download_and_upload_to_store,
+    fn=download_hf,
     config=DownloadConfig(
         hf_dataset_id="bigcode/starcoderdata",
         revision="9fc30b5",
         gcs_output_path=this_output_path(),
         wait_for_completion=True,
     ),
-    override_output_path="gs://marin-us-central2/raw/starcoderdata-720c8c",
+    override_output_path="raw/starcoderdata-720c8c",
 ).cd("9fc30b5")
