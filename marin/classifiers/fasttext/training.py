@@ -42,7 +42,7 @@ def train_model(
     num_cpus = fasttext_args["thread"] if "thread" in fasttext_args else 1
 
     # run training on remote worker, not head node
-    @ray.remote(memory=memory_req * 1024 * 1024 * 1024, runtime_env={"pip": ["s3fs", "fasttext"]}, num_cpus=num_cpus)
+    @ray.remote(memory=memory_req * 1024 * 1024 * 1024, num_cpus=num_cpus)
     def run():
         if fsspec_exists(os.path.join(output_path, "model.bin")):
             logger.info(f"Model already exists at {output_path}/model.bin. Skipping training.")
