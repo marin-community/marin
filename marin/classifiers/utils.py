@@ -173,7 +173,7 @@ def create_label_attribute(input_doc_path: str, output_attr_path: str, label: st
     """
 
     # curry write_label so that we can pass it to map_files_in_directory
-    @ray.remote(memory=1 * 1024 * 1024 * 1024, runtime_env={"pip": ["s3fs"]}, num_cpus=1)  # 1 GB
+    @ray.remote(memory=1 * 1024 * 1024 * 1024, num_cpus=1)  # 1 GB
     def processing_func(input_file_path, output_file_path):
         return write_label_attribute(input_file_path, output_file_path, label)
 
@@ -210,7 +210,7 @@ def attributes_to_dataset(
     """
 
     # curry write_fasttext_lines so that we can pass it to map_files_in_directory
-    @ray.remote(memory=1 * 1024 * 1024 * 1024, runtime_env={"pip": ["s3fs"]}, num_cpus=1)  # 1 GB
+    @ray.remote(memory=1 * 1024 * 1024 * 1024, num_cpus=1)  # 1 GB
     def processing_func(input_file_path: str, output_file_path: str) -> bool:
         attr_file_path = rebase_file_path(doc_path, input_file_path, attr_path)
         return write_examples(input_file_path, output_file_path, attr_file_path, sampling_rate, seed, get_label)
