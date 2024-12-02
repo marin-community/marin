@@ -17,7 +17,7 @@ mmlu_download_step = ExecutorStep(
         gcs_output_path=this_output_path(),
         wait_for_completion=True,
     ),
-    override_output_path="gs://marin-us-central2/raw/cais/mmlu",
+    override_output_path="raw/cais/mmlu",
 ).cd("c30699e/huggingface.co/datasets/cais/mmlu/resolve/c30699e")
 
 """

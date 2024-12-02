@@ -7,9 +7,13 @@ class SimpleTrainConfig:
     train_batch_size: int
     num_train_steps: int
     learning_rate: float
+    data_seed: int | None = None
     weight_decay: float | None = None
     min_lr_ratio: float | None = None
     warmup: float | None = None
-    cooldown: float | None = None
+    decay: float | None = None
+    lr_schedule: str | None = None
+    cycle_length: int | list[int] | None = None
     z_loss_weight: float | None = None
+    steps_per_eval: int | None = None
     node_count: int = 1

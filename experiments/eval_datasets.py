@@ -44,7 +44,7 @@ mmlu_raw = ExecutorStep(
         wait_for_completion=True,
         hf_urls_glob=["**/*.parquet", "*.md"],
     ),
-    override_output_path="gs://marin-us-central2/raw/cais/mmluhf",
+    override_output_path="raw/cais/mmluhf",
 ).cd("c30699e")
 
 # download boolq dataset
@@ -58,7 +58,7 @@ boolq_raw = ExecutorStep(
         wait_for_completion=True,
         hf_urls_glob=["**/*.parquet"],
     ),
-    override_output_path="gs://marin-us-central2/raw/google/boolqhf",
+    override_output_path="raw/google/boolqhf",
 ).cd("35b264d")
 
 # download hellaswag dataset
@@ -72,7 +72,7 @@ hellaswag_raw = ExecutorStep(
         wait_for_completion=True,
         hf_urls_glob=["**/*.parquet"],
     ),
-    override_output_path="gs://marin-us-central2/raw/Rowan/hellaswaghf",
+    override_output_path="raw/Rowan/hellaswaghf",
 ).cd("50441ce")
 
 # download piqa dataset
@@ -86,7 +86,7 @@ piqa_raw = ExecutorStep(
         wait_for_completion=True,
         hf_urls_glob=["**/*.parquet"],
     ),
-    override_output_path="gs://marin-us-central2/raw/ybisk/piqahf",
+    override_output_path="raw/ybisk/piqahf",
 ).cd("142c512")
 
 # download winogrande dataset
@@ -100,7 +100,7 @@ winogrande_raw = ExecutorStep(
         wait_for_completion=True,
         hf_urls_glob=["winogrande_xl/**/*.parquet"],
     ),
-    override_output_path="gs://marin-us-central2/raw/allenai/winograndehf",
+    override_output_path="raw/allenai/winograndehf",
 ).cd("ebf71e3")
 
 # download arc dataset
@@ -114,7 +114,7 @@ arc_raw = ExecutorStep(
         wait_for_completion=True,
         hf_urls_glob=["**/*.parquet", "*.md"],
     ),
-    override_output_path="gs://marin-us-central2/raw/allenai/ai2_archf",
+    override_output_path="raw/allenai/ai2_archf",
 ).cd("210d026")
 
 # download openbookqa dataset
@@ -128,7 +128,7 @@ openbookqa_raw = ExecutorStep(
         wait_for_completion=True,
         hf_urls_glob=["**/*.parquet", "*.md"],
     ),
-    override_output_path="gs://marin-us-central2/raw/allenai/openbookqahf",
+    override_output_path="raw/allenai/openbookqahf",
 ).cd("388097e")
 
 # download MMLU-Pro dataset
