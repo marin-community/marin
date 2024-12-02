@@ -132,7 +132,7 @@ def default_eval(
         evals = CORE_TASKS
 
     return ExecutorStep(
-        name=f"evaluation/lm_evaluation_harness/core-eval-{executor_step.name}",
+        name=f"evaluation/lm_evaluation_harness/{executor_step.name}",
         fn=evaluate,
         config=EvaluationConfig(
             evaluator="lm_evaluation_harness",

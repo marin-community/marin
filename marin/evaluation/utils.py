@@ -1,3 +1,4 @@
+import logging
 import os
 import subprocess
 import time
@@ -8,6 +9,8 @@ import yaml
 from fsspec.implementations.local import LocalFileSystem
 
 from marin.utils import fsspec_exists, fsspec_glob, fsspec_mtime
+
+logger = logging.getLogger(__name__)
 
 
 def authenticate_with_hf(hf_auth_token: str | None) -> None:
@@ -51,24 +54,24 @@ def upload_to_gcs(local_path: str, gcs_path: str) -> None:
     fs = fsspec.filesystem("gcs")
     # The slash is needed to upload the contents of the folder to `gcs_path`
     fs.put(local_path + "/", gcs_path, recursive=True)
-    print(f"Uploaded {local_path} to {gcs_path}.")
+    logger.info(f"Uploaded {local_path} to {gcs_path}.")
 
 
 def run_bash_command(command: list[str], check: bool = True) -> None:
     """Runs a bash command."""
     command_str: str = " ".join(command)
-    print(f"RUNNING: {command_str}")
+    logger.info(f"RUNNING: {command_str}")
     start_time: float = time.time()
 
     try:
         result = subprocess.run(command, check=check, text=True, capture_output=True)
         elapsed_time_seconds: float = time.time() - start_time
-        print(f"COMPLETED: {command_str} ({elapsed_time_seconds}s)")
-        print(f"STDOUT:\n{result.stdout}")
-        print(f"STDERR:\n{result.stderr}")
+        logger.info(f"COMPLETED: {command_str} ({elapsed_time_seconds}s)")
+        logger.info(f"STDOUT:\n{result.stdout}")
+        logger.info(f"STDERR:\n{result.stderr}")
     except subprocess.CalledProcessError as e:
-        print(f"FAILED: {command_str}")
-        print(f"ERROR:\n{e.stderr}")
+        logger.error(f"FAILED: {command_str}")
+        logger.error(f"STDOUT:\n{e.stdout}")
         raise
 
 

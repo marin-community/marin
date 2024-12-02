@@ -1,3 +1,4 @@
+import logging
 import os
 import shutil
 import traceback
@@ -7,6 +8,8 @@ from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Dependency, ModelConfig
 from marin.evaluation.evaluators.vllm_tpu_evaluator import VllmTpuEvaluator
 from marin.evaluation.utils import is_remote_path, run_bash_command, set_cuda_visible_devices, upload_to_gcs
+
+logger = logging.getLogger(__name__)
 
 
 # TODO: this currently doesn't work on TPUs: https://github.com/vllm-project/vllm/issues/8499
@@ -86,11 +89,11 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
             # write what has been saved
             if is_remote_path(output_path):
                 try:
-                    print("Uploading eval results to GCS...")
+                    logger.info("Uploading eval results to GCS...")
                     upload_to_gcs(self.RESULTS_PATH, output_path)
-                    print("Upload completed successfully.")
+                    logger.info("Upload completed successfully.")
                 except Exception as upload_error:
-                    print(f"Failed to upload results to GCS: {upload_error}")
+                    logger.info(f"Failed to upload results to GCS: {upload_error}")
 
             self.cleanup(model)
             if os.path.exists(self.RESULTS_PATH):

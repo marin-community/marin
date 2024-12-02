@@ -77,7 +77,6 @@ training_config = SimpleTrainConfig(
     weight_decay=0.033,
     min_lr_ratio=0.1,
     warmup=5000,
-    cooldown=3e-5,
     z_loss_weight=1e-4,
 )
 
