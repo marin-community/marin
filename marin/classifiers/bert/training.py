@@ -50,7 +50,7 @@ def train_epochs(
     for epoch in range(num_epochs):
         start = time.time()
 
-        logger.info("Training epoch %d", epoch)
+        logger.info(f"Training epoch {epoch}")
         total_loss = 0
 
         for t, batch in enumerate(data_loader):
