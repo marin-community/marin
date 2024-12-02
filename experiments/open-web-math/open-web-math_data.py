@@ -18,7 +18,7 @@ open_web_math_raw = ExecutorStep(
         gcs_output_path=this_output_path(),
         wait_for_completion=False,
     ),
-    override_output_path="gs://marin-us-central2/raw/open-web-math-fde8ef8",
+    override_output_path="raw/open-web-math-fde8ef8",
 )
 
 ############################################################
