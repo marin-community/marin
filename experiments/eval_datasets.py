@@ -156,7 +156,7 @@ humaneval_raw = ExecutorStep(
         wait_for_completion=True,
         hf_urls_glob=["**/*.parquet", "*.md"],
     ),
-    override_output_path="gs://marin-us-central2/raw/openai/openai_humaneval",
+    override_output_path="gs://marin-us-central2/raw/openai/openai_humanevalhf",
 ).cd("7dce605")
 
 # download mbpp
@@ -170,7 +170,7 @@ mbpp_raw = ExecutorStep(
         wait_for_completion=True,
         hf_urls_glob=["**/*.parquet", "*.md"],
     ),
-    override_output_path="gs://marin-us-central2/raw/google-research-datasets/mbpp",
+    override_output_path="gs://marin-us-central2/raw/google-research-datasets/mbpphf",
 ).cd("4bb6404")
 
 
@@ -416,7 +416,7 @@ humaneval_eval = ExecutorStep(
 )
 
 # This creates a JSON file representing the train, test, and validation splits for mbpp
-humaneval_eval = ExecutorStep(
+mbpp_eval = ExecutorStep(
     name="evaluation/mbpp-eval",
     fn=raw2json,
     config=DatasetConversionConfig(
@@ -444,7 +444,7 @@ eval_datasets = [
     EvalDataset("allenai", "openbookqa", [openbookqa_eval], ["core"]),
     EvalDataset("Tiger-Lab", "MMLU-Pro", [mmlu_pro_eval]),
     EvalDataset("openai", "openai_humaneval", [humaneval_eval]),
-    EvalDataset("google-research-datasets", "mbpp", ["mbpp_eval"]),
+    EvalDataset("google-research-datasets", "mbpp", [mbpp_eval]),
 ]
 
 
