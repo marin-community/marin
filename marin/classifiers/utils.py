@@ -22,14 +22,14 @@ logger = logging.getLogger("ray")
 
 
 @cached_or_construct_output(success_suffix="SUCCESS")
-def write_label_attribute(input_file_path: str, output_file_path: str, label: str) -> None:
+def write_attribute_file(input_file_path: str, output_file_path: str, attribute_func: Callable[[dict], dict]) -> None:
     """
     Creates an attribute "label" from input label for each document.
 
     Args:
         input_file_path (str): Path to the input JSONL file in Dolma format (gzip compressed).
         output_file_path (str): Path to the output attribute JSONL file (gzip compressed).
-        label (str): Quality classifier label.
+        attribute_func (Callable[[dict],dict]): Function to construct attributes from documents.
     """
     with (
         fsspec.open(input_file_path, "rt", compression="gzip") as f_in,
@@ -37,7 +37,7 @@ def write_label_attribute(input_file_path: str, output_file_path: str, label: st
     ):
         for line in f_in:
             json_obj = json.loads(line)
-            attributes = {"label": label}
+            attributes = attribute_func(json_obj)
             f_out.write(
                 json.dumps({"id": json_obj["id"], "source": json_obj["source"], "attributes": attributes}) + "\n"
             )
@@ -162,20 +162,20 @@ def format_dataset(
                 f_out.write(line)
 
 
-def create_label_attribute(input_doc_path: str, output_attr_path: str, label: str) -> None:
+def label_docs(input_doc_path: str, output_attr_path: str, attribute_func: Callable[[dict], dict]) -> None:
     """
     Create attribute for quality classifier label.
 
     Args:
         input_doc_path (str): Path to documents (i.e., gs://$BUCKET/documents/...).
         output_attr_path (str): Path to write attributes (i.e., gs://$BUCKET/attributes/.../<experiment>).
-        label (str): Quality classifier label to write as attribute.
+        attribute_func (Callable[[dict],dict]): Function to construct attributes from documents.
     """
 
     # curry write_label so that we can pass it to map_files_in_directory
     @ray.remote(memory=1 * 1024 * 1024 * 1024, num_cpus=1)  # 1 GB
     def processing_func(input_file_path, output_file_path):
-        return write_label_attribute(input_file_path, output_file_path, label)
+        return write_attribute_file(input_file_path, output_file_path, attribute_func)
 
     responses = map_files_in_directory(processing_func.remote, input_doc_path, "**/*.jsonl.gz", output_attr_path)
     try:

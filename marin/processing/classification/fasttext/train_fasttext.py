@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 import draccus
 
 from marin.classifiers.fasttext.training import train_model
-from marin.classifiers.utils import DatasetConfig, attributes_to_dataset, create_label_attribute
+from marin.classifiers.utils import DatasetConfig, attributes_to_dataset, label_docs
 from marin.utils import fsspec_rm
 
 
@@ -40,7 +40,11 @@ class TrainFasttextClassifierConfig:
 def train(cfg: TrainFasttextClassifierConfig):
     for dataset in cfg.datasets:
         attr_path = os.path.join(cfg.output_path, "tmp")
-        create_label_attribute(input_doc_path=dataset.input_doc_path, output_attr_path=attr_path, label=dataset.label)
+        label_docs(
+            input_doc_path=dataset.input_doc_path,
+            output_attr_path=attr_path,
+            attribute_func=lambda _, dataset=dataset: {"label": dataset.label},
+        )
         attributes_to_dataset(
             output_path=cfg.output_path,
             doc_path=dataset.input_doc_path,
