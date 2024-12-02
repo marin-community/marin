@@ -182,6 +182,7 @@ def default_train(
                 ),
             ),
             hf_save_steps=25000,
+            data_seed=train_config.data_seed,
         ),
     )
 
