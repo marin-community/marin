@@ -10,12 +10,23 @@ import ray
 from draccus.utils import Dataclass
 
 from marin.execution.executor import Executor, ExecutorStep, get_info_path, output_path_of, this_output_path, versioned
-from marin.execution.executor_step_status import STATUS_SUCCESS, get_current_status, get_status_path, read_events
+from marin.execution.executor_step_status import (
+    STATUS_DEP_FAILED,
+    STATUS_FAILED,
+    STATUS_RUNNING,
+    STATUS_SUCCESS,
+    STATUS_WAITING,
+    append_status,
+    get_current_status,
+    get_status_path,
+    read_events,
+)
+from marin.execution.status_actor import StatusActor
 
 
-@pytest.fixture
+@pytest.fixture(scope="module", autouse=True)
 def ray_start():
-    ray.init("local", ignore_reinit_error=True)
+    ray.init("local", ignore_reinit_error=True, namespace="marin")
     yield
     ray.shutdown()  # teardown
 
@@ -112,6 +123,7 @@ def test_executor():
 
         for step in executor.steps:
             status_path = get_status_path(executor.output_paths[step])
+            # import pdb; pdb.set_trace()
             events = read_events(status_path)
             assert get_current_status(events) == STATUS_SUCCESS
             info_path = get_info_path(executor.output_paths[step])
@@ -190,6 +202,62 @@ def test_force_run_failed():
         assert len(results) == 2
 
     cleanup_log(log)
+
+
+def test_status_actor():
+    """Test the status actor that keeps track of statuses."""
+
+    def test_status_check():
+        status = [STATUS_SUCCESS, STATUS_FAILED, STATUS_WAITING, STATUS_RUNNING, STATUS_DEP_FAILED]
+        expected_status = [STATUS_SUCCESS, STATUS_FAILED, None, None, STATUS_DEP_FAILED]
+        actor = StatusActor.options(name="status_actor", get_if_exists=True, lifetime="detached").remote()
+        for s, e in zip(status, expected_status, strict=False):
+            with tempfile.TemporaryDirectory(prefix="output_path") as output_path:
+                append_status(f"{output_path}/.executor_status", s)
+                assert ray.get(actor.get_status.remote(output_path)) == e
+
+    test_status_check()
+
+    def test_one_executor_waiting_for_another():
+        with tempfile.NamedTemporaryFile() as file:
+            with open(file.name, "w") as f:
+                f.write("0")
+
+            @dataclass
+            class Config:
+                number: int
+                path: str
+                wait: int
+                input_path: str
+
+            def fn(config: Config):
+                time.sleep(config.wait)
+                with open(config.path, "r") as f:
+                    number = int(f.read())
+                with open(config.path, "w") as f:
+                    f.write(str(number + config.number))
+
+            a = ExecutorStep(name="a", fn=fn, config=Config(versioned(1), file.name, 10, ""))
+            b = ExecutorStep(name="b", fn=fn, config=Config(versioned(2), file.name, 0, output_path_of(a)))
+
+            @ray.remote
+            def run_fn(executor, steps):
+                executor.run(steps=steps)
+
+            with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
+                executor1 = create_executor(temp_dir)
+                executor2 = create_executor(temp_dir)
+
+                run1 = run_fn.remote(executor1, [a])
+                time.sleep(5)
+                run2 = run_fn.remote(executor2, [a, b])
+
+                ray.get([run1, run2])
+
+                with open(file.name, "r") as f:
+                    assert int(f.read()) == 3
+
+    test_one_executor_waiting_for_another()
 
 
 def test_parallelism():
