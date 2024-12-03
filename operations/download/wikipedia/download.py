@@ -6,65 +6,68 @@ Download script for the Wikipedia raw HTML data, provided by Wikimedia.
 Home Page: https://dumps.wikimedia.org/enwiki/latest/enwiki-latest-pages-articles.xml.bz2
 """
 
-import bz2
+import logging
+import os
 from dataclasses import dataclass
-from pathlib import Path
 
 import draccus
 import fsspec
-import requests
+import ray
 from tqdm import tqdm
+
+logger = logging.getLogger("ray")
 
 
 @dataclass
 class DownloadConfig:
-    input_path: Path
+    input_urls: list[str]
+    revision: str
     output_path: str
-    chunk_size: int = 1024 * 1024  # 1MB
 
 
-def get_file_size(url):
-    """Get content length from headers without downloading"""
-    response = requests.head(url)
-    return int(response.headers.get("content-length", 0))
+@ray.remote
+def process_url(url: str, output_path: str) -> None:
+    logger.info(f"Processing URL: {url}")
+    logger.info(f"Output path: {output_path}")
+
+    try:
+        with fsspec.open(url, "rb") as tar_file:
+            tar_fs = fsspec.filesystem("tar", fo=tar_file)
+
+            # List all files within the tar archive
+            files = tar_fs.ls("/")
+            logger.info(f"Files in the tar archive: {files}")
+
+            # Read each file in the tar archive
+            for file_info in tqdm(files, desc="Extracting files"):
+                file_path = file_info["name"]
+                output_file_path = os.path.join(output_path, file_path.replace(".ndjson", ".jsonl.gz"))
+                with (
+                    tar_fs.open(file_path, "r") as file,
+                    fsspec.open(output_file_path, "wb", compression="gzip") as output_file,
+                ):
+                    content = file.read()
+                    logger.info(f"Content of {file_path}:")
+
+                    for line in tqdm(content.split("\n"), desc="Writing content"):
+                        out_dict = {
+                            "id": line["identifier"],
+                            "url": ["url"],
+                            "date_published": line["event"]["date_published"],
+                            "html": line["article_body"]["html"],
+                            "wikitext": line["article_body"]["wikitext"],
+                        }
+                        logger.info(out_dict, file=output_file)
+
+    except Exception as e:
+        logger.error(f"Error processing URL: {url}")
+        raise e
 
 
 @draccus.wrap()
 def download(cfg: DownloadConfig) -> None:
-    total_size = get_file_size(cfg.input_path)
+    print("Starting transfer of Wikipedia dump...")
 
-    try:
-        print("Starting transfer of Wikipedia dump...")
-        print(f"Source: {cfg.input_path}")
-        print(f"Destination: {cfg.output_path}")
-
-        decompressor = bz2.BZ2Decompressor()
-
-        with (
-            fsspec.open(cfg.input_path, "rb") as source,
-            fsspec.open(cfg.output_path, "wb") as destination,
-            tqdm(total=total_size, unit="iB", unit_scale=True, desc="Downloading and decompressing") as pbar,
-        ):
-
-            while True:
-                chunk = source.read(cfg.chunk_size)
-                if not chunk:
-                    break
-
-                # Decompress chunk
-                try:
-                    decompressed_chunk = decompressor.decompress(chunk)
-                    if decompressed_chunk:
-                        destination.write(decompressed_chunk)
-                except EOFError:
-                    # Handle end of bz2 stream
-                    break
-
-                pbar.update(len(chunk))
-
-        print("\nTransfer completed successfully!")
-        print(f"File available at: {cfg.output_path}")
-
-    except Exception as e:
-        print(f"Error during transfer: {e}")
-        raise
+    for url in cfg.input_urls:
+        output_path = os.path.join(cfg.output_path, cfg.revision)
+        ray.get(process_url.remote(url, output_path))
