@@ -170,7 +170,7 @@ mbpp_raw = ExecutorStep(
         wait_for_completion=True,
         hf_urls_glob=["**/*.parquet", "*.md"],
     ),
-    override_output_path="gs://marin-us-central2/raw/google-research-datasets/mbpphf",
+    override_output_path="raw/google-research-datasets/mbpphf",
 ).cd("4bb6404")
 
 
