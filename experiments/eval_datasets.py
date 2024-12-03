@@ -142,7 +142,7 @@ mmlu_pro_raw = ExecutorStep(
         wait_for_completion=True,
         hf_urls_glob=["**/*.parquet", "*.md"],
     ),
-    override_output_path="gs://marin-us-central2/raw/TIGER-Lab/MMLU-Prohf",
+    override_output_path="raw/TIGER-Lab/MMLU-Prohf",
 ).cd("3373e0b")
 
 # download openai_humaneval
