@@ -81,6 +81,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, fields, is_dataclass, replace
 from datetime import datetime
 from typing import Any, Generic, TypeVar
+from urllib.parse import urlparse
 
 import draccus
 import fsspec
@@ -508,13 +509,17 @@ class Executor:
         output_path = os.path.join(self.prefix, step.name + "-" + hashed_version)
 
         # Override output path if specified
-        if step.override_output_path is not None:
-            if output_path != step.override_output_path:
+        override_path = step.override_output_path
+        if override_path is not None:
+            if _is_relative_path(override_path):
+                override_path = os.path.join(self.prefix, override_path)
+
+            if output_path != override_path:
                 logger.warning(
                     f"Output path {output_path} doesn't match given "
                     "override {step.override_output_path}, using the latter."
                 )
-                output_path = step.override_output_path
+                output_path = override_path
 
         # Record everything
         # Multiple `ExecutorStep`s can have the same version, so only keep one
@@ -668,7 +673,7 @@ class Executor:
         if step.pip_dependency_groups is not None:
             pip_dependencies = get_pip_dependencies(step.pip_dependency_groups)
         else:
-            pip_dependencies = []
+            pip_dependencies = None
 
         if is_running_or_waiting(status):
             if should_run:
@@ -855,4 +860,15 @@ def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], descrip
         description=description,
     )
 
-    executor.run(steps=steps, dry_run=config.dry_run, run_only=config.run_only)
+    executor.run(steps=steps, dry_run=config.dry_run, run_only=config.run_only, force_run_failed=config.force_run_failed)
+
+
+def _is_relative_path(url_or_path):
+    # if it's a url, it's not a relative path
+    parsed_url = urlparse(url_or_path)
+
+    if parsed_url.scheme:
+        return False
+
+    # otherwise if it starts with a slash, it's not a relative path
+    return not url_or_path.startswith("/")
