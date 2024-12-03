@@ -7,6 +7,7 @@ from typing import ClassVar
 import ray
 import requests
 
+from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Dependency, Evaluator, ModelConfig
 from marin.evaluation.utils import kill_process_on_port
 from marin.utils import remove_tpu_lockfile_on_exit
@@ -134,7 +135,7 @@ class VllmTpuEvaluator(Evaluator, ABC):
     def launch_evaluate_with_ray(
         self,
         model: ModelConfig,
-        evals: list[str],
+        evals: list[EvalTaskConfig],
         output_path: str,
         max_eval_instances: int | None = None,
     ) -> None:
@@ -147,7 +148,7 @@ class VllmTpuEvaluator(Evaluator, ABC):
         )
         @remove_tpu_lockfile_on_exit
         def launch(
-            model: ModelConfig, evals: list[str], output_path: str, max_eval_instances: int | None = None
+            model: ModelConfig, evals: list[EvalTaskConfig], output_path: str, max_eval_instances: int | None = None
         ) -> None:
             self.evaluate(model, evals, output_path, max_eval_instances)
 
