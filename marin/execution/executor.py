@@ -381,6 +381,7 @@ class Executor:
         self.status_actor: StatusActor = StatusActor.options(
             name="status_actor", get_if_exists=True, lifetime="detached"
         ).remote()
+        self.status_actor_refs: list[ray.ObjectRef] = []  # List of all the refs of status actor created by this executor
 
     def run(
         self,
@@ -427,6 +428,7 @@ class Executor:
 
         logger.info("### Waiting for all steps to finish ###")
         ray.get(list(self.refs.values()))
+        ray.get(self.status_actor_refs)
 
     def _compute_transitive_deps(self, steps: list[ExecutorStep], run_steps: list[str]) -> list[ExecutorStep]:
         """
@@ -688,8 +690,10 @@ class Executor:
                     pip=pip_dependencies,
                 ),
             ).remote(step.fn, config, dependencies, output_path, should_run, self.status_actor)
-            self.status_actor.add_update_reference.remote(
-                output_path=output_path, reference=RayObjectRef(self.refs[step])
+            self.status_actor_refs.append(
+                self.status_actor.add_update_reference.remote(
+                    output_path=output_path, reference=RayObjectRef(self.refs[step])
+                )
             )
 
         return self.refs[step]
@@ -715,25 +719,30 @@ def execute_after_dependencies(
     Run a function `fn` with the given `config`, after all the `dependencies` have finished.
     Only do stuff if `should_run` is True.
     """
+    actor_refs = []
     ray_task_id = ray.get_runtime_context().get_task_id()
 
     # Ensure that dependencies are all run first
     if should_run:
-        status_actor.add_update_status.remote(output_path, STATUS_WAITING, ray_task_id=ray_task_id)
+        actor_refs.append(status_actor.add_update_status.remote(output_path, STATUS_WAITING, ray_task_id=ray_task_id))
     try:
         ray.get(dependencies)
     except Exception as e:
         # Failed due to some exception
         message = traceback.format_exc()
         if should_run:
-            status_actor.add_update_status.remote(
-                output_path, STATUS_DEP_FAILED, message=message, ray_task_id=ray_task_id
+            actor_refs.append(
+                status_actor.add_update_status.remote(
+                    output_path, STATUS_DEP_FAILED, message=message, ray_task_id=ray_task_id
+                )
             )
+        # make sure to apply all the actor updates before raising the exception
+        ray.get(actor_refs)
         raise e
 
     # Call fn(config)
     if should_run:
-        status_actor.add_update_status.remote(output_path, STATUS_RUNNING, ray_task_id=ray_task_id)
+        actor_refs.append(status_actor.add_update_status.remote(output_path, STATUS_RUNNING, ray_task_id=ray_task_id))
     try:
         if isinstance(fn, ray.remote_function.RemoteFunction):
             if should_run:
@@ -747,12 +756,21 @@ def execute_after_dependencies(
         # Failed due to some exception
         message = traceback.format_exc()
         if should_run:
-            status_actor.add_update_status.remote(output_path, STATUS_FAILED, message=message, ray_task_id=ray_task_id)
+            actor_refs.append(
+                status_actor.add_update_status.remote(
+                    output_path, STATUS_FAILED, message=message, ray_task_id=ray_task_id
+                )
+            )
+        # make sure to apply all the actor updates before raising the exception
+        ray.get(actor_refs)
         raise e
 
     # Success!
     if should_run:
-        status_actor.add_update_status.remote(output_path, STATUS_SUCCESS, ray_task_id=ray_task_id)
+        actor_refs.append(status_actor.add_update_status.remote(output_path, STATUS_SUCCESS, ray_task_id=ray_task_id))
+
+    # make sure to apply all the actor updates before returning
+    ray.get(actor_refs)
 
 
 def get_fn_name(fn: Callable | ray.remote_function.RemoteFunction, short: bool = False):
