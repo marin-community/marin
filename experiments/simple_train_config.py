@@ -7,6 +7,7 @@ class SimpleTrainConfig:
     train_batch_size: int
     num_train_steps: int
     learning_rate: float
+    data_seed: int | None = None
     weight_decay: float | None = None
     min_lr_ratio: float | None = None
     warmup: float | None = None
