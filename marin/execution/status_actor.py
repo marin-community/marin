@@ -43,6 +43,15 @@ class RayObjectRef:
 
 @ray.remote
 class StatusActor:
+    """
+    This class is used to keep track of the status and reference of each output path across various experiments.
+    This enables steps from one experiment to depend on steps from another experiment.
+    Actor class is backed by GCP, where we write any status updates of the output path. Incase we have ray cluster
+    failure, we use the status file to recover the status of the output path.
+    We map the previous status (before cluster failure) to new status (after cluster failure) according to:
+            old_status = [STATUS_SUCCESS, STATUS_FAILED, STATUS_WAITING, STATUS_RUNNING, STATUS_DEP_FAILED]
+            new_status = [STATUS_SUCCESS, STATUS_FAILED, None, None, STATUS_DEP_FAILED]
+    """
 
     def __init__(self, cache_size: int = 10_000):
         self.value_to_status_reference: dict[str, tuple[str | None, ObjectRef | None]] = {}
