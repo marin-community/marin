@@ -24,13 +24,14 @@ dependencies = [
     "braceexpand",
     "deepdiff",
     "tqdm",
+    "tqdm-loggable",
     "toml",
     "pandas", # Only needed by Fileprovider in inference.py
     "pyarrow", # # Only needed by Fileprovider in inference.py
     # We are keeping levanter deps for now. @TODO :: Remove them
     "jax>=0.4.34",
     "multiprocess==0.70.16",
-    "levanter>=1.2.dev1074",
+    "levanter>=1.2.dev1147",
 ]
 
 [project.optional-dependencies]
