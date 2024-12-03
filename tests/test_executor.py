@@ -259,6 +259,32 @@ def test_status_actor():
 
     test_one_executor_waiting_for_another()
 
+    def test_actor_status_when_cluster_dies():
+        status = [STATUS_SUCCESS, STATUS_FAILED, STATUS_WAITING, STATUS_RUNNING, STATUS_DEP_FAILED]
+        expected_status = [STATUS_SUCCESS, STATUS_FAILED, None, None, STATUS_DEP_FAILED]
+        # Create 5 output_paths and write sttus to them using actor, then kill the ray session and restart it
+        # and check if the status is still there
+
+        actor = StatusActor.options(name="status_actor", get_if_exists=True, lifetime="detached").remote()
+        output_paths = []
+        refs = []
+        with tempfile.TemporaryDirectory(prefix="output_path") as output_path:
+            for i in range(5):
+                os.mkdir(f"{output_path}/{i}")
+                output_paths.append(f"{output_path}/{i}")
+                refs.append(actor.add_update_status.remote(output_paths[i], status[i]))
+
+            ray.get(refs)
+
+            ray.shutdown()
+            ray.init("local", ignore_reinit_error=True, namespace="marin")
+            actor = StatusActor.options(name="status_actor", get_if_exists=True, lifetime="detached").remote()
+
+            for i in range(5):
+                assert ray.get(actor.get_status.remote(output_paths[i])) == expected_status[i]
+
+    test_actor_status_when_cluster_dies()
+
 
 def test_parallelism():
     """Make sure things that parallel execution is possible."""
