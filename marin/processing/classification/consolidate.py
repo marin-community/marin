@@ -174,11 +174,9 @@ def process_file(
             dataset = dataset.map(
                 partial(apply_filter_remove_spans, doc_filter=doc_filter, id_to_attributes=id_to_attributes)
             )
+            dataset = dataset.filter(lambda x: x["keep"])
         else:
             raise ValueError(f"Unknown filter type: {doc_filter.type}")
-
-    # In the previous map step, we set the "keep" key for documents that should be removed
-    dataset = dataset.filter(lambda x: x["keep"])
 
     write_dataset(dataset, output_path)
 
@@ -220,7 +218,7 @@ def calculate_percentile_threshold(
     return threshold
 
 
-@ray.remote(runtime_env={"pip": ["ddsketch"]})
+@ray.remote
 def consolidate(config: ConsolidateConfig):
     input_paths = fsspec_glob(os.path.join(config.input_path, f"**/*.{config.filetype}"))
     logger.info(f"Consolidating {len(input_paths)} documents")
