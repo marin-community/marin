@@ -130,6 +130,9 @@ def default_train(
         tokenizer = pretraining_data.tokenizer
     vocab_size = load_tokenizer(tokenizer).vocab_size
 
+    # Max length of 64 characters for WANDB run is 64 characters
+    name = name[:64]
+
     # TODO: right now, assume architecture is a LlamaConfig, generalize this
     assert isinstance(model_config, LlamaConfig)
     return ExecutorStep(
@@ -179,6 +182,7 @@ def default_train(
                 ),
             ),
             hf_save_steps=25000,
+            data_seed=train_config.data_seed,
         ),
     )
 
