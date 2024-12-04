@@ -126,6 +126,8 @@ class StatusActor:
                 if is_failure(events[-1].status) or events[-1].status == STATUS_SUCCESS:
                     self.value_to_status_reference[output_path] = (events[-1].status, None)
                     return events[-1].status
+                else:
+                    return None
             else:  # No status file, so it's a new step
                 self.value_to_status_reference[output_path] = (None, None)
                 return None
