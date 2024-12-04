@@ -18,6 +18,7 @@ from levanter.optim import AdamConfig
 from levanter.store.cache import CacheOptions
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
+from levanter.eval_harness import LmEvalHarnessConfig
 
 from experiments.eval_datasets import (
     eval_datasets,
@@ -35,6 +36,7 @@ from marin.processing.tokenize import (
     tokenize,
 )
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
+from marin.experiments.evals.task_configs import levanter_lm_eval_CORE_configs
 
 
 def default_tokenize(
@@ -122,8 +124,6 @@ def default_train(
 
     """
 
-    pretraining_data, evaluation_data = _prepare_data_config(tokenized, use_default_validation, use_default_evaluation)
-
     if isinstance(pretraining_data.tokenizer, VersionedValue):
         tokenizer = pretraining_data.tokenizer.value
     else:
@@ -150,7 +150,6 @@ def default_train(
             tpu_type=train_config.tpu_type,
             node_count=train_config.node_count,
             data=pretraining_data,
-            supervised_data=evaluation_data,
             trainer=TrainerConfig(
                 tracker=WandbConfig(
                     project="marin",
@@ -159,7 +158,6 @@ def default_train(
                 mp=jmp.get_policy("p=f32,c=bfloat16"),
                 train_batch_size=train_config.train_batch_size,
                 num_train_steps=train_config.num_train_steps,
-                steps_per_eval=train_config.steps_per_eval if train_config.steps_per_eval is not None else 1000,
                 checkpointer=CheckpointerConfig(
                     save_interval=timedelta(minutes=10),
                     keep=[dict(every=25000)],
@@ -183,6 +181,10 @@ def default_train(
             ),
             hf_save_steps=25000,
             data_seed=train_config.data_seed,
+            eval_harness_steps=10000,
+            eval_harness=LmEvalHarnessConfig(
+                task_spec=get_CORE_config_levanter_lm_eval(),
+            )
         ),
     )
 
