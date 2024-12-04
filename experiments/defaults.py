@@ -12,13 +12,13 @@ import jmp
 from levanter.checkpoint import CheckpointerConfig
 from levanter.compat.hf_checkpoints import load_tokenizer
 from levanter.data.text import LMMixtureDatasetConfig, SupervisedSourceConfig, SupervisedUrlSourceConfig
+from levanter.eval_harness import LmEvalHarnessConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig
 from levanter.optim import AdamConfig
 from levanter.store.cache import CacheOptions
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
-from levanter.eval_harness import LmEvalHarnessConfig
 
 from experiments.eval_datasets import (
     eval_datasets,
@@ -36,7 +36,6 @@ from marin.processing.tokenize import (
     tokenize,
 )
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
-from marin.experiments.evals.task_configs import levanter_lm_eval_CORE_configs
 
 
 def default_tokenize(
