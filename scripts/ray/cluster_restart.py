@@ -130,8 +130,7 @@ def resubmit_job(
     job_str = " ".join(job_array)
     logger.info(f"Submitting the job: {job_str}")
 
-    # result = subprocess.run(job_array, capture_output=True, text=True)
-    logger.info(f"Job : {job_array} ")
+    result = subprocess.run(job_array, capture_output=True, text=True)
 
     if result.returncode == 0:
         logger.info(f"Successfully resubmitted job {job_id}")
@@ -238,7 +237,7 @@ def main() -> None:
                 return
             before_cluster_restart(args.config, args.local_path, args.raise_errors)
         elif args.stage == "after":
-            restart_jobs_after_restart()
+            restart_jobs_after_restart(args.local_path, args.raise_errors)
     finally:
         logger.info("Terminating Ray Dashboard process...")
         dashboard_process.terminate()
