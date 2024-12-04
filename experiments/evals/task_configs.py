@@ -1,4 +1,5 @@
 from marin.evaluation.evaluation_config import EvalTaskConfig
+from levanter.eval_harness import TaskConfig
 
 # tasks to run (corresponding to lm_eval_harness tasks)
 # subset from from page 43 of the DCLM paper: https://arxiv.org/pdf/2406.11794
@@ -19,3 +20,26 @@ CORE_TASKS = [
     EvalTaskConfig("wsc273", 0),  # Winograd Schema Challenge
     EvalTaskConfig("winogrande", 0),  # Winograd challenge, extended to more domains
 ]
+
+def get_CORE_config_levanter_lm_eval():
+    LEVANTER_LM_EVAL_CORE_TASKS = [
+        TaskConfig(task="agieval_lsat_ar", num_fewshot=3),  # 3-shot tests in legal domain
+        TaskConfig(task="arc_easy", num_fewshot=10),  # 10-shot, four-way MCQ questions involving grade 3-9 basic science
+        TaskConfig(task="arc_challenge", num_fewshot=10),  # a (harder) version of arc_easy
+        TaskConfig(task="boolq", num_fewshot=10),  # answer yes/no questions based on a passage
+        TaskConfig(task="commonsense_qa", num_fewshot=10),  # 5-way multiple-choice questions based on common-sense, everyday scenarios
+        TaskConfig(task="copa", num_fewshot=0),  # use causal reasoning to predict the correct outcome of a given scenario
+        TaskConfig(task="hellaswag", num_fewshot=0, task_alias="hellaswag_0shot"),  # 4-way multiple choice commonsense reasoning dataset
+        TaskConfig(task="hellaswag", num_fewshot=10, task_alias="hellaswag_10shot"),  # 4-way multiple choice commonsense reasoning dataset
+        TaskConfig(task="lambada", num_fewshot=0),  # predict the endings of text passages
+        TaskConfig(task="openbookqa", num_fewshot=0),  # 4-way multiple choice question answering task that requires multi-step reasoning
+        TaskConfig(task="piqa", num_fewshot=10),  # answer questions based on a passage
+        #TaskConfig(task="squadv2", num_fewshot=10),  # reading comprehension benchmark
+        TaskConfig(task="wsc273", num_fewshot=0),  # Winograd Schema Challenge
+        TaskConfig(task="winogrande", num_fewshot=0),  # Winograd challenge, extended to more domains
+    ]
+
+    return LEVANTER_LM_EVAL_CORE_TASKS
+
+
+
