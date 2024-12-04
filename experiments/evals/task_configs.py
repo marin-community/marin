@@ -1,5 +1,6 @@
-from marin.evaluation.evaluation_config import EvalTaskConfig
 from levanter.eval_harness import TaskConfig
+
+from marin.evaluation.evaluation_config import EvalTaskConfig
 
 # tasks to run (corresponding to lm_eval_harness tasks)
 # subset from from page 43 of the DCLM paper: https://arxiv.org/pdf/2406.11794

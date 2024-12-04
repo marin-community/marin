@@ -1,18 +1,24 @@
-import os
-import subprocess
-import time
-from abc import ABC
-from typing import ClassVar
 
-import ray
-import requests
+import logging
+from dataclasses import dataclass, replace
 
 import levanter.eval_harness as eval_harness
+import levanter.infra.cli_helpers
+import ray
+from levanter.infra.ray_tpu import run_on_pod_resumable
+from ray.runtime_env import RuntimeEnv
 
-from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.evaluation.evaluators.evaluator import Dependency, Evaluator, ModelConfig
-from marin.evaluation.utils import kill_process_on_port
-from marin.utils import remove_tpu_lockfile_on_exit
+from marin.training.training import (
+    _add_default_env_variables,
+    _add_run_env_variables,
+    _check_for_wandb_key,
+    _update_config_to_use_out_path,
+)
+from marin.utilities.dataclass_utils import shallow_asdict
+from marin.utilities.gcs_utils import get_vm_region
+
+logger = logging.getLogger(__name__)
+
 
 @dataclass
 class LmEvalOnPodConfig(eval_harness.EvalHarnessMainConfig):
@@ -54,7 +60,7 @@ def run_levanter_lm_eval(config: LmEvalOnPodConfig):
 
     if not config.bypass_path_checks and config.tpu_type is not None:
         ray.get(
-            ray.remote(_doublecheck_paths_sft)
+            ray.remote(_doublecheck_paths_eval)
             .options(runtime_env=runtime_env, num_cpus=0.1)
             .remote(config, must_save_checkpoints=True)
         )
@@ -82,5 +88,42 @@ def _upcast_eval_config(config: LmEvalOnPodConfig) -> eval_harness.EvalHarnessMa
     eval_config = eval_harness.EvalHarnessMainConfig(**dict_config)
 
     return eval_config
+
+def _doublecheck_paths_eval(config: LmEvalOnPodConfig, must_save_checkpoints):
+    """
+    Double-check paths specifically for eval configs.
+    """
+    local_ok = config.bypass_path_checks or config.tpu_type is None
+    try:
+        region = get_vm_region()
+    except ValueError as e:
+        if local_ok:
+            logger.warning("Could not determine the region of the VM. This is fine if you're running locally.")
+            return
+        raise ValueError("Could not determine the region of the VM. This is required for path checks.") from e
+
+    # _check_path_in_region("data.cache_dir", config.data.cache_dir, none_ok=True, region=region, local_ok=local_ok)
+    # # now check all subcaches if applicable
+    # if isinstance(config.data, LMMixtureDatasetConfig):
+    #     for key, subcache in config.data.configs.items():
+    #         _check_path_in_region(
+    #             f"data.configs[{key}].cache_dir", subcache.cache_dir, none_ok=True, region=region, local_ok=local_ok
+    #         )
+    # _check_path_in_region(
+    #     "trainer.checkpointer.base_path",
+    #     config.trainer.checkpointer.base_path,
+    #     none_ok=not must_save_checkpoints,
+    #     region=region,
+    #     local_ok=local_ok,
+    # )
+
+    # if config.hf_save_path is not None:
+    #     _check_path_in_region(
+    #         "hf_save_path", config.hf_save_path, none_ok=not must_save_checkpoints, region=region, local_ok=local_ok
+    #     )
+    # else:
+    #     logger.warning("hf_save_path is not set. This is fine if you don't want HF checkpoints.")
+
+    return config
 
 
