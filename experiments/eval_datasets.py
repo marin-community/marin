@@ -9,7 +9,7 @@ from operations.raw2json.huggingface.qa.raw2json import DatasetConversionConfig,
 This script downloads HF datasets for various tasks and converts them to prompt/response JSONL format for log prob
 evaluation. It also converts them to dolma "text" format for decontamination.
 
-To adda new dataset, you need to:
+To add a new dataset, you need to:
 1. Download the dataset (in the download section)
 2. Convert the dataset to evaluation format (in the conversion section)
 3. Add the dataset to the eval_datasets list
@@ -30,6 +30,7 @@ Downloads the following datasets
 - MMLU-Pro
 - openai_humaneval
 - mbpp
+- legalbench
 
 """
 ############################################################
@@ -173,6 +174,20 @@ mbpp_raw = ExecutorStep(
     override_output_path="raw/google-research-datasets/mbpphf",
 ).cd("4bb6404")
 
+# download legalbench
+legalbench_raw = ExecutorStep(
+    name="raw/nguha/legalbench",
+    fn=download_hf,
+    config=DownloadConfig(
+        hf_dataset_id="nguha/legalbench",
+        revision=versioned("e042ea6"),
+        gcs_output_path=this_output_path(),
+        wait_for_completion=True,
+        hf_urls_glob=["**/*.tsv", "*.md"],
+    ),
+    override_output_path="raw/nguha/legalbenchhf",
+).cd("e042ea6")
+
 
 """
 Converts raw to JSON for:
@@ -187,6 +202,7 @@ Converts raw to JSON for:
 - MMLU-Pro
 - openai_humaneval
 - mbpp
+- legalbench
 """
 ############################################################
 # Convert mmlu to evaluation format (i.e. JSON with "prompt", "response" fields)
@@ -430,6 +446,23 @@ mbpp_eval = ExecutorStep(
     ),
 )
 
+# This creates a JSON file representing the train, test, and validation splits for legalbench
+legalbench_eval = ExecutorStep(
+    name="evaluation/legalbench-eval",
+    fn=raw2json,
+    config=DatasetConversionConfig(
+        dataset_name="nguha/legalbench",
+        subsets=["*"],
+        splits=["train", "test", "validation"],
+        input_path=legalbench_raw,
+        hf_path="nguha/legalbench",
+        output_path=this_output_path(),
+        output_format=OutputFormatOptions("evaluation"),
+        prompt_key="text",
+        answer_text_key="answer",
+    ),
+)
+
 eval_datasets = [
     # these tags are used to group datasets together for averaging
     EvalDataset("cais", "mmlu", [mmlu_aux_eval, mmlu_subject_eval]),
@@ -443,6 +476,7 @@ eval_datasets = [
     EvalDataset("Tiger-Lab", "MMLU-Pro", [mmlu_pro_eval]),
     EvalDataset("openai", "openai_humaneval", [humaneval_eval]),
     EvalDataset("google-research-datasets", "mbpp", [mbpp_eval]),
+    EvalDataset("nguha", "legalbench", [legalbench_eval]),
 ]
 
 
