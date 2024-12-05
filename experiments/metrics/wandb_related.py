@@ -107,12 +107,30 @@ def get_all_runs_over_period(num_days=7, entity="stanford-mercury", project="mar
         return None
 
 
+def get_vocab_size_for_tokenizer(tokenizer: str) -> int:
+
+    logger.info("Tokenizer: ", tokenizer)
+    if tokenizer == "EleutherAI/gpt-neox-20b":
+        vocab_size = 50_257
+    elif tokenizer == "meta-llama/Meta-Llama-3.1-8B":
+        vocab_size = 128_256
+    elif tokenizer == "meta-llama/Llama-2-7b":
+        vocab_size = 32_000
+    elif tokenizer == "gpt2":
+        vocab_size = 50_257
+    else:
+        logger.error(f"Unknown tokenizer: {tokenizer}")
+        return None
+
+    logger.info("Vocab size: ", vocab_size)
+    return vocab_size
+
+
 def count_params_for_run(run_id: str, entity="stanford-mercury", project="marin") -> int:
     """
     Retrieves the number of parameters for a specific WandB run.
     """
     from experiments.llama import LlamaConfig, compute_num_parameters
-    from marin.processing.tokenize.utils import calculate_vocab_size
 
     # Initialize the WandB API
     api = wandb.Api()
@@ -124,7 +142,9 @@ def count_params_for_run(run_id: str, entity="stanford-mercury", project="marin"
         assert run is not None, f"Run {run_id} not found."
 
         tokenizer = run.config.get("data", {}).get("tokenizer", None)
-        vocab_size = calculate_vocab_size(tokenizer)
+        vocab_size = get_vocab_size_for_tokenizer(tokenizer)
+        if not vocab_size:
+            return None
         model_dict = run.config.get("model", {})
         logger.info("Model dict: ", model_dict)
 
@@ -171,7 +191,9 @@ def calculate_wandb_metrics(config: WANDB_METRICS_CONFIG) -> tuple[dict[str, Any
         run_metrics[run_id] = get_wandb_run_metrics(run_id)
 
         # get parameter count for the run and add to metrics
-        run_metrics[run_id]["num_parameters"] = count_params_for_run(run_id)
+        num_params = count_params_for_run(run_id)
+        if num_params:
+            run_metrics[run_id]["num_parameters"] = num_params
 
     # Define parameter scale thresholds (exclusive upper bounds)
     parameter_scales = {
@@ -217,12 +239,17 @@ def calculate_wandb_metrics(config: WANDB_METRICS_CONFIG) -> tuple[dict[str, Any
         ),
     }
 
+    logger.info(metrics)
+
     with fsspec.open(os.path.join(config.output_path, "metric.json"), "w") as f:
-        logger.info(json.dumps(metrics), file=f)
+        json.dump(metrics, f)
+
+    logger.info("Metrics have been saved: %s", json.dumps(metrics, indent=2))
 
 
 if __name__ == "__main__":
+
     config = WANDB_METRICS_CONFIG(entity="stanford-mercury", project="marin", num_days=7, output_path=".")
     # calculate_wandb_metrics(config)
 
-    count_params_for_run(run_id="sweep474-150m-hs=128-ce=64000-bs=256-step=4000-lr=0.001-wd0.1-e08ba6")
+    calculate_wandb_metrics(config)
