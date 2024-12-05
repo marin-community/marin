@@ -1,4 +1,4 @@
-
+import dataclasses
 import logging
 from dataclasses import dataclass, replace
 
@@ -89,6 +89,7 @@ def _upcast_eval_config(config: LmEvalOnPodConfig) -> eval_harness.EvalHarnessMa
 
     return eval_config
 
+
 def _doublecheck_paths_eval(config: LmEvalOnPodConfig, must_save_checkpoints):
     """
     Double-check paths specifically for eval configs.
@@ -96,6 +97,7 @@ def _doublecheck_paths_eval(config: LmEvalOnPodConfig, must_save_checkpoints):
     local_ok = config.bypass_path_checks or config.tpu_type is None
     try:
         region = get_vm_region()
+        logger.info(f"VM region: {region}")
     except ValueError as e:
         if local_ok:
             logger.warning("Could not determine the region of the VM. This is fine if you're running locally.")
@@ -125,5 +127,3 @@ def _doublecheck_paths_eval(config: LmEvalOnPodConfig, must_save_checkpoints):
     #     logger.warning("hf_save_path is not set. This is fine if you don't want HF checkpoints.")
 
     return config
-
-
