@@ -1,27 +1,22 @@
-import json
 import logging
-import os.path
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-
-import fsspec
 
 logger = logging.getLogger("ray")
 
 
 @dataclass
-class GCP_API_CONFIG:
-    output_path: str
-    PROJECT_ID: str = "hai-gcp-models"
-    TIME_SINCE: str = (datetime.now() - timedelta(days=7)).isoformat("T") + "Z"  # Format in RFC3339
+class GcpApiConfig:
+    project_id: str = "hai-gcp-models"
+    time_since: str = (datetime.now() - timedelta(days=7)).isoformat("T") + "Z"  # Format in RFC3339
 
 
 @dataclass
-class NUM_RESTART_CONFIG(GCP_API_CONFIG):
+class NumRestartConfig(GcpApiConfig):
     instance_substr: str = "ray-marin-us-central2-head"
 
 
-def get_number_of_restarts(config: NUM_RESTART_CONFIG) -> int:
+def get_gcp_restart_events(config: NumRestartConfig) -> list[dict]:
     """Get the number of restarts for a specific instance substring"""
     # Initialize the logging client
     from google.cloud import logging as gcp_logging
@@ -34,7 +29,7 @@ def get_number_of_restarts(config: NUM_RESTART_CONFIG) -> int:
         (
             protoPayload.methodName="v1.compute.instances.insert"
         )
-        timestamp >= "{config.TIME_SINCE}"
+        timestamp >= "{config.time_since}"
         severity=NOTICE
         protoPayload.resourceName:"{config.instance_substr}"
     """
@@ -66,7 +61,4 @@ def get_number_of_restarts(config: NUM_RESTART_CONFIG) -> int:
     else:
         logging.error("No instance creation or deletion events in the past week.")
 
-    with fsspec.open(os.path.join(config.output_path, "metric.json"), "w") as f:
-        print(json.dumps({"Number of Ray cluster restart": len(events), "Ray restart events": events}), file=f)
-
-    return len(events)
+    return events
