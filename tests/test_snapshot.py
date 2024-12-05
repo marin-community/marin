@@ -3,7 +3,7 @@ import subprocess
 
 import pytest
 
-from marin.schemas.web.convert import ResiliparseConfig
+from marin.schemas.web.convert import ResiliparseConfig, TrafilaturaConfig
 from marin.web.convert import convert_page
 
 my_path = os.path.dirname(os.path.realpath(__file__))
@@ -104,7 +104,8 @@ def test_generate_markdown_from_html_with_trafilatura(input_name):
     input_file = os.path.join(input_path, f"{input_name}.html")
     input_content = read_file(input_file)
 
-    output_dict = convert_page(input_content, extract_method="trafilatura")
+    config = TrafilaturaConfig.default_config()
+    output_dict = convert_page(input_content, extract_method="trafilatura", config=config)
 
     output = output_dict["content"]
 
