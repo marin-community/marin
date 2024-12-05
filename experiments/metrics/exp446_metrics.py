@@ -1,14 +1,15 @@
 import os
 from datetime import datetime, timedelta
 
-from experiments.metrics.gcp_related import NUM_RESTART_CONFIG, get_number_of_restarts
-from experiments.metrics.github_related import (
+from gcp_related import NUM_RESTART_CONFIG, get_number_of_restarts
+from github_related import (
     GITHUB_API_CONFIG,
     GITHUB_ISSUE_CONFIG,
     get_average_duration_for_all_workflows,
     get_closed_issues_with_label,
 )
-from experiments.metrics.wandb_related import WANDB_METRICS_CONFIG, get_wandb_run_metrics
+from wandb_related import WANDB_METRICS_CONFIG, calculate_wandb_metrics
+
 from marin.execution.executor import ExecutorMainConfig, ExecutorStep, executor_main, output_path_of, this_output_path
 from marin.utilities.metrics_utils import MergeConfig, merge
 
@@ -43,7 +44,7 @@ number_of_restarts = ExecutorStep(
 
 experiments_metrics = ExecutorStep(
     name=os.path.join("metrics", "wandb", "experiments_metrics"),
-    fn=get_wandb_run_metrics,
+    fn=calculate_wandb_metrics,
     config=WANDB_METRICS_CONFIG(
         output_path=this_output_path(),
         num_days=7,  # number of days before today to get metrics for
