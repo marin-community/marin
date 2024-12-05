@@ -8,6 +8,7 @@ from experiments.metrics.github_related import (
     get_average_duration_for_all_workflows,
     get_closed_issues_with_label,
 )
+from experiments.metrics.wandb_related import WANDB_METRICS_CONFIG, calculate_wandb_metrics
 
 
 def main():
@@ -33,6 +34,12 @@ def main():
     )
     final_metrics["Number of Ray cluster restart"] = len(events)
     final_metrics["Ray restart events"] = events
+
+    experiment_metrics = calculate_wandb_metrics(
+        WANDB_METRICS_CONFIG(num_days=7, entity="stanford-mercury", project="marin")
+    )
+    for key, value in experiment_metrics.items():
+        final_metrics[key] = value
     return final_metrics
 
 
