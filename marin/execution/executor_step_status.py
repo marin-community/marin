@@ -24,6 +24,7 @@ STATUS_WAITING = "WAITING"  # Waiting for dependencies to finish
 STATUS_RUNNING = "RUNNING"
 STATUS_FAILED = "FAILED"
 STATUS_SUCCESS = "SUCCESS"
+STATUS_DEP_FAILED = "DEP_FAILED"  # Dependency failed
 
 
 @dataclass(frozen=True)
@@ -75,3 +76,7 @@ def append_status(path: str, status: str, message: str | None = None, ray_task_i
     with fsspec.open(path, "w") as f:
         for event in events:
             print(json.dumps(asdict(event)), file=f)
+
+
+def is_failure(status):
+    return status in [STATUS_FAILED, STATUS_DEP_FAILED]
