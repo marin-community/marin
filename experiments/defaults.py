@@ -12,7 +12,7 @@ import jmp
 from levanter.checkpoint import CheckpointerConfig
 from levanter.compat.hf_checkpoints import load_tokenizer
 from levanter.data.text import LMMixtureDatasetConfig, SupervisedSourceConfig, SupervisedUrlSourceConfig
-from levanter.eval_harness import LmEvalHarnessConfig
+from levanter.eval_harness import LmEvalHarnessConfig, TaskConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig
 from levanter.optim import AdamConfig
@@ -26,6 +26,7 @@ from experiments.eval_datasets import (
 from experiments.llama import compute_num_parameters
 from experiments.paloma import paloma_tokenized
 from experiments.simple_train_config import SimpleTrainConfig
+from marin.evaluation.task_configs import LEVANTER_LM_EVAL_CORE_TASKS
 from marin.execution.executor import ExecutorStep, InputName, VersionedValue, output_path_of, this_output_path, versioned
 from marin.processing.tokenize import (
     TokenizeConfig,
@@ -108,6 +109,7 @@ def default_train(
     tags: Sequence[str] = (),
     use_default_validation: bool = True,
     use_default_evaluation: bool = True,
+    eval_harness_tasks: list[str | TaskConfig] | None = None,
 ) -> ExecutorStep:
     """
     Train a language model using the default configuration.
@@ -120,8 +122,10 @@ def default_train(
         tags: Any additional tags to add to the Wandb tracker.
         use_default_validation: Whether to use the default validation sets (currently Paloma).
         use_default_evaluation: Whether to use the default supervised validation data (currently MMLU).
-
+        eval_harness_tasks: List of evaluation harness tasks. Defaults to None.
     """
+
+    pretraining_data, evaluation_data = _prepare_data_config(tokenized, use_default_validation, use_default_evaluation)
 
     if isinstance(pretraining_data.tokenizer, VersionedValue):
         tokenizer = pretraining_data.tokenizer.value
@@ -131,6 +135,10 @@ def default_train(
 
     # Max length of 64 characters for WANDB run is 64 characters
     name = name[:64]
+
+    # eval harness run on the CORE tasks by default
+    if eval_harness_tasks is None:
+        eval_harness_tasks = LEVANTER_LM_EVAL_CORE_TASKS
 
     # TODO: right now, assume architecture is a LlamaConfig, generalize this
     assert isinstance(model_config, LlamaConfig)
@@ -149,6 +157,7 @@ def default_train(
             tpu_type=train_config.tpu_type,
             node_count=train_config.node_count,
             data=pretraining_data,
+            supervised_data=evaluation_data,
             trainer=TrainerConfig(
                 tracker=WandbConfig(
                     project="marin",
@@ -157,6 +166,7 @@ def default_train(
                 mp=jmp.get_policy("p=f32,c=bfloat16"),
                 train_batch_size=train_config.train_batch_size,
                 num_train_steps=train_config.num_train_steps,
+                steps_per_eval=train_config.steps_per_eval if train_config.steps_per_eval is not None else 1000,
                 checkpointer=CheckpointerConfig(
                     save_interval=timedelta(minutes=10),
                     keep=[dict(every=25000)],
@@ -182,8 +192,8 @@ def default_train(
             data_seed=train_config.data_seed,
             eval_harness_steps=10000,
             eval_harness=LmEvalHarnessConfig(
-                task_spec=get_CORE_config_levanter_lm_eval(),
-            )
+                task_spec=eval_harness_tasks,
+            ),
         ),
     )
 
