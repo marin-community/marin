@@ -109,18 +109,19 @@ def download_and_upload_to_store(cfg: DownloadConfig) -> None:
 
     with tempfile.TemporaryDirectory() as temp_dir:
         for file in files:
-            if fnmatch.fnmatch(file, cfg.hf_url_glob):
-                try:
-                    # Construct HuggingFace URL
-                    hf_url = construct_hf_url(cfg.hf_dataset_id, cfg.revision, file)
-                    hf_urls.append(hf_url)
-                    fsspec_file_path = os.path.join(versioned_output_path, file)
+            for hf_url_glob in cfg.hf_urls_glob:
+                if fnmatch.fnmatch(file, hf_url_glob):
+                    try:
+                        # Construct HuggingFace URL
+                        hf_url = construct_hf_url(cfg.hf_dataset_id, cfg.revision, file)
+                        hf_urls.append(hf_url)
+                        fsspec_file_path = os.path.join(versioned_output_path, file)
 
-                    f = thread_pool.submit(put_file, temp_dir, file, fsspec_file_path)
-                    futures.append((file, f))
+                        f = thread_pool.submit(put_file, temp_dir, file, fsspec_file_path)
+                        futures.append((file, f))
 
-                except Exception as e:
-                    logging.exception(f"Error processing {file}: {e}")
+                    except Exception as e:
+                        logging.exception(f"Error processing {file}: {e}")
 
         for file, f in futures:
             try:
