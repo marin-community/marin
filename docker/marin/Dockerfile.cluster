@@ -3,6 +3,14 @@ FROM rayproject/ray:nightly.240914.bb15a3-py311-cpu
 # Install general dependencies
 RUN sudo apt-get update && sudo apt-get install -y clang curl g++ vim libpython3.11 libpython3.11-dev docker.io cmake
 
+# Setup gcsfuse
+RUN sudo apt install lsb-release -y
+RUN export GCSFUSE_REPO=gcsfuse-`lsb_release -c -s` && echo "deb https://packages.cloud.google.com/apt $GCSFUSE_REPO main" | sudo tee /etc/apt/sources.list.d/gcsfuse.list
+RUN curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo apt-key add -
+RUN sudo apt-get update && sudo apt-get install fuse gcsfuse -y
+RUN sudo mkdir /opt/gcsfuse_mount
+RUN sudo chown -R $(whoami) /opt/gcsfuse_mount
+
 # Install resiliparse build dependencies (requires libre2-dev>=2022-04-01)
 RUN sudo apt-get install -y build-essential zlib1g-dev liblz4-dev libuchardet-dev libre2-dev
 # Install lexbor from source, since the apt package for jammy is corrupted
@@ -27,7 +35,6 @@ RUN sudo mkdir -p /opt/marin/
 RUN sudo chown -R $(whoami) /opt/marin/
 # Ray uses conda
 ENV PATH=/home/ray/anaconda3/bin:/home/ray/anaconda3/bin:/home/ray/anaconda3/condabin:$PATH
-RUN pip install --no-cache-dir -U "jax[tpu]@git+https://github.com/dlwh/jax@retry_refuse" -f https://storage.googleapis.com/jax-releases/libtpu_releases.html
 
 # gcloud
 RUN conda install conda-forge::google-cloud-sdk -y
@@ -38,24 +45,6 @@ RUN conda install -c conda-forge ncurses -y
 # pytorch is a heavy dependency, so we install it up front to try to cache it
 RUN pip install --no-cache-dir torch>=2.1 --extra-index-url https://download.pytorch.org/whl/cpu
 
-WORKDIR /tmp/
-ADD pyproject.toml /tmp/
-RUN pip install --no-cache-dir . --extra-index-url https://download.pytorch.org/whl/cpu
-
-
-# Our weird fork of OLMo
-# The olmo library did not set `exists_ok=True` at
-# https://github.com/allenai/OLMo/blob/main/hf_olmo/configuration_olmo.py#L43
-# which causes the following error:
-# ValueError: 'olmo' is already used by a Transformers config, pick another name.
-# Use the following dependency instead where the issue is fixed.
-RUN pip install --no-cache-dir git+https://github.com/teetone/OLMo.git@main
-
-# Install vllm for TPU
-# cf https://github.com/vllm-project/vllm/blob/main/Dockerfile.tpu
-RUN pip install --no-cache-dir torch_xla[tpu] -f https://storage.googleapis.com/libtpu-releases/index.html
-RUN pip install --no-cache-dir torch_xla[pallas] -f https://storage.googleapis.com/jax-releases/jax_nightly_releases.html -f https://storage.googleapis.com/jax-releases/jaxlib_nightly_releases.html
-
 RUN sudo mkdir -p /opt/vllm
 RUN sudo chown -R $(whoami) /opt/vllm
 RUN cd /opt/vllm && git clone https://github.com/vllm-project/vllm.git /opt/vllm
@@ -64,8 +53,31 @@ RUN git checkout tags/v0.5.3.post1
 RUN pip install --no-cache-dir -r requirements-tpu.txt
 RUN VLLM_TARGET_DEVICE="tpu" python3 setup.py develop
 
+# Install vllm for TPU
+# cf https://github.com/vllm-project/vllm/blob/main/Dockerfile.tpu
+RUN pip install --no-cache-dir torch_xla[tpu] -f https://storage.googleapis.com/libtpu-releases/index.html
+RUN pip install --no-cache-dir torch_xla[pallas] -f https://storage.googleapis.com/jax-releases/jax_nightly_releases.html -f https://storage.googleapis.com/jax-releases/jaxlib_nightly_releases.html
+
+
+# Our weird fork of OLMo
+# The olmo library did not set `exists_ok=True` at
+# https://github.com/allenai/OLMo/blob/main/hf_olmo/configuration_olmo.py#L43
+# which causes the following error:
+# ValueError: 'olmo' is already used by a Transformers config, pick another name.
+# Use the following dependency instead where the issue is fixed.
+RUN pip install --no-cache-dir git+https://github.com/teetone/OLMo.git@main  --extra-index-url https://download.pytorch.org/whl/cpu
+
+
+# NOTE: Try to keep as much "heavy" stuff as possible before this line to avoid re-installing
+
+# (not installing pyproject.toml because it interferes with Ray's RuntimeEnv deps)
+#WORKDIR /tmp/
+#ADD pyproject.toml /tmp/
+#RUN pip install --no-cache-dir . --extra-index-url https://download.pytorch.org/whl/cpu
+
 # copy in the autoscaler hacks
 ENV VENV_PATH=/home/ray/anaconda3/
+ENV PYTHONPATH=$PYTHONPATH:$VENV_PATH/lib/python3.11/site-packages
 RUN sudo mkdir /opt/abhi-ray
 RUN sudo chown -R $(whoami) /opt/abhi-ray
 WORKDIR /opt/abhi-ray
@@ -73,27 +85,20 @@ RUN git clone --branch abhi-2.34.0 --single-branch --depth 1 https://github.com/
 RUN rm -rf $VENV_PATH/lib/python3.11/site-packages/ray/autoscaler
 RUN ln -s /opt/abhi-ray/ray/python/ray/autoscaler $VENV_PATH/lib/python3.11/site-packages/ray/autoscaler
 
-ENV PYTHONPATH=$PYTHONPATH:$VENV_PATH/lib/python3.11/site-packages
+# HACK until https://github.com/ray-project/ray/issues/47769 is resolved
+RUN git clone https://github.com/dlwh/ray.git ~/ray --branch tpu_docker_2.34 --depth 1
+RUN cp ~/ray/python/ray/autoscaler/_private/gcp/tpu_command_runner.py $VENV_PATH/lib/python3.11/site-packages/ray/autoscaler/_private/gcp/tpu_command_runner.py
+RUN rm -rf ~/ray
+
+# Install updated fsspec version
+RUN pip install --no-cache-dir fsspec==2024.9.0
+
 # Add /usr/lib/x86_64-linux-gnu/ to LD_LIBRARY_PATH so that bash prefers the systems
 # libtinfo.so over the conda-provided version. Using the conda-provided libtinfo.so
 # outputs a noisy warning because it doesn't include version information.
 ENV LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/lib/x86_64-linux-gnu/
 ENV LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/home/ray/anaconda3/lib
 ENV PATH=$PATH:/home/ray/anaconda3/bin
-
-# HACK until https://github.com/ray-project/ray/issues/47769 is resolved
-RUN git clone https://github.com/dlwh/ray.git ~/ray --branch tpu_docker_2.34 --depth 1
-RUN cp ~/ray/python/ray/autoscaler/_private/gcp/tpu_command_runner.py $VENV_PATH/lib/python3.11/site-packages/ray/autoscaler/_private/gcp/tpu_command_runner.py
-RUN rm -rf ~/ray
-
-
-# Setup gcsfuse
-RUN sudo apt install lsb-release -y
-RUN export GCSFUSE_REPO=gcsfuse-`lsb_release -c -s` && echo "deb https://packages.cloud.google.com/apt $GCSFUSE_REPO main" | sudo tee /etc/apt/sources.list.d/gcsfuse.list
-RUN curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo apt-key add -
-RUN sudo apt-get update && sudo apt-get install fuse gcsfuse -y
-RUN sudo mkdir /opt/gcsfuse_mount
-RUN sudo chown -R $(whoami) /opt/gcsfuse_mount
 
 # to run docker containers, we need to be in the docker group
 RUN sudo usermod -aG docker $(whoami)
