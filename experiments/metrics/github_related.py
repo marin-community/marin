@@ -102,7 +102,7 @@ def get_closed_issues_with_label(config: GithubIssueConfig) -> int:
         # Count the closed issues
         for issue in issues:
             if "closed_at" in issue and datetime.fromisoformat(issue["closed_at"][:-1]) >= datetime.fromisoformat(
-                    config.time_since
+                config.time_since
             ):
                 closed_issues_count += 1
 
@@ -116,8 +116,12 @@ def get_closed_issues_with_label(config: GithubIssueConfig) -> int:
 if __name__ == "__main__":
     config = GithubApiConfig(os.getenv("GITHUB_TOKEN"), time_since=(datetime.now() - timedelta(days=7)).isoformat())
     print(get_average_duration_for_all_workflows(config))
-    print(get_closed_issues_with_label(GithubIssueConfig(
-        github_token=os.getenv("GITHUB_TOKEN"),
-        time_since=(datetime.now() - timedelta(days=7)).isoformat(),
-        label="infrastructure",
-    )))
+    print(
+        get_closed_issues_with_label(
+            GithubIssueConfig(
+                github_token=os.getenv("GITHUB_TOKEN"),
+                time_since=(datetime.now() - timedelta(days=7)).isoformat(),
+                label="infrastructure",
+            )
+        )
+    )
