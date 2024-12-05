@@ -1,27 +1,23 @@
-import json
 import logging
-import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-import fsspec
 import wandb
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass
-class WANDB_METRICS_CONFIG:
+class WandbMetricsConfig:
     entity: str
     project: str
     num_days: int  # number of days before today to get metrics for
-    output_path: str
 
 
 def get_wandb_run_metrics(
     run_id: str, metrics=None, entity: str = "stanford-mercury", project: str = "marin"
-) -> dict[str, Any]:
+) -> dict[str, Any] | None:
     """
     Retrieves key metrics for a specific WandB run.
 
@@ -38,7 +34,6 @@ def get_wandb_run_metrics(
 
     # Initialize the WandB API
     api = wandb.Api()
-
     try:
         # Fetch the specified run
         run = api.run(f"{entity}/{project}/{run_id}")
@@ -66,7 +61,7 @@ def get_wandb_run_metrics(
         return None
 
 
-def get_all_runs_over_period(num_days=7, entity="stanford-mercury", project="marin") -> dict[str, Any]:
+def get_all_runs_over_period(num_days=7, entity="stanford-mercury", project="marin") -> list[dict[str, Any]] | None:
     """
     Retrieves all runs created within the past week (or given time window).
     """
@@ -107,9 +102,9 @@ def get_all_runs_over_period(num_days=7, entity="stanford-mercury", project="mar
         return None
 
 
-def get_vocab_size_for_tokenizer(tokenizer: str) -> int:
+def get_vocab_size_for_tokenizer(tokenizer: str) -> int | None:
 
-    logger.info("Tokenizer: ", tokenizer)
+    logger.info(f"Tokenizer:{tokenizer}")
     if tokenizer == "EleutherAI/gpt-neox-20b":
         vocab_size = 50_257
     elif tokenizer == "meta-llama/Meta-Llama-3.1-8B":
@@ -122,11 +117,11 @@ def get_vocab_size_for_tokenizer(tokenizer: str) -> int:
         logger.error(f"Unknown tokenizer: {tokenizer}")
         return None
 
-    logger.info("Vocab size: ", vocab_size)
+    logger.info(f"Vocab size:  {vocab_size}")
     return vocab_size
 
 
-def count_params_for_run(run_id: str, entity="stanford-mercury", project="marin") -> int:
+def count_params_for_run(run_id: str, entity="stanford-mercury", project="marin") -> int | None:
     """
     Retrieves the number of parameters for a specific WandB run.
     """
@@ -173,7 +168,7 @@ def count_params_for_run(run_id: str, entity="stanford-mercury", project="marin"
         return None
 
 
-def calculate_wandb_metrics(config: WANDB_METRICS_CONFIG) -> tuple[dict[str, Any], str]:
+def calculate_wandb_metrics(config: WandbMetricsConfig) -> dict[str, Any]:
     """
     Calculate and upload metrics to GCS for the past num_days.
 
@@ -240,16 +235,11 @@ def calculate_wandb_metrics(config: WANDB_METRICS_CONFIG) -> tuple[dict[str, Any
     }
 
     logger.info(metrics)
-
-    with fsspec.open(os.path.join(config.output_path, "metric.json"), "w") as f:
-        json.dump(metrics, f)
-
-    logger.info("Metrics have been saved: %s", json.dumps(metrics, indent=2))
+    return metrics
 
 
 if __name__ == "__main__":
 
-    config = WANDB_METRICS_CONFIG(entity="stanford-mercury", project="marin", num_days=7, output_path=".")
-    # calculate_wandb_metrics(config)
+    config = WandbMetricsConfig(entity="stanford-mercury", project="marin", num_days=7)
 
     calculate_wandb_metrics(config)
