@@ -6,7 +6,6 @@ import levanter.eval_harness as eval_harness
 import levanter.infra.cli_helpers
 import ray
 from levanter.infra.ray_tpu import run_on_pod_resumable
-from ray.runtime_env import RuntimeEnv
 
 from marin.training.training import (
     _add_default_env_variables,
@@ -56,18 +55,12 @@ def run_levanter_lm_eval(config: LmEvalOnPodConfig):
     env = _add_run_env_variables(env)
     config = replace(config, env=env)
 
-    runtime_env = RuntimeEnv(env_vars=config.env, pip=["levanter>=1.2.dev1074"])
-
     if not config.bypass_path_checks and config.tpu_type is not None:
-        ray.get(
-            ray.remote(_doublecheck_paths_eval)
-            .options(runtime_env=runtime_env, num_cpus=0.1)
-            .remote(config, must_save_checkpoints=True)
-        )
+        ray.get(ray.remote(_doublecheck_paths_eval).options(num_cpus=0.1).remote(config, must_save_checkpoints=True))
 
     eval_config = _upcast_eval_config(config)
 
-    @ray.remote(runtime_env=runtime_env)
+    @ray.remote
     def eval_lm_task():
         eval_harness.run_eval_harness_main(eval_config)
 

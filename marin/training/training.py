@@ -59,18 +59,12 @@ def run_levanter_sft(config: TrainSFTOnPodConfig):
     config = _enforce_run_id(config)
     logger.info(f"Using run ID: {config.trainer.id}")
 
-    runtime_env = RuntimeEnv(env_vars=config.env, pip=["levanter>=1.2.dev1074"])
-
     if not config.bypass_path_checks and config.tpu_type is not None:
-        ray.get(
-            ray.remote(_doublecheck_paths_sft)
-            .options(runtime_env=runtime_env, num_cpus=0.1)
-            .remote(config, must_save_checkpoints=True)
-        )
+        ray.get(ray.remote(_doublecheck_paths_sft).options(num_cpus=0.1).remote(config, must_save_checkpoints=True))
 
     sft_config = _upcast_sft_config(config)
 
-    @ray.remote(runtime_env=runtime_env)
+    @ray.remote
     def sft_task():
         sft.train(sft_config)
 
@@ -150,7 +144,7 @@ def _update_config_to_use_out_path(config: TrainLmOnPodConfig):
     return replace(config, trainer=trainer, hf_save_path=os.path.join(config.output_path, DEFAULT_HF_CHECKPOINTS_PATH))
 
 
-@ray.remote(num_cpus=0.1, runtime_env={"pip": ["levanter>=1.2.dev1074"]})
+@ray.remote(num_cpus=0.1)
 def run_levanter_train_lm(config: TrainLmOnPodConfig):
     """
     Run the Levanter training main function on a Ray cluster.
@@ -183,7 +177,7 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
     config = _enforce_run_id(config)
     logger.info(f"Using run ID: {config.trainer.id}")
 
-    runtime_env = RuntimeEnv(env_vars=config.env, pip=["levanter>=1.2.dev1074"])
+    runtime_env = RuntimeEnv(env_vars=config.env)
 
     if not config.bypass_path_checks and config.tpu_type is not None:
         # run this on the Ray cluster to get the right region
