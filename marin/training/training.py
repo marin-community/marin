@@ -37,7 +37,7 @@ class TrainSFTOnPodConfig(sft.SFTConfig):
     impute_run_id_from_output_path: bool = True
 
 
-@ray.remote(num_cpus=0.1, runtime_env={"pip": ["levanter>=1.2.dev1074"]})
+@ray.remote(num_cpus=0.1)
 def run_levanter_sft(config: TrainSFTOnPodConfig):
     """
     Run the Levanter SFT training function on a Ray cluster.

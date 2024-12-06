@@ -37,7 +37,7 @@ class LmEvalOnPodConfig(eval_harness.EvalHarnessMainConfig):
     """Number of TPU slices for evals."""
 
 
-@ray.remote(num_cpus=0.1, runtime_env={"pip": ["levanter>=1.2.dev1074"]})
+@ray.remote(num_cpus=0.1)
 def run_levanter_lm_eval(config: LmEvalOnPodConfig):
     """
     Run the Levanter's LM-Eval-Harness on a Ray cluster.
