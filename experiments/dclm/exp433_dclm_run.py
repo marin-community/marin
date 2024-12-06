@@ -94,7 +94,7 @@ dclm_mixture_model = default_train(
 )
 
 dclm_baseline_only_model = default_train(
-    name="dclm_baseline_1b_1x_replication_nov12",
+    name="dclm_baseline_1b_1x_eval_sanity",
     tokenized=dclm_baseline_only_config,
     model_config=llama_1_4b_dclm,
     train_config=training_config,
@@ -107,7 +107,7 @@ if __name__ == "__main__":
             dclm_baseline_tokenized,
             starcoderdata_tokenized,
             proofpile_2_tokenized,
-            dclm_mixture_model,
+            # dclm_mixture_model,
             dclm_baseline_only_model,
             # mmlu_eval,
         ]

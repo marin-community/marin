@@ -31,7 +31,8 @@ dependencies = [
     # We are keeping levanter deps for now. @TODO :: Remove them
     "jax>=0.4.34",
     "multiprocess==0.70.16",
-    "levanter>=1.2.dev1147",
+    #"levanter>=1.2.dev1152",
+    "git+https://github.com/stanford-crfm/levanter.git@c90cff9bef4341cea376d4e330dcddabeaf4d86a",
 ]
 
 [project.optional-dependencies]
