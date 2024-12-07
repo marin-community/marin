@@ -38,10 +38,10 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
     steps = []
     tokenized: dict[str, ExecutorStep] = {}
     weights: dict[str, float] = {}
-    
+
     for input_data_source, input_data_path in config.input_data_source_to_path.items():
         input_basename = os.path.basename(os.path.normpath(input_data_path))
-        
+
         # Calculate compression ratios
         compression_step = ExecutorStep(
             name=f"attributes/compression_filtering/{config.experiment_name}/{input_data_source}",
