@@ -32,12 +32,7 @@ class ExperimentConfig:
 
 
 def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
-    """Create the steps for a single experiment.
-    
-    The experiment filters documents based on their LZ4 compression ratio,
-    keeping only those with ratios between 0.6 and 0.9. We hypothesize that
-    texts with very low or very high compression ratios are lower quality.
-    """
+    """Create the steps for a single experiment with compression ratio filtering."""
     assert config.experiment_name is not None
 
     steps = []
@@ -47,15 +42,15 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
     for input_data_source, input_data_path in config.input_data_source_to_path.items():
         input_basename = os.path.basename(os.path.normpath(input_data_path))
         
-        # Calculate compression ratios using existing inference infrastructure
+        # Calculate compression ratios
         compression_step = ExecutorStep(
             name=f"attributes/compression_filtering/{config.experiment_name}/{input_data_source}",
             fn=run_inference,
             config=InferenceConfig(
                 input_path=input_data_path,
                 output_path=this_output_path(input_basename),
-                model_type="compression",
-                model_name="compression",
+                model_type="compression",  # Use our new compression classifier
+                model_name="compression",  # This doesn't matter for compression
                 attribute_name=versioned("compression_ratio"),
                 runtime=RuntimeConfig(
                     memory_limit_gb=12,
@@ -77,8 +72,8 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
                         type=versioned("classify"),
                         attribute_path=output_path_of(compression_step, input_basename),
                         name=versioned("compression_ratio"),
-                        threshold=versioned(0.6),  # lower bound
-                        upper_threshold=versioned(0.9),  # upper bound
+                        threshold=versioned(0.6),  # Lower bound
+                        upper_threshold=versioned(0.9),  # Upper bound
                     ),
                 ],
                 ray_memory_limit_gb=12,
@@ -86,7 +81,6 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
             pip_dependency_groups=["ddsketch"],
         )
 
-        # Tokenize filtered documents
         tokenize_step = default_tokenize(
             name=f"compression_filtering/{config.experiment_name}/{input_data_source}",
             dataset=output_path_of(consolidate_step),
@@ -101,7 +95,6 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
 
     data_config = lm_mixture_data_config(components=tokenized, weights=weights)
 
-    # Train on filtered dataset
     train_step = default_train(
         name=f"compression_filtering/{config.experiment_name}",
         tokenized=data_config,
