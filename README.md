@@ -24,11 +24,11 @@ the appropriate Python version (3.10), then run the following:
 ```bash
 git clone https://github.com/stanford-crfm/marin
 cd marin
-pip install -e ".[dev]"
+pip install -e ".[extras]"
 ```
 
 This will install all the core dependencies and build `marin` as a Python
-package. Installing the `[dev]` requirements will additionally install test,
+package. Installing the `[extras]` requirements will additionally install test,
 linting, and debugging dependencies (e.g., `pytest`).
 
 ## Quickstart
