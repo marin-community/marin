@@ -17,7 +17,7 @@ from pathlib import Path
 import fsspec
 import ray
 import requests
-from tqdm import tqdm
+from tqdm_loggable.auto import tqdm
 
 from marin.utils import fsspec_exists, fsspec_glob
 
@@ -45,12 +45,12 @@ def download(cfg: DownloadConfig) -> None:
         return
 
     try:
-        print("Starting transfer of Ar5iv dataset...")
-        print(f"Source: {cfg.input_path}")
+        logger.info("Starting transfer of Ar5iv dataset...")
+        logger.info(f"Source: {cfg.input_path}")
 
         total_size = get_file_size(cfg.input_path)
 
-        print(f"Downloading and extracting to {cfg.output_path}...")
+        logger.info(f"Downloading and extracting to {cfg.output_path}...")
 
         # Download zip to memory
         zip_content = BytesIO()
@@ -84,8 +84,8 @@ def download(cfg: DownloadConfig) -> None:
             skip_shards = set([f for f in file_list if f.filename.split("/")[-2] in downloaded_shards])
             file_list = [f for f in file_list if f.filename.split("/")[-2] not in downloaded_shards]
 
-            print(f"Skipping {len(skip_shards)} already downloaded shards, downloading {len(file_list)} shards...")
-            print(f"Files to download: {file_list}")
+            logger.info(f"Skipping {len(skip_shards)} already downloaded shards, downloading {len(file_list)} shards...")
+            logger.info(f"Files to download: {file_list}")
 
             for file_info in file_list:
                 # Extract shard id from file path
@@ -94,7 +94,7 @@ def download(cfg: DownloadConfig) -> None:
                 if shard_id not in skip_shards:
                     shard_dict[shard_id].append(file_info)
 
-            print(f"\nExtracting and uploading {len(file_list)} files...")
+            logger.info(f"\nExtracting and uploading {len(file_list)} files...")
 
             for shard_id, shard in tqdm(shard_dict.items(), desc="Processing shards"):
                 # Extract content for each file in the shard
@@ -122,8 +122,8 @@ def download(cfg: DownloadConfig) -> None:
                 logger.info(f"Shard {shard_id} with {len(extracted_shard)} files uploaded to {gcs_path}")
 
         zip_content.close()
-        print("\nTransfer completed successfully!")
+        logger.info("\nTransfer completed successfully!")
 
     except Exception as e:
-        print(f"Error during transfer: {e}")
+        logger.exception(f"Error during transfer: {e}")
         raise

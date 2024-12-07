@@ -12,7 +12,7 @@ from dataclasses import dataclass
 import draccus
 import fsspec
 import ray
-from tqdm import tqdm
+from tqdm_loggable.auto import tqdm
 
 from marin.schemas.web.convert import ExtractionConfig
 from marin.utils import fsspec_glob
@@ -67,7 +67,7 @@ def process_file(input_file_path: str, output_path: str, extract_method: str, ex
 
                         print(out_dict, file=output)
                     except Exception as e:
-                        print(f"Error processing line: {e}")
+                        logger.exception(f"Error processing line: {e}")
                         raise
 
             try:
@@ -75,11 +75,11 @@ def process_file(input_file_path: str, output_path: str, extract_method: str, ex
                 for result in results:
                     print(result, file=output)
             except Exception as e:
-                print(f"Error processing remaining tasks: {e}")
+                logger.exception(f"Error processing remaining tasks: {e}")
                 raise
 
-        print("\nProcessing completed successfully!")
-        print(f"File available at: {output_path}")
+        logger.info("\nProcessing completed successfully!")
+        logger.info(f"File available at: {output_path}")
 
     except Exception as e:
         logger.error(f"Error during processing: {e}")
