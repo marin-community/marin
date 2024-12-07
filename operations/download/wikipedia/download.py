@@ -15,7 +15,7 @@ import draccus
 import fsspec
 import ray
 import requests
-from tqdm import tqdm
+from tqdm_loggable.auto import tqdm
 
 from marin.utils import fsspec_exists, fsspec_size
 
@@ -84,7 +84,7 @@ def process_file(input_file: str, output_path: str) -> None:
 
 @draccus.wrap()
 def download(cfg: DownloadConfig) -> None:
-    print("Starting transfer of Wikipedia dump...")
+    logger.info("Starting transfer of Wikipedia dump...")
 
     MAX_CONCURRENT_DOWNLOADS = 10
     download_refs = []

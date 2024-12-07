@@ -1,4 +1,4 @@
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
+from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path, versioned
 from marin.schemas.web.convert import ResiliparseConfig
 from operations.download.wikipedia.download import DownloadConfig, download
 from operations.transform.wikipedia.transform_wikipedia import WikiExtractionConfig, process_wiki_dump
@@ -22,7 +22,7 @@ wikipedia_text_extracted = ExecutorStep(
     name="documents/wikipedia-resiliparse-with-preserving-formatting",
     fn=process_wiki_dump,
     config=WikiExtractionConfig(
-        input_path=versioned("gs://marin-us-central2/raw/wikipedia/v2024-05-01"),
+        input_path=output_path_of(wikipedia_dump_raw),
         revision="20241201",
         output_path=this_output_path(),
         extract_method="resiliparse",
