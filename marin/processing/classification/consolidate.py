@@ -114,14 +114,14 @@ def apply_filter_classify(input_data: dict, doc_filter: FilterConfig, id_to_attr
     if isinstance(value, dict):
         # Handle existing case where value is a dict with labels
         value = value[doc_filter.label]
-    
+
     # Check both lower and upper bounds if specified
     if doc_filter.threshold is not None and value < doc_filter.threshold:
         return False
-        
+
     if doc_filter.upper_threshold is not None and value > doc_filter.upper_threshold:
         return False
-        
+
     return True
 
 def read_attributes_as_dict(attribute_filename: str) -> dict[str, Any]:
