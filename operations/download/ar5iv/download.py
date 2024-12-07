@@ -84,7 +84,7 @@ def download(cfg: DownloadConfig) -> None:
             skip_shards = set([f for f in file_list if f.filename.split("/")[-2] in downloaded_shards])
             file_list = [f for f in file_list if f.filename.split("/")[-2] not in downloaded_shards]
 
-            print(f"Skipping {len(skip_shards)} shards, downloading {len(file_list)} shards...")
+            print(f"Skipping {len(skip_shards)} already downloaded shards, downloading {len(file_list)} shards...")
             print(f"Files to download: {file_list}")
 
             for file_info in file_list:
