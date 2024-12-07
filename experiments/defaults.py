@@ -195,6 +195,7 @@ def default_train(
                 task_spec=eval_harness_tasks,
             ),
         ),
+        pip_dependency_groups=["tokenize_train"],
     )
 
 
