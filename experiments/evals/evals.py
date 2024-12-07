@@ -143,5 +143,6 @@ def default_eval(
             discover_latest_checkpoint=True,
             max_eval_instances=max_eval_instances,
             launch_with_ray=False,
+            step=executor_step,
         ),
     )

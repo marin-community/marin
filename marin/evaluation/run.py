@@ -30,9 +30,17 @@ def evaluate(config: EvaluationConfig) -> None:
             model,
             evals=config.evals,
             output_path=config.evaluation_path,
+            max_eval_instances=config.max_eval_instances,
+            step=config.step,
         )
     else:
-        evaluator.evaluate(model, evals=config.evals, output_path=config.evaluation_path)
+        evaluator.evaluate(
+            model,
+            evals=config.evals,
+            output_path=config.evaluation_path,
+            max_eval_instances=config.max_eval_instances,
+            step=config.step,
+        )
 
     print(f"Done (total time: {time.time() - start_time} seconds)")
 
