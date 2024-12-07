@@ -6,7 +6,6 @@ from typing import ClassVar
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.utils import download_from_gcs, is_remote_path
-from marin.execution.executor import ExecutorStep
 
 
 @dataclass(frozen=True)
@@ -67,7 +66,6 @@ class Evaluator(ABC):
         evals: list[EvalTaskConfig],
         output_path: str,
         max_eval_instances: int | None = None,
-        step: ExecutorStep | None = None,
     ) -> None:
         """
         Launches the evaluation run with Ray.
@@ -88,7 +86,6 @@ class Evaluator(ABC):
         evals: list[EvalTaskConfig],
         output_path: str,
         max_eval_instances: int | None = None,
-        step: ExecutorStep | None = None,
     ) -> None:
         """What to run to evaluate."""
         pass

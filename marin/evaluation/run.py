@@ -34,7 +34,6 @@ def evaluate(config: EvaluationConfig) -> None:
             evals=config.evals,
             output_path=config.evaluation_path,
             max_eval_instances=config.max_eval_instances,
-            step=config.step,
         )
     else:
         evaluator.evaluate(
@@ -42,7 +41,6 @@ def evaluate(config: EvaluationConfig) -> None:
             evals=config.evals,
             output_path=config.evaluation_path,
             max_eval_instances=config.max_eval_instances,
-            step=config.step,
         )
 
     logger.info(f"Done (total time: {time.time() - start_time} seconds)")
