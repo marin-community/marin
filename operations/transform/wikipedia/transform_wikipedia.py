@@ -4,10 +4,10 @@ wikipedia/extract_html.py
 Script for extracting HTML content from Wikipedia dumps in DOLMA format.
 """
 
+import json
 import logging
 import os
 from dataclasses import dataclass
-from pathlib import Path
 
 import draccus
 import fsspec
@@ -30,19 +30,18 @@ class WikiExtractionConfig:
     extract_config: ExtractionConfig
 
 
-@ray.remote
-def process_html(html_text: str, extract_method: str, extract_config: ExtractionConfig) -> dict[str, str]:
-    return convert_page(html_text, extract_method=extract_method, extract_config=extract_config)
-
-
 @ray.remote(memory=2 * 1024 * 1024 * 1024)
-def process_file(input_file_path: str, output_path: str) -> None:
-    output_file_path = os.path.join(output_path, input_file_path.replace(".ndjson.gz", ".jsonl.gz"))
+def process_html(html_text: str, extract_method: str, extract_config: ExtractionConfig) -> dict[str, str]:
+    return convert_page(html_text, extract_method=extract_method, config=extract_config)
+
+
+@ray.remote
+def process_file(input_file_path: str, output_path: str, extract_method: str, extract_config: ExtractionConfig) -> None:
+    output_file_path = os.path.join(output_path, input_file_path.split("/")[-1].replace(".ndjson.gz", ".jsonl.gz"))
 
     logger.info("Starting processing of file {input_file_path}")
     logger.info(f"Source: {input_file_path}")
     logger.info(f"Destination: {output_file_path}")
-
     try:
         with (
             fsspec.open(input_file_path, compression="gzip") as source,
@@ -52,16 +51,26 @@ def process_file(input_file_path: str, output_path: str) -> None:
 
             pending_tasks = []
             for line in tqdm(source, desc="Processing lines"):
-                pending_tasks.append(process_html.remote(line))
+                row = json.loads(line)
+                pending_tasks.append(process_html.remote(row["html"], extract_method, extract_config))
 
                 if len(pending_tasks) > MAX_PENDING_TASKS:
                     ready_tasks, pending_tasks = ray.wait(pending_tasks, num_returns=1)
                     try:
                         result = ray.get(ready_tasks)
-                        print(result, file=output)
+                        out_dict = {
+                            "id": row["identifier"],
+                            "url": row["url"],
+                            "title": row["name"],
+                            "abstract": row["abstract"],
+                            "date_created": row["date_created"],
+                            "text": result,
+                        }
+
+                        print(out_dict, file=output)
                     except Exception as e:
                         print(f"Error processing line: {e}")
-                        continue
+                        raise
 
             try:
                 results = ray.get(pending_tasks)
@@ -75,7 +84,7 @@ def process_file(input_file_path: str, output_path: str) -> None:
         print(f"File available at: {output_path}")
 
     except Exception as e:
-        print(f"Error during processing: {e}")
+        logger.error(f"Error during processing: {e}")
         raise
 
 
@@ -95,8 +104,9 @@ def process_wiki_dump(cfg: WikiExtractionConfig) -> None:
                 logger.exception(f"Error processing the group: {e}")
                 continue
 
-        output_file = Path(cfg.output_path) / file.name.replace(".ndjson.gz", ".txt")
-        result_refs.append(process_file.remote(file, output_file))
+        output_path = os.path.join(cfg.output_path, cfg.revision)
+        result_refs.append(process_file.remote(file, output_path, cfg.extract_method, cfg.extract_config))
+        break
     try:
         ray.get(result_refs)
     except Exception as e:
