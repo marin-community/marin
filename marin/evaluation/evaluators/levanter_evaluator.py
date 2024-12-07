@@ -104,26 +104,4 @@ def _doublecheck_paths_eval(config: LmEvalOnPodConfig, must_save_checkpoints):
             return
         raise ValueError("Could not determine the region of the VM. This is required for path checks.") from e
 
-    # _check_path_in_region("data.cache_dir", config.data.cache_dir, none_ok=True, region=region, local_ok=local_ok)
-    # # now check all subcaches if applicable
-    # if isinstance(config.data, LMMixtureDatasetConfig):
-    #     for key, subcache in config.data.configs.items():
-    #         _check_path_in_region(
-    #             f"data.configs[{key}].cache_dir", subcache.cache_dir, none_ok=True, region=region, local_ok=local_ok
-    #         )
-    # _check_path_in_region(
-    #     "trainer.checkpointer.base_path",
-    #     config.trainer.checkpointer.base_path,
-    #     none_ok=not must_save_checkpoints,
-    #     region=region,
-    #     local_ok=local_ok,
-    # )
-
-    # if config.hf_save_path is not None:
-    #     _check_path_in_region(
-    #         "hf_save_path", config.hf_save_path, none_ok=not must_save_checkpoints, region=region, local_ok=local_ok
-    #     )
-    # else:
-    #     logger.warning("hf_save_path is not set. This is fine if you don't want HF checkpoints.")
-
     return config

@@ -23,10 +23,10 @@ from levanter.trainer import TrainerConfig
 from experiments.eval_datasets import (
     eval_datasets,
 )
+from experiments.evals.task_configs import LEVANTER_LM_EVAL_CORE_TASKS
 from experiments.llama import compute_num_parameters
 from experiments.paloma import paloma_tokenized
 from experiments.simple_train_config import SimpleTrainConfig
-from experiments.evals.task_configs import LEVANTER_LM_EVAL_CORE_TASKS
 from marin.execution.executor import ExecutorStep, InputName, VersionedValue, output_path_of, this_output_path, versioned
 from marin.processing.tokenize import (
     TokenizeConfig,
