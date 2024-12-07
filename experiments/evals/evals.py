@@ -118,6 +118,7 @@ def default_eval(
     Args:
         step (ExecutorStep | InputName): step to evaluate.
         evals (list[EvalTaskConfig]): List of evals to run- defaults to a set of CORE_TASKS.
+        max_eval_instances (int): Maximum number of evaluation instances to run.
     """
 
     if isinstance(step, ExecutorStep):
@@ -135,14 +136,13 @@ def default_eval(
         name=f"evaluation/lm_evaluation_harness/{executor_step.name}",
         fn=evaluate,
         config=EvaluationConfig(
-            evaluator="lm_evaluation_harness",
+            evaluator="levanter_lm_evaluation_harness",
             model_name=None,  # imputed automatically
             model_path=model_step_path,  # type: ignore
             evaluation_path=this_output_path(),
             evals=evals,
             discover_latest_checkpoint=True,
             max_eval_instances=max_eval_instances,
-            launch_with_ray=False,
             step=executor_step,
         ),
     )

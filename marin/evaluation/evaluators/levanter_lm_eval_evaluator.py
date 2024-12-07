@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import shutil
 from typing import ClassVar
 
 import levanter.eval_harness as eval_harness
@@ -24,7 +25,7 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
         *LevanterTpuEvaluator.DEFAULT_PIP_PACKAGES,
     ]
 
-    RESULTS_PATH: str = os.path.join(LevanterTpuEvaluator.CACHE_PATH, "lm_eval_harness_results.json")
+    RESULTS_PATH: str = os.path.join(LevanterTpuEvaluator.CACHE_PATH, "levanter_lm_eval_harness_results.json")
 
     def evaluate(
         self,
@@ -63,12 +64,12 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
 
             tasks = []
             for eval_task_config in evals:
-                task_spec = eval_harness.TaskConfig(
+                task = eval_harness.TaskConfig(
                     task=eval_task_config.name,
                     num_fewshot=eval_task_config.num_fewshot,
                     task_alias=eval_task_config.task_alias,
                 )
-                tasks.append(task_spec)
+                tasks.append(task)
 
             eval_config = eval_harness.EvalHarnessMainConfig(
                 eval_harness=eval_harness.EvalHarnessConfig(
@@ -88,8 +89,10 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
                 json.dump(outputs, f, indent=2)
 
         except Exception as e:
+
             print(f"Error running eval harness: {e}")
             raise e
+
         finally:
 
             if is_remote_path(output_path):
@@ -101,3 +104,6 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
                     logger.info(f"Failed to upload results to GCS: {upload_error}")
 
             self.cleanup(model)
+
+            if os.path.exists(self.RESULTS_PATH):
+                shutil.rmtree(self.RESULTS_PATH)
