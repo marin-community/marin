@@ -7,7 +7,6 @@ import ray
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Dependency, Evaluator, ModelConfig
-from marin.execution.executor import ExecutorStep
 from marin.utils import remove_tpu_lockfile_on_exit
 
 logger = logging.getLogger(__name__)
@@ -74,7 +73,6 @@ class LevanterTpuEvaluator(Evaluator, ABC):
         evals: list[EvalTaskConfig],
         output_path: str,
         max_eval_instances: int | None = None,
-        step: ExecutorStep | None = None,
     ) -> None:
         """
         Launches the evaluation run with Ray.
@@ -89,8 +87,7 @@ class LevanterTpuEvaluator(Evaluator, ABC):
             evals: list[EvalTaskConfig],
             output_path: str,
             max_eval_instances: int | None = None,
-            step: ExecutorStep | None = None,
         ) -> None:
-            self.evaluate(model, evals, output_path, max_eval_instances, step)
+            self.evaluate(model, evals, output_path, max_eval_instances)
 
-        ray.get(launch.remote(model, evals, output_path, max_eval_instances, step))
+        ray.get(launch.remote(model, evals, output_path, max_eval_instances))

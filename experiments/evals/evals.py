@@ -121,6 +121,7 @@ def default_eval(
         max_eval_instances (int): Maximum number of evaluation instances to run.
     """
 
+    # extract the `ExecutorStep` corresponding to the training step, and get the model path
     if isinstance(step, ExecutorStep):
         model_step_path = output_path_of(step)
         executor_step = step
@@ -143,6 +144,5 @@ def default_eval(
             evals=evals,
             discover_latest_checkpoint=True,
             max_eval_instances=max_eval_instances,
-            step=executor_step,
         ),
     )
