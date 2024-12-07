@@ -23,7 +23,7 @@ CORE_TASKS = [
 ]
 
 
-LEVANTER_LM_EVAL_CORE_TASKS = [
+CORE_TASKS = [
     TaskConfig(task="agieval_lsat_ar", num_fewshot=3),  # 3-shot tests in legal domain
     TaskConfig(task="arc_easy", num_fewshot=10),  # 10-shot, four-way MCQs involving grade 3-9 basic science
     TaskConfig(task="arc_challenge", num_fewshot=10),  # a (harder) version of arc_easy

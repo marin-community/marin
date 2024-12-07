@@ -1,5 +1,7 @@
 from dataclasses import dataclass, field
 
+from marin.execution.executor import ExecutorStep
+
 
 @dataclass(frozen=True)
 class EvalTaskConfig:
@@ -8,6 +10,9 @@ class EvalTaskConfig:
 
     num_fewshot: int
     """Number of few-shot examples to evaluate on."""
+
+    task_alias: str
+    """Alias for the task name."""
 
 
 @dataclass(frozen=True)
@@ -57,4 +62,10 @@ class EvaluationConfig:
     max_eval_instances: int | None = None
     """
     Maximum number of evaluation instances to run.
+    """
+
+    step: ExecutorStep | None = None
+    """
+    The step to evaluate, and is used to get trainer and model configs.
+    Needed only for Levanter's lm-eval evaluator.
     """

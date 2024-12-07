@@ -8,6 +8,7 @@ from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Dependency, ModelConfig
 from marin.evaluation.evaluators.vllm_tpu_evaluator import VllmTpuEvaluator
 from marin.evaluation.utils import is_remote_path, run_bash_command, set_cuda_visible_devices, upload_to_gcs
+from marin.execution.executor import ExecutorStep
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +28,12 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
     ]
 
     def evaluate(
-        self, model: ModelConfig, evals: list[EvalTaskConfig], output_path: str, max_eval_instances: int | None = None
+        self,
+        model: ModelConfig,
+        evals: list[EvalTaskConfig],
+        output_path: str,
+        max_eval_instances: int | None = None,
+        step: ExecutorStep | None = None,
     ) -> None:
         """
         Runs EleutherAI's lm-eval harness on the specified model and set of  tasks.
@@ -37,6 +43,7 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
             evals (List[EvalTaskConfig]): The list of evaluations to run.
             output_path (str): The path to save the evaluation results.
             max_eval_instances (int | None): The maximum number of evaluation instances to run.
+            step (ExecutorStep | None): The step to evaluate. Used to get the config for the model and the trainer.
         """
         # From https://github.com/EleutherAI/lm-evaluation-harness?tab=readme-ov-file#model-apis-and-inference-servers
         # Run lm_eval with the model and the specified evals
