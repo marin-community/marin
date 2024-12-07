@@ -56,6 +56,7 @@ class FilterConfig:
     upper_threshold: float | None = None
     """Keep documents where the value is below this."""
 
+
 @dataclass(frozen=True)
 class ConsolidateConfig:
     """Config for Consolidation operation on Marin data"""
@@ -107,6 +108,7 @@ def apply_filter_remove_spans(
 
     return dict(input_data, text=new_text, keep=True)
 
+
 def apply_filter_classify(input_data: dict, doc_filter: FilterConfig, id_to_attributes: dict[str, Any]) -> bool:
     attributes = id_to_attributes[input_data["id"]]
     # Get value from attributes
@@ -123,6 +125,7 @@ def apply_filter_classify(input_data: dict, doc_filter: FilterConfig, id_to_attr
         return False
 
     return True
+
 
 def read_attributes_as_dict(attribute_filename: str) -> dict[str, Any]:
     """Given some attribute filename, return a dictionary mapping from id to attributes

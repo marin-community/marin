@@ -190,18 +190,20 @@ class FinewebEduClassifier(BERTClassifier):
 
         return batch
 
+
 class CompressionClassifier(BaseClassifier):
     def __init__(self, model_name: str, attribute_name: str, *args, **kwargs):
         super().__init__(model_name, attribute_name)
 
     def __call__(self, batch):
         compression_ratios = []
-        for text in batch['text']:
-            text_bytes = text.encode('utf-8')
+        for text in batch["text"]:
+            text_bytes = text.encode("utf-8")
             compressed = lz4.frame.compress(text_bytes)
             ratio = len(compressed) / len(text_bytes)
             compression_ratios.append({self.attribute_name: ratio})
-        return {'attributes': compression_ratios}
+        return {"attributes": compression_ratios}
+
 
 class AutoClassifier(BaseClassifier):
     _MODEL_NAME_TO_CLS_DICT: ClassVar[dict[str, BaseClassifier]] = {
