@@ -53,6 +53,8 @@ class FilterConfig:
     keep_fraction: float | None = None
     """Keep documents where the score is in the top percentile. Calculates the threshold from the entire dataset."""
 
+    upper_threshold: float | None = None
+    """Keep documents where the value is below this."""
 
 @dataclass(frozen=True)
 class ConsolidateConfig:
@@ -105,18 +107,22 @@ def apply_filter_remove_spans(
 
     return dict(input_data, text=new_text, keep=True)
 
-
 def apply_filter_classify(input_data: dict, doc_filter: FilterConfig, id_to_attributes: dict[str, Any]) -> bool:
     attributes = id_to_attributes[input_data["id"]]
-    # Check attribute >= threshold?
-    scores = attributes[doc_filter.name]
-    score = scores[doc_filter.label]
-
-    if score >= doc_filter.threshold:
-        return True
-
-    return False
-
+    # Get value from attributes
+    value = attributes[doc_filter.name]
+    if isinstance(value, dict):
+        # Handle existing case where value is a dict with labels
+        value = value[doc_filter.label]
+    
+    # Check both lower and upper bounds if specified
+    if doc_filter.threshold is not None and value < doc_filter.threshold:
+        return False
+        
+    if doc_filter.upper_threshold is not None and value > doc_filter.upper_threshold:
+        return False
+        
+    return True
 
 def read_attributes_as_dict(attribute_filename: str) -> dict[str, Any]:
     """Given some attribute filename, return a dictionary mapping from id to attributes
