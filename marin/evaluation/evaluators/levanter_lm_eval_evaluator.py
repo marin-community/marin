@@ -90,7 +90,7 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
 
         except Exception as e:
 
-            print(f"Error running eval harness: {e}")
+            logger.error(f"Error running eval harness: {e}")
             raise e
 
         finally:

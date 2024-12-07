@@ -1,3 +1,4 @@
+import logging
 import os
 from abc import ABC
 from typing import ClassVar
@@ -8,6 +9,8 @@ from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Dependency, Evaluator, ModelConfig
 from marin.execution.executor import ExecutorStep
 from marin.utils import remove_tpu_lockfile_on_exit
+
+logger = logging.getLogger(__name__)
 
 
 class LevanterTpuEvaluator(Evaluator, ABC):
@@ -38,7 +41,7 @@ class LevanterTpuEvaluator(Evaluator, ABC):
         """
         Clean up resources.
         """
-        print("Cleaning up resources.")
+        logger.info("Cleaning up resources.")
 
         # Delete the checkpoint
         model.destroy()
