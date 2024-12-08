@@ -31,8 +31,7 @@ dependencies = [
     # We are keeping levanter deps for now. @TODO :: Remove them
     "jax>=0.4.34",
     "multiprocess==0.70.16",
-    #"levanter>=1.2.dev1152",
-    "git+https://github.com/stanford-crfm/levanter.git@c90cff9bef4341cea376d4e330dcddabeaf4d86a",
+    "levanter>=1.2.dev1162",
 ]
 
 [project.optional-dependencies]
@@ -80,7 +79,7 @@ tokenize_train = [
     "jax>=0.4.34",
     "multiprocess==0.70.16",
     "levanter>=1.2.dev1147",
-    "lm-eval@git+https://github.com/dlwh/lm-evaluation-harness.git@no_torch"
+    "lm-eval@git+https://github.com/dlwh/lm-evaluation-harness.git@no_torch",
 ]
 
 data_browser = [

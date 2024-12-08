@@ -9,7 +9,7 @@ class EvalTaskConfig:
     num_fewshot: int
     """Number of few-shot examples to evaluate on."""
 
-    task_alias: str
+    task_alias: str | None = None
     """Alias for the task name."""
 
 
@@ -61,4 +61,3 @@ class EvaluationConfig:
     """
     Maximum number of evaluation instances to run.
     """
-
