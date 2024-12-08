@@ -12,6 +12,15 @@ from operations.transform.conversation.transform_conversation import create_shar
 
 @dataclasses.dataclass
 class FilterDolminoConfig:
+    """Configuration to filter the dolmino dataset.
+
+    Attributes:
+        input_path: The path to the input dolmino dataset.
+        output_path: The path to the output of the filtered dolmino dataset.
+        split: The split of the dolmino dataset to filter (e.g. "wiki", "stackexchange", "pes2o").
+        min_length: The minimum length for each document to filter by.
+    """
+
     input_path: str
     output_path: str
     split: str
