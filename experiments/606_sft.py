@@ -66,7 +66,6 @@ llama_8b_tulu3_model = ExecutorStep(
                 save_interval=timedelta(minutes=10),
                 keep=[dict(every=25000)],
             ),
-            # initialize_from="gs://levanter-checkpoints/marin/olmoish7b_v4_1024_0627/dlwh_7b0627/step-510000/",
         ),
         model=LlamaConfig(
             seq_len=4096,  # Seq len set to reproduce Tulu SFT
