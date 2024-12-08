@@ -1,5 +1,7 @@
 import json
 import logging
+import os
+import shutil
 from typing import ClassVar
 
 import fsspec
@@ -45,8 +47,6 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
         # Eval Harness code: https://github.com/stanford-crfm/levanter/blob/main/src/levanter/eval_harness.py
         # Run the harness with the model and the specified evals
 
-        from transformers import AutoTokenizer
-
         try:
 
             # Download the model from GCS or HuggingFace
@@ -55,13 +55,11 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
             logger.info(f"Running eval harness on model: {model_name_or_path}")
 
             trainer_config = TrainerConfig(
-                mp=jmp.get_policy("fp32"),
-                per_device_eval_batch_size=32,
-                ray=RayConfig(auto_start_cluster=False)
+                mp=jmp.get_policy("f32"), per_device_eval_parallelism=32, ray=RayConfig(auto_start_cluster=False)
             )
 
             model_config = LlamaConfig()
-\
+
             # convert to the config that Levanter's eval_harness expects
             tasks = []
             for eval_task_config in evals:
@@ -72,14 +70,42 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
                 )
                 tasks.append(task)
 
+            model_path = os.path.join(LevanterTpuEvaluator.CACHE_PATH, model.path)
+
+            def get_tokenizer_name(model_path: str) -> str:
+                # Path to the tokenizer config file
+                tokenizer_config_path = os.path.join(model_path, "tokenizer_config.json")
+
+                # Load the tokenizer configuration
+                with open(tokenizer_config_path, "r") as f:
+                    tokenizer_config = json.load(f)
+                    logger.info(f"Tokenizer Config: {tokenizer_config}")
+
+                # Extract the tokenizer name
+                tokenizer_name = tokenizer_config.get("tokenizer_class", "Unknown")
+                logger.info(f"Tokenizer Name: {tokenizer_name}")
+
+                if tokenizer_name == "GPTNeoXTokenizer":
+                    tokenizer = "EleutherAI/gpt-neox-20b"
+                elif tokenizer_name == "LlamaTokenizer":
+                    tokenizer = "meta-llama/Llama-2-7b-hf"
+                elif tokenizer_name == "PreTrainedTokenizerFast":
+                    tokenizer = "meta-llama/Meta-Llama-3.1-8B"
+                else:
+                    tokenizer = "gpt2"
+
+                return tokenizer
+
+            tokenizer = get_tokenizer_name(model_path)
+
             eval_config = eval_harness.EvalHarnessMainConfig(
-                eval_harness=eval_harness.EvalHarnessConfig(
+                eval_harness=eval_harness.LmEvalHarnessConfig(
                     task_spec=tasks,
                     max_examples=max_eval_instances,
-                    log_samples=True,
+                    log_samples=False,
                 ),
-                tokenizer=AutoTokenizer.from_pretrained(model.name, trust_remote_code=True),
-                checkpoint_path=model.path,
+                tokenizer=tokenizer,
+                checkpoint_path=model_path,
                 checkpoint_is_hf=True,
                 trainer=trainer_config,
                 model=model_config,
@@ -89,7 +115,10 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
 
             if is_remote_path(output_path):
                 try:
-                    logger.info("Uploading eval results to GCS...")
+                    # add a results.json to output path
+                    output_path = os.path.join(output_path, "results.json")
+
+                    logger.info(f"Uploading results to GCS: {output_path}")
 
                     # write output JSON directly to output_path on GCS
                     fs = fsspec.filesystem("gcs")
@@ -110,3 +139,5 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
             # Clean up resources
             self.cleanup(model)
 
+            if os.path.exists(LevanterTpuEvaluator.CACHE_PATH):
+                shutil.rmtree(LevanterTpuEvaluator.CACHE_PATH)

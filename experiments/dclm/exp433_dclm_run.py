@@ -112,7 +112,7 @@ if __name__ == "__main__":
             dclm_baseline_tokenized,
             starcoderdata_tokenized,
             proofpile_2_tokenized,
-            # dclm_mixture_model,
+            dclm_mixture_model,
             dclm_baseline_only_model,
             dclm_mixture_eval,
             dclm_baseline_only_eval,
