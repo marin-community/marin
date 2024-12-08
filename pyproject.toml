@@ -29,7 +29,7 @@ dependencies = [
     "pandas", # Only needed by Fileprovider in inference.py
     "pyarrow", # # Only needed by Fileprovider in inference.py
     # We are keeping levanter deps for now. @TODO :: Remove them
-    "jax>=0.4.34",
+    "jax>=0.4.34,<04.36",
     "multiprocess==0.70.16",
     "levanter>=1.2.dev1162",
 ]
