@@ -1,11 +1,15 @@
+"""
+Canonical set of evals.
+"""
+
+import logging
+
 from experiments.evals.task_configs import CORE_TASKS
 from marin.evaluation.evaluation_config import EvalTaskConfig, EvaluationConfig
 from marin.evaluation.run import evaluate
 from marin.execution.executor import ExecutorStep, InputName, output_path_of, this_output_path
 
-"""
-Canonical set of evals.
-"""
+logger = logging.getLogger(__name__)
 
 
 def evaluate_helm(model_name: str, model_path: str, evals: list[EvalTaskConfig]) -> ExecutorStep:
@@ -129,12 +133,14 @@ def default_eval(
         model_step_path = output_path_of(step.step)
         executor_step = step.step
 
+    logger.info(f"Creating default evaluation step for {executor_step.name}")
+
     # Default to CORE_TASKS
     if evals is None:
         evals = CORE_TASKS
 
     return ExecutorStep(
-        name=f"evaluation/lm_evaluation_harness/{executor_step.name}",
+        name=f"evaluation/levanter_lm_evaluation_harness/{executor_step.name}",
         fn=evaluate,
         config=EvaluationConfig(
             evaluator="levanter_lm_evaluation_harness",

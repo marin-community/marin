@@ -21,7 +21,7 @@ class LevanterTpuEvaluator(Evaluator, ABC):
     ]
 
     # Where to store checkpoints, cache inference results, etc.
-    CACHE_PATH: str = "/tmp"
+    CACHE_PATH: str = "/tmp/levanter-lm-eval"
 
     @staticmethod
     def download_model(model: ModelConfig) -> str:
