@@ -31,13 +31,8 @@ class WikiExtractionConfig:
 
 
 @ray.remote(memory=2 * 1024 * 1024 * 1024)
-def process_html(html_text: str, extract_method: str, extract_config: ExtractionConfig) -> dict[str, str]:
-    return convert_page(html_text, extract_method=extract_method, config=extract_config)
-
-
-@ray.remote
 def process_file(input_file_path: str, output_path: str, extract_method: str, extract_config: ExtractionConfig) -> None:
-    output_file_path = os.path.join(output_path, input_file_path.split("/")[-1].replace(".ndjson.gz", ".jsonl.gz"))
+    output_file_path = os.path.join(output_path, input_file_path.split("/")[-1].replace(".ndjson", ".jsonl.gz"))
 
     logger.info("Starting processing of file {input_file_path}")
     logger.info(f"Source: {input_file_path}")
@@ -47,38 +42,29 @@ def process_file(input_file_path: str, output_path: str, extract_method: str, ex
             fsspec.open(input_file_path, compression="gzip") as source,
             fsspec.open(output_file_path, "wt", compression="gzip") as output,
         ):
-            MAX_PENDING_TASKS = 25
-
-            pending_tasks = []
             for line in tqdm(source, desc="Processing lines"):
                 row = json.loads(line)
-                pending_tasks.append(process_html.remote(row["html"], extract_method, extract_config))
 
-                if len(pending_tasks) > MAX_PENDING_TASKS:
-                    ready_tasks, pending_tasks = ray.wait(pending_tasks, num_returns=1)
-                    try:
-                        result = ray.get(ready_tasks)
-                        out_dict = {
-                            "id": row["identifier"],
-                            "url": row["url"],
-                            "title": row["name"],
-                            "abstract": row["abstract"],
-                            "date_created": row["date_created"],
-                            "text": result,
-                        }
+                try:
+                    result = convert_page(
+                        row["article_body"]["html"], extract_method=extract_method, config=extract_config
+                    )
+                    out_dict = {
+                        "id": row["identifier"],
+                        "url": row["url"],
+                        "title": row["name"],
+                        "abstract": row.get("abstract", ""),
+                        "date_created": row["date_created"] if "date_created" in row else row.get("date_modified", ""),
+                        "text": result["content"],
+                    }
 
-                        print(out_dict, file=output)
-                    except Exception as e:
-                        logger.exception(f"Error processing line: {e}")
-                        raise
+                    print(json.dumps(out_dict), file=output)  # Without this line, the JSON file will be corrupted
+                except Exception as e:
+                    logger.info(f"Keys in row: {row.keys()}")
+                    logger.info(f"Article body keys: {row['article_body'].keys()}")
 
-            try:
-                results = ray.get(pending_tasks)
-                for result in results:
-                    print(result, file=output)
-            except Exception as e:
-                logger.exception(f"Error processing remaining tasks: {e}")
-                raise
+                    logger.exception(f"Error processing line: {e}")
+                    continue
 
         logger.info("\nProcessing completed successfully!")
         logger.info(f"File available at: {output_path}")
@@ -90,7 +76,10 @@ def process_file(input_file_path: str, output_path: str, extract_method: str, ex
 
 @draccus.wrap()
 def process_wiki_dump(cfg: WikiExtractionConfig) -> None:
-    files = fsspec_glob(f"{cfg.input_path}/*.ndjson.gz")
+    logger.info(f"Starting processing of Wikipedia dump in {cfg.input_path}")
+
+    files = fsspec_glob(f"{cfg.input_path}/*.ndjson")
+    logger.info(f"Found {len(files)} files to process")
 
     result_refs = []
     MAX_CONCURRENT_WORKERS = 15
@@ -106,7 +95,6 @@ def process_wiki_dump(cfg: WikiExtractionConfig) -> None:
 
         output_path = os.path.join(cfg.output_path, cfg.revision)
         result_refs.append(process_file.remote(file, output_path, cfg.extract_method, cfg.extract_config))
-        break
     try:
         ray.get(result_refs)
     except Exception as e:

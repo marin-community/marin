@@ -72,8 +72,10 @@ def process_file(input_file: str, output_path: str) -> None:
                 for file_name in tqdm(file_names):
                     file = tr.extractfile(file_name)
                     file_content = file.read()
-                    file_path = os.path.join(output_path, file_name)
+                    file_path = os.path.join(output_path, file_name + ".gz")
 
+                    # Each file is a .ndjson file, which contains about 18k-21k articles
+                    # per file with size ranging from 200MB to 300MB
                     with fsspec.open(file_path, "wb", compression="gzip") as f:
                         f.write(file_content)
 
