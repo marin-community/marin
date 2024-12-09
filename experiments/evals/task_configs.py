@@ -23,20 +23,15 @@ CORE_TASKS = [
 ]
 
 
-LEVANTER_LM_EVAL_CORE_TASKS = [
-    TaskConfig(task="agieval_lsat_ar", num_fewshot=3),  # 3-shot tests in legal domain
-    TaskConfig(task="arc_easy", num_fewshot=10),  # 10-shot, four-way MCQs involving grade 3-9 basic science
-    TaskConfig(task="arc_challenge", num_fewshot=10),  # a (harder) version of arc_easy
-    TaskConfig(task="boolq", num_fewshot=10),  # answer yes/no questions based on a passage
-    TaskConfig(task="commonsense_qa", num_fewshot=10),  # 5-way MCQs based on common-sense, everyday scenarios
-    TaskConfig(task="copa", num_fewshot=0),  # use causal reasoning to predict correct outcome of given scenario
-    # 4-way multiple choice commonsense reasoning dataset
-    TaskConfig(task="hellaswag", num_fewshot=0, task_alias="hellaswag_0shot"),
-    TaskConfig(task="hellaswag", num_fewshot=10, task_alias="hellaswag_10shot"),
-    TaskConfig(task="lambada_openai", num_fewshot=0),  # predict the endings of text passages
-    TaskConfig(task="openbookqa", num_fewshot=0),  # 4-way MCQ, QA task that requires multi-step reasoning
-    TaskConfig(task="piqa", num_fewshot=10),  # answer questions based on a passage
-    # TaskConfig(task="squadv2", num_fewshot=10),  # reading comprehension benchmark
-    TaskConfig(task="wsc273", num_fewshot=0),  # Winograd Schema Challenge
-    TaskConfig(task="winogrande", num_fewshot=0),  # Winograd challenge, extended to more domains
-]
+def convert_to_levanter_task_config(tasks: list[EvalTaskConfig]) -> list[TaskConfig]:
+    """
+    Convert a list of EvalTaskConfig to a list of TaskConfig that Levanter's eval_harness expects.
+    """
+    return [
+        TaskConfig(
+            task=task.name,
+            num_fewshot=task.num_fewshot,
+            task_alias=task.task_alias,
+        )
+        for task in tasks
+    ]
