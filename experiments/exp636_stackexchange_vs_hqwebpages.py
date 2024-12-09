@@ -24,6 +24,11 @@ dolmino_stackexchange_model = default_train(
 stackexchange_filtered_hq_webpages_experiment_dict, stackexchange_filtered_hq_webpages_experiment_steps = create_steps(
     stackexchange_experiment_config
 )
+
+stackexchange_filtered_hq_webpages_model = stackexchange_filtered_hq_webpages_experiment_dict[
+    f"{stackexchange_experiment_config.experiment_name}-train"
+]
+
 stackexchange_filtered_hq_webpages_tokenized = stackexchange_filtered_hq_webpages_experiment_dict[
     f"{stackexchange_experiment_config.experiment_name}-tokenize"
 ]
@@ -47,7 +52,7 @@ if __name__ == "__main__":
     executor_main(
         steps=[
             dolmino_stackexchange_model,
-            stackexchange_filtered_hq_webpages_experiment_steps,
+            stackexchange_filtered_hq_webpages_model,
             half_stackexchange_half_hqwebpages_model,
         ]
     )
