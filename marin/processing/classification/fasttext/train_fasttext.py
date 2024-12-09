@@ -43,7 +43,7 @@ def train(cfg: TrainFasttextClassifierConfig):
         label_docs(
             input_doc_path=dataset.input_doc_path,
             output_attr_path=attr_path,
-            attribute_func=lambda _, dataset=dataset: {"label": dataset.label},
+            attribute_func=lambda doc, attrs, dataset=dataset: {"label": dataset.label},
         )
         attributes_to_dataset(
             output_path=cfg.output_path,
