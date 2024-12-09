@@ -7,9 +7,7 @@ Demo for creating custom attributes.
 from collections.abc import Callable
 from dataclasses import dataclass
 
-import draccus
-
-from marin.classifiers.utils import label_docs
+from marin.classifiers.utils import label_documents
 
 
 @dataclass
@@ -30,9 +28,8 @@ class CustomAttributeConfig:
     input_attr_paths: list[str] | None = None
 
 
-@draccus.wrap()
 def create_custom_attribute(cfg: CustomAttributeConfig):
-    label_docs(
+    label_documents(
         input_doc_path=cfg.input_doc_path,
         output_attr_path=cfg.output_attr_path,
         attribute_func=cfg.attribute_func,
@@ -41,19 +38,25 @@ def create_custom_attribute(cfg: CustomAttributeConfig):
 
 
 def main():
+    """
+    Demo for creating custom attributes.
+
+    First creates an attribute based on the length of the text in a document.
+    Then increments that attribute by 1.
+    """
     create_custom_attribute(
         CustomAttributeConfig(
             input_doc_path="gs://marin-us-central2/documents/instruct/tulu_v2_mix/text",
-            output_attr_path="gs://marin-us-central2/attributes/create_attribute_demo/part1",
+            output_attr_path="gs://marin-us-central2/custom_attribute_demo/part1",
             attribute_func=lambda doc, attrs: {"label": len(doc["text"])},
         )
     )
     create_custom_attribute(
         CustomAttributeConfig(
             input_doc_path="gs://marin-us-central2/documents/instruct/tulu_v2_mix/text/",
-            output_attr_path="gs://marin-us-central2/attributes/create_attribute_demo/part2",
+            output_attr_path="gs://marin-us-central2/custom_attribute_demo/part2",
             attribute_func=lambda doc, attrs: {"label": attrs[0]["label"] + 1},
-            input_attr_paths=["gs://marin-us-central2/attributes/create_attribute_demo/part1"],
+            input_attr_paths=["gs://marin-us-central2/scratch/custom_attribute_demo/part1"],
         )
     )
 
