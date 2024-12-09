@@ -108,6 +108,13 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
         train_config=llama_1_4b_train_config,
     )
 
+    steps_dict = {
+        f"{config.experiment_name}-inference": inference_step,
+        f"{config.experiment_name}-consolidate": consolidate_step,
+        f"{config.experiment_name}-tokenize": tokenize_step,
+        f"{config.experiment_name}-train": train_step,
+    }
+
     steps.append(train_step)
 
-    return steps
+    return steps_dict, steps
