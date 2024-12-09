@@ -17,6 +17,7 @@ from marin.evaluation.evaluators.levanter_tpu_evaluator import LevanterTpuEvalua
 from marin.evaluation.utils import (
     is_remote_path,
 )
+from marin.experiments.evals.task_configs import convert_to_levanter_task_config
 
 logger = logging.getLogger(__name__)
 
@@ -64,14 +65,7 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
             model_config = LlamaConfig()
 
             # convert to the config that Levanter's eval_harness expects
-            tasks = []
-            for eval_task_config in evals:
-                task = eval_harness.TaskConfig(
-                    task=eval_task_config.name,
-                    num_fewshot=eval_task_config.num_fewshot,
-                    task_alias=eval_task_config.task_alias,
-                )
-                tasks.append(task)
+            tasks = convert_to_levanter_task_config(evals)
 
             model_path = os.path.join(LevanterTpuEvaluator.CACHE_PATH, model.path)
 

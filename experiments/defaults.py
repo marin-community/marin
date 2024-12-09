@@ -23,7 +23,7 @@ from levanter.trainer import TrainerConfig
 from experiments.eval_datasets import (
     eval_datasets,
 )
-from experiments.evals.task_configs import LEVANTER_LM_EVAL_CORE_TASKS
+from experiments.evals.task_configs import CORE_TASKS, convert_to_levanter_task_config
 from experiments.llama import compute_num_parameters
 from experiments.paloma import paloma_tokenized
 from experiments.simple_train_config import SimpleTrainConfig
@@ -122,7 +122,7 @@ def default_train(
         tags: Any additional tags to add to the Wandb tracker.
         use_default_validation: Whether to use the default validation sets (currently Paloma).
         use_default_evaluation: Whether to use the default supervised validation data (currently MMLU).
-        eval_harness_tasks: List of evaluation harness tasks. Defaults to None.
+        eval_harness_tasks: List of evaluation harness tasks. Defaults to the CORE set of tasks.
     """
 
     pretraining_data, evaluation_data = _prepare_data_config(tokenized, use_default_validation, use_default_evaluation)
@@ -138,7 +138,7 @@ def default_train(
 
     # eval harness run on the CORE tasks by default
     if eval_harness_tasks is None:
-        eval_harness_tasks = LEVANTER_LM_EVAL_CORE_TASKS
+        eval_harness_tasks = convert_to_levanter_task_config(CORE_TASKS)
 
     # TODO: right now, assume architecture is a LlamaConfig, generalize this
     assert isinstance(model_config, LlamaConfig)
