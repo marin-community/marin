@@ -122,7 +122,13 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
 
     steps.append(train_step)
 
-    return steps
+    steps_dict = {
+        f"{config.experiment_name}-inference": inference_step,
+        f"{config.experiment_name}-consolidate": consolidate_step,
+        f"{config.experiment_name}-tokenize": tokenize_step,
+        f"{config.experiment_name}-train": train_step,
+    }
+    return steps_dict, steps
 
 
 def create_experiment_configs() -> list[ExperimentConfig]:
@@ -169,7 +175,8 @@ def create_experiment_configs() -> list[ExperimentConfig]:
 def main():
     steps = []
     for experiment_config in create_experiment_configs():
-        steps.extend(create_steps(experiment_config))
+        _, steps = create_steps(experiment_config)
+        steps.extend(steps)
     executor_main(steps=steps)
 
 
