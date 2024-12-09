@@ -1,7 +1,7 @@
 """Filter training data based on LZ4 compression ratios.
 
 Filter documents based on their LZ4 compression ratios (compressed_size/original_size),
-keeping only those with ratios between 0.6 and 0.9. 
+keeping only those with ratios between 0.6 and 0.9.
 
 Dataset: fineweb_2024_18 (CommonCrawl 2024-18)
 Model: llama_1_4b
