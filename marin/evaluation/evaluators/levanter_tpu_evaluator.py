@@ -59,6 +59,10 @@ class LevanterTpuEvaluator(Evaluator, ABC):
                 "pip_check": False,
                 "pip_version": f"==23.0.1;python_version=='{self._python_version}'",
             },
+            "env_vars": {
+                # Set an env variable needed for lm-eval-harness to trust remote code, required for some of the tasks
+                "HF_DATASETS_TRUST_REMOTE_CODE": "1",
+            },
         }
 
         # An empty list of py_modules can cause an error in Ray
