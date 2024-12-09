@@ -573,6 +573,15 @@ class Executor:
             steps=self.step_infos,
         )
 
+    def get_experiment_url(self) -> str:
+        """Return the URL where the experiment can be viewed."""
+        if self.prefix.startswith("gs://"):
+            host = "https://marlin-subtle-barnacle.ngrok-free.app"
+        else:
+            host = "http://localhost:5000"
+
+        return host + "/experiment?path=" + urllib.parse.quote(self.executor_info_path)
+
     def write_infos(self):
         """Output JSON files (one for the entire execution, one for each step)."""
 
@@ -590,13 +599,9 @@ class Executor:
 
         # Print where to find the executor info (experiments JSON)
         logger.info(f"Writing executor info to {self.executor_info_path}")
-        # TODO: don't hardcode this webserver later
-        experimentUrl = "https://marlin-subtle-barnacle.ngrok-free.app/experiment?path=" + urllib.parse.quote(
-            self.executor_info_path
-        )
         logger.info("To view the experiment page, go to:")
         logger.info("")
-        logger.info(experimentUrl)
+        logger.info(self.get_experiment_url())
         logger.info("")
 
         # Write out info for each step
@@ -663,7 +668,6 @@ class Executor:
                 previous_info = json.load(f)
             step_idx = self.steps.index(step)
             current_info = json.loads(json.dumps(asdict(self.step_infos[step_idx]), indent=2, cls=CustomJsonEncoder))
-            logger.info(f"Comparing previous info with current info for {step.name}:")
             if not compare_dicts(previous_info, current_info):
                 logger.warning(
                     f"The current and previous info files are not same for {step.name} "
