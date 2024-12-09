@@ -14,6 +14,7 @@ import os
 from dataclasses import dataclass, field
 
 from experiments.defaults import default_tokenize, default_train
+from experiments.exp102_classifier_ablations import ExperimentConfig as ClassifierExperimentConfig
 from experiments.llama import llama3_tokenizer, llama_1_4b, llama_1_4b_train_config
 from marin.core.runtime import TaskConfig
 from marin.execution.executor import (
@@ -27,7 +28,6 @@ from marin.processing.classification.config.inference_config import RuntimeConfi
 from marin.processing.classification.consolidate import ConsolidateConfig, FilterConfig, consolidate
 from marin.processing.classification.inference import InferenceConfig, run_inference
 from marin.processing.tokenize import lm_mixture_data_config
-from experiments.exp102_classifier_ablations import ExperimentConfig as ClassifierExperimentConfig
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -39,6 +39,7 @@ class ExperimentConfig:
     input_data_source_to_path: dict[str, str] = field(
         default_factory=lambda: ClassifierExperimentConfig.input_data_source_to_path.default_factory()
     )
+
 
 def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
     """Create the steps for a single experiment with compression ratio filtering."""
