@@ -28,6 +28,9 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
         *LevanterTpuEvaluator.DEFAULT_PIP_PACKAGES,
     ]
 
+    # set an env variable needed for lm-eval-harness to trust remote code, required for some of the tasks
+    os.environ["HF_DATASETS_TRUST_REMOTE_CODE"] = "1"
+
     def evaluate(
         self,
         model: ModelConfig,
