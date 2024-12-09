@@ -29,8 +29,8 @@ class TrainBertClassifierConfig:
         memory (int): Amount of memory allocated for remote training process (in GB).
     """
 
-    output_path: str
-    datasets: list[DatasetConfig]
+    output_path: str | None = field(default=None)
+    datasets: list[DatasetConfig] = field(default_factory=list)
     bert_args: dict = field(default_factory=dict)
     seed: int = 0
     val_frac: float = 0.1

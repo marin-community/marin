@@ -74,4 +74,4 @@ jobs:
         shell: bash -l {0}
         run: |
           export CI=true # Set CI environment variable; It's needed for tokenization
-          PYTHONPATH=tests:. pytest --durations=0 -s --tb=no -v
+          CI=true PYTHONPATH=tests:. pytest --durations=0 -s --tb=no -v tests/
