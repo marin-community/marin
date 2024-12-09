@@ -113,9 +113,6 @@ def apply_filter_classify(input_data: dict, doc_filter: FilterConfig, id_to_attr
     attributes = id_to_attributes[input_data["id"]]
     # Get value from attributes
     value = attributes[doc_filter.name]
-    if isinstance(value, dict):
-        # Handle existing case where value is a dict with labels
-        value = value[doc_filter.label]
 
     # Check both lower and upper bounds if specified
     if doc_filter.threshold is not None and value < doc_filter.threshold:
