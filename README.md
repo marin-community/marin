@@ -40,7 +40,7 @@ run the snapshot tests. This is a one-time install that can be done using the
 following commands:
 
 ```bash
-brew install node  # For MacOS X
+brew install node  # For macOS
 conda install -c conda-forge pandoc
 npm install -g pandiff
 ```
