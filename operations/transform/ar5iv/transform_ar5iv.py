@@ -31,11 +31,6 @@ class Ar5ivExtractionConfig:
 
 
 @ray.remote(memory=2 * 1024 * 1024 * 1024)
-def process_html(html_text: str, extract_method: str, extract_config: ExtractionConfig) -> dict[str, str]:
-    return convert_page(html_text, extract_method=extract_method, config=extract_config)
-
-
-@ray.remote
 def process_file(input_file_path: str, output_path: str, extract_method: str, extract_config: ExtractionConfig) -> None:
     output_file_path = os.path.join(output_path, input_file_path.split("/")[-1])
 
@@ -47,36 +42,22 @@ def process_file(input_file_path: str, output_path: str, extract_method: str, ex
             fsspec.open(input_file_path, compression="gzip") as source,
             fsspec.open(output_file_path, "wt", compression="gzip") as output,
         ):
-            MAX_PENDING_TASKS = 25
-
-            pending_tasks = []
             for line in tqdm(source, desc="Processing lines"):
                 row = json.loads(line)
-                pending_tasks.append(process_html.remote(row["content"], extract_method, extract_config))
 
-                if len(pending_tasks) > MAX_PENDING_TASKS:
-                    ready_tasks, pending_tasks = ray.wait(pending_tasks, num_returns=1)
-                    try:
-                        result = ray.get(ready_tasks)
-                        out_dict = {
-                            "id": row["filename"],
-                            "source": "ar5iv",
-                            "format": "text",
-                            "text": result,
-                        }
+                try:
+                    result = convert_page(row["content"], extract_method=extract_method, config=extract_config)
+                    out_dict = {
+                        "id": row["filename"],
+                        "source": "ar5iv",
+                        "format": "text",
+                        "text": result["content"],
+                    }
 
-                        print(out_dict, file=output)
-                    except Exception as e:
-                        logger.exception(f"Error processing line: {e}")
-                        raise
-
-            try:
-                results = ray.get(pending_tasks)
-                for result in results:
-                    print(result, file=output)
-            except Exception as e:
-                logger.exception(f"Error processing remaining tasks: {e}")
-                raise
+                    print(json.dumps(out_dict), file=output)
+                except Exception as e:
+                    logger.exception(f"Error processing line: {e}")
+                    raise
 
         logger.info("\nProcessing completed successfully!")
         logger.info(f"File available at: {output_path}")
