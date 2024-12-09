@@ -27,6 +27,9 @@ Downloads the following datasets
 - arc
 - openbookqa
 - hellaswag
+- MMLU-Pro
+- openai_humaneval
+- mbpp
 
 """
 ############################################################
@@ -128,6 +131,49 @@ openbookqa_raw = ExecutorStep(
     override_output_path="raw/allenai/openbookqahf",
 ).cd("388097e")
 
+# download MMLU-Pro dataset
+mmlu_pro_raw = ExecutorStep(
+    name="raw/TIGER-Lab/MMLU-Pro",
+    fn=download_hf,
+    config=DownloadConfig(
+        hf_dataset_id="TIGER-Lab/MMLU-Pro",
+        revision=versioned("3373e0b"),
+        gcs_output_path=this_output_path(),
+        wait_for_completion=True,
+        hf_urls_glob=["**/*.parquet", "*.md"],
+    ),
+    override_output_path="raw/TIGER-Lab/MMLU-Prohf",
+).cd("3373e0b")
+
+# download openai_humaneval
+humaneval_raw = ExecutorStep(
+    name="raw/openai/openai_humaneval",
+    fn=download_hf,
+    config=DownloadConfig(
+        hf_dataset_id="openai/openai_humaneval",
+        revision=versioned("7dce605"),
+        gcs_output_path=this_output_path(),
+        wait_for_completion=True,
+        hf_urls_glob=["**/*.parquet", "*.md"],
+    ),
+    override_output_path="gs://marin-us-central2/raw/openai/openai_humanevalhf",
+).cd("7dce605")
+
+# download mbpp
+mbpp_raw = ExecutorStep(
+    name="raw/google-research-datasets/mbpp",
+    fn=download_hf,
+    config=DownloadConfig(
+        hf_dataset_id="google-research-datasets/mbpp",
+        revision=versioned("4bb6404"),
+        gcs_output_path=this_output_path(),
+        wait_for_completion=True,
+        hf_urls_glob=["**/*.parquet", "*.md"],
+    ),
+    override_output_path="raw/google-research-datasets/mbpphf",
+).cd("4bb6404")
+
+
 """
 Converts raw to JSON for:
 - mmlu
@@ -138,6 +184,9 @@ Converts raw to JSON for:
 - arc-challenge
 - openbookqa
 - hellaswag
+- MMLU-Pro
+- openai_humaneval
+- mbpp
 """
 ############################################################
 # Convert mmlu to evaluation format (i.e. JSON with "prompt", "response" fields)
@@ -328,6 +377,58 @@ hellaswag_eval = ExecutorStep(
     ),
 )
 
+# This creates a JSON file representing the test and validation splits for MMLU-Pro
+mmlu_pro_eval = ExecutorStep(
+    name="evaluation/MMLU-Pro-eval",
+    fn=raw2json,
+    config=DatasetConversionConfig(
+        dataset_name="TIGER-Lab/MMLU-Pro",
+        subsets=["*"],
+        splits=["test", "validation"],
+        input_path=mmlu_pro_raw,
+        hf_path="TIGER-Lab/MMLU-Pro",
+        output_path=this_output_path(),
+        output_format=OutputFormatOptions("evaluation"),
+        prompt_key="question",
+        options_key="options",
+        answer_labels=["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P"],
+        answer_idx_key="answer_index",
+    ),
+)
+
+# This creates a JSON file representing the test and validation splits for openai_humaneval
+humaneval_eval = ExecutorStep(
+    name="evaluation/humaneval-eval",
+    fn=raw2json,
+    config=DatasetConversionConfig(
+        dataset_name="openai/openai_humaneval",
+        subsets=["*"],
+        splits=["test"],
+        input_path=humaneval_raw,
+        hf_path="openai/openai_humaneval",
+        output_path=this_output_path(),
+        output_format=OutputFormatOptions("evaluation"),
+        prompt_key="prompt",
+        answer_text_key="canonical_solution",
+    ),
+)
+
+# This creates a JSON file representing the train, test, and validation splits for mbpp
+mbpp_eval = ExecutorStep(
+    name="evaluation/mbpp-eval",
+    fn=raw2json,
+    config=DatasetConversionConfig(
+        dataset_name="google-research-datasets/mbpp",
+        subsets=["*"],
+        splits=["train", "test", "validation"],
+        input_path=mbpp_raw,
+        hf_path="google-research-datasets/mbpp",
+        output_path=this_output_path(),
+        output_format=OutputFormatOptions("evaluation"),
+        prompt_key="text",
+        answer_text_key="code",
+    ),
+)
 
 eval_datasets = [
     # these tags are used to group datasets together for averaging
@@ -339,6 +440,9 @@ eval_datasets = [
     EvalDataset("allenai", "ai2_arc_easy", [arc_easy_eval], ["core", "arc"]),
     EvalDataset("allenai", "ai2_arc_challenge", [arc_challenge_eval], ["core", "arc"]),
     EvalDataset("allenai", "openbookqa", [openbookqa_eval], ["core"]),
+    EvalDataset("Tiger-Lab", "MMLU-Pro", [mmlu_pro_eval]),
+    EvalDataset("openai", "openai_humaneval", [humaneval_eval]),
+    EvalDataset("google-research-datasets", "mbpp", [mbpp_eval]),
 ]
 
 
