@@ -27,6 +27,7 @@ from marin.processing.classification.config.inference_config import RuntimeConfi
 from marin.processing.classification.consolidate import ConsolidateConfig, FilterConfig, consolidate
 from marin.processing.classification.inference import InferenceConfig, run_inference
 from marin.processing.tokenize import lm_mixture_data_config
+from experiments.exp102_classifier_ablations import ExperimentConfig as ClassifierExperimentConfig
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -36,11 +37,8 @@ logger = logging.getLogger(__name__)
 class ExperimentConfig:
     experiment_name: str
     input_data_source_to_path: dict[str, str] = field(
-        default_factory=lambda: {
-            "fineweb_2024_18": "gs://marin-us-central2/documents/fineweb-small-resiliparse-preserve-formatting-e8c6ec/md/CC-MAIN-2024-18",
-        }
+        default_factory=lambda: ClassifierExperimentConfig.input_data_source_to_path.default_factory()
     )
-
 
 def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
     """Create the steps for a single experiment with compression ratio filtering."""
