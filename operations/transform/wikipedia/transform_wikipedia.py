@@ -1,7 +1,7 @@
 """
-wikipedia/extract_html.py
+wikipedia/transform_wikipedia.py
 
-Script for extracting HTML content from Wikipedia dumps in DOLMA format.
+Performs HTML->Text/MD conversion using the specified tools over a wiki dump save in DOLMA format.
 """
 
 import json

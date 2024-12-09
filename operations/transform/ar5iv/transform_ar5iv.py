@@ -1,7 +1,7 @@
 """
-wikipedia/extract_html.py
+ar5iv/transform_ar5iv.py
 
-Script for extracting HTML content from Wikipedia dumps in DOLMA format.
+Performs HTML->Text/MD conversion using the specified tools over a ar5iv dump save in DOLMA format.
 """
 
 import json
