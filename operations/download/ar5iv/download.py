@@ -7,7 +7,7 @@ from pathlib import Path
 
 import fsspec
 import ray
-from tqdm import tqdm
+from tqdm_loggable.auto import tqdm
 
 from marin.utils import fsspec_exists, fsspec_glob
 
