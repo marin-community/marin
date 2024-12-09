@@ -107,8 +107,8 @@ def default_train(
     model_config: LmConfig,
     train_config: SimpleTrainConfig,
     tags: Sequence[str] = (),
-    use_default_validation: bool = False,
-    use_default_evaluation: bool = False,
+    use_default_validation: bool = True,
+    use_default_evaluation: bool = True,
     eval_harness_tasks: list[str | TaskConfig] | None = None,
 ) -> ExecutorStep:
     """
@@ -196,7 +196,6 @@ def default_train(
             ),
         ),
         pip_dependency_groups=["tokenize_train"],
-        override_output_path="gs://marin-us-central2/checkpoints/dclm_baseline_1b_1x_replication_nov12-75338b",
     )
 
 
