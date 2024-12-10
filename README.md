@@ -14,9 +14,10 @@ The core part of Marin is minimal, consisting of basically an [executor
 framework](docs/executor.md), which manages the execution of a set of
 arbitrary steps.
 
-Currently, Marin's primary use case is to build a language model like Llama 3,
+Marin's primary use case is to build a language model like Llama 3,
 which involves data curation, transformation, filtering, tokenization,
 training, and evaluation (see [overview](docs/lm/overview.md)).
+Note that for now, all this specific code resides in this repository.
 
 ## Setup
 
