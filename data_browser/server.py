@@ -25,17 +25,24 @@ class ServerConfig:
 
 
 class Server:
+    """
+    The only state that the server has right now is the filesystems.
+    Note that utils.py has fsspec utilities that we could call directly which
+    would simplify the code, but the filesystem objects wouldn't be cached.
+    """
     def __init__(self, config: ServerConfig):
         self.config = config
 
-        self.local_fs = fsspec.filesystem("local")
-        self.gcs_fs = fsspec.filesystem("gcs")
+        self.fs_cache = {
+            None: fsspec.filesystem("local"),
+            "gs": fsspec.filesystem("gcs"),
+            "s3": fsspec.filesystem("s3"),
+        }
 
     def fs(self, path: str):
         """Automatically figure out the filesystem to use based on the `path`."""
-        if path.startswith("gs://"):
-            return self.gcs_fs
-        return self.local_fs
+        protocol, _ = fsspec.core.split_protocol(path)
+        return self.fs_cache[protocol]
 
 
 server: Server | None = None
@@ -43,13 +50,14 @@ server: Server | None = None
 
 def list_files(path: str) -> dict:
     """List all files in the given path."""
+    protocol, _ = fsspec.core.split_protocol(path)  # e.g., "gs"
     files = server.fs(path).ls(path, detail=True, refresh=True)
 
     # If path = "gs://", the file names listed don't have the "gs://" prefix
     # (but still represents an absolute path), so we add it in.
     def name_to_path(name: str) -> str:
-        if path.startswith("gs://"):
-            return "gs://" + name
+        if protocol is not None:
+            return f"{protocol}://{name}"
         return name
 
     # Replace file with path
