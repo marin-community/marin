@@ -1,3 +1,5 @@
+from levanter.eval_harness import TaskConfig
+
 from marin.evaluation.evaluation_config import EvalTaskConfig
 
 # tasks to run (corresponding to lm_eval_harness tasks)
@@ -10,12 +12,27 @@ CORE_TASKS = [
     EvalTaskConfig("boolq", 10),  # answer yes/no questions based on a passage
     EvalTaskConfig("commonsense_qa", 10),  # 5-way multiple-choice questions based on common-sense, everyday scenarios
     EvalTaskConfig("copa", 0),  # use causal reasoning to predict the correct outcome of a given scenario
-    EvalTaskConfig("hellaswag", 0),  # 4-way multiple choice commonsense reasoning dataset
-    EvalTaskConfig("hellaswag", 10),  # 4-way multiple choice commonsense reasoning dataset
-    EvalTaskConfig("lambada", 0),  # predict the endings of text passages
+    EvalTaskConfig("hellaswag", 0, task_alias="hellaswag_0shot"),  # 4-way multiple choice commonsense reasoning dataset
+    EvalTaskConfig("hellaswag", 10, task_alias="hellaswag_10shot"),  # 4-way MCQ commonsense reasoning dataset
+    EvalTaskConfig("lambada_openai", 0),  # predict the endings of text passages
     EvalTaskConfig("openbookqa", 0),  # 4-way multiple choice question answering task that requires multi-step reasoning
     EvalTaskConfig("piqa", 10),  # answer questions based on a passage
-    EvalTaskConfig("squadv2", 10),  # reading comprehension benchmark
+    # (requires generation which is not supported in Levanter at the moment)
+    # EvalTaskConfig("squadv2", 10),  # reading comprehension benchmark
     EvalTaskConfig("wsc273", 0),  # Winograd Schema Challenge
     EvalTaskConfig("winogrande", 0),  # Winograd challenge, extended to more domains
 ]
+
+
+def convert_to_levanter_task_config(tasks: list[EvalTaskConfig]) -> list[TaskConfig]:
+    """
+    Convert a list of EvalTaskConfig to a list of TaskConfig that Levanter's eval_harness expects.
+    """
+    return [
+        TaskConfig(
+            task=task.name,
+            num_fewshot=task.num_fewshot,
+            task_alias=task.task_alias,
+        )
+        for task in tasks
+    ]
