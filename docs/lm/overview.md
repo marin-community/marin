@@ -19,7 +19,7 @@ We leverage various tools:
 - For data processing we use [fastText](https://fasttext.cc/).
 - For model training, it uses [levanter](https://github.com/stanford-crfm/levanter),
   a Jax-based framework that's legible, scalable, and reproducible.
-- For mode levaluation, we use [lm-evaluation-harness](https://github.com/EleutherAI/lm-evaluation-harness).
+- For model evaluation, we use [lm-evaluation-harness](https://github.com/EleutherAI/lm-evaluation-harness).
 
 Throughout, we use the same data formats as [Dolma](https://github.com/allenai/dolma).
 
