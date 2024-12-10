@@ -10,14 +10,19 @@ specified by the following:
 - **function**: a normal Python function or a [Ray](https://docs.ray.io) remote function (which enables massive parallelism)
 - **config**: the single argument to the function, which is a dataclass; fields of the config can refer to previous steps.
 
-A key decision in Marin is that data gets passed between steps via the file system.
-Thus, each step associated with an **output path** where that step
+A key decision in Marin is that data gets passed between steps by reading and writing to the filesystem.
+The rationale is two-fold:
+- For very large datasets, where efficiency and robustness is a concern, we give
+  the steps full control over serialization and deserialization.
+- It makes the intermediate state completely transparent, and one can do things
+  like monitor the state while it's being created (e.g., a jsonl file).
+
+In particular, each step associated with an **output path** where that step
 writes its output (in any format).
 When a step A references another step B in its config, that step simply resolves to step B's output path,
 and step A is responsible for reading the data from that output path.
 The name of the output path includes the step name and a hash of the
 config (at least the part of it that's explicitly versioned) and all its dependencies.
-The reason to use file paths is that it makes the intermediate state transparent.
 
 In the [hello world example](experiments/hello_world.py), we have two steps,
 generating data and compute statistics.
