@@ -20,16 +20,17 @@ from marin.core.runtime import RayConfig, TaskConfig, cached_or_construct_output
 
 import re
 
+
 # This function will be executed on the worker nodes. It is important to keep the function idempotent and resumable.
 # default memory is unbound, default runtime_env is empty, default num_cpus is 1
 # IMPORTANT:Ray resources are logical and not physical: https://docs.ray.io/en/latest/ray-core/scheduling/resources.html
 # Ray will not impose any physical limits on the resources used by the function, these numbers are used for scheduling.
-@ray.remote(memory=1 * 1024 * 1024 * 1024, runtime_env={"pip": ["pubmed-parser"]}, num_cpus=1) # 1 GB
+@ray.remote(memory=1 * 1024 * 1024 * 1024, runtime_env={"pip": ["pubmed-parser"]}, num_cpus=1)  # 1 GB
 @cached_or_construct_output(success_suffix="SUCCESS")  # We use this decorator to make this function idempotent
 def xml_to_md(input_file_path, output_file_path):
     # The runtime for this function should be low (less than 5-10 min), as the machines are preemptible
     # Example of input_path = gs://marin-data/processed/pubmed/2024-07-02/xml
-    
+
     # import conversion function (needs to be done within this function)
     from marin.processing.pubmed.convert import xml2md
 
@@ -60,9 +61,7 @@ def xml_to_md(input_file_path, output_file_path):
                 md = "This is a blank article with no paragraphs."
                 status = "skip"
             metadata.update({"status": status})
-            output.write(
-                json.dumps({"id": idx, "text": md, "source": source, "metadata": metadata}) + "\n"
-            )
+            output.write(json.dumps({"id": idx, "text": md, "source": source, "metadata": metadata}) + "\n")
     return True
 
 
