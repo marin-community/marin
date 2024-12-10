@@ -21,7 +21,7 @@ We leverage various tools:
   a Jax-based framework that's legible, scalable, and reproducible.
 - For model evaluation, we use [lm-evaluation-harness](https://github.com/EleutherAI/lm-evaluation-harness).
 
-Throughout, we use the same data formats as [Dolma](https://github.com/allenai/dolma).
+Where possible, we use the same data formats as [Dolma](https://github.com/allenai/dolma). Where not possible, we try to use "natural" extensions that stick to the spirit of the format.
 
 The [quickstart eperiment](experiments/quickstart.py) provides a mini-version of
 all the steps.  To run the quickstart (which should finish in less than 10
