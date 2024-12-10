@@ -118,11 +118,7 @@ if __name__ == "__main__":
 
     result_refs = []
     for file in files:
-        result_refs.append(
-            process_one_dolma_file.remote(
-                file, args.output_path, args.domain, args.examples_per_file
-            )
-        )
+        result_refs.append(process_one_dolma_file.remote(file, args.output_path, args.domain, args.examples_per_file))
 
     # Wait for all the tasks to finish
     try:
