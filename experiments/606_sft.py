@@ -42,7 +42,7 @@ tulu3_llama_tokenize_step = ExecutorStep(
 )
 
 llama_8b_tulu3_model = ExecutorStep(
-    name="checkpoints/llama3.1_8b_tulu_sft_v3",
+    name="checkpoints/llama3.1_8b_tulu3",
     fn=run_levanter_sft,
     config=TrainSFTOnPodConfig(
         output_path=this_output_path(),
@@ -54,6 +54,7 @@ llama_8b_tulu3_model = ExecutorStep(
         ),
         initialize_from_hf=True,
         model_name_or_path="meta-llama/Llama-3.1-8B",
+        max_seq_len=4096,
         # Modify the nested trainer config by creating a new one
         trainer=TrainerConfig(
             tracker=WandbConfig(
