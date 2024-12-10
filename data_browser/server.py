@@ -30,6 +30,7 @@ class Server:
     Note that utils.py has fsspec utilities that we could call directly which
     would simplify the code, but the filesystem objects wouldn't be cached.
     """
+
     def __init__(self, config: ServerConfig):
         self.config = config
 
