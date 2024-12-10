@@ -42,7 +42,7 @@ def compare_outputs(input_name, expected_file, output_file):
         print(result.args)
     except subprocess.CalledProcessError as e:
         print(f"Error running pandiff: {e}")
-        raise
+        print(e.stderr)
 
     # show the diff
     raise AssertionError(
