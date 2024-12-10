@@ -30,7 +30,7 @@ from marin.processing.classification.inference import InferenceConfig, run_infer
 from marin.processing.tokenize import lm_mixture_data_config
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("ray")
 
 
 @dataclass
@@ -60,7 +60,7 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
                 input_path=input_data_path,
                 output_path=this_output_path(input_basename),
                 model_type="compression",  # Use our new compression classifier
-                model_name="compression",  # This doesn't matter for compression
+                model_name=None,  # This doesn't matter for compression
                 attribute_name=versioned("compression_ratio"),
                 runtime=RuntimeConfig(
                     memory_limit_gb=12,
