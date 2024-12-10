@@ -65,6 +65,7 @@ class Evaluator(ABC):
         model: ModelConfig,
         evals: list[EvalTaskConfig],
         output_path: str,
+        max_eval_instances: int | None = None,
     ) -> None:
         """
         Launches the evaluation run with Ray.
@@ -74,10 +75,17 @@ class Evaluator(ABC):
             evals (List[EvalTaskConfig]): The list of evaluations to run.
             output_path (str): The path to save the evaluation results.
             max_eval_instances (int | None): The maximum number of evaluation instances to run.
+            step (ExecutorStep | None): The step to evaluate. Used to get the config for the model and the trainer.
         """
         pass
 
     @abstractmethod
-    def evaluate(self, model: ModelConfig, evals: list[EvalTaskConfig], output_path: str) -> None:
+    def evaluate(
+        self,
+        model: ModelConfig,
+        evals: list[EvalTaskConfig],
+        output_path: str,
+        max_eval_instances: int | None = None,
+    ) -> None:
         """What to run to evaluate."""
         pass
