@@ -21,6 +21,7 @@ from marin.data_sources.wikipedia.convert import html2md
 
 import re
 
+
 # This function will be executed on the worker nodes. It is important to keep the function idempotent and resumable.
 # default memory is unbound, default runtime_env is empty, default num_cpus is 1
 # IMPORTANT:Ray resources are logical and not physical: https://docs.ray.io/en/latest/ray-core/scheduling/resources.html
