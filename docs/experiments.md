@@ -1,6 +1,6 @@
 # Experiments
 
-At the [infrastructure level](docs/executor.md), an experiment is simply a DAG of steps to be exxecuted.
+At the [infrastructure level](docs/executor.md), an experiment is simply a DAG of steps to be executed.
 However, conceptually, an **experiment** represents a unit of inquiry with a
 particular hypothesis or goal.
 Each such experiment is captured by a GitHub issue with the `experiments` tag
