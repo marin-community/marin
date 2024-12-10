@@ -11,14 +11,10 @@ from levanter.distributed import RayConfig
 from levanter.models.llama import LlamaConfig
 from levanter.trainer import TrainerConfig
 
+from experiments.evals.task_configs import convert_to_levanter_task_config
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Dependency, ModelConfig
 from marin.evaluation.evaluators.levanter_tpu_evaluator import LevanterTpuEvaluator
-from marin.evaluation.utils import (
-    is_remote_path,
-)
-
-from experiments.evals.task_configs import convert_to_levanter_task_config
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +69,7 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
                     max_examples=max_eval_instances,
                     log_samples=False,
                 ),
-                tokenizer=model_path, # levanter picks up the tokenizer from the model path
+                tokenizer=model_path,  # levanter picks up the tokenizer from the model path
                 checkpoint_path=model_path,
                 checkpoint_is_hf=True,
                 trainer=trainer_config,
