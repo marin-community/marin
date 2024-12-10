@@ -29,9 +29,6 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
         *LevanterTpuEvaluator.DEFAULT_PIP_PACKAGES,
     ]
 
-    # set an env variable needed for lm-eval-harness to trust remote code, required for some of the tasks
-    os.environ["HF_DATASETS_TRUST_REMOTE_CODE"] = "1"
-
     def evaluate(
         self,
         model: ModelConfig,
@@ -69,39 +66,13 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
 
             model_path = os.path.join(LevanterTpuEvaluator.CACHE_PATH, model.path)
 
-            def get_tokenizer_name(model_path: str) -> str:
-                # Path to the tokenizer config file
-                tokenizer_config_path = os.path.join(model_path, "tokenizer_config.json")
-
-                # Load the tokenizer configuration
-                with open(tokenizer_config_path, "r") as f:
-                    tokenizer_config = json.load(f)
-                    logger.info(f"Tokenizer Config: {tokenizer_config}")
-
-                # Extract the tokenizer name
-                tokenizer_name = tokenizer_config.get("tokenizer_class", "Unknown")
-                logger.info(f"Tokenizer Name: {tokenizer_name}")
-
-                if tokenizer_name == "GPTNeoXTokenizer":
-                    tokenizer = "EleutherAI/gpt-neox-20b"
-                elif tokenizer_name == "LlamaTokenizer":
-                    tokenizer = "meta-llama/Llama-2-7b-hf"
-                elif tokenizer_name == "PreTrainedTokenizerFast":
-                    tokenizer = "meta-llama/Meta-Llama-3.1-8B"
-                else:
-                    tokenizer = "gpt2"
-
-                return tokenizer
-
-            tokenizer = get_tokenizer_name(model_path)
-
             eval_config = eval_harness.EvalHarnessMainConfig(
                 eval_harness=eval_harness.LmEvalHarnessConfig(
                     task_spec=tasks,
                     max_examples=max_eval_instances,
                     log_samples=False,
                 ),
-                tokenizer=tokenizer,
+                tokenizer=model_path, # levanter picks up the tokenizer from the model path
                 checkpoint_path=model_path,
                 checkpoint_is_hf=True,
                 trainer=trainer_config,
