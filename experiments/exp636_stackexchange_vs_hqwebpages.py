@@ -62,7 +62,7 @@ if __name__ == "__main__":
     executor_main(
         steps=[
             dolmino_stackexchange_model,
-            # stackexchange_filtered_hq_webpages_model,
-            # half_stackexchange_half_hqwebpages_model,
+            stackexchange_filtered_hq_webpages_model,
+            half_stackexchange_half_hqwebpages_model,
         ]
     )

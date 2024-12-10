@@ -171,7 +171,7 @@ mbpp_raw = ExecutorStep(
         hf_urls_glob=["**/*.parquet", "*.md"],
     ),
     override_output_path="raw/google-research-datasets/mbpphf",
-).cd("4bb6404")
+).cd("4bb6404/full")
 
 
 """
