@@ -129,9 +129,9 @@ def read_parquet_file(path: str, offset: int, count: int) -> dict:
 
 def has_permissions(path: str) -> bool:
     """Returns whether the user can access `path` according to the permissions."""
-    path = os.path.abspath(path)
+    resolved_path = os.path.realpath(path)
     for allowed_path in server.config.root_paths:
-        if path.startswith(allowed_path):
+        if os.path.commonpath([resolved_path, allowed_path]) == allowed_path:
             return True
     return False
 
@@ -210,7 +210,7 @@ def static_proxy(path):
 
 def standardize_config(config: ServerConfig) -> ServerConfig:
     """Replace relative paths with absolute paths."""
-    absolute_root_paths = [os.path.abspath(path) for path in config.root_paths]
+    absolute_root_paths = [os.path.realpath(path) for path in config.root_paths]
     return replace(config, root_paths=absolute_root_paths)
 
 

@@ -4,8 +4,7 @@ Marin's executor framework manages the execution of experiments.
 This document is more about the mechanics, read [this](docs/experiments.md) to
 learn more about the conventions.
 
-An **experiment** is a sequence (really, a DAG) of steps, where each **step**
-is
+An **experiment** is a sequence (really, a DAG) of steps, where each **step** is
 specified by the following:
 - **name**: an identifier describing the function (and its version)
 - **function**: a normal Python function or a [Ray](https://docs.ray.io) remote function (which enables massive parallelism)

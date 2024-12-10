@@ -575,6 +575,7 @@ class Executor:
 
     def get_experiment_url(self) -> str:
         """Return the URL where the experiment can be viewed."""
+        # TODO: remove hardcoding
         if self.prefix.startswith("gs://"):
             host = "https://marlin-subtle-barnacle.ngrok-free.app"
         else:
