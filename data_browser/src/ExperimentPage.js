@@ -95,7 +95,7 @@ function renderExperimentHeader(args) {
   const relativePath = extractRayRelativePath(experiment.caller_path);
 
   const links = [];
-  
+
   // Link to code on GitHub
   const githubUrl = experiment.git_commit ?
     `https://github.com/stanford-crfm/marin/tree/${experiment.git_commit}/${relativePath}` :
