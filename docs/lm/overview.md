@@ -5,12 +5,12 @@ The steps are roughly:
 
 * starts with raw HTML
 * processes it into text
-* trains a quality classifer
-* filters the data with that classifier
+* trains a set of quality classifers
+* filters the data with those classifiers
 * performs deduplication
 * tokenizes the deduped data
 * trains a model on the tokenized data
-* evaluates the model
+* evaluates the resulting model
 
 We leverage various tools:
 
@@ -23,7 +23,9 @@ We leverage various tools:
 
 Throughout, we use the same data formats as [Dolma](https://github.com/allenai/dolma).
 
-To launch the quickstart, which has a mini-version of all these steps, run:
+The [quickstart eperiment](experiments/quickstart.py) provides a mini-version of
+all the steps.  To run the quickstart (which should finish in less than 10
+minutes, and doesn't require a GPU/TPU), run:
 
 ```bash
 python experiments/quickstart.py --prefix var
