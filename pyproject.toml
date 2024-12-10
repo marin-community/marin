@@ -12,7 +12,7 @@ requires-python = ">=3.10"
 dependencies = [
     "draccus>=0.8.0",
     "google-api-python-client~=2.0",
-    "ray<2.40.0",
+    "ray",
     "gcsfs",
     "google-cloud-storage",
     "google-cloud-storage-transfer",
@@ -87,8 +87,10 @@ data_browser = [
 ]
 
 eval = [
-    "lm-eval",
+    "levanter>=1.2.dev1163",
+    "lm-eval @ git+https://github.com/dlwh/lm-evaluation-harness.git@no_torch",
 ]
+
 [tool.setuptools.packages.find]
 where = ["."]
 exclude = ["cache", "infra"]

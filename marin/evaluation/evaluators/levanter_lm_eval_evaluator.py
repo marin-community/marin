@@ -17,7 +17,8 @@ from marin.evaluation.evaluators.levanter_tpu_evaluator import LevanterTpuEvalua
 from marin.evaluation.utils import (
     is_remote_path,
 )
-from marin.experiments.evals.task_configs import convert_to_levanter_task_config
+
+from experiments.evals.task_configs import convert_to_levanter_task_config
 
 logger = logging.getLogger(__name__)
 
@@ -79,24 +80,23 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
                 model=model_config,
             )
 
-            outputs = eval_harness.run_eval_harness_main(eval_config)
+            results = eval_harness.run_eval_harness_main(eval_config)
 
-            if is_remote_path(output_path):
-                try:
-                    # add a results.json to output path
-                    output_path = os.path.join(output_path, "results.json")
+            try:
+                # add a results.json to output path
+                output_path = os.path.join(output_path, "results.json")
 
-                    logger.info(f"Uploading results to GCS: {output_path}")
+                logger.info(f"Uploading results to GCS: {output_path}")
 
-                    # write output JSON directly to output_path on GCS
-                    fs = fsspec.filesystem("gcs")
-                    with fs.open(output_path, "w") as f:
-                        json.dump(outputs, f, indent=2)
+                # write output JSON directly to output_path on GCS
+                fs = fsspec.filesystem("gcs")
+                with fs.open(output_path, "w") as f:
+                    json.dump(results, f, indent=2)
 
-                    logger.info("Upload completed successfully.")
+                logger.info("Upload completed successfully.")
 
-                except Exception as upload_error:
-                    logger.info(f"Failed to upload results to GCS: {upload_error}")
+            except Exception as upload_error:
+                logger.info(f"Failed to upload results to GCS: {upload_error}")
 
         except Exception as e:
 
