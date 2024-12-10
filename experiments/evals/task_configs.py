@@ -17,7 +17,6 @@ CORE_TASKS = [
     EvalTaskConfig("lambada_openai", 0),  # predict the endings of text passages
     EvalTaskConfig("openbookqa", 0),  # 4-way multiple choice question answering task that requires multi-step reasoning
     EvalTaskConfig("piqa", 10),  # answer questions based on a passage
-    
     #(requires generation which is not supported in Levanter at the moment)
     # EvalTaskConfig("squadv2", 10),  # reading comprehension benchmark 
     EvalTaskConfig("wsc273", 0),  # Winograd Schema Challenge
