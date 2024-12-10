@@ -22,18 +22,18 @@ def filter_urls(element):
 class ProcessHtmlContentFn(beam.DoFn):
     def process(self, element, *args, **kwargs):
         segment_file, urls_info = element
-        urls_set = set([url_info['url'] for url_info in urls_info])  # Convert URLs to a set for efficient lookup
+        urls_set = set([url_info["url"] for url_info in urls_info])  # Convert URLs to a set for efficient lookup
 
         # Placeholder for fetching the WARC file from S3 or another location
         # Here, we'll use a simple HTTP request as an example, but in practice,
         # you would fetch this from your storage solution (e.g., S3, GCS)
         # warc_file_url = f'https://example.com/path/to/warc/files/{segment_file}'
         try:
-            with fsspec.open('s3://commoncrawl/' + segment_file, 'rb') as f:
+            with fsspec.open("s3://commoncrawl/" + segment_file, "rb") as f:
                 for record in ArchiveIterator(f):
-                    if record.rec_type == 'response':
+                    if record.rec_type == "response":
                         # Extract the target URI from the WARC record
-                        target_uri = record.rec_headers.get_header('WARC-Target-URI')
+                        target_uri = record.rec_headers.get_header("WARC-Target-URI")
                         if target_uri in urls_set:
                             # Process the HTML content of the record here
                             # This is where you'd integrate Readability.js and html2text
@@ -55,29 +55,33 @@ class GroupBySegmentFn(beam.DoFn):
         # Yield a tuple of the segment file and the URL info
         yield (segment_file, url_info)
 
+
 def run():
     pipeline_options = PipelineOptions()
     with beam.Pipeline(options=pipeline_options) as p:
         # Read the RPV2 metadata from GCS
-        urls = (p 
-                | 'ReadRPV2Metadata' >> beam.io.ReadFromText('gs://your_bucket/your_rpv2_metadata_files*')
-                | 'ParseJSON' >> beam.Map(lambda x: json.loads(x)))
+        urls = (
+            p
+            | "ReadRPV2Metadata" >> beam.io.ReadFromText("gs://your_bucket/your_rpv2_metadata_files*")
+            | "ParseJSON" >> beam.Map(lambda x: json.loads(x))
+        )
 
         # Apply your filtering criteria
-        filtered_urls = (urls 
-                         | 'FilterURLs' >> beam.Filter(filter_urls)
-                         | 'MapToSegmentFile' >> beam.Map(lambda x: (x['cc_segment'], x)))
+        filtered_urls = (
+            urls
+            | "FilterURLs" >> beam.Filter(filter_urls)
+            | "MapToSegmentFile" >> beam.Map(lambda x: (x["cc_segment"], x))
+        )
 
         # Group URLs by their corresponding Common Crawl segment
-        grouped_by_segment = (filtered_urls 
-                              | 'GroupBySegmentFile' >> beam.GroupByKey())
+        grouped_by_segment = filtered_urls | "GroupBySegmentFile" >> beam.GroupByKey()
 
         # Process the HTML content for each segment
-        processed_html = (grouped_by_segment
-                          | 'ProcessHTMLContent' >> beam.ParDo(ProcessHtmlContentFn()))
+        processed_html = grouped_by_segment | "ProcessHTMLContent" >> beam.ParDo(ProcessHtmlContentFn())
 
         # You can then write the processed HTML (now in markdown) to GCS or any other sink
         # processed_html | 'WriteToGCS' >> beam.io.WriteToText('gs://your_output_bucket/output')
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     run()

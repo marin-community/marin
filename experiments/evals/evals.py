@@ -1,11 +1,15 @@
+"""
+Canonical set of evals.
+"""
+
+import logging
+
 from experiments.evals.task_configs import CORE_TASKS
 from marin.evaluation.evaluation_config import EvalTaskConfig, EvaluationConfig
 from marin.evaluation.run import evaluate
 from marin.execution.executor import ExecutorStep, InputName, output_path_of, this_output_path
 
-"""
-Canonical set of evals.
-"""
+logger = logging.getLogger(__name__)
 
 
 def evaluate_helm(model_name: str, model_path: str, evals: list[EvalTaskConfig]) -> ExecutorStep:
@@ -118,8 +122,10 @@ def default_eval(
     Args:
         step (ExecutorStep | InputName): step to evaluate.
         evals (list[EvalTaskConfig]): List of evals to run- defaults to a set of CORE_TASKS.
+        max_eval_instances (int): Maximum number of evaluation instances to run.
     """
 
+    # this logic extracts the `ExecutorStep` corresponding to the training step, and get the model path
     if isinstance(step, ExecutorStep):
         model_step_path = output_path_of(step)
         executor_step = step
@@ -127,21 +133,22 @@ def default_eval(
         model_step_path = output_path_of(step.step)
         executor_step = step.step
 
+    logger.info(f"Creating default evaluation step for {executor_step.name}")
+
     # Default to CORE_TASKS
     if evals is None:
         evals = CORE_TASKS
 
     return ExecutorStep(
-        name=f"evaluation/lm_evaluation_harness/{executor_step.name}",
+        name=f"evaluation/levanter_lm_evaluation_harness/{executor_step.name}",
         fn=evaluate,
         config=EvaluationConfig(
-            evaluator="lm_evaluation_harness",
+            evaluator="levanter_lm_evaluation_harness",
             model_name=None,  # imputed automatically
             model_path=model_step_path,  # type: ignore
             evaluation_path=this_output_path(),
             evals=evals,
             discover_latest_checkpoint=True,
             max_eval_instances=max_eval_instances,
-            launch_with_ray=False,
         ),
     )
