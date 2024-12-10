@@ -10,7 +10,7 @@ def add_arguments(parser: argparse.ArgumentParser):
 
 
 def calculate_model_size(
-    vocab_size: int = 128256, 
+    vocab_size: int = 128256,
     hidden_dim: int = 4096,
     intermediate_dim: int = 14336,
     num_layers: int = 32,
@@ -37,9 +37,9 @@ def calculate_model_size(
 
     mlp = 3 * hidden_dim * intermediate_dim
 
-    transformer_layer = attn + mlp + 2 * hidden_dim # plus 2 rmsnorm
+    transformer_layer = attn + mlp + 2 * hidden_dim  # plus 2 rmsnorm
 
-    transformer = num_layers * transformer_layer + hidden_dim # plus final rmsnorm
+    transformer = num_layers * transformer_layer + hidden_dim  # plus final rmsnorm
     print(f"{transformer=}")
 
     lm_head = hidden_dim * vocab_size
@@ -69,10 +69,10 @@ def calculate_model_flops_per_token(
         seq_len,
         vocab_size,
         glu=True,
-    )   # only fwd flops
-    flops_per_token *= 3    # fwd + bwd
+    )  # only fwd flops
+    flops_per_token *= 3  # fwd + bwd
     print(f"Total FLOPs per token: {int(flops_per_token)}")
-    
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -80,12 +80,12 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     assert args.model_path.exists(), f"{args.model_path} does not exist."
-    
+
     print(f"Model config: {args.model_path}")
-    with open(args.model_path, 'r') as f:
+    with open(args.model_path, "r") as f:
         data = yaml.safe_load(f)
 
-    assert data['type'] == 'llama', "Model size calculator currently only supports llama models"
+    assert data["type"] == "llama", "Model size calculator currently only supports llama models"
 
     calculate_model_size(**data)
     calculate_model_flops_per_token(**data)
