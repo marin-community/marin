@@ -1,3 +1,9 @@
+"""
+An experiment to train quality classifiers from high quality data from https://huggingface.co/datasets/allenai/dolmino-mix-1124
+
+experiment 164 contains many trained quality classifiers: https://github.com/stanford-crfm/marin/issues/164
+"""
+
 from experiments.exp164_quality_classifiers import dclm_negative_examples_in_dolma_format
 from experiments.pretraining_datasets import dolmino
 from experiments.quality_classifier_experiment_utils import ExperimentConfig, create_steps
