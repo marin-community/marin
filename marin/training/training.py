@@ -391,7 +391,7 @@ def _add_default_env_variables(env: dict, default_env: dict | None):
 
 def _add_run_env_variables(env: dict):
     """
-    Add a few environment variables from `os.environ` into `env` that we need for logging, as well as for internal evals. 
+    Add a few environment variables from `os.environ` into `env` that we need for logging as well as for internal evals.
     Specifically:
     - GIT_COMMIT
     - HF_DATASETS_TRUST_REMOTE_CODE
