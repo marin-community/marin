@@ -11,6 +11,7 @@ from marin.web.rpv2 import NUM_SHARDS, RPV2_CRAWLS, iterate_rpv2_file
 
 # Create a bloom filter from a shard of RPV2
 
+
 # Python's built-in hash function is not deterministic across invocations
 def hash_func(s):
     # can't overflow C long
@@ -20,13 +21,16 @@ def hash_func(s):
 
 SLICE_SIZE = 50
 
+
 def chunk_range(n, chunk_size):
     for i in range(0, n, chunk_size):
         yield range(i, min(i + chunk_size, n))
 
+
 ALL_SLICES = list(chunk_range(NUM_SHARDS, SLICE_SIZE))
 
-def mk_bloom_for_shard_slice(out_path, crawl, part, lang, shard_slice = range(NUM_SHARDS)):
+
+def mk_bloom_for_shard_slice(out_path, crawl, part, lang, shard_slice=range(NUM_SHARDS)):
     # NB: this must be 0 so we can make the bloom filter sizes the same so we can union them
     num_files_per_shard_mid = sum(1 for _ in iterate_rpv2_file(crawl, 0, "en", "middle"))
     num_files_per_shard_head = sum(1 for _ in iterate_rpv2_file(crawl, 0, "en", "head"))
@@ -92,6 +96,7 @@ def union_blooms(out_path, paths):
         del other
         # run gc to avoid memory issues
         import gc
+
         gc.collect()
 
     compare = bloom_filter.approx_items
@@ -123,6 +128,3 @@ if __name__ == "__main__":
 
         out_path = os.path.join(base_path, f"{lang}_{crawl}.bloom")
         union_blooms(out_path, paths)
-
-
-
