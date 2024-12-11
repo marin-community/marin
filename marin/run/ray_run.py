@@ -3,6 +3,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import shlex
 
 import toml
@@ -45,6 +46,7 @@ def get_dependencies_from_toml(toml_file: str) -> list:
     try:
         parsed_toml = toml.load(toml_file)
         dependencies = parsed_toml.get("project", {}).get("dependencies", [])
+        dependencies = _remove_problematic_deps(dependencies)
         logger.info(f"Dependencies extracted: {dependencies}")
         return dependencies
     except FileNotFoundError:
@@ -53,6 +55,18 @@ def get_dependencies_from_toml(toml_file: str) -> list:
     except toml.TomlDecodeError:
         logger.error(f"Failed to parse {toml_file}.")
         return []
+
+
+def _remove_problematic_deps(dependencies: list[str]):
+    out: list[str] = []
+    # remove ray from dependencies. We do this because Ray gets mad if you try to install another version of Ray
+    expr = re.compile(r"^\s*ray([^a-zA-Z0-9_]|$)")
+    for dep in dependencies:
+        if not expr.match(dep):
+            out.append(dep)
+        else:
+            logger.debug(f"Skipping dependency: {dep}")
+    return out
 
 
 async def submit_and_track_job(entrypoint: str, dependencies: list, env_vars: dict, no_wait: bool):
