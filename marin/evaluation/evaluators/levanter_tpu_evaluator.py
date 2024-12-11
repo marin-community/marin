@@ -63,7 +63,7 @@ class LevanterTpuEvaluator(Evaluator, ABC):
             "env_vars": {
                 # Set an env variable needed for lm-eval-harness to trust remote code, required for some of the tasks
                 "HF_DATASETS_TRUST_REMOTE_CODE": "1",
-                "TOKENIZERS_PARALLELISM": "false"
+                "TOKENIZERS_PARALLELISM": "false",
             },
         }
 
