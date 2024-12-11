@@ -57,11 +57,10 @@ def process_one_warc_file(
     text_output_file = None
     if text_output_path:
         text_output_file = os.path.join(text_output_path, base_folder, output_file_name)
-    
+
     html_output_file = None
     if html_output_path:
         html_output_file = os.path.join(html_output_path, base_folder, output_file_name)
-
 
     # Write the output to a file with md information.
     logger.info(f"Writing to {md_output_file = }, {text_output_file = }")
@@ -139,7 +138,7 @@ def process_one_warc_file(
                 "format": "md",
                 "metadata": {f"fw_{key}": value for key, value in out_fw.items() if key not in ("md", "html", "text")},
             }
-            
+
             print(json.dumps(out_dolma), file=f)
 
     if text_output_file and "text" in df.columns:
@@ -151,11 +150,12 @@ def process_one_warc_file(
                     "text": out_fw["text"],
                     "source": "fineweb",
                     "format": "text",
-                    "metadata": {f"fw_{key}": value for key, value in out_fw.items() if key not in ("md", "html", "text")},
+                    "metadata": {
+                        f"fw_{key}": value for key, value in out_fw.items() if key not in ("md", "html", "text")
+                    },
                 }
                 print(json.dumps(out_dolma), file=f)
 
-    
     if html_output_file:
         with fsspec.open(html_output_file, "wt", compression="gzip") as f:  # html output
             for index, row in df.iterrows():
@@ -243,11 +243,27 @@ def process_fw_parquet(
                         ]
                     }
                 ).remote(
-                    filename, output_file_name, extract_method, config, md_output_path, text_output_path, html_output_path
+                    filename,
+                    output_file_name,
+                    extract_method,
+                    config,
+                    md_output_path,
+                    text_output_path,
+                    html_output_path,
                 )
             )
         else:
-            ray_waitable.append(process_one_warc_file.remote(filename, output_file_name, extract_method, config, md_output_path, text_output_path, html_output_path))
+            ray_waitable.append(
+                process_one_warc_file.remote(
+                    filename,
+                    output_file_name,
+                    extract_method,
+                    config,
+                    md_output_path,
+                    text_output_path,
+                    html_output_path,
+                )
+            )
         file_path.append(filename)
 
     was_successful = True
@@ -336,15 +352,17 @@ def process_fw_dump(cfg: ParquetFWConfig):
             output_path = os.path.join(
                 cfg.md_output_path,
                 input_file_name.replace(".parquet", ""),
-            ) # gs://marin-us-central2/processed/CC-MAIN-2024-10/000_00000
-
+            )  # gs://marin-us-central2/processed/CC-MAIN-2024-10/000_00000
 
             logger.info(f"Starting Processing for the fw parquet file: {file} in output_path: {output_path}")
             result_refs.append(
-                process_fw_parquet.remote(file, output_path, cfg.extract_method, cfg.config, md_output_path, text_output_path, html_output_path))
+                process_fw_parquet.remote(
+                    file, output_path, cfg.extract_method, cfg.config, md_output_path, text_output_path, html_output_path
+                )
+            )
 
             num_files += 1
-            
+
             if cfg.max_files and num_files >= cfg.max_files:
                 end_processing = True
                 break
@@ -353,9 +371,10 @@ def process_fw_dump(cfg: ParquetFWConfig):
             ray.get(result_refs)
         except Exception as e:
             raise Exception(f"Error processing the group: {e}")
-            
+
         if end_processing:
             break
 
-if __name__=="__main__":
+
+if __name__ == "__main__":
     process_fw_dump()

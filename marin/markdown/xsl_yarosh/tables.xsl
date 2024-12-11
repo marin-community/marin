@@ -2,7 +2,7 @@
 <xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
 		xmlns:m="http://www.w3.org/1998/Math/MathML"
                 version='1.0'>
-                
+
 <!-- ====================================================================== -->
 <!-- $id: tables.xsl, 2002/17/05 Exp $
      This file is part of the XSLT MathML Library distribution.
