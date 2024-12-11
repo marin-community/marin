@@ -407,6 +407,9 @@ def _add_run_env_variables(env: dict):
     if "HF_DATASETS_TRUST_REMOTE_CODE" not in env:
         env["HF_DATASETS_TRUST_REMOTE_CODE"] = "1"
 
+    if "TOKENIZERS_PARALLELISM" not in env:
+        env["TOKENIZERS_PARALLELISM"] = "false"
+
     return env
 
 
