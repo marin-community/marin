@@ -57,7 +57,6 @@ def extract_from_html(url, html_content, debug=False):
         # "traf_xml": trafilatura_xml,
     }
 
-
     if debug:
         cleaned_html = cleaned["html"]
         md = h.handle(cleaned_html)
@@ -69,7 +68,7 @@ def extract_from_html(url, html_content, debug=False):
 
 
 def process_files(snapshot, n, lang, part, debug=False):
-   for doc_id, qs in iterate_rpv2_file(snapshot, n, lang, part):
+    for doc_id, qs in iterate_rpv2_file(snapshot, n, lang, part):
         url = qs["metadata"]["url"]
         snapshot_id = qs["metadata"]["snapshot_id"]
         try:
@@ -89,6 +88,7 @@ def process_files(snapshot, n, lang, part, debug=False):
                 logger.error(f"Content could not be processed for {doc_id} URL: {url}")
         except Exception as e:
             logger.exception(f"Error processing {doc_id}: {e}")
+
 
 if __name__ == "__main__":
     lang = "en"
@@ -123,4 +123,3 @@ if __name__ == "__main__":
 
                 if i % 100 == 0:
                     raise ValueError("Stop here")
-
