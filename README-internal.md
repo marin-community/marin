@@ -133,10 +133,6 @@ def my_tpu_job():
     ...
 ```
 
-## Running evals via lm-evaluation-harness
-
-When running evals via lm-evaluation-harness, set the env var `HF_DATASETS_TRUST_REMOTE_CODE` to `true` to allow tasks that need remote code to be run to run in evals.
-
 ## Running Evals on NLP Cluster
 
 We run external evaluations on the NLP cluster because lm-evaluation-harness does not support TPUs yet.
