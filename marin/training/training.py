@@ -391,9 +391,10 @@ def _add_default_env_variables(env: dict, default_env: dict | None):
 
 def _add_run_env_variables(env: dict):
     """
-    Add a few environment variables from `os.environ` into `env` that we need for logging. Specifically:
-    - WANDB_API_KEY
+    Add a few environment variables from `os.environ` into `env` that we need for logging, as well as for internal evals. 
+    Specifically:
     - GIT_COMMIT
+    - HF_DATASETS_TRUST_REMOTE_CODE
     """
 
     if "GIT_COMMIT" not in env:
@@ -401,6 +402,10 @@ def _add_run_env_variables(env: dict):
             env["GIT_COMMIT"] = levanter.infra.cli_helpers.get_git_commit()
         except:  # noqa
             logger.warning("Could not infer git commit.")
+
+    # required for internal evals to run some tasks
+    if "HF_DATASETS_TRUST_REMOTE_CODE" not in env:
+        env["HF_DATASETS_TRUST_REMOTE_CODE"] = "1"
 
     return env
 
