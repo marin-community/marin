@@ -54,12 +54,9 @@ def download_hf(cfg: DownloadConfig) -> None:
     # Parse the output path and get the file system
     fs, _ = fsspec.core.url_to_fs(cfg.gcs_output_path)
 
-    # Use revision as "version" for writing to the output path
-    versioned_output_path = os.path.join(cfg.gcs_output_path, cfg.revision)
-
     # Ensure the output path is writable
     try:
-        ensure_fsspec_path_writable(versioned_output_path)
+        ensure_fsspec_path_writable(cfg.gcs_output_path)
     except ValueError as e:
         logger.exception(f"Output path validation failed: {e}")
         raise e
@@ -84,7 +81,7 @@ def download_hf(cfg: DownloadConfig) -> None:
 
     for file in files:
         try:
-            fsspec_file_path = os.path.join(versioned_output_path, file.split("/", 3)[-1])  # Strip the dataset prefix
+            fsspec_file_path = os.path.join(cfg.gcs_output_path, file.split("/", 3)[-1])  # Strip the dataset prefix
             # Hf file paths are always of format : hf://[<repo_type_prefix>]<repo_id>[@<revision>]/<path/in/repo>
             task_generator.append((cfg, hf_fs, file, fsspec_file_path))
         except Exception as e:
@@ -104,7 +101,7 @@ def download_hf(cfg: DownloadConfig) -> None:
 
     # Write Provenance JSON
     write_provenance_json(
-        versioned_output_path,
+        cfg.gcs_output_path,
         metadata={"dataset": cfg.hf_dataset_id, "version": cfg.revision, "links": files},
     )
 
