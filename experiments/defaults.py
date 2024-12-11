@@ -109,7 +109,7 @@ def default_train(
     tags: Sequence[str] = (),
     use_default_validation: bool = True,
     use_default_evaluation: bool = True,
-    eval_harness_tasks: list[str | TaskConfig] | None = None,
+    eval_harness_tasks: list[str | TaskConfig] | bool = True,
 ) -> ExecutorStep:
     """
     Train a language model using the default configuration.
@@ -122,7 +122,8 @@ def default_train(
         tags: Any additional tags to add to the Wandb tracker.
         use_default_validation: Whether to use the default validation sets (currently Paloma).
         use_default_evaluation: Whether to use the default supervised validation data (currently MMLU).
-        eval_harness_tasks: List of evaluation harness tasks. Defaults to the CORE set of tasks.
+        eval_harness_tasks: List of evaluation harness tasks. Defaults to the CORE set of tasks. or bool to use or not
+              use the default CORE tasks.
     """
 
     pretraining_data, evaluation_data = _prepare_data_config(tokenized, use_default_validation, use_default_evaluation)
@@ -135,7 +136,7 @@ def default_train(
     name = name[:64]
 
     # eval harness run on the CORE tasks by default
-    if eval_harness_tasks is None:
+    if eval_harness_tasks is True or eval_harness_tasks is None:
         eval_harness_tasks = convert_to_levanter_task_config(CORE_TASKS)
 
     # TODO: right now, assume architecture is a LlamaConfig, generalize this
