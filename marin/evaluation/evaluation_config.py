@@ -9,6 +9,9 @@ class EvalTaskConfig:
     num_fewshot: int
     """Number of few-shot examples to evaluate on."""
 
+    task_alias: str | None = None
+    """Alias for the task name."""
+
 
 @dataclass(frozen=True)
 class EvaluationConfig:

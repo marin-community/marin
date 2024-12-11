@@ -7,6 +7,7 @@ python3 run.py <Name of evaluator> --model <Path to model or Hugging Face model 
 --evals <List of evals to run> --output-path <Where to output logs and results>
 """
 
+import logging
 import time
 
 import draccus
@@ -16,13 +17,15 @@ from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
 from marin.evaluation.evaluators.evaluator_factory import get_evaluator
 from marin.evaluation.utils import discover_hf_checkpoints
 
+logger = logging.getLogger(__name__)
+
 
 def evaluate(config: EvaluationConfig) -> None:
-    print(f"Running evals with args: {config}")
+    logger.info(f"Running evals with args: {config}")
     evaluator: Evaluator = get_evaluator(config)
 
     model: ModelConfig = _impute_model_config(config)
-    print(f"Evaluating {model.name} with {config.evals}")
+    logger.info(f"Evaluating {model.name} with {config.evals}")
 
     start_time: float = time.time()
     if config.launch_with_ray:
@@ -30,11 +33,17 @@ def evaluate(config: EvaluationConfig) -> None:
             model,
             evals=config.evals,
             output_path=config.evaluation_path,
+            max_eval_instances=config.max_eval_instances,
         )
     else:
-        evaluator.evaluate(model, evals=config.evals, output_path=config.evaluation_path)
+        evaluator.evaluate(
+            model,
+            evals=config.evals,
+            output_path=config.evaluation_path,
+            max_eval_instances=config.max_eval_instances,
+        )
 
-    print(f"Done (total time: {time.time() - start_time} seconds)")
+    logger.info(f"Done (total time: {time.time() - start_time} seconds)")
 
 
 def _impute_model_config(config):
