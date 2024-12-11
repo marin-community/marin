@@ -87,7 +87,7 @@ EXPERIMENT_TAG_MIXTURE = ["433_dclm_1b_1x"]
 EXPERIMENT_TAG_BASELINE_ONLY = ["433_dclm_baseline_1b_1x"]
 
 dclm_mixture_model = default_train(
-    name="dclm_1b_1x_replication",
+    name="dclm_1b_1x_replication_oct26",
     tokenized=dclm_mixture_config,
     model_config=llama_1_4b_dclm,
     train_config=training_config,
@@ -110,7 +110,7 @@ if __name__ == "__main__":
     executor_main(
         steps=[
             dclm_baseline_tokenized,
-            sstarcoderdata_tokenized,
+            starcoderdata_tokenized,
             proofpile_2_tokenized,
             dclm_mixture_model,
             dclm_baseline_only_model,
