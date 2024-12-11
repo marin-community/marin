@@ -109,12 +109,12 @@ dclm_baseline_only_eval = default_eval(step=dclm_baseline_only_model)
 if __name__ == "__main__":
     executor_main(
         steps=[
-            #dclm_baseline_tokenized,
-            #starcoderdata_tokenized,
-            #proofpile_2_tokenized,
+            # dclm_baseline_tokenized,
+            # starcoderdata_tokenized,
+            # proofpile_2_tokenized,
             dclm_mixture_model,
-            #dclm_baseline_only_model,
-            #dclm_mixture_eval,
-            #dclm_baseline_only_eval,
+            # dclm_baseline_only_model,
+            # dclm_mixture_eval,
+            # dclm_baseline_only_eval,
         ]
     )
