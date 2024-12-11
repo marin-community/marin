@@ -9,6 +9,7 @@ from levanter.optim import AdamConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 
+from experiments.evals.evals import default_eval
 from experiments.llama import llama3_tokenizer
 from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path
 from marin.processing.tokenize.tokenize import TokenizeConfig, levanter_tokenize_sft
@@ -42,7 +43,7 @@ tulu3_llama_tokenize_step = ExecutorStep(
 )
 
 llama_8b_tulu3_model = ExecutorStep(
-    name="checkpoints/llama3.1_8b_tulu3",
+    name="checkpoints/llama3.1_8b_tulu_3",
     fn=run_levanter_sft,
     config=TrainSFTOnPodConfig(
         output_path=this_output_path(),
@@ -98,6 +99,8 @@ llama_8b_tulu3_model = ExecutorStep(
     ),
 )
 
+llama_8b_tulu3_eval = default_eval(step=llama_8b_tulu3_model)
+
 
 if __name__ == "__main__":
-    executor_main(steps=[tulu3_llama_tokenize_step, llama_8b_tulu3_model])
+    executor_main(steps=[tulu3_llama_tokenize_step, llama_8b_tulu3_model, llama_8b_tulu3_eval])
