@@ -25,5 +25,5 @@ jobs:
       - name: Install dependencies
         run: pip install .[extras]
 
-      - run: Run the quickstart script
+      - name: Run the quickstart script
         run: python experiments/quickstart.py
