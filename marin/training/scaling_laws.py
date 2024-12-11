@@ -1,14 +1,14 @@
 import dataclasses
 import logging
-from typing import Sequence
+from collections.abc import Sequence
 
-from experiments.defaults import default_train
-from experiments.llama import llama_1_4b, llama_8b
-from experiments.simple_train_config import SimpleTrainConfig
 from levanter.data.text import LMMixtureDatasetConfig
 from levanter.models.llama import LlamaConfig
-from marin.execution.executor import ExecutorStep, InputName
 
+from experiments.defaults import default_train
+from experiments.llama import llama_1_4b
+from experiments.simple_train_config import SimpleTrainConfig
+from marin.execution.executor import ExecutorStep, InputName
 
 DEFAULT_MODEL_CONFIG = LlamaConfig(
     seq_len=4096,
@@ -26,23 +26,27 @@ DEFAULT_SWEEP_TRAIN_CONFIG = SimpleTrainConfig(
     train_batch_size=1024,
     learning_rate=1e-3,
     weight_decay=0.1,
+    # https://arxiv.org/pdf/2412.04403 gets 4 points per run. this gives us 5
     num_train_steps=50000,  # 4096 * 1024 * 50000 = ~200B tokens
     cycle_length=10000,  # 5 cycles with 10000 steps/cycle
+    steps_per_eval=10000,  # same as cycle length
     warmup=1000,  # initial warmup
     decay=0.1,  # 10% decay
     lr_schedule="inv",  # inv decay
-    steps_per_eval=10000,  # same as cycle length
 )
 
 
 # TODO(dlwh): in an old levanter branch (wandb_sweeps) i had fancier sweep generation stuff for doing surgery on the
 # config. Consider using that.
 
+
 def scaling_law_suite(
     sweep_name: str,
     tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig,
     widths: Sequence[int] = (512, 768, 1024, 1536, 2048),
     base_model_config: LlamaConfig = llama_1_4b,
+    tags: Sequence[str] = (),
+    *,
     intermediate_scale: float = 8,
     training_config: SimpleTrainConfig = DEFAULT_SWEEP_TRAIN_CONFIG,
     base_lr: float = 3e-4 * 4096,
@@ -70,7 +74,7 @@ def scaling_law_suite(
         * incredibly wide intermediate_scale is based on the same table
         * base_lr is based on llama 3 (https://arxiv.org/pdf/2407.21783 table 3)
         * max_lr is a reasonable value that is not too high
-        * default model config (1_4b) gives the number of layers used in https://arxiv.org/pdf/2412.04403 table 1 for most models
+        * default model config (1_4b) gives the number of layers used in https://arxiv.org/pdf/2412.04403 table 1
     """
 
     steps = []
@@ -81,9 +85,16 @@ def scaling_law_suite(
         num_kv_heads = min(num_heads, 8)
         assert num_heads * head_size == w, f"Number of heads must divide width: {w} % {head_size} != 0"
 
+        # if num_kv_heads doesn't divide num_heads, we need to adjust num_kv_heads
+        if num_heads % num_kv_heads != 0:
+            num_kv_heads = num_heads
+
         model_config = dataclasses.replace(
-            base_model_config, hidden_dim=w, intermediate_dim=intermediate_dim, num_heads=num_heads,
-            num_kv_heads=num_kv_heads
+            base_model_config,
+            hidden_dim=w,
+            intermediate_dim=intermediate_dim,
+            num_heads=num_heads,
+            num_kv_heads=num_kv_heads,
         )
 
         lr = min(base_lr / w, max_lr)
@@ -97,6 +108,7 @@ def scaling_law_suite(
                 tokenized=tokenized,
                 model_config=model_config,
                 train_config=training_config,
+                tags=tags,
             )
         )
     return steps
