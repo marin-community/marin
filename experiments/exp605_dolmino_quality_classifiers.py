@@ -1,7 +1,13 @@
 """
-An experiment to train quality classifiers from high quality data from https://huggingface.co/datasets/allenai/dolmino-mix-1124
+An experiment to train quality classifiers from high quality data from Dolmino:
+https://huggingface.co/datasets/allenai/dolmino-mix-1124
 
-experiment 164 contains many trained quality classifiers: https://github.com/stanford-crfm/marin/issues/164
+Dolmino is a dataset of high quality data sources including wikipedia, pes2o, stackexchange,
+math synthetic data, and many more. In this file, we experiment with training and running quality classifiers
+from the Wikipedia and Pes2o splits of the dataset.
+
+We use DCLM's negative examples which are 200k Refined Web examples from
+this issue: https://github.com/stanford-crfm/marin/issues/164
 """
 
 from experiments.exp164_quality_classifiers import dclm_negative_examples_in_dolma_format
