@@ -68,7 +68,7 @@ class SimpleShardSource(ShardedDataSource):
 
 @pytest.fixture(scope="module")
 def ray_init():
-    ray.init("local", ignore_reinit_error=True)
+    ray.init("local")
     try:
         yield
     finally:
