@@ -1,5 +1,6 @@
 from experiments.defaults import default_tokenize, default_train
 from experiments.dolma.tokenize_dolma import tokenize_dolma_steps
+from experiments.evals.evals import default_eval
 from experiments.exp596_stackexchange_classifier import stackexchange_experiment_config
 from experiments.llama import llama3_tokenizer, llama_1_4b, llama_1_4b_train_config
 from experiments.pretraining_datasets import dolmino
@@ -31,6 +32,8 @@ dolmino_stackexchange_model = default_train(
     train_config=llama_1_4b_train_config,
 )
 
+dolmino_stackexchange_eval = default_eval(dolmino_stackexchange_model)
+
 dolma_stackexchange_tokenized = tokenize_dolma_steps()["dolma/stackexchange"]
 
 dolma_stackexchange_model = default_train(
@@ -40,12 +43,19 @@ dolma_stackexchange_model = default_train(
     train_config=llama_1_4b_train_config,
 )
 
+dolma_stackexchange_eval = default_eval(dolma_stackexchange_model)
+
 _, stackexchange_filtered_hq_webpages_experiment_steps = create_steps(stackexchange_experiment_config)
+
+# NOTE(chris): Normally this is not required because default_train will eval on the last step, but I had not
+# pushed the changes to the repo when I created this experiment, which is why I'm evaluating after the run.
+stackexchange_filtered_hq_webpages_eval = default_eval(stackexchange_filtered_hq_webpages_experiment_steps[-1])
+stackexchange_filtered_hq_webpages_experiment_steps.append(stackexchange_filtered_hq_webpages_eval)
 
 if __name__ == "__main__":
     steps = [
-        dolmino_stackexchange_model,
-        dolma_stackexchange_model,
+        dolmino_stackexchange_eval,
+        dolma_stackexchange_eval,
     ]
     steps.extend(stackexchange_filtered_hq_webpages_experiment_steps)
     executor_main(steps=steps)
