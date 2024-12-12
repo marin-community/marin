@@ -53,10 +53,10 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
             logger.info(f"Running eval harness on model: {model_name_or_path}")
 
             trainer_config = TrainerConfig(
-                mp=jmp.get_policy("f32"), per_device_eval_parallelism=32, ray=RayConfig(auto_start_cluster=False)
+                mp=jmp.get_policy("p=f32,c=bfloat16"), per_device_eval_parallelism=-1, ray=RayConfig(auto_start_cluster=False)
             )
 
-            model_config = LlamaConfig()
+            model_config = LlamaConfig(seq_len=4096)
 
             # convert to the config that Levanter's eval_harness expects
             tasks = convert_to_levanter_task_config(evals)
@@ -68,6 +68,7 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
                     task_spec=tasks,
                     max_examples=max_eval_instances,
                     log_samples=False,
+                    max_eval_length=4096,
                 ),
                 tokenizer=model_path,  # levanter picks up the tokenizer from the model path
                 checkpoint_path=model_path,

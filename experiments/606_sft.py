@@ -63,6 +63,7 @@ llama_8b_tulu3_model = ExecutorStep(
             ),
             mp=jmp.get_policy("p=f32,c=bfloat16"),
             train_batch_size=128,
+            per_device_eval_parallelism=1,
             num_train_steps=NUM_TRAIN_STEPS,
             checkpointer=CheckpointerConfig(
                 save_interval=timedelta(minutes=10),
