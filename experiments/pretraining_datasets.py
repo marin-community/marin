@@ -3,6 +3,7 @@ from operations.download.huggingface.download import DownloadConfig, download
 from operations.download.huggingface.download_gated_manual import download_and_upload_to_store
 from operations.download.huggingface.download_hf import download_hf
 
+# TODO: remove download and download_and_upload_to_store. Instead use download_hf instead
 fineweb = ExecutorStep(
     name="raw/fineweb",
     fn=download,
@@ -100,6 +101,8 @@ proofpile_2 = ExecutorStep(
     override_output_path="raw/proof-pile-2-f1b1d8",
 ).cd("901a927/huggingface.co/datasets/EleutherAI/proof-pile-2/resolve/901a927")
 
+# TODO: Earlier datasets were stored in gcs_output_path/<revision> instead of gcs_output_path.
+#   Migrate the dataset and cd can be removed.
 starcoderdata = ExecutorStep(
     name="raw/starcoderdata",
     fn=download_hf,
