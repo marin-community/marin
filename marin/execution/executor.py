@@ -742,6 +742,12 @@ def execute_after_dependencies(
         # Lock is with some other process. Wait for the process to finish or fail, and propogate accordingly
         while True:
             actor_task_state = ray.util.state.get_task(actor_lock_task_id)
+
+            # Sometimes the actor_state is not ready
+            if actor_task_state is None:
+                time.sleep(5)  # Wait for 5 seconds and check again
+                continue
+
             if actor_task_state.state == "FINISHED":  # The original task has finished successfully
                 return
             elif actor_task_state.state == "FAILED":  # The original rask has failed, raise this exception
