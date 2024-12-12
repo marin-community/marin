@@ -23,7 +23,7 @@ from levanter.trainer import TrainerConfig
 from experiments.eval_datasets import (
     eval_datasets,
 )
-from experiments.evals.task_configs import CORE_TASKS, convert_to_levanter_task_config
+from experiments.evals.task_configs import CORE_TASKS
 from experiments.llama import compute_num_parameters
 from experiments.paloma import paloma_tokenized
 from experiments.simple_train_config import SimpleTrainConfig
@@ -109,7 +109,7 @@ def default_train(
     tags: Sequence[str] = (),
     use_default_validation: bool = True,
     use_default_evaluation: bool = True,
-    eval_harness_tasks: list[str | TaskConfig] | bool = True,
+    eval_harness_tasks: Sequence[str | TaskConfig] = CORE_TASKS,
 ) -> ExecutorStep:
     """
     Train a language model using the default configuration.
@@ -122,8 +122,7 @@ def default_train(
         tags: Any additional tags to add to the Wandb tracker.
         use_default_validation: Whether to use the default validation sets (currently Paloma).
         use_default_evaluation: Whether to use the default supervised validation data (currently MMLU).
-        eval_harness_tasks: List of evaluation harness tasks. Defaults to the CORE set of tasks. or bool to use or not
-              use the default CORE tasks.
+        eval_harness_tasks: List of evaluation harness tasks. Defaults to the CORE set of tasks. Use () or [] to disable.
     """
 
     pretraining_data, evaluation_data = _prepare_data_config(tokenized, use_default_validation, use_default_evaluation)
@@ -134,10 +133,6 @@ def default_train(
 
     # Max length of 64 characters for WANDB run is 64 characters
     name = name[:64]
-
-    # eval harness run on the CORE tasks by default
-    if eval_harness_tasks is True or eval_harness_tasks is None:
-        eval_harness_tasks = convert_to_levanter_task_config(CORE_TASKS)
 
     # TODO: right now, assume architecture is a LlamaConfig, generalize this
     assert isinstance(model_config, LlamaConfig)
@@ -189,7 +184,7 @@ def default_train(
             ),
             hf_save_steps=steps_per_export,
             data_seed=train_config.data_seed,
-            eval_harness_steps=10000,
+            eval_harness_steps=train_config.steps_per_task_eval or 10000,
             eval_harness=LmEvalHarnessConfig(
                 task_spec=eval_harness_tasks,
             ),
