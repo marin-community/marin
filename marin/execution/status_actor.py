@@ -57,6 +57,7 @@ class StatusActor:
         self.value_to_status_reference: dict[str, tuple[str | None, ObjectRef | None]] = {}
         self.lru_cache: OrderedDict[str, None] = OrderedDict()  # lru_cache to keep dict size to cache_size
         self.cache_size = cache_size
+        self.lock_output_path_to_task_id: dict[str, str] = {}
 
     def _add_status_and_reference(
         self, output_path: str, executor_step_event: ExecutorStepEvent | None, reference: RayObjectRef
@@ -137,3 +138,17 @@ class StatusActor:
 
     def get_all_status(self) -> dict[str, tuple[str, ObjectRef]]:
         return self.value_to_status_reference.copy()
+
+    def get_lock(self, output_path: str, ray_task_id: str) -> str:
+        """Returns the lock for the given output path. If some other task has already locked the output path, then
+        return the task ID of the task that has locked it."""
+        if output_path not in self.lock_output_path_to_task_id:
+            self.lock_output_path_to_task_id[output_path] = ray_task_id
+        return self.lock_output_path_to_task_id[output_path]
+
+    def release_lock(self, output_path: str):
+        """Release the lock for the given output path."""
+        del self.lock_output_path_to_task_id[output_path]
+
+    def get_multiple_status(self, output_paths: list[str]) -> list[str | None]:
+        return [self.get_status(output_path) for output_path in output_paths]
