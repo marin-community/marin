@@ -27,7 +27,14 @@ from experiments.evals.task_configs import CORE_TASKS
 from experiments.llama import compute_num_parameters
 from experiments.paloma import paloma_tokenized
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.execution.executor import ExecutorStep, InputName, VersionedValue, output_path_of, this_output_path, versioned
+from marin.execution.executor import (
+    ExecutorStep,
+    InputName,
+    output_path_of,
+    this_output_path,
+    unwrap_versioned_value,
+    versioned,
+)
 from marin.processing.tokenize import (
     TokenizeConfig,
     TokenizerStep,
@@ -194,10 +201,7 @@ def default_train(
 
 
 def _get_vocab_size(pretraining_data):
-    if isinstance(pretraining_data.tokenizer, VersionedValue):
-        tokenizer = pretraining_data.tokenizer.value
-    else:
-        tokenizer = pretraining_data.tokenizer
+    tokenizer = unwrap_versioned_value(pretraining_data.tokenizer)
     vocab_size = load_tokenizer(tokenizer).vocab_size
     return vocab_size
 

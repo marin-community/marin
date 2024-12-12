@@ -198,6 +198,15 @@ def versioned(value: T_co) -> VersionedValue[T_co]:
     return VersionedValue(value)
 
 
+def unwrap_versioned_value(value: VersionedValue[T_co] | T_co) -> T_co:
+    """
+    Unwrap the value if it is a VersionedValue, otherwise return the value as is.
+
+    Sometimes we need to actually use a value that is wrapped in a VersionedValue before it is used in a config.
+    """
+    return value.value if isinstance(value, VersionedValue) else value
+
+
 ############################################################
 
 
