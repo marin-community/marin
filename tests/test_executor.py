@@ -216,7 +216,7 @@ def test_status_actor():
                 append_status(f"{output_path}/.executor_status", s)
                 assert ray.get(actor.get_status.remote(output_path)) == e
 
-    # test_status_check()
+    test_status_check()
 
     def test_one_executor_waiting_for_another():
         with tempfile.NamedTemporaryFile() as file:
@@ -237,7 +237,7 @@ def test_status_actor():
                 with open(config.path, "w") as f:
                     f.write(str(number + config.number))
 
-            a = ExecutorStep(name="a", fn=fn, config=Config(versioned(1), file.name, 10, ""))
+            a = ExecutorStep(name="a", fn=fn, config=Config(versioned(1), file.name, 2, ""))
             b = ExecutorStep(name="b", fn=fn, config=Config(versioned(2), file.name, 0, output_path_of(a)))
 
             @ray.remote
@@ -256,7 +256,7 @@ def test_status_actor():
                 with open(file.name, "r") as f:
                     assert int(f.read()) == 3
 
-    # test_one_executor_waiting_for_another()
+    test_one_executor_waiting_for_another()
 
     def test_actor_status_when_cluster_dies():
         status = [STATUS_SUCCESS, STATUS_FAILED, STATUS_WAITING, STATUS_RUNNING, STATUS_DEP_FAILED]
@@ -282,7 +282,7 @@ def test_status_actor():
             for i in range(5):
                 assert ray.get(actor.get_status.remote(output_paths[i])) == expected_status[i]
 
-    # test_actor_status_when_cluster_dies()
+    test_actor_status_when_cluster_dies()
 
     def test_multiple_steps_race_condition():
         # Open a temp dir, make a step that write a random file in that temp dir. Make 10 of these steps and run them
