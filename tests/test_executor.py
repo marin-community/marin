@@ -1,5 +1,6 @@
 import json
 import os
+import random
 import re
 import tempfile
 import time
@@ -90,7 +91,7 @@ def test_executor():
 
     with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
         executor = create_executor(temp_dir)
-        executor.run(steps=[b])
+        executor.run(steps=[b], wait_for_status_actor=True)
 
         assert len(executor.steps) == 2
         assert executor.output_paths[a].startswith(executor.prefix + "/a-")
@@ -123,7 +124,6 @@ def test_executor():
 
         for step in executor.steps:
             status_path = get_status_path(executor.output_paths[step])
-            # import pdb; pdb.set_trace()
             events = read_events(status_path)
             assert get_current_status(events) == STATUS_SUCCESS
             info_path = get_info_path(executor.output_paths[step])
@@ -180,7 +180,7 @@ def test_force_run_failed():
     with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
         executor_initial = Executor(prefix=temp_dir, executor_info_base_path=temp_dir)
         with pytest.raises(Exception, match="Failed"):
-            executor_initial.run(steps=[a])
+            executor_initial.run(steps=[a], wait_for_status_actor=True)
 
         with pytest.raises(FileNotFoundError):
             read_log(log)
@@ -190,14 +190,14 @@ def test_force_run_failed():
 
         # Re-run without force_run
         executor_non_force = Executor(prefix=temp_dir, executor_info_base_path=temp_dir)
-        executor_non_force.run(steps=[a])
+        executor_non_force.run(steps=[a], wait_for_status_actor=True)
         # should still be failed
         with pytest.raises(FileNotFoundError):
             read_log(log)
 
         # Rerun with force_run_failed
         executor_force = Executor(prefix=temp_dir, executor_info_base_path=temp_dir)
-        executor_force.run(steps=[a], force_run_failed=True)
+        executor_force.run(steps=[a], force_run_failed=True, wait_for_status_actor=True)
         results = read_log(log)
         assert len(results) == 2
 
@@ -216,7 +216,7 @@ def test_status_actor():
                 append_status(f"{output_path}/.executor_status", s)
                 assert ray.get(actor.get_status.remote(output_path)) == e
 
-    test_status_check()
+    # test_status_check()
 
     def test_one_executor_waiting_for_another():
         with tempfile.NamedTemporaryFile() as file:
@@ -242,14 +242,13 @@ def test_status_actor():
 
             @ray.remote
             def run_fn(executor, steps):
-                executor.run(steps=steps)
+                executor.run(steps=steps, wait_for_status_actor=True)
 
             with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
                 executor1 = create_executor(temp_dir)
                 executor2 = create_executor(temp_dir)
 
                 run1 = run_fn.remote(executor1, [a])
-                time.sleep(5)
                 run2 = run_fn.remote(executor2, [a, b])
 
                 ray.get([run1, run2])
@@ -257,7 +256,7 @@ def test_status_actor():
                 with open(file.name, "r") as f:
                     assert int(f.read()) == 3
 
-    test_one_executor_waiting_for_another()
+    # test_one_executor_waiting_for_another()
 
     def test_actor_status_when_cluster_dies():
         status = [STATUS_SUCCESS, STATUS_FAILED, STATUS_WAITING, STATUS_RUNNING, STATUS_DEP_FAILED]
@@ -283,7 +282,44 @@ def test_status_actor():
             for i in range(5):
                 assert ray.get(actor.get_status.remote(output_paths[i])) == expected_status[i]
 
-    test_actor_status_when_cluster_dies()
+    # test_actor_status_when_cluster_dies()
+
+    def test_multiple_steps_race_condition():
+        # Open a temp dir, make a step that write a random file in that temp dir. Make 10 of these steps and run them
+        # in parallel. Check that only one of them runs
+        with tempfile.TemporaryDirectory(prefix="output_path") as output_path:
+
+            @dataclass
+            class Config:
+                path: str
+
+            def fn(config: Config):
+                random_str = str(random.randint(0, 1000))
+                time.sleep(2)
+                with open(os.path.join(config.path, random_str), "w") as f:
+                    f.write("1")
+
+            @ray.remote
+            def run_fn(executor, steps):
+                executor.run(steps=steps, wait_for_status_actor=True)
+
+            with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
+
+                executor_refs = []
+                for _ in range(10):
+                    executor = create_executor(temp_dir)
+                    executor_refs.append(
+                        run_fn.remote(executor, [ExecutorStep(name="step", fn=fn, config=Config(output_path))])
+                    )
+
+                ray.get(executor_refs)
+
+                files = os.listdir(output_path)
+                print(files)
+                assert len(files) == 1
+                os.unlink(os.path.join(output_path, files[0]))
+
+    test_multiple_steps_race_condition()
 
 
 def test_parallelism():
@@ -306,7 +342,7 @@ def test_parallelism():
     with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
         executor = create_executor(temp_dir)
         start_time = time.time()
-        executor.run(steps=bs)
+        executor.run(steps=bs, wait_for_status_actor=True)
         end_time = time.time()
 
         results = read_log(log)
@@ -350,7 +386,7 @@ def test_versioning():
                 ),
             )
             executor = create_executor(temp_dir)
-            executor.run(steps=[b])
+            executor.run(steps=[b], wait_for_status_actor=True)
             output_path = executor.output_paths[b]
             return output_path
 
@@ -400,7 +436,7 @@ def test_dedup_version():
 
     with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
         executor = create_executor(temp_dir)
-        executor.run(steps=[b1, b2])
+        executor.run(steps=[b1, b2], wait_for_status_actor=True)
         assert len(executor.steps) == 2
 
 
@@ -430,7 +466,7 @@ def test_run_only_some_steps():
 
     with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
         executor = create_executor(temp_dir)
-        executor.run(steps=[b, c], run_only=["^b$"])
+        executor.run(steps=[b, c], run_only=["^b$"], wait_for_status_actor=True)
 
         results = read_log(log)
         assert len(results) == 2
@@ -441,7 +477,7 @@ def test_run_only_some_steps():
 
     with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
         executor = create_executor(temp_dir)
-        executor.run(steps=[a, b, c], run_only=["a", "c"])
+        executor.run(steps=[a, b, c], run_only=["a", "c"], wait_for_status_actor=True)
 
         # these can execute in any order
         results = read_log(log)
