@@ -88,6 +88,7 @@ import fsspec
 import ray
 import ray.remote_function
 from ray.runtime_env import RuntimeEnv
+from ray.util import state  # noqa
 
 from marin.execution.executor_step_status import (
     STATUS_DEP_FAILED,
