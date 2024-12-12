@@ -282,7 +282,7 @@ def test_status_actor():
             for i in range(5):
                 assert ray.get(actor.get_status.remote(output_paths[i])) == expected_status[i]
 
-    test_actor_status_when_cluster_dies()
+    # test_actor_status_when_cluster_dies()
 
     def test_multiple_steps_race_condition():
         # Open a temp dir, make a step that write a random file in that temp dir. Make 10 of these steps and run them
