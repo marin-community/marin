@@ -461,7 +461,7 @@ function renderDirectory(args) {
     {paths.length > 1 ? renderPath({paths, index, updateUrlParams}) : null}
     <ul>
       {files.map((file, i) => {
-        const newPath = "gs://" + file.name;  // TODO: assume gs:// for now, might want to push to backend
+        const newPath = file.path;
         return <li key={i}>
           <span className="clickable" onClick={() => updatePath(paths, index, newPath, updateUrlParams)}>
             {file.name}
