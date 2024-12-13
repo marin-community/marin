@@ -23,11 +23,18 @@ from levanter.trainer import TrainerConfig
 from experiments.eval_datasets import (
     eval_datasets,
 )
-from experiments.evals.task_configs import CORE_TASKS, convert_to_levanter_task_config
+from experiments.evals.task_configs import CORE_TASKS
 from experiments.llama import compute_num_parameters
 from experiments.paloma import paloma_tokenized
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.execution.executor import ExecutorStep, InputName, VersionedValue, output_path_of, this_output_path, versioned
+from marin.execution.executor import (
+    ExecutorStep,
+    InputName,
+    output_path_of,
+    this_output_path,
+    unwrap_versioned_value,
+    versioned,
+)
 from marin.processing.tokenize import (
     TokenizeConfig,
     TokenizerStep,
@@ -109,7 +116,7 @@ def default_train(
     tags: Sequence[str] = (),
     use_default_validation: bool = True,
     use_default_evaluation: bool = True,
-    eval_harness_tasks: list[str | TaskConfig] | None = None,
+    eval_harness_tasks: Sequence[str | TaskConfig] = CORE_TASKS,
 ) -> ExecutorStep:
     """
     Train a language model using the default configuration.
@@ -122,23 +129,17 @@ def default_train(
         tags: Any additional tags to add to the Wandb tracker.
         use_default_validation: Whether to use the default validation sets (currently Paloma).
         use_default_evaluation: Whether to use the default supervised validation data (currently MMLU).
-        eval_harness_tasks: List of evaluation harness tasks. Defaults to the CORE set of tasks.
+        eval_harness_tasks: List of evaluation harness tasks. Defaults to the CORE set of tasks. Use () or [] to disable.
     """
 
     pretraining_data, evaluation_data = _prepare_data_config(tokenized, use_default_validation, use_default_evaluation)
 
-    if isinstance(pretraining_data.tokenizer, VersionedValue):
-        tokenizer = pretraining_data.tokenizer.value
-    else:
-        tokenizer = pretraining_data.tokenizer
-    vocab_size = load_tokenizer(tokenizer).vocab_size
+    vocab_size = _get_vocab_size(pretraining_data)
+
+    steps_per_export = train_config.steps_per_export if train_config.steps_per_export is not None else 1000
 
     # Max length of 64 characters for WANDB run is 64 characters
     name = name[:64]
-
-    # eval harness run on the CORE tasks by default
-    if eval_harness_tasks is None:
-        eval_harness_tasks = convert_to_levanter_task_config(CORE_TASKS)
 
     # TODO: right now, assume architecture is a LlamaConfig, generalize this
     assert isinstance(model_config, LlamaConfig)
@@ -169,7 +170,7 @@ def default_train(
                 steps_per_eval=train_config.steps_per_eval if train_config.steps_per_eval is not None else 1000,
                 checkpointer=CheckpointerConfig(
                     save_interval=timedelta(minutes=10),
-                    keep=[dict(every=25000)],
+                    keep=[dict(every=steps_per_export)],
                 ),
                 replica_dcn_axis_size=-1,
             ),
@@ -188,15 +189,21 @@ def default_train(
                     train_config.min_lr_ratio if train_config.min_lr_ratio is not None else AdamConfig().min_lr_ratio
                 ),
             ),
-            hf_save_steps=25000,
+            hf_save_steps=steps_per_export,
             data_seed=train_config.data_seed,
-            eval_harness_steps=10000,
+            eval_harness_steps=train_config.steps_per_task_eval or 10000,
             eval_harness=LmEvalHarnessConfig(
                 task_spec=eval_harness_tasks,
             ),
         ),
         pip_dependency_groups=["tokenize_train"],
     )
+
+
+def _get_vocab_size(pretraining_data):
+    tokenizer = unwrap_versioned_value(pretraining_data.tokenizer)
+    vocab_size = load_tokenizer(tokenizer).vocab_size
+    return vocab_size
 
 
 def _prepare_data_config(
