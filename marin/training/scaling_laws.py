@@ -99,7 +99,6 @@ def scaling_law_suite(
             num_kv_heads=num_kv_heads,
         )
 
-        #
         lr = min(base_lr / w, max_lr)
         training_config = dataclasses.replace(training_config, learning_rate=lr)
 
