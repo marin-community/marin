@@ -1,3 +1,5 @@
+from collections.abc import Sequence
+
 from levanter.eval_harness import TaskConfig
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
@@ -24,7 +26,7 @@ CORE_TASKS = (
 )
 
 
-def convert_to_levanter_task_config(tasks: list[EvalTaskConfig]) -> list[TaskConfig]:
+def convert_to_levanter_task_config(tasks: Sequence[EvalTaskConfig]) -> list[TaskConfig]:
     """
     Convert a list of EvalTaskConfig to a list of TaskConfig that Levanter's eval_harness expects.
     """

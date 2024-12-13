@@ -12,7 +12,7 @@ import jmp
 from levanter.checkpoint import CheckpointerConfig
 from levanter.compat.hf_checkpoints import load_tokenizer
 from levanter.data.text import LMMixtureDatasetConfig, SupervisedSourceConfig, SupervisedUrlSourceConfig
-from levanter.eval_harness import LmEvalHarnessConfig, TaskConfig
+from levanter.eval_harness import LmEvalHarnessConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig
 from levanter.optim import AdamConfig
@@ -23,10 +23,11 @@ from levanter.trainer import TrainerConfig
 from experiments.eval_datasets import (
     eval_datasets,
 )
-from experiments.evals.task_configs import CORE_TASKS
+from experiments.evals.task_configs import CORE_TASKS, convert_to_levanter_task_config
 from experiments.llama import compute_num_parameters
 from experiments.paloma import paloma_tokenized
 from experiments.simple_train_config import SimpleTrainConfig
+from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.execution.executor import (
     ExecutorStep,
     InputName,
@@ -116,7 +117,7 @@ def default_train(
     tags: Sequence[str] = (),
     use_default_validation: bool = True,
     use_default_evaluation: bool = True,
-    eval_harness_tasks: Sequence[str | TaskConfig] = CORE_TASKS,
+    eval_harness_tasks: Sequence[EvalTaskConfig] = CORE_TASKS,
 ) -> ExecutorStep:
     """
     Train a language model using the default configuration.
@@ -193,7 +194,7 @@ def default_train(
             data_seed=train_config.data_seed,
             eval_harness_steps=train_config.steps_per_task_eval or 10000,
             eval_harness=LmEvalHarnessConfig(
-                task_spec=eval_harness_tasks,
+                task_spec=convert_to_levanter_task_config(eval_harness_tasks),
             ),
         ),
         pip_dependency_groups=["tokenize_train"],
