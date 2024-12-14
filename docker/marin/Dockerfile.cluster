@@ -58,15 +58,7 @@ RUN VLLM_TARGET_DEVICE="tpu" python3 setup.py develop
 RUN pip install --no-cache-dir torch_xla[tpu] -f https://storage.googleapis.com/libtpu-releases/index.html
 RUN pip install --no-cache-dir torch_xla[pallas] -f https://storage.googleapis.com/jax-releases/jax_nightly_releases.html -f https://storage.googleapis.com/jax-releases/jaxlib_nightly_releases.html
 
-
-# Our weird fork of OLMo
-# The olmo library did not set `exists_ok=True` at
-# https://github.com/allenai/OLMo/blob/main/hf_olmo/configuration_olmo.py#L43
-# which causes the following error:
-# ValueError: 'olmo' is already used by a Transformers config, pick another name.
-# Use the following dependency instead where the issue is fixed.
-RUN pip install --no-cache-dir git+https://github.com/teetone/OLMo.git@main  --extra-index-url https://download.pytorch.org/whl/cpu
-
+RUN pip install -U jax[tpu]==0.4.35 -f https://storage.googleapis.com/jax-releases/libtpu_releases.html
 
 # NOTE: Try to keep as much "heavy" stuff as possible before this line to avoid re-installing
 

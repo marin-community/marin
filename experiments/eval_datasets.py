@@ -34,6 +34,8 @@ Downloads the following datasets
 """
 ############################################################
 # download mmlu dataset
+# TODO: Earlier datasets were stored in gcs_output_path/<revision> instead of gcs_output_path.
+#   Migrate the dataset and cd can be removed.
 mmlu_raw = ExecutorStep(
     name="raw/cais/mmlu",
     fn=download_hf,
@@ -48,6 +50,8 @@ mmlu_raw = ExecutorStep(
 ).cd("c30699e")
 
 # download boolq dataset
+# TODO: Earlier datasets were stored in gcs_output_path/<revision> instead of gcs_output_path.
+#   Migrate the dataset and cd can be removed.
 boolq_raw = ExecutorStep(
     name="raw/google/boolq",
     fn=download_hf,
@@ -62,6 +66,8 @@ boolq_raw = ExecutorStep(
 ).cd("35b264d")
 
 # download hellaswag dataset
+# TODO: Earlier datasets were stored in gcs_output_path/<revision> instead of gcs_output_path.
+#   Migrate the dataset and cd can be removed.
 hellaswag_raw = ExecutorStep(
     name="raw/Rowan/hellaswag",
     fn=download_hf,
@@ -76,6 +82,8 @@ hellaswag_raw = ExecutorStep(
 ).cd("50441ce")
 
 # download piqa dataset
+# TODO: Earlier datasets were stored in gcs_output_path/<revision> instead of gcs_output_path.
+#   Migrate the dataset and cd can be removed.
 piqa_raw = ExecutorStep(
     name="raw/ybisk/piqa",
     fn=download_hf,
@@ -90,6 +98,8 @@ piqa_raw = ExecutorStep(
 ).cd("142c512")
 
 # download winogrande dataset
+# TODO: Earlier datasets were stored in gcs_output_path/<revision> instead of gcs_output_path.
+#   Migrate the dataset and cd can be removed.
 winogrande_raw = ExecutorStep(
     name="raw/allenai/winogrande",
     fn=download_hf,
@@ -104,6 +114,8 @@ winogrande_raw = ExecutorStep(
 ).cd("ebf71e3")
 
 # download arc dataset
+# TODO: Earlier datasets were stored in gcs_output_path/<revision> instead of gcs_output_path.
+#   Migrate the dataset and cd can be removed.
 arc_raw = ExecutorStep(
     name="raw/allenai/ai2_arc",
     fn=download_hf,
@@ -118,6 +130,8 @@ arc_raw = ExecutorStep(
 ).cd("210d026")
 
 # download openbookqa dataset
+# TODO: Earlier datasets were stored in gcs_output_path/<revision> instead of gcs_output_path.
+#   Migrate the dataset and cd can be removed.
 openbookqa_raw = ExecutorStep(
     name="raw/allenai/openbookqa",
     fn=download_hf,
@@ -132,6 +146,8 @@ openbookqa_raw = ExecutorStep(
 ).cd("388097e")
 
 # download MMLU-Pro dataset
+# TODO: Earlier datasets were stored in gcs_output_path/<revision> instead of gcs_output_path.
+#   Migrate the dataset and cd can be removed.
 mmlu_pro_raw = ExecutorStep(
     name="raw/TIGER-Lab/MMLU-Pro",
     fn=download_hf,
@@ -146,6 +162,8 @@ mmlu_pro_raw = ExecutorStep(
 ).cd("3373e0b")
 
 # download openai_humaneval
+# TODO: Earlier datasets were stored in gcs_output_path/<revision> instead of gcs_output_path.
+#   Migrate the dataset and cd can be removed.
 humaneval_raw = ExecutorStep(
     name="raw/openai/openai_humaneval",
     fn=download_hf,
@@ -160,6 +178,8 @@ humaneval_raw = ExecutorStep(
 ).cd("7dce605")
 
 # download mbpp
+# TODO: Earlier datasets were stored in gcs_output_path/<revision> instead of gcs_output_path.
+#   Migrate the dataset and cd can be removed.
 mbpp_raw = ExecutorStep(
     name="raw/google-research-datasets/mbpp",
     fn=download_hf,
@@ -171,7 +191,7 @@ mbpp_raw = ExecutorStep(
         hf_urls_glob=["**/*.parquet", "*.md"],
     ),
     override_output_path="raw/google-research-datasets/mbpphf",
-).cd("4bb6404")
+).cd("4bb6404/full")
 
 
 """
@@ -440,7 +460,6 @@ eval_datasets = [
     EvalDataset("allenai", "ai2_arc_easy", [arc_easy_eval], ["core", "arc"]),
     EvalDataset("allenai", "ai2_arc_challenge", [arc_challenge_eval], ["core", "arc"]),
     EvalDataset("allenai", "openbookqa", [openbookqa_eval], ["core"]),
-    EvalDataset("Tiger-Lab", "MMLU-Pro", [mmlu_pro_eval]),
     EvalDataset("openai", "openai_humaneval", [humaneval_eval]),
     EvalDataset("google-research-datasets", "mbpp", [mbpp_eval]),
 ]
