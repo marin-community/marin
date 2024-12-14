@@ -8,11 +8,11 @@
 python process_parquet_fw.py --parquet_file  gs://marin-data/raw/fineweb/fw-v1.0/CC-MAIN-2024-10/
 ```
 # Process
-1. `process_dump.sh` will run for a single for a single dump of common crawl, and iterate through all the parquet files in 
+1. `process_dump.sh` will run for a single for a single dump of common crawl, and iterate through all the parquet files in
 `gs://marin-data/raw/fineweb/fw-v1.0/DUMP/`. For each parquet file it will call `process_parquet_fw.py`
-2. `process_parquet_fw.py` will split a fw parquet file into smaller parquet chunck such that each chunk only has entries from a 
+2. `process_parquet_fw.py` will split a fw parquet file into smaller parquet chunck such that each chunk only has entries from a
 single WARC file. This smaller parquet chunck will be saved in `gs://marin-data/raw/fineweb/fw-v1.0/DUMP/<dump-idx>/<chunk-idx>.parquet`
-4. Now for each of these smaller parquet chunck file, we will call `process_one_warc_file` using Ray.remote() using a single CPU. 
+4. Now for each of these smaller parquet chunck file, we will call `process_one_warc_file` using Ray.remote() using a single CPU.
 `process_one_warc_file` downloads the WARC file, converts it to markdown and then saves three files:
    1. `gs://marin-data/raw/fineweb/fw-v1.0/DUMP/<dump-idx>/<chunk-idx>_processed_md.jsonl.gz : MD file in Dolma format
    2. `gs://marin-data/raw/fineweb/fw-v1.0/DUMP/<dump-idx>/<chunk-idx>_processed_html.jsonl.gz : HTML file in Dolma format
