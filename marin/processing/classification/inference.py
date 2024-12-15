@@ -6,12 +6,12 @@ python -m marin.processing.classification.inference \
     --config_path marin/processing/classification/config/dclm_fasttext.yaml
 """
 
+import logging
 import os
 
 import draccus
 import pandas as pd
 import ray
-from ray.runtime_env import RuntimeEnv
 
 from marin.core.runtime import cached_or_construct_output
 from marin.processing.classification.classifier import (
@@ -25,6 +25,8 @@ from marin.utils import (
     fsspec_mkdirs,
     rebase_file_path,
 )
+
+logger = logging.getLogger("ray")
 
 
 def read_dataset(input_filename: str, columns: list[str] | None = None):
@@ -68,6 +70,7 @@ def write_dataset(dataset, output_filename: str):
 
 @cached_or_construct_output(success_suffix="SUCCESS")
 def process_file_with_quality_classifier(input_filename: str, output_filename: str, quality_classifier: BaseClassifier):
+    print(f"[*] Processing {input_filename} to {output_filename}")
     dataset = read_dataset(input_filename)
 
     dataset = dataset.select_columns(["text", "id"])
@@ -86,8 +89,6 @@ def process_file_ray(
     model_type: str | None,
     filetype: str,
 ):
-    print(f"[*] Read in dataset {input_filename}")
-
     quality_classifier = AutoClassifier.from_model_path(model_name_or_path, attribute_name, model_type=model_type)
 
     process_file_with_quality_classifier(input_filename, output_filename, quality_classifier)
@@ -109,7 +110,11 @@ def _process_dir(
     efficient than process_file_ray because it avoids the overhead of spawning a new
     Ray task for each file and instead processes all files in a single task.
     """
-    files = fsspec_glob(os.path.join(input_path, f"**/*.{filetype}"))
+    files = fsspec_glob(os.path.join(input_path, f"*.{filetype}"))
+
+    if len(files) == 0:
+        logger.error(f"No files found in {input_path} with pattern {filetype}!!! This is likely an error.")
+        return
 
     quality_classifier = AutoClassifier.from_model_path(model_name_or_path, attribute_name, model_type=model_type)
 
@@ -153,9 +158,6 @@ def run_inference(inference_config: InferenceConfig):
 
         result_ref = process_filepath_func.options(
             memory=inference_config.runtime.memory_limit_gb * 1024 * 1024 * 1024,
-            runtime_env=RuntimeEnv(
-                pip=inference_config.runtime.requirements_filepath,
-            ),
             resources=inference_config.runtime.resources,
         ).remote(
             input_filepath,
