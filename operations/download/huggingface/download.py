@@ -47,7 +47,7 @@ class DownloadConfig:
     )
 
     # Job Control Parameters, used only for non-gated dataset transfers done via STS
-    wait_for_completion: bool = False                       # if True, will block until job completes
+    wait_for_completion: bool = True                        # if True, will block until job completes
     timeout: int = 1800                                     # Maximum time to wait for job completion (in seconds)
     poll_interval: int = 10                                 # Time to wait between polling job status (in seconds)
 
@@ -78,7 +78,7 @@ def download(cfg: DownloadConfig) -> None | ray.ObjectRef:
     logger.info(f"[*] Downloading HF Dataset `{cfg.hf_dataset_id}` to `{cfg.gcs_output_path}`")
 
     job_name, job_url = download_hf_dataset(
-        cfg.hf_dataset_id, cfg.revision, cfg.hf_url_glob, cfg.gcs_output_path, cfg.public_gcs_path
+        cfg.hf_dataset_id, cfg.revision, cfg.hf_urls_glob, cfg.gcs_output_path, cfg.public_gcs_path
     )
 
     if cfg.wait_for_completion:
