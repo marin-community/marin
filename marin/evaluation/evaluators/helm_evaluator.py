@@ -3,6 +3,7 @@ import shutil
 import traceback
 from typing import ClassVar
 
+from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Dependency, ModelConfig
 from marin.evaluation.evaluators.vllm_tpu_evaluator import VllmTpuEvaluator
 from marin.evaluation.utils import is_remote_path, run_bash_command, upload_to_gcs, write_yaml
@@ -95,15 +96,23 @@ class HELMEvaluator(VllmTpuEvaluator):
         write_yaml(content, HELMEvaluator.TOKENIZER_CONFIGS_FILE_PATH)
 
     def evaluate(
-        self, model: ModelConfig, evals: list[str], output_path: str, max_eval_instances: int | None = None
+        self,
+        model: ModelConfig,
+        evals: list[EvalTaskConfig],
+        output_path: str,
+        max_eval_instances: int | None = None,
     ) -> None:
         """
         Runs HELM on the specified model and set of evaluations.
 
         Args:
             model (ModelConfig): The model configuration of the model we want to evaluate
-            evals (List[str]): The list of evaluations to run.
+
+            evals (List[EvalTaskConfig]): The list of evaluations to run.
+                As of now we don't use num_fewshot from the EvalTaskConfig.
+
             output_path (str): The path to save the evaluation results.
+
             max_eval_instances (int | None): The maximum number of evaluation instances to run.
         """
         try:
@@ -114,7 +123,7 @@ class HELMEvaluator(VllmTpuEvaluator):
             run_entries_files: list[str] = []
             schema_files: list[str] = []
             for helm_eval in evals:
-                run_entries_file: str = f"run_entries_{helm_eval}.conf"
+                run_entries_file: str = f"run_entries_{helm_eval.name}.conf"
                 run_entries_url: str = self.RUN_ENTRIES_TEMPLATE.format(run_entries_file=run_entries_file)
                 ensure_file_downloaded(source_url=run_entries_url, target_path=run_entries_file)
                 assert os.path.exists(
@@ -122,7 +131,7 @@ class HELMEvaluator(VllmTpuEvaluator):
                 ), f"Failed to download. Does {run_entries_file} exist at {self.ALL_RUN_ENTRIES_URL}?"
                 run_entries_files.append(run_entries_file)
 
-                schema_file: str = f"schema_{helm_eval}.yaml"
+                schema_file: str = f"schema_{helm_eval.name}.yaml"
                 schema_url: str = self.SCHEMA_TEMPLATE.format(schema_file=schema_file)
                 ensure_file_downloaded(source_url=schema_url, target_path=schema_file)
                 assert os.path.exists(

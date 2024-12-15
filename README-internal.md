@@ -135,8 +135,8 @@ def my_tpu_job():
 
 ## Running Evals on NLP Cluster
 
-We run evaluations on the NLP cluster because lm-evaluation-harness does not support TPUs yet.
+We run external evaluations on the NLP cluster because lm-evaluation-harness does not support TPUs yet.
 
 ```bash
-nlprun --job-name marin-evaluation --machine sphinx3 -w /nlp/scr4/nlp/crfm/benchmarking/marin -a marin-evaluation -g 1 -c 4 --memory 64g 'python3 experiments/evals/run_on_gpu.py > eval.log 2>&1'
+nlprun --job-name marin-evaluation --machine sphinx3 -w /nlp/scr/<user>/marin/ -a <ANACONDA_ENVIRONMENT> -g 1 -c 4 --memory 64g 'python3 experiments/evals/run_on_gpu.py > eval.log 2>&1'
 ```
