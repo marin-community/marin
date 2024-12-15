@@ -9,7 +9,6 @@ from levanter.optim import AdamConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 
-from experiments.evals.evals import default_eval
 from experiments.llama import llama3_tokenizer
 from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path
 from marin.processing.tokenize.tokenize import TokenizeConfig, levanter_tokenize_sft
@@ -63,7 +62,6 @@ llama_8b_tulu3_model = ExecutorStep(
             ),
             mp=jmp.get_policy("p=f32,c=bfloat16"),
             train_batch_size=128,
-            per_device_eval_parallelism=1,
             num_train_steps=NUM_TRAIN_STEPS,
             checkpointer=CheckpointerConfig(
                 save_interval=timedelta(minutes=10),
@@ -100,8 +98,6 @@ llama_8b_tulu3_model = ExecutorStep(
     ),
 )
 
-llama_8b_tulu3_eval = default_eval(step=llama_8b_tulu3_model)
-
 
 if __name__ == "__main__":
-    executor_main(steps=[tulu3_llama_tokenize_step, llama_8b_tulu3_model, llama_8b_tulu3_eval])
+    executor_main(steps=[tulu3_llama_tokenize_step, llama_8b_tulu3_model])
