@@ -39,8 +39,8 @@ class TrainFasttextClassifierConfig:
 def train(cfg: TrainFasttextClassifierConfig):
     for dataset in cfg.datasets:
         create_dataset(
-            output_dataset_path=cfg.output_path,
             input_doc_path=dataset.input_doc_path,
+            output_dataset_path=cfg.output_path,
             label_func=lambda doc, attrs, dataset=dataset: {"label": dataset.label},
             seed=cfg.seed,
             sampling_rate=dataset.sampling_rate,
