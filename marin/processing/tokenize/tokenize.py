@@ -37,7 +37,6 @@ from levanter.store.cache import CacheOptions
 from ray.runtime_env import RuntimeEnv
 
 from marin.execution.executor import InputName
-from marin.processing.tokenize.independent_tokenize import tokenize_and_concatenate_shards
 from marin.utils import fsspec_glob, fsspec_isdir
 
 logger = logging.getLogger(__name__)
@@ -87,7 +86,7 @@ def tokenize(config: TokenizeConfig):
     train_source = config.train_source()
     if train_source is not None:
         train_ledger = (
-            ray.remote(tokenize_and_concatenate_shards)
+            ray.remote(_levanter_build_cache)
             .options(name=f"tokenize::{config.cache_path}", runtime_env=RuntimeEnv(env_vars={"JAX_PLATFORMS": "cpu"}))
             .remote(
                 train_source,
@@ -103,7 +102,7 @@ def tokenize(config: TokenizeConfig):
 
     if validation_source is not None:
         validation_ledger = (
-            ray.remote(tokenize_and_concatenate_shards)
+            ray.remote(_levanter_build_cache)
             .options(name=f"tokenize::{config.cache_path}", runtime_env=RuntimeEnv(env_vars={"JAX_PLATFORMS": "cpu"}))
             .remote(
                 validation_source,
@@ -197,11 +196,9 @@ def levanter_tokenize_supervised(config: TokenizeConfig):
     logger.info(f"Finished caching supervised dataset to {config.cache_path}.")
 
 
-@ray.remote(runtime_env=RuntimeEnv(env_vars={"JAX_PLATFORM_NAME": "cpu"}))
+@ray.remote(runtime_env=RuntimeEnv(env_vars={"JAX_PLATFORMS": "cpu"}))
 def levanter_tokenize(input_paths: list[str] | str, tokenizer_name: str, output_path: str):
-    from levanter.data.metrics_monitor import LoggerMetricsMonitor
     from levanter.data.text import BatchTokenizer
-    from levanter.store.cache import build_or_load_cache
 
     if len(input_paths) == 0:
         logger.warning("No input files found. Nothing to do.")
@@ -215,16 +212,23 @@ def levanter_tokenize(input_paths: list[str] | str, tokenizer_name: str, output_
     tokenizer = transformers.AutoTokenizer.from_pretrained(tokenizer_name)
     batch_tokenizer = BatchTokenizer(tokenizer, enforce_eos=True)
 
+    _levanter_build_cache(source, batch_tokenizer, output_path)
+    logger.info(f"Finished caching {input_paths} to {output_path}.")
+
+
+def _levanter_build_cache(source, batch_tokenizer, output_path, options: CacheOptions = CacheOptions.default()):
+    from levanter.data.metrics_monitor import LoggerMetricsMonitor
+    from levanter.store.cache import build_or_load_cache
+
     cache = build_or_load_cache(
         cache_dir=output_path,
         input_shards=source,
         processor=batch_tokenizer,
         await_finished=False,
         monitors=[LoggerMetricsMonitor("ray")],
+        options=options,
     )
-
     cache.await_finished()
-    logger.info(f"Finished caching {input_paths} to {output_path}.")
 
 
 def _create_source(input_paths: str | list[str], text_key) -> ShardedDataSource:

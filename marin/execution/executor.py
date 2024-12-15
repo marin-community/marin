@@ -81,6 +81,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, fields, is_dataclass, replace
 from datetime import datetime
 from typing import Any, Generic, TypeVar
+from urllib.parse import urlparse
 
 import draccus
 import fsspec
@@ -195,6 +196,15 @@ def versioned(value: T_co) -> VersionedValue[T_co]:
     if isinstance(value, VersionedValue):
         raise ValueError("Can't nest VersionedValue")
     return VersionedValue(value)
+
+
+def unwrap_versioned_value(value: VersionedValue[T_co] | T_co) -> T_co:
+    """
+    Unwrap the value if it is a VersionedValue, otherwise return the value as is.
+
+    Sometimes we need to actually use a value that is wrapped in a VersionedValue before it is used in a config.
+    """
+    return value.value if isinstance(value, VersionedValue) else value
 
 
 ############################################################
@@ -505,13 +515,17 @@ class Executor:
         output_path = os.path.join(self.prefix, step.name + "-" + hashed_version)
 
         # Override output path if specified
-        if step.override_output_path is not None:
-            if output_path != step.override_output_path:
+        override_path = step.override_output_path
+        if override_path is not None:
+            if _is_relative_path(override_path):
+                override_path = os.path.join(self.prefix, override_path)
+
+            if output_path != override_path:
                 logger.warning(
                     f"Output path {output_path} doesn't match given "
                     "override {step.override_output_path}, using the latter."
                 )
-                output_path = step.override_output_path
+                output_path = override_path
 
         # Record everything
         # Multiple `ExecutorStep`s can have the same version, so only keep one
@@ -568,6 +582,16 @@ class Executor:
             steps=self.step_infos,
         )
 
+    def get_experiment_url(self) -> str:
+        """Return the URL where the experiment can be viewed."""
+        # TODO: remove hardcoding
+        if self.prefix.startswith("gs://"):
+            host = "https://marlin-subtle-barnacle.ngrok-free.app"
+        else:
+            host = "http://localhost:5000"
+
+        return host + "/experiment?path=" + urllib.parse.quote(self.executor_info_path)
+
     def write_infos(self):
         """Output JSON files (one for the entire execution, one for each step)."""
 
@@ -585,13 +609,9 @@ class Executor:
 
         # Print where to find the executor info (experiments JSON)
         logger.info(f"Writing executor info to {self.executor_info_path}")
-        # TODO: don't hardcode this webserver later
-        experimentUrl = "https://marlin-subtle-barnacle.ngrok-free.app/experiment?path=" + urllib.parse.quote(
-            self.executor_info_path
-        )
         logger.info("To view the experiment page, go to:")
         logger.info("")
-        logger.info(experimentUrl)
+        logger.info(self.get_experiment_url())
         logger.info("")
 
         # Write out info for each step
@@ -658,7 +678,6 @@ class Executor:
                 previous_info = json.load(f)
             step_idx = self.steps.index(step)
             current_info = json.loads(json.dumps(asdict(self.step_infos[step_idx]), indent=2, cls=CustomJsonEncoder))
-            logger.info(f"Comparing previous info with current info for {step.name}:")
             if not compare_dicts(previous_info, current_info):
                 logger.warning(
                     f"The current and previous info files are not same for {step.name} "
@@ -815,3 +834,14 @@ def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], descrip
     )
 
     executor.run(steps=steps, dry_run=config.dry_run, run_only=config.run_only, force_run_failed=config.force_run_failed)
+
+
+def _is_relative_path(url_or_path):
+    # if it's a url, it's not a relative path
+    parsed_url = urlparse(url_or_path)
+
+    if parsed_url.scheme:
+        return False
+
+    # otherwise if it starts with a slash, it's not a relative path
+    return not url_or_path.startswith("/")

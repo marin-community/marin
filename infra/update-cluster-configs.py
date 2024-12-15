@@ -9,8 +9,8 @@ this_path = os.path.dirname(os.path.abspath(__file__))
 template_path = os.path.join(this_path, "marin-cluster-template.yaml")
 
 DOCKER_TAGS = {
-    "us-central2": "20241114",
-    "us-west4": "20241114",
+    "us-central2": "20241123",
+    "us-west4": "20241123",
     "europe-west4": "20241114",
 }
 
@@ -51,7 +51,7 @@ generation_configs = {
     },
     "v5e": {
         "runtime_version": "v2-alpha-tpuv5-lite",
-        "base_worker": "1",
+        "base_worker": "4",
         "slices": [8, 16, 32, 64, 128, 256],
         "num_tpus": 8,
         "tpus_worker": 1,

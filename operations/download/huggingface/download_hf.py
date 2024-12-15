@@ -10,7 +10,7 @@ import os
 import fsspec
 import ray
 from huggingface_hub import HfFileSystem
-from tqdm_loggable.auto import tqdm
+from tqdm_loggable.tqdm_logging import tqdm_logging
 
 from marin.core.runtime import simple_backpressure
 from marin.utilities.validation_utils import write_provenance_json
@@ -54,12 +54,14 @@ def download_hf(cfg: DownloadConfig) -> None:
     # Parse the output path and get the file system
     fs, _ = fsspec.core.url_to_fs(cfg.gcs_output_path)
 
-    # Use revision as "version" for writing to the output path
-    versioned_output_path = os.path.join(cfg.gcs_output_path, cfg.revision)
+    # TODO: Our earlier version of download_hf used this piece of code for calculating the versioned_output_path
+    # versioned_output_path = os.path.join(cfg.gcs_output_path, cfg.revision)
+    # This versioned_output_path was used instead of gcs_output_path. So some of the earlier datasets are stored in
+    # gcs_output_path/<revision> instead of gcs_output_path. We should do this migration.
 
     # Ensure the output path is writable
     try:
-        ensure_fsspec_path_writable(versioned_output_path)
+        ensure_fsspec_path_writable(cfg.gcs_output_path)
     except ValueError as e:
         logger.exception(f"Output path validation failed: {e}")
         raise e
@@ -77,11 +79,14 @@ def download_hf(cfg: DownloadConfig) -> None:
             pattern = f"datasets/{cfg.hf_dataset_id}/{hf_url_glob}"
             files += hf_fs.glob(pattern, revision=cfg.revision)
 
+    if not files:
+        raise ValueError(f"No files found for dataset `{cfg.hf_dataset_id}. Used glob patterns: {cfg.hf_urls_glob}")
+
     task_generator = []
 
     for file in files:
         try:
-            fsspec_file_path = os.path.join(versioned_output_path, file.split("/", 3)[-1])  # Strip the dataset prefix
+            fsspec_file_path = os.path.join(cfg.gcs_output_path, file.split("/", 3)[-1])  # Strip the dataset prefix
             # Hf file paths are always of format : hf://[<repo_type_prefix>]<repo_id>[@<revision>]/<path/in/repo>
             task_generator.append((cfg, hf_fs, file, fsspec_file_path))
         except Exception as e:
@@ -89,7 +94,7 @@ def download_hf(cfg: DownloadConfig) -> None:
 
     total_files = len(task_generator)
     logger.info(f"Total number of files to process: {total_files}")
-    pbar = tqdm(total=total_files)
+    pbar = tqdm_logging(total=total_files)
 
     for ref in simple_backpressure(stream_file_to_fsspec, iter(task_generator), max_in_flight=32, fetch_local=True):
         try:
@@ -97,10 +102,11 @@ def download_hf(cfg: DownloadConfig) -> None:
             pbar.update(1)
         except Exception as e:
             logging.exception(f"Error during task execution: {e}")
+            raise e
 
     # Write Provenance JSON
     write_provenance_json(
-        versioned_output_path,
+        cfg.gcs_output_path,
         metadata={"dataset": cfg.hf_dataset_id, "version": cfg.revision, "links": files},
     )
 

@@ -1,7 +1,10 @@
 import gzip
 import io
 import json
+import os
+from dataclasses import asdict, dataclass, replace
 
+import draccus
 import fsspec
 import zstandard as zstd
 from flask import Flask, jsonify, request, send_from_directory
@@ -9,13 +12,57 @@ from pyarrow.parquet import ParquetFile
 
 app = Flask(__name__, static_folder="build")
 
-# Initialize fsspec GCS filesystem
-fs = fsspec.filesystem("gcs")
+
+@dataclass(frozen=True)
+class ServerConfig:
+    """
+    Specifies how to launch a data browser (e.g., what files to expose and how).
+    Any sort of permissions and throttling policies should be specified here.
+    """
+
+    root_paths: list[str]
+    """Paths (and their descendents) to allow access to."""
+
+
+class Server:
+    """
+    The only state that the server has right now is the filesystems.
+    Note that utils.py has fsspec utilities that we could call directly which
+    would simplify the code, but the filesystem objects wouldn't be cached.
+    """
+
+    def __init__(self, config: ServerConfig):
+        self.config = config
+
+        self.fs_cache = {
+            None: fsspec.filesystem("local"),
+            "gs": fsspec.filesystem("gcs"),
+            "s3": fsspec.filesystem("s3"),
+        }
+
+    def fs(self, path: str):
+        """Automatically figure out the filesystem to use based on the `path`."""
+        protocol, _ = fsspec.core.split_protocol(path)
+        return self.fs_cache[protocol]
+
+
+server: Server | None = None
 
 
 def list_files(path: str) -> dict:
     """List all files in the given path."""
-    files = fs.ls(path, detail=True, refresh=True)
+    protocol, _ = fsspec.core.split_protocol(path)  # e.g., "gs"
+    files = server.fs(path).ls(path, detail=True, refresh=True)
+
+    # If path = "gs://", the file names listed don't have the "gs://" prefix
+    # (but still represents an absolute path), so we add it in.
+    def name_to_path(name: str) -> str:
+        if protocol is not None:
+            return f"{protocol}://{name}"
+        return name
+
+    # Replace file with path
+    files = [{"path": name_to_path(file["name"]), **file} for file in files]
 
     return {
         "type": "directory",
@@ -26,7 +73,7 @@ def list_files(path: str) -> dict:
 def read_json_file(path: str) -> dict:
     """Reads a JSON file."""
     MAX_BYTES = 100 * 1024 * 1024
-    with fs.open(path) as f:
+    with server.fs(path).open(path) as f:
         raw = f.read(MAX_BYTES)  # Don't OOM on huge files
         if len(raw) == MAX_BYTES:
             return {
@@ -48,7 +95,7 @@ def read_text_file(
     Reads a range of lines (offset to offset + count) from a text file (possibly compressed using gzip or zstd).
     Interpret each line as a JSON if `get_json` is set.
     """
-    with fs.open(path, "rb") as f:
+    with server.fs(path).open(path, "rb") as f:
         # Unzip
         if gzipped:
             f = gzip.GzipFile(fileobj=f)
@@ -89,6 +136,21 @@ def read_parquet_file(path: str, offset: int, count: int) -> dict:
     }
 
 
+def has_permissions(path: str) -> bool:
+    """Returns whether the user can access `path` according to the permissions."""
+    resolved_path = os.path.realpath(path)
+    for allowed_path in server.config.root_paths:
+        if os.path.commonpath([resolved_path, allowed_path]) == allowed_path:
+            return True
+    return False
+
+
+@app.route("/api/config", methods=["GET"])
+def config():
+    # Later: only send the necessary parts of config
+    return jsonify(asdict(server.config))
+
+
 @app.route("/api/view", methods=["GET"])
 def view():
     path = request.args.get("path")
@@ -97,12 +159,14 @@ def view():
 
     try:
         if not path:
-            return jsonify({"error": "Path not specified"}), 404
-        if not fs.exists(path):
-            return jsonify({"error": "Path does not exist"}), 404
+            return jsonify({"error": "No path specified"})
+        if not has_permissions(path):
+            return jsonify({"error": f"No permission to access: {path}"})
+        if not server.fs(path).exists(path):
+            return jsonify({"error": f"Path does not exist: {path}"})
 
         # Directory
-        if fs.isdir(path):
+        if server.fs(path).isdir(path):
             return jsonify(list_files(path))
 
         # jsonl files
@@ -153,5 +217,23 @@ def static_proxy(path):
     return send_from_directory(app.static_folder, path)
 
 
-if __name__ == "__main__":
+def standardize_config(config: ServerConfig) -> ServerConfig:
+    """Replace relative paths with absolute paths."""
+    absolute_root_paths = [os.path.realpath(path) for path in config.root_paths]
+    return replace(config, root_paths=absolute_root_paths)
+
+
+@draccus.wrap()
+def main(config: ServerConfig):
+    print("ServerConfig:", config)
+
+    config = standardize_config(config)
+
+    global server
+    server = Server(config)
+
     app.run(host="0.0.0.0", port=5000)
+
+
+if __name__ == "__main__":
+    main()
