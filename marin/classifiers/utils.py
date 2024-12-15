@@ -25,8 +25,8 @@ logger = logging.getLogger("ray")
 
 
 def label_documents(
-    output_attr_path: str,
     input_doc_path: str,
+    output_attr_path: str,
     label_func: Callable[[Document, list[Attribute]], dict],
     input_attr_paths: list[str] | None = None,
 ) -> None:
@@ -34,8 +34,8 @@ def label_documents(
     Create a new attribute by applying label_func to each document and its (optional) associated attributes.
 
     Args:
-        output_attr_path (str): Path to write attributes (i.e., gs://$BUCKET/attributes/...).
         input_doc_path (str): Path to documents (i.e., gs://$BUCKET/documents/...).
+        output_attr_path (str): Path to write attributes (i.e., gs://$BUCKET/attributes/...).
         label_func (Callable[[Document, list[Attribute]], dict]): Generates attribute dict
             from document and other input attributes.
         input_attr_paths (list[str]): Path to attributes needed to determine new attribute.
@@ -49,7 +49,7 @@ def label_documents(
             if input_attr_paths is not None
             else []
         )
-        return label_documents_shard(output_file_path, input_file_path, label_func, attr_file_paths)
+        return label_documents_shard(input_file_path, output_file_path, label_func, attr_file_paths)
 
     responses = map_files_in_directory(processing_func.remote, input_doc_path, "**/*.jsonl.gz", output_attr_path)
     try:
@@ -61,8 +61,8 @@ def label_documents(
 
 @cached_or_construct_output(success_suffix="SUCCESS")
 def label_documents_shard(
-    output_file_path: str,
     input_doc_file_path: str,
+    output_file_path: str,
     label_func: Callable[[Document, list[Attribute]], dict],
     input_attr_file_paths: list[str] | None = None,
 ) -> None:
@@ -70,8 +70,8 @@ def label_documents_shard(
     Writes new attribute file by applying label_func.
 
     Args:
-        output_file_path (str): Path to the output attribute JSONL file (gzip compressed).
         input_doc_file_path (str): Path to the input JSONL file in Dolma format (gzip compressed).
+        output_file_path (str): Path to the output attribute JSONL file (gzip compressed).
         label_func (Callable[[Document, list[Attribute]], dict]): Generates attribute dict from
         document and other input attributes.
         input_attr_file_paths (list[str] | None): Path to attributes needed to determine new attribute.
@@ -99,8 +99,8 @@ def label_documents_shard(
 
 
 def create_dataset(
-    output_dataset_path: str,
     input_doc_path: str,
+    output_dataset_path: str,
     label_func: Callable[[Document, list[Attribute]], str],
     input_attr_paths: list[str] | None = None,
     seed: int = 0,
@@ -111,8 +111,8 @@ def create_dataset(
     Converts documents and specified attribute to quality classifier training data (text,label) pairs.
 
     Args:
-        output_dataset_path (str): Path for output data (i.e., gs://$BUCKET/classifiers/$EXPERIMENT).
         input_doc_path (str): Path to input documents (i.e., gs://$BUCKET/documents/reddit/v0/<doc_experiment>).
+        output_dataset_path (str): Path for output data (i.e., gs://$BUCKET/classifiers/$EXPERIMENT).
         label_func (Callable[[Document, list[Attribute]], str]): Generates label from document and input attributes.
         input_attr_paths (str): Path to input attributes (i.e., gs://$BUCKET/attributes/reddit/v0/<attr_experiment>).
         seed (int): Seed for random number generator to ensure reproducibility.
@@ -121,7 +121,6 @@ def create_dataset(
                                          training dataset. Defaults to None.
     """
 
-    # curry write_fasttext_lines so that we can pass it to map_files_in_directory
     @ray.remote(memory=1 * 1024 * 1024 * 1024, num_cpus=1)  # 1 GB
     def processing_func(input_file_path: str, output_file_path: str) -> None:
         attr_file_paths = (
@@ -129,10 +128,10 @@ def create_dataset(
             if input_attr_paths is not None
             else []
         )
-        return create_dataset_shard(output_file_path, input_file_path, label_func, attr_file_paths, sampling_rate, seed)
+        return create_dataset_shard(input_file_path, output_file_path, label_func, attr_file_paths, sampling_rate, seed)
 
     _, doc_fs_path = fsspec.core.url_to_fs(input_doc_path)
-    output_dataset_path = os.path.join(output_dataset_path, "data", doc_fs_path.lstrip("/"), "data.jsonl.gz")
+    dataset_file_path = os.path.join(output_dataset_path, "data", doc_fs_path.lstrip("/"), "data.jsonl.gz")
     shard_path = os.path.join(output_dataset_path, "shards", doc_fs_path.lstrip("/"))
 
     responses = map_files_in_directory(processing_func.remote, input_doc_path, "**/*.jsonl.gz", shard_path)
@@ -144,19 +143,19 @@ def create_dataset(
 
     shard_paths = fsspec_glob(os.path.join(shard_path, "**/*.jsonl.gz"))
     if max_sample_size is None:
-        merge_dataset_shards(shard_paths, output_dataset_path)
+        merge_dataset_shards(shard_paths, dataset_file_path)
     else:
         with tempfile.NamedTemporaryFile() as tmpfile:
             merge_dataset_shards(shard_paths, tmpfile.name)
-            reservoir_sample(tmpfile.name, output_dataset_path, max_sample_size, seed)
+            reservoir_sample(tmpfile.name, dataset_file_path, max_sample_size, seed)
 
     fsspec_rm(shard_path)
 
 
 @cached_or_construct_output(success_suffix="SUCCESS")
 def create_dataset_shard(
-    output_file_path: str,
     input_doc_file_path: str,
+    output_file_path: str,
     label_func: Callable[[Document, list[Attribute]], str],
     input_attr_file_paths: list[str],
     sampling_rate: float,
@@ -168,8 +167,8 @@ def create_dataset_shard(
     of training dataset and/or weight different domains).
 
     Args:
-        output_file_path (str): Path to the output file (gzip compressed).
         input_doc_file_path (str): Path to the input JSONL file (gzip compressed).
+        output_file_path (str): Path to the output file (gzip compressed).
         label_func (Callable[[Document, list[Attribute]], str]): Generates label from document and input attributes.
         input_attr_file_paths (list[str]): Path to the attribute JSONL file (gzip compressed).
         sampling_rate (float): Fraction of lines to be written to the output file.
