@@ -1,3 +1,5 @@
+from collections.abc import Sequence
+
 from levanter.eval_harness import TaskConfig
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
@@ -5,7 +7,7 @@ from marin.evaluation.evaluation_config import EvalTaskConfig
 # tasks to run (corresponding to lm_eval_harness tasks)
 # subset from from page 43 of the DCLM paper: https://arxiv.org/pdf/2406.11794
 # TODO: add more once supported in lm-eval-harness and/or tested on our end
-CORE_TASKS = [
+CORE_TASKS = (
     EvalTaskConfig("agieval_lsat_ar", 3),  # 3-shot tests in legal domain
     EvalTaskConfig("arc_easy", 10),  # 10-shot, four-way MCQ questions involving grade 3-9 basic science
     EvalTaskConfig("arc_challenge", 10),  # a (harder) version of arc_easy
@@ -21,10 +23,10 @@ CORE_TASKS = [
     # EvalTaskConfig("squadv2", 10),  # reading comprehension benchmark
     EvalTaskConfig("wsc273", 0),  # Winograd Schema Challenge
     EvalTaskConfig("winogrande", 0),  # Winograd challenge, extended to more domains
-]
+)
 
 
-def convert_to_levanter_task_config(tasks: list[EvalTaskConfig]) -> list[TaskConfig]:
+def convert_to_levanter_task_config(tasks: Sequence[EvalTaskConfig]) -> list[TaskConfig]:
     """
     Convert a list of EvalTaskConfig to a list of TaskConfig that Levanter's eval_harness expects.
     """
