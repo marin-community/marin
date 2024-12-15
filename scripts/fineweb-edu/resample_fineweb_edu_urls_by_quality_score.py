@@ -9,35 +9,16 @@ python marin/run/ray_run.py \
     --no_wait -- \
     python scripts/fineweb-edu/resample_fineweb_edu_urls_by_quality_score.py \
     --input_pattern 'gs://marin-us-central2/scratch/nfliu/urls_and_scores/fineweb-edu*/CC*/*_urls_and_quality_classifier_scores.jsonl.gz' \
-    --resample True \
+    --cc-prefix 'gs://marin-us-central2/scratch/nfliu/urls_and_scores/fineweb-edu-cc/' \
     --train_output_path gs://marin-us-central2/scratch/nfliu/datasets/url_scoring/fineweb-edu/train.parquet \
     --test_output_path gs://marin-us-central2/scratch/nfliu/datasets/url_scoring/fineweb-edu/test.parquet
-```
-
-```
-python marin/run/ray_run.py \
-    --no_wait -- \
-    python scripts/fineweb-edu/resample_fineweb_edu_urls_by_quality_score.py \
-    --input_pattern 'gs://marin-us-central2/scratch/nfliu/urls_and_scores/fineweb-edu-cc/CC*/*_urls_and_quality_classifier_scores.jsonl.gz' \
-    --resample False \
-    --train_output_path gs://marin-us-central2/scratch/nfliu/datasets/url_scoring/fineweb-edu-cc/train.parquet \
-    --test_output_path gs://marin-us-central2/scratch/nfliu/datasets/url_scoring/fineweb-edu-cc/test.parquet
-```
-
-```
-python marin/run/ray_run.py \
-    --no_wait -- \
-    python scripts/fineweb-edu/resample_fineweb_edu_urls_by_quality_score.py \
-    --input_pattern 'gs://marin-us-central2/scratch/nfliu/urls_and_scores/fineweb-edu*/CC*/*_urls_and_quality_classifier_scores.jsonl.gz' \
-    --resample False \
-    --train_output_path gs://marin-us-central2/scratch/nfliu/datasets/url_scoring/fineweb-edu-no-resample/train.parquet \
-    --test_output_path gs://marin-us-central2/scratch/nfliu/datasets/url_scoring/fineweb-edu-no-resample/test.parquet
 ```
 """
 import json
 import logging
+import math
 import random
-from collections import defaultdict
+from collections import defaultdict, Counter
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
@@ -57,15 +38,15 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ResamplingConfig:
     input_pattern: str
+    cc_prefix: str
     train_output_path: str
     test_output_path: str
-    resample: bool
     test_size: float = 0.2
 
 
 @ray.remote(memory=256 * 1024 * 1024 * 1024, num_cpus=8)
 def resample_urls_remote(
-    input_pattern: str, train_output_path: str, test_output_path: str, resample: bool, test_size: float = 0.2
+    input_pattern: str, cc_prefix: str, train_output_path: str, test_output_path: str, test_size: float = 0.2
 ):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     logger = logging.getLogger(__name__)
@@ -86,6 +67,9 @@ def resample_urls_remote(
     all_examples = []
     seen_urls = set()
     num_skipped = 0
+    num_cc_filepaths = 0
+    cc_discrete_labels_to_counts = Counter()
+
     for filepath in tqdm(input_filepaths, desc="Reading input filepaths"):
         with fsspec.open(filepath, "rt", compression="infer") as f:
             # Use readlines to encourage fsspec to load everything into memory
@@ -100,12 +84,24 @@ def resample_urls_remote(
                     continue
                 all_examples.append(parsed_line)
                 seen_urls.add(parsed_line["url"])
+                if filepath.startswith(cc_prefix):
+                    discrete_label = int(min(max(round(parsed_line["score"]), 0), 5))
+                    cc_discrete_labels_to_counts[discrete_label] += 1
+        if filepath.startswith(cc_prefix):
+            num_cc_filepaths += 1
 
     # Delete the set of all URLs, since we won't need it past this point
     del seen_urls
     logger.info(
-        f"Read {len(all_examples)} deduplicated examples, " f"{num_skipped} skipped (due to invalid score or duplicate)"
+        f"Read {len(all_examples)} deduplicated examples, "
+        f"{num_skipped} skipped (due to invalid score or duplicate), "
+        f"{num_cc_filepaths} CC filepaths used to calculate CC label distribution"
     )
+
+    total_cc_examples = sum(cc_discrete_labels_to_counts.values())
+    for label in sorted(cc_discrete_labels_to_counts.keys()):
+        rel_count = cc_discrete_labels_to_counts[label] / total_cc_examples
+        logger.info(f"Label {label}: {cc_discrete_labels_to_counts[label]} samples, relative={rel_count:.4f}")
 
     # Build a mapping from domain to examples
     domain_examples = defaultdict(list)
@@ -139,14 +135,14 @@ def resample_urls_remote(
     logger.info("Built test dataset")
 
     # Function to bucket and resample examples
-    def bucket_and_resample(examples):
+    def bucket_and_resample(examples, weights: dict[int, int] | None = None):
         # Each example has `url`, `canonicalized_url`, and `score`.
         # Labels are computed using np.round(score).clip(0, 5).astype(int).
         # We will bucket examples based on these labels to ensure even distribution.
         buckets = defaultdict(list)
         for example in examples:
             score = example["score"]
-            # Compute the label as per the discretization logic
+            # Bucket by the example's corresponding discrete label.
             label = int(min(max(round(score), 0), 5))
             buckets[label].append(example)
 
@@ -154,19 +150,67 @@ def resample_urls_remote(
         for label in sorted(buckets):
             logger.info(f"Label {label}: {len(buckets[label])}")
 
-        # Resample to ensure even distribution across labels
-        max_samples_per_label = min(len(bucket) for bucket in buckets.values())
-        resampled_examples = []
-        for label, bucket in buckets.items():
-            resampled_examples.extend(random.sample(bucket, k=max_samples_per_label))
+        if not weights:
+            # If no weights provided, resample to ensure even distribution across labels
+            max_samples_per_label = min(len(bucket) for bucket in buckets.values())
+            resampled_examples = []
+            for label, bucket in buckets.items():
+                resampled_examples.extend(random.sample(bucket, k=max_samples_per_label))
+        else:
+            # Resample according to provided weights
+            logger.info(f"Got label weights: {weights}")
+            # Compute scaling factor S
+            sum_weights = sum(weights.values())
+            # Avoid division by zero if sum_weights == 0
+            if sum_weights == 0:
+                logger.warning("All weights are zero, will return empty sample.")
+                return []
+
+            # For each label, determine the maximum S that doesn't exceed that bucket's size
+            # We want to maximize S subject to S * weights[label] <= len(buckets[label])
+            # => S <= len(buckets[label]) / weights[label]
+            # If weights[label] = 0, that label should get no samples, so skip that constraint.
+            feasible_S_values = []
+            for label, w in weights.items():
+                if w > 0:
+                    max_S = len(buckets[label]) / w
+                    feasible_S_values.append(max_S)
+                else:
+                    # If weight is zero, no samples needed from that bucket.
+                    # This doesn't constrain S, but we won't pick any from it.
+                    pass
+
+            if not feasible_S_values:
+                logger.warning("No positive weights provided, will return empty sample.")
+                return []
+
+            S = min(feasible_S_values)
+
+            # Now compute the number of samples for each label
+            resampled_examples = []
+            sample_counts = {}
+            for label, bucket in buckets.items():
+                w = weights.get(label, 0)
+                # Number of samples from this bucket
+                count = int(math.floor(S * w)) if w > 0 else 0
+                chosen = random.sample(bucket, k=count)
+                resampled_examples.extend(chosen)
+                sample_counts[label] = count
+
+            # Log the resulting distribution after sampling
+            total_samples = sum(sample_counts.values())
+            logger.info("Resulting sampled label distributions:")
+            for label in sorted(sample_counts.keys()):
+                rel_count = sample_counts[label] / total_samples
+                logger.info(f"Label {label}: {sample_counts[label]} samples, relative={rel_count:.4f}")
+
         logger.info(f"Resampling complete, got {len(resampled_examples)} examples in total")
         return resampled_examples
 
     # Resample train examples
-    if resample:
-        resampled_train_examples = bucket_and_resample(train_examples)
-    else:
-        resampled_train_examples = train_examples
+    resampled_train_examples = bucket_and_resample(train_examples)
+    # Resample test examples
+    resampled_test_examples = bucket_and_resample(test_examples, cc_discrete_labels_to_counts)
 
     # Convert train examples to a PyArrow Table
     train_table = pa.Table.from_pylist(resampled_train_examples)
@@ -178,7 +222,7 @@ def resample_urls_remote(
     logger.info(f"Wrote {len(resampled_train_examples)} train examples")
 
     # Convert all test examples to a PyArrow Table
-    test_table = pa.Table.from_pylist(test_examples)
+    test_table = pa.Table.from_pylist(resampled_test_examples)
     # Get filesystem and path for the test output
     fs_test, test_path_in_fs = fsspec.core.url_to_fs(test_output_path)
     # Write all test examples to the output path as Parquet (without resampling)
@@ -197,7 +241,7 @@ def resample_urls_remote(
 def resample_urls(cfg: ResamplingConfig):
     _ = ray.get(
         resample_urls_remote.remote(
-            cfg.input_pattern, cfg.train_output_path, cfg.test_output_path, cfg.resample, cfg.test_size
+            cfg.input_pattern, cfg.cc_prefix, cfg.train_output_path, cfg.test_output_path, cfg.resample, cfg.test_size
         )
     )
 
