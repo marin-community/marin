@@ -98,6 +98,15 @@ llama_1_4b_train_config = SimpleTrainConfig(
     weight_decay=0.1,
 )
 
+llama_8b_train_config = SimpleTrainConfig(
+    tpu_type="v4-512",
+    train_batch_size=1024,
+    num_train_steps=40000,  # 4096 * 1024 * 40000 = 167B tokens
+    # these hypers from Table 12 in https://arxiv.org/html/2406.11794v1#A6
+    learning_rate=2e-3,
+    weight_decay=0.05,
+)
+
 
 def compute_num_parameters(config: LlamaConfig, vocab_size) -> int:
 
