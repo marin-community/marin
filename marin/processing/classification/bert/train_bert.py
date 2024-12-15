@@ -41,7 +41,7 @@ def train(cfg: TrainBertClassifierConfig):
         create_dataset(
             input_doc_path=dataset.input_doc_path,
             output_dataset_path=cfg.output_path,
-            label_func=lambda doc, attrs, dataset=dataset: {"label": dataset.label},
+            label_func=lambda doc, attrs, dataset=dataset: dataset.label,
             seed=cfg.seed,
             sampling_rate=dataset.sampling_rate,
             max_sample_size=dataset.max_sample_size,
