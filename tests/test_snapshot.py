@@ -3,7 +3,7 @@ import subprocess
 
 import pytest
 
-from marin.schemas.web.convert import ResiliparseConfig
+from marin.schemas.web.convert import ResiliparseConfig, TrafilaturaConfig
 from marin.web.convert import convert_page
 
 my_path = os.path.dirname(os.path.realpath(__file__))
@@ -28,21 +28,28 @@ def compare_outputs(input_name, expected_file, output_file):
     os.makedirs(diff_path, exist_ok=True)
     base_name = os.path.basename(expected_file)
     diff_name = f"{base_name}.diff.md"
+    # first see if we can even expect to run pandiff by using which
     try:
-        result = subprocess.run(
+        subprocess.run(
+            ["which", "pandiff"],
+            check=True,
+            text=True,
+            capture_output=True,
+        )
+    except subprocess.CalledProcessError:
+        raise AssertionError(
+            f"Output does not match expected for {input_name}. pandiff not found, skipping diff."
+        ) from None
+
+    try:
+        subprocess.run(
             ["pandiff", expected_file, output_file, "-o", f"{diff_path}/{diff_name}"],
             check=True,
             text=True,
             capture_output=True,
         )
-
-        # print stdout and stderr and the command
-        print(result.stdout)
-        print(result.stderr)
-        print(result.args)
     except subprocess.CalledProcessError as e:
-        print(f"Error running pandiff: {e}")
-        raise
+        raise AssertionError(f"Output does not match expected for {input_name}. Error running pandiff: {e}") from e
 
     # show the diff
     raise AssertionError(
@@ -104,7 +111,8 @@ def test_generate_markdown_from_html_with_trafilatura(input_name):
     input_file = os.path.join(input_path, f"{input_name}.html")
     input_content = read_file(input_file)
 
-    output_dict = convert_page(input_content, extract_method="trafilatura")
+    config = TrafilaturaConfig.default_config()
+    output_dict = convert_page(input_content, extract_method="trafilatura", config=config)
 
     output = output_dict["content"]
 

@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import ClassVar
 
+from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.utils import download_from_gcs, is_remote_path
 
 
@@ -62,24 +63,29 @@ class Evaluator(ABC):
     def launch_evaluate_with_ray(
         self,
         model: ModelConfig,
-        evals: list[str],
+        evals: list[EvalTaskConfig],
         output_path: str,
-        max_eval_instances: int | None,
+        max_eval_instances: int | None = None,
     ) -> None:
         """
         Launches the evaluation run with Ray.
 
         Args:
             model (ModelConfig): The model configuration of the model we want to evaluate
-            evals (List[str]): The list of evaluations to run.
+            evals (List[EvalTaskConfig]): The list of evaluations to run.
             output_path (str): The path to save the evaluation results.
             max_eval_instances (int | None): The maximum number of evaluation instances to run.
+            step (ExecutorStep | None): The step to evaluate. Used to get the config for the model and the trainer.
         """
         pass
 
     @abstractmethod
     def evaluate(
-        self, model: ModelConfig, evals: list[str], output_path: str, max_eval_instances: int | None = None
+        self,
+        model: ModelConfig,
+        evals: list[EvalTaskConfig],
+        output_path: str,
+        max_eval_instances: int | None = None,
     ) -> None:
         """What to run to evaluate."""
         pass
