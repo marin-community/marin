@@ -5,14 +5,9 @@ Get the out-bound links from Dolma-format examples containing HTML.
 Running on OpenWebMath:
 
 ```
-python scripts/crawl/get_outlinks_from_html.py \
-    --html_input_path gs://marin-us-central2/documents/open-web-math-fde8ef8/html/ \
-    --prefix openwebmath \
-    --outlinks_output_path gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8/
-```
-
-```
-ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- \
+python marin/run/ray_run.py \
+    --pip_deps 'resiliparse_dom @ git+https://github.com/nelson-liu/chatnoir-resiliparse@58247de82b4d881223435113f1a07a86ad66494c#egg=resiliparse_dom&subdirectory=resiliparse_dom,courlan,w3lib,cchardet' \
+    --no_wait -- \
     python scripts/crawl/get_outlinks_from_html.py \
     --html_input_path gs://marin-us-central2/documents/open-web-math-fde8ef8/html/ \
     --prefix openwebmath \
@@ -24,11 +19,14 @@ Running on FineWeb-Edu:
 ```
 for fineweb_edu_dump_html_path in $(gcloud storage ls gs://marin-us-central2/documents/fineweb-edu/html); do
     dump_name=$(basename -- ${fineweb_edu_dump_html_path})
-    ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- \
-    python scripts/crawl/get_outlinks_from_html.py \
-    --html_input_path ${fineweb_edu_dump_html_path} \
-    --prefix fineweb_edu \
-    --outlinks_output_path gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu/${dump_name}
+
+    python marin/run/ray_run.py \
+        --pip_deps 'resiliparse_dom @ git+https://github.com/nelson-liu/chatnoir-resiliparse@58247de82b4d881223435113f1a07a86ad66494c#egg=resiliparse_dom&subdirectory=resiliparse_dom,courlan,w3lib,cchardet' \
+        --no_wait -- \
+        python scripts/crawl/get_outlinks_from_html.py \
+        --html_input_path ${fineweb_edu_dump_html_path} \
+        --prefix fineweb_edu \
+        --outlinks_output_path gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu/${dump_name}
 done
 ```
 """
@@ -59,7 +57,24 @@ class OutlinksExtractionConfig:
     outlinks_output_path: str
 
 
-def is_internal_link(base_url, target_url):
+def is_internal_link(base_url: str, target_url: str):
+    """
+    Given an absolute base URL (e.g., the URL of a page) and an href target
+    (absolute or relative), check if the linked page is an internal link of
+    the base url. For example, if the base url is
+    https://en.wikipedia.org/wiki/Marin_County,_California and the target URL is
+    https://en.wikipedia.org/wiki/San_Francisco_Bay_Area, then it is an internal link.
+    If the target URL href is "San_Francisco_Bay_Area", then it's also an internal link.
+    If the target URL href is https://www.presidioyachtclub.org/ , then it isn't an internal
+    link to the base url.
+
+    Args:
+    base_url (str): base URL to use in determining if a target is internal
+    target_url (str): target link href to check.
+
+    Returns:
+    True if target_url is internal to base_url, else False
+    """
     # Parse the base URL
     base_parsed = urlparse(base_url)
     base_host = base_parsed.netloc.lstrip("www.")
@@ -77,7 +92,17 @@ def is_internal_link(base_url, target_url):
     return base_host == target_host
 
 
-def is_parseable(link):
+def is_absolute_link_parseable(link: str) -> bool:
+    """
+    Takes in an absolute link (i.e., not a relative href target) and returns whether
+    the link is parseable or not.
+
+    Args:
+    link (str): Absolute link to check.
+
+    Returns:
+    True if link is parseable, else False.
+    """
     try:
         result = urlparse(link)
         # Check if the URL has a valid scheme and netloc
@@ -88,15 +113,7 @@ def is_parseable(link):
 
 @ray.remote(
     memory=4 * 1024 * 1024 * 1024,
-    runtime_env={
-        "pip": [
-            "resiliparse_dom @ git+https://github.com/nelson-liu/chatnoir-resiliparse@58247de82b4d881223435113f1a07a86ad66494c#egg=resiliparse_dom&subdirectory=resiliparse_dom",
-            "courlan",
-            "w3lib",
-            "cchardet",
-        ]
-    },
-)  # 4 GB
+)
 @cached_or_construct_output(
     success_suffix="SUCCESS", verbose=False
 )  # We use this decorator to make this function idempotent
@@ -138,10 +155,11 @@ def process_one_batch(input_path: str, output_path: str):
                 unfiltered_outbound_links = set()
                 for link in parsed_html.find_all("a", href=True):
                     href = link.get("href")
-                    if href and is_parseable(href):
+                    if href:
                         absolute_link_target = urljoin(url, href)
-                        canonical_link = w3lib.url.canonicalize_url(absolute_link_target)
-                        unfiltered_outbound_links.add(canonical_link)
+                        if is_absolute_link_parseable(absolute_link_target):
+                            canonical_link = w3lib.url.canonicalize_url(absolute_link_target)
+                            unfiltered_outbound_links.add(canonical_link)
 
                 # Heuristically filter the outbound_links
                 outbound_links = set()
@@ -183,10 +201,11 @@ def process_one_batch(input_path: str, output_path: str):
                 main_text_outbound_links = set()
                 for link in main_text_with_links.find_all("a", href=True):
                     href = link.get("href")
-                    if href and is_parseable(href):
+                    if href:
                         absolute_link_target = urljoin(url, href)
-                        canonical_link = w3lib.url.canonicalize_url(absolute_link_target)
-                        main_text_outbound_links.add(canonical_link)
+                        if is_absolute_link_parseable(absolute_link_target):
+                            canonical_link = w3lib.url.canonicalize_url(absolute_link_target)
+                            main_text_outbound_links.add(canonical_link)
 
                 # Filter outbound_links to allowed protocols
                 allowed_protocols = {"http", "https"}
