@@ -11,6 +11,12 @@ import levanter.infra.cli_helpers as cli
 import yaml
 from levanter.infra.tpus import run_command, setup_vm_docker, start_tpu_vm_queued_resources, tpu_ssh
 
+TPU_TYPE_TO_VM_IMAGE = {
+    "v5litepod": "v2-alpha-tpuv5-lite",
+    "v5p": "v2-alpha-tpuv5",
+    "v6e": "v2-alpha-tpuv6e",
+}
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -22,7 +28,7 @@ def main():
     cli.add_arg(parser, config, ["--project"], default=cli.gcloud_config()["project"])
     cli.add_arg(parser, config, ["--tpu_name"], required=False, default=None)
     cli.add_arg(parser, config, ["--tpu_type"], required=True)
-    cli.add_arg(parser, config, ["--version"], default="tpu-ubuntu2204-base")
+    cli.add_arg(parser, config, ["--version"], default=None)
     cli.add_arg(parser, config, ["--zone"], default=None, type=str, required=False)
 
     parser.add_argument("command", nargs=argparse.REMAINDER)
@@ -36,7 +42,8 @@ def main():
     if tpu_name is None:
         # generate a random unique name
         tpu_name = f"ray-worker-manual-{cli.default_run_id()}"
-    version = args.version
+    tpu_gen = tpu_type.split("-")[0]
+    version = args.version or TPU_TYPE_TO_VM_IMAGE.get(tpu_gen, "tpu-ubuntu2204-base")
     zone = args.zone
 
     head = args.head
