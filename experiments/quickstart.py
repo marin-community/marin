@@ -248,6 +248,7 @@ def main(config: ExecutorMainConfig):
         steps = create_steps(experiment_prefix, synth_data)
         config = dataclasses.replace(config)
         executor_main(config, steps=steps)
+        # Testing
         logger.info(f"Execution completed successfully. All outputs are in {bucket_prefix}/{experiment_prefix}")
     except Exception as e:
         logger.error(f"Error in main execution: {e}")
