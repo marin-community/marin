@@ -4,7 +4,6 @@ import re
 from textwrap import fill
 
 import html2text
-import lxml.etree as ET
 import markdownify
 import six
 from bs4 import BeautifulSoup, Comment, Doctype, NavigableString
@@ -621,6 +620,8 @@ _xslt_mml_path = os.path.join(os.path.dirname(__file__), "xsl_yarosh/mmltex.xsl"
 # cf https://github.com/oerpub/mathconverter/blob/master/converter.py#L14
 # (we've modified the xslt to output simpler markdown when possible
 def mathml_to_markdown(mathml_node):
+    import lxml.etree as ET
+
     global _xslt_mml
     if _xslt_mml is None:
         _xslt_mml = ET.parse(_xslt_mml_path)
