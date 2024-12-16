@@ -34,7 +34,7 @@ class WikiExtractionConfig:
 def process_file(input_file_path: str, output_path: str, extract_method: str, extract_config: ExtractionConfig) -> None:
     output_file_path = os.path.join(output_path, input_file_path.split("/")[-1].replace(".ndjson", ".jsonl.gz"))
 
-    logger.info("Starting processing of file {input_file_path}")
+    logger.info(f"Starting processing of file {input_file_path}")
     logger.info(f"Source: {input_file_path}")
     logger.info(f"Destination: {output_file_path}")
     try:

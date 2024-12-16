@@ -32,12 +32,17 @@ def process_shard(input_path, output_path, shard_id: str, file_list: list) -> No
         with fsspec.open(str(input_path), "rb") as f:
             with zipfile.ZipFile(f) as zf:
                 gcs_path = f"{output_path}/{shard_id}.jsonl.gz"
+                success_path = f"{output_path}/{shard_id}.SUCCESS"
+
                 # Avoid overwriting if shard already exists
-                if fsspec_exists(gcs_path):
+                if fsspec_exists(success_path):
                     logger.info(f"Shard {shard_id} already exists at {gcs_path}, skipping...")
                     return
 
-                with fsspec.open(gcs_path, "wt", compression="gzip") as out_f:
+                with (
+                    fsspec.open(gcs_path, "wt", compression="gzip") as out_f,
+                    fsspec.open(success_path, "wt") as success_f,
+                ):
                     for filename in file_list:
                         with zf.open(filename, "r") as file_handle:
                             content = file_handle.read()
@@ -46,7 +51,12 @@ def process_shard(input_path, output_path, shard_id: str, file_list: list) -> No
                                 "format": "html",
                                 "content": content.decode("utf-8", errors="replace"),
                             }
+                            success_record = {
+                                "filename": filename,
+                                "format": "html",
+                            }
                             print(json.dumps(record), file=out_f)
+                            print(json.dumps(success_record), file=success_f)
 
                 logger.info(f"Shard {shard_id} with {len(file_list)} files uploaded to {gcs_path}")
 
@@ -86,7 +96,7 @@ def download(cfg: DownloadConfig) -> None:
                     shard_dict[shard_id].append(info.filename)
 
                 # Filter out shards we already processed
-                downloaded_files = fsspec_glob(f"{cfg.output_path}/*.jsonl.gz")
+                downloaded_files = fsspec_glob(f"{cfg.output_path}/*.SUCCESS")
                 downloaded_shards = set(f.split("/")[-1].split(".")[0] for f in downloaded_files)
 
                 # Apply max_files limit if provided
