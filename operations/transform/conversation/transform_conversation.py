@@ -148,6 +148,22 @@ def create_shard_output_directory(output_filename: str) -> str:
 @ray.remote(memory=4 * 1024 * 1024 * 1024)
 @cached_or_construct_output(success_suffix="SUCCESS")
 def transform_file(input_filename: str, output_filename: str, cfg: TransformSFTDatasetConfig):
+    """
+    Transforms the input dataset file and writes the transformed data into shards.
+    Args:
+        input_filename (str): The path to the input dataset file.
+        output_filename (str): The base path for the output shard files.
+        cfg (TransformSFTDatasetConfig): Configuration object containing transformation parameters.
+    Returns:
+        None
+
+    Note: we assume regardlss of filetype that every directory will have a 'provenance.json' file
+    which we use for our own metadata. We check this explicitly because *json is a valid
+    file type, but 'provenance.json' is not a valid dataset file.
+    """
+
+    if "provenance.json" in input_filename:
+        return
     rows = load_dataset(input_filename)
     logger.info(f"Transforming {len(rows)} rows from {input_filename} to {output_filename}")
 
