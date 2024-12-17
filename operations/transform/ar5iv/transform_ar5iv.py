@@ -12,11 +12,27 @@ from dataclasses import dataclass
 import draccus
 import fsspec
 import ray
+from bs4 import BeautifulSoup
 from tqdm_loggable.auto import tqdm
 
 from marin.schemas.web.convert import ExtractionConfig
 from marin.utils import fsspec_glob
 from marin.web.convert import convert_page
+from scripts.ar5iv.transform import (
+    clean_li,
+    linelisting_to_newline,
+    remove_ar5iv_footer,
+    remove_authors,
+    remove_before_section,
+    remove_biblinks,
+    remove_biblio,
+    remove_figure_captions,
+    remove_footnotes,
+    remove_references,
+    remove_title,
+    remove_title_page,
+    unwrap_eqn,
+)
 
 logger = logging.getLogger("ray")
 
@@ -26,12 +42,35 @@ class Ar5ivExtractionConfig:
     input_path: str
     output_path: str
     revision: str
+    remove_reference_section: bool
     extract_method: str
     extract_config: ExtractionConfig
 
 
+def clean_html(html: str, remove_reference_section: bool = True) -> str:
+    html = BeautifulSoup(html, "html.parser")
+
+    remove_authors(html)
+    remove_title_page(html)
+    clean_li(html)
+    remove_biblio(html)
+    remove_footnotes(html)
+    remove_biblinks(html)
+    linelisting_to_newline(html)
+    unwrap_eqn(html)
+    remove_ar5iv_footer(html)
+    remove_before_section(html)
+    remove_title(html)
+    remove_figure_captions(html)
+
+    if remove_reference_section:
+        remove_references(html)
+
+    return str(html)
+
+
 @ray.remote(memory=2 * 1024 * 1024 * 1024)
-def process_file(input_file_path: str, output_path: str, extract_method: str, extract_config: ExtractionConfig) -> None:
+def process_file(input_file_path: str, output_path: str, extract_method: str, extract_config: ExtractionConfig, remove_reference_section: bool = True) -> None:
     output_file_path = os.path.join(output_path, input_file_path.split("/")[-1])
 
     logger.info(f"Starting processing of file {input_file_path}")
@@ -46,7 +85,8 @@ def process_file(input_file_path: str, output_path: str, extract_method: str, ex
                 row = json.loads(line)
 
                 try:
-                    result = convert_page(row["content"], extract_method=extract_method, config=extract_config)
+                    filtered_html = clean_html(row["content"], remove_reference_section)
+                    result = convert_page(filtered_html, extract_method=extract_method, config=extract_config)
                     out_dict = {
                         "id": row["filename"],
                         "source": "ar5iv",
@@ -83,7 +123,7 @@ def process_ar5iv_dump(cfg: Ar5ivExtractionConfig) -> None:
                 logger.exception(f"Error processing the group: {e}")
                 continue
 
-        result_refs.append(process_file.remote(file, cfg.output_path, cfg.extract_method, cfg.extract_config))
+        result_refs.append(process_file.remote(file, cfg.output_path, cfg.extract_method, cfg.extract_config, cfg.remove_reference_section))
 
     try:
         ray.get(result_refs)

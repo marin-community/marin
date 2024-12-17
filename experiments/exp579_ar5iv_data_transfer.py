@@ -34,6 +34,7 @@ ar5iv_no_problem_resiliparse_with_preserve_formatting = ExecutorStep(
             main_content=versioned(True),
             links=versioned(True),
         ),
+        remove_reference_section=versioned(True),
     ),
     pip_dependency_groups=["download_transform"],
 )
@@ -50,6 +51,7 @@ ar5iv_no_problem_readability = ExecutorStep(
             include_images=versioned(False),
             include_links=versioned(False),
         ),
+        remove_reference_section=versioned(True),
     ),
     pip_dependency_groups=["download_transform"],
 )
@@ -67,6 +69,7 @@ ar5iv_warnings_resiliparse_with_preserve_formatting = ExecutorStep(
             main_content=versioned(True),
             links=versioned(True),
         ),
+        remove_reference_section=versioned(True),
     ),
     pip_dependency_groups=["download_transform"],
 )
@@ -83,6 +86,7 @@ ar5iv_warnings_readability = ExecutorStep(
             include_images=versioned(False),
             include_links=versioned(False),
         ),
+        remove_reference_section=versioned(True),
     ),
     pip_dependency_groups=["download_transform"],
 )
