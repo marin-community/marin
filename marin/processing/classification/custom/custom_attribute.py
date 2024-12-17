@@ -1,7 +1,7 @@
 """
 custom_attribute.py
 
-Demo for creating custom attributes.
+Function for creating custom attributes.
 """
 
 from collections.abc import Callable
@@ -37,31 +37,3 @@ def create_custom_attribute(cfg: CustomAttributeConfig):
         label_func=cfg.label_func,
         input_attr_paths=cfg.input_attr_paths,
     )
-
-
-def main():
-    """
-    Demo for creating custom attributes.
-
-    First creates an attribute based on the length of the text in a document.
-    Then increments that attribute by 1.
-    """
-    create_custom_attribute(
-        CustomAttributeConfig(
-            input_doc_path="gs://marin-us-central2/documents/instruct/tulu_v2_mix/text",
-            output_attr_path="gs://marin-us-central2/custom_attribute_demo/part1",
-            label_func=lambda doc, attrs: {"label": len(doc["text"])},
-        )
-    )
-    create_custom_attribute(
-        CustomAttributeConfig(
-            input_doc_path="gs://marin-us-central2/documents/instruct/tulu_v2_mix/text/",
-            output_attr_path="gs://marin-us-central2/custom_attribute_demo/part2",
-            label_func=lambda doc, attrs: {"label": attrs[0]["label"] + 1},
-            input_attr_paths=["gs://marin-us-central2/scratch/custom_attribute_demo/part1"],
-        )
-    )
-
-
-if __name__ == "__main__":
-    main()
