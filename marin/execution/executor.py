@@ -620,7 +620,7 @@ class Executor:
 
         output_paths_list = list(self.output_paths.values())
 
-        status_values = ray.get(self.status_actor.get_multiple_status.remote(output_paths_list))
+        status_values = ray.get(self.status_actor.get_statuses.remote(output_paths_list))
         self.statuses = {key: status for key, status in zip(self.output_paths.keys(), status_values, strict=False)}
 
     def run_step(self, step: ExecutorStep, dry_run: bool, force_run_failed: bool, wait_for_status_actor: bool) -> None:
@@ -662,7 +662,7 @@ class Executor:
             logger.info(f"Force running {step.name}, previous status: {status}")
             should_run = True
 
-        if should_run is False:
+        if not should_run:
             # We skip running a step if we find a SUCCESS file for a step, but here we compare the complete info
             # to show if previous info and current info match so we aren't accidentally using the wrong version.
             # This is important since we aren't versioning everything
@@ -697,7 +697,7 @@ class Executor:
                 ),
             ).remote(step.fn, config, dependencies, output_path, self.status_actor, wait_for_status_actor)
         else:
-            self.refs[step] = ray.put(None)
+            self.refs[step] = ray.put(None)  # Necessary as we call ray.get on all the deps in execute_after_dependencies
 
 
 def asdict_without_description(obj: dataclass) -> dict[str, Any]:
@@ -707,7 +707,7 @@ def asdict_without_description(obj: dataclass) -> dict[str, Any]:
     return d
 
 
-def release_lock_and_wait_for_status_actor(
+def _release_lock_and_wait_for_status_actor(
     status_actor: StatusActor, output_path: str, actor_refs: list[ray.ObjectRef], wait_for_status_actor: bool
 ):
     """
@@ -733,30 +733,41 @@ def execute_after_dependencies(
     Run a function `fn` with the given `config`, after all the `dependencies` have finished.
     Only do stuff if `should_run` is True.
     """
-    actor_refs = []
+    actor_refs: list[ray.ObjectRef] = []  # Holds references to ray remote calls made by this functions
     ray_task_id = ray.get_runtime_context().get_task_id()
     # Try and get the lock from the status actor
     actor_lock_task_id = ray.get(status_actor.get_lock.remote(output_path, ray_task_id=ray_task_id))
 
     if actor_lock_task_id != ray_task_id:
-        # Lock is with some other process. Wait for the process to finish or fail, and propogate accordingly
+        # Lock is with some other step. Wait for the other step to finish or fail, and propagate accordingly
         while True:
             actor_task_state = ray.util.state.get_task(actor_lock_task_id)
 
             # Sometimes the actor_state is not ready
             if actor_task_state is None:
-                time.sleep(5)  # Wait for 5 seconds and check again
-                continue
-
-            if actor_task_state.state == "FINISHED":  # The original task has finished successfully
+                logger.warning(
+                    f"Status for step/task {actor_lock_task_id} is not ready. "
+                    f"{actor_lock_task_id} has the lock"
+                    f"for {output_path}. Waiting for the status to be ready."
+                )
+            elif actor_task_state.state == "FINISHED":  # The other step with the lock has finished successfully
                 return
-            elif actor_task_state.state == "FAILED":  # The original rask has failed, raise this exception
-                raise Exception("The original task has failed")
+            elif actor_task_state.state == "FAILED":  # The other step with the lock has failed, raise this exception
+                raise Exception(
+                    f"The step with task id: {actor_lock_task_id} has failed. Since {actor_lock_task_id} "
+                    f"had the lock for {output_path}, we are failing the current step with task id "
+                    f"{ray_task_id}"
+                )
             else:
-                time.sleep(5)  # Wait for 5 seconds and check again
+                logger.info(
+                    f"Task {actor_lock_task_id} is {actor_task_state.state}. {actor_lock_task_id} has the"
+                    f"lock for {output_path}. Waiting for it to finish or fail."
+                )
+
+            time.sleep(5)  # Wait for 5 seconds and check again
 
     # Lock is with this process, we can proceed
-    actor_refs.append(status_actor.add_update_status.remote(output_path, STATUS_WAITING, ray_task_id=ray_task_id))
+    actor_refs.append(status_actor.update_status.remote(output_path, STATUS_WAITING, ray_task_id=ray_task_id))
 
     # Get all the dependencies
     try:
@@ -765,17 +776,15 @@ def execute_after_dependencies(
         # Failed due to some exception
         message = traceback.format_exc()
         actor_refs.append(
-            status_actor.add_update_status.remote(
-                output_path, STATUS_DEP_FAILED, message=message, ray_task_id=ray_task_id
-            )
+            status_actor.update_status.remote(output_path, STATUS_DEP_FAILED, message=message, ray_task_id=ray_task_id)
         )
         # Release the lock
-        release_lock_and_wait_for_status_actor(status_actor, output_path, actor_refs, wait_for_status_actor)
+        _release_lock_and_wait_for_status_actor(status_actor, output_path, actor_refs, wait_for_status_actor)
 
         raise e
 
     # Call fn(config)
-    actor_refs.append(status_actor.add_update_status.remote(output_path, STATUS_RUNNING, ray_task_id=ray_task_id))
+    actor_refs.append(status_actor.update_status.remote(output_path, STATUS_RUNNING, ray_task_id=ray_task_id))
     try:
         if isinstance(fn, ray.remote_function.RemoteFunction):
             ray.get(fn.remote(config))
@@ -787,17 +796,17 @@ def execute_after_dependencies(
         # Failed due to some exception
         message = traceback.format_exc()
         actor_refs.append(
-            status_actor.add_update_status.remote(output_path, STATUS_FAILED, message=message, ray_task_id=ray_task_id)
+            status_actor.update_status.remote(output_path, STATUS_FAILED, message=message, ray_task_id=ray_task_id)
         )
         # Release the lock
-        release_lock_and_wait_for_status_actor(status_actor, output_path, actor_refs, wait_for_status_actor)
+        _release_lock_and_wait_for_status_actor(status_actor, output_path, actor_refs, wait_for_status_actor)
         raise e
 
     # Success
-    actor_refs.append(status_actor.add_update_status.remote(output_path, STATUS_SUCCESS, ray_task_id=ray_task_id))
+    actor_refs.append(status_actor.update_status.remote(output_path, STATUS_SUCCESS, ray_task_id=ray_task_id))
 
     # Release the lock
-    release_lock_and_wait_for_status_actor(status_actor, output_path, actor_refs, wait_for_status_actor)
+    _release_lock_and_wait_for_status_actor(status_actor, output_path, actor_refs, wait_for_status_actor)
 
 
 def get_fn_name(fn: Callable | ray.remote_function.RemoteFunction, short: bool = False):

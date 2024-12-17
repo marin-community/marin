@@ -208,6 +208,7 @@ def test_status_actor():
     """Test the status actor that keeps track of statuses."""
 
     def test_status_check():
+        # Test how the actor reads persistent status from GCP
         status = [STATUS_SUCCESS, STATUS_FAILED, STATUS_WAITING, STATUS_RUNNING, STATUS_DEP_FAILED]
         expected_status = [STATUS_SUCCESS, STATUS_FAILED, None, None, STATUS_DEP_FAILED]
         actor = StatusActor.options(name="status_actor", get_if_exists=True, lifetime="detached").remote()
@@ -219,6 +220,7 @@ def test_status_actor():
     test_status_check()
 
     def test_one_executor_waiting_for_another():
+        # Test when 2 experiments have a step in common and one waits for another to finish
         with tempfile.NamedTemporaryFile() as file:
             with open(file.name, "w") as f:
                 f.write("0")
@@ -259,6 +261,7 @@ def test_status_actor():
     test_one_executor_waiting_for_another()
 
     def test_actor_status_when_cluster_dies():
+        # Test what happens when a cluster dies and status actor needs to read again from the GCP.
         status = [STATUS_SUCCESS, STATUS_FAILED, STATUS_WAITING, STATUS_RUNNING, STATUS_DEP_FAILED]
         expected_status = [STATUS_SUCCESS, STATUS_FAILED, None, None, STATUS_DEP_FAILED]
         # Create 5 output_paths and write sttus to them using actor, then kill the ray session and restart it
@@ -271,7 +274,7 @@ def test_status_actor():
             for i in range(5):
                 os.mkdir(f"{output_path}/{i}")
                 output_paths.append(f"{output_path}/{i}")
-                refs.append(actor.add_update_status.remote(output_paths[i], status[i]))
+                refs.append(actor.update_status.remote(output_paths[i], status[i]))
 
             ray.get(refs)
 
@@ -285,6 +288,7 @@ def test_status_actor():
     # test_actor_status_when_cluster_dies()
 
     def test_multiple_steps_race_condition():
+        # Test when there are many steps trying to run simultaneously.
         # Open a temp dir, make a step that write a random file in that temp dir. Make 10 of these steps and run them
         # in parallel. Check that only one of them runs
         with tempfile.TemporaryDirectory(prefix="output_path") as output_path:
