@@ -38,7 +38,7 @@ class RayObjectRef:
 
     """
 
-    ref: ObjectRef | None
+    ref: ObjectRef
 
 
 @ray.remote
@@ -60,15 +60,16 @@ class StatusActor:
         self.lock_output_path_to_task_id: dict[str, str] = {}
 
     def _add_status_and_reference(
-        self, output_path: str, executor_step_event: ExecutorStepEvent | None, reference: RayObjectRef
+        self, output_path: str, executor_step_event: ExecutorStepEvent | None, reference: RayObjectRef | None
     ):
         """
         Main function to update the status and reference of an output path.
         reference is a RayObjectRef object that wraps the reference to pass it by reference.
+        executor_step_event is the event updating the status of a step. We update our dict and also write to GCP.
         If either one of status or reference is None, we use the previous value.
         """
 
-        reference = reference.ref
+        reference = reference and reference.ref
         if reference is None and executor_step_event is None:
             return
         elif reference is None:
@@ -96,17 +97,15 @@ class StatusActor:
                 oldest = self.lru_cache.popitem(last=False)
                 del self.value_to_status_reference[oldest[0]]
 
-    def add_update_status(
-        self, output_path: str, status: str, message: str | None = None, ray_task_id: str | None = None
-    ):
+    def update_status(self, output_path: str, status: str, message: str | None = None, ray_task_id: str | None = None):
         """
         Update the status of an output path. We also write the output to GCP.
         """
         date = datetime.now().isoformat()
         event = ExecutorStepEvent(date=date, status=status, message=message, ray_task_id=ray_task_id)
-        self._add_status_and_reference(output_path, event, RayObjectRef(None))
+        self._add_status_and_reference(output_path, event, None)
 
-    def add_update_reference(self, output_path: str, reference: RayObjectRef):
+    def update_reference(self, output_path: str, reference: RayObjectRef):
         """
         We update the reference for an output path. We need to pass reference as a list to ensure we pass by reference
         """
@@ -150,5 +149,5 @@ class StatusActor:
         """Release the lock for the given output path."""
         del self.lock_output_path_to_task_id[output_path]
 
-    def get_multiple_status(self, output_paths: list[str]) -> list[str | None]:
+    def get_statuses(self, output_paths: list[str]) -> list[str | None]:
         return [self.get_status(output_path) for output_path in output_paths]
