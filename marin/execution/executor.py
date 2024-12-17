@@ -640,14 +640,13 @@ class Executor:
         config_version = self.versions[step]["config"]
         output_path = self.output_paths[step]
 
-        # Please note that this status might be a stale status as we read it in the starting of the execution and it
-        # might have been overwrittin by another experiment. But based on this status we will either decide to run
-        # this step or not. Incase we decide not to run this step, it's not a problem. Incase we do decide to run it,
-        # there is a final check in execute_after_dependencies function which ensures locking. Our primary objective
-        # is to ensure that we are not running the same step twice to ensure no data is corrupted.
+        # Note that this status might be stale, since it might have been overwritten by another experiment since we read it.
+        # Nonetheless, we will either decide to run this step or not based on the read status.
+        # If we do not run this step, it's not a problem. If we do decide to run it,
+        # there is a final check in execute_after_dependencies function to ensure that we do not execute the same step concurrently.
         # Todo (abhinav): There is a small chance that we might run same step twice due to stale status.
-        #  Eg:- Stale status is None, but the step actually succeed and lock was released.
-        #  We can fix this by making status opaque to executor and keeping the status only inside the actor.
+        # In particular, if the stale status is None, but the step actually succeed and lock was released.
+        # We can fix this by making status opaque to executor and keeping the status only inside the actor.
         status = self.statuses[step]
 
         # Print information about this step
