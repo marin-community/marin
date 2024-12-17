@@ -1,7 +1,17 @@
 """
 custom_attribute.py
 
-Function for creating custom attributes.
+Function for creating a custom attribute.
+
+Computes the value of a custom attribute for each document in a collection of documents. The attribute can
+be an arbitrary (user-specified) function of document itself as well as some number of other
+pre-existing document attributes.
+
+Example 1: Count the number of words in each document (depends only on the text of the document).
+
+Example 2: Compute the maximum quality score over two quality classifiers (depends on the attribute files
+    generated from running inference with both quality classifiers).
+
 """
 
 from collections.abc import Callable
