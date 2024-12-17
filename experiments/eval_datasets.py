@@ -191,7 +191,7 @@ mbpp_raw = ExecutorStep(
         hf_urls_glob=["**/*.parquet", "*.md"],
     ),
     override_output_path="raw/google-research-datasets/mbpphf",
-).cd("4bb6404")
+).cd("4bb6404/full")
 
 
 """
@@ -460,7 +460,6 @@ eval_datasets = [
     EvalDataset("allenai", "ai2_arc_easy", [arc_easy_eval], ["core", "arc"]),
     EvalDataset("allenai", "ai2_arc_challenge", [arc_challenge_eval], ["core", "arc"]),
     EvalDataset("allenai", "openbookqa", [openbookqa_eval], ["core"]),
-    EvalDataset("Tiger-Lab", "MMLU-Pro", [mmlu_pro_eval]),
     EvalDataset("openai", "openai_humaneval", [humaneval_eval]),
     EvalDataset("google-research-datasets", "mbpp", [mbpp_eval]),
 ]
