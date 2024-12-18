@@ -111,3 +111,14 @@ starcoderdata = ExecutorStep(
     ),
     override_output_path="raw/starcoderdata-720c8c",
 ).cd("9fc30b5")
+
+multilegalpile = ExecutorStep(
+    name="raw/multilegalpile",
+    fn=download_hf,
+    config=DownloadConfig(
+        hf_dataset_id="joelniklaus/MultiLegalPileWikipediaFiltered",
+        revision="483f6c8",
+        gcs_output_path=this_output_path(),
+        wait_for_completion=True,
+    ),
+).cd("483f6c8/huggingface.co/datasets/joelniklaus/MultiLegalPileWikipediaFiltered/resolve/483f6c8")
