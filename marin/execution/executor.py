@@ -675,7 +675,7 @@ class Executor:
         # If we do not run this step, it's not a problem. If we do decide to run it,
         # there is a final check in execute_after_dependencies function to ensure that we do not execute the
         # same step concurrently.
-        # Todo (abhinav): There is a small chance that we might run same step twice due to stale status.
+        # TODO(abhinav): There is a small chance that we might run same step twice due to stale status.
         # In particular, if the stale status is None, but the step actually succeed and lock was released.
         # We can fix this by making status opaque to executor and keeping the status only inside the actor.
         status = self.statuses[step]
