@@ -144,12 +144,14 @@ def default_eval(
     if evals is None:
         evals = CORE_TASKS
 
-    # run MMLU 0-shot evaluation if specified, remove if set to False
+    # run MMLU 0-shot and 5-shot evaluation if specified, remove if set to False
     if run_mmlu:
-        evals.append(EvalTaskConfig(name="mmlu", num_fewshot=0))
+        evals.append(EvalTaskConfig(name="mmlu", num_fewshot=0, task_alias="mmlu_0shot"))
+        evals.append(EvalTaskConfig(name="mmlu", num_fewshot=5, task_alias="mmlu_5shot"))
 
-    if not run_mmlu and EvalTaskConfig(name="mmlu", num_fewshot=0) in evals:
-        evals.remove(EvalTaskConfig(name="mmlu", num_fewshot=0))
+    if not run_mmlu and any(task.name == "mmlu" for task in evals):
+        logger.warning("MMLU evaluation is not run by default. Set `run_mmlu=True` to include it.")
+        evals = [task for task in evals if task.name != "mmlu"]
 
     return ExecutorStep(
         name=f"evaluation/levanter_lm_evaluation_harness/{executor_step.name}",
