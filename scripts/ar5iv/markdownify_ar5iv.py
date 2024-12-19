@@ -9,7 +9,7 @@ Run with:
         => Assumes that `ray dashboard infra/marin-cluster.yaml` running in a separate terminal (port forwarding)!
 """
 
-'''Convert fineweb to markdown'''
+"""Convert fineweb to markdown"""
 import argparse
 import json
 import os
@@ -23,13 +23,15 @@ import requests
 import datetime
 
 from marin.utils import get_gcs_path
+
 # from scripts.ar5iv.utils import get_ar5iv_success_path
 from marin import markdown
 import re
 from bs4 import BeautifulSoup
 import markdownify
 
-n=256
+n = 256
+
 
 @ray.remote(memory=1024 * 1024 * 1024)  # 1 GB
 def markdownify_ar5iv_html(file):
@@ -43,7 +45,7 @@ def markdownify_ar5iv_html(file):
     try:
         outs = ""
         print(f"Starting Processing for the ar5iv file: {html}")
-        with fsspec.open(get_gcs_path(file), 'rb', compression='gzip') as outputf:
+        with fsspec.open(get_gcs_path(file), "rb", compression="gzip") as outputf:
             # print(input_file_paths)
             for _ in range(n):
                 line = outputf.readline()
@@ -60,15 +62,20 @@ def markdownify_ar5iv_html(file):
                 # cleanup: replace nbsp as space
                 # this isn't quite right if we preserve html in places, but we currently are not doing that
                 content = content.replace("\xa0", " ").strip()
-                outs += json.dumps({
-                    "id": html_blob["id"],             # MANDATORY: source-specific identifier
-                    "text": content,           # MANDATORY: textual content of the document
-                    "source": "ar5iv",         # MANDATORY: source of the data, such as peS2o, common-crawl, etc.
-                    "added": datetime.datetime.now().isoformat(),          # OPTIONAL: timestamp ai2 acquired this data
-                }) + "\n"
+                outs += (
+                    json.dumps(
+                        {
+                            "id": html_blob["id"],  # MANDATORY: source-specific identifier
+                            "text": content,  # MANDATORY: textual content of the document
+                            "source": "ar5iv",  # MANDATORY: source of the data, such as peS2o, common-crawl, etc.
+                            "added": datetime.datetime.now().isoformat(),  # OPTIONAL: timestamp ai2 acquired this data
+                        }
+                    )
+                    + "\n"
+                )
         out_file = file.replace("html_clean", "md").replace("ar5iv_clean", "ar5iv_md")
-        with fsspec.open(get_gcs_path(out_file), 'wb', compression='gzip') as outputf:
-            outputf.write(outs.encode('utf-8'))
+        with fsspec.open(get_gcs_path(out_file), "wb", compression="gzip") as outputf:
+            outputf.write(outs.encode("utf-8"))
         print(f"Wrote to file {out_file}")
     except FileNotFoundError as e:
         print(f"Error reading the zip file: {e}")
@@ -77,9 +84,9 @@ def markdownify_ar5iv_html(file):
     return True
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Convert ar5iv to markdown.")
-    parser.add_argument('--input_path', type=str, help='Path to the ar5iv html folder', required=True)
+    parser.add_argument("--input_path", type=str, help="Path to the ar5iv html folder", required=True)
 
     args = parser.parse_args()
     gfs = fsspec.filesystem("gcs")
