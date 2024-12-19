@@ -55,6 +55,7 @@ class StatusActor:
 
     def __init__(self, cache_size: int = 10_000):
         self.value_to_status_reference: dict[str, tuple[str | None, ObjectRef | None]] = {}
+        # TODO(abhi): Make the values of the dict a dataclass
         self.lru_cache: OrderedDict[str, None] = OrderedDict()  # lru_cache to keep dict size to cache_size
         self.cache_size = cache_size
         self.lock_output_path_to_task_id: dict[str, str] = {}
