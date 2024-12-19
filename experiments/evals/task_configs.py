@@ -32,6 +32,7 @@ MMLU_TASKS = [
 
 CORE_TASKS_PLUS_MMLU = CORE_TASKS + MMLU_TASKS
 
+
 def convert_to_levanter_task_config(tasks: Sequence[EvalTaskConfig]) -> list[TaskConfig]:
     """
     Convert a list of EvalTaskConfig to a list of TaskConfig that Levanter's eval_harness expects.
