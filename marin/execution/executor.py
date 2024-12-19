@@ -390,6 +390,19 @@ class Executor:
         dry_run: bool = False,
         run_only: list[str] | None = None,
         force_run_failed: bool = False,
+    ):
+        """Run the pipeline of `ExecutorStep`s."""
+        self._run(
+            steps, dry_run=dry_run, run_only=run_only, force_run_failed=force_run_failed, wait_for_status_actor=False
+        )
+
+    def _run(
+        self,
+        steps: list[ExecutorStep | InputName],
+        *,
+        dry_run: bool = False,
+        run_only: list[str] | None = None,
+        force_run_failed: bool = False,
         wait_for_status_actor: bool = False,
     ):
         """
@@ -400,9 +413,10 @@ class Executor:
             dry_run: If True, only print out what needs to be done.
             run_only: If not None, only run the steps in the list and their dependencies. Matches steps' names as regex
             force_run_failed: If True, run steps even if they have already been run (including if they failed)
-            wait_for_status_actor: If True, wait for the status actor updates to be written before returning. This is
-                mainly used in unit testing.
+            wait_for_status_actor: If True, wait for the status actor updates to be written before returning. This can
+            be used in unit testing or to make sure that the status updates are written before moving further.
         """
+
         # Gather all the steps, compute versions and output paths for all of them.
         logger.info(f"### Inspecting the {len(steps)} provided steps ###")
         for step in steps:
@@ -640,10 +654,12 @@ class Executor:
         config_version = self.versions[step]["config"]
         output_path = self.output_paths[step]
 
-        # Note that this status might be stale, since it might have been overwritten by another experiment since we read it.
+        # Note that this status might be stale, since it might have been overwritten by another experiment since
+        # we read it.
         # Nonetheless, we will either decide to run this step or not based on the read status.
         # If we do not run this step, it's not a problem. If we do decide to run it,
-        # there is a final check in execute_after_dependencies function to ensure that we do not execute the same step concurrently.
+        # there is a final check in execute_after_dependencies function to ensure that we do not execute the
+        # same step concurrently.
         # Todo (abhinav): There is a small chance that we might run same step twice due to stale status.
         # In particular, if the stale status is None, but the step actually succeed and lock was released.
         # We can fix this by making status opaque to executor and keeping the status only inside the actor.
@@ -686,9 +702,7 @@ class Executor:
         else:
             pip_dependencies = None
 
-        should_run = should_run and (dry_run is False)
-
-        if should_run:
+        if should_run and not dry_run:
             self.refs[step] = execute_after_dependencies.options(
                 name=name,
                 runtime_env=RuntimeEnv(
@@ -719,21 +733,8 @@ def _release_lock_and_wait_for_status_actor(
         ray.get(actor_refs)
 
 
-@ray.remote
-def execute_after_dependencies(
-    fn: ExecutorFunction,
-    config: dataclass,
-    dependencies: list[ray.ObjectRef],
-    output_path: str,
-    status_actor: StatusActor,
-    wait_for_status_actor: bool = False,
-):
-    """
-    Run a function `fn` with the given `config`, after all the `dependencies` have finished.
-    Only do stuff if `should_run` is True.
-    """
-    actor_refs: list[ray.ObjectRef] = []  # Holds references to ray remote calls made by this functions
-    ray_task_id = ray.get_runtime_context().get_task_id()
+def _get_lock_or_wait_for_step_with_lock(output_path: str, status_actor: StatusActor, ray_task_id: str):
+
     # Try and get the lock from the status actor
     actor_lock_task_id = ray.get(status_actor.get_lock.remote(output_path, ray_task_id=ray_task_id))
 
@@ -750,7 +751,12 @@ def execute_after_dependencies(
                     f"for {output_path}. Waiting for the status to be ready."
                 )
             elif actor_task_state.state == "FINISHED":  # The other step with the lock has finished successfully
-                return
+                logger.info(
+                    f"The step with task id: {actor_lock_task_id} has succeeded. Since {actor_lock_task_id} "
+                    f"had the lock for {output_path}, we are returning the current step with task id "
+                    f"{ray_task_id} without running but considering success."
+                )
+                return False, True
             elif actor_task_state.state == "FAILED":  # The other step with the lock has failed, raise this exception
                 raise Exception(
                     f"The step with task id: {actor_lock_task_id} has failed. Since {actor_lock_task_id} "
@@ -764,8 +770,37 @@ def execute_after_dependencies(
                 )
 
             time.sleep(5)  # Wait for 5 seconds and check again
+    else:
+        # Lock is with this step
+        return True, False
 
+
+@ray.remote
+def execute_after_dependencies(
+    fn: ExecutorFunction,
+    config: dataclass,
+    dependencies: list[ray.ObjectRef],
+    output_path: str,
+    status_actor: StatusActor,
+    wait_for_status_actor: bool = False,
+):
+    """
+    Run a function `fn` with the given `config`, after all the `dependencies` have finished.
+    Only do stuff if `should_run` is True.
+    """
+    ray_task_id = ray.get_runtime_context().get_task_id()
+    try:
+        lock, finished = _get_lock_or_wait_for_step_with_lock(output_path, status_actor, ray_task_id)
+        if finished:  # Step with lock finished successfully
+            return
+    except Exception as e:
+        raise e
+
+    assert lock, f"Must have the lock on {output_path} before proceeding"
     # Lock is with this process, we can proceed
+
+    actor_refs: list[ray.ObjectRef] = []  # Holds references to ray remote calls made by this functions
+
     actor_refs.append(status_actor.update_status.remote(output_path, STATUS_WAITING, ray_task_id=ray_task_id))
 
     # Get all the dependencies
