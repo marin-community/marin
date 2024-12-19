@@ -3,7 +3,7 @@
 		xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
 		xmlns:m="http://www.w3.org/1998/Math/MathML"
 		version='1.0'>
-                
+
 <!-- ====================================================================== -->
 <!-- $Id: cmarkup.xsl,v 1.8 2003/06/10 12:24:04 shade33 Exp $
      This file is part of the XSLT MathML Library distribution.
@@ -79,18 +79,18 @@
 <xsl:template match="m:interval[*[2]]">
 	<xsl:choose>
 		<xsl:when test="@closure='open' or @closure='open-closed'">
-			<xsl:text>\left(</xsl:text>		
+			<xsl:text>\left(</xsl:text>
 		</xsl:when>
-		<xsl:otherwise><xsl:text>\left[</xsl:text></xsl:otherwise> 
+		<xsl:otherwise><xsl:text>\left[</xsl:text></xsl:otherwise>
 	</xsl:choose>
 	<xsl:apply-templates select="*[1]"/>
 	<xsl:text> , </xsl:text>
 	<xsl:apply-templates select="*[2]"/>
 	<xsl:choose>
 		<xsl:when test="@closure='open' or @closure='closed-open'">
-			<xsl:text>\right)</xsl:text>		
+			<xsl:text>\right)</xsl:text>
 		</xsl:when>
-		<xsl:otherwise><xsl:text>\right]</xsl:text></xsl:otherwise> 
+		<xsl:otherwise><xsl:text>\right]</xsl:text></xsl:otherwise>
 	</xsl:choose>
 </xsl:template>
 
@@ -111,7 +111,7 @@
 	<xsl:apply-templates select="m:bvar/*"/>
   <xsl:text>\mapsto </xsl:text>
   <xsl:apply-templates select="*[last()]"/>
-<!--	Other variant 
+<!--	Other variant
 	<xsl:text>\mathrm{lambda}\: </xsl:text>
   	<xsl:apply-templates select="m:bvar/*"/>
   	<xsl:text>.\: </xsl:text>
@@ -250,7 +250,7 @@
       (number(.) &lt; 0)]]]">-</xsl:when>
       <xsl:otherwise>+</xsl:otherwise>
     </xsl:choose>
-   </xsl:if>   
+   </xsl:if>
     <xsl:choose>
       <xsl:when test="self::m:apply[*[1][self::m:times] and
       *[2][self::m:cn[not(m:sep) and (number(.) &lt;0)]]]">
@@ -313,7 +313,7 @@
 				<xsl:when test="self::m:cn">\times <!-- times --></xsl:when>
 				<xsl:otherwise><!--invisible times--></xsl:otherwise>
 			</xsl:choose>
-		</xsl:if> 
+		</xsl:if>
 		<xsl:if test="position()&gt;= $first">
 			<xsl:apply-templates select=".">
 				<xsl:with-param name="p" select="3"/>
@@ -787,7 +787,7 @@ priority="2">
 <xsl:template match="m:apply[*[1][self::m:product]]">
 	<xsl:text>\prod</xsl:text><xsl:call-template name="series"/>
 </xsl:template>
-	
+
 <xsl:template name="series">
 	<xsl:if test="m:lowlimit/*|m:interval/*[1]|m:condition/*">
 		<xsl:text>_{</xsl:text>
@@ -1043,7 +1043,7 @@ priority="2">
 
 <!-- 4.4.12.6 primes -->
 <xsl:template match="m:primes"><xsl:text>\mathbb{P}</xsl:text></xsl:template>
-	
+
 <!-- 4.4.12.7 exponentiale -->
 <xsl:template match="m:exponentiale"><xsl:text>e</xsl:text></xsl:template>
 
@@ -1080,7 +1080,7 @@ priority="2">
   <xsl:for-each select="*[position()&gt;1]">
 		<xsl:if test="position() &gt; 1">
 			<xsl:copy-of select="$mo"/>
-		</xsl:if>   
+		</xsl:if>
 		<xsl:apply-templates select=".">
 			<xsl:with-param name="p" select="$this-p"/>
 		</xsl:apply-templates>

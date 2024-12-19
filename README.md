@@ -3,140 +3,102 @@
 > "*I am not afraid of storms, for I am learning how to sail my ship."*<br/>
 > – Louisa May Alcott
 
-Marin is an open-source framework for building foundation models in a
-reproducible and transparent way.  All the code, data, and experiments for all
-stages of the pipeline (e.g., data curation, transformation, filtering,
-tokenization, training, evaluation) are accessible on the platform with full
-provenance.
+Marin is a modular, open-source framework for the research and development of
+foundation models.  A key property of Marin is reproducibility: All the steps
+raw data to the final model are recorded for posterity (not just the final
+model).  Moreover, all [experiments](docs/experiments.md) (whether successful
+or not) are also recorded, so the entire research process (not just the
+development of the final model) is transparent.
 
-Marin leverages several tools:
-- For training, it uses [levanter](https://github.com/stanford-crfm/levanter),
-  a Jax-based framework that's legible, scalable, and reproducible.
-- For scheduling distributed jobs over a cluster for data processing and
-  training, we use [Ray](https://docs.ray.io/).
-- We use the same data formats as [Dolma](https://github.com/allenai/dolma).
+The core part of Marin is minimal, consisting of basically an [executor
+framework](docs/executor.md), which manages the execution of a set of
+arbitrary steps.
+
+Marin's primary use case is to build a language model like Llama 3,
+which involves data curation, transformation, filtering, tokenization,
+training, and evaluation (see [overview](docs/lm/overview.md)).
+Note that for now, all this specific code resides in this repository.
 
 ## Setup
 
-To get set up, create a new virtual environment (or `conda` environment) with
-the appropriate Python version (3.10), then run the following:
+To install Marin, create a new virtual environment (or `conda` environment)
+with the appropriate Python version (3.10), and then run the following:
 
 ```bash
 git clone https://github.com/stanford-crfm/marin
 cd marin
-pip install -e ".[dev]"
+pip install -e ".[extras]"
 ```
 
 This will install all the core dependencies and build `marin` as a Python
-package. Installing the `[dev]` requirements will additionally install test,
+package. Installing the `[extras]` requirements will additionally install test,
 linting, and debugging dependencies (e.g., `pytest`).
 
-## Quickstart
+## Tests
 
-To get started, you can run a toy example which:
-
-* starts with raw HTML
-* processes it into text
-* trains a quality classifer
-* filters the data with that classifier
-* performs deduplication
-* tokenizes the deduped data
-* trains a model on the tokenized data
-
-TODO: add evaluation
+The first time you run tests locally, you will need install `pandiff` to
+run the snapshot tests. This is a one-time install that can be done using the
+following commands:
 
 ```bash
-export MARIN_PREFIX="/path/to/storage/marin"  # or s3:// or gs:// etc.
-python experiments/quickstart.py
-```
-
-## Dev Notes
-
-To run the tests locally, first run `export RAY_ADDRESS=` to run Ray in local mode.
-
-NOTE: The first time you run tests locally, you will need install `pandiff` to run the snapshot tests. This is a one-time install that can be done using the following commands:
-
-```bash
-brew install node
+brew install node  # For macOS
 conda install -c conda-forge pandoc
 npm install -g pandiff
 ```
+
+To run the tests, first run `export RAY_ADDRESS=` to run Ray in local mode.
 
 1. We have linters set up to ensure code quality. You can run them with:
    ```bash
    pre-commit run --all-files
    ```
 2. To run the tests, run `PYTHONPATH=tests:. pytest tests --durations=0 -n 4 --tb=no -v`
-3. When submitting to cluster, we recommend using run script `marin/run/run.py`. See `marin/run/README.md`
-   for more details.
 
+## Hello world example
 
-### Snapshot tests
+Let's run your first [hello world experiment](experiments/hello_world.py),
+which has two steps:
 
-For HTML-to-text conversion, we have snapshot unit tests.  To add a test case,
-do the following:
+1. Generate some numbers.
+2. Compute some statistics of the numbers.
 
-* Add an html file to `tests/snapshots/inputs/` that you want to test.
-* Add the expected markdown output to `tests/snapshots/expected/` with the same
-  name as the input file.
-* Commit these files.
-
-Pro-tip: You can copy the markdown from `process_url.py`'s output to the
-expected file and edit it as needed.
-
-If it's reasonable, try to add a unit test as well. This will help ensure that
-the conversion is correct.  If you've made a change that you think is correct,
-you can update the snapshots by copying `tests/snapshots/outputs/` to
-`tests/snapshots/expected/`. This will overwrite the expected output with the
-new output. You should review these changes before committing them.
-
-
-## Submitting jobs to Ray cluster
-
-The Ray cluster only has the core ray and vllm packages installed, along with a cpu build of pytorch.
-We are still keeping vllm as it requires significant time to build.
-If you run an experiment directly on ray, expect missing dependencies.
-To resolve this, you can now install dependencies in a fine-grained way using [ray_run.py](../marin/run/ray_run.py) or
-using pip_dependency_groups argument in `ExecutorStep`
-
-Dependency Management:
-
-1. Use [ray_run.py](marin/run/ray_run.py) to handle dependencies across an entire experiment.
-Just add any extra packages you need with `--pip_deps`. Core dependencies (levanter, draccus, fspsec, etc.)
-are automatically installed from [pyproject.toml](pyproject.toml).
-2. For step-specific dependencies, use `pip_dependency_groups` in `ExecutorStep`.
-This takes a list where each item is either (1) A key from `project.optional-dependencies` dictionary in pyproject.toml
-or (2) A specific pip package. Check out [quickstart.py](experiments/quickstart.py) for an example.
-
-Example usage:
-
-If you earlier used the command
+To run this example (and output), simply type:
 
 ```bash
-ray job submit --working-dir . -- python experiments/check_pip_packages_env_variables.py
+python experiments/hello_world.py --prefix var
 ```
 
-Now you can run the same command with
+This command should create the following assets:
+
+1. `var/experiments/hello_world-7063e5.json`: stores a record of all the steps in this experiment.
+1. `var/hello_world/data-d50b06`: the output of step 1 (generate some numbers, stored in `numbers.json`).
+1. `var/hello_world/stats-b5daf3`: the output of step 2 (compute some statistics, stored in `stats.json`).
+
+Note that if you run the same command again, it will detect that both steps
+have been already run and return automatically.
+
+## Data browser
+
+Marin comes with a [data browser](data_browser/README.md) that makes it easy to
+view datasets (in various formats) and experiments produced by the executor.
+After installing the necessary dependencies, run:
 
 ```bash
-python marin/run/ray_run.py --env_vars HF_TOKEN hf_abcd --pip_deps trafilatura,dolma
--- python experiments/check_pip_packages_env_variables.py
+cd data_browser
+python server.py --config conf/local.conf
 ```
 
-The new command will:
-1. Install all the core dependencies in pyproject.toml
-2. Install `trafilatura` and `dolma` as additional dependencies
+Once the server is started, go to
+[http://localhost:5000](http://localhost:5000) and navigate around to the
+experiment JSON file to get a nicer view of the experiment (the URL is also
+printed out when you run the experiment).
 
-Example for using `pip_dependency_groups` in `ExecutorStep`:
+See the [data browser README](data_browser/README.md) for more details.
 
-```python
-number_of_restarts = ExecutorStep(
-    name=...,
-    fn=...,
-    config=...,
-    pip_dependency_groups=["quality_dedup_consolidate", "google-cloud-logging"],
-)
-```
+## What's next?
 
-This will install the dependencies specified in the `quality_dedup_consolidate` groups
-and also pip install `google-cloud-logging`.
+To learn more about the core infrastructure:
+- [Executor framework](docs/executor.md): how to manage Python libraries, run big parallel jobs using Ray, how versioning works, etc.
+- [Experiments](docs/experiments.md): how we use the executor framework to run machine learning experiments.
+
+Or you can jump directly to learn about our [language modeling efforts](docs/lm/overview.md).

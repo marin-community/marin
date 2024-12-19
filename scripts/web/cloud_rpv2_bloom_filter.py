@@ -20,7 +20,7 @@ def create_process_slice_task(out_path, lang, crawl, part, chunk_range, credenti
         "lang": lang,
         "crawl": crawl,
         "part": part,
-        "chunk_range": list(chunk_range)  # Make sure to convert the range into a list
+        "chunk_range": list(chunk_range),  # Make sure to convert the range into a list
     }
 
     # Specify your project ID and Cloud Task queue information
@@ -99,13 +99,12 @@ def create_union_blooms_task(out_path, paths, credentials, id_token):
     # Create the task object
     task = {
         "http_request": {
-                "http_method": tasks_v2.HttpMethod.POST,
-                "url": url,
-                "body": json.dumps(task_data).encode(),
-                "headers": {"Authorization": f"Bearer {id_token}",
-                            "Content-Type": "application/json"}
-            },
-        }
+            "http_method": tasks_v2.HttpMethod.POST,
+            "url": url,
+            "body": json.dumps(task_data).encode(),
+            "headers": {"Authorization": f"Bearer {id_token}", "Content-Type": "application/json"},
+        },
+    }
 
     response = client.create_task(request={"parent": queue_path, "task": task})
     return response
@@ -123,12 +122,14 @@ def purge_merged_blooms(out_path, paths):
 if __name__ == "__main__":
     lang = "en"
     # need to be able to invoke a gen2 cloud function
-    credentials, project = google.auth.default(scopes=[
-        "https://www.googleapis.com/auth/cloud-platform",
-        "https://www.googleapis.com/auth/cloud-tasks",
-        # also need to read/write gcs
-        "https://www.googleapis.com/auth/devstorage.read_write",
-    ])
+    credentials, project = google.auth.default(
+        scopes=[
+            "https://www.googleapis.com/auth/cloud-platform",
+            "https://www.googleapis.com/auth/cloud-tasks",
+            # also need to read/write gcs
+            "https://www.googleapis.com/auth/devstorage.read_write",
+        ]
+    )
 
     PATH = "gs://levanter-data/marin/v0/url_blooms/"
 
@@ -136,8 +137,9 @@ if __name__ == "__main__":
     total = 0
 
     auth_req = Request()
-    id_token = google.oauth2.id_token.fetch_id_token(auth_req, audience="https://us-central1-hai-gcp-models.cloudfunctions.net/build_rpv2_bloom_filter")
-
+    id_token = google.oauth2.id_token.fetch_id_token(
+        auth_req, audience="https://us-central1-hai-gcp-models.cloudfunctions.net/build_rpv2_bloom_filter"
+    )
 
     for crawl in RPV2_CRAWLS[0:10]:
         for part, slice, path in all_paths_for_crawl(PATH, crawl, lang):
@@ -159,4 +161,3 @@ if __name__ == "__main__":
     #
     #     out_path = f"gs://levanter-data/marin/v0/url_blooms/{lang}_{crawl}.bloom"
     #     create_union_blooms_task(out_path, paths, credentials, id_token)
-
