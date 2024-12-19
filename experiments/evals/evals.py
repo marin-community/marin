@@ -114,7 +114,10 @@ def evaluate_alpaca_eval(model_name: str, model_path: str) -> ExecutorStep:
 
 
 def default_eval(
-    step: ExecutorStep | InputName, evals: list[EvalTaskConfig] | None = None, max_eval_instances: int | None = None
+    step: ExecutorStep | InputName,
+    evals: list[EvalTaskConfig] | None = None,
+    max_eval_instances: int | None = None,
+    run_mmlu: bool = False,
 ) -> ExecutorStep:
     """
     Create an ExecutorStep to evaluate the model using LM Evaluation Harness on a step.
@@ -123,6 +126,8 @@ def default_eval(
         step (ExecutorStep | InputName): step to evaluate.
         evals (list[EvalTaskConfig]): List of evals to run- defaults to a set of CORE_TASKS.
         max_eval_instances (int): Maximum number of evaluation instances to run.
+        run_mmlu (bool): Whether to run MMLU 0-shot evaluation. (we don't want MMLU by default as it is
+                                etremely noisy at 1B scale, but want it as an option.)
     """
 
     # this logic extracts the `ExecutorStep` corresponding to the training step, and get the model path
@@ -138,6 +143,13 @@ def default_eval(
     # Default to CORE_TASKS
     if evals is None:
         evals = CORE_TASKS
+
+    # run MMLU 0-shot evaluation if specified, remove if set to False
+    if run_mmlu:
+        evals.append(EvalTaskConfig(name="mmlu", num_fewshot=0))
+
+    if not run_mmlu and EvalTaskConfig(name="mmlu", num_fewshot=0) in evals:
+        evals.remove(EvalTaskConfig(name="mmlu", num_fewshot=0))
 
     return ExecutorStep(
         name=f"evaluation/levanter_lm_evaluation_harness/{executor_step.name}",
