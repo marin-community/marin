@@ -133,7 +133,7 @@ def my_tpu_job():
     ...
 ```
 
-## Running Evals on NLP Cluster
+## Evaluation
 
 By default, we run evaluations on TPU using `lm-evaluation-harness` via Levanter. See 
 [`experiments/evals/README_eval.md`](./experiments/evals/README_eval.md) for more details.
