@@ -126,7 +126,7 @@ def default_eval(
         step (ExecutorStep | InputName): step to evaluate.
         evals (list[EvalTaskConfig]): List of evals to run- defaults to a set of CORE_TASKS.
         max_eval_instances (int): Maximum number of evaluation instances to run.
-        run_mmlu (bool): Whether to run MMLU 0-shot evaluation. (we don't want MMLU by default as it is
+        run_mmlu (bool): Whether to run MMLU 0 and 5 shot evaluation. (we don't want MMLU by default as it is
                                 etremely noisy at 1B scale, but want it as an option.)
     """
 
