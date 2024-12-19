@@ -46,7 +46,7 @@ def fit_power_law(x, y, delta=1e-3, use_log_space=False, initial_guess=None):
             initial_guess = [1.0, 1.0, 1.0, 1.0, 0.0]  # [A, B, alpha, beta, E]
 
     def model(params, N, D):
-        """Power-law model equation, with optional log-space transformation for A and B."""
+        """power-law model equation, with optional log-space transformation for A and B."""
         if use_log_space:
             log_A, log_B, alpha, beta, E = params
             A, B = np.exp(log_A), np.exp(log_B)
@@ -55,7 +55,7 @@ def fit_power_law(x, y, delta=1e-3, use_log_space=False, initial_guess=None):
         return A / (N ** alpha) + B / (D ** beta) + E
 
     def objective(params):
-        """Objective function: Huber loss on residuals, applying log outside if required."""
+        # huber loss on residuals
         predictions = model(params, N, D)
         if use_log_space:
             residuals = np.log(y) - np.log(predictions)
@@ -64,13 +64,13 @@ def fit_power_law(x, y, delta=1e-3, use_log_space=False, initial_guess=None):
         loss = np.sum(huber(delta, residuals))
         return loss
 
-    # Define bounds
+    # define bounds
     if use_log_space:
         bounds = [(None, None), (None, None), (0, None), (0, None), (0, None)]  # log A, log B unrestricted
     else:
         bounds = [(0, None), (0, None), (0, None), (0, None), (0, None)]  # A, B, alpha, beta, E >= 0
 
-    # Optimize the parameters
+    # optimize the objective function
     result = minimize(objective, initial_guess, method='L-BFGS-B', bounds=bounds, epsilon=1e-7)
 
     print(result)
@@ -84,18 +84,3 @@ def fit_power_law(x, y, delta=1e-3, use_log_space=False, initial_guess=None):
         return A, B, alpha, beta, E
     else:
         raise RuntimeError(f"Optimization failed: {result.message}")
-
-# Example usage:
-if __name__ == "__main__":
-    # Example data
-    N = np.array([1, 2, 3, 4, 5])
-    D = np.array([2, 3, 4, 5, 6])
-    y = np.array([10, 5, 3, 2, 1])  # Target values
-
-    # Fit the model without log-space optimization
-    params = fit_power_law((N, D), y, use_log_space=False)
-    print("Fitted Parameters without log-space (A, B, alpha, beta, E):", params)
-
-    # Fit the model with log-space optimization
-    params_log = fit_power_law((N, D), y, use_log_space=True)
-    print("\nFitted Parameters with log-space (A, B, alpha, beta, E):", params_log)
