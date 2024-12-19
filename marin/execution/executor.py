@@ -391,6 +391,7 @@ class Executor:
         self.status_actor: StatusActor = StatusActor.options(
             name="status_actor", get_if_exists=True, lifetime="detached"
         ).remote()
+        # TODO: Add a design docstring of how status_actor works
 
     def run(
         self,
@@ -747,7 +748,11 @@ def _release_lock_and_wait_for_status_actor(
         ray.get(actor_refs)
 
 
-def _get_lock_or_wait_for_step_with_lock(output_path: str, status_actor: StatusActor, ray_task_id: str):
+def _get_lock_or_wait_for_step_with_lock(
+    output_path: str, status_actor: StatusActor, ray_task_id: str
+) -> list[bool, bool]:
+    """This function tries to get the lock on a particular output path. Incase it can't get the lock, it waits
+    for the step that has the lock on the particular output path, to finish or fail."""
 
     # Try and get the lock from the status actor
     actor_lock_task_id = ray.get(status_actor.get_lock.remote(output_path, ray_task_id=ray_task_id))
@@ -804,13 +809,13 @@ def execute_after_dependencies(
     """
     ray_task_id = ray.get_runtime_context().get_task_id()
     try:
-        lock, finished = _get_lock_or_wait_for_step_with_lock(output_path, status_actor, ray_task_id)
+        has_lock, finished = _get_lock_or_wait_for_step_with_lock(output_path, status_actor, ray_task_id)
         if finished:  # Step with lock finished successfully
             return
     except Exception as e:
         raise e
 
-    assert lock, f"Must have the lock on {output_path} before proceeding"
+    assert has_lock, f"Must have the lock on {output_path} before proceeding"
     # Lock is with this process, we can proceed
 
     actor_refs: list[ray.ObjectRef] = []  # Holds references to ray remote calls made by this functions
@@ -910,7 +915,8 @@ class ExecutorMainConfig:
 @draccus.wrap()
 def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], description: str | None = None):
     """Main entry point for experiments (to standardize)"""
-    ray.init(namespace="marin")  # We need to init ray here to make sure we have the correct namespace
+    ray.init(namespace="marin")  # We need to init ray here to make sure we have the correct namespace for actors
+    # (status_actor in particular)
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
