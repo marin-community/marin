@@ -141,6 +141,8 @@ def default_eval(
     if evals is None:
         evals = CORE_TASKS
 
+    logger.info(f"Running evals on the following tasks: {evals}")
+
     return ExecutorStep(
         name=f"evaluation/levanter_lm_evaluation_harness/{executor_step.name}",
         fn=evaluate,
