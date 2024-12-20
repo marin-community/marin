@@ -28,21 +28,28 @@ def compare_outputs(input_name, expected_file, output_file):
     os.makedirs(diff_path, exist_ok=True)
     base_name = os.path.basename(expected_file)
     diff_name = f"{base_name}.diff.md"
+    # first see if we can even expect to run pandiff by using which
     try:
-        result = subprocess.run(
+        subprocess.run(
+            ["which", "pandiff"],
+            check=True,
+            text=True,
+            capture_output=True,
+        )
+    except subprocess.CalledProcessError:
+        raise AssertionError(
+            f"Output does not match expected for {input_name}. pandiff not found, skipping diff."
+        ) from None
+
+    try:
+        subprocess.run(
             ["pandiff", expected_file, output_file, "-o", f"{diff_path}/{diff_name}"],
             check=True,
             text=True,
             capture_output=True,
         )
-
-        # print stdout and stderr and the command
-        print(result.stdout)
-        print(result.stderr)
-        print(result.args)
     except subprocess.CalledProcessError as e:
-        print(f"Error running pandiff: {e}")
-        raise
+        raise AssertionError(f"Output does not match expected for {input_name}. Error running pandiff: {e}") from e
 
     # show the diff
     raise AssertionError(
