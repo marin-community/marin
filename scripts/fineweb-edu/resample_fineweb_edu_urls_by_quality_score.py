@@ -11,7 +11,8 @@ python marin/run/ray_run.py \
     --input_pattern 'gs://marin-us-central2/scratch/nfliu/urls_and_scores/fineweb-edu*/CC*/*_urls_and_quality_classifier_scores.jsonl.gz' \
     --cc_prefix 'gs://marin-us-central2/scratch/nfliu/urls_and_scores/fineweb-edu-cc/' \
     --train_output_path gs://marin-us-central2/scratch/nfliu/datasets/url_scoring/fineweb-edu/train.parquet \
-    --test_output_path gs://marin-us-central2/scratch/nfliu/datasets/url_scoring/fineweb-edu/test.parquet
+    --cc_test_output_path gs://marin-us-central2/scratch/nfliu/datasets/url_scoring/fineweb-edu/test_cc.parquet \
+    --balanced_test_output_path gs://marin-us-central2/scratch/nfliu/datasets/url_scoring/fineweb-edu/test_balanced.parquet
 ```
 """
 import json
@@ -40,13 +41,19 @@ class ResamplingConfig:
     input_pattern: str
     cc_prefix: str
     train_output_path: str
-    test_output_path: str
+    cc_test_output_path: str
+    balanced_test_output_path: str
     test_size: float = 0.2
 
 
 @ray.remote(memory=256 * 1024 * 1024 * 1024, num_cpus=8)
 def resample_urls_remote(
-    input_pattern: str, cc_prefix: str, train_output_path: str, test_output_path: str, test_size: float = 0.2
+    input_pattern: str,
+    cc_prefix: str,
+    train_output_path: str,
+    cc_test_output_path: str,
+    balanced_test_output_path: str,
+    test_size: float = 0.2,
 ):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     logger = logging.getLogger(__name__)
@@ -55,9 +62,14 @@ def resample_urls_remote(
     random.seed(0)
 
     train_success_path = train_output_path + ".SUCCESS"
-    test_success_path = test_output_path + ".SUCCESS"
+    cc_test_success_path = cc_test_output_path + ".SUCCESS"
+    balanced_test_success_path = cc_test_output_path + ".SUCCESS"
     # Skip if we've already written success files for the training and test datasets.
-    if fsspec_exists(train_success_path) and fsspec_exists(test_success_path):
+    if (
+        fsspec_exists(train_success_path)
+        and fsspec_exists(cc_test_success_path)
+        and fsspec_exists(balanced_test_success_path)
+    ):
         return
 
     input_filepaths = fsspec_glob(input_pattern)
@@ -209,10 +221,11 @@ def resample_urls_remote(
 
     # Resample train examples
     resampled_train_examples = bucket_and_resample(train_examples)
-    # Resample test examples
-    resampled_test_examples = bucket_and_resample(test_examples, cc_discrete_labels_to_counts)
+    # Resample test examples to match CC distribution
+    cc_resampled_test_examples = bucket_and_resample(test_examples, cc_discrete_labels_to_counts)
+    # Resample test examples to be balanced
+    balanced_resampled_test_examples = bucket_and_resample(test_examples)
 
-    # Convert train examples to a PyArrow Table
     train_table = pa.Table.from_pylist(resampled_train_examples)
     # Get filesystem and path for the train output
     fs_train, train_path_in_fs = fsspec.core.url_to_fs(train_output_path)
@@ -221,27 +234,41 @@ def resample_urls_remote(
     pq.write_table(train_table, train_path_in_fs, filesystem=fs_train, compression="snappy")
     logger.info(f"Wrote {len(resampled_train_examples)} train examples")
 
-    # Convert all test examples to a PyArrow Table
-    test_table = pa.Table.from_pylist(resampled_test_examples)
+    cc_resampled_test_table = pa.Table.from_pylist(cc_resampled_test_examples)
     # Get filesystem and path for the test output
-    fs_test, test_path_in_fs = fsspec.core.url_to_fs(test_output_path)
+    fs_test, cc_test_path_in_fs = fsspec.core.url_to_fs(cc_test_output_path)
     # Write all test examples to the output path as Parquet (without resampling)
-    logger.info(f"Writing {len(test_examples)} test examples")
-    pq.write_table(test_table, test_path_in_fs, filesystem=fs_test, compression="snappy")
-    logger.info(f"Wrote {len(test_examples)} test examples")
+    logger.info(f"Writing {len(cc_resampled_test_examples)} test examples")
+    pq.write_table(cc_resampled_test_table, cc_test_path_in_fs, filesystem=fs_test, compression="snappy")
+    logger.info(f"Wrote {len(cc_resampled_test_examples)} test examples")
+
+    balanced_resampled_test_table = pa.Table.from_pylist(balanced_resampled_test_examples)
+    # Get filesystem and path for the test output
+    fs_test, balanced_test_path_in_fs = fsspec.core.url_to_fs(balanced_test_output_path)
+    # Write all test examples to the output path as Parquet (without resampling)
+    logger.info(f"Writing {len(balanced_resampled_test_examples)} test examples")
+    pq.write_table(balanced_resampled_test_table, balanced_test_path_in_fs, filesystem=fs_test, compression="snappy")
+    logger.info(f"Wrote {len(balanced_resampled_test_examples)} test examples")
 
     # Write success files indicating the number of examples written
     with fsspec.open(train_success_path, "wt", compression="infer") as f:
         f.write(json.dumps({"num_examples": len(resampled_train_examples)}))
-    with fsspec.open(test_success_path, "wt", compression="infer") as f:
-        f.write(json.dumps({"num_examples": len(test_examples)}))
+    with fsspec.open(cc_test_success_path, "wt", compression="infer") as f:
+        f.write(json.dumps({"num_examples": len(cc_resampled_test_examples)}))
+    with fsspec.open(balanced_test_success_path, "wt", compression="infer") as f:
+        f.write(json.dumps({"num_examples": len(balanced_resampled_test_examples)}))
 
 
 @draccus.wrap()
 def resample_urls(cfg: ResamplingConfig):
     _ = ray.get(
         resample_urls_remote.remote(
-            cfg.input_pattern, cfg.cc_prefix, cfg.train_output_path, cfg.test_output_path, cfg.test_size
+            cfg.input_pattern,
+            cfg.cc_prefix,
+            cfg.train_output_path,
+            cfg.cc_test_output_path,
+            cfg.balanced_test_output_path,
+            cfg.test_size,
         )
     )
 
