@@ -47,7 +47,7 @@ def run_levanter_sft(config: TrainSFTOnPodConfig):
         logger.info(f"Using output path: {config.output_path}")
         config = _update_config_to_use_out_path(config)
 
-    default_env = default_launch_config.env_for_accel(config.tpu_type)
+    default_env = default_launch_config.env_for_accel(config.tpu_type or "")
     env = _add_default_env_variables(config.env, default_env)
     _check_for_wandb_key(env)
     env = _add_run_env_variables(env)
@@ -166,7 +166,7 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
         logger.info(f"Using output path: {config.output_path}")
         config = _update_config_to_use_out_path(config)
 
-    env = _add_default_env_variables(config.env, default_launch_config.env_for_accel(config.tpu_type))
+    env = _add_default_env_variables(config.env, default_launch_config.env_for_accel(config.tpu_type or ""))
     _check_for_wandb_key(env)
     env = _add_run_env_variables(env)
     config = replace(config, env=env)
