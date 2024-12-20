@@ -3,7 +3,6 @@ import re
 from dataclasses import asdict
 from urllib.parse import urljoin
 
-import htmlmin
 from bs4 import BeautifulSoup
 
 from marin.markdown import to_markdown
@@ -130,6 +129,7 @@ def convert_page_with_readability(
     Returns:
         dict[str, str]: Dictionary containing the title, content, and HTML of the page.
     """
+    import htmlmin
     from readability import Document
 
     # remove null character and control characters
@@ -172,6 +172,7 @@ def convert_page_with_readability(
 
 def convert_page_legacy(html: str, url: str | None = None) -> dict[str, str]:
     print("This is Legacy method, use convert_page_python instead")
+    import htmlmin
     from readabilipy import simple_json_from_html_string
 
     reabilitied = simple_json_from_html_string(html, use_readability=True)

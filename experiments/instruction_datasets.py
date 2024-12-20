@@ -19,7 +19,8 @@ from marin.execution.executor import (
     this_output_path,
     versioned,
 )
-from operations.download.huggingface.download import DownloadConfig, download
+from operations.download.huggingface.download import DownloadConfig
+from operations.download.huggingface.download_hf import download_hf
 from operations.transform.conversation.transform_conversation import TransformSFTDatasetConfig, transform_dataset
 
 
@@ -78,6 +79,13 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         metadata_columns=["dataset", "id"],  # Keeping these metadata columns
         filetype="jsonl",  # Corrected from parquet to jsonl based on the file extension
     ),
+    "allenai/tulu-3-sft-mixture": InstructionDatasetConfig(
+        hf_dataset_id="allenai/tulu-3-sft-mixture",
+        revision="55e9fd6",  # The revision hash shown in the image
+        wait_for_completion=True,
+        metadata_columns=["dataset", "id"],  # Keeping these metadata columns
+        filetype="parquet",
+    ),
 }
 
 
@@ -92,12 +100,12 @@ def download_dataset_step(dataset: InstructionDatasetConfig) -> ExecutorStep:
     dataset_name = get_directory_friendly_dataset_name(dataset.hf_dataset_id)
     download_step = ExecutorStep(
         name=f"raw/{dataset_name}",
-        fn=download,
+        fn=download_hf,
         config=DownloadConfig(
             hf_dataset_id=dataset.hf_dataset_id,
             revision=versioned(dataset.revision),
             gcs_output_path=this_output_path(),
-            wait_for_completion=dataset.wait_for_completion,
+            wait_for_completion=True,
         ),
     )
 
@@ -108,8 +116,10 @@ def transform_dataset_step(dataset: InstructionDatasetConfig, download_step: Exe
     dataset_name = get_directory_friendly_dataset_name(dataset.hf_dataset_id)
     download_data = output_path_of(
         download_step,
-        f"{dataset.revision}/huggingface.co/datasets/{dataset.hf_dataset_id}/resolve/{dataset.revision}",
+        f"{dataset.revision}",
     )
+
+    # Transform the dataset
     transform_step = ExecutorStep(
         name=f"documents/{dataset_name}",
         fn=transform_dataset,

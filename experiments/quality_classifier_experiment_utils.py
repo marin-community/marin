@@ -21,6 +21,8 @@ class ExperimentConfig:
     experiment_name: str
     quality_classifier_model_path: str | ExecutorStep
     input_data_source_to_path: dict[str, str] = field(
+        # TODO(chris): Change this to an ExecutorStep. This is currently hardcoded because we would need to
+        # re-run the downloading of fineweb and run the extraction script on it.
         default_factory=lambda: {
             "fineweb_2024_18": "gs://marin-us-central2/documents/fineweb-small-resiliparse-preserve-formatting-e8c6ec/md/CC-MAIN-2024-18",
         }
