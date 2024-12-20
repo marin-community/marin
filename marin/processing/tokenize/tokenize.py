@@ -196,7 +196,7 @@ def levanter_tokenize_supervised(config: TokenizeConfig):
     logger.info(f"Finished caching supervised dataset to {config.cache_path}.")
 
 
-@ray.remote(runtime_env=RuntimeEnv(env_vars={"JAX_PLATFORM_NAME": "cpu"}))
+@ray.remote(runtime_env=RuntimeEnv(env_vars={"JAX_PLATFORMS": "cpu"}))
 def levanter_tokenize(input_paths: list[str] | str, tokenizer_name: str, output_path: str):
     from levanter.data.text import BatchTokenizer
 
