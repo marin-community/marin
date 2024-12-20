@@ -27,7 +27,7 @@ from marin.execution.status_actor import StatusActor
 
 @pytest.fixture(scope="module", autouse=True)
 def ray_start():
-    ray.init("local", namespace="marin")
+    ray.init(namespace="marin")
     yield
     ray.shutdown()  # teardown
 

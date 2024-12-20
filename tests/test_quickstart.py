@@ -8,7 +8,7 @@ import ray
 
 @pytest.fixture
 def ray_start():
-    ray.init("local")  # setup
+    ray.init(namespace="marin")  # setup
     yield
     ray.shutdown()  # teardown
 
