@@ -60,8 +60,7 @@ def create_experiment_configs() -> list[ExperimentConfig]:
 def main():
     steps = []
     for experiment_config in create_experiment_configs():
-        _, steps = create_steps(experiment_config)
-        steps.extend(steps)
+        steps.extend(create_steps(experiment_config))
     executor_main(steps=steps)
 
 
