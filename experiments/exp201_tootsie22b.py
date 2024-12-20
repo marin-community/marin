@@ -50,6 +50,8 @@ llama_22b_tootsie = default_train(
     model_config=llama_22b,
     train_config=llama_22b_train_config,
     tags=["llama", "22b", "wsd-s", "exp201", "tootsie"],
+    eval_harness_tasks=[],
+    use_default_evaluation=False,
 )
 
 if __name__ == "__main__":
