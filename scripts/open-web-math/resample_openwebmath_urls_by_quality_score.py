@@ -13,9 +13,6 @@ python marin/run/ray_run.py \
     --train_output_path gs://marin-us-central2/scratch/nfliu/datasets/url_scoring/open-web-math/train.parquet \
     --cc_test_output_path gs://marin-us-central2/scratch/nfliu/datasets/url_scoring/open-web-math/test_cc.parquet \
     --balanced_test_output_path gs://marin-us-central2/scratch/nfliu/datasets/url_scoring/open-web-math/test_balanced.parquet
-
-
-
 ```
 """
 import json
