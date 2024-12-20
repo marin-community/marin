@@ -10,10 +10,7 @@ import ray
 from google.api_core.exceptions import Forbidden as GcpForbiddenException
 from levanter.data.text import LMMixtureDatasetConfig
 from levanter.infra.ray_tpu import run_on_pod_multislice_resumable, run_on_pod_resumable
-from levanter.main import (
-    sft,  # If sft.py is meant to be imported directly
-    train_lm,
-)
+from levanter.main import sft, train_lm
 from mergedeep import mergedeep
 from ray.runtime_env import RuntimeEnv
 
@@ -50,7 +47,8 @@ def run_levanter_sft(config: TrainSFTOnPodConfig):
         logger.info(f"Using output path: {config.output_path}")
         config = _update_config_to_use_out_path(config)
 
-    env = _add_default_env_variables(config.env, default_launch_config.get("env"))
+    default_env = default_launch_config.env_for_accel(config.tpu_type)
+    env = _add_default_env_variables(config.env, default_env)
     _check_for_wandb_key(env)
     env = _add_run_env_variables(env)
     config = replace(config, env=env)
@@ -168,7 +166,7 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
         logger.info(f"Using output path: {config.output_path}")
         config = _update_config_to_use_out_path(config)
 
-    env = _add_default_env_variables(config.env, default_launch_config.get("env"))
+    env = _add_default_env_variables(config.env, default_launch_config.env_for_accel(config.tpu_type))
     _check_for_wandb_key(env)
     env = _add_run_env_variables(env)
     config = replace(config, env=env)
