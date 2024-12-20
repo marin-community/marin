@@ -48,5 +48,5 @@ if __name__ == "__main__":
         experiment_name="mmlu-100k-rw-100k",
         quality_classifier_model_path=marin_mmlu_100k_rw_100k,
     )
-    _, steps = create_steps(experiment_config)
+    steps = create_steps(experiment_config)
     executor_main(steps)

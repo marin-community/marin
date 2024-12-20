@@ -52,5 +52,5 @@ stackexchange_experiment_config = ExperimentConfig(
 )
 
 if __name__ == "__main__":
-    _, steps = create_steps(stackexchange_experiment_config)
+    steps = create_steps(stackexchange_experiment_config)
     executor_main(steps)
