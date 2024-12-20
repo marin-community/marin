@@ -137,7 +137,7 @@ def default_train(
 
     vocab_size = _get_vocab_size(pretraining_data)
 
-    steps_per_export = train_config.steps_per_export if train_config.steps_per_export is not None else 1000
+    steps_per_export = train_config.steps_per_export
 
     # Max length of 64 characters for WANDB run is 64 characters
     name = name[:64]
