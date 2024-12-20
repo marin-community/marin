@@ -63,7 +63,7 @@ def resample_urls_remote(
 
     train_success_path = train_output_path + ".SUCCESS"
     cc_test_success_path = cc_test_output_path + ".SUCCESS"
-    balanced_test_success_path = cc_test_output_path + ".SUCCESS"
+    balanced_test_success_path = balanced_test_output_path + ".SUCCESS"
     # Skip if we've already written success files for the training and test datasets.
     if (
         fsspec_exists(train_success_path)
