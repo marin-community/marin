@@ -5,6 +5,7 @@ import shutil
 from typing import ClassVar
 
 import fsspec
+import jax
 import jmp
 import levanter.eval_harness as eval_harness
 from levanter.distributed import RayConfig
@@ -63,6 +64,8 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
             # convert to the config that Levanter's eval_harness expects
             tasks = convert_to_levanter_task_config(evals)
 
+            print(f"tasks: {tasks}")
+
             model_path = os.path.join(LevanterTpuEvaluator.CACHE_PATH, model.path)
 
             eval_config = eval_harness.EvalHarnessMainConfig(
@@ -80,21 +83,35 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
 
             results = eval_harness.run_eval_harness_main(eval_config)
 
-            try:
-                # add a results.json to output path
-                output_path = os.path.join(output_path, "results.json")
+            # Debug logs for distributed processes
+            logger.info(f"JAX process_count: {jax.process_count()}, process_index: {jax.process_index()}")
+            print(f"JAX process_count: {jax.process_count()}, process_index: {jax.process_index()}") # print to be safe
 
-                logger.info(f"Uploading results to GCS: {output_path}")
+            logger.info(f"Results: {results}")
+            print(f"Results: {results}") # print to be safe
 
-                # write output JSON directly to output_path on GCS
-                fs = fsspec.filesystem("gcs")
-                with fs.open(output_path, "w") as f:
-                    json.dump(results, f, indent=2)
+            if jax.process_index() == 0:
 
-                logger.info("Upload completed successfully.")
+                try:
+                    # add a results.json to output path
+                    output_path = os.path.join(output_path, "results.json")
 
-            except Exception as upload_error:
-                logger.info(f"Failed to upload results to GCS: {upload_error}")
+                    logger.info(f"Uploading results to GCS: {output_path}")
+
+                    logger.info(f"Size of results dict: approximately {len(json.dumps(results))} bytes")
+
+                    # write output JSON directly to output_path on GCS
+                    fs = fsspec.filesystem("gcs")
+                    with fs.open(output_path, "w") as f:
+                        json.dump(results, f, indent=2)
+
+                    logger.info("Upload completed successfully.")
+
+                except Exception as upload_error:
+                    logger.info(f"Failed to upload results to GCS: {upload_error}")
+
+            else:
+                logger.info("Skipping upload as this is not the main process.")
 
         except Exception as e:
 
