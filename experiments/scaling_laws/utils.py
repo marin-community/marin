@@ -1,6 +1,7 @@
-from scipy.optimize import minimize
-import numpy as np
+import jax
 import jax.numpy as jnp
+import numpy as np
+from scipy.optimize import minimize
 from scipy.special import huber
 
 
@@ -75,7 +76,7 @@ def fit_power_law(x, y, delta=1e-3, use_log_space=False, initial_guess=None):
         bounds = [(0, None), (0, None), (0, None), (0, None), (0, None)]  # A, B, alpha, beta, E >= 0
 
     # optimize the objective function
-    result = minimize(objective, initial_guess, method="L-BFGS-B", bounds=bounds, epsilon=1e-7)
+    result = minimize(objective, initial_guess, method="L-BFGS-B", bounds=bounds)
 
     print(result)
 
