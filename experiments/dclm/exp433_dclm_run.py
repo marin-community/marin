@@ -5,6 +5,8 @@ from experiments.pretraining_datasets import dclm_baseline, proofpile_2, starcod
 from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
 
+from experiments.evals.task_configs import CORE_TASKS_PLUS_MMLU
+
 gpt_neox_tokenizer = "EleutherAI/gpt-neox-20b"
 
 ### Define the datasets and tokenization configurations
@@ -87,7 +89,7 @@ EXPERIMENT_TAG_MIXTURE = ["433_dclm_1b_1x"]
 EXPERIMENT_TAG_BASELINE_ONLY = ["433_dclm_baseline_1b_1x"]
 
 dclm_mixture_model = default_train(
-    name="dclm_1b_1x_replication_oct26",
+    name="dclm_1b_1x_replication_eval_check",
     tokenized=dclm_mixture_config,
     model_config=llama_1_4b_dclm,
     train_config=training_config,
@@ -102,7 +104,7 @@ dclm_baseline_only_model = default_train(
     tags=EXPERIMENT_TAG_BASELINE_ONLY,
 )
 
-dclm_mixture_eval = default_eval(step=dclm_mixture_model)
+dclm_mixture_eval = default_eval(step=dclm_mixture_model, evals=CORE_TASKS_PLUS_MMLU)
 
 dclm_baseline_only_eval = default_eval(step=dclm_baseline_only_model)
 
@@ -113,8 +115,8 @@ if __name__ == "__main__":
             starcoderdata_tokenized,
             proofpile_2_tokenized,
             dclm_mixture_model,
-            dclm_baseline_only_model,
+            #dclm_baseline_only_model,
             dclm_mixture_eval,
-            dclm_baseline_only_eval,
+            #dclm_baseline_only_eval,
         ]
     )

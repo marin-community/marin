@@ -26,7 +26,7 @@ CORE_TASKS = (
 )
 
 MMLU_TASKS = (
-    EvalTaskConfig("mmlu", 0, task_alias="mmlu_0shot"),
+    #EvalTaskConfig("mmlu", 0, task_alias="mmlu_0shot"),
     EvalTaskConfig("mmlu", 5, task_alias="mmlu_5shot"),
 )
 
