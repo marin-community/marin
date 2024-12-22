@@ -7,24 +7,19 @@ from scipy.special import huber
 
 def chinchilla_loss(params, y, x):
     predicted = inv_exp_predict(params, x)
-
     return jnp.mean(huber(y - predicted))
 
 
 def inv_exp_predict(params, x):
     (log_constant, log_scale, exponent) = params
-    # NOTE: chinchilla uses huber
     z = jax.nn.logsumexp(log_scale - exponent * x, axis=1)
-    # log(exp(a) + exp(b)) = log(exp(a) * (1 + exp(b - a))) = a + log(1 + exp(b - a))
     predicted = log_constant + jnp.log1p(jnp.exp(z - log_constant))
     return predicted
 
 
 def mse_loss(params, y, x):
-    # ignore the scale
     (log_constant, _, exponent) = params
     targets = log_constant + jnp.einsum("ij,j->i", x, exponent)
-
     return jnp.mean((y - targets) ** 2)
 
 
@@ -51,7 +46,7 @@ def fit_power_law(x, y, delta=1e-3, use_log_space=False, initial_guess=None):
             initial_guess = [1.0, 1.0, 1.0, 1.0, 0.0]  # [A, B, alpha, beta, E]
 
     def model(params, N, D):
-        """power-law model equation, with optional log-space transformation for A and B."""
+        """power-law model equation"""
         if use_log_space:
             log_A, log_B, alpha, beta, E = params
             A, B = np.exp(log_A), np.exp(log_B)
@@ -71,9 +66,9 @@ def fit_power_law(x, y, delta=1e-3, use_log_space=False, initial_guess=None):
 
     # define bounds
     if use_log_space:
-        bounds = [(None, None), (None, None), (0, None), (0, None), (0, None)]  # log A, log B unrestricted
+        bounds = [(None, None), (None, None), (0, None), (0, None), (0, None)]
     else:
-        bounds = [(0, None), (0, None), (0, None), (0, None), (0, None)]  # A, B, alpha, beta, E >= 0
+        bounds = [(0, None), (0, None), (0, None), (0, None), (0, None)] 
 
     # optimize the objective function
     result = minimize(objective, initial_guess, method="L-BFGS-B", bounds=bounds)
