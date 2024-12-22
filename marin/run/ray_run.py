@@ -137,6 +137,13 @@ def main():
                 env_vars[item[0]] = ""
             elif len(item) == 2:
                 # If both key and value are provided, store them as a key-value pair
+                if "=" in item[0]:
+                    logger.error(
+                        f"Invalid key provided for environment variable: {' '.join(item)}. "
+                        f"Key should not contain '='.\n\n"
+                        f"You probably meant to do '-e {' '.join(item[0].split('='))}'."
+                    )
+                    exit(1)
                 env_vars[item[0]] = item[1]
 
     # Now env_vars is a dictionary with the environment variables set using -e
