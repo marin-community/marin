@@ -20,7 +20,7 @@ from torch.utils.data.distributed import DistributedSampler
 from transformers import AdamW, BertForSequenceClassification, BertTokenizer
 
 from marin.classifiers.bert.utils import BertDataset, format_example
-from marin.classifiers.utils import format_dataset, merge_shards, shuffle, split_dataset
+from marin.classifiers.utils import format_dataset, merge_dataset_shards, shuffle, split_dataset
 from marin.utils import fsspec_cpdir, fsspec_exists, fsspec_glob, fsspec_rm, remove_tpu_lockfile_on_exit
 
 logger = logging.getLogger("ray")
@@ -184,7 +184,7 @@ def train_model(
             val_path = os.path.join(tmp_dir, "data.val")
             model_path = os.path.join(tmp_dir, "model.bin")
 
-            merge_shards(shard_paths, merge_path)
+            merge_dataset_shards(shard_paths, merge_path)
             format_dataset(merge_path, format_example)
             split_dataset(merge_path, train_path, val_path, val_frac, seed)
             shuffle(train_path, train_path, seed)
