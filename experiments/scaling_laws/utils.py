@@ -4,6 +4,8 @@ from scipy.special import huber
 from collections.abc import Sequence
 from typing import Any
 
+import matplotlib.pyplot as plt
+
 try:
     import pandas as pd
 except ImportError:
@@ -76,10 +78,67 @@ def pull_metrics_from_wandb(
             data.append(step_data)
     return pd.DataFrame(data)
 
-def filter_zero_d(N, D, losses):
-    idx = (D != 0)
-    return N[idx], D[idx], losses[idx]
+def filter_zero_d(df: pd.DataFrame, d_key: str = "throughput/total_tokens") -> pd.DataFrame:
+    """
+    Returns a new DataFrame that excludes any rows where the specified
+    'd_key' column is zero.
+    """
+    return df[df[d_key] != 0].copy()
 
 def predict_power_law(params, N, D):
     A, B, alpha, beta, E = params
     return A / (N ** alpha) + B / (D ** beta) + E
+
+def aggregate_steps(
+    df: pd.DataFrame, 
+    step_mode: str = "average", 
+    step_range: tuple[int, int] = (1, 5),
+    group_col: str = "run",
+) -> pd.DataFrame:
+    """
+    step_mode can be:
+      - "average": average step_range across each run
+      - "last": pick the max step within step_range
+      - "all": keep every step (no grouping)
+    step_range is inclusive for min_step to max_step
+    """
+    min_step, max_step = step_range
+    df_filtered = df[(df["step"] >= min_step) & (df["step"] <= max_step)]
+
+    if step_mode == "average":
+        grouped = df_filtered.groupby(group_col, as_index=False).mean(numeric_only=True)
+        return grouped
+    elif step_mode == "last":
+        # pick the largest step in the range for each run
+        def pick_last(g):
+            last_step_idx = g["step"].idxmax()
+            return g.loc[last_step_idx]
+        grouped = df_filtered.groupby(group_col, as_index=False).apply(pick_last)
+        return grouped.reset_index(drop=True)
+    elif step_mode == "all":
+        # no aggregation
+        return df_filtered.copy()
+    else:
+        raise ValueError(f"Unknown step_mode: {step_mode}")
+
+def extract_ndy(
+    df: pd.DataFrame,
+    param_count_col: str = "parameter_count",
+    tokens_col: str = "throughput/total_tokens",
+    loss_col: str = "eval/paloma/c4_en/bpb",
+):
+    N = df[param_count_col].values
+    D = df[tokens_col].values
+    y = df[loss_col].values
+    return N, D, y
+
+def plot_fit(actual, predicted, title="Power Law Fit"):
+    plt.figure()
+    plt.scatter(actual, predicted, alpha=0.7)
+    plt.xlabel("Actual Loss")
+    plt.ylabel("Predicted Loss")
+    plt.title(title)
+    # disable offset
+    plt.ticklabel_format(useOffset=False)  # Disable offset notation
+    plt.grid(True)
+    plt.show()
