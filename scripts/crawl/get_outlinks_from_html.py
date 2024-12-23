@@ -212,9 +212,17 @@ def process_one_batch(input_path: str, output_path: str):
                 for link in main_text_with_links.find_all("a", href=True):
                     href = link.get("href")
                     if href:
+                        # If we've already seen this link and know it's unjoinable,
+                        # just skip it
                         if (url, href) in unjoinable_links:
                             continue
-                        absolute_link_target = urljoin(url, href)
+
+                        # Check again, since there seem to be some cases where
+                        # main text extraction mutates the link target
+                        try:
+                            absolute_link_target = urljoin(url, href)
+                        except Exception:
+                            continue
                         if is_absolute_link_parseable(absolute_link_target):
                             canonical_link = w3lib.url.canonicalize_url(absolute_link_target)
                             main_text_outbound_links.add(canonical_link)
