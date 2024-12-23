@@ -25,20 +25,31 @@ def power_law_loss(params, N, D, y, use_log_space, delta):
         residuals = np.log(y) - np.log(predictions)
     else:
         residuals = y - predictions
-    return np.sum(huber(delta, residuals))
+    return np.mean(huber(delta, residuals))
 
 def fit_power_law(N, D, y, use_log_space=False, initial_guess=None, delta=1e-3):
-    if initial_guess is None:
-        if use_log_space:
-            initial_guess = [0.0, 0.0, 1.0, 1.0, 0.0]
-        else:
-            initial_guess = [1.0, 1.0, 1.0, 1.0, 0.0]
-
-    bounds = (
-        [(None, None), (None, None), (0, None), (0, None), (0, None)]
-        if use_log_space
-        else [(0, None), (0, None), (0, None), (0, None), (0, None)]
-    )
+    if use_log_space:
+        # Optimize log_A and log_B to ensure A, B > 0
+        if initial_guess is None:
+            initial_guess = [0.0, 0.0, 1.0, 1.0, 0.0]  # [log_A, log_B, alpha, beta, E]
+        bounds = [
+            (None, None),  # log_A unbounded
+            (None, None),  # log_B unbounded
+            (0, None),      # alpha >= 0
+            (0, None),      # beta >= 0
+            (0, None)       # E >= 0
+        ]
+    else:
+        # Directly optimize A, B with constraints A, B >= 0
+        if initial_guess is None:
+            initial_guess = [1.0, 1.0, 1.0, 1.0, 0.0]  # [A, B, alpha, beta, E]
+        bounds = [
+            (0, None),      # A >= 0
+            (0, None),      # B >= 0
+            (0, None),      # alpha >= 0
+            (0, None),      # beta >= 0
+            (0, None)       # E >= 0
+        ]
 
     def objective(params):
         return power_law_loss(params, N, D, y, use_log_space, delta)
@@ -100,37 +111,23 @@ def aggregate_steps(
       - "average": average step_range across each run
       - "last": pick the max step within step_range
       - "all": keep every step (no grouping)
-    step_range is inclusive for min_step to max_step
     """
-    min_step, max_step = step_range
-    df_filtered = df[(df["step"] >= min_step) & (df["step"] <= max_step)]
 
     if step_mode == "average":
-        grouped = df_filtered.groupby(group_col, as_index=False).mean(numeric_only=True)
+        grouped = df.groupby(group_col, as_index=False).mean(numeric_only=True)
         return grouped
     elif step_mode == "last":
         # pick the largest step in the range for each run
         def pick_last(g):
             last_step_idx = g["step"].idxmax()
             return g.loc[last_step_idx]
-        grouped = df_filtered.groupby(group_col, as_index=False).apply(pick_last)
+        grouped = df.groupby(group_col, as_index=False).apply(pick_last)
         return grouped.reset_index(drop=True)
     elif step_mode == "all":
         # no aggregation
-        return df_filtered.copy()
+        return df.copy()
     else:
         raise ValueError(f"Unknown step_mode: {step_mode}")
-
-def extract_ndy(
-    df: pd.DataFrame,
-    param_count_col: str = "parameter_count",
-    tokens_col: str = "throughput/total_tokens",
-    loss_col: str = "eval/paloma/c4_en/bpb",
-):
-    N = df[param_count_col].values
-    D = df[tokens_col].values
-    y = df[loss_col].values
-    return N, D, y
 
 def plot_fit(actual, predicted, title="Power Law Fit"):
     plt.figure()
@@ -142,3 +139,33 @@ def plot_fit(actual, predicted, title="Power Law Fit"):
     plt.ticklabel_format(useOffset=False)  # Disable offset notation
     plt.grid(True)
     plt.show()
+
+def extract_ndy(
+    df: pd.DataFrame,
+    param_count_col: str = "parameter_count",
+    tokens_col: str = "throughput/total_tokens",
+    loss_col: str = "eval/paloma/c4_en/bpb",
+):
+    N = df[param_count_col].values
+    D = df[tokens_col].values
+    y = df[loss_col].values
+
+    # get hidden dim from run i.e tootsie-scaling-512-81c36c (512)
+    hidden_dim = df["run"].str.extract(r"(\d+)")[0].astype(int)
+
+    print(f"N: {N}")
+    print(f"hidden_dim: {hidden_dim}")
+
+    # we want non-embedding params
+    N = non_embedding_params(N, hidden_dim=hidden_dim)
+
+    print("After non-embedding params")
+    print(f"N: {N}")
+
+    return N, D, y
+
+
+def non_embedding_params(total_param_count, hidden_dim):
+    # Llama-3 tokenizer vocab size
+    LLAMA3_TOKENIZER_VOCAB_SIZE = 128_256
+    return total_param_count - 2 * hidden_dim * LLAMA3_TOKENIZER_VOCAB_SIZE
