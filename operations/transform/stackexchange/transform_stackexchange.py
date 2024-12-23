@@ -38,7 +38,7 @@ from marin.domains.stackexchange.utils import (
     extract_stackexchange_threads,
     markdownify_thread,
 )
-from marin.utils import fsspec_glob
+from marin.utils import fsspec_exists, fsspec_glob
 
 # Initialize Logger
 logger = logging.getLogger(__name__)
@@ -134,6 +134,11 @@ def transform_stackexchange(cfg: TransformStackExchangeConfig) -> None:
     for input_file in files:
         subdomain = re.match(r"(.+?)\.(stackexchange|net|com)", os.path.basename(input_file)).group(1)
         output_file = os.path.join(cfg.output_path, f"{subdomain}.jsonl.gz")
+        success_file = os.path.join(cfg.output_path, f"{subdomain}.SUCCESS")
+
+        if fsspec_exists(success_file):
+            logger.info(f"Skipping {subdomain} -- Already Processed")
+            continue
 
         # Handle RAM Overrides
         if subdomain in RAY_MEMORY_OVERRIDES:
