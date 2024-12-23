@@ -4,9 +4,11 @@ ar5iv/transform_ar5iv.py
 Performs HTML->Text/MD conversion using the specified tools over a ar5iv dump save in DOLMA format.
 """
 
+import html
 import json
 import logging
 import os
+import re
 from dataclasses import dataclass
 
 import draccus
@@ -19,7 +21,6 @@ from marin.schemas.web.convert import ExtractionConfig
 from marin.utils import fsspec_glob
 from marin.web.convert import convert_page
 from scripts.ar5iv.transform import (
-    clean_li,
     linelisting_to_newline,
     remove_ar5iv_footer,
     remove_authors,
@@ -29,8 +30,6 @@ from scripts.ar5iv.transform import (
     remove_figure_captions,
     remove_footnotes,
     remove_references,
-    remove_title,
-    remove_title_page,
     unwrap_eqn,
 )
 
@@ -51,8 +50,8 @@ def clean_html(html: str, remove_reference_section: bool = True) -> str:
     html = BeautifulSoup(html, "html.parser")
 
     remove_authors(html)
-    remove_title_page(html)
-    clean_li(html)
+    # remove_title_page(html)
+    # clean_li(html)
     remove_biblio(html)
     remove_footnotes(html)
     remove_biblinks(html)
@@ -60,13 +59,28 @@ def clean_html(html: str, remove_reference_section: bool = True) -> str:
     unwrap_eqn(html)
     remove_ar5iv_footer(html)
     remove_before_section(html)
-    remove_title(html)
+    # remove_title(html)
     remove_figure_captions(html)
 
     if remove_reference_section:
         remove_references(html)
 
     return str(html)
+
+
+def process_extracted_content(result: str) -> str:
+    content = result.strip()
+
+    # Remove excessive newline characters by replacing multiple \n with a single space
+    content = re.sub(r'\n+', ' ', content)
+
+    # Patch up any remaining HTML entities (e.g., &gt; -> >)
+    content = html.unescape(content)
+
+    # Remove any remaining escaped backslashes (e.g., \\n -> \n)
+    content = content.replace('\\\\n', '\n')
+
+    return str(content).strip()
 
 
 @ray.remote(memory=2 * 1024 * 1024 * 1024)
@@ -87,11 +101,13 @@ def process_file(input_file_path: str, output_path: str, extract_method: str, ex
                 try:
                     filtered_html = clean_html(row["content"], remove_reference_section)
                     result = convert_page(filtered_html, extract_method=extract_method, config=extract_config)
+                    processed_result = process_extracted_content(result["content"])
+
                     out_dict = {
                         "id": row["filename"],
                         "source": "ar5iv",
                         "format": "text",
-                        "text": result["content"],
+                        "text": processed_result,
                     }
 
                     print(json.dumps(out_dict), file=output)
