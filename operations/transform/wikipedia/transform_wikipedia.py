@@ -70,23 +70,22 @@ def remove_references_from_html(html: str) -> str:
     if reflist:
         reflist.extract()
 
-    ref_heading = soup.find("span", {"class": "mw-heading", "id": "References"})
+    ref_heading = soup.find("span", {"id": "References"})
     if ref_heading:
         ref_heading.extract()
 
     return str(soup)
 
 
-def clean_html(html: str, remove_reference_section: bool = True) -> str:
+def clean_wiki_html(html: str, remove_reference_section: bool = True) -> str:
     """
     Cleans the HTML by removing unwanted elements.
     """
-    html = BeautifulSoup(html, "html.parser")
 
-    remove_and_append_infobox(html)
+    html = remove_and_append_infobox(html)
 
     if remove_reference_section:
-        remove_references_from_html(html)
+        html = remove_references_from_html(html)
 
     return str(html)
 
@@ -107,17 +106,26 @@ def process_file(input_file_path: str, output_path: str, extract_method: str, ex
                 row = json.loads(line)
 
                 try:
-                    filtered_html = clean_html(row["article_body"]["html"], remove_reference_section)
-                    result = convert_page(
-                        filtered_html, extract_method=extract_method, config=extract_config
-                    )
+                    content = None
+                    if "html" not in row["article_body"].keys() and "wikitext" in row["article_body"].keys():
+                        content = row["article_body"]["wikitext"]
+                    elif "html" in row["article_body"]:
+                        html_string = row["article_body"]["html"]
+                        filtered_html = clean_wiki_html(html_string, remove_reference_section)
+                        content = convert_page(
+                            filtered_html, extract_method=extract_method, config=extract_config
+                        )["content"]
+                    else:
+                        logger.error(f"No content found in the row: {row}")
+                        continue
+
                     out_dict = {
                         "id": row["identifier"],
                         "url": row["url"],
                         "title": row["name"],
                         "abstract": row.get("abstract", ""),
                         "date_created": row["date_created"] if "date_created" in row else row.get("date_modified", ""),
-                        "text": result["content"],
+                        "text": content,
                     }
 
                     print(json.dumps(out_dict), file=output)  # Without this line, the JSON file will be corrupted
@@ -156,7 +164,11 @@ def process_wiki_dump(cfg: WikiExtractionConfig) -> None:
                 continue
 
         output_path = os.path.join(cfg.output_path, cfg.revision)
-        result_refs.append(process_file.remote(file, output_path, cfg.extract_method, cfg.extract_config, cfg.remove_reference_section))
+        result_refs.append(
+            process_file.remote(
+                file, output_path, cfg.extract_method, cfg.extract_config, cfg.remove_reference_section
+            )
+        )
     try:
         ray.get(result_refs)
     except Exception as e:
