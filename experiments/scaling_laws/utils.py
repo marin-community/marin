@@ -153,16 +153,26 @@ def extract_ndy(
     # get hidden dim from run i.e tootsie-scaling-512-81c36c (512)
     hidden_dim = df["run"].str.extract(r"(\d+)")[0].astype(int)
 
-    print(f"N: {N}")
-    print(f"hidden_dim: {hidden_dim}")
-
     # we want non-embedding params
     N = non_embedding_params(N, hidden_dim=hidden_dim)
 
-    print("After non-embedding params")
-    print(f"N: {N}")
-
     return N, D, y
+
+
+def plot_actual_vs_predicted(y_actual, y_predicted, title="Actual vs Predicted"):
+    plt.figure(figsize=(10, 6))
+    
+    # plot actual and predicted values
+    plt.plot(y_actual, label="Actual", marker='o', linestyle='-', linewidth=2)    
+    plt.plot(y_predicted, label="Predicted", marker='x', linestyle='--', linewidth=2)
+    
+    # add labels, legend, and title
+    plt.xlabel("Step")
+    plt.ylabel("Task loss")
+    plt.title(title)
+    plt.legend()
+    plt.grid(True)
+    plt.show()
 
 
 def non_embedding_params(total_param_count, hidden_dim):
