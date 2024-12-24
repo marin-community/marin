@@ -166,4 +166,3 @@ available_node_types:
     resources:
       CPU: 120
       TPU: 8
-
