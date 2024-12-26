@@ -346,7 +346,6 @@ def fit_task_loss_from_ladder_models(
     return y_pred_actual, preds_big.to_numpy()
 
 
-
 def fit_accuracy_from_task_loss(
     task_losses: np.ndarray,
     runs: list[str],
