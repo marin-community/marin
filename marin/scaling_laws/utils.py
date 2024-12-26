@@ -98,15 +98,22 @@ def fit_power_law(N, D, y, use_log_space=False, initial_guess=None, delta=1e-3):
 
 
 def fit_sigmoidal(L, y, initial_guess=None, delta=1e-3):
+
     if initial_guess is None:
         initial_guess = [1.0, 0.0, 1.0, 0.0]  # [a, b, k, L_0]
-    bounds = [(0, None), (None, None), (0, None), (None, None)]  # a >= 0  # b unbounded  # k >= 0  # L_0 unbounded
 
-    def objective(params):
+    lower_bounds = [0, -np.inf, 0, -np.inf]  # Lower bounds for [a, b, k, L_0]
+    upper_bounds = [np.inf, np.inf, np.inf, np.inf]  # Upper bounds for [a, b, k, L_0]
+    bounds = (lower_bounds, upper_bounds)
+
+    def objective(L, a, b, k, L_0):
+        params = [a, b, k, L_0]
         return sigmoidal_loss(params, L, y, delta)
 
     # use scipy.optimize.curve_fit
-    popt, _ = curve_fit(sigmoidal_model, L, y, p0=initial_guess, bounds=bounds)
+    popt, _ = curve_fit(objective, L, y, p0=initial_guess, bounds=bounds)
+
+    print("Fitted sigmoidal params:", popt)
 
     return popt
 
@@ -347,15 +354,18 @@ def fit_task_loss_from_ladder_models(
 
 
 def fit_accuracy_from_task_loss(
-    task_losses: np.ndarray,
+    pred_task_losses: np.ndarray,
+    ground_truth_task_losses: np.ndarray,
     runs: list[str],
     entity: str,
     project: str,
     metrics: list[str],
     x_axis: str = "throughput/total_gflops",
     tokens_col: str = "throughput/total_tokens",
+    param_col: str = "parameter_count",
     pred_run: str = "llama-8b-tootsie-0.001-19ad63",
     aggregation: str = "all",
+    task_loss_col: str = "eval/paloma/c4_en/bpb",
     accuracy_col: str = "lm_eval/hellaswag_0shot/acc",
 ) -> np.ndarray:
     """
@@ -374,14 +384,17 @@ def fit_accuracy_from_task_loss(
 
     # get the data
     ladder_df = pull_metrics_from_wandb(
-        runs=runs, metrics=metrics, entity=entity, project=project, x_axis=x_axis, summary_fields=()
+        runs=runs, metrics=metrics, entity=entity, project=project, x_axis=x_axis, summary_fields=(param_col,)
     )
 
     # filter out rows with zero tokens, aggregate the steps
     ladder_df_filtered = filter_zero_d(ladder_df, tokens_col)
     ladder_df_agg = aggregate_steps(ladder_df_filtered, step_mode=aggregation)
 
-    # we already have task_losses passed in. We need acc
+    # get task losses on "training" data-points (meaning runs we use for fitting the sigmoidal model)
+    N, D, task_losses = extract_ndy(ladder_df_agg, param_col, tokens_col, task_loss_col)
+
+    # get accuracies on "training" data-points
     acc = ladder_df_agg[accuracy_col].values
 
     # TODO:
@@ -402,15 +415,24 @@ def fit_accuracy_from_task_loss(
     print("Fitted sigmoidal params:", params)
 
     # predict the accuracy
-    acc_preds = predict_sigmoidal(params, task_losses)
+    acc_preds = predict_sigmoidal(params, pred_task_losses)
 
     pred_df = pull_metrics_from_wandb(
-        runs=[pred_run], metrics=[accuracy_col], entity=entity, project=project, summary_fields=[]
+        runs=[pred_run],
+        metrics=metrics,
+        entity=entity,
+        project=project,
+        summary_fields=[
+            param_col,
+        ],
     )
     pred_df_filtered = filter_zero_d(pred_df, d_key=tokens_col)
 
     pred_df_agg = aggregate_steps(pred_df_filtered, step_mode=aggregation)
 
+    print("Predicting on:", pred_df_agg.head())
+    print("Number of rows:", len(pred_df_agg))
+
     acc_pred_actual = pred_df_agg[accuracy_col].values
 
-    return acc_pred_actual, acc_preds.to_numpy()
+    return acc_pred_actual, acc_preds
