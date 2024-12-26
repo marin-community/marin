@@ -346,7 +346,19 @@ def fit_task_loss_from_ladder_models(
     return y_pred_actual, preds_big.to_numpy()
 
 
-def fit_accuracy_from_task_loss(task_loss: np.ndarray, acc: np.ndarray) -> np.ndarray:
+
+def fit_accuracy_from_task_loss(
+    task_losses: np.ndarray,
+    runs: list[str],
+    entity: str,
+    project: str,
+    metrics: list[str],
+    x_axis: str = "throughput/total_gflops",
+    tokens_col: str = "throughput/total_tokens",
+    pred_run: str = "llama-8b-tootsie-0.001-19ad63",
+    aggregation: str = "all",
+    accuracy_col: str = "lm_eval/hellaswag_0shot/acc",
+) -> np.ndarray:
     """
     Fit a sigmoidal function to predict the accuracy from the task loss.
     Ref: https://arxiv.org/pdf/2412.04403 sec 3.2
@@ -361,6 +373,18 @@ def fit_accuracy_from_task_loss(task_loss: np.ndarray, acc: np.ndarray) -> np.nd
         The predicted accuracy
     """
 
+    # get the data
+    ladder_df = pull_metrics_from_wandb(
+        runs=runs, metrics=metrics, entity=entity, project=project, x_axis=x_axis, summary_fields=()
+    )
+
+    # filter out rows with zero tokens, aggregate the steps
+    ladder_df_filtered = filter_zero_d(ladder_df, tokens_col)
+    ladder_df_agg = aggregate_steps(ladder_df_filtered, step_mode=aggregation)
+
+    # we already have task_losses passed in. We need acc
+    acc = ladder_df_agg[accuracy_col].values
+
     # TODO:
     # in the paper they mention "To smoothen the noise, we apply a moving average
     # on the task loss and task accuracy over all checkpoints of each training run,
@@ -368,11 +392,26 @@ def fit_accuracy_from_task_loss(task_loss: np.ndarray, acc: np.ndarray) -> np.nd
     # from the first 10% of each training run as these are quite noisy,
     # and add an extra data point (L = 0.0, Acc = 1.0)" and other tweaks."
 
+    print("Task losses:", task_losses)
+    print("Accuracies:", acc)
+    print("Task losses shape:", task_losses.shape)
+    print("Accuracies shape:", acc.shape)
+    print("Going to fit sigmoidal model")
+
     # fit the sigmoidal model
-    params = fit_sigmoidal(task_loss, acc, delta=1e-3)
+    params = fit_sigmoidal(task_losses, acc, delta=1e-3)
     print("Fitted sigmoidal params:", params)
 
     # predict the accuracy
-    preds = predict_sigmoidal(params, task_loss)
+    acc_preds = predict_sigmoidal(params, task_losses)
 
-    return preds
+    pred_df = pull_metrics_from_wandb(
+        runs=[pred_run], metrics=[accuracy_col], entity=entity, project=project, summary_fields=[]
+    )
+    pred_df_filtered = filter_zero_d(pred_df, d_key=tokens_col)
+
+    pred_df_agg = aggregate_steps(pred_df_filtered, step_mode=aggregation)
+
+    acc_pred_actual = pred_df_agg[accuracy_col].values
+
+    return acc_pred_actual, acc_preds.to_numpy()
