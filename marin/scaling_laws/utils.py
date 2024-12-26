@@ -346,7 +346,7 @@ def fit_task_loss_from_ladder_models(
     return y_pred_actual, preds_big.to_numpy()
 
 
-def fit_accuracy_from_task_loss(task_loss: np.ndarray) -> np.ndarray:
+def fit_accuracy_from_task_loss(task_loss: np.ndarray, acc: np.ndarray) -> np.ndarray:
     """
     Fit a sigmoidal function to predict the accuracy from the task loss.
     Ref: https://arxiv.org/pdf/2412.04403 sec 3.2
@@ -369,7 +369,7 @@ def fit_accuracy_from_task_loss(task_loss: np.ndarray) -> np.ndarray:
     # and add an extra data point (L = 0.0, Acc = 1.0)" and other tweaks."
 
     # fit the sigmoidal model
-    params = fit_sigmoidal(task_loss, y, delta=1e-3)
+    params = fit_sigmoidal(task_loss, acc, delta=1e-3)
     print("Fitted sigmoidal params:", params)
 
     # predict the accuracy
