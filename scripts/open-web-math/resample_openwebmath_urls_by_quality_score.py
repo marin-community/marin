@@ -108,7 +108,7 @@ def resample_urls_remote(
                 all_examples.append(parsed_line)
                 seen_urls.add(parsed_line["url"])
                 if filepath.startswith(cc_prefix):
-                    discrete_label = min(int(parsed_line["score"] / 0.1), 9)
+                    discrete_label = min(int(parsed_line["regex_adjusted_score"] / 0.1), 9)
                     cc_discrete_labels_to_counts[discrete_label] += 1
         if filepath.startswith(cc_prefix):
             num_cc_filepaths += 1
@@ -165,7 +165,7 @@ def resample_urls_remote(
         # We discretize the labels into buckets from 0-9 with `min(int(score / 0.1), 9)`
         buckets = defaultdict(list)
         for example in examples:
-            score = example["score"]
+            score = example["regex_adjusted_score"]
             # Bucket by the example's corresponding discrete label.
             label = min(int(score / 0.1), 9)
             buckets[label].append(example)
