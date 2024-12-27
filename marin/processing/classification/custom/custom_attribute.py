@@ -24,26 +24,31 @@ from marin.classifiers.utils import label_documents
 @dataclass
 class CustomAttributeConfig:
     """
-    Configuration class for main process.
+    Configuration class for creating a custom attribute.
 
     Attributes:
         input_doc_path (str): Path to documents (i.e., gs://$BUCKET/documents/...).
         output_attr_path (str): Path to write attributes (i.e., gs://$BUCKET/attributes/...).
-        label_func (Callable[[Document, list[Attribute]], dict]): Generates attribute dict from
-            document and other input attributes.
         input_attr_paths (list[str]): Path to attributes needed to determine new attribute.
     """
 
     input_doc_path: str
     output_attr_path: str
-    label_func: Callable[[Document, list[Attribute]], dict]
     input_attr_paths: list[str] | None = None
 
 
-def create_custom_attribute(cfg: CustomAttributeConfig):
+def create_custom_attribute(cfg: CustomAttributeConfig, label_func: Callable[[Document, list[Attribute]], dict]):
+    """
+    Create a custom attribute for each document in a collection of documents.
+
+    Args:
+        cfg (CustomAttributeConfig): Configuration for creating a custom attribute.
+        label_func (Callable[[Document, list[Attribute]], dict]): Generates custom attribute dict from
+            document and other input attributes.
+    """
     label_documents(
         input_doc_path=cfg.input_doc_path,
         output_attr_path=cfg.output_attr_path,
-        label_func=cfg.label_func,
+        label_func=label_func,
         input_attr_paths=cfg.input_attr_paths,
     )
