@@ -28,7 +28,8 @@ class ExperimentConfig:
     quality_classifier_model_paths: list[str | ExecutorStep]
     input_data_source_to_path: dict[str, str] = field(
         default_factory=lambda: {
-            "fineweb_2024_18": "gs://marin-us-central2/documents/fineweb-small-resiliparse-preserve-formatting-e8c6ec/md/CC-MAIN-2024-18",
+            "test": "gs://marin-us-central2/documents/quick-start-tests"
+            # "fineweb_2024_18": "gs://marin-us-central2/documents/fineweb-small-resiliparse-preserve-formatting-e8c6ec/md/CC-MAIN-2024-18",
         }
     )
     keep_fraction: float = 0.2  # Keep 20% of the documents
@@ -38,10 +39,6 @@ def get_model_path(model_path: str | ExecutorStep):
     if isinstance(model_path, ExecutorStep):
         return output_path_of(model_path, "model.bin")
     return versioned(model_path)
-
-
-def label_func(doc, attrs):
-    return {"quality": max(attr["__label__hq"] for attr in attrs)}
 
 
 def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
@@ -78,6 +75,16 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
             )
             inference_steps.append(inference_step)
 
+        def label_func(doc, attrs):
+            return {
+                f"{config.experiment_name}-quality": {
+                    "score": max(
+                        attr["attributes"][f"{config.experiment_name}-quality_classifier-{classifier_id}"]["__label__hq"]
+                        for classifier_id, attr in enumerate(attrs)
+                    )
+                }
+            }
+
         ensemble_step = ExecutorStep(
             name=f"attributes/quality_filtering/{config.experiment_name}/{input_data_source}",
             fn=create_custom_attribute,
@@ -100,7 +107,7 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
                         type=versioned("classify"),
                         attribute_path=output_path_of(ensemble_step, input_basename),
                         name=versioned(f"{config.experiment_name}-quality"),
-                        label="quality",
+                        label="score",
                         threshold=versioned(None),
                         keep_fraction=versioned(config.keep_fraction),
                     ),
