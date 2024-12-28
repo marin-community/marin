@@ -64,6 +64,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install uv toml
           python scripts/install_all_pip_dep.py
+          which ray || true
 
       - name: Start Ray cluster locally
         shell: bash -l {0}
