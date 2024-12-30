@@ -362,7 +362,8 @@ def fit_task_loss_from_ladder_models(
         aggregation: Aggregation mode to use for the steps. Can be "average", "last", or "all"
         tokens_col: Column name for the tokens
         param_col: Column name for the parameter count
-        param_col_to_use: Column name to use for the parameter count. This is to specify if we want to use JAX's computed params or ours.
+        param_col_to_use: Column name to use for the parameter count. This is to specify
+                    if we want to use JAX's computed params or ours.
 
     Returns:
         The actual and predicted task losses for the given run as (actual, predicted)
@@ -393,7 +394,6 @@ def fit_task_loss_from_ladder_models(
 
     # fit the power law model and make a prediction on the "training" data for sanity-checking
     params = fit_power_law(N, D, y, use_log_space=True)
-    preds = predict_power_law(params, N, D)
 
     pred_df = pull_metrics_from_wandb(
         runs=[pred_run], metrics=[task_loss, tokens_col], entity=entity, project=project, summary_fields=[param_col]
