@@ -143,8 +143,6 @@ def fit_sigmoidal(L, y, initial_guess=None):
     # use scipy.optimize.curve_fit
     popt, _ = curve_fit(objective, L, y, p0=initial_guess, bounds=bounds)
 
-    print("Fitted sigmoidal params:", popt)
-
     return popt
 
 
@@ -289,8 +287,6 @@ def compute_num_params_from_run(run, vocab_size: int = LLAMA3_TOKENIZER_VOCAB_SI
 
     num_parameters = compute_num_parameters(llama_config, vocab_size=vocab_size)
 
-    print("Computed params:", num_parameters)
-
     return num_parameters
 
 
@@ -397,7 +393,6 @@ def fit_task_loss_from_ladder_models(
 
     # fit the power law model and make a prediction on the "training" data for sanity-checking
     params = fit_power_law(N, D, y, use_log_space=True)
-    print("Fitted params (small runs):", params)
     preds = predict_power_law(params, N, D)
 
     pred_df = pull_metrics_from_wandb(
@@ -459,8 +454,6 @@ def fit_accuracy_from_task_loss(
         summary_fields=(param_col,),
     )
 
-    print("Number of rows in ladder_df before filtering/aggregation:", len(ladder_df))
-
     # filter out rows with zero tokens, aggregate the steps
     ladder_df_filtered = filter_zero_d(ladder_df, tokens_col)
     ladder_df_agg = aggregate_steps(ladder_df_filtered, step_mode=aggregation)
@@ -505,19 +498,11 @@ def fit_accuracy_from_task_loss(
     # from the first 10% of each training run as these are quite noisy,
     # and add an extra data point (L = 0.0, Acc = 1.0)" and other tweaks."
 
-    print("Task losses:", task_losses)
-    print("Accuracies:", acc)
-    print("Task losses shape:", task_losses.shape)
-    print("Accuracies shape:", acc.shape)
-    print("Going to fit sigmoidal model")
+    print("Number of rows in task_losses:", len(task_losses))
+    print("Number of rows in acc:", len(acc))
 
     # fit the sigmoidal model
-    params = fit_sigmoidal(task_losses, acc, delta=1e-3)
-    print("Fitted sigmoidal params:", params)
-
-    print("Predicting on:", pred_task_losses)
-
-    print("Pred df agg", pred_df_agg)
+    params = fit_sigmoidal(task_losses, acc)
 
     # filter out pred_task_losses to use only the last number of rows.
     # this number is determined by the number of rows in pred_df_agg
@@ -526,8 +511,6 @@ def fit_accuracy_from_task_loss(
 
     # predict the accuracy
     acc_preds = predict_sigmoidal(params, pred_task_losses)
-
-    print("Number of rows in acc_preds:", len(acc_preds))
 
     acc_pred_actual = pred_df_agg[accuracy_col].values
 
