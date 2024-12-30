@@ -102,13 +102,16 @@ def fit_sigmoidal(L, y, initial_guess=None, delta=1e-3):
     if initial_guess is None:
         initial_guess = [1.0, 0.0, 1.0, 0.0]  # [a, b, k, L_0]
 
-    lower_bounds = [0, -np.inf, 0, -np.inf]  # Lower bounds for [a, b, k, L_0]
-    upper_bounds = [np.inf, np.inf, np.inf, np.inf]  # Upper bounds for [a, b, k, L_0]
+    # TODO double check bounds
+    # lower_bounds = [0, -np.inf, 0, -np.inf]  # Lower bounds for [a, b, k, L_0]
+    # upper_bounds = [np.inf, np.inf, np.inf, np.inf]  # Upper bounds for [a, b, k, L_0]
+    lower_bounds = [0, -np.inf, -np.inf, -np.inf]
+    upper_bounds = [np.inf, np.inf,  np.inf,  np.inf]
+
     bounds = (lower_bounds, upper_bounds)
 
     def objective(L, a, b, k, L_0):
-        params = [a, b, k, L_0]
-        return sigmoidal_loss(params, L, y, delta)
+        return predict_sigmoidal([a, b, k, L_0], L)
 
     # use scipy.optimize.curve_fit
     popt, _ = curve_fit(objective, L, y, p0=initial_guess, bounds=bounds)
@@ -162,7 +165,8 @@ def predict_power_law(params, N, D):
 
 
 def predict_sigmoidal(params, task_loss):
-    return sigmoidal_model(params, task_loss)
+    a, b, k, L_0 = params
+    return a / (1 + np.exp(-k * (task_loss - L_0))) + b
 
 
 def aggregate_steps(
@@ -355,11 +359,9 @@ def fit_task_loss_from_ladder_models(
 
 def fit_accuracy_from_task_loss(
     pred_task_losses: np.ndarray,
-    ground_truth_task_losses: np.ndarray,
     runs: list[str],
     entity: str,
     project: str,
-    metrics: list[str],
     x_axis: str = "throughput/total_gflops",
     tokens_col: str = "throughput/total_tokens",
     param_col: str = "parameter_count",
@@ -384,12 +386,45 @@ def fit_accuracy_from_task_loss(
 
     # get the data
     ladder_df = pull_metrics_from_wandb(
-        runs=runs, metrics=metrics, entity=entity, project=project, x_axis=x_axis, summary_fields=(param_col,)
+        runs=runs, metrics=[
+            task_loss_col, accuracy_col, tokens_col
+        ], entity=entity, project=project, x_axis=x_axis, summary_fields=(param_col,)
     )
+
+    print("Number of rows in ladder_df before filtering/aggregation:", len(ladder_df))
 
     # filter out rows with zero tokens, aggregate the steps
     ladder_df_filtered = filter_zero_d(ladder_df, tokens_col)
     ladder_df_agg = aggregate_steps(ladder_df_filtered, step_mode=aggregation)
+
+    # get the data for the run we want to predict on
+    pred_df = pull_metrics_from_wandb(
+        runs=[pred_run],
+        metrics=[
+            accuracy_col, tokens_col
+        ],
+        entity=entity,
+        project=project,
+        x_axis=x_axis,
+        summary_fields=(param_col,)
+    )
+
+    pred_df_filtered = filter_zero_d(pred_df, d_key=tokens_col)
+    pred_df_agg = aggregate_steps(pred_df_filtered, step_mode=aggregation)
+
+    print("Number of rows in ladder_df_agg:", len(ladder_df_agg))
+    print("Number of rows in pred_df_agg:", len(pred_df_agg))
+
+    # TODO: this shouldn't be necessary but for some reason we're missing tracking evals for the first
+    # few steps- we should sync this up across evals
+    # filter the rows of pred_df_agg to only include the rows that are in ladder_df_agg
+    # (matching done by the tokens_col)
+    # and also get the number of rows in the filtered pred_df_agg
+    # pred_df_agg = pred_df_agg[pred_df_agg[tokens_col].isin(ladder_df_agg[tokens_col])]  
+    # rows_in_pred_df_agg = len(pred_df_agg)
+
+    # print("Number of rows in ladder_df_agg after filtering:", len(ladder_df_agg))
+    # print("Number of rows in pred_df_agg:", len(pred_df_agg))
 
     # get task losses on "training" data-points (meaning runs we use for fitting the sigmoidal model)
     N, D, task_losses = extract_ndy(ladder_df_agg, param_col, tokens_col, task_loss_col)
@@ -414,24 +449,19 @@ def fit_accuracy_from_task_loss(
     params = fit_sigmoidal(task_losses, acc, delta=1e-3)
     print("Fitted sigmoidal params:", params)
 
+    print("Predicting on:", pred_task_losses)
+
+    print("Pred df agg", pred_df_agg)
+
+    # filter out pred_task_losses to use only the last number of rows. 
+    # this number is determined by the number of rows in pred_df_agg
+    rows_in_pred_df_agg = len(pred_df_agg)
+    pred_task_losses = pred_task_losses[-rows_in_pred_df_agg:]
+
     # predict the accuracy
     acc_preds = predict_sigmoidal(params, pred_task_losses)
 
-    pred_df = pull_metrics_from_wandb(
-        runs=[pred_run],
-        metrics=metrics,
-        entity=entity,
-        project=project,
-        summary_fields=[
-            param_col,
-        ],
-    )
-    pred_df_filtered = filter_zero_d(pred_df, d_key=tokens_col)
-
-    pred_df_agg = aggregate_steps(pred_df_filtered, step_mode=aggregation)
-
-    print("Predicting on:", pred_df_agg.head())
-    print("Number of rows:", len(pred_df_agg))
+    print("Number of rows in acc_preds:", len(acc_preds))
 
     acc_pred_actual = pred_df_agg[accuracy_col].values
 
