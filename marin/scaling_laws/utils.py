@@ -16,6 +16,9 @@ except ImportError:
 # Llama-3 tokenizer vocab size
 LLAMA3_TOKENIZER_VOCAB_SIZE = 128_256
 
+####################################################################################################
+# Power law helpers
+
 
 def power_law_model(params, N, D, use_log_space=True):
     """
@@ -35,12 +38,18 @@ def power_law_model(params, N, D, use_log_space=True):
     return A / (N**alpha) + B / (D**beta) + E
 
 
-def sigmoidal_model(params, L):
-    a, b, k, L_0 = params
-    return a / (1 + np.exp(-k * (L - L_0))) + b
-
-
 def power_law_loss(params, N, D, y, use_log_space, delta):
+    """
+    Mean Huber loss for the power-law model.
+
+    Args:
+        params: List of parameters [A, B, alpha, beta, E]
+        N: Number of parameters
+        D: Number of tokens
+        y: Actual loss
+        use_log_space: if true, residual is set to difference of logs of actual and predicted values
+        delta: huber loss delta, indicating the quadratic vs. linear loss changepoint.
+    """
     predictions = power_law_model(params, N, D, use_log_space)
     if use_log_space:
         residuals = np.log(y) - np.log(predictions)
@@ -49,18 +58,19 @@ def power_law_loss(params, N, D, y, use_log_space, delta):
     return np.mean(huber(delta, residuals))
 
 
-def sigmoidal_loss(params, L, y, delta):
-    # mean of L2 loss between actual and predicted values
-    predictions = sigmoidal_model(params, L)
-    residuals = y - predictions
-
-    # L2 loss
-    return np.mean(residuals**2)
-
-
 def fit_power_law(N, D, y, use_log_space=False, initial_guess=None, delta=1e-3):
+    """
+    Fit a power law model to the data ((N, D), y).
+
+    Args:
+        N: Number of parameters
+        D: Number of tokens
+        y: Actual loss or metric we want to learn to predict
+        use_log_space: if true, A and B are in log space *AND* Huber loss is computed in log space.
+        initial_guess: Initial guess for the parameters
+        delta: huber loss delta, indicating the quadratic vs. linear loss changepoint.
+    """
     if use_log_space:
-        # Optimize log_A and log_B to ensure A, B > 0
         if initial_guess is None:
             initial_guess = [0.0, 0.0, 1.0, 1.0, 0.0]  # [log_A, log_B, alpha, beta, E]
         bounds = [
@@ -71,7 +81,6 @@ def fit_power_law(N, D, y, use_log_space=False, initial_guess=None, delta=1e-3):
             (0, None),  # E >= 0
         ]
     else:
-        # Directly optimize A, B with constraints A, B >= 0
         if initial_guess is None:
             initial_guess = [1.0, 1.0, 1.0, 1.0, 0.0]  # [A, B, alpha, beta, E]
         bounds = [
@@ -89,6 +98,7 @@ def fit_power_law(N, D, y, use_log_space=False, initial_guess=None, delta=1e-3):
     if not result.success:
         raise RuntimeError(f"Optimization failed: {result.message}")
 
+    # return the fitted parameters, converting log_A and log_B back to A and B if needed
     if use_log_space:
         log_A, log_B, alpha, beta, E = result.x
         A, B = np.exp(log_A), np.exp(log_B)
@@ -97,7 +107,24 @@ def fit_power_law(N, D, y, use_log_space=False, initial_guess=None, delta=1e-3):
         return result.x
 
 
-def fit_sigmoidal(L, y, initial_guess=None, delta=1e-3):
+def predict_power_law(params, N, D):
+    A, B, alpha, beta, E = params
+    return A / (N**alpha) + B / (D**beta) + E
+
+
+####################################################################################################
+# Sigmoidal fit helpers
+
+
+def fit_sigmoidal(L, y, initial_guess=None):
+    """
+    Fit a sigmoidal model to the data (L, y).
+
+    Args:
+        L: Task loss
+        y: Ground-truth task accuracy
+        initial_guess: Initial guess for the parameters
+    """
 
     if initial_guess is None:
         initial_guess = [1.0, 0.0, 1.0, 0.0]  # [a, b, k, L_0]
@@ -106,7 +133,7 @@ def fit_sigmoidal(L, y, initial_guess=None, delta=1e-3):
     # lower_bounds = [0, -np.inf, 0, -np.inf]  # Lower bounds for [a, b, k, L_0]
     # upper_bounds = [np.inf, np.inf, np.inf, np.inf]  # Upper bounds for [a, b, k, L_0]
     lower_bounds = [0, -np.inf, -np.inf, -np.inf]
-    upper_bounds = [np.inf, np.inf,  np.inf,  np.inf]
+    upper_bounds = [np.inf, np.inf, np.inf, np.inf]
 
     bounds = (lower_bounds, upper_bounds)
 
@@ -121,6 +148,15 @@ def fit_sigmoidal(L, y, initial_guess=None, delta=1e-3):
     return popt
 
 
+def predict_sigmoidal(params, task_loss):
+    a, b, k, L_0 = params
+    return a / (1 + np.exp(-k * (task_loss - L_0))) + b
+
+
+####################################################################################################
+# WandB and data processing helpers
+
+
 def pull_metrics_from_wandb(
     runs: Sequence[str],
     metrics: Sequence[str],
@@ -129,18 +165,38 @@ def pull_metrics_from_wandb(
     x_axis: str = "throughput/total_gflops",
     summary_fields: Sequence[str] = ("parameter_count",),
 ) -> pd.DataFrame:
+    """
+    Pulls the metrics from the given runs and returns a DataFrame.
+
+    Args:
+        runs: List of run IDs
+        metrics: List of metrics to pull from the runs; these differ depending on the step (unlike summary_fields)
+        entity: WandB entity
+        project: WandB project
+        x_axis: Column to use for the x-axis (eg. throughput/total_gflops)
+        summary_fields: List of summary fields to pull from the runs
+
+    Returns:
+        Pandas dataFrame with the metrics
+    """
+
     import wandb
 
-    data = []
     api = wandb.Api()
+
+    data = []
     for run_id in runs:
         run = api.run(f"{entity}/{project}/{run_id}")
         run_data = {"run": run.name}
 
+        # this is precautionary; compute the number of parameters ourselves to avoid discrepancies
         run_data["computed_params"] = compute_num_params_from_run(run, vocab_size=LLAMA3_TOKENIZER_VOCAB_SIZE)
 
+        # get the summary fields
         for field in summary_fields:
             run_data[field] = run.summary.get(field, None)
+
+        # get the per-step metrics
         history = run.history(keys=metrics, x_axis=x_axis)
         for i in range(len(history)):
             step_data = {m: history[m][i] for m in metrics}
@@ -159,14 +215,23 @@ def filter_zero_d(df: pd.DataFrame, d_key: str = "throughput/total_tokens") -> p
     return df[df[d_key] != 0].copy()
 
 
-def predict_power_law(params, N, D):
-    A, B, alpha, beta, E = params
-    return A / (N**alpha) + B / (D**beta) + E
+def extract_ndy(
+    df: pd.DataFrame,
+    param_count_col: str = "parameter_count",
+    tokens_col: str = "throughput/total_tokens",
+    loss_col: str = "eval/paloma/c4_en/bpb",
+):
+    N = df[param_count_col].values
+    D = df[tokens_col].values
+    y = df[loss_col].values
 
+    # get hidden dim from run i.e tootsie-scaling-512-81c36c should result in (512)
+    hidden_dim = df["run"].str.extract(r"(\d+)")[0].astype(int)
 
-def predict_sigmoidal(params, task_loss):
-    a, b, k, L_0 = params
-    return a / (1 + np.exp(-k * (task_loss - L_0))) + b
+    # we want non-embedding params
+    N = non_embedding_params(N, hidden_dim=hidden_dim)
+
+    return N, D, y
 
 
 def aggregate_steps(
@@ -200,6 +265,39 @@ def aggregate_steps(
         raise ValueError(f"Unknown step_mode: {step_mode}")
 
 
+def non_embedding_params(total_param_count, hidden_dim, vocab_size: int = LLAMA3_TOKENIZER_VOCAB_SIZE):
+    return total_param_count - 2 * hidden_dim * vocab_size
+
+
+def compute_num_params_from_run(run, vocab_size: int = LLAMA3_TOKENIZER_VOCAB_SIZE):
+    """
+    Computes the number of parameters in a run using the model config.
+
+    Args:
+        run: WandB run object
+        vocab_size: Tokenizer vocab size
+    """
+
+    model_dict = run.config.get("model", {})
+    llama_config = LlamaConfig(
+        hidden_dim=model_dict.get("hidden_dim"),
+        num_heads=model_dict.get("num_heads"),
+        num_kv_heads=model_dict.get("num_kv_heads"),
+        intermediate_dim=model_dict.get("intermediate_dim"),
+        num_layers=model_dict.get("num_layers"),
+    )
+
+    num_parameters = compute_num_parameters(llama_config, vocab_size=vocab_size)
+
+    print("Computed params:", num_parameters)
+
+    return num_parameters
+
+
+####################################################################################################
+# Plotting helpers
+
+
 def plot_fit(actual, predicted, title="Power Law Fit"):
     """
     Plot predicted vs actual values.
@@ -217,28 +315,13 @@ def plot_fit(actual, predicted, title="Power Law Fit"):
     plt.show()
 
 
-def extract_ndy(
-    df: pd.DataFrame,
-    param_count_col: str = "parameter_count",
-    tokens_col: str = "throughput/total_tokens",
-    loss_col: str = "eval/paloma/c4_en/bpb",
-):
-    N = df[param_count_col].values
-    D = df[tokens_col].values
-    y = df[loss_col].values
-
-    # get hidden dim from run i.e tootsie-scaling-512-81c36c should result in (512)
-    hidden_dim = df["run"].str.extract(r"(\d+)")[0].astype(int)
-
-    # we want non-embedding params
-    N = non_embedding_params(N, hidden_dim=hidden_dim)
-
-    return N, D, y
-
-
 def plot_actual_vs_predicted(
-    y_actual, y_predicted, title="Actual vs Predicted", task_loss: str = "eval/paloma/c4_en/bpb"
+    y_actual, y_predicted, title="Actual vs Predicted", task_metric: str = "eval/paloma/c4_en/bpb"
 ):
+    """
+    Plot actual vs predicted values. task_metric is the name of the metric we are predicting.
+    """
+
     plt.figure(figsize=(10, 6))
 
     # plot actual and predicted values
@@ -247,33 +330,15 @@ def plot_actual_vs_predicted(
 
     # add labels, legend, and title
     plt.xlabel("Step")
-    plt.ylabel("Task loss: " + task_loss)
+    plt.ylabel("Metric: " + task_metric)
     plt.title(title)
     plt.legend()
     plt.grid(True)
     plt.show()
 
 
-def non_embedding_params(total_param_count, hidden_dim):
-    return total_param_count - 2 * hidden_dim * LLAMA3_TOKENIZER_VOCAB_SIZE
-
-
-def compute_num_params_from_run(run, vocab_size: int = LLAMA3_TOKENIZER_VOCAB_SIZE):
-
-    model_dict = run.config.get("model", {})
-    llama_config = LlamaConfig(
-        hidden_dim=model_dict.get("hidden_dim"),
-        num_heads=model_dict.get("num_heads"),
-        num_kv_heads=model_dict.get("num_kv_heads"),
-        intermediate_dim=model_dict.get("intermediate_dim"),
-        num_layers=model_dict.get("num_layers"),
-    )
-
-    num_parameters = compute_num_parameters(llama_config, vocab_size=vocab_size)
-
-    print("Computed params:", num_parameters)
-
-    return num_parameters
+####################################################################################################
+# Functions for fitting scaling laws
 
 
 def fit_task_loss_from_ladder_models(
@@ -386,9 +451,12 @@ def fit_accuracy_from_task_loss(
 
     # get the data
     ladder_df = pull_metrics_from_wandb(
-        runs=runs, metrics=[
-            task_loss_col, accuracy_col, tokens_col
-        ], entity=entity, project=project, x_axis=x_axis, summary_fields=(param_col,)
+        runs=runs,
+        metrics=[task_loss_col, accuracy_col, tokens_col],
+        entity=entity,
+        project=project,
+        x_axis=x_axis,
+        summary_fields=(param_col,),
     )
 
     print("Number of rows in ladder_df before filtering/aggregation:", len(ladder_df))
@@ -400,13 +468,11 @@ def fit_accuracy_from_task_loss(
     # get the data for the run we want to predict on
     pred_df = pull_metrics_from_wandb(
         runs=[pred_run],
-        metrics=[
-            accuracy_col, tokens_col
-        ],
+        metrics=[accuracy_col, tokens_col],
         entity=entity,
         project=project,
         x_axis=x_axis,
-        summary_fields=(param_col,)
+        summary_fields=(param_col,),
     )
 
     pred_df_filtered = filter_zero_d(pred_df, d_key=tokens_col)
@@ -420,7 +486,7 @@ def fit_accuracy_from_task_loss(
     # filter the rows of pred_df_agg to only include the rows that are in ladder_df_agg
     # (matching done by the tokens_col)
     # and also get the number of rows in the filtered pred_df_agg
-    # pred_df_agg = pred_df_agg[pred_df_agg[tokens_col].isin(ladder_df_agg[tokens_col])]  
+    # pred_df_agg = pred_df_agg[pred_df_agg[tokens_col].isin(ladder_df_agg[tokens_col])]
     # rows_in_pred_df_agg = len(pred_df_agg)
 
     # print("Number of rows in ladder_df_agg after filtering:", len(ladder_df_agg))
@@ -453,7 +519,7 @@ def fit_accuracy_from_task_loss(
 
     print("Pred df agg", pred_df_agg)
 
-    # filter out pred_task_losses to use only the last number of rows. 
+    # filter out pred_task_losses to use only the last number of rows.
     # this number is determined by the number of rows in pred_df_agg
     rows_in_pred_df_agg = len(pred_df_agg)
     pred_task_losses = pred_task_losses[-rows_in_pred_df_agg:]
