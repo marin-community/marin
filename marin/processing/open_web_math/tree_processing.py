@@ -302,7 +302,7 @@ def extract_headings(tree, replacement_manager, markdown_formatting):
 def post_process_headings(text):
     """Replace [heading_i] with '#' * i"""
     for i in range(6, 0, -1):
-        text = text.replace("[heading_%d]" % i, "#" * i)
+        text = text.replace(f"[heading_{i}]", "#" * i)
     return text
 
 
