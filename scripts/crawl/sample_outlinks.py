@@ -86,7 +86,7 @@ def get_shards_to_process(input_pattern: str, num_to_sample: int, output_prefix:
     with tqdm(total=len(refs), desc="Counting records") as pbar:
         while refs:
             # Process results in the finish order instead of the submission order.
-            ready_refs, refs = ray.wait(refs, num_returns=500, timeout=60)
+            ready_refs, refs = ray.wait(refs, num_returns=min(500, len(refs)), timeout=60)
             # The node only needs enough space to store
             # a batch of objects instead of all objects.
             results = ray.get(ready_refs)
