@@ -129,9 +129,7 @@ def get_shards_to_process(input_pattern: str, num_to_sample: int, output_prefix:
     num_shards = (len(extracted_examples_list) + shard_size - 1) // shard_size
 
     for shard_idx in range(num_shards):
-        # E.g., if output_prefix="/tmp/output", final shards become:
-        #   "/tmp/output.00000.jsonl.gz", "/tmp/output.00001.jsonl.gz", ...
-        shard_filename = f"{output_prefix}.{shard_idx:05d}.jsonl.gz"
+        shard_filename = f"{output_prefix}.{shard_idx}.parquet"
 
         start_idx = shard_idx * shard_size
         end_idx = min((shard_idx + 1) * shard_size, len(extracted_examples_list))
