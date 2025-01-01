@@ -69,6 +69,27 @@ def count_examples_in_shard(shard_path: str) -> tuple[str, int]:
     return shard_path, num_lines
 
 
+@ray.remote(memory=8 * 1024 * 1024 * 1024)
+def get_examples_from_offsets(shard_path: str, offsets: list[int]):
+    extracted_examples = set()
+    offsets = sorted(offsets)  # ensure ascending order
+    with fsspec.open(shard_path, "rt", compression="gzip") as fin:
+        current_line_idx = 0
+        offsets_iter = iter(offsets)
+        next_offset = next(offsets_iter, None)
+        for line in fin:
+            if next_offset is None:
+                # We have retrieved all needed lines from this shard
+                break
+            if current_line_idx == next_offset:
+                # This is one of the lines we want
+                parsed_example = json.loads(line.rstrip("\n"))
+                extracted_examples.add(Outlink(**parsed_example))
+                next_offset = next(offsets_iter, None)
+            current_line_idx += 1
+    return extracted_examples
+
+
 @ray.remote(memory=64 * 1024 * 1024 * 1024)
 def get_shards_to_process(input_pattern: str, num_to_sample: int, output_prefix: str):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -115,22 +136,20 @@ def get_shards_to_process(input_pattern: str, num_to_sample: int, output_prefix:
     # Extract sampled IDs from their corresponding files
     logger.info("Extracting sampled IDs")
     extracted_examples = set()
-    for shard_path, offsets in tqdm(shard_to_local_offsets.items(), desc="Extracting sampled IDs"):
-        offsets = sorted(offsets)  # ensure ascending order
-        with fsspec.open(shard_path, "rt", compression="gzip") as fin:
-            current_line_idx = 0
-            offsets_iter = iter(offsets)
-            next_offset = next(offsets_iter, None)
-            for line in fin:
-                if next_offset is None:
-                    # We have retrieved all needed lines from this shard
-                    break
-                if current_line_idx == next_offset:
-                    # This is one of the lines we want
-                    parsed_example = json.loads(line.rstrip("\n"))
-                    extracted_examples.add(Outlink(**parsed_example))
-                    next_offset = next(offsets_iter, None)
-                current_line_idx += 1
+    refs = []
+    for shard_path, offsets in shard_to_local_offsets.items():
+        refs.append(get_examples_from_offsets.remote(shard_path, offsets))
+
+    with tqdm(total=len(refs), desc="Extracting sampled IDs") as pbar:
+        while refs:
+            # Process results in the finish order instead of the submission order.
+            ready_refs, refs = ray.wait(refs, num_returns=min(500, len(refs)), timeout=60)
+            # The node only needs enough space to store
+            # a batch of objects instead of all objects.
+            results = ray.get(ready_refs)
+            for plucked_shard_examples in results:
+                extracted_examples.update(plucked_shard_examples)
+                pbar.update(1)
     logger.info(f"Extracted {len(extracted_examples)} examples")
 
     # Sort examples by domain so that URLs pointing to the same domain are in the same shard
