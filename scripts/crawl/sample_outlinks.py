@@ -93,8 +93,8 @@ def get_shards_to_process(input_pattern: str, num_to_sample: int, output_prefix:
             for shard_path, num_examples in results:
                 # shard path contains examples from [`current_index`, `current_index + num_lines`)
                 example_ranges_to_path[(current_index, current_index + num_examples)] = shard_path
+                current_index = current_index + num_examples
                 pbar.update(1)
-            current_index = current_index + num_examples
 
     # Randomly sample IDs from 0 to current_index - 1 (inclusive)
     logger.info(f"Subsampling {num_to_sample} ids")
@@ -135,7 +135,7 @@ def get_shards_to_process(input_pattern: str, num_to_sample: int, output_prefix:
     # Sort examples by domain so that URLs pointing to the same domain are in the same shard
     extracted_examples = sorted(extracted_examples, key=lambda x: urlparse(x.link_target).netloc)
 
-    shard_size = 50_000
+    shard_size = 10_000
     logger.info(f"Writing {len(extracted_examples)} sampled lines (shard size {shard_size})")
     extracted_examples_list = list(extracted_examples)
     num_shards = (len(extracted_examples_list) + shard_size - 1) // shard_size
