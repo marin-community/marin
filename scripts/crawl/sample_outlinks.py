@@ -60,6 +60,15 @@ class Outlink:
     in_main_content: bool
 
 
+@ray.remote(memory=8 * 1024 * 1024 * 1024)
+def count_examples_in_shard(shard_path: str) -> tuple[str, int]:
+    with fsspec.open(shard_path, "rt", compression="gzip") as fin:
+        num_lines = 0
+        for _ in fin:
+            num_lines += 1
+    return shard_path, num_lines
+
+
 @ray.remote(memory=64 * 1024 * 1024 * 1024)
 def get_shards_to_process(input_pattern: str, num_to_sample: int, output_prefix: str):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -69,16 +78,23 @@ def get_shards_to_process(input_pattern: str, num_to_sample: int, output_prefix:
     # Iterate over all records and build a mapping from example index to
     # the filepath that contains those example ranges.
     example_ranges_to_path: dict[tuple[int, int], str] = {}
+    refs = []
+    for shard_path in shard_paths:
+        refs.append(count_examples_in_shard.remote(shard_path))
+
     current_index = 0
-    for shard_path in tqdm(shard_paths, desc="Counting records"):
-        # Get the number of items in this file
-        with fsspec.open(shard_path, "rt", compression="gzip") as fin:
-            num_lines = 0
-            for _ in fin:
-                num_lines += 1
-            # shard path contains examples from [`current_index`, `current_index + num_lines`)
-            example_ranges_to_path[(current_index, current_index + num_lines)] = shard_path
-        current_index = current_index + num_lines
+    with tqdm(total=len(refs), desc="Counting records") as pbar:
+        while refs:
+            # Process results in the finish order instead of the submission order.
+            ready_refs, refs = ray.wait(refs, num_returns=500, timeout=60)
+            # The node only needs enough space to store
+            # a batch of objects instead of all objects.
+            results = ray.get(ready_refs)
+            for shard_path, num_examples in results:
+                # shard path contains examples from [`current_index`, `current_index + num_lines`)
+                example_ranges_to_path[(current_index, current_index + num_examples)] = shard_path
+                pbar.update(1)
+            current_index = current_index + num_examples
 
     # Randomly sample IDs from 0 to current_index - 1 (inclusive)
     logger.info(f"Subsampling {num_to_sample} ids")
