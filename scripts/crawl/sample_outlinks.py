@@ -132,8 +132,8 @@ def get_shards_to_process(input_pattern: str, num_to_sample: int, output_prefix:
                     next_offset = next(offsets_iter, None)
                 current_line_idx += 1
 
-    # Sort examples by domain so that URLs from the same domain are in the same shard
-    extracted_examples = sorted(extracted_examples, key=lambda x: urlparse(x).netloc)
+    # Sort examples by domain so that URLs pointing to the same domain are in the same shard
+    extracted_examples = sorted(extracted_examples, key=lambda x: urlparse(x.link_target).netloc)
 
     shard_size = 50_000
     logger.info(f"Writing {len(extracted_examples)} sampled lines (shard size {shard_size})")
