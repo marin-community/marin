@@ -10,7 +10,7 @@ python marin/run/ray_run.py \
     python scripts/crawl/sample_outlinks.py \
     --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8/*_links.jsonl.gz' \
     --num_to_sample 1000000 \
-    --output_path gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-1M/links.jsonl.gz
+    --output_prefix gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-1M/links
 ```
 
 Running on FineWeb-Edu:
@@ -24,7 +24,7 @@ for fineweb_edu_dump_html_path in $(gcloud storage ls gs://marin-us-central2/doc
         python scripts/crawl/sample_outlinks.py \
         --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu/CC-MAIN*/*_links.jsonl.gz' \
         --num_to_sample 1000000 \
-        --output_path gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-1M/links.jsonl.gz
+        --output_prefix gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-1M/links
 done
 ```
 """
@@ -34,6 +34,9 @@ import logging
 from dataclasses import dataclass, asdict
 import random
 from collections import defaultdict
+from urllib.parse import urlparse
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 import draccus
 import fsspec
@@ -50,7 +53,7 @@ logger = logging.getLogger(__name__)
 class OutlinksSamplingConfig:
     input_pattern: str
     num_to_sample: int
-    output_path: str
+    output_prefix: str
 
 
 @dataclass(frozen=True)
@@ -62,7 +65,7 @@ class Outlink:
 
 
 @ray.remote(memory=64 * 1024 * 1024 * 1024)
-def get_shards_to_process(input_pattern: str, num_to_sample: int, output_path: str):
+def get_shards_to_process(input_pattern: str, num_to_sample: int, output_prefix: str):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     shard_paths = sorted(list(fsspec_glob(input_pattern)))
     logger.info(f"Found {len(shard_paths)} shards to process")
@@ -117,16 +120,36 @@ def get_shards_to_process(input_pattern: str, num_to_sample: int, output_path: s
                     next_offset = next(offsets_iter, None)
                 current_line_idx += 1
 
-    logger.info(f"Writing {len(extracted_examples)} sampled lines to {output_path}")
-    with fsspec.open(output_path, "w", compression="gzip") as fout:
-        for example in tqdm(extracted_examples, desc="Writing"):
-            fout.write(json.dumps(asdict(example)) + "\n")
+    # Sort examples by domain so that URLs from the same domain are in the same shard
+    extracted_examples = sorted(extracted_examples, key=lambda x: urlparse(x).netloc)
+
+    shard_size = 50_000
+    logger.info(f"Writing {len(extracted_examples)} sampled lines (shard size {shard_size})")
+    extracted_examples_list = list(extracted_examples)
+    num_shards = (len(extracted_examples_list) + shard_size - 1) // shard_size
+
+    for shard_idx in range(num_shards):
+        # E.g., if output_prefix="/tmp/output", final shards become:
+        #   "/tmp/output.00000.jsonl.gz", "/tmp/output.00001.jsonl.gz", ...
+        shard_filename = f"{output_prefix}.{shard_idx:05d}.jsonl.gz"
+
+        start_idx = shard_idx * shard_size
+        end_idx = min((shard_idx + 1) * shard_size, len(extracted_examples_list))
+        shard_dicts = [asdict(example) for example in extracted_examples_list[start_idx:end_idx]]
+
+        logger.info(f"Writing shard {shard_idx + 1}/{num_shards} to {shard_filename}")
+        table = pa.Table.from_pylist(shard_dicts)
+
+        with fsspec.open(shard_filename, "wb") as fout:
+            pq.write_table(table, fout, compression="snappy")
+
+    logger.info("All shards have been written successfully.")
 
 
 @draccus.wrap()
 def get_outlinks_from_html(cfg: OutlinksSamplingConfig):
     # Do all the processing in a remote function
-    _ = ray.get(get_shards_to_process.remote(cfg.input_pattern, cfg.num_to_sample, cfg.output_path))
+    _ = ray.get(get_shards_to_process.remote(cfg.input_pattern, cfg.num_to_sample, cfg.output_prefix))
 
 
 if __name__ == "__main__":
