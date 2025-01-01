@@ -16,16 +16,12 @@ python marin/run/ray_run.py \
 Running on FineWeb-Edu:
 
 ```
-for fineweb_edu_dump_html_path in $(gcloud storage ls gs://marin-us-central2/documents/fineweb-edu/html); do
-    dump_name=$(basename -- ${fineweb_edu_dump_html_path})
-
-    python marin/run/ray_run.py \
-        --no_wait -- \
-        python scripts/crawl/sample_outlinks.py \
-        --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu/CC-MAIN*/*_links.jsonl.gz' \
-        --num_to_sample 1000000 \
-        --output_prefix gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-1M/links
-done
+python marin/run/ray_run.py \
+    --no_wait -- \
+    python scripts/crawl/sample_outlinks.py \
+    --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu/CC-MAIN*/*_links.jsonl.gz' \
+    --num_to_sample 1000000 \
+    --output_prefix gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-1M/links
 ```
 """
 
