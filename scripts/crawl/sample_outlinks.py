@@ -131,6 +131,7 @@ def get_shards_to_process(input_pattern: str, num_to_sample: int, output_prefix:
                     extracted_examples.add(Outlink(**parsed_example))
                     next_offset = next(offsets_iter, None)
                 current_line_idx += 1
+    logger.info(f"Extracted {len(extracted_examples)} examples")
 
     # Sort examples by domain so that URLs pointing to the same domain are in the same shard
     extracted_examples = sorted(extracted_examples, key=lambda x: urlparse(x.link_target).netloc)
