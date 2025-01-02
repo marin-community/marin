@@ -7,8 +7,9 @@ Running on FineWeb-Edu:
 
 ```
 python marin/run/ray_run.py \
+    --pip_deps 'warcio' \
     --no_wait -- \
-    python scripts/crawl/sample_outlinks.py \
+    python scripts/crawl/fetch_links.py \
     --urls_path gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-1M/links.99.parquet \
     --warc_output_path gs://marin-us-central2/scratch/nfliu/fetched_outlinks/fineweb-edu-1M/links.99.warc.gz \
     --robots_output_path gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-1M/links.99.json
@@ -54,6 +55,7 @@ class FetchLinksConfig:
 
 @ray.remote(memory=64 * 1024 * 1024 * 1024)
 def fetch_links(urls_path: str, warc_output_path: str, robots_output_path: str):
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     with fsspec.open(urls_path) as f:
         df = pd.read_parquet(f)
     logger.info(f"Found {len(df)} examples in input file")
@@ -66,6 +68,7 @@ def fetch_links(urls_path: str, warc_output_path: str, robots_output_path: str):
 
 
 def fetch_to_warc(urls: list[str], warc_output_path: str, robots_output_path: str):
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     domains_to_robots: dict[str, str] = {}
 
     warc_buffer = io.BytesIO()
