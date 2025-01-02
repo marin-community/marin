@@ -21,6 +21,7 @@ import json
 import logging
 from dataclasses import dataclass
 from urllib.parse import urlparse
+import random
 
 import draccus
 import fsspec
@@ -64,6 +65,9 @@ def fetch_links(urls_path: str, warc_output_path: str, robots_output_path: str, 
 
     # Extract the URLs from the "link_target" column
     urls = df["link_target"].tolist()
+
+    # Randomly shuffle the URLs to load balance so we aren't repeatedly hitting a particular host
+    random.shuffle(urls)
 
     fetch_to_warc(urls, warc_output_path, robots_output_path, errors_output_path)
     logger.info(f"WARC file created at: {warc_output_path}, robots.txt data written to {robots_output_path}")
