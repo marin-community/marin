@@ -23,6 +23,7 @@ from urllib.parse import urlparse
 import draccus
 import fsspec
 import ray
+import pandas as pd
 from tqdm_loggable.auto import tqdm
 
 import requests
@@ -51,12 +52,15 @@ class FetchLinksConfig:
     robots_output_path: str
 
 
+@ray.remote(memory=64 * 1024 * 1024 * 1024)
 def fetch_links(urls_path: str, warc_output_path: str, robots_output_path: str):
-    with fsspec.open(urls_path, "rt", compression="gzip") as fin:
-        examples = [json.loads(line.strip()) for line in fin if line.strip()]
-    logger.info(f"Found {len(examples)} examples in input file")
+    with fsspec.open(urls_path) as f:
+        df = pd.read_parquet(f)
+    logger.info(f"Found {len(df)} examples in input file")
 
-    urls = [ex["link_target"] for ex in examples]
+    # Extract the URLs from the "link_target" column
+    urls = df["link_target"].tolist()
+
     fetch_to_warc(urls, warc_output_path, robots_output_path)
     logger.info(f"WARC file created at: {warc_output_path}, robots.txt data written to {robots_output_path}")
 
