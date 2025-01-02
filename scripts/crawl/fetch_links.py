@@ -70,7 +70,11 @@ def fetch_links(urls_path: str, warc_output_path: str, robots_output_path: str, 
     random.shuffle(urls)
 
     fetch_to_warc(urls, warc_output_path, robots_output_path, errors_output_path)
-    logger.info(f"WARC file created at: {warc_output_path}, robots.txt data written to {robots_output_path}")
+    logger.info(
+        f"WARC file created at: {warc_output_path}\n"
+        f"robots.txt data written to {robots_output_path}\n"
+        f"errors written to {errors_output_path}"
+    )
 
 
 def fetch_to_warc(urls: list[str], warc_output_path: str, robots_output_path: str, errors_output_path: str):
