@@ -12,8 +12,8 @@ python marin/run/ray_run.py \
     python scripts/crawl/fetch_links.py \
     --urls_path gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-1M/links.99.parquet \
     --warc_output_path gs://marin-us-central2/scratch/nfliu/fetched_outlinks/fineweb-edu-1M/links.99.warc.gz \
-    --robots_output_path gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-1M/links.99_robots.json \
-    --errors_output_path gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-1M/links.99_errors.json
+    --robots_output_path gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-1M/links.99_robots.json.gz \
+    --errors_output_path gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-1M/links.99_errors.json.gz
 ```
 """
 import io
