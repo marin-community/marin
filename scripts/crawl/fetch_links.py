@@ -43,7 +43,7 @@ def fetch_url(session: requests.Session, url: str) -> tuple[requests.Response, N
         response = session.get(url, timeout=30)
         response.raise_for_status()
         return response, None
-    except requests.RequestException as e:
+    except Exception as e:
         logger.info(f"Failed to fetch {url}: {e}")
         return None, str(e)
 
