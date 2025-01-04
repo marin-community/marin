@@ -59,6 +59,11 @@ class FetchLinksConfig:
 @ray.remote(memory=64 * 1024 * 1024 * 1024)
 def fetch_links(urls_path: str, warc_output_path: str, robots_output_path: str, errors_output_path: str):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+    success_path = warc_output_path + ".SUCCESS"
+    if fsspec.exists(success_path):
+        logger.info(f"Already processed and wrote WARC to {warc_output_path}, skipping...")
+        return
+
     with fsspec.open(urls_path) as f:
         df = pd.read_parquet(f)
     logger.info(f"Found {len(df)} examples in input file")
@@ -70,6 +75,19 @@ def fetch_links(urls_path: str, warc_output_path: str, robots_output_path: str, 
     random.shuffle(urls)
 
     fetch_to_warc(urls, warc_output_path, robots_output_path, errors_output_path)
+
+    # Create success file
+    with fsspec.open(success_path, "w") as fout:
+        json.dump(
+            {
+                "urls_path": urls_path,
+                "warc_output_path": warc_output_path,
+                "robots_output_path": robots_output_path,
+                "errors_output_path": errors_output_path,
+            },
+            fout,
+        )
+
     logger.info(
         f"WARC file created at: {warc_output_path}\n"
         f"robots.txt data written to {robots_output_path}\n"
