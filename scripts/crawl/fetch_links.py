@@ -19,19 +19,20 @@ python marin/run/ray_run.py \
 import io
 import json
 import logging
+import random
 from dataclasses import dataclass
 from urllib.parse import urlparse
-import random
 
 import draccus
 import fsspec
-import ray
 import pandas as pd
-from tqdm_loggable.auto import tqdm
-
+import ray
 import requests
+from tqdm_loggable.auto import tqdm
 from warcio.statusandheaders import StatusAndHeaders
 from warcio.warcwriter import WARCWriter
+
+from marin.utils import fsspec_exists
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -60,7 +61,7 @@ class FetchLinksConfig:
 def fetch_links(urls_path: str, warc_output_path: str, robots_output_path: str, errors_output_path: str):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     success_path = warc_output_path + ".SUCCESS"
-    if fsspec.exists(success_path):
+    if fsspec_exists(success_path):
         logger.info(f"Already processed and wrote WARC to {warc_output_path}, skipping...")
         return
 
