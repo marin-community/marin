@@ -156,8 +156,12 @@ def get_shards_to_process(input_pattern: str, num_to_sample: int, output_prefix:
 
     # Sort examples by domain so that URLs pointing to the same domain are in the same shard
     extracted_examples = sorted(extracted_examples, key=lambda x: urlparse(x.link_target).netloc)
+    # Write out extracted examples as sharded parquet
+    write_sharded_examples(extracted_examples, output_prefix, shard_size=10_000)
+    logger.info("All shards have been written successfully.")
 
-    shard_size = 10_000
+
+def write_sharded_examples(extracted_examples: list[Outlink], output_prefix: str, shard_size: int = 10_000):
     logger.info(f"Writing {len(extracted_examples)} sampled lines (shard size {shard_size})")
     extracted_examples_list = list(extracted_examples)
     num_shards = (len(extracted_examples_list) + shard_size - 1) // shard_size
@@ -174,8 +178,6 @@ def get_shards_to_process(input_pattern: str, num_to_sample: int, output_prefix:
 
         with fsspec.open(shard_filename, "wb") as fout:
             pq.write_table(table, fout, compression="snappy")
-
-    logger.info("All shards have been written successfully.")
 
 
 @draccus.wrap()
