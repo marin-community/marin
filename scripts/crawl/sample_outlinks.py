@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """
-Subsample outlinks from a collection.
+Subsample outlinks from a collection. An input file is a JSONL file, where each record contains
+an Outlink. The output is sharded parquet file(s) (10K records each), where each record contains
+an Outlink.
 
 Running on OpenWebMath:
 
