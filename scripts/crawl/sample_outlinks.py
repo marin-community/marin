@@ -60,7 +60,7 @@ class Outlink:
     in_main_content: bool
 
 
-@ray.remote(memory=2 * 1024 * 1024 * 1024)
+@ray.remote(memory=1 * 1024 * 1024 * 1024)
 def count_examples_in_shard(shard_path: str) -> tuple[str, int]:
     with fsspec.open(shard_path, "rt", compression="gzip") as fin:
         num_lines = 0
