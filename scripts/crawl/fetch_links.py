@@ -57,7 +57,7 @@ class FetchLinksConfig:
     errors_output_path: str
 
 
-@ray.remote(memory=64 * 1024 * 1024 * 1024)
+@ray.remote(memory=8 * 1024 * 1024 * 1024)
 def fetch_links(urls_path: str, warc_output_path: str, robots_output_path: str, errors_output_path: str):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     success_path = warc_output_path + ".SUCCESS"
