@@ -13,7 +13,7 @@ ar5iv_no_problem_raw = ExecutorStep(
 )
 
 ar5iv_warnings_raw = ExecutorStep(
-    name="raw/ar5iv/ar5iv-04-2024-warning",
+    name="raw/ar5iv/ar5iv-04-2024-warning-with-references",
     fn=download,
     config=DownloadConfig(
         input_path="gs://marin-us-central2/raw/ar5iv/v04.2024/ar5iv-04-2024-warnings.zip",
@@ -22,7 +22,7 @@ ar5iv_warnings_raw = ExecutorStep(
 )
 
 ar5iv_no_problem_resiliparse_with_preserve_formatting = ExecutorStep(
-    name="documents/ar5iv/ar5iv-04-2024-no-problem",
+    name="documents/ar5iv/ar5iv-04-2024-no-problem-with-references",
     fn=process_ar5iv_dump,
     config=Ar5ivExtractionConfig(
         input_path=output_path_of(ar5iv_no_problem_raw),
@@ -34,13 +34,13 @@ ar5iv_no_problem_resiliparse_with_preserve_formatting = ExecutorStep(
             main_content=versioned(True),
             links=versioned(True),
         ),
-        remove_reference_section=versioned(True),
+        remove_reference_section=versioned(False),
     ),
     pip_dependency_groups=["download_transform"],
 )
 
 ar5iv_no_problem_readability = ExecutorStep(
-    name="documents/ar5iv/ar5iv-04-2024-no-problem",
+    name="documents/ar5iv/ar5iv-04-2024-no-problem-with-references",
     fn=process_ar5iv_dump,
     config=Ar5ivExtractionConfig(
         input_path=output_path_of(ar5iv_no_problem_raw),
@@ -51,13 +51,13 @@ ar5iv_no_problem_readability = ExecutorStep(
             include_images=versioned(False),
             include_links=versioned(False),
         ),
-        remove_reference_section=versioned(True),
+        remove_reference_section=versioned(False),
     ),
     pip_dependency_groups=["download_transform"],
 )
 
 ar5iv_warnings_resiliparse_with_preserve_formatting = ExecutorStep(
-    name="documents/ar5iv/ar5iv-04-2024-warning",
+    name="documents/ar5iv/ar5iv-04-2024-warning-with-references",
     fn=process_ar5iv_dump,
     config=Ar5ivExtractionConfig(
         input_path=output_path_of(ar5iv_warnings_raw),
@@ -69,7 +69,7 @@ ar5iv_warnings_resiliparse_with_preserve_formatting = ExecutorStep(
             main_content=versioned(True),
             links=versioned(True),
         ),
-        remove_reference_section=versioned(True),
+        remove_reference_section=versioned(False),
     ),
     pip_dependency_groups=["download_transform"],
 )
@@ -86,7 +86,7 @@ ar5iv_warnings_readability = ExecutorStep(
             include_images=versioned(False),
             include_links=versioned(False),
         ),
-        remove_reference_section=versioned(True),
+        remove_reference_section=versioned(False),
     ),
     pip_dependency_groups=["download_transform"],
 )

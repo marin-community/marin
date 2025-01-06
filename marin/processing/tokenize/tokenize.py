@@ -87,7 +87,7 @@ def tokenize(config: TokenizeConfig):
     if train_source is not None:
         train_ledger = (
             ray.remote(_levanter_build_cache)
-            .options(name=f"tokenize::{config.cache_path}", runtime_env=RuntimeEnv(env_vars={"JAX_PLATFORMS": "cpu"}))
+            .options(name=f"tokenize::{config.cache_path}", runtime_env=RuntimeEnv(env_vars={"JAX_PLATFORMS": "cpu"}), max_retries=5)
             .remote(
                 train_source,
                 batch_tokenizer,
@@ -114,10 +114,29 @@ def tokenize(config: TokenizeConfig):
     else:
         validation_ledger = None
 
+    MAX_NUM_PENDING_TASKS = 30
+    result_refs = []
+
     if train_ledger is not None:
-        ray.get(train_ledger)
+        result_refs.append(train_ledger)
     if validation_ledger is not None:
-        ray.get(validation_ledger)
+        result_refs.append(validation_ledger)
+
+    while result_refs:
+        if len(result_refs) > MAX_NUM_PENDING_TASKS:
+            ready_refs, result_refs = ray.wait(result_refs, num_returns=1)
+            try:
+                ray.get(ready_refs)
+            except Exception as e:
+                logger.exception(f"Error processing task: {e}")
+                continue
+        else:
+            try:
+                ray.get(result_refs)
+                result_refs = []
+            except Exception as e:
+                logger.exception(f"Error processing remaining tasks: {e}")
+                raise e
 
 
 @ray.remote(runtime_env=RuntimeEnv(env_vars={"JAX_PLATFORMS": "cpu"}))
@@ -228,6 +247,7 @@ def _levanter_build_cache(source, batch_tokenizer, output_path, options: CacheOp
         monitors=[LoggerMetricsMonitor("ray")],
         options=options,
     )
+
     cache.await_finished()
 
 

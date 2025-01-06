@@ -19,7 +19,7 @@ wikipedia_dump_raw = ExecutorStep(
 )
 
 wikipedia_text_resiliparse_with_preserve_formatting = ExecutorStep(
-    name="documents/wikipedia-resiliparse-with-preserving-formatting",
+    name="documents/wikipedia-resiliparse-with-preserving-formatting-with-references",
     fn=process_wiki_dump,
     config=WikiExtractionConfig(
         input_path=output_path_of(wikipedia_dump_raw, "20241201"),
@@ -29,15 +29,15 @@ wikipedia_text_resiliparse_with_preserve_formatting = ExecutorStep(
         extract_config=ResiliparseConfig(
             preserve_formatting=versioned(True),
             main_content=versioned(True),
-            links=versioned(True),
+            links=versioned(False),
         ),
-        remove_reference_section=versioned(True),
+        remove_reference_section=versioned(False),
     ),
     pip_dependency_groups=["download_transform"],
 )
 
 wikipedia_text_readability = ExecutorStep(
-    name="documents/wikipedia-readability",
+    name="documents/wikipedia-readability-with-references",
     fn=process_wiki_dump,
     config=WikiExtractionConfig(
         input_path=output_path_of(wikipedia_dump_raw, "20241201"),
@@ -48,7 +48,7 @@ wikipedia_text_readability = ExecutorStep(
             include_images=versioned(False),
             include_links=versioned(False),
         ),
-        remove_reference_section=versioned(True),
+        remove_reference_section=versioned(False),
     ),
     pip_dependency_groups=["download_transform"],
 )
