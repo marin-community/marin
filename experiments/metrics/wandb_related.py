@@ -87,7 +87,7 @@ def get_all_runs_over_period(num_days=7, entity="stanford-mercury", project="mar
         runs = api.runs(f"{entity}/{project}")
 
         # Filter runs by creation date
-        runs_list = [run for run in runs if datetime.strptime(run.created_at, "%Y-%m-%dT%H:%M:%S%z") >= time_window]
+        runs_list = [run for run in runs if datetime.strptime(run.updated_at, "%Y-%m-%dT%H:%M:%S%z") >= time_window]
 
         logger.info(f"Successfully retrieved {len(runs_list)} runs from the past {num_days} days")
 
