@@ -56,6 +56,8 @@ RUN sudo apt-get install libopenblas-base libopenmpi-dev libomp-dev -y
 # NOTE(chris): Instead of running pip install requirements-tpus.txt as instructed, there is some bug
 # where the current torch_xla version in the requirements-tpus.txt is not compatible with the platform (installation fails),
 # so we install the dependencies manually from the requirements-tpu.txt file.
+# This has been fixed in the new version: https://github.com/vllm-project/vllm/issues/11811#issuecomment-2575583282
+# So we should replace this to a simple pip install -r requirements-tpu.txt command when the new version is released.
 RUN pip install -r requirements-common.txt
 RUN pip install cmake>=3.26 ninja packaging setuptools-scm>=8 wheel jinja2
 RUN pip install --no-cache-dir torch_xla[tpu] -f https://storage.googleapis.com/libtpu-releases/index.html
