@@ -89,6 +89,7 @@ import ray
 import ray.remote_function
 from ray.runtime_env import RuntimeEnv
 from ray.util import state  # noqa
+from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 
 from marin.execution.executor_step_status import (
     STATUS_DEP_FAILED,
@@ -389,7 +390,14 @@ class Executor:
         self.step_infos: list[ExecutorStepInfo] = []
         self.executor_info: ExecutorInfo | None = None
         self.status_actor: StatusActor = StatusActor.options(
-            name="status_actor", get_if_exists=True, lifetime="detached"
+            name="status_actor",
+            get_if_exists=True,
+            lifetime="detached",
+            # This is to ensure that the status actor is only schduled on the headnode
+            scheduling_strategy=NodeAffinitySchedulingStrategy(
+                node_id=ray.get_runtime_context().node_id,
+                soft=False,
+            ),
         ).remote()
         # TODO: Add a design docstring of how status_actor works
 
