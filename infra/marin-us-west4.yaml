@@ -87,7 +87,7 @@ available_node_types:
     max_workers: 1024
     min_workers: 4
     node_config:
-      acceleratorType: v5litepod-1
+      acceleratorType: v5litepod-4
       runtimeVersion: v2-alpha-tpuv5-lite
       schedulingConfig:
         preemptible: true

@@ -78,5 +78,20 @@ def append_status(path: str, status: str, message: str | None = None, ray_task_i
             print(json.dumps(asdict(event)), file=f)
 
 
-def is_failure(status):
+def append_status_event(output_path: str, executor_step_event: ExecutorStepEvent):
+    # Write to GCS
+    path = get_status_path(output_path)
+    events = read_events(path)
+    events.append(executor_step_event)
+    # Note: gcs files are immutable so can't append, so have to read everything.
+    with fsspec.open(path, "w") as f:
+        for event in events:
+            print(json.dumps(asdict(event)), file=f)
+
+
+def is_failure(status: str):
     return status in [STATUS_FAILED, STATUS_DEP_FAILED]
+
+
+def is_running_or_waiting(status: str):
+    return status in [STATUS_WAITING, STATUS_RUNNING]
