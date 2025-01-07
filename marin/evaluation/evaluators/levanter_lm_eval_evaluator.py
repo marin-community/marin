@@ -53,7 +53,9 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
             logger.info(f"Running eval harness on model: {model_name_or_path}")
 
             trainer_config = TrainerConfig(
-                mp=jmp.get_policy("f32"), per_device_eval_parallelism=32, ray=RayConfig(auto_start_cluster=False)
+                mp=jmp.get_policy("p=f32,c=bfloat16"),
+                per_device_eval_parallelism=16,
+                ray=RayConfig(auto_start_cluster=False),
             )
 
             model_config = LlamaConfig()
