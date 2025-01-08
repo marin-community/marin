@@ -1,12 +1,12 @@
 """
 Functions for fitting scaling laws and plotting the results.
 
-The functions here implement the methods in https://arxiv.org/pdf/2412.04403.
+The functions in this file implement the techniques in https://arxiv.org/pdf/2412.04403.
 
-At a high level, we want to predict the accuracy of a lregr model (eg. 8B, 22B) on a particular benchmark (eg. HellaSwag)
-using (N, D) data of a bunch of smaller models. We accomplish this by fitting two models:
-- We first fit a power-law model to predict the task loss from the number of parameters and tokens.
-- Then, we fit a sigmoidal model to predict the task accuracy from the task loss.
+Our objective is to predict the accuracy of a larger target model on a specific benchmark.
+This prediction is done through a two-step modeling process using (N, D) data from various smaller models:
+- we first fit a power-law model to predict the task loss from the number of parameters and tokens.
+- then, we fit a sigmoidal model to predict the task accuracy from the task loss.
 
 For further details see the corresponding GitHub issue: https://github.com/stanford-crfm/marin/issues/646.
 
