@@ -10,15 +10,15 @@ python marin/run/ray_run.py \
     --pip_deps 'warcio' \
     --no_wait -- \
     python scripts/crawl/fetch_links.py \
-    --urls_path gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-1M/links.99.parquet \
-    --warc_output_path gs://marin-us-central2/scratch/nfliu/fetched_outlinks/fineweb-edu-1M/links.99.warc.gz \
-    --robots_output_path gs://marin-us-central2/scratch/nfliu/fetched_outlinks/fineweb-edu-1M/links.99_robots.json.gz \
-    --errors_output_path gs://marin-us-central2/scratch/nfliu/fetched_outlinks/fineweb-edu-1M/links.99_errors.json.gz
+    --urls_input_directory gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-1M/ \
+    --output_directory gs://marin-us-central2/scratch/nfliu/fetched_outlinks/fineweb-edu-1M/
 ```
 """
 import io
 import json
 import logging
+import os
+import pathlib
 import random
 from dataclasses import dataclass
 from urllib.parse import urlparse
@@ -32,7 +32,7 @@ from tqdm_loggable.auto import tqdm
 from warcio.statusandheaders import StatusAndHeaders
 from warcio.warcwriter import WARCWriter
 
-from marin.utils import fsspec_exists
+from marin.utils import fsspec_exists, fsspec_glob
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -51,10 +51,8 @@ def fetch_url(session: requests.Session, url: str) -> tuple[requests.Response, N
 
 @dataclass
 class FetchLinksConfig:
-    urls_path: str
-    warc_output_path: str
-    robots_output_path: str
-    errors_output_path: str
+    urls_input_directory: str
+    output_directory: str
 
 
 @ray.remote(memory=8 * 1024 * 1024 * 1024)
@@ -159,10 +157,33 @@ def fetch_to_warc(urls: list[str], warc_output_path: str, robots_output_path: st
         json.dump(fetch_errors, fout)
 
 
+@ray.remote(memory=8 * 1024 * 1024 * 1024)
+def get_shard_indices_to_process(urls_input_directory: str) -> list[int]:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+    shard_indices: list[int] = [
+        int(pathlib.Path(path).name.removesuffix(".parquet").removeprefix(f"links."))
+        for path in fsspec_glob(os.path.join(urls_input_directory, "links.*.parquet"))
+    ]
+    shard_indices = sorted(shard_indices)
+    logger.info(f"Found {len(shard_indices)} shards to process")
+    return shard_indices
+
+
 @draccus.wrap()
 def main(cfg: FetchLinksConfig):
-    # Do all the processing in a remote function
-    _ = ray.get(fetch_links.remote(cfg.urls_path, cfg.warc_output_path, cfg.robots_output_path, cfg.errors_output_path))
+    shard_indices = ray.get(get_shard_indices_to_process.remote(cfg.urls_input_directory))
+
+    refs = []
+    for shard_index in shard_indices:
+        input_path = os.path.join(cfg.urls_input_directory, f"links.{shard_index}.parquet")
+        warc_output_path = os.path.join(cfg.output_directory, f"links.{shard_index}.warc.gz")
+        robots_output_path = os.path.join(cfg.output_directory, f"links.{shard_index}_robots.json.gz")
+        errors_output_path = os.path.join(cfg.output_directory, f"links.{shard_index}_errors.json.gz")
+        refs.append(fetch_links.remote(input_path, warc_output_path, robots_output_path, errors_output_path))
+    logger.info(f"Submitted {len(refs)} tasks")
+
+    # Wait for the tasks to finish
+    _ = ray.get(refs)
 
 
 if __name__ == "__main__":
