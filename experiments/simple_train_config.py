@@ -18,7 +18,7 @@ class SimpleTrainConfig:
 
     steps_per_eval: int | None = None
     """how often to run validation losses"""
-    steps_per_export: int | None = None
+    steps_per_export: int = 10000
     steps_per_task_eval: int | None = None
     """how often to run task evaluations"""
 
