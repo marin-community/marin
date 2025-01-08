@@ -5,15 +5,13 @@ dump. Then, extract the URL and text of each record and score the text with the
 FineWeb-Edu quality classifier.
 
 ```
-for fineweb_edu_dump_html_path in $(gcloud storage ls gs://marin-us-central2/documents/fineweb-edu/html); do
-    dump_name=$(basename -- ${fineweb_edu_dump_html_path})
-    python marin/run/ray_run.py \
+python marin/run/ray_run.py \
     --pip_deps '--find-links https://storage.googleapis.com/jax-releases/libtpu_releases.html,w3lib,trafilatura,jax[tpu],flax,transformers,requests,warcio,resiliparse' \
     --no_wait -- \
     python scripts/fineweb-edu/get_urls_and_fineweb_scores_from_warcs.py \
-    --cc_dump ${dump_name} \
+    --cc_dumps '["CC-MAIN-2022-05", "CC-MAIN-2022-21", "CC-MAIN-2022-27", "CC-MAIN-2022-33", "CC-MAIN-2022-40", "CC-MAIN-2022-49", "CC-MAIN-2023-06", "CC-MAIN-2023-14", "CC-MAIN-2023-23", "CC-MAIN-2023-40", "CC-MAIN-2023-50", "CC-MAIN-2024-10"]' \
     --num_warcs_to_sample 500 \
-    --output_path gs://marin-us-central2/scratch/nfliu/urls_and_scores/fineweb-edu-cc/${dump_name}
+    --output_directory gs://marin-us-central2/scratch/nfliu/urls_and_scores/fineweb-edu-cc/
 done
 ```
 """
@@ -22,8 +20,8 @@ import json
 import logging
 import math
 import os
-from dataclasses import dataclass
 import random
+from dataclasses import dataclass
 from io import BytesIO
 
 import draccus
@@ -32,11 +30,11 @@ import ray
 import requests
 import trafilatura
 import w3lib.url
+from resiliparse.parse.encoding import bytes_to_str, detect_encoding
 from tqdm_loggable.auto import tqdm
 from trafilatura import extract
 from transformers import AutoTokenizer, FlaxAutoModelForSequenceClassification
 from warcio import ArchiveIterator
-from resiliparse.parse.encoding import detect_encoding, bytes_to_str
 
 from marin.core.runtime import cached_or_construct_output
 from marin.utils import remove_tpu_lockfile_on_exit
@@ -47,9 +45,9 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class CCUrlsAndScoresExtractionConfig:
-    cc_dump: str
+    cc_dumps: list[str]
     num_warcs_to_sample: int
-    output_path: str
+    output_directory: str
 
 
 def decode_html(html: bytes) -> str | None:
@@ -195,29 +193,35 @@ def get_warc_paths_to_process(cc_dump: str, num_warcs_to_sample):
     return [f"https://data.commoncrawl.org/{path}" for path in warc_paths[:num_warcs_to_sample]]
 
 
-@draccus.wrap()
-def get_urls_and_scores_from_warcs(cfg: CCUrlsAndScoresExtractionConfig):
-    warc_paths = ray.get(get_warc_paths_to_process.remote(cfg.cc_dump, cfg.num_warcs_to_sample))
+@ray.remote(memory=8 * 1024 * 1024 * 1024)
+def get_urls_and_scores_from_warcs(cc_dump: str, output_directory: str, num_warcs_to_sample: int):
+    warc_paths = ray.get(get_warc_paths_to_process.remote(cc_dump, num_warcs_to_sample))
 
     refs = []
     for warc_path in warc_paths:
         warc_name = os.path.basename(warc_path)
-        output_path = os.path.join(cfg.output_path, f"{warc_name}_extracted_text.jsonl.gz")
+        output_path = os.path.join(output_directory, f"{warc_name}_extracted_text.jsonl.gz")
         refs.append(extract_text_from_warc.remote(warc_path, output_path))
     logger.info(f"Submitted {len(refs)} tasks to extract text")
-
-    # Wait for the tasks to finish
     _ = ray.get(refs)
 
     refs = []
     for warc_path in warc_paths:
         warc_name = os.path.basename(warc_path)
-        input_path = os.path.join(cfg.output_path, f"{warc_name}_extracted_text.jsonl.gz")
-        output_path = os.path.join(cfg.output_path, f"{warc_name}_urls_and_quality_classifier_scores.jsonl.gz")
+        input_path = os.path.join(output_directory, f"{warc_name}_extracted_text.jsonl.gz")
+        output_path = os.path.join(output_directory, f"{warc_name}_urls_and_quality_classifier_scores.jsonl.gz")
         refs.append(process_one_batch.remote(input_path, output_path))
     logger.info(f"Submitted {len(refs)} tasks to run quality classifier")
+    _ = ray.get(refs)
 
-    # Wait for the tasks to finish
+
+@draccus.wrap()
+def get_urls_and_scores_from_dumps(cfg: CCUrlsAndScoresExtractionConfig):
+    refs = []
+    logger.info(f"Got {len(cfg.cc_dumps)} CC dumps to process")
+    for cc_dump in cfg.cc_dumps:
+        dump_output_directory = os.path.join(cfg.output_directory, cc_dump)
+        refs.append(get_urls_and_scores_from_warcs.remote(cc_dump, dump_output_directory, cfg.num_warcs_to_sample))
     _ = ray.get(refs)
 
 
