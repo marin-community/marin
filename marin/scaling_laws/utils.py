@@ -139,7 +139,7 @@ def predict_power_law(params: Sequence[float], N: np.ndarray, D: np.ndarray) -> 
 # Sigmoidal fit helpers
 
 
-def fit_sigmoidal(L: np.ndarray, y: np.ndarray, initial_guess: Sequence[float] | None) -> np.ndarray:
+def fit_sigmoidal(L: np.ndarray, y: np.ndarray, initial_guess: Sequence[float] | None = None) -> np.ndarray:
     """
     Fit a sigmoidal model to the data (L, y).
 
