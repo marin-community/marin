@@ -64,6 +64,7 @@ def get_wandb_run_metrics(
 def get_all_runs_over_period(num_days=7, entity="stanford-mercury", project="marin") -> list[dict[str, Any]] | None:
     """
     Retrieves all runs created within the past week (or given time window).
+    If num_days is -1, it will retrieve all runs for the project.
     """
     # Initialize the WandB API
     api = wandb.Api()
@@ -86,8 +87,11 @@ def get_all_runs_over_period(num_days=7, entity="stanford-mercury", project="mar
         # Fetch all runs for the project
         runs = api.runs(f"{entity}/{project}")
 
-        # Filter runs by creation date
-        runs_list = [run for run in runs if datetime.strptime(run.updated_at, "%Y-%m-%dT%H:%M:%S%z") >= time_window]
+        # Filter runs by update date
+        if num_days >= 0:
+            runs_list = [run for run in runs if datetime.strptime(run.updated_at, "%Y-%m-%dT%H:%M:%S%z") >= time_window]
+        else:
+            runs_list = runs
 
         logger.info(f"Successfully retrieved {len(runs_list)} runs from the past {num_days} days")
 
