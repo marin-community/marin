@@ -10,7 +10,7 @@ template_path = os.path.join(this_path, "marin-cluster-template.yaml")
 
 DOCKER_TAGS = {
     "us-central2": "20250107",
-    "us-west4": "20241123",
+    "us-west4": "20250107",
     "europe-west4": "20241128",
 }
 
