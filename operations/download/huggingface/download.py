@@ -1,7 +1,7 @@
 """
 huggingface/download.py
 
-Download script for arbitrary datasets hosted on HuggingFace (supports both public and gated HF Datasets); this script
+Download script for arbitrary datasets hosted on HuggingFace (supports public HF Datasets); this script
 requires a pointer to the dataset repository URL, and a revision (Git SHA from the HF Dataset page). Given this, we
 will automatically launch a Google Storage Transfer Service (STS) job to download the appropriate files to GCS.
 
@@ -12,6 +12,8 @@ Run with:
         --revision="8fd6e8e"
 """
 
+import dataclasses
+import logging
 from dataclasses import dataclass
 
 import draccus
@@ -20,27 +22,32 @@ import ray
 from marin.utilities.huggingface_hub_utils import download_hf_dataset
 from marin.utilities.storage_transfer_utils import wait_for_transfer_job
 
+logger = logging.getLogger("ray")
+
 
 @dataclass
 class DownloadConfig:
     # fmt: off
-    gcs_output_path: str                                    # Path to store raw data on GCS (includes gs://$BUCKET/...)
+    gcs_output_path: str
+    """
+    Path to store raw data in persistent storage (e.g. gs://$BUCKET/...).
+    This works with any fsspec-compatible path, but for backwards compatibility, we call it gcs_output_path.
+    """
 
     # HuggingFace Dataset Parameters
     hf_dataset_id: str                                      # HF Dataset to Download (as `$ORG/$DATASET` on HF Hub)
 
-    # Note: when just specifying main, the revision that gets saved on GCS won't actually autofetch the underlying SHA
-    # (it will just say main, which isn't useful if the dataset repo gets updated later)
-    revision: str                                           # (Short) Commit Hash (from HF Dataset Repo; 7 characters)
-    hf_url_glob: str = "*"                                  # Glob Pattern to Match Files in HF Dataset
+    revision: str  # (Short) Commit Hash (from HF Dataset Repo; 7 characters)
+    hf_urls_glob: list[str] = dataclasses.field(default_factory=list)
+    # List of Glob Patterns to Match Files in HF Dataset, If empty we get all the files in a hf repo
 
     # Additional GCS Parameters
     public_gcs_path: str = (                                # Path to Publicly Readable Bucket (for Storage Transfer)
         "gs://hf_dataset_transfer_bucket"
     )
 
-    # Job Control Parameters
-    wait_for_completion: bool = False                       # if True, will block until job completes
+    # Job Control Parameters, used only for non-gated dataset transfers done via STS
+    wait_for_completion: bool = True                        # if True, will block until job completes
     timeout: int = 1800                                     # Maximum time to wait for job completion (in seconds)
     poll_interval: int = 10                                 # Time to wait between polling job status (in seconds)
 
@@ -64,30 +71,34 @@ def _wait_for_job_completion(job_name: str, timeout: int, poll_interval: int) ->
 
 
 def download(cfg: DownloadConfig) -> None | ray.ObjectRef:
-    print(f"[*] Downloading HF Dataset `{cfg.hf_dataset_id}` to `{cfg.gcs_output_path}`")
+    logging.warning(
+        "DEPRECATED: This function is deprecated and will be removed in a future release." "Consider using download_hf"
+    )
+
+    logger.info(f"[*] Downloading HF Dataset `{cfg.hf_dataset_id}` to `{cfg.gcs_output_path}`")
 
     job_name, job_url = download_hf_dataset(
-        cfg.hf_dataset_id, cfg.revision, cfg.hf_url_glob, cfg.gcs_output_path, cfg.public_gcs_path
+        cfg.hf_dataset_id, cfg.revision, cfg.hf_urls_glob, cfg.gcs_output_path, cfg.public_gcs_path
     )
 
     if cfg.wait_for_completion:
-        print(f"[*] Waiting for Job Completion :: {job_url}")
+        logger.info(f"[*] Waiting for Job Completion :: {job_url}")
         future = _wait_for_job_completion.remote(job_name, cfg.timeout, cfg.poll_interval)
 
-        print(f"[*] Launched Job Completion Waiter :: {future}")
+        logger.info(f"[*] Launched Job Completion Waiter :: {future}")
         result = ray.get(future)
-        print(f"[*] Job Completion Waiter Result :: {result}")
+        logger.info(f"[*] Job Completion Waiter Result :: {result}")
 
         return future
 
     # Finalize
-    print(f"[*] Launched Transfer Job & wrote `provenance.json`; check Transfer Job status at:\n\t=> {job_url}")
+    logger.info(f"[*] Launched Transfer Job & wrote `provenance.json`; check Transfer Job status at:\n\t=> {job_url}")
 
 
 @draccus.wrap()
-def download_main(cfg: DownloadConfig):
+def main(cfg: DownloadConfig):
     download(cfg)
 
 
 if __name__ == "__main__":
-    download()
+    main()

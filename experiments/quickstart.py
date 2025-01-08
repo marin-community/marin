@@ -1,209 +1,258 @@
-from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path, versioned
+import dataclasses
+import logging
+import os
+import sys
 
-############################################################
-# Download the pretraining data
-from operations.download.huggingface.download import DownloadConfig, download
+import draccus
+from levanter.models.gpt2 import Gpt2Config
+from levanter.trainer import TrainerConfig
 
-raw_download_step = ExecutorStep(
-    name="raw/hello_world_fw-pliang",
-    fn=download,
-    config=DownloadConfig(
-        hf_dataset_id="skaramcheti/hello_world_fw",
-        revision="8fd6e8e",
-        gcs_output_path=this_output_path(),
-        wait_for_completion=True,
-    ),
+from marin.classifiers.utils import DatasetConfig
+from marin.execution.executor import (
+    ExecutorMainConfig,
+    ExecutorStep,
+    executor_main,
+    output_path_of,
+    this_output_path,
+    versioned,
 )
-raw_data = output_path_of(
-    raw_download_step, "8fd6e8e/huggingface.co/datasets/skaramcheti/hello_world_fw/resolve/8fd6e8e/data/CC-MAIN-2024-10"
+from marin.processing.classification.consolidate import ConsolidateConfig, FilterConfig, consolidate
+from marin.processing.classification.dedupe import DedupeConfig, dedupe
+from marin.processing.classification.fasttext.train_fasttext import (
+    TrainFasttextClassifierConfig,
+    train,
 )
+from marin.processing.classification.inference import InferenceConfig, run_inference
+from marin.processing.tokenize import TokenizeConfig, lm_data_config, tokenize
+from marin.schemas.web.convert import HtmlToMarkdownConfig
+from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
+from marin.utilities.ray_utils import is_local_ray_cluster
+from marin.utils import is_in_ci
+from scripts.hello_world_fw.process import FineWebConfig, transform
 
-############################################################
-# Transform HTML to text
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
 
-from marin.schemas.web.convert import TrafilaturaConfig  # noqa
-from scripts.hello_world_fw.process import FineWebConfig, transform  # noqa
 
-transform_trafilatura_step = ExecutorStep(
-    name="documents/hello_world_fw-pliang-trafilatura",
-    fn=transform,
-    config=FineWebConfig(
-        input_path=raw_data,
-        output_path=this_output_path(),
-        extract_method=versioned("trafilatura"),
-        config=TrafilaturaConfig(
-            favor_precision=versioned(False),
-            favor_recall=versioned(True),
-            include_comments=versioned(False),
-            deduplicate=versioned(False),
+def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
+    # ############################################################
+    # Transform HTML to text
+
+    transform_hq_data_step = ExecutorStep(
+        name=os.path.join(prefix, "hq-transformed"),
+        fn=transform,
+        config=FineWebConfig(
+            input_path=os.path.join(synth_data, "pos"),
+            output_path=this_output_path(),
+            extract_method=versioned("readability"),
+            config=HtmlToMarkdownConfig.default_config(),
         ),
-    ),
-)
+        pip_dependency_groups=["download_transform"],
+    )
 
-transform_resiliparse_step = ExecutorStep(
-    name="documents/hello_world_fw-pliang-resiliparse",
-    fn=transform,
-    config=FineWebConfig(
-        input_path=raw_data,
-        output_path=this_output_path(),
-        extract_method=versioned("resiliparse"),
-    ),
-)
+    transform_lq_data_step = ExecutorStep(
+        name=os.path.join(prefix, "lq-transformed"),
+        fn=transform,
+        config=FineWebConfig(
+            input_path=os.path.join(synth_data, "neg"),
+            output_path=this_output_path(),
+            extract_method=versioned("readability"),
+            config=HtmlToMarkdownConfig.default_config(),
+        ),
+        pip_dependency_groups=["download_transform"],
+    )
 
-transform_readability_step = ExecutorStep(
-    name="documents/hello_world_fw-pliang-readability",
-    fn=transform,
-    config=FineWebConfig(
-        input_path=raw_data,
-        output_path=this_output_path(),
-        extract_method=versioned("readability"),
-    ),
-)
+    # ############################################################
+    # Train quality classifier
 
-############################################################
-# Download good data
+    train_quality_step = ExecutorStep(
+        name=os.path.join(prefix, "quality-classifier"),
+        fn=train,
+        config=TrainFasttextClassifierConfig(
+            datasets=[
+                DatasetConfig(
+                    input_doc_path=output_path_of(transform_hq_data_step),
+                    label="hq",
+                    sampling_rate=1.0,
+                ),
+                DatasetConfig(
+                    input_doc_path=output_path_of(transform_lq_data_step),
+                    label="lq",
+                    sampling_rate=1.0,
+                ),
+            ],
+            output_path=this_output_path(),
+            fasttext_args={
+                "lr": 0.001,
+                "minCount": 1,
+                "epoch": 25,
+                "wordNgrams": 2,
+                "dim": 50,
+                "thread": 1,
+            },
+        ),
+        pip_dependency_groups=["quality_dedup_consolidate"],
+    )
 
-download_sft_step = ExecutorStep(
-    name="raw/tulu-v2-sft-mixture",
-    fn=download,
-    config=DownloadConfig(
-        hf_dataset_id="allenai/tulu-v2-sft-mixture",
-        revision="6248b17",
-        gcs_output_path=this_output_path(),
-    ),
-)
+    ############################################################
+    # Run inference with quality classifier
 
-# TODO: convert the data into Dolma format
-# For now, just use the one that's already given
-sft_data = "gs://marin-us-central2/documents/instruct/v1_olmo_mix/text"
+    inference_hq_step = ExecutorStep(
+        name=os.path.join(prefix, "hq-inference"),
+        fn=run_inference,
+        config=InferenceConfig(
+            input_path=output_path_of(transform_hq_data_step),
+            output_path=this_output_path(),
+            model_name=output_path_of(train_quality_step),
+            model_type="fasttext",
+            attribute_name="quickstart-fasttext-quality-hq",
+        ),
+        pip_dependency_groups=["quality_dedup_consolidate"],
+    )
 
-############################################################
-# Train quality classifier
+    inference_lq_step = ExecutorStep(
+        name=os.path.join(prefix, "lq-inference"),
+        fn=run_inference,
+        config=InferenceConfig(
+            input_path=output_path_of(transform_lq_data_step),
+            output_path=this_output_path(),
+            model_name=output_path_of(train_quality_step),
+            model_type="fasttext",
+            attribute_name="quickstart-fasttext-quality-lq",
+        ),
+        pip_dependency_groups=["quality_dedup_consolidate"],
+    )
 
-from scripts.fasttext.train_fasttext import TrainFasttextClassifierConfig, train  # noqa
+    ############################################################
+    # Deduplicate
 
-train_quality_step = ExecutorStep(
-    name="classifiers/hello_world_fw-pliang",
-    fn=train,
-    config=TrainFasttextClassifierConfig(
-        pos_doc_path=sft_data,
-        neg_doc_path=output_path_of(transform_trafilatura_step),
-        output_path=this_output_path(),
-        pos_sampling_rate=0.1,
-        neg_sampling_rate=1.0,
-        fasttext_args={"lr": 0.1},
-    ),
-)
+    dedupe_step = ExecutorStep(
+        name=os.path.join(prefix, "dedupe"),
+        fn=dedupe,
+        config=DedupeConfig(
+            input_path=output_path_of(transform_hq_data_step),
+            output_path=this_output_path(),
+        ),
+        pip_dependency_groups=["quality_dedup_consolidate"],
+    )
 
-############################################################
-# Run inference with quality classifier
+    ############################################################
+    # Consolidate
 
-from marin.processing.classification.inference import InferenceConfig, run_inference  # noqa
+    consolidate_step = ExecutorStep(
+        name=os.path.join(prefix, "consolidate"),
+        fn=consolidate,
+        config=ConsolidateConfig(
+            input_path=output_path_of(transform_hq_data_step),
+            output_path=this_output_path(),
+            filters=[
+                FilterConfig(
+                    type=versioned("classify"),
+                    attribute_path=output_path_of(inference_hq_step),
+                    name=versioned("quickstart-fasttext-quality-hq"),
+                    label="__label__hq",
+                    threshold=versioned(0.1),
+                ),
+                FilterConfig(
+                    type=versioned("remove_spans"),
+                    attribute_path=output_path_of(dedupe_step),
+                    name=versioned("duplicate_text"),
+                ),
+            ],
+        ),
+        pip_dependency_groups=["quality_dedup_consolidate"],
+    )
 
-inference_quality_step = ExecutorStep(
-    name="attributes/hello_world_fw-pliang",
-    fn=run_inference,
-    config=InferenceConfig(
-        input_path=output_path_of(transform_trafilatura_step),
-        output_path=this_output_path(),
-        model_name="allenai/dolma-1_7-fasttext-quality-filter",
-        model_type="fasttext",
-        attribute_name="olmo-fasttext-quality",
-    ),
-)
+    ############################################################
+    # Tokenize
+    tokenizer = "gpt2"
 
-############################################################
-# Deduplicate
+    tokenize_step = ExecutorStep(
+        name=os.path.join(prefix, "tokenized"),
+        fn=tokenize,
+        config=TokenizeConfig(
+            train_paths=output_path_of(consolidate_step),
+            validation_paths=[],
+            cache_path=this_output_path(),
+            tokenizer=versioned(tokenizer),
+        ),
+    )
 
-from marin.processing.classification.dedupe import DedupeConfig, dedupe  # noqa
+    # ############################################################
+    # Training
+    if not is_in_ci() and not is_local_ray_cluster():
+        tpu_type = "v4-8"
+    else:
+        tpu_type = None
 
-dedupe_step = ExecutorStep(
-    name="attributes/hello_world_fw-pliang-dedupe",
-    fn=dedupe,
-    config=DedupeConfig(
-        input_path=output_path_of(transform_trafilatura_step),
-        output_path=this_output_path(),
-    ),
-)
-
-############################################################
-# Consolidate
-
-from marin.processing.classification.consolidate import ConsolidateConfig, FilterConfig, consolidate  # noqa
-
-consolidate_step = ExecutorStep(
-    name="documents/hello_world_fw-pliang-consolidate",
-    fn=consolidate,
-    config=ConsolidateConfig(
-        input_path=output_path_of(transform_trafilatura_step),
-        output_path=this_output_path(),
-        filters=[
-            FilterConfig(
-                type=versioned("classify"),
-                attribute_path=output_path_of(inference_quality_step),
-                name=versioned("olmo-fasttext-quality"),
-                label="__label__hq",
-                threshold=versioned(0.1),
+    train_step = ExecutorStep(
+        name=os.path.join(prefix, "train"),
+        fn=run_levanter_train_lm,
+        config=TrainLmOnPodConfig(
+            output_path=this_output_path(),
+            data=lm_data_config(tokenize_step),
+            env={
+                "WANDB_API_KEY": None,
+                "WANDB_MODE": "disabled",
+                "JAX_PLATFORMS": "cpu",
+            },  # Running it locally and turning off wandb
+            tpu_type=tpu_type,
+            hf_save_steps=1,
+            model=Gpt2Config(
+                num_layers=2,
+                num_heads=2,
+                seq_len=64,
+                hidden_dim=32,
             ),
-            FilterConfig(
-                type=versioned("remove_spans"),
-                attribute_path=output_path_of(dedupe_step),
-                name=versioned("duplicate_text"),
-            ),
-        ],
-    ),
-)
+            trainer=TrainerConfig(train_batch_size=8, num_train_steps=2, max_eval_batches=1, require_accelerator=False),
+        ),
+    )
 
-############################################################
-# Tokenize
+    ##### Evaluate
 
-from marin.processing.tokenize import TokenizeConfig, tokenize  # noqa
+    # evaluate_step = evaluate_helm_on_step(train_step, ["mmlu"], max_eval_instances=10)
 
-tokenize_step = ExecutorStep(
-    name="tokenized/llama3/hello_world_fw-pliang",
-    fn=tokenize,
-    config=TokenizeConfig(
-        input_path=output_path_of(consolidate_step),
-        cache_path=this_output_path(),
-        dataset_name="hello_world_fw-pliang",  # Does this have to be unique?
-        tokenizer="meta-llama/Meta-Llama-3.1-8B",
-    ),
-)
+    return [
+        transform_hq_data_step,
+        transform_lq_data_step,
+        train_quality_step,
+        inference_hq_step,
+        inference_lq_step,
+        dedupe_step,
+        consolidate_step,
+        tokenize_step,
+        train_step,
+        # evaluate_step,
+    ]
 
-############################################################
-# Training
 
-# TODO: wait for Ray version
+@draccus.wrap()
+def main(config: ExecutorMainConfig):
+    try:
+        # Replace this only if it's not in argv
+        if "--prefix" in sys.argv:  # Check if prefix is already provided
+            bucket_prefix = config.prefix
+        else:
+            bucket_prefix = "/tmp"  # Default to a temporary directory
 
-############################################################
-# Evaluate
+        experiment_prefix = "quickstart-tests"
+        config = dataclasses.replace(
+            config, prefix=bucket_prefix, executor_info_base_path=os.path.join(bucket_prefix, "experiments")
+        )
 
-from scripts.evaluation.evaluation_config import EvaluationConfig  # noqa
-from scripts.evaluation.run import evaluate  # noqa
+        # path to synthetic test data
+        synth_data: str = "./tests/quickstart-data"
+        # delete all previous runs
+        if os.path.exists(os.path.join(bucket_prefix, experiment_prefix)):
+            os.system(f"rm -rf {os.path.join(bucket_prefix, experiment_prefix)}")
+        steps = create_steps(experiment_prefix, synth_data)
+        config = dataclasses.replace(config)
+        executor_main(config, steps=steps)
+        logger.info(f"Execution completed successfully. All outputs are in {bucket_prefix}/{experiment_prefix}")
+    except Exception as e:
+        logger.error(f"Error in main execution: {e}")
+        raise e
 
-evaluate_step = ExecutorStep(
-    name="evaluation/hello_world_fw-pliang",
-    fn=evaluate,
-    config=EvaluationConfig(
-        evaluator="helm",
-        model_name="pf5pe4ut/step-600",
-        # TODO: replace this with `output_path_of(train_step)`
-        model_path="gs://marin-us-central2/checkpoints/quickstart_single_script_docker_test_09_18/pf5pe4ut/hf/pf5pe4ut/step-600",
-        evaluation_path=this_output_path(),
-        evals=["mmlu"],
-    ),
-)
-
-############################################################
 
 if __name__ == "__main__":
-    executor_main(
-        steps=[
-            transform_trafilatura_step,
-            transform_resiliparse_step,  # Not used
-            transform_readability_step,  # Not used
-            # train_quality_step,  # Not used  (TODO: fails right now)
-            tokenize_step,
-            evaluate_step,
-        ]
-    )
+    main()

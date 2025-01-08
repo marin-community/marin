@@ -1,7 +1,7 @@
 import unittest
 from datetime import datetime, timedelta
 
-from parse_wandb_runs import check_create_time
+from scripts.training.time_to_train.parse_wandb_runs import check_create_time
 
 
 class TestCheckCreateTime(unittest.TestCase):
@@ -30,5 +30,5 @@ class TestCheckCreateTime(unittest.TestCase):
         self.assertTrue(check_create_time("2023-01-31 23:59:59 PST", "2023-01-01", "2023-01-31"))
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

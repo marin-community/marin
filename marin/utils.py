@@ -3,7 +3,9 @@ import logging
 import os
 import re
 from contextlib import contextmanager
+from datetime import datetime
 
+import braceexpand
 import fsspec
 
 logger = logging.getLogger(__name__)
@@ -55,8 +57,10 @@ def fsspec_glob(file_path):
     """
     Get a list of files in a fsspec filesystem that match a pattern.
 
+    We extend fsspec glob to also work with braces, using braceexpand.
+
     Args:
-        file_path (str): The path of the file
+        file_path (str): a file path or pattern, possibly with *, **, ?, or {}'s
 
     Returns:
         list: A list of files that match the pattern. returned files have the protocol prepended to them.
@@ -71,7 +75,13 @@ def fsspec_glob(file_path):
             return f"{protocol}://{file}"
         return file
 
-    return [join_protocol(file) for file in fs.glob(file_path)]
+    out = []
+
+    # glob has to come after braceexpand
+    for file in braceexpand.braceexpand(file_path):
+        out.extend(join_protocol(file) for file in fs.glob(file))
+
+    return out
 
 
 def fsspec_mkdirs(dir_path, exist_ok=True):
@@ -158,11 +168,31 @@ def fsspec_cpdir(dir_path: str, target_path: str) -> None:
     fs.put(os.path.join(dir_path, "*"), target_path, recursive=True)
 
 
+def fsspec_cp(source_path: str, target_path: str) -> None:
+    """
+    Copies source file to target path.
+
+    Args:
+        source_path (str): The path of the file to copy.
+        target_path (str): The target path.
+    """
+
+    fs = fsspec.core.get_fs_token_paths(target_path, mode="wb")[0]
+    fs.put(source_path, target_path)
+
+
 def fsspec_size(file_path: str) -> int:
     """Get file size (in bytes) of a file on an `fsspec` filesystem."""
     fs = fsspec.core.url_to_fs(file_path)[0]
 
     return fs.size(file_path)
+
+
+def fsspec_mtime(file_path: str) -> datetime:
+    """Get file modification time (in seconds since epoch) of a file on an `fsspec` filesystem."""
+    fs = fsspec.core.url_to_fs(file_path)[0]
+
+    return fs.modified(file_path)
 
 
 def validate_marin_gcp_path(path: str) -> str:
@@ -296,3 +326,13 @@ def _hacky_remove_tpu_lockfile():
         except Exception:
             logger.error("Failed to remove lockfile")
             pass
+
+
+def is_in_ci() -> bool:
+    """
+    Check if the code is running in a CI environment.
+
+    Returns:
+        bool: True if running in CI, False otherwise.
+    """
+    return "CI" in os.environ

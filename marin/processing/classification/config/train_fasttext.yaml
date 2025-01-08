@@ -4,3 +4,10 @@ fasttext_args:
 seed: 0
 val_frac: 0.1
 memory: 1
+datasets:
+  - input_doc_path: "gs://marin-us-central2/documents/instruct/tulu_v2_mix/text"
+    label: "hq"
+    sampling_rate: 0.1
+  - input_doc_path: "gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart"
+    label: "lq"
+    sampling_rate: 1.0

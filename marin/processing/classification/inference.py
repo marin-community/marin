@@ -6,15 +6,12 @@ python -m marin.processing.classification.inference \
     --config_path marin/processing/classification/config/dclm_fasttext.yaml
 """
 
-import json
+import logging
 import os
 
-import datasets
 import draccus
-import fsspec
+import pandas as pd
 import ray
-from ray.data.datasource import FilenameProvider
-from ray.runtime_env import RuntimeEnv
 
 from marin.core.runtime import cached_or_construct_output
 from marin.processing.classification.classifier import (
@@ -29,95 +26,95 @@ from marin.utils import (
     rebase_file_path,
 )
 
-
-class JsonFilenameProvider(FilenameProvider):
-
-    def __init__(self, files: list[str], input_path: str):
-        self.files = files
-        self.input_path = input_path
-
-    def get_filename_for_block(self, block, task_index, block_index):
-        input_filename = self.files[task_index]
-        output_filename = os.path.basename(input_filename)
-        return output_filename
+logger = logging.getLogger("ray")
 
 
-@ray.remote
-def process_file_using_actor_pool(input_path: str, output_path: str, model_name_or_path: str):
-    ctx = ray.data.DataContext.get_current()
-    ctx.execution_options.preserve_order = True
+def read_dataset(input_filename: str, columns: list[str] | None = None):
+    """Read in a dataset and return as a Huggingface Dataset
 
-    print(f"[*] Reading in dataset {input_path}")
-    print(f"[*] Output directory is {output_path}")
+    Args:
+        input_filename: str
+            The path to the input file. Currently supports .jsonl.gz and .parquet
 
-    files = fsspec_glob(os.path.join(input_path, "**/*.jsonl.gz"))
+    Returns:
+        datasets.Dataset: A Huggingface Dataset in-memory without using the disk
+    """
+    import datasets
 
-    ray.data.read_json(
-        files,
-        arrow_open_stream_args={"compression": "gzip"},
-        override_num_blocks=len(files),
-    ).map_batches(
-        AutoClassifier,
-        # concurrency=(1,16),
-        concurrency=(1, len(files)),
-        fn_constructor_args=(model_name_or_path),
-        batch_size=None,
-    ).write_json(
-        output_path,
-        filename_provider=JsonFilenameProvider(files, input_path),
-        arrow_open_stream_args={"compression": "gzip"},
-    )
+    datasets.disable_caching()
+    datasets.logging.set_verbosity_warning()
+    # We use pandas to read in the file so that we don't have to materialize
+    # the entire dataset in disk since we have limited disk space.
+    # Huggingface datasets loads the dataset into disk first and mmaps.
+    if input_filename.endswith(".jsonl.gz"):
+        df = pd.read_json(input_filename, compression="gzip", lines=True)
+        dataset = datasets.Dataset.from_pandas(df)
+        return dataset
+    elif input_filename.endswith(".parquet"):
+        df = pd.read_parquet(input_filename, columns=columns)
+        dataset = datasets.Dataset.from_pandas(df)
+        return dataset
+    else:
+        raise ValueError(f"Unsupported filetype: {input_filename}")
 
 
-@ray.remote
-@cached_or_construct_output(success_suffix="SUCCESS")
-def process_file_ray(
-    input_filename: str, output_filename: str, model_name_or_path: str, attribute_name: str, model_type: str | None
-):
-    print(f"[*] Read in dataset {input_filename}")
-
-    quality_classifier = AutoClassifier.from_model_path(model_name_or_path, attribute_name, model_type=model_type)
-
-    json_list = []
-    with fsspec.open(input_filename, "rt", compression="gzip") as f_in:
-        for line in f_in:
-            json_list.append(json.loads(line))
-
-    dataset = datasets.Dataset.from_list(json_list)
-
-    dataset = dataset.select_columns(["text", "id", "source"])
-    predicted_dataset = dataset.map(lambda batch: quality_classifier(batch), batched=True, batch_size=1024)
-
-    with fsspec.open(output_filename, "wt", compression="gzip") as f_out:
-        for row in predicted_dataset:
-            res = {"id": row["id"], "source": row["source"], "attributes": row["attributes"]}
-            json_row = json.dumps(res)
-            f_out.write(json_row + "\n")
+def write_dataset(dataset, output_filename: str):
+    """Writes a Huggingface Dataset to a file (remote or local)"""
+    if output_filename.endswith(".jsonl.gz"):
+        dataset.to_json(output_filename, compression="gzip")
+    elif output_filename.endswith(".parquet"):
+        dataset.to_parquet(output_filename)
+    else:
+        raise ValueError(f"Unsupported filetype: {output_filename}")
 
 
 @cached_or_construct_output(success_suffix="SUCCESS")
 def process_file_with_quality_classifier(input_filename: str, output_filename: str, quality_classifier: BaseClassifier):
-    json_list = []
-    with fsspec.open(input_filename, "rt", compression="gzip") as f_in:
-        for line in f_in:
-            json_list.append(json.loads(line))
+    print(f"[*] Processing {input_filename} to {output_filename}")
+    dataset = read_dataset(input_filename)
 
-    dataset = datasets.Dataset.from_list(json_list)
+    dataset = dataset.select_columns(["text", "id"])
+    dataset = dataset.map(lambda batch: quality_classifier(batch), batched=True, batch_size=512)
+    dataset = dataset.select_columns(["id", "attributes"])
 
-    dataset = dataset.select_columns(["text", "id", "source"])
-    predicted_dataset = dataset.map(lambda batch: quality_classifier(batch), batched=True, batch_size=512)
+    write_dataset(dataset, output_filename)
 
-    with fsspec.open(output_filename, "wt", compression="gzip") as f_out:
-        for row in predicted_dataset:
-            res = {"id": row["id"], "source": row["source"], "attributes": row["attributes"]}
-            json_row = json.dumps(res)
-            f_out.write(json_row + "\n")
+
+@ray.remote
+def process_file_ray(
+    input_filename: str,
+    output_filename: str,
+    model_name_or_path: str,
+    attribute_name: str,
+    model_type: str | None,
+    filetype: str,
+):
+    quality_classifier = AutoClassifier.from_model_path(model_name_or_path, attribute_name, model_type=model_type)
+
+    process_file_with_quality_classifier(input_filename, output_filename, quality_classifier)
 
 
 @ray.remote
 @cached_or_construct_output(success_suffix="SUCCESS")
-def process_dir(input_path: str, output_path: str, model_name_or_path: str, attribute_name: str, model_type: str | None):
-    files = fsspec_glob(os.path.join(input_path, "**/*.jsonl.gz"))
+def _process_dir(
+    input_path: str,
+    output_path: str,
+    model_name_or_path: str,
+    attribute_name: str,
+    model_type: str | None,
+    filetype: str,
+):
+    """Perform quality classification on a directory of files
+
+    We assume that the input_path is a directory of files. Using _process_dir is more
+    efficient than process_file_ray because it avoids the overhead of spawning a new
+    Ray task for each file and instead processes all files in a single task.
+    """
+    files = fsspec_glob(os.path.join(input_path, f"*.{filetype}"))
+
+    if len(files) == 0:
+        logger.error(f"No files found in {input_path} with pattern {filetype}!!! This is likely an error.")
+        return
 
     quality_classifier = AutoClassifier.from_model_path(model_name_or_path, attribute_name, model_type=model_type)
 
@@ -128,7 +125,7 @@ def process_dir(input_path: str, output_path: str, model_name_or_path: str, attr
 
 def get_process_filepath_func(subdirectories: list[str]):
     if len(subdirectories) > 0:
-        return process_dir
+        return _process_dir
     else:
         return process_file_ray
 
@@ -139,7 +136,7 @@ def get_filepaths_and_process_filepath_func(inference_config: InferenceConfig):
 
     # This is the case where the directory has no subdirectories. So, we are iterating through files and not directories
     if len(filepaths) == 0:
-        filepaths = fsspec_glob(os.path.join(inference_config.input_path, "**/*.jsonl.gz"))
+        filepaths = fsspec_glob(os.path.join(inference_config.input_path, f"**/*.{inference_config.filetype}"))
 
     return filepaths, process_filepath_func
 
@@ -157,13 +154,10 @@ def run_inference(inference_config: InferenceConfig):
             ray.get(ready_refs)
 
         output_filepath = rebase_file_path(input_path, input_filepath, output_path)
-        fsspec_mkdirs(output_filepath)
+        fsspec_mkdirs(os.path.dirname(output_filepath))
 
         result_ref = process_filepath_func.options(
             memory=inference_config.runtime.memory_limit_gb * 1024 * 1024 * 1024,
-            runtime_env=RuntimeEnv(
-                pip=inference_config.runtime.requirements_filepath,
-            ),
             resources=inference_config.runtime.resources,
         ).remote(
             input_filepath,
@@ -171,6 +165,7 @@ def run_inference(inference_config: InferenceConfig):
             inference_config.model_name,
             inference_config.attribute_name,
             inference_config.model_type,
+            inference_config.filetype,
         )
 
         responses.append(result_ref)

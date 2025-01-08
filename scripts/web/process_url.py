@@ -11,17 +11,20 @@ import marin.web as web
 from marin.markdown import to_markdown
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     out_path = "output"
     os.makedirs(out_path, exist_ok=True)
     for url in sys.argv[1:]:
         # being a little sneaky. not really doing crawling.
-        with fsspec.open(url, "r",
-                         client_kwargs={
-                             "headers": {
-                                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3"
-                                }
-                         }) as f:
+        with fsspec.open(
+            url,
+            "r",
+            client_kwargs={
+                "headers": {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3"
+                }
+            },
+        ) as f:
             html = f.read()
 
         # out = trafilatura.bare_extraction(html, output_format="python",
@@ -55,10 +58,10 @@ if __name__ == '__main__':
         #     with open(f"{base_name}.traf.html", "w") as f:
         #         f.write(ET.tostring(node, pretty_print=True).decode())
         #
-            # markdown = html_to_markdown(ET.tostring(node, pretty_print=True).decode())
-            #
-            # with open(f"{base_name}.traf.md", "w") as f:
-            #     print(markdown, file=f)
+        # markdown = html_to_markdown(ET.tostring(node, pretty_print=True).decode())
+        #
+        # with open(f"{base_name}.traf.md", "w") as f:
+        #     print(markdown, file=f)
 
         out = web.convert_page(html, url=url)
         title = out["title"]
@@ -67,12 +70,9 @@ if __name__ == '__main__':
         with open(f"{out_path}/{base_name}.orig.html", "w") as f:
             print(html, file=f)
 
-
         with open(f"{out_path}/{base_name}.readability.html", "w") as f:
             print(out["html"], file=f)
 
         with open(f"{out_path}/{base_name}.md", "w") as f:
             print(f"# {title}\n", file=f)
             print(md, file=f)
-
-

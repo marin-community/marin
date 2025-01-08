@@ -3,256 +3,102 @@
 > "*I am not afraid of storms, for I am learning how to sail my ship."*<br/>
 > – Louisa May Alcott
 
-## Getting Started
+Marin is a modular, open-source framework for the research and development of
+foundation models.  A key property of Marin is reproducibility: All the steps
+raw data to the final model are recorded for posterity (not just the final
+model).  Moreover, all [experiments](docs/experiments.md) (whether successful
+or not) are also recorded, so the entire research process (not just the
+development of the final model) is transparent.
 
-To get set up, create a new virtual environment (or `conda` environment) with the appropriate Python version (3.10),
-then run the following:
+The core part of Marin is minimal, consisting of basically an [executor
+framework](docs/executor.md), which manages the execution of a set of
+arbitrary steps.
+
+Marin's primary use case is to build a language model like Llama 3,
+which involves data curation, transformation, filtering, tokenization,
+training, and evaluation (see [overview](docs/lm/overview.md)).
+Note that for now, all this specific code resides in this repository.
+
+## Setup
+
+To install Marin, create a new virtual environment (or `conda` environment)
+with the appropriate Python version (3.10), and then run the following:
 
 ```bash
 git clone https://github.com/stanford-crfm/marin
 cd marin
-pip install -e ".[dev]"
+pip install -e ".[extras]"
 ```
 
-This will install all the core dependencies and build `marin` as a Python package. Installing the `[dev]` requirements
-will additionally install test, linting, and debugging dependencies (e.g., `pytest`).
+This will install all the core dependencies and build `marin` as a Python
+package. Installing the `[extras]` requirements will additionally install test,
+linting, and debugging dependencies (e.g., `pytest`).
 
+## Tests
 
-## Ray + Google Cloud Platform Quickstart
-
-In order to run data processing and curation workloads, we use [Ray](https://docs.ray.io/), a nifty Python library for
-configuring and launching distributed applications. We use Ray on top of Google Cloud Platform to 1) automatically
-provision and maintain a cluster of virtual machines (VMs), and 2) to launch individual "jobs" (units of work) on our
-cluster. For more detailed information [see the `infra` README](./infra/README.md).
-
-#### Google Cloud (`gcloud`) Setup
-
-The **most important prerequisite** is making sure that your development environment (e.g., laptop) is set up for
-Google Cloud Platform (GCP) for project `hai-gcp-models`. Make sure to
-[install `gcloud`](https://cloud.google.com/sdk/docs/quickstarts), then:
+The first time you run tests locally, you will need install `pandiff` to
+run the snapshot tests. This is a one-time install that can be done using the
+following commands:
 
 ```bash
-gcloud auth login
-gcloud auth application-default login
-gcloud config set account <your-email-account>
-gcloud config set project hai-gcp-models
-
-# [Verification] Should show a [core] entry with `account = <your-email-account` and `project = hai-gcp-models`
-gcloud config list
-
-# [Verification] Should not throw a permission error
-gcloud storage ls gs://marin-data
+brew install node  # For macOS
+conda install -c conda-forge pandoc
+npm install -g pandiff
 ```
 
-If you don't have permissions for `hai-gcp-models` or you run into permissions issues, contact David Hall or
-Sidd Karamcheti for help!
+To run the tests, first run `export RAY_ADDRESS=` to run Ray in local mode.
 
-#### Ray Cluster + Job Submission
+1. We have linters set up to ensure code quality. You can run them with:
+   ```bash
+   pre-commit run --all-files
+   ```
+2. To run the tests, run `PYTHONPATH=tests:. pytest tests --durations=0 -n 4 --tb=no -v`
 
-Once authenticated for GCP, all other work happens through our
-[Ray Cluster](https://docs.ray.io/en/latest/cluster/getting-started.html). The entire cluster configuration
-is stored in [`infra/marin-cluster.yaml`](./infra/marin-cluster.yaml). **Ray uses this file as the single-source of
-truth for all cluster operations** -- you can think of this file as an alternative to managing your own SSH keys,
-remembering the IP address of the cluster head node, what port the dashboard is running on, etc.
+## Hello world example
 
-There are two steps necessary for 1) establishing a connection to the cluster and 2) submitting/monitoring jobs on the
-cluster. **You will need at least two terminal processes running for the following steps** (make sure to activate your
-`marin` Python environment as well):
+Let's run your first [hello world experiment](experiments/hello_world.py),
+which has two steps:
+
+1. Generate some numbers.
+2. Compute some statistics of the numbers.
+
+To run this example (and output), simply type:
 
 ```bash
-# [Terminal 1] Establish a Connection to the Ray Dashboard (launches an ssh connection w/ port-forwarding)
-#   =>> Assumes `marin` Python environment is active, and you're running scripts from the repository root directory
-ray dashboard infra/marin-cluster.yaml
-
-# [Browser] Navigate to `http://localhost:8265` (or whatever URL is output by the above command)
-#   =>> You should see the Cluster Overview Page (with a list of recent jobs, node status, resource status)
+python experiments/hello_world.py --prefix var
 ```
 
-In addition to linking you to the cluster dashboard, the above command will establish a (persistent) SSH connection to
-our cluster's head node (if you're familiar with the NLP SLURM workflow, think of this as a connection to `sc`). Keep
-this terminal open!
+This command should create the following assets:
 
-To submit jobs, we use the
-[Jobs API](https://docs.ray.io/en/latest/cluster/running-applications/job-submission/quickstart.html#submitting-a-job).
-This requires that your Python script is formatted in a certain way, calling some boilerplate Ray functions prior to
-launching tasks -- see [`tests/test_ray_cluster.py`](./tests/test_ray_cluster.py) for a minimal example. To launch:
+1. `var/experiments/hello_world-7063e5.json`: stores a record of all the steps in this experiment.
+1. `var/hello_world/data-d50b06`: the output of step 1 (generate some numbers, stored in `numbers.json`).
+1. `var/hello_world/stats-b5daf3`: the output of step 2 (compute some statistics, stored in `stats.json`).
 
-```
-# [Terminal 2] Submit a Ray Job (specified via a Python script)
-#   =>> Assumes `marin` Python environment is active, current working directory == repository root == "."
-#   =>> Will output a Job ID like `raysubmit_pAJM8vKfHPhiyHBa`
-ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python tests/test_ray_cluster.py
+Note that if you run the same command again, it will detect that both steps
+have been already run and return automatically.
 
-# Get Job Status (given Job ID = raysubmit_pAJM8vKfHPhiyHBa)
-ray job status --address http://127.0.0.1:8265 raysubmit_pAJM8vKfHPhiyHBa
+## Data browser
 
-# Get Job Logs (Console Out)
-ray job logs --address http://127.0.0.1:8265 raysubmit_pAJM8vKfHPhiyHBa
+Marin comes with a [data browser](data_browser/README.md) that makes it easy to
+view datasets (in various formats) and experiments produced by the executor.
+After installing the necessary dependencies, run:
 
-# Kill / Stop Job (if necessary / error / bug)
-ray job stop --address http://127.0.0.1:8265 raysubmit_pAJM8vKfHPhiyHBa
+```bash
+cd data_browser
+python server.py --config conf/local.conf
 ```
 
-To avoid passing `--address ...` you can set the environment variable `export RAY_ADDRESS="http://127.0.0.1:8265"`
+Once the server is started, go to
+[http://localhost:5000](http://localhost:5000) and navigate around to the
+experiment JSON file to get a nicer view of the experiment (the URL is also
+printed out when you run the experiment).
 
-**Quality of Life**: If you like `tmux` and `conda` (with environment name `marin`), feel free to run
-[`infra/marin-tmux.sh`](./infra/marin-tmux.sh) that automates launching the dashboard for you. Make sure to read the
-script before running!
+See the [data browser README](data_browser/README.md) for more details.
 
+## What's next?
 
-## Programming Guidelines
+To learn more about the core infrastructure:
+- [Executor framework](docs/executor.md): how to manage Python libraries, run big parallel jobs using Ray, how versioning works, etc.
+- [Experiments](docs/experiments.md): how we use the executor framework to run machine learning experiments.
 
-### Using Ray
-
-When using Ray, use the `ray.remote` decorator for any function that you want to run distributed.
-`ray.remote` executes the function in a separate process, possibly on a separate machine.
-
-```python
-@ray.remote
-def my_function():
-    ...
-
-result_future = my_function.remote()
-
-# Get the result of the function
-result = ray.get(result_future)
-```
-
-Ray is a resource-aware job scheduler, so you can specify the resources that a job requires:
-
-```python
-@ray.remote(num_cpus=4)
-def my_cpu_job():
-    ...
-```
-
-Please see the [Ray documentation](https://docs.ray.io/en/latest/index.html) for more information, though
-see the next section for some important notes about using TPUs.
-
-
-### Using TPUs on Ray
-
-You can use our workers like normal CPU instances, just using the `ray.remote` decorator. However, if you want to use
-the TPUs, you need to tell Ray that you need them. To use TPUs on our cluster, you should use the following:
-
-
-```python
-@ray.remote(num_cpus=8, resources={"TPU": 4, "TPU-v4-8-head": 1})
-def my_tpu_job():
-    ...
-
-```
-
-Always use the `TPU-v4-8-head` resource when requesting TPUs unless you specifically want a multi-node slice. This will
-ensure you don't accidentally grab part of a multi-node slice, which will lead to weird errors.
-
-Also, despite it saying `"TPU": 4`, you're actually getting all the TPUs. TPU v4 slices have 4 boards with 2 cores each,
-so you're getting 8 cores total, but they present as 4 TPUs.
-
-**IMPORTANT**: Ray and `libtpu` don't always get along. If you are using TPUs, you should either fork a process that
-uses the TPUs or force remove the libtpu lockfile when your task finishes. The latter is very hacky, but it works.
-We offer a utility decorator to do this for you:
-
-```python
-from marin.utils import remove_tpu_lockfile_on_exit
-
-@ray.remote(num_cpus=8, resources={"TPU": 4, "TPU-v4-8-head": 1})
-@remove_tpu_lockfile_on_exit
-def my_tpu_job():
-    ...
-```
-
----
-
-## Organization
-
-### Scripts
-
-Scripts go in `scripts/$domain/`. Once there's a script for actually creating the domain, let's make a README.md in
-that directory that explains how to use the script.
-
-### Source
-
-Markdown conversion goes in `marin/markdown/`.
-
-Library-y source code goes in `marin/$domain/`.
-
-
-# Domains
-
-## Web
-
-### Working on Markdown conversion
-
-My (@dlwh) workflow looks like this:
-
-* `export PYTHONPATH=.:$PYTHONPATH`, or use an IDE that does this for you.
-* find a web page that I'm concerned about
-* run `python3 scripts/web/process_url.py <url>`
-* look at the outputs in `output/`. In particular compare `outputs/name.readability.html` to `outputs/name.md` to see what the conversion looks like.
-* If you need to, make a gist of the md at https://gist.github.com/ and look at how GitHub renders it. This is the gold standard for what we're aiming for.
-
-#### Adding a test case
-
-We use snapshot testing in addition to unit tests. To add a test case, do the following:
-
-* Add an html file to `tests/snapshots/inputs/` that you want to test.
-* Add the expected markdown output to `tests/snapshots/expected/` with the same name as the input file.
-* Commit these files.
-
-Pro-tip: You can copy the markdown from `process_url.py`'s output to the expected file and edit it as needed.
-
-If it's reasonable, try to add a unit test as well. This will help ensure that the conversion is correct.
-
-#### Running tests
-
-To run the tests, run `pytest` in the root directory. This will run the unit tests and snapshot tests.
-
-#### Updating snapshots
-
-If you've made a change that you think is correct, you can update the snapshots by copying `tests/snapshots/outputs/` to `tests/snapshots/expected/`. This will overwrite the expected output with the new output. You should review these changes before committing them.
-
-
-## Wikipedia
-
-TODO
-
-## ArXiv
-
-TODO
-
-## Code
-
-TODO
-
-## Instruction Data
-
-XXX
-
-## Books
-
-XXX
-
-## StackExchange
-
-XXX
-
-## Reddit/Forums
-
-XXX
-
-## CC News?
-
-XXX
-
-## Semantic Scholar??
-
-XXX
-
-## PubMed
-
-TODO
-
-## Law
-
-TODO
+Or you can jump directly to learn about our [language modeling efforts](docs/lm/overview.md).

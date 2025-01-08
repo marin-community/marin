@@ -12,8 +12,8 @@ from datetime import datetime
 import ray
 
 from marin.classifiers.fasttext.utils import format_example
-from marin.classifiers.utils import merge_shards_and_split, shuffle
-from marin.utils import fsspec_cpdir, fsspec_exists, fsspec_glob
+from marin.classifiers.utils import format_dataset, merge_dataset_shards, shuffle, split_dataset
+from marin.utils import fsspec_cpdir, fsspec_exists, fsspec_glob, fsspec_rm
 
 
 def train_model(
@@ -42,30 +42,33 @@ def train_model(
     num_cpus = fasttext_args["thread"] if "thread" in fasttext_args else 1
 
     # run training on remote worker, not head node
-    @ray.remote(memory=memory_req * 1024 * 1024 * 1024, runtime_env={"pip": ["s3fs", "fasttext"]}, num_cpus=num_cpus)
+    @ray.remote(memory=memory_req * 1024 * 1024 * 1024, num_cpus=num_cpus)
     def run():
         if fsspec_exists(os.path.join(output_path, "model.bin")):
             logger.info(f"Model already exists at {output_path}/model.bin. Skipping training.")
-            return True
+            return
 
         import fasttext
 
         shard_paths = fsspec_glob(os.path.join(input_path, "**/*.jsonl.gz"))
+        logger.info(f"Received input paths: {shard_paths}")
 
         with tempfile.TemporaryDirectory() as tmp_dir:
+            merge_path = os.path.join(tmp_dir, "data.full")
             train_path = os.path.join(tmp_dir, "data.train")
             val_path = os.path.join(tmp_dir, "data.val")
             model_path = os.path.join(tmp_dir, "model.bin")
 
-            merge_shards_and_split(shard_paths, train_path, val_path, val_frac, seed, format_example)
+            merge_dataset_shards(shard_paths, merge_path)
+            format_dataset(merge_path, format_example)
+            split_dataset(merge_path, train_path, val_path, val_frac, seed)
             shuffle(train_path, train_path, seed)
 
             model = fasttext.train_supervised(train_path, **fasttext_args)
             model.save_model(model_path)
 
+            fsspec_rm(merge_path)
             fsspec_cpdir(tmp_dir, output_path)
-
-        return True
 
     response = run.remote()
     try:

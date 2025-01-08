@@ -13,7 +13,53 @@ from marin.utils import fsspec_glob, fsspec_mkdirs, fsspec_rm, rebase_file_path
 
 
 @dataclass
+class NGramConfig:
+    """
+    Configuration class for Dolma deduplication n-gram settings.
+    Dolma dedupe pipeline has an ngram match mode which is an alternative to exact match.
+    Paragraphs are newline delimited text in the document.
+    For each paragraph, all ngrams are produced with a given stride.
+    So for 3-gram with 0 stride, 'The cat sat on the mat.' produces:
+    'The cat sat', 'cat sat on', 'sat on the', 'on the mat', and 'the mat.'
+    If you don't want the ngrams to overlap, you can increase stride.
+    Stride is how many tokens to skip when moving through the string to produce ngrams.
+    The ngrams are run through a bloom filter which contains all seen ngrams.
+    The paragraph is considered a duplicate if the percentage of found ngrams is above a threshold.
+    In short, a paragraph is considered a duplicate if its ngrams are typically duplicates.
+
+    Attributes:
+        length (int): Size of the ngram (e.g. 8)
+        stride (int): Step size when moving through string to generate ngrams
+        threshold (float): Percentage of duplicate ngrams for a paragraph to be considered duplicate
+    """
+
+    ngram_length: int = 8
+    stride: int | None = None  # None means stride=0
+    overlap_threshold: float = 0.7
+
+
+@dataclass
 class DedupeConfig:
+    """
+    Configuration class for running dolma deduplication on docs.
+
+    Deduplication will identify spans of text in documents that are duplicate.
+
+    Attributes:
+        input_path (str): Path of files to apply deduplication to.
+        output_path (str): Path for storing results of deduplication (char spans in docs that are duplicate)
+        attribute_name (str): Name for key to store duplicate span info in json
+        min_length (int): min length of document to be deduplicated
+        min_words (int): min number of words to be deduplicated
+        bloom_filter_size (int): set size of Bloom filter in bytes
+        estimated_doc_count (int): estimated number of docs to deduplicate
+        false_positive_rate (float): false positive rate for Bloom filter
+        ngram (NGramConfig): settings for ngram matching including length, match threshold, and stride
+        processes (int): number of processes to use for deduplication
+        decontaminate (bool): run in decontamination mode (don't add non benchmark text to Bloom filter)
+        decontaminate_path (str): path of decontamination set text
+    """
+
     input_path: str
     output_path: str
     attribute_name: str = "duplicate_text"
@@ -22,6 +68,7 @@ class DedupeConfig:
     bloom_filter_size: int | None = None  # default to 0 to use estimated_doc_count and false_positive_rate
     estimated_doc_count: int = 1000000
     false_positive_rate: float = 0.001
+    ngram: NGramConfig | None = None  # use ngram matching if ngram settings provided
     processes: int = 1
     decontaminate: bool = False
     decontaminate_path: str | None = None
@@ -66,6 +113,7 @@ def do_dedup(
     bloom_filter_size,
     estimated_doc_count,
     false_positive_rate,
+    ngram,
     processes,
     read_only=False,
     bloom_filter_file="deduper_bloom_filter.bin",
@@ -104,6 +152,19 @@ def do_dedup(
 
     # for decontamination bloom filter is read only
     command.append("--bloom_filter.read_only" if read_only else "--no-bloom_filter.read_only")
+
+    # add ngram settings to dolma dedupe command if in ngram matching mode
+    if ngram is not None:
+        command.extend(
+            [
+                "--dedupe.paragraphs.by_ngram.ngram_length",
+                str(ngram.ngram_length),
+                "--dedupe.paragraphs.by_ngram.overlap_threshold",
+                str(ngram.overlap_threshold),
+                "--dedupe.paragraphs.by_ngram.stride",
+                str(ngram.stride),
+            ]
+        )
 
     process = subprocess.Popen(
         " ".join(command),
@@ -205,7 +266,7 @@ def delete_jsonl_files(dir_path):
     return files_deleted
 
 
-@ray.remote(runtime_env={"pip": ["dolma"]})
+@ray.remote
 def dolma_dedup(
     input_path,
     output_path,
@@ -215,6 +276,7 @@ def dolma_dedup(
     bloom_filter_size,
     estimated_doc_count,
     false_positive_rate,
+    ngram,
     processes,
     decomtaminate_dir,
     decontaminate,
@@ -233,9 +295,10 @@ def dolma_dedup(
                     bloom_filter_size,
                     estimated_doc_count,
                     false_positive_rate,
+                    ngram,
                     processes,
                     read_only=False,
-                    bloom_filter_file="decotaminated_bloom_filter.bin",
+                    bloom_filter_file="decontaminated_bloom_filter.bin",
                 )
 
                 # Delete all JSONL files in the temporary directory since we have bloom filter
@@ -250,9 +313,10 @@ def dolma_dedup(
                     bloom_filter_size,
                     estimated_doc_count,
                     false_positive_rate,
+                    ngram,
                     processes,
                     read_only=True,
-                    bloom_filter_file="decotaminated_bloom_filter.bin",
+                    bloom_filter_file="decontaminated_bloom_filter.bin",
                 )
             else:
                 copy_files_in(input_path, tmpdir)
@@ -264,6 +328,7 @@ def dolma_dedup(
                     bloom_filter_size,
                     estimated_doc_count,
                     false_positive_rate,
+                    ngram,
                     processes,
                 )
 
@@ -281,7 +346,7 @@ def dolma_dedup(
                 copy_file_out(local_file, output_file)
 
         except Exception as e:
-            print(f"An error occurred during deduplication: {e}")
+            raise RuntimeError("An error has occurred during deduplication") from e
     return "Deduplication process completed"
 
 
@@ -303,6 +368,7 @@ def dedupe(config: DedupeConfig):
             config.bloom_filter_size,
             config.estimated_doc_count,
             config.false_positive_rate,
+            config.ngram,
             config.processes,
             config.decontaminate_path,
             config.decontaminate,

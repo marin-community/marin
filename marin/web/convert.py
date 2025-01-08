@@ -3,17 +3,25 @@ import re
 from dataclasses import asdict
 from urllib.parse import urljoin
 
-import htmlmin
 from bs4 import BeautifulSoup
 
 from marin.markdown import to_markdown
-from marin.schemas.web.convert import TrafilaturaConfig
+from marin.schemas.web.convert import (
+    ExtractionConfig,
+    HtmlToMarkdownConfig,
+    ResiliparseConfig,
+    TrafilaturaConfig,
+)
+from marin.web.utils import extract_content_from_dom
 
 logger = logging.getLogger("ray")
+HTML_CORRECTION_PREFIX = "<!DOCTYPE html>"
 
 
 def convert_page_with_trafilatura(
-    html: str, url: str | None = None, config: str | TrafilaturaConfig = "fineweb"
+    html: str,
+    url: str | None = None,
+    config: ExtractionConfig = TrafilaturaConfig.default_config(),
 ) -> dict[str, str]:
     """
     Convert HTML to text[non-markdown] using Trafilatura.
@@ -21,34 +29,26 @@ def convert_page_with_trafilatura(
     Parameters:
         html (str): HTML content to convert.
         url (str | None): URL of the page.
+        config (TrafilaturaConfig): Configuration for Trafilatura.
 
     Returns:
         dict[str, str]: Dictionary containing the title, content, and HTML of the page.
     """
     from trafilatura import extract, extract_metadata
 
-    title = extract_metadata(html).title
+    title = None
+    try:
+        metadata = extract_metadata(html)
 
-    content = None
-    match config:
-        case str():
-            content = extract(
-                html,
-                **asdict(TrafilaturaConfig.get_preset_config(config)),
-            )
-        case TrafilaturaConfig():
-            content = extract(
-                html,
-                **asdict(config),
-            )
-        case _:
-            raise Exception(
-                f"Invalid config type: {type(config)}. Pass a TrafilaturaConfig object or use 'fineweb' \
-                or 'default' presets."
-            )
-
-    if title == "[no-title]":
+        if metadata:
+            title = metadata.title
+    except Exception as e:
+        logger.warning(f"Error extracting metadata: {e}")
         title = None
+
+    content = extract(html, **asdict(config))
+    if not content:
+        content = extract(HTML_CORRECTION_PREFIX + html, **asdict(config))
 
     if title:
         content = f"{title}\n\n{content}"
@@ -61,7 +61,11 @@ def convert_page_with_trafilatura(
     return out
 
 
-def convert_page_with_resiliparse(html: str, url: str | None = None) -> dict[str, str]:
+def convert_page_with_resiliparse(
+    html: str,
+    url: str | None = None,
+    config: ResiliparseConfig | None = ResiliparseConfig.default_config(),
+) -> dict[str, str]:
     """
     Convert HTML to text[non-markdown] using Resiliparse.
 
@@ -74,6 +78,7 @@ def convert_page_with_resiliparse(html: str, url: str | None = None) -> dict[str
     Parameters:
         html (str): HTML content to convert.
         url (str | None): URL of the page.
+        config (ResiliparseConfig): Configuration for Resiliparse.
 
     Returns:
         dict[str, str]: Dictionary containing the title, content, and HTML of the page.
@@ -84,15 +89,21 @@ def convert_page_with_resiliparse(html: str, url: str | None = None) -> dict[str
     tree = HTMLTree.parse(html)
     title = tree.title or None
 
-    content = extract_plain_text(
-        html,
-        preserve_formatting=False,
-        main_content=True,
-        links=False,
-    )
+    content = None
+    if not config.use_custom_variant:
+        content = extract_plain_text(html, **config.resiliparse_kwargs)
 
-    if title:
-        content = f"{title}\n\n{content}"
+        if title:
+            content = f"{title}\n\n{content}"
+
+    else:
+        # We override the existing resiliparse package with our custom fork in the worker
+        # environment. So we call the remote function with `pip` argument in decorator to
+        # install the custom package.
+        content = extract_content_from_dom(html, config.resiliparse_kwargs, config.markdownify_config)
+
+        if title:
+            content = f"# {title}\n\n{content}"
 
     out = {"title": title, "content": content, "html": html}
 
@@ -102,17 +113,23 @@ def convert_page_with_resiliparse(html: str, url: str | None = None) -> dict[str
     return out
 
 
-def convert_page_with_readability(html: str, url: str | None = None) -> dict[str, str]:
+def convert_page_with_readability(
+    html: str,
+    url: str | None = None,
+    config: HtmlToMarkdownConfig = HtmlToMarkdownConfig.default_config(),
+) -> dict[str, str]:
     """
     Convert HTML to text[markdown] using Readability and markdownify.
 
     Parameters:
         html (str): HTML content to convert.
         url (str | None): URL of the page.
+        config (HtmlToMarkdownConfig): Configuration for markdownify.
 
     Returns:
         dict[str, str]: Dictionary containing the title, content, and HTML of the page.
     """
+    import htmlmin
     from readability import Document
 
     # remove null character and control characters
@@ -132,7 +149,7 @@ def convert_page_with_readability(html: str, url: str | None = None) -> dict[str
     content = str(tree)
 
     # convert to markdown
-    markdown = to_markdown(tree)
+    markdown = to_markdown(tree, config)
 
     # readability-lxml uses "[no-title]" for pages without a title
     if title == "[no-title]":
@@ -155,6 +172,7 @@ def convert_page_with_readability(html: str, url: str | None = None) -> dict[str
 
 def convert_page_legacy(html: str, url: str | None = None) -> dict[str, str]:
     print("This is Legacy method, use convert_page_python instead")
+    import htmlmin
     from readabilipy import simple_json_from_html_string
 
     reabilitied = simple_json_from_html_string(html, use_readability=True)
@@ -188,7 +206,7 @@ def convert_page(
     html: str,
     url: str | None = None,
     extract_method: str = "readability",
-    config: str | TrafilaturaConfig = "default",
+    config: ExtractionConfig = HtmlToMarkdownConfig.default_config(),
 ) -> dict[str, str]:
     """
     Convert HTML to text using the specified method.
@@ -197,6 +215,7 @@ def convert_page(
         html (str): HTML content to convert.
         url (str | None): URL of the page.
         extract_method (str): Method to use for extraction. Defaults to "readability".
+        config (ExtractionConfig): Configuration for the extraction method.
 
     Returns:
         dict[str, str]: Dictionary containing the title, content, and HTML of the page.
@@ -206,9 +225,9 @@ def convert_page(
         case "trafilatura":
             return convert_page_with_trafilatura(html, url, config)
         case "readability":
-            return convert_page_with_readability(html, url)
+            return convert_page_with_readability(html, url, config)
         case "resiliparse":
-            return convert_page_with_resiliparse(html, url)
+            return convert_page_with_resiliparse(html, url, config)
         case "legacy":
             return convert_page_legacy(html, url)
         case _:
