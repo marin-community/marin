@@ -6,15 +6,12 @@ import numpy as np
 from scipy.optimize import curve_fit, minimize
 from scipy.special import huber
 
-from experiments.llama import LlamaConfig, compute_num_parameters
+from experiments.llama import LlamaConfig, compute_num_parameters, llama3_tokenizer_vocab_size
 
 try:
     import pandas as pd
 except ImportError:
     pd: Any = None
-
-# Llama-3 tokenizer vocab size
-LLAMA3_TOKENIZER_VOCAB_SIZE = 128_256
 
 ####################################################################################################
 # Power law helpers
@@ -188,7 +185,7 @@ def pull_metrics_from_wandb(
         run_data = {"run": run.name}
 
         # this is precautionary; compute the number of parameters ourselves to avoid discrepancies
-        run_data["computed_params"] = compute_num_params_from_run(run, vocab_size=LLAMA3_TOKENIZER_VOCAB_SIZE)
+        run_data["computed_params"] = compute_num_params_from_run(run, vocab_size=llama3_tokenizer_vocab_size)
 
         # get the summary fields
         for field in summary_fields:
@@ -263,11 +260,11 @@ def aggregate_steps(
         raise ValueError(f"Unknown step_mode: {step_mode}")
 
 
-def non_embedding_params(total_param_count, hidden_dim, vocab_size: int = LLAMA3_TOKENIZER_VOCAB_SIZE):
+def non_embedding_params(total_param_count, hidden_dim, vocab_size: int = llama3_tokenizer_vocab_size):
     return total_param_count - 2 * hidden_dim * vocab_size
 
 
-def compute_num_params_from_run(run, vocab_size: int = LLAMA3_TOKENIZER_VOCAB_SIZE):
+def compute_num_params_from_run(run, vocab_size: int = llama3_tokenizer_vocab_size):
     """
     Computes the number of parameters in a run using the model config.
 
@@ -399,7 +396,6 @@ def fit_task_loss_from_ladder_models(
         runs=[pred_run], metrics=[task_loss, tokens_col], entity=entity, project=project, summary_fields=[param_col]
     )
     pred_df_filtered = filter_zero_d(pred_df, d_key=tokens_col)
-    # pred_df_filtered = pred_df
 
     pred_df_agg = aggregate_steps(pred_df_filtered, step_mode=aggregation)
     N_pred, D_pred, y_pred_actual = extract_ndy(pred_df_agg, param_col_to_use, tokens_col, task_loss)
@@ -471,20 +467,6 @@ def fit_accuracy_from_task_loss(
     pred_df_filtered = filter_zero_d(pred_df, d_key=tokens_col)
     pred_df_agg = aggregate_steps(pred_df_filtered, step_mode=aggregation)
 
-    print("Number of rows in ladder_df_agg:", len(ladder_df_agg))
-    print("Number of rows in pred_df_agg:", len(pred_df_agg))
-
-    # TODO: this shouldn't be necessary but for some reason we're missing tracking evals for the first
-    # few steps- we should sync this up across evals
-    # filter the rows of pred_df_agg to only include the rows that are in ladder_df_agg
-    # (matching done by the tokens_col)
-    # and also get the number of rows in the filtered pred_df_agg
-    # pred_df_agg = pred_df_agg[pred_df_agg[tokens_col].isin(ladder_df_agg[tokens_col])]
-    # rows_in_pred_df_agg = len(pred_df_agg)
-
-    # print("Number of rows in ladder_df_agg after filtering:", len(ladder_df_agg))
-    # print("Number of rows in pred_df_agg:", len(pred_df_agg))
-
     # get task losses on "training" data-points (meaning runs we use for fitting the sigmoidal model)
     N, D, task_losses = extract_ndy(ladder_df_agg, param_col, tokens_col, task_loss_col)
 
@@ -497,9 +479,6 @@ def fit_accuracy_from_task_loss(
     # with a window size of 5. We also discard the checkpoints
     # from the first 10% of each training run as these are quite noisy,
     # and add an extra data point (L = 0.0, Acc = 1.0)" and other tweaks."
-
-    print("Number of rows in task_losses:", len(task_losses))
-    print("Number of rows in acc:", len(acc))
 
     # fit the sigmoidal model
     params = fit_sigmoidal(task_losses, acc)
