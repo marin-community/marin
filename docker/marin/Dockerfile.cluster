@@ -94,6 +94,9 @@ RUN rm -rf ~/ray
 # Install updated fsspec version
 RUN pip install --no-cache-dir fsspec==2024.9.0
 
+# Install updated transformers version for OLMO
+RUN pip install transformers==4.47.0
+
 # Add /usr/lib/x86_64-linux-gnu/ to LD_LIBRARY_PATH so that bash prefers the systems
 # libtinfo.so over the conda-provided version. Using the conda-provided libtinfo.so
 # outputs a noisy warning because it doesn't include version information.

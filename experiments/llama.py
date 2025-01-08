@@ -108,7 +108,7 @@ llama_8b_train_config = SimpleTrainConfig(
 )
 
 
-def compute_num_parameters(config: LlamaConfig, vocab_size) -> int:
+def compute_num_parameters(config: LlamaConfig, vocab_size: int) -> int:
 
     head_size = config.hidden_dim // config.num_heads
     q_params = config.num_heads * head_size * config.hidden_dim
