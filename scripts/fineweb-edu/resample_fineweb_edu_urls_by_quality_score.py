@@ -88,6 +88,9 @@ def resample_urls_remote(
             # at once, rather than making multiple requests to GCS.
             for line in tqdm(f.readlines(), desc="Reading input filepath"):
                 parsed_line = json.loads(line)
+                # FineWeb-Edu scores should range from 0 to 5. On occasion, the
+                # model may output values beyond this range, so we skip these
+                # examples.
                 if parsed_line["score"] > 5 or parsed_line["score"] < 0:
                     num_skipped += 1
                     continue
