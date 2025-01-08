@@ -152,10 +152,7 @@ def fit_sigmoidal(L: np.ndarray, y: np.ndarray, initial_guess: Sequence[float] |
     if initial_guess is None:
         initial_guess = [1.0, 0.0, 1.0, 0.0]  # [a, b, k, L_0]
 
-    # TODO double check bounds
-    # lower_bounds = [0, -np.inf, 0, -np.inf]  # Lower bounds for [a, b, k, L_0]
-    # upper_bounds = [np.inf, np.inf, np.inf, np.inf]  # Upper bounds for [a, b, k, L_0]
-    lower_bounds = [0, -np.inf, -np.inf, -np.inf]
+    lower_bounds = [-np.inf, -np.inf, -np.inf, -np.inf]
     upper_bounds = [np.inf, np.inf, np.inf, np.inf]
 
     bounds = (lower_bounds, upper_bounds)
