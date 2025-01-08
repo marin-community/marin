@@ -45,6 +45,7 @@ from marin.processing.tokenize import (
     tokenize,
 )
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
+from marin.scaling_laws.scaling_law_config import ScalingLawConfig, run_scaling_law_analysis
 
 
 def default_tokenize(
@@ -251,3 +252,49 @@ def _get_tokenizer_for_train(tokenized: InputName | ExecutorStep | LMMixtureData
             raise ValueError(f"Could not determine tokenizer from {tokenized}")
 
     return tokenizer
+
+def default_scaling_laws(
+    ladder_runs: Sequence[ExecutorStep | InputName],
+    pred_run: ExecutorStep | InputName,
+    intermediate_task_loss: str = "eval/paloma/c4_en/bpb",
+    task_accuracy: str = "lm_eval/hellaswag_10shot/acc",
+):
+"""
+Use a sequence of training runs (steps) to predict the performance of a target larger model.
+
+Args:
+    ladder_runs (Sequence[ExecutorStep | InputName]): training runs to use as input for prediction.
+    pred_run (ExecutorStep | InputName): Training run to predict the performance of.
+    intermediate_task_loss (str): Intermediate task loss to use for scaling laws.
+    task_accuracy (str): Task accuracy to predict for the larger model.
+"""
+
+    # TODO: it'd be nice to fit different curves simultaneously by supporting multiple task accuracies
+    # and produce several plots and metrics over all our benchmarks. For now starting with one task.
+
+    # get the executor steps for the ladder runs
+    ladder_run_executor_steps = []
+    for step in ladder_runs:
+        if isinstance(step, ExecutorStep):
+            executor_step = step
+        elif isinstance(step, InputName):
+            executor_step = step.step
+        ladder_run_executor_steps.append(executor_step)
+
+    # get the executor step for the prediction run
+    if isinstance(pred_run, ExecutorStep):
+        pred_run_step = pred_run
+    elif isinstance(pred_run, InputName):
+        pred_run_step = pred_run.step
+
+    return ExecutorStep(
+        name=f"scaling_laws/predictions-{pred_run_step.name}",
+        fn=run_scaling_law_analysis,
+        config=ScalingLawConfig(
+            ladder_model_steps=ladder_run_executor_steps,
+            pred_step=pred_run_step,
+            task_loss=intermediate_task_loss,
+            task_accuracy=task_accuracy,
+        ),
+    )
+
