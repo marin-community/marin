@@ -171,19 +171,44 @@ def get_shard_indices_to_process(urls_input_directory: str) -> list[int]:
 
 @draccus.wrap()
 def main(cfg: FetchLinksConfig):
-    shard_indices = ray.get(get_shard_indices_to_process.remote(cfg.urls_input_directory))
+    shard_indices_to_process = ray.get(get_shard_indices_to_process.remote(cfg.urls_input_directory))
+    num_shards_to_process = len(shard_indices_to_process)
 
-    refs = []
-    for shard_index in shard_indices:
+    # Set a limit on the number of concurrent tasks so we don't make too many network requests
+    MAX_CONCURRENT_TASKS = 10
+    num_shards_submitted = 0
+    unfinished = []
+
+    def submit_shard_task(shard_index):
+        nonlocal num_shards_submitted
         input_path = os.path.join(cfg.urls_input_directory, f"links.{shard_index}.parquet")
         warc_output_path = os.path.join(cfg.output_directory, f"links.{shard_index}.warc.gz")
         robots_output_path = os.path.join(cfg.output_directory, f"links.{shard_index}_robots.json.gz")
         errors_output_path = os.path.join(cfg.output_directory, f"links.{shard_index}_errors.json.gz")
-        refs.append(fetch_links.remote(input_path, warc_output_path, robots_output_path, errors_output_path))
-    logger.info(f"Submitted {len(refs)} tasks")
+        unfinished.append(fetch_links.remote(input_path, warc_output_path, robots_output_path, errors_output_path))
 
-    # Wait for the tasks to finish
-    _ = ray.get(refs)
+        num_shards_submitted += 1
+        if num_shards_submitted % 10 == 0:
+            logger.info(
+                f"Submitted {num_shards_submitted} / {num_shards_to_process} shards "
+                f"({num_shards_submitted / num_shards_to_process})"
+            )
+
+    # Launch the initial MAX_CONCURRENT_TASKS batch of tasks
+    for _ in range(min(MAX_CONCURRENT_TASKS, len(shard_indices_to_process))):
+        submit_shard_task(shard_indices_to_process.pop())
+
+    while unfinished:
+        finished, unfinished = ray.wait(unfinished, num_returns=len(unfinished), timeout=5)
+        try:
+            _ = ray.get(finished)
+        except Exception as e:
+            logger.exception(f"Error processing shard: {e}")
+
+        # If we have more shard paths left to process and we haven't hit the max
+        # number of concurrent tasks, add tasks to the unfinished queue.
+        while shard_indices_to_process and len(unfinished) < MAX_CONCURRENT_TASKS:
+            submit_shard_task(shard_indices_to_process.pop())
 
 
 if __name__ == "__main__":
