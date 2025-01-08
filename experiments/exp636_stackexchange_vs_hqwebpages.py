@@ -1,3 +1,10 @@
+"""Experiment comparing training on StackExchange filtered web pages vs. training on StackExchange directly.
+
+StackExchange is a dataset of high quality web pages, but the dataset is small. Web pages from FineWeb
+are plentiful but they are not as high quality as StackExchange. We compare a model trained on
+many epochs of StackExchange with a model trained on a single epoch of FineWeb.
+"""
+
 from experiments.defaults import default_tokenize, default_train
 from experiments.dolma.tokenize_dolma import tokenize_dolma_steps
 from experiments.evals.evals import default_eval
@@ -45,7 +52,7 @@ dolma_stackexchange_model = default_train(
 
 dolma_stackexchange_eval = default_eval(dolma_stackexchange_model)
 
-_, stackexchange_filtered_hq_webpages_experiment_steps = create_steps(stackexchange_experiment_config)
+stackexchange_filtered_hq_webpages_experiment_steps = create_steps(stackexchange_experiment_config)
 
 # NOTE(chris): Normally this is not required because default_train will eval on the last step, but I had not
 # pushed the changes to the repo when I created this experiment, which is why I'm evaluating after the run.
