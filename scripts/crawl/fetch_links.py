@@ -173,6 +173,7 @@ def get_shard_indices_to_process(urls_input_directory: str) -> list[int]:
 def main(cfg: FetchLinksConfig):
     shard_indices_to_process = ray.get(get_shard_indices_to_process.remote(cfg.urls_input_directory))
     num_shards_to_process = len(shard_indices_to_process)
+    random.shuffle(shard_indices_to_process)
 
     # Set a limit on the number of concurrent tasks so we don't make too many network requests
     MAX_CONCURRENT_TASKS = 10
