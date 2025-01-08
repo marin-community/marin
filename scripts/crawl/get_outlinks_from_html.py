@@ -6,7 +6,7 @@ Running on OpenWebMath:
 
 ```
 python marin/run/ray_run.py \
-    --pip_deps 'resiliparse_dom @ git+https://github.com/nelson-liu/chatnoir-resiliparse@58247de82b4d881223435113f1a07a86ad66494c#egg=resiliparse_dom&subdirectory=resiliparse_dom,courlan,w3lib,cchardet' \
+    --pip_deps 'resiliparse_dom @ git+https://github.com/nelson-liu/chatnoir-resiliparse@58247de82b4d881223435113f1a07a86ad66494c#egg=resiliparse_dom&subdirectory=resiliparse_dom,courlan,w3lib,cchardet,beautifulsoup4,lxml' \
     --no_wait -- \
     python scripts/crawl/get_outlinks_from_html.py \
     --html_input_path gs://marin-us-central2/documents/open-web-math-fde8ef8/html/ \
@@ -21,7 +21,7 @@ for fineweb_edu_dump_html_path in $(gcloud storage ls gs://marin-us-central2/doc
     dump_name=$(basename -- ${fineweb_edu_dump_html_path})
 
     python marin/run/ray_run.py \
-        --pip_deps 'resiliparse_dom @ git+https://github.com/nelson-liu/chatnoir-resiliparse@58247de82b4d881223435113f1a07a86ad66494c#egg=resiliparse_dom&subdirectory=resiliparse_dom,courlan,w3lib,cchardet' \
+        --pip_deps 'resiliparse_dom @ git+https://github.com/nelson-liu/chatnoir-resiliparse@58247de82b4d881223435113f1a07a86ad66494c#egg=resiliparse_dom&subdirectory=resiliparse_dom,courlan,w3lib,cchardet,beautifulsoup4,lxml' \
         --no_wait -- \
         python scripts/crawl/get_outlinks_from_html.py \
         --html_input_path ${fineweb_edu_dump_html_path} \
@@ -133,7 +133,9 @@ def process_one_batch(input_path: str, output_path: str):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
     with fsspec.open(output_path, "w", compression="gzip") as fout:
-        num_failed_to_parse = 0
+        num_docs_failed_to_parse = 0
+        num_links_failed_to_parse = 0
+        num_total_links = 0
         num_total = 0
         with fsspec.open(input_path, "rt", compression="gzip") as fin:
             for line in fin:
@@ -150,13 +152,21 @@ def process_one_batch(input_path: str, output_path: str):
                     parsed_html = BeautifulSoup(html_str, "lxml")
                 except Exception:
                     # Skip documents that don't parse
-                    num_failed_to_parse += 1
+                    num_docs_failed_to_parse += 1
                     continue
+
+                unjoinable_links: set[tuple[str, str]] = set()
                 unfiltered_outbound_links = set()
                 for link in parsed_html.find_all("a", href=True):
+                    num_total_links += 1
                     href = link.get("href")
                     if href:
-                        absolute_link_target = urljoin(url, href)
+                        try:
+                            absolute_link_target = urljoin(url, href)
+                        except Exception:
+                            unjoinable_links.add((url, href))
+                            num_links_failed_to_parse += 1
+                            continue
                         if is_absolute_link_parseable(absolute_link_target):
                             canonical_link = w3lib.url.canonicalize_url(absolute_link_target)
                             unfiltered_outbound_links.add(canonical_link)
@@ -196,13 +206,23 @@ def process_one_batch(input_path: str, output_path: str):
                     main_text_with_links = BeautifulSoup(main_text_dom_str, "lxml")
                 except Exception:
                     # Skip documents that don't parse
-                    num_failed_to_parse += 1
+                    num_docs_failed_to_parse += 1
                     continue
                 main_text_outbound_links = set()
                 for link in main_text_with_links.find_all("a", href=True):
                     href = link.get("href")
                     if href:
-                        absolute_link_target = urljoin(url, href)
+                        # If we've already seen this link and know it's unjoinable,
+                        # just skip it
+                        if (url, href) in unjoinable_links:
+                            continue
+
+                        # Check again, since there seem to be some cases where
+                        # main text extraction mutates the link target
+                        try:
+                            absolute_link_target = urljoin(url, href)
+                        except Exception:
+                            continue
                         if is_absolute_link_parseable(absolute_link_target):
                             canonical_link = w3lib.url.canonicalize_url(absolute_link_target)
                             main_text_outbound_links.add(canonical_link)
@@ -226,7 +246,10 @@ def process_one_batch(input_path: str, output_path: str):
                         )
                         + "\n"
                     )
-        logger.info(f"Failed to parse {num_failed_to_parse} out of {num_total} records")
+        logger.info(
+            f"Failed to parse {num_docs_failed_to_parse} out of {num_total} records\n"
+            f"Failed to parse {num_links_failed_to_parse} links out of {num_total_links} links"
+        )
 
 
 @ray.remote(memory=32 * 1024 * 1024 * 1024)
