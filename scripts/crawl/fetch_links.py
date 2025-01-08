@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 def fetch_url(session: requests.Session, url: str) -> tuple[requests.Response, None] | tuple[None, str]:
     """Fetch the content of a URL."""
     try:
-        response = session.get(url, timeout=30)
+        response = session.get(url, timeout=10)
         response.raise_for_status()
         return response, None
     except Exception as e:
