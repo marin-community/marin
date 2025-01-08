@@ -1,3 +1,20 @@
+"""
+Functions for fitting scaling laws and plotting the results.
+
+The functions here implement the methods in https://arxiv.org/pdf/2412.04403.
+
+At a high level, we want to predict the accuracy of a lregr model (eg. 8B, 22B) on a particular benchmark (eg. HellaSwag)
+using (N, D) data of a bunch of smaller models. We accomplish this by fitting two models:
+- We first fit a power-law model to predict the task loss from the number of parameters and tokens.
+- Then, we fit a sigmoidal model to predict the task accuracy from the task loss.
+
+For further details see the corresponding GitHub issue: https://github.com/stanford-crfm/marin/issues/646.
+
+To use this code, call fit_task_loss_from_ladder_models() and fit_accuracy_from_task_loss() with appropriate arguments.
+
+Example usage is in marin/scaling_laws/scaling_laws_analysis.ipynb.
+"""
+
 from collections.abc import Sequence
 from typing import Any
 
@@ -17,7 +34,7 @@ except ImportError:
 # Power law helpers
 
 
-def power_law_model(params, N, D, use_log_space=True):
+def power_law_model(params: Sequence[float], N: np.ndarray, D: np.ndarray, use_log_space: bool = True) -> np.ndarray:
     """
     Power-law equation: A / N^alpha + B / D^beta + E
 
@@ -35,7 +52,9 @@ def power_law_model(params, N, D, use_log_space=True):
     return A / (N**alpha) + B / (D**beta) + E
 
 
-def power_law_loss(params, N, D, y, use_log_space, delta):
+def power_law_loss(
+    params: Sequence[float], N: np.ndarray, D: np.ndarray, y: np.ndarray, use_log_space: bool, delta: float
+) -> float:
     """
     Mean Huber loss for the power-law model.
 
@@ -55,7 +74,14 @@ def power_law_loss(params, N, D, y, use_log_space, delta):
     return np.mean(huber(delta, residuals))
 
 
-def fit_power_law(N, D, y, use_log_space=False, initial_guess=None, delta=1e-3):
+def fit_power_law(
+    N: np.ndarray,
+    D: np.ndarray,
+    y: np.ndarray,
+    use_log_space: bool = False,
+    initial_guess: Sequence[float] | None = None,
+    delta: float = 1e-3,
+) -> np.ndarray | tuple[float, float, float, float, float]:
     """
     Fit a power law model to the data ((N, D), y).
 
@@ -104,7 +130,7 @@ def fit_power_law(N, D, y, use_log_space=False, initial_guess=None, delta=1e-3):
         return result.x
 
 
-def predict_power_law(params, N, D):
+def predict_power_law(params: Sequence[float], N: np.ndarray, D: np.ndarray) -> np.ndarray:
     A, B, alpha, beta, E = params
     return A / (N**alpha) + B / (D**beta) + E
 
@@ -113,7 +139,7 @@ def predict_power_law(params, N, D):
 # Sigmoidal fit helpers
 
 
-def fit_sigmoidal(L, y, initial_guess=None):
+def fit_sigmoidal(L: np.ndarray, y: np.ndarray, initial_guess: Sequence[float] | None) -> np.ndarray:
     """
     Fit a sigmoidal model to the data (L, y).
 
@@ -143,7 +169,7 @@ def fit_sigmoidal(L, y, initial_guess=None):
     return popt
 
 
-def predict_sigmoidal(params, task_loss):
+def predict_sigmoidal(params: Sequence[float], task_loss: np.ndarray) -> np.ndarray:
     a, b, k, L_0 = params
     return a / (1 + np.exp(-k * (task_loss - L_0))) + b
 
@@ -210,12 +236,27 @@ def filter_zero_d(df: pd.DataFrame, d_key: str = "throughput/total_tokens") -> p
     return df[df[d_key] != 0].copy()
 
 
-def extract_ndy(
+def extract_scaling_data(
     df: pd.DataFrame,
     param_count_col: str = "parameter_count",
     tokens_col: str = "throughput/total_tokens",
     loss_col: str = "eval/paloma/c4_en/bpb",
-):
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Extracts N, D, and y from the given DataFrame.
+
+    Args:
+        df: DataFrame
+        param_count_col: Column name for the parameter count
+        tokens_col: Column name for the tokens
+        loss_col: Column name for the loss
+
+    Returns:
+        Tuple of numpy arrays: (N, D, y) where
+            N = Number of parameters (excluding embedding parameters)
+            D = Number of tokens
+            y = Loss
+    """
     N = df[param_count_col].values
     D = df[tokens_col].values
     y = df[loss_col].values
@@ -231,7 +272,7 @@ def extract_ndy(
 
 def aggregate_steps(
     df: pd.DataFrame,
-    step_mode: str = "average",
+    step_mode: str = "all",
     step_range: tuple[int, int] = (1, 5),
     group_col: str = "run",
 ) -> pd.DataFrame:
@@ -260,7 +301,7 @@ def aggregate_steps(
         raise ValueError(f"Unknown step_mode: {step_mode}")
 
 
-def non_embedding_params(total_param_count, hidden_dim, vocab_size: int = llama3_tokenizer_vocab_size):
+def non_embedding_params(total_param_count: int, hidden_dim: int, vocab_size: int = llama3_tokenizer_vocab_size):
     return total_param_count - 2 * hidden_dim * vocab_size
 
 
@@ -291,7 +332,7 @@ def compute_num_params_from_run(run, vocab_size: int = llama3_tokenizer_vocab_si
 # Plotting helpers
 
 
-def plot_fit(actual, predicted, title="Power Law Fit"):
+def plot_fit(actual: np.ndarray, predicted: np.ndarray, title="Power Law Fit") -> None:
     """
     Plot predicted vs actual values.
     """
@@ -309,8 +350,11 @@ def plot_fit(actual, predicted, title="Power Law Fit"):
 
 
 def plot_actual_vs_predicted(
-    y_actual, y_predicted, title="Actual vs Predicted", task_metric: str = "eval/paloma/c4_en/bpb"
-):
+    y_actual: np.ndarray,
+    y_predicted: np.ndarray,
+    title: str = "Actual vs Predicted",
+    task_metric: str = "eval/paloma/c4_en/bpb",
+) -> None:
     """
     Plot actual vs predicted values. task_metric is the name of the metric we are predicting.
     """
@@ -376,7 +420,7 @@ def fit_task_loss_from_ladder_models(
     ladder_df_agg = aggregate_steps(ladder_df_filtered, step_mode=aggregation)
 
     # prepare data (N, D, y) for fitting the power law model
-    N, D, y = extract_ndy(
+    N, D, y = extract_scaling_data(
         ladder_df_agg, param_col_to_use, tokens_col, task_loss
     )  # this also removes embedding param count
 
@@ -398,7 +442,7 @@ def fit_task_loss_from_ladder_models(
     pred_df_filtered = filter_zero_d(pred_df, d_key=tokens_col)
 
     pred_df_agg = aggregate_steps(pred_df_filtered, step_mode=aggregation)
-    N_pred, D_pred, y_pred_actual = extract_ndy(pred_df_agg, param_col_to_use, tokens_col, task_loss)
+    N_pred, D_pred, y_pred_actual = extract_scaling_data(pred_df_agg, param_col_to_use, tokens_col, task_loss)
 
     if use_log_for_ND:
         N_pred = np.log(N_pred)
@@ -468,7 +512,7 @@ def fit_accuracy_from_task_loss(
     pred_df_agg = aggregate_steps(pred_df_filtered, step_mode=aggregation)
 
     # get task losses on "training" data-points (meaning runs we use for fitting the sigmoidal model)
-    N, D, task_losses = extract_ndy(ladder_df_agg, param_col, tokens_col, task_loss_col)
+    N, D, task_losses = extract_scaling_data(ladder_df_agg, param_col, tokens_col, task_loss_col)
 
     # get accuracies on "training" data-points
     acc = ladder_df_agg[accuracy_col].values
