@@ -10,7 +10,7 @@ from marin.utils import remove_tpu_lockfile_on_exit
 
 
 def setup_module(module):
-    ray.init("local", num_cpus=8, ignore_reinit_error=True)
+    ray.init(namespace="marin")
 
 
 def teardown_module(module):
