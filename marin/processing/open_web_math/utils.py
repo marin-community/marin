@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+"""
+This file was taken from https://github.com/keirp/OpenWebMath
+"""
 import re
 
 import numpy as np

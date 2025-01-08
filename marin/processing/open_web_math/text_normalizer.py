@@ -6,7 +6,9 @@
 #
 # From https://github.com/facebookresearch/cc_net/blob/main/cc_net/text_normalizer.py
 # ruff: noqa: RUF001
-
+"""
+This file was taken from https://github.com/keirp/OpenWebMath
+"""
 import re
 import unicodedata
 
