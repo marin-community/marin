@@ -13,6 +13,17 @@ python marin/run/ray_run.py \
     --urls_input_directory gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-1M/ \
     --output_directory gs://marin-us-central2/scratch/nfliu/fetched_outlinks/fineweb-edu-1M/
 ```
+
+Running on OpenWebMath:
+
+```
+python marin/run/ray_run.py \
+    --pip_deps 'warcio' \
+    --no_wait -- \
+    python scripts/crawl/fetch_links.py \
+    --urls_input_directory gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-1M/ \
+    --output_directory gs://marin-us-central2/scratch/nfliu/fetched_outlinks/open-web-math-fde8ef8-1M/
+```
 """
 import io
 import json
@@ -41,7 +52,7 @@ logger = logging.getLogger(__name__)
 def fetch_url(session: requests.Session, url: str) -> tuple[requests.Response, None] | tuple[None, str]:
     """Fetch the content of a URL."""
     try:
-        response = session.get(url, timeout=10)
+        response = session.get(url, timeout=30)
         response.raise_for_status()
         return response, None
     except Exception as e:
