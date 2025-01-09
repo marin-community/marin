@@ -22,4 +22,4 @@ services:
 
 networks:
   data_browser_net:
-    driver: bridge 
+    driver: bridge

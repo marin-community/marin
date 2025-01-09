@@ -6,10 +6,10 @@ from dataclasses import asdict, dataclass, replace
 
 import draccus
 import fsspec
-import zstandard as zstd
-from flask import Flask, jsonify, request, send_from_directory, Response
-from pyarrow.parquet import ParquetFile
 import requests
+import zstandard as zstd
+from flask import Flask, Response, jsonify, request, send_from_directory
+from pyarrow.parquet import ParquetFile
 
 app = Flask(__name__, static_folder="build")
 
@@ -48,6 +48,7 @@ class Server:
 
 
 server: Server | None = None
+
 
 def resolve_path(path: str) -> str:
     """Resolve a path to an absolute path, except for cloud storage paths."""
@@ -242,10 +243,7 @@ def proxy_to_dev_server(path):
 
 def standardize_config(config: ServerConfig) -> ServerConfig:
     """Replace relative paths with absolute paths, except for cloud storage paths."""
-    absolute_root_paths = [
-        resolve_path(path)
-        for path in config.root_paths
-    ]
+    absolute_root_paths = [resolve_path(path) for path in config.root_paths]
     return replace(config, root_paths=absolute_root_paths)
 
 
