@@ -76,7 +76,7 @@ def fetch_links(urls_path: str, warc_output_path: str, robots_output_path: str, 
 
     with fsspec.open(urls_path) as f:
         df = pd.read_parquet(f)
-    logger.info(f"Found {len(df)} examples in input file")
+    logger.info(f"Found {len(df)} examples in input file {urls_path}")
 
     # Extract the URLs from the "link_target" column
     urls = df["link_target"].tolist()
@@ -86,6 +86,7 @@ def fetch_links(urls_path: str, warc_output_path: str, robots_output_path: str, 
     # Randomly shuffle the URLs to load balance so we aren't repeatedly hitting a particular host
     random.shuffle(urls)
 
+    logger.info(f"Fetching {len(urls)} deduplicated URLs from input file {urls_path}")
     fetch_to_warc(urls, warc_output_path, robots_output_path, errors_output_path)
 
     # Create success file
