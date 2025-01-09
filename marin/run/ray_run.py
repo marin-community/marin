@@ -3,6 +3,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import shlex
 
 import toml
@@ -45,6 +46,7 @@ def get_dependencies_from_toml(toml_file: str) -> list:
     try:
         parsed_toml = toml.load(toml_file)
         dependencies = parsed_toml.get("project", {}).get("dependencies", [])
+        dependencies = _remove_problematic_deps(dependencies)
         logger.info(f"Dependencies extracted: {dependencies}")
         return dependencies
     except FileNotFoundError:
@@ -53,6 +55,18 @@ def get_dependencies_from_toml(toml_file: str) -> list:
     except toml.TomlDecodeError:
         logger.error(f"Failed to parse {toml_file}.")
         return []
+
+
+def _remove_problematic_deps(dependencies: list[str]):
+    out: list[str] = []
+    # remove ray from dependencies. We do this because Ray gets mad if you try to install another version of Ray
+    expr = re.compile(r"^\s*ray([^a-zA-Z0-9_]|$)")
+    for dep in dependencies:
+        if not expr.match(dep):
+            out.append(dep)
+        else:
+            logger.debug(f"Skipping dependency: {dep}")
+    return out
 
 
 async def submit_and_track_job(entrypoint: str, dependencies: list, env_vars: dict, no_wait: bool):
@@ -123,6 +137,13 @@ def main():
                 env_vars[item[0]] = ""
             elif len(item) == 2:
                 # If both key and value are provided, store them as a key-value pair
+                if "=" in item[0]:
+                    logger.error(
+                        f"Invalid key provided for environment variable: {' '.join(item)}. "
+                        f"Key should not contain '='.\n\n"
+                        f"You probably meant to do '-e {' '.join(item[0].split('='))}'."
+                    )
+                    exit(1)
                 env_vars[item[0]] = item[1]
 
     # Now env_vars is a dictionary with the environment variables set using -e

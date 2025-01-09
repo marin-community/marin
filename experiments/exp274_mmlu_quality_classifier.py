@@ -1,6 +1,6 @@
-from experiments.exp102_classifier_ablations import ExperimentConfig, create_steps
 from experiments.exp164_quality_classifiers import dclm_negative_examples_in_dolma_format
 from experiments.exp412_download_and_raw2json_hf_qa import mmlu_convert_eval_aux
+from experiments.quality_classifier_experiment_utils import ExperimentConfig, create_steps
 from marin.classifiers.utils import DatasetConfig
 from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path, versioned
 from marin.processing.classification.fasttext.train_fasttext import (
@@ -48,4 +48,5 @@ if __name__ == "__main__":
         experiment_name="mmlu-100k-rw-100k",
         quality_classifier_model_path=marin_mmlu_100k_rw_100k,
     )
-    executor_main(create_steps(experiment_config))
+    steps = create_steps(experiment_config)
+    executor_main(steps)

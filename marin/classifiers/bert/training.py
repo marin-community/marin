@@ -7,6 +7,7 @@ Train BERT models.
 import logging
 import os
 import tempfile
+import time
 from datetime import datetime
 
 import ray
@@ -15,11 +16,14 @@ import torch_xla.core.xla_model as xm
 import torch_xla.distributed.parallel_loader as pl
 import torch_xla.distributed.xla_multiprocessing as xmp
 from torch.utils.data import DataLoader
+from torch.utils.data.distributed import DistributedSampler
 from transformers import AdamW, BertForSequenceClassification, BertTokenizer
 
 from marin.classifiers.bert.utils import BertDataset, format_example
-from marin.classifiers.utils import format_dataset, merge_shards, shuffle, split_dataset
-from marin.utils import fsspec_cpdir, fsspec_exists, fsspec_glob, fsspec_rm
+from marin.classifiers.utils import format_dataset, merge_dataset_shards, shuffle, split_dataset
+from marin.utils import fsspec_cpdir, fsspec_exists, fsspec_glob, fsspec_rm, remove_tpu_lockfile_on_exit
+
+logger = logging.getLogger("ray")
 
 
 def train_epochs(
@@ -27,6 +31,7 @@ def train_epochs(
     optimizer: torch.optim.Optimizer,
     data_loader: torch.utils.data.DataLoader,
     num_epochs: int,
+    index: int | None = None,
 ) -> bool:
     """
     Train a model for a number of epochs.
@@ -36,14 +41,19 @@ def train_epochs(
         optimizer (torch.optim.Optimizer): Optimizer to use for training.
         data_loader (torch.utils.data.DataLoader): DataLoader for training data.
         num_epochs (int): Number of epochs to train for.
+        index: (Optional[int]): Index of the TPU device (if called from _mp_fn).
 
     Returns:
         bool: True if the process is successful.
     """
     model.train()
     for epoch in range(num_epochs):
+        start = time.time()
+
+        logger.info(f"Training epoch {epoch}")
         total_loss = 0
-        for batch in data_loader:
+
+        for t, batch in enumerate(data_loader):
             input_ids = batch["input_ids"]
             attention_mask = batch["attention_mask"]
             labels = batch["labels"]
@@ -54,13 +64,28 @@ def train_epochs(
             loss.backward()
 
             xm.optimizer_step(optimizer)
+            xm.mark_step()
 
             total_loss += loss.item()
+            if t % 10 == 0:
+                logger.info(f"Step {t} on device {index}, Loss: {loss.item()}")
 
-        print(f"Epoch {epoch + 1}/{num_epochs}, Loss: {total_loss/len(data_loader):.4f}")
+        end = time.time()
+        logger.info(f"Epoch {epoch + 1}/{num_epochs}, Loss: {total_loss/len(data_loader):.4f}")
+        logger.info(f"Took {end - start} time")
 
 
-def _mp_fn(index, hf_model, train_path, save_path, lr, batch_size, num_epochs):
+def _mp_fn(
+    index: int,
+    hf_model: str,
+    train_path: str,
+    save_path: str,
+    lr: float,
+    batch_size: int,
+    num_epochs: int,
+    num_workers: int = 8,
+    prefetch_factor: int = 4,
+):
     """
     Function to run on each TPU device for BERT classifier training.
 
@@ -72,13 +97,27 @@ def _mp_fn(index, hf_model, train_path, save_path, lr, batch_size, num_epochs):
         lr (float): Learning rate for training.
         batch_size (int): Batch size for training.
         num_epochs (int): Number of epochs to train for.
+        num_workers (int): Number of workers for DataLoader.
+        prefetch_factor (int): Prefetch factor for DataLoader.
 
     Returns:
         bool: True if the process is successful.
     """
+
     tokenizer = BertTokenizer.from_pretrained(hf_model)
     train_dataset = BertDataset(train_path, tokenizer)
-    train_loader = DataLoader(train_dataset, batch_size=batch_size)
+    train_sampler = DistributedSampler(
+        train_dataset,
+        num_replicas=xm.xrt_world_size(),
+        rank=xm.get_ordinal(),
+    )
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        sampler=train_sampler,
+        num_workers=num_workers,
+        prefetch_factor=prefetch_factor,
+    )
 
     device = xm.xla_device()
     device_loader = pl.MpDeviceLoader(train_loader, device)
@@ -87,11 +126,10 @@ def _mp_fn(index, hf_model, train_path, save_path, lr, batch_size, num_epochs):
     optimizer = AdamW(model.parameters(), lr=lr)
     xm.broadcast_master_param(model)
 
-    train_epochs(model, optimizer, device_loader, num_epochs)
+    train_epochs(model, optimizer, device_loader, num_epochs, index)
 
     if index == 0:
         xm.save(model.state_dict(), save_path)
-    return True
 
 
 def train_model(
@@ -106,7 +144,7 @@ def train_model(
     num_epochs: int = 1,
 ) -> None:
     """
-    Train a fastText model.
+    Train a BERT model.
 
     Args:
         input_path (str): Path for input training data.
@@ -122,7 +160,6 @@ def train_model(
     Returns:
         None: No return value.
     """
-    logger = logging.getLogger("bert")
 
     logger.info(f"Training BERT model for experiment {output_path}")
     datetime_start = datetime.utcnow()
@@ -130,12 +167,13 @@ def train_model(
     # run training on remote worker, not head node
     @ray.remote(
         memory=memory_req * 1024 * 1024 * 1024,
-        resources={"TPU": 4},
+        resources={"TPU": 4, "TPU-v4-8-head": 1},
     )
+    @remove_tpu_lockfile_on_exit
     def run():
         if fsspec_exists(f"{output_path}/model.bin"):
             logger.info(f"Model already exists at {output_path}/model.bin. Skipping training.")
-            return True
+            return
 
         shard_paths = fsspec_glob(os.path.join(input_path, "**/*.jsonl.gz"))
         logger.info(f"Received input paths: {shard_paths}")
@@ -146,7 +184,7 @@ def train_model(
             val_path = os.path.join(tmp_dir, "data.val")
             model_path = os.path.join(tmp_dir, "model.bin")
 
-            merge_shards(shard_paths, merge_path)
+            merge_dataset_shards(shard_paths, merge_path)
             format_dataset(merge_path, format_example)
             split_dataset(merge_path, train_path, val_path, val_frac, seed)
             shuffle(train_path, train_path, seed)

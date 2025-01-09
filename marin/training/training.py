@@ -10,10 +10,7 @@ import ray
 from google.api_core.exceptions import Forbidden as GcpForbiddenException
 from levanter.data.text import LMMixtureDatasetConfig
 from levanter.infra.ray_tpu import run_on_pod_multislice_resumable, run_on_pod_resumable
-from levanter.main import (
-    sft,  # If sft.py is meant to be imported directly
-    train_lm,
-)
+from levanter.main import sft, train_lm
 from mergedeep import mergedeep
 from ray.runtime_env import RuntimeEnv
 
@@ -37,7 +34,7 @@ class TrainSFTOnPodConfig(sft.SFTConfig):
     impute_run_id_from_output_path: bool = True
 
 
-@ray.remote(num_cpus=0.1, runtime_env={"pip": ["levanter>=1.2.dev1074"]})
+@ray.remote(num_cpus=0.1)
 def run_levanter_sft(config: TrainSFTOnPodConfig):
     """
     Run the Levanter SFT training function on a Ray cluster.
@@ -50,7 +47,8 @@ def run_levanter_sft(config: TrainSFTOnPodConfig):
         logger.info(f"Using output path: {config.output_path}")
         config = _update_config_to_use_out_path(config)
 
-    env = _add_default_env_variables(config.env, default_launch_config.get("env"))
+    default_env = default_launch_config.env_for_accel(config.tpu_type or "")
+    env = _add_default_env_variables(config.env, default_env)
     _check_for_wandb_key(env)
     env = _add_run_env_variables(env)
     config = replace(config, env=env)
@@ -59,18 +57,12 @@ def run_levanter_sft(config: TrainSFTOnPodConfig):
     config = _enforce_run_id(config)
     logger.info(f"Using run ID: {config.trainer.id}")
 
-    runtime_env = RuntimeEnv(env_vars=config.env, pip=["levanter>=1.2.dev1074"])
-
     if not config.bypass_path_checks and config.tpu_type is not None:
-        ray.get(
-            ray.remote(_doublecheck_paths_sft)
-            .options(runtime_env=runtime_env, num_cpus=0.1)
-            .remote(config, must_save_checkpoints=True)
-        )
+        ray.get(ray.remote(_doublecheck_paths_sft).options(num_cpus=0.1).remote(config, must_save_checkpoints=True))
 
     sft_config = _upcast_sft_config(config)
 
-    @ray.remote(runtime_env=runtime_env)
+    @ray.remote
     def sft_task():
         sft.train(sft_config)
 
@@ -150,7 +142,7 @@ def _update_config_to_use_out_path(config: TrainLmOnPodConfig):
     return replace(config, trainer=trainer, hf_save_path=os.path.join(config.output_path, DEFAULT_HF_CHECKPOINTS_PATH))
 
 
-@ray.remote(num_cpus=0.1, runtime_env={"pip": ["levanter>=1.2.dev1074"]})
+@ray.remote(num_cpus=0.1)
 def run_levanter_train_lm(config: TrainLmOnPodConfig):
     """
     Run the Levanter training main function on a Ray cluster.
@@ -174,7 +166,7 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
         logger.info(f"Using output path: {config.output_path}")
         config = _update_config_to_use_out_path(config)
 
-    env = _add_default_env_variables(config.env, default_launch_config.get("env"))
+    env = _add_default_env_variables(config.env, default_launch_config.env_for_accel(config.tpu_type or ""))
     _check_for_wandb_key(env)
     env = _add_run_env_variables(env)
     config = replace(config, env=env)
@@ -183,7 +175,7 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
     config = _enforce_run_id(config)
     logger.info(f"Using run ID: {config.trainer.id}")
 
-    runtime_env = RuntimeEnv(env_vars=config.env, pip=["levanter>=1.2.dev1074"])
+    runtime_env = RuntimeEnv(env_vars=config.env)
 
     if not config.bypass_path_checks and config.tpu_type is not None:
         # run this on the Ray cluster to get the right region
@@ -397,9 +389,10 @@ def _add_default_env_variables(env: dict, default_env: dict | None):
 
 def _add_run_env_variables(env: dict):
     """
-    Add a few environment variables from `os.environ` into `env` that we need for logging. Specifically:
-    - WANDB_API_KEY
+    Add a few environment variables from `os.environ` into `env` that we need for logging as well as for internal evals.
+    Specifically:
     - GIT_COMMIT
+    - HF_DATASETS_TRUST_REMOTE_CODE
     """
 
     if "GIT_COMMIT" not in env:
@@ -407,6 +400,13 @@ def _add_run_env_variables(env: dict):
             env["GIT_COMMIT"] = levanter.infra.cli_helpers.get_git_commit()
         except:  # noqa
             logger.warning("Could not infer git commit.")
+
+    # required for internal evals to run some tasks
+    if "HF_DATASETS_TRUST_REMOTE_CODE" not in env:
+        env["HF_DATASETS_TRUST_REMOTE_CODE"] = "1"
+
+    if "TOKENIZERS_PARALLELISM" not in env:
+        env["TOKENIZERS_PARALLELISM"] = "false"
 
     return env
 

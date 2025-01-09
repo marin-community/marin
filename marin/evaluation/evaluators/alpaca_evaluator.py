@@ -47,6 +47,12 @@ class AlpacaEvaluator(VllmTpuEvaluator):
                     # Mandatory argument for `vllm_local_completions` in AlpacaEval
                     # https://github.com/tatsu-lab/alpaca_eval/blob/main/src/alpaca_eval/decoders/vllm_local.py#L21
                     "max_new_tokens": None,  # Following the config above, set to None to go up to EOS or context length
+                    "model_kwargs": {
+                        "max_model_len": 4096,  # Cap at 4096 tokens
+                        "dtype": "bfloat16",  # Explicitly use bfloat16 for TPU
+                        # "enforce_eager": True, # Uncomment if you want to enforce eager execution to save memory
+                        "device": "tpu",
+                    },
                 },
             }
         }
@@ -65,7 +71,11 @@ class AlpacaEvaluator(VllmTpuEvaluator):
             os.environ["OPENAI_API_KEY"] = f.read().strip()
 
     def evaluate(
-        self, model: ModelConfig, evals: list[str], output_path: str, max_eval_instances: int | None = None
+        self,
+        model: ModelConfig,
+        evals: list[str],
+        output_path: str,
+        max_eval_instances: int | None = None,
     ) -> None:
         """
         Runs AlpacaEval on the specified model.
