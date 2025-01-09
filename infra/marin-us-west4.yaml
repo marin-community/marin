@@ -18,7 +18,7 @@ provider:
   project_id: hai-gcp-models
 
 docker:
-    image: "us-west4-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:20241123"
+    image: "us-west4-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:20241220"
     container_name: "ray_docker"
     pull_before_run: true
     worker_run_options:
@@ -85,15 +85,15 @@ available_node_types:
             sourceImage: projects/ubuntu-os-cloud/global/images/family/ubuntu-2204-lts
   tpu_worker:
     max_workers: 1024
-    min_workers: 4
+    min_workers: 0
     node_config:
-      acceleratorType: v5litepod-1
+      acceleratorType: v5litepod-4
       runtimeVersion: v2-alpha-tpuv5-lite
       schedulingConfig:
         preemptible: true
     resources:
       CPU: 120
-      TPU: 8
+      TPU: 4
 
   tpu_slice_v5e_8:
     max_workers: 1024
@@ -105,7 +105,7 @@ available_node_types:
         preemptible: true
     resources:
       CPU: 120
-      TPU: 8
+      TPU: 4
 
   tpu_slice_v5e_16:
     max_workers: 1024
@@ -117,7 +117,7 @@ available_node_types:
         preemptible: true
     resources:
       CPU: 120
-      TPU: 8
+      TPU: 4
 
   tpu_slice_v5e_32:
     max_workers: 1024
@@ -129,7 +129,7 @@ available_node_types:
         preemptible: true
     resources:
       CPU: 120
-      TPU: 8
+      TPU: 4
 
   tpu_slice_v5e_64:
     max_workers: 1024
@@ -141,7 +141,7 @@ available_node_types:
         preemptible: true
     resources:
       CPU: 120
-      TPU: 8
+      TPU: 4
 
   tpu_slice_v5e_128:
     max_workers: 1024
@@ -153,7 +153,7 @@ available_node_types:
         preemptible: true
     resources:
       CPU: 120
-      TPU: 8
+      TPU: 4
 
   tpu_slice_v5e_256:
     max_workers: 1024
@@ -165,4 +165,4 @@ available_node_types:
         preemptible: true
     resources:
       CPU: 120
-      TPU: 8
+      TPU: 4
