@@ -17,33 +17,34 @@ from experiments.metrics.wandb_related import WandbMetricsConfig, calculate_wand
 
 def main(save_path: str) -> dict:
 
-    final_metrics = {
-        "Workflow Times per workflow": get_average_duration_for_all_workflows(
-            GithubApiConfig(
-                github_token=os.getenv("GITHUB_TOKEN"), time_since=(datetime.now() - timedelta(days=7)).isoformat()
-            )
-        )
-    }
+    final_metrics = {}
 
-    label = "experiments"
-    final_metrics[f"Closed Issues with label {label}"] = get_closed_issues_with_label(
-        GithubIssueConfig(
-            github_token=os.getenv("GITHUB_TOKEN"),
-            time_since=(datetime.now() - timedelta(days=7)).isoformat(),
-            label=label,
-        ),
-    )
+    # final_metrics = {
+    #     "Workflow Times per workflow": get_average_duration_for_all_workflows(
+    #         GithubApiConfig(
+    #             github_token=os.getenv("GITHUB_TOKEN"), time_since=(datetime.now() - timedelta(days=7)).isoformat()
+    #         )
+    #     )
+    # }
 
-    events = get_gcp_restart_events(
-        NumRestartConfig(time_since=((datetime.now() - timedelta(days=7)).isoformat("T") + "Z"))
-    )
-    final_metrics["Number of Ray cluster restart"] = len(events)
-    final_metrics["Ray restart events"] = events
+    # label = "experiments"
+    # final_metrics[f"Closed Issues with label {label}"] = get_closed_issues_with_label(
+    #     GithubIssueConfig(
+    #         github_token=os.getenv("GITHUB_TOKEN"),
+    #         time_since=(datetime.now() - timedelta(days=7)).isoformat(),
+    #         label=label,
+    #     ),
+    # )
+
+    # events = get_gcp_restart_events(
+    #     NumRestartConfig(time_since=((datetime.now() - timedelta(days=7)).isoformat("T") + "Z"))
+    # )
+    # final_metrics["Number of Ray cluster restart"] = len(events)
+    # final_metrics["Ray restart events"] = events
 
     # get all runs; num_days=-1 means all runs
-    ALL_DAYS = -1
     experiment_metrics = calculate_wandb_metrics(
-        WandbMetricsConfig(num_days=ALL_DAYS, entity="stanford-mercury", project="marin")
+        WandbMetricsConfig(num_days=None, entity="stanford-mercury", project="marin")
     )
     for key, value in experiment_metrics.items():
         final_metrics[key] = value
