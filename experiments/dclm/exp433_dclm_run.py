@@ -1,11 +1,10 @@
 from experiments.defaults import SimpleTrainConfig, default_tokenize, default_train
 from experiments.evals.evals import default_eval
+from experiments.evals.task_configs import CORE_TASKS_PLUS_MMLU
 from experiments.llama import LlamaConfig
 from experiments.pretraining_datasets import dclm_baseline, proofpile_2, starcoderdata
 from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
-
-from experiments.evals.task_configs import CORE_TASKS_PLUS_MMLU
 
 gpt_neox_tokenizer = "EleutherAI/gpt-neox-20b"
 
@@ -111,12 +110,12 @@ dclm_baseline_only_eval = default_eval(step=dclm_baseline_only_model)
 if __name__ == "__main__":
     executor_main(
         steps=[
-            dclm_baseline_tokenized,
-            starcoderdata_tokenized,
-            proofpile_2_tokenized,
-            dclm_mixture_model,
-            #dclm_baseline_only_model,
+            # dclm_baseline_tokenized,
+            # starcoderdata_tokenized,
+            # proofpile_2_tokenized,
+            # dclm_mixture_model,
+            # dclm_baseline_only_model,
             dclm_mixture_eval,
-            #dclm_baseline_only_eval,
+            # dclm_baseline_only_eval,
         ]
     )
