@@ -68,6 +68,7 @@ def tokenize_dolma_steps(*, base_path="tokenized/", tokenizer=llama3_tokenizer) 
                 cache_path=this_output_path(),
                 tokenizer=versioned(tokenizer),
             ),
+            pip_dependency_groups=["sentencepiece"],
         )
 
     return dolma_steps
