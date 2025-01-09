@@ -135,5 +135,5 @@ def my_tpu_job():
 
 ## Evaluation
 
-By default, we run evaluations on TPU using `lm-evaluation-harness` via Levanter. See 
+By default, we run evaluations on TPU using `lm-evaluation-harness` via Levanter. See
 [`experiments/evals/README_eval.md`](./experiments/evals/README_eval.md) for more details.

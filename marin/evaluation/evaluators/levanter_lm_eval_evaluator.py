@@ -64,8 +64,6 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
             # convert to the config that Levanter's eval_harness expects
             tasks = convert_to_levanter_task_config(evals)
 
-            print(f"tasks: {tasks}")
-
             model_path = os.path.join(LevanterTpuEvaluator.CACHE_PATH, model.path)
 
             eval_config = eval_harness.EvalHarnessMainConfig(
@@ -83,13 +81,6 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
 
             results = eval_harness.run_eval_harness_main(eval_config)
 
-            # Debug logs for distributed processes
-            logger.info(f"JAX process_count: {jax.process_count()}, process_index: {jax.process_index()}")
-            print(f"JAX process_count: {jax.process_count()}, process_index: {jax.process_index()}") # print to be safe
-
-            logger.info(f"Results: {results}")
-            print(f"Results: {results}") # print to be safe
-
             if jax.process_index() == 0:
 
                 try:
@@ -97,8 +88,6 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
                     output_path = os.path.join(output_path, "results.json")
 
                     logger.info(f"Uploading results to GCS: {output_path}")
-
-                    logger.info(f"Size of results dict: approximately {len(json.dumps(results))} bytes")
 
                     # write output JSON directly to output_path on GCS
                     fs = fsspec.filesystem("gcs")
