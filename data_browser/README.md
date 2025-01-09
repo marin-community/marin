@@ -10,7 +10,7 @@ To start the data browser:
 
 To deploy:
 
-    gcloud run deploy data-browser --source . --port 5000 --region us-central1 --platform managed --no-allow-unauthenticated
+    TODO
 
 ## Deployment (CRFM)
 
