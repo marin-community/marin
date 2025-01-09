@@ -107,6 +107,7 @@ def fetch_links(urls_path: str, warc_output_path: str, robots_output_path: str, 
 
 def fetch_to_warc(urls: list[str], warc_output_path: str, robots_output_path: str, errors_output_path: str):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+    seen_urls = set()
     domains_to_robots: dict[str, str] = {}
     fetch_errors: dict[str, str] = {}
 
@@ -117,6 +118,11 @@ def fetch_to_warc(urls: list[str], warc_output_path: str, robots_output_path: st
         writer = WARCWriter(warc_buffer, gzip=True)
 
         for url in tqdm(urls, desc="Fetching URLs"):
+            # Skip if we've already seen this URL
+            if url in seen_urls:
+                continue
+            seen_urls.add(url)
+
             parsed_url = urlparse(url)
             url_domain = parsed_url.netloc
 
