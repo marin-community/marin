@@ -51,7 +51,7 @@ def clip(minimum, x, maximum):
 
 
 @ray.remote(memory=256 * 1024 * 1024 * 1024, num_cpus=8)
-def resample_urls_remote(
+def resample_urls(
     input_patterns: list[str],
     cc_prefix: str,
     train_output_path: str,
@@ -59,6 +59,30 @@ def resample_urls_remote(
     balanced_test_output_path: str,
     test_size: float = 0.2,
 ):
+    """This function resamples and split records into training and test sets.
+    Each record contains a str URL and a continuous float score (the mathscore
+    classifier's score, in range [0, 1]). OpenWebMath adaptively changes the
+    filtering thresholds based on whether LaTeX was detected in a page. If the
+    URL has LaTeX, the threshold is 0.15. If the URL doesn't have LaTeX, the
+    threshold is 0.8. To unify these two into a single score, we add a constant
+    value of 0.65 to the math classifier score of all URLs that contain LaTeX
+    (the "regex-adjusted score"). These regex-adjusted scores are clipped
+    between 0.0 and 1.0 .
+
+    To resample the data, we discretize the regex-adjusted scores into 10
+    buckets (with `min(int(parsed_line["regex_adjusted_score"] / 0.1), 9)`). The
+    training dataset is balanced, i.e., the resultant dataset has an equal # of
+    examples in each of these bins. We also generate two test datasets:
+
+        - The cc-distributed test set follows the same quality distribution as
+          CC (computed on a sample, where CC files are denoted by `cc_prefix`).
+        - The balanced test set has an equal # of examples in each bin.
+
+    In addition, the train and test sets are split s.t. domains that appear in
+    train do not appear in test. On the other hand, there may be overlap (in
+    either domains or URLs) between the CC-distributed test set and the balanced
+    test set.
+    """
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     logger = logging.getLogger(__name__)
 
@@ -238,43 +262,33 @@ def resample_urls_remote(
     # Resample test examples to be balanced
     balanced_resampled_test_examples = bucket_and_resample(test_examples)
 
-    train_table = pa.Table.from_pylist(resampled_train_examples)
+    # Write train set
+    write_examples_to_parquet(resampled_train_examples, train_output_path, train_success_path)
+
+    # Write CC-distributed test set
+    write_examples_to_parquet(cc_resampled_test_examples, cc_test_output_path, cc_test_success_path)
+
+    # Write balanced test set
+    write_examples_to_parquet(balanced_resampled_test_examples, balanced_test_output_path, balanced_test_success_path)
+
+
+def write_examples_to_parquet(examples: list[dict], output_path: str, output_success_path: str):
+    table = pa.Table.from_pylist(examples)
     # Get filesystem and path for the train output
-    fs_train, train_path_in_fs = fsspec.core.url_to_fs(train_output_path)
+    output_fs, output_path_in_fs = fsspec.core.url_to_fs(output_path)
     # Write the resampled train examples to the output path as Parquet
-    logger.info(f"Writing {len(resampled_train_examples)} train examples")
-    pq.write_table(train_table, train_path_in_fs, filesystem=fs_train, compression="snappy")
-    logger.info(f"Wrote {len(resampled_train_examples)} train examples")
-
-    cc_resampled_test_table = pa.Table.from_pylist(cc_resampled_test_examples)
-    # Get filesystem and path for the test output
-    fs_test, cc_test_path_in_fs = fsspec.core.url_to_fs(cc_test_output_path)
-    # Write all test examples to the output path as Parquet (without resampling)
-    logger.info(f"Writing {len(cc_resampled_test_examples)} test examples")
-    pq.write_table(cc_resampled_test_table, cc_test_path_in_fs, filesystem=fs_test, compression="snappy")
-    logger.info(f"Wrote {len(cc_resampled_test_examples)} test examples")
-
-    balanced_resampled_test_table = pa.Table.from_pylist(balanced_resampled_test_examples)
-    # Get filesystem and path for the test output
-    fs_test, balanced_test_path_in_fs = fsspec.core.url_to_fs(balanced_test_output_path)
-    # Write all test examples to the output path as Parquet (without resampling)
-    logger.info(f"Writing {len(balanced_resampled_test_examples)} test examples")
-    pq.write_table(balanced_resampled_test_table, balanced_test_path_in_fs, filesystem=fs_test, compression="snappy")
-    logger.info(f"Wrote {len(balanced_resampled_test_examples)} test examples")
-
+    logger.info(f"Writing {len(examples)} train examples")
+    pq.write_table(table, output_path_in_fs, filesystem=output_fs, compression="snappy")
+    logger.info(f"Wrote {len(examples)} train examples")
     # Write success files indicating the number of examples written
-    with fsspec.open(train_success_path, "wt", compression="infer") as f:
-        f.write(json.dumps({"num_examples": len(resampled_train_examples)}))
-    with fsspec.open(cc_test_success_path, "wt", compression="infer") as f:
-        f.write(json.dumps({"num_examples": len(cc_resampled_test_examples)}))
-    with fsspec.open(balanced_test_success_path, "wt", compression="infer") as f:
-        f.write(json.dumps({"num_examples": len(balanced_resampled_test_examples)}))
+    with fsspec.open(output_success_path, "wt", compression="infer") as f:
+        f.write(json.dumps({"num_examples": len(examples)}))
 
 
 @draccus.wrap()
-def resample_urls(cfg: ResamplingConfig):
+def resample_and_split_urls(cfg: ResamplingConfig):
     _ = ray.get(
-        resample_urls_remote.remote(
+        resample_urls.remote(
             cfg.input_patterns,
             cfg.cc_prefix,
             cfg.train_output_path,
