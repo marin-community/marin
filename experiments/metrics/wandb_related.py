@@ -30,7 +30,7 @@ def get_wandb_run_metrics(
     - dict: A dictionary containing relevant metrics for the run.
     """
     if metrics is None:
-        metrics = ["eval/paloma/c4_en/bpb", "throughput/total_gflops", "_runtime"]
+        metrics = ["eval/paloma/c4_en/bpb", "throughput/total_gflops", "_runtime", "parameter_count"]
 
     # Initialize the WandB API
     api = wandb.Api()
@@ -189,10 +189,10 @@ def calculate_wandb_metrics(config: WandbMetricsConfig) -> dict[str, Any]:
         run_id = run.id
         run_metrics[run_id] = get_wandb_run_metrics(run_id)
 
-        # get parameter count for the run and add to metrics
-        num_params = count_params_for_run(run_id)
-        if num_params:
-            run_metrics[run_id]["num_parameters"] = num_params
+        # # get parameter count for the run and add to metrics
+        # num_params = count_params_for_run(run_id)
+        # if num_params:
+        #     run_metrics[run_id]["num_parameters"] = num_params
 
     # Define parameter scale thresholds (exclusive upper bounds)
     parameter_scales = {
@@ -210,7 +210,7 @@ def calculate_wandb_metrics(config: WandbMetricsConfig) -> dict[str, Any]:
     # best_bpb1b_run_id, best_bpb7b_run_id = None, None
     for run_id, metrics in run_metrics.items():
         if metrics["eval/paloma/c4_en/bpb"] is not None:
-            num_parameters = metrics["num_parameters"]
+            num_parameters = metrics["parameter_count"]
             for scale_label, threshold in parameter_scales.items():
                 if num_parameters < threshold:
                     current_best_bpb = best_bpb_per_scale[scale_label]["bpb"]
@@ -239,6 +239,7 @@ def calculate_wandb_metrics(config: WandbMetricsConfig) -> dict[str, Any]:
             for scale, data in best_bpb_per_scale.items()
         },
         "total_gflops_across_runs": total_gflops,
+        "total_petaflops_across_runs": total_gflops / 1e6,
     }
 
     logger.info(metrics)
