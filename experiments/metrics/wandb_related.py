@@ -239,7 +239,6 @@ def calculate_wandb_metrics(config: WandbMetricsConfig) -> dict[str, Any]:
             for scale, data in best_bpb_per_scale.items()
         },
         "total_gflops_across_runs": total_gflops,
-        "total_petaflops_across_runs": total_gflops / 1e6,
     }
 
     logger.info(metrics)
