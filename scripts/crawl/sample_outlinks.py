@@ -120,10 +120,10 @@ def get_shards_to_process(input_pattern: str, num_to_sample: int, output_prefix:
                 pbar.update(1)
 
     # Randomly sample IDs from 0 to current_index - 1 (inclusive)
-    logger.info(f"Subsampling {num_to_sample} ids")
+    logger.info(f"Subsampling {num_to_sample * 5} ids")
     # Oversample by 5x, since some of the target URLs will be duplicates
     subsampled_ids = random.sample(range(0, current_index), k=min(num_to_sample * 5, current_index))
-    logger.info(f"Subsampled {num_to_sample} ids")
+    logger.info(f"Subsampled {num_to_sample * 5} ids")
 
     # Associate shards with ids to pluck from them
     shard_to_local_offsets = defaultdict(list)
