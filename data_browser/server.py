@@ -257,7 +257,7 @@ def main(config: ServerConfig):
     server = Server(config)
 
     debug = os.environ.get("DEV") == "true"
-    app.run(host="0.0.0.0", port=5000, debug=debug)
+    app.run(host="0.0.0.0", port=5000 if debug else 80, debug=debug)
 
 
 if __name__ == "__main__":
