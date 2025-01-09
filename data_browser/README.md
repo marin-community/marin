@@ -11,7 +11,7 @@ To start the data browser:
     npm start             # Starts React frontend at https://localhost:3000
     python server.py      # Starts Flask backend at https://localhost:5000
 
-## Deployment
+## Deployment (CRFM)
 
 ### One-time setup (already done for everyone, just for reference)
 
@@ -47,10 +47,10 @@ Create a shared network:
 
 To run the server:
 
-    docker run --rm --name flask -p 5000:5000 --network data_browser_net -v $PWD/gcs-key.json:/app/gcs-key.json -e GOOGLE_APPLICATION_CREDENTIALS=/app/gcs-key.json marin/data_browser
+    docker run --restart=always --rm --name flask -p 5000:5000 --network data_browser_net -v $PWD/gcs-key.json:/app/gcs-key.json -e GOOGLE_APPLICATION_CREDENTIALS=/app/gcs-key.json marin/data_browser
 
 Use ngrok to make the server available publicly:
 
-    docker run --rm --name ngrok -p 4040:4040 --network data_browser_net --env-file ngrok.env ngrok/ngrok http --domain=marlin-subtle-barnacle.ngrok-free.app http://flask:5000 --oauth google
+    docker run --restart=always --rm --name ngrok -p 4040:4040 --network data_browser_net --env-file ngrok.env ngrok/ngrok http --domain=marlin-subtle-barnacle.ngrok-free.app http://flask:5000 --oauth google
 
 TODO: make this work with docker-compose

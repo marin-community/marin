@@ -29,9 +29,9 @@ dependencies = [
     "pandas", # Only needed by Fileprovider in inference.py
     "pyarrow", # # Only needed by Fileprovider in inference.py
     # We are keeping levanter deps for now. @TODO :: Remove them
-    "jax>=0.4.34",
+    "jax==0.4.35",
     "multiprocess==0.70.16",
-    "levanter>=1.2.dev1147",
+    "levanter>=1.2.dev1163",
 ]
 
 [project.optional-dependencies]
@@ -65,7 +65,7 @@ download_transform = [
     "resiliparse",
     "trafilatura",
     "boto3==1.35.23",
-    "htmlmin"
+    "htmlmin",
 ]
 
 quality_dedup_consolidate = [
@@ -78,7 +78,8 @@ quality_dedup_consolidate = [
 tokenize_train = [
     "jax>=0.4.34",
     "multiprocess==0.70.16",
-    "levanter>=1.2.dev1054",
+    "levanter>=1.2.dev1147",
+    "lm-eval@git+https://github.com/dlwh/lm-evaluation-harness.git@no_torch",
 ]
 
 data_browser = [
@@ -86,8 +87,10 @@ data_browser = [
 ]
 
 eval = [
-    "lm-eval",
+    "levanter>=1.2.dev1163",
+    "lm-eval @ git+https://github.com/dlwh/lm-evaluation-harness.git@no_torch",
 ]
+
 [tool.setuptools.packages.find]
 where = ["."]
 exclude = ["cache", "infra"]
