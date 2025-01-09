@@ -138,6 +138,7 @@ def get_shards_to_process(input_pattern: str, num_to_sample: int, output_prefix:
     # Extract sampled IDs from their corresponding files
     logger.info("Extracting sampled IDs")
     extracted_examples = set()
+    seen_target_urls = set()
     refs = []
     for shard_path, offsets in shard_to_local_offsets.items():
         refs.append(get_examples_from_offsets.remote(shard_path, offsets))
@@ -150,9 +151,14 @@ def get_shards_to_process(input_pattern: str, num_to_sample: int, output_prefix:
             # a batch of objects instead of all objects.
             results = ray.get(ready_refs)
             for plucked_shard_examples in results:
-                extracted_examples.update(plucked_shard_examples)
+                for plucked_shard_example in plucked_shard_examples:
+                    # Only add examples if we haven't seen the target URL already
+                    if plucked_shard_example.link_target in seen_target_urls:
+                        continue
+                    extracted_examples.add(plucked_shard_example)
+                    seen_target_urls.add(plucked_shard_example.link_target)
                 pbar.update(1)
-    logger.info(f"Extracted {len(extracted_examples)} examples")
+    logger.info(f"Extracted {len(extracted_examples)} examples (after link target deduplication)")
 
     # Sort examples by domain so that URLs pointing to the same domain are in the same shard
     extracted_examples = sorted(extracted_examples, key=lambda x: urlparse(x.link_target).netloc)
