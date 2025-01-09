@@ -109,5 +109,7 @@ pes2o_experiment_config = ExperimentConfig(
 pes2o_train_steps = create_steps(pes2o_experiment_config)
 
 if __name__ == "__main__":
-    steps = wiki_train_steps + pes2o_train_steps
+    wiki_steps = create_steps(wiki_experiment_config)
+    pes2o_steps = create_steps(pes2o_experiment_config)
+    steps = wiki_steps + pes2o_steps
     executor_main(steps=steps)
