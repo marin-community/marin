@@ -131,6 +131,7 @@ def fetch_to_warc(urls: list[str], warc_output_path: str, robots_output_path: st
                 logger.info(f"Getting robots.txt: {robots_url}")
                 robots_response, _ = fetch_url(session, robots_url)
                 if robots_response is not None:
+                    logger.info(f"Got robots.txt for {robots_url}")
                     domains_to_robots[url_domain] = robots_response.text
 
             logger.info(f"Processing: {url}")
@@ -139,10 +140,10 @@ def fetch_to_warc(urls: list[str], warc_output_path: str, robots_output_path: st
                 if err:
                     fetch_errors[url] = err
                 continue
-
             # Prepare HTTP headers for WARC
             http_headers = []
             status_line = f"{response.status_code} {response.reason}"
+            logger.info(f"Got response {status_line} for {url}")
             http_headers.append(("Status", status_line))
             for header, value in response.headers.items():
                 http_headers.append((header, value))
