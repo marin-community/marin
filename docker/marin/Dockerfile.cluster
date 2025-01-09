@@ -77,7 +77,6 @@ RUN pip install jax[tpu]==0.4.36 -f https://storage.googleapis.com/jax-releases/
 
 # copy in the autoscaler hacks
 ENV VENV_PATH=/home/ray/anaconda3/
-ENV PYTHONPATH=$PYTHONPATH:$VENV_PATH/lib/python3.11/site-packages
 RUN sudo mkdir /opt/abhi-ray
 RUN sudo chown -R $(whoami) /opt/abhi-ray
 WORKDIR /opt/abhi-ray
@@ -92,6 +91,9 @@ RUN rm -rf ~/ray
 
 # Install updated fsspec version
 RUN pip install --no-cache-dir fsspec==2024.9.0
+
+# Install updated transformers version for OLMO
+RUN pip install transformers==4.47.0
 
 # Add /usr/lib/x86_64-linux-gnu/ to LD_LIBRARY_PATH so that bash prefers the systems
 # libtinfo.so over the conda-provided version. Using the conda-provided libtinfo.so
