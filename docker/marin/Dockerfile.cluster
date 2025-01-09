@@ -60,8 +60,7 @@ RUN sudo apt-get install libopenblas-base libopenmpi-dev libomp-dev -y
 # So we should replace this to a simple pip install -r requirements-tpu.txt command when the new version is released.
 RUN pip install -r requirements-common.txt
 RUN pip install cmake>=3.26 ninja packaging setuptools-scm>=8 wheel jinja2
-RUN pip install --no-cache-dir torch_xla[tpu] -f https://storage.googleapis.com/libtpu-releases/index.html
-RUN pip install --no-cache-dir torch_xla[pallas] -f https://storage.googleapis.com/jax-releases/jax_nightly_releases.html -f https://storage.googleapis.com/jax-releases/jaxlib_nightly_releases.html
+RUN pip install --no-cache-dir torch_xla[tpu]@https://storage.googleapis.com/pytorch-xla-releases/wheels/tpuvm/torch_xla-2.6.0.dev20241126-cp311-cp311-linux_x86_64.whl -f https://storage.googleapis.com/libtpu-releases/index.html
 RUN pip install torchvision==0.20.0.dev20241126+cpu torch==2.6.0.dev20241126+cpu --extra-index-url https://download.pytorch.org/whl/nightly/cpu
 RUN pip install jax==0.4.36.dev20241122 jaxlib==0.4.36.dev20241122 -f https://storage.googleapis.com/jax-releases/jax_nightly_releases.html -f https://storage.googleapis.com/jax-releases/jaxlib_nightly_releases.html
 RUN VLLM_TARGET_DEVICE="tpu" python3 setup.py develop
