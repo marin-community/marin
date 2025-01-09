@@ -201,7 +201,6 @@ def default_train(
             eval_harness=harness_config,
         ),
         pip_dependency_groups=["tokenize_train"],
-        override_output_path="gs://marin-us-central2/checkpoints/dclm_1b_1x_replication_eval_check_4251ae",
     )
 
 

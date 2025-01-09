@@ -5,7 +5,6 @@ import shutil
 from typing import ClassVar
 
 import fsspec
-import jax
 import jmp
 import levanter.eval_harness as eval_harness
 from levanter.distributed import RayConfig
@@ -81,26 +80,21 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
 
             results = eval_harness.run_eval_harness_main(eval_config)
 
-            if jax.process_index() == 0:
+            try:
+                # add a results.json to output path
+                output_path = os.path.join(output_path, "results.json")
 
-                try:
-                    # add a results.json to output path
-                    output_path = os.path.join(output_path, "results.json")
+                logger.info(f"Uploading results to GCS: {output_path}")
 
-                    logger.info(f"Uploading results to GCS: {output_path}")
+                # write output JSON directly to output_path on GCS
+                fs = fsspec.filesystem("gcs")
+                with fs.open(output_path, "w") as f:
+                    json.dump(results, f, indent=2)
 
-                    # write output JSON directly to output_path on GCS
-                    fs = fsspec.filesystem("gcs")
-                    with fs.open(output_path, "w") as f:
-                        json.dump(results, f, indent=2)
+                logger.info("Upload completed successfully.")
 
-                    logger.info("Upload completed successfully.")
-
-                except Exception as upload_error:
-                    logger.info(f"Failed to upload results to GCS: {upload_error}")
-
-            else:
-                logger.info("Skipping upload as this is not the main process.")
+            except Exception as upload_error:
+                logger.info(f"Failed to upload results to GCS: {upload_error}")
 
         except Exception as e:
 
