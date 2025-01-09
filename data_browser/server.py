@@ -7,8 +7,9 @@ from dataclasses import asdict, dataclass, replace
 import draccus
 import fsspec
 import zstandard as zstd
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, jsonify, request, send_from_directory, Response
 from pyarrow.parquet import ParquetFile
+import requests
 
 app = Flask(__name__, static_folder="build")
 
@@ -47,6 +48,10 @@ class Server:
 
 
 server: Server | None = None
+
+def resolve_path(path: str) -> str:
+    """Resolve a path to an absolute path, except for cloud storage paths."""
+    return path if path.startswith(("gs://", "s3://")) else os.path.realpath(path)
 
 
 def list_files(path: str) -> dict:
@@ -138,10 +143,16 @@ def read_parquet_file(path: str, offset: int, count: int) -> dict:
 
 def has_permissions(path: str) -> bool:
     """Returns whether the user can access `path` according to the permissions."""
-    resolved_path = os.path.realpath(path)
+    resolved_path = resolve_path(path)
     for allowed_path in server.config.root_paths:
-        if os.path.commonpath([resolved_path, allowed_path]) == allowed_path:
-            return True
+        # For cloud storage paths (gs://, s3://), check if the resolved path starts with the allowed path
+        if resolved_path.startswith(("gs://", "s3://")):
+            if resolved_path.startswith(allowed_path):
+                return True
+        # For local paths, use os.path.commonpath
+        else:
+            if os.path.commonpath([resolved_path, allowed_path]) == allowed_path:
+                return True
     return False
 
 
@@ -209,17 +220,32 @@ def view():
 @app.route("/view")
 @app.route("/experiment")
 def serve():
+    if os.environ.get("DEV") == "true":
+        return proxy_to_dev_server("")
     return send_from_directory(app.static_folder, "index.html")
 
 
 @app.route("/<path:path>")
 def static_proxy(path):
+    if os.environ.get("DEV") == "true":
+        return proxy_to_dev_server(path)
     return send_from_directory(app.static_folder, path)
 
 
+def proxy_to_dev_server(path):
+    """Proxy requests to the development server running on port 3000"""
+    resp = requests.get(f"http://localhost:3000/{path}")
+    excluded_headers = ["content-encoding", "content-length", "transfer-encoding", "connection"]
+    headers = [(name, value) for (name, value) in resp.raw.headers.items() if name.lower() not in excluded_headers]
+    return Response(resp.content, resp.status_code, headers)
+
+
 def standardize_config(config: ServerConfig) -> ServerConfig:
-    """Replace relative paths with absolute paths."""
-    absolute_root_paths = [os.path.realpath(path) for path in config.root_paths]
+    """Replace relative paths with absolute paths, except for cloud storage paths."""
+    absolute_root_paths = [
+        resolve_path(path)
+        for path in config.root_paths
+    ]
     return replace(config, root_paths=absolute_root_paths)
 
 
@@ -232,7 +258,8 @@ def main(config: ServerConfig):
     global server
     server = Server(config)
 
-    app.run(host="0.0.0.0", port=5000)
+    debug = os.environ.get("DEV") == "true"
+    app.run(host="0.0.0.0", port=5000, debug=debug)
 
 
 if __name__ == "__main__":
