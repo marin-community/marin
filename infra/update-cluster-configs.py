@@ -9,8 +9,8 @@ this_path = os.path.dirname(os.path.abspath(__file__))
 template_path = os.path.join(this_path, "marin-cluster-template.yaml")
 
 DOCKER_TAGS = {
-    "us-central2": "20250107",
-    "us-west4": "20250107",
+    "us-central2": "20250108",
+    "us-west4": "20250108",
     "europe-west4": "20241128",
 }
 
