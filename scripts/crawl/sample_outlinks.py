@@ -121,7 +121,8 @@ def get_shards_to_process(input_pattern: str, num_to_sample: int, output_prefix:
 
     # Randomly sample IDs from 0 to current_index - 1 (inclusive)
     logger.info(f"Subsampling {num_to_sample} ids")
-    subsampled_ids = random.sample(range(0, current_index), k=num_to_sample)
+    # Oversample by 5x, since some of the target URLs will be duplicates
+    subsampled_ids = random.sample(range(0, current_index), k=min(num_to_sample * 5, current_index))
     logger.info(f"Subsampled {num_to_sample} ids")
 
     # Associate shards with ids to pluck from them
@@ -137,7 +138,7 @@ def get_shards_to_process(input_pattern: str, num_to_sample: int, output_prefix:
 
     # Extract sampled IDs from their corresponding files
     logger.info("Extracting sampled IDs")
-    extracted_examples = set()
+    extracted_examples = []
     seen_target_urls = set()
     refs = []
     for shard_path, offsets in shard_to_local_offsets.items():
@@ -155,10 +156,12 @@ def get_shards_to_process(input_pattern: str, num_to_sample: int, output_prefix:
                     # Only add examples if we haven't seen the target URL already
                     if plucked_shard_example.link_target in seen_target_urls:
                         continue
-                    extracted_examples.add(plucked_shard_example)
+                    extracted_examples.append(plucked_shard_example)
                     seen_target_urls.add(plucked_shard_example.link_target)
                 pbar.update(1)
     logger.info(f"Extracted {len(extracted_examples)} examples (after link target deduplication)")
+    # subsample to `num_to_sample`
+    extracted_examples = random.sample(extracted_examples, k=num_to_sample)
 
     # Sort examples by domain so that URLs pointing to the same domain are in the same shard
     extracted_examples = sorted(extracted_examples, key=lambda x: urlparse(x.link_target).netloc)
