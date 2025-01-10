@@ -1,6 +1,5 @@
 import logging
 
-from experiments.evals.evals import default_eval
 from experiments.exp164_quality_classifiers import (
     dclm_eli5_100k_oh_100k_rw_200k,
     dclm_eli5_100k_oh_100k_rw_200k_seed_1,
@@ -62,7 +61,6 @@ def main():
     steps = []
     for experiment_config in create_experiment_configs():
         steps.extend(create_steps(experiment_config))
-        steps.append(default_eval(steps[-1]))
     executor_main(steps=steps)
 
 

@@ -1,4 +1,3 @@
-from experiments.evals.evals import default_eval
 from experiments.exp164_quality_classifiers import dclm_negative_examples_in_dolma_format
 from experiments.exp412_download_and_raw2json_hf_qa import mmlu_convert_eval_aux
 from experiments.quality_classifier_experiment_utils import ExperimentConfig, create_steps
@@ -50,6 +49,4 @@ if __name__ == "__main__":
         quality_classifier_model_path=marin_mmlu_100k_rw_100k,
     )
     steps = create_steps(experiment_config)
-    model_step = steps[-1]
-    steps.append(default_eval(model_step))
     executor_main(steps=steps)
