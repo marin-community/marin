@@ -226,8 +226,7 @@ if __name__ == "__main__":
 
     wandb.finish()
 
-    if True:
-        make_report()
+    # make_report()
 
     if all_vms_to_delete:
         print("Deleting VMs")
