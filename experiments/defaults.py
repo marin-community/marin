@@ -137,13 +137,18 @@ def default_train(
 
     vocab_size = _get_vocab_size(pretraining_data)
 
-    steps_per_export = train_config.steps_per_export if train_config.steps_per_export is not None else 1000
+    steps_per_export = train_config.steps_per_export
 
     # Max length of 64 characters for WANDB run is 64 characters
     name = name[:64]
 
     # TODO: right now, assume architecture is a LlamaConfig, generalize this
     assert isinstance(model_config, LlamaConfig)
+    if eval_harness_tasks:
+        harness_config = LmEvalHarnessConfig(task_spec=convert_to_levanter_task_config(eval_harness_tasks))
+    else:
+        harness_config = None
+
     return ExecutorStep(
         name=os.path.join("checkpoints", name),
         description=(
@@ -193,9 +198,7 @@ def default_train(
             hf_save_steps=steps_per_export,
             data_seed=train_config.data_seed,
             eval_harness_steps=train_config.steps_per_task_eval or 10000,
-            eval_harness=LmEvalHarnessConfig(
-                task_spec=convert_to_levanter_task_config(eval_harness_tasks),
-            ),
+            eval_harness=harness_config,
         ),
         pip_dependency_groups=["tokenize_train"],
     )
