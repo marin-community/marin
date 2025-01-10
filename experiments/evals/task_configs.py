@@ -25,6 +25,13 @@ CORE_TASKS = (
     EvalTaskConfig("winogrande", 0),  # Winograd challenge, extended to more domains
 )
 
+MMLU_TASKS = (
+    EvalTaskConfig("mmlu", 0, task_alias="mmlu_0shot"),
+    EvalTaskConfig("mmlu", 5, task_alias="mmlu_5shot"),
+)
+
+CORE_TASKS_PLUS_MMLU = CORE_TASKS + MMLU_TASKS
+
 
 def convert_to_levanter_task_config(tasks: Sequence[EvalTaskConfig]) -> list[TaskConfig]:
     """
