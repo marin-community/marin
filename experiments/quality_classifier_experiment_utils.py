@@ -2,6 +2,8 @@ import os
 from dataclasses import dataclass, field
 
 from experiments.defaults import default_tokenize, default_train
+from experiments.evals.evals import default_eval
+from experiments.evals.task_configs import CORE_TASKS_PLUS_MMLU
 from experiments.llama import llama3_tokenizer, llama_1_4b, llama_1_4b_train_config
 from marin.core.runtime import TaskConfig
 from marin.execution.executor import (
@@ -110,6 +112,9 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
         train_config=llama_1_4b_train_config,
     )
 
+    eval_step = default_eval(train_step, evals=CORE_TASKS_PLUS_MMLU)
+
     steps.append(train_step)
+    steps.append(eval_step)
 
     return steps
