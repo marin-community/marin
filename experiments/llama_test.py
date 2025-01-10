@@ -1,4 +1,4 @@
-from enum import Enum
+import subprocess
 
 import ray
 from pydantic import BaseModel
@@ -17,11 +17,7 @@ Below is an extract from a web page. Evaluate whether the page has a high educat
 - Bestow a fifth point if the extract is outstanding in its educational value, perfectly suited for teaching either at primary school or grade school. It follows detailed reasoning, the writing style is easy to follow and offers profound and thorough insights into the subject matter, devoid of any non-educational or complex content.
 
 The extract: {example}
-After examining the extract:
-Generate a JSON object with the following fields:
-- justification: a brief justification of the score, up to 100 words.
-- score: the total score, an integer between 0 and 5.
-
+After examining the extract: - Briefly justify your total score, up to 100 words. - Conclude with the score using the format: “Educational score: <total points>”
 Remember to assess from the AI Assistant perspective, utilizing web search knowledge as necessary. To evaluate the response in alignment with this additive scoring model, we’ll systematically attribute points based on the outlined criteria.
 """  # noqa: E501, RUF001
 
@@ -36,7 +32,6 @@ def test_hf():
     """Possible way for inference but it's slow"""
 
     from vllm import LLM, SamplingParams
-    from vllm.sampling_params import GuidedDecodingParams
 
     prompts = [
         "Catch up on all the latest from our staff and partners Placement student Chloe, Cultural Heritage Management student at the University of York, tells us all about her time volunteering for the CBA and YAC In July 2022 we teamed up with Archaeology Scotland to launch the Scotland Online YAC club thanks to funding from Historic Environment Scotland. YAC Leader, Jane Miller, tells us all about the first 6 months and how the club is getting on. Find out more from Isobel, a recent work experience student. Read all about the author of 'The Secret of the Treasure Keepers' and what inspired her to write her latest book.",  # noqa: E501
@@ -44,9 +39,9 @@ def test_hf():
         "1 + 1 = 4",
     ]
     # Currently, top-p sampling is disabled. `top_p` should be 1.0.'
-    json_schema = EducationalScore.model_json_schema()
-    guided_decoding_params = GuidedDecodingParams(json=json_schema)
-    sampling_params = SamplingParams(guided_decoding=guided_decoding_params)
+    # json_schema = EducationalScore.model_json_schema()
+    # guided_decoding_params = GuidedDecodingParams(json=json_schema)
+    sampling_params = SamplingParams(max_tokens=1024)
 
     # Set `enforce_eager=True` to avoid ahead-of-time compilation.
     # In real workloads, `enforace_eager` should be `False`.
@@ -59,58 +54,27 @@ def test_hf():
         generated_text = output.outputs[0].text
         print(f"Prompt: {prompt}, Generated text: {generated_text}")
 
-        # if "Educational score" in generated_text:
-        #     index_of_educational_score = generated_text.index("Educational score")
-        #     score = generated_text[index_of_educational_score + len("Educational score: ") :]
-        #     print(f"Score: {score}")
+        if "Educational score" in generated_text:
+            index_of_educational_score = generated_text.index("Educational score")
+            score = generated_text[index_of_educational_score + len("Educational score: ") :]
+            print(f"Score: {score}")
         # assert generated_text.startswith(answer)
 
 
-# Guided decoding by JSON using Pydantic schema
-class CarType(str, Enum):
-    sedan = "sedan"
-    suv = "SUV"
-    truck = "Truck"
-    coupe = "Coupe"
+@ray.remote
+def test_gcs_fuse():
+    # GCS_FUSE_BUCKET_ENV_VAR = os.environ.get("BUCKET")
+    with open("/opt/gcsfuse_mount/test.txt", "w") as f:
+        f.write("Hello, world!")
 
+    result = subprocess.run(["ls", "/opt/gcsfuse_mount"], capture_output=True, text=True)
+    print(result.stdout)
 
-class CarDescription(BaseModel):
-    brand: str
-    model: str
-    car_type: CarType
-
-
-@ray.remote(resources={"TPU": 4, "TPU-v4-8-head": 1})
-def test_hf_qwen():
-    """Possible way for inference but it's slow"""
-
-    from vllm import LLM, SamplingParams
-    from vllm.sampling_params import GuidedDecodingParams
-
-    llm = LLM(model="Qwen/Qwen2.5-3B-Instruct", enforce_eager=True, max_model_len=100)
-    # llm = LLM(model="meta-llama/Llama-3.1-8B-Instruct", enforce_eager=True, max_model_len=4096)
-
-    # guided_decoding_params = GuidedDecodingParams(json=json_schema)
-    # sampling_params = SamplingParams(max_tokens=1024, guided_decoding=guided_decoding_params)
-    # prompt = ("Generate a JSON with the brand, model and car_type of"
-    #         "the most iconic car from the 90's")
-    # outputs = llm.generate(
-    #     prompts=prompt,
-    #     sampling_params=sampling_params,
-    # )
-    # print(outputs[0].outputs[0].text)
-
-    guided_decoding_params = GuidedDecodingParams(choice=["Positive", "Negative"])
-    sampling_params = SamplingParams(guided_decoding=guided_decoding_params)
-    outputs = llm.generate(
-        prompts="Classify this sentiment: vLLM is wonderful!",
-        sampling_params=sampling_params,
-    )
-    print(outputs[0].outputs[0].text)
+    assert "test.txt" in result.stdout
 
 
 if __name__ == "__main__":
-    ref = test_hf_qwen.remote()
+    ref = test_gcs_fuse.remote()
     try:
         ray.get(ref)
     except Exception as e:
