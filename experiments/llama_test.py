@@ -27,9 +27,36 @@ class EducationalScore(BaseModel):
     score: int
 
 
+MODEL_PATH = "/opt/gcsfuse_mount/models/HuggingFaceTB--SmolLM2-1-7B-Instruct-919c55"
+
+
 @ray.remote(resources={"TPU": 4, "TPU-v4-8-head": 1})
 def test_hf():
     """Possible way for inference but it's slow"""
+
+    result = subprocess.run(["mkdir", "/opt/gcsfuse_mount/models"], capture_output=True, text=True)
+    print(result.stdout)
+
+    result = subprocess.run(
+        ["mkdir", "/opt/gcsfuse_mount/models/HuggingFaceTB--SmolLM2-1-7B-Instruct-919c55"],
+        capture_output=True,
+        text=True,
+    )
+    print(result.stdout)
+
+    result = subprocess.run(
+        ["ls", "/opt/gcsfuse_mount/models/HuggingFaceTB--SmolLM2-1-7B-Instruct-919c55"], capture_output=True, text=True
+    )
+    print(result.stdout)
+
+    # import fsspec
+    # fs = fsspec.filesystem("gcs")
+    # # fs.mkdir("gs://marin-us-central2/gcsfuse_mount/test_dir")
+    # with fsspec.open("gs://marin-us-central2/gcsfuse_mount/test_dir/test.txt", "w") as f:
+    #     f.write("Hello, world!")
+
+    # result = subprocess.run(["ls", "/opt/gcsfuse_mount/"], capture_output=True, text=True)
+    # print(result.stdout)
 
     from vllm import LLM, SamplingParams
 
@@ -45,7 +72,7 @@ def test_hf():
 
     # Set `enforce_eager=True` to avoid ahead-of-time compilation.
     # In real workloads, `enforace_eager` should be `False`.
-    llm = LLM(model="meta-llama/Llama-3.1-8B-Instruct", enforce_eager=True, max_model_len=8192)
+    llm = LLM(model=MODEL_PATH, enforce_eager=True, max_model_len=8192)
 
     prompts = [PRESET_PROMPT.format(example=example) for example in prompts]
     outputs = llm.generate(prompts=prompts, sampling_params=sampling_params)
@@ -61,20 +88,8 @@ def test_hf():
         # assert generated_text.startswith(answer)
 
 
-@ray.remote
-def test_gcs_fuse():
-    # GCS_FUSE_BUCKET_ENV_VAR = os.environ.get("BUCKET")
-    with open("/opt/gcsfuse_mount/test.txt", "w") as f:
-        f.write("Hello, world!")
-
-    result = subprocess.run(["ls", "/opt/gcsfuse_mount"], capture_output=True, text=True)
-    print(result.stdout)
-
-    assert "test.txt" in result.stdout
-
-
 if __name__ == "__main__":
-    ref = test_gcs_fuse.remote()
+    ref = test_hf.remote()
     try:
         ray.get(ref)
     except Exception as e:
