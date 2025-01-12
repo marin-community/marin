@@ -1,5 +1,3 @@
-import subprocess
-
 import ray
 from pydantic import BaseModel
 
@@ -27,37 +25,12 @@ class EducationalScore(BaseModel):
     score: int
 
 
-MODEL_PATH = "/opt/gcsfuse_mount/models/HuggingFaceTB--SmolLM2-1-7B-Instruct-919c55"
+MODEL_PATH = "/opt/gcsfuse_mount/models/Qwen--Qwen2-5-7B-Instruct-7b83e4"
 
 
 @ray.remote(resources={"TPU": 4, "TPU-v4-8-head": 1})
 def test_hf():
     """Possible way for inference but it's slow"""
-
-    result = subprocess.run(["mkdir", "/opt/gcsfuse_mount/models"], capture_output=True, text=True)
-    print(result.stdout)
-
-    result = subprocess.run(
-        ["mkdir", "/opt/gcsfuse_mount/models/HuggingFaceTB--SmolLM2-1-7B-Instruct-919c55"],
-        capture_output=True,
-        text=True,
-    )
-    print(result.stdout)
-
-    result = subprocess.run(
-        ["ls", "/opt/gcsfuse_mount/models/HuggingFaceTB--SmolLM2-1-7B-Instruct-919c55"], capture_output=True, text=True
-    )
-    print(result.stdout)
-
-    # import fsspec
-    # fs = fsspec.filesystem("gcs")
-    # # fs.mkdir("gs://marin-us-central2/gcsfuse_mount/test_dir")
-    # with fsspec.open("gs://marin-us-central2/gcsfuse_mount/test_dir/test.txt", "w") as f:
-    #     f.write("Hello, world!")
-
-    # result = subprocess.run(["ls", "/opt/gcsfuse_mount/"], capture_output=True, text=True)
-    # print(result.stdout)
-
     from vllm import LLM, SamplingParams
 
     prompts = [
