@@ -1,6 +1,6 @@
 from experiments.defaults import SimpleTrainConfig, default_tokenize, default_train
 from experiments.evals.evals import default_eval
-from experiments.evals.task_configs import CORE_TASKS_PLUS_MMLU
+from experiments.evals.task_configs import CORE_TASKS, CORE_TASKS_PLUS_MMLU
 from experiments.llama import LlamaConfig
 from experiments.pretraining_datasets import dclm_baseline, proofpile_2, starcoderdata
 from marin.execution.executor import executor_main
@@ -103,19 +103,19 @@ dclm_baseline_only_model = default_train(
     tags=EXPERIMENT_TAG_BASELINE_ONLY,
 )
 
-dclm_mixture_eval = default_eval(step=dclm_mixture_model, evals=CORE_TASKS_PLUS_MMLU)
+dclm_mixture_eval = default_eval(step=dclm_mixture_model, evals=CORE_TASKS)
 
 dclm_baseline_only_eval = default_eval(step=dclm_baseline_only_model)
 
 if __name__ == "__main__":
     executor_main(
         steps=[
-            dclm_baseline_tokenized,
-            starcoderdata_tokenized,
-            proofpile_2_tokenized,
-            dclm_mixture_model,
-            dclm_baseline_only_model,
+            #dclm_baseline_tokenized,
+            #starcoderdata_tokenized,
+            #proofpile_2_tokenized,
+            #dclm_mixture_model,
+            #dclm_baseline_only_model,
             dclm_mixture_eval,
-            dclm_baseline_only_eval,
+            #dclm_baseline_only_eval,
         ]
     )

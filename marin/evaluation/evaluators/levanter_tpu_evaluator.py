@@ -17,7 +17,8 @@ class LevanterTpuEvaluator(Evaluator, ABC):
 
     # pip packages to install for running levanter's eval_harness on TPUs
     DEFAULT_PIP_PACKAGES: ClassVar[list[Dependency]] = [
-        Dependency(name="levanter>=1.2.dev1163"),
+        #Dependency(name="levanter>=1.2.dev1163"),
+        Dependency(name="levanter @ git+https://github.com/stanford-crfm/levanter.git@c10280a9c07189eee0ac54663f151018f920fafc"),
         Dependency(name="lm-eval @ git+https://github.com/nikil-ravi/lm-evaluation-harness.git@bpb-changes"),
     ]
 
