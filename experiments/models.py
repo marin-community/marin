@@ -61,6 +61,9 @@ def create_local_filesystem_link(model_name: str):
     # Create /opt/gcsfuse_mount/models
     subprocess.run(["mkdir", f"{LOCAL_PREFIX}/{GCS_FUSE_MOUNT_PATH}"], capture_output=True, text=True)
 
+    # TODO: Link the actual model folder to the local filesystem as well
+    # Right now it is abstracted away because no access to the hashed version
+
 
 def get_model(model_name: str) -> ExecutorStep:
     model_config = MODEL_NAME_TO_CONFIG[model_name]
