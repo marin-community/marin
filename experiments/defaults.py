@@ -44,8 +44,8 @@ from marin.processing.tokenize import (
     lm_data_config,
     tokenize,
 )
-from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 from marin.scaling_laws.scaling_law_config import ScalingLawConfig, run_scaling_law_analysis
+from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 
 
 def default_tokenize(
@@ -253,21 +253,22 @@ def _get_tokenizer_for_train(tokenized: InputName | ExecutorStep | LMMixtureData
 
     return tokenizer
 
-def default_scaling_laws(
+
+def default_scaling_law_analysis(
     ladder_runs: Sequence[ExecutorStep | InputName],
     pred_run: ExecutorStep | InputName,
     intermediate_task_loss: str = "eval/paloma/c4_en/bpb",
     task_accuracy: str = "lm_eval/hellaswag_10shot/acc",
 ):
-"""
-Use a sequence of training runs (steps) to predict the performance of a target larger model.
+    """
+    Use a sequence of training runs (steps) to predict the performance of a target larger model.
 
-Args:
-    ladder_runs (Sequence[ExecutorStep | InputName]): training runs to use as input for prediction.
-    pred_run (ExecutorStep | InputName): Training run to predict the performance of.
-    intermediate_task_loss (str): Intermediate task loss to use for scaling laws.
-    task_accuracy (str): Task accuracy to predict for the larger model.
-"""
+    Args:
+        ladder_runs (Sequence[ExecutorStep | InputName]): training runs to use as input for prediction.
+        pred_run (ExecutorStep | InputName): Training run to predict the performance of.
+        intermediate_task_loss (str): Intermediate task loss to use for scaling laws.
+        task_accuracy (str): Task accuracy to predict for the larger model.
+    """
 
     # TODO: it'd be nice to fit different curves simultaneously by supporting multiple task accuracies
     # and produce several plots and metrics over all our benchmarks. For now starting with one task.
@@ -292,9 +293,8 @@ Args:
         fn=run_scaling_law_analysis,
         config=ScalingLawConfig(
             ladder_model_steps=ladder_run_executor_steps,
-            pred_step=pred_run_step,
-            task_loss=intermediate_task_loss,
+            pred_model_step=pred_run_step,
+            intermediate_task_loss=intermediate_task_loss,
             task_accuracy=task_accuracy,
         ),
     )
-

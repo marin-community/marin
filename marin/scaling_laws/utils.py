@@ -369,6 +369,7 @@ def plot_actual_vs_predicted(
     plt.legend()
     plt.grid(True)
     plt.show()
+    plt.savefig("actual_vs_predicted.png")
 
 
 ####################################################################################################

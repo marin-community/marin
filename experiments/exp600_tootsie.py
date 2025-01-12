@@ -67,7 +67,6 @@ llama_8b_tootsie = dataclasses.replace(
     override_output_path="checkpoints/llama-8b-tootsie-0.001-19ad63",
 )
 
-
 if __name__ == "__main__":
     executor_main(
         steps=[
