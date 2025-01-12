@@ -68,15 +68,16 @@ def download_hf(cfg: DownloadConfig) -> None:
 
     # Initialize Hugging Face filesystem
     hf_fs = HfFileSystem(token=os.environ.get("HF_TOKEN", False))
+    hf_repo_name_with_prefix = os.path.join(cfg.hf_repo_type_prefix, cfg.hf_dataset_id)
 
     if not cfg.hf_urls_glob:
         # We get all the files using find
-        files = hf_fs.find(f"datasets/{cfg.hf_dataset_id}/", revision=cfg.revision)
+        files = hf_fs.find(hf_repo_name_with_prefix, revision=cfg.revision)
     else:
         # Get list of files directly from HfFileSystem matching the pattern
         files = []
         for hf_url_glob in cfg.hf_urls_glob:
-            pattern = f"datasets/{cfg.hf_dataset_id}/{hf_url_glob}"
+            pattern = os.path.join(hf_repo_name_with_prefix, hf_url_glob)
             files += hf_fs.glob(pattern, revision=cfg.revision)
 
     if not files:
