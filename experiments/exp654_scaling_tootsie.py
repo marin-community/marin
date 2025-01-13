@@ -7,7 +7,7 @@ TAG = ["654_scaling_tootsie"]
 
 suite = scaling_law_suite(sweep_name="tootsie-scaling", tokenized=dclm_mixture_config_llama3, tags=TAG)
 
-# in addition to training the 8B model, predict its performance using scaling laws
+# in addition to training the 8B model, fit scaling laws to predict its performance
 scaling_law_8b_performance_pred = default_scaling_law_analysis(
     ladder_runs=[
         *suite,

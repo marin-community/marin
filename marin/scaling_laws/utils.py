@@ -335,8 +335,8 @@ def plot_fit(actual: np.ndarray, predicted: np.ndarray, title="Power Law Fit") -
     """
     plt.figure()
     plt.scatter(actual, predicted, alpha=0.7)
-    plt.xlabel("Actual Loss")
-    plt.ylabel("Predicted Loss")
+    plt.xlabel("Actual Values")
+    plt.ylabel("Predicted Values")
     plt.title(title)
 
     # disable offset notation for the y-axis
@@ -344,6 +344,8 @@ def plot_fit(actual: np.ndarray, predicted: np.ndarray, title="Power Law Fit") -
 
     plt.grid(True)
     plt.show()
+
+    return plt
 
 
 def plot_actual_vs_predicted(
@@ -369,7 +371,8 @@ def plot_actual_vs_predicted(
     plt.legend()
     plt.grid(True)
     plt.show()
-    plt.savefig("actual_vs_predicted.png")
+
+    return plt
 
 
 ####################################################################################################
@@ -467,7 +470,7 @@ def fit_accuracy_from_task_loss(
     aggregation: str = "all",
     task_loss_col: str = "eval/paloma/c4_en/bpb",
     accuracy_col: str = "lm_eval/hellaswag_0shot/acc",
-) -> np.ndarray:
+) -> tuple[np.ndarray, np.ndarray]:
     """
     Fit a sigmoidal function to predict the accuracy from the task loss.
     Ref: https://arxiv.org/pdf/2412.04403 sec 3.2
