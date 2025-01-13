@@ -14,7 +14,7 @@ class WandbMetricsConfig:
     project: str
 
     # restrict aggregation to this many days before today
-    num_days: int | None # use None for specifying no time window (i.e, all runs are counted)
+    num_days: int | None  # use None for specifying no time window (i.e, all runs are counted)
 
 
 def get_wandb_run_metrics(
@@ -73,7 +73,9 @@ def get_wandb_run_metrics(
         return None
 
 
-def get_all_runs_over_period(num_days: int | None = None, entity="stanford-mercury", project="marin") -> list[dict[str, Any]] | None:
+def get_all_runs_over_period(
+    num_days: int | None = None, entity="stanford-mercury", project="marin"
+) -> list[dict[str, Any]] | None:
     """
     Retrieves all runs created within the past week (or given time window).
     If num_days is None, it will retrieve all runs for the project.
@@ -98,7 +100,9 @@ def get_all_runs_over_period(num_days: int | None = None, entity="stanford-mercu
         # Filter runs by update date
         if num_days is not None:
             time_window = datetime.now(timezone.utc) - timedelta(days=num_days)
-            filtered_runs = [run for run in runs if datetime.strptime(run.updated_at, "%Y-%m-%dT%H:%M:%S%z") >= time_window]
+            filtered_runs = [
+                run for run in runs if datetime.strptime(run.updated_at, "%Y-%m-%dT%H:%M:%S%z") >= time_window
+            ]
             logger.info(f"Successfully retrieved {len(filtered_runs)} runs updated in the past {num_days} days")
         else:
             filtered_runs = runs
