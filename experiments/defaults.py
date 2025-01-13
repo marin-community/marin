@@ -294,7 +294,7 @@ def default_scaling_law_analysis(
 
     return ExecutorStep(
         name=f"""scaling_laws/predictions-{pred_run_or_id if
-            isinstance(pred_run_or_id, str) else pred_run_or_id.name}-{task_accuracy}""",
+            isinstance(pred_run_or_id, str) else pred_run_or_id.name}->{task_accuracy}""",
         fn=run_scaling_law_analysis,
         config=ScalingLawConfig(
             ladder_model_steps=ladder_steps_or_ids,
