@@ -1,4 +1,5 @@
 FROM rayproject/ray:nightly.240914.bb15a3-py311-cpu
+ARG VLLM_VERSION=0.6.6.post1
 
 # Install general dependencies
 RUN sudo apt-get update && sudo apt-get install -y clang curl g++ vim libpython3.11 libpython3.11-dev docker.io cmake
@@ -42,23 +43,30 @@ RUN gcloud components install alpha
 
 RUN conda install -c conda-forge ncurses -y
 
-# pytorch is a heavy dependency, so we install it up front to try to cache it
-RUN pip install --no-cache-dir torch>=2.1 --extra-index-url https://download.pytorch.org/whl/cpu
-
+# Install Pytorch and VLLM
+RUN sudo apt update && sudo apt install unzip -y
 RUN sudo mkdir -p /opt/vllm
 RUN sudo chown -R $(whoami) /opt/vllm
-RUN cd /opt/vllm && git clone https://github.com/vllm-project/vllm.git /opt/vllm
-WORKDIR /opt/vllm/
-RUN git checkout tags/v0.5.3.post1
-RUN pip install --no-cache-dir -r requirements-tpu.txt
+RUN cd /opt/vllm && curl -sLO "https://github.com/vllm-project/vllm/archive/refs/tags/v${VLLM_VERSION}.zip" && unzip v${VLLM_VERSION}.zip
+
+WORKDIR /opt/vllm/vllm-${VLLM_VERSION}
+RUN pip uninstall torch torch-xla -y
+RUN sudo apt-get install libopenblas-base libopenmpi-dev libomp-dev -y
+
+# NOTE(chris): Instead of running pip install requirements-tpus.txt as instructed, there is some bug
+# where the current torch_xla version in the requirements-tpus.txt is not compatible with the platform (installation fails),
+# so we install the dependencies manually from the requirements-tpu.txt file.
+# This has been fixed in the new version: https://github.com/vllm-project/vllm/issues/11811#issuecomment-2575583282
+# So we should replace this to a simple pip install -r requirements-tpu.txt command when the new version is released.
+RUN pip install -r requirements-common.txt
+RUN pip install cmake>=3.26 ninja packaging setuptools-scm>=8 wheel jinja2
+RUN pip install --no-cache-dir torch_xla[tpu]@https://storage.googleapis.com/pytorch-xla-releases/wheels/tpuvm/torch_xla-2.6.0.dev20241126-cp311-cp311-linux_x86_64.whl -f https://storage.googleapis.com/libtpu-releases/index.html
+RUN pip install torchvision==0.20.0.dev20241126+cpu torch==2.6.0.dev20241126+cpu --extra-index-url https://download.pytorch.org/whl/nightly/cpu
+RUN pip install jax==0.4.36.dev20241122 jaxlib==0.4.36.dev20241122 -f https://storage.googleapis.com/jax-releases/jax_nightly_releases.html -f https://storage.googleapis.com/jax-releases/jaxlib_nightly_releases.html
 RUN VLLM_TARGET_DEVICE="tpu" python3 setup.py develop
 
-# Install vllm for TPU
-# cf https://github.com/vllm-project/vllm/blob/main/Dockerfile.tpu
-RUN pip install --no-cache-dir torch_xla[tpu] -f https://storage.googleapis.com/libtpu-releases/index.html
-RUN pip install --no-cache-dir torch_xla[pallas] -f https://storage.googleapis.com/jax-releases/jax_nightly_releases.html -f https://storage.googleapis.com/jax-releases/jaxlib_nightly_releases.html
-
-RUN pip install -U jax[tpu]==0.4.35 -f https://storage.googleapis.com/jax-releases/libtpu_releases.html
+# Install Jax for TPU usage
+RUN pip install jax[tpu]==0.4.36 -f https://storage.googleapis.com/jax-releases/libtpu_releases.html
 
 # NOTE: Try to keep as much "heavy" stuff as possible before this line to avoid re-installing
 
@@ -69,7 +77,6 @@ RUN pip install -U jax[tpu]==0.4.35 -f https://storage.googleapis.com/jax-releas
 
 # copy in the autoscaler hacks
 ENV VENV_PATH=/home/ray/anaconda3/
-ENV PYTHONPATH=$PYTHONPATH:$VENV_PATH/lib/python3.11/site-packages
 RUN sudo mkdir /opt/abhi-ray
 RUN sudo chown -R $(whoami) /opt/abhi-ray
 WORKDIR /opt/abhi-ray
@@ -84,6 +91,9 @@ RUN rm -rf ~/ray
 
 # Install updated fsspec version
 RUN pip install --no-cache-dir fsspec==2024.9.0
+
+# Install updated transformers version for OLMO
+RUN pip install transformers==4.47.0
 
 # Add /usr/lib/x86_64-linux-gnu/ to LD_LIBRARY_PATH so that bash prefers the systems
 # libtinfo.so over the conda-provided version. Using the conda-provided libtinfo.so

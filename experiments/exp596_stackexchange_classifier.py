@@ -46,9 +46,11 @@ stackexchange_qa_vote_geq_5_rm_duplicate_200k_rw_200k = ExecutorStep(
     pip_dependency_groups=["fasttext"],
 )
 
+stackexchange_experiment_config = ExperimentConfig(
+    experiment_name="stackexchange-qa-vote-geq-5-rm-duplicate-200k-rw-200k",
+    quality_classifier_model_path=stackexchange_qa_vote_geq_5_rm_duplicate_200k_rw_200k,
+)
+
 if __name__ == "__main__":
-    experiment_config = ExperimentConfig(
-        experiment_name="stackexchange-qa-vote-geq-5-rm-duplicate-200k-rw-200k",
-        quality_classifier_model_path=stackexchange_qa_vote_geq_5_rm_duplicate_200k_rw_200k,
-    )
-    executor_main(create_steps(experiment_config))
+    steps = create_steps(stackexchange_experiment_config)
+    executor_main(steps)
