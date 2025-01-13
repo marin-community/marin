@@ -106,7 +106,7 @@ def get_all_runs_over_period(
             logger.info(f"Successfully retrieved {len(filtered_runs)} runs updated in the past {num_days} days")
         else:
             filtered_runs = runs
-            logger.info(f"Successfully retrieved {len(filtered_runs)} runs since the beginning of the project")
+            logger.info(f"Successfully retrieved {len(filtered_runs)} runs since the beginning of time")
 
         return filtered_runs
 
