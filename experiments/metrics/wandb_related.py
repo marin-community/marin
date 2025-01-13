@@ -46,8 +46,12 @@ def get_wandb_run_metrics(
         for metric in metrics:
             # Retrieve the metric value for the run
             value = run.summary.get(metric, None)
+
+            # if the metric is not found or is not a valid value, set it to None
+            # A metric being None means we skip that run in the aggregation
             if value is not None:
                 if isinstance(value, str) and value.lower() == "nan":
+                    # happens when evals fail or haven't been run, typically for quickstart/test runs
                     logger.info(f"Metric '{metric}' for run {run_id} is 'NaN'. Setting to None.")
                     value = None
                 else:
