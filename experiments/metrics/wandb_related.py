@@ -12,7 +12,9 @@ logger = logging.getLogger(__name__)
 class WandbMetricsConfig:
     entity: str
     project: str
-    num_days: int  # number of days before today to get metrics for
+
+    # restrict aggregation to this many days before today
+    num_days: int | None # use None for specifying no time window (i.e, all runs are counted)
 
 
 def get_wandb_run_metrics(
@@ -91,7 +93,7 @@ def get_all_runs_over_period(num_days: int | None = None, entity="stanford-mercu
         # Fetch all runs for the project
         runs = api.runs(f"{entity}/{project}")
 
-        print(f"Found {len(runs)} runs in project {project}")
+        logger.info(f"Found {len(runs)} runs in project {project}")
 
         # Filter runs by update date
         if num_days is not None:
@@ -99,7 +101,6 @@ def get_all_runs_over_period(num_days: int | None = None, entity="stanford-mercu
             filtered_runs = [run for run in runs if datetime.strptime(run.updated_at, "%Y-%m-%dT%H:%M:%S%z") >= time_window]
             logger.info(f"Successfully retrieved {len(filtered_runs)} runs updated in the past {num_days} days")
         else:
-            print("Getting all runs")
             filtered_runs = runs
             logger.info(f"Successfully retrieved {len(filtered_runs)} runs since the beginning of the project")
 
@@ -188,8 +189,8 @@ def calculate_wandb_metrics(config: WandbMetricsConfig) -> dict[str, Any]:
     - tuple: a metrics dict and the GCS path to the metrics file.
     """
 
-    print("Calculating metrics for WandB runs...")
-    print(f"Entity: {config.entity}, Project: {config.project}, Num days: {config.num_days}")
+    logger.info("Calculating metrics for WandB runs...")
+    logger.info(f"Entity: {config.entity}, Project: {config.project}, Num days: {config.num_days}")
 
     # get all runs from past num_days
     runs = get_all_runs_over_period(num_days=config.num_days, entity=config.entity, project=config.project)
@@ -216,6 +217,9 @@ def calculate_wandb_metrics(config: WandbMetricsConfig) -> dict[str, Any]:
     # best_bpb1b_run_id, best_bpb7b_run_id = None, None
     for run_id, metrics in run_metrics.items():
         if metrics["eval/paloma/c4_en/bpb"] is not None:
+            if not isinstance(metrics["eval/paloma/c4_en/bpb"], float):
+                logger.info(f"BPB for run {run_id} is a string: {metrics['eval/paloma/c4_en/bpb']}. Skipping.")
+                continue
             num_parameters = float(metrics["parameter_count"])
             for scale_label, threshold in parameter_scales.items():
                 if num_parameters < threshold:
