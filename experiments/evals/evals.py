@@ -114,14 +114,16 @@ def evaluate_alpaca_eval(model_name: str, model_path: str) -> ExecutorStep:
 
 
 def default_eval(
-    step: ExecutorStep | InputName, evals: list[EvalTaskConfig] | None = None, max_eval_instances: int | None = None
+    step: ExecutorStep | InputName,
+    evals: list[EvalTaskConfig] | None = None,
+    max_eval_instances: int | None = None,
 ) -> ExecutorStep:
     """
     Create an ExecutorStep to evaluate the model using LM Evaluation Harness on a step.
 
     Args:
         step (ExecutorStep | InputName): step to evaluate.
-        evals (list[EvalTaskConfig]): List of evals to run- defaults to a set of CORE_TASKS.
+        evals (list[EvalTaskConfig]): List of evals to run- defaults to a set of CORE_TASKS defined in task_configs.py
         max_eval_instances (int): Maximum number of evaluation instances to run.
     """
 
@@ -138,6 +140,8 @@ def default_eval(
     # Default to CORE_TASKS
     if evals is None:
         evals = CORE_TASKS
+
+    logger.info(f"Running evals on the following tasks: {evals}")
 
     return ExecutorStep(
         name=f"evaluation/levanter_lm_evaluation_harness/{executor_step.name}",
