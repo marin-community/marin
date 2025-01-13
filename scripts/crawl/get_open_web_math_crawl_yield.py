@@ -2,26 +2,13 @@
 """
 Given a parquet file with outlinks and the crawl results, compute crawl yield statistics.
 
-Running on FineWeb-Edu:
-
-```
-python marin/run/ray_run.py \
-    --pip_deps 'warcio,w3lib' \
-    --no_wait -- \
-    python scripts/crawl/get_crawl_yield.py \
-    --urls_input_directory gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-1M/ \
-    --crawl_input_directory gs://marin-us-central2/scratch/nfliu/fetched_outlinks/fineweb-edu-1M/ \
-    --urls_and_scores_output_directory gs://marin-us-central2/scratch/nfliu/urls_and_scores/fineweb-edu-1M/ \
-    --statistics_output_path gs://marin-us-central2/scratch/nfliu/fetched_outlinks/fineweb-edu-1M/yield_statistics.json
-```
-
 Running on OpenWebMath:
 
 ```
 python marin/run/ray_run.py \
     --pip_deps 'resiliparse,fasttext,lxml,py-asciimath,tabulate,warcio,w3lib' \
     --no_wait -- \
-    python scripts/crawl/get_crawl_yield.py \
+    python scripts/crawl/get_open_web_math_crawl_yield.py \
     --urls_input_directory gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-1M/ \
     --crawl_input_directory gs://marin-us-central2/scratch/nfliu/fetched_outlinks/open-web-math-fde8ef8-1M/ \
     --urls_and_scores_output_directory gs://marin-us-central2/scratch/nfliu/urls_and_scores/open-web-math-fde8ef8-1M/ \
@@ -133,7 +120,9 @@ def get_shard_yield(
     mathscore_model = FasttextClassifier(model_name="open-web-math/filtering-models", attribute_name="")
     logger.info("Loaded mathscore model")
 
-    randomized_config = OpenWebMathConfig(os.path.join(os.path.dirname(__file__), "configs", "randomized_all.yaml"))
+    randomized_config = OpenWebMathConfig(
+        os.path.join(os.path.dirname(__file__), os.path.pardir, "open-web-math", "configs", "randomized_all.yaml")
+    )
 
     fetched_urls = set()
     num_records_skipped = 0
