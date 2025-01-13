@@ -1,7 +1,5 @@
 from experiments.defaults import default_scaling_law_analysis
-from experiments.exp600_tootsie import dclm_mixture_config_llama3, llama_8b_tootsie
 from marin.execution.executor import executor_main
-from marin.training.scaling_laws import scaling_law_suite
 
 RUNS = [
     "tootsie-scaling-512-81c36c",
@@ -17,7 +15,7 @@ scaling_law_8b_performance_pred = default_scaling_law_analysis(
     ladder_runs=RUNS,
     pred_run=PRED_RUN,
     intermediate_task_loss="eval/paloma/c4_en/bpb",
-    task_accuracy="lm_eval/hellaswag_0shot/acc",
+    task_accuracy="lm_eval/hellaswag_10shot/acc",
 )
 
 if __name__ == "__main__":

@@ -3,7 +3,6 @@ from dataclasses import dataclass
 import wandb
 
 from marin.execution.executor import ExecutorStep
-from marin.scaling_laws.utils import plot_actual_vs_predicted, plot_fit
 
 
 @dataclass(frozen=True)
@@ -128,7 +127,8 @@ def log_and_create_report(
     run = wandb.init(
         project=wandb_project,
         entity=wandb_entity,
-        name=f"Scaling Law Report: {pred_run_id}",
+        name=f"""Scaling Law Report: {scaling_law_config.intermediate_task_loss}
+            ->{scaling_law_config.task_accuracy}-{pred_run_id}""",
         tags=["scaling_laws"],
         config={
             "input_runs": input_run_ids,
@@ -137,34 +137,50 @@ def log_and_create_report(
         reinit=True,
     )
 
-    # Task Loss Comparison Plot
-    task_loss_plot = plot_actual_vs_predicted(
-        actual_loss, predicted_loss, title=f"Prediction on larger run using {len(input_run_ids)} smaller models"
-    )
-    wandb.log({"Task Loss Comparison": wandb.Image(task_loss_plot)})
+    # Create two tables: one for task loss and one for task accuracy
+    task_loss_table = wandb.Table(columns=["Step", "Actual", "Predicted"])
+    for step, (act_loss, pred_loss) in enumerate(zip(actual_loss, predicted_loss, strict=False)):
+        task_loss_table.add_data(step, act_loss, pred_loss)
 
-    # Task Loss fit plot
-    task_loss_fit_plot = plot_fit(
-        actual_loss, predicted_loss, title=f"Prediction on larger run using {len(input_run_ids)} smaller models"
-    )
-    wandb.log({"Task Loss Fit": wandb.Image(task_loss_fit_plot)})
+    task_accuracy_table = wandb.Table(columns=["Step", "Actual", "Predicted"])
+    for step, (act_acc, pred_acc) in enumerate(zip(actual_acc, predicted_acc, strict=False)):
+        task_accuracy_table.add_data(step, act_acc, pred_acc)
 
-    # Task Accuracy Comparison Plot
-    task_accuracy_plot = plot_actual_vs_predicted(
-        actual_acc,
-        predicted_acc,
-        title=f"Prediction on larger run using {len(input_run_ids)} smaller models",
-        task_metric=scaling_law_config.task_accuracy,
+    # Log scatter plots (Actual vs. Predicted)
+    wandb.log(
+        {
+            "Task Loss Scatter": wandb.plot.scatter(
+                task_loss_table,
+                x="Actual",
+                y="Predicted",
+                title="Task Loss: Actual vs Predicted",
+            ),
+            "Task Accuracy Scatter": wandb.plot.scatter(
+                task_accuracy_table,
+                x="Actual",
+                y="Predicted",
+                title="Task Accuracy: Actual vs Predicted",
+            ),
+        }
     )
-    wandb.log({"Task Accuracy Comparison": wandb.Image(task_accuracy_plot)})
 
-    # Task Accuracy fit plot
-    task_accuracy_fit_plot = plot_fit(
-        actual_acc,
-        predicted_acc,
-        title=f"Prediction on larger run using {len(input_run_ids)} smaller models",
+    # Log line plots (Actual and Predicted vs. Step)
+    wandb.log(
+        {
+            "Task Loss Line": wandb.plot.line(
+                task_loss_table,
+                x="Step",
+                y=["Actual", "Predicted"],
+                title="Task Loss: Actual and Predicted vs Step",
+            ),
+            "Task Accuracy Line": wandb.plot.line(
+                task_accuracy_table,
+                x="Step",
+                y=["Actual", "Predicted"],
+                title="Task Accuracy: Actual and Predicted vs Step",
+            ),
+        }
     )
-    wandb.log({"Task Accuracy Fit": wandb.Image(task_accuracy_fit_plot)})
 
     # Info about runs and links
     input_run_links = [f"https://wandb.ai/stanford-mercury/marin/runs/{run_id}" for run_id in input_run_ids]
