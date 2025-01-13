@@ -496,6 +496,24 @@ def fit_accuracy_from_task_loss(
     ladder_df_filtered = filter_zero_d(ladder_df, tokens_col)
     ladder_df_agg = aggregate_steps(ladder_df_filtered, step_mode=aggregation)
 
+    # TODO:
+    # in the paper they mention "To smoothen the noise, we apply a moving average
+    # on the task loss and task accuracy over all checkpoints of each training run,
+    # with a window size of 5. We also discard the checkpoints
+    # from the first 10% of each training run as these are quite noisy,
+    # and add an extra data point (L = 0.0, Acc = 1.0)" and other tweaks."
+
+    # add an extra data point (L = 0.0, Acc = 1.0)
+    # make a copy of the last row and set the task loss to 0.0 and accuracy to 1.0
+    new_row = ladder_df_agg.iloc[-1].copy()
+    new_row[task_loss_col] = 0.0
+    new_row[accuracy_col] = 1.0
+
+    print("Adding an extra data point:")
+    print(new_row)
+    ladder_df_agg = pd.concat([ladder_df_agg, pd.DataFrame([new_row])], ignore_index=True)
+    print(ladder_df_agg.tail())
+
     # get the data for the run we want to predict on
     pred_df = pull_metrics_from_wandb(
         runs=[pred_run],
@@ -514,13 +532,6 @@ def fit_accuracy_from_task_loss(
 
     # get accuracies on "training" data-points
     acc = ladder_df_agg[accuracy_col].values
-
-    # TODO:
-    # in the paper they mention "To smoothen the noise, we apply a moving average
-    # on the task loss and task accuracy over all checkpoints of each training run,
-    # with a window size of 5. We also discard the checkpoints
-    # from the first 10% of each training run as these are quite noisy,
-    # and add an extra data point (L = 0.0, Acc = 1.0)" and other tweaks."
 
     # fit the sigmoidal model
     params = fit_sigmoidal(task_losses, acc)
