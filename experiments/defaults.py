@@ -44,7 +44,7 @@ from marin.processing.tokenize import (
     lm_data_config,
     tokenize,
 )
-from marin.scaling_laws.scaling_law_config import ScalingLawConfig, run_scaling_law_analysis
+from marin.scaling_laws.scaling_laws import ScalingLawConfig, run_scaling_law_analysis
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 
 
