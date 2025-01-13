@@ -508,14 +508,14 @@ def fit_accuracy_from_task_loss(
 
     # add an extra data point (L = 0.0, Acc = 1.0)
     # make a copy of the last row and set the task loss to 0.0 and accuracy to 1.0
-    new_row = ladder_df_agg.iloc[-1].copy()
-    new_row[task_loss_col] = 0.0
-    new_row[accuracy_col] = 1.0
+    # new_row = ladder_df_agg.iloc[-1].copy()
+    # new_row[task_loss_col] = 0.0
+    # new_row[accuracy_col] = 1.0
 
-    print("Adding an extra data point:")
-    print(new_row)
-    ladder_df_agg = pd.concat([ladder_df_agg, pd.DataFrame([new_row])], ignore_index=True)
-    print(ladder_df_agg.tail())
+    # print("Adding an extra data point:")
+    # print(new_row)
+    # ladder_df_agg = pd.concat([ladder_df_agg, pd.DataFrame([new_row])], ignore_index=True)
+    # print(ladder_df_agg.tail())
 
     # get the data for the run we want to predict on
     pred_df = pull_metrics_from_wandb(
