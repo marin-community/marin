@@ -255,8 +255,8 @@ def _get_tokenizer_for_train(tokenized: InputName | ExecutorStep | LMMixtureData
 
 
 def default_scaling_law_analysis(
-    ladder_runs: Sequence[ExecutorStep | InputName],
-    pred_run: ExecutorStep | InputName,
+    ladder_runs: Sequence[ExecutorStep | InputName | str],
+    pred_run: ExecutorStep | InputName | str,
     intermediate_task_loss: str = "eval/paloma/c4_en/bpb",
     task_accuracy: str = "lm_eval/hellaswag_10shot/acc",
 ):
@@ -264,8 +264,8 @@ def default_scaling_law_analysis(
     Use a sequence of training runs (steps) to predict the performance of a target larger model.
 
     Args:
-        ladder_runs (Sequence[ExecutorStep | InputName]): training runs to use as input for prediction.
-        pred_run (ExecutorStep | InputName): Training run to predict the performance of.
+        ladder_runs (Sequence[ExecutorStep | InputName | str]): training runs to use as input for prediction.
+        pred_run (ExecutorStep | InputName | str): Training run to predict the performance of.
         intermediate_task_loss (str): Intermediate task loss to use for scaling laws.
         task_accuracy (str): Task accuracy to predict for the larger model.
     """
@@ -274,26 +274,31 @@ def default_scaling_law_analysis(
     # and produce several plots and metrics over all our benchmarks. For now starting with one task.
 
     # get the executor steps for the ladder runs
-    ladder_run_executor_steps = []
-    for step in ladder_runs:
-        if isinstance(step, ExecutorStep):
-            executor_step = step
-        elif isinstance(step, InputName):
-            executor_step = step.step
-        ladder_run_executor_steps.append(executor_step)
+    ladder_steps_or_ids = []
+    for run in ladder_runs:
+        if isinstance(run, ExecutorStep):
+            run_step_or_id = run
+        elif isinstance(run, InputName):
+            run_step_or_id = run.step
+        else:
+            run_step_or_id = str(run)
+        ladder_steps_or_ids.append(run_step_or_id)
 
     # get the executor step for the prediction run
     if isinstance(pred_run, ExecutorStep):
-        pred_run_step = pred_run
+        pred_run_or_id = pred_run
     elif isinstance(pred_run, InputName):
-        pred_run_step = pred_run.step
+        pred_run_or_id = pred_run.step
+    else:
+        pred_run_or_id = str(pred_run)
 
     return ExecutorStep(
-        name=f"scaling_laws/predictions-{pred_run_step.name}",
+        name=f"""scaling_laws/predictions-{pred_run_or_id if
+            isinstance(pred_run_or_id, str) else pred_run_or_id.name}-{task_accuracy}""",
         fn=run_scaling_law_analysis,
         config=ScalingLawConfig(
-            ladder_model_steps=ladder_run_executor_steps,
-            pred_model_step=pred_run_step,
+            ladder_model_steps=ladder_steps_or_ids,
+            pred_model_step=pred_run_or_id,
             intermediate_task_loss=intermediate_task_loss,
             task_accuracy=task_accuracy,
         ),
