@@ -179,7 +179,7 @@ def extract_text_from_warc(
 )
 @remove_tpu_lockfile_on_exit
 @cached_or_construct_output(success_suffix="SUCCESS", verbose=False)
-def process_one_batch(input_path: str, output_path: str):
+def get_shard_quality_classifier_scores(input_path: str, output_path: str):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
     logger.info("Loading quality classifier...")
@@ -210,21 +210,19 @@ def process_one_batch(input_path: str, output_path: str):
     assert len(examples_scores) == len(examples_to_classify)
     logger.info(f"Ran quality classifier on {len(examples_to_classify)} examples")
 
-    with fsspec.open(output_path, "w", compression="gzip") as fout:
-        for (
-            example,
-            example_score,
-        ) in zip(examples_to_classify, examples_scores):
-            fout.write(
-                json.dumps(
-                    {
-                        "url": example["url"],
-                        "canonicalized_url": example["canonicalized_url"],
-                        "score": example_score,
-                    }
-                )
-                + "\n"
-            )
+    output_records = []
+    for (
+        example,
+        example_score,
+    ) in zip(examples_to_classify, examples_scores):
+        output_records.append(
+            {
+                "url": example["url"],
+                "canonicalized_url": example["canonicalized_url"],
+                "score": example_score,
+            }
+        )
+    write_examples_to_parquet(output_records, output_path)
 
 
 def write_examples_to_parquet(examples: list[dict], output_path: str):
@@ -288,7 +286,7 @@ def main(cfg: GetCrawlYieldConfig):
         urls_and_scores_output_path = os.path.join(
             cfg.urls_and_scores_output_directory, f"links.{shard_index}_urls_and_scores.parquet"
         )
-        unfinished.append(process_one_batch.remote(extracted_text_path, urls_and_scores_output_path))
+        unfinished.append(get_shard_quality_classifier_scores.remote(extracted_text_path, urls_and_scores_output_path))
     # Wait for text extraction jobs to finish
     total_urls_passing = 0
     while unfinished:
