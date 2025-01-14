@@ -7,7 +7,9 @@ from ray import ObjectRef
 
 from marin.execution.executor_step_status import (
     STATUS_FAILED,
+    STATUS_RUNNING,
     STATUS_SUCCESS,
+    STATUS_WAITING,
     ExecutorStepEvent,
     append_status_event,
     get_status_path,
@@ -119,7 +121,20 @@ class StatusActor:
         then we return that. Otherwise, return None."""
 
         if output_path in self.value_to_status_reference:
-            return self.value_to_status_reference[output_path][0]
+            status = self.value_to_status_reference[output_path][0]
+            if status == STATUS_RUNNING or status == STATUS_WAITING:
+                # Verify if this is still running and was not stopped by ray job API or any other way
+                # There must be a task_id with lock
+                task_id = self.lock_output_path_to_task_id[output_path]
+                task_state = ray.util.state.get_task(task_id)
+                if task_state.state == "FAILED":
+                    self.update_status(
+                        output_path, STATUS_FAILED, message="Task was stopped by ray API", ray_task_id=task_id
+                    )
+                    self.release_lock(output_path)
+                    return STATUS_FAILED
+            return status
+
         else:
             status_path = get_status_path(output_path)
             events = read_events(status_path)
