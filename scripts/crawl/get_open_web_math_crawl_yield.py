@@ -12,7 +12,7 @@ python marin/run/ray_run.py \
     --urls_input_directory gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-1M/ \
     --crawl_input_directory gs://marin-us-central2/scratch/nfliu/fetched_outlinks/open-web-math-fde8ef8-1M/ \
     --urls_and_scores_output_directory gs://marin-us-central2/scratch/nfliu/urls_and_scores/open-web-math-fde8ef8-1M/ \
-    --statistics_output_path gs://marin-us-central2/scratch/nfliu/fetched_outlinks/open-web-math-fde8ef8-1M/yield_statistics.json
+    --statistics_output_path gs://marin-us-central2/scratch/nfliu/fetched_outlinks/open-web-math-fde8ef8-1M/yield_statistics.json.gz
 ```
 """
 import json
@@ -260,7 +260,7 @@ def main(cfg: GetCrawlYieldConfig):
         f"Total URLs fetched: {total_urls_fetched}\n"
         f"Total URLs passing: {total_urls_passing}\n"
     )
-    with fsspec.open(warc_path, "w", compression="gzip") as fout:
+    with fsspec.open(cfg.statistics_output_path, "w", compression="gzip") as fout:
         json.dump(
             {
                 "total_urls": total_urls,
