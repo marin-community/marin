@@ -6,7 +6,7 @@ Running on OpenWebMath:
 
 ```
 python marin/run/ray_run.py \
-    --pip_deps 'resiliparse,fasttext,lxml,py-asciimath,tabulate,warcio,w3lib' \
+    --pip_deps 'resiliparse,fasttext,lxml,py-asciimath,tabulate,warcio[all],w3lib' \
     --no_wait -- \
     python scripts/crawl/get_open_web_math_crawl_yield.py \
     --urls_input_directory gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-1M/ \
@@ -37,7 +37,7 @@ from marin.processing.classification.classifier import FasttextClassifier
 from marin.processing.open_web_math.extract import extract_text
 from marin.processing.open_web_math.text_normalizer import normalize
 from marin.processing.open_web_math.utils import Config as OpenWebMathConfig
-from marin.utils import fsspec_glob, fsspec_rm
+from marin.utils import fsspec_exists, fsspec_glob, fsspec_rm
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -105,6 +105,9 @@ def get_shard_yield(
     urls_path: str, warc_path: str, robots_path: str, errors_path: str, urls_and_scores_output_path: str
 ):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+    success_path = urls_and_scores_output_path + ".SUCCESS"
+    if fsspec_exists(success_path):
+        logger.info(f"Success path {success_path} already exists, skipping...")
 
     with fsspec.open(urls_path) as f:
         df = pd.read_parquet(f)
@@ -182,6 +185,17 @@ def get_shard_yield(
     # Write examples from this shard to parquet
     write_examples_to_parquet(urls_with_scores, urls_and_scores_output_path)
     logger.info(f"Saved {num_records_saved} records from WARC, skipped {num_records_skipped} records")
+
+    with fsspec.open(success_path, "w") as fout:
+        json.dump(
+            {
+                "total_urls": len(urls),
+                "total_urls_fetched": len(fetched_urls),
+                "total_urls_passing": num_records_passing,
+            },
+            fout,
+        )
+
     return (
         len(urls),
         len(fetched_urls),
