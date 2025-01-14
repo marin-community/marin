@@ -34,26 +34,25 @@ from marin.processing.tokenize import (
 )
 
 TAG = "702_targeted_curriculum"
-
-stage = "stage1"
+USER = "suhas"
 
 def tokenize_train_validation(
     train_files : list[str],
     validation_files : list[str],
     name : str,
+    text_key : str = "text",
 ) -> ExecutorStep:
-    BASE_DIR_DOLMA = "gs://marin-us-central2/raw/dolma/v1.7"
 
     tokenizer_config = TokenizeConfig(
-        train_paths=versioned([f"{BASE_DIR_DOLMA}/{file}" for file in train_files]),
-        validation_paths=versioned([f"{BASE_DIR_DOLMA}/{file}" for file in validation_files]),
+        train_paths=versioned([f"{file}" for file in train_files]),
+        validation_paths=versioned([f"{file}" for file in validation_files]),
         cache_path=this_output_path(),
         tokenizer=versioned(llama3_tokenizer),
-        text_key="text",
+        text_key=text_key,
     )
 
     return ExecutorStep(
-        name=os.path.join("tokenized", f"{name}_{stage}"),
+        name=os.path.join("tokenized", "suhas", f"{name}"),
         description=f"Tokenize raw text using the llama3_tokenizer (with manual validation set).",
         fn=tokenize,
         config=tokenizer_config,
@@ -72,7 +71,14 @@ def train_executor_step(
     steps_per_eval : int,
     steps_per_export : int,
     tpu_type : str,
+    optimizer_config : AdamConfig = None,
 ) -> ExecutorStep:
+    
+    if optimizer_config is None:
+        optimizer_config = AdamConfig(
+            learning_rate=learning_rate,
+            weight_decay=weight_decay,
+        )
 
     train_config = TrainLmOnPodConfig(
         output_path=this_output_path(),
@@ -82,7 +88,7 @@ def train_executor_step(
         supervised_data=evaluation_data,
         trainer=TrainerConfig(
             tracker=WandbConfig(
-                project="marin",
+                project="suhas-curriculum",
                 tags=[name, TAG],
             ),
             mp=jmp.get_policy("p=f32,c=bfloat16"),
@@ -97,10 +103,7 @@ def train_executor_step(
         ),
         z_loss_weight=None,
         model=model,
-        optimizer=AdamConfig(
-            learning_rate=learning_rate,
-            weight_decay=weight_decay,
-        ),
+        optimizer=optimizer_config,
         hf_save_steps=steps_per_export,
         data_seed=42,
         initialize_from_checkpoint_path=model_checkpoint,
@@ -108,7 +111,7 @@ def train_executor_step(
         eval_harness=None, # TODO: add eval harness
     )
 
-    executor_step_name = os.path.join("checkpoints", name[:64])
+    executor_step_name = os.path.join("checkpoints", USER, name[:64])
 
     return ExecutorStep(
         name=executor_step_name,
