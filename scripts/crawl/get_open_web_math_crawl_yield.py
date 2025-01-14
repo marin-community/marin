@@ -252,9 +252,9 @@ def main(cfg: GetCrawlYieldConfig):
                 total_urls += shard_urls
                 total_urls_fetched += shard_urls_fetched
                 total_urls_passing += shard_urls_passing
-
         except Exception as e:
             logger.exception(f"Error processing shard: {e}")
+            raise
     logger.info(
         f"Total URLs: {total_urls}\n"
         f"Total URLs fetched: {total_urls_fetched}\n"
