@@ -112,6 +112,7 @@ def fetch_to_warc(urls: list[str], warc_output_path: str, robots_output_path: st
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     domains_to_robots: dict[str, str] = {}
     fetch_errors: dict[str, str] = {}
+    robots_fetch_errors: dict[str, str] = {}
 
     warc_buffer = io.BytesIO()
 
@@ -124,15 +125,22 @@ def fetch_to_warc(urls: list[str], warc_output_path: str, robots_output_path: st
             url_domain = parsed_url.netloc
 
             if url_domain not in domains_to_robots:
+                if robots_url in robots_fetch_errors:
+                    logger.info(f"Already (unsuccessfully) tried getting robots url {robots_url}, skipping")
                 # Construct the robots.txt URL
                 base_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
                 robots_url = f"{base_url}/robots.txt"
 
                 logger.info(f"Getting robots.txt: {robots_url}")
                 robots_response, _ = fetch_url(session, robots_url)
-                if robots_response is not None:
+                if robots_response is None:
+                    if err:
+                        robots_fetch_errors[robots_url] = err
+                else:
                     logger.info(f"Got robots.txt for {robots_url}")
                     domains_to_robots[url_domain] = robots_response.text
+            else:
+                logger.info(f"Already got robots.txt for {robots_url}, skipping...")
 
             logger.info(f"Processing: {url}")
             response, err = fetch_url(session, url)
