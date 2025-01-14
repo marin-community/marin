@@ -25,6 +25,7 @@ python marin/run/ray_run.py \
     --output_directory gs://marin-us-central2/scratch/nfliu/fetched_outlinks/open-web-math-fde8ef8-1M/
 ```
 """
+from collections import Counter
 import io
 import json
 import logging
@@ -42,6 +43,7 @@ import requests
 from tqdm_loggable.auto import tqdm
 from warcio.statusandheaders import StatusAndHeaders
 from warcio.warcwriter import WARCWriter
+import requests
 
 from marin.utils import fsspec_exists, fsspec_glob
 
@@ -49,15 +51,22 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 
-def fetch_url(session: requests.Session, url: str) -> tuple[requests.Response, None] | tuple[None, str]:
+def fetch_url(
+    session: requests.Session, url: str, timeout: float = 30
+) -> tuple[requests.Response, None, bool] | tuple[None, str, bool]:
     """Fetch the content of a URL."""
     try:
-        response = session.get(url, timeout=30)
+        response = session.get(url, timeout=timeout)
         response.raise_for_status()
-        return response, None
+        return response, None, False
+    except requests.exceptions.HTTPError as e:
+        # We got a response from the server, so the domain is reachable.
+        # This is not a "connection" failure—just an HTTP error (e.g. 404).
+        return None, str(e), False
     except Exception as e:
-        logger.info(f"Failed to fetch {url}: {e}")
-        return None, str(e)
+        # Catchall all other errors (SSL, etc.) are connection errors
+        # This means the domain was not reachable at all (DNS, connect, etc.)
+        return None, str(e), True
 
 
 @dataclass
@@ -66,7 +75,7 @@ class FetchLinksConfig:
     output_directory: str
 
 
-@ray.remote(memory=8 * 1024 * 1024 * 1024)
+@ray.remote(memory=64 * 1024 * 1024 * 1024)
 def fetch_links(urls_path: str, warc_output_path: str, robots_output_path: str, errors_output_path: str):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     success_path = warc_output_path + ".SUCCESS"
@@ -108,8 +117,25 @@ def fetch_links(urls_path: str, warc_output_path: str, robots_output_path: str, 
     )
 
 
+def decreasing_timeout(
+    base_timeout: float = 10.0, failures: int = 0, factor: float = 2.0, min_timeout: float = 1.0
+) -> float:
+    """
+    The more failures a domain has, the smaller the timeout we allow.
+    For example:
+        - If failures = 0, timeout = base_timeout (e.g. 10).
+        - If failures = 1, timeout = base_timeout / factor (e.g. 5).
+        - If failures = 2, timeout = base_timeout / factor^2 (e.g. 2.5).
+        - ... and so on.
+    We clamp the final value so it doesn't go below min_timeout.
+    """
+    timeout = base_timeout / (factor**failures)
+    return max(timeout, min_timeout)
+
+
 def fetch_to_warc(urls: list[str], warc_output_path: str, robots_output_path: str, errors_output_path: str):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+    domain_failure_counts: dict[str, int] = Counter()
     domains_to_robots: dict[str, str] = {}
     fetch_errors: dict[str, str] = {}
     robots_fetch_errors: dict[str, str] = {}
@@ -124,6 +150,12 @@ def fetch_to_warc(urls: list[str], warc_output_path: str, robots_output_path: st
             parsed_url = urlparse(url)
             url_domain = parsed_url.netloc
 
+            # Decide how small the timeout should be now
+            num_domain_failures = domain_failure_counts[url_domain]
+            current_timeout = decreasing_timeout(
+                base_timeout=10.0, failures=num_domain_failures, factor=2.0, min_timeout=1.0
+            )
+
             # Get the robots.txt
             if url_domain not in domains_to_robots:
                 # Construct the robots.txt URL
@@ -133,10 +165,14 @@ def fetch_to_warc(urls: list[str], warc_output_path: str, robots_output_path: st
                     logger.info(f"Already (unsuccessfully) tried getting robots url {robots_url}, skipping")
                 else:
                     logger.info(f"Getting robots.txt: {robots_url}")
-                    robots_response, robots_err = fetch_url(session, robots_url)
+                    robots_response, robots_err, robots_is_connection_err = fetch_url(
+                        session, robots_url, current_timeout
+                    )
                     if robots_response is None:
                         if robots_err:
                             robots_fetch_errors[robots_url] = robots_err
+                            if robots_is_connection_err:
+                                domain_failure_counts[url_domain] += 1
                     else:
                         logger.info(f"Got robots.txt for {robots_url}")
                         domains_to_robots[url_domain] = robots_response.text
@@ -144,11 +180,18 @@ def fetch_to_warc(urls: list[str], warc_output_path: str, robots_output_path: st
                 logger.info(f"Already got robots.txt for {robots_url}, skipping...")
 
             logger.info(f"Processing: {url}")
-            response, err = fetch_url(session, url)
+            response, err, is_connection_err = fetch_url(session, url, current_timeout)
             if response is None:
                 if err:
                     fetch_errors[url] = err
+                if is_connection_err:
+                    domain_failure_counts[url_domain] += 1
                 continue
+            else:
+                # If it succeeded (or even if it was a 404 from the server),
+                # we consider that "reachable" so we reset the counter:
+                domain_failure_counts[url_domain] = 0
+
             # Prepare HTTP headers for WARC
             http_headers = []
             status_line = f"{response.status_code} {response.reason}"
