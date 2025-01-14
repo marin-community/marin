@@ -1,3 +1,4 @@
+import os
 import subprocess
 from dataclasses import dataclass
 
@@ -29,6 +30,10 @@ MODEL_NAME_TO_CONFIG = {
         hf_repo_id="Qwen/Qwen2.5-7B-Instruct",
         hf_revision="a09a354",
     ),
+    "Qwen/Qwen2.5-72B-Instruct": ModelConfig(
+        hf_repo_id="Qwen/Qwen2.5-72B-Instruct",
+        hf_revision="495f393",
+    ),
 }
 
 
@@ -44,6 +49,9 @@ def download_model_step(model_config: ModelConfig) -> ExecutorStep:
             wait_for_completion=True,
             hf_repo_type_prefix="",
         ),
+        # We have to override the output path or else there will be a hash at the end, because of the hash,
+        # this means that we won't know how to call mkdir in the next step below.
+        override_output_path=f"{GCS_FUSE_MOUNT_PATH}/{model_name}",
     )
     # While the above operation downloads the model to the GCS, the model
     # is not available on the local filesystem since GCS does not handle
@@ -63,16 +71,16 @@ def create_local_filesystem_link(model_name: str):
 
     # TODO: Link the actual model folder to the local filesystem as well
     # Right now it is abstracted away because no access to the hashed version
+    subprocess.run(["mkdir", f"{LOCAL_PREFIX}/{GCS_FUSE_MOUNT_PATH}/{model_name}"], capture_output=True, text=True)
 
 
-def get_model(model_name: str) -> ExecutorStep:
-    model_config = MODEL_NAME_TO_CONFIG[model_name]
-    download_step = download_model_step(model_config)
-    return download_step
+def get_model_local_path(model_name: str) -> str:
+    step = download_model_step(MODEL_NAME_TO_CONFIG[model_name])
+    return os.path.join(LOCAL_PREFIX, step.name)
 
 
 if __name__ == "__main__":
     steps = []
     for model_name in MODEL_NAME_TO_CONFIG.keys():
-        steps.append(get_model(model_name))
+        steps.append(download_model_step(MODEL_NAME_TO_CONFIG[model_name]))
     executor_main(steps)
