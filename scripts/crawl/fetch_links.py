@@ -124,21 +124,22 @@ def fetch_to_warc(urls: list[str], warc_output_path: str, robots_output_path: st
             parsed_url = urlparse(url)
             url_domain = parsed_url.netloc
 
+            # Get the robots.txt
             if url_domain not in domains_to_robots:
-                if robots_url in robots_fetch_errors:
-                    logger.info(f"Already (unsuccessfully) tried getting robots url {robots_url}, skipping")
                 # Construct the robots.txt URL
                 base_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
                 robots_url = f"{base_url}/robots.txt"
-
-                logger.info(f"Getting robots.txt: {robots_url}")
-                robots_response, _ = fetch_url(session, robots_url)
-                if robots_response is None:
-                    if err:
-                        robots_fetch_errors[robots_url] = err
+                if robots_url in robots_fetch_errors:
+                    logger.info(f"Already (unsuccessfully) tried getting robots url {robots_url}, skipping")
                 else:
-                    logger.info(f"Got robots.txt for {robots_url}")
-                    domains_to_robots[url_domain] = robots_response.text
+                    logger.info(f"Getting robots.txt: {robots_url}")
+                    robots_response, _ = fetch_url(session, robots_url)
+                    if robots_response is None:
+                        if err:
+                            robots_fetch_errors[robots_url] = err
+                    else:
+                        logger.info(f"Got robots.txt for {robots_url}")
+                        domains_to_robots[url_domain] = robots_response.text
             else:
                 logger.info(f"Already got robots.txt for {robots_url}, skipping...")
 
@@ -228,6 +229,7 @@ def main(cfg: FetchLinksConfig):
             _ = ray.get(finished)
         except Exception as e:
             logger.exception(f"Error processing shard: {e}")
+            raise
 
         # If we have more shard paths left to process and we haven't hit the max
         # number of concurrent tasks, add tasks to the unfinished queue.
