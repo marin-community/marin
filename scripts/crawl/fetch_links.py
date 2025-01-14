@@ -133,10 +133,10 @@ def fetch_to_warc(urls: list[str], warc_output_path: str, robots_output_path: st
                     logger.info(f"Already (unsuccessfully) tried getting robots url {robots_url}, skipping")
                 else:
                     logger.info(f"Getting robots.txt: {robots_url}")
-                    robots_response, _ = fetch_url(session, robots_url)
+                    robots_response, robots_err = fetch_url(session, robots_url)
                     if robots_response is None:
-                        if err:
-                            robots_fetch_errors[robots_url] = err
+                        if robots_err:
+                            robots_fetch_errors[robots_url] = robots_err
                     else:
                         logger.info(f"Got robots.txt for {robots_url}")
                         domains_to_robots[url_domain] = robots_response.text
