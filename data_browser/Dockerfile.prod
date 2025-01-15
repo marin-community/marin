@@ -24,8 +24,10 @@ WORKDIR /app
 COPY --from=python-builder /usr/local/lib/python3.12/site-packages/ /usr/local/lib/python3.12/site-packages/
 COPY --from=frontend-builder /app/build ./build
 COPY server.py .
+COPY wsgi.py .
 COPY conf ./conf
 
 ENV DEV=false
 
-CMD ["gunicorn", "--bind", "0.0.0.0:80", "--workers", "1", "server:app", "--", "--config", "conf/gcp.conf"]
+ENTRYPOINT ["python", "-m", "gunicorn", "--bind", "0.0.0.0:80", "--workers", "1", "wsgi:application"]
+
