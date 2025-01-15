@@ -285,7 +285,7 @@ def main(cfg: GetCrawlYieldConfig):
             cfg.urls_and_scores_output_directory, f"links.{shard_index}_urls_and_scores.parquet"
         )
         unfinished.append(get_shard_quality_classifier_scores.remote(extracted_text_path, urls_and_scores_output_path))
-    # Wait for text extraction jobs to finish
+    # Wait for quality classification jobs to finish
     total_urls_passing = 0
     while unfinished:
         finished, unfinished = ray.wait(unfinished, num_returns=len(unfinished), timeout=5)
