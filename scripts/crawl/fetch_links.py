@@ -151,13 +151,13 @@ def fetch_links(urls_path: str, warc_output_path: str, robots_output_path: str, 
 
 
 def decreasing_timeout(
-    base_timeout: float = 10.0, failures: int = 0, factor: float = 2.0, min_timeout: float = 1.0
+    base_timeout: float = 30.0, failures: int = 0, factor: float = 2.0, min_timeout: float = 1.0
 ) -> float:
     """
     The more failures a domain has, the smaller the timeout we allow.
     We clamp the final value so it doesn't go below min_timeout.
     """
-    timeout = base_timeout / (factor ** min(failures / 4, 4))
+    timeout = base_timeout / (factor ** min(failures / 5, 5))
     return max(timeout, min_timeout)
 
 
@@ -181,7 +181,7 @@ def fetch_to_warc(urls: list[str], warc_output_path: str, robots_output_path: st
             # Decide how small the timeout should be now
             num_domain_failures = domain_failure_counts[url_domain]
             current_timeout = decreasing_timeout(
-                base_timeout=10.0, failures=num_domain_failures, factor=2.0, min_timeout=1.0
+                base_timeout=30.0, failures=num_domain_failures, factor=2.0, min_timeout=1.0
             )
 
             # Get the robots.txt
