@@ -134,6 +134,13 @@ def main():
                 exit(1)
             elif len(item) == 1:
                 # If only the key is provided, set its value to an empty string
+                if "=" in item[0]:
+                    logger.error(
+                        f"Invalid key provided for environment variable: {' '.join(item)}. "
+                        f"Key should not contain '='.\n\n"
+                        f"You probably meant to do '-e {' '.join(item[0].split('='))}'."
+                    )
+                    exit(1)
                 env_vars[item[0]] = ""
             elif len(item) == 2:
                 # If both key and value are provided, store them as a key-value pair
