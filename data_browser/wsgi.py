@@ -1,5 +1,6 @@
+import server as server_module
 import yaml
-from server import app, ServerConfig, standardize_config, Server, server
+from server import app, ServerConfig, standardize_config, Server
 
 # Read config from gcp.conf
 with open('conf/gcp.conf', 'r') as f:
@@ -10,7 +11,6 @@ config = ServerConfig(**config_dict)
 config = standardize_config(config)
 
 # Initialize global server instance
-import server as server_module
 server_module.server = Server(config)
 
 # This is what Gunicorn will import

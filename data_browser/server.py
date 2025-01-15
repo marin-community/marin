@@ -237,8 +237,11 @@ def static_proxy(path):
 
 def proxy_to_dev_server(path):
     """Proxy requests to the development server running on port 3000
-    
-    This implements a basic HTTP reverse proxy pattern where we forward the original request to the target server (dev server) and then strip out hop-by-hop headers that should not be forwarded (these headers are meant only for a single transport-level connection). See https://www.rfc-editor.org/rfc/rfc2616#section-13.5.1
+
+    This implements a basic HTTP reverse proxy pattern where we forward the original request 
+    to the target server (dev server) and then strip out hop-by-hop headers that should not 
+    be forwarded (these headers are meant only for a single transport-level connection). 
+    See https://www.rfc-editor.org/rfc/rfc2616#section-13.5.1
     """
     resp = requests.get(f"http://localhost:3000/{path}")
     excluded_headers = ["content-encoding", "content-length", "transfer-encoding", "connection"]
