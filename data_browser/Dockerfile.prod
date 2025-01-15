@@ -28,4 +28,4 @@ COPY conf ./conf
 
 ENV DEV=false
 
-ENTRYPOINT ["python", "server.py", "--config", "conf/gcp.conf"]
+CMD ["gunicorn", "--bind", "0.0.0.0:80", "--workers", "1", "server:app", "--", "--config", "conf/gcp.conf"]
