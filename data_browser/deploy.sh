@@ -25,5 +25,11 @@ gcloud run deploy marin-data-browser \
     --port 80 \
     --region us-central1 \
     --platform managed \
-    --ingress internal-and-cloud-load-balancing \
+    --ingress all \
     --service-account marin-data-browser@hai-gcp-models.iam.gserviceaccount.com
+
+# Allow unauthenticated access to the service
+gcloud run services add-iam-policy-binding marin-data-browser \
+    --region=us-central1 \
+    --member="allUsers" \
+    --role="roles/run.invoker"
