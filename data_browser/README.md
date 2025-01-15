@@ -10,7 +10,17 @@ To start the data browser:
 
 To deploy:
 
-    TODO
+    ./deploy.sh
+
+View:
+
+    https://marin-data-browser-748532799086.us-central1.run.app
+
+Check logs:
+
+    https://console.cloud.google.com/run/detail/us-central1/marin-data-browser/logs?project=hai-gcp-models
+
+TODO: https://cloud.google.com/iap/docs/enabling-cloud-run#gcloud
 
 ## Deployment (CRFM)
 
