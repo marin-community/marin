@@ -122,14 +122,9 @@ def decreasing_timeout(
 ) -> float:
     """
     The more failures a domain has, the smaller the timeout we allow.
-    For example:
-        - If failures = 0, timeout = base_timeout (e.g. 10).
-        - If failures = 1, timeout = base_timeout / factor (e.g. 5).
-        - If failures = 2, timeout = base_timeout / factor^2 (e.g. 2.5).
-        - ... and so on.
     We clamp the final value so it doesn't go below min_timeout.
     """
-    timeout = base_timeout / (factor**failures)
+    timeout = base_timeout / (factor ** min(failures / 4, 4))
     return max(timeout, min_timeout)
 
 
