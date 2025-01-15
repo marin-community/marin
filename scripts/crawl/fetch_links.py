@@ -54,18 +54,51 @@ logger = logging.getLogger(__name__)
 def fetch_url(
     session: requests.Session, url: str, timeout: float = 30
 ) -> tuple[requests.Response, None, bool] | tuple[None, str, bool]:
-    """Fetch the content of a URL."""
+    """Fetch the content of a URL, truncating at 10 MB if necessary."""
+    MAX_SIZE_BYTES = 10 * 1024 * 1024  # 10 MB
+    CHUNK_SIZE = 1 * 1024 * 1024  # 1 MB
     try:
-        response = session.get(url, timeout=timeout)
-        response.raise_for_status()
-        return response, None, False
+        # Use stream=True to avoid downloading the entire body into memory at once.
+        with session.get(url, timeout=timeout, stream=True) as r:
+            r.raise_for_status()
+
+            # Create a mutable Response object that we'll patch with truncated content.
+            truncated_response = requests.models.Response()
+            truncated_response.status_code = r.status_code
+            truncated_response.reason = r.reason
+            truncated_response.headers = r.headers
+            truncated_response.url = r.url
+            truncated_response.request = r.request
+
+            # Read response in chunks, truncate at 10 MB
+            content_buffer = io.BytesIO()
+            downloaded_bytes = 0
+
+            for chunk in r.iter_content(chunk_size=CHUNK_SIZE):
+                if chunk:
+                    new_size = downloaded_bytes + len(chunk)
+
+                    # If adding this chunk would exceed the 10MB cap, only write the part that fits
+                    if new_size > MAX_SIZE_BYTES:
+                        allowed_bytes = MAX_SIZE_BYTES - downloaded_bytes
+                        content_buffer.write(chunk[:allowed_bytes])
+                        # You might log or otherwise note that you've truncated the response:
+                        # logger.info(f"Truncated {url} after {MAX_SIZE_BYTES} bytes.")
+                        break
+                    else:
+                        content_buffer.write(chunk)
+                        downloaded_bytes = new_size
+
+            truncated_response._content = content_buffer.getvalue()
+
+            return truncated_response, None, False
     except requests.exceptions.HTTPError as e:
-        # We got a response from the server, so the domain is reachable.
-        # This is not a "connection" failure—just an HTTP error (e.g. 404).
+        # We got a response from the server, so the domain is reachable
+        logger.exception(f"Error fetching {url}: {e}")
         return None, str(e), False
     except Exception as e:
-        # Catchall all other errors (SSL, etc.) are connection errors
-        # This means the domain was not reachable at all (DNS, connect, etc.)
+        # Anything else is a connection-level error (DNS, SSL, etc.)
+        logger.exception(f"Error fetching {url}: {e}")
         return None, str(e), True
 
 
@@ -75,7 +108,7 @@ class FetchLinksConfig:
     output_directory: str
 
 
-@ray.remote(memory=64 * 1024 * 1024 * 1024)
+@ray.remote(memory=128 * 1024 * 1024 * 1024)
 def fetch_links(urls_path: str, warc_output_path: str, robots_output_path: str, errors_output_path: str):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     success_path = warc_output_path + ".SUCCESS"
