@@ -1,4 +1,12 @@
-#/bin/bash
+#!/bin/bash
+
+# This script deploys the Marin Data Browser application to Google Cloud Run.
+# It performs the following steps:
+# 1. Creates an Artifact Registry repository if it doesn't exist
+# 2. Builds the Docker image using production Dockerfile
+# 3. Tags and pushes the image to Artifact Registry
+# 4. Deploys the application to Cloud Run
+# 5. Configures public access to the service
 
 set -e
 
@@ -25,6 +33,15 @@ gcloud run deploy marin-data-browser \
     --port 80 \
     --region us-central1 \
     --platform managed \
+    --ingress all \
+    --service-account marin-data-browser@hai-gcp-models.iam.gserviceaccount.com
+
+# Allow unauthenticated access to the service
+gcloud run services add-iam-policy-binding marin-data-browser \
+    --region=us-central1 \
+    --member="allUsers" \
+    --role="roles/run.invoker"
+
     --ingress all \
     --service-account marin-data-browser@hai-gcp-models.iam.gserviceaccount.com
 
