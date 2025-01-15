@@ -13,6 +13,8 @@ from pyarrow.parquet import ParquetFile
 
 app = Flask(__name__, static_folder="build")
 
+CLOUD_STORAGE_PREFIXES = ("gs://", "s3://")
+
 
 @dataclass(frozen=True)
 class ServerConfig:
@@ -52,7 +54,7 @@ server: Server | None = None
 
 def resolve_path(path: str) -> str:
     """Resolve a path to an absolute path, except for cloud storage paths."""
-    return path if path.startswith(("gs://", "s3://")) else os.path.realpath(path)
+    return path if path.startswith(CLOUD_STORAGE_PREFIXES) else os.path.realpath(path)
 
 
 def list_files(path: str) -> dict:
@@ -146,8 +148,8 @@ def has_permissions(path: str) -> bool:
     """Returns whether the user can access `path` according to the permissions."""
     resolved_path = resolve_path(path)
     for allowed_path in server.config.root_paths:
-        # For cloud storage paths (gs://, s3://), check if the resolved path starts with the allowed path
-        if resolved_path.startswith(("gs://", "s3://")):
+        # For cloud storage paths, check if the resolved path starts with the allowed path
+        if resolved_path.startswith(CLOUD_STORAGE_PREFIXES):
             if resolved_path.startswith(allowed_path):
                 return True
         # For local paths, use os.path.commonpath
@@ -234,7 +236,10 @@ def static_proxy(path):
 
 
 def proxy_to_dev_server(path):
-    """Proxy requests to the development server running on port 3000"""
+    """Proxy requests to the development server running on port 3000
+    
+    This implements a basic HTTP reverse proxy pattern where we forward the original request to the target server (dev server) and then strip out hop-by-hop headers that should not be forwarded (these headers are meant only for a single transport-level connection). See https://www.rfc-editor.org/rfc/rfc2616#section-13.5.1
+    """
     resp = requests.get(f"http://localhost:3000/{path}")
     excluded_headers = ["content-encoding", "content-length", "transfer-encoding", "connection"]
     headers = [(name, value) for (name, value) in resp.raw.headers.items() if name.lower() not in excluded_headers]
