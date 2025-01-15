@@ -190,7 +190,7 @@ def get_shard_quality_classifier_scores(input_path: str, output_path: str):
 
     logger.info("Reading input path with extracted text")
     with fsspec.open(input_path) as f:
-        examples_to_classify = pd.read_parquet(f)
+        examples_to_classify = pd.read_parquet(f).to_dict("records")
     logger.info("Finished reading input path with extracted text")
 
     # Classify all of the examples in the shard
