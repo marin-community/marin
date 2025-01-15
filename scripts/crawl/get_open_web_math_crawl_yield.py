@@ -108,6 +108,13 @@ def get_shard_yield(
     success_path = urls_and_scores_output_path + ".SUCCESS"
     if fsspec_exists(success_path):
         logger.info(f"Success path {success_path} already exists, skipping...")
+        with fsspec.open(success_path) as f:
+            shard_stats = json.load(f)
+        return (
+            shard_stats["total_urls"],
+            shard_stats["total_urls_fetched"],
+            shard_stats["total_urls_passing"],
+        )
 
     with fsspec.open(urls_path) as f:
         df = pd.read_parquet(f)

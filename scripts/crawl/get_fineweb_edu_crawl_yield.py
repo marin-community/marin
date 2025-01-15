@@ -37,7 +37,6 @@ from trafilatura import extract
 from transformers import AutoTokenizer, FlaxAutoModelForSequenceClassification
 from warcio import ArchiveIterator
 
-from marin.core.runtime import cached_or_construct_output
 from marin.utils import fsspec_exists, fsspec_glob, fsspec_rm, remove_tpu_lockfile_on_exit
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -107,6 +106,12 @@ def extract_text_from_warc(
     success_path = extracted_text_output_path + ".SUCCESS"
     if fsspec_exists(success_path):
         logger.info(f"Success path {success_path} already exists, skipping...")
+        with fsspec.open(success_path) as f:
+            shard_stats = json.load(f)
+        return (
+            shard_stats["total_urls"],
+            shard_stats["total_urls_fetched"],
+        )
 
     with fsspec.open(urls_path) as f:
         df = pd.read_parquet(f)
@@ -178,9 +183,14 @@ def extract_text_from_warc(
     resources={"TPU": 4, "TPU-v4-8-head": 1},
 )
 @remove_tpu_lockfile_on_exit
-@cached_or_construct_output(success_suffix="SUCCESS", verbose=False)
 def get_shard_quality_classifier_scores(input_path: str, output_path: str):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+    success_path = output_path + ".SUCCESS"
+    if fsspec_exists(success_path):
+        logger.info(f"Success path {success_path} already exists, skipping...")
+        with fsspec.open(success_path) as f:
+            shard_stats = json.load(f)
+        return shard_stats["total_urls_passing"]
 
     logger.info("Loading quality classifier...")
     # Load the quality classifier
@@ -208,11 +218,14 @@ def get_shard_quality_classifier_scores(input_path: str, output_path: str):
     assert len(examples_scores) == len(examples_to_classify)
     logger.info(f"Ran quality classifier on {len(examples_to_classify)} examples")
 
+    num_records_passing = 0
     output_records = []
     for (
         example,
         example_score,
     ) in zip(examples_to_classify, examples_scores):
+        if example_score >= 3.0:
+            num_records_passing += 1
         output_records.append(
             {
                 "url": example["url"],
@@ -221,6 +234,14 @@ def get_shard_quality_classifier_scores(input_path: str, output_path: str):
             }
         )
     write_examples_to_parquet(output_records, output_path)
+    with fsspec.open(success_path, "w") as fout:
+        json.dump(
+            {
+                "total_urls_passing": num_records_passing,
+            },
+            fout,
+        )
+    return num_records_passing
 
 
 def write_examples_to_parquet(examples: list[dict], output_path: str):
