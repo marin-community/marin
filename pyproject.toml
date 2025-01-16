@@ -79,7 +79,7 @@ tokenize_train = [
     "jax>=0.4.34",
     "multiprocess==0.70.16",
     "levanter>=1.2.dev1147",
-    "lm-eval@git+https://github.com/dlwh/lm-evaluation-harness.git@no_torch",
+    "lm-eval@git+https://github.com/nikil-ravi/lm-evaluation-harness.git@bpb-changes",
 ]
 
 data_browser = [
@@ -88,7 +88,7 @@ data_browser = [
 
 eval = [
     "levanter>=1.2.dev1163",
-    "lm-eval @ git+https://github.com/dlwh/lm-evaluation-harness.git@no_torch",
+    "lm-eval@git+https://github.com/nikil-ravi/lm-evaluation-harness.git@bpb-changes",
 ]
 
 [tool.setuptools.packages.find]
