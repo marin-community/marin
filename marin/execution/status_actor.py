@@ -4,6 +4,7 @@ from datetime import datetime
 
 import ray
 from ray import ObjectRef
+from ray.util import state  # noqa
 
 from marin.execution.executor_step_status import (
     STATUS_FAILED,
@@ -61,6 +62,7 @@ class StatusActor:
         self.lru_cache: OrderedDict[str, None] = OrderedDict()  # lru_cache to keep dict size to cache_size
         self.cache_size = cache_size
         self.lock_output_path_to_task_id: dict[str, str] = {}
+        print("StatusActor initialized")
 
     def _add_status_and_reference(
         self, output_path: str, executor_step_event: ExecutorStepEvent | None, reference: RayObjectRef | None
@@ -126,7 +128,14 @@ class StatusActor:
                 # Verify if this is still running and was not stopped by ray job API or any other way
                 # There must be a task_id with lock
                 task_id = self.lock_output_path_to_task_id[output_path]
-                task_state = ray.util.state.get_task(task_id)
+                task_state = ray.util.state.get_task(task_id, timeout=60)
+
+                if task_state is None:  # We try for 60 seconds. If we don't get the task state, we assume it's running
+                    return status
+
+                if type(task_state) is list:  # Due to retires in ray, task_state can be a list of states
+                    task_state = task_state[-1]
+
                 if task_state.state == "FAILED":
                     self.update_status(
                         output_path, STATUS_FAILED, message="Task was stopped by ray API", ray_task_id=task_id
