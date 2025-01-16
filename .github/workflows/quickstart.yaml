@@ -30,5 +30,12 @@ jobs:
       - name: Install dependencies
         run: pip install .[extras]
 
+      # Start Ray cluster locally; We give cpus as 64 since we don't want Ray to get stuck in infinite loop trying to
+      # get the resources
+      - name: Start Ray cluster locally
+        shell: bash -l {0}
+        run: |
+          ray start --head --num-cpus=64
+
       - name: Run the quickstart script
         run: python experiments/quickstart.py
