@@ -11,6 +11,8 @@ python marin/run/ray_run.py \
     python scripts/crawl/get_fineweb_edu_crawl_yield.py \
     --urls_input_directory gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-1M/ \
     --crawl_input_directory gs://marin-us-central2/scratch/nfliu/fetched_outlinks/fineweb-edu-1M/ \
+    --data_source fineweb-edu-1M \
+    --text_output_directory gs://marin-us-central2/scratch/nfliu/text/fineweb-edu-1M/ \
     --urls_and_scores_output_directory gs://marin-us-central2/scratch/nfliu/urls_and_scores/fineweb-edu-1M/ \
     --statistics_output_path gs://marin-us-central2/scratch/nfliu/fetched_outlinks/fineweb-edu-1M/yield_statistics.json.gz
 ```
@@ -21,7 +23,9 @@ import math
 import os
 import pathlib
 import random
-from dataclasses import dataclass
+from copy import deepcopy
+from dataclasses import asdict, dataclass
+from typing import Any
 
 import draccus
 import fsspec
@@ -44,9 +48,20 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
+class DolmaFormattedFineWebEduRecord:
+    id: str
+    source: str
+    format: str
+    text: str
+    metadata: dict[str, Any]
+
+
+@dataclass
 class GetCrawlYieldConfig:
     urls_input_directory: str
     crawl_input_directory: str
+    data_source: str
+    text_output_directory: str
     statistics_output_path: str
     urls_and_scores_output_directory: str
 
@@ -99,6 +114,7 @@ def extract_text_from_warc(
     warc_path: str,
     robots_path: str,
     errors_path: str,
+    data_source: str,
     extracted_text_output_path: str,
 ):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -150,9 +166,23 @@ def extract_text_from_warc(
                     num_records_skipped += 1
                     continue
 
-                extracted_text_records.append(
-                    {"url": record_url, "canonicalized_url": canonicalized_url, "extracted_text": extracted_text}
+                record_id = record.rec_headers.get_header("WARC-Record-ID")
+                assert record_id
+                record_date = record.rec_headers.get_header("WARC-Date")
+                assert record_date
+                out_dolma = DolmaFormattedFineWebEduRecord(
+                    id=record_id,
+                    source=data_source,
+                    format="text",
+                    text=extracted_text,
+                    metadata={
+                        "url": record_url,
+                        "canonicalized_url": canonicalized_url,
+                        "date": record_date,
+                        "file_path": warc_path,
+                    },
                 )
+                extracted_text_records.append(asdict(out_dolma))
                 num_records_saved += 1
     # Count the number of URLs that weren't fetched
     unfetched_urls = urls - fetched_urls
@@ -183,9 +213,11 @@ def extract_text_from_warc(
     resources={"TPU": 4, "TPU-v4-8-head": 1},
 )
 @remove_tpu_lockfile_on_exit
-def get_shard_quality_classifier_scores(input_path: str, output_path: str):
+def get_shard_quality_classifier_scores(
+    input_path: str, text_and_scores_output_path: str, urls_and_scores_output_path: str
+):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-    success_path = output_path + ".SUCCESS"
+    success_path = urls_and_scores_output_path + ".SUCCESS"
     if fsspec_exists(success_path):
         logger.info(f"Success path {success_path} already exists, skipping...")
         with fsspec.open(success_path) as f:
@@ -208,7 +240,7 @@ def get_shard_quality_classifier_scores(input_path: str, output_path: str):
     for examples_batch in tqdm(
         batched(examples_to_classify, 512), desc="Classifying text", total=math.ceil(len(examples_to_classify) / 512)
     ):
-        documents = [ex["extracted_text"] for ex in examples_batch]
+        documents = [ex["text"] for ex in examples_batch]
         inputs = tokenizer(documents, return_tensors="jax", padding="longest", truncation=True)
         outputs = model(**inputs)
         logits = outputs.logits.squeeze(-1)
@@ -219,21 +251,27 @@ def get_shard_quality_classifier_scores(input_path: str, output_path: str):
     logger.info(f"Ran quality classifier on {len(examples_to_classify)} examples")
 
     num_records_passing = 0
-    output_records = []
+    urls_and_scores_output_records = []
+    text_and_scores_output_records = []
     for (
         example,
         example_score,
     ) in zip(examples_to_classify, examples_scores):
         if example_score >= 3.0:
             num_records_passing += 1
-        output_records.append(
+        urls_and_scores_output_records.append(
             {
-                "url": example["url"],
-                "canonicalized_url": example["canonicalized_url"],
+                "url": example["metadata"]["url"],
+                "canonicalized_url": example["metadata"]["canonicalized_url"],
                 "score": example_score,
             }
         )
-    write_examples_to_parquet(output_records, output_path)
+        copied_example = deepcopy(example)
+        copied_example["metadata"]["score"] = example_score
+        text_and_scores_output_records.append(copied_example)
+    write_examples_to_parquet(urls_and_scores_output_records, urls_and_scores_output_path)
+    write_examples_to_parquet(text_and_scores_output_records, urls_and_scores_output_path)
+
     with fsspec.open(success_path, "w") as fout:
         json.dump(
             {
@@ -275,11 +313,12 @@ def main(cfg: GetCrawlYieldConfig):
         robots_path = os.path.join(cfg.crawl_input_directory, f"links.{shard_index}_robots.json.gz")
         errors_path = os.path.join(cfg.crawl_input_directory, f"links.{shard_index}_errors.json.gz")
         extracted_text_output_path = os.path.join(
-            cfg.urls_and_scores_output_directory, f"links.{shard_index}_extracted_text.parquet"
+            cfg.text_output_directory, f"links.{shard_index}_extracted_text.parquet"
         )
-
         unfinished.append(
-            extract_text_from_warc.remote(urls_path, warc_path, robots_path, errors_path, extracted_text_output_path)
+            extract_text_from_warc.remote(
+                urls_path, warc_path, robots_path, errors_path, cfg.data_source, extracted_text_output_path
+            )
         )
     # Wait for text extraction jobs to finish
     total_urls = 0
@@ -299,13 +338,18 @@ def main(cfg: GetCrawlYieldConfig):
     # Run the quality classifier on the extracted text
     unfinished = []
     for shard_index in shard_indices_to_process:
-        extracted_text_path = os.path.join(
-            cfg.urls_and_scores_output_directory, f"links.{shard_index}_extracted_text.parquet"
+        extracted_text_path = os.path.join(cfg.text_output_directory, f"links.{shard_index}_extracted_text.parquet")
+        text_and_scores_output_path = os.path.join(
+            cfg.text_output_directory, f"links.{shard_index}_text_and_scores.parquet"
         )
         urls_and_scores_output_path = os.path.join(
             cfg.urls_and_scores_output_directory, f"links.{shard_index}_urls_and_scores.parquet"
         )
-        unfinished.append(get_shard_quality_classifier_scores.remote(extracted_text_path, urls_and_scores_output_path))
+        unfinished.append(
+            get_shard_quality_classifier_scores.remote(
+                extracted_text_path, urls_and_scores_output_path, text_and_scores_output_path
+            )
+        )
     # Wait for quality classification jobs to finish
     total_urls_passing = 0
     while unfinished:
@@ -329,13 +373,15 @@ def main(cfg: GetCrawlYieldConfig):
             fout,
         )
 
-    # Consolidate urls and scores into a single parqet
-    parquet_paths = [
+    # Consolidate urls and scores into a single parquet
+    urls_and_scores_parquet_paths = [
         os.path.join(cfg.urls_and_scores_output_directory, f"links.{shard_index}_urls_and_scores.parquet")
         for shard_index in shard_indices_to_process
     ]
-    consolidated_parquet_path = os.path.join(cfg.urls_and_scores_output_directory, f"urls_and_scores.parquet")
-    _ = ray.get(consolidate_parquet.remote(parquet_paths, consolidated_parquet_path))
+    consolidated_urls_and_scores_parquet_path = os.path.join(
+        cfg.urls_and_scores_output_directory, f"urls_and_scores.parquet"
+    )
+    _ = ray.get(consolidate_parquet.remote(urls_and_scores_parquet_paths, consolidated_urls_and_scores_parquet_path))
 
 
 if __name__ == "__main__":
