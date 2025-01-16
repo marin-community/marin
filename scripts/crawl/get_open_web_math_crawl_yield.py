@@ -33,6 +33,7 @@ import pyarrow.parquet as pq
 import ray
 import w3lib.url
 from resiliparse.parse.encoding import bytes_to_str, detect_encoding
+from resiliparse.process_guard import time_guard, ExecutionTimeout
 from tqdm_loggable.auto import tqdm
 from warcio import ArchiveIterator
 
@@ -164,69 +165,76 @@ def get_shard_yield(
     with fsspec.open(warc_path, "rb", compression="gzip") as file_stream:
         for record in tqdm(ArchiveIterator(file_stream)):
             if record.rec_type == "response":
-                record_url = record.rec_headers.get_header("WARC-Target-URI")
-                fetched_urls.add(record_url)
+                # Timeout if a record takes more than 5 minutes
+                with time_guard(timeout=60 * 5):
+                    record_url = record.rec_headers.get_header("WARC-Target-URI")
+                    try:
+                        fetched_urls.add(record_url)
 
-                content = record.content_stream().read()
-                html_decoded: str | None = decode_html(content)
-                if not html_decoded or not record_url:
-                    num_records_skipped += 1
-                    continue
+                        content = record.content_stream().read()
+                        html_decoded: str | None = decode_html(content)
+                        if not html_decoded or not record_url:
+                            num_records_skipped += 1
+                            continue
 
-                randomized_config_sample = randomized_config.sample()
-                try:
-                    extraction_result = extract_text(html_decoded, randomized_config_sample, fast=True)
-                except Exception:
-                    num_records_skipped += 1
-                    continue
+                        randomized_config_sample = randomized_config.sample()
+                        try:
+                            extraction_result = extract_text(html_decoded, randomized_config_sample, fast=True)
+                        except Exception:
+                            num_records_skipped += 1
+                            continue
 
-                if extraction_result is None:
-                    num_records_skipped += 1
-                    continue
+                        if extraction_result is None:
+                            num_records_skipped += 1
+                            continue
 
-                extracted_text, extraction_metadata = extraction_result
-                score = score_text(extracted_text, mathscore_model)
-                found_math = extraction_metadata["found_math"]
-                canonicalized_url = w3lib.url.canonicalize_url(record_url)
+                        extracted_text, extraction_metadata = extraction_result
+                        score = score_text(extracted_text, mathscore_model)
+                        found_math = extraction_metadata["found_math"]
+                        canonicalized_url = w3lib.url.canonicalize_url(record_url)
+                    except ExecutionTimeout:
+                        logger.info(f"Execution timed out for {record_url}")
+                        num_records_skipped += 1
+                        continue
 
-                if found_math and score > 0.15:
-                    # If the URL has LaTeX, the threshold is 0.15.
-                    num_records_passing += 1
-                elif not found_math and score > 0.8:
-                    # If the URL doesn't have LaTeX, the threshold is 0.8.
-                    num_records_passing += 1
+                    if found_math and score > 0.15:
+                        # If the URL has LaTeX, the threshold is 0.15.
+                        num_records_passing += 1
+                    elif not found_math and score > 0.8:
+                        # If the URL doesn't have LaTeX, the threshold is 0.8.
+                        num_records_passing += 1
 
-                urls_with_scores.append(
-                    {
-                        "url": record_url,
-                        "canonicalized_url": canonicalized_url,
-                        "score": score,
-                        "found_math": found_math,
-                    }
-                )
-                record_id = record.rec_headers.get_header("WARC-Record-ID")
-                assert record_id
-                record_date = record.rec_headers.get_header("WARC-Date")
-                assert record_date
-                text_with_scores.append(
-                    asdict(
-                        DolmaFormattedOpenWebMathRecord(
-                            id=record_id,
-                            source=data_source,
-                            format="text",
-                            text=extracted_text,
-                            metadata={
-                                "url": record_url,
-                                "canonicalized_url": canonicalized_url,
-                                "date": record_date,
-                                "file_path": warc_path,
-                                "score": score,
-                                "found_math": found_math,
-                            },
+                    urls_with_scores.append(
+                        {
+                            "url": record_url,
+                            "canonicalized_url": canonicalized_url,
+                            "score": score,
+                            "found_math": found_math,
+                        }
+                    )
+                    record_id = record.rec_headers.get_header("WARC-Record-ID")
+                    assert record_id
+                    record_date = record.rec_headers.get_header("WARC-Date")
+                    assert record_date
+                    text_with_scores.append(
+                        asdict(
+                            DolmaFormattedOpenWebMathRecord(
+                                id=record_id,
+                                source=data_source,
+                                format="text",
+                                text=extracted_text,
+                                metadata={
+                                    "url": record_url,
+                                    "canonicalized_url": canonicalized_url,
+                                    "date": record_date,
+                                    "file_path": warc_path,
+                                    "score": score,
+                                    "found_math": found_math,
+                                },
+                            )
                         )
                     )
-                )
-                num_records_saved += 1
+                    num_records_saved += 1
 
     # Count the number of URLs that weren't fetched
     unfetched_urls = urls - fetched_urls
@@ -247,7 +255,6 @@ def get_shard_yield(
             },
             fout,
         )
-
     return (
         len(urls),
         len(fetched_urls),
