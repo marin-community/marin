@@ -395,7 +395,7 @@ class Executor:
             lifetime="detached",
             # This is to ensure that the status actor is only schduled on the headnode
             scheduling_strategy=NodeAffinitySchedulingStrategy(
-                node_id=ray.get_runtime_context().node_id,
+                node_id=ray.get_runtime_context().get_node_id(),
                 soft=False,
             ),
         ).remote()
@@ -769,6 +769,9 @@ def _get_lock_or_wait_for_step_with_lock(
         # Lock is with some other step. Wait for the other step to finish or fail, and propagate accordingly
         while True:
             actor_task_state = ray.util.state.get_task(actor_lock_task_id)
+
+            if type(actor_task_state) is list:  # Due to retires in ray, task_state can be a list of states
+                actor_task_state = actor_task_state[-1]
 
             # Sometimes the actor_state is not ready
             if actor_task_state is None:
