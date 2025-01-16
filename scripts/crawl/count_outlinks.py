@@ -44,7 +44,7 @@ class OutlinksCountingConfig:
     input_pattern: str
 
 
-@ray.remote(memory=1 * 1024 * 1024 * 1024)
+@ray.remote(memory=4 * 1024 * 1024 * 1024)
 def count_examples_in_shard(shard_path: str) -> tuple[int, set[int]]:
     unique_outlink_target_hashes = set()
     num_lines = 0
