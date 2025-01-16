@@ -24,6 +24,13 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
+      - name: Set up Conda
+        uses: conda-incubator/setup-miniconda@v2
+        with:
+          auto-update-conda: true
+          python-version: ${{ matrix.python-version }}
+          activate-environment: marin_unit_test_env
+          auto-activate-base: false
 
       - name: Cache pip dependencies
         uses: actions/cache@v3
