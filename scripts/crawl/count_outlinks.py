@@ -80,6 +80,7 @@ def count_outlinks(input_pattern: str):
         submit_shard_task(shard_paths.pop())
 
     all_link_target_hashes = set()
+    num_outlinks = 0
     with tqdm(total=num_shards_to_process, desc="Counting records") as pbar:
         while unfinished:
             finished, unfinished = ray.wait(unfinished, num_returns=len(unfinished), timeout=5)
