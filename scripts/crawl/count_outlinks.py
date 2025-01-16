@@ -78,7 +78,8 @@ def count_outlinks(input_pattern: str):
                 num_outlinks += num_examples
                 all_link_target_hashes.update(shard_link_target_hashes)
                 pbar.update(1)
-    logger.info(f"Found {num_outlinks} outlinks ({len(all_link_target_hashes)} unique)")
+                logger.info(f"So far, found {num_outlinks} outlinks ({len(all_link_target_hashes)} unique)")
+    logger.info(f"In total, found {num_outlinks} outlinks ({len(all_link_target_hashes)} unique)")
 
 
 @draccus.wrap()
