@@ -57,4 +57,4 @@ jobs:
       - name: Run the quickstart script
         shell: bash -l {0}
         run: |
-          python experiments/quickstart.py
+          PYTHONPATH=. python experiments/quickstart.py
