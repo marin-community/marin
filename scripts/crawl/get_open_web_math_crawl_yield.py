@@ -210,7 +210,7 @@ def get_shard_yield(
                 assert record_date
                 text_with_scores.append(
                     asdict(
-                        out_dolma=DolmaFormattedOpenWebMathRecord(
+                        DolmaFormattedOpenWebMathRecord(
                             id=record_id,
                             source=data_source,
                             format="text",
