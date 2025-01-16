@@ -70,7 +70,7 @@ def count_outlinks(input_pattern: str):
     with tqdm(total=len(refs), desc="Counting records") as pbar:
         while refs:
             # Process results in the finish order instead of the submission order.
-            ready_refs, refs = ray.wait(refs, num_returns=min(500, len(refs)), timeout=60)
+            ready_refs, refs = ray.wait(refs, num_returns=min(32, len(refs)), timeout=60)
             # The node only needs enough space to store
             # a batch of objects instead of all objects.
             results = ray.get(ready_refs)
