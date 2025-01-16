@@ -11,6 +11,8 @@ python marin/run/ray_run.py \
     python scripts/crawl/get_open_web_math_crawl_yield.py \
     --urls_input_directory gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-1M/ \
     --crawl_input_directory gs://marin-us-central2/scratch/nfliu/fetched_outlinks/open-web-math-fde8ef8-1M/ \
+    --data_source open-web-math-fde8ef8-1M \
+    --text_output_directory gs://marin-us-central2/scratch/nfliu/text/open-web-math-fde8ef8-1M/ \
     --urls_and_scores_output_directory gs://marin-us-central2/scratch/nfliu/urls_and_scores/open-web-math-fde8ef8-1M/ \
     --statistics_output_path gs://marin-us-central2/scratch/nfliu/fetched_outlinks/open-web-math-fde8ef8-1M/yield_statistics.json.gz
 ```
@@ -20,7 +22,8 @@ import logging
 import os
 import pathlib
 import random
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from typing import Any
 
 import draccus
 import fsspec
@@ -44,9 +47,20 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
+class DolmaFormattedOpenWebMathRecord:
+    id: str
+    source: str
+    format: str
+    text: str
+    metadata: dict[str, Any]
+
+
+@dataclass
 class GetCrawlYieldConfig:
     urls_input_directory: str
     crawl_input_directory: str
+    data_source: str
+    text_output_directory: str
     statistics_output_path: str
     urls_and_scores_output_directory: str
 
@@ -102,7 +116,13 @@ def consolidate_parquet(parquet_paths: str, consolidated_parquet_path: str):
     num_cpus=8,
 )
 def get_shard_yield(
-    urls_path: str, warc_path: str, robots_path: str, errors_path: str, urls_and_scores_output_path: str
+    urls_path: str,
+    warc_path: str,
+    robots_path: str,
+    errors_path: str,
+    data_source: str,
+    extracted_text_output_path: str,
+    urls_and_scores_output_path: str,
 ):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     success_path = urls_and_scores_output_path + ".SUCCESS"
@@ -138,7 +158,9 @@ def get_shard_yield(
     num_records_skipped = 0
     num_records_passing = 0
     num_records_saved = 0
+
     urls_with_scores = []
+    text_with_scores = []
     with fsspec.open(warc_path, "rb", compression="gzip") as file_stream:
         for record in tqdm(ArchiveIterator(file_stream)):
             if record.rec_type == "response":
@@ -181,6 +203,28 @@ def get_shard_yield(
                         "score": score,
                         "found_math": found_math,
                     }
+                )
+                record_id = record.rec_headers.get_header("WARC-Record-ID")
+                assert record_id
+                record_date = record.rec_headers.get_header("WARC-Date")
+                assert record_date
+                text_with_scores.append(
+                    asdict(
+                        out_dolma=DolmaFormattedOpenWebMathRecord(
+                            id=record_id,
+                            source=data_source,
+                            format="text",
+                            text=extracted_text,
+                            metadata={
+                                "url": record_url,
+                                "canonicalized_url": canonicalized_url,
+                                "date": record_date,
+                                "file_path": warc_path,
+                                "score": score,
+                                "found_math": found_math,
+                            },
+                        )
+                    )
                 )
                 num_records_saved += 1
 
@@ -243,8 +287,19 @@ def main(cfg: GetCrawlYieldConfig):
         urls_and_scores_output_path = os.path.join(
             cfg.urls_and_scores_output_directory, f"links.{shard_index}_urls_and_scores.parquet"
         )
+        text_and_scores_output_path = os.path.join(
+            cfg.text_output_directory, f"links.{shard_index}_text_and_scores.parquet"
+        )
         unfinished.append(
-            get_shard_yield.remote(urls_path, warc_path, robots_path, errors_path, urls_and_scores_output_path)
+            get_shard_yield.remote(
+                urls_path,
+                warc_path,
+                robots_path,
+                errors_path,
+                cfg.data_source,
+                text_and_scores_output_path,
+                urls_and_scores_output_path,
+            )
         )
 
     # Wait for jobs to finish
