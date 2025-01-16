@@ -121,7 +121,7 @@ def get_shard_yield(
     robots_path: str,
     errors_path: str,
     data_source: str,
-    extracted_text_output_path: str,
+    text_with_scores_output_path: str,
     urls_and_scores_output_path: str,
 ):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -235,6 +235,7 @@ def get_shard_yield(
     logger.info(f"Out of {len(fetched_urls)} fetched_urls, {len(fetched_urls - urls)} were not in the input set of URLs")
     # Write examples from this shard to parquet
     write_examples_to_parquet(urls_with_scores, urls_and_scores_output_path)
+    write_examples_to_parquet(text_with_scores, text_with_scores_output_path)
     logger.info(f"Saved {num_records_saved} records from WARC, skipped {num_records_skipped} records")
 
     with fsspec.open(success_path, "w") as fout:
