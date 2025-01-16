@@ -55,4 +55,6 @@ jobs:
           ray start --head --num-cpus=64
 
       - name: Run the quickstart script
-        run: python experiments/quickstart.py
+        shell: bash -l {0}
+        run: |
+          python experiments/quickstart.py
