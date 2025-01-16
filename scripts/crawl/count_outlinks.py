@@ -61,24 +61,44 @@ def count_outlinks(input_pattern: str):
     shard_paths = list(fsspec_glob(input_pattern))
     logger.info(f"Found {len(shard_paths)} shards to process")
 
-    refs = []
-    for shard_path in shard_paths:
-        refs.append(count_examples_in_shard.remote(shard_path))
+    num_shards_to_process = len(shard_paths)
+    MAX_CONCURRENT_TASKS = 100
+    num_shards_submitted = 0
+    unfinished = []
 
-    num_outlinks = 0
+    def submit_shard_task(shard_path):
+        nonlocal num_shards_submitted
+        unfinished.append(count_examples_in_shard.remote(shard_path))
+        num_shards_submitted += 1
+        if num_shards_submitted % 10 == 0:
+            logger.info(
+                f"Submitted {num_shards_submitted} / {num_shards_to_process} shards "
+                f"({num_shards_submitted / num_shards_to_process})"
+            )
+
+    for _ in range(min(MAX_CONCURRENT_TASKS, len(shard_paths))):
+        submit_shard_task(shard_paths.pop())
+
     all_link_target_hashes = set()
-    with tqdm(total=len(refs), desc="Counting records") as pbar:
-        while refs:
-            # Process results in the finish order instead of the submission order.
-            ready_refs, refs = ray.wait(refs, num_returns=min(32, len(refs)), timeout=60)
-            # The node only needs enough space to store
-            # a batch of objects instead of all objects.
-            results = ray.get(ready_refs)
-            for num_examples, shard_link_target_hashes in results:
-                num_outlinks += num_examples
-                all_link_target_hashes.update(shard_link_target_hashes)
-                pbar.update(1)
-                logger.info(f"So far, found {num_outlinks} outlinks ({len(all_link_target_hashes)} unique)")
+    with tqdm(total=num_shards_to_process, desc="Counting records") as pbar:
+        while unfinished:
+            finished, unfinished = ray.wait(unfinished, num_returns=len(unfinished), timeout=5)
+            try:
+                results = ray.get(finished)
+                for num_examples, shard_link_target_hashes in results:
+                    num_outlinks += num_examples
+                    all_link_target_hashes.update(shard_link_target_hashes)
+                    pbar.update(1)
+                    logger.info(f"So far, found {num_outlinks} outlinks ({len(all_link_target_hashes)} unique)")
+            except Exception as e:
+                logger.exception(f"Error processing shard: {e}")
+                raise
+
+            # If we have more shard paths left to process and we haven't hit the max
+            # number of concurrent tasks, add tasks to the unfinished queue.
+            while shard_paths and len(unfinished) < MAX_CONCURRENT_TASKS:
+                submit_shard_task(shard_paths.pop())
+
     logger.info(f"In total, found {num_outlinks} outlinks ({len(all_link_target_hashes)} unique)")
 
 
