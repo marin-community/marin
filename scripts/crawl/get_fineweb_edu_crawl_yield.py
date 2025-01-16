@@ -214,7 +214,9 @@ def extract_text_from_warc(
 )
 @remove_tpu_lockfile_on_exit
 def get_shard_quality_classifier_scores(
-    input_path: str, text_and_scores_output_path: str, urls_and_scores_output_path: str
+    input_path: str,
+    urls_and_scores_output_path: str,
+    text_and_scores_output_path: str,
 ):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     success_path = urls_and_scores_output_path + ".SUCCESS"
@@ -270,7 +272,7 @@ def get_shard_quality_classifier_scores(
         copied_example["metadata"]["score"] = example_score
         text_and_scores_output_records.append(copied_example)
     write_examples_to_parquet(urls_and_scores_output_records, urls_and_scores_output_path)
-    write_examples_to_parquet(text_and_scores_output_records, urls_and_scores_output_path)
+    write_examples_to_parquet(text_and_scores_output_records, text_and_scores_output_path)
 
     with fsspec.open(success_path, "w") as fout:
         json.dump(
