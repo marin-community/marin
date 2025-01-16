@@ -93,7 +93,7 @@ def get_examples_from_offsets(shard_path: str, offsets: list[int]):
 
 
 @ray.remote(memory=64 * 1024 * 1024 * 1024)
-def get_shards_to_process(input_pattern: str, num_to_sample: int, output_prefix: str):
+def sample_outlinks(input_pattern: str, num_to_sample: int, output_prefix: str):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     shard_paths = sorted(list(fsspec_glob(input_pattern)))
     logger.info(f"Found {len(shard_paths)} shards to process")
@@ -190,10 +190,10 @@ def write_sharded_examples(extracted_examples: list[Outlink], output_prefix: str
 
 
 @draccus.wrap()
-def get_outlinks_from_html(cfg: OutlinksSamplingConfig):
+def sample_outlinks_from_html(cfg: OutlinksSamplingConfig):
     # Do all the processing in a remote function
-    _ = ray.get(get_shards_to_process.remote(cfg.input_pattern, cfg.num_to_sample, cfg.output_prefix))
+    _ = ray.get(sample_outlinks.remote(cfg.input_pattern, cfg.num_to_sample, cfg.output_prefix))
 
 
 if __name__ == "__main__":
-    get_outlinks_from_html()
+    sample_outlinks_from_html()
