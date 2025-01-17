@@ -52,6 +52,13 @@ class OutlinksSamplingConfig:
     input_pattern: str
     num_to_sample: int
     output_prefix: str
+    # Slice off the first `start_from` examples
+    # from the sampled instances.
+    # This is useful in the following setting:
+    # 1. Sample 1M items
+    # 2. Realize you have more compute, so you want to go from 1M -> 10M.
+    # 3. So, you can sample 10M, then set start_from to 1M, to get 9M more (disjoint) instances.
+    start_from: int = 0
 
 
 @dataclass(frozen=True)
@@ -92,8 +99,8 @@ def get_examples_from_offsets(shard_path: str, offsets: list[int]):
     return extracted_examples
 
 
-@ray.remote(memory=64 * 1024 * 1024 * 1024)
-def sample_outlinks(input_pattern: str, num_to_sample: int, output_prefix: str):
+@ray.remote(memory=256 * 1024 * 1024 * 1024)
+def sample_outlinks(input_pattern: str, num_to_sample: int, output_prefix: str, start_from: int):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     shard_paths = sorted(list(fsspec_glob(input_pattern)))
     logger.info(f"Found {len(shard_paths)} shards to process")
@@ -145,30 +152,28 @@ def sample_outlinks(input_pattern: str, num_to_sample: int, output_prefix: str):
 
     # Extract sampled IDs from their corresponding files
     logger.info("Extracting sampled IDs")
-    extracted_examples = []
-    seen_target_urls = set()
     refs = []
     for shard_path, offsets in shard_to_local_offsets.items():
         refs.append(get_examples_from_offsets.remote(shard_path, offsets))
 
-    with tqdm(total=len(refs), desc="Extracting sampled IDs") as pbar:
-        while refs:
-            # Process results in the finish order instead of the submission order.
-            ready_refs, refs = ray.wait(refs, num_returns=min(500, len(refs)), timeout=60)
-            # The node only needs enough space to store
-            # a batch of objects instead of all objects.
-            results = ray.get(ready_refs)
-            for plucked_shard_examples in results:
-                for plucked_shard_example in plucked_shard_examples:
-                    # Only add examples if we haven't seen the target URL already
-                    if plucked_shard_example.link_target in seen_target_urls:
-                        continue
-                    extracted_examples.append(plucked_shard_example)
-                    seen_target_urls.add(plucked_shard_example.link_target)
-                pbar.update(1)
+    # Wait for the refs to finish. Need to preserve submission order here to ensure
+    # reproducibility.
+    results = ray.get(refs)
+
+    extracted_examples = []
+    seen_target_urls = set()
+    for plucked_shard_examples in results:
+        for plucked_shard_example in plucked_shard_examples:
+            # Only add examples if we haven't seen the target URL already
+            if plucked_shard_example.link_target in seen_target_urls:
+                continue
+            extracted_examples.append(plucked_shard_example)
+            seen_target_urls.add(plucked_shard_example.link_target)
     logger.info(f"Extracted {len(extracted_examples)} examples (after link target deduplication)")
-    # subsample to `num_to_sample`
-    random.shuffle(extracted_examples)
+    # Slice off the first `start_from`
+    logger.info(f"Removing first {start_from} examples")
+    extracted_examples = extracted_examples[start_from:]
+    # Take the next `num_to_sample`
     extracted_examples = extracted_examples[:num_to_sample]
 
     # Sort examples by domain so that URLs pointing to the same domain are in the same shard
@@ -200,7 +205,7 @@ def write_sharded_examples(extracted_examples: list[Outlink], output_prefix: str
 @draccus.wrap()
 def sample_outlinks_from_html(cfg: OutlinksSamplingConfig):
     # Do all the processing in a remote function
-    _ = ray.get(sample_outlinks.remote(cfg.input_pattern, cfg.num_to_sample, cfg.output_prefix))
+    _ = ray.get(sample_outlinks.remote(cfg.input_pattern, cfg.num_to_sample, cfg.output_prefix, cfg.start_from))
 
 
 if __name__ == "__main__":
