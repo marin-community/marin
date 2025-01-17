@@ -98,6 +98,9 @@ def sample_outlinks(input_pattern: str, num_to_sample: int, output_prefix: str):
     shard_paths = sorted(list(fsspec_glob(input_pattern)))
     logger.info(f"Found {len(shard_paths)} shards to process")
 
+    # Set the random seed for reproducibility
+    random.seed(0)
+
     # Iterate over all records and build a mapping from example index to
     # the filepath that contains those example ranges.
     example_ranges_to_path: dict[tuple[int, int], str] = {}
@@ -122,7 +125,11 @@ def sample_outlinks(input_pattern: str, num_to_sample: int, output_prefix: str):
     # Randomly sample IDs from 0 to current_index - 1 (inclusive)
     logger.info(f"Subsampling {num_to_sample * 5} ids")
     # Oversample by 5x, since some of the target URLs will be duplicates
-    subsampled_ids = random.sample(range(0, current_index), k=min(num_to_sample * 5, current_index))
+    # NOTE: this means you have to store this list in memory, but it seems necessary if you
+    # want a stable incremental sample (i.e., sampling 10 includes the results of sampling 5).
+    ids = list(range(0, current_index))
+    random.shuffle(ids)
+    subsampled_ids = ids[: min(num_to_sample * 5, current_index)]
     logger.info(f"Subsampled {num_to_sample * 5} ids")
 
     # Associate shards with ids to pluck from them
@@ -161,7 +168,8 @@ def sample_outlinks(input_pattern: str, num_to_sample: int, output_prefix: str):
                 pbar.update(1)
     logger.info(f"Extracted {len(extracted_examples)} examples (after link target deduplication)")
     # subsample to `num_to_sample`
-    extracted_examples = random.sample(extracted_examples, k=num_to_sample)
+    random.shuffle(extracted_examples)
+    extracted_examples = extracted_examples[:num_to_sample]
 
     # Sort examples by domain so that URLs pointing to the same domain are in the same shard
     extracted_examples = sorted(extracted_examples, key=lambda x: urlparse(x.link_target).netloc)
