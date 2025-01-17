@@ -152,7 +152,8 @@ def sample_outlinks(input_pattern: str, num_to_sample: int, output_prefix: str, 
     # Extract sampled IDs from their corresponding files
     logger.info("Extracting sampled IDs")
     refs = []
-    for shard_path, offsets in shard_to_local_offsets.items():
+    for shard_path in sorted(shard_to_local_offsets.keys()):
+        offsets = shard_to_local_offsets[shard_path]
         refs.append(get_examples_from_offsets.remote(shard_path, offsets))
 
     # Wait for the refs to finish. Need to preserve submission order here to ensure
@@ -175,8 +176,8 @@ def sample_outlinks(input_pattern: str, num_to_sample: int, output_prefix: str, 
     logger.info(f"Removing first {start_from} examples")
     extracted_examples = extracted_examples[start_from:]
     # Take the next `num_to_sample`
-    logger.info(f"Taking the next {num_to_sample} examples")
-    extracted_examples = extracted_examples[:num_to_sample]
+    logger.info(f"Taking the next {num_to_sample - start_from} examples")
+    extracted_examples = extracted_examples[: num_to_sample - start_from]
 
     # Sort examples by domain so that URLs pointing to the same domain are in the same shard
     logger.info("Sorting examples by domain, so URLs from the same domain are in the same shard")
