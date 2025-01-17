@@ -173,11 +173,13 @@ def sample_outlinks(input_pattern: str, num_to_sample: int, output_prefix: str, 
             seen_target_urls.add(plucked_shard_example.link_target)
     logger.info(f"Extracted {len(extracted_examples)} examples (after link target deduplication)")
     # Slice off the first `start_from`
-    logger.info(f"Removing first {start_from} examples")
-    extracted_examples = extracted_examples[start_from:]
-    # Take the next `num_to_sample`
-    logger.info(f"Taking the next {num_to_sample - start_from} examples")
-    extracted_examples = extracted_examples[: num_to_sample - start_from]
+    if len(extracted_examples) < num_to_sample:
+        raise ValueError(
+            f"Extracted {len(extracted_examples)} examples (after link target deduplication), "
+            f"which is less than number to sample {num_to_sample}"
+        )
+    extracted_examples = extracted_examples[start_from:num_to_sample]
+    logger.info(f"Took {len(extracted_examples)} examples")
 
     # Sort examples by domain so that URLs pointing to the same domain are in the same shard
     logger.info("Sorting examples by domain, so URLs from the same domain are in the same shard")
