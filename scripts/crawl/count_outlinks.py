@@ -40,52 +40,6 @@ class OutlinksCountingConfig:
     input_pattern: str
 
 
-def pick_first_aggregator():
-    return AggregateFn(
-        init=lambda: None,
-        accumulate_row=lambda acc, row: row if acc is None else acc,
-        merge=lambda a, b: a if a is not None else b,
-        finalize=lambda a: a,
-    )
-
-
-def pick_first_aggregator():
-    def init_fn():
-        return None
-
-    def accumulate_block(acc, block):
-        # If we already have a row, no need to look at the block
-        if acc is not None:
-            return acc
-
-        # If the block is empty, we do nothing
-        if len(block) == 0:
-            return acc
-
-        # Otherwise, pick the first row in the block
-        # -> block could be a Pandas DataFrame or an Arrow Table
-        # We'll handle each case:
-        if hasattr(block, "iloc"):  # Pandas
-            # Convert first row to a dict
-            return block.iloc[0].to_dict()
-        else:
-            # Arrow Table or something similar
-            # Extract columns in a dict
-            column_names = block.column_names
-            # row 0
-            return {col: block[col][0].as_py() for col in column_names}
-
-    def merge_fn(a, b):
-        return a if a is not None else b
-
-    def finalize_fn(acc):
-        return acc
-
-    return AggregateFn(
-        init=init_fn, accumulate_block=accumulate_block, merge=merge_fn, finalize=finalize_fn, name="pick_first"
-    )
-
-
 @ray.remote(memory=256 * 1024 * 1024 * 1024)
 def count_outlinks(input_pattern: str):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -97,11 +51,11 @@ def count_outlinks(input_pattern: str):
     logger.info("Counting total number of outlinks")
     count_total = ds.count()
     logger.info("Deduplicating outlinks by link target")
-    aggregator = pick_first_aggregator()
-    # This just takes the first element from each group
-    ds_unique = ds.groupby("link_target").aggregate(aggregator)
+    # First, groupby link_target and compute some aggregation (e.g. count)
+    ds_grouped = ds.groupby("link_target").count()
     logger.info("Counting number of deduplicated outlinks")
-    count_unique = ds_unique.count()
+    # Now each group is just one row; how many groups do we have?
+    count_unique = ds_grouped.count()
     logger.info(f"Found {count_total} total outlinks")
     logger.info(f"Found {count_unique} unique outlinks")
 
