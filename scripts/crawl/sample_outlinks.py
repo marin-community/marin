@@ -118,8 +118,10 @@ def sample_outlinks(input_pattern: str, num_to_sample: int, output_prefix: str, 
     current_index = 0
     # Process in submission order for reproducibility
     example_ranges_to_path: dict[tuple[int, int], str] = {}
+    logger.info("Waiting to count records in each shard")
     results = ray.get(refs)
-    for shard_path, num_examples in results:
+    logger.info("Counted records in each shard")
+    for shard_path, num_examples in tqdm(results, desc="Building offsets"):
         # shard path contains examples from [`current_index`, `current_index + num_lines`)
         example_ranges_to_path[(current_index, current_index + num_examples)] = shard_path
         current_index = current_index + num_examples
@@ -153,11 +155,13 @@ def sample_outlinks(input_pattern: str, num_to_sample: int, output_prefix: str, 
 
     # Wait for the refs to finish. Need to preserve submission order here to ensure
     # reproducibility.
+    logger.info("Waiting to extract sampled IDs from each shard")
     results = ray.get(refs)
+    logger.info("Extracted sampled IDs from each shard")
 
     extracted_examples = []
     seen_target_urls = set()
-    for plucked_shard_examples in results:
+    for plucked_shard_examples in tqdm(results, desc="Extracting examples"):
         for plucked_shard_example in plucked_shard_examples:
             # Only add examples if we haven't seen the target URL already
             if plucked_shard_example.link_target in seen_target_urls:
@@ -169,11 +173,14 @@ def sample_outlinks(input_pattern: str, num_to_sample: int, output_prefix: str, 
     logger.info(f"Removing first {start_from} examples")
     extracted_examples = extracted_examples[start_from:]
     # Take the next `num_to_sample`
+    logger.info(f"Taking the next {num_to_sample} examples")
     extracted_examples = extracted_examples[:num_to_sample]
 
     # Sort examples by domain so that URLs pointing to the same domain are in the same shard
+    logger.info("Sorting examples by domain, so URLs from the same domain are in the same shard")
     extracted_examples = sorted(extracted_examples, key=lambda x: urlparse(x.link_target).netloc)
     # Write out extracted examples as sharded parquet
+    logger.info("Writing sharded examples")
     write_sharded_examples(extracted_examples, output_prefix, shard_size=10_000)
     logger.info("All shards have been written successfully.")
 
