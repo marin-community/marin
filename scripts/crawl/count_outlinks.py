@@ -51,8 +51,8 @@ def count_examples_in_shard(shard_path: str) -> tuple[int, HyperLogLog]:
     Process each shard, counting total outlinks and building
     an HLL for approximate unique counting.
     """
-    # Create HLL with ~0.1% error
-    shard_hll = HyperLogLog(0.001)
+    # Create HLL with ~0.5% error
+    shard_hll = HyperLogLog(0.005)
     num_lines = 0
     with fsspec.open(shard_path, "rt", compression="gzip") as fin:
         for line in fin:
@@ -86,8 +86,8 @@ def count_outlinks(input_pattern: str):
     for _ in range(min(MAX_CONCURRENT_TASKS, len(shard_paths))):
         submit_shard_task(shard_paths.pop())
 
-    # Create HLL with ~0.1% error
-    global_hll = HyperLogLog(0.001)
+    # Create HLL with ~0.5% error
+    global_hll = HyperLogLog(0.005)
     num_outlinks = 0
     with tqdm(total=num_shards_to_process, desc="Counting records") as pbar:
         while unfinished:
