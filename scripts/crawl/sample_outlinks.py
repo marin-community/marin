@@ -102,6 +102,7 @@ def get_examples_from_offsets(shard_path: str, offsets: list[int]):
 @ray.remote(memory=256 * 1024 * 1024 * 1024)
 def sample_outlinks(input_pattern: str, num_to_sample: int, output_prefix: str, start_from: int):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+    # Sort for reproducibility
     shard_paths = sorted(list(fsspec_glob(input_pattern)))
     logger.info(f"Found {len(shard_paths)} shards to process")
 
@@ -110,24 +111,18 @@ def sample_outlinks(input_pattern: str, num_to_sample: int, output_prefix: str, 
 
     # Iterate over all records and build a mapping from example index to
     # the filepath that contains those example ranges.
-    example_ranges_to_path: dict[tuple[int, int], str] = {}
     refs = []
     for shard_path in shard_paths:
         refs.append(count_examples_in_shard.remote(shard_path))
 
     current_index = 0
-    with tqdm(total=len(refs), desc="Counting records") as pbar:
-        while refs:
-            # Process results in the finish order instead of the submission order.
-            ready_refs, refs = ray.wait(refs, num_returns=min(500, len(refs)), timeout=60)
-            # The node only needs enough space to store
-            # a batch of objects instead of all objects.
-            results = ray.get(ready_refs)
-            for shard_path, num_examples in results:
-                # shard path contains examples from [`current_index`, `current_index + num_lines`)
-                example_ranges_to_path[(current_index, current_index + num_examples)] = shard_path
-                current_index = current_index + num_examples
-                pbar.update(1)
+    # Process in submission order for reproducibility
+    example_ranges_to_path: dict[tuple[int, int], str] = {}
+    results = ray.get(refs)
+    for shard_path, num_examples in results:
+        # shard path contains examples from [`current_index`, `current_index + num_lines`)
+        example_ranges_to_path[(current_index, current_index + num_examples)] = shard_path
+        current_index = current_index + num_examples
 
     # Randomly sample IDs from 0 to current_index - 1 (inclusive)
     logger.info(f"Subsampling {num_to_sample * 5} ids")
