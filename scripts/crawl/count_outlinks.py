@@ -7,7 +7,7 @@ Running on OpenWebMath:
 
 ```
 python marin/run/ray_run.py \
-    --pip_deps 'hyperloglog' \
+    --pip_deps 'xxhash' \
     --no_wait -- \
     python scripts/crawl/count_outlinks.py \
     --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8/*_links.jsonl.gz'
@@ -17,7 +17,7 @@ Running on FineWeb-Edu:
 
 ```
 python marin/run/ray_run.py \
-    --pip_deps 'hyperloglog' \
+    --pip_deps 'xxhash' \
     --no_wait -- \
     python scripts/crawl/count_outlinks.py \
     --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu/CC-MAIN*/*_links.jsonl.gz'
@@ -31,8 +31,7 @@ import draccus
 import fsspec
 import ray
 from tqdm_loggable.auto import tqdm
-from hyperloglog import HyperLogLog
-
+import xxhash
 
 from marin.utils import fsspec_glob
 
@@ -46,20 +45,14 @@ class OutlinksCountingConfig:
 
 
 @ray.remote(memory=4 * 1024 * 1024 * 1024)
-def count_examples_in_shard(shard_path: str) -> tuple[int, HyperLogLog]:
-    """
-    Process each shard, counting total outlinks and building
-    an HLL for approximate unique counting.
-    """
-    # Create HLL with ~0.1% error
-    shard_hll = HyperLogLog(0.001)
+def count_examples_in_shard(shard_path: str) -> tuple[int, set[int]]:
+    unique_outlink_target_hashes = set()
     num_lines = 0
     with fsspec.open(shard_path, "rt", compression="gzip") as fin:
         for line in fin:
-            outlink = json.loads(line)["link_target"]
-            shard_hll.add(outlink)
+            unique_outlink_target_hashes.add(xxhash.xxh64(json.loads(line)["link_target"]).intdigest())
             num_lines += 1
-    return num_lines, shard_hll
+    return num_lines, unique_outlink_target_hashes
 
 
 @ray.remote(memory=256 * 1024 * 1024 * 1024)
@@ -86,22 +79,18 @@ def count_outlinks(input_pattern: str):
     for _ in range(min(MAX_CONCURRENT_TASKS, len(shard_paths))):
         submit_shard_task(shard_paths.pop())
 
-    # Create HLL with ~0.1% error
-    global_hll = HyperLogLog(0.001)
+    all_link_target_hashes = set()
     num_outlinks = 0
     with tqdm(total=num_shards_to_process, desc="Counting records") as pbar:
         while unfinished:
             finished, unfinished = ray.wait(unfinished, num_returns=len(unfinished), timeout=5)
             try:
                 results = ray.get(finished)
-                for num_examples, shard_hll in results:
+                for num_examples, shard_link_target_hashes in results:
                     num_outlinks += num_examples
-                    global_hll.update(shard_hll)
+                    all_link_target_hashes.update(shard_link_target_hashes)
                     pbar.update(1)
-                    # Log approximate unique count so far
-                    logger.info(
-                        f"So far, found ~{len(global_hll):,} unique outlinks and {num_outlinks:,} total outlinks"
-                    )
+                    logger.info(f"So far, found {num_outlinks} outlinks ({len(all_link_target_hashes)} unique)")
             except Exception as e:
                 logger.exception(f"Error processing shard: {e}")
                 raise
@@ -111,7 +100,7 @@ def count_outlinks(input_pattern: str):
             while shard_paths and len(unfinished) < MAX_CONCURRENT_TASKS:
                 submit_shard_task(shard_paths.pop())
 
-    logger.info(f"In total, found ~{len(global_hll):,} unique outlinks and {num_outlinks:,} total outlinks")
+    logger.info(f"In total, found {num_outlinks} outlinks ({len(all_link_target_hashes)} unique)")
 
 
 @draccus.wrap()
