@@ -38,6 +38,7 @@ import pyarrow.parquet as pq
 
 import draccus
 import fsspec
+import numpy as np
 import ray
 from tqdm_loggable.auto import tqdm
 
@@ -108,6 +109,7 @@ def sample_outlinks(input_pattern: str, num_to_sample: int, output_prefix: str, 
 
     # Set the random seed for reproducibility
     random.seed(0)
+    np.random.seed(seed=0)
 
     # Iterate over all records and build a mapping from example index to
     # the filepath that contains those example ranges.
@@ -131,9 +133,9 @@ def sample_outlinks(input_pattern: str, num_to_sample: int, output_prefix: str, 
     # Oversample by 5x, since some of the target URLs will be duplicates
     # NOTE: this means you have to store this list in memory, but it seems necessary if you
     # want a stable incremental sample (i.e., sampling 10 includes the results of sampling 5).
-    ids = list(range(0, current_index))
-    random.shuffle(ids)
-    subsampled_ids = ids[: min(num_to_sample * 5, current_index)]
+    ids = np.arange(0, current_index)
+    np.random.shuffle(ids)
+    subsampled_ids = list(ids[: min(num_to_sample * 5, current_index)])
     logger.info(f"Subsampled {num_to_sample * 5} ids")
 
     # Associate shards with ids to pluck from them
