@@ -27,7 +27,6 @@ from dataclasses import dataclass
 import draccus
 import fsspec
 import ray
-from ray.data.aggregate import AggregateFn
 
 from marin.utils import fsspec_glob
 
@@ -51,11 +50,9 @@ def count_outlinks(input_pattern: str):
     logger.info("Counting total number of outlinks")
     count_total = ds.count()
     logger.info("Deduplicating outlinks by link target")
-    # First, groupby link_target and compute some aggregation (e.g. count)
-    ds_grouped = ds.groupby("link_target").count()
+    ds_unique = ds.unique("link_target")
     logger.info("Counting number of deduplicated outlinks")
-    # Now each group is just one row; how many groups do we have?
-    count_unique = ds_grouped.count()
+    count_unique = ds_unique.count()
     logger.info(f"Found {count_total} total outlinks")
     logger.info(f"Found {count_unique} unique outlinks")
 
