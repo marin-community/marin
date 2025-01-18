@@ -34,6 +34,7 @@ from collections import defaultdict
 from urllib.parse import urlparse
 import pyarrow as pa
 import pyarrow.parquet as pq
+import random
 
 import draccus
 import fsspec
@@ -103,15 +104,29 @@ def get_examples_from_offsets(shard_path: str, offsets: list[int], example_ids: 
     return extracted_examples
 
 
+def rejection_sample(range_max, num_samples, rng):
+    chosen = []
+    seen = set()
+    with tqdm(total=num_samples) as pbar:
+        while len(chosen) < num_samples:
+            # generate a batch of random ints using NumPy
+            batch = rng.integers(0, range_max, size=1024)
+            for val in batch:
+                if val not in seen:
+                    seen.add(val)
+                    chosen.append(val)
+                    pbar.update(1)
+                    if len(chosen) == num_samples:
+                        break
+    return chosen
+
+
 @ray.remote(memory=256 * 1024 * 1024 * 1024)
 def sample_outlinks(input_pattern: str, num_to_sample: int, output_prefix: str, start_from: int):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     # Sort for reproducibility
     shard_paths = sorted(list(fsspec_glob(input_pattern)))
     logger.info(f"Found {len(shard_paths)} shards to process")
-
-    # Set the random seed for reproducibility
-    np.random.seed(seed=0)
 
     # Iterate over all records and build a mapping from example index to
     # the filepath that contains those example ranges.
@@ -133,11 +148,15 @@ def sample_outlinks(input_pattern: str, num_to_sample: int, output_prefix: str, 
     # Randomly sample IDs from 0 to current_index - 1 (inclusive)
     logger.info(f"Subsampling {num_to_sample * 5} ids")
     # Oversample by 5x, since some of the target URLs will be duplicates
-    # NOTE: this means you have to store this list in memory, but it seems necessary if you
-    # want a stable incremental sample (i.e., sampling 10 includes the results of sampling 5).
-    ids = np.arange(0, current_index)
-    np.random.shuffle(ids)
-    subsampled_ids = list(ids[: min(num_to_sample * 5, current_index)])
+    rng = np.random.default_rng(0)
+    num_ids_to_generate = min(num_to_sample * 5, current_index)
+    if num_ids_to_generate == current_index:
+        # We want to use all the IDs, so just shuffle them
+        subsampled_ids = np.arange(0, current_index)
+        rng.shuffle(subsampled_ids)
+    else:
+        # We want to rejection sample, trade-off memory for time
+        subsampled_ids = rejection_sample(current_index, num_ids_to_generate, rng)
 
     # Associate shards with ids to pluck from them
     shard_to_local_offsets_with_ids = defaultdict(list)
