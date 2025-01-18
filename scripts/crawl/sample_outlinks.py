@@ -8,6 +8,7 @@ Running on OpenWebMath:
 
 ```
 python marin/run/ray_run.py \
+    --pip_deps 'tldextract' \
     --no_wait -- \
     python scripts/crawl/sample_outlinks.py \
     --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8/*_links.jsonl.gz' \
@@ -19,6 +20,7 @@ Running on FineWeb-Edu:
 
 ```
 python marin/run/ray_run.py \
+    --pip_deps 'tldextract' \
     --no_wait -- \
     python scripts/crawl/sample_outlinks.py \
     --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu/CC-MAIN*/*_links.jsonl.gz' \
@@ -34,13 +36,13 @@ from collections import defaultdict
 from urllib.parse import urlparse
 import pyarrow as pa
 import pyarrow.parquet as pq
-import random
 
 import draccus
 import fsspec
 import numpy as np
 import ray
 from tqdm_loggable.auto import tqdm
+import tldextract
 
 from marin.utils import fsspec_glob
 
@@ -220,8 +222,9 @@ def sample_outlinks(input_pattern: str, num_to_sample: int, output_prefix: str, 
 
     # Sort examples by domain so that URLs pointing to the same domain are in the same shard
     logger.info("Sorting examples by domain, so URLs from the same domain are in the same shard")
+    no_fetch_extract = tldextract.TLDExtract(suffix_list_urls=())
     extracted_deduplicated_examples = sorted(
-        extracted_deduplicated_examples, key=lambda x: urlparse(x.link_target).netloc
+        extracted_deduplicated_examples, key=lambda x: no_fetch_extract(x).registered_domain
     )
     # Write out extracted examples as sharded parquet
     logger.info("Writing sharded examples")
