@@ -30,7 +30,6 @@ python marin/run/ray_run.py \
 import json
 import logging
 from dataclasses import dataclass, asdict
-import random
 from collections import defaultdict
 from urllib.parse import urlparse
 import pyarrow as pa
@@ -80,8 +79,11 @@ def count_examples_in_shard(shard_path: str) -> tuple[str, int]:
 
 
 @ray.remote(memory=4 * 1024 * 1024 * 1024)
-def get_examples_from_offsets(shard_path: str, offsets: list[int]):
-    extracted_examples = set()
+def get_examples_from_offsets(shard_path: str, offsets: list[int], example_ids: list[int]):
+    assert len(example_ids) == len(offsets)
+    offset_to_id = {offset: example_id for offset, example_id in zip(offsets, example_ids)}
+
+    extracted_examples = []
     offsets = sorted(offsets)  # ensure ascending order
     with fsspec.open(shard_path, "rt", compression="gzip") as fin:
         current_line_idx = 0
@@ -94,7 +96,8 @@ def get_examples_from_offsets(shard_path: str, offsets: list[int]):
             if current_line_idx == next_offset:
                 # This is one of the lines we want
                 parsed_example = json.loads(line.rstrip("\n"))
-                extracted_examples.add(Outlink(**parsed_example))
+                example_id = offset_to_id[next_offset]
+                extracted_examples.append((Outlink(**parsed_example), example_id))
                 next_offset = next(offsets_iter, None)
             current_line_idx += 1
     return extracted_examples
@@ -108,7 +111,6 @@ def sample_outlinks(input_pattern: str, num_to_sample: int, output_prefix: str, 
     logger.info(f"Found {len(shard_paths)} shards to process")
 
     # Set the random seed for reproducibility
-    random.seed(0)
     np.random.seed(seed=0)
 
     # Iterate over all records and build a mapping from example index to
@@ -136,25 +138,26 @@ def sample_outlinks(input_pattern: str, num_to_sample: int, output_prefix: str, 
     ids = np.arange(0, current_index)
     np.random.shuffle(ids)
     subsampled_ids = list(ids[: min(num_to_sample * 5, current_index)])
-    logger.info(f"Subsampled {num_to_sample * 5} ids")
 
     # Associate shards with ids to pluck from them
-    shard_to_local_offsets = defaultdict(list)
+    shard_to_local_offsets_with_ids = defaultdict(list)
     for example_id in tqdm(subsampled_ids, desc="Mapping sampled IDs to shards"):
         # Find which shard this example belongs to
         for (start_idx, end_idx), shard_path in example_ranges_to_path.items():
             if start_idx <= example_id < end_idx:
                 # local offset inside the shard
                 local_offset = example_id - start_idx
-                shard_to_local_offsets[shard_path].append(local_offset)
+                shard_to_local_offsets_with_ids[shard_path].append((local_offset, example_id))
                 break
 
     # Extract sampled IDs from their corresponding files
     logger.info("Extracting sampled IDs")
     refs = []
-    for shard_path in sorted(shard_to_local_offsets.keys()):
-        offsets = shard_to_local_offsets[shard_path]
-        refs.append(get_examples_from_offsets.remote(shard_path, offsets))
+    for shard_path in shard_to_local_offsets_with_ids:
+        offsets_with_ids = shard_to_local_offsets_with_ids[shard_path]
+        local_offsets = [x[0] for x in offsets_with_ids]
+        example_ids = [x[1] for x in offsets_with_ids]
+        refs.append(get_examples_from_offsets.remote(shard_path, local_offsets, example_ids))
 
     # Wait for the refs to finish. Need to preserve submission order here to ensure
     # reproducibility.
@@ -162,31 +165,41 @@ def sample_outlinks(input_pattern: str, num_to_sample: int, output_prefix: str, 
     results = ray.get(refs)
     logger.info("Extracted sampled IDs from each shard")
 
-    extracted_examples = []
-    seen_target_urls = set()
+    example_id_to_example = {}
     for plucked_shard_examples in tqdm(results, desc="Extracting examples"):
-        for plucked_shard_example in plucked_shard_examples:
-            # Only add examples if we haven't seen the target URL already
-            if plucked_shard_example.link_target in seen_target_urls:
-                continue
-            extracted_examples.append(plucked_shard_example)
-            seen_target_urls.add(plucked_shard_example.link_target)
-    logger.info(f"Extracted {len(extracted_examples)} examples (after link target deduplication)")
+        for plucked_shard_example, example_id in plucked_shard_examples:
+            example_id_to_example[example_id] = plucked_shard_example
+    logger.info(f"Extracted {len(example_id_to_example)} examples")
+
+    # Now, order the examples in the same order as what we randomly sampled
+    extracted_examples = [example_id_to_example[subsampled_id] for subsampled_id in subsampled_ids]
+
+    # deduplicate the links based on the target URL
+    deduplicated_examples = []
+    seen_target_urls = set()
+    for example in extracted_examples:
+        if example.link_target in seen_target_urls:
+            continue
+        deduplicated_examples.append(example)
+        seen_target_urls.add(example.link_target)
+
     # Slice off the first `start_from`
-    if len(extracted_examples) < num_to_sample:
+    if len(deduplicated_examples) < num_to_sample:
         raise ValueError(
-            f"Extracted {len(extracted_examples)} examples (after link target deduplication), "
+            f"Extracted {len(deduplicated_examples)} examples (after link target deduplication), "
             f"which is less than number to sample {num_to_sample}"
         )
-    extracted_examples = extracted_examples[start_from:num_to_sample]
-    logger.info(f"Took {len(extracted_examples)} examples")
+    extracted_deduplicated_examples = deduplicated_examples[start_from:num_to_sample]
+    logger.info(f"Took {len(extracted_deduplicated_examples)} examples")
 
     # Sort examples by domain so that URLs pointing to the same domain are in the same shard
     logger.info("Sorting examples by domain, so URLs from the same domain are in the same shard")
-    extracted_examples = sorted(extracted_examples, key=lambda x: urlparse(x.link_target).netloc)
+    extracted_deduplicated_examples = sorted(
+        extracted_deduplicated_examples, key=lambda x: urlparse(x.link_target).netloc
+    )
     # Write out extracted examples as sharded parquet
     logger.info("Writing sharded examples")
-    write_sharded_examples(extracted_examples, output_prefix, shard_size=10_000)
+    write_sharded_examples(extracted_deduplicated_examples, output_prefix, shard_size=10_000)
     logger.info("All shards have been written successfully.")
 
 
