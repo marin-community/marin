@@ -11,8 +11,8 @@ python marin/run/ray_run.py \
     --no_wait -- \
     python scripts/crawl/sample_outlinks.py \
     --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8/*_links.jsonl.gz' \
-    --num_to_sample 1000000 \
-    --output_prefix gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-1M/links
+    --num_to_sample 10000000 \
+    --output_prefix gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-10M/links
 ```
 
 Running on FineWeb-Edu:
@@ -22,8 +22,8 @@ python marin/run/ray_run.py \
     --no_wait -- \
     python scripts/crawl/sample_outlinks.py \
     --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu/CC-MAIN*/*_links.jsonl.gz' \
-    --num_to_sample 1000000 \
-    --output_prefix gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-1M/links
+    --num_to_sample 10000000 \
+    --output_prefix gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-10M/links
 ```
 """
 
