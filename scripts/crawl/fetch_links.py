@@ -10,8 +10,8 @@ python marin/run/ray_run.py \
     --pip_deps 'warcio' \
     --no_wait -- \
     python scripts/crawl/fetch_links.py \
-    --urls_input_directory gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-1M/ \
-    --output_directory gs://marin-us-central2/scratch/nfliu/fetched_outlinks/fineweb-edu-1M/
+    --urls_input_directory gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-10M/ \
+    --output_directory gs://marin-us-central2/scratch/nfliu/fetched_outlinks/fineweb-edu-10M/
 ```
 
 Running on OpenWebMath:
@@ -21,8 +21,8 @@ python marin/run/ray_run.py \
     --pip_deps 'warcio' \
     --no_wait -- \
     python scripts/crawl/fetch_links.py \
-    --urls_input_directory gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-1M/ \
-    --output_directory gs://marin-us-central2/scratch/nfliu/fetched_outlinks/open-web-math-fde8ef8-1M/
+    --urls_input_directory gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-10M/ \
+    --output_directory gs://marin-us-central2/scratch/nfliu/fetched_outlinks/open-web-math-fde8ef8-10M/
 ```
 """
 from collections import Counter
