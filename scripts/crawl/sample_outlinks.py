@@ -26,7 +26,7 @@ python marin/run/ray_run.py \
     --output_prefix gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-10M/links
 ```
 """
-
+import bisect
 import json
 import logging
 from dataclasses import dataclass, asdict
@@ -158,16 +158,22 @@ def sample_outlinks(input_pattern: str, num_to_sample: int, output_prefix: str, 
         # We want to rejection sample, trade-off memory for time
         subsampled_ids = rejection_sample(current_index, num_ids_to_generate, rng)
 
-    # Associate shards with ids to pluck from them
+    # Convert shard ranges dict to a list sorted by start index
+    range_list = sorted(
+        [(start_idx, end_idx, shard_path) for (start_idx, end_idx), shard_path in example_ranges_to_path.items()],
+        key=lambda x: x[0],
+    )
+    # Create a list of just the start indices, for bisect
+    starts = [item[0] for item in range_list]
+
+    # Map sampled IDs to the correct shard via binary search
     shard_to_local_offsets_with_ids = defaultdict(list)
     for example_id in tqdm(subsampled_ids, desc="Mapping sampled IDs to shards"):
-        # Find which shard this example belongs to
-        for (start_idx, end_idx), shard_path in example_ranges_to_path.items():
-            if start_idx <= example_id < end_idx:
-                # local offset inside the shard
-                local_offset = example_id - start_idx
-                shard_to_local_offsets_with_ids[shard_path].append((local_offset, example_id))
-                break
+        # Find which shard covers this ID
+        shard_idx = bisect.bisect_right(starts, example_id) - 1
+        start_idx, _, shard_path = range_list[shard_idx]
+        local_offset = example_id - start_idx
+        shard_to_local_offsets_with_ids[shard_path].append((local_offset, example_id))
 
     # Extract sampled IDs from their corresponding files
     logger.info("Extracting sampled IDs")
