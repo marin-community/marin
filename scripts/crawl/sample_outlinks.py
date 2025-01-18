@@ -224,7 +224,7 @@ def sample_outlinks(input_pattern: str, num_to_sample: int, output_prefix: str, 
     logger.info("Sorting examples by domain, so URLs from the same domain are in the same shard")
     no_fetch_extract = tldextract.TLDExtract(suffix_list_urls=())
     extracted_deduplicated_examples = sorted(
-        extracted_deduplicated_examples, key=lambda x: no_fetch_extract(x).registered_domain
+        extracted_deduplicated_examples, key=lambda x: no_fetch_extract(x.link_target).registered_domain
     )
     # Write out extracted examples as sharded parquet
     logger.info("Writing sharded examples")
