@@ -82,8 +82,8 @@ def fetch_url(
                     if new_size > MAX_SIZE_BYTES:
                         allowed_bytes = MAX_SIZE_BYTES - downloaded_bytes
                         content_buffer.write(chunk[:allowed_bytes])
-                        # You might log or otherwise note that you've truncated the response:
-                        # logger.info(f"Truncated {url} after {MAX_SIZE_BYTES} bytes.")
+                        # Log that we've truncated the response:
+                        logger.info(f"Truncated {url} after {MAX_SIZE_BYTES} bytes.")
                         break
                     else:
                         content_buffer.write(chunk)
@@ -271,7 +271,7 @@ def main(cfg: FetchLinksConfig):
     random.shuffle(shard_indices_to_process)
 
     # Set a limit on the number of concurrent tasks so we don't make too many network requests
-    MAX_CONCURRENT_TASKS = 10
+    MAX_CONCURRENT_TASKS = 50
     num_shards_submitted = 0
     unfinished = []
 
