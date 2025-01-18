@@ -107,7 +107,7 @@ def get_examples_from_offsets(shard_path: str, offsets: list[int], example_ids: 
 def rejection_sample(range_max, num_samples, rng):
     chosen = []
     seen = set()
-    with tqdm(total=num_samples) as pbar:
+    with tqdm(total=num_samples, desc="Rejection sampling") as pbar:
         while len(chosen) < num_samples:
             # generate a batch of random ints using NumPy
             batch = rng.integers(0, range_max, size=1024)
@@ -150,6 +150,7 @@ def sample_outlinks(input_pattern: str, num_to_sample: int, output_prefix: str, 
     # Oversample by 5x, since some of the target URLs will be duplicates
     rng = np.random.default_rng(0)
     num_ids_to_generate = min(num_to_sample * 5, current_index)
+
     if num_ids_to_generate == current_index:
         # We want to use all the IDs, so just shuffle them
         subsampled_ids = np.arange(0, current_index)
