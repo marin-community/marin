@@ -190,7 +190,7 @@ def get_urls_and_scores_from_warcs(cc_dump: str, output_path: str, num_warcs_to_
     logger.info(f"Submitted {len(refs)} tasks to score URLs from WARCs")
 
     # Wait for the tasks to finish
-    _ = ray.get(refs)
+    ray.get(refs)
 
 
 @draccus.wrap()
@@ -200,7 +200,7 @@ def get_urls_and_scores_from_dumps(cfg: CCUrlsAndScoresExtractionConfig):
     for cc_dump in cfg.cc_dumps:
         dump_output_path = os.path.join(cfg.output_path, cc_dump)
         refs.append(get_urls_and_scores_from_warcs.remote(cc_dump, dump_output_path, cfg.num_warcs_to_sample))
-    _ = ray.get(refs)
+    ray.get(refs)
 
 
 if __name__ == "__main__":

@@ -203,7 +203,7 @@ def get_urls_and_scores_from_warcs(cc_dump: str, output_path: str, num_warcs_to_
         output_path = os.path.join(output_path, f"{warc_name}_extracted_text.jsonl.gz")
         refs.append(extract_text_from_warc.remote(warc_path, output_path))
     logger.info(f"Submitted {len(refs)} tasks to extract text")
-    _ = ray.get(refs)
+    ray.get(refs)
 
     refs = []
     for warc_path in warc_paths:
@@ -212,7 +212,7 @@ def get_urls_and_scores_from_warcs(cc_dump: str, output_path: str, num_warcs_to_
         output_path = os.path.join(output_path, f"{warc_name}_urls_and_quality_classifier_scores.jsonl.gz")
         refs.append(process_one_batch.remote(input_path, output_path))
     logger.info(f"Submitted {len(refs)} tasks to run quality classifier")
-    _ = ray.get(refs)
+    ray.get(refs)
 
 
 @draccus.wrap()
@@ -222,7 +222,7 @@ def get_urls_and_scores_from_dumps(cfg: CCUrlsAndScoresExtractionConfig):
     for cc_dump in cfg.cc_dumps:
         dump_output_path = os.path.join(cfg.output_path, cc_dump)
         refs.append(get_urls_and_scores_from_warcs.remote(cc_dump, dump_output_path, cfg.num_warcs_to_sample))
-    _ = ray.get(refs)
+    ray.get(refs)
 
 
 if __name__ == "__main__":
