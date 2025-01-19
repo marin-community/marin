@@ -23,3 +23,5 @@ class SimpleTrainConfig:
     """how often to run task evaluations"""
 
     node_count: int = 1
+
+    initialize_from_checkpoint_path: str | None = None
