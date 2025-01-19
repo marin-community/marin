@@ -199,6 +199,7 @@ def default_train(
             data_seed=train_config.data_seed,
             eval_harness_steps=train_config.steps_per_task_eval or 10000,
             eval_harness=harness_config,
+            initialize_from_checkpoint_path=train_config.initialize_from_checkpoint_path,
         ),
         pip_dependency_groups=["tokenize_train"],
     )
