@@ -38,7 +38,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 
-@dataclass
+@dataclass(frozen=True)
 class UrlsAndScoresExtractionConfig:
     html_input_path: str
     prefix: str

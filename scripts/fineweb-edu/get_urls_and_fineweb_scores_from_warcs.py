@@ -43,7 +43,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 
-@dataclass
+@dataclass(frozen=True)
 class CCUrlsAndScoresExtractionConfig:
     cc_dumps: list[str]
     num_warcs_to_sample: int

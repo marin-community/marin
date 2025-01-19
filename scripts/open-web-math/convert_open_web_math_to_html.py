@@ -156,7 +156,7 @@ def process_one_shard(
     )
 
 
-@dataclass
+@dataclass(frozen=True)
 class DolmaFormattedOpenWebMathRecord:
     id: str
     source: str
@@ -165,7 +165,7 @@ class DolmaFormattedOpenWebMathRecord:
     metadata: dict[str, Any]
 
 
-@dataclass
+@dataclass(frozen=True)
 class ParquetOpenWebMathConfig:
     input_path: str
     html_output_path: str
