@@ -155,7 +155,7 @@ def get_urls_and_scores_from_html(cfg: UrlsAndScoresExtractionConfig):
     logger.info(f"Submitted {len(refs)} tasks to score URLs")
 
     # Wait for the tasks to finish
-    _ = ray.get(refs)
+    ray.get(refs)
 
 
 if __name__ == "__main__":
