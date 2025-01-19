@@ -175,7 +175,7 @@ def process_one_shard(
     )
 
 
-@dataclass
+@dataclass(frozen=True)
 class DolmaFormattedFineWebEduRecord:
     id: str
     source: str
@@ -184,7 +184,7 @@ class DolmaFormattedFineWebEduRecord:
     metadata: dict[str, Any]
 
 
-@dataclass
+@dataclass(frozen=True)
 class ParquetFineWebEduConfig:
     input_path: str
     html_output_path: str
