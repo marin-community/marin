@@ -197,7 +197,7 @@ def get_urls_and_scores_from_html(cfg: UrlsAndScoresExtractionConfig):
     logger.info(f"Submitted {len(refs)} tasks to extract text")
 
     # Wait for the tasks to finish
-    _ = ray.get(refs)
+    ray.get(refs)
 
     refs = []
     for i, html_shard_index in enumerate(shard_indices):
@@ -207,7 +207,7 @@ def get_urls_and_scores_from_html(cfg: UrlsAndScoresExtractionConfig):
     logger.info(f"Submitted {len(refs)} tasks to run quality classifier")
 
     # Wait for the tasks to finish
-    _ = ray.get(refs)
+    ray.get(refs)
 
 
 if __name__ == "__main__":

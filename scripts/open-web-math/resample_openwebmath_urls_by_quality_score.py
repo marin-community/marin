@@ -287,7 +287,7 @@ def write_examples_to_parquet(examples: list[dict], output_path: str, output_suc
 
 @draccus.wrap()
 def resample_and_split_urls(cfg: ResamplingConfig):
-    _ = ray.get(
+    ray.get(
         resample_urls.remote(
             cfg.input_patterns,
             cfg.cc_prefix,
