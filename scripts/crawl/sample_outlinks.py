@@ -14,6 +14,7 @@ python marin/run/ray_run.py \
     python scripts/crawl/sample_outlinks.py \
     --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8/*_links.jsonl.gz' \
     --num_to_sample 10000000 \
+    --shard_size 100000 \
     --output_prefix gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-10M/links
 ```
 
@@ -26,6 +27,7 @@ python marin/run/ray_run.py \
     python scripts/crawl/sample_outlinks.py \
     --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu/CC-MAIN*/*_links.jsonl.gz' \
     --num_to_sample 10000000 \
+    --shard_size 100000 \
     --output_prefix gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-10M/links
 ```
 
@@ -33,17 +35,19 @@ python marin/run/ray_run.py \
 import bisect
 import json
 import logging
-from dataclasses import dataclass, asdict
-from collections import defaultdict
-import pyarrow as pa
-import pyarrow.parquet as pq
+import math
+import random
+from collections import Counter, defaultdict
+from dataclasses import asdict, dataclass
 
 import draccus
 import fsspec
 import numpy as np
+import pyarrow as pa
+import pyarrow.parquet as pq
 import ray
-from tqdm_loggable.auto import tqdm
 import tldextract
+from tqdm_loggable.auto import tqdm
 
 from marin.utils import fsspec_glob
 
@@ -55,6 +59,7 @@ logger = logging.getLogger(__name__)
 class OutlinksSamplingConfig:
     input_pattern: str
     num_to_sample: int
+    shard_size: int
     output_prefix: str
     start_from: int = 0
 
@@ -128,7 +133,7 @@ def rejection_sample(range_max: int, num_samples: int, rng: np.random.Generator)
 
 
 @ray.remote(memory=256 * 1024 * 1024 * 1024)
-def sample_outlinks(input_pattern: str, num_to_sample: int, output_prefix: str, start_from: int):
+def sample_outlinks(input_pattern: str, num_to_sample: int, shard_size: int, output_prefix: str, start_from: int):
     """
     Given an input pattern of shards with outlinks, randomly sample `num_to_sample` of them.
     The output links are written to `{output_prefix}.{shard_idx}.parquet`, where each shard
@@ -147,6 +152,7 @@ def sample_outlinks(input_pattern: str, num_to_sample: int, output_prefix: str, 
     Args:
     input_pattern (int): Pattern to input outlinks to sample.
     num_to_sample (int): Number of outlinks to sample.
+    shard_size (int): Number of outlinks in each shard.
     output_prefix (str): Write sampled outlinks to `{output_prefix}.{shard_idx}.parquet`
     start_from (int): slice off the first `start_from` items from the sampled outlinks.
                       So, the total number of outlinks written is `num_to_sample - start_from`.
@@ -248,33 +254,80 @@ def sample_outlinks(input_pattern: str, num_to_sample: int, output_prefix: str, 
 
     # Sort examples by domain so that URLs pointing to the same domain are in the same shard
     logger.info("Sorting examples by domain, so URLs from the same domain are in the same shard")
-    no_fetch_extract = tldextract.TLDExtract(suffix_list_urls=())
-    extracted_deduplicated_examples = sorted(
-        extracted_deduplicated_examples, key=lambda x: no_fetch_extract(x.link_target).registered_domain
+
+    sharded_examples = shard_urls_by_domain(
+        extracted_deduplicated_examples,
+        shard_count=int(math.ceil((num_to_sample - start_from) / shard_size)),
+        block_size=500,
     )
     # Write out extracted examples as sharded parquet
     logger.info("Writing sharded examples")
-    write_sharded_examples(extracted_deduplicated_examples, output_prefix, shard_size=10_000)
+    write_sharded_examples(sharded_examples, output_prefix)
     logger.info("All shards have been written successfully.")
 
 
-def write_sharded_examples(extracted_examples: list[Outlink], output_prefix: str, shard_size: int = 10_000):
-    logger.info(f"Writing {len(extracted_examples)} sampled lines (shard size {shard_size})")
-    extracted_examples_list = list(extracted_examples)
-    num_shards = (len(extracted_examples_list) + shard_size - 1) // shard_size
+def shard_urls_by_domain(examples: list[Outlink], shard_count: int, block_size: int = 500):
+    """
+    Distribute URLs into shards in a domain-aware, block-wise manner.
 
-    for shard_idx in range(num_shards):
+    Args:
+    urls (list[Outlink]): A list of URL strings.
+    shard_count (int): Number of shards to produce.
+    block_size (int): How many URLs from a single domain to group together.
+
+    Returns: a list of lists, where each sub-list is a shard containing URLs.
+    """
+    no_fetch_extract = tldextract.TLDExtract(suffix_list_urls=())
+
+    # 1) Group URLs by domain
+    domain_map = defaultdict(list)
+    for example in examples:
+        domain = no_fetch_extract(example.link_target).registered_domain.lower()
+        domain_map[domain].append(example)
+
+    # 2) Split each domain's URLs into 'block_size' chunks
+    blocks = []
+    domain_to_num_blocks = Counter()
+    for domain, domain_urls in domain_map.items():
+        random.shuffle(domain_urls)
+        for i in range(0, len(domain_urls), block_size):
+            block = domain_urls[i : i + block_size]
+            blocks.append(block)
+            domain_to_num_blocks[domain] += 1
+    logger.info(f"Domains with the most blocks: {domain_to_num_blocks.most_common(10)}")
+
+    # 3) Distribute blocks across shards in a round-robin manner
+    shards = [[] for _ in range(shard_count)]
+    idx = 0
+    for block in blocks:
+        shards[idx].extend(block)
+        idx = (idx + 1) % shard_count
+
+    return shards
+
+
+def write_sharded_examples(sharded_examples: list[list[Outlink]], output_prefix: str):
+    logger.info(f"Writing {len(sharded_examples)} shards")
+
+    shard_idx_to_num_examples = Counter()
+    num_examples_written = 0
+    for shard_idx, shard in enumerate(sharded_examples):
         shard_filename = f"{output_prefix}.{shard_idx}.parquet"
+        shard_dicts = [asdict(example) for example in shard]
 
-        start_idx = shard_idx * shard_size
-        end_idx = min((shard_idx + 1) * shard_size, len(extracted_examples_list))
-        shard_dicts = [asdict(example) for example in extracted_examples_list[start_idx:end_idx]]
-
-        logger.info(f"Writing shard {shard_idx + 1}/{num_shards} to {shard_filename}")
+        logger.info(
+            f"Writing shard {shard_idx + 1}/{len(sharded_examples)} to {shard_filename} "
+            f"({len(shard_dicts)} examples)"
+        )
         table = pa.Table.from_pylist(shard_dicts)
 
         with fsspec.open(shard_filename, "wb") as fout:
             pq.write_table(table, fout, compression="snappy")
+            num_examples_written += len(shard_dicts)
+            shard_idx_to_num_examples[shard_idx] += len(shard_dicts)
+    logger.info(f"Wrote {num_examples_written} examples in total")
+    logger.info(f"Largest shards: {shard_idx_to_num_examples.most_common(10)}")
+    logger.info(f"Smallest shards: {shard_idx_to_num_examples.most_common()[:-10-1:-1]}")
 
 
 @draccus.wrap()
