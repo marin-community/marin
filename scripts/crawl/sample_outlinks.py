@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-Subsample outlinks from a collection. An input file is a JSONL file, where each record contains
-an Outlink. The output is sharded parquet file(s) (10K records each), where each record contains
-an Outlink.
+Subsample outlinks from a collection (uniform random, exact sampling). An
+input file is a JSONL file, where each record contains an Outlink. The output is
+sharded parquet file(s) (10K records each), where each record contains an
+Outlink.
 
 Running on OpenWebMath:
 
@@ -27,13 +28,13 @@ python marin/run/ray_run.py \
     --num_to_sample 10000000 \
     --output_prefix gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-10M/links
 ```
+
 """
 import bisect
 import json
 import logging
 from dataclasses import dataclass, asdict
 from collections import defaultdict
-from urllib.parse import urlparse
 import pyarrow as pa
 import pyarrow.parquet as pq
 
@@ -55,12 +56,6 @@ class OutlinksSamplingConfig:
     input_pattern: str
     num_to_sample: int
     output_prefix: str
-    # Slice off the first `start_from` examples
-    # from the sampled instances.
-    # This is useful in the following setting:
-    # 1. Sample 1M items
-    # 2. Realize you have more compute, so you want to go from 1M -> 10M.
-    # 3. So, you can sample 10M, then set start_from to 1M, to get 9M more (disjoint) instances.
     start_from: int = 0
 
 
@@ -106,7 +101,16 @@ def get_examples_from_offsets(shard_path: str, offsets: list[int], example_ids: 
     return extracted_examples
 
 
-def rejection_sample(range_max, num_samples, rng):
+def rejection_sample(range_max: int, num_samples: int, rng: np.random.Generator) -> list[int]:
+    """
+    Samples `num_samples` integers from from [0, range_max). Crucially, sampling is _incremental_, since
+    sampling k+1 items will include the results of sampling k items.
+
+    Args:
+    range_max (int): Integers are sampled from [0, range_max)
+    num_samples (int): Number of integers to sample
+    rng (np.random.Generator): Generator instance to use for sampling
+    """
     chosen = []
     seen = set()
     with tqdm(total=num_samples, desc="Rejection sampling") as pbar:
@@ -125,6 +129,28 @@ def rejection_sample(range_max, num_samples, rng):
 
 @ray.remote(memory=256 * 1024 * 1024 * 1024)
 def sample_outlinks(input_pattern: str, num_to_sample: int, output_prefix: str, start_from: int):
+    """
+    Given an input pattern of shards with outlinks, randomly sample `num_to_sample` of them.
+    The output links are written to `{output_prefix}.{shard_idx}.parquet`, where each shard
+    is 10,000 links.
+
+    The `start_from` argument is used to slice off the first `start_from` examples
+    from the sampled instances. Sampling is incremental, which makes it useful for the
+    following setting:
+
+    1. Sample k items
+    2. Realize you have more compute, so you want to go from k -> 2k
+    3. So, you can sample 2k, then set start_from to k, to get k more (disjoint) instances.
+
+    This function requires O(k) memory, where k is the number of links to sample.
+
+    Args:
+    input_pattern (int): Pattern to input outlinks to sample.
+    num_to_sample (int): Number of outlinks to sample.
+    output_prefix (str): Write sampled outlinks to `{output_prefix}.{shard_idx}.parquet`
+    start_from (int): slice off the first `start_from` items from the sampled outlinks.
+                      So, the total number of outlinks written is `num_to_sample - start_from`.
+    """
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     # Sort for reproducibility
     shard_paths = sorted(list(fsspec_glob(input_pattern)))
