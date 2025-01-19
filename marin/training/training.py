@@ -112,6 +112,9 @@ class TrainLmOnPodConfig(train_lm.TrainLmConfig):
     node_count: int = 1
     """Number of TPU slices for training."""
 
+    initialize_from_checkpoint_path: str | None = None
+    """If set, the training will resume from the checkpoint at this path."""
+
 
 DEFAULT_CHECKPOINTS_PATH = "checkpoints"
 DEFAULT_HF_CHECKPOINTS_PATH = "hf"
