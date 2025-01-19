@@ -11,7 +11,7 @@ python marin/run/ray_run.py \
     python scripts/fineweb-edu/get_urls_and_fineweb_scores_from_warcs.py \
     --cc_dumps '["CC-MAIN-2022-05", "CC-MAIN-2022-21", "CC-MAIN-2022-27", "CC-MAIN-2022-33", "CC-MAIN-2022-40", "CC-MAIN-2022-49", "CC-MAIN-2023-06", "CC-MAIN-2023-14", "CC-MAIN-2023-23", "CC-MAIN-2023-40", "CC-MAIN-2023-50", "CC-MAIN-2024-10"]' \
     --num_warcs_to_sample 500 \
-    --output_directory gs://marin-us-central2/scratch/nfliu/urls_and_scores/fineweb-edu-cc/
+    --output_path gs://marin-us-central2/scratch/nfliu/urls_and_scores/fineweb-edu-cc/
 done
 ```
 """
@@ -47,7 +47,7 @@ logger = logging.getLogger(__name__)
 class CCUrlsAndScoresExtractionConfig:
     cc_dumps: list[str]
     num_warcs_to_sample: int
-    output_directory: str
+    output_path: str
 
 
 def decode_html(html: bytes) -> str | None:
@@ -194,13 +194,13 @@ def get_warc_paths_to_process(cc_dump: str, num_warcs_to_sample):
 
 
 @ray.remote(memory=8 * 1024 * 1024 * 1024)
-def get_urls_and_scores_from_warcs(cc_dump: str, output_directory: str, num_warcs_to_sample: int):
+def get_urls_and_scores_from_warcs(cc_dump: str, output_path: str, num_warcs_to_sample: int):
     warc_paths = ray.get(get_warc_paths_to_process.remote(cc_dump, num_warcs_to_sample))
 
     refs = []
     for warc_path in warc_paths:
         warc_name = os.path.basename(warc_path)
-        output_path = os.path.join(output_directory, f"{warc_name}_extracted_text.jsonl.gz")
+        output_path = os.path.join(output_path, f"{warc_name}_extracted_text.jsonl.gz")
         refs.append(extract_text_from_warc.remote(warc_path, output_path))
     logger.info(f"Submitted {len(refs)} tasks to extract text")
     _ = ray.get(refs)
@@ -208,8 +208,8 @@ def get_urls_and_scores_from_warcs(cc_dump: str, output_directory: str, num_warc
     refs = []
     for warc_path in warc_paths:
         warc_name = os.path.basename(warc_path)
-        input_path = os.path.join(output_directory, f"{warc_name}_extracted_text.jsonl.gz")
-        output_path = os.path.join(output_directory, f"{warc_name}_urls_and_quality_classifier_scores.jsonl.gz")
+        input_path = os.path.join(output_path, f"{warc_name}_extracted_text.jsonl.gz")
+        output_path = os.path.join(output_path, f"{warc_name}_urls_and_quality_classifier_scores.jsonl.gz")
         refs.append(process_one_batch.remote(input_path, output_path))
     logger.info(f"Submitted {len(refs)} tasks to run quality classifier")
     _ = ray.get(refs)
@@ -220,8 +220,8 @@ def get_urls_and_scores_from_dumps(cfg: CCUrlsAndScoresExtractionConfig):
     refs = []
     logger.info(f"Got {len(cfg.cc_dumps)} CC dumps to process")
     for cc_dump in cfg.cc_dumps:
-        dump_output_directory = os.path.join(cfg.output_directory, cc_dump)
-        refs.append(get_urls_and_scores_from_warcs.remote(cc_dump, dump_output_directory, cfg.num_warcs_to_sample))
+        dump_output_path = os.path.join(cfg.output_path, cc_dump)
+        refs.append(get_urls_and_scores_from_warcs.remote(cc_dump, dump_output_path, cfg.num_warcs_to_sample))
     _ = ray.get(refs)
 
 
