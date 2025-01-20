@@ -53,6 +53,14 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 
+@dataclass
+class FetchLinksConfig:
+    urls_input_directory: str
+    output_directory: str
+    threads_per_shard: int = 40
+    max_concurrent_shards: int = 20
+
+
 def fetch_url(
     session: requests.Session,
     url: str,
@@ -111,12 +119,6 @@ def fetch_url(
         # Anything else is a connection-level error (DNS, SSL, etc.)
         logger.exception(f"Error fetching {url}: {e}")
         return None, None, str(e), True
-
-
-@dataclass
-class FetchLinksConfig:
-    urls_input_directory: str
-    output_directory: str
 
 
 def _fetch_one_url(
@@ -249,7 +251,9 @@ def _fetch_one_url(
 
 
 @ray.remote(memory=128 * 1024 * 1024 * 1024, num_cpus=8)
-def fetch_links(urls_path: str, warc_output_path: str, robots_output_path: str, errors_output_path: str):
+def fetch_links(
+    urls_path: str, warc_output_path: str, robots_output_path: str, errors_output_path: str, threads_per_shard: int
+):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     success_path = warc_output_path + ".SUCCESS"
     if fsspec_exists(success_path):
@@ -269,7 +273,7 @@ def fetch_links(urls_path: str, warc_output_path: str, robots_output_path: str, 
     random.shuffle(urls)
 
     logger.info(f"Fetching {len(urls)} deduplicated URLs from input file {urls_path}")
-    fetch_to_warc(urls, warc_output_path, robots_output_path, errors_output_path)
+    fetch_to_warc(urls, warc_output_path, robots_output_path, errors_output_path, threads_per_shard)
 
     # Create success file
     with fsspec.open(success_path, "w") as fout:
@@ -301,7 +305,9 @@ def decreasing_timeout(
     return max(timeout, min_timeout)
 
 
-def fetch_to_warc(urls: list[str], warc_output_path: str, robots_output_path: str, errors_output_path: str):
+def fetch_to_warc(
+    urls: list[str], warc_output_path: str, robots_output_path: str, errors_output_path: str, threads_per_shard: int
+):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
     # Data structures to track domain info
@@ -323,7 +329,7 @@ def fetch_to_warc(urls: list[str], warc_output_path: str, robots_output_path: st
         writer = WARCWriter(warc_buffer, gzip=True)
 
         # We'll process the URLS in parallel:
-        with ThreadPoolExecutor(max_workers=40) as executor:
+        with ThreadPoolExecutor(max_workers=threads_per_shard) as executor:
             future_to_url = {
                 executor.submit(
                     _fetch_one_url,
@@ -368,11 +374,11 @@ def fetch_to_warc(urls: list[str], warc_output_path: str, robots_output_path: st
         fout.write(warc_data)
 
     # Write domains_to_robots data
-    with fsspec.open(robots_output_path, "w", compression="gzip") as fout:
+    with fsspec.open(robots_output_path, "w", compression="infer") as fout:
         json.dump(domains_to_robots, fout)
 
     # Write errors
-    with fsspec.open(errors_output_path, "w", compression="gzip") as fout:
+    with fsspec.open(errors_output_path, "w", compression="infer") as fout:
         json.dump(fetch_errors, fout)
 
 
@@ -395,7 +401,6 @@ def main(cfg: FetchLinksConfig):
     random.shuffle(shard_indices_to_process)
 
     # Set a limit on the number of concurrent tasks so we don't make too many network requests
-    MAX_CONCURRENT_TASKS = 50
     num_shards_submitted = 0
     unfinished = []
 
@@ -405,7 +410,11 @@ def main(cfg: FetchLinksConfig):
         warc_output_path = os.path.join(cfg.output_directory, f"links.{shard_index}.warc.gz")
         robots_output_path = os.path.join(cfg.output_directory, f"links.{shard_index}_robots.json.gz")
         errors_output_path = os.path.join(cfg.output_directory, f"links.{shard_index}_errors.json.gz")
-        unfinished.append(fetch_links.remote(input_path, warc_output_path, robots_output_path, errors_output_path))
+        unfinished.append(
+            fetch_links.remote(
+                input_path, warc_output_path, robots_output_path, errors_output_path, cfg.threads_per_shard
+            )
+        )
 
         num_shards_submitted += 1
         if num_shards_submitted % 10 == 0:
@@ -414,21 +423,21 @@ def main(cfg: FetchLinksConfig):
                 f"({num_shards_submitted / num_shards_to_process})"
             )
 
-    # Launch the initial MAX_CONCURRENT_TASKS batch of tasks
-    for _ in range(min(MAX_CONCURRENT_TASKS, len(shard_indices_to_process))):
+    # Launch the initial cfg.max_concurrent_shards batch of tasks
+    for _ in range(min(cfg.max_concurrent_shards, len(shard_indices_to_process))):
         submit_shard_task(shard_indices_to_process.pop())
 
     while unfinished:
         finished, unfinished = ray.wait(unfinished, num_returns=len(unfinished), timeout=5)
         try:
-            _ = ray.get(finished)
+            ray.get(finished)
         except Exception as e:
             logger.exception(f"Error processing shard: {e}")
             raise
 
         # If we have more shard paths left to process and we haven't hit the max
         # number of concurrent tasks, add tasks to the unfinished queue.
-        while shard_indices_to_process and len(unfinished) < MAX_CONCURRENT_TASKS:
+        while shard_indices_to_process and len(unfinished) < cfg.max_concurrent_shards:
             submit_shard_task(shard_indices_to_process.pop())
 
 
