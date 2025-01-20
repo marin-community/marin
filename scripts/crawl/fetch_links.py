@@ -228,6 +228,9 @@ def fetch_to_warc(
                         netloc_to_robots_fetch_error[netloc] = "netloc passed max number of 429/5xx"
                     else:
                         url_to_fetch_errors[url] = "netloc passed max number of 429/5xx"
+                        # Final outcome => increment progress
+                        with pbar_lock:
+                            pbar.update(1)
                     work_queue.task_done()
                     continue
                 if netloc_connection_error_counts[netloc] >= MAX_NUM_CONNECTION_ERROR:
@@ -237,6 +240,9 @@ def fetch_to_warc(
                         netloc_to_robots_fetch_error[netloc] = "netloc passed max number of connection errors"
                     else:
                         url_to_fetch_errors[url] = f"netloc passed max number of connection errors"
+                        # Final outcome => increment progress
+                        with pbar_lock:
+                            pbar.update(1)
                     work_queue.task_done()
                     continue
 
@@ -302,7 +308,7 @@ def fetch_to_warc(
                 if netloc not in netloc_to_robots and netloc not in netloc_to_robots_fetch_error:
                     # Insert a robots task for it
                     robots_url = f"{urlparse(url).scheme}://{netloc}/robots.txt"
-                    work_queue.put((robots_url, 2, True))
+                    work_queue.put((robots_url, retries_per_url, True))
                     # Re-queue the original request
                     work_queue.put((url, retries_left, False))
                     work_queue.task_done()
