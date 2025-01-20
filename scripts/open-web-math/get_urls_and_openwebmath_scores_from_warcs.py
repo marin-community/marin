@@ -21,7 +21,7 @@ import logging
 import os
 import random
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from io import BytesIO
 
 import draccus
@@ -48,6 +48,14 @@ class CCUrlsAndScoresExtractionConfig:
     cc_dumps: list[str]
     num_warcs_to_sample: int
     output_path: str
+
+
+@dataclass(frozen=True)
+class OpenWebMathUrlWithScore:
+    url: str
+    canonicalized_url: str
+    score: float
+    found_math: bool
 
 
 def decode_html(html: bytes) -> str | None:
@@ -149,12 +157,14 @@ def process_one_batch(warc_path: str, output_path: str):
 
                 fout.write(
                     json.dumps(
-                        {
-                            "url": record_url,
-                            "canonicalized_url": canonicalized_url,
-                            "score": score,
-                            "found_math": found_math,
-                        }
+                        asdict(
+                            OpenWebMathUrlWithScore(
+                                url=record_url,
+                                canonicalized_url=canonicalized_url,
+                                score=score,
+                                found_math=found_math,
+                            )
+                        )
                     )
                     + "\n"
                 )

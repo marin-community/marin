@@ -21,7 +21,7 @@ import logging
 import math
 import os
 import pathlib
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 
 import draccus
 import fsspec
@@ -44,6 +44,13 @@ class UrlsAndScoresExtractionConfig:
     html_input_path: str
     prefix: str
     output_path: str
+
+
+@dataclass(frozen=True)
+class FineWebEduUrlWithScore:
+    url: str
+    canonicalized_url: str
+    score: float
 
 
 def batched(iterable, n=1):
@@ -163,11 +170,13 @@ def process_one_batch(input_path: str, output_path: str):
         ) in zip(examples_to_classify, examples_scores):
             fout.write(
                 json.dumps(
-                    {
-                        "url": example["url"],
-                        "canonicalized_url": example["canonicalized_url"],
-                        "score": example_score,
-                    }
+                    asdict(
+                        FineWebEduUrlWithScore(
+                            url=example["url"],
+                            canonicalized_url=example["canonicalized_url"],
+                            score=example_score,
+                        )
+                    )
                 )
                 + "\n"
             )

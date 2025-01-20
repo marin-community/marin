@@ -19,7 +19,7 @@ import json
 import logging
 import os
 import pathlib
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 
 import draccus
 import fsspec
@@ -43,6 +43,14 @@ class UrlsAndScoresExtractionConfig:
     html_input_path: str
     prefix: str
     output_path: str
+
+
+@dataclass(frozen=True)
+class OpenWebMathUrlWithScore:
+    url: str
+    canonicalized_url: str
+    score: float
+    found_math: bool
 
 
 def score_text(text, score_model):
@@ -79,7 +87,9 @@ def score_line(line, mathscore_model, randomized_config):
     score = score_text(extracted_text, mathscore_model)
     canonicalized_url = w3lib.url.canonicalize_url(url)
     found_math = extraction_metadata["found_math"]
-    return {"url": url, "canonicalized_url": canonicalized_url, "score": score, "found_math": found_math}
+    return asdict(
+        OpenWebMathUrlWithScore(url=url, canonicalized_url=canonicalized_url, score=score, found_math=found_math)
+    )
 
 
 @ray.remote(
