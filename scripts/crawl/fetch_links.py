@@ -170,12 +170,13 @@ def fetch_to_warc(
     # (e.g., *.wordpress.com , *.blogspot.com, etc.)
     registered_domain_next_allowed = defaultdict(float)
 
-    # When we hit a 429 error for a URL, we wait 300 seconds
+    # When we hit a 429 error for a URL, we back off (up to 300 seconds)
     # until the next fetch to a URL from that registered domain
-    delay_429_5xx = 300
+    registered_domain_backoff_seconds = defaultdict(lambda: 5.0)
+    max_delay_429_5xx = 30
     # For each netloc, count the number of consecutive 429s that we encounter.
     netloc_429_5xx_counts = Counter()
-    # If we encounter MAX_NUM_429 429 responses for a netloc (despite the `delay_429`-second delay
+    # If we encounter MAX_NUM_429 429 responses for a netloc (despite the backoff
     # between requests), skip all further URLs from this netloc.
     MAX_NUM_429_5xx = 3
 
@@ -231,7 +232,7 @@ def fetch_to_warc(
             try:
                 if netloc_429_5xx_counts[netloc] >= MAX_NUM_429_5xx:
                     # This netloc has seen more than `MAX_NUM_429` consecutive
-                    # 429 responses (despite waiting `delay_429` seconds between requests
+                    # 429 responses (despite backing off between requests
                     # to the registered domain as a whole), so we give up on all URLs
                     # from this netloc.
                     if is_robots and (netloc not in netloc_to_robots and netloc not in netloc_to_robots_fetch_error):
@@ -281,15 +282,24 @@ def fetch_to_warc(
                         netloc_to_robots[netloc] = resp.text
                         netloc_connection_error_counts[netloc] = 0
                         netloc_429_5xx_counts[netloc] = 0
+                        # reset the backoff value
+                        registered_domain_backoff_seconds[registered_domain] = 5.0
                         registered_domain_next_allowed[registered_domain] = time.time()
+
                     else:
                         # Some error
                         if conn_err:
                             netloc_connection_error_counts[netloc] += 1
                         if code and (code == 429 or code > 499):
+                            registered_domain_backoff_seconds[registered_domain] = min(
+                                registered_domain_backoff_seconds[registered_domain] * 2, max_delay_429_5xx
+                            )
+
                             netloc_429_5xx_counts[netloc] += 1
-                            # Wait `delay_429_5xx` seconds until the next time we hit this registered domain
-                            registered_domain_next_allowed[registered_domain] = time.time() + delay_429_5xx
+                            # Back off to delay the the next time we hit this registered domain
+                            registered_domain_next_allowed[registered_domain] = (
+                                time.time() + registered_domain_backoff_seconds[registered_domain]
+                            )
 
                             # Re-queue if we have retries left and this netloc hasn't reached the max
                             # number of 429s or 5xxs
@@ -331,7 +341,11 @@ def fetch_to_warc(
                         logger.info(f"Fetched {len(successful_responses)} successful responses")
                     netloc_connection_error_counts[netloc] = 0
                     netloc_429_5xx_counts[netloc] = 0
+
+                    # reset the backoff value
+                    registered_domain_backoff_seconds[registered_domain] = 5.0
                     registered_domain_next_allowed[registered_domain] = time.time()
+
                     # Final outcome => increment progress
                     with pbar_lock:
                         pbar.update(1)
@@ -347,9 +361,14 @@ def fetch_to_warc(
                             pbar.update(1)
                     elif code and (code == 429 or code > 499):
                         netloc_429_5xx_counts[netloc] += 1
-                        # Wait `delay_429_5xx` seconds until the next time we can fetch a URL from
+                        # back off until the next time we can fetch a URL from
                         # this registered domain
-                        registered_domain_next_allowed[registered_domain] = time.time() + delay_429_5xx
+                        registered_domain_backoff_seconds[registered_domain] = min(
+                            registered_domain_backoff_seconds[registered_domain] * 2, max_delay_429_5xx
+                        )
+                        registered_domain_next_allowed[registered_domain] = (
+                            time.time() + registered_domain_backoff_seconds[registered_domain]
+                        )
                         # Re-queue if we have retries left and this netloc hasn't reached the max
                         # number of 429s or 5xxs
                         if retries_left > 0 and netloc_429_5xx_counts[netloc] < MAX_NUM_429_5xx:
