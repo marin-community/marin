@@ -221,7 +221,9 @@ def view():
 
 @app.route("/")
 @app.route("/view")
+@app.route("/view/")
 @app.route("/experiment")
+@app.route("/experiment/")
 def serve():
     if os.environ.get("DEV") == "true":
         return proxy_to_dev_server("")
