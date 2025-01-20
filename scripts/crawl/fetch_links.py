@@ -7,7 +7,7 @@ Running on FineWeb-Edu:
 
 ```
 python marin/run/ray_run.py \
-    --pip_deps 'warcio' \
+    --pip_deps 'warcio,tldextract' \
     --no_wait -- \
     python scripts/crawl/fetch_links.py \
     --urls_input_directory gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-10M/ \
@@ -20,7 +20,7 @@ Running on OpenWebMath:
 
 ```
 python marin/run/ray_run.py \
-    --pip_deps 'warcio' \
+    --pip_deps 'warcio,tldextract' \
     --no_wait -- \
     python scripts/crawl/fetch_links.py \
     --urls_input_directory gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-10M/ \
@@ -36,9 +36,9 @@ import os
 import pathlib
 import random
 import threading
+import queue
 import time
 from collections import Counter, defaultdict
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
@@ -47,6 +47,7 @@ import fsspec
 import pandas as pd
 import ray
 import requests
+import tldextract
 from tqdm_loggable.auto import tqdm
 from warcio.statusandheaders import StatusAndHeaders
 from warcio.warcwriter import WARCWriter
@@ -123,134 +124,231 @@ def fetch_url(
         return None, None, str(e), True
 
 
-def _fetch_one_url(
-    url: str,
-    session: requests.Session,
-    domain_failure_counts: dict[str, int],
-    domains_to_robots: dict[str, str],
-    robots_fetch_errors: dict[str, str],
-    fetch_errors: dict[str, str],
-    domain_locks: dict[str, threading.Lock],
-    domain_next_allowed: dict[str, float],
-    domain_backoff_seconds: dict[str, float],
-    logger: logging.Logger,
-) -> tuple[str, requests.Response | None]:
+def fetch_to_warc(
+    urls: list[str],
+    warc_output_path: str,
+    robots_output_path: str,
+    errors_output_path: str,
+    threads_per_shard: int,
+):
     """
-    Worker function that:
-      1. Ensures we don't hit the same domain in parallel (domain_locks).
-      2. Respects "next allowed request time" per domain.
-      3. Fetches robots.txt if not already done.
-      4. Tries 3 times to fetch the main URL if we get 429.
-      5. Returns (url, response or None).
+    Main pipeline that:
+      - Deduplicates and shuffles URLs
+      - Spawns multiple worker threads pulling from a shared queue
+      - For each domain, ensures concurrency=1 using domain locks
+      - Collects results in a WARC file
+      - Writes out robots and error logs
     """
-    max_backoff = 300
-    parsed_url = urlparse(url)
-    url_domain = parsed_url.netloc
+    urls = list(set(urls))
+    random.shuffle(urls)
+    logger.info(f"fetch_to_warc: {len(urls)} unique URLs to fetch.")
 
-    # First, possibly fetch robots.txt (done once per domain).
-    # We'll grab the domain lock so that no parallel request for robots.txt is done.
-    with domain_locks[url_domain]:
-        now = time.time()
-        if now < domain_next_allowed[url_domain]:
-            wait_time = domain_next_allowed[url_domain] - now
-            logger.info(f"[robots] Rate limiting {url_domain}; sleeping for {wait_time:.2f}s.")
-            time.sleep(wait_time)
+    # Domain-level concurrency, rate-limits, and backoff
+    domain_locks = defaultdict(threading.Lock)
+    domain_failure_counts = Counter()  # domain -> # of consecutive connection fails
+    domain_next_allowed = defaultdict(float)  # domain -> earliest next fetch time
+    domain_backoff_seconds = defaultdict(lambda: 2.0)
+    MAX_BACKOFF = 300
 
-        if url_domain not in domains_to_robots and url_domain not in robots_fetch_errors:
-            logger.info(f"Getting robots.txt for domain: {url_domain}")
-            # Decreasing timeout based on failures
-            current_timeout = decreasing_timeout(
-                base_timeout=30.0,
-                failures=domain_failure_counts[url_domain],
-                factor=2.0,
-                min_timeout=1.0,
-            )
-            base_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
-            robots_url = f"{base_url}/robots.txt"
+    # Robot storage
+    domains_to_robots = {}
+    robots_fetch_errors = {}
 
-            robots_response, robots_response_code, robots_err, robots_conn_err = fetch_url(
-                session, robots_url, timeout=current_timeout
-            )
-            if robots_response is None:
-                if robots_err:
-                    robots_fetch_errors[url_domain] = robots_err
-                if robots_conn_err:
-                    domain_failure_counts[url_domain] += 1
-                if robots_response_code == 429:
-                    domain_backoff_seconds[url_domain] = min(domain_backoff_seconds[url_domain] * 2, max_backoff)
-                    domain_next_allowed[url_domain] = time.time() + domain_backoff_seconds[url_domain]
-            else:
-                logger.info(f"Got robots.txt for {url_domain}")
-                domains_to_robots[url_domain] = robots_response.text
-                # reset domain failures if we succeed
-                domain_failure_counts[url_domain] = 0
+    # Fetch errors
+    fetch_errors = {}
 
-    # Now fetch the main URL, possibly retrying on 429
-    attempts = 0
-    max_retries = 3
-    response = None
-    final_err = None
+    # Store successful responses in memory, then write them at the end.
+    # TODO(nfliu): consider streaming directly to the WARC
+    # list of (url, response)
+    successful_responses = []
 
-    while attempts < max_retries:
-        attempts += 1
-        with domain_locks[url_domain]:
-            # Enforce domain-level rate limiting
+    # A queue of tasks. Each is (url, retries_left, is_robots)
+    work_queue = queue.Queue()
+
+    # Enqueue the main tasks
+    for u in urls:
+        work_queue.put((u, 3, False))  # up to 3 retries for each real page
+
+    pbar = tqdm(total=len(urls), desc="Fetching", ncols=80)
+    pbar_lock = threading.Lock()
+    no_fetch_extract = tldextract.TLDExtract(suffix_list_urls=())
+
+    # Worker function
+    def worker():
+        session = requests.Session()
+        session.headers.update({"User-Agent": "CCBot"})
+
+        while True:
+            try:
+                url, retries_left, is_robots = work_queue.get_nowait()
+            except queue.Empty:
+                return  # no more tasks
+
+            domain = no_fetch_extract(url).registered_domain.lower()
             now = time.time()
-            if now < domain_next_allowed[url_domain]:
-                wait_time = domain_next_allowed[url_domain] - now
-                logger.info(f"[URL] Rate limiting {url_domain}; sleeping for {wait_time:.2f}s.")
-                time.sleep(wait_time)
 
-            # Decide how small the timeout should be now
-            num_domain_failures = domain_failure_counts[url_domain]
-            current_timeout = decreasing_timeout(
-                base_timeout=30.0, failures=num_domain_failures, factor=2.0, min_timeout=1.0
-            )
+            # 1) Acquire concurrency=1 for this domain
+            lock_acquired = domain_locks[domain].acquire(blocking=False)
+            if not lock_acquired:
+                # Another thread is fetching this domain. Re-queue and move on.
+                work_queue.put((url, retries_left, is_robots))
+                work_queue.task_done()
+                continue
 
-            logger.info(f"Fetching {url} (attempt {attempts}/{max_retries})")
-            fetched_response, fetched_response_code, err, is_conn_err = fetch_url(session, url, timeout=current_timeout)
-
-            if fetched_response is not None:
-                # A non-429 response means success or some HTTP status != 429
-                # either way we consider that "done"
-                response = fetched_response
-                domain_failure_counts[url_domain] = 0
-                # Slight "cooldown" after success
-                domain_backoff_seconds[url_domain] = max(1.0, domain_backoff_seconds[url_domain])
-                domain_next_allowed[url_domain] = time.time() + domain_backoff_seconds[url_domain] / 5.0
-                break
-
-            # If we reach here, we have an error
-            final_err = err
-
-            if is_conn_err:
-                # connection-level error
-                domain_failure_counts[url_domain] += 1
-                # We won't automatically retry connection errors beyond the single attempt
-                # but if you wanted to, you could do so here.
-                break
-
-            if fetched_response_code == 429:
-                logger.warning(f"Hit 429 for {url_domain} on attempt {attempts}")
-                # exponential backoff for 429
-                domain_backoff_seconds[url_domain] = min(domain_backoff_seconds[url_domain] * 2, max_backoff)
-                domain_next_allowed[url_domain] = time.time() + domain_backoff_seconds[url_domain]
-                # If we haven't exhausted max_retries, loop again
-                # We'll attempt again in the next iteration
-                if attempts < max_retries:
+            try:
+                # 2) Check if domain is currently rate-limited
+                if now < domain_next_allowed[domain]:
+                    # Not ready yet, re-queue
+                    work_queue.put((url, retries_left, is_robots))
+                    work_queue.task_done()
                     continue
+
+                # 3) If this is a robots fetch
+                if is_robots:
+                    # If already fetched or permanently errored, skip
+                    if domain in domains_to_robots or domain in robots_fetch_errors:
+                        work_queue.task_done()
+                        continue
+
+                    current_timeout = decreasing_timeout(
+                        base_timeout=30.0,
+                        failures=domain_failure_counts[domain],
+                        factor=2.0,
+                        min_timeout=1.0,
+                    )
+                    resp, code, err, conn_err = fetch_url(session, url, timeout=current_timeout)
+
+                    if resp is not None:
+                        # Succeeded
+                        domains_to_robots[domain] = resp.text
+                        domain_failure_counts[domain] = 0
+                        domain_backoff_seconds[domain] = max(1.0, domain_backoff_seconds[domain])
+                        domain_next_allowed[domain] = time.time() + (domain_backoff_seconds[domain] / 5.0)
+                    else:
+                        # Some error
+                        if conn_err:
+                            domain_failure_counts[domain] += 1
+                        if code == 429:
+                            # Exponential backoff
+                            b = domain_backoff_seconds[domain]
+                            domain_backoff_seconds[domain] = min(b * 2, MAX_BACKOFF)
+                            domain_next_allowed[domain] = time.time() + domain_backoff_seconds[domain]
+                            # Re-queue if we have retries left
+                            if retries_left > 0:
+                                work_queue.put((url, retries_left - 1, True))
+                        else:
+                            # e.g., 404 or 500, or permanent robots error
+                            robots_fetch_errors[domain] = err or "robots fetch error"
+
+                    work_queue.task_done()
+                    continue  # end is_robots block
+
+                # 4) If we need robots for this domain but haven't fetched or errored
+                if domain not in domains_to_robots and domain not in robots_fetch_errors:
+                    # Insert a robots task for it
+                    base = f"{urlparse(url).scheme}://{urlparse(url).netloc}"
+                    robots_url = base + "/robots.txt"
+                    work_queue.put((robots_url, 2, True))
+                    # Re-queue the original request
+                    work_queue.put((url, retries_left, False))
+                    work_queue.task_done()
+                    continue
+
+                # 5) Actually fetch the main URL
+                current_timeout = decreasing_timeout(
+                    base_timeout=30.0,
+                    failures=domain_failure_counts[domain],
+                    factor=2.0,
+                    min_timeout=1.0,
+                )
+                resp, code, err, conn_err = fetch_url(session, url, timeout=current_timeout)
+
+                if resp is not None:
+                    # success or non-429 response
+                    successful_responses.append((url, resp))
+                    domain_failure_counts[domain] = 0
+                    # slight cooldown after success
+                    domain_backoff_seconds[domain] = max(1.0, domain_backoff_seconds[domain])
+                    domain_next_allowed[domain] = time.time() + (domain_backoff_seconds[domain] / 5.0)
+                    # Final outcome => increment progress
+                    with pbar_lock:
+                        pbar.update(1)
+
                 else:
-                    # No more attempts left
-                    break
+                    # error
+                    if conn_err:
+                        # e.g. DNS error
+                        domain_failure_counts[domain] += 1
+                        fetch_errors[url] = err
+                        # Final outcome => increment progress
+                        with pbar_lock:
+                            pbar.update(1)
+                    elif code == 429:
+                        # exponential backoff
+                        b = domain_backoff_seconds[domain]
+                        domain_backoff_seconds[domain] = min(b * 2, MAX_BACKOFF)
+                        domain_next_allowed[domain] = time.time() + domain_backoff_seconds[domain]
+                        if retries_left > 0:
+                            work_queue.put((url, retries_left - 1, False))
+                        else:
+                            # out of retries => final error
+                            fetch_errors[url] = "429, no more retries"
+                            with pbar_lock:
+                                pbar.update(1)
+                    else:
+                        # any other HTTP error
+                        fetch_errors[url] = err
+                        with pbar_lock:
+                            pbar.update(1)
+                work_queue.task_done()
 
-            # If it's some other HTTP error (404, 500, etc.), we won't retry
-            break
+            finally:
+                # Always release the domain lock if we acquired it
+                domain_locks[domain].release()
 
-    # If we exhausted attempts and still have no success, record an error
-    if response is None and final_err:
-        fetch_errors[url] = final_err
+    # 6) Launch worker threads
+    threads = []
+    for _ in range(threads_per_shard):
+        t = threading.Thread(target=worker, daemon=True)
+        t.start()
+        threads.append(t)
 
-    return url, response
+    # 7) Wait for queue to be empty
+    work_queue.join()
+    for t in threads:
+        t.join()
+
+    # 8) Now we have successful responses in memory; write them to WARC
+    warc_buffer = io.BytesIO()
+    writer = WARCWriter(warc_buffer, gzip=True)
+    for url, response in successful_responses:
+        status_line = f"{response.status_code} {response.reason}"
+        http_headers = [("Status", status_line)]
+        for h, v in response.headers.items():
+            http_headers.append((h, v))
+        status_headers = StatusAndHeaders(status_line, http_headers, protocol="HTTP/1.1")
+        payload_io = io.BytesIO(response.content)
+        record = writer.create_warc_record(url, "response", payload=payload_io, http_headers=status_headers)
+        writer.write_record(record)
+
+    # Write the WARC file
+    with fsspec.open(warc_output_path, "wb") as fout:
+        fout.write(warc_buffer.getvalue())
+
+    # Write robots data
+    with fsspec.open(robots_output_path, "w", compression="infer") as fout:
+        json.dump(domains_to_robots, fout)
+
+    # Write errors
+    all_errors = {"fetch_errors": fetch_errors, "robots_fetch_errors": robots_fetch_errors}
+    with fsspec.open(errors_output_path, "w", compression="infer") as fout:
+        json.dump(all_errors, fout)
+
+    logger.info(
+        f"Wrote {len(successful_responses)} successful WARC responses to {warc_output_path}.\n"
+        f"Fetched robots for {len(domains_to_robots)} domains, encountered {len(robots_fetch_errors)} robots errors.\n"
+        f"Recorded {len(fetch_errors)} fetch errors."
+    )
 
 
 @ray.remote(memory=128 * 1024 * 1024 * 1024, num_cpus=8)
@@ -306,83 +404,6 @@ def decreasing_timeout(
     """
     timeout = base_timeout / (factor ** min(failures / 5, 5))
     return max(timeout, min_timeout)
-
-
-def fetch_to_warc(
-    urls: list[str], warc_output_path: str, robots_output_path: str, errors_output_path: str, threads_per_shard: int
-):
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-
-    # Data structures to track domain info
-    domain_failure_counts = Counter()  # for the decreasing_timeout logic
-    domain_next_allowed = defaultdict(float)  # domain -> earliest next request time
-    # Start with a minimal backoff of 4 seconds for each domain:
-    domain_backoff_seconds = defaultdict(lambda: 4.0)
-    domain_locks = defaultdict(threading.Lock)
-
-    domains_to_robots: dict[str, str] = {}
-    fetch_errors: dict[str, str] = {}
-    robots_fetch_errors: dict[str, str] = {}
-
-    warc_buffer = io.BytesIO()
-
-    # We'll open a single requests.Session in the main thread
-    with requests.Session() as session:
-        session.headers.update({"User-Agent": "CCBot"})
-        writer = WARCWriter(warc_buffer, gzip=True)
-
-        # We'll process the URLS in parallel:
-        with ThreadPoolExecutor(max_workers=threads_per_shard) as executor:
-            future_to_url = {
-                executor.submit(
-                    _fetch_one_url,
-                    url,
-                    session,
-                    domain_failure_counts,
-                    domains_to_robots,
-                    robots_fetch_errors,
-                    fetch_errors,
-                    domain_locks,
-                    domain_next_allowed,
-                    domain_backoff_seconds,
-                    logger,
-                ): url
-                for url in urls
-            }
-
-            # We can show a progress bar with as_completed:
-            for future in tqdm(as_completed(future_to_url), total=len(urls), desc="Fetching URLs"):
-                url = future_to_url[future]
-                url, response = future.result()
-                # If `response` is not None, write it to WARC
-                if response is not None:
-                    status_line = f"{response.status_code} {response.reason}"
-                    logger.info(f"Got response {status_line} for {url}")
-
-                    http_headers = [("Status", status_line)]
-                    for header, value in response.headers.items():
-                        http_headers.append((header, value))
-
-                    status_headers = StatusAndHeaders(status_line, http_headers, protocol="HTTP/1.1")
-                    payload_io = io.BytesIO(response.content)
-
-                    warc_record = writer.create_warc_record(
-                        url, "response", payload=payload_io, http_headers=status_headers
-                    )
-                    writer.write_record(warc_record)
-
-    # Write final WARC data
-    warc_data = warc_buffer.getvalue()
-    with fsspec.open(warc_output_path, "wb") as fout:
-        fout.write(warc_data)
-
-    # Write domains_to_robots data
-    with fsspec.open(robots_output_path, "w", compression="infer") as fout:
-        json.dump(domains_to_robots, fout)
-
-    # Write errors
-    with fsspec.open(errors_output_path, "w", compression="infer") as fout:
-        json.dump(fetch_errors, fout)
 
 
 @ray.remote(memory=8 * 1024 * 1024 * 1024)
