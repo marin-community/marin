@@ -158,6 +158,9 @@ def fetch_to_warc(
     # errors we've encountered, the shorter a timeout we use when making requests to URLs
     # from this netloc (since it's pretty likely that the site is just dead).
     netloc_connection_error_counts = Counter()
+    # If we've hit 5 or more consecutive connection errors for a netloc, skip all
+    # further URLs from this netloc.
+    MAX_NUM_CONNECTION_ERROR = 5
 
     # For each registered domain, keep track of the next time (Unix epoch time)
     # that we are allowed to make a request to a URL from this registered domain.
@@ -214,7 +217,10 @@ def fetch_to_warc(
             netloc = urlparse(url).netloc
             now = time.time()
 
-            if netloc_429_5xx_counts[netloc] >= MAX_NUM_429_5xx:
+            if (
+                netloc_429_5xx_counts[netloc] >= MAX_NUM_429_5xx
+                or netloc_connection_error_counts[netloc] >= MAX_NUM_CONNECTION_ERROR
+            ):
                 # This netloc has seen more than `MAX_NUM_429` consecutive
                 # 429 responses (despite waiting `delay_429` seconds between requests
                 # to the registered domain as a whole), so we give up on all URLs
