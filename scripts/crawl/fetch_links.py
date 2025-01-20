@@ -169,8 +169,8 @@ def fetch_to_warc(
     max_delay_429_5xx = 30
     # For each netloc, count the number of consecutive 429s that we encounter.
     netloc_429_5xx_counts = Counter()
-    # If we encounter MAX_NUM_429 429 responses for a netloc (despite the backoff
-    # between requests), skip all further URLs from this netloc.
+    # If we encounter `MAX_NUM_429_5xx` consecutive 429 or 5xx responses for a
+    # netloc (despite the backoff between requests), skip all further URLs from this netloc.
     MAX_NUM_429_5xx = 10
 
     # Robot storage
