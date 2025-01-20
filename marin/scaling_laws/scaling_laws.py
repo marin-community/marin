@@ -128,7 +128,7 @@ def log_and_create_report(
         project=wandb_project,
         entity=wandb_entity,
         name=f"""Scaling Law Report: {scaling_law_config.intermediate_task_loss}
-            ->{scaling_law_config.task_accuracy}-{pred_run_id}""",
+            ->{scaling_law_config.task_accuracy}-{pred_run_id}-new-398fyh""",
         tags=["scaling_laws"],
         config={
             "input_runs": input_run_ids,
@@ -137,48 +137,31 @@ def log_and_create_report(
         reinit=True,
     )
 
-    # Create two tables: one for task loss and one for task accuracy
-    task_loss_table = wandb.Table(columns=["Step", "Actual", "Predicted"])
-    for step, (act_loss, pred_loss) in enumerate(zip(actual_loss, predicted_loss, strict=False)):
-        task_loss_table.add_data(step, act_loss, pred_loss)
+    # Create steps array
+    steps = list(range(len(actual_loss)))
 
-    task_accuracy_table = wandb.Table(columns=["Step", "Actual", "Predicted"])
-    for step, (act_acc, pred_acc) in enumerate(zip(actual_acc, predicted_acc, strict=False)):
-        task_accuracy_table.add_data(step, act_acc, pred_acc)
-
-    # Log scatter plots (Actual vs. Predicted)
-    wandb.log(
-        {
-            "Task Loss Scatter": wandb.plot.scatter(
-                task_loss_table,
-                x="Actual",
-                y="Predicted",
-                title="Task Loss: Actual vs Predicted",
-            ),
-            "Task Accuracy Scatter": wandb.plot.scatter(
-                task_accuracy_table,
-                x="Actual",
-                y="Predicted",
-                title="Task Accuracy: Actual vs Predicted",
-            ),
-        }
+    # Log accuracy plot data
+    accuracy_plot = wandb.plot.line_series(
+        xs=steps,
+        ys=[actual_acc, predicted_acc],
+        keys=["Actual", "Predicted"],
+        title="Task Accuracy: Actual vs Predicted",
+        xname="Step"
     )
 
-    # Log line plots (Actual and Predicted vs. Step)
+    # Log loss plot data
+    loss_plot = wandb.plot.line_series(
+        xs=steps,
+        ys=[actual_loss, predicted_loss],
+        keys=["Actual", "Predicted"],
+        title="Task Loss: Actual vs Predicted",
+        xname="Step"
+    )
+
     wandb.log(
         {
-            "Task Loss Line": wandb.plot.line(
-                task_loss_table,
-                x="Step",
-                y=["Actual", "Predicted"],
-                title="Task Loss: Actual and Predicted vs Step",
-            ),
-            "Task Accuracy Line": wandb.plot.line(
-                task_accuracy_table,
-                x="Step",
-                y=["Actual", "Predicted"],
-                title="Task Accuracy: Actual and Predicted vs Step",
-            ),
+            "Task Accuracy": accuracy_plot,
+            "Task Loss": loss_plot,
         }
     )
 
