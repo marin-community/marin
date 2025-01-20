@@ -47,7 +47,6 @@ import fsspec
 import pandas as pd
 import ray
 import requests
-import tldextract
 from tqdm_loggable.auto import tqdm
 from warcio.statusandheaders import StatusAndHeaders
 from warcio.warcwriter import WARCWriter
@@ -143,15 +142,11 @@ def fetch_to_warc(
     random.shuffle(urls)
     logger.info(f"fetch_to_warc: {len(urls)} unique URLs to fetch.")
 
-    # NOTE: For a URL like https://meta.stackexchange.com/questions ,
-    # the registered domain is "stackexchange.com", while the
-    # netloc is "meta.stackexchange.com"
-
-    # Each registered domain has a lock to ensure that we only have one concurrent
-    # thread making a request to each registered domain. For example, if a thread is making
-    # a request to abc.wordpress.com , another thread cannot touch xyz.wordpress.com until
-    # it acquires the lock. We do this in the interest of being as polite as possible.
-    registered_domain_locks = defaultdict(threading.Lock)
+    # Each netloc has a lock to ensure that we only have one concurrent
+    # thread making a request to each netloc. For example, if a thread is making
+    # a request to abc.wordpress.com/page1.html , another thread cannot touch
+    # abc.wordpress.com/page2.html until it acquires the lock.
+    netloc_locks = defaultdict(threading.Lock)
 
     # For each netloc , we keep track of how many consecutive connection errors
     # we've encountered (e.g., if the name cannot be resolved). The more consecutive connection
@@ -162,17 +157,15 @@ def fetch_to_warc(
     # further URLs from this netloc.
     MAX_NUM_CONNECTION_ERROR = 5
 
-    # For each registered domain, keep track of the next time (Unix epoch time)
-    # that we are allowed to make a request to a URL from this registered domain.
+    # For each netloc, keep track of the next time (Unix epoch time)
+    # that we are allowed to make a request to a URL from this netloc.
     # This is important for handling 429s, since we want to wait a bit until the next time
-    # we make a request to this registered domain. This is done at the registered domain-level,
-    # since they often have shared hosting and shared rate limits
-    # (e.g., *.wordpress.com , *.blogspot.com, etc.)
-    registered_domain_next_allowed = defaultdict(float)
+    # we make a request to this netloc.
+    netloc_next_allowed = defaultdict(float)
 
-    # When we hit a 429 error for a URL, we back off (up to 300 seconds)
-    # until the next fetch to a URL from that registered domain
-    registered_domain_backoff_seconds = defaultdict(lambda: 5.0)
+    # When we hit a 429 error for a URL, we back off (up to 30 seconds)
+    # until the next fetch to a URL from that netloc
+    netloc_backoff_seconds = defaultdict(lambda: 5.0)
     max_delay_429_5xx = 30
     # For each netloc, count the number of consecutive 429s that we encounter.
     netloc_429_5xx_counts = Counter()
@@ -201,7 +194,6 @@ def fetch_to_warc(
 
     pbar = tqdm(total=len(urls), desc="Fetching")
     pbar_lock = threading.Lock()
-    no_fetch_extract = tldextract.TLDExtract(suffix_list_urls=())
 
     # Worker function
     def worker():
@@ -214,15 +206,11 @@ def fetch_to_warc(
             except queue.Empty:
                 return  # no more tasks
 
-            registered_domain = no_fetch_extract(url).registered_domain.lower()
             netloc = urlparse(url).netloc
             now = time.time()
 
-            # 1) Acquire lock for this registered_domain
-            # This means, e.g., that a request to cs.stackexchange.com
-            # cannot be made while a request to meta.stackexchange.com,
-            # since they both share the registered domain "stackexchange.com".
-            lock_acquired = registered_domain_locks[registered_domain].acquire(blocking=False)
+            # 1) Acquire lock for this netloc
+            lock_acquired = netloc_locks[netloc].acquire(blocking=False)
             if not lock_acquired:
                 # Another thread is fetching this domain. Re-queue and move on.
                 work_queue.put((url, retries_left, is_robots))
@@ -232,9 +220,8 @@ def fetch_to_warc(
             try:
                 if netloc_429_5xx_counts[netloc] >= MAX_NUM_429_5xx:
                     # This netloc has seen more than `MAX_NUM_429` consecutive
-                    # 429 responses (despite backing off between requests
-                    # to the registered domain as a whole), so we give up on all URLs
-                    # from this netloc.
+                    # 429 responses (despite backing off between requests), so
+                    # we give up on all URLs from this netloc.
                     if is_robots and (netloc not in netloc_to_robots and netloc not in netloc_to_robots_fetch_error):
                         # Don't overwrite robots.txt if we already successfully fetched it, or an existing error
                         # if there already is one.
@@ -253,8 +240,8 @@ def fetch_to_warc(
                     work_queue.task_done()
                     continue
 
-                # 2) Check if registered_domain is currently rate-limited
-                if now < registered_domain_next_allowed[registered_domain]:
+                # 2) Check if netloc is currently rate-limited
+                if now < netloc_next_allowed[netloc]:
                     # Not ready yet, re-queue and work on another URL
                     work_queue.put((url, retries_left, is_robots))
                     work_queue.task_done()
@@ -283,23 +270,19 @@ def fetch_to_warc(
                         netloc_connection_error_counts[netloc] = 0
                         netloc_429_5xx_counts[netloc] = 0
                         # reset the backoff value
-                        registered_domain_backoff_seconds[registered_domain] = 5.0
-                        registered_domain_next_allowed[registered_domain] = time.time()
+                        netloc_backoff_seconds[netloc] = 5.0
+                        netloc_next_allowed[netloc] = time.time()
 
                     else:
                         # Some error
                         if conn_err:
                             netloc_connection_error_counts[netloc] += 1
                         if code and (code == 429 or code > 499):
-                            registered_domain_backoff_seconds[registered_domain] = min(
-                                registered_domain_backoff_seconds[registered_domain] * 2, max_delay_429_5xx
-                            )
+                            netloc_backoff_seconds[netloc] = min(netloc_backoff_seconds[netloc] * 2, max_delay_429_5xx)
 
                             netloc_429_5xx_counts[netloc] += 1
-                            # Back off to delay the the next time we hit this registered domain
-                            registered_domain_next_allowed[registered_domain] = (
-                                time.time() + registered_domain_backoff_seconds[registered_domain]
-                            )
+                            # Back off to delay the the next time we hit this netloc
+                            netloc_next_allowed[netloc] = time.time() + netloc_backoff_seconds[netloc]
 
                             # Re-queue if we have retries left and this netloc hasn't reached the max
                             # number of 429s or 5xxs
@@ -343,8 +326,8 @@ def fetch_to_warc(
                     netloc_429_5xx_counts[netloc] = 0
 
                     # reset the backoff value
-                    registered_domain_backoff_seconds[registered_domain] = 5.0
-                    registered_domain_next_allowed[registered_domain] = time.time()
+                    netloc_backoff_seconds[netloc] = 5.0
+                    netloc_next_allowed[netloc] = time.time()
 
                     # Final outcome => increment progress
                     with pbar_lock:
@@ -362,13 +345,9 @@ def fetch_to_warc(
                     elif code and (code == 429 or code > 499):
                         netloc_429_5xx_counts[netloc] += 1
                         # back off until the next time we can fetch a URL from
-                        # this registered domain
-                        registered_domain_backoff_seconds[registered_domain] = min(
-                            registered_domain_backoff_seconds[registered_domain] * 2, max_delay_429_5xx
-                        )
-                        registered_domain_next_allowed[registered_domain] = (
-                            time.time() + registered_domain_backoff_seconds[registered_domain]
-                        )
+                        # this netloc
+                        netloc_backoff_seconds[netloc] = min(netloc_backoff_seconds[netloc] * 2, max_delay_429_5xx)
+                        netloc_next_allowed[netloc] = time.time() + netloc_backoff_seconds[netloc]
                         # Re-queue if we have retries left and this netloc hasn't reached the max
                         # number of 429s or 5xxs
                         if retries_left > 0 and netloc_429_5xx_counts[netloc] < MAX_NUM_429_5xx:
@@ -387,7 +366,7 @@ def fetch_to_warc(
 
             finally:
                 # Always release the domain lock if we acquired it
-                registered_domain_locks[registered_domain].release()
+                netloc_locks[netloc].release()
 
     # 6) Launch worker threads
     threads = []
