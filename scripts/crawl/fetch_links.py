@@ -7,7 +7,7 @@ Running on FineWeb-Edu:
 
 ```
 python marin/run/ray_run.py \
-    --pip_deps 'warcio,tldextract' \
+    --pip_deps 'warcio' \
     --no_wait -- \
     python scripts/crawl/fetch_links.py \
     --urls_input_directory gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-10M/ \
@@ -20,7 +20,7 @@ Running on OpenWebMath:
 
 ```
 python marin/run/ray_run.py \
-    --pip_deps 'warcio,tldextract' \
+    --pip_deps 'warcio' \
     --no_wait -- \
     python scripts/crawl/fetch_links.py \
     --urls_input_directory gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-10M/ \
