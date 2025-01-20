@@ -126,7 +126,7 @@ def extract_text(input_path: str, output_path: str):
 )
 @remove_tpu_lockfile_on_exit
 @cached_or_construct_output(success_suffix="SUCCESS", verbose=False)
-def process_one_batch(input_path: str, output_path: str):
+def score_extracted_text(input_path: str, output_path: str):
     """
     Takes in an input file, get the URLs and the quality classifier scores from the text,
     and writes them to output_path.
@@ -212,7 +212,7 @@ def get_urls_and_scores_from_html(cfg: UrlsAndScoresExtractionConfig):
     for i, html_shard_index in enumerate(shard_indices):
         input_path = os.path.join(cfg.output_path, f"{i}_extracted_text.json.gz")
         output_path = os.path.join(cfg.output_path, f"{i}_urls_and_quality_classifier_scores.jsonl.gz")
-        refs.append(process_one_batch.remote(input_path, output_path))
+        refs.append(score_extracted_text.remote(input_path, output_path))
     logger.info(f"Submitted {len(refs)} tasks to run quality classifier")
 
     # Wait for the tasks to finish

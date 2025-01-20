@@ -94,6 +94,14 @@ def batched(iterable, n=1):
 )
 @cached_or_construct_output(success_suffix="SUCCESS", verbose=False)
 def extract_text_from_warc(warc_path: str, output_path: str):
+    """
+    Given a path to a WARC, extract text from its responses.
+
+    Args:
+    warc_path (str): path to input WARC
+    output_path (str): path to write extracted text records as
+                       JSONL-formatted `FineWebEduExtractedText` records.
+    """
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     logger.info(f"Using trafilatura version {trafilatura.__version__}")
 
@@ -147,7 +155,17 @@ def extract_text_from_warc(warc_path: str, output_path: str):
 )
 @remove_tpu_lockfile_on_exit
 @cached_or_construct_output(success_suffix="SUCCESS", verbose=False)
-def process_one_batch(input_path: str, output_path: str):
+def score_extracted_text(input_path: str, output_path: str):
+    """
+    Given an input path to extracted text (JSONL-formatted `FineWebEduUrlWithScore`),
+    run the FineWeb-Edu classifier to get a quality score for the extracted text.
+    The output is written to output_path, as JSONL-formatted `FineWebEduUrlWithScore`
+    records.
+
+    Args:
+    input_path (str): Path to JSONL-serialized `FineWebEduExtractedText` records
+    output_path (str): Path to write JSONL-serialized `FineWebEduUrlWithScore` records
+    """
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
     logger.info("Loading quality classifier...")
@@ -230,7 +248,7 @@ def get_urls_and_scores_from_warcs(cc_dump: str, output_path: str, num_warcs_to_
         warc_name = os.path.basename(warc_path)
         input_path = os.path.join(output_path, f"{warc_name}_extracted_text.jsonl.gz")
         output_path = os.path.join(output_path, f"{warc_name}_urls_and_quality_classifier_scores.jsonl.gz")
-        refs.append(process_one_batch.remote(input_path, output_path))
+        refs.append(score_extracted_text.remote(input_path, output_path))
     logger.info(f"Submitted {len(refs)} tasks to run quality classifier")
     ray.get(refs)
 
