@@ -3,7 +3,7 @@ import yaml
 from server import Server, ServerConfig, app, standardize_config
 
 # Read config from gcp.conf
-with open('conf/gcp.conf', 'r') as f:
+with open("conf/gcp.conf", "r") as f:
     config_dict = yaml.safe_load(f)
 
 # Initialize server configuration
