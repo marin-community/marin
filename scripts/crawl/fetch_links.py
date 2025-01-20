@@ -11,7 +11,9 @@ python marin/run/ray_run.py \
     --no_wait -- \
     python scripts/crawl/fetch_links.py \
     --urls_input_directory gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-10M/ \
-    --output_directory gs://marin-us-central2/scratch/nfliu/fetched_outlinks/fineweb-edu-10M/
+    --output_path gs://marin-us-central2/scratch/nfliu/fetched_outlinks/fineweb-edu-10M/ \
+    --threads_per_shard 40 \
+    --max_concurrent_shards 1
 ```
 
 Running on OpenWebMath:
@@ -22,7 +24,9 @@ python marin/run/ray_run.py \
     --no_wait -- \
     python scripts/crawl/fetch_links.py \
     --urls_input_directory gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-10M/ \
-    --output_directory gs://marin-us-central2/scratch/nfliu/fetched_outlinks/open-web-math-fde8ef8-10M/
+    --output_path gs://marin-us-central2/scratch/nfliu/fetched_outlinks/open-web-math-fde8ef8-10M/ \
+    --threads_per_shard 40 \
+    --max_concurrent_shards 1
 ```
 """
 import io
@@ -56,7 +60,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class FetchLinksConfig:
     urls_input_directory: str
-    output_directory: str
+    output_path: str
     threads_per_shard: int = 40
     max_concurrent_shards: int = 20
 
@@ -407,9 +411,9 @@ def main(cfg: FetchLinksConfig):
     def submit_shard_task(shard_index):
         nonlocal num_shards_submitted
         input_path = os.path.join(cfg.urls_input_directory, f"links.{shard_index}.parquet")
-        warc_output_path = os.path.join(cfg.output_directory, f"links.{shard_index}.warc.gz")
-        robots_output_path = os.path.join(cfg.output_directory, f"links.{shard_index}_robots.json.gz")
-        errors_output_path = os.path.join(cfg.output_directory, f"links.{shard_index}_errors.json.gz")
+        warc_output_path = os.path.join(cfg.output_path, f"links.{shard_index}.warc.gz")
+        robots_output_path = os.path.join(cfg.output_path, f"links.{shard_index}_robots.json.gz")
+        errors_output_path = os.path.join(cfg.output_path, f"links.{shard_index}_errors.json.gz")
         unfinished.append(
             fetch_links.remote(
                 input_path, warc_output_path, robots_output_path, errors_output_path, cfg.threads_per_shard
