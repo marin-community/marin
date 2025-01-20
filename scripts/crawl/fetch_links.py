@@ -143,7 +143,7 @@ def _fetch_one_url(
       4. Tries 3 times to fetch the main URL if we get 429.
       5. Returns (url, response or None).
     """
-    max_backoff = 60
+    max_backoff = 300
     parsed_url = urlparse(url)
     url_domain = parsed_url.netloc
 
@@ -316,8 +316,8 @@ def fetch_to_warc(
     # Data structures to track domain info
     domain_failure_counts = Counter()  # for the decreasing_timeout logic
     domain_next_allowed = defaultdict(float)  # domain -> earliest next request time
-    # Start with a minimal backoff of 1 second for each domain:
-    domain_backoff_seconds = defaultdict(lambda: 1.0)
+    # Start with a minimal backoff of 4 seconds for each domain:
+    domain_backoff_seconds = defaultdict(lambda: 4.0)
     domain_locks = defaultdict(threading.Lock)
 
     domains_to_robots: dict[str, str] = {}
