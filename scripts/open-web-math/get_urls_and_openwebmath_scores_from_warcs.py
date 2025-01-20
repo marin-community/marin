@@ -95,6 +95,14 @@ def score_text(text, score_model):
 )
 @cached_or_construct_output(success_suffix="SUCCESS", verbose=False)
 def process_one_batch(warc_path: str, output_path: str):
+    """
+    Takes in an input WARC file and gets the URLs and the quality classifier scores from the text.
+    Output is written to output_path.
+
+    Args:
+    input_path (str): Path of HTML file (Dolma-format JSONL) to extract outlinks from.
+    output_path (str): Path to write JSONL file with outlinks.
+    """
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     max_retries = 10
     backoff_time = 1  # initial backoff time in seconds
