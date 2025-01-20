@@ -117,11 +117,11 @@ def fetch_url(
             return truncated_response, r.status_code, None, False
     except requests.exceptions.HTTPError as e:
         # We got a response from the server, so the domain is reachable
-        logger.exception(f"Error fetching {url}: {e}")
+        logger.error(f"Error fetching {url}: {e}")
         return None, e.response.status_code, str(e), False
     except Exception as e:
         # Anything else is a connection-level error (DNS, SSL, etc.)
-        logger.exception(f"Error fetching {url}: {e}")
+        logger.error(f"Error fetching {url}: {e}")
         return None, None, str(e), True
 
 
