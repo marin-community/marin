@@ -143,6 +143,7 @@ def _fetch_one_url(
       4. Tries 3 times to fetch the main URL if we get 429.
       5. Returns (url, response or None).
     """
+    max_backoff = 60
     parsed_url = urlparse(url)
     url_domain = parsed_url.netloc
 
@@ -176,7 +177,7 @@ def _fetch_one_url(
                 if robots_conn_err:
                     domain_failure_counts[url_domain] += 1
                 if robots_response_code == 429:
-                    domain_backoff_seconds[url_domain] *= 2
+                    domain_backoff_seconds[url_domain] = min(domain_backoff_seconds[url_domain] * 2, max_backoff)
                     domain_next_allowed[url_domain] = time.time() + domain_backoff_seconds[url_domain]
             else:
                 logger.info(f"Got robots.txt for {url_domain}")
@@ -197,7 +198,7 @@ def _fetch_one_url(
             now = time.time()
             if now < domain_next_allowed[url_domain]:
                 wait_time = domain_next_allowed[url_domain] - now
-                logger.info(f"[main URL] Rate limiting {url_domain}; sleeping for {wait_time:.2f}s.")
+                logger.info(f"[URL] Rate limiting {url_domain}; sleeping for {wait_time:.2f}s.")
                 time.sleep(wait_time)
 
             # Decide how small the timeout should be now
@@ -232,7 +233,7 @@ def _fetch_one_url(
             if fetched_response_code == 429:
                 logger.warning(f"Hit 429 for {url_domain} on attempt {attempts}")
                 # exponential backoff for 429
-                domain_backoff_seconds[url_domain] *= 2
+                domain_backoff_seconds[url_domain] = min(domain_backoff_seconds[url_domain] * 2, max_backoff)
                 domain_next_allowed[url_domain] = time.time() + domain_backoff_seconds[url_domain]
                 # If we haven't exhausted max_retries, loop again
                 # We'll attempt again in the next iteration
