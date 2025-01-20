@@ -217,17 +217,6 @@ def fetch_to_warc(
             netloc = urlparse(url).netloc
             now = time.time()
 
-            if (
-                netloc_429_5xx_counts[netloc] >= MAX_NUM_429_5xx
-                or netloc_connection_error_counts[netloc] >= MAX_NUM_CONNECTION_ERROR
-            ):
-                # This netloc has seen more than `MAX_NUM_429` consecutive
-                # 429 responses (despite waiting `delay_429` seconds between requests
-                # to the registered domain as a whole), so we give up on all URLs
-                # from this netloc.
-                work_queue.task_done()
-                continue
-
             # 1) Acquire lock for this registered_domain
             # This means, e.g., that a request to cs.stackexchange.com
             # cannot be made while a request to meta.stackexchange.com,
@@ -240,6 +229,29 @@ def fetch_to_warc(
                 continue
 
             try:
+                if netloc_429_5xx_counts[netloc] >= MAX_NUM_429_5xx:
+                    # This netloc has seen more than `MAX_NUM_429` consecutive
+                    # 429 responses (despite waiting `delay_429` seconds between requests
+                    # to the registered domain as a whole), so we give up on all URLs
+                    # from this netloc.
+                    if is_robots and (netloc not in netloc_to_robots and netloc not in netloc_to_robots_fetch_error):
+                        # Don't overwrite robots.txt if we already successfully fetched it, or an existing error
+                        # if there already is one.
+                        netloc_to_robots_fetch_error[netloc] = "netloc passed max number of 429/5xx"
+                    else:
+                        url_to_fetch_errors[url] = "netloc passed max number of 429/5xx"
+                    work_queue.task_done()
+                    continue
+                if netloc_connection_error_counts[netloc] >= MAX_NUM_CONNECTION_ERROR:
+                    if is_robots and (netloc not in netloc_to_robots and netloc not in netloc_to_robots_fetch_error):
+                        # Don't overwrite robots.txt if we already successfully fetched it, or an existing error
+                        # if there already is one.
+                        netloc_to_robots_fetch_error[netloc] = "netloc passed max number of connection errors"
+                    else:
+                        url_to_fetch_errors[url] = f"netloc passed max number of connection errors"
+                    work_queue.task_done()
+                    continue
+
                 # 2) Check if registered_domain is currently rate-limited
                 if now < registered_domain_next_allowed[registered_domain]:
                     # Not ready yet, re-queue and work on another URL
