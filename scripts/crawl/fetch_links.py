@@ -12,7 +12,7 @@ python marin/run/ray_run.py \
     python scripts/crawl/fetch_links.py \
     --urls_input_directory gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-10M/ \
     --output_path gs://marin-us-central2/scratch/nfliu/fetched_outlinks/fineweb-edu-10M/ \
-    --threads_per_shard 40 \
+    --threads_per_shard 80 \
     --max_concurrent_shards 1
 ```
 
@@ -25,7 +25,7 @@ python marin/run/ray_run.py \
     python scripts/crawl/fetch_links.py \
     --urls_input_directory gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-10M/ \
     --output_path gs://marin-us-central2/scratch/nfliu/fetched_outlinks/open-web-math-fde8ef8-10M/ \
-    --threads_per_shard 40 \
+    --threads_per_shard 80 \
     --max_concurrent_shards 1
 ```
 """
@@ -61,7 +61,7 @@ logger = logging.getLogger(__name__)
 class FetchLinksConfig:
     urls_input_directory: str
     output_path: str
-    threads_per_shard: int = 40
+    threads_per_shard: int = 80
     max_concurrent_shards: int = 20
 
 
@@ -416,7 +416,7 @@ def fetch_to_warc(
     )
 
 
-@ray.remote(memory=128 * 1024 * 1024 * 1024, num_cpus=8)
+@ray.remote(memory=128 * 1024 * 1024 * 1024, num_cpus=16)
 def fetch_links(
     urls_path: str, warc_output_path: str, robots_output_path: str, errors_output_path: str, threads_per_shard: int
 ):
