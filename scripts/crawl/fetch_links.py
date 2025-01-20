@@ -327,6 +327,8 @@ def fetch_to_warc(
                 if resp is not None:
                     # Successfully fetched the URL
                     successful_responses.append((url, resp))
+                    if len(successful_responses) % 1000 == 0:
+                        logger.info(f"Fetched {len(successful_responses)} successful responses")
                     netloc_connection_error_counts[netloc] = 0
                     netloc_429_5xx_counts[netloc] = 0
                     registered_domain_next_allowed[registered_domain] = time.time()
