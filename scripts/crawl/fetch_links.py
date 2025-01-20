@@ -13,7 +13,7 @@ python marin/run/ray_run.py \
     --urls_input_directory gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-10M/ \
     --output_path gs://marin-us-central2/scratch/nfliu/fetched_outlinks/fineweb-edu-10M/ \
     --threads_per_shard 80 \
-    --max_concurrent_shards 1
+    --max_concurrent_shards 20
 ```
 
 Running on OpenWebMath:
@@ -26,7 +26,7 @@ python marin/run/ray_run.py \
     --urls_input_directory gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-10M/ \
     --output_path gs://marin-us-central2/scratch/nfliu/fetched_outlinks/open-web-math-fde8ef8-10M/ \
     --threads_per_shard 80 \
-    --max_concurrent_shards 1
+    --max_concurrent_shards 20
 ```
 """
 import io
