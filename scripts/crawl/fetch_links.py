@@ -155,7 +155,7 @@ def fetch_to_warc(
     netloc_connection_error_counts = Counter()
     # If we've hit 5 or more consecutive connection errors for a netloc, skip all
     # further URLs from this netloc.
-    MAX_NUM_CONNECTION_ERROR = 5
+    MAX_NUM_CONNECTION_ERROR = 10
 
     # For each netloc, keep track of the next time (Unix epoch time)
     # that we are allowed to make a request to a URL from this netloc.
@@ -171,7 +171,7 @@ def fetch_to_warc(
     netloc_429_5xx_counts = Counter()
     # If we encounter MAX_NUM_429 429 responses for a netloc (despite the backoff
     # between requests), skip all further URLs from this netloc.
-    MAX_NUM_429_5xx = 3
+    MAX_NUM_429_5xx = 10
 
     # Robot storage
     netloc_to_robots = {}
@@ -181,8 +181,7 @@ def fetch_to_warc(
     url_to_fetch_errors = {}
     # Store successful responses in memory, then write them at the end.
     # TODO(nfliu): consider streaming directly to the WARC
-    # list of (url, response)
-    successful_responses = []
+    successful_responses: dict[str, requests.Response] = {}
 
     # A queue of tasks. Each is (url, retries_left, is_robots)
     work_queue = queue.Queue()
@@ -216,29 +215,28 @@ def fetch_to_warc(
                 work_queue.put((url, retries_left, is_robots))
                 work_queue.task_done()
                 continue
-
             try:
                 if netloc_429_5xx_counts[netloc] >= MAX_NUM_429_5xx:
                     # This netloc has seen more than `MAX_NUM_429` consecutive
                     # 429 responses (despite backing off between requests), so
                     # we give up on all URLs from this netloc.
                     if is_robots and (netloc not in netloc_to_robots and netloc not in netloc_to_robots_fetch_error):
-                        # Don't overwrite robots.txt if we already successfully fetched it, or an existing error
-                        # if there already is one.
+                        # Don't overwrite robots.txt if we already successfully fetched it, or
+                        # if there is an existing error
                         netloc_to_robots_fetch_error[netloc] = "netloc passed max number of 429/5xx"
-                    else:
+                    elif not is_robots:
                         url_to_fetch_errors[url] = "netloc passed max number of 429/5xx"
                         # Final outcome => increment progress
                         with pbar_lock:
                             pbar.update(1)
                     work_queue.task_done()
                     continue
-                if netloc_connection_error_counts[netloc] >= MAX_NUM_CONNECTION_ERROR:
+                elif netloc_connection_error_counts[netloc] >= MAX_NUM_CONNECTION_ERROR:
                     if is_robots and (netloc not in netloc_to_robots and netloc not in netloc_to_robots_fetch_error):
-                        # Don't overwrite robots.txt if we already successfully fetched it, or an existing error
-                        # if there already is one.
+                        # Don't overwrite robots.txt if we already successfully fetched it, or
+                        # if there is an existing error
                         netloc_to_robots_fetch_error[netloc] = "netloc passed max number of connection errors"
-                    else:
+                    elif not is_robots:
                         url_to_fetch_errors[url] = f"netloc passed max number of connection errors"
                         # Final outcome => increment progress
                         with pbar_lock:
@@ -325,7 +323,7 @@ def fetch_to_warc(
 
                 if resp is not None:
                     # Successfully fetched the URL
-                    successful_responses.append((url, resp))
+                    successful_responses[url] = resp
                     if len(successful_responses) % 1000 == 0:
                         logger.info(f"Fetched {len(successful_responses)} successful responses")
                     netloc_connection_error_counts[netloc] = 0
@@ -338,7 +336,6 @@ def fetch_to_warc(
                     # Final outcome => increment progress
                     with pbar_lock:
                         pbar.update(1)
-
                 else:
                     # error
                     if conn_err:
@@ -389,7 +386,7 @@ def fetch_to_warc(
     # 8) Now we have successful responses in memory; write them to WARC
     warc_buffer = io.BytesIO()
     writer = WARCWriter(warc_buffer, gzip=True)
-    for url, response in successful_responses:
+    for url, response in successful_responses.items():
         status_line = f"{response.status_code} {response.reason}"
         http_headers = [("Status", status_line)]
         for h, v in response.headers.items():
