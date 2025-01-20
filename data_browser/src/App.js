@@ -13,10 +13,10 @@ function RouteChangeNotifier() {
   useEffect(() => {
     // Check if we're in an iframe
     if (window !== window.parent) {
-      // Send message to parent with the new path
+      // Send message to parent with the new path and query string
       window.parent.postMessage({
         type: 'ROUTE_CHANGE',
-        path: location.pathname
+        path: location.pathname + location.search
       }, '*');
     }
   }, [location]);
