@@ -21,7 +21,7 @@ import logging
 import math
 import os
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from io import BytesIO
 
 import draccus
@@ -48,6 +48,20 @@ class CCUrlsAndScoresExtractionConfig:
     cc_dumps: list[str]
     num_warcs_to_sample: int
     output_path: str
+
+
+@dataclass(frozen=True)
+class FineWebEduExtractedText:
+    url: str
+    canonicalized_url: str
+    extracted_text: str
+
+
+@dataclass(frozen=True)
+class FineWebEduUrlWithScore:
+    url: str
+    canonicalized_url: str
+    score: float
 
 
 def decode_html(html: bytes) -> str | None:
@@ -114,7 +128,11 @@ def extract_text_from_warc(warc_path: str, output_path: str):
 
                 fout.write(
                     json.dumps(
-                        {"url": record_url, "canonicalized_url": canonicalized_url, "extracted_text": extracted_text}
+                        asdict(
+                            FineWebEduExtractedText(
+                                url=record_url, canonicalized_url=canonicalized_url, extracted_text=extracted_text
+                            )
+                        )
                     )
                     + "\n"
                 )
@@ -167,11 +185,13 @@ def process_one_batch(input_path: str, output_path: str):
         ) in zip(examples_to_classify, examples_scores):
             fout.write(
                 json.dumps(
-                    {
-                        "url": example["url"],
-                        "canonicalized_url": example["canonicalized_url"],
-                        "score": example_score,
-                    }
+                    asdict(
+                        FineWebEduUrlWithScore(
+                            url=example["url"],
+                            canonicalized_url=example["canonicalized_url"],
+                            score=example_score,
+                        )
+                    )
                 )
                 + "\n"
             )
