@@ -117,7 +117,7 @@ def count_outlinks(input_pattern: str):
 @draccus.wrap()
 def count_outlinks_from_html(cfg: OutlinksCountingConfig):
     # Do all the processing in a remote function
-    _ = ray.get(count_outlinks.remote(cfg.input_pattern))
+    ray.get(count_outlinks.remote(cfg.input_pattern))
 
 
 if __name__ == "__main__":
