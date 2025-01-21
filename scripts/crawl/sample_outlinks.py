@@ -9,7 +9,6 @@ Running on OpenWebMath:
 
 ```
 python marin/run/ray_run.py \
-    --pip_deps 'tldextract' \
     --no_wait -- \
     python scripts/crawl/sample_outlinks.py \
     --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8/*_links.jsonl.gz' \
@@ -22,7 +21,6 @@ Running on FineWeb-Edu:
 
 ```
 python marin/run/ray_run.py \
-    --pip_deps 'tldextract' \
     --no_wait -- \
     python scripts/crawl/sample_outlinks.py \
     --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu/CC-MAIN*/*_links.jsonl.gz' \
@@ -39,6 +37,7 @@ import math
 import random
 from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass
+from urllib.parse import urlparse
 
 import draccus
 import fsspec
@@ -46,7 +45,6 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 import ray
-import tldextract
 from tqdm_loggable.auto import tqdm
 
 from marin.utils import fsspec_glob
@@ -277,12 +275,10 @@ def shard_urls_by_domain(examples: list[Outlink], shard_count: int, block_size: 
 
     Returns: a list of lists, where each sub-list is a shard containing URLs.
     """
-    no_fetch_extract = tldextract.TLDExtract(suffix_list_urls=())
-
     # 1) Group URLs by domain
     domain_map = defaultdict(list)
     for example in examples:
-        domain = no_fetch_extract(example.link_target).registered_domain.lower()
+        domain = urlparse(example.link_target).netloc.lower()
         domain_map[domain].append(example)
 
     # 2) Split each domain's URLs into 'block_size' chunks
