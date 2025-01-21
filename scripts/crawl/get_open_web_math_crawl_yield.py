@@ -2,6 +2,18 @@
 """
 Given a parquet file with outlinks and the crawl results, compute crawl yield statistics.
 
+In particular, we compute:
+
+1. The total number of URLs in the outlinks (N_total)
+2. The total number of URLs that were successfully fetched (N_f)
+3. The total number of successfully-fetched URLs that pass the FineWeb-Edu quality filtering pipeline (N_hq)
+
+The quantities of interest are:
+
+- N_f / N_total: How many of the URLs are actually crawlable / we get responses from?
+- N_hq / N_total: What is the overall yield rate of the crawl frontier?
+- N_hq / N_f: What is the yield rate of the successfully-fetched pages?
+
 Running on OpenWebMath:
 
 ```
