@@ -1,3 +1,8 @@
+"""
+A simple scaling law experiment (to serve as an example or test script) to predict the performance of a 8B model
+from 5 smaller models.
+"""
+
 from experiments.defaults import default_scaling_law_analysis
 from experiments.evals.task_configs import CORE_TASKS
 from marin.execution.executor import executor_main
@@ -16,7 +21,7 @@ scaling_law_8b_performance_pred = default_scaling_law_analysis(
     ladder_runs=RUNS,
     pred_run=PRED_RUN,
     intermediate_task_loss="eval/paloma/c4_en/bpb",
-    task_accuracies=CORE_TASKS[4:9],
+    task_accuracies=CORE_TASKS[4:9], # predict 5 metrics
 )
 
 if __name__ == "__main__":
