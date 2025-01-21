@@ -431,6 +431,14 @@ def fetch_to_warc(
         status_line = f"{response.status_code} {response.reason}"
         http_headers = [("Status", status_line)]
         for h, v in response.headers.items():
+            # Only keep headers with ascii names and values, since warcio errors out
+            # headers with values including Unicode characters. For example, the URL
+            # https://lib.utsa.edu/research/ causes issues because one of the returned headers is:
+            # ('Strict-Transport-Security', 'max-age=31536000;Â\xa0includeSubDomains; preload')
+            if h is not None and not h.isascii():
+                continue
+            if v is not None and not v.isascii():
+                continue
             http_headers.append((h, v))
         status_headers = StatusAndHeaders(status_line, http_headers, protocol="HTTP/1.1")
         payload_io = io.BytesIO(response.content)
