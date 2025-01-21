@@ -11,7 +11,7 @@ The high-level design of this fetcher is heavily inspired by the Apache Nutch cr
   and each process writes out a WARC with the fetched contents of the URLs in the shard
 - Each process runs multiple threads (`--threads_per_shard`) to fetch in parallel.
   The threads share a queue of URLs to fetch.
-  - In addition, each host (netloc) has a separate lock to ensure that within a single process,
+  - In addition, each host (netloc) we're fetching from has a separate lock to ensure that within a single process,
     we aren't making multiple simultaneous requests to a particular host.
   - When we see a 429 or 5xx response, the thread adaptively backs-off by requeuing the URL
     for retrying at a later point in time and goes to work on another URL.
