@@ -21,7 +21,7 @@ scaling_law_8b_performance_pred = default_scaling_law_analysis(
     ladder_runs=RUNS,
     pred_run=PRED_RUN,
     intermediate_task_loss="eval/paloma/c4_en/bpb",
-    task_accuracies=CORE_TASKS[4:9], # predict 5 metrics
+    task_accuracies=CORE_TASKS[4:9],  # predict 5 metrics
 )
 
 if __name__ == "__main__":

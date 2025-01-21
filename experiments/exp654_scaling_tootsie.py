@@ -14,13 +14,13 @@ scaling_law_8b_performance_pred = default_scaling_law_analysis(
     ],
     pred_run=llama_8b_tootsie,
     intermediate_task_loss="eval/paloma/c4_en/bpb",
-    task_accuracy="lm_eval/hellaswag_10shot/acc",
+    task_accuracies=["lm_eval/hellaswag_10shot/acc"],
 )
 
 if __name__ == "__main__":
     executor_main(
         steps=[
-            # *suite,
+            *suite,
             scaling_law_8b_performance_pred,
         ],
         description="scaling law suite to predict performance of 8B model on DCLM mix",
