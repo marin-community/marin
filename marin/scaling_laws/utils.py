@@ -564,8 +564,7 @@ def fit_multiple_metrics_scaling_laws(
             - (actual_loss, predicted_loss): Task loss predictions
             - Dict mapping each accuracy metric to (actual_acc, predicted_acc)
     """
-    # First get task loss predictions - we'll need this for all accuracy predictions
-    # Include all metrics in single pull for efficiency
+    # first get task loss predictions
     actual_loss, predicted_loss = fit_task_loss_from_ladder_models(
         runs=runs,
         entity=entity,
