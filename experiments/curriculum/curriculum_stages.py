@@ -72,6 +72,7 @@ def train_executor_step(
     steps_per_export : int,
     tpu_type : str,
     optimizer_config : AdamConfig = None,
+    additional_tags : list[str] = [],
 ) -> ExecutorStep:
     
     if optimizer_config is None:
@@ -89,7 +90,7 @@ def train_executor_step(
         trainer=TrainerConfig(
             tracker=WandbConfig(
                 project="suhas-curriculum",
-                tags=[name, TAG],
+                tags=[name, TAG, *additional_tags],
             ),
             mp=jmp.get_policy("p=f32,c=bfloat16"),
             train_batch_size=train_batch_size,

@@ -82,12 +82,12 @@ dolma_c4_stage2_tokenized = tokenize_train_validation(
     name="dolma_c4_stage2",
 )
 
-def full_training_stage_varsched(total_code_portion, duration_frac_stage2, code_frac_alloc_stage2, stage, version_tag=""):
+def full_training_stage_varsched(total_code_portion, duration_frac_stage2, code_frac_alloc_stage2, stage, learning_rate=3e-3, cooldown_frac=None, schedule_type="cosine", version_tag="", additional_tags=[]):
     duration_frac_stage1 = 1 - duration_frac_stage2
     code_frac_alloc_stage1 = 1 - code_frac_alloc_stage2
 
-    code_weight_stage1 = round(total_code_portion * code_frac_alloc_stage1 / duration_frac_stage1, 5)
-    code_weight_stage2 = round(total_code_portion * code_frac_alloc_stage2 / duration_frac_stage2, 5)
+    code_weight_stage1 = round(total_code_portion * code_frac_alloc_stage1 / duration_frac_stage1, 7)
+    code_weight_stage2 = round(total_code_portion * code_frac_alloc_stage2 / duration_frac_stage2, 7)
 
     print('-' * 100)
     print(f"total_code_portion: {total_code_portion}")
@@ -123,15 +123,26 @@ def full_training_stage_varsched(total_code_portion, duration_frac_stage2, code_
     steps_stage1 = int(num_train_steps * duration_frac_stage1)
     steps_stage2 = num_train_steps - steps_stage1
 
-    learning_rate=3e-3
     weight_decay=0.1
     steps_per_eval=num_train_steps // 20
     steps_per_export=steps_stage1 if stage == "stage1" else num_train_steps
-    old_prefix = f"stack-dedup-c4-curriculum-3B-150m-varsched-{code_frac_alloc_stage2}"
-    name_prefix = f"stack-c4-3B-150m-varsched-{code_frac_alloc_stage2}"
+    name_prefix = f"varsched-bf-{code_frac_alloc_stage2}"
+
+    if schedule_type == "linear":
+        optimizer_config = AdamConfig(
+            learning_rate=learning_rate,
+            weight_decay=weight_decay,
+            lr_schedule=schedule_type,
+            decay=cooldown_frac,
+        )
+        name_prefix += f"-{schedule_type}-{cooldown_frac}"
+    elif schedule_type == "cosine":
+        optimizer_config = None
+    else:
+        raise ValueError(f"Invalid schedule type: {schedule_type}")
 
     train_step_stage1 = train_executor_step(
-        name=f"{old_prefix}-{code_weight_stage1}-stage1{version_tag}",
+        name=f"{name_prefix}-{code_weight_stage1}-{code_weight_stage2}-stage1{version_tag}",
         pretraining_data=pretraining_data_stage1,
         evaluation_data=evaluation_data_stage1,
         model=model,
@@ -143,6 +154,8 @@ def full_training_stage_varsched(total_code_portion, duration_frac_stage2, code_
         steps_per_eval=steps_per_eval,
         steps_per_export=steps_per_export,
         tpu_type=tpu_type,
+        optimizer_config=optimizer_config,
+        additional_tags=additional_tags,
     )
 
     train_step_stage2 = train_executor_step(
@@ -150,7 +163,7 @@ def full_training_stage_varsched(total_code_portion, duration_frac_stage2, code_
         pretraining_data=pretraining_data_stage2,
         evaluation_data=evaluation_data_stage2,
         model=model,
-        model_checkpoint=f"gs://marin-us-central2/checkpoints/suhas/{old_prefix}-{code_weight_stage1}-stage1{version_tag}/checkpoints/step-{steps_stage1}",
+        model_checkpoint=f"gs://marin-us-central2/checkpoints/suhas/{name_prefix}-{code_weight_stage1}-{code_weight_stage2}-stage1{version_tag}/checkpoints/step-{steps_stage1}",
         train_batch_size=train_batch_size,
         num_train_steps=num_train_steps,
         learning_rate=learning_rate,
@@ -158,6 +171,8 @@ def full_training_stage_varsched(total_code_portion, duration_frac_stage2, code_
         steps_per_eval=steps_per_eval,
         steps_per_export=steps_per_export,
         tpu_type=tpu_type,
+        optimizer_config=optimizer_config,
+        additional_tags=additional_tags,
     )
 
     if stage == "stage1":
@@ -165,7 +180,7 @@ def full_training_stage_varsched(total_code_portion, duration_frac_stage2, code_
     else:
         return train_step_stage2
 
-def full_training_stage_halfsched(starting_code_portion, ending_code_portion, stage, num_train_steps=3000, model_size="150m", version_tag=""):
+def full_training_stage_halfsched(starting_code_portion, ending_code_portion, stage, num_train_steps=3000, model_size="150m", version_tag="", additional_tags=[]):
     data_config_stage1 = lm_mixture_data_config(
         components={"stack_dedup": stack_dedup_stage1_tokenized, "c4": dolma_c4_stage1_tokenized},
         weights={"stack_dedup": starting_code_portion, "c4": 1 - starting_code_portion},
@@ -207,6 +222,7 @@ def full_training_stage_halfsched(starting_code_portion, ending_code_portion, st
         steps_per_eval=steps_per_eval,
         steps_per_export=steps_per_export,
         tpu_type=tpu_type,
+        additional_tags=additional_tags,
     )
 
     train_step_stage2 = train_executor_step(
@@ -222,6 +238,7 @@ def full_training_stage_halfsched(starting_code_portion, ending_code_portion, st
         steps_per_eval=steps_per_eval,
         steps_per_export=steps_per_export,
         tpu_type=tpu_type,
+        additional_tags=additional_tags,
     )
 
     if stage == "stage1":
@@ -229,77 +246,98 @@ def full_training_stage_halfsched(starting_code_portion, ending_code_portion, st
     else:
         return train_step_stage2
 
+def full_training_stage_baseline_sweep(learning_rate, schedule_type, cooldown_frac=None, num_train_steps=3000, model_size="150m", additional_tags=[]):
+    data_config = lm_mixture_data_config(
+        components={"stack_dedup": stack_dedup_stage1_tokenized, "c4": dolma_c4_stage1_tokenized},
+        weights={"stack_dedup": 0.005, "c4": 0.995},
+    )
+
+    pretraining_data, evaluation_data = _prepare_data_config(data_config, use_default_validation=True, use_default_evaluation=True)
+
+    # Construct executor steps for training
+
+    tpu_type="v4-128"
+    model = {
+        "150m": llama_150m,
+        "300m": llama_300m,
+    }[model_size]
+    train_batch_size=1024
+    weight_decay=0.1
+    steps_per_eval=num_train_steps // 20
+    steps_per_export=3000 // 2
+    name_prefix = f"stack-c4-{num_train_steps // 1000}B-{model_size}-baseline-lr-sweep"
+
+    if schedule_type == "linear":
+        optimizer_config = AdamConfig(
+            learning_rate=learning_rate,
+            weight_decay=weight_decay,
+            lr_schedule=schedule_type,
+            decay=cooldown_frac,
+        )
+
+        schedule_type = f"linear-{cooldown_frac}"
+    elif schedule_type == "cosine":
+        optimizer_config = None
+    else:
+        raise ValueError(f"Invalid schedule type: {schedule_type}")
+    
+    train_step = train_executor_step(
+        name=f"{name_prefix}-{learning_rate}-{schedule_type}",
+        pretraining_data=pretraining_data,
+        evaluation_data=evaluation_data,
+        model=model,
+        model_checkpoint=None,
+        train_batch_size=train_batch_size,
+        num_train_steps=num_train_steps,
+        learning_rate=learning_rate,
+        weight_decay=weight_decay,
+        steps_per_eval=steps_per_eval,
+        steps_per_export=steps_per_export,
+        tpu_type=tpu_type,
+        optimizer_config=optimizer_config,
+        additional_tags=additional_tags,
+    )
+
+    return train_step
+
 ############################################################
 
 if __name__ == "__main__":
+    # Do a full sweep to build intuition for optimal schedule on 2d grid
 
-    ### Launch end points of tradeoff
+    # stage = "stage2"
 
-    stage = "stage2" # LAUNCH STAGE 2
-    version_tag = "-v2"
+    # executor_main(
+    #     steps=[
+    #         full_training_stage_varsched(total_code_portion=0.005, duration_frac_stage2=duration_frac_stage2, code_frac_alloc_stage2=code_frac_alloc_stage2, stage=stage, additional_tags=["two-stage-bruteforce", stage])
+    #         for duration_frac_stage2 in [0.8]
+    #         for code_frac_alloc_stage2 in [0.7, 0.9, 0.95, 0.99]
+    #     ],
+    #     description=f"Test training with varying mixtures",
+    # )
+
+    # Do a sweep over length of stage 2 for all data in stage 2
+
+    stage = "stage1"
 
     executor_main(
         steps=[
-            full_training_stage_halfsched(starting_code_portion=1.0, ending_code_portion=0.0, stage=stage, num_train_steps=3000, version_tag=version_tag),
-            full_training_stage_halfsched(starting_code_portion=0.0, ending_code_portion=1.0, stage=stage, num_train_steps=3000, version_tag=version_tag),
-            full_training_stage_halfsched(starting_code_portion=0.1, ending_code_portion=0.0, stage=stage, num_train_steps=3000, version_tag=version_tag),
-            full_training_stage_halfsched(starting_code_portion=0.0, ending_code_portion=0.1, stage=stage, num_train_steps=3000, version_tag=version_tag),
-            full_training_stage_halfsched(starting_code_portion=0.01, ending_code_portion=0.0, stage=stage, num_train_steps=3000, version_tag=version_tag),
-            full_training_stage_halfsched(starting_code_portion=0.0, ending_code_portion=0.01, stage=stage, num_train_steps=3000, version_tag=version_tag),
+            full_training_stage_varsched(total_code_portion=0.005, duration_frac_stage2=duration_frac_stage2, code_frac_alloc_stage2=code_frac_alloc_stage2, schedule_type=schedule_type, cooldown_frac=cooldown_frac, stage=stage, additional_tags=["all-stage2-bruteforce", stage])
+            # for duration_frac_stage2 in [0.8, 0.4, 0.2, 0.1, 0.05, 0.025, 0.00625]
+            # for schedule_type, cooldown_frac in [("linear", 0.2), ("linear", 0.0)]
+            for duration_frac_stage2 in [0.035]
+            for schedule_type, cooldown_frac in [("linear", 0.1), ("linear", 0.05)]
+            for code_frac_alloc_stage2 in [1.0]
         ],
         description=f"Test training with varying mixtures",
     )
-
-    ### Increase parameter count for fixed token count
-
-    # stage = "stage2"
-    # version_tag = ""
+    # Note: changed varsched naming system
 
     # executor_main(
     #     steps=[
-    #         full_training_stage_halfsched(starting_code_portion=0.0  , ending_code_portion=0.01 , stage=stage, num_train_steps=3000, model_size="300m"),
-    #         full_training_stage_halfsched(starting_code_portion=0.001, ending_code_portion=0.009, stage=stage, num_train_steps=3000, model_size="300m"),
-    #         full_training_stage_halfsched(starting_code_portion=0.003, ending_code_portion=0.007, stage=stage, num_train_steps=3000, model_size="300m"),
-    #         full_training_stage_halfsched(starting_code_portion=0.005, ending_code_portion=0.005, stage=stage, num_train_steps=3000, model_size="300m"),
-    #         full_training_stage_halfsched(starting_code_portion=0.007, ending_code_portion=0.003, stage=stage, num_train_steps=3000, model_size="300m"),
-    #         full_training_stage_halfsched(starting_code_portion=0.009, ending_code_portion=0.001, stage=stage, num_train_steps=3000, model_size="300m"),
-    #         full_training_stage_halfsched(starting_code_portion=0.01 , ending_code_portion=0.0  , stage=stage, num_train_steps=3000, model_size="300m"),
-    #     ],
-    #     description=f"Test training with varying mixtures",
-    # )
-
-    ### Increase token count for fixed model size
-
-    # stage = "stage2"
-    # version_tag = ""
-
-    # executor_main(
-    #     steps=[
-    #         full_training_stage_halfsched(starting_code_portion=0.0  , ending_code_portion=0.01 , stage=stage, num_train_steps=12000),
-    #         full_training_stage_halfsched(starting_code_portion=0.001, ending_code_portion=0.009, stage=stage, num_train_steps=12000),
-    #         full_training_stage_halfsched(starting_code_portion=0.003, ending_code_portion=0.007, stage=stage, num_train_steps=12000),
-    #         full_training_stage_halfsched(starting_code_portion=0.005, ending_code_portion=0.005, stage=stage, num_train_steps=12000),
-    #         full_training_stage_halfsched(starting_code_portion=0.007, ending_code_portion=0.003, stage=stage, num_train_steps=12000),
-    #         full_training_stage_halfsched(starting_code_portion=0.009, ending_code_portion=0.001, stage=stage, num_train_steps=12000),
-    #         full_training_stage_halfsched(starting_code_portion=0.01 , ending_code_portion=0.0  , stage=stage, num_train_steps=12000),
-    #     ],
-    #     description=f"Test training with varying mixtures",
-    # )
-
-    # stage = "stage2"
-    # version_tag = "-v5"
-
-    # executor_main(
-    #     steps=[
-    #         full_training_stage_varsched(total_code_portion=0.5, duration_frac_stage2=0.45, code_frac_alloc_stage2=0.9, stage=stage, version_tag=version_tag), # 0.09091, 1.0
-    #         # full_training_stage_varsched(total_code_portion=0.5, duration_frac_stage2=math.sqrt(0.45 * 0.9), code_frac_alloc_stage2=0.9, stage=stage, version_tag=version_tag), # 0.13751, 0.70711
-    #         # full_training_stage_varsched(total_code_portion=0.5, duration_frac_stage2=0.9, code_frac_alloc_stage2=0.9, stage=stage, version_tag=version_tag), # 0.5, 0.5
-    #         # full_training_stage_varsched(total_code_portion=0.05, duration_frac_stage2=0.045, code_frac_alloc_stage2=0.9, stage=stage, version_tag=version_tag), # 0.00524, 1.0
-    #         # full_training_stage_varsched(total_code_portion=0.05, duration_frac_stage2=math.sqrt(0.045 * 0.9), code_frac_alloc_stage2=0.9, stage=stage, version_tag=version_tag), # 0.00626, 0.22361
-    #         # full_training_stage_varsched(total_code_portion=0.05, duration_frac_stage2=0.9, code_frac_alloc_stage2=0.9, stage=stage, version_tag=version_tag), # 0.05, 0.05
-    #         # full_training_stage_varsched(total_code_portion=0.005, duration_frac_stage2=0.0045, code_frac_alloc_stage2=0.9, stage=stage, version_tag=version_tag), # 0.0005, 1.0
-    #         # full_training_stage_varsched(total_code_portion=0.005, duration_frac_stage2=math.sqrt(0.0045 * 0.9), code_frac_alloc_stage2=0.9, stage=stage, version_tag=version_tag),
-    #         # full_training_stage_varsched(total_code_portion=0.005, duration_frac_stage2=0.9, code_frac_alloc_stage2=0.9, stage=stage, version_tag=version_tag), # 0.005, 0.005
+    #         full_training_stage_baseline_sweep(learning_rate=3e-3, schedule_type=schedule_type, num_train_steps=3000, cooldown_frac=cooldown_frac, model_size="150m", additional_tags=["baseline-lr-sweep"])
+    #         for cooldown_frac in [0.01, 0.05, 0.1, 0.2, 0.5, 0.9, 0.99]
+    #         for schedule_type in ["linear"]
     #     ],
     #     description=f"Test training with varying mixtures",
     # )
