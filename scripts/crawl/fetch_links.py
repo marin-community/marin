@@ -435,9 +435,9 @@ def fetch_to_warc(
             # headers with values including Unicode characters. For example, the URL
             # https://lib.utsa.edu/research/ causes issues because one of the returned headers is:
             # ('Strict-Transport-Security', 'max-age=31536000;Â\xa0includeSubDomains; preload')
-            if h is not None and not h.isascii():
+            if h and not h.isascii():
                 continue
-            if v is not None and not v.isascii():
+            if v and not v.isascii():
                 continue
             http_headers.append((h, v))
         status_headers = StatusAndHeaders(status_line, http_headers, protocol="HTTP/1.1")
