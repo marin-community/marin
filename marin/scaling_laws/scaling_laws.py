@@ -10,10 +10,10 @@ from marin.execution.executor import ExecutorStep
 class ScalingLawConfig:
 
     ladder_model_steps: list[ExecutorStep | str]
-    """list of (smaller model) wandb run ids to be used as input for scaling laws"""
+    """list of (smaller model) steps or wandb run ids to be used as input for scaling laws"""
 
     pred_model_step: ExecutorStep | str
-    """wandb run id for the larger model to make predictions for"""
+    """executor step or wandb run id for the larger model to make predictions for"""
 
     intermediate_task_loss: str = "eval/paloma/c4_en/bpb"
     """intermediate task loss to be used for scaling laws (eg. c4en bpb)"""
@@ -110,34 +110,6 @@ def log_and_create_report(
         },
         reinit=True,
     )
-
-    # # Create steps array
-    # steps = list(range(len(actual_loss)))
-
-    # # Log accuracy plot data
-    # accuracy_plot = wandb.plot.line_series(
-    #     xs=steps,
-    #     ys=[actual_acc, predicted_acc],
-    #     keys=["Actual", "Predicted"],
-    #     title="Task Accuracy: Actual vs Predicted",
-    #     xname="Step"
-    # )
-
-    # # Log loss plot data
-    # loss_plot = wandb.plot.line_series(
-    #     xs=steps,
-    #     ys=[actual_loss, predicted_loss],
-    #     keys=["Actual", "Predicted"],
-    #     title="Task Loss: Actual vs Predicted",
-    #     xname="Step"
-    # )
-
-    # wandb.log(
-    #     {
-    #         "Task Accuracy": accuracy_plot,
-    #         "Task Loss": loss_plot,
-    #     }
-    # )
 
     # Create steps array
     steps = list(range(len(actual_loss)))

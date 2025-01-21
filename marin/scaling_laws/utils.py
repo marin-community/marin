@@ -552,7 +552,7 @@ def fit_multiple_metrics_scaling_laws(
     normalize_ND: bool = False,
 ) -> tuple[tuple[np.ndarray, np.ndarray], dict[str, tuple[np.ndarray, np.ndarray]]]:
     """
-    Fits scaling laws for task loss and multiple accuracy metrics efficiently.
+    Fits scaling laws for task loss and multiple accuracy metrics.
 
     Args:
         runs: List of runs to pull the data from
