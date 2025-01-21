@@ -186,7 +186,7 @@ def fetch_to_warc(
     # abc.wordpress.com/page2.html until it acquires the lock.
     netloc_locks = defaultdict(threading.Lock)
 
-    # For each netloc , we keep track of how many consecutive connection errors
+    # For each netloc, we keep track of how many consecutive connection errors
     # we've encountered (e.g., if the name cannot be resolved). The more consecutive connection
     # errors we've encountered, the shorter a timeout we use when making requests to URLs
     # from this netloc (since it's pretty likely that the site is just dead).
