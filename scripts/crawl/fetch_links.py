@@ -3,6 +3,23 @@
 Given a parquet file with outlinks, fetch the link targets and write the
 scraped pages as a WARC file.
 
+The high-level design of this fetcher is heavily inspired by the Apache Nutch crawler:
+
+- Input: N shards of URLs (each shard has ~100K URLs)
+- Each shard is processed by a different ray remote function. `--max_concurrent_shards` controls
+  the number of shards that can be processed concurrently. The processes don't talk to each other,
+  and each process writes out a WARC with the fetched contents of the URLs in the shard
+- Each process runs multiple threads (`--threads_per_shard`) to fetch in parallel.
+  The threads share a queue of URLs to fetch.
+  - In addition, each host (netloc) has a separate lock to ensure that within a single process,
+    we aren't making multiple simultaneous requests to a particular host.
+  - When we see a 429 or 5xx response, the thread adaptively backs-off by requeuing the URL
+    for retrying at a later point in time and goes to work on another URL.
+  - When we see too many (10) consecutive 429s or 5xx from a particular host, we skip all
+    further URLs from that host.
+  - Finally, when we see too many (10) consecutive connection errors from a particular host,
+    we skip all further URLs from that host.
+
 Running on FineWeb-Edu:
 
 ```
@@ -72,17 +89,23 @@ def fetch_url(
     max_size_bytes: int = 10 * 1024 * 1024,
     chunk_size: int = 1 * 1024 * 1024,
 ) -> tuple[requests.Response, int | None, None, bool] | tuple[None, int | None, str, bool]:
-    """Fetch the content of a URL, truncating at 10 MB if necessary.
+    """Fetch the content of a URL, truncating the response at `max_size_bytes` if necessary.
+
+    Args:
+    session (requests.Session): Session object to use for fetching the URL
+    url (str): URL to fetch
+    timeout (float, default=30): timeout to use when issuing request
+    max_size_bytes (int, default=10*1024*1024 (10MB)): truncate responses after this many bytes.
+    chunk_size (int, default=1*1024*1024 (1MB)): chunk size to use when streaming responses.
 
     Returns a tuple with four items:
-    - Response, if the request was successful, else None
+    - The response, if the request was successful, else None
     - The response status code, if we received a response, else None
     - The error string if the request was not successful, else None
-    - True if the domain was unreachable, else False
-      (e.g., successful request or we get a 4xx or 5xx response)
+    - True if the domain was unreachable, else False (e.g., successful request
+      or we get a 4xx or 5xx response)
     """
     try:
-        # Use stream=True to avoid downloading the entire body into memory at once.
         with session.get(url, timeout=timeout, stream=True) as r:
             r.raise_for_status()
 
@@ -94,15 +117,15 @@ def fetch_url(
             truncated_response.url = r.url
             truncated_response.request = r.request
 
-            # Read response in chunks, truncate at 10 MB
+            # Read response in chunks, truncate at `max_size_bytes`
             content_buffer = io.BytesIO()
             downloaded_bytes = 0
-
             for chunk in r.iter_content(chunk_size=chunk_size):
                 if chunk:
                     new_size = downloaded_bytes + len(chunk)
 
-                    # If adding this chunk would exceed the 10MB cap, only write the part that fits
+                    # If adding this chunk would exceed the `max_size_bytes` cap,
+                    # only write the part that fits
                     if new_size > max_size_bytes:
                         allowed_bytes = max_size_bytes - downloaded_bytes
                         content_buffer.write(chunk[:allowed_bytes])
@@ -116,10 +139,12 @@ def fetch_url(
             truncated_response._content = content_buffer.getvalue()
             return truncated_response, r.status_code, None, False
     except requests.exceptions.HTTPError as e:
-        # We got a response from the server, so the domain is reachable
+        # We got a response from the server, so the domain is reachable, but
+        # the request was not successful (e.g., a 4xx or 5xx error).
         return None, e.response.status_code, str(e), False
     except Exception as e:
-        # Anything else is a connection-level error (DNS, SSL, etc.)
+        # Anything else is a connection-level error (DNS, SSL, etc.),
+        # where we didn't even get a response back.
         return None, None, str(e), True
 
 
@@ -134,9 +159,22 @@ def fetch_to_warc(
     Main pipeline that:
       - Deduplicates and shuffles URLs
       - Spawns multiple worker threads pulling from a shared queue
-      - For each domain, ensures concurrency=1 using domain locks
+      - Uses per-netloc locks to ensure that only one thread concurrently
+        making a request to each netloc.
       - Collects results in a WARC file
       - Writes out robots and error logs
+
+    Args:
+    urls (list[str]): List of URLs to fetch
+    warc_output_path (str): Path to write the output WARC file with the fetched responses
+    robots_output_path (str): Path to write JSON object with mapping of netloc to robots.txt
+    errors_output_path (str): Path to write JSON object with fetch errors for robots.txts and
+      and URLs. The JSON object has two keys: (1) "url_to_fetch_errors" and
+      (2) "netloc_to_robots_fetch_error". "url_to_fetch_errors" maps to a mapping of URLs to
+      the error encountered when fetching (if we saw one), and "netloc_to_robots_fetch_error"
+      maps to a mapping of robots.txt URLs (one per netloc) to the error encountered when
+      fetching (if we saw one),
+    threads_per_shard (int): Number of threads to use for concurrent fetching.
     """
     urls = list(set(urls))
     random.shuffle(urls)
@@ -144,7 +182,7 @@ def fetch_to_warc(
 
     # Each netloc has a lock to ensure that we only have one concurrent
     # thread making a request to each netloc. For example, if a thread is making
-    # a request to abc.wordpress.com/page1.html , another thread cannot touch
+    # a request to abc.wordpress.com/page1.html , another thread cannot work on
     # abc.wordpress.com/page2.html until it acquires the lock.
     netloc_locks = defaultdict(threading.Lock)
 
@@ -180,7 +218,8 @@ def fetch_to_warc(
     # Fetch errors
     url_to_fetch_errors = {}
     # Store successful responses in memory, then write them at the end.
-    # TODO(nfliu): consider streaming directly to the WARC
+    # TODO(nfliu): consider streaming directly to the WARC, need to check
+    # if this would incur too many GCS operations.
     successful_responses: dict[str, requests.Response] = {}
 
     # A queue of tasks. Each is (url, retries_left, is_robots)
@@ -396,15 +435,15 @@ def fetch_to_warc(
         record = writer.create_warc_record(url, "response", payload=payload_io, http_headers=status_headers)
         writer.write_record(record)
 
-    # Write the WARC file
+    # Write the WARC file to output path
     with fsspec.open(warc_output_path, "wb") as fout:
         fout.write(warc_buffer.getvalue())
 
-    # Write robots data
+    # Write robots data to output path
     with fsspec.open(robots_output_path, "w", compression="infer") as fout:
         json.dump(netloc_to_robots, fout)
 
-    # Write errors
+    # Write errors to output path
     all_errors = {
         "url_to_fetch_errors": url_to_fetch_errors,
         "netloc_to_robots_fetch_error": netloc_to_robots_fetch_error,
@@ -423,6 +462,24 @@ def fetch_to_warc(
 def fetch_links(
     urls_path: str, warc_output_path: str, robots_output_path: str, errors_output_path: str, threads_per_shard: int
 ):
+    """
+    Given a parquet with links to fetch, fetch the responses and write the output as WARC
+    to `warc_output_path`. In addition, the robots.txt for each fetched netloc and any errors
+    encountered while fetching are written to `robots_output_path` and `errors_output_path`,
+    respectively.
+
+    Args:
+    urls_path: Path to parquet with links to fetch.
+    warc_output_path (str): Path to write the output WARC file with the fetched responses
+    robots_output_path (str): Path to write JSON object with mapping of netloc to robots.txt
+    errors_output_path (str): Path to write JSON object with fetch errors for robots.txts and
+      and URLs. The JSON object has two keys: (1) "url_to_fetch_errors" and
+      (2) "netloc_to_robots_fetch_error". "url_to_fetch_errors" maps to a mapping of URLs to
+      the error encountered when fetching (if we saw one), and "netloc_to_robots_fetch_error"
+      maps to a mapping of robots.txt URLs (one per netloc) to the error encountered when
+      fetching (if we saw one),
+    threads_per_shard (int): Number of threads to use for concurrent fetching.
+    """
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     success_path = warc_output_path + ".SUCCESS"
     if fsspec_exists(success_path):
@@ -467,7 +524,7 @@ def decreasing_timeout(
     base_timeout: float = 30.0, failures: int = 0, factor: float = 2.0, min_timeout: float = 1.0
 ) -> float:
     """
-    The more failures a domain has, the smaller the timeout we allow.
+    The more failures a domain has, the (exponentially) smaller the timeout we allow.
     We clamp the final value so it doesn't go below min_timeout.
     """
     timeout = base_timeout / (factor ** min(failures / 5, 5))
