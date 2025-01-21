@@ -23,7 +23,7 @@ from levanter.trainer import TrainerConfig
 from experiments.eval_datasets import (
     eval_datasets,
 )
-from experiments.evals.task_configs import CORE_TASKS, convert_to_levanter_task_config
+from experiments.evals.task_configs import CORE_TASKS, convert_to_levanter_task_config, convert_to_task_metrics
 from experiments.llama import compute_num_parameters
 from experiments.paloma import paloma_tokenized
 from experiments.simple_train_config import SimpleTrainConfig
@@ -261,7 +261,7 @@ def default_scaling_law_analysis(
     ladder_runs: Sequence[ExecutorStep | InputName | str],
     pred_run: ExecutorStep | InputName | str,
     intermediate_task_loss: str = "eval/paloma/c4_en/bpb",
-    task_accuracy: str = "lm_eval/hellaswag_10shot/acc",
+    task_accuracies: Sequence[str] | Sequence[EvalTaskConfig] = ("lm_eval/hellaswag_10shot/acc"),
 ):
     """
     Use a sequence of training runs (steps) to predict the performance of a target larger model.
@@ -270,11 +270,8 @@ def default_scaling_law_analysis(
         ladder_runs (Sequence[ExecutorStep | InputName | str]): training runs to use as input for prediction.
         pred_run (ExecutorStep | InputName | str): Training run to predict the performance of.
         intermediate_task_loss (str): Intermediate task loss to use for scaling laws.
-        task_accuracy (str): Task accuracy to predict for the larger model.
+        task_accuracies (Sequence[str] | Sequence[EvalTaskConfig]): Task accuracies to predict for the larger model.
     """
-
-    # TODO: it'd be nice to fit different curves simultaneously by supporting multiple task accuracies
-    # and produce several plots and metrics over all our benchmarks. For now starting with one task.
 
     # get the executor steps for the ladder runs
     ladder_steps_or_ids = []
@@ -295,14 +292,18 @@ def default_scaling_law_analysis(
     else:
         pred_run_or_id = str(pred_run)
 
+    # convert the task accuracies to strings if they are EvalTaskConfigs
+    if isinstance(task_accuracies[0], EvalTaskConfig):
+        task_accuracies = convert_to_task_metrics(task_accuracies)
+
     return ExecutorStep(
-        name=f"""scaling_laws/predictions-{pred_run_or_id if
-            isinstance(pred_run_or_id, str) else pred_run_or_id.name}->{task_accuracy}""",
+        name=f"""scaling_laws/preds-{pred_run_or_id if
+            isinstance(pred_run_or_id, str) else pred_run_or_id.name}""",
         fn=run_scaling_law_analysis,
         config=ScalingLawConfig(
             ladder_model_steps=ladder_steps_or_ids,
             pred_model_step=pred_run_or_id,
             intermediate_task_loss=intermediate_task_loss,
-            task_accuracy=task_accuracy,
+            task_accuracies=task_accuracies,
         ),
     )

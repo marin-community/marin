@@ -143,6 +143,8 @@ def fit_sigmoidal(L: np.ndarray, y: np.ndarray, initial_guess: Sequence[float] |
     """
     Fit a sigmoidal model to the data (L, y).
 
+    Equation: a / (1 + exp(-k * (L - L_0))) + b
+
     Args:
         L: Task loss
         y: Ground-truth task accuracy
@@ -161,7 +163,7 @@ def fit_sigmoidal(L: np.ndarray, y: np.ndarray, initial_guess: Sequence[float] |
         return predict_sigmoidal([a, b, k, L_0], L)
 
     # use scipy.optimize.curve_fit
-    popt, _ = curve_fit(objective, L, y, p0=initial_guess, bounds=bounds)
+    popt, _ = curve_fit(objective, L, y, p0=initial_guess, bounds=bounds, maxfev=5000, method="trf", ftol=1e-8)
 
     return popt
 
@@ -499,24 +501,6 @@ def fit_accuracy_from_task_loss(
     ladder_df_filtered = filter_zero_d(ladder_df, tokens_col)
     ladder_df_agg = aggregate_steps(ladder_df_filtered, step_mode=aggregation)
 
-    # TODO:
-    # in the paper they mention "To smoothen the noise, we apply a moving average
-    # on the task loss and task accuracy over all checkpoints of each training run,
-    # with a window size of 5. We also discard the checkpoints
-    # from the first 10% of each training run as these are quite noisy,
-    # and add an extra data point (L = 0.0, Acc = 1.0)" and other tweaks."
-
-    # add an extra data point (L = 0.0, Acc = 1.0)
-    # make a copy of the last row and set the task loss to 0.0 and accuracy to 1.0
-    # new_row = ladder_df_agg.iloc[-1].copy()
-    # new_row[task_loss_col] = 0.0
-    # new_row[accuracy_col] = 1.0
-
-    # print("Adding an extra data point:")
-    # print(new_row)
-    # ladder_df_agg = pd.concat([ladder_df_agg, pd.DataFrame([new_row])], ignore_index=True)
-    # print(ladder_df_agg.tail())
-
     # get the data for the run we want to predict on
     pred_df = pull_metrics_from_wandb(
         runs=[pred_run],
@@ -539,7 +523,7 @@ def fit_accuracy_from_task_loss(
     # fit the sigmoidal model
     params = fit_sigmoidal(task_losses, acc)
 
-    # filter out pred_task_losses to use only the last number of rows.
+    # filter out pred_task_losses to use only the last n rows.
     # this number is determined by the number of rows in pred_df_agg
     rows_in_pred_df_agg = len(pred_df_agg)
     pred_task_losses = pred_task_losses[-rows_in_pred_df_agg:]
@@ -550,3 +534,97 @@ def fit_accuracy_from_task_loss(
     acc_pred_actual = pred_df_agg[accuracy_col].values
 
     return acc_pred_actual, acc_preds
+
+
+def fit_multiple_metrics_scaling_laws(
+    runs: list[str],
+    accuracy_metrics: Sequence[str],
+    entity: str,
+    project: str,
+    x_axis: str = "throughput/total_gflops",
+    pred_run: str = "llama-8b-tootsie-0.001-19ad63",
+    task_loss: str = "eval/paloma/c4_en/bpb",
+    aggregation: str = "all",
+    tokens_col: str = "throughput/total_tokens",
+    param_col: str = "parameter_count",
+    param_col_to_use: str = "computed_params",
+    use_log_for_ND: bool = False,
+    normalize_ND: bool = False,
+) -> tuple[tuple[np.ndarray, np.ndarray], dict[str, tuple[np.ndarray, np.ndarray]]]:
+    """
+    Fits scaling laws for task loss and multiple accuracy metrics efficiently.
+
+    Args:
+        runs: List of runs to pull the data from
+        accuracy_metrics: List of accuracy metrics to predict
+        [other args same as original functions]
+
+    Returns:
+        Tuple of:
+            - (actual_loss, predicted_loss): Task loss predictions
+            - Dict mapping each accuracy metric to (actual_acc, predicted_acc)
+    """
+    # First get task loss predictions - we'll need this for all accuracy predictions
+    # Include all metrics in single pull for efficiency
+    actual_loss, predicted_loss = fit_task_loss_from_ladder_models(
+        runs=runs,
+        entity=entity,
+        project=project,
+        metrics=[task_loss, tokens_col],
+        x_axis=x_axis,
+        pred_run=pred_run,
+        task_loss=task_loss,
+        aggregation=aggregation,
+        tokens_col=tokens_col,
+        param_col=param_col,
+        param_col_to_use=param_col_to_use,
+        use_log_for_ND=use_log_for_ND,
+        normalize_ND=normalize_ND,
+    )
+
+    # Get all data once for efficiency
+    ladder_df = pull_metrics_from_wandb(
+        runs=list(runs),
+        metrics=[task_loss, *accuracy_metrics, tokens_col],
+        entity=entity,
+        project=project,
+        x_axis=x_axis,
+        summary_fields=(param_col,),
+    )
+
+    pred_df = pull_metrics_from_wandb(
+        runs=[pred_run],
+        metrics=[*accuracy_metrics, tokens_col],
+        entity=entity,
+        project=project,
+        x_axis=x_axis,
+        summary_fields=(param_col,),
+    )
+
+    # Filter and aggregate once
+    ladder_df_filtered = filter_zero_d(ladder_df, tokens_col)
+    ladder_df_agg = aggregate_steps(ladder_df_filtered, step_mode=aggregation)
+
+    pred_df_filtered = filter_zero_d(pred_df, d_key=tokens_col)
+    pred_df_agg = aggregate_steps(pred_df_filtered, step_mode=aggregation)
+
+    # Get task losses for fitting once
+    N, D, task_losses = extract_scaling_data(ladder_df_agg, param_col, tokens_col, task_loss)
+
+    # fit each accuracy metric
+    accuracy_results = {}
+    for acc_metric in accuracy_metrics:
+        acc = ladder_df_agg[acc_metric].values
+        params = fit_sigmoidal(task_losses, acc)
+
+        # get actual values for this metric
+        acc_pred_actual = pred_df_agg[acc_metric].values
+
+        # number of predictions should match actual values
+        pred_task_losses = predicted_loss[-len(acc_pred_actual) :]
+
+        # predict accuracies
+        acc_preds = predict_sigmoidal(params, pred_task_losses)
+        accuracy_results[acc_metric] = (acc_pred_actual, acc_preds)
+
+    return (actual_loss, predicted_loss), accuracy_results
