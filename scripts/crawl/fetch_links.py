@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Given a parquet file with outlinks, fetch the link targets and write the
+Given a parquet file with `Outlink`s, download the link targets and write the
 scraped pages as a WARC file.
 
 The high-level design of this fetcher is heavily inspired by the Apache Nutch crawler:
@@ -150,6 +150,7 @@ def fetch_url(
 
 def fetch_to_warc(
     urls: list[str],
+    shard_id: str,
     warc_output_path: str,
     robots_output_path: str,
     errors_output_path: str,
@@ -166,6 +167,7 @@ def fetch_to_warc(
 
     Args:
     urls (list[str]): List of URLs to fetch
+    shard_id (str): ID of this shard, used for logging
     warc_output_path (str): Path to write the output WARC file with the fetched responses
     robots_output_path (str): Path to write JSON object with mapping of netloc to robots.txt
     errors_output_path (str): Path to write JSON object with fetch errors for robots.txts and
@@ -230,7 +232,7 @@ def fetch_to_warc(
     for u in urls:
         work_queue.put((u, retries_per_url, False))
 
-    pbar = tqdm(total=len(urls), desc="Fetching")
+    pbar = tqdm(total=len(urls), desc=f"Fetching shard {shard_id}")
     pbar_lock = threading.Lock()
 
     # Worker function
@@ -433,7 +435,11 @@ def fetch_to_warc(
         status_headers = StatusAndHeaders(status_line, http_headers, protocol="HTTP/1.1")
         payload_io = io.BytesIO(response.content)
         record = writer.create_warc_record(url, "response", payload=payload_io, http_headers=status_headers)
-        writer.write_record(record)
+        try:
+            writer.write_record(record)
+        except Exception:
+            logger.exception(f"Got exception when writing WARC record.\n" f"url: {url}\n" f"headers: {status_headers}")
+            raise
 
     # Write the WARC file to output path
     with fsspec.open(warc_output_path, "wb") as fout:
@@ -469,7 +475,7 @@ def fetch_links(
     respectively.
 
     Args:
-    urls_path: Path to parquet with links to fetch.
+    urls_path (str): Path to parquet with links to fetch.
     warc_output_path (str): Path to write the output WARC file with the fetched responses
     robots_output_path (str): Path to write JSON object with mapping of netloc to robots.txt
     errors_output_path (str): Path to write JSON object with fetch errors for robots.txts and
@@ -499,7 +505,8 @@ def fetch_links(
     random.shuffle(urls)
 
     logger.info(f"Fetching {len(urls)} deduplicated URLs from input file {urls_path}")
-    fetch_to_warc(urls, warc_output_path, robots_output_path, errors_output_path, threads_per_shard)
+    shard_id = os.path.basename(urls_path)
+    fetch_to_warc(urls, shard_id, warc_output_path, robots_output_path, errors_output_path, threads_per_shard)
 
     # Create success file
     with fsspec.open(success_path, "w") as fout:
