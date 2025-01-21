@@ -446,7 +446,7 @@ def fetch_to_warc(
         try:
             writer.write_record(record)
         except Exception:
-            logger.exception(f"Got exception when writing WARC record.\n" f"url: {url}\n" f"headers: {status_headers}")
+            logger.exception(f"Got exception when writing WARC record.\nurl: {url}\nheaders: {status_headers}")
             raise
 
     # Write the WARC file to output path
