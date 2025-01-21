@@ -1,4 +1,5 @@
 from experiments.defaults import default_scaling_law_analysis
+from experiments.evals.task_configs import CORE_TASKS
 from marin.execution.executor import executor_main
 
 RUNS = [
@@ -15,7 +16,7 @@ scaling_law_8b_performance_pred = default_scaling_law_analysis(
     ladder_runs=RUNS,
     pred_run=PRED_RUN,
     intermediate_task_loss="eval/paloma/c4_en/bpb",
-    task_accuracy="lm_eval/hellaswag_10shot/acc",
+    task_accuracies=CORE_TASKS[4:9],
 )
 
 if __name__ == "__main__":
