@@ -10,10 +10,13 @@ import requests
 import zstandard as zstd
 from flask import Flask, Response, jsonify, request, send_from_directory
 from pyarrow.parquet import ParquetFile
+from flask_limiter import Limiter
 
 app = Flask(__name__, static_folder="build")
 
 CLOUD_STORAGE_PREFIXES = ("gs://", "s3://")
+
+limiter = Limiter(app, key_func=lambda: request.remote_addr)
 
 
 @dataclass(frozen=True)
@@ -178,6 +181,7 @@ def config():
 
 
 @app.route("/api/download", methods=["GET"])
+@limiter.limit("10 per minute")
 def download():
     path = request.args.get("path")
     if not path:
@@ -192,6 +196,7 @@ def download():
 
 
 @app.route("/api/view", methods=["GET"])
+@limiter.limit("60 per minute")
 def view():
     path = request.args.get("path")
     offset = int(request.args.get("offset", 0))
