@@ -9,8 +9,8 @@ import fsspec
 import requests
 import zstandard as zstd
 from flask import Flask, Response, jsonify, request, send_from_directory
-from pyarrow.parquet import ParquetFile
 from flask_limiter import Limiter
+from pyarrow.parquet import ParquetFile
 
 app = Flask(__name__, static_folder="build")
 
@@ -146,7 +146,7 @@ def read_parquet_file(path: str, offset: int, count: int) -> dict:
     # Ensure we only read a max of MAX_LINES lines
     if offset + count >= MAX_LINES or count >= MAX_LINES:
         return {"error": f"Only {MAX_LINES} lines are allowed to be read at a time"}
-    
+
     pf = ParquetFile(path)
     # Note: can make this more efficient by skipping the first offset without reading into memory
     rows = next(pf.iter_batches(batch_size=offset + count))[offset:]
@@ -199,7 +199,7 @@ def download():
         return jsonify({"error": f"No permission to access: {path}"})
     if not server.fs(path).exists(path):
         return jsonify({"error": f"Path does not exist: {path}"})
-    
+
     # Stream the file directly from cloud storage or the filesystem
     return Response(server.fs(path).open(path, "rb"), content_type='application/octet-stream')
 
