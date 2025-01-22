@@ -1,0 +1,33 @@
+# Stage 1: Build frontend
+FROM node:20-slim AS frontend-builder
+WORKDIR /app
+COPY package*.json ./
+RUN npm install
+COPY public ./public
+COPY src ./src
+RUN npm run build
+
+# Stage 2: Build Python dependencies
+FROM python:3.12-slim AS python-builder
+WORKDIR /app
+COPY pyproject.toml .
+COPY poetry.lock .
+RUN pip install poetry && \
+    poetry config virtualenvs.create false && \
+    poetry install --no-root --without dev
+
+# Stage 3: Final minimal image
+FROM python:3.12-slim
+WORKDIR /app
+
+# Copy only necessary files from builders
+COPY --from=python-builder /usr/local/lib/python3.12/site-packages/ /usr/local/lib/python3.12/site-packages/
+COPY --from=frontend-builder /app/build ./build
+COPY server.py .
+COPY wsgi.py .
+COPY conf ./conf
+
+ENV DEV=false
+
+ENTRYPOINT ["python", "-m", "gunicorn", "--bind", "0.0.0.0:80", "--workers", "1", "wsgi:application"]
+
