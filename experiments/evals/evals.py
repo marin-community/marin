@@ -126,7 +126,7 @@ def _infer_model_name_for_path(model_path: str) -> str:
 
 
 def default_eval(
-    step: ExecutorStep | InputName,
+    step: ExecutorStep | InputName | str,
     evals: list[EvalTaskConfig] | None = None,
     max_eval_instances: int | None = None,
 ) -> ExecutorStep:
