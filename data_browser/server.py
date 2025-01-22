@@ -16,7 +16,7 @@ app = Flask(__name__, static_folder="build")
 
 CLOUD_STORAGE_PREFIXES = ("gs://", "s3://")
 
-limiter = Limiter(app, key_func=lambda: request.remote_addr)
+limiter = Limiter(app)
 
 
 @dataclass(frozen=True)
