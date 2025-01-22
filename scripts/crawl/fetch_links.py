@@ -595,15 +595,6 @@ def load_json_if_exists(json_path: str):
     return {}
 
 
-def merge_dict_inplace(base_dict: dict, new_dict: dict):
-    """
-    Merge key-value from new_dict into base_dict,
-    overwriting collisions in base_dict with new_dict’s values.
-    """
-    for k, v in new_dict.items():
-        base_dict[k] = v
-
-
 @ray.remote(memory=128 * 1024 * 1024 * 1024, num_cpus=16)
 def fetch_links(
     urls_path: str, parquet_output_path: str, robots_output_path: str, errors_output_path: str, threads_per_shard: int
