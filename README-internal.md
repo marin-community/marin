@@ -50,13 +50,13 @@ this terminal open!
 To submit jobs, we use the
 [Jobs API](https://docs.ray.io/en/latest/cluster/running-applications/job-submission/quickstart.html#submitting-a-job).
 This requires that your Python script is formatted in a certain way, calling some boilerplate Ray functions prior to
-launching tasks -- see [`tests/test_ray_cluster.py`](./tests/test_ray_cluster.py) for a minimal example. To launch:
+launching tasks -- see [`tests/test_quickstart.py`](./tests/test_quickstart.py) for a minimal example. To launch:
 
 ```
 # [Terminal 2] Submit a Ray Job (specified via a Python script)
 #   =>> Assumes `marin` Python environment is active, current working directory == repository root == "."
 #   =>> Will output a Job ID like `raysubmit_pAJM8vKfHPhiyHBa`
-ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python tests/test_ray_cluster.py
+ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python tests/test_quickstart.py
 
 # Get Job Status (given Job ID = raysubmit_pAJM8vKfHPhiyHBa)
 ray job status --address http://127.0.0.1:8265 raysubmit_pAJM8vKfHPhiyHBa
