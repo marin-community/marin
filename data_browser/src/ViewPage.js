@@ -422,7 +422,6 @@ function renderPaths(args) {
     Paths
     <ul>
       {paths.map((path, index) => {
-        console.log(payloads[path]);
         const isDirectory = payloads[path]?.type === "directory"; // Check if the path is a directory
         const downloadUrl = `/api/download?path=${encodeURIComponent(path)}`;
         const downloadLink = isDirectory ? null : (
