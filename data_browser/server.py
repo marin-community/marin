@@ -144,25 +144,51 @@ def read_parquet_file(path: str, offset: int, count: int) -> dict:
     }
 
 
-def has_permissions(path: str) -> bool:
+def has_permissions(path: str, root_paths: list[str]) -> bool:
     """Returns whether the user can access `path` according to the permissions."""
-    resolved_path = resolve_path(path)
-    for allowed_path in server.config.root_paths:
+    for allowed_path in root_paths:
         # For cloud storage paths, check if the resolved path starts with the allowed path
-        if resolved_path.startswith(CLOUD_STORAGE_PREFIXES):
-            if resolved_path.startswith(allowed_path):
+        if path.startswith(CLOUD_STORAGE_PREFIXES):
+            if path.startswith(allowed_path):
                 return True
-        # For local paths, use os.path.commonpath
         else:
-            if os.path.commonpath([resolved_path, allowed_path]) == allowed_path:
+            if not os.path.isabs(path):
+                # Don't allow relative paths
+                return False
+            if os.path.commonpath([path, allowed_path]) == allowed_path:
+                # The path is allowed if it's a subpath of the allowed path
                 return True
     return False
+
+
+# Sanity checks to ensure has_permissions works as expected
+assert has_permissions("gs://marin-us-central2/test/test.txt", ["gs://marin-us-central2"])
+assert not has_permissions("gs://marin-us-central2/test/test.txt", [])
+assert not has_permissions("/etc/hosts", [])
+assert has_permissions("/app/var/test", ["/app/var"])
+assert not has_permissions("/app/various", ["/app/var"])
+assert not has_permissions("../app/var", ["/app/var"])
+assert not has_permissions("../etc/hosts", ["/etc"])
 
 
 @app.route("/api/config", methods=["GET"])
 def config():
     # Later: only send the necessary parts of config
     return jsonify(asdict(server.config))
+
+
+@app.route("/api/download", methods=["GET"])
+def download():
+    path = request.args.get("path")
+    if not path:
+        return jsonify({"error": "No path specified"})
+    if not has_permissions(path, server.config.root_paths):
+        return jsonify({"error": f"No permission to access: {path}"})
+    if not server.fs(path).exists(path):
+        return jsonify({"error": f"Path does not exist: {path}"})
+    
+    # Stream the file directly from cloud storage or the filesystem
+    return Response(server.fs(path).open(path, "rb"), content_type='application/octet-stream')
 
 
 @app.route("/api/view", methods=["GET"])
@@ -174,7 +200,7 @@ def view():
     try:
         if not path:
             return jsonify({"error": "No path specified"})
-        if not has_permissions(path):
+        if not has_permissions(path, server.config.root_paths):
             return jsonify({"error": f"No permission to access: {path}"})
         if not server.fs(path).exists(path):
             return jsonify({"error": f"Path does not exist: {path}"})
@@ -267,6 +293,7 @@ def main(config: ServerConfig):
     server = Server(config)
 
     debug = os.environ.get("DEV") == "true"
+    assert debug, "This function must be run in debug mode"
     app.run(host="0.0.0.0", port=5000 if debug else 80, debug=debug)
 
 
