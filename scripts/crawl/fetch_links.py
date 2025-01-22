@@ -427,7 +427,7 @@ def fetch_to_warc(
     # 8) Now we have successful responses in memory; write them to WARC
     warc_buffer = io.BytesIO()
     writer = WARCWriter(warc_buffer, gzip=True)
-    for url, response in successful_responses.items():
+    for url, response in tqdm(successful_responses.items(), desc="Converting responses to WARC"):
         status_line = f"{response.status_code} {response.reason}"
         http_headers = [("Status", status_line)]
         for h, v in response.headers.items():
@@ -450,20 +450,26 @@ def fetch_to_warc(
             raise
 
     # Write the WARC file to output path
+    logger.info(f"Writing WARC to {warc_output_path}")
     with fsspec.open(warc_output_path, "wb") as fout:
         fout.write(warc_buffer.getvalue())
+    logger.info(f"Wrote WARC to {warc_output_path}")
 
     # Write robots data to output path
+    logger.info(f"Writing robots to {robots_output_path}")
     with fsspec.open(robots_output_path, "w", compression="infer") as fout:
         json.dump(netloc_to_robots, fout)
+    logger.info(f"Wrote robots to {robots_output_path}")
 
     # Write errors to output path
+    logger.info(f"Writing errors to {errors_output_path}")
     all_errors = {
         "url_to_fetch_errors": url_to_fetch_errors,
         "netloc_to_robots_fetch_error": netloc_to_robots_fetch_error,
     }
     with fsspec.open(errors_output_path, "w", compression="infer") as fout:
         json.dump(all_errors, fout)
+    logger.info(f"Wrote errors to {errors_output_path}")
 
     logger.info(
         f"Wrote {len(successful_responses)} successful WARC responses to {warc_output_path}.\n"
