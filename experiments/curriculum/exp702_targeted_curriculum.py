@@ -136,6 +136,16 @@ def full_training_stage_varsched(total_code_portion, duration_frac_stage2, code_
             decay=cooldown_frac,
         )
         name_prefix += f"-{schedule_type}-{cooldown_frac}"
+    elif schedule_type == "linear-sgd":
+        optimizer_config = AdamConfig(
+            learning_rate=learning_rate,
+            weight_decay=weight_decay,
+            lr_schedule="linear",
+            decay=cooldown_frac,
+            beta1=0.8,
+            beta2=0.9,
+        )
+        name_prefix += f"-linear-sgd-0.8"
     elif schedule_type == "cosine":
         optimizer_config = None
     else:
@@ -246,10 +256,10 @@ def full_training_stage_halfsched(starting_code_portion, ending_code_portion, st
     else:
         return train_step_stage2
 
-def full_training_stage_baseline_sweep(learning_rate, schedule_type, cooldown_frac=None, num_train_steps=3000, model_size="150m", additional_tags=[]):
+def full_training_stage_baseline_sweep(learning_rate, schedule_type, cooldown_frac=None, num_train_steps=3000, model_size="150m", additional_tags=[], code_portion=0.005):
     data_config = lm_mixture_data_config(
         components={"stack_dedup": stack_dedup_stage1_tokenized, "c4": dolma_c4_stage1_tokenized},
-        weights={"stack_dedup": 0.005, "c4": 0.995},
+        weights={"stack_dedup": code_portion, "c4": 1 - code_portion},
     )
 
     pretraining_data, evaluation_data = _prepare_data_config(data_config, use_default_validation=True, use_default_evaluation=True)
@@ -303,41 +313,27 @@ def full_training_stage_baseline_sweep(learning_rate, schedule_type, cooldown_fr
 ############################################################
 
 if __name__ == "__main__":
-    # Do a full sweep to build intuition for optimal schedule on 2d grid
-
-    # stage = "stage2"
-
-    # executor_main(
-    #     steps=[
-    #         full_training_stage_varsched(total_code_portion=0.005, duration_frac_stage2=duration_frac_stage2, code_frac_alloc_stage2=code_frac_alloc_stage2, stage=stage, additional_tags=["two-stage-bruteforce", stage])
-    #         for duration_frac_stage2 in [0.8]
-    #         for code_frac_alloc_stage2 in [0.7, 0.9, 0.95, 0.99]
-    #     ],
-    #     description=f"Test training with varying mixtures",
-    # )
-
     # Do a sweep over length of stage 2 for all data in stage 2
 
-    stage = "stage1"
+    stage = "stage2"
 
     executor_main(
         steps=[
-            full_training_stage_varsched(total_code_portion=0.005, duration_frac_stage2=duration_frac_stage2, code_frac_alloc_stage2=code_frac_alloc_stage2, schedule_type=schedule_type, cooldown_frac=cooldown_frac, stage=stage, additional_tags=["all-stage2-bruteforce", stage])
-            # for duration_frac_stage2 in [0.8, 0.4, 0.2, 0.1, 0.05, 0.025, 0.00625]
-            # for schedule_type, cooldown_frac in [("linear", 0.2), ("linear", 0.0)]
-            for duration_frac_stage2 in [0.035]
-            for schedule_type, cooldown_frac in [("linear", 0.1), ("linear", 0.05)]
+            full_training_stage_varsched(total_code_portion=0.005, duration_frac_stage2=duration_frac_stage2, code_frac_alloc_stage2=code_frac_alloc_stage2, schedule_type=schedule_type, cooldown_frac=cooldown_frac, stage=stage, additional_tags=["all-stage2-bruteforce", stage], version_tag="-v1")
+            for duration_frac_stage2 in [0.2, 0.1, 0.05, 0.025, 0.00625]
+            for schedule_type, cooldown_frac in [("linear", 0.01)]
             for code_frac_alloc_stage2 in [1.0]
         ],
         description=f"Test training with varying mixtures",
     )
-    # Note: changed varsched naming system
+
+    # # Fit scaling laws for no cooldown runs
 
     # executor_main(
     #     steps=[
-    #         full_training_stage_baseline_sweep(learning_rate=3e-3, schedule_type=schedule_type, num_train_steps=3000, cooldown_frac=cooldown_frac, model_size="150m", additional_tags=["baseline-lr-sweep"])
-    #         for cooldown_frac in [0.01, 0.05, 0.1, 0.2, 0.5, 0.9, 0.99]
-    #         for schedule_type in ["linear"]
+    #         full_training_stage_baseline_sweep(learning_rate=3e-3, schedule_type="linear", cooldown_frac=cooldown_frac, num_train_steps=3000, model_size="150m", additional_tags=['zero-cooldown-scaling'], code_portion=code_portion)
+    #         for cooldown_frac in [0.0]
+    #         for code_portion in [0.001, 0.005, 0.01, 0.05, 0.1]
     #     ],
     #     description=f"Test training with varying mixtures",
     # )

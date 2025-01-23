@@ -5,6 +5,7 @@ import pandas as pd
 from tqdm import tqdm
 import argparse
 import pickle
+import numpy as np
 
 plt.rcParams.update({
     "font.family": "Palatino Linotype"
@@ -134,15 +135,26 @@ for total_fraction in [0.5, 0.05, 0.005]:
     plt.figure(figsize=(7, 5), dpi=600)
     plt.grid(True, linestyle='--', alpha=0.4)
 
-    for run_stage2 in run_list_stage2_sorted:
+    for i, run_stage2 in enumerate(run_list_stage2_sorted):
+        color = f'C{i}'
+        print(run_stage2['name'])
         # Filter out step 0 and plot
         history_no_step0 = run_stage2['merged_history'][run_stage2['merged_history']['_step'] > 0]
-        plt.plot(history_no_step0['_step'], history_no_step0['eval/stack_dedup/loss'], label=f'Stage one: {run_stage2["code_portion_stage1"]} code, Stage two: {run_stage2["code_portion_stage2"]} code')
+        plt.plot(history_no_step0['_step'], history_no_step0['eval/stack_dedup/loss'], label=f'Stage one: {run_stage2["code_portion_stage1"]} code, Stage two: {run_stage2["code_portion_stage2"]} code', color=color)
+
+        # history_stage1 = run_stage2['history_stage1']
+        # # fit a straight line to the history_stage1 with log transform on both axes
+        # x_no_step0 = history_stage1['_step'][history_stage1['_step'] > 300]
+        # y_no_step0 = history_stage1['eval/stack_dedup/loss'][history_stage1['_step'] > 300]
+        # logx = np.log(x_no_step0)
+        # logy = np.log(y_no_step0)
+        # p = np.polyfit(logx, logy, 2)
+
+        # plt.plot(x_no_step0, y_no_step0, color=color)
+        # plt.plot(np.exp(logx), np.exp(np.polyval(p, logx)), color=color, linestyle='--')
 
     plt.xlabel('Step')
     plt.ylabel('Loss')
-    # plt.xscale('log')
-    # plt.yscale('log')
     plt.title(f'Two equal stages: Total Code Fraction = {total_fraction}')
     plt.legend()
     plt.tight_layout()
