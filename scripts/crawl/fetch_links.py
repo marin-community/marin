@@ -56,6 +56,7 @@ import random
 import threading
 import queue
 import time
+import tempfile
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from urllib.parse import urlparse
@@ -68,7 +69,7 @@ import ray
 import requests
 from tqdm_loggable.auto import tqdm
 
-from marin.utils import fsspec_exists, fsspec_glob
+from marin.utils import fsspec_exists, fsspec_glob, fsspec_cp
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -150,17 +151,17 @@ def fetch_url(
 
 def write_parquet_chunk(
     chunk: list[dict],
-    parquet_path: str,
+    local_parquet_path: str,
 ):
-    """Write or append a list of dict records to a Parquet file."""
+    """Write or append a list of dict records to a local Parquet file."""
     if not chunk:
         return
     df = pd.DataFrame.from_records(chunk)
 
-    if not fsspec_exists(parquet_path):
-        fastparquet.write(parquet_path, df, compression="snappy", open_with=fsspec.open)
+    if not os.path.exists(local_parquet_path):
+        fastparquet.write(local_parquet_path, df, compression="snappy", open_with=fsspec.open)
     else:
-        fastparquet.write(parquet_path, df, append=True, compression="snappy", open_with=fsspec.open)
+        fastparquet.write(local_parquet_path, df, append=True, compression="snappy", open_with=fsspec.open)
 
 
 def fetch_to_parquet(
@@ -202,9 +203,8 @@ def fetch_to_parquet(
     already_fetched_urls = load_already_fetched_urls(parquet_output_path)
 
     # Store the number of records we've already written
-    num_written_records = len(already_fetched_urls)
     num_written_records_lock = threading.Lock()
-    logger.info(f"Shard {shard_id}: Found {num_written_records} already fetched URLs in {parquet_output_path}")
+    logger.info(f"Shard {shard_id}: Found {len(urls)} already fetched URLs in {parquet_output_path}")
 
     # Load or init the mapping from netloc to robots
     existing_robots = load_json_if_exists(robots_output_path)
@@ -273,16 +273,62 @@ def fetch_to_parquet(
 
     def writer_thread():
         """
-        Continuously dequeues results and writes them to Parquet in chunks,
-        so we never accumulate too many results in memory and we can recover
-        from pre-emption.
+        Continuously dequeues results and writes them to Parquet in chunks locally,
+        then uploads the Parquet file to a remote gs:// path. This prevents
+        accumulating too many results in memory and allows recovery from pre-emption.
         """
         buffer = []
-        while True:
-            item = results_queue.get()
-            if item is SENTINEL:
-                # Flush any leftover items
-                if buffer:
+
+        # Create a temporary directory for Parquet files
+        with tempfile.TemporaryDirectory() as temp_dir:
+            local_parquet_path = os.path.join(temp_dir, f"{shard_id}_temp_output.parquet")
+            while True:
+                item = results_queue.get()
+                if item is SENTINEL:
+                    # Flush any leftover items
+                    if buffer:
+                        # Write robots data to output path
+                        with netloc_to_robots_lock:
+                            netloc_to_robots_output = deepcopy(netloc_to_robots)
+                        with fsspec.open(robots_output_path, "w", compression="infer") as fout:
+                            json.dump(netloc_to_robots_output, fout)
+
+                        # Write errors to output path
+                        with url_to_fetch_errors_lock:
+                            url_to_fetch_errors_output = deepcopy(url_to_fetch_errors)
+                        with netloc_to_robots_fetch_error_lock:
+                            netloc_to_robots_fetch_error_output = deepcopy(netloc_to_robots_fetch_error)
+                        with fsspec.open(errors_output_path, "w", compression="infer") as fout:
+                            json.dump(
+                                {
+                                    "url_to_fetch_errors": url_to_fetch_errors_output,
+                                    "netloc_to_robots_fetch_error": netloc_to_robots_fetch_error_output,
+                                },
+                                fout,
+                            )
+
+                        # Write leftover items to local parquet
+                        write_parquet_chunk(buffer, local_parquet_path)
+
+                        # Upload the local parquet to remote gs:// path
+                        try:
+                            fsspec_cp(local_parquet_path, parquet_output_path)
+                            logger.info(f"[shard {shard_id}] uploaded final parquet chunk to {parquet_output_path}")
+                        except Exception as e:
+                            logger.error(f"Failed to upload parquet file to {parquet_output_path}: {e}")
+
+                        with num_written_records_lock:
+                            num_written_records += len(buffer)
+                            logger.info(f"[shard {shard_id}] wrote {num_written_records} records so far")
+
+                    results_queue.task_done()
+                    break
+
+                buffer.append(item)
+                results_queue.task_done()
+
+                # If buffer is large enough, flush to local Parquet and upload
+                if len(buffer) >= chunk_size:
                     # Write robots data to output path
                     with netloc_to_robots_lock:
                         netloc_to_robots_output = deepcopy(netloc_to_robots)
@@ -302,44 +348,24 @@ def fetch_to_parquet(
                             },
                             fout,
                         )
-                    # Write leftover items to parquet
-                    write_parquet_chunk(buffer, parquet_output_path)
+
+                    # Write buffer to local parquet
+                    write_parquet_chunk(buffer, local_parquet_path)
+
+                    # Upload the local parquet to remote gs:// path
+                    try:
+                        fsspec_cp(local_parquet_path, parquet_output_path)
+                        logger.info(f"[shard {shard_id}] Uploaded parquet chunk to {parquet_output_path}")
+                    except Exception as e:
+                        logger.error(f"Failed to upload parquet file to {parquet_output_path}: {e}")
+
                     with num_written_records_lock:
                         num_written_records += len(buffer)
                         logger.info(f"[shard {shard_id}] wrote {num_written_records} records so far")
-                results_queue.task_done()
-                break
 
-            buffer.append(item)
-            results_queue.task_done()
+                    buffer.clear()
 
-            # If buffer is large enough, flush to Parquet
-            if len(buffer) >= chunk_size:
-                # Write robots data to output path
-                with netloc_to_robots_lock:
-                    netloc_to_robots_output = deepcopy(netloc_to_robots)
-                with fsspec.open(robots_output_path, "w", compression="infer") as fout:
-                    json.dump(netloc_to_robots_output, fout)
-
-                # Write errors to output path
-                with url_to_fetch_errors_lock:
-                    url_to_fetch_errors_output = deepcopy(url_to_fetch_errors)
-                with netloc_to_robots_fetch_error_lock:
-                    netloc_to_robots_fetch_error_output = deepcopy(netloc_to_robots_fetch_error)
-                with fsspec.open(errors_output_path, "w", compression="infer") as fout:
-                    json.dump(
-                        {
-                            "url_to_fetch_errors": url_to_fetch_errors_output,
-                            "netloc_to_robots_fetch_error": netloc_to_robots_fetch_error_output,
-                        },
-                        fout,
-                    )
-                write_parquet_chunk(buffer, parquet_output_path)
-                with num_written_records_lock:
-                    num_written_records += len(buffer)
-                    logger.info(f"[shard {shard_id}] wrote {num_written_records} records so far")
-                buffer.clear()
-        logger.info(f"Writer thread for shard {shard_id} finished.")
+            logger.info(f"Writer thread for shard {shard_id} finished.")
 
     writer = threading.Thread(target=writer_thread, daemon=True)
     writer.start()
