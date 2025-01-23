@@ -70,6 +70,7 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
                     task_spec=tasks,
                     max_examples=max_eval_instances,
                     log_samples=False,
+                    max_eval_length=4096,
                 ),
                 tokenizer=model_path,  # levanter picks up the tokenizer from the model path
                 checkpoint_path=model_path,

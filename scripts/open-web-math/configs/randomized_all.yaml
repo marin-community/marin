@@ -1,0 +1,35 @@
+markdown_headings: [
+    [0.9, True],
+    [0.1, False],
+  ]
+markdown_code: [
+    [0.95, True],
+    [0.05, False],
+  ]
+boilerplate_config:
+  ratio_threshold: [
+    [0.9, 0.18],
+    [0.1, 0.30],
+  ]
+  absolute_threshold: [
+    [0.9, 10],
+    [0.1, 20],
+  ]
+  end_threshold: [
+    [0.95, 15],
+    [0.05, 5],
+  ]
+  enable: [
+    [0.95, True],
+    [0.05, False],
+  ]
+remove_buttons: True
+remove_image_figures: True
+remove_link_clusters: True
+table_config:
+  min_rows: 2
+  min_cols: 3
+  format: 'plain'
+remove_chinese: True
+remove_edit_buttons: True
+extract_latex: True
