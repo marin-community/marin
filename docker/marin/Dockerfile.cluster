@@ -65,8 +65,8 @@ RUN conda install -c conda-forge ncurses -y
 #RUN pip install jax==0.4.36.dev20241122 jaxlib==0.4.36.dev20241122 -f https://storage.googleapis.com/jax-releases/jax_nightly_releases.html -f https://storage.googleapis.com/jax-releases/jaxlib_nightly_releases.html
 #RUN VLLM_TARGET_DEVICE="tpu" python3 setup.py develop
 
-# Install Jax for TPU usage
-RUN pip install -U jax[tpu]==0.4.37 -f https://storage.googleapis.com/jax-releases/libtpu_releases.html
+# Install Jax for TPU usage, fsspec for GCS access, and transformers for OLMO
+RUN pip install --no-cache-dir -U jax[tpu]==0.4.36 -f https://storage.googleapis.com/jax-releases/libtpu_releases.html fsspec==2024.9.0 transformers==4.47.0
 
 # NOTE: Try to keep as much "heavy" stuff as possible before this line to avoid re-installing
 
@@ -88,12 +88,6 @@ RUN ln -s /opt/abhi-ray/ray/python/ray/autoscaler $VENV_PATH/lib/python3.11/site
 RUN git clone https://github.com/dlwh/ray.git ~/ray --branch tpu_docker_2.34 --depth 1
 RUN cp ~/ray/python/ray/autoscaler/_private/gcp/tpu_command_runner.py $VENV_PATH/lib/python3.11/site-packages/ray/autoscaler/_private/gcp/tpu_command_runner.py
 RUN rm -rf ~/ray
-
-# Install updated fsspec version
-RUN pip install --no-cache-dir fsspec==2024.9.0
-
-# Install updated transformers version for OLMO
-RUN pip install transformers==4.47.0
 
 # Add /usr/lib/x86_64-linux-gnu/ to LD_LIBRARY_PATH so that bash prefers the systems
 # libtinfo.so over the conda-provided version. Using the conda-provided libtinfo.so
