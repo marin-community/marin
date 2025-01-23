@@ -156,7 +156,7 @@ def process_one_shard(
     )
 
 
-@dataclass
+@dataclass(frozen=True)
 class DolmaFormattedOpenWebMathRecord:
     id: str
     source: str
@@ -165,7 +165,7 @@ class DolmaFormattedOpenWebMathRecord:
     metadata: dict[str, Any]
 
 
-@dataclass
+@dataclass(frozen=True)
 class ParquetOpenWebMathConfig:
     input_path: str
     html_output_path: str
@@ -266,7 +266,7 @@ def process_open_web_math(cfg: ParquetOpenWebMathConfig):
     files = fsspec_glob(os.path.join(cfg.input_path, "*.parquet"))
     # Group open-web-math examples by their source WARC
     groupby_ref = group_open_web_math_by_warc.remote(files, cfg.html_output_path)
-    _ = ray.get(groupby_ref)
+    ray.get(groupby_ref)
 
     shard_indices_to_process_ref = get_shards_to_process.remote(cfg.html_output_path)
     shard_indices_to_process = ray.get(shard_indices_to_process_ref)
@@ -303,7 +303,7 @@ def process_open_web_math(cfg: ParquetOpenWebMathConfig):
     while unfinished:
         finished, unfinished = ray.wait(unfinished, num_returns=len(unfinished), timeout=5)
         try:
-            _ = ray.get(finished)
+            ray.get(finished)
         except Exception as e:
             logger.exception(f"Error processing shard: {e}")
 

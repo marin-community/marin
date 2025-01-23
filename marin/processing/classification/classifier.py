@@ -39,6 +39,7 @@ class FasttextClassifier(BaseClassifier):
     _MODEL_NAME_TO_MODEL_FILENAME_DICT: ClassVar[dict[str, str]] = {
         "mlfoundations/fasttext-oh-eli5": "openhermes_reddit_eli5_vs_rw_v2_bigram_200k_train.bin",
         "allenai/dolma-1_7-fasttext-quality-filter": "model.bin",
+        "open-web-math/filtering-models": "math_score.bin",
     }
 
     def __init__(self, model_name: str, attribute_name: str, *args, **kwargs):
