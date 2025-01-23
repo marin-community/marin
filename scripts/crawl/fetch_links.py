@@ -171,7 +171,7 @@ def fetch_to_parquet(
     robots_output_path: str,
     errors_output_path: str,
     threads_per_shard: int,
-    parquet_chunk_size: int = 10_000,
+    parquet_chunk_size: int = 5_000,
 ):
     """
     Main pipeline that:
