@@ -9,14 +9,14 @@ this_path = os.path.dirname(os.path.abspath(__file__))
 template_path = os.path.join(this_path, "marin-cluster-template.yaml")
 
 DOCKER_TAGS = {
-    "us-central2": "20250108",
-    "us-west4": "20250108",
-    "europe-west4": "20250108",
-    "us-east1": "20241220",
-    "us-east5": "20241220",
+    "us-central2": "20250122",
+    "us-west4": "20250122",
+    "europe-west4": "20250122",
+    "us-east1": "20240122",
+    "us-east5": "20240122",
     # NB: different naming convention because we have two zones in europe-west4
-    "europe-west4-a": "20241220",
-    "asia-northeast1": "20241220",
+    "europe-west4-a": "20240122",
+    "asia-northeast1": "20240122",
 }
 
 configs = {
