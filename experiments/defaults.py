@@ -151,7 +151,7 @@ def default_train(
             name = name[:64]
         else:
             prefix, suffix = name.rsplit("-", 1)
-            name = prefix[:64 - len(suffix)] + "-" + suffix
+            name = prefix[: 64 - len(suffix)] + "-" + suffix
         logger.warning(f"Truncated name from {old_name} to {name} to fit within WANDB limits.")
 
     # TODO: right now, assume architecture is a LlamaConfig, generalize this
@@ -171,6 +171,7 @@ def default_train(
     model_averaging = None
     if train_config.ema_beta is not None:
         from levanter.optim.model_averaging import EmaModelAveragingConfig
+
         model_averaging = EmaModelAveragingConfig(beta=train_config.ema_beta)
 
     return ExecutorStep(
