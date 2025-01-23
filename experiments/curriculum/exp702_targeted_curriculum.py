@@ -7,6 +7,7 @@ import os
 from datetime import timedelta
 import random
 import math
+from itertools import chain
 
 import jmp
 from levanter.checkpoint import CheckpointerConfig
@@ -22,7 +23,7 @@ from experiments.pretraining_datasets import fineweb_edu, slimpajama_6b
 from experiments.evals.task_configs import CORE_TASKS, convert_to_levanter_task_config
 
 from marin.execution.executor import executor_main
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
+from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned, output_path_of
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
 from marin.processing.tokenize import (
@@ -82,7 +83,7 @@ dolma_c4_stage2_tokenized = tokenize_train_validation(
     name="dolma_c4_stage2",
 )
 
-def full_training_stage_varsched(total_code_portion, duration_frac_stage2, code_frac_alloc_stage2, stage, learning_rate=3e-3, cooldown_frac=None, schedule_type="cosine", version_tag="", additional_tags=[]):
+def full_training_stage_varsched(total_code_portion, duration_frac_stage2, code_frac_alloc_stage2, learning_rate=3e-3, cooldown_frac=None, schedule_type="cosine", version_tag="", additional_tags=[]):
     duration_frac_stage1 = 1 - duration_frac_stage2
     code_frac_alloc_stage1 = 1 - code_frac_alloc_stage2
 
@@ -125,7 +126,6 @@ def full_training_stage_varsched(total_code_portion, duration_frac_stage2, code_
 
     weight_decay=0.1
     steps_per_eval=num_train_steps // 20
-    steps_per_export=steps_stage1 if stage == "stage1" else num_train_steps
     name_prefix = f"varsched-bf-{code_frac_alloc_stage2}"
 
     if schedule_type == "linear":
@@ -162,10 +162,10 @@ def full_training_stage_varsched(total_code_portion, duration_frac_stage2, code_
         learning_rate=learning_rate,
         weight_decay=weight_decay,
         steps_per_eval=steps_per_eval,
-        steps_per_export=steps_per_export,
+        steps_per_export=steps_stage1,
         tpu_type=tpu_type,
         optimizer_config=optimizer_config,
-        additional_tags=additional_tags,
+        additional_tags=additional_tags + ["stage1"],
     )
 
     train_step_stage2 = train_executor_step(
@@ -173,24 +173,21 @@ def full_training_stage_varsched(total_code_portion, duration_frac_stage2, code_
         pretraining_data=pretraining_data_stage2,
         evaluation_data=evaluation_data_stage2,
         model=model,
-        model_checkpoint=f"gs://marin-us-central2/checkpoints/suhas/{name_prefix}-{code_weight_stage1}-{code_weight_stage2}-stage1{version_tag}/checkpoints/step-{steps_stage1}",
+        model_checkpoint=output_path_of(train_step_stage1).cd(f"checkpoints/step-{steps_stage1}"),
         train_batch_size=train_batch_size,
         num_train_steps=num_train_steps,
         learning_rate=learning_rate,
         weight_decay=weight_decay,
         steps_per_eval=steps_per_eval,
-        steps_per_export=steps_per_export,
+        steps_per_export=num_train_steps,
         tpu_type=tpu_type,
         optimizer_config=optimizer_config,
-        additional_tags=additional_tags,
+        additional_tags=additional_tags + ["stage2"],
     )
 
-    if stage == "stage1":
-        return train_step_stage1
-    else:
-        return train_step_stage2
+    return [train_step_stage1, train_step_stage2]
 
-def full_training_stage_halfsched(starting_code_portion, ending_code_portion, stage, num_train_steps=3000, model_size="150m", version_tag="", additional_tags=[]):
+def full_training_stage_halfsched(starting_code_portion, ending_code_portion, num_train_steps=3000, model_size="150m", version_tag="", additional_tags=[]):
     data_config_stage1 = lm_mixture_data_config(
         components={"stack_dedup": stack_dedup_stage1_tokenized, "c4": dolma_c4_stage1_tokenized},
         weights={"stack_dedup": starting_code_portion, "c4": 1 - starting_code_portion},
@@ -232,7 +229,7 @@ def full_training_stage_halfsched(starting_code_portion, ending_code_portion, st
         steps_per_eval=steps_per_eval,
         steps_per_export=steps_per_export,
         tpu_type=tpu_type,
-        additional_tags=additional_tags,
+        additional_tags=additional_tags + ["stage1"],
     )
 
     train_step_stage2 = train_executor_step(
@@ -240,7 +237,7 @@ def full_training_stage_halfsched(starting_code_portion, ending_code_portion, st
         pretraining_data=pretraining_data_stage2,
         evaluation_data=evaluation_data_stage2,
         model=model,
-        model_checkpoint=f"gs://marin-us-central2/checkpoints/suhas/{name_prefix}-{starting_code_portion}-stage1{version_tag}/checkpoints/step-{num_train_steps // 2}",
+        model_checkpoint=output_path_of(train_step_stage1).cd(f"checkpoints/step-{num_train_steps // 2}"),
         train_batch_size=train_batch_size,
         num_train_steps=num_train_steps,
         learning_rate=learning_rate,
@@ -248,13 +245,10 @@ def full_training_stage_halfsched(starting_code_portion, ending_code_portion, st
         steps_per_eval=steps_per_eval,
         steps_per_export=steps_per_export,
         tpu_type=tpu_type,
-        additional_tags=additional_tags,
+        additional_tags=additional_tags + ["stage2"],
     )
 
-    if stage == "stage1":
-        return train_step_stage1
-    else:
-        return train_step_stage2
+    return [train_step_stage1, train_step_stage2]
 
 def full_training_stage_baseline_sweep(learning_rate, schedule_type, cooldown_frac=None, num_train_steps=3000, model_size="150m", additional_tags=[], code_portion=0.005):
     data_config = lm_mixture_data_config(
@@ -308,32 +302,31 @@ def full_training_stage_baseline_sweep(learning_rate, schedule_type, cooldown_fr
         additional_tags=additional_tags,
     )
 
-    return train_step
+    return [train_step]
 
 ############################################################
 
 if __name__ == "__main__":
-    # Do a sweep over length of stage 2 for all data in stage 2
+    # # Do a sweep over length of stage 2 for all data in stage 2
 
-    stage = "stage2"
+    # stage_pairs = [
+    #     full_training_stage_varsched(total_code_portion=0.005, duration_frac_stage2=duration_frac_stage2, code_frac_alloc_stage2=code_frac_alloc_stage2, schedule_type=schedule_type, cooldown_frac=cooldown_frac, additional_tags=["all-stage2-bruteforce"], version_tag="-v2")
+    #     for duration_frac_stage2 in [0.2, 0.1, 0.05, 0.025, 0.00625]
+    #     for schedule_type, cooldown_frac in [("linear", 0.01)]
+    #     for code_frac_alloc_stage2 in [1.0]
+    # ]
+
+    # Fit scaling laws for no cooldown runs
+
+    stage_pairs = [
+        full_training_stage_baseline_sweep(learning_rate=3e-3, schedule_type="linear", cooldown_frac=cooldown_frac, num_train_steps=3000, model_size="150m", additional_tags=['zero-cooldown-scaling'], code_portion=code_portion)
+        for cooldown_frac in [0.0]
+        for code_portion in [0.001, 0.005, 0.01, 0.05, 0.1]
+    ]
+
+    steps = list(chain(*stage_pairs))
 
     executor_main(
-        steps=[
-            full_training_stage_varsched(total_code_portion=0.005, duration_frac_stage2=duration_frac_stage2, code_frac_alloc_stage2=code_frac_alloc_stage2, schedule_type=schedule_type, cooldown_frac=cooldown_frac, stage=stage, additional_tags=["all-stage2-bruteforce", stage], version_tag="-v1")
-            for duration_frac_stage2 in [0.2, 0.1, 0.05, 0.025, 0.00625]
-            for schedule_type, cooldown_frac in [("linear", 0.01)]
-            for code_frac_alloc_stage2 in [1.0]
-        ],
+        steps=steps,
         description=f"Test training with varying mixtures",
     )
-
-    # # Fit scaling laws for no cooldown runs
-
-    # executor_main(
-    #     steps=[
-    #         full_training_stage_baseline_sweep(learning_rate=3e-3, schedule_type="linear", cooldown_frac=cooldown_frac, num_train_steps=3000, model_size="150m", additional_tags=['zero-cooldown-scaling'], code_portion=code_portion)
-    #         for cooldown_frac in [0.0]
-    #         for code_portion in [0.001, 0.005, 0.01, 0.05, 0.1]
-    #     ],
-    #     description=f"Test training with varying mixtures",
-    # )
