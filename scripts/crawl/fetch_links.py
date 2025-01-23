@@ -602,7 +602,6 @@ def fetch_to_parquet(
     writer.join()
 
     logger.info(
-        f"Wrote {num_written_records} successful responses to {parquet_output_path}.\n"
         f"Fetched robots for {len(netloc_to_robots)} domains, encountered {len(netloc_to_robots_fetch_error)} robots errors.\n"
         f"Recorded {len(url_to_fetch_errors)} fetch errors."
     )
