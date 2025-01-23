@@ -1,10 +1,10 @@
 from marin.execution.executor import ExecutorStep, this_output_path
-from operations.download.huggingface.download import DownloadConfig, download
+from operations.download.huggingface.download_hf import DownloadConfig, download_hf
 
 finemath_commit_hash = "8f233cf"
 finemath = ExecutorStep(
     name="raw/finemath",
-    fn=download,
+    fn=download_hf,
     config=DownloadConfig(
         hf_dataset_id="HuggingFaceTB/finemath",
         revision=finemath_commit_hash,
@@ -13,4 +13,4 @@ finemath = ExecutorStep(
     ),
 )
 
-finemath_3_plus = finemath.cd(f"{finemath_commit_hash}/finemath-3plus")
+finemath_3_plus = finemath.cd("finemath-3plus")
