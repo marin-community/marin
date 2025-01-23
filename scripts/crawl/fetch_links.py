@@ -171,7 +171,7 @@ def fetch_to_parquet(
     robots_output_path: str,
     errors_output_path: str,
     threads_per_shard: int,
-    chunk_size: int = 1000,
+    parquet_chunk_size: int = 1000,
 ):
     """
     Main pipeline that:
@@ -194,7 +194,7 @@ def fetch_to_parquet(
       maps to a mapping of robots.txt URLs (one per netloc) to the error encountered when
       fetching (if we saw one),
     threads_per_shard (int): Number of threads to use for concurrent fetching.
-    chunk_size (int): The number of results to write out at once to the parquet file.
+    parquet_chunk_size (int): The number of results to write out at once to the parquet file.
     """
     urls = list(set(urls))
     random.shuffle(urls)
@@ -309,10 +309,13 @@ def fetch_to_parquet(
                             )
 
                         # Write leftover items to local parquet
+                        logger.info(f"[shard {shard_id}] Writing {len(buffer)} examples to {local_parquet_path}")
                         write_parquet_chunk(buffer, local_parquet_path)
+                        logger.info(f"[shard {shard_id}] Wrote {len(buffer)} examples to {local_parquet_path}")
 
                         # Upload the local parquet to remote gs:// path
                         try:
+                            logger.info(f"[shard {shard_id}] uploading final parquet chunk to {parquet_output_path}")
                             fsspec_cp(local_parquet_path, parquet_output_path)
                             logger.info(f"[shard {shard_id}] uploaded final parquet chunk to {parquet_output_path}")
                         except Exception as e:
@@ -329,7 +332,7 @@ def fetch_to_parquet(
                 results_queue.task_done()
 
                 # If buffer is large enough, flush to local Parquet and upload
-                if len(buffer) >= chunk_size:
+                if len(buffer) >= parquet_chunk_size:
                     # Write robots data to output path
                     with netloc_to_robots_lock:
                         netloc_to_robots_output = deepcopy(netloc_to_robots)
@@ -351,10 +354,13 @@ def fetch_to_parquet(
                         )
 
                     # Write buffer to local parquet
+                    logger.info(f"[shard {shard_id}] Writing {len(buffer)} examples to {local_parquet_path}")
                     write_parquet_chunk(buffer, local_parquet_path)
+                    logger.info(f"[shard {shard_id}] Wrote {len(buffer)} examples to {local_parquet_path}")
 
                     # Upload the local parquet to remote gs:// path
                     try:
+                        logger.info(f"[shard {shard_id}] Uploading parquet chunk to {parquet_output_path}")
                         fsspec_cp(local_parquet_path, parquet_output_path)
                         logger.info(f"[shard {shard_id}] Uploaded parquet chunk to {parquet_output_path}")
                     except Exception as e:
