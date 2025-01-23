@@ -7,7 +7,7 @@ from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import executor_main
 
 llama_1_4b_train_config = SimpleTrainConfig(
-    tpu_type="v4-256",
+    tpu_type="v4-128",
     node_count=1,
     train_batch_size=1024,
     num_train_steps=50_000,
