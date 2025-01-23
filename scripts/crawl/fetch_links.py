@@ -158,9 +158,9 @@ def write_parquet_chunk(
     df = pd.DataFrame.from_records(chunk)
 
     if not fsspec_exists(parquet_path):
-        fastparquet.write(parquet_path, df, compression="snappy")
+        fastparquet.write(parquet_path, df, compression="snappy", open_with=fsspec.open)
     else:
-        fastparquet.write(parquet_path, df, append=True, compression="snappy")
+        fastparquet.write(parquet_path, df, append=True, compression="snappy", open_with=fsspec.open)
 
 
 def fetch_to_parquet(
