@@ -590,7 +590,7 @@ def load_already_fetched_urls(parquet_path: str):
 def load_json_if_exists(json_path: str):
     """Load a JSON file if it exists, else return an empty dict."""
     if fsspec_exists(json_path):
-        with fsspec.open(json_path) as fin:
+        with fsspec.open(json_path, compression="infer") as fin:
             return json.load(fin)
     return {}
 
