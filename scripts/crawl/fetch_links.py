@@ -204,7 +204,7 @@ def fetch_to_parquet(
 
     # Store the number of records we've already written
     num_written_records_lock = threading.Lock()
-    logger.info(f"Shard {shard_id}: Found {len(urls)} already fetched URLs in {parquet_output_path}")
+    logger.info(f"Shard {shard_id}: Found {len(already_fetched_urls)} already fetched URLs in {parquet_output_path}")
 
     # Load or init the mapping from netloc to robots
     existing_robots = load_json_if_exists(robots_output_path)
@@ -278,6 +278,7 @@ def fetch_to_parquet(
         accumulating too many results in memory and allows recovery from pre-emption.
         """
         buffer = []
+        num_written_records = len(already_fetched_urls)
 
         # Create a temporary directory for Parquet files
         with tempfile.TemporaryDirectory() as temp_dir:
