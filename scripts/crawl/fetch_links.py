@@ -528,6 +528,7 @@ def fetch_to_parquet(
                     result_record = {
                         "url": url,
                         "status_code": resp.status_code,
+                        "reason": resp.reason,
                         "headers": dict(resp.headers),
                         "content": resp.content,  # could store as bytes or text
                         "fetched_at": time.time(),
