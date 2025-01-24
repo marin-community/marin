@@ -30,4 +30,3 @@ COPY conf ./conf
 ENV DEV=false
 
 ENTRYPOINT ["python", "-m", "gunicorn", "--bind", "0.0.0.0:80", "--workers", "1", "wsgi:application"]
-

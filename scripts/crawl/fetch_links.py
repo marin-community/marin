@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """
 Given a parquet file with `Outlink`s, download the link targets and write the
-scraped pages as a WARC file.
+scraped pages as a parquet file.
 
 The high-level design of this fetcher is heavily inspired by the Apache Nutch crawler:
 
 - Input: N shards of URLs (each shard has ~100K URLs)
 - Each shard is processed by a different ray remote function. `--max_concurrent_shards` controls
   the number of shards that can be processed concurrently. The processes don't talk to each other,
-  and each process writes out a WARC with the fetched contents of the URLs in the shard
+  and each process writes out a parquet with the fetched contents of the URLs in the shard.
+  - Writing is handled by a separate thread, and results are flushed out to the parquet every 5000
+    successful responses. This enables us to restart from partial results if the shard is pre-empted.
 - Each process runs multiple threads (`--threads_per_shard`) to fetch in parallel.
   The threads share a queue of URLs to fetch.
   - In addition, each host (netloc) we're fetching from has a separate lock to ensure that within a single process,
@@ -20,11 +22,14 @@ The high-level design of this fetcher is heavily inspired by the Apache Nutch cr
   - Finally, when we see too many (10) consecutive connection errors from a particular host,
     we skip all further URLs from that host.
 
+After fetching to parquet, use `convert_responses_parquet_to_warc.py` to convert the parquet
+responses to WARC.
+
 Running on FineWeb-Edu:
 
 ```
 python marin/run/ray_run.py \
-    --pip_deps 'warcio' \
+    --pip_deps 'fastparquet' \
     --no_wait -- \
     python scripts/crawl/fetch_links.py \
     --urls_input_directory gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-10M/ \
@@ -37,7 +42,7 @@ Running on OpenWebMath:
 
 ```
 python marin/run/ray_run.py \
-    --pip_deps 'warcio' \
+    --pip_deps 'fastparquet' \
     --no_wait -- \
     python scripts/crawl/fetch_links.py \
     --urls_input_directory gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-10M/ \
@@ -47,6 +52,7 @@ python marin/run/ray_run.py \
 ```
 """
 import io
+from copy import deepcopy
 import json
 import logging
 import os
@@ -55,20 +61,20 @@ import random
 import threading
 import queue
 import time
+import tempfile
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
 import draccus
+import fastparquet
 import fsspec
 import pandas as pd
 import ray
 import requests
 from tqdm_loggable.auto import tqdm
-from warcio.statusandheaders import StatusAndHeaders
-from warcio.warcwriter import WARCWriter
 
-from marin.utils import fsspec_exists, fsspec_glob
+from marin.utils import fsspec_exists, fsspec_glob, fsspec_cp
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -148,13 +154,29 @@ def fetch_url(
         return None, None, str(e), True
 
 
-def fetch_to_warc(
+def write_parquet_chunk(
+    chunk: list[dict],
+    local_parquet_path: str,
+):
+    """Write or append a list of dict records to a local Parquet file."""
+    if not chunk:
+        return
+    df = pd.DataFrame.from_records(chunk)
+
+    if not os.path.exists(local_parquet_path):
+        fastparquet.write(local_parquet_path, df, compression="snappy")
+    else:
+        fastparquet.write(local_parquet_path, df, append=True, compression="snappy")
+
+
+def fetch_to_parquet(
     urls: list[str],
     shard_id: str,
-    warc_output_path: str,
+    parquet_output_path: str,
     robots_output_path: str,
     errors_output_path: str,
     threads_per_shard: int,
+    parquet_chunk_size: int = 5_000,
 ):
     """
     Main pipeline that:
@@ -162,13 +184,13 @@ def fetch_to_warc(
       - Spawns multiple worker threads pulling from a shared queue
       - Uses per-netloc locks to ensure that only one thread concurrently
         making a request to each netloc.
-      - Collects results in a WARC file
+      - Collects results in a parquet file
       - Writes out robots and error logs
 
     Args:
     urls (list[str]): List of URLs to fetch
     shard_id (str): ID of this shard, used for logging
-    warc_output_path (str): Path to write the output WARC file with the fetched responses
+    parquet_output_path (str): Path to write the output parquet file with the fetched responses
     robots_output_path (str): Path to write JSON object with mapping of netloc to robots.txt
     errors_output_path (str): Path to write JSON object with fetch errors for robots.txts and
       and URLs. The JSON object has two keys: (1) "url_to_fetch_errors" and
@@ -177,10 +199,46 @@ def fetch_to_warc(
       maps to a mapping of robots.txt URLs (one per netloc) to the error encountered when
       fetching (if we saw one),
     threads_per_shard (int): Number of threads to use for concurrent fetching.
+    parquet_chunk_size (int): The number of results to write out at once to the parquet file.
     """
     urls = list(set(urls))
     random.shuffle(urls)
-    logger.info(f"fetch_to_warc: {len(urls)} unique URLs to fetch.")
+    logger.info(f"Found {len(urls)} unique URLs to fetch.")
+
+    already_fetched_urls = load_already_fetched_urls(parquet_output_path)
+
+    # Store the number of records we've already written
+    num_written_records_lock = threading.Lock()
+    logger.info(f"Shard {shard_id}: Found {len(already_fetched_urls)} already fetched URLs in {parquet_output_path}")
+
+    # Load or init the mapping from netloc to robots
+    existing_robots = load_json_if_exists(robots_output_path)
+    netloc_to_robots = deepcopy(existing_robots)
+
+    # Load or init the mappings from:
+    # 1. netloc to robots fetch errors
+    # 2. URL to fetch errors
+    existing_errors = load_json_if_exists(errors_output_path)
+    netloc_to_robots_fetch_error = deepcopy(existing_errors.get("netloc_to_robots_fetch_error", {}))
+    url_to_fetch_errors = deepcopy(existing_errors.get("url_to_fetch_errors", {}))
+
+    # Locks to protect concurrent access to the mappings
+    netloc_to_robots_lock = threading.Lock()
+    netloc_to_robots_fetch_error_lock = threading.Lock()
+    url_to_fetch_errors_lock = threading.Lock()
+
+    # If a URL is already in the existing output or has a final error, skip it.
+    urls_to_fetch = []
+    for url in urls:
+        if url in already_fetched_urls:
+            # We've already fetched this URL, so skip it.
+            continue
+        if url in url_to_fetch_errors:
+            # We've already recorded a terminal error for this URL, so skip it.
+            continue
+        urls_to_fetch.append(url)
+    random.shuffle(urls_to_fetch)
+    logger.info(f"Found {len(urls_to_fetch)} URLs to fetch after skipping already-fetched or errored URLs.")
 
     # Each netloc has a lock to ensure that we only have one concurrent
     # thread making a request to each netloc. For example, if a thread is making
@@ -213,24 +271,123 @@ def fetch_to_warc(
     # netloc (despite the backoff between requests), skip all further URLs from this netloc.
     MAX_NUM_429_5xx = 10
 
-    # Robot storage
-    netloc_to_robots = {}
-    netloc_to_robots_fetch_error = {}
+    # Queue for the writer thread
+    results_queue = queue.Queue()
+    # We use a sentinel (None) to signal the writer thread when we're done
+    SENTINEL = None
 
-    # Fetch errors
-    url_to_fetch_errors = {}
-    # Store successful responses in memory, then write them at the end.
-    # TODO(nfliu): consider streaming directly to the WARC, need to check
-    # if this would incur too many GCS operations.
-    successful_responses: dict[str, requests.Response] = {}
+    def writer_thread():
+        """
+        Continuously dequeues results and writes them to Parquet in chunks locally,
+        then uploads the Parquet file to a remote gs:// path. This prevents
+        accumulating too many results in memory and allows recovery from pre-emption.
+        """
+        buffer = []
+        num_written_records = len(already_fetched_urls)
+
+        # Create a temporary directory for Parquet files
+        with tempfile.TemporaryDirectory() as temp_dir:
+            local_parquet_path = os.path.join(temp_dir, f"{shard_id}_temp_output.parquet")
+            while True:
+                item = results_queue.get()
+                if item is SENTINEL:
+                    # Flush any leftover items
+                    if buffer:
+                        # Write robots data to output path
+                        with netloc_to_robots_lock:
+                            netloc_to_robots_output = deepcopy(netloc_to_robots)
+                        with fsspec.open(robots_output_path, "w", compression="infer") as fout:
+                            json.dump(netloc_to_robots_output, fout)
+
+                        # Write errors to output path
+                        with url_to_fetch_errors_lock:
+                            url_to_fetch_errors_output = deepcopy(url_to_fetch_errors)
+                        with netloc_to_robots_fetch_error_lock:
+                            netloc_to_robots_fetch_error_output = deepcopy(netloc_to_robots_fetch_error)
+                        with fsspec.open(errors_output_path, "w", compression="infer") as fout:
+                            json.dump(
+                                {
+                                    "url_to_fetch_errors": url_to_fetch_errors_output,
+                                    "netloc_to_robots_fetch_error": netloc_to_robots_fetch_error_output,
+                                },
+                                fout,
+                            )
+
+                        # Write leftover items to local parquet
+                        logger.info(f"[shard {shard_id}] Writing {len(buffer)} examples to {local_parquet_path}")
+                        write_parquet_chunk(buffer, local_parquet_path)
+                        logger.info(f"[shard {shard_id}] Wrote {len(buffer)} examples to {local_parquet_path}")
+
+                        # Upload the local parquet to remote gs:// path
+                        try:
+                            logger.info(f"[shard {shard_id}] uploading final parquet chunk to {parquet_output_path}")
+                            fsspec_cp(local_parquet_path, parquet_output_path)
+                            logger.info(f"[shard {shard_id}] uploaded final parquet chunk to {parquet_output_path}")
+                        except Exception as e:
+                            logger.error(f"Failed to upload parquet file to {parquet_output_path}: {e}")
+
+                        with num_written_records_lock:
+                            num_written_records += len(buffer)
+                            logger.info(f"[shard {shard_id}] wrote {num_written_records} records so far")
+
+                    results_queue.task_done()
+                    break
+
+                buffer.append(item)
+                results_queue.task_done()
+
+                # If buffer is large enough, flush to local Parquet and upload
+                if len(buffer) >= parquet_chunk_size:
+                    # Write robots data to output path
+                    with netloc_to_robots_lock:
+                        netloc_to_robots_output = deepcopy(netloc_to_robots)
+                    with fsspec.open(robots_output_path, "w", compression="infer") as fout:
+                        json.dump(netloc_to_robots_output, fout)
+
+                    # Write errors to output path
+                    with url_to_fetch_errors_lock:
+                        url_to_fetch_errors_output = deepcopy(url_to_fetch_errors)
+                    with netloc_to_robots_fetch_error_lock:
+                        netloc_to_robots_fetch_error_output = deepcopy(netloc_to_robots_fetch_error)
+                    with fsspec.open(errors_output_path, "w", compression="infer") as fout:
+                        json.dump(
+                            {
+                                "url_to_fetch_errors": url_to_fetch_errors_output,
+                                "netloc_to_robots_fetch_error": netloc_to_robots_fetch_error_output,
+                            },
+                            fout,
+                        )
+
+                    # Write buffer to local parquet
+                    logger.info(f"[shard {shard_id}] Writing {len(buffer)} examples to {local_parquet_path}")
+                    write_parquet_chunk(buffer, local_parquet_path)
+                    logger.info(f"[shard {shard_id}] Wrote {len(buffer)} examples to {local_parquet_path}")
+
+                    # Upload the local parquet to remote gs:// path
+                    try:
+                        logger.info(f"[shard {shard_id}] Uploading parquet chunk to {parquet_output_path}")
+                        fsspec_cp(local_parquet_path, parquet_output_path)
+                        logger.info(f"[shard {shard_id}] Uploaded parquet chunk to {parquet_output_path}")
+                    except Exception as e:
+                        logger.error(f"Failed to upload parquet file to {parquet_output_path}: {e}")
+
+                    with num_written_records_lock:
+                        num_written_records += len(buffer)
+                        logger.info(f"[shard {shard_id}] wrote {num_written_records} records so far")
+
+                    buffer.clear()
+
+            logger.info(f"Writer thread for shard {shard_id} finished.")
+
+    writer = threading.Thread(target=writer_thread, daemon=True)
+    writer.start()
 
     # A queue of tasks. Each is (url, retries_left, is_robots)
     work_queue = queue.Queue()
-
     retries_per_url = 3
-    # Enqueue the main tasks
-    for u in urls:
-        work_queue.put((u, retries_per_url, False))
+    # Enqueue the URL fetching tasks
+    for url in urls_to_fetch:
+        work_queue.put((url, retries_per_url, False))
 
     pbar = tqdm(total=len(urls), desc=f"Fetching shard {shard_id}")
     pbar_lock = threading.Lock()
@@ -264,9 +421,11 @@ def fetch_to_warc(
                     if is_robots and (netloc not in netloc_to_robots and netloc not in netloc_to_robots_fetch_error):
                         # Don't overwrite robots.txt if we already successfully fetched it, or
                         # if there is an existing error
-                        netloc_to_robots_fetch_error[netloc] = "netloc passed max number of 429/5xx"
+                        with netloc_to_robots_fetch_error_lock:
+                            netloc_to_robots_fetch_error[netloc] = "netloc passed max number of 429/5xx"
                     elif not is_robots:
-                        url_to_fetch_errors[url] = "netloc passed max number of 429/5xx"
+                        with url_to_fetch_errors_lock:
+                            url_to_fetch_errors[url] = "netloc passed max number of 429/5xx"
                         # Final outcome => increment progress
                         with pbar_lock:
                             pbar.update(1)
@@ -276,9 +435,11 @@ def fetch_to_warc(
                     if is_robots and (netloc not in netloc_to_robots and netloc not in netloc_to_robots_fetch_error):
                         # Don't overwrite robots.txt if we already successfully fetched it, or
                         # if there is an existing error
-                        netloc_to_robots_fetch_error[netloc] = "netloc passed max number of connection errors"
+                        with netloc_to_robots_fetch_error_lock:
+                            netloc_to_robots_fetch_error[netloc] = "netloc passed max number of connection errors"
                     elif not is_robots:
-                        url_to_fetch_errors[url] = f"netloc passed max number of connection errors"
+                        with url_to_fetch_errors_lock:
+                            url_to_fetch_errors[url] = f"netloc passed max number of connection errors"
                         # Final outcome => increment progress
                         with pbar_lock:
                             pbar.update(1)
@@ -311,7 +472,8 @@ def fetch_to_warc(
 
                     if resp is not None:
                         # Succeeded
-                        netloc_to_robots[netloc] = resp.text
+                        with netloc_to_robots_lock:
+                            netloc_to_robots[netloc] = resp.text
                         netloc_connection_error_counts[netloc] = 0
                         netloc_429_5xx_counts[netloc] = 0
                         # reset the backoff value
@@ -335,10 +497,12 @@ def fetch_to_warc(
                                 work_queue.put((url, retries_left - 1, True))
                             else:
                                 # out of retries => final error
-                                netloc_to_robots_fetch_error[netloc] = f"{code}, no more retries"
+                                with netloc_to_robots_fetch_error_lock:
+                                    netloc_to_robots_fetch_error[netloc] = f"{code}, no more retries"
                         else:
                             # e.g., 4xx or permanent robots error
-                            netloc_to_robots_fetch_error[netloc] = err or "robots fetch error"
+                            with netloc_to_robots_fetch_error_lock:
+                                netloc_to_robots_fetch_error[netloc] = err or "robots fetch error"
 
                     work_queue.task_done()
                     continue  # end is_robots block
@@ -364,9 +528,18 @@ def fetch_to_warc(
 
                 if resp is not None:
                     # Successfully fetched the URL
-                    successful_responses[url] = resp
-                    if len(successful_responses) % 1000 == 0:
-                        logger.info(f"Fetched {len(successful_responses)} successful responses")
+
+                    # Enqueue a dictionary that we will write to Parquet
+                    result_record = {
+                        "url": url,
+                        "status_code": resp.status_code,
+                        "reason": resp.reason,
+                        "headers": dict(resp.headers),
+                        "content": resp.content,  # could store as bytes or text
+                        "fetched_at": time.time(),
+                    }
+                    results_queue.put(result_record)
+
                     netloc_connection_error_counts[netloc] = 0
                     netloc_429_5xx_counts[netloc] = 0
 
@@ -382,7 +555,8 @@ def fetch_to_warc(
                     if conn_err:
                         # e.g. DNS error
                         netloc_connection_error_counts[netloc] += 1
-                        url_to_fetch_errors[url] = err
+                        with url_to_fetch_errors_lock:
+                            url_to_fetch_errors[url] = err
                         # Final outcome => increment progress
                         with pbar_lock:
                             pbar.update(1)
@@ -398,12 +572,14 @@ def fetch_to_warc(
                             work_queue.put((url, retries_left - 1, False))
                         else:
                             # out of retries => final error
-                            url_to_fetch_errors[url] = f"{code}, no more retries"
+                            with url_to_fetch_errors_lock:
+                                url_to_fetch_errors[url] = f"{code}, no more retries"
                             with pbar_lock:
                                 pbar.update(1)
                     else:
                         # any other HTTP error
-                        url_to_fetch_errors[url] = err
+                        with url_to_fetch_errors_lock:
+                            url_to_fetch_errors[url] = err
                         with pbar_lock:
                             pbar.update(1)
                 work_queue.task_done()
@@ -421,76 +597,55 @@ def fetch_to_warc(
 
     # 7) Wait for queue to be empty
     work_queue.join()
+    # All fetching is done. Tell the writer thread to exit.
+    results_queue.put(SENTINEL)
+
     for t in threads:
         t.join()
 
-    # 8) Now we have successful responses in memory; write them to WARC
-    warc_buffer = io.BytesIO()
-    writer = WARCWriter(warc_buffer, gzip=True)
-    for url, response in tqdm(successful_responses.items(), desc="Converting responses to WARC"):
-        status_line = f"{response.status_code} {response.reason}"
-        http_headers = [("Status", status_line)]
-        for h, v in response.headers.items():
-            # Only keep headers with ascii names and values, since warcio errors out
-            # headers with values including Unicode characters. For example, the URL
-            # https://lib.utsa.edu/research/ causes issues because one of the returned headers is:
-            # ('Strict-Transport-Security', 'max-age=31536000;Â\xa0includeSubDomains; preload')
-            if h and not h.isascii():
-                continue
-            if v and not v.isascii():
-                continue
-            http_headers.append((h, v))
-        status_headers = StatusAndHeaders(status_line, http_headers, protocol="HTTP/1.1")
-        payload_io = io.BytesIO(response.content)
-        record = writer.create_warc_record(url, "response", payload=payload_io, http_headers=status_headers)
-        try:
-            writer.write_record(record)
-        except Exception:
-            logger.exception(f"Got exception when writing WARC record.\nurl: {url}\nheaders: {status_headers}")
-            raise
-
-    # Write the WARC file to output path
-    logger.info(f"Writing WARC to {warc_output_path}")
-    with fsspec.open(warc_output_path, "wb") as fout:
-        fout.write(warc_buffer.getvalue())
-    logger.info(f"Wrote WARC to {warc_output_path}")
-
-    # Write robots data to output path
-    logger.info(f"Writing robots to {robots_output_path}")
-    with fsspec.open(robots_output_path, "w", compression="infer") as fout:
-        json.dump(netloc_to_robots, fout)
-    logger.info(f"Wrote robots to {robots_output_path}")
-
-    # Write errors to output path
-    logger.info(f"Writing errors to {errors_output_path}")
-    all_errors = {
-        "url_to_fetch_errors": url_to_fetch_errors,
-        "netloc_to_robots_fetch_error": netloc_to_robots_fetch_error,
-    }
-    with fsspec.open(errors_output_path, "w", compression="infer") as fout:
-        json.dump(all_errors, fout)
-    logger.info(f"Wrote errors to {errors_output_path}")
+    # Wait until the writer has finished flushing everything
+    results_queue.join()
+    writer.join()
 
     logger.info(
-        f"Wrote {len(successful_responses)} successful WARC responses to {warc_output_path}.\n"
         f"Fetched robots for {len(netloc_to_robots)} domains, encountered {len(netloc_to_robots_fetch_error)} robots errors.\n"
         f"Recorded {len(url_to_fetch_errors)} fetch errors."
     )
 
 
+def load_already_fetched_urls(parquet_path: str):
+    """
+    If a parquet already exists, read in the URLs that we've successfully fetched.
+    Return a set() of URLs so we can skip re-fetching them.
+    """
+    if fsspec_exists(parquet_path):
+        df = pd.read_parquet(parquet_path)
+        if "url" in df.columns:
+            return set(df["url"].dropna().unique().tolist())
+    return set()
+
+
+def load_json_if_exists(json_path: str):
+    """Load a JSON file if it exists, else return an empty dict."""
+    if fsspec_exists(json_path):
+        with fsspec.open(json_path, compression="infer") as fin:
+            return json.load(fin)
+    return {}
+
+
 @ray.remote(memory=128 * 1024 * 1024 * 1024, num_cpus=16)
 def fetch_links(
-    urls_path: str, warc_output_path: str, robots_output_path: str, errors_output_path: str, threads_per_shard: int
+    urls_path: str, parquet_output_path: str, robots_output_path: str, errors_output_path: str, threads_per_shard: int
 ):
     """
-    Given a parquet with links to fetch, fetch the responses and write the output as WARC
-    to `warc_output_path`. In addition, the robots.txt for each fetched netloc and any errors
+    Given a parquet with links to fetch, fetch the responses and write the output as parquet
+    to `parquet_output_path`. In addition, the robots.txt for each fetched netloc and any errors
     encountered while fetching are written to `robots_output_path` and `errors_output_path`,
     respectively.
 
     Args:
     urls_path (str): Path to parquet with links to fetch.
-    warc_output_path (str): Path to write the output WARC file with the fetched responses
+    parquet_output_path (str): Path to write the output parquet file with the fetched responses
     robots_output_path (str): Path to write JSON object with mapping of netloc to robots.txt
     errors_output_path (str): Path to write JSON object with fetch errors for robots.txts and
       and URLs. The JSON object has two keys: (1) "url_to_fetch_errors" and
@@ -501,9 +656,9 @@ def fetch_links(
     threads_per_shard (int): Number of threads to use for concurrent fetching.
     """
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-    success_path = warc_output_path + ".SUCCESS"
+    success_path = parquet_output_path + ".SUCCESS"
     if fsspec_exists(success_path):
-        logger.info(f"Already processed and wrote WARC to {warc_output_path}, skipping...")
+        logger.info(f"Already processed and wrote parquet to {parquet_output_path}, skipping...")
         return
 
     with fsspec.open(urls_path) as f:
@@ -517,17 +672,16 @@ def fetch_links(
 
     # Randomly shuffle the URLs to load balance so we aren't repeatedly hitting a particular host
     random.shuffle(urls)
-
-    logger.info(f"Fetching {len(urls)} deduplicated URLs from input file {urls_path}")
     shard_id = os.path.basename(urls_path)
-    fetch_to_warc(urls, shard_id, warc_output_path, robots_output_path, errors_output_path, threads_per_shard)
+    logger.info(f"Fetching {len(urls)} deduplicated URLs from input file {urls_path}")
+    fetch_to_parquet(urls, shard_id, parquet_output_path, robots_output_path, errors_output_path, threads_per_shard)
 
     # Create success file
     with fsspec.open(success_path, "w") as fout:
         json.dump(
             {
                 "urls_path": urls_path,
-                "warc_output_path": warc_output_path,
+                "parquet_output_path": parquet_output_path,
                 "robots_output_path": robots_output_path,
                 "errors_output_path": errors_output_path,
             },
@@ -535,7 +689,7 @@ def fetch_links(
         )
 
     logger.info(
-        f"WARC file created at: {warc_output_path}\n"
+        f"Parquet file created at: {parquet_output_path}\n"
         f"robots.txt data written to {robots_output_path}\n"
         f"errors written to {errors_output_path}"
     )
@@ -577,12 +731,12 @@ def main(cfg: FetchLinksConfig):
     def submit_shard_task(shard_index):
         nonlocal num_shards_submitted
         input_path = os.path.join(cfg.urls_input_directory, f"links.{shard_index}.parquet")
-        warc_output_path = os.path.join(cfg.output_path, f"links.{shard_index}.warc.gz")
+        parquet_output_path = os.path.join(cfg.output_path, f"fetched_links.{shard_index}.parquet")
         robots_output_path = os.path.join(cfg.output_path, f"links.{shard_index}_robots.json.gz")
         errors_output_path = os.path.join(cfg.output_path, f"links.{shard_index}_errors.json.gz")
         unfinished.append(
             fetch_links.remote(
-                input_path, warc_output_path, robots_output_path, errors_output_path, cfg.threads_per_shard
+                input_path, parquet_output_path, robots_output_path, errors_output_path, cfg.threads_per_shard
             )
         )
 
