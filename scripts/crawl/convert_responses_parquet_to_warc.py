@@ -14,12 +14,13 @@ python marin/run/ray_run.py \
 ```
 """
 import io
-from http.client import responses
+import json
 import logging
 import os
 import pathlib
 import random
 from dataclasses import dataclass
+from http.client import responses
 
 import draccus
 import fsspec
@@ -29,8 +30,8 @@ from tqdm_loggable.auto import tqdm
 from warcio.statusandheaders import StatusAndHeaders
 from warcio.warcwriter import WARCWriter
 
-from marin.utils import fsspec_glob
 from marin.core.runtime import cached_or_construct_output
+from marin.utils import fsspec_glob
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -55,7 +56,7 @@ def convert_parquet_to_warc(input_path: str, output_path: str):
     for record in tqdm(records, desc="Converting responses to WARC"):
         status_line = f"{record['status_code']} {record.get('reason', responses[record['status_code']])}"
         http_headers = [("Status", status_line)]
-        for h, v in record["headers"].items():
+        for h, v in json.loads(record["headers"]).items():
             # Only keep headers with ascii names and values, since warcio errors out
             # headers with values including Unicode characters. For example, the URL
             # https://lib.utsa.edu/research/ causes issues because one of the returned headers is:
