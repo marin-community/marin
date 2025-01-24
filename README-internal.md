@@ -28,7 +28,7 @@ issues, contact David Hall or Sidd Karamcheti for help!
 Once authenticated for GCP, all other work happens through our
 [Ray Cluster](https://docs.ray.io/en/latest/cluster/getting-started.html). The entire cluster configuration template is stored in [`infra/marin-cluster-template.yaml`](./infra/marin-cluster-template.yaml). **Ray uses this file as the single-source of
 truth for all cluster operations** -- you can think of this file as an alternative to managing your own SSH keys,
-remembering the IP address of the cluster head node, what port the dashboard is running on, etc. For more info about this template and connecting to specific clusters, see [`infra/README.md`](./infra/REEADME.md).
+remembering the IP address of the cluster head node, what port the dashboard is running on, etc. For more info about this template and connecting to specific clusters, see [`infra/README.md`](./infra/README.md).
 
 There are two steps necessary for 1) establishing a connection to the cluster and 2) submitting/monitoring jobs on the
 cluster. **You will need at least two terminal processes running for the following steps** (make sure to activate your
@@ -50,13 +50,13 @@ this terminal open!
 To submit jobs, we use the
 [Jobs API](https://docs.ray.io/en/latest/cluster/running-applications/job-submission/quickstart.html#submitting-a-job).
 This requires that your Python script is formatted in a certain way, calling some boilerplate Ray functions prior to
-launching tasks -- see [`tests/test_ray_cluster.py`](./tests/test_ray_cluster.py) for a minimal example. To launch:
+launching tasks -- see [`tests/test_quickstart.py`](./tests/test_quickstart.py) for a minimal example. To launch:
 
 ```
 # [Terminal 2] Submit a Ray Job (specified via a Python script)
 #   =>> Assumes `marin` Python environment is active, current working directory == repository root == "."
 #   =>> Will output a Job ID like `raysubmit_pAJM8vKfHPhiyHBa`
-ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python tests/test_ray_cluster.py
+ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python tests/test_quickstart.py
 
 # Get Job Status (given Job ID = raysubmit_pAJM8vKfHPhiyHBa)
 ray job status --address http://127.0.0.1:8265 raysubmit_pAJM8vKfHPhiyHBa
