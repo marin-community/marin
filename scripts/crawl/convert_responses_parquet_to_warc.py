@@ -56,8 +56,15 @@ def convert_parquet_to_warc(input_path: str, output_path: str):
 
     warc_buffer = io.BytesIO()
     writer = WARCWriter(warc_buffer, gzip=True)
+
+    # Manually add response code 999
+    responses[999] = "Request denied"
     for record in tqdm(records, desc="Converting responses to WARC"):
-        status_line = f"{record['status_code']} {record.get('reason', responses[record['status_code']])}"
+        status_reason = record.get("reason", responses.get(record["status_code"]))
+        if not status_reason:
+            logger.info(f"Failed to get status reason for code {record['status_code']}, url: {record['url']}")
+            status_reason = ""
+        status_line = f"{record['status_code']} {status_reason}"
         http_headers = [("Status", status_line)]
         for h, v in json.loads(record["headers"]).items():
             # Only keep headers with ascii names and values, since warcio errors out
