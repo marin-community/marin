@@ -4,6 +4,7 @@ Issue: https://github.com/stanford-crfm/marin/issues/702
 """
 
 from itertools import chain
+from typing import List, Optional
 import random
 
 from levanter.optim import AdamConfig
@@ -129,6 +130,124 @@ stage_data = {
     # },
 }
 
+def full_training_stage_allstage2(
+    data1_name : str,
+    data2_name : str,
+    total_data1_portion : float,
+    duration_fracs_stage2 : List[float],
+    learning_rate : float = 3e-3,
+    cooldown_frac : Optional[float] = None,
+    schedule_type : str = "cosine",
+    model_size : str = "150m",
+    num_train_steps : int = 3000,
+    version_tag : str = "",
+    additional_tags : List[str] = [],
+):
+    """
+    Generalized version of varsched that works with any two datasets.
+    
+    Args:
+        data1_name: Name of first dataset (e.g. "stack_dedup", "stack_cpp")
+        data2_name: Name of second dataset (e.g. "c4")
+        total_data1_portion: Total portion of data1 across both stages
+        duration_fracs_stage2: Fraction of total steps to spend in stage 2
+    """
+
+    duration_fracs_stage2 = sorted(duration_fracs_stage2, reverse=True)
+
+    def steps_stage1(duration_frac_stage2):
+        return int(num_train_steps * (1 - duration_frac_stage2))
+
+    # Construct executor steps for training
+
+    tpu_type="v4-128"
+    model = {
+        "150m": llama_150m,
+        "300m": llama_300m,
+        "600m": llama_600m,
+    }[model_size]
+    train_batch_size=1024
+    num_train_steps=num_train_steps 
+
+    weight_decay=0.1
+    steps_per_eval=num_train_steps // 20
+    name_prefix = f"{data1_name}-{data2_name}-allstage2"
+    
+    if model_size == "300m" or model_size == "600m":
+        name_prefix += f"-{model_size}"
+
+    if schedule_type == "linear":
+        optimizer_config = AdamConfig(
+            learning_rate=learning_rate,
+            weight_decay=weight_decay,
+            lr_schedule=schedule_type,
+            decay=cooldown_frac,
+        )
+        name_prefix += f"-{schedule_type}-{cooldown_frac}"
+    elif schedule_type == "cosine":
+        optimizer_config = None
+    else:
+        raise ValueError(f"Invalid schedule type: {schedule_type}")
+
+    data_config_stage1 = lm_mixture_data_config(
+        components={data1_name: stage_data[data1_name]["stage1"], data2_name: stage_data[data2_name]["stage1"]},
+        weights={data1_name: 0.0, data2_name: 1.0},
+    )
+
+    pretraining_data_stage1, evaluation_data_stage1 = _prepare_data_config(data_config_stage1, use_default_validation=True, use_default_evaluation=True)
+
+    train_step_stage1 = train_executor_step(
+        name=f"{name_prefix}-stage1{version_tag}",
+        pretraining_data=pretraining_data_stage1,
+        evaluation_data=evaluation_data_stage1,
+        model=model,
+        model_checkpoint=None,
+        train_batch_size=train_batch_size,
+        num_train_steps=num_train_steps,
+        learning_rate=learning_rate,
+        weight_decay=weight_decay,
+        steps_per_eval=steps_per_eval,
+        steps_per_export_list=[steps_stage1(duration_frac_stage2) for duration_frac_stage2 in duration_fracs_stage2],
+        tpu_type=tpu_type,
+        optimizer_config=optimizer_config,
+        additional_tags=additional_tags + ["stage1"],
+    )
+
+    train_steps_stage2 = []
+
+    for duration_frac_stage2 in duration_fracs_stage2:
+        data1_weight_stage2 = round(total_data1_portion / duration_frac_stage2, 7)
+
+        assert 0 <= data1_weight_stage2 <= 1, f"data1_weight_stage2: {data1_weight_stage2}"
+
+        data_config_stage2 = lm_mixture_data_config(
+            components={data1_name: stage_data[data1_name]["stage2"], data2_name: stage_data[data2_name]["stage2"]},
+            weights={data1_name: data1_weight_stage2, data2_name: 1 - data1_weight_stage2},
+        )
+
+        pretraining_data_stage2, evaluation_data_stage2 = _prepare_data_config(data_config_stage2, use_default_validation=True, use_default_evaluation=True)
+
+        train_step_stage2 = train_executor_step(
+            name=f"{name_prefix}-{data1_weight_stage2}-stage2{version_tag}",
+            pretraining_data=pretraining_data_stage2,
+            evaluation_data=evaluation_data_stage2,
+            model=model,
+            model_checkpoint=output_path_of(train_step_stage1).cd(f"checkpoints/step-{steps_stage1(duration_frac_stage2)}"),
+            train_batch_size=train_batch_size,
+            num_train_steps=num_train_steps,
+            learning_rate=learning_rate,
+            weight_decay=weight_decay,
+            steps_per_eval=steps_per_eval,
+            steps_per_export_list=[num_train_steps],
+            tpu_type=tpu_type,
+            optimizer_config=optimizer_config,
+            additional_tags=additional_tags + ["stage2"],
+        )
+
+        train_steps_stage2.append(train_step_stage2)
+
+    return [train_step_stage1, *train_steps_stage2]
+
 def full_training_stage_varsched(data1_name, data2_name, total_data1_portion, duration_frac_stage2, data1_frac_alloc_stage2, learning_rate=3e-3, cooldown_frac=None, schedule_type="cosine", model_size="150m", num_train_steps=3000, version_tag="", additional_tags=[]):
     """
     Generalized version of varsched that works with any two datasets.
@@ -180,7 +299,6 @@ def full_training_stage_varsched(data1_name, data2_name, total_data1_portion, du
     num_train_steps=num_train_steps 
 
     steps_stage1 = int(num_train_steps * duration_frac_stage1)
-    steps_stage2 = num_train_steps - steps_stage1
 
     weight_decay=0.1
     steps_per_eval=num_train_steps // 20
@@ -293,6 +411,20 @@ def full_training_stage_baseline_sweep(data1_name, data2_name, learning_rate, sc
 ############################################################
 
 if __name__ == "__main__":
+    # stage_pairs = [
+    #     full_training_stage_allstage2(
+    #         data1_name="stack_dedup",
+    #         data2_name="stack_cpp",
+    #         total_data1_portion=0.005,
+    #         duration_fracs_stage2=[0.4, 0.2],
+    #         schedule_type=schedule_type,
+    #         cooldown_frac=cooldown_frac,
+    #         num_train_steps=500,
+    #         additional_tags=["debug"]
+    #     )
+    #     for schedule_type, cooldown_frac in [("cosine", None), ("linear", 0.0)]
+    # ]
+
     # stage_pairs = [
     #     full_training_stage_varsched(
     #         data1_name="stack_dedup",
