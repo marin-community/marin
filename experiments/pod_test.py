@@ -20,7 +20,7 @@ def test():
     sampling_params = SamplingParams(temperature=0.7, top_p=1.0, n=1, max_tokens=16)
 
     llm = LLM(
-        model="meta-llama/Meta-Llama-3-8B-Instruct",
+        model="/opt/gcsfuse_mount/models/meta-llama--Llama-3-3-70B-Instruct",
         enforce_eager=True,
         max_model_len=8192,
         tensor_parallel_size=8,
