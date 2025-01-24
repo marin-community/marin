@@ -17,6 +17,8 @@ from experiments.metrics.wandb_related import WandbMetricsConfig, calculate_wand
 
 def main(save_path: str) -> dict:
 
+    final_metrics = {}
+
     final_metrics = {
         "Workflow Times per workflow": get_average_duration_for_all_workflows(
             GithubApiConfig(
@@ -40,8 +42,9 @@ def main(save_path: str) -> dict:
     final_metrics["Number of Ray cluster restart"] = len(events)
     final_metrics["Ray restart events"] = events
 
+    # get all runs; num_days=-1 means all runs
     experiment_metrics = calculate_wandb_metrics(
-        WandbMetricsConfig(num_days=7, entity="stanford-mercury", project="marin")
+        WandbMetricsConfig(num_days=None, entity="stanford-mercury", project="marin")
     )
     for key, value in experiment_metrics.items():
         final_metrics[key] = value
