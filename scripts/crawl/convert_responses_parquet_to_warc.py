@@ -12,6 +12,9 @@ python marin/run/ray_run.py \
     --input_directory gs://marin-us-central2/scratch/nfliu/fetched_outlinks/fineweb-edu-10M/ \
     --output_path gs://marin-us-central2/scratch/nfliu/fetched_outlinks/fineweb-edu-10M/
 ```
+
+After converting to WARC, you may want to delete the parquets with fetched responses
+to conserve GCS space.
 """
 import io
 import json
