@@ -71,7 +71,7 @@ def power_law_loss(
         residuals = np.log(y) - np.log(predictions)
     else:
         residuals = y - predictions
-    return np.mean(huber(delta, residuals))
+    return np.sum(huber(delta, residuals))
 
 
 def fit_power_law(
