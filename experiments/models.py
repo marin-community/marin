@@ -1,5 +1,4 @@
 import os
-import subprocess
 from dataclasses import dataclass
 
 from experiments.instruction_datasets import get_directory_friendly_dataset_name
@@ -34,6 +33,10 @@ MODEL_NAME_TO_CONFIG = {
         hf_repo_id="Qwen/Qwen2.5-72B-Instruct",
         hf_revision="495f393",
     ),
+    "meta-llama/Llama-3.3-70B-Instruct": ModelConfig(
+        hf_repo_id="meta-llama/Llama-3.3-70B-Instruct",
+        hf_revision="6f6073b",
+    ),
 }
 
 
@@ -49,29 +52,12 @@ def download_model_step(model_config: ModelConfig) -> ExecutorStep:
             wait_for_completion=True,
             hf_repo_type_prefix="",
         ),
-        # We have to override the output path or else there will be a hash at the end, because of the hash,
-        # this means that we won't know how to call mkdir in the next step below.
+        # must override because it because if we don't then it will end in a hash
+        # if it ends in a hash, then we cannot determine the local path
         override_output_path=f"{GCS_FUSE_MOUNT_PATH}/{model_name}",
     )
-    # While the above operation downloads the model to the GCS, the model
-    # is not available on the local filesystem since GCS does not handle
-    # implicitly defined directories that are not created through GCSFuse.
-    # The previous operation was created using Cloud Storage but not FUSE
-    # so it will no appear to be available. The following operation creates
-    # the directory on the local filesystem.
-    # Source: https://arc.net/l/quote/dcgeuozs
-    create_local_filesystem_link(model_name)
 
     return download_step
-
-
-def create_local_filesystem_link(model_name: str):
-    # Create /opt/gcsfuse_mount/models
-    subprocess.run(["mkdir", f"{LOCAL_PREFIX}/{GCS_FUSE_MOUNT_PATH}"], capture_output=True, text=True)
-
-    # TODO: Link the actual model folder to the local filesystem as well
-    # Right now it is abstracted away because no access to the hashed version
-    subprocess.run(["mkdir", f"{LOCAL_PREFIX}/{GCS_FUSE_MOUNT_PATH}/{model_name}"], capture_output=True, text=True)
 
 
 def get_model_local_path(model_name: str) -> str:
