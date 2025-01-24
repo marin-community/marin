@@ -3,113 +3,54 @@ Test continued training from checkpoint to support different mixtures.
 Issue: https://github.com/stanford-crfm/marin/issues/702
 """
 
-import os
-from datetime import timedelta
-import random
-import math
 from itertools import chain
 
-import jmp
-from levanter.checkpoint import CheckpointerConfig
-from levanter.optim import AdamConfig
-from levanter.tracker.wandb import WandbConfig
-from levanter.trainer import TrainerConfig
-from levanter.eval_harness import LmEvalHarnessConfig
+from levanter.optim import AdamConfig, SGDConfig
 
-from experiments.defaults import default_tokenize, default_train, _prepare_data_config
-from experiments.llama import llama3_tokenizer, llama_150m, llama_300m
-from experiments.simple_train_config import SimpleTrainConfig
-from experiments.pretraining_datasets import fineweb_edu, slimpajama_6b
-from experiments.evals.task_configs import CORE_TASKS, convert_to_levanter_task_config
+from experiments.defaults import _prepare_data_config
+from experiments.llama import llama_150m, llama_300m
 
-from marin.execution.executor import executor_main
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned, output_path_of
-from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
+from marin.execution.executor import executor_main, output_path_of
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
-from marin.processing.tokenize import (
-    TokenizeConfig,
-    TokenizerStep,
-    add_validation_sets_to_mixture,
-    levanter_tokenize_supervised,
-    lm_data_config,
-    tokenize,
-)
 
-from experiments.curriculum.curriculum_stages import tokenize_train_validation, train_executor_step
+from experiments.curriculum.curriculum_stages import train_executor_step
+from experiments.curriculum.datasets import stage_data
 
-BASE_DIR_STACK_PYTHON = "gs://marin-us-central2/raw/the-stack-dedup-4ba450/17cad72/data/python"
-BASE_DIR_DOLMA = "gs://marin-us-central2/raw/dolma/v1.7"
-
-# randomly split stack python parquet files into two seperate groups
-stack_file_ids = list(range(144))
-random.seed(42)
-random.shuffle(stack_file_ids)
-stack_file_ids_stage1 = stack_file_ids[0:72]
-stack_file_ids_stage2 = stack_file_ids[72:143]
-stack_file_ids_validation = stack_file_ids[143:144]
-
-# randomly split dolma c4 json.gz files into two seperate groups
-dolma_file_ids = list(range(171))
-random.shuffle(dolma_file_ids)
-dolma_file_ids_stage1 = dolma_file_ids[0:85]
-dolma_file_ids_stage2 = dolma_file_ids[85:170]
-dolma_file_ids_validation = dolma_file_ids[170:171]
-
-# Stage 1
-
-stack_dedup_stage1_tokenized = tokenize_train_validation(
-    train_files=[f"{BASE_DIR_STACK_PYTHON}/data-{id:05d}-of-00144.parquet" for id in stack_file_ids_stage1],
-    validation_files=[f"{BASE_DIR_STACK_PYTHON}/data-{id:05d}-of-00144.parquet" for id in stack_file_ids_validation],
-    name="stack_dedup_stage1",
-    text_key="content"
-)
-
-dolma_c4_stage1_tokenized = tokenize_train_validation(
-    train_files=[f"{BASE_DIR_DOLMA}/c4-{id:04d}.json.gz" for id in dolma_file_ids_stage1],
-    validation_files=[f"{BASE_DIR_DOLMA}/c4-{id:04d}.json.gz" for id in dolma_file_ids_validation],
-    name="dolma_c4_stage1",
-)
-
-stack_dedup_stage2_tokenized = tokenize_train_validation(
-    train_files=[f"{BASE_DIR_STACK_PYTHON}/data-{id:05d}-of-00144.parquet" for id in stack_file_ids_stage2],
-    validation_files=[f"{BASE_DIR_STACK_PYTHON}/data-{id:05d}-of-00144.parquet" for id in stack_file_ids_validation],
-    name="stack_dedup_stage2",
-    text_key="content"
-)
-
-dolma_c4_stage2_tokenized = tokenize_train_validation(
-    train_files=[f"{BASE_DIR_DOLMA}/c4-{id:04d}.json.gz" for id in dolma_file_ids_stage2],
-    validation_files=[f"{BASE_DIR_DOLMA}/c4-{id:04d}.json.gz" for id in dolma_file_ids_validation],
-    name="dolma_c4_stage2",
-)
-
-def full_training_stage_varsched(total_code_portion, duration_frac_stage2, code_frac_alloc_stage2, learning_rate=3e-3, cooldown_frac=None, schedule_type="cosine", version_tag="", additional_tags=[]):
+def full_training_stage_varsched(data1_name, data2_name, total_data1_portion, duration_frac_stage2, data1_frac_alloc_stage2, learning_rate=3e-3, cooldown_frac=None, schedule_type="cosine", version_tag="", additional_tags=[]):
+    """
+    Generalized version of varsched that works with any two datasets.
+    
+    Args:
+        data1_name: Name of first dataset (e.g. "stack_dedup", "stack_cpp")
+        data2_name: Name of second dataset (e.g. "c4")
+        total_data1_portion: Total portion of data1 across both stages
+        duration_frac_stage2: Fraction of total steps to spend in stage 2
+        data1_frac_alloc_stage2: Fraction of data1's total portion to allocate to stage 2
+    """
     duration_frac_stage1 = 1 - duration_frac_stage2
-    code_frac_alloc_stage1 = 1 - code_frac_alloc_stage2
+    data1_frac_alloc_stage1 = 1 - data1_frac_alloc_stage2
 
-    code_weight_stage1 = round(total_code_portion * code_frac_alloc_stage1 / duration_frac_stage1, 7)
-    code_weight_stage2 = round(total_code_portion * code_frac_alloc_stage2 / duration_frac_stage2, 7)
+    data1_weight_stage1 = round(total_data1_portion * data1_frac_alloc_stage1 / duration_frac_stage1, 7)
+    data1_weight_stage2 = round(total_data1_portion * data1_frac_alloc_stage2 / duration_frac_stage2, 7)
 
     print('-' * 100)
-    print(f"total_code_portion: {total_code_portion}")
-    print(f"duration_frac_stage1: {duration_frac_stage1}, code_frac_alloc_stage1: {code_frac_alloc_stage1}, code_weight_stage1: {code_weight_stage1}")
-    print(f"duration_frac_stage2: {duration_frac_stage2}, code_frac_alloc_stage2: {code_frac_alloc_stage2}, code_weight_stage2: {code_weight_stage2}")
+    print(f"total_data1_portion: {total_data1_portion}")
+    print(f"duration_frac_stage1: {duration_frac_stage1}, data1_frac_alloc_stage1: {data1_frac_alloc_stage1}, data1_weight_stage1: {data1_weight_stage1}")
+    print(f"duration_frac_stage2: {duration_frac_stage2}, data1_frac_alloc_stage2: {data1_frac_alloc_stage2}, data1_weight_stage2: {data1_weight_stage2}")
 
-    assert 0 <= code_weight_stage1 <= 1, f"code_weight_stage1: {code_weight_stage1}"
-    assert 0 <= code_weight_stage2 <= 1, f"code_weight_stage2: {code_weight_stage2}"
+    assert 0 <= data1_weight_stage1 <= 1, f"data1_weight_stage1: {data1_weight_stage1}"
+    assert 0 <= data1_weight_stage2 <= 1, f"data1_weight_stage2: {data1_weight_stage2}"
 
     data_config_stage1 = lm_mixture_data_config(
-        components={"stack_dedup": stack_dedup_stage1_tokenized, "c4": dolma_c4_stage1_tokenized},
-        weights={"stack_dedup": code_weight_stage1, "c4": 1 - code_weight_stage1},
+        components={data1_name: stage_data[data1_name]["stage1"], data2_name: stage_data[data2_name]["stage1"]},
+        weights={data1_name: data1_weight_stage1, data2_name: 1 - data1_weight_stage1},
     )
 
     pretraining_data_stage1, evaluation_data_stage1 = _prepare_data_config(data_config_stage1, use_default_validation=True, use_default_evaluation=True)
 
-    # Stage 2
-
     data_config_stage2 = lm_mixture_data_config(
-        components={"stack_dedup": stack_dedup_stage2_tokenized, "c4": dolma_c4_stage2_tokenized},
-        weights={"stack_dedup": code_weight_stage2, "c4": 1 - code_weight_stage2},
+        components={data1_name: stage_data[data1_name]["stage2"], data2_name: stage_data[data2_name]["stage2"]},
+        weights={data1_name: data1_weight_stage2, data2_name: 1 - data1_weight_stage2},
     )
 
     pretraining_data_stage2, evaluation_data_stage2 = _prepare_data_config(data_config_stage2, use_default_validation=True, use_default_evaluation=True)
@@ -126,7 +67,7 @@ def full_training_stage_varsched(total_code_portion, duration_frac_stage2, code_
 
     weight_decay=0.1
     steps_per_eval=num_train_steps // 20
-    name_prefix = f"varsched-bf-{code_frac_alloc_stage2}"
+    name_prefix = f"varsched-bf-{data1_frac_alloc_stage2}"
 
     if schedule_type == "linear":
         optimizer_config = AdamConfig(
@@ -137,22 +78,19 @@ def full_training_stage_varsched(total_code_portion, duration_frac_stage2, code_
         )
         name_prefix += f"-{schedule_type}-{cooldown_frac}"
     elif schedule_type == "linear-sgd":
-        optimizer_config = AdamConfig(
+        optimizer_config = SGDConfig(
             learning_rate=learning_rate,
             weight_decay=weight_decay,
-            lr_schedule="linear",
-            decay=cooldown_frac,
-            beta1=0.8,
-            beta2=0.9,
+            momentum=0.0,
         )
-        name_prefix += f"-linear-sgd-0.8"
+        name_prefix += f"-linear-sgd"
     elif schedule_type == "cosine":
         optimizer_config = None
     else:
         raise ValueError(f"Invalid schedule type: {schedule_type}")
 
     train_step_stage1 = train_executor_step(
-        name=f"{name_prefix}-{code_weight_stage1}-{code_weight_stage2}-stage1{version_tag}",
+        name=f"{name_prefix}-{data1_weight_stage1}-{data1_weight_stage2}-stage1{version_tag}",
         pretraining_data=pretraining_data_stage1,
         evaluation_data=evaluation_data_stage1,
         model=model,
@@ -169,7 +107,7 @@ def full_training_stage_varsched(total_code_portion, duration_frac_stage2, code_
     )
 
     train_step_stage2 = train_executor_step(
-        name=f"{name_prefix}-{code_weight_stage1}-{code_weight_stage2}-stage2{version_tag}",
+        name=f"{name_prefix}-{data1_weight_stage1}-{data1_weight_stage2}-stage2{version_tag}",
         pretraining_data=pretraining_data_stage2,
         evaluation_data=evaluation_data_stage2,
         model=model,
@@ -187,17 +125,26 @@ def full_training_stage_varsched(total_code_portion, duration_frac_stage2, code_
 
     return [train_step_stage1, train_step_stage2]
 
-def full_training_stage_halfsched(starting_code_portion, ending_code_portion, num_train_steps=3000, model_size="150m", version_tag="", additional_tags=[]):
+def full_training_stage_halfsched(data1_name, data2_name, starting_data1_portion, ending_data1_portion, num_train_steps=3000, model_size="150m", version_tag="", additional_tags=[]):
+    """
+    Generalized version of halfsched that works with any two datasets.
+    
+    Args:
+        data1_name: Name of first dataset (e.g. "stack_dedup", "stack_cpp")
+        data2_name: Name of second dataset (e.g. "c4")
+        starting_data1_portion: Portion of data1 in first stage
+        ending_data1_portion: Portion of data1 in second stage
+    """
     data_config_stage1 = lm_mixture_data_config(
-        components={"stack_dedup": stack_dedup_stage1_tokenized, "c4": dolma_c4_stage1_tokenized},
-        weights={"stack_dedup": starting_code_portion, "c4": 1 - starting_code_portion},
+        components={data1_name: stage_data[data1_name]["stage1"], data2_name: stage_data[data2_name]["stage1"]},
+        weights={data1_name: starting_data1_portion, data2_name: 1 - starting_data1_portion},
     )
 
     pretraining_data_stage1, evaluation_data_stage1 = _prepare_data_config(data_config_stage1, use_default_validation=True, use_default_evaluation=True)
 
     data_config_stage2 = lm_mixture_data_config(
-        components={"stack_dedup": stack_dedup_stage2_tokenized, "c4": dolma_c4_stage2_tokenized},
-        weights={"stack_dedup": ending_code_portion, "c4": 1 - ending_code_portion},
+        components={data1_name: stage_data[data1_name]["stage2"], data2_name: stage_data[data2_name]["stage2"]},
+        weights={data1_name: ending_data1_portion, data2_name: 1 - ending_data1_portion},
     )
 
     pretraining_data_stage2, evaluation_data_stage2 = _prepare_data_config(data_config_stage2, use_default_validation=True, use_default_evaluation=True)
@@ -217,7 +164,7 @@ def full_training_stage_halfsched(starting_code_portion, ending_code_portion, nu
     name_prefix = f"stack-dedup-c4-curriculum-{num_train_steps // 1000}B-{model_size}-halfsched"
 
     train_step_stage1 = train_executor_step(
-        name=f"{name_prefix}-{starting_code_portion}-stage1{version_tag}",
+        name=f"{name_prefix}-{starting_data1_portion}-stage1{version_tag}",
         pretraining_data=pretraining_data_stage1,
         evaluation_data=evaluation_data_stage1,
         model=model,
@@ -233,7 +180,7 @@ def full_training_stage_halfsched(starting_code_portion, ending_code_portion, nu
     )
 
     train_step_stage2 = train_executor_step(
-        name=f"{name_prefix}-{starting_code_portion}-{ending_code_portion}-stage2{version_tag}",
+        name=f"{name_prefix}-{starting_data1_portion}-{ending_data1_portion}-stage2{version_tag}",
         pretraining_data=pretraining_data_stage2,
         evaluation_data=evaluation_data_stage2,
         model=model,
@@ -250,10 +197,10 @@ def full_training_stage_halfsched(starting_code_portion, ending_code_portion, nu
 
     return [train_step_stage1, train_step_stage2]
 
-def full_training_stage_baseline_sweep(learning_rate, schedule_type, cooldown_frac=None, num_train_steps=3000, model_size="150m", additional_tags=[], code_portion=0.005):
+def full_training_stage_baseline_sweep(data1_name, data2_name, learning_rate, schedule_type, cooldown_frac=None, num_train_steps=3000, model_size="150m", additional_tags=[], data1_portion=0.005, train_batch_size=1024):
     data_config = lm_mixture_data_config(
-        components={"stack_dedup": stack_dedup_stage1_tokenized, "c4": dolma_c4_stage1_tokenized},
-        weights={"stack_dedup": code_portion, "c4": 1 - code_portion},
+        components={data1_name: stage_data[data1_name]["stage1"], data2_name: stage_data[data2_name]["stage2"]},
+        weights={data1_name: data1_portion, data2_name: 1 - data1_portion},
     )
 
     pretraining_data, evaluation_data = _prepare_data_config(data_config, use_default_validation=True, use_default_evaluation=True)
@@ -265,11 +212,10 @@ def full_training_stage_baseline_sweep(learning_rate, schedule_type, cooldown_fr
         "150m": llama_150m,
         "300m": llama_300m,
     }[model_size]
-    train_batch_size=1024
     weight_decay=0.1
     steps_per_eval=num_train_steps // 20
-    steps_per_export=3000 // 2
-    name_prefix = f"stack-c4-{num_train_steps // 1000}B-{model_size}-baseline-lr-sweep"
+    steps_per_export=num_train_steps // 2
+    name_prefix = f"{data1_name}-{data2_name}-{num_train_steps // 1000}B-{model_size}-baseline"
 
     if schedule_type == "linear":
         optimizer_config = AdamConfig(
@@ -286,7 +232,7 @@ def full_training_stage_baseline_sweep(learning_rate, schedule_type, cooldown_fr
         raise ValueError(f"Invalid schedule type: {schedule_type}")
     
     train_step = train_executor_step(
-        name=f"{name_prefix}-{learning_rate}-{schedule_type}",
+        name=name_prefix,
         pretraining_data=pretraining_data,
         evaluation_data=evaluation_data,
         model=model,
@@ -307,21 +253,20 @@ def full_training_stage_baseline_sweep(learning_rate, schedule_type, cooldown_fr
 ############################################################
 
 if __name__ == "__main__":
-    # # Do a sweep over length of stage 2 for all data in stage 2
-
-    # stage_pairs = [
-    #     full_training_stage_varsched(total_code_portion=0.005, duration_frac_stage2=duration_frac_stage2, code_frac_alloc_stage2=code_frac_alloc_stage2, schedule_type=schedule_type, cooldown_frac=cooldown_frac, additional_tags=["all-stage2-bruteforce"], version_tag="-v2")
-    #     for duration_frac_stage2 in [0.2, 0.1, 0.05, 0.025, 0.00625]
-    #     for schedule_type, cooldown_frac in [("linear", 0.01)]
-    #     for code_frac_alloc_stage2 in [1.0]
-    # ]
-
-    # Fit scaling laws for no cooldown runs
-
     stage_pairs = [
-        full_training_stage_baseline_sweep(learning_rate=3e-3, schedule_type="linear", cooldown_frac=cooldown_frac, num_train_steps=3000, model_size="150m", additional_tags=['zero-cooldown-scaling'], code_portion=code_portion)
-        for cooldown_frac in [0.0]
-        for code_portion in [0.001, 0.005, 0.01, 0.05, 0.1]
+        full_training_stage_varsched(
+            data1_name="stack_dedup",
+            data2_name="stack_cpp",
+            total_data1_portion=0.005,
+            duration_frac_stage2=duration_frac_stage2,
+            data1_frac_alloc_stage2=data1_frac_alloc_stage2,
+            schedule_type=schedule_type,
+            cooldown_frac=cooldown_frac,
+            additional_tags=["python-cpp-0.005-allstage2-sweep"],
+        )
+        for duration_frac_stage2 in [0.4, 0.2, 0.1, 0.05, 0.025]
+        for schedule_type, cooldown_frac in [("cosine", None), ("linear", 0.0), ("linear", 0.05), ("linear", 0.2)]
+        for data1_frac_alloc_stage2 in [1.0]
     ]
 
     steps = list(chain(*stage_pairs))
