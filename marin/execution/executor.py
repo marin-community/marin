@@ -516,6 +516,14 @@ class Executor:
 
         return to_run
 
+    def compute_hashed_version_str(self, step: ExecutorStep) -> str:
+        version = {
+            "name": step.name,
+            "config": self.versions[step]["config"],
+            "dependencies": [self.versions[dep] for dep in self.dependencies[step]],
+        }
+        return json.dumps(version, sort_keys=True, cls=CustomJsonEncoder)
+
     def compute_version(self, step: ExecutorStep):
         if step in self.versions:
             return
