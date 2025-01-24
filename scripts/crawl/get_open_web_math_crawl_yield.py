@@ -21,12 +21,12 @@ python marin/run/ray_run.py \
     --pip_deps 'resiliparse,fasttext,lxml,py-asciimath,tabulate,warcio[all],w3lib,cchardet' \
     --no_wait -- \
     python scripts/crawl/get_open_web_math_crawl_yield.py \
-    --urls_input_directory gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-1M/ \
-    --crawl_input_directory gs://marin-us-central2/scratch/nfliu/fetched_outlinks/open-web-math-fde8ef8-1M/ \
-    --data_source open-web-math-fde8ef8-1M \
-    --text_output_directory gs://marin-us-central2/scratch/nfliu/text/open-web-math-fde8ef8-1M/ \
-    --urls_and_scores_output_directory gs://marin-us-central2/scratch/nfliu/urls_and_scores/open-web-math-fde8ef8-1M/ \
-    --statistics_output_path gs://marin-us-central2/scratch/nfliu/fetched_outlinks/open-web-math-fde8ef8-1M/yield_statistics.json.gz
+    --urls_input_directory gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-10M/ \
+    --crawl_input_directory gs://marin-us-central2/scratch/nfliu/fetched_outlinks/open-web-math-fde8ef8-10M/ \
+    --data_source open-web-math-fde8ef8-10M \
+    --text_output_directory gs://marin-us-central2/scratch/nfliu/text/open-web-math-fde8ef8-10M/ \
+    --urls_and_scores_output_directory gs://marin-us-central2/scratch/nfliu/urls_and_scores/open-web-math-fde8ef8-10M/ \
+    --statistics_output_path gs://marin-us-central2/scratch/nfliu/fetched_outlinks/open-web-math-fde8ef8-10M/yield_statistics.json.gz
 ```
 """
 import json
@@ -245,6 +245,7 @@ def get_shard_yield(
     logger.info(f"Out of {len(urls)} URLs to fetch, {len(unfetched_urls)} were not successfully fetched")
     # As a sanity check, count the number of fetched_urls that aren't in the original set. This should hopefully be 0.
     logger.info(f"Out of {len(fetched_urls)} fetched_urls, {len(fetched_urls - urls)} were not in the input set of URLs")
+    logger.info(f"{num_records_passing} URLs passed the quality filtering pipeline")
     # Write examples from this shard to parquet
     write_examples_to_parquet(urls_with_scores, urls_and_scores_output_path)
     write_examples_to_parquet(text_with_scores, text_with_scores_output_path)
