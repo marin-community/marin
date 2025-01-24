@@ -99,4 +99,6 @@ ENV PATH=$PATH:/home/ray/anaconda3/bin
 # to run docker containers, we need to be in the docker group
 RUN sudo usermod -aG docker $(whoami)
 
+RUN sudo apt-get update && sudo apt-get install -y podman
+
 WORKDIR /opt/marin
