@@ -8,7 +8,9 @@ The high-level design of this fetcher is heavily inspired by the Apache Nutch cr
 - Input: N shards of URLs (each shard has ~100K URLs)
 - Each shard is processed by a different ray remote function. `--max_concurrent_shards` controls
   the number of shards that can be processed concurrently. The processes don't talk to each other,
-  and each process writes out a parquet with the fetched contents of the URLs in the shard
+  and each process writes out a parquet with the fetched contents of the URLs in the shard.
+  - Writing is handled by a separate thread, and results are flushed out to the parquet every 5000
+    successful responses. This enables us to restart from partial results if the shard is pre-empted.
 - Each process runs multiple threads (`--threads_per_shard`) to fetch in parallel.
   The threads share a queue of URLs to fetch.
   - In addition, each host (netloc) we're fetching from has a separate lock to ensure that within a single process,
@@ -19,6 +21,9 @@ The high-level design of this fetcher is heavily inspired by the Apache Nutch cr
     further URLs from that host.
   - Finally, when we see too many (10) consecutive connection errors from a particular host,
     we skip all further URLs from that host.
+
+After fetching to parquet, use `convert_responses_parquet_to_warc.py` to convert the parquet
+responses to WARC.
 
 Running on FineWeb-Edu:
 
