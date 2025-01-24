@@ -40,7 +40,7 @@ def tokenize_train_validation(
     train_files : list[str],
     validation_files : list[str],
     name : str,
-    text_key : str = "text",
+    **kwargs
 ) -> ExecutorStep:
 
     tokenizer_config = TokenizeConfig(
@@ -48,7 +48,7 @@ def tokenize_train_validation(
         validation_paths=versioned([f"{file}" for file in validation_files]),
         cache_path=this_output_path(),
         tokenizer=versioned(llama3_tokenizer),
-        text_key=text_key,
+        **kwargs
     )
 
     return ExecutorStep(
