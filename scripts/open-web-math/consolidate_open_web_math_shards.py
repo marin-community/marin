@@ -50,7 +50,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 
-@dataclass
+@dataclass(frozen=True)
 class ConsolidationConfig:
     input_path: str
     prefix: str
@@ -111,7 +111,7 @@ def consolidate_html(cfg: ConsolidationConfig):
     shard_indices_to_process_path = os.path.join(cfg.input_path, "shard_indices.jsonl.gz")
     # Write the shard indices to process to `shard_indices_to_process_path`, or skip
     # if it already exists.
-    _ = ray.get(get_shards_indices_to_process.remote(cfg.input_path, shard_indices_to_process_path))
+    ray.get(get_shards_indices_to_process.remote(cfg.input_path, shard_indices_to_process_path))
     with fsspec.open(shard_indices_to_process_path, "rt", compression="gzip") as f:
         shard_indices = json.load(f)
     logger.info(f"Found {len(shard_indices)} to process")
@@ -128,7 +128,7 @@ def consolidate_html(cfg: ConsolidationConfig):
     logger.info(f"Submitted {len(refs)} tasks")
 
     # Wait for the tasks to finish
-    _ = ray.get(refs)
+    ray.get(refs)
 
 
 if __name__ == "__main__":

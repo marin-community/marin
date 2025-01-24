@@ -50,7 +50,7 @@ setup_commands:
   - gcloud secrets versions access latest --secret=OPENAI_API_KEY > $HOME/.cache/openai/token
   - echo 'export MARIN_PREFIX="gs://{{BUCKET}}"' >> $HOME/.bashrc
   - echo 'export BUCKET="{{BUCKET}}"' >> $HOME/.bashrc
-  - gcsfuse --only-dir gcsfuse_mount $BUCKET /opt/gcsfuse_mount || true
+  - gcsfuse --implicit-dirs --only-dir gcsfuse_mount $BUCKET /opt/gcsfuse_mount || true
 
 # Set Head Node == `ray_head_default`
 head_node_type: head_default
