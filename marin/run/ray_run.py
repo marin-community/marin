@@ -15,6 +15,11 @@ from marin.run.vars import ENV_VARS, PIP_DEPS, REMOTE_DASHBOARD_URL
 logger = logging.getLogger("ray")
 
 
+def parse_pip_requirements(requirements_string):
+    # Use a regular expression to split by commas, but not within brackets
+    return re.findall(r"\w+(?:\[\w+(?:,\w+)*\])?", requirements_string)
+
+
 def generate_pythonpath(base_dir="submodules"):
     # List to hold all the paths
     paths = []
@@ -109,7 +114,7 @@ def main():
         "the VALUE will be set to an empty string.",
     )
     parser.add_argument(
-        "--pip_deps", type=lambda x: x.split(","), help="List of pip dependencies to " "install before running."
+        "--pip_deps", type=parse_pip_requirements, help="List of pip dependencies to " "install before running."
     )
     parser.add_argument("cmd", help="The command to run in the Ray cluster.", nargs=argparse.REMAINDER)
 
