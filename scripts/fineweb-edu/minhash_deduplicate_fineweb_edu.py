@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 python marin/run/ray_run.py \
-    --pip_deps 'datatrove[all]' \
+    --pip_deps 'datatrove[io,processing]' \
     --no_wait -- \
     python scripts/fineweb-edu/minhash_deduplicate_fineweb_edu.py \
     --input_pattern 'gs://marin-us-central2/scratch/nfliu/text/fineweb-edu-10M/*.parquet' \
@@ -123,7 +123,7 @@ def minhash_deduplicate_fineweb_edu(
 
 
 @draccus.wrap()
-def process_fineweb_edu(cfg: MinhashDeduplicateFineWebEduConfig):
+def minhash_deduplicate_fineweb_edu_driver(cfg: MinhashDeduplicateFineWebEduConfig):
     minhash_config = MinhashConfig(
         hash_config=HashConfig(precision=64),
         num_buckets=14,
@@ -138,4 +138,4 @@ def process_fineweb_edu(cfg: MinhashDeduplicateFineWebEduConfig):
 
 
 if __name__ == "__main__":
-    minhash_deduplicate_fineweb_edu()
+    minhash_deduplicate_fineweb_edu_driver()
