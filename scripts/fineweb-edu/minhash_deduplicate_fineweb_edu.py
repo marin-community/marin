@@ -52,7 +52,7 @@ def minhash_deduplicate_fineweb_edu(
         fineweb_edu_parquet_paths = [
             path.removeprefix("gs://marin-us-central2/") for path in fsspec_glob(fineweb_edu_pattern)
         ]
-        with fsspec.open(parquets_paths_file) as f:
+        with fsspec.open(parquets_paths_file, "w") as f:
             for path in tqdm(fineweb_edu_parquet_paths, desc="Writing parquets paths file"):
                 f.write(path + "\n")
 
