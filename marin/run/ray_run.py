@@ -15,9 +15,18 @@ from marin.run.vars import ENV_VARS, PIP_DEPS, REMOTE_DASHBOARD_URL
 logger = logging.getLogger("ray")
 
 
-def parse_pip_requirements(requirements_string):
-    # Use a regular expression to split by commas, but not within brackets
-    return re.findall(r"\w+(?:\[\w+(?:,\w+)*\])?", requirements_string)
+def parse_pip_requirements(line: str) -> list[str]:
+    # The pattern means:
+    #   (?:\[[^\]]*\]|[^,])+
+    #   Match either:
+    #       - a bracketed chunk: [anything but ]]
+    #       - OR any character that isn't a comma
+    #   Repeat 1 or more times.
+    # So each match is all characters up to the next top-level comma.
+    # For example, the input string "numpy==2.0.0,scipy[extras1,extras2],sympy"
+    # is parsed as ["numpy==2.0.0", "scipy[extras1,extras2]", "sympy"]
+    pattern = r"(?:\[[^\]]*\]|[^,])+"
+    return re.findall(pattern, line)
 
 
 def generate_pythonpath(base_dir="submodules"):
