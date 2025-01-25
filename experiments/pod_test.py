@@ -1,37 +1,45 @@
+import time
+
 import ray
 
-# runtime_env = RuntimeEnv(
-#     image_uri="docker.io/christopherchou/vllm-tpu-py11:latest",
-#     env_vars={"HF_HOME": "/workspace/"}
-#     # image_uri="docker.io/anyscale/ray:2.31.0-py39-cpu"
-# )
+from experiments.models import get_model_local_path
+from marin.generation.llm_generation import LLMProvider
 
 
-# @ray.remote(runtime_env=runtime_env)
-@ray.remote
+@ray.remote(resources={"TPU-v6e-8-head": 1})
 def test():
-    from vllm import LLM
-    from vllm.sampling_params import SamplingParams
-
-    print("Hello, world!")
 
     prompts = ["What is 2 + 2?", "What is the capital of France?"]
 
-    sampling_params = SamplingParams(temperature=0.7, top_p=1.0, n=1, max_tokens=16)
+    sampling_params = {
+        "temperature": 0.1,
+        "top_p": 0.3,
+        "n": 1,
+        "max_tokens": 16,
+    }
 
-    llm = LLM(
-        model="/opt/gcsfuse_mount/models/meta-llama--Llama-3-3-70B-Instruct",
-        enforce_eager=True,
-        max_model_len=8192,
-        tensor_parallel_size=8,
+    engine_kwargs = {
+        "enforce_eager": True,
+        "tensor_parallel_size": 1,
+        "max_model_len": 8192,
+    }
+
+    start = time.time()
+    llm_provider = LLMProvider(
+        model_name=get_model_local_path("meta-llama/Llama-3.1-8B-Instruct"),
+        # model_name="gs://marin-us-east5/gcsfuse_mount/models/meta-llama--Llama-3-1-8B-Instruct",
+        # model_name="meta-llama/Llama-3.1-8B-Instruct",
+        generation_kwargs=sampling_params,
+        engine_kwargs=engine_kwargs,
     )
+    end = time.time()
+    print(f"Time taken to load model: {end - start}")
 
-    outputs = llm.generate(prompts, sampling_params)
-
-    for output in outputs:
-        prompt = output.prompt
-        generated_text = output.outputs[0].text
-        print(f"Prompt: {prompt!r}, Generated text: {generated_text!r}")
+    start = time.time()
+    outputs = llm_provider.generate(prompts)
+    end = time.time()
+    print(f"Time taken to generate: {end - start}")
+    print(outputs)
 
 
 if __name__ == "__main__":

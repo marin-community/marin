@@ -37,6 +37,10 @@ MODEL_NAME_TO_CONFIG = {
         hf_repo_id="meta-llama/Llama-3.3-70B-Instruct",
         hf_revision="6f6073b",
     ),
+    "meta-llama/Llama-3.1-8B-Instruct": ModelConfig(
+        hf_repo_id="meta-llama/Llama-3.1-8B-Instruct",
+        hf_revision="0e9e39f",
+    ),
 }
 
 
