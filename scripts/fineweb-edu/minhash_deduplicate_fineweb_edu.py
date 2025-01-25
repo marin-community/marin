@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 python marin/run/ray_run.py \
-    --pip_deps 'datatrove[io,processing]' \
+    --pip_deps 'datatrove[io,processing],spacy' \
     --no_wait -- \
     python scripts/fineweb-edu/minhash_deduplicate_fineweb_edu.py \
     --input_pattern 'gs://marin-us-central2/scratch/nfliu/text/fineweb-edu-10M/*.parquet' \
@@ -70,7 +70,7 @@ def minhash_deduplicate_fineweb_edu(
             ),
         ],
         tasks=TOTAL_TASKS,
-        WORKERS=NUM_WORKERS,
+        workers=NUM_WORKERS,
         logging_dir=f"{minhash_logs_path}/signatures",
     )
 
@@ -115,7 +115,7 @@ def minhash_deduplicate_fineweb_edu(
             JsonlWriter(output_folder=f"{minhash_base_path}/deduplicated_output"),
         ],
         tasks=TOTAL_TASKS,
-        WORKERS=NUM_WORKERS,
+        workers=NUM_WORKERS,
         logging_dir=f"{minhash_logs_path}/filter",
         depends=stage3,
     )
