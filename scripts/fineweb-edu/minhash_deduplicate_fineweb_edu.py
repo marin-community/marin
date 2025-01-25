@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 python marin/run/ray_run.py \
-    --pip_deps 'datatrove[io,processing],spacy' \
+    --pip_deps 'datatrove[io,processing],spacy,cupy-cuda12x==13.3.0' \
     --no_wait -- \
     python scripts/fineweb-edu/minhash_deduplicate_fineweb_edu.py \
     --input_pattern 'gs://marin-us-central2/scratch/nfliu/text/fineweb-edu-10M/*.parquet' \
