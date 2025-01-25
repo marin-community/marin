@@ -31,6 +31,7 @@ from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.execution.executor import (
     ExecutorStep,
     InputName,
+    get_executor_step,
     output_path_of,
     this_output_path,
     unwrap_versioned_value,
@@ -273,24 +274,9 @@ def default_scaling_law_analysis(
         task_accuracies (Sequence[str] | Sequence[EvalTaskConfig]): Task accuracies to predict for the larger model.
     """
 
-    # get the executor steps for the ladder runs
-    ladder_steps_or_ids = []
-    for run in ladder_runs:
-        if isinstance(run, ExecutorStep):
-            run_step_or_id = run
-        elif isinstance(run, InputName):
-            run_step_or_id = run.step
-        else:
-            run_step_or_id = str(run)
-        ladder_steps_or_ids.append(run_step_or_id)
-
-    # get the executor step for the prediction run
-    if isinstance(pred_run, ExecutorStep):
-        pred_run_or_id = pred_run
-    elif isinstance(pred_run, InputName):
-        pred_run_or_id = pred_run.step
-    else:
-        pred_run_or_id = str(pred_run)
+    # get the executor steps or run IDs for the ladder runs and the pred run
+    ladder_steps_or_ids = [get_executor_step(run) if not isinstance(run, str) else run for run in ladder_runs]
+    pred_run_or_id = get_executor_step(pred_run) if not isinstance(pred_run, str) else pred_run
 
     # convert the task accuracies to strings if they are EvalTaskConfigs
     if isinstance(task_accuracies[0], EvalTaskConfig):
