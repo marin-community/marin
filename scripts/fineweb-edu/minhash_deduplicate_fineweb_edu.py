@@ -109,7 +109,6 @@ def minhash_deduplicate_fineweb_edu(
     stage4 = LocalPipelineExecutor(
         pipeline=[
             INPUT_READER,
-            TokensCounter(),  # nice way to see how many tokens we had before and after deduplication
             MinhashDedupFilter(
                 input_folder=f"{minhash_base_path}/remove_ids",
                 exclusion_writer=JsonlWriter(f"{minhash_base_path}/removed"),
