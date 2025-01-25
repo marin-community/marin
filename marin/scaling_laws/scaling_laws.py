@@ -1,6 +1,6 @@
 """
-This file contains functions for setting scaling law configurations, wrapper functions to call the relevant 
-regressions/predictions, and creating a WandB report with the results. The code here implements the function 
+This file contains functions for setting scaling law configurations, wrapper functions to call the relevant
+regressions/predictions, and creating a WandB report with the results. The code here implements the function
 (see `run_scaling_law_analysis`, that will be called by an ExecutorStep in the scaling laws analysis pipeline.
 
 Our objective is to predict the accuracy of a larger target model on a specific benchmark.
@@ -8,11 +8,12 @@ This prediction is done through a two-step modeling process using (N, D) data fr
 - we first fit a power-law model to predict the task loss from the number of parameters and tokens.
 - then, we fit a sigmoidal model to predict task accuracy from the task loss.
 
-Reference: 
+Reference:
     Establishing Task Scaling Laws via Compute-Efficient Model Ladders
     Bhagia et. al 2024
     https://arxiv.org/pdf/2412.04403.
 """
+
 from collections.abc import Sequence
 from dataclasses import dataclass
 
