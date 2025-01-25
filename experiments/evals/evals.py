@@ -7,7 +7,7 @@ import logging
 from experiments.evals.task_configs import CORE_TASKS
 from marin.evaluation.evaluation_config import EvalTaskConfig, EvaluationConfig
 from marin.evaluation.run import evaluate
-from marin.execution.executor import ExecutorStep, InputName, output_path_of, this_output_path
+from marin.execution.executor import ExecutorStep, InputName, get_executor_step, output_path_of, this_output_path
 
 logger = logging.getLogger(__name__)
 
@@ -45,12 +45,8 @@ def evaluate_helm_on_step(
         evals (list[str]): List of evaluations to run with HELM, e.g, ["mmlu", "lite"].
     """
     # TODO: support evaluating all checkpoints in a run
-    if isinstance(step, ExecutorStep):
-        model_step_path = output_path_of(step)
-        executor_step = step
-    elif isinstance(step, InputName):
-        model_step_path = output_path_of(step.step)
-        executor_step = step.step
+    executor_step = get_executor_step(step)
+    model_step_path = output_path_of(executor_step)
 
     return ExecutorStep(
         name=f"evaluation/helm/{executor_step.name}",
@@ -128,12 +124,8 @@ def default_eval(
     """
 
     # this logic extracts the `ExecutorStep` corresponding to the training step, and get the model path
-    if isinstance(step, ExecutorStep):
-        model_step_path = output_path_of(step)
-        executor_step = step
-    elif isinstance(step, InputName):
-        model_step_path = output_path_of(step.step)
-        executor_step = step.step
+    executor_step = get_executor_step(step)
+    model_step_path = output_path_of(executor_step)
 
     logger.info(f"Creating default evaluation step for {executor_step.name}")
 
