@@ -57,7 +57,9 @@ def minhash_deduplicate_fineweb_edu(
                 f.write(path + "\n")
 
     # this is the original data that we want to deduplicate
-    INPUT_READER = ParquetReader("gs://marin-us-central2/", paths_file=parquets_paths_file)
+    # NOTE: neither the base folder path or the paths in the pathfile should
+    # include the leading "/"
+    INPUT_READER = ParquetReader("gs://marin-us-central2", paths_file=parquets_paths_file)
     TOTAL_TASKS = 1000
     NUM_WORKERS = 100
 
