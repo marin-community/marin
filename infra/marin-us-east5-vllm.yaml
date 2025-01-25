@@ -3,7 +3,7 @@
 # Update the template or the script, not this file! #
 #####################################################
 # Unique Identifier for the Head Node + Workers
-cluster_name: marin-vllm-us-east5-a
+cluster_name: marin-vllm-us-east5-b
 
 # Maximum Workers (excluding Head Node)
 max_workers: 1024
@@ -14,7 +14,7 @@ max_workers: 1024
 provider:
   type: gcp
   region: us-east5
-  availability_zone: us-east5-a
+  availability_zone: us-east5-b
   project_id: hai-gcp-models
 
 docker:
@@ -47,7 +47,7 @@ setup_commands:
   # set the GCP project because it's not injected by default
   - gcloud config set project hai-gcp-models
   - gcloud config set compute/region us-east5
-  - gcloud config set compute/zone us-east5-a
+  - gcloud config set compute/zone us-east5-b
   - mkdir $HOME/.cache/huggingface -p
   - gcloud secrets versions access latest --secret=HF_TOKEN > $HOME/.cache/huggingface/token
   - mkdir $HOME/.cache/openai -p
@@ -66,7 +66,7 @@ available_node_types:
   head_default:
     min_workers: 0
     max_workers: 0
-    resources: {"CPU": 0}
+    resources: {"CPU": 1}
 
     # GCP-Specific Configuration; by default, Ray will configure unspecified fields (e.g., subnets, ssh-keys)
     #   => Ref: https://cloud.google.com/compute/docs/reference/rest/v1/instances/insert
@@ -83,17 +83,17 @@ available_node_types:
 
             # Set Source Image =>> Ubuntu 22.04 Base VM
             sourceImage: projects/ubuntu-os-cloud/global/images/family/ubuntu-2204-lts
-  # tpu_worker:
-  #   max_workers: 1024
-  #   min_workers: 0
-  #   node_config:
-  #     acceleratorType: v6e-4
-  #     runtimeVersion: v2-alpha-tpuv6e
-  #     schedulingConfig:
-  #       preemptible: true
-  #   resources:
-  #     CPU: 120
-  #     TPU: 4
+  tpu_worker:
+    max_workers: 1024
+    min_workers: 0
+    node_config:
+      acceleratorType: v6e-4
+      runtimeVersion: v2-alpha-tpuv6e
+      schedulingConfig:
+        preemptible: true
+    resources:
+      CPU: 120
+      TPU: 4
 
   tpu_slice_v6e_8:
     max_workers: 1024
