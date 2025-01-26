@@ -18,6 +18,7 @@ CLOUD_STORAGE_PREFIXES = ("gs://", "s3://")
 
 limiter = Limiter(app)
 
+
 @dataclass(frozen=True)
 class ServerConfig:
     """
