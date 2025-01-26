@@ -91,8 +91,10 @@ def count_tokens_in_shard(input_path: str, shard_output_path: str, tokenizer_nam
         num_tokens = count_tokens_in_jsonl_file(input_path, tokenizer_name)
     else:
         raise ValueError(f"Failed to detect filetype for path {input_path}")
+
     with fsspec.open(shard_output_path, "w") as f:
         json.dump({"input_path": input_path, "num_tokens": num_tokens}, f)
+    return num_tokens
 
 
 @ray.remote(memory=32 * 1024 * 1024 * 1024)
