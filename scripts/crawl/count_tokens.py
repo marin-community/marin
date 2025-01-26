@@ -22,17 +22,18 @@ python marin/run/ray_run.py \
 ```
 """
 import json
+import logging
+import os
+from dataclasses import dataclass, field
 
 import draccus
 import fsspec
-import ray
-from transformers import AutoTokenizer
 import pandas as pd
-import logging
+import ray
 from tqdm_loggable.auto import tqdm
+from transformers import AutoTokenizer
 
 from marin.utils import fsspec_glob
-from dataclasses import dataclass, field
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -50,7 +51,7 @@ def count_tokens_in_jsonl_file(input_path: str, tokenizer_name: str) -> int:
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
     total_tokens = 0
     with fsspec.open(input_path, "rt", compression="infer") as f:
-        for line in f:
+        for line in tqdm(f, desc=os.path.basename(input_path)):
             data = json.loads(line)
             total_tokens += len(tokenizer.encode(data["text"]))
     return total_tokens
@@ -61,7 +62,7 @@ def count_tokens_in_parquet_file(input_path: str, tokenizer_name: str) -> int:
     total_tokens = 0
     df = pd.read_parquet(input_path)
     assert "text" in df.columns
-    for text in df["text"].tolist():
+    for text in tqdm(df["text"].tolist(), desc=os.path.basename(input_path)):
         total_tokens += len(tokenizer.encode(text))
     return total_tokens
 
