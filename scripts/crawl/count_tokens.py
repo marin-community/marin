@@ -9,7 +9,8 @@ Counting tokens in fineweb-edu-10M:
 python marin/run/ray_run.py \
     --no_wait -- \
     python scripts/crawl/count_tokens.py \
-    --input_patterns '["gs://marin-us-central2/scratch/nfliu/text/fineweb-edu-10M/*_text_and_scores.parquet"]'
+    --input_patterns '["gs://marin-us-central2/scratch/nfliu/text/fineweb-edu-10M/*_text_and_scores.parquet"]' \
+    --output_path "gs://marin-us-central2/scratch/nfliu/count_tokens/fineweb-edu-10M/"
 ```
 
 Counting tokens in fineweb-edu-10M (deduplicated):
@@ -18,7 +19,8 @@ Counting tokens in fineweb-edu-10M (deduplicated):
 python marin/run/ray_run.py \
     --no_wait -- \
     python scripts/crawl/count_tokens.py \
-    --input_patterns '["gs://marin-us-central2/scratch/nfliu/text/fineweb-edu-10M-minhash/*.jsonl.gz"]'
+    --input_patterns '["gs://marin-us-central2/scratch/nfliu/text/fineweb-edu-10M-minhash/*.jsonl.gz"]' \
+    --output_path "gs://marin-us-central2/scratch/nfliu/count_tokens/fineweb-edu-10M-minhash/"
 ```
 
 Counting tokens in fineweb-edu:
@@ -27,13 +29,14 @@ Counting tokens in fineweb-edu:
 python marin/run/ray_run.py \
     --no_wait -- \
     python scripts/crawl/count_tokens.py \
-    --input_patterns '["gs://marin-us-central2/raw/fineweb-edu/*/*.parquet"]'
+    --input_patterns '["gs://marin-us-central2/raw/fineweb-edu/*/*.parquet"]' \
+    --output_path "gs://marin-us-central2/scratch/nfliu/count_tokens/fineweb-edu/"
 ```
 """
 import json
 import logging
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import draccus
 import fsspec
@@ -42,7 +45,7 @@ import ray
 from tqdm_loggable.auto import tqdm
 from transformers import AutoTokenizer
 
-from marin.utils import fsspec_glob
+from marin.utils import fsspec_glob, fsspec_exists
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -50,9 +53,8 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class CountTokensConfig:
-    input_patterns: list[str] = field(
-        default_factory=lambda: ["gs://marin-us-central2/scratch/nfliu/text/fineweb-edu-10M/*.parquet"]
-    )
+    input_patterns: list[str]
+    output_path: str
     tokenizer_name: str = "gpt2"
 
 
@@ -77,18 +79,23 @@ def count_tokens_in_parquet_file(input_path: str, tokenizer_name: str) -> int:
 
 
 @ray.remote(memory=32 * 1024 * 1024 * 1024)
-def count_tokens_in_shard(input_path: str, tokenizer_name: str):
+def count_tokens_in_shard(input_path: str, shard_output_path: str, tokenizer_name: str):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+    if fsspec_exists(shard_output_path):
+        with fsspec.open(shard_output_path) as f:
+            return json.load(f)["num_tokens"]
     if input_path.endswith(".parquet"):
-        return count_tokens_in_parquet_file(input_path, tokenizer_name)
+        num_tokens = count_tokens_in_parquet_file(input_path, tokenizer_name)
     elif ".jsonl" in input_path:
-        return count_tokens_in_jsonl_file(input_path, tokenizer_name)
+        num_tokens = count_tokens_in_jsonl_file(input_path, tokenizer_name)
     else:
         raise ValueError(f"Failed to detect filetype for path {input_path}")
+    with fsspec.open(shard_output_path, "w") as f:
+        json.dump({"input_path": input_path, "num_tokens": num_tokens}, f)
 
 
 @ray.remote(memory=32 * 1024 * 1024 * 1024)
-def count_tokens(input_patterns: list[str], tokenizer_name: str):
+def count_tokens(input_patterns: list[str], output_path: str, tokenizer_name: str):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     # Get the input paths
     input_paths = []
@@ -103,7 +110,8 @@ def count_tokens(input_patterns: list[str], tokenizer_name: str):
 
     def submit_shard_task(shard_path):
         nonlocal num_shards_submitted
-        unfinished.append(count_tokens_in_shard.remote(shard_path, tokenizer_name))
+        shard_output_path = os.path.join(output_path, os.path.basename(shard_path) + ".token_counts")
+        unfinished.append(count_tokens_in_shard.remote(shard_path, shard_output_path, tokenizer_name))
         num_shards_submitted += 1
         if num_shards_submitted % 10 == 0:
             logger.info(
@@ -137,7 +145,7 @@ def count_tokens(input_patterns: list[str], tokenizer_name: str):
 @draccus.wrap()
 def count_tokens_driver(cfg: CountTokensConfig):
     # Do everything in a remote task
-    ray.get(count_tokens.remote(cfg.input_patterns, cfg.tokenizer_name))
+    ray.get(count_tokens.remote(cfg.input_patterns, cfg.output_path, cfg.tokenizer_name))
 
 
 if __name__ == "__main__":
