@@ -78,6 +78,7 @@ def count_tokens_in_parquet_file(input_path: str, tokenizer_name: str) -> int:
 
 @ray.remote(memory=32 * 1024 * 1024 * 1024)
 def count_tokens_in_shard(input_path: str, tokenizer_name: str):
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     if input_path.endswith(".parquet"):
         return count_tokens_in_parquet_file(input_path, tokenizer_name)
     elif ".jsonl" in input_path:
