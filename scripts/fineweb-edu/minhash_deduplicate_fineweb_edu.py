@@ -19,7 +19,6 @@ from datatrove.executor import LocalPipelineExecutor
 from datatrove.pipeline.dedup import MinhashDedupSignature
 from datatrove.pipeline.dedup.minhash import MinhashConfig, MinhashDedupBuckets, MinhashDedupCluster, MinhashDedupFilter
 from datatrove.pipeline.readers import ParquetReader
-from datatrove.pipeline.tokens import TokensCounter
 from datatrove.pipeline.writers.jsonl import JsonlWriter
 from datatrove.utils.hashing import HashConfig
 from datatrove.utils.typeshelper import Languages
