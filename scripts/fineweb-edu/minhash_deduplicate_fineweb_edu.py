@@ -4,13 +4,13 @@ python marin/run/ray_run.py \
     --pip_deps 'datatrove[io,processing],spacy,cupy-cuda12x==13.3.0' \
     --no_wait -- \
     python scripts/fineweb-edu/minhash_deduplicate_fineweb_edu.py \
-    --input_patterns '["gs://marin-us-central2/scratch/nfliu/text/fineweb-edu-10M/*.parquet", "gs://marin-us-central2/raw/fineweb-edu/*/*.parquet"]' \
+    --input_patterns '["gs://marin-us-central2/scratch/nfliu/text/fineweb-edu-10M/*_text_and_scores.parquet", "gs://marin-us-central2/raw/fineweb-edu/*/*.parquet"]' \
     --parquets_paths_file 'gs://marin-us-central2/scratch/nfliu/fineweb_edu_fineweb_edu_10M_paths.txt' \
     --minhash_base_path 'gs://marin-us-central2/scratch/nfliu/minhash/fineweb_edu_fineweb_edu_10M_minhash' \
     --minhash_logs_path 'gs://marin-us-central2/scratch/nfliu/minhash/logs/fineweb_edu_fineweb_edu_10M_minhash_logs'
 """
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import draccus
 import fsspec
@@ -32,7 +32,9 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class MinhashDeduplicateFineWebEduConfig:
-    input_patterns: list[str] = ["gs://marin-us-central2/scratch/nfliu/text/fineweb-edu-10M/*.parquet"]
+    input_patterns: list[str] = field(
+        default_factory=lambda: ["gs://marin-us-central2/scratch/nfliu/text/fineweb-edu-10M/*_text_and_scores.parquet"]
+    )
     parquets_paths_file: str = "gs://marin-us-central2/scratch/nfliu/fineweb_edu_10M_paths.txt"
     minhash_base_path: str = "gs://marin-us-central2/scratch/nfliu/minhash/fineweb_edu_10M_minhash"
     minhash_logs_path: str = "gs://marin-us-central2/scratch/nfliu/minhash/logs/fineweb_edu_10M_minhash_logs"
