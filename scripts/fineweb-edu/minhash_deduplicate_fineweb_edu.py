@@ -83,7 +83,7 @@ class MinhashDeduplicateFineWebEduConfig:
     minhash_logs_path: str = "gs://marin-us-central2/scratch/nfliu/minhash/logs/fineweb_edu_10M_minhash_logs"
 
 
-@ray.remote(memory=300 * 1024 * 1024 * 1024, num_cpus=101)
+@ray.remote(memory=320 * 1024 * 1024 * 1024, num_cpus=8)
 def minhash_deduplicate_fineweb_edu(
     fineweb_edu_patterns: list[str],
     parquets_paths_file: str,
