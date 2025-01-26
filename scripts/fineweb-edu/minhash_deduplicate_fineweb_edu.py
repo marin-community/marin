@@ -5,7 +5,7 @@ Deduplicating fineweb-edu-10M
 
 ```
 python marin/run/ray_run.py \
-    --pip_deps 'datatrove[io,processing],spacy,cupy-cuda12x==13.3.0' \
+    --pip_deps 'datatrove[io,processing] @ git+https://github.com/nelson-liu/datatrove@tqdm_loggable,spacy,cupy-cuda12x==13.3.0' \
     --no_wait -- \
     python scripts/fineweb-edu/minhash_deduplicate_fineweb_edu.py \
     --input_patterns '["gs://marin-us-central2/scratch/nfliu/text/fineweb-edu-10M/*_text_and_scores.parquet"]' \
@@ -24,7 +24,7 @@ Deduplicating FineWeb-Edu
 
 ```
 python marin/run/ray_run.py \
-    --pip_deps 'datatrove[io,processing],spacy,cupy-cuda12x==13.3.0' \
+    --pip_deps 'datatrove[io,processing] @ git+https://github.com/nelson-liu/datatrove@tqdm_loggable,spacy,cupy-cuda12x==13.3.0' \
     --no_wait -- \
     python scripts/fineweb-edu/minhash_deduplicate_fineweb_edu.py \
     --input_patterns '["gs://marin-us-central2/raw/fineweb-edu/*/*.parquet"]' \
@@ -43,7 +43,7 @@ Deduplicating the union of FineWeb-Edu and fineweb-edu-10M
 
 ```
 python marin/run/ray_run.py \
-    --pip_deps 'datatrove[io,processing],spacy,cupy-cuda12x==13.3.0' \
+    --pip_deps 'datatrove[io,processing] @ git+https://github.com/nelson-liu/datatrove@tqdm_loggable,spacy,cupy-cuda12x==13.3.0' \
     --no_wait -- \
     python scripts/fineweb-edu/minhash_deduplicate_fineweb_edu.py \
     --input_patterns '["gs://marin-us-central2/scratch/nfliu/text/fineweb-edu-10M/*_text_and_scores.parquet", "gs://marin-us-central2/raw/fineweb-edu/*/*.parquet"]' \
