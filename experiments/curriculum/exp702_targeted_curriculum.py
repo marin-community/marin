@@ -330,7 +330,7 @@ def full_training_stage_varsched(data1_name, data2_name, total_data1_portion, du
         learning_rate=learning_rate,
         weight_decay=weight_decay,
         steps_per_eval=steps_per_eval,
-        steps_per_export=steps_stage1,
+        steps_per_export_list=[steps_stage1],
         tpu_type=tpu_type,
         optimizer_config=optimizer_config,
         additional_tags=additional_tags + ["stage1"],
@@ -347,7 +347,7 @@ def full_training_stage_varsched(data1_name, data2_name, total_data1_portion, du
         learning_rate=learning_rate,
         weight_decay=weight_decay,
         steps_per_eval=steps_per_eval,
-        steps_per_export=num_train_steps,
+        steps_per_export_list=[num_train_steps],
         tpu_type=tpu_type,
         optimizer_config=optimizer_config,
         additional_tags=additional_tags + ["stage2"],
@@ -437,8 +437,8 @@ if __name__ == "__main__":
     #         additional_tags=["python-cpp-0.005-allstage2-sweep"],
     #         version_tag="-v1"
     #     )
-    #     for duration_frac_stage2 in [0.4, 0.2, 0.1, 0.05, 0.025]
-    #     for schedule_type, cooldown_frac in [("cosine", None), ("linear", 0.0), ("linear", 0.05), ("linear", 0.2)]
+    #     for duration_frac_stage2 in [0.01, 0.005]
+    #     for schedule_type, cooldown_frac in [("cosine", None), ("linear", 0.0)]
     #     for data1_frac_alloc_stage2 in [1.0]
     # ]
 
@@ -455,7 +455,7 @@ if __name__ == "__main__":
             num_train_steps=12000,
             additional_tags=["python-c4-0.005-600m-allstage2-sweep"],
         )
-        for duration_frac_stage2 in [0.4, 0.2, 0.1, 0.05, 0.025]
+        for duration_frac_stage2 in [0.00625, 0.025, 0.8]
         for schedule_type, cooldown_frac in [("cosine", None), ("linear", 0.0), ("linear", 0.05), ("linear", 0.2)]
         for data1_frac_alloc_stage2 in [1.0]
     ]
