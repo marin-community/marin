@@ -7,10 +7,10 @@ import draccus
 import fsspec
 import ray
 import requests
-from tqdm import tqdm
 
 from marin.core.runtime import cached_or_construct_output
 from marin.utils import fsspec_exists
+from operations.download.nemotron_cc.utils import decompress_zstd_stream
 
 logger = logging.getLogger("ray")
 
@@ -38,46 +38,7 @@ def download_single_nemotron_path(input_file_path: str, output_file_path: str):
         response = requests.get(cc_url, headers={"user-agent": myagent}, stream=True)
 
         if response.status_code == 200:
-            import zstandard as zstd
-
-            dctx = zstd.ZstdDecompressor()
-
-            # Read chunk by chunk so we can split on newlines ourselves
-            with dctx.stream_reader(response.raw) as reader:
-                chunk_size = 65536
-                buffer = b""
-
-                # Get total size for progress bar
-                total_size = int(response.headers.get("content-length", 0))
-                progress_bar = tqdm(total=total_size, unit="iB", unit_scale=True, desc="Downloading")
-                bytes_read = 0
-
-                while True:
-                    chunk = reader.read(chunk_size)
-                    if not chunk:
-                        break
-                    buffer += chunk
-                    bytes_read += len(chunk)
-                    progress_bar.update(len(chunk))
-
-                    while True:
-                        newline_pos = buffer.find(b"\n")
-                        if newline_pos < 0:
-                            break
-                        line_bytes = buffer[:newline_pos]
-                        buffer = buffer[newline_pos + 1 :]
-
-                        if not line_bytes.strip():
-                            continue
-
-                        try:
-                            content = json.loads(line_bytes.decode("utf-8"))
-                            contents.append(content)
-                        except json.JSONDecodeError:
-                            logger.warning(f"Could not parse JSON line: {line_bytes[:80]}...")
-                            continue
-
-                progress_bar.close()
+            contents = decompress_zstd_stream(response.raw, response.headers.get("content-length", 0))
         else:
             logger.error(f"Failed to fetch data: {response.status_code}")
             return None
@@ -153,6 +114,4 @@ def download_nemotron_cc(cfg: NemotronIngressConfig):
     except Exception as e:
         raise Exception(f"Error processing the group: {e}")  # noqa
 
-
-if __name__ == "__main__":
-    download_nemotron_cc(NemotronIngressConfig(output_path="gs://marin-us-central2/raw/nemotron_cc"))
+    logger.info(f"Downloaded Nemotron CC files to {cfg.output_path}")
