@@ -18,9 +18,6 @@ CLOUD_STORAGE_PREFIXES = ("gs://", "s3://")
 
 limiter = Limiter(app)
 
-# Maximum number of lines to read from a text or parquet file
-MAX_LINES = 10000
-
 @dataclass(frozen=True)
 class ServerConfig:
     """
@@ -30,6 +27,13 @@ class ServerConfig:
 
     root_paths: list[str]
     """Paths (and their descendents) to allow access to."""
+
+    max_lines: int
+    """Maximum number of lines to read from a text or parquet file.
+    This is the maximum number of lines that will be read in a single request,
+    which means that even if we're only requesting a single line, if the portion
+    of the file requested is past the first `max_lines` lines, we would exceed
+    this limit."""
 
 
 class Server:
@@ -108,9 +112,9 @@ def read_text_file(
     Reads a range of lines (offset to offset + count) from a text file (possibly compressed using gzip or zstd).
     Interpret each line as a JSON if `get_json` is set.
     """
-    # Ensure we only read a max of MAX_LINES lines
-    if offset + count >= MAX_LINES or count >= MAX_LINES:
-        return {"error": f"Only {MAX_LINES} lines are allowed to be read at a time"}
+    # Ensure we only read a max of server.config.max_lines lines
+    if offset + count >= server.config.max_lines or count >= server.config.max_lines:
+        return {"error": f"Only {server.config.max_lines} lines are allowed to be read at a time"}
     with server.fs(path).open(path, "rb") as f:
         # Unzip
         if gzipped:
@@ -143,9 +147,9 @@ def read_text_file(
 
 def read_parquet_file(path: str, offset: int, count: int) -> dict:
     """Reads a range of records (offset to offset + count) from a parquet file."""
-    # Ensure we only read a max of MAX_LINES lines
-    if offset + count >= MAX_LINES or count >= MAX_LINES:
-        return {"error": f"Only {MAX_LINES} lines are allowed to be read at a time"}
+    # Ensure we only read a max of server.config.max_lines lines
+    if offset + count >= server.config.max_lines or count >= server.config.max_lines:
+        return {"error": f"Only {server.config.max_lines} lines are allowed to be read at a time"}
 
     pf = ParquetFile(path)
     # Note: can make this more efficient by skipping the first offset without reading into memory
