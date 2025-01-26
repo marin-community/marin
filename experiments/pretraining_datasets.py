@@ -133,4 +133,5 @@ nemotron_cc = ExecutorStep(
     config=NemotronIngressConfig(
         output_path=this_output_path(),
     ),
+    override_output_path="raw/nemotron_cc",
 )
