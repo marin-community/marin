@@ -52,6 +52,10 @@ class DownloadConfig:
     poll_interval: int = 10                                 # Time to wait between polling job status (in seconds)
 
     # fmt: on
+    hf_repo_type_prefix: str = (
+        "datasets"  # The repo_type_prefix is datasets/ for datasets,
+        # spaces/ for spaces, and models do not need a prefix in the URL.
+    )
 
 
 @ray.remote
