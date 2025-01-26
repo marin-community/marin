@@ -139,9 +139,5 @@ def count_tokens_driver(cfg: CountTokensConfig):
     ray.get(count_tokens.remote(cfg.input_patterns, cfg.tokenizer_name))
 
 
-def main():
-    count_tokens_driver()
-
-
 if __name__ == "__main__":
-    main()
+    count_tokens_driver()
