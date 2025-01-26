@@ -11,6 +11,15 @@ python marin/run/ray_run.py \
     python scripts/crawl/count_tokens.py \
     --input_patterns '["gs://marin-us-central2/scratch/nfliu/text/fineweb-edu-10M/*_text_and_scores.parquet"]'
 ```
+
+Counting tokens in fineweb-edu:
+
+```
+python marin/run/ray_run.py \
+    --no_wait -- \
+    python scripts/crawl/count_tokens.py \
+    --input_patterns '["gs://marin-us-central2/raw/fineweb-edu/*/*.parquet"]'
+```
 """
 import json
 
