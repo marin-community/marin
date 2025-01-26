@@ -43,7 +43,7 @@ Deduplicating the union of FineWeb-Edu and fineweb-edu-10M
 
 ```
 python marin/run/ray_run.py \
-    --pip_deps 'datatrove[io,processing] @ git+https://github.com/nelson-liu/datatrove@tqdm_loggable,spacy,cupy-cuda12x==13.3.0' \
+    --pip_deps 'datatrove[io,processing] @ git+https://github.com/nelson-liu/datatrove@ray_executor,spacy,cupy-cuda12x==13.3.0' \
     --no_wait -- \
     python scripts/fineweb-edu/minhash_deduplicate_fineweb_edu.py \
     --input_patterns '["gs://marin-us-central2/scratch/nfliu/text/fineweb-edu-10M/*_text_and_scores.parquet", "gs://marin-us-central2/raw/fineweb-edu/*/*.parquet"]' \
@@ -58,7 +58,7 @@ from dataclasses import dataclass, field
 import draccus
 import fsspec
 import ray
-from datatrove.executor import LocalPipelineExecutor
+from datatrove.executor import RayPipelineExecutor
 from datatrove.pipeline.dedup import MinhashDedupSignature
 from datatrove.pipeline.dedup.minhash import MinhashConfig, MinhashDedupBuckets, MinhashDedupCluster, MinhashDedupFilter
 from datatrove.pipeline.readers import ParquetReader
@@ -107,13 +107,14 @@ def minhash_deduplicate_fineweb_edu(
     # NOTE: neither the base folder path or the paths in the pathfile should
     # include the leading "/"
     INPUT_READER = ParquetReader(
-        "gs://marin-us-central2", paths_file=parquets_paths_file, file_progress=True, doc_progress=True
+        "gs://marin-us-central2",
+        paths_file=parquets_paths_file,
     )
-    TOTAL_TASKS = 1000
+    TOTAL_TASKS = 2000
     NUM_WORKERS = 100
 
     # stage 1 computes minhash signatures for each task (each task gets a set of files)
-    stage1 = LocalPipelineExecutor(
+    stage1 = RayPipelineExecutor(
         pipeline=[
             INPUT_READER,
             MinhashDedupSignature(
@@ -123,10 +124,11 @@ def minhash_deduplicate_fineweb_edu(
         tasks=TOTAL_TASKS,
         workers=NUM_WORKERS,
         logging_dir=f"{minhash_logs_path}/signatures",
+        memory_bytes_per_task=8 * 1024 * 1024 * 1024,
     )
 
     # stage 2 finds matches between signatures in each bucket
-    stage2 = LocalPipelineExecutor(
+    stage2 = RayPipelineExecutor(
         pipeline=[
             MinhashDedupBuckets(
                 input_folder=f"{minhash_base_path}/signatures",
@@ -137,10 +139,11 @@ def minhash_deduplicate_fineweb_edu(
         tasks=minhash_config.num_buckets,
         logging_dir=f"{minhash_logs_path}/buckets",
         depends=stage1,
+        memory_bytes_per_task=8 * 1024 * 1024 * 1024,
     )
 
     # stage 3 creates clusters of duplicates using the results from all buckets
-    stage3 = LocalPipelineExecutor(
+    stage3 = RayPipelineExecutor(
         pipeline=[
             MinhashDedupCluster(
                 input_folder=f"{minhash_base_path}/buckets",
@@ -149,13 +152,14 @@ def minhash_deduplicate_fineweb_edu(
             ),
         ],
         tasks=1,
+        memory_bytes_per_task=300 * 1024 * 1024 * 1024,
         logging_dir=f"{minhash_logs_path}/clusters",
         depends=stage2,
     )
 
     # stage 4 reads the original input data and removes all but 1 sample per duplicate cluster
     # the data must match exactly stage 1, so number of tasks and the input source must be the same
-    stage4 = LocalPipelineExecutor(
+    stage4 = RayPipelineExecutor(
         pipeline=[
             INPUT_READER,
             MinhashDedupFilter(
@@ -168,6 +172,7 @@ def minhash_deduplicate_fineweb_edu(
         workers=NUM_WORKERS,
         logging_dir=f"{minhash_logs_path}/filter",
         depends=stage3,
+        memory_bytes_per_task=8 * 1024 * 1024 * 1024,
     )
     stage4.run()
 
