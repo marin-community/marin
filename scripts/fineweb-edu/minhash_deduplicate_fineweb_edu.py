@@ -4,10 +4,10 @@ python marin/run/ray_run.py \
     --pip_deps 'datatrove[io,processing],spacy,cupy-cuda12x==13.3.0' \
     --no_wait -- \
     python scripts/fineweb-edu/minhash_deduplicate_fineweb_edu.py \
-    --input_pattern 'gs://marin-us-central2/scratch/nfliu/text/fineweb-edu-10M/*.parquet' \
-    --parquets_paths_file 'gs://marin-us-central2/scratch/nfliu/fineweb_edu_10M_paths.txt' \
-    --minhash_base_path 'gs://marin-us-central2/scratch/nfliu/minhash/fineweb_edu_10M_minhash' \
-    --minhash_logs_path 'gs://marin-us-central2/scratch/nfliu/minhash/logs/fineweb_edu_10M_minhash_logs'
+    --input_patterns '["gs://marin-us-central2/scratch/nfliu/text/fineweb-edu-10M/*.parquet", "gs://marin-us-central2/raw/fineweb-edu/*/*.parquet"]' \
+    --parquets_paths_file 'gs://marin-us-central2/scratch/nfliu/fineweb_edu_fineweb_edu_10M_paths.txt' \
+    --minhash_base_path 'gs://marin-us-central2/scratch/nfliu/minhash/fineweb_edu_fineweb_edu_10M_minhash' \
+    --minhash_logs_path 'gs://marin-us-central2/scratch/nfliu/minhash/logs/fineweb_edu_fineweb_edu_10M_minhash_logs'
 """
 import logging
 from dataclasses import dataclass
@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class MinhashDeduplicateFineWebEduConfig:
-    input_pattern: str = "gs://marin-us-central2/scratch/nfliu/text/fineweb-edu-10M/*.parquet"
+    input_patterns: list[str] = ["gs://marin-us-central2/scratch/nfliu/text/fineweb-edu-10M/*.parquet"]
     parquets_paths_file: str = "gs://marin-us-central2/scratch/nfliu/fineweb_edu_10M_paths.txt"
     minhash_base_path: str = "gs://marin-us-central2/scratch/nfliu/minhash/fineweb_edu_10M_minhash"
     minhash_logs_path: str = "gs://marin-us-central2/scratch/nfliu/minhash/logs/fineweb_edu_10M_minhash_logs"
@@ -40,7 +40,7 @@ class MinhashDeduplicateFineWebEduConfig:
 
 @ray.remote(memory=300 * 1024 * 1024 * 1024, num_cpus=101)
 def minhash_deduplicate_fineweb_edu(
-    fineweb_edu_pattern: str,
+    fineweb_edu_patterns: list[str],
     parquets_paths_file: str,
     minhash_base_path: str,
     minhash_logs_path: str,
@@ -48,9 +48,11 @@ def minhash_deduplicate_fineweb_edu(
 ):
     if not fsspec_exists(parquets_paths_file):
         # Create the pathfile for FineWeb-Edu, removing the base bucket prefix
-        fineweb_edu_parquet_paths = [
-            path.removeprefix("gs://marin-us-central2/") for path in fsspec_glob(fineweb_edu_pattern)
-        ]
+        fineweb_edu_parquet_paths = []
+        for pattern in fineweb_edu_patterns:
+            for path in fsspec_glob(pattern):
+                assert path.startswith("gs://marin-us-central2/")
+                fineweb_edu_parquet_paths.append(path.removeprefix("gs://marin-us-central2/"))
         with fsspec.open(parquets_paths_file, "w") as f:
             for path in tqdm(fineweb_edu_parquet_paths, desc="Writing parquets paths file"):
                 f.write(path + "\n")
@@ -132,7 +134,7 @@ def minhash_deduplicate_fineweb_edu_driver(cfg: MinhashDeduplicateFineWebEduConf
     # Do everything in a remote task
     ray.get(
         minhash_deduplicate_fineweb_edu.remote(
-            cfg.input_pattern, cfg.parquets_paths_file, cfg.minhash_base_path, cfg.minhash_logs_path, minhash_config
+            cfg.input_patterns, cfg.parquets_paths_file, cfg.minhash_base_path, cfg.minhash_logs_path, minhash_config
         )
     )
 
