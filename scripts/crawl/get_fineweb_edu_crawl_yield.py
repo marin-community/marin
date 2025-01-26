@@ -21,12 +21,12 @@ python marin/run/ray_run.py \
     --pip_deps '--find-links https://storage.googleapis.com/jax-releases/libtpu_releases.html,w3lib,trafilatura,jax[tpu],flax,transformers,requests,warcio[all],resiliparse' \
     --no_wait -- \
     python scripts/crawl/get_fineweb_edu_crawl_yield.py \
-    --urls_input_directory gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-1M/ \
-    --crawl_input_directory gs://marin-us-central2/scratch/nfliu/fetched_outlinks/fineweb-edu-1M/ \
-    --data_source fineweb-edu-1M \
-    --text_output_directory gs://marin-us-central2/scratch/nfliu/text/fineweb-edu-1M/ \
-    --urls_and_scores_output_directory gs://marin-us-central2/scratch/nfliu/urls_and_scores/fineweb-edu-1M/ \
-    --statistics_output_path gs://marin-us-central2/scratch/nfliu/fetched_outlinks/fineweb-edu-1M/yield_statistics.json.gz
+    --urls_input_directory gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-10M/ \
+    --crawl_input_directory gs://marin-us-central2/scratch/nfliu/fetched_outlinks/fineweb-edu-10M/ \
+    --data_source fineweb-edu-10M \
+    --text_output_directory gs://marin-us-central2/scratch/nfliu/text/fineweb-edu-10M/ \
+    --urls_and_scores_output_directory gs://marin-us-central2/scratch/nfliu/urls_and_scores/fineweb-edu-10M/ \
+    --statistics_output_path gs://marin-us-central2/scratch/nfliu/fetched_outlinks/fineweb-edu-10M/yield_statistics.json.gz
 ```
 """
 import json
@@ -293,6 +293,7 @@ def get_shard_quality_classifier_scores(
             },
             fout,
         )
+    logger.info(f"{num_records_passing} URLs passed the quality filtering pipeline")
     return num_records_passing
 
 
