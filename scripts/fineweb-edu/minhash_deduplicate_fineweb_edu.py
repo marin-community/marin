@@ -91,6 +91,7 @@ def minhash_deduplicate_fineweb_edu(
     minhash_logs_path: str,
     minhash_config: MinhashConfig,
 ):
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     if not fsspec_exists(parquets_paths_file):
         # Create the pathfile for FineWeb-Edu, removing the base bucket prefix
         fineweb_edu_parquet_paths = []
