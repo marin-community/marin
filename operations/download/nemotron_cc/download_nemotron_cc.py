@@ -20,7 +20,7 @@ NCC_PATH_FILE_URL = "https://data.commoncrawl.org/contrib/Nemotron/Nemotron-CC/d
 
 @cached_or_construct_output(success_suffix="SUCCESS")
 @ray.remote(memory=10 * 1024 * 1024 * 1024, runtime_env={"pip": ["gcsfs", "zstandard"]}, max_retries=5)  # 10 GB
-def download_single_nemotron_path(input_file_path: str, output_file_path: str):
+def download_single_nemotron_path(input_file_path: str, output_file_path: str, chunk_size: int):
     """
     Fetches content from a Common Crawl path.
     Args:
@@ -38,7 +38,7 @@ def download_single_nemotron_path(input_file_path: str, output_file_path: str):
         response = requests.get(cc_url, headers={"user-agent": myagent}, stream=True)
 
         if response.status_code == 200:
-            contents = decompress_zstd_stream(response.raw, response.headers.get("content-length", 0))
+            contents = decompress_zstd_stream(response.raw, response.headers.get("content-length", 0), chunk_size)
         else:
             logger.error(f"Failed to fetch data: {response.status_code}")
             return None
@@ -68,6 +68,7 @@ def download_single_nemotron_path(input_file_path: str, output_file_path: str):
 @dataclass
 class NemotronIngressConfig:
     output_path: str
+    chunk_size: int = 65536
 
 
 @draccus.wrap()
@@ -107,7 +108,7 @@ def download_nemotron_cc(cfg: NemotronIngressConfig):
         output_file_path = os.path.join(cfg.output_path, cc_split, part_path).replace("jsonl.zstd", "jsonl.gz")
         logger.info(f"Starting Processing for the Nemotron CC file: {file} in output_path: {cfg.output_path}")
 
-        result_refs.append(download_single_nemotron_path.remote(file, output_file_path))
+        result_refs.append(download_single_nemotron_path.remote(file, output_file_path, cfg.chunk_size))
 
     try:
         ray.get(result_refs)

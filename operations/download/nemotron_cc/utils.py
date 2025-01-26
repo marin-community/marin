@@ -6,7 +6,7 @@ from tqdm import tqdm
 logger = logging.getLogger("ray")
 
 
-def decompress_zstd_stream(raw_stream, content_length: int, chunk_size: int = 65536):
+def decompress_zstd_stream(raw_stream, content_length: int, chunk_size: int):
     """
     Decompresses a zstd stream and parses JSON lines.
     Args:
