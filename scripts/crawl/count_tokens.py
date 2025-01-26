@@ -82,6 +82,7 @@ def count_tokens_in_parquet_file(input_path: str, tokenizer_name: str) -> int:
 def count_tokens_in_shard(input_path: str, shard_output_path: str, tokenizer_name: str):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     if fsspec_exists(shard_output_path):
+        logger.info(f"Found output at {shard_output_path}, re-using results...")
         with fsspec.open(shard_output_path) as f:
             return json.load(f)["num_tokens"]
     if input_path.endswith(".parquet"):
