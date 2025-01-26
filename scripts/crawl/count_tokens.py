@@ -12,6 +12,15 @@ python marin/run/ray_run.py \
     --input_patterns '["gs://marin-us-central2/scratch/nfliu/text/fineweb-edu-10M/*_text_and_scores.parquet"]'
 ```
 
+Counting tokens in fineweb-edu-10M (deduplicated):
+
+```
+python marin/run/ray_run.py \
+    --no_wait -- \
+    python scripts/crawl/count_tokens.py \
+    --input_patterns '["gs://marin-us-central2/scratch/nfliu/text/fineweb-edu-10M-minhash/*.jsonl.gz"]'
+```
+
 Counting tokens in fineweb-edu:
 
 ```
@@ -87,7 +96,7 @@ def count_tokens(input_patterns: list[str], tokenizer_name: str):
     logger.info(f"Found {len(input_paths)} input paths")
 
     num_shards_to_process = len(input_paths)
-    MAX_CONCURRENT_TASKS = 100
+    MAX_CONCURRENT_TASKS = 1000
     num_shards_submitted = 0
     unfinished = []
 
