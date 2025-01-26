@@ -206,8 +206,7 @@ def download():
         return jsonify({"error": f"Path does not exist: {path}"})
 
     # Stream the file directly from cloud storage or the filesystem
-    return Response(server.fs(path).open(path, "rb"), content_type='application/octet-stream')
-
+    return Response(server.fs(path).open(path, "rb"), content_type="application/octet-stream")
 
 @app.route("/api/view", methods=["GET"])
 @limiter.limit("60 per minute")
