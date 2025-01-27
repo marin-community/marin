@@ -111,7 +111,7 @@ def minhash_deduplicate_fineweb_edu(
         paths_file=parquets_paths_file,
     )
     TOTAL_TASKS = 2000
-    NUM_WORKERS = 100
+    NUM_WORKERS = 500
 
     # stage 1 computes minhash signatures for each task (each task gets a set of files)
     stage1 = RayPipelineExecutor(
