@@ -18,6 +18,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 import wandb
+import numpy as np
+import pandas as pd
 
 from marin.execution.executor import ExecutorStep
 
@@ -118,7 +120,7 @@ def log_and_create_report(
     run = wandb.init(
         project=wandb_project,
         entity=wandb_entity,
-        name=f"""Scaling Law Report: {pred_run_id}""",
+        name=f"""Scaling Law Report: {pred_run_id}-ngrfuyg""",
         tags=["scaling_laws"],
         config={
             "input_runs": input_run_ids,
@@ -170,3 +172,98 @@ def log_and_create_report(
     )
 
     wandb.finish()
+
+##### Projection of performance to larger model sizes/#tokens using scaling laws #####
+
+@dataclass
+class ProjectionPoint:
+    """Represents a point to project performance to"""
+    num_params: int
+    num_tokens: int
+
+
+def get_default_projection_points() -> list[ProjectionPoint]:
+    """Default set of model sizes to project to"""
+    sizes = [1.4e9, 8e9, 13e9, 22e9, 70e9] 
+    chinchilla_multipliers = [0.5, 1, 2, 5, 10, 20]
+    
+    return [ProjectionPoint(int(size), int(size * m)) for size in sizes for m in chinchilla_multipliers]
+
+def create_projection_df(points: list[ProjectionPoint]) -> pd.DataFrame:
+    """Convert projection points to a dataframe format matching scaling law requirements"""
+    return pd.DataFrame({
+        'parameter_count': [p.num_params for p in points],
+        'throughput/total_tokens': [p.num_tokens for p in points],
+        'run': [f'projection_{i}' for i in range(len(points))]
+    })
+
+def default_scaling_law_projection(
+    ladder_runs: Sequence[str],
+    intermediate_task_loss: str = "eval/paloma/c4_en/bpb",
+    projection_points: list[ProjectionPoint] | None = None,
+    entity: str = "stanford-mercury",
+    project: str = "marin",
+    use_log_for_ND: bool = True,
+    normalize_ND: bool = True,
+) -> tuple[np.ndarray, list[ProjectionPoint]]:
+    """
+    Project performance to larger model sizes using scaling laws.
+    
+    Args:
+        ladder_runs: Sequence of run IDs to use for fitting scaling laws
+        scaling_law_config: Configuration for scaling law analysis
+        projection_points: Optional custom points to project to
+        entity: WandB entity
+        project: WandB project
+    
+    Returns:
+        Tuple of (predicted_losses, projection_points)
+    """
+    from marin.scaling_laws.utils import (
+        pull_metrics_from_wandb, filter_zero_d, extract_scaling_data,
+        fit_power_law, predict_power_law
+    )
+
+    
+    # Get or create projection points
+    points = projection_points or get_default_projection_points()
+    projection_df = create_projection_df(points)
+    
+    # Get ladder model data
+    metrics = [intermediate_task_loss, "throughput/total_tokens"]
+    ladder_df = pull_metrics_from_wandb(
+        runs=ladder_runs,
+        metrics=metrics,
+        entity=entity,
+        project=project
+    )
+    
+    # Prepare data for fitting
+    ladder_df_filtered = filter_zero_d(ladder_df)
+    N, D, y = extract_scaling_data(
+        ladder_df_filtered,
+        loss_col=intermediate_task_loss
+    )
+    
+    # Fit power law
+    N_proj = np.array([p.num_params for p in points])
+    D_proj = np.array([p.num_tokens for p in points])
+    
+    if use_log_for_ND:
+        N = np.log(N)
+        D = np.log(D)
+        N_proj = np.log(N_proj)
+        D_proj = np.log(D_proj)
+    
+    if normalize_ND:
+        N_scale = np.mean(N)
+        D_scale = np.mean(D)
+        N = N / N_scale
+        D = D / D_scale
+        N_proj = N_proj / N_scale
+        D_proj = D_proj / D_scale
+    
+    params = fit_power_law(N, D, y, use_log_space=True)
+    predictions = predict_power_law(params, N_proj, D_proj)
+    
+    return predictions, points
