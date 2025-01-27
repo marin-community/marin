@@ -17,8 +17,7 @@ class LLMProvider:
 
     DEFAULT_GENERATION_KWARGS: ClassVar[dict[str, Any]] = {
         "temperature": 0.1,
-        "top_p": 0.3,
-        "max_tokens": 128,
+        "max_tokens": 1024,
     }
 
     def __init__(self, model_name: str, generation_kwargs: dict[str, Any], engine_kwargs: dict[str, Any]):

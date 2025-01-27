@@ -1,8 +1,25 @@
-import os
+"""
+
+Usage:
+1. If you have a model you want to download from huggingface, add the repo name and config in MODEL_NAME_TO_CONFIG.
+2. Run download_model_step(MODEL_NAME_TO_CONFIG[model_name]) to download the model.
+3. Use get_model_local_path(model_name) to get the local path of the model.
+
+Example:
+```
+model_name = "meta-llama/Llama-3.1-8B-Instruct"
+model_config = MODEL_NAME_TO_CONFIG[model_name]
+download_step = download_model_step(model_config)
+executor_main([download_step])
+
+local_path = get_model_local_path(model_name)
+```
+"""
+
 from dataclasses import dataclass
 
 from experiments.instruction_datasets import get_directory_friendly_dataset_name
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
+from marin.execution.executor import ExecutorStep, this_output_path, versioned
 from operations.download.huggingface.download import DownloadConfig
 from operations.download.huggingface.download_hf import download_hf
 
@@ -64,13 +81,9 @@ def download_model_step(model_config: ModelConfig) -> ExecutorStep:
     return download_step
 
 
+# NOTE(Chris): For some reason importing from this file causes model loading to hang!
 def get_model_local_path(model_name: str) -> str:
-    step = download_model_step(MODEL_NAME_TO_CONFIG[model_name])
-    return os.path.join(LOCAL_PREFIX, step.name)
-
-
-if __name__ == "__main__":
-    steps = []
-    for model_name in MODEL_NAME_TO_CONFIG.keys():
-        steps.append(download_model_step(MODEL_NAME_TO_CONFIG[model_name]))
-    executor_main(steps)
+    # step = download_model_step(MODEL_NAME_TO_CONFIG[model_name])
+    # local_file_path = os.path.join(LOCAL_PREFIX, step.name)
+    # return local_file_path
+    return "/opt/gcsfuse_mount/models/meta-llama--Llama-3-1-8B-Instruct"
