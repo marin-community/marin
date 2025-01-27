@@ -5,6 +5,7 @@ Issue: https://github.com/stanford-crfm/marin/issues/702
 
 import os
 from datetime import timedelta
+import time
 
 import jmp
 from levanter.checkpoint import CheckpointerConfig
@@ -48,7 +49,7 @@ def construct_steps():
     weight_decay=0.1
     steps_per_eval=num_train_steps // 2
     steps_per_export=num_train_steps // 2
-    name_prefix = "debug-resume-optimizer-v9"
+    name_prefix = f"debug-resume-optimizer-{time.strftime('%m-%d-%H-%M')}-"
 
     optimizer_config = AdamConfig(
         learning_rate=learning_rate,
@@ -81,7 +82,7 @@ def construct_steps():
         pretraining_data=pretraining_data,
         evaluation_data=evaluation_data,
         model=model,
-        model_checkpoint=f"gs://marin-us-central2/{stage1_output_path}/checkpoints/step-{num_train_steps // 2}",
+        model_checkpoint=output_path_of(train_step_stage1).cd(f"checkpoints/step-{num_train_steps // 2}"),
         train_batch_size=train_batch_size,
         num_train_steps=num_train_steps,
         learning_rate=learning_rate,

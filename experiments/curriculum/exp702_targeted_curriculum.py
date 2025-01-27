@@ -442,6 +442,24 @@ if __name__ == "__main__":
     #     for data1_frac_alloc_stage2 in [1.0]
     # ]
 
+    # stage_pairs = [
+    #     full_training_stage_varsched(
+    #         data1_name="stack_dedup",
+    #         data2_name="c4",
+    #         total_data1_portion=0.005,
+    #         duration_frac_stage2=duration_frac_stage2,
+    #         data1_frac_alloc_stage2=data1_frac_alloc_stage2,
+    #         schedule_type=schedule_type,
+    #         cooldown_frac=cooldown_frac,
+    #         model_size="600m",
+    #         num_train_steps=12000,
+    #         additional_tags=["python-c4-0.005-600m-allstage2-sweep"],
+    #     )
+    #     for duration_frac_stage2 in [0.00625, 0.025, 0.8]
+    #     for schedule_type, cooldown_frac in [("cosine", None), ("linear", 0.0), ("linear", 0.05), ("linear", 0.2)]
+    #     for data1_frac_alloc_stage2 in [1.0]
+    # ]
+
     stage_pairs = [
         full_training_stage_varsched(
             data1_name="stack_dedup",
@@ -451,13 +469,14 @@ if __name__ == "__main__":
             data1_frac_alloc_stage2=data1_frac_alloc_stage2,
             schedule_type=schedule_type,
             cooldown_frac=cooldown_frac,
-            model_size="600m",
-            num_train_steps=12000,
-            additional_tags=["python-c4-0.005-600m-allstage2-sweep"],
+            model_size="150m",
+            num_train_steps=3000,
+            additional_tags=["python-c4-0.005-varsched-cooldown-0.05-sweep"],
+            version_tag="-v1"
         )
-        for duration_frac_stage2 in [0.00625, 0.025, 0.8]
-        for schedule_type, cooldown_frac in [("cosine", None), ("linear", 0.0), ("linear", 0.05), ("linear", 0.2)]
-        for data1_frac_alloc_stage2 in [1.0]
+        for duration_frac_stage2 in [0.4, 0.2, 0.1, 0.05, 0.025, 0.00625]
+        for schedule_type, cooldown_frac in [("linear", 0.05)]
+        for data1_frac_alloc_stage2 in [0.25, 0.5, 0.75, 1.0]
     ]
 
     steps = list(chain(*stage_pairs))
