@@ -2,6 +2,7 @@ from collections import Counter
 
 import ray
 from google.cloud import compute_v1, tpu_v2alpha1
+import logging
 
 PROJECT_NAME = "hai-gcp-models"
 
@@ -26,6 +27,9 @@ def gather_tpu_info_from_vms(location):
 
     vms_to_delete = []
     for node in nodes:
+        # if count is not correct then, delete, 15 minutes count
+        print(f"TEMP CATHY node info {node.__dict__}")
+        print(f"TEMP CATHY node info {node.state}")
         if node.state in BAD_STATES:
             print(f"Node {node.name} is in state {node.state}, deleting")
             vms_to_delete.append(node.name)
