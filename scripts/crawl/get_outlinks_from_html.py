@@ -276,7 +276,7 @@ def get_outlinks_from_html(cfg: OutlinksExtractionConfig):
     logger.info(f"Submitted {len(refs)} tasks")
 
     # Wait for the tasks to finish
-    _ = ray.get(refs)
+    ray.get(refs)
 
 
 if __name__ == "__main__":
