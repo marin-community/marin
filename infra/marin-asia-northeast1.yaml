@@ -18,7 +18,7 @@ provider:
   project_id: hai-gcp-models
 
 docker:
-    image: "asia-northeast1-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:20241220"
+    image: "asia-northeast1-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:6da1c9ed"
     container_name: "ray_docker"
     pull_before_run: true
     worker_run_options:
@@ -54,7 +54,7 @@ setup_commands:
   - gcloud secrets versions access latest --secret=OPENAI_API_KEY > $HOME/.cache/openai/token
   - echo 'export MARIN_PREFIX="gs://marin-asia-northeast1"' >> $HOME/.bashrc
   - echo 'export BUCKET="marin-asia-northeast1"' >> $HOME/.bashrc
-  - gcsfuse --only-dir gcsfuse_mount $BUCKET /opt/gcsfuse_mount || true
+  - gcsfuse --implicit-dirs --only-dir gcsfuse_mount $BUCKET /opt/gcsfuse_mount || true
 
 # Set Head Node == `ray_head_default`
 head_node_type: head_default
@@ -157,7 +157,7 @@ available_node_types:
 
   tpu_slice_v6e_256:
     max_workers: 1024
-    min_workers: 8
+    min_workers: 0
     node_config:
       acceleratorType: v6e-256
       runtimeVersion: v2-alpha-tpuv6e
