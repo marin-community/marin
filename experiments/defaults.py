@@ -284,7 +284,7 @@ def default_scaling_law_analysis(
 
     return ExecutorStep(
         name=f"""scaling_laws/preds-{pred_run_or_id if
-            isinstance(pred_run_or_id, str) else pred_run_or_id.name}""",
+            isinstance(pred_run_or_id, str) else pred_run_or_id.name}-e9rn98n""",
         fn=run_scaling_law_analysis,
         config=ScalingLawConfig(
             ladder_model_steps=ladder_steps_or_ids,
@@ -293,3 +293,20 @@ def default_scaling_law_analysis(
             task_accuracies=task_accuracies,
         ),
     )
+
+
+def default_scaling_laws_suite(experiment: ExecutorStep, scaling_law_config: ScalingLawConfig) -> ExecutorStep:
+    """
+    Given a training config, spits out a suite of models of different sizes that can be run, along with the step for actually running scaling laws."
+    """
+    pass
+
+
+def default_scaling_law_projection(
+    ladder_runs: Sequence[ExecutorStep | InputName | str],
+    scaling_law_config: ScalingLawConfig,
+):
+    """
+    Given a suite of small models, predict the performance on a number of (N, D) values.
+    """
+    pass
