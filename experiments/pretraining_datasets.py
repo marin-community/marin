@@ -128,10 +128,10 @@ dolmino = ExecutorStep(
 ).cd("bb54cab")
 
 nemotron_cc = ExecutorStep(
-    name="raw/nemotron_cc",
+    name="raw/nemotro-cc",
     fn=download_nemotron_cc,
     config=NemotronIngressConfig(
         output_path=this_output_path(),
     ),
-    override_output_path="raw/nemotron_cc",
+    pip_dependency_groups=["download_transform"],
 )
