@@ -58,7 +58,6 @@ llama_13b_tootsie = default_train(
     train_config=llama_22b_train_config,
     tags=["llama", "13b", "wsd-s", "exp201", "tootsie"],
     eval_harness_tasks=[],
-    use_default_evaluation=False,
 )
 
 llama_70b_tootsie = default_train(
@@ -68,7 +67,6 @@ llama_70b_tootsie = default_train(
     train_config=llama_70b_train_config,
     tags=["llama", "70b", "wsd-s", "exp201", "tootsie"],
     eval_harness_tasks=[],
-    use_default_evaluation=False,
 )
 
 
