@@ -112,7 +112,11 @@ def default_train(
             name = name[:64]
         else:
             prefix, suffix = name.rsplit("-", 1)
-            name = prefix[: 64 - len(suffix)] + "-" + suffix
+            if len(suffix) >= 64:
+                suffix = suffix[:64]
+                name = suffix
+            else:
+                name = prefix[: 63 - len(suffix)] + "-" + suffix
         logger.warning(f"Truncated name from {old_name} to {name} to fit within WANDB limits.")
 
     # TODO: right now, assume architecture is a LlamaConfig, generalize this
@@ -153,7 +157,7 @@ def default_train(
             trainer=TrainerConfig(
                 tracker=WandbConfig(
                     project="marin",
-                    tags=[name, *tags],
+                    tags=[*tags],
                 ),
                 mp=jmp.get_policy("p=f32,c=bfloat16"),
                 train_batch_size=train_config.train_batch_size,
