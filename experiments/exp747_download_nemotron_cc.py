@@ -6,5 +6,4 @@ if __name__ == "__main__":
         steps=[
             nemotron_cc,
         ],
-        pip_dependency_groups=["download_transform"],
     )
