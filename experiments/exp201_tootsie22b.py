@@ -12,13 +12,31 @@ For now, we're training on DCLM's best mix, but that will change.
 
 from experiments.defaults import default_train
 from experiments.exp600_tootsie import dclm_mixture_config_llama3
-from experiments.llama import llama_13b, llama_70b
+from experiments.llama import llama_13b, llama_22b, llama_70b
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import executor_main
 
 llama_22b_train_config = SimpleTrainConfig(
-    tpu_type="v6e-256",
-    node_count=2,
+    tpu_type="v6e-128",
+    node_count=4,
+    train_batch_size=1024,
+    num_train_steps=1_000_000,  # using wsd-s so this doesn't really matter
+    learning_rate=3e-4,
+    weight_decay=0.05,
+    # WSD-S
+    cycle_length=10000,
+    steps_per_eval=10000,
+    steps_per_export=20000,
+    warmup=1000,  # initial warmup
+    # TODO: do we need rewarmup
+    decay=0.1,  # 10% of 10000 = 500 steps
+    lr_schedule="inv",
+)
+
+
+llama_13b_train_config = SimpleTrainConfig(
+    tpu_type="v6e-64",
+    node_count=4,
     train_batch_size=1024,
     num_train_steps=1_000_000,  # using wsd-s so this doesn't really matter
     learning_rate=3e-4,
@@ -36,7 +54,7 @@ llama_22b_train_config = SimpleTrainConfig(
 
 llama_70b_train_config = SimpleTrainConfig(
     tpu_type="v6e-256",
-    node_count=4,
+    node_count=2,
     train_batch_size=1024,
     num_train_steps=1_000_000,  # using wsd-s so this doesn't really matter
     learning_rate=3e-5,
@@ -55,9 +73,19 @@ llama_13b_tootsie = default_train(
     name="llama-13b-tootsie-dummy-testing",
     tokenized=dclm_mixture_config_llama3,
     model_config=llama_13b,
-    train_config=llama_22b_train_config,
+    train_config=llama_13b_train_config,
     tags=["llama", "13b", "wsd-s", "exp201", "tootsie"],
     eval_harness_tasks=[],
+)
+
+llama_22b_tootsie = default_train(
+    name="llama-22b-tootsie-dummy-testing",
+    tokenized=dclm_mixture_config_llama3,
+    model_config=llama_22b,
+    train_config=llama_22b_train_config,
+    tags=["llama", "22b", "wsd-s", "exp201", "tootsie"],
+    eval_harness_tasks=[],
+    use_default_evaluation=False,
 )
 
 llama_70b_tootsie = default_train(
@@ -74,6 +102,7 @@ if __name__ == "__main__":
     executor_main(
         steps=[
             llama_13b_tootsie,
+            llama_22b_tootsie,
             llama_70b_tootsie,
         ],
         description="Train some models on DCLM using WSD-S.",
