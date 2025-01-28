@@ -27,3 +27,5 @@ class SimpleTrainConfig:
     """None means match steps_per_export, -1 disables"""
 
     node_count: int = 1
+
+    allow_partial_checkpoint: bool = False

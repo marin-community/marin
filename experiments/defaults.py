@@ -169,6 +169,7 @@ def default_train(
                 ),
                 model_averaging=model_averaging,
                 replica_dcn_axis_size=-1,
+                allow_partial_checkpoint=train_config.allow_partial_checkpoint,
             ),
             z_loss_weight=train_config.z_loss_weight,
             model=model_config,
