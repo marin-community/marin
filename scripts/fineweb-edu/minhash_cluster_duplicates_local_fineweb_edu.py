@@ -12,7 +12,7 @@ pip install 'datatrove[io] @ git+https://github.com/nelson-liu/datatrove@ray_exe
 Cluster duplicates for FineWeb-Edu
 
 ```
-python scripts/fineweb-edu/minhash_cluster_deduplicates_local_fineweb_edu.py \
+python scripts/fineweb-edu/minhash_cluster_duplicates_local_fineweb_edu.py \
     --minhash_base_path 'gs://marin-us-central2/scratch/nfliu/minhash/fineweb_edu_minhash' \
     --minhash_logs_path 'gs://marin-us-central2/scratch/nfliu/minhash/logs/fineweb_edu_minhash_logs'
 ```
