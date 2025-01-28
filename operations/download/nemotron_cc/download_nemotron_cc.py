@@ -108,8 +108,8 @@ def download_nemotron_cc(cfg: NemotronIngressConfig):
         # Extract quality and kind info from path
         path_parts = file.split("/")
         quality = path_parts[-4].split("=")[1]  # quality=medium
-        kind1 = path_parts[-3].split("=")[1]    # kind=actual
-        kind2 = path_parts[-2].split("=")[1]    # kind2=actual
+        kind1 = path_parts[-3].split("=")[1]  # kind=actual
+        kind2 = path_parts[-2].split("=")[1]  # kind2=actual
 
         part_path = f"{quality}-{kind1}-{kind2}-{part_path}"
 
