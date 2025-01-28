@@ -63,5 +63,5 @@ if __name__ == "__main__":
             nemotron_cc_tokenized,
             nemotron_cc_model,
         ],
-        description="Train 1.4B models on standard datasets (SlimPajama 6B, SlimPajama, FineWebEdu, Nemotron CC).",
+        description="Train 1.4B models on standard datasets (SlimPajama 6B, SlimPajama, FineWebEdu, Nemotron-CC).",
     )
