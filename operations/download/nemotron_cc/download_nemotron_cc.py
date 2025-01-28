@@ -19,7 +19,7 @@ NCC_PATH_FILE_URL = "https://data.commoncrawl.org/contrib/Nemotron/Nemotron-CC/d
 
 
 @cached_or_construct_output(success_suffix="SUCCESS")
-@ray.remote(memory=10 * 1024 * 1024 * 1024, runtime_env={"pip": ["gcsfs", "zstandard"]}, max_retries=5)  # 10 GB
+@ray.remote(memory=10 * 1024 * 1024 * 1024, max_retries=5)  # 10 GB
 def download_single_nemotron_path(input_file_path: str, output_file_path: str, chunk_size: int):
     """
     Fetches content from a Common Crawl path.
@@ -104,6 +104,14 @@ def download_nemotron_cc(cfg: NemotronIngressConfig):
         file_name = os.path.basename(file)
         cc_split = file_name.split("-part-")[0]
         part_path = file_name.split("-part-")[1]
+
+        # Extract quality and kind info from path
+        path_parts = file.split("/")
+        quality = path_parts[-4].split("=")[1]  # quality=medium
+        kind1 = path_parts[-3].split("=")[1]    # kind=actual
+        kind2 = path_parts[-2].split("=")[1]    # kind2=actual
+
+        part_path = f"{quality}-{kind1}-{kind2}-{part_path}"
 
         output_file_path = os.path.join(cfg.output_path, cc_split, part_path).replace("jsonl.zstd", "jsonl.gz")
         logger.info(f"Starting Processing for the Nemotron CC file: {file} in output_path: {cfg.output_path}")
