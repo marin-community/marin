@@ -149,9 +149,9 @@ WANDB_PROJECT = "marin-monitoring"
 WANDB_ID = "tpu-monitoring-v3-testing"
 
 
-def delete_stale_vms():
+def delete_stale_vms(vms_to_delete):
     compute_client = tpu_v2alpha1.TpuClient()
-    for _, vms in all_vms_to_delete.items():
+    for _, vms in vms_to_delete.items():
         for vm in vms:
             try:
                 compute_client.delete_node(name=vm)
@@ -230,4 +230,4 @@ if __name__ == "__main__":
 
     if all_vms_to_delete:
         print("Deleting VMs")
-        delete_stale_vms()
+        delete_stale_vms(all_vms_to_delete)
