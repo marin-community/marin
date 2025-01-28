@@ -2,6 +2,7 @@ from marin.execution.executor import ExecutorStep, this_output_path
 from operations.download.huggingface.download import DownloadConfig, download
 from operations.download.huggingface.download_gated_manual import download_and_upload_to_store
 from operations.download.huggingface.download_hf import download_hf
+from operations.download.nemotron_cc.download_nemotron_cc import NemotronIngressConfig, download_nemotron_cc
 
 # TODO: remove download and download_and_upload_to_store. Instead use download_hf instead
 fineweb = ExecutorStep(
@@ -125,3 +126,12 @@ dolmino = ExecutorStep(
         wait_for_completion=True,
     ),
 ).cd("bb54cab")
+
+nemotron_cc = ExecutorStep(
+    name="raw/nemotro-cc",
+    fn=download_nemotron_cc,
+    config=NemotronIngressConfig(
+        output_path=this_output_path(),
+    ),
+    pip_dependency_groups=["download_transform"],
+)
