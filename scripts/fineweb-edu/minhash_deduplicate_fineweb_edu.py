@@ -136,10 +136,11 @@ def minhash_deduplicate_fineweb_edu(
                 config=minhash_config,
             ),
         ],
-        tasks=minhash_config.num_buckets,
+        tasks=minhash_config.num_buckets * 50,
+        randomize_start_duration=180,
         logging_dir=f"{minhash_logs_path}/buckets",
         depends=stage1,
-        memory_bytes_per_task=8 * 1024 * 1024 * 1024,
+        memory_bytes_per_task=16 * 1024 * 1024 * 1024,
     )
 
     # stage 3 creates clusters of duplicates using the results from all buckets
