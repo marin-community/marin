@@ -14,7 +14,7 @@ from operations.download.nemotron_cc.utils import decompress_zstd_stream
 
 logger = logging.getLogger("ray")
 
-myagent = "marin-nemotron-ingress/1.0 (marin@marin.com)"
+myagent = "marin-nemotron-ingress/1.0"
 NCC_PATH_FILE_URL = "https://data.commoncrawl.org/contrib/Nemotron/Nemotron-CC/data-jsonl.paths.gz"
 
 
