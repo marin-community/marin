@@ -560,7 +560,7 @@ class Executor:
             if output_path != override_path:
                 logger.warning(
                     f"Output path {output_path} doesn't match given "
-                    "override {step.override_output_path}, using the latter."
+                    f"override {step.override_output_path}, using the latter."
                 )
                 output_path = override_path
 
