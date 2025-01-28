@@ -70,12 +70,10 @@ def construct_steps():
         learning_rate=learning_rate,
         weight_decay=weight_decay,
         steps_per_eval=steps_per_eval,
-        steps_per_export=steps_per_export,
+        steps_per_export_list=[steps_per_export],
         tpu_type=tpu_type,
         optimizer_config=optimizer_config,
     )
-
-    stage1_output_path = output_path_of(train_step_stage1).step.override_output_path
 
     train_step_stage2 = train_executor_step(
         name=f"{name_prefix}-stage2",
@@ -88,7 +86,7 @@ def construct_steps():
         learning_rate=learning_rate,
         weight_decay=weight_decay,
         steps_per_eval=steps_per_eval,
-        steps_per_export=steps_per_export,
+        steps_per_export_list=[steps_per_export],
         tpu_type=tpu_type,
         optimizer_config=optimizer_config,
     )
@@ -100,12 +98,7 @@ def construct_steps():
 if __name__ == "__main__":
     train_step_stage1, train_step_stage2 = construct_steps()
 
-    # executor_main(
-    #     steps=[train_step_stage1],
-    #     description=f"Test training with varying mixtures",
-    # )
-
     executor_main(
-        steps=[train_step_stage2],
+        steps=[train_step_stage1, train_step_stage2],
         description=f"Test training with varying mixtures",
     )

@@ -1,0 +1,13 @@
+{
+  "type": "service_account",
+  "project_id": "hai-gcp-models",
+  "private_key_id": "b75e25e0192474192c8cc10b13d227e187ab354d",
+  "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDm11pCKR4hKA0U\nkE3in/uQyTA68oTrH3cJ8hfLhbgqf0cdDucGgSTKeSFiHca1fAfzuuIjqE2hagII\nxWdXsOjnlJTCZP/Alluiq4L0bIhS7eMUCeH3U19Tsaq1Voq5hDXHbD+wCk9Rwgbw\n/Mew+FgOg7G58zI0CZgPxZVgPHgj6nBZ9UyFWMQ2bF2rdErSAVnEpDSokdrbMDgW\nYXoiWpM3sXlM+ZkLGW0to8pTBxZMHxPkya+m+fIJ4fLJsuJ9Y9O049ycDHT6p/5p\n3vjMpaoL+TS88COw/QMOAP3SKYwrkIY/Kx23w53qTnOg7Wtj6yDnVBocQTw4829b\nLHEzSdrNAgMBAAECggEAFdTMDnHBDbWx9v3mv8YNjpXYX9rLw0jIg0JICdFtp2c+\nHHtqUe0ow5VNGPBj+InwXpaQCHtETD2wT5ALw/lRLYWZxAC1R0txAyNhUShqhB1H\nWn/MxQ03eLzWviufFwhv5ZpRM57l/X9yFJxzbkMuYMEHr+RWHSHDJcqz49QUMKEv\nWNKc/n58MYv2DNq3iwjedN9C6n1RkR5XZpSgfWfIMd3FK3RnXVrApIIoKqIJ+PFK\n3dft7+OXAogwt6ajpY93KEEk+CX9vkmxwoUvIXcS2tOHKk404L9hLUV/ciBGKcyo\nGUiduhdVVbWfk1v172t6kEzVfaGOXjNqImEeBSNjaQKBgQD7nq9YXUOXB5bSSdHC\n4Bf+I4vH1ZpFT7FuMumH3mG6WXGy1JHQVugFvjKB74HUwZhQGXuF1u4NfDZaqbw2\n7N1ilur5ULxxipMR5rzTultFUrQzR5TzKo0z2eFCHo7SYJMjzYwAElTnHhG88gyX\n6Cv6BN7hXCS/MOcHurELYWL+zwKBgQDq3BHrMHKTsoD4oxxcQYcoq9iUEqXM9NLH\nX0u1DVt/K9Gd8THj5EP9pVof9g6whlgEWJ0P9s8Og0t4aQPVcC4FvToDtJjgpgwq\nYFEUhe6vpxSD/B1ZtO8cP9OKJxnYr112BjPZjHD32WotWWYZzsqNaM1fTw+vLyF0\nr/XjSjPTowKBgGadTXck+daTAsAZ2NC3oTFEf9HsW7DekkaVvsVpPMPJjGPY6upj\nNtZ4vZJeAb2pghtQeR6ZC5Y2TNhmllpz+MknMQaiFWfckqPfTKywOF6qHtE25RjS\nBqnZtlLHsYk8V2VngyvYTgW/Lo62y8n7pkudRuPzNw09vUpaqa8xdTTjAoGATzDZ\nUeZKHAcqeav2Gh12R356TqNjCJLcp6E4U9onKeBKk+kKG3+SdWpV00USeu8xqnV+\nsC1Wb9xRjE5MnqFuwzyk3S7+BXG31GoZrMPkUZIS1tYhx2e84FedKo44ptmqt+sr\nfIVgahIDPTtRtA4IOlpGNYbhEP7hVwkl7ffNNeUCgYEAmbSq0k3I/OGdmuewjmz/\nS6bAOkujfqhdwwBKiJf+54hSqjP7qhCLTbYs8hyINAPNolqS3Qyhnh0vREk5QEPu\npCTL26+J09rIpW7UhHyzjM+90RGO9B79FLJjv+HADEQwFg4AONA9FRA07j9zT//T\nrN/w12kFaLAqJQ3jVfbGj14=\n-----END PRIVATE KEY-----\n",
+  "client_email": "marin-data-browser@hai-gcp-models.iam.gserviceaccount.com",
+  "client_id": "102649850904248355945",
+  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+  "token_uri": "https://oauth2.googleapis.com/token",
+  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/marin-data-browser%40hai-gcp-models.iam.gserviceaccount.com",
+  "universe_domain": "googleapis.com"
+}

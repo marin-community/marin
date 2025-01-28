@@ -24,6 +24,7 @@ from marin.execution.executor import executor_main
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
+from marin.processing.tokenize.tokenize import levanter_tokenize_sft
 from marin.processing.tokenize import (
     TokenizeConfig,
     TokenizerStep,
@@ -56,6 +57,29 @@ def tokenize_train_validation(
         description=f"Tokenize raw text using the llama3_tokenizer (with manual validation set).",
         fn=tokenize,
         config=tokenizer_config,
+    )
+
+def tokenize_train_validation_sft(
+    train_files : list[str],
+    validation_files : list[str],
+    name : str,
+) -> ExecutorStep:
+
+    tokenizer_config = TokenizeConfig(
+        train_paths=versioned([f"{file}" for file in train_files]),
+        validation_paths=versioned([f"{file}" for file in validation_files]),
+        cache_path=this_output_path(),
+        tokenizer=versioned(llama3_tokenizer),
+        # fixed to OAI chat format
+        input_field="user",
+        output_field="assistant",
+    )
+
+    return ExecutorStep(
+        name=os.path.join("tokenized", "suhas", f"{name}"),
+        description="Tokenize chat SFT data",
+        fn=levanter_tokenize_sft,
+        config=tokenizer_config, 
     )
 
 def train_executor_step(
