@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """
-This script runs _only_ stage 3 of the deduplication pipeline.
+This script runs _only_ stage 3 of the deduplication pipeline. Stage 1 and stage 2
+are expected to have been run before executing this script.
+
+Setup for a fresh VM:
 
 ```
 # Install marin
@@ -9,7 +12,7 @@ pip install -e ".[extras]"
 pip install 'datatrove[io] @ git+https://github.com/nelson-liu/datatrove@ray_executor_dedup_logging' spacy cupy-cuda12x==13.3.0
 ```
 
-Cluster duplicates for FineWeb-Edu
+Cluster duplicates for FineWeb-Edu:
 
 ```
 python scripts/fineweb-edu/minhash_cluster_duplicates_local_fineweb_edu.py \
