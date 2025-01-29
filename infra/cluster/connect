@@ -4,9 +4,9 @@
 # You might need to install yq (https://kislyuk.github.io/yq/)
 # brew install yq
 
-if ! command -v screen &> /dev/null
+if ! command -v tmux &> /dev/null
 then
-    echo "screen could not be found. Please install it."
+    echo "tmux could not be found. Please install it."
     exit 1
 fi
 
@@ -21,27 +21,27 @@ while IFS= read -r cluster_port_pair; do
   cluster_name=$(echo "$cluster_port_pair" | awk -F ': ' '{print $1}')
   port=$(echo "$cluster_port_pair" | awk -F ': ' '{print $2}')
 
-  SCREEN_NAME="${cluster_name}"
+  SESSION_NAME="${cluster_name}"
   CLUSTER_CONFIG_PATH="./infra/${cluster_name}.yaml"
-  SCREEN_LOG_FILE="$HOME/.marin_screen_logs/${SCREEN_NAME}.log"
-  mkdir -p "$(dirname "$SCREEN_LOG_FILE")"
+  SESSION_LOG_FILE="$HOME/.marin_tmux_logs/${SESSION_NAME}.log"
+  mkdir -p "$(dirname "$SESSION_LOG_FILE")"
 
 
-  # Check if a screen session with the given name already exists
-  if screen -list | grep -q "$SCREEN_NAME"; then
-    echo "Screen session '$SCREEN_NAME' already exists. Please detach or kill it first."
+  # Check if a tmux session with the given name already exists
+  if tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
+    echo "tmux session '$SESSION_NAME' already exists. Please detach or kill it first."
     continue # Skip to the next cluster
   fi
 
-  screen -dmS "$SCREEN_NAME"
+  tmux new-session -d -s "$SESSION_NAME"
 
   # Try setting DISPLAY and then run ray dashboard in the background and log output to a file
-  screen -S "$SCREEN_NAME" -X stuff "export DISPLAY=:0\n"
-  screen -S "$SCREEN_NAME" -X stuff "ray dashboard --port=$port \"$CLUSTER_CONFIG_PATH\" > \"${SCREEN_LOG_FILE}\" 2>&1 &\n"
+  tmux send-keys -t "$SESSION_NAME" "export DISPLAY=:0" Enter
+  tmux send-keys -t "$SESSION_NAME" "ray dashboard --port=$port \"$CLUSTER_CONFIG_PATH\" > \"${SESSION_LOG_FILE}\" 2>&1 &" Enter
 
-  echo "Screen session '$SCREEN_NAME' created for cluster '$cluster_name'. Run 'screen -r $SCREEN_NAME' to connect. See logs in ${SCREEN_LOG_FILE}"
+  echo "tmux session '$SESSION_NAME' created for cluster '$cluster_name'. Run 'tmux attach -t $SESSION_NAME' to connect. See logs in ${SESSION_LOG_FILE}"
 
 done < <(yq -r 'to_entries | .[] | .key + ": " + (.value | to_string)' infra/cluster/clusters.yaml)
 
 
-echo "Finished creating screen sessions for all clusters."
+echo "Finished creating tmux sessions for all clusters."
