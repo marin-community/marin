@@ -88,7 +88,7 @@ def count_tokens_in_parquet_file(input_path: str, tokenizer_name: str) -> int:
     return total_tokens
 
 
-@ray.remote(memory=32 * 1024 * 1024 * 1024)
+@ray.remote(memory=2 * 1024 * 1024 * 1024)
 def count_tokens_in_shard(input_path: str, shard_output_path: str, tokenizer_name: str):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     if fsspec_exists(shard_output_path):
@@ -107,7 +107,7 @@ def count_tokens_in_shard(input_path: str, shard_output_path: str, tokenizer_nam
     return num_tokens
 
 
-@ray.remote(memory=32 * 1024 * 1024 * 1024)
+@ray.remote(memory=8 * 1024 * 1024 * 1024)
 def count_tokens(input_patterns: list[str], output_path: str, tokenizer_name: str):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     # Get the input paths
