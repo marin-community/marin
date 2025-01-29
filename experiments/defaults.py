@@ -3,6 +3,7 @@ This file represents the best practices for each stage of the pipeline.
 """
 
 import dataclasses
+import logging
 import os
 from collections.abc import Sequence
 from datetime import timedelta
@@ -45,6 +46,8 @@ from marin.processing.tokenize import (
     tokenize,
 )
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
+
+logger = logging.getLogger("ray")
 
 
 def default_tokenize(
@@ -140,7 +143,16 @@ def default_train(
     steps_per_export = train_config.steps_per_export
 
     # Max length of 64 characters for WANDB run is 64 characters
-    name = name[:64]
+    # we don't want to use the first 64 because the UID bit goes at the end. instead, grab the trailing -XXX
+    # and add whatever we can fit in the remaining space.
+    if len(name) > 64:
+        old_name = name
+        if "-" not in name:
+            name = name[:64]
+        else:
+            prefix, suffix = name.rsplit("-", 1)
+            name = prefix[: 64 - len(suffix)] + "-" + suffix
+        logger.warning(f"Truncated name from {old_name} to {name} to fit within WANDB limits.")
 
     # TODO: right now, assume architecture is a LlamaConfig, generalize this
     assert isinstance(model_config, LlamaConfig)
@@ -148,6 +160,19 @@ def default_train(
         harness_config = LmEvalHarnessConfig(task_spec=convert_to_levanter_task_config(eval_harness_tasks))
     else:
         harness_config = None
+
+    if train_config.steps_per_hf_export is None:
+        steps_per_export_hf = steps_per_export
+    elif train_config.steps_per_hf_export == -1:
+        steps_per_export_hf = None
+    else:
+        steps_per_export_hf = train_config.steps_per_hf_export
+
+    model_averaging = None
+    if train_config.ema_beta is not None:
+        from levanter.optim.model_averaging import EmaModelAveragingConfig
+
+        model_averaging = EmaModelAveragingConfig(beta=train_config.ema_beta)
 
     return ExecutorStep(
         name=os.path.join("checkpoints", name),
@@ -178,6 +203,7 @@ def default_train(
                     save_interval=timedelta(minutes=10),
                     keep=[dict(every=steps_per_export)],
                 ),
+                model_averaging=model_averaging,
                 replica_dcn_axis_size=-1,
             ),
             z_loss_weight=train_config.z_loss_weight,
@@ -195,7 +221,7 @@ def default_train(
                     train_config.min_lr_ratio if train_config.min_lr_ratio is not None else AdamConfig().min_lr_ratio
                 ),
             ),
-            hf_save_steps=steps_per_export,
+            hf_save_steps=steps_per_export_hf,
             data_seed=train_config.data_seed,
             eval_harness_steps=train_config.steps_per_task_eval or 10000,
             eval_harness=harness_config,
