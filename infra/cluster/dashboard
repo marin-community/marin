@@ -25,6 +25,6 @@ if [ -z "$PORT" ]; then
 fi
 
 # Open the dashboard in the default browser (macOS specific)
-open "http://localhost:${PORT}"
+open "$RAY_ADDRESS"
 
-echo "Opening dashboard for cluster '$CLUSTER_NAME' in your browser (http://localhost:${PORT})."
+echo "Opening dashboard for cluster '$CLUSTER_NAME' in your browser ($RAY_ADDRESS)."
