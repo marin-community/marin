@@ -21,6 +21,9 @@ fi
 
 export RAY_ADDRESS="http://localhost:${PORT}"
 echo ""
+echo ""
 echo "[$CLUSTER_NAME] RAY_ADDRESS set to: $RAY_ADDRESS"
+echo ""
 echo "[$CLUSTER_NAME] Remember to 'source infra/cluster/activate <cluster_name>' to set the environment variable in your current shell."
-echo "[$CLUSTER_NAME] To open the dashboard, run: ray dashboard --address=\"${RAY_ADDRESS}\""
+echo ""
+echo "[$CLUSTER_NAME] To open the dashboard, run: ray dashboard"
