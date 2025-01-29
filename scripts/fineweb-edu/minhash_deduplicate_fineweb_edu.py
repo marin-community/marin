@@ -33,7 +33,7 @@ python marin/run/ray_run.py \
     --minhash_logs_path 'gs://marin-us-central2/scratch/nfliu/minhash/logs/fineweb_edu_minhash_logs'
 
 # Move the deduplicated content
-gcloud storage mv gs://marin-us-central2/scratch/nfliu/minhash/fineweb_edu_minhash/deduplicated_output/* gs://marin-us-central2/scratch/nfliu/text/fineweb-edu-10M-minhash/
+gcloud storage mv gs://marin-us-central2/scratch/nfliu/minhash/fineweb_edu_minhash/deduplicated_output/* gs://marin-us-central2/scratch/nfliu/text/fineweb-edu-minhash/
 # Remove the logs and intermediate output
 gcloud storage rm --recursive gs://marin-us-central2/scratch/nfliu/minhash/fineweb_edu_minhash
 gcloud storage rm --recursive gs://marin-us-central2/scratch/nfliu/minhash/logs/fineweb_edu_minhash_logs
