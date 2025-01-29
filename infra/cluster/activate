@@ -1,0 +1,23 @@
+#!/bin/bash
+
+# Load cluster ports from yaml file
+# You might need to install yq (https://kislyuk.github.io/yq/)
+# brew install yq
+
+CLUSTER_NAME="$1"
+
+if [ -z "$CLUSTER_NAME" ]; then
+  echo "Usage: source infra/cluster/activate <cluster_name>  (note the 'source')"
+  exit 1
+fi
+
+PORT=$(yq ".${CLUSTER_NAME}" infra/cluster/clusters.yaml)
+
+if [ -z "$PORT" ]; then
+  echo "Cluster name '$CLUSTER_NAME' not found in infra/cluster/clusters.yaml"
+  exit 1
+fi
+
+export RAY_ADDRESS="http://localhost:${PORT}"
+echo "RAY_ADDRESS set to: $RAY_ADDRESS"
+echo "Remember to 'source infra/cluster/activate <cluster_name>' to set the environment variable in your current shell."
