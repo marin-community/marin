@@ -4,6 +4,7 @@
 # You might need to install yq (https://kislyuk.github.io/yq/)
 # brew install yq
 
+# The first argument ($1) to this script is expected to be the cluster name
 CLUSTER_NAME="$1"
 
 if [ -z "$CLUSTER_NAME" ]; then
