@@ -12,19 +12,28 @@ fi
 
 CLUSTER_NAME="$1"
 
+if [ -z "$CLUSTER_NAME" ] && [ -z "$RAY_ADDRESS" ]; then
+  echo "Usage: ./infra/cluster/dashboard <cluster_name> or set RAY_ADDRESS environment variable"
+  exit 1
+fi
+
 if [ -z "$CLUSTER_NAME" ]; then
-  echo "Usage: ./infra/cluster/dashboard <cluster_name>"
-  exit 1
+    RAY_ADDRESS_TO_OPEN="$RAY_ADDRESS"
+    CLUSTER_NAME_DISPLAY="using RAY_ADDRESS environment variable"
+else
+    PORT=$(yq ".${CLUSTER_NAME}" infra/cluster/clusters.yaml)
+
+    if [ -z "$PORT" ]; then
+      echo "Cluster name '$CLUSTER_NAME' not found in infra/cluster/clusters.yaml"
+      exit 1
+    fi
+    export RAY_ADDRESS="http://localhost:${PORT}"
+    RAY_ADDRESS_TO_OPEN="$RAY_ADDRESS"
+    CLUSTER_NAME_DISPLAY="cluster '$CLUSTER_NAME'"
 fi
 
-PORT=$(yq ".${CLUSTER_NAME}" infra/cluster/clusters.yaml)
-
-if [ -z "$PORT" ]; then
-  echo "Cluster name '$CLUSTER_NAME' not found in infra/cluster/clusters.yaml"
-  exit 1
-fi
 
 # Open the dashboard in the default browser (macOS specific)
-open "$RAY_ADDRESS"
+open "$RAY_ADDRESS_TO_OPEN"
 
-echo "Opening dashboard for cluster '$CLUSTER_NAME' in your browser ($RAY_ADDRESS)."
+echo "Opening dashboard for $CLUSTER_NAME_DISPLAY in your browser ($RAY_ADDRESS_TO_OPEN)."
