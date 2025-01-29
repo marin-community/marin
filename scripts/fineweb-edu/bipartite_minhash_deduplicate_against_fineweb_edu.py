@@ -155,7 +155,7 @@ def minhash_deduplicate_fineweb_edu(
 @draccus.wrap()
 def minhash_deduplicate_fineweb_edu_driver(cfg: MinhashDeduplicateFineWebEduConfig):
     minhash_config = MinhashConfig(
-        hash_config=HashConfig(precision=64),
+        hash_config=HashConfig(hash_fc="sha1", precision=64),
         num_buckets=14,
         hashes_per_bucket=8,
     )
