@@ -32,6 +32,16 @@ python marin/run/ray_run.py \
     --input_patterns '["gs://marin-us-central2/raw/fineweb-edu/*/*.parquet"]' \
     --output_path "gs://marin-us-central2/scratch/nfliu/count_tokens/fineweb-edu/"
 ```
+
+Counting tokens in fineweb-edu (deduplicated):
+
+```
+python marin/run/ray_run.py \
+    --no_wait -- \
+    python scripts/crawl/count_tokens.py \
+    --input_patterns '["gs://marin-us-central2/scratch/nfliu/text/fineweb-edu-minhash/*.jsonl.gz"]' \
+    --output_path "gs://marin-us-central2/scratch/nfliu/count_tokens/fineweb-edu-minhash/"
+```
 """
 import json
 import logging
@@ -143,6 +153,9 @@ def count_tokens(input_patterns: list[str], output_path: str, tokenizer_name: st
             while input_paths and len(unfinished) < MAX_CONCURRENT_TASKS:
                 submit_shard_task(input_paths.pop())
     logger.info(f"Total number of tokens: {num_tokens}")
+    aggregated_stats_output_path = os.path.join(output_path, "total_token_counts.json")
+    with fsspec.open(aggregated_stats_output_path, "w") as f:
+        json.dump({"num_tokens": num_tokens, "num_shards": num_shards_to_process}, f)
 
 
 @draccus.wrap()
