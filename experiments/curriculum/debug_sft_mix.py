@@ -21,9 +21,7 @@ from experiments.instruction_datasets import get_instruction_dataset
 BASE_DIR_STACK_PYTHON = "gs://marin-us-central2/raw/the-stack-dedup-4ba450/17cad72/data/python"
 BASE_DIR_STACK_CPP = "gs://marin-us-central2/raw/the-stack-dedup-4ba450/17cad72/data/cpp"
 BASE_DIR_DOLMA = "gs://marin-us-central2/raw/dolma/v1.7"
-# BASE_DIR_TULU3 = "gs://marin-us-central2/documents/allenai--tulu-3-sft-mixture-0a99cb/data"
-
-tulu_3_dataset = get_instruction_dataset("allenai/tulu-3-sft-mixture")
+BASE_DIR_TULU3 = "gs://marin-us-central2/documents/allenai--tulu-3-sft-mixture-0a99cb/data"
 
 # randomly split stack python parquet files into two seperate groups
 stack_file_ids = list(range(144))
@@ -60,18 +58,12 @@ stack_dedup_stage1_tokenized = tokenize_train_validation(
     text_key="content"
 )
 
-# tulu_stage1_tokenized = tokenize_train_validation_sft(
-#     train_files=[output_path_of(tulu_3_dataset, f"train-{id:05d}-of-00006/**.jsonl.gz") for id in tulu_file_ids_stage1],
-#     validation_files=[output_path_of(tulu_3_dataset, f"train-{id:05d}-of-00006/**.jsonl.gz") for id in tulu_file_ids_validation],
-#     name="tulu_stage1_debug2",
-# )
-
 tulu_stage1_tokenized = tokenize_train_validation_sft(
-    # train_files=[output_path_of(tulu_3_dataset, f"train-{id:05d}-of-00006/shard_00000.jsonl.gz") for id in tulu_file_ids_stage1],
-    # validation_files=[output_path_of(tulu_3_dataset, f"train-{id:05d}-of-00006/shard_00000.jsonl.gz") for id in tulu_file_ids_validation],
-    train_files=["gs://marin-us-central2/documents/allenai--tulu-3-sft-mixture-0a99cb/data/train-00000-of-00006/shard_00000.jsonl.gz"],
-    validation_files=["gs://marin-us-central2/documents/allenai--tulu-3-sft-mixture-0a99cb/data/train-00001-of-00006/shard_00000.jsonl.gz"],
-    name="tulu_stage1_debug5",
+    train_files=[f"{BASE_DIR_TULU3}/train-{id:05d}-of-00006/**.jsonl.gz" for id in tulu_file_ids_stage1],
+    validation_files=[f"{BASE_DIR_TULU3}/train-{id:05d}-of-00006/**.jsonl.gz" for id in tulu_file_ids_validation],
+    # train_files=["gs://marin-us-central2/documents/allenai--tulu-3-sft-mixture-0a99cb/data/train-00000-of-00006/shard_00000.jsonl.gz"],
+    # validation_files=["gs://marin-us-central2/documents/allenai--tulu-3-sft-mixture-0a99cb/data/train-00001-of-00006/shard_00000.jsonl.gz"],
+    name="tulu_stage1_debug4",
 )
 
 stage_data = {
@@ -83,7 +75,7 @@ stage_data = {
     },
 }
 
-def full_training_stage_baseline_sweep(data1_name, data2_name, learning_rate, schedule_type, cooldown_frac=None, num_train_steps=3000, model_size="150m", additional_tags=[], data1_portion=0.005, train_batch_size=1024):
+def full_training_stage_baseline_sweep(data1_name, data2_name, learning_rate, schedule_type, cooldown_frac=None, num_train_steps=3000, model_size="150m", additional_tags=[], data1_portion=0.005, train_batch_size=1024, version_tag=None):
     data_config = lm_mixture_data_config(
         components={data1_name: stage_data[data1_name]["stage1"], data2_name: stage_data[data2_name]["stage1"]},
         weights={data1_name: data1_portion, data2_name: 1 - data1_portion},
@@ -101,7 +93,7 @@ def full_training_stage_baseline_sweep(data1_name, data2_name, learning_rate, sc
     weight_decay=0.1
     steps_per_eval=num_train_steps // 20
     steps_per_export=num_train_steps // 2
-    name_prefix = f"{data1_name}-{data2_name}-{num_train_steps // 1000}B-{model_size}-baseline"
+    name_prefix = f"debug-sft-mix-{version_tag}"
 
     if schedule_type == "linear":
         optimizer_config = AdamConfig(
@@ -147,9 +139,10 @@ if __name__ == "__main__":
             learning_rate=1e-3,
             schedule_type="linear",
             cooldown_frac=0.05,
-            num_train_steps=200,
+            num_train_steps=1000,
             model_size="150m",
             additional_tags=["debug-sft-mix"],
+            version_tag="v2",
         )
     ]
 
