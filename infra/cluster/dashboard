@@ -1,0 +1,30 @@
+#!/bin/bash
+
+# Load cluster ports from yaml file
+# You might need to install yq (https://kislyuk.github.io/yq/)
+# brew install yq
+
+if ! command -v yq &> /dev/null
+then
+    echo "yq could not be found. Please install it (brew install yq)."
+    exit 1
+fi
+
+CLUSTER_NAME="$1"
+
+if [ -z "$CLUSTER_NAME" ]; then
+  echo "Usage: ./infra/cluster/dashboard <cluster_name>"
+  exit 1
+fi
+
+PORT=$(yq ".${CLUSTER_NAME}" infra/cluster/clusters.yaml)
+
+if [ -z "$PORT" ]; then
+  echo "Cluster name '$CLUSTER_NAME' not found in infra/cluster/clusters.yaml"
+  exit 1
+fi
+
+# Open the dashboard in the default browser (macOS specific)
+open "http://localhost:${PORT}"
+
+echo "Opening dashboard for cluster '$CLUSTER_NAME' in your browser (http://localhost:${PORT})."
