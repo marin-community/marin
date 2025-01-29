@@ -35,9 +35,8 @@ while IFS= read -r cluster_port_pair; do
 
   tmux new-session -d -s "$SESSION_NAME"
 
-  # Try setting DISPLAY and then run ray dashboard in the background and log output to a file
-  tmux send-keys -t "$SESSION_NAME" "export DISPLAY=:0" Enter
-  tmux send-keys -t "$SESSION_NAME" "ray dashboard --port=$port \"$CLUSTER_CONFIG_PATH\" > \"${SESSION_LOG_FILE}\" 2>&1 &" Enter
+  echo tmux send-keys -t "$SESSION_NAME" "echo hi" Enter
+  echo tmux send-keys -t "$SESSION_NAME" "ray dashboard --port=$port \"$CLUSTER_CONFIG_PATH\"" Enter
 
   echo "tmux session '$SESSION_NAME' created for cluster '$cluster_name'. Run 'tmux attach -t $SESSION_NAME' to connect. See logs in ${SESSION_LOG_FILE}"
 
