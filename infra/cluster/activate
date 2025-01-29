@@ -7,7 +7,7 @@
 CLUSTER_NAME="$1"
 
 if [ -z "$CLUSTER_NAME" ]; then
-  echo "Usage: ./infra/cluster/activate <cluster_name>"
+  echo "Usage: source infra/cluster/activate <cluster_name>  (note the 'source')"
   exit 1
 fi
 
@@ -20,3 +20,4 @@ fi
 
 export RAY_ADDRESS="http://localhost:${PORT}"
 echo "RAY_ADDRESS set to: $RAY_ADDRESS"
+echo "Remember to 'source infra/cluster/activate <cluster_name>' to set the environment variable in your current shell."
