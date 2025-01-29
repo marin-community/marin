@@ -67,6 +67,7 @@ def index_fineweb_edu_for_minhash_deduplication(
     INPUT_READER = ParquetReader(
         "gs://marin-us-central2",
         paths_file=parquets_paths_file,
+        doc_progress=True,
     )
     TOTAL_TASKS = 2000
     NUM_WORKERS = 1000
