@@ -31,7 +31,7 @@ while IFS= read -r cluster_port_pair; do
 
   screen -dmS "$SCREEN_NAME"
   # Run ray dashboard in the background (&)
-  screen -S "$SCREEN_NAME" -X stuff "ray dashboard infra/cluster/${cluster_name}.yaml -p $port &\n"
+  screen -S "$SCREEN_NAME" -X stuff "ray dashboard --port=$port\n"
 
   echo "Screen session '$SCREEN_NAME' created for cluster '$cluster_name'. Run 'screen -r $SCREEN_NAME' to connect."
 
