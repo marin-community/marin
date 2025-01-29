@@ -17,27 +17,25 @@ then
 fi
 
 
-SCREEN_NAME="marin-cluster-monitor"
-
-# Check if a screen session with the given name already exists
-if screen -list | grep -q "$SCREEN_NAME"; then
-  echo "Screen session '$SCREEN_NAME' already exists.  Please detach or kill it first."
-  exit 1
-fi
-
-
-screen -dmS "$SCREEN_NAME"
-
-
 while IFS= read -r cluster_port_pair; do
   cluster_name=$(echo "$cluster_port_pair" | awk -F ': ' '{print $1}')
   port=$(echo "$cluster_port_pair" | awk -F ': ' '{print $2}')
 
-  screen -S "$SCREEN_NAME" -X screen -t "$cluster_name"
+  SCREEN_NAME="marin-${cluster_name}-dashboard"
+
+  # Check if a screen session with the given name already exists
+  if screen -list | grep -q "$SCREEN_NAME"; then
+    echo "Screen session '$SCREEN_NAME' already exists. Please detach or kill it first."
+    continue # Skip to the next cluster
+  fi
+
+  screen -dmS "$SCREEN_NAME"
   # Run ray dashboard in the background (&)
   screen -S "$SCREEN_NAME" -X stuff "ray dashboard infra/cluster/${cluster_name}.yaml -p $port &\n"
-  sleep 1 # give time for ray dashboard to start, before next one starts
+
+  echo "Screen session '$SCREEN_NAME' created for cluster '$cluster_name'. Run 'screen -r $SCREEN_NAME' to connect."
+
 done < <(yq -r 'to_entries | .[] | .key + ": " + .value' infra/cluster/clusters.yaml)
 
 
-echo "Screen session '$SCREEN_NAME' created with Ray dashboards. Run 'screen -r $SCREEN_NAME' to connect."
+echo "Finished creating screen sessions for all clusters."
