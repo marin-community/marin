@@ -22,6 +22,7 @@ while IFS= read -r cluster_port_pair; do
   port=$(echo "$cluster_port_pair" | awk -F ': ' '{print $2}')
 
   SCREEN_NAME="marin-${cluster_name}-dashboard"
+  CLUSTER_CONFIG_PATH="./infra/marin-${cluster_name}.yaml"
 
   # Check if a screen session with the given name already exists
   if screen -list | grep -q "$SCREEN_NAME"; then
@@ -29,7 +30,7 @@ while IFS= read -r cluster_port_pair; do
     continue # Skip to the next cluster
   fi
 
-  screen -S "$SCREEN_NAME" ray dashboard --port=$port ../clusters.yaml
+  screen -S "$SCREEN_NAME" ray dashboard --port=$port "$CLUSTER_CONFIG_PATH"
   screen -r "$SCREEN_NAME"
 
   echo "Screen session '$SCREEN_NAME' created and attached for cluster '$cluster_name'."
