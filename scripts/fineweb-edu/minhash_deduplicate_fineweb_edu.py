@@ -46,10 +46,16 @@ python marin/run/ray_run.py \
     --pip_deps 'datatrove[io,processing] @ git+https://github.com/nelson-liu/datatrove@ray_executor_dedup_logging,spacy,cupy-cuda12x==13.3.0' \
     --no_wait -- \
     python scripts/fineweb-edu/minhash_deduplicate_fineweb_edu.py \
-    --input_patterns '["gs://marin-us-central2/scratch/nfliu/text/fineweb-edu-10M/*_text_and_scores.parquet", "gs://marin-us-central2/raw/fineweb-edu/*/*.parquet"]' \
+    --input_patterns '["gs://marin-us-central2/raw/fineweb-edu/*/*.parquet", "gs://marin-us-central2/scratch/nfliu/text/fineweb-edu-10M/*_text_and_scores.parquet"]' \
     --parquets_paths_file 'gs://marin-us-central2/scratch/nfliu/fineweb_edu_fineweb_edu_10M_paths.txt' \
     --minhash_base_path 'gs://marin-us-central2/scratch/nfliu/minhash/fineweb_edu_fineweb_edu_10M_minhash' \
     --minhash_logs_path 'gs://marin-us-central2/scratch/nfliu/minhash/logs/fineweb_edu_fineweb_edu_10M_minhash_logs'
+
+# Move the deduplicated content
+gcloud storage mv gs://marin-us-central2/scratch/nfliu/minhash/fineweb_edu_fineweb_edu_10M_minhash/deduplicated_output/* gs://marin-us-central2/scratch/nfliu/text/fineweb-edu-fineweb-edu-10M-minhash/
+# Remove the logs and intermediate output
+gcloud storage rm --recursive gs://marin-us-central2/scratch/nfliu/minhash/fineweb_edu_fineweb_edu_10M_minhash
+gcloud storage rm --recursive gs://marin-us-central2/scratch/nfliu/minhash/logs/fineweb_edu_fineweb_edu_10M_minhash_logs
 ```
 """
 import logging
