@@ -29,9 +29,15 @@ while IFS= read -r cluster_port_pair; do
     continue # Skip to the next cluster
   fi
 
-  screen -S "$SCREEN_NAME" ray dashboard --port=$port
+  SCREEN_LOG_FILE="$HOME/.marin_screen_logs/${SCREEN_NAME}.log"
+  mkdir -p "$(dirname "$SCREEN_LOG_FILE")"
 
-  echo "Screen session '$SCREEN_NAME' created and attached for cluster '$cluster_name'."
+  screen -dmS "$SCREEN_NAME"
+  # Run ray dashboard in the background and log output to a file
+  screen -S "$SCREEN_NAME" -X stuff "ray dashboard --port=$port > \"${SCREEN_LOG_FILE}\" 2>&1 &\n"
+  screen -r "$SCREEN_NAME"
+
+  echo "Screen session '$SCREEN_NAME' created and attached for cluster '$cluster_name'. See logs in ${SCREEN_LOG_FILE}"
 
 done < <(yq -r 'to_entries | .[] | .key + ": " + .value' infra/cluster/clusters.yaml)
 
