@@ -12,7 +12,7 @@ pip install -e ".[extras]"
 pip install 'datatrove[io] @ git+https://github.com/nelson-liu/datatrove@ray_executor_dedup_logging' spacy cupy-cuda12x==13.3.0
 ```
 
-Cluster duplicates for FineWeb-Edu:
+Cluster duplicates for FineWeb-Edu (16h22m on n2-highmem-128):
 
 ```
 python scripts/fineweb-edu/minhash_cluster_duplicates_local_fineweb_edu.py \
