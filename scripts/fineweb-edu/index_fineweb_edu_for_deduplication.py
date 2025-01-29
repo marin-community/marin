@@ -4,7 +4,7 @@ Index fineweb-edu for eventual bipartite deduplication.
 
 ```
 python marin/run/ray_run.py \
-    --pip_deps 'datatrove[io,processing] @ git+https://github.com/nelson-liu/datatrove@ray_executor_dedup_logging,spacy,cupy-cuda12x==13.3.0' \
+    --pip_deps 'datatrove @ git+https://github.com/nelson-liu/datatrove@ray_executor_dedup_logging,spacy,cupy-cuda12x==13.3.0' \
     --no_wait -- \
     python scripts/fineweb-edu/index_fineweb_edu_for_deduplication.py \
     --input_patterns '["gs://marin-us-central2/raw/fineweb-edu/*/*.parquet"]' \

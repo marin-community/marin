@@ -10,7 +10,7 @@ Note that we do _not_ modify fineweb-edu, only the input dataset.
 
 ```
 python marin/run/ray_run.py \
-    --pip_deps 'datatrove[io,processing] @ git+https://github.com/nelson-liu/datatrove@ray_executor_dedup_logging,spacy,cupy-cuda12x==13.3.0' \
+    --pip_deps 'datatrove @ git+https://github.com/nelson-liu/datatrove@ray_executor_dedup_logging,spacy,cupy-cuda12x==13.3.0' \
     --no_wait -- \
     python scripts/fineweb-edu/bipartite_minhash_deduplicate_against_fineweb_edu.py \
     # TODO(nfliu): check the fineweb-edu index path and make sure it's right.
