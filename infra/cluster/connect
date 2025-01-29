@@ -16,6 +16,7 @@ then
     exit 1
 fi
 
+set -x # Enable verbose logging
 
 while IFS= read -r cluster_port_pair; do
   cluster_name=$(echo "$cluster_port_pair" | awk -F ': ' '{print $1}')
@@ -35,8 +36,9 @@ while IFS= read -r cluster_port_pair; do
 
   tmux new-session -d -s "$SESSION_NAME"
 
-  echo tmux send-keys -t "$SESSION_NAME" "echo hi" Enter
-  echo tmux send-keys -t "$SESSION_NAME" "ray dashboard --port=$port \"$CLUSTER_CONFIG_PATH\"" Enter
+  echo tmux send-keys -t "$SESSION_NAME" "echo hi"
+  tmux send-keys -t "$SESSION_NAME" "echo hi" Enter
+  tmux send-keys -t "$SESSION_NAME" "ray dashboard --port=$port \"$CLUSTER_CONFIG_PATH\"" Enter
 
   echo "tmux session '$SESSION_NAME' created for cluster '$cluster_name'. Run 'tmux attach -t $SESSION_NAME' to connect. See logs in ${SESSION_LOG_FILE}"
 
@@ -44,3 +46,5 @@ done < <(yq -r 'to_entries | .[] | .key + ": " + (.value | to_string)' infra/clu
 
 
 echo "Finished creating tmux sessions for all clusters."
+
+set +x # Disable verbose logging
