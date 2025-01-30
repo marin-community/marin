@@ -121,7 +121,7 @@ def count_tokens_in_shard(input_path: str, shard_output_path: str, tokenizer_nam
 
     with fsspec.open(shard_output_path, "w") as f:
         json.dump({"input_path": input_path, "num_tokens": num_tokens, "num_documents": num_documents}, f)
-    return num_tokens
+    return num_tokens, num_documents
 
 
 @ray.remote(memory=8 * 1024 * 1024 * 1024)
@@ -159,7 +159,7 @@ def count_tokens(input_patterns: list[str], output_path: str, tokenizer_name: st
             finished, unfinished = ray.wait(unfinished, num_returns=len(unfinished), timeout=5)
             try:
                 results = ray.get(finished)
-                for shard_num_documents, shard_num_tokens in results:
+                for shard_num_tokens, shard_num_documents in results:
                     num_tokens += shard_num_tokens
                     num_documents += shard_num_documents
                     pbar.update(1)
