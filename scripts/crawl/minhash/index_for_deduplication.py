@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 """
-Index fineweb-edu for eventual bipartite deduplication
+Create an index of a dataset so that we can deduplicate other datasets against it.
 
 ```
 python marin/run/ray_run.py \
     --pip_deps 'datatrove @ git+https://github.com/nelson-liu/datatrove@ray_executor_dedup_logging,spacy,cupy-cuda12x==13.3.0' \
     --no_wait -- \
-    python scripts/fineweb-edu/index_fineweb_edu_for_deduplication.py \
+    python scripts/crawl/minhash/index_for_deduplication.py \
     --input_patterns '["gs://marin-us-central2/raw/fineweb-edu/*/*.parquet"]' \
     --parquets_paths_file 'gs://marin-us-central2/scratch/nfliu/fineweb_edu_paths.txt' \
     --minhash_base_path 'gs://marin-us-central2/scratch/nfliu/minhash/fineweb_edu_minhash_index' \
-    --minhash_logs_path 'gs://marin-us-central2/scratch/nfliu/minhash/logs/fineweb_edu_minhash_index_logs'
+    --minhash_logs_path 'gs://marin-us-central2/scratch/nfliu/minhash/logs/fineweb_edu_minhash_index_logs' \
+    --index_name fineweb-edu-index
 
 # Remove intermediate outputs
 gcloud storage rm --recursive gs://marin-us-central2/scratch/nfliu/minhash/fineweb_edu_minhash_index/signatures/
@@ -38,31 +39,33 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
-class IndexFineWebEduForMinHashDeduplicationConfig:
+class IndexForDeduplicationConfig:
     input_patterns: list[str]
     parquets_paths_file: str
     minhash_base_path: str
     minhash_logs_path: str
+    index_name: str
 
 
 @ray.remote(memory=32 * 1024 * 1024 * 1024, num_cpus=8)
-def index_fineweb_edu_for_minhash_deduplication(
-    fineweb_edu_patterns: list[str],
+def index_for_minhash_deduplication(
+    input_patterns: list[str],
     parquets_paths_file: str,
     minhash_base_path: str,
     minhash_logs_path: str,
+    index_name: str,
     minhash_config: MinhashConfig,
 ):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     if not fsspec_exists(parquets_paths_file):
-        # Create the pathfile for FineWeb-Edu, removing the base bucket prefix
-        fineweb_edu_parquet_paths = []
-        for pattern in fineweb_edu_patterns:
+        # Create the pathfile for the input dataset, removing the base bucket prefix
+        input_parquet_paths = []
+        for pattern in input_patterns:
             for path in fsspec_glob(pattern):
                 assert path.startswith("gs://marin-us-central2/")
-                fineweb_edu_parquet_paths.append(path.removeprefix("gs://marin-us-central2/"))
+                input_parquet_paths.append(path.removeprefix("gs://marin-us-central2/"))
         with fsspec.open(parquets_paths_file, "w") as f:
-            for path in tqdm(fineweb_edu_parquet_paths, desc="Writing parquets paths file"):
+            for path in tqdm(input_parquet_paths, desc="Writing parquets paths file"):
                 f.write(path + "\n")
 
     # this is the original data that we want to deduplicate
@@ -97,7 +100,7 @@ def index_fineweb_edu_for_minhash_deduplication(
                 input_folder=f"{minhash_base_path}/signatures",
                 output_folder=f"{minhash_base_path}/buckets",
                 index_folder=f"{minhash_base_path}/index",
-                create_index_name="fineweb-edu-index",
+                create_index_name=index_name,
                 # Index should be empty, so we aren't actually removing anything
                 only_dedup_in_index=True,
                 config=minhash_config,
@@ -113,7 +116,7 @@ def index_fineweb_edu_for_minhash_deduplication(
 
 
 @draccus.wrap()
-def index_fineweb_edu_for_minhash_deduplication_driver(cfg: IndexFineWebEduForMinHashDeduplicationConfig):
+def index_for_minhash_deduplication_driver(cfg: IndexForDeduplicationConfig):
     minhash_config = MinhashConfig(
         hash_config=HashConfig(
             hash_fc="sha1",
@@ -124,11 +127,16 @@ def index_fineweb_edu_for_minhash_deduplication_driver(cfg: IndexFineWebEduForMi
     )
     # Do everything in a remote task
     ray.get(
-        index_fineweb_edu_for_minhash_deduplication.remote(
-            cfg.input_patterns, cfg.parquets_paths_file, cfg.minhash_base_path, cfg.minhash_logs_path, minhash_config
+        index_for_minhash_deduplication.remote(
+            cfg.input_patterns,
+            cfg.parquets_paths_file,
+            cfg.minhash_base_path,
+            cfg.minhash_logs_path,
+            cfg.index_name,
+            minhash_config,
         )
     )
 
 
 if __name__ == "__main__":
-    index_fineweb_edu_for_minhash_deduplication_driver()
+    index_for_minhash_deduplication_driver()
