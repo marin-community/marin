@@ -15,29 +15,42 @@ Reference:
 """
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
-import wandb
 import numpy as np
-import pandas as pd
+import wandb
+from matplotlib import pyplot as plt
 
 from marin.execution.executor import ExecutorStep
+from marin.scaling_laws.utils import ProjectionPoint, get_default_projection_points
 
 
 @dataclass(frozen=True)
 class ScalingLawConfig:
 
-    ladder_model_steps: list[ExecutorStep | str]
+    ladder_model_steps: Sequence[ExecutorStep | str]
     """list of (smaller model) steps or wandb run ids to be used as input for scaling laws"""
 
     pred_model_step: ExecutorStep | str
     """executor step or wandb run id for the larger model to make predictions for"""
 
-    intermediate_task_loss: str = "eval/paloma/c4_en/bpb"
-    """intermediate task loss to be used for scaling laws (eg. c4en bpb)"""
+    projection_points: Sequence[ProjectionPoint] | None = None  # Predict for N,D points
+    """Points to project to"""
 
-    task_accuracies: Sequence[str] = "lm_eval/hellaswag_10shot/acc"
+    task_losses: Sequence[str] = field(default_factory=lambda: ["eval/paloma/c4_en/bpb"])
+    """task losses to predict for scaling laws (eg. c4en bpb)"""
+
+    task_accuracies: Sequence[str] = field(default_factory=lambda: ["lm_eval/hellaswag_10shot/acc"])
     """task accuracy to predict for the larger model (eg. hellaswag accuracy)"""
+
+    use_log_for_ND: bool = True
+    """whether to use log space for N,D in scaling laws"""
+
+    normalize_ND: bool = True
+    """whether to normalize N,D in scaling laws"""
+
+    entity: str = "stanford-mercury"
+    project: str = "marin"
 
 
 def get_wandb_run_id_from_step(step: ExecutorStep) -> str:
@@ -51,76 +64,61 @@ def run_scaling_law_analysis(config: ScalingLawConfig) -> None:
     """
     Analyze scaling laws for a given task loss and multiple accuracy metrics.
     """
-    from marin.scaling_laws.utils import fit_multiple_metrics_scaling_laws
+    from marin.scaling_laws.utils import fit_scaling_laws
 
     input_run_ids = [
         get_wandb_run_id_from_step(step) if isinstance(step, ExecutorStep) else step
         for step in config.ladder_model_steps
     ]
 
-    if isinstance(config.pred_model_step, ExecutorStep):
-        pred_run_id = get_wandb_run_id_from_step(config.pred_model_step)
-    else:
-        pred_run_id = config.pred_model_step
+    pred_run_id = None
+    if config.pred_model_step:
+        pred_run_id = (
+            get_wandb_run_id_from_step(config.pred_model_step)
+            if isinstance(config.pred_model_step, ExecutorStep)
+            else config.pred_model_step
+        )
 
-    # Get predictions for task loss and all accuracy metrics in one go
-    (actual_loss, predicted_loss), accuracy_results = fit_multiple_metrics_scaling_laws(
+    projections, predictions, points = fit_scaling_laws(
         runs=input_run_ids,
+        loss_metrics=config.task_losses,
         accuracy_metrics=config.task_accuracies,
-        entity="stanford-mercury",
-        project="marin",
+        entity=config.entity,
+        project=config.project,
         pred_run=pred_run_id,
-        task_loss=config.intermediate_task_loss,
-        aggregation="all",
-        tokens_col="throughput/total_tokens",
-        param_col="parameter_count",
-        param_col_to_use="computed_params",
-        use_log_for_ND=True,
-        normalize_ND=True,
+        projection_points=config.projection_points or get_default_projection_points(),
+        use_log_for_ND=config.use_log_for_ND,
+        normalize_ND=config.normalize_ND,
     )
 
-    # Log and create a report
     log_and_create_report(
-        actual_loss=actual_loss.tolist(),
-        predicted_loss=predicted_loss.tolist(),
-        accuracy_results={k: (v[0].tolist(), v[1].tolist()) for k, v in accuracy_results.items()},
+        projections=projections,
+        points=points if config.projection_points else get_default_projection_points(),
+        predictions=predictions,
         input_run_ids=input_run_ids,
         pred_run_id=pred_run_id,
         scaling_law_config=config,
-        wandb_project="marin-scaling-laws",
-        wandb_entity="stanford-mercury",
     )
 
 
 def log_and_create_report(
-    actual_loss: list,
-    predicted_loss: list,
-    accuracy_results: dict[str, tuple[list, list]],
+    projections: dict[str, np.ndarray],
+    points: list[ProjectionPoint],
+    predictions: tuple[dict, dict] | None,
     input_run_ids: list,
-    pred_run_id: str,
+    pred_run_id: str | None,
     scaling_law_config: ScalingLawConfig,
     wandb_project: str = "marin-scaling-laws",
     wandb_entity: str = "stanford-mercury",
 ):
     """
     Logs scaling law analysis creates a concise WandB report with plots and info about runs.
-
-    Args:
-        actual_loss (list): List of actual task loss values.
-        predicted_loss (list): List of predicted task loss values.
-        accuracy_results (dict): Dictionary mapping accuracy metric names to tuples of
-                               (actual_acc_list, predicted_acc_list).
-        input_run_ids (list): List of input WandB run IDs for smaller models.
-        pred_run_id (str): WandB run ID for the larger model.
-        scaling_law_config (ScalingLawConfig): Scaling law configuration.
-        wandb_project (str): WandB project name.
-        wandb_entity (str): WandB entity (user or team) name.
     """
     # Initialize WandB run
     run = wandb.init(
         project=wandb_project,
         entity=wandb_entity,
-        name=f"""Scaling Law Report: {pred_run_id}-ngrfuyg""",
+        name=f"""Scaling Law Report: {pred_run_id if pred_run_id else 'projection'}- bpb""",
         tags=["scaling_laws"],
         config={
             "input_runs": input_run_ids,
@@ -129,141 +127,84 @@ def log_and_create_report(
         reinit=True,
     )
 
-    # Create steps array
-    steps = list(range(len(actual_loss)))
-
     # Create plots dictionary for wandb.log
     plots = {}
 
-    # Add loss plot
-    plots["Task Loss"] = wandb.plot.line_series(
-        xs=steps,
-        ys=[actual_loss, predicted_loss],
-        keys=["Actual", "Predicted"],
-        title="Task Loss: Actual vs Predicted",
-        xname="Step",
-        split_table=True,
-    )
+    # Log projections
+    for loss_name, projection in projections.items():
+        plt.figure()
+        plot_scaling_projections(projection, points)
+        plots[f"Projection - {loss_name}"] = wandb.Image(plt)
+        plt.close()
 
-    # Add accuracy plots for each metric
-    for metric, (actual_acc, predicted_acc) in accuracy_results.items():
-        plots[f"Task Accuracy - {metric}"] = wandb.plot.line_series(
-            xs=steps,
-            ys=[actual_acc[:30], predicted_acc[:30]],
-            keys=["Actual", "Predicted"],
-            title=f"Task Accuracy ({metric}): Actual vs Predicted",
-            xname="Step",
-            split_table=True,
-        )
+    if predictions:
+
+        loss_results, accuracy_results = predictions
+
+        if loss_results:
+            for loss_name, (actual_loss, predicted_loss) in loss_results.items():
+                steps = list(range(len(actual_loss)))
+                plots[f"Task Loss - {loss_name}"] = wandb.plot.line_series(
+                    xs=steps,
+                    ys=[actual_loss.tolist(), predicted_loss.tolist()],
+                    keys=["Actual", "Predicted"],
+                    title=f"Task Loss: {loss_name}",
+                    xname="Step",
+                    split_table=True,
+                )
+
+        if accuracy_results:
+            # Add accuracy plots for each metric
+            for metric, (actual_acc, predicted_acc) in accuracy_results.items():
+                steps = list(range(len(actual_acc)))
+                plots[f"Task Accuracy - {metric}"] = wandb.plot.line_series(
+                    xs=steps,
+                    ys=[actual_acc.tolist(), predicted_acc.tolist()],
+                    keys=["Actual", "Predicted"],
+                    title=f"Task Accuracy ({metric})",
+                    xname="Step",
+                    split_table=True,
+                )
 
     # Log all plots
     wandb.log(plots)
 
     # Info about runs and links
     input_run_links = [f"https://wandb.ai/stanford-mercury/marin/runs/{run_id}" for run_id in input_run_ids]
-    prediction_run_link = f"https://wandb.ai/stanford-mercury/marin/runs/{pred_run_id}"
+    prediction_run_link = f"https://wandb.ai/stanford-mercury/marin/runs/{pred_run_id}" if pred_run_id else None
     run.summary.update(
         {
             "Input Runs": input_run_links,
             "Prediction Run": prediction_run_link,
-            "Task Loss Metric": scaling_law_config.intermediate_task_loss,
-            "Task Accuracy Metrics": scaling_law_config.task_accuracies,
+            "Task Losses": scaling_law_config.task_losses,
+            "Task Accuracies": scaling_law_config.task_accuracies,
         }
     )
 
     wandb.finish()
 
+
 ##### Projection of performance to larger model sizes/#tokens using scaling laws #####
 
-@dataclass
-class ProjectionPoint:
-    """Represents a point to project performance to"""
-    num_params: int
-    num_tokens: int
 
+def plot_scaling_projections(predicted: np.ndarray, points: list[ProjectionPoint]):
+    """Plot scaling law predictions vs tokens for specified or all model sizes"""
+    plt.figure(figsize=(12, 6))
+    unique_params = np.unique([p.num_params for p in points])
 
-def get_default_projection_points() -> list[ProjectionPoint]:
-    """Default set of model sizes to project to"""
-    sizes = [1.4e9, 8e9, 13e9, 22e9, 70e9] 
-    chinchilla_multipliers = [0.5, 1, 2, 5, 10, 20]
-    
-    return [ProjectionPoint(int(size), int(size * m)) for size in sizes for m in chinchilla_multipliers]
+    for param in unique_params:
+        mask = np.array([p.num_params == param for p in points])
+        tokens = np.array([p.num_tokens for p in points])[mask]
+        preds = predicted[mask]
 
-def create_projection_df(points: list[ProjectionPoint]) -> pd.DataFrame:
-    """Convert projection points to a dataframe format matching scaling law requirements"""
-    return pd.DataFrame({
-        'parameter_count': [p.num_params for p in points],
-        'throughput/total_tokens': [p.num_tokens for p in points],
-        'run': [f'projection_{i}' for i in range(len(points))]
-    })
+        plt.plot(tokens, preds, "o-", linewidth=2, label=f"{param/1e9:.1f}B params")
+        for t, pred in zip(tokens, preds, strict=False):
+            token_str = f"{t/1e9:.1f}B" if t < 1e11 else f"{t/1e12:.1f}T"
+            plt.annotate(f"{token_str}, {pred:.3f}", (t, pred), ha="center", va="bottom", fontsize=8)
 
-def default_scaling_law_projection(
-    ladder_runs: Sequence[str],
-    intermediate_task_loss: str = "eval/paloma/c4_en/bpb",
-    projection_points: list[ProjectionPoint] | None = None,
-    entity: str = "stanford-mercury",
-    project: str = "marin",
-    use_log_for_ND: bool = True,
-    normalize_ND: bool = True,
-) -> tuple[np.ndarray, list[ProjectionPoint]]:
-    """
-    Project performance to larger model sizes using scaling laws.
-    
-    Args:
-        ladder_runs: Sequence of run IDs to use for fitting scaling laws
-        scaling_law_config: Configuration for scaling law analysis
-        projection_points: Optional custom points to project to
-        entity: WandB entity
-        project: WandB project
-    
-    Returns:
-        Tuple of (predicted_losses, projection_points)
-    """
-    from marin.scaling_laws.utils import (
-        pull_metrics_from_wandb, filter_zero_d, extract_scaling_data,
-        fit_power_law, predict_power_law
-    )
-
-    
-    # Get or create projection points
-    points = projection_points or get_default_projection_points()
-    projection_df = create_projection_df(points)
-    
-    # Get ladder model data
-    metrics = [intermediate_task_loss, "throughput/total_tokens"]
-    ladder_df = pull_metrics_from_wandb(
-        runs=ladder_runs,
-        metrics=metrics,
-        entity=entity,
-        project=project
-    )
-    
-    # Prepare data for fitting
-    ladder_df_filtered = filter_zero_d(ladder_df)
-    N, D, y = extract_scaling_data(
-        ladder_df_filtered,
-        loss_col=intermediate_task_loss
-    )
-    
-    # Fit power law
-    N_proj = np.array([p.num_params for p in points])
-    D_proj = np.array([p.num_tokens for p in points])
-    
-    if use_log_for_ND:
-        N = np.log(N)
-        D = np.log(D)
-        N_proj = np.log(N_proj)
-        D_proj = np.log(D_proj)
-    
-    if normalize_ND:
-        N_scale = np.mean(N)
-        D_scale = np.mean(D)
-        N = N / N_scale
-        D = D / D_scale
-        N_proj = N_proj / N_scale
-        D_proj = D_proj / D_scale
-    
-    params = fit_power_law(N, D, y, use_log_space=True)
-    predictions = predict_power_law(params, N_proj, D_proj)
-    
-    return predictions, points
+    plt.xscale("log")
+    plt.xlabel("Number of Tokens")
+    plt.ylabel("Predicted Loss")
+    plt.grid(True)
+    plt.legend()
+    return plt
