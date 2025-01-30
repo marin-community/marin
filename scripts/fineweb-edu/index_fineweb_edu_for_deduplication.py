@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Index fineweb-edu for eventual bipartite deduplication.
+Index fineweb-edu for eventual bipartite deduplication
 
 ```
 python marin/run/ray_run.py \
@@ -21,7 +21,7 @@ import fsspec
 import ray
 from datatrove.executor import RayPipelineExecutor
 from datatrove.pipeline.dedup import MinhashDedupSignature
-from datatrove.pipeline.dedup.minhash import MinhashConfig, MinhashBuildIndex
+from datatrove.pipeline.dedup.minhash import MinhashConfig, MinhashDedupBuckets
 from datatrove.pipeline.readers import ParquetReader
 from datatrove.utils.hashing import HashConfig
 from datatrove.utils.typeshelper import Languages
@@ -89,18 +89,21 @@ def index_fineweb_edu_for_minhash_deduplication(
     # stage 2 creates an index from the signatures
     stage2 = RayPipelineExecutor(
         pipeline=[
-            MinhashBuildIndex(
+            MinhashDedupBuckets(
                 input_folder=f"{minhash_base_path}/signatures",
-                output_folder=f"{minhash_base_path}/index",
-                index_name="fineweb-edu-index",
+                output_folder=f"{minhash_base_path}/buckets",
+                index_folder=f"{minhash_base_path}/index",
+                create_index_name="fineweb-edu-index",
+                # Index should be empty, so we aren't actually removing anything
+                only_dedup_in_index=True,
                 config=minhash_config,
-                lines_to_buffer=1000,
             ),
         ],
-        tasks=minhash_config.num_buckets,
-        memory_bytes_per_task=16 * 1024 * 1024 * 1024,
+        tasks=minhash_config.num_buckets * 50,
+        randomize_start_duration=180,
         logging_dir=f"{minhash_logs_path}/index",
         depends=stage1,
+        memory_bytes_per_task=16 * 1024 * 1024 * 1024,
     )
     stage2.run()
 
