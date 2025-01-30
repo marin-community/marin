@@ -108,8 +108,9 @@ def count_tokens_in_shard(input_path: str, shard_output_path: str, tokenizer_nam
     if fsspec_exists(shard_output_path):
         logger.info(f"Found output at {shard_output_path}, re-using results...")
         with fsspec.open(shard_output_path) as f:
-            saved_num_tokens = json.load(f)["num_tokens"]
-            saved_num_documents = json.load(f)["num_documents"]
+            loaded_results = json.load(f)
+            saved_num_tokens = loaded_results["num_tokens"]
+            saved_num_documents = loaded_results["num_documents"]
             return (saved_num_tokens, saved_num_documents)
     if input_path.endswith(".parquet"):
         num_tokens, num_documents = count_tokens_in_parquet_file(input_path, tokenizer_name)
