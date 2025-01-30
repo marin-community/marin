@@ -302,11 +302,38 @@ def default_scaling_laws_suite(experiment: ExecutorStep, scaling_law_config: Sca
     pass
 
 
-def default_scaling_law_projection(
+def default_scaling_law_pred(
     ladder_runs: Sequence[ExecutorStep | InputName | str],
-    scaling_law_config: ScalingLawConfig,
+    pred_run: ExecutorStep | InputName | None = None,
+    task_losses: Sequence[str] = ("eval/paloma/c4_en/bpb"),
+    task_accuracies: Sequence[str] | Sequence[EvalTaskConfig] = ("lm_eval/hellaswag_10shot/acc"),
 ):
     """
     Given a suite of small models, predict the performance on a number of (N, D) values.
     """
-    pass
+    # get the executor steps or run IDs for the ladder runs and the pred run
+    ladder_steps_or_ids = [get_executor_step(run) if not isinstance(run, str) else run for run in ladder_runs]
+
+    pred_run_or_id = None
+    if pred_run:
+        pred_run_or_id = get_executor_step(pred_run) if not isinstance(pred_run, str) else pred_run
+
+    # convert the task accuracies to strings if they are `EvalTaskConfig`s
+    if isinstance(task_accuracies[0], EvalTaskConfig):
+        task_accuracies = convert_to_task_metrics(task_accuracies)
+
+    if pred_run_or_id:
+        name = pred_run_or_id if isinstance(pred_run_or_id, str) else pred_run_or_id.name
+    else:
+        name = "projection"
+
+    return ExecutorStep(
+        name=f"""scaling_laws/{name}-bpb""",
+        fn=run_scaling_law_analysis,
+        config=ScalingLawConfig(
+            ladder_model_steps=ladder_steps_or_ids,
+            pred_model_step=pred_run_or_id,
+            task_losses=task_losses,
+            task_accuracies=task_accuracies,
+        ),
+    )

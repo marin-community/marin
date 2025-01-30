@@ -3,7 +3,7 @@ A simple scaling law experiment (to serve as an example or test script) to predi
 from 5 smaller models.
 """
 
-from experiments.defaults import default_scaling_law_analysis
+from experiments.defaults import default_scaling_law_pred
 from experiments.evals.task_configs import CORE_TASKS
 from marin.execution.executor import executor_main
 
@@ -17,10 +17,10 @@ RUNS = [
 
 PRED_RUN = "llama-8b-tootsie-0.001-19ad63"
 
-scaling_law_8b_performance_pred = default_scaling_law_analysis(
+scaling_law_8b_performance_pred = default_scaling_law_pred(
     ladder_runs=RUNS,
     pred_run=PRED_RUN,
-    intermediate_task_loss="eval/paloma/c4_en/bpb",
+    task_losses=("eval/paloma/c4_en/bpb", "eval/bpb", "eval/loss"),
     task_accuracies=CORE_TASKS[4:9],  # predict 5 metrics
 )
 

@@ -16,6 +16,7 @@ Example usage is in marin/scaling_laws/scaling_laws_analysis.ipynb.
 """
 
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from typing import Any
 
 import matplotlib.pyplot as plt
@@ -51,6 +52,7 @@ def power_law_model(params: Sequence[float], N: np.ndarray, D: np.ndarray, use_l
         A, B, alpha, beta, E = params
     return A / (N**alpha) + B / (D**beta) + E
 
+
 def power_law_loss(
     params: Sequence[float],
     N: np.ndarray,
@@ -59,7 +61,7 @@ def power_law_loss(
     use_log_space: bool,
     delta: float,
     reduction: Callable[[np.ndarray], float] | None = np.sum,
- ) -> float:
+) -> float:
     """
     Huber loss for the power-law model.
     Args:
@@ -244,7 +246,7 @@ def extract_scaling_data(
     df: pd.DataFrame,
     param_count_col: str = "parameter_count",
     tokens_col: str = "throughput/total_tokens",
-    loss_col: str = "eval/paloma/c4_en/bpb",
+    loss_col: str = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Extracts N, D, and y from the given DataFrame.
@@ -263,7 +265,7 @@ def extract_scaling_data(
     """
     N = df[param_count_col].values
     D = df[tokens_col].values
-    y = df[loss_col].values
+    y = df[loss_col].values if loss_col is not None else None
 
     # get hidden dim from run i.e tootsie-scaling-512-81c36c should result in (512)
     hidden_dim = df["run"].str.extract(r"(\d+)")[0].astype(int)
@@ -380,6 +382,37 @@ def plot_actual_vs_predicted(
     plt.show()
 
     return plt
+
+
+####################################################################################################
+# Projection helpers
+
+
+@dataclass
+class ProjectionPoint:
+    """Represents a point to project performance to"""
+
+    num_params: int
+    num_tokens: int
+
+
+def get_default_projection_points() -> list[ProjectionPoint]:
+    """Default set of model sizes to project to"""
+    sizes = [1.4e9, 8e9, 13e9, 22e9, 70e9]
+    chinchilla_multipliers = [0.5, 1, 2, 5, 10, 20]
+
+    return [ProjectionPoint(int(size), int(size * m)) for size in sizes for m in chinchilla_multipliers]
+
+
+def create_projection_df(points: list[ProjectionPoint]) -> pd.DataFrame:
+    """Convert projection points to a dataframe format matching scaling law requirements"""
+    return pd.DataFrame(
+        {
+            "parameter_count": [p.num_params for p in points],
+            "throughput/total_tokens": [p.num_tokens for p in points],
+            "run": [f"projection_{i}" for i in range(len(points))],
+        }
+    )
 
 
 ####################################################################################################
@@ -632,3 +665,137 @@ def fit_multiple_metrics_scaling_laws(
         accuracy_results[acc_metric] = (acc_pred_actual, acc_preds)
 
     return (actual_loss, predicted_loss), accuracy_results
+
+
+def fit_scaling_laws(
+    runs: list[str],
+    loss_metrics: Sequence[str],
+    accuracy_metrics: Sequence[str],
+    entity: str,
+    project: str,
+    x_axis: str = "throughput/total_gflops",
+    pred_run: str = "llama-8b-tootsie-0.001-19ad63",
+    projection_points: list[ProjectionPoint] | None = None,
+    aggregation: str = "all",
+    tokens_col: str = "throughput/total_tokens",
+    param_col: str = "parameter_count",
+    param_col_to_use: str = "computed_params",
+    use_log_for_ND: bool = False,
+    normalize_ND: bool = False,
+) -> tuple[dict[str, np.ndarray], dict[str, tuple[np.ndarray, np.ndarray]] | None, list[ProjectionPoint] | None]:
+    """Fit scaling laws for both projection and prediction"""
+
+    # First pull for losses - only essential metrics
+    metrics = list(loss_metrics) + [tokens_col]
+    loss_df = pull_metrics_from_wandb(
+        runs=runs,
+        metrics=metrics,
+        entity=entity,
+        project=project,
+        x_axis=x_axis,
+        summary_fields=(param_col,),
+    )
+
+    # Process loss data
+    loss_df_filtered = filter_zero_d(loss_df, tokens_col)
+    loss_df_agg = aggregate_steps(loss_df_filtered, step_mode=aggregation)
+
+    # Get N, D
+    N, D, _ = extract_scaling_data(loss_df_agg, param_col_to_use, tokens_col)
+    if use_log_for_ND:
+        N = np.log(N)
+        D = np.log(D)
+    if normalize_ND:
+        N_scale = np.mean(N)
+        D_scale = np.mean(D)
+        N = N / N_scale
+        D = D / D_scale
+
+    # Handle projections
+    projections = {}
+    points = None
+    if projection_points:
+        points = projection_points or get_default_projection_points()
+        N_proj = np.array([p.num_params for p in points])
+        D_proj = np.array([p.num_tokens for p in points])
+
+        if use_log_for_ND:
+            N_proj, D_proj = np.log(N_proj), np.log(D_proj)
+        if normalize_ND:
+            N_proj, D_proj = N_proj / N_scale, D_proj / D_scale
+
+        for loss_metric in loss_metrics:
+            y = loss_df_agg[loss_metric].values
+            params = fit_power_law(N, D, y, use_log_space=True)
+            projections[loss_metric] = predict_power_law(params, N_proj, D_proj)
+
+    predictions = None
+    if pred_run:
+        loss_pred_df = pull_metrics_from_wandb(
+            runs=[pred_run],
+            metrics=list(loss_metrics) + [tokens_col],
+            entity=entity,
+            project=project,
+            x_axis=x_axis,
+            summary_fields=(param_col,),
+        )
+
+        loss_pred_filtered = filter_zero_d(loss_pred_df, tokens_col)
+        loss_pred_agg = aggregate_steps(loss_pred_filtered, step_mode=aggregation)
+
+        N_pred, D_pred, _ = extract_scaling_data(loss_pred_agg, param_col_to_use, tokens_col)
+        if use_log_for_ND:
+            N_pred = np.log(N_pred)
+            D_pred = np.log(D_pred)
+        if normalize_ND:
+            N_pred = N_pred / N_scale
+            D_pred = D_pred / D_scale
+
+        # Fit losses
+        loss_results = {}
+        for loss_metric in loss_metrics:
+            y = loss_df_agg[loss_metric].values
+            params = fit_power_law(N, D, y, use_log_space=True)
+            actual_loss = loss_pred_agg[loss_metric].values
+            predicted_loss = predict_power_law(params, N_pred, D_pred)
+            loss_results[loss_metric] = (actual_loss, predicted_loss)
+
+        # Second pull for accuracies
+        if accuracy_metrics:
+            acc_df = pull_metrics_from_wandb(
+                runs=runs,
+                metrics=list(accuracy_metrics) + [tokens_col],
+                entity=entity,
+                project=project,
+                x_axis=x_axis,
+                summary_fields=(param_col,),
+            )
+            acc_pred_df = pull_metrics_from_wandb(
+                runs=[pred_run],
+                metrics=list(accuracy_metrics) + [tokens_col],
+                entity=entity,
+                project=project,
+                x_axis=x_axis,
+                summary_fields=(param_col,),
+            )
+
+            acc_df_filtered = filter_zero_d(acc_df, tokens_col)
+            acc_df_agg = aggregate_steps(acc_df_filtered, step_mode=aggregation)
+            acc_pred_filtered = filter_zero_d(acc_pred_df, tokens_col)
+            acc_pred_agg = aggregate_steps(acc_pred_filtered, step_mode=aggregation)
+
+            # Fit accuracies
+            accuracy_results = {}
+            loss_metric, (_, predicted_loss) = list(loss_results.items())[0]  # use first loss
+            task_losses = loss_df_agg[loss_metric].values
+            for acc_metric in accuracy_metrics:
+                acc = acc_df_agg[acc_metric].values
+                params = fit_sigmoidal(task_losses, acc)
+                acc_pred_actual = acc_pred_agg[acc_metric].values
+                pred_task_losses = predicted_loss[-len(acc_pred_actual) :]
+                acc_preds = predict_sigmoidal(params, pred_task_losses)
+                accuracy_results[f"{acc_metric}_from_{loss_metric}"] = (acc_pred_actual, acc_preds)
+
+        predictions = (loss_results, accuracy_results)
+
+    return projections, predictions, points
