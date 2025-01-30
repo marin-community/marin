@@ -51,8 +51,9 @@ class MinhashDeduplicateFineWebEduConfig:
 
 
 @ray.remote(memory=32 * 1024 * 1024 * 1024, num_cpus=8)
-def minhash_deduplicate_fineweb_edu(
-    fineweb_edu_patterns: list[str],
+def minhash_deduplicate_against_fineweb_edu(
+    fineweb_edu_index_path: str,
+    input_patterns: list[str],
     parquets_paths_file: str,
     minhash_base_path: str,
     minhash_logs_path: str,
@@ -60,14 +61,14 @@ def minhash_deduplicate_fineweb_edu(
 ):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     if not fsspec_exists(parquets_paths_file):
-        # Create the pathfile for FineWeb-Edu, removing the base bucket prefix
-        fineweb_edu_parquet_paths = []
-        for pattern in fineweb_edu_patterns:
+        # Create the pathfile for the input, removing the base bucket prefix
+        input_parquet_paths = []
+        for pattern in input_patterns:
             for path in fsspec_glob(pattern):
                 assert path.startswith("gs://marin-us-central2/")
-                fineweb_edu_parquet_paths.append(path.removeprefix("gs://marin-us-central2/"))
+                input_parquet_paths.append(path.removeprefix("gs://marin-us-central2/"))
         with fsspec.open(parquets_paths_file, "w") as f:
-            for path in tqdm(fineweb_edu_parquet_paths, desc="Writing parquets paths file"):
+            for path in tqdm(input_parquet_paths, desc="Writing parquets paths file"):
                 f.write(path + "\n")
 
     # this is the original data that we want to deduplicate
@@ -152,7 +153,7 @@ def minhash_deduplicate_fineweb_edu(
 
 
 @draccus.wrap()
-def minhash_deduplicate_fineweb_edu_driver(cfg: MinhashDeduplicateFineWebEduConfig):
+def minhash_deduplicate_against_fineweb_edu_driver(cfg: MinhashDeduplicateFineWebEduConfig):
     minhash_config = MinhashConfig(
         hash_config=HashConfig(hash_fc="sha1", precision=64),
         num_buckets=14,
@@ -160,11 +161,16 @@ def minhash_deduplicate_fineweb_edu_driver(cfg: MinhashDeduplicateFineWebEduConf
     )
     # Do everything in a remote task
     ray.get(
-        minhash_deduplicate_fineweb_edu.remote(
-            cfg.input_patterns, cfg.parquets_paths_file, cfg.minhash_base_path, cfg.minhash_logs_path, minhash_config
+        minhash_deduplicate_against_fineweb_edu.remote(
+            cfg.fineweb_edu_index_path,
+            cfg.input_patterns,
+            cfg.parquets_paths_file,
+            cfg.minhash_base_path,
+            cfg.minhash_logs_path,
+            minhash_config,
         )
     )
 
 
 if __name__ == "__main__":
-    minhash_deduplicate_fineweb_edu_driver()
+    minhash_deduplicate_against_fineweb_edu_driver()
