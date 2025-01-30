@@ -18,6 +18,12 @@ python marin/run/ray_run.py \
     --parquets_paths_file 'gs://marin-us-central2/scratch/nfliu/fineweb_edu_10M_paths.txt' \
     --minhash_base_path 'gs://marin-us-central2/scratch/nfliu/minhash/fineweb_edu_10M_minhash_against_fineweb_edu' \
     --minhash_logs_path 'gs://marin-us-central2/scratch/nfliu/minhash/logs/fineweb_edu_10M_minhash_against_fineweb_edu_logs'
+
+# Move the deduplicated content
+gcloud storage mv gs://marin-us-central2/scratch/nfliu/minhash/fineweb_edu_10M_minhash_against_fineweb_edu/deduplicated_output/* gs://marin-us-central2/scratch/nfliu/text/fineweb_edu_10M_minhash_against_fineweb_edu/
+# Remove the logs and intermediate output
+gcloud storage rm --recursive gs://marin-us-central2/scratch/nfliu/minhash/fineweb_edu_10M_minhash_against_fineweb_edu
+gcloud storage rm --recursive gs://marin-us-central2/scratch/nfliu/minhash/fineweb_edu_10M_minhash_against_fineweb_edu_logs
 ```
 """
 import logging

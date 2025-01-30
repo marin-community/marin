@@ -42,6 +42,16 @@ python marin/run/ray_run.py \
     --input_patterns '["gs://marin-us-central2/scratch/nfliu/text/fineweb-edu-minhash/*.jsonl.gz"]' \
     --output_path "gs://marin-us-central2/scratch/nfliu/count_tokens/fineweb-edu-minhash/"
 ```
+
+Counting tokens in fineweb-edu-10M (deduplicated against fineweb-edu):
+
+```
+python marin/run/ray_run.py \
+    --no_wait -- \
+    python scripts/crawl/count_tokens.py \
+    --input_patterns '["gs://marin-us-central2/scratch/nfliu/text/fineweb_edu_10M_minhash_against_fineweb_edu/*.jsonl.gz"]' \
+    --output_path "gs://marin-us-central2/scratch/nfliu/count_tokens/fineweb_edu_10M_minhash_against_fineweb_edu/"
+```
 """
 import json
 import logging
@@ -68,24 +78,28 @@ class CountTokensConfig:
     tokenizer_name: str = "gpt2"
 
 
-def count_tokens_in_jsonl_file(input_path: str, tokenizer_name: str) -> int:
+def count_tokens_in_jsonl_file(input_path: str, tokenizer_name: str) -> tuple[int, int]:
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
     total_tokens = 0
+    num_documents = 0
     with fsspec.open(input_path, "rt", compression="infer") as f:
         for line in tqdm(f, desc=os.path.basename(input_path)):
             data = json.loads(line)
             total_tokens += len(tokenizer.encode(data["text"]))
-    return total_tokens
+            num_documents += 1
+    return total_tokens, num_documents
 
 
-def count_tokens_in_parquet_file(input_path: str, tokenizer_name: str) -> int:
+def count_tokens_in_parquet_file(input_path: str, tokenizer_name: str) -> tuple[int, int]:
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
     total_tokens = 0
+    num_documents = 0
     df = pd.read_parquet(input_path)
     assert "text" in df.columns
     for text in tqdm(df["text"].tolist(), desc=os.path.basename(input_path)):
         total_tokens += len(tokenizer.encode(text))
-    return total_tokens
+        num_documents += 1
+    return total_tokens, num_documents
 
 
 @ray.remote(memory=2 * 1024 * 1024 * 1024)
@@ -94,16 +108,18 @@ def count_tokens_in_shard(input_path: str, shard_output_path: str, tokenizer_nam
     if fsspec_exists(shard_output_path):
         logger.info(f"Found output at {shard_output_path}, re-using results...")
         with fsspec.open(shard_output_path) as f:
-            return json.load(f)["num_tokens"]
+            saved_num_tokens = json.load(f)["num_tokens"]
+            saved_num_documents = json.load(f)["num_documents"]
+            return (saved_num_tokens, saved_num_documents)
     if input_path.endswith(".parquet"):
-        num_tokens = count_tokens_in_parquet_file(input_path, tokenizer_name)
+        num_tokens, num_documents = count_tokens_in_parquet_file(input_path, tokenizer_name)
     elif ".jsonl" in input_path:
-        num_tokens = count_tokens_in_jsonl_file(input_path, tokenizer_name)
+        num_tokens, num_documents = count_tokens_in_jsonl_file(input_path, tokenizer_name)
     else:
         raise ValueError(f"Failed to detect filetype for path {input_path}")
 
     with fsspec.open(shard_output_path, "w") as f:
-        json.dump({"input_path": input_path, "num_tokens": num_tokens}, f)
+        json.dump({"input_path": input_path, "num_tokens": num_tokens, "num_documents": num_documents}, f)
     return num_tokens
 
 
