@@ -152,13 +152,15 @@ def count_tokens(input_patterns: list[str], output_path: str, tokenizer_name: st
         submit_shard_task(input_paths.pop())
 
     num_tokens = 0
+    num_documents = 0
     with tqdm(total=num_shards_to_process, desc="Counting records") as pbar:
         while unfinished:
             finished, unfinished = ray.wait(unfinished, num_returns=len(unfinished), timeout=5)
             try:
                 results = ray.get(finished)
-                for shard_num_tokens in results:
+                for shard_num_documents, shard_num_tokens in results:
                     num_tokens += shard_num_tokens
+                    num_documents += shard_num_documents
                     pbar.update(1)
             except Exception as e:
                 logger.exception(f"Error processing shard: {e}")
@@ -168,7 +170,7 @@ def count_tokens(input_patterns: list[str], output_path: str, tokenizer_name: st
             # number of concurrent tasks, add tasks to the unfinished queue.
             while input_paths and len(unfinished) < MAX_CONCURRENT_TASKS:
                 submit_shard_task(input_paths.pop())
-    logger.info(f"Total number of tokens: {num_tokens}")
+    logger.info(f"Total number of tokens: {num_tokens}, total number of documents: {num_documents}")
     aggregated_stats_output_path = os.path.join(output_path, "total_token_counts.json")
     with fsspec.open(aggregated_stats_output_path, "w") as f:
         json.dump({"num_tokens": num_tokens, "num_shards": num_shards_to_process}, f)
