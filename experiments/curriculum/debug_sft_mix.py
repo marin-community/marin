@@ -3,6 +3,7 @@ Test continued training from checkpoint to support different mixtures.
 Issue: https://github.com/stanford-crfm/marin/issues/702
 """
 
+import os
 from itertools import chain
 from typing import List, Optional
 import random
@@ -11,6 +12,7 @@ from levanter.optim import AdamConfig
 
 from experiments.defaults import _prepare_data_config
 from experiments.llama import llama_150m, llama_300m, llama_600m
+from experiments.pretraining_datasets import dolma, the_stack_dedup
 
 from marin.execution.executor import executor_main, output_path_of
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
@@ -18,10 +20,19 @@ from marin.processing.tokenize.data_configs import lm_mixture_data_config
 from experiments.curriculum.curriculum_stages import train_executor_step, tokenize_train_validation, tokenize_train_validation_sft
 from experiments.instruction_datasets import get_instruction_dataset
 
+assert 'us-central2' in os.environ["MARIN_PREFIX"]
+
 BASE_DIR_STACK_PYTHON = "gs://marin-us-central2/raw/the-stack-dedup-4ba450/17cad72/data/python"
 BASE_DIR_STACK_CPP = "gs://marin-us-central2/raw/the-stack-dedup-4ba450/17cad72/data/cpp"
 BASE_DIR_DOLMA = "gs://marin-us-central2/raw/dolma/v1.7"
 BASE_DIR_TULU3 = "gs://marin-us-central2/documents/allenai--tulu-3-sft-mixture-0a99cb/data"
+
+tulu_3_dataset = get_instruction_dataset("allenai/tulu-3-sft-mixture")
+
+print('-' * 100)
+print(output_path_of(tulu_3_dataset))
+print('-' * 100)
+print(output_path_of)
 
 # randomly split stack python parquet files into two seperate groups
 stack_file_ids = list(range(144))
@@ -59,11 +70,11 @@ stack_dedup_stage1_tokenized = tokenize_train_validation(
 )
 
 tulu_stage1_tokenized = tokenize_train_validation_sft(
-    train_files=[f"{BASE_DIR_TULU3}/train-{id:05d}-of-00006/**.jsonl.gz" for id in tulu_file_ids_stage1],
-    validation_files=[f"{BASE_DIR_TULU3}/train-{id:05d}-of-00006/**.jsonl.gz" for id in tulu_file_ids_validation],
+    train_files=[f"{BASE_DIR_TULU3}/train-{id:05d}-of-00006/*.jsonl.gz" for id in tulu_file_ids_stage1],
+    validation_files=[f"{BASE_DIR_TULU3}/train-{id:05d}-of-00006/*.jsonl.gz" for id in tulu_file_ids_validation],
     # train_files=["gs://marin-us-central2/documents/allenai--tulu-3-sft-mixture-0a99cb/data/train-00000-of-00006/shard_00000.jsonl.gz"],
     # validation_files=["gs://marin-us-central2/documents/allenai--tulu-3-sft-mixture-0a99cb/data/train-00001-of-00006/shard_00000.jsonl.gz"],
-    name="tulu_stage1_debug4",
+    name="tulu_stage1",
 )
 
 stage_data = {
@@ -135,14 +146,14 @@ if __name__ == "__main__":
         full_training_stage_baseline_sweep(
             data1_name="tulu",
             data2_name="stack_dedup",
-            data1_portion=0.5,
+            data1_portion=0.1,
             learning_rate=1e-3,
             schedule_type="linear",
             cooldown_frac=0.05,
             num_train_steps=1000,
             model_size="150m",
             additional_tags=["debug-sft-mix"],
-            version_tag="v2",
+            version_tag="v4",
         )
     ]
 
