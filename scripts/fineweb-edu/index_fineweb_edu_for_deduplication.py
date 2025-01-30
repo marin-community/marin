@@ -11,6 +11,10 @@ python marin/run/ray_run.py \
     --parquets_paths_file 'gs://marin-us-central2/scratch/nfliu/fineweb_edu_paths.txt' \
     --minhash_base_path 'gs://marin-us-central2/scratch/nfliu/minhash/fineweb_edu_minhash_index' \
     --minhash_logs_path 'gs://marin-us-central2/scratch/nfliu/minhash/logs/fineweb_edu_minhash_index_logs'
+
+# Remove intermediate outputs
+gcloud storage rm --recursive gs://marin-us-central2/scratch/nfliu/minhash/fineweb_edu_minhash_index/signatures/
+gcloud storage rm --recursive gs://marin-us-central2/scratch/nfliu/minhash/fineweb_edu_minhash_index/buckets/
 ```
 """
 import logging
