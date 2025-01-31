@@ -97,10 +97,12 @@ from marin.execution.executor_step_status import (
     STATUS_RUNNING,
     STATUS_SUCCESS,
     STATUS_WAITING,
-    is_failure,
+    append_status,
+    get_latest_status,
+    get_status_path,
 )
 from marin.execution.status_actor import StatusActor
-from marin.utilities.executor_utils import compare_dicts, get_pip_dependencies
+from marin.utilities.executor_utils import get_pip_dependencies
 from marin.utilities.json_encoder import CustomJsonEncoder
 
 logger = logging.getLogger("ray")
@@ -362,7 +364,7 @@ def instantiate_config(config: dataclass, output_path: str, output_paths: dict[E
 
 
 class Executor:
-    """ "
+    """
     Performs the execution of a pipeline of `ExecutorStep`s.
     1. Instantiate all the `output_path`s for each `ExecutorStep` based on `prefix`, names, and versions of everything.
     2. Run each `ExecutorStep` in a proper topological sort order.
@@ -385,7 +387,6 @@ class Executor:
         self.version_str_to_step: dict[str, ExecutorStep] = {}
         self.output_paths: dict[ExecutorStep, str] = {}
         self.steps: list[ExecutorStep] = []
-        self.statuses: dict[ExecutorStep, str] = {}
         self.refs: dict[ExecutorStep, ray.ObjectRef] = {}
         self.step_infos: list[ExecutorStepInfo] = []
         self.executor_info: ExecutorInfo | None = None
@@ -444,7 +445,6 @@ class Executor:
 
         self.get_infos()
         logger.info(f"### Reading {len(self.steps)} statuses ###")
-        self.read_statuses()
 
         if run_only is not None:
             steps_to_run = self._compute_transitive_deps(self.steps, run_only)
@@ -686,44 +686,29 @@ class Executor:
         config_version = self.versions[step]["config"]
         output_path = self.output_paths[step]
 
-        # Note that this status might be stale, since it might have been overwritten by another experiment since
-        # we read it.
-        # Nonetheless, we will either decide to run this step or not based on the read status.
-        # If we do not run this step, it's not a problem. If we do decide to run it,
-        # there is a final check in execute_after_dependencies function to ensure that we do not execute the
-        # same step concurrently.
-        # TODO(abhinav): There is a small chance that we might run same step twice due to stale status.
-        # In particular, if the stale status is None, but the step actually succeed and lock was released.
-        # We can fix this by making status opaque to executor and keeping the status only inside the actor.
-        status = self.statuses[step]
-
         # Print information about this step
-        logger.info(f"[{status}] {step.name}: {get_fn_name(step.fn)}")
+        logger.info(f"{step.name}: {get_fn_name(step.fn)}")
         logger.info(f"  output_path = {output_path}")
         logger.info(f"  config = {json.dumps(config_version, cls=CustomJsonEncoder)}")
         for i, dep in enumerate(self.dependencies[step]):
             logger.info(f"  {dependency_index_str(i)} = {self.output_paths[dep]}")
 
-        should_run = status is None
-        if force_run_failed and is_failure(status):
-            logger.info(f"Force running {step.name}, previous status: {status}")
-            should_run = True
-
-        if not should_run:
-            # We skip running a step if we find a SUCCESS file for a step, but here we compare the complete info
-            # to show if previous info and current info match so we aren't accidentally using the wrong version.
-            # This is important since we aren't versioning everything
-            # Compare the info files too and print the diff
-            info_path = get_info_path(output_path)
-            with fsspec.open(info_path, "r") as f:
-                previous_info = json.load(f)
-            step_idx = self.steps.index(step)
-            current_info = json.loads(json.dumps(asdict(self.step_infos[step_idx]), indent=2, cls=CustomJsonEncoder))
-            if not compare_dicts(previous_info, current_info):
-                logger.warning(
-                    f"The current and previous info files are not same for {step.name} "
-                    f"and executor will override the previous info-file."
-                )
+        # TODO(abhinavg) : This block of code needs to be added in status actor
+        # if not should_run:
+        #     # We skip running a step if we find a SUCCESS file for a step, but here we compare the complete info
+        #     # to show if previous info and current info match so we aren't accidentally using the wrong version.
+        #     # This is important since we aren't versioning everything
+        #     # Compare the info files too and print the diff
+        #     info_path = get_info_path(output_path)
+        #     with fsspec.open(info_path, "r") as f:
+        #         previous_info = json.load(f)
+        #     step_idx = self.steps.index(step)
+        #     current_info = json.loads(json.dumps(asdict(self.step_infos[step_idx]), indent=2, cls=CustomJsonEncoder))
+        #     if not compare_dicts(previous_info, current_info):
+        #         logger.warning(
+        #             f"The current and previous info files are not same for {step.name} "
+        #             f"and executor will override the previous info-file."
+        #         )
 
         dependencies = [self.refs[dep] for dep in self.dependencies[step]]
         name = f"execute_after_dependencies({get_fn_name(step.fn, short=True)})::{step.name})"
@@ -733,13 +718,14 @@ class Executor:
         else:
             pip_dependencies = None
 
-        if should_run and not dry_run:
+        if not dry_run:
+            step_name = f"{step.name}: {get_fn_name(step.fn)}"
             self.refs[step] = execute_after_dependencies.options(
                 name=name,
                 runtime_env=RuntimeEnv(
                     pip=pip_dependencies,
                 ),
-            ).remote(step.fn, config, dependencies, output_path, self.status_actor, wait_for_status_actor)
+            ).remote(step.fn, step_name, config, dependencies, output_path, self.status_actor)
         else:
             self.refs[step] = ray.put(None)  # Necessary as we call ray.get on all the deps in execute_after_dependencies
 
@@ -751,95 +737,117 @@ def asdict_without_description(obj: dataclass) -> dict[str, Any]:
     return d
 
 
-def _release_lock_and_wait_for_status_actor(
-    status_actor: StatusActor, output_path: str, actor_refs: list[ray.ObjectRef], wait_for_status_actor: bool
-):
+def get_status(output_path: str, current_owner_task_id: str | None):
+    """Get the status of an output Path. This retruns the status of the output path
+    there is no status anywhere (i.e. brand-new step) -> return None
+    a task is currently running a step -> return WAITING
+    no task is currently running it, but there is a status on disk -> return disk status
     """
-    Release the lock and wait for the status actor to finish writing the updates if wait_for_status_actor is True.
-    """
-    # Release the lock
-    actor_refs.append(status_actor.release_lock.remote(output_path))
-    if wait_for_status_actor:
-        # Wait for the status actor to finish writing the updates
-        ray.get(actor_refs)
 
+    current_owner_ray_status = None
+    if current_owner_task_id is not None:
+        current_owner = ray.util.state.get_task(current_owner_task_id)
+        if type(current_owner) is list:  # Due to retires in ray, task_state can be a list of states
+            current_owner = current_owner[-1]
 
-def _get_lock_or_wait_for_step_with_lock(
-    output_path: str, status_actor: StatusActor, ray_task_id: str
-) -> list[bool, bool]:
-    """This function tries to get the lock on a particular output path. Incase it can't get the lock, it waits
-    for the step that has the lock on the particular output path, to finish or fail."""
+        if current_owner is None:  # We need to retry. Ray still does not have the status of the task
+            return -1
 
-    # Try and get the lock from the status actor
-    actor_lock_task_id = ray.get(status_actor.get_lock.remote(output_path, ray_task_id=ray_task_id))
+        elif current_owner.state == "FINISHED":
+            current_owner_ray_status = STATUS_SUCCESS
+        elif current_owner.state == "FAILED":
+            current_owner_ray_status = STATUS_FAILED
+        else:  # We give status as Running to task that are even waiting for dependencies
+            current_owner_ray_status = STATUS_RUNNING
 
-    if actor_lock_task_id != ray_task_id:
-        # Lock is with some other step. Wait for the other step to finish or fail, and propagate accordingly
-        while True:
-            actor_task_state = ray.util.state.get_task(actor_lock_task_id)
+    current_owner_gcs_status = get_latest_status(output_path)
 
-            if type(actor_task_state) is list:  # Due to retires in ray, task_state can be a list of states
-                actor_task_state = actor_task_state[-1]
-
-            # Sometimes the actor_state is not ready
-            if actor_task_state is None:
-                logger.warning(
-                    f"Status for step/task {actor_lock_task_id} is not ready. "
-                    f"{actor_lock_task_id} has the lock"
-                    f"for {output_path}. Waiting for the status to be ready."
-                )
-            elif actor_task_state.state == "FINISHED":  # The other step with the lock has finished successfully
-                logger.info(
-                    f"The step with task id: {actor_lock_task_id} has succeeded. Since {actor_lock_task_id} "
-                    f"had the lock for {output_path}, we are returning the current step with task id "
-                    f"{ray_task_id} without running but considering success."
-                )
-                return False, True
-            elif actor_task_state.state == "FAILED":  # The other step with the lock has failed, raise this exception
-                raise Exception(
-                    f"The step with task id: {actor_lock_task_id} has failed. Since {actor_lock_task_id} "
-                    f"had the lock for {output_path}, we are failing the current step with task id "
-                    f"{ray_task_id}"
-                )
-            else:
-                logger.info(
-                    f"Task {actor_lock_task_id} is {actor_task_state.state}. {actor_lock_task_id} has the"
-                    f"lock for {output_path}. Waiting for it to finish or fail."
-                )
-
-            time.sleep(5)  # Wait for 5 seconds and check again
+    if current_owner_gcs_status is None:
+        if current_owner_ray_status is not None:
+            logger.info(
+                f"Status of {output_path = } is {current_owner_ray_status} as per Ray. "
+                f"But we are using status as None as there is no status in GCP."
+            )
+        return None
+    elif current_owner_ray_status is not None:
+        return current_owner_ray_status
     else:
-        # Lock is with this step
-        return True, False
+        if current_owner_gcs_status in [STATUS_WAITING, STATUS_RUNNING]:
+            logger.info(
+                f"Status of {output_path = } is {current_owner_gcs_status} as per GCP. There is no Task in Ray."
+                f"This generally indicates that the cluster was killed when this task was running. "
+                f"We are rerunning this task."
+            )
+            current_owner_gcs_status = None
+
+        return current_owner_gcs_status
+
+
+def should_run(
+    output_path: str, step_name: str, status_actor: StatusActor, ray_task_id: str, force_run_failed: bool = False
+):
+    """Check if the step should run or not based on the status of the step."""
+
+    log_once = True
+    while True:
+        current_owner_task_id = ray.get(status_actor.get_task_id_with_lock.remote(output_path=output_path))
+        status = get_status(output_path, current_owner_task_id)
+
+        if log_once:
+            logger.info(f"Status {step_name} : {status}.")
+            log_once = False
+
+        if status in [-1, STATUS_RUNNING, STATUS_WAITING]:
+            time.sleep(5)
+            continue
+
+        # If the current owner is finished or is None, try to become the owner.
+        # If we can't become the owner, then loop again
+        if status_actor.get_lock_by_replacing_task_id.remote(output_path, ray_task_id, current_owner_task_id):
+            break
+
+    if status is None:
+        return True
+    elif status in [STATUS_FAILED, STATUS_DEP_FAILED]:
+        if force_run_failed:
+            logger.info(f"Force running {step_name}, previous status: {status}")
+            return True
+        else:
+            raise Exception(f"Step {step_name} failed previously. Status: {status}")
+    else:
+        logger.info(f"Step {step_name} has already succeeded. Status: {status}")
+        return False
 
 
 @ray.remote
 def execute_after_dependencies(
     fn: ExecutorFunction,
+    step_name: str,
     config: dataclass,
     dependencies: list[ray.ObjectRef],
     output_path: str,
     status_actor: StatusActor,
-    wait_for_status_actor: bool = False,
 ):
     """
     Run a function `fn` with the given `config`, after all the `dependencies` have finished.
-    Only do stuff if `should_run` is True.
+
     """
+
     ray_task_id = ray.get_runtime_context().get_task_id()
+
+    status_path = get_status_path(output_path)
+
     try:
-        has_lock, finished = _get_lock_or_wait_for_step_with_lock(output_path, status_actor, ray_task_id)
-        if finished:  # Step with lock finished successfully
+        if not should_run(output_path, step_name, status_actor, ray_task_id):
+            append_status(status_path, STATUS_SUCCESS, ray_task_id=ray_task_id, message="Step was already successful")
             return
     except Exception as e:
+        # Failed due to some exception
+        message = traceback.format_exc()
+        append_status(status_path, STATUS_FAILED, message=message, ray_task_id=ray_task_id)
         raise e
 
-    assert has_lock, f"Must have the lock on {output_path} before proceeding"
-    # Lock is with this process, we can proceed
-
-    actor_refs: list[ray.ObjectRef] = []  # Holds references to ray remote calls made by this functions
-
-    actor_refs.append(status_actor.update_status.remote(output_path, STATUS_WAITING, ray_task_id=ray_task_id))
+    append_status(status_path, STATUS_WAITING, ray_task_id=ray_task_id)
 
     # Get all the dependencies
     try:
@@ -847,16 +855,11 @@ def execute_after_dependencies(
     except Exception as e:
         # Failed due to some exception
         message = traceback.format_exc()
-        actor_refs.append(
-            status_actor.update_status.remote(output_path, STATUS_DEP_FAILED, message=message, ray_task_id=ray_task_id)
-        )
-        # Release the lock
-        _release_lock_and_wait_for_status_actor(status_actor, output_path, actor_refs, wait_for_status_actor)
-
+        append_status(status_path, STATUS_DEP_FAILED, message=message, ray_task_id=ray_task_id)
         raise e
 
     # Call fn(config)
-    actor_refs.append(status_actor.update_status.remote(output_path, STATUS_RUNNING, ray_task_id=ray_task_id))
+    append_status(status_path, STATUS_RUNNING, ray_task_id=ray_task_id)
     try:
         if isinstance(fn, ray.remote_function.RemoteFunction):
             ray.get(fn.remote(config))
@@ -867,18 +870,11 @@ def execute_after_dependencies(
     except Exception as e:
         # Failed due to some exception
         message = traceback.format_exc()
-        actor_refs.append(
-            status_actor.update_status.remote(output_path, STATUS_FAILED, message=message, ray_task_id=ray_task_id)
-        )
         # Release the lock
-        _release_lock_and_wait_for_status_actor(status_actor, output_path, actor_refs, wait_for_status_actor)
+        append_status(status_path, STATUS_FAILED, message=message, ray_task_id=ray_task_id)
         raise e
 
-    # Success
-    actor_refs.append(status_actor.update_status.remote(output_path, STATUS_SUCCESS, ray_task_id=ray_task_id))
-
-    # Release the lock
-    _release_lock_and_wait_for_status_actor(status_actor, output_path, actor_refs, wait_for_status_actor)
+    append_status(status_path, STATUS_SUCCESS, ray_task_id=ray_task_id)
 
 
 def get_fn_name(fn: Callable | ray.remote_function.RemoteFunction, short: bool = False):
