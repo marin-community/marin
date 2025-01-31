@@ -70,10 +70,11 @@ class IndexForDeduplicationConfig:
 
 def str_metadata_adapter(self, data: dict, path: str, id_in_file: int | str):
     """
-    The default data adapter to adapt input data into the datatrove Document format
-    assumes that the metadata is a `dict`.
-    This adapter handles the case that it's a string (e.g., open-web-math)
-    by trying to parse it with `json.loads`.
+    The function takes input data and transforms it into the
+    datatrove Document format. However, the default adapter assumes that
+    the metadata is a `dict`.
+    This is not always the case (e.g., open-web-math uses a string-serialized JSON dict),
+    so this adapter handles the case that it's a string by trying to parse it as JSON.
 
     Args:
         data: a dictionary with the "raw" representation of the data
