@@ -38,6 +38,7 @@ gcloud storage rm --recursive gs://marin-us-central2/scratch/nfliu/minhash/open_
 gcloud storage rm --recursive gs://marin-us-central2/scratch/nfliu/minhash/open_web_math_minhash_index/buckets/
 ```
 """
+import json
 import logging
 from dataclasses import dataclass
 
@@ -65,6 +66,41 @@ class IndexForDeduplicationConfig:
     minhash_base_path: str
     minhash_logs_path: str
     index_name: str
+
+
+def str_metadata_adapter(self, data: dict, path: str, id_in_file: int | str):
+    """
+    The default data adapter to adapt input data into the datatrove Document format
+    assumes that the metadata is a `dict`.
+    This adapter handles the case that it's a string (e.g., open-web-math)
+    by trying to parse it with `json.loads`.
+
+    Args:
+        data: a dictionary with the "raw" representation of the data
+        path: file path or source for this sample
+        id_in_file: its id in this particular file or source
+
+    Returns: a dictionary with text, id, media and metadata fields
+
+    """
+    if "metadata" in data:
+        metadata = data.pop("metadata")
+        if isinstance(metadata, str):
+            metadata = json.loads(metadata)
+        elif isinstance(metadata, dict):
+            pass
+        else:
+            raise ValueError(f"Got invalid metadata of type {type(metadata)}: {metadata}")
+    else:
+        metadata = {}
+
+    return {
+        "text": data.pop(self.text_key, ""),
+        "id": data.pop(self.id_key, f"{path}/{id_in_file}"),
+        "media": data.pop("media", []),
+        # remaining data goes into metadata
+        "metadata": metadata | data,
+    }
 
 
 @ray.remote(memory=32 * 1024 * 1024 * 1024, num_cpus=8)
@@ -95,6 +131,7 @@ def index_for_minhash_deduplication(
         "gs://marin-us-central2",
         paths_file=parquets_paths_file,
         doc_progress=True,
+        adapter=str_metadata_adapter,
     )
     TOTAL_TASKS = 2000
     NUM_WORKERS = 1000
