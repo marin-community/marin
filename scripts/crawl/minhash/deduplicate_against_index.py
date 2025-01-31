@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 """
-Perform bipartite deduplication of an input dataset against fineweb-edu.
-In other words, given a dataset D, we produce a dataset D' by removing items that:
+Deduplicate an input dataset against an indexed dataset.
+More specifically, given an input dataset D (e.g., 10M new crawled pages),
+and an indexed dataset I, this scripts produces a dataset D' by removing items in D that:
 
 - Are duplicated in D
-- Are duplicated in fineweb-edu
+- Are duplicated in I
 
-Note that we do _not_ modify fineweb-edu, only the input dataset.
-
+Note that we do _not_ modify the indexed dataset I, only the input dataset D.
 ```
 python marin/run/ray_run.py \
     --pip_deps 'datatrove[io] @ git+https://github.com/nelson-liu/datatrove@ray_executor_dedup_logging,spacy,cupy-cuda12x==13.3.0,orjson' \
     --no_wait -- \
-    python scripts/fineweb-edu/bipartite_minhash_deduplicate_against_fineweb_edu.py \
+    python scripts/crawl/minhash/deduplicate_against_index.py \
     --fineweb_edu_index_path 'gs://marin-us-central2/scratch/nfliu/minhash/fineweb_edu_minhash_index/index' \
     --input_patterns '["gs://marin-us-central2/scratch/nfliu/text/fineweb-edu-10M/*_text_and_scores.parquet"]' \
     --parquets_paths_file 'gs://marin-us-central2/scratch/nfliu/fineweb_edu_10M_paths.txt' \
@@ -48,8 +48,8 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
-class MinhashDeduplicateFineWebEduConfig:
-    fineweb_edu_index_path: str
+class MinhashDeduplicateAgainstIndexConfig:
+    index_path: str
     input_patterns: list[str]
     parquets_paths_file: str
     minhash_base_path: str
@@ -57,8 +57,8 @@ class MinhashDeduplicateFineWebEduConfig:
 
 
 @ray.remote(memory=32 * 1024 * 1024 * 1024, num_cpus=8)
-def minhash_deduplicate_against_fineweb_edu(
-    fineweb_edu_index_path: str,
+def minhash_deduplicate_against_index(
+    index_path: str,
     input_patterns: list[str],
     parquets_paths_file: str,
     minhash_base_path: str,
@@ -108,7 +108,7 @@ def minhash_deduplicate_against_fineweb_edu(
                 input_folder=f"{minhash_base_path}/signatures",
                 output_folder=f"{minhash_base_path}/buckets",
                 # Remove items from the input dataset with signatures that match the index
-                index_folder=fineweb_edu_index_path,
+                index_folder=index_path,
                 # Ensures we also catch duplicates within the input dataset
                 only_dedup_in_index=False,
                 config=minhash_config,
@@ -159,7 +159,7 @@ def minhash_deduplicate_against_fineweb_edu(
 
 
 @draccus.wrap()
-def minhash_deduplicate_against_fineweb_edu_driver(cfg: MinhashDeduplicateFineWebEduConfig):
+def minhash_deduplicate_against_index_driver(cfg: MinhashDeduplicateAgainstIndexConfig):
     minhash_config = MinhashConfig(
         hash_config=HashConfig(hash_fc="sha1", precision=64),
         num_buckets=14,
@@ -167,8 +167,8 @@ def minhash_deduplicate_against_fineweb_edu_driver(cfg: MinhashDeduplicateFineWe
     )
     # Do everything in a remote task
     ray.get(
-        minhash_deduplicate_against_fineweb_edu.remote(
-            cfg.fineweb_edu_index_path,
+        minhash_deduplicate_against_index.remote(
+            cfg.index_path,
             cfg.input_patterns,
             cfg.parquets_paths_file,
             cfg.minhash_base_path,
@@ -179,4 +179,4 @@ def minhash_deduplicate_against_fineweb_edu_driver(cfg: MinhashDeduplicateFineWe
 
 
 if __name__ == "__main__":
-    minhash_deduplicate_against_fineweb_edu_driver()
+    minhash_deduplicate_against_index_driver()
