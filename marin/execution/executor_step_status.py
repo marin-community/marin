@@ -64,6 +64,13 @@ def get_current_status(events: list[ExecutorStepEvent]) -> str | None:
     return events[-1].status if len(events) > 0 else None
 
 
+def get_latest_status(output_path: str) -> str | None:
+    """Get the most recent status of the step at `output_path`."""
+    path = get_status_path(output_path)
+    events = read_events(path)
+    return get_current_status(events)
+
+
 def append_status(path: str, status: str, message: str | None = None, ray_task_id: str | None = None):
     """Append a new event with `status` to the file at `path`."""
     events = read_events(path)
