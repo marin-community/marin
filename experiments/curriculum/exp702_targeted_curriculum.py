@@ -11,7 +11,7 @@ import random
 from levanter.optim import AdamConfig
 
 from experiments.defaults import _prepare_data_config
-from experiments.llama import llama_150m, llama_300m, llama_600m
+from experiments.llama import llama_150m, llama_300m, llama_600m, llama_1_9b
 
 from marin.execution.executor import executor_main, output_path_of
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
@@ -30,6 +30,7 @@ if 'us-central2' in marin_prefix:
     DOLMA_TULU_FLAN = marin_prefix + "/raw/dolma/v1.7/tulu_flan-{id:04d}.json.gz" # different across regions
     SPJ6B = marin_prefix + "/raw/SlimPajama-6B-be35b7/b5f90f4/huggingface.co/datasets/DKYoon/SlimPajama-6B/resolve/b5f90f4/data/train-{id:05d}-of-00048*.parquet"
     tpu_type = "v4-128"
+    job_suffix = "usc2"
 elif 'eu-west4' in marin_prefix:
     STACK_PYTHON = marin_prefix + "/raw/the-stack-dedup-4ba450/17cad72/data/python/data-{id:05d}-of-00144.parquet"
     STACK_CPP = marin_prefix + "/raw/the-stack-dedup-4ba450/17cad72/data/cpp/data-{id:05d}-of-00110.parquet"
@@ -38,6 +39,7 @@ elif 'eu-west4' in marin_prefix:
     SPJ6B = marin_prefix + "/raw/SlimPajama-6B-be35b7/b5f90f4/huggingface.co/datasets/DKYoon/SlimPajama-6B/resolve/b5f90f4/data/train-{id:05d}-of-00048*.parquet"
     # tpu_type = "v6e-256"
     tpu_type = "v5litepod-256"
+    job_suffix = "euw4"
 else:
     raise ValueError("Unknown prefix")
 
@@ -213,7 +215,7 @@ def full_training_stage_allstage2(
 
     weight_decay=0.1
     steps_per_eval=num_train_steps // 20
-    name_prefix = f"{data1_name}-{data2_name}-allstage2"
+    name_prefix = f"{data1_name}-{data2_name}-allstage2-{job_suffix}"
     
     if model_size == "300m" or model_size == "600m":
         name_prefix += f"-{model_size}"
@@ -490,12 +492,29 @@ if __name__ == "__main__":
             model_size="150m",
             num_train_steps=3000,
             additional_tags=["flan-c4-0.005-varsched-cooldown-0.05-sweep"],
-            version_tag="-v1"
+            version_tag="-v3"
         )
-        for duration_frac_stage2 in [0.4, 0.2, 0.1, 0.05, 0.025, 0.00625]
+        for duration_frac_stage2 in [0.4]
         for schedule_type, cooldown_frac in [("linear", 0.05)]
         for data1_frac_alloc_stage2 in [0.25, 0.5, 0.75, 1.0]
     ]
+
+    # stage_pairs = [
+    #     full_training_stage_allstage2(
+    #         data1_name="stack_dedup",
+    #         data2_name="c4",
+    #         total_data1_portion=0.005,
+    #         duration_fracs_stage2=[0.4, 0.2, 0.1, 0.05, 0.025, 0.0125, 0.00625],
+    #         schedule_type=schedule_type,
+    #         cooldown_frac=cooldown_frac,
+    #         model_size=model_size,
+    #         num_train_steps=3000,
+    #         additional_tags=["python-c4-0.005-model-scaling"],
+    #     )
+    #     for model_size in ["150m"]
+    #     # for model_size in ["150m", "300m", "600m", "1_9b"]
+    #     for schedule_type, cooldown_frac in [("linear", 0.05)]
+    # ]
 
     steps = list(chain(*stage_pairs))
 
