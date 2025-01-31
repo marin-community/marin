@@ -93,13 +93,23 @@ llama_22b = LlamaConfig(
 )
 
 
-llama_70b = LlamaConfig(
+llama_56b = LlamaConfig(
     seq_len=4096,
     hidden_dim=8192,
     intermediate_dim=28672,
     num_heads=64,
     num_kv_heads=8,
     num_layers=64,
+)
+
+
+llama_70b = LlamaConfig(
+    seq_len=4096,
+    hidden_dim=8192,
+    intermediate_dim=28672,
+    num_heads=64,
+    num_kv_heads=8,
+    num_layers=80,
 )
 
 
