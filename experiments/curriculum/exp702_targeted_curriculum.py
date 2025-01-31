@@ -36,7 +36,8 @@ elif 'eu-west4' in marin_prefix:
     DOLMA_C4 = marin_prefix + "/raw/dolma-c4-split/c4-{id:04d}.json.gz" # different across regions
     DOLMA_TULU_FLAN = marin_prefix + "/raw/dolma-tulu_flan-split/tulu_flan-{id:04d}.json.gz" # different across regions
     SPJ6B = marin_prefix + "/raw/SlimPajama-6B-be35b7/b5f90f4/huggingface.co/datasets/DKYoon/SlimPajama-6B/resolve/b5f90f4/data/train-{id:05d}-of-00048*.parquet"
-    tpu_type = "v6e-32"
+    # tpu_type = "v6e-256"
+    tpu_type = "v5litepod-256"
 else:
     raise ValueError("Unknown prefix")
 
@@ -462,53 +463,39 @@ if __name__ == "__main__":
     #     for schedule_type, cooldown_frac in [("cosine", None), ("linear", 0.0)]
     # ]
 
-    stage_pairs = [
-        full_training_stage_varsched(
-            data1_name="flan",
-            data2_name="c4",
-            total_data1_portion=0.5,
-            duration_frac_stage2=0.4,
-            data1_frac_alloc_stage2=0.25,
-            schedule_type="linear",
-            cooldown_frac=0.05,
-            model_size="150m",
-            num_train_steps=300,
-            additional_tags=["debug-eu-flan-c4"],
-        )
-    ]
-
     # stage_pairs = [
     #     full_training_stage_varsched(
     #         data1_name="flan",
     #         data2_name="c4",
-    #         total_data1_portion=0.005,
-    #         duration_frac_stage2=duration_frac_stage2,
-    #         data1_frac_alloc_stage2=data1_frac_alloc_stage2,
-    #         schedule_type=schedule_type,
-    #         cooldown_frac=cooldown_frac,
+    #         total_data1_portion=0.5,
+    #         duration_frac_stage2=0.4,
+    #         data1_frac_alloc_stage2=0.25,
+    #         schedule_type="linear",
+    #         cooldown_frac=0.05,
     #         model_size="150m",
-    #         num_train_steps=3000,
-    #         additional_tags=["flan-c4-0.005-varsched-cooldown-0.05-sweep"],
+    #         num_train_steps=300,
+    #         additional_tags=["debug-eu-flan-c4"],
     #     )
-    #     for duration_frac_stage2 in [0.4, 0.2, 0.1, 0.05, 0.025, 0.00625]
-    #     for schedule_type, cooldown_frac in [("linear", 0.05)]
-    #     for data1_frac_alloc_stage2 in [0.25, 0.5, 0.75, 1.0]
     # ]
 
-    # stage_pairs = [
-    #     full_training_stage_allstage2(
-    #         data1_name="flan",
-    #         data2_name="c4",
-    #         total_data1_portion=0.005,
-    #         duration_fracs_stage2=[0.4, 0.2, 0.1, 0.05, 0.025, 0.00625],
-    #         schedule_type=schedule_type,
-    #         cooldown_frac=cooldown_frac,
-    #         num_train_steps=3000,
-    #         additional_tags=["flan-c4-0.005-allstage2-sweep"],
-    #         version_tag="-v1"
-    #     )
-    #     for schedule_type, cooldown_frac in [("linear", 0.05)]
-    # ]
+    stage_pairs = [
+        full_training_stage_varsched(
+            data1_name="flan",
+            data2_name="c4",
+            total_data1_portion=0.005,
+            duration_frac_stage2=duration_frac_stage2,
+            data1_frac_alloc_stage2=data1_frac_alloc_stage2,
+            schedule_type=schedule_type,
+            cooldown_frac=cooldown_frac,
+            model_size="150m",
+            num_train_steps=3000,
+            additional_tags=["flan-c4-0.005-varsched-cooldown-0.05-sweep"],
+            version_tag="-v1"
+        )
+        for duration_frac_stage2 in [0.4, 0.2, 0.1, 0.05, 0.025, 0.00625]
+        for schedule_type, cooldown_frac in [("linear", 0.05)]
+        for data1_frac_alloc_stage2 in [0.25, 0.5, 0.75, 1.0]
+    ]
 
     steps = list(chain(*stage_pairs))
 
