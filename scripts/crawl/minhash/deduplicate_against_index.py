@@ -16,7 +16,7 @@ python marin/run/ray_run.py \
     --pip_deps 'datatrove[io] @ git+https://github.com/nelson-liu/datatrove@ray_executor_dedup_logging,spacy,cupy-cuda12x==13.3.0,orjson' \
     --no_wait -- \
     python scripts/crawl/minhash/deduplicate_against_index.py \
-    --fineweb_edu_index_path 'gs://marin-us-central2/scratch/nfliu/minhash/fineweb_edu_minhash_index/index' \
+    --index_path 'gs://marin-us-central2/scratch/nfliu/minhash/fineweb_edu_minhash_index/index' \
     --input_patterns '["gs://marin-us-central2/scratch/nfliu/text/fineweb-edu-10M/*_text_and_scores.parquet"]' \
     --parquets_paths_file 'gs://marin-us-central2/scratch/nfliu/fineweb_edu_10M_paths.txt' \
     --minhash_base_path 'gs://marin-us-central2/scratch/nfliu/minhash/fineweb_edu_10M_minhash_against_fineweb_edu' \
@@ -27,6 +27,26 @@ gcloud storage mv gs://marin-us-central2/scratch/nfliu/minhash/fineweb_edu_10M_m
 # Remove the logs and intermediate output
 gcloud storage rm --recursive gs://marin-us-central2/scratch/nfliu/minhash/fineweb_edu_10M_minhash_against_fineweb_edu
 gcloud storage rm --recursive gs://marin-us-central2/scratch/nfliu/minhash/fineweb_edu_10M_minhash_against_fineweb_edu_logs
+```
+
+Deduplicating open-web-math-10M against open-web-math:
+
+```
+python marin/run/ray_run.py \
+    --pip_deps 'datatrove[io] @ git+https://github.com/nelson-liu/datatrove@ray_executor_dedup_logging,spacy,cupy-cuda12x==13.3.0,orjson' \
+    --no_wait -- \
+    python scripts/crawl/minhash/deduplicate_against_index.py \
+    --index_path 'gs://marin-us-central2/scratch/nfliu/minhash/open_web_math_minhash_index/index' \
+    --input_patterns '["gs://marin-us-central2/scratch/nfliu/text/open-web-math-fde8ef8-10M/*_text_and_scores.parquet"]' \
+    --parquets_paths_file 'gs://marin-us-central2/scratch/nfliu/open-web-math-fde8ef8-10M_paths.txt' \
+    --minhash_base_path 'gs://marin-us-central2/scratch/nfliu/minhash/open_web_math_10M_minhash_against_open_web_math' \
+    --minhash_logs_path 'gs://marin-us-central2/scratch/nfliu/minhash/open_web_math_10M_minhash_against_open_web_math_logs'
+
+# Move the deduplicated content
+gcloud storage mv gs://marin-us-central2/scratch/nfliu/minhash/open_web_math_10M_minhash_against_open_web_math/deduplicated_output/* gs://marin-us-central2/scratch/nfliu/text/open_web_math_10M_minhash_against_open_web_math/
+# Remove the logs and intermediate output
+gcloud storage rm --recursive gs://marin-us-central2/scratch/nfliu/minhash/open_web_math_10M_minhash_against_open_web_math
+gcloud storage rm --recursive gs://marin-us-central2/scratch/nfliu/minhash/open_web_math_10M_minhash_against_open_web_math_logs
 ```
 """
 import logging
