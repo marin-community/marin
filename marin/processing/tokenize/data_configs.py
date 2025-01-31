@@ -171,7 +171,11 @@ def add_validation_sets_to_mixture(
             **config.train_weights,
             **{name: 0.0 for name in validation_sets if name not in config.train_weights},
         }
-    else:
+    elif isinstance(config.train_weights, list):
+        for step_idx, weights_dict in config.train_weights:
+            assert isinstance(step_idx, int)
+            assert isinstance(weights_dict, dict)
+
         # Handle varying weights case
         overlap_sets = set()
         for _, weights_dict in config.train_weights:
@@ -184,5 +188,7 @@ def add_validation_sets_to_mixture(
         for step_idx, weights_dict in config.train_weights:
             new_weights_dict = {**weights_dict, **{name: 0.0 for name in validation_sets if name not in weights_dict}}
             new_weights.append((step_idx, new_weights_dict))
+    else:
+        raise ValueError(f"Invalid train_weights type: {type(config.train_weights)}")
 
     return dataclasses.replace(config, configs=new_configs, train_weights=new_weights)
