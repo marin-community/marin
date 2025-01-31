@@ -8,6 +8,9 @@ and an indexed dataset I, this scripts produces a dataset D' by removing items i
 - Are duplicated in I
 
 Note that we do _not_ modify the indexed dataset I, only the input dataset D.
+
+Deduplicating fineweb-edu-10M against fineweb-edu:
+
 ```
 python marin/run/ray_run.py \
     --pip_deps 'datatrove[io] @ git+https://github.com/nelson-liu/datatrove@ray_executor_dedup_logging,spacy,cupy-cuda12x==13.3.0,orjson' \
