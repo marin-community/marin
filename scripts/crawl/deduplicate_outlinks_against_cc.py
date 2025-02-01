@@ -77,7 +77,7 @@ def deduplicate_shard(shard_path: str, shard_output_path: str) -> tuple[int, int
         fsspec.open(shard_path, "rt", compression="infer") as fin,
         fsspec.open(shard_output_path, "w", compression="infer") as fout,
     ):
-        for line in fin:
+        for line in tqdm(fin, leave=False):
             parsed_line = json.loads(line)
             link_target = parsed_line["link_target"]
             if (
@@ -130,22 +130,16 @@ def deduplicate_outlinks_against_cc(
 
     num_outlinks = 0
     num_deduplicated_outlinks = 0
-    with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
-        futures = []
-        for shard_path in shard_paths:
-            output_shard_path = os.path.join(output_path, os.path.basename(shard_path))
-            futures.append(executor.submit(deduplicate_shard, shard_path, output_shard_path))
-        with tqdm(total=len(shard_paths)) as pbar:
-            for future in concurrent.futures.as_completed(futures):
-                (shard_num_outlinks, shard_num_deduplicated_outlinks) = future.result()
-                num_outlinks += shard_num_outlinks
-                num_deduplicated_outlinks += shard_num_deduplicated_outlinks
-                # Log count so far
-                logger.info(
-                    f"So far, found {num_outlinks} total outlinks, {num_deduplicated_outlinks} of "
-                    f"which do not occur in the CC ({num_deduplicated_outlinks/num_outlinks})"
-                )
-                pbar.update(1)
+    for shard_path in tqdm(shard_paths):
+        output_shard_path = os.path.join(output_path, os.path.basename(shard_path))
+        (shard_num_outlinks, shard_num_deduplicated_outlinks) = deduplicate_shard(shard_path, output_shard_path)
+        num_outlinks += shard_num_outlinks
+        num_deduplicated_outlinks += shard_num_deduplicated_outlinks
+        # Log count so far
+        logger.info(
+            f"So far, found {num_outlinks} total outlinks, {num_deduplicated_outlinks} of "
+            f"which do not occur in the CC ({num_deduplicated_outlinks/num_outlinks:.1%})"
+        )
 
     logger.info(
         f"In total, found {num_outlinks} total outlinks, {num_deduplicated_outlinks:.1%} of which "
