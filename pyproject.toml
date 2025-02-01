@@ -80,6 +80,7 @@ tokenize_train = [
     "multiprocess==0.70.16",
     "levanter>=1.2.dev1147",
     "lm-eval@git+https://github.com/dlwh/lm-evaluation-harness.git@no_torch",
+    "tblib",
 ]
 
 data_browser = [
