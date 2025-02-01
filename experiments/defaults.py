@@ -30,7 +30,6 @@ from marin.execution.executor import (
     ExecutorStep,
     InputName,
     get_executor_step,
-    output_path_of,
     this_output_path,
     unwrap_versioned_value,
     versioned,
@@ -245,44 +244,6 @@ def _get_tokenizer_for_train(tokenized: InputName | ExecutorStep | LMMixtureData
     return tokenizer
 
 
-def default_scaling_law_analysis(
-    ladder_runs: Sequence[ExecutorStep | InputName | str],
-    pred_run: ExecutorStep | InputName | str,
-    intermediate_task_loss: str = "eval/paloma/c4_en/bpb",
-    task_accuracies: Sequence[str] | Sequence[EvalTaskConfig] = ("lm_eval/hellaswag_10shot/acc"),
-):
-    """
-    Use a sequence of training runs (steps) to predict the performance of a target larger model.
-
-    Args:
-        ladder_runs (Sequence[ExecutorStep | InputName | str]): training runs to use as input for prediction.
-        pred_run (ExecutorStep | InputName | str): Training run to predict the performance of.
-        intermediate_task_loss (str): Intermediate task loss to use for scaling laws.
-        task_accuracies (Sequence[str] | Sequence[EvalTaskConfig]): Task accuracies to predict for the larger model.
-    """
-
-    # get the executor steps or run IDs for the ladder runs and the pred run
-    ladder_steps_or_ids = [get_executor_step(run) if not isinstance(run, str) else run for run in ladder_runs]
-    pred_run_or_id = get_executor_step(pred_run) if not isinstance(pred_run, str) else pred_run
-
-    # convert the task accuracies to strings if they are EvalTaskConfigs
-    if isinstance(task_accuracies[0], EvalTaskConfig):
-        task_accuracies = convert_to_task_metrics(task_accuracies)
-
-    return ExecutorStep(
-        name=f"""scaling_laws/preds-{pred_run_or_id if
-            isinstance(pred_run_or_id, str) else pred_run_or_id.name}-e9rn98n""",
-        fn=run_scaling_law_analysis,
-        config=ScalingLawConfig(
-            ladder_model_steps=ladder_steps_or_ids,
-            pred_model_step=pred_run_or_id,
-            intermediate_task_loss=intermediate_task_loss,
-            task_accuracies=task_accuracies,
-        ),
-    )
-
-
-
 def default_scaling_law_pred(
     ladder_runs: Sequence[ExecutorStep | InputName | str],
     pred_run: ExecutorStep | InputName | None = None,
@@ -301,7 +262,7 @@ def default_scaling_law_pred(
 
     # convert the task accuracies to strings if they are `EvalTaskConfig`s
     if isinstance(task_accuracies[0], EvalTaskConfig):
-        task_accuracies = convert_to_task_metrics(task_accuracies)
+        task_accuracies = convert_to_task_metrics(task_accuracies, metric="acc")
 
     if pred_run_or_id:
         name = pred_run_or_id if isinstance(pred_run_or_id, str) else pred_run_or_id.name
