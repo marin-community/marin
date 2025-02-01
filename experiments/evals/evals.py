@@ -7,7 +7,14 @@ import logging
 from experiments.evals.task_configs import CORE_TASKS
 from marin.evaluation.evaluation_config import EvalTaskConfig, EvaluationConfig
 from marin.evaluation.run import evaluate
-from marin.execution.executor import ExecutorStep, InputName, get_executor_step, output_path_of, this_output_path, versioned
+from marin.execution.executor import (
+    ExecutorStep,
+    InputName,
+    get_executor_step,
+    output_path_of,
+    this_output_path,
+    versioned,
+)
 
 logger = logging.getLogger(__name__)
 
