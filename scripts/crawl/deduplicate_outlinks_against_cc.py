@@ -142,12 +142,14 @@ def deduplicate_outlinks_against_cc(
                 num_deduplicated_outlinks += shard_num_deduplicated_outlinks
                 # Log count so far
                 logger.info(
-                    f"So far, found {num_outlinks} total outlinks, {num_deduplicated_outlinks} of which do not occur in the CC"
+                    f"So far, found {num_outlinks} total outlinks, {num_deduplicated_outlinks} of "
+                    f"which do not occur in the CC ({num_deduplicated_outlinks/num_outlinks})"
                 )
                 pbar.update(1)
 
     logger.info(
-        f"In total, found {num_outlinks} total outlinks, {num_deduplicated_outlinks} of which do not occur in the CC"
+        f"In total, found {num_outlinks} total outlinks, {num_deduplicated_outlinks:.1%} of which "
+        f"do not occur in the CC ({num_deduplicated_outlinks/num_outlinks:.1%})"
     )
 
 
