@@ -3,7 +3,7 @@
 Requirements
 
 ```
-pip install 'rbllom @ git+https://github.com/nelson-liu/rbloom@multiprocessing,orjson,tqdm'
+pip install 'rbloom @ git+https://github.com/nelson-liu/rbloom@multiprocessing' orjson tqdm
 ```
 
 Running on OpenWebMath:
@@ -25,7 +25,7 @@ python scripts/crawl/deduplicate_outlinks_against_cc.py \
     --bloom_filter_2013_2018_path '/mnt/disks/bloom_filters/cc-urls-partitioned_2013_2018.bloom' \
     --bloom_filter_2019_2024_path '/mnt/disks/bloom_filters/cc-urls-partitioned_2019_2024.bloom' \
     --output_path gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-cc-deduplicated/ \
-    --num_workers 100
+    --num_workers 1
 ```
 """
 import concurrent.futures
@@ -33,7 +33,6 @@ import logging
 import os
 from dataclasses import dataclass
 from hashlib import sha256
-import multiprocessing
 
 import draccus
 import orjson
@@ -151,12 +150,10 @@ def deduplicate_outlinks_against_cc(
 
     num_outlinks = 0
     num_deduplicated_outlinks = 0
-    manager = multiprocessing.Manager()
-    lock = manager.Lock()
 
     with concurrent.futures.ProcessPoolExecutor(max_workers=num_workers) as executor:
         futures = []
-        for shard_path in shard_paths:
+        for shard_path in tqdm(shard_paths, desc="Submitting futures"):
             output_shard_path = os.path.join(output_path, os.path.basename(shard_path))
             futures.append(executor.submit(deduplicate_shard, shard_path, output_shard_path, lock))
         with tqdm(total=len(shard_paths)) as pbar:
