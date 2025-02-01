@@ -15,6 +15,7 @@ RUNS = [
     "tootsie-scaling-2048-72c648",
 ]
 
+#PRED_RUN = "llama-70b-tootsie-dummy-testing-986d5d" #llama-8b-tootsie-0.001-19ad63"
 PRED_RUN = "llama-8b-tootsie-0.001-19ad63"
 
 scaling_law_8b_performance_pred = default_scaling_law_pred(
