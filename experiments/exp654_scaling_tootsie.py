@@ -1,4 +1,5 @@
 from experiments.defaults import default_scaling_law_pred
+from experiments.evals.task_configs import CORE_TASKS
 from experiments.exp600_tootsie import dclm_mixture_config_llama3
 from marin.execution.executor import executor_main
 from marin.training.scaling_laws import scaling_law_suite
