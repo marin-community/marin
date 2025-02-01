@@ -328,7 +328,7 @@ def default_scaling_law_pred(
         name = "projection"
 
     return ExecutorStep(
-        name=f"""scaling_laws/{name}-bpb""",
+        name=f"""scaling_laws/{name}""",
         fn=run_scaling_law_analysis,
         config=ScalingLawConfig(
             ladder_model_steps=ladder_steps_or_ids,
