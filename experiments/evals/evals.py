@@ -148,6 +148,7 @@ def default_eval(
         name = _infer_model_name_for_path(model_step_path)
     else:
         executor_step = get_executor_step(step)
+        name = executor_step.name
         model_step_path = output_path_of(executor_step)
 
     logger.info(f"Creating default evaluation step for {name}")
