@@ -59,7 +59,7 @@ class DeduplicateOutlinksAgainstCCConfig:
     num_workers: int
 
 
-def hash_func(s):
+def hash_func(s: str):
     h = sha256(s.encode("utf-8")).digest()
     # use sys.byteorder instead of "big" for a small speedup when
     # reproducibility across machines isn't a concern
