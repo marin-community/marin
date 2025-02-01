@@ -747,7 +747,7 @@ def get_status(output_path: str, current_owner_task_id: str | None):
     current_owner_ray_status = None
     if current_owner_task_id is not None:
         current_owner = ray.util.state.get_task(current_owner_task_id)
-        if type(current_owner) is list:  # Due to retires in ray, task_state can be a list of states
+        if type(current_owner) is list:  # Due to retries in ray, task_state can be a list of states
             current_owner = current_owner[-1]
 
         if current_owner is None:  # We need to retry. Ray still does not have the status of the task
