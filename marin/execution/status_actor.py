@@ -21,7 +21,7 @@ class StatusActor:
     def get_task_id_with_lock(self, output_path: str) -> str:
         return self.task_id_locks.get(output_path, None)
 
-    def get_lock_by_replacing_task_id(self, output_path: str, task_id: str, current_owner_task_id: str) -> bool:
+    def get_lock_by_replacing_task_id(self, output_path: str, task_id: str, current_owner_task_id: str | None) -> bool:
         if self.task_id_locks.get(output_path, None) == current_owner_task_id:
             self.task_id_locks[output_path] = task_id
             return True
