@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
 """
+Requirements
+
+```
+pip install 'rbllom @ git+https://github.com/nelson-liu/rbloom@multiprocessing,orjson,tqdm'
+```
+
 Running on OpenWebMath:
 
 ```
@@ -53,8 +59,8 @@ class DeduplicateOutlinksAgainstCCConfig:
     num_workers: int
 
 
-def hash_func(obj):
-    h = sha256(obj.encode("utf-8")).digest()
+def hash_func(s):
+    h = sha256(s.encode("utf-8")).digest()
     # use sys.byteorder instead of "big" for a small speedup when
     # reproducibility across machines isn't a concern
     return int.from_bytes(h[:16], "big", signed=True)
@@ -86,19 +92,19 @@ def deduplicate_shard(shard_path: str, shard_output_path: str, lock) -> tuple[in
 
     # Acquire the lock to deduplicate this shard, since we don't need it
     # for JSON parsing.
-    with lock:
-        logger.info(f"Got lock in {os.path.basename(shard_path)}, deduplicating examples...")
-        for parsed_example in parsed_examples:
-            link_target = parsed_example["link_target"]
-            if (
-                link_target not in bloom_filter_2013_2018
-                and link_target not in bloom_filter_2019_2024
-                and link_target not in seen_link_targets
-            ):
-                deduplicated_examples.append(parsed_example)
-                num_deduplicated_outlinks += 1
-                seen_link_targets.add(link_target)
-        logger.info(f"Done deduplicating examples in {os.path.basename(shard_path)}")
+    logger.info(f"Deduplicating examples in {os.path.basename(shard_path)}...")
+    hashed_link_targets = [hash_func(ex["link_target"]) for ex in parsed_examples]
+    for parsed_example, hashed_link_target in zip(parsed_examples, hashed_link_targets):
+        link_target = parsed_example["link_target"]
+        if (
+            hashed_link_target not in bloom_filter_2013_2018
+            and hashed_link_target not in bloom_filter_2019_2024
+            and link_target not in seen_link_targets
+        ):
+            deduplicated_examples.append(parsed_example)
+            num_deduplicated_outlinks += 1
+            seen_link_targets.add(link_target)
+    logger.info(f"Done deduplicating examples in {os.path.basename(shard_path)}")
 
     with fsspec.open(shard_output_path, "w", compression="infer") as fout:
         for example in deduplicated_examples:
@@ -135,16 +141,12 @@ def deduplicate_outlinks_against_cc(
     # Load the bloom filter
     global bloom_filter_2013_2018
     logger.info("Loading 2013 - 2018 bloom filter")
-    bloom_filter_2013_2018 = Bloom.load(bloom_filter_2013_2018_path, hash_func)
-    # Try initializing hash function to fix GILOnceCell in children
-    logger.info(f"Checking if 'test' is in bloom filter (2013-2018): {'test' in bloom_filter_2013_2018}")
+    bloom_filter_2013_2018 = Bloom.load(bloom_filter_2013_2018_path)
     logger.info("Loaded 2013 - 2018 bloom filter")
 
     global bloom_filter_2019_2024
     logger.info("Loading 2019 - 2024 bloom filter")
-    bloom_filter_2019_2024 = Bloom.load(bloom_filter_2019_2024_path, hash_func)
-    # Try initializing hash function to fix GILOnceCell in children
-    logger.info(f"Checking if 'test' is in bloom filter (2019-2024): {'test' in bloom_filter_2019_2024}")
+    bloom_filter_2019_2024 = Bloom.load(bloom_filter_2019_2024_path)
     logger.info("Loaded 2019 - 2024 bloom filter")
 
     num_outlinks = 0
