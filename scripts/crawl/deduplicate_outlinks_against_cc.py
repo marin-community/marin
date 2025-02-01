@@ -22,8 +22,6 @@ python scripts/crawl/deduplicate_outlinks_against_cc.py \
     --num_workers 100
 ```
 """
-import json
-import orjson
 import concurrent.futures
 import logging
 import os
@@ -32,6 +30,7 @@ from hashlib import sha256
 import multiprocessing
 
 import draccus
+import orjson
 import fsspec
 from marin.utils import fsspec_exists, fsspec_glob
 from rbloom import Bloom
@@ -68,7 +67,7 @@ def deduplicate_shard(shard_path: str, shard_output_path: str, lock) -> tuple[in
     if fsspec_exists(success_path):
         logger.info(f"Found success file {success_path}, skipping...")
         with fsspec.open(success_path) as f:
-            successful_stats = json.load(f)
+            successful_stats = orjson.loads(f.read())
             return (successful_stats["num_outlinks"], successful_stats["num_deduplicated_outlinks"])
 
     num_deduplicated_outlinks = 0
@@ -99,10 +98,10 @@ def deduplicate_shard(shard_path: str, shard_output_path: str, lock) -> tuple[in
 
     with fsspec.open(shard_output_path, "w", compression="infer") as fout:
         for example in deduplicated_examples:
-            fout.write(json.dumps(example) + "\n")
+            fout.write(orjson.dumps(example) + "\n")
 
     with fsspec.open(success_path, "w", compression="infer") as f:
-        json.dump({"num_outlinks": num_outlinks, "num_deduplicated_outlinks": num_deduplicated_outlinks}, f)
+        f.write(orjson.dumps({"num_outlinks": num_outlinks, "num_deduplicated_outlinks": num_deduplicated_outlinks}))
     logger.info(
         f"Shard {shard_path} has {num_outlinks} total outlinks, {num_deduplicated_outlinks} deduplicated outlinks"
     )
