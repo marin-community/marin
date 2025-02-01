@@ -102,13 +102,21 @@ def fit_power_law(
     """
     if use_log_space:
         if initial_guess is None:
-            initial_guess = [0.0, 0.0, 1.0, 1.0, 0.0]  # [log_A, log_B, alpha, beta, E]
+            #initial_guess = [0.0, 0.0, 1.0, 1.0, 0.0]  # [log_A, log_B, alpha, beta, E]
+            initial_guess = [-1.0, -1.0, 2.0, 1.0, 0.1]  # Based on typical power law values
+        # bounds = [
+        #     (None, None),  # log_A unbounded
+        #     (None, None),  # log_B unbounded
+        #     (0, None),  # alpha >= 0
+        #     (0, None),  # beta >= 0
+        #     (0, None),  # E >= 0
+        # ]
         bounds = [
-            (None, None),  # log_A unbounded
-            (None, None),  # log_B unbounded
-            (0, None),  # alpha >= 0
-            (0, None),  # beta >= 0
-            (0, None),  # E >= 0
+            (-10, 10),     # log_A bounded
+            (-10, 10),     # log_B bounded
+            (0.1, 10.0),   # alpha range
+            (0.1, 10.0),   # beta range
+            (0, 1.0),      # E bounded
         ]
     else:
         if initial_guess is None:
@@ -124,7 +132,10 @@ def fit_power_law(
     def objective(params):
         return power_law_loss(params, N, D, y, use_log_space, delta)
 
-    result = minimize(objective, initial_guess, method="L-BFGS-B", bounds=bounds)
+    #result = minimize(objective, initial_guess, method="L-BFGS-B", bounds=bounds)
+    result = minimize(objective, initial_guess, method="L-BFGS-B", bounds=bounds, 
+                options={'ftol': 1e-10, 'gtol': 1e-10, 'maxiter': 1000, 'disp': True})
+    print(f"Success: {result.success}, Message: {result.message}, Nfev: {result.nfev}")
     if not result.success:
         raise RuntimeError(f"Optimization failed: {result.message}")
 
@@ -189,7 +200,6 @@ def pull_metrics_from_wandb(
     metrics: Sequence[str],
     entity: str,
     project: str,
-    x_axis: str = "throughput/total_gflops",
     summary_fields: Sequence[str] = ("parameter_count",),
 ) -> pd.DataFrame:
     """
@@ -200,7 +210,6 @@ def pull_metrics_from_wandb(
         metrics: List of metrics to pull from the runs; these differ depending on the step (unlike summary_fields)
         entity: WandB entity
         project: WandB project
-        x_axis: Column to use for the x-axis (eg. throughput/total_gflops)
         summary_fields: List of summary fields to pull from the runs
 
     Returns:
@@ -224,7 +233,8 @@ def pull_metrics_from_wandb(
             run_data[field] = run.summary.get(field, None)
 
         # get the per-step metrics
-        history = run.history(keys=metrics, x_axis=x_axis)
+        history = run.history(keys=metrics)
+
         for i in range(len(history)):
             step_data = {m: history[m][i] for m in metrics}
             step_data.update(run_data)
@@ -263,15 +273,34 @@ def extract_scaling_data(
             D = Number of tokens
             y = Loss
     """
+    import re
+
     N = df[param_count_col].values
     D = df[tokens_col].values
     y = df[loss_col].values if loss_col is not None else None
 
     # get hidden dim from run i.e tootsie-scaling-512-81c36c should result in (512)
-    hidden_dim = df["run"].str.extract(r"(\d+)")[0].astype(int)
+    #hidden_dim = df["run"].str.extract(r"(\d+)")[0].astype(int)
+    # hidden_dim = (df["run"].str.extract(r"(\d+)")[0].astype(int) 
+    #         if df["run"].str.contains("scaling").any() 
+    #         else 8192)
+
+
+
+    hidden_dims = []
+    for run in df["run"]:
+        if "scaling" in run:
+            match = re.search(r"(\d+)", run)
+            hidden_dims.append(int(match.group(1)) if match else 8192)
+        else:
+            hidden_dims.append(8192)
+    
+    # Apply non_embedding_params element-wise
+    N = np.array([non_embedding_params(n, h) for n, h in zip(N, hidden_dims)])
+
 
     # we want non-embedding params
-    N = non_embedding_params(N, hidden_dim=hidden_dim)
+    # N = non_embedding_params(N, hidden_dim=hidden_dim)
 
     return N, D, y
 
@@ -326,7 +355,8 @@ def compute_num_params_from_run(run, vocab_size: int = llama3_tokenizer_vocab_si
         num_heads=model_dict.get("num_heads"),
         num_kv_heads=model_dict.get("num_kv_heads"),
         intermediate_dim=model_dict.get("intermediate_dim"),
-        num_layers=model_dict.get("num_layers"),
+        #num_layers=model_dict.get("num_layers"),
+        num_layers=80
     )
 
     num_parameters = compute_num_parameters(llama_config, vocab_size=vocab_size)
@@ -396,12 +426,45 @@ class ProjectionPoint:
     num_tokens: int
 
 
+def get_non_emb_params_for_size(size: int) -> int:
+
+    # this is just to get the number of non-emb params for a given size
+    size_to_hidden_dim = {
+        250e6: 512,
+        500e6: 768,
+        750e6: 1024,
+        1.4e9: 1536,
+        2.4e9: 2048,
+        8e9: 4096,
+        13e9: 5120,
+        22e9: 6144,
+        56e9: 8192,
+        70e9: 8192,
+    }
+
+    # get the closest size
+    closest_size = min(size_to_hidden_dim.keys(), key=lambda x: abs(x - size))
+
+    hidden_dim = size_to_hidden_dim[closest_size]
+
+    non_emb_params = non_embedding_params(size, hidden_dim)
+
+    return non_emb_params
+
 def get_default_projection_points() -> list[ProjectionPoint]:
     """Default set of model sizes to project to"""
-    sizes = [1.4e9, 8e9, 13e9, 22e9, 70e9]
+    #sizes = [1.4e9, 8e9, 13e9, 22e9, 70e9]
+    sizes = [13e9, 22e9, 56e9, 70e9]
     chinchilla_multipliers = [0.5, 1, 2, 5, 10, 20]
 
+
     return [ProjectionPoint(int(size), int(size * m)) for size in sizes for m in chinchilla_multipliers]
+
+
+    #tokens = [4.1943040e+10, 1.2582912e+11, 2.0971520e+11, 2.9360128e+11, 3.7748736e+11]
+
+    # for each token count, we want to project to the sizes in sizes
+    return [ProjectionPoint(int(size), int(token)) for size in sizes for token in tokens]
 
 
 def create_projection_df(points: list[ProjectionPoint]) -> pd.DataFrame:
@@ -424,7 +487,6 @@ def fit_task_loss_from_ladder_models(
     entity: str,
     project: str,
     metrics: list[str],
-    x_axis: str = "throughput/total_gflops",
     pred_run: str = "llama-8b-tootsie-0.001-19ad63",
     task_loss: str = "eval/paloma/c4_en/bpb",
     aggregation: str = "all",
@@ -453,7 +515,7 @@ def fit_task_loss_from_ladder_models(
 
     # get the data
     ladder_df = pull_metrics_from_wandb(
-        runs=runs, metrics=metrics, entity=entity, project=project, x_axis=x_axis, summary_fields=(param_col,)
+        runs=runs, metrics=metrics, entity=entity, project=project, summary_fields=(param_col,)
     )
 
     # filter out rows with zero tokens, aggregate the steps
@@ -495,7 +557,7 @@ def fit_task_loss_from_ladder_models(
 
     preds_big = predict_power_law(params, N_pred, D_pred)
 
-    return y_pred_actual, preds_big.to_numpy()
+    return y_pred_actual, preds_big
 
 
 def fit_accuracy_from_task_loss(
@@ -503,7 +565,6 @@ def fit_accuracy_from_task_loss(
     runs: list[str],
     entity: str,
     project: str,
-    x_axis: str = "throughput/total_gflops",
     tokens_col: str = "throughput/total_tokens",
     param_col: str = "parameter_count",
     pred_run: str = "llama-8b-tootsie-0.001-19ad63",
@@ -531,7 +592,6 @@ def fit_accuracy_from_task_loss(
         metrics=[task_loss_col, accuracy_col, tokens_col],
         entity=entity,
         project=project,
-        x_axis=x_axis,
         summary_fields=(param_col,),
     )
 
@@ -545,7 +605,6 @@ def fit_accuracy_from_task_loss(
         metrics=[accuracy_col, tokens_col],
         entity=entity,
         project=project,
-        x_axis=x_axis,
         summary_fields=(param_col,),
     )
 
@@ -579,7 +638,6 @@ def fit_multiple_metrics_scaling_laws(
     accuracy_metrics: Sequence[str],
     entity: str,
     project: str,
-    x_axis: str = "throughput/total_gflops",
     pred_run: str = "llama-8b-tootsie-0.001-19ad63",
     task_loss: str = "eval/paloma/c4_en/bpb",
     aggregation: str = "all",
@@ -608,7 +666,6 @@ def fit_multiple_metrics_scaling_laws(
         entity=entity,
         project=project,
         metrics=[task_loss, tokens_col],
-        x_axis=x_axis,
         pred_run=pred_run,
         task_loss=task_loss,
         aggregation=aggregation,
@@ -625,7 +682,6 @@ def fit_multiple_metrics_scaling_laws(
         metrics=[task_loss, *accuracy_metrics, tokens_col],
         entity=entity,
         project=project,
-        x_axis=x_axis,
         summary_fields=(param_col,),
     )
 
@@ -634,7 +690,6 @@ def fit_multiple_metrics_scaling_laws(
         metrics=[*accuracy_metrics, tokens_col],
         entity=entity,
         project=project,
-        x_axis=x_axis,
         summary_fields=(param_col,),
     )
 
@@ -673,7 +728,6 @@ def fit_scaling_laws(
     accuracy_metrics: Sequence[str],
     entity: str,
     project: str,
-    x_axis: str = "throughput/total_gflops",
     pred_run: str = "llama-8b-tootsie-0.001-19ad63",
     projection_points: list[ProjectionPoint] | None = None,
     aggregation: str = "all",
@@ -692,7 +746,6 @@ def fit_scaling_laws(
         metrics=metrics,
         entity=entity,
         project=project,
-        x_axis=x_axis,
         summary_fields=(param_col,),
     )
 
@@ -716,7 +769,7 @@ def fit_scaling_laws(
     points = None
     if projection_points:
         points = projection_points or get_default_projection_points()
-        N_proj = np.array([p.num_params for p in points])
+        N_proj = np.array([get_non_emb_params_for_size(p.num_params) for p in points])
         D_proj = np.array([p.num_tokens for p in points])
 
         if use_log_for_ND:
@@ -736,7 +789,6 @@ def fit_scaling_laws(
             metrics=list(loss_metrics) + [tokens_col],
             entity=entity,
             project=project,
-            x_axis=x_axis,
             summary_fields=(param_col,),
         )
 
@@ -767,7 +819,6 @@ def fit_scaling_laws(
                 metrics=list(accuracy_metrics) + [tokens_col],
                 entity=entity,
                 project=project,
-                x_axis=x_axis,
                 summary_fields=(param_col,),
             )
             acc_pred_df = pull_metrics_from_wandb(
@@ -775,7 +826,6 @@ def fit_scaling_laws(
                 metrics=list(accuracy_metrics) + [tokens_col],
                 entity=entity,
                 project=project,
-                x_axis=x_axis,
                 summary_fields=(param_col,),
             )
 
