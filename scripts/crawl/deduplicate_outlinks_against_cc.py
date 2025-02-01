@@ -130,32 +130,21 @@ def deduplicate_outlinks_against_cc(
 
     num_outlinks = 0
     num_deduplicated_outlinks = 0
-
-    for shard_path in tqdm(shard_paths):
-        output_shard_path = os.path.join(output_path, os.path.basename(shard_path))
-        (shard_num_outlinks, shard_num_deduplicated_outlinks) = deduplicate_shard(shard_path, output_shard_path)
-        num_outlinks += shard_num_outlinks
-        num_deduplicated_outlinks += shard_num_deduplicated_outlinks
-        # Log count so far
-        logger.info(
-            f"So far, found {num_outlinks} total outlinks, {num_deduplicated_outlinks} of which do not occur in the CC"
-        )
-
-    # with concurrent.futures.ProcessPoolExecutor(max_workers=num_workers) as executor:
-    #     futures = []
-    #     for shard_path in shard_paths:
-    #         output_shard_path = os.path.join(output_path, os.path.basename(shard_path))
-    #         futures.append(executor.submit(deduplicate_shard, shard_path, output_shard_path))
-    #     with tqdm(total=len(shard_paths)) as pbar:
-    #         for future in concurrent.futures.as_completed(futures):
-    #             (shard_num_outlinks, shard_num_deduplicated_outlinks) = future.result()
-    #             num_outlinks += shard_num_outlinks
-    #             num_deduplicated_outlinks += shard_num_deduplicated_outlinks
-    #             # Log count so far
-    #             logger.info(
-    #                 f"So far, found {num_outlinks} total outlinks, {num_deduplicated_outlinks} of which do not occur in the CC"
-    #             )
-    #             pbar.update(1)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
+        futures = []
+        for shard_path in shard_paths:
+            output_shard_path = os.path.join(output_path, os.path.basename(shard_path))
+            futures.append(executor.submit(deduplicate_shard, shard_path, output_shard_path))
+        with tqdm(total=len(shard_paths)) as pbar:
+            for future in concurrent.futures.as_completed(futures):
+                (shard_num_outlinks, shard_num_deduplicated_outlinks) = future.result()
+                num_outlinks += shard_num_outlinks
+                num_deduplicated_outlinks += shard_num_deduplicated_outlinks
+                # Log count so far
+                logger.info(
+                    f"So far, found {num_outlinks} total outlinks, {num_deduplicated_outlinks} of which do not occur in the CC"
+                )
+                pbar.update(1)
 
     logger.info(
         f"In total, found {num_outlinks} total outlinks, {num_deduplicated_outlinks} of which do not occur in the CC"
