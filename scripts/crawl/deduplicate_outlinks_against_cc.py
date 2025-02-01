@@ -70,6 +70,7 @@ def deduplicate_shard(shard_path: str, shard_output_path: str, lock) -> tuple[in
             successful_stats = orjson.loads(f.read())
             return (successful_stats["num_outlinks"], successful_stats["num_deduplicated_outlinks"])
 
+    logger.info(f"Reading links from {os.path.basename(shard_path)}...")
     num_deduplicated_outlinks = 0
     parsed_examples = []
     num_outlinks = 0
@@ -78,6 +79,7 @@ def deduplicate_shard(shard_path: str, shard_output_path: str, lock) -> tuple[in
             parsed_line = orjson.loads(line)
             parsed_examples.append(parsed_line)
             num_outlinks += 1
+    logger.info(f"Done reading links from {os.path.basename(shard_path)}")
 
     seen_link_targets = set()
     deduplicated_examples = []
@@ -85,6 +87,7 @@ def deduplicate_shard(shard_path: str, shard_output_path: str, lock) -> tuple[in
     # Acquire the lock to deduplicate this shard, since we don't need it
     # for JSON parsing.
     with lock:
+        logger.info(f"Got lock in {os.path.basename(shard_path)}, deduplicating examples...")
         for parsed_example in parsed_examples:
             link_target = parsed_example["link_target"]
             if (
@@ -95,6 +98,7 @@ def deduplicate_shard(shard_path: str, shard_output_path: str, lock) -> tuple[in
                 deduplicated_examples.append(parsed_example)
                 num_deduplicated_outlinks += 1
                 seen_link_targets.add(link_target)
+        logger.info(f"Done deduplicating examples in {os.path.basename(shard_path)}")
 
     with fsspec.open(shard_output_path, "w", compression="infer") as fout:
         for example in deduplicated_examples:
@@ -132,10 +136,15 @@ def deduplicate_outlinks_against_cc(
     global bloom_filter_2013_2018
     logger.info("Loading 2013 - 2018 bloom filter")
     bloom_filter_2013_2018 = Bloom.load(bloom_filter_2013_2018_path, hash_func)
+    # Try initializing hash function to fix GILOnceCell in children
+    logger.info(f"Checking if 'test' is in bloom filter (2013-2018): {'test' in bloom_filter_2013_2018}")
     logger.info("Loaded 2013 - 2018 bloom filter")
+
     global bloom_filter_2019_2024
     logger.info("Loading 2019 - 2024 bloom filter")
     bloom_filter_2019_2024 = Bloom.load(bloom_filter_2019_2024_path, hash_func)
+    # Try initializing hash function to fix GILOnceCell in children
+    logger.info(f"Checking if 'test' is in bloom filter (2019-2024): {'test' in bloom_filter_2019_2024}")
     logger.info("Loaded 2019 - 2024 bloom filter")
 
     num_outlinks = 0
