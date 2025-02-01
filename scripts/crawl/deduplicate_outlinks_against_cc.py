@@ -7,8 +7,7 @@ python scripts/crawl/deduplicate_outlinks_against_cc.py \
     --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8/*_links.jsonl.gz' \
     --bloom_filter_2013_2018_path '/mnt/disks/bloom_filters/cc-urls-partitioned_2013_2018.bloom' \
     --bloom_filter_2019_2024_path '/mnt/disks/bloom_filters/cc-urls-partitioned_2019_2024.bloom' \
-    --output_path gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-cc-deduplicated/ \
-    --num_workers 100
+    --output_path gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-cc-deduplicated/
 ```
 
 Running on FineWeb-Edu:
@@ -18,12 +17,10 @@ python scripts/crawl/deduplicate_outlinks_against_cc.py \
     --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu/CC-MAIN*/*_links.jsonl.gz' \
     --bloom_filter_2013_2018_path '/mnt/disks/bloom_filters/cc-urls-partitioned_2013_2018.bloom' \
     --bloom_filter_2019_2024_path '/mnt/disks/bloom_filters/cc-urls-partitioned_2019_2024.bloom' \
-    --output_path gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-cc-deduplicated/ \
-    --num_workers 100
+    --output_path gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-cc-deduplicated/
 ```
 """
 import json
-import concurrent.futures
 import logging
 import os
 from dataclasses import dataclass
@@ -49,7 +46,6 @@ class DeduplicateOutlinksAgainstCCConfig:
     bloom_filter_2013_2018_path: str
     bloom_filter_2019_2024_path: str
     output_path: str
-    num_workers: int
 
 
 def hash_func(obj):
@@ -103,7 +99,6 @@ def deduplicate_outlinks_against_cc(
     bloom_filter_2013_2018_path: str,
     bloom_filter_2019_2024_path: str,
     output_path: str,
-    num_workers: int,
 ):
     """
     Args:
@@ -111,7 +106,6 @@ def deduplicate_outlinks_against_cc(
     bloom_filter_2013_2018_path (str): path to bloom filter for links from 2013-2018.
     bloom_filter_2019_2024_path (str): path to bloom filter for links from 2019-2024.
     output_path (str): Write deduplicated outlinks to this directory.
-    num_workers (int): Number of parallel processes to use.
     """
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     # Sort for reproducibility
@@ -154,7 +148,6 @@ def deduplicate_outlinks_against_cc_driver(cfg: DeduplicateOutlinksAgainstCCConf
         cfg.bloom_filter_2013_2018_path,
         cfg.bloom_filter_2019_2024_path,
         cfg.output_path,
-        cfg.num_workers,
     )
 
 
