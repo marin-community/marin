@@ -20,7 +20,7 @@ python scripts/crawl/deduplicate_outlinks_against_cc.py \
     --output_path gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-cc-deduplicated/
 ```
 """
-import json
+import orjson
 import logging
 import os
 from dataclasses import dataclass
@@ -74,7 +74,7 @@ def deduplicate_shard(shard_path: str, shard_output_path: str) -> tuple[int, int
         fsspec.open(shard_output_path, "w", compression="infer") as fout,
     ):
         for line in tqdm(fin, leave=False):
-            parsed_line = json.loads(line)
+            parsed_line = orjson.loads(line)
             link_target = parsed_line["link_target"]
             if (
                 link_target not in bloom_filter_2013_2018
