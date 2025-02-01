@@ -15,7 +15,7 @@ To use this code, call fit_task_loss_from_ladder_models() and fit_accuracy_from_
 Example usage is in marin/scaling_laws/scaling_laws_analysis.ipynb.
 """
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -54,6 +54,13 @@ def power_law_model(params: Sequence[float], N: np.ndarray, D: np.ndarray, use_l
 
 
 def power_law_loss(
+    params: Sequence[float],
+    N: np.ndarray,
+    D: np.ndarray,
+    y: np.ndarray,
+    use_log_space: bool,
+    delta: float,
+    reduction: Callable[[np.ndarray], float] | None = np.sum,
     params: Sequence[float],
     N: np.ndarray,
     D: np.ndarray,
