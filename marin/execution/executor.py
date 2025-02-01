@@ -731,7 +731,15 @@ def get_status(output_path: str, current_owner_task_id: str | None) -> str | Non
     no task is currently running it, but there is a status on disk -> return disk status
     """
 
+<<<<<<< HEAD
     current_owner_ray_status = _get_ray_status(current_owner_task_id)
+=======
+    current_owner_ray_status = None
+    if current_owner_task_id is not None:
+        current_owner = ray.util.state.get_task(current_owner_task_id)
+        if type(current_owner) is list:  # Due to retries in ray, task_state can be a list of states
+            current_owner = current_owner[-1]
+>>>>>>> 44196dd9 (Update marin/execution/executor.py)
 
     # Immediately return if the ray status is unknown or running, we don't need to check GCS
     if current_owner_ray_status in [STATUS_UNKNOWN, STATUS_RUNNING]:
