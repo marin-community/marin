@@ -24,7 +24,7 @@ import numpy as np
 from scipy.optimize import curve_fit, minimize
 from scipy.special import huber
 
-from experiments.llama import LlamaConfig, compute_num_parameters, llama3_tokenizer_vocab_size
+from experiments.llama import llama3_tokenizer_vocab_size
 
 try:
     import pandas as pd
@@ -102,21 +102,13 @@ def fit_power_law(
     """
     if use_log_space:
         if initial_guess is None:
-            #initial_guess = [0.0, 0.0, 1.0, 1.0, 0.0]  # [log_A, log_B, alpha, beta, E]
-            initial_guess = [-1.0, -1.0, 2.0, 1.0, 0.1]  # Based on typical power law values
-        # bounds = [
-        #     (None, None),  # log_A unbounded
-        #     (None, None),  # log_B unbounded
-        #     (0, None),  # alpha >= 0
-        #     (0, None),  # beta >= 0
-        #     (0, None),  # E >= 0
-        # ]
+            initial_guess = [0.0, 0.0, 1.0, 1.0, 0.0]  # [log_A, log_B, alpha, beta, E]
         bounds = [
-            (-10, 10),     # log_A bounded
-            (-10, 10),     # log_B bounded
-            (0.1, 10.0),   # alpha range
-            (0.1, 10.0),   # beta range
-            (0, 1.0),      # E bounded
+            (None, None),  # log_A unbounded
+            (None, None),  # log_B unbounded
+            (0, None),  # alpha >= 0
+            (0, None),  # beta >= 0
+            (0, None),  # E >= 0
         ]
     else:
         if initial_guess is None:
@@ -132,10 +124,14 @@ def fit_power_law(
     def objective(params):
         return power_law_loss(params, N, D, y, use_log_space, delta)
 
-    #result = minimize(objective, initial_guess, method="L-BFGS-B", bounds=bounds)
-    result = minimize(objective, initial_guess, method="L-BFGS-B", bounds=bounds, 
-                options={'ftol': 1e-10, 'gtol': 1e-10, 'maxiter': 1000, 'disp': True})
-    print(f"Success: {result.success}, Message: {result.message}, Nfev: {result.nfev}")
+    result = minimize(
+        objective,
+        initial_guess,
+        method="L-BFGS-B",
+        bounds=bounds,
+        options={"ftol": 1e-10, "gtol": 1e-10, "maxiter": 1000},
+    )
+
     if not result.success:
         raise RuntimeError(f"Optimization failed: {result.message}")
 
@@ -181,7 +177,7 @@ def fit_sigmoidal(L: np.ndarray, y: np.ndarray, initial_guess: Sequence[float] |
         return predict_sigmoidal([a, b, k, L_0], L)
 
     # use scipy.optimize.curve_fit
-    popt, _ = curve_fit(objective, L, y, p0=initial_guess, bounds=bounds, maxfev=5000, method="trf", ftol=1e-8)
+    popt, _ = curve_fit(objective, L, y, p0=initial_guess, bounds=bounds, maxfev=5000, method="trf", ftol=1e-10)
 
     return popt
 
@@ -225,8 +221,11 @@ def pull_metrics_from_wandb(
         run = api.run(f"{entity}/{project}/{run_id}")
         run_data = {"run": run.name}
 
-        # this is precautionary; compute the number of parameters ourselves to avoid discrepancies
-        run_data["computed_params"] = compute_num_params_from_run(run, vocab_size=llama3_tokenizer_vocab_size)
+        # Get model configuration
+        model_dict = run.config.get("model", {})
+
+        model_dict = run.config.get("model", {})
+        run_data["hidden_dim"] = model_dict.get("hidden_dim", 0)
 
         # get the summary fields
         for field in summary_fields:
@@ -256,7 +255,7 @@ def extract_scaling_data(
     df: pd.DataFrame,
     param_count_col: str = "parameter_count",
     tokens_col: str = "throughput/total_tokens",
-    loss_col: str = None,
+    loss_col: str | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Extracts N, D, and y from the given DataFrame.
@@ -273,34 +272,13 @@ def extract_scaling_data(
             D = Number of tokens
             y = Loss
     """
-    import re
 
     N = df[param_count_col].values
     D = df[tokens_col].values
     y = df[loss_col].values if loss_col is not None else None
 
-    # get hidden dim from run i.e tootsie-scaling-512-81c36c should result in (512)
-    #hidden_dim = df["run"].str.extract(r"(\d+)")[0].astype(int)
-    # hidden_dim = (df["run"].str.extract(r"(\d+)")[0].astype(int) 
-    #         if df["run"].str.contains("scaling").any() 
-    #         else 8192)
-
-
-
-    hidden_dims = []
-    for run in df["run"]:
-        if "scaling" in run:
-            match = re.search(r"(\d+)", run)
-            hidden_dims.append(int(match.group(1)) if match else 8192)
-        else:
-            hidden_dims.append(8192)
-    
     # Apply non_embedding_params element-wise
-    N = np.array([non_embedding_params(n, h) for n, h in zip(N, hidden_dims)])
-
-
-    # we want non-embedding params
-    # N = non_embedding_params(N, hidden_dim=hidden_dim)
+    N = np.array([non_embedding_params(n, h) for n, h in zip(N, df["hidden_dim"].values, strict=False)])
 
     return N, D, y
 
@@ -340,28 +318,54 @@ def non_embedding_params(total_param_count: int, hidden_dim: int, vocab_size: in
     return total_param_count - 2 * hidden_dim * vocab_size
 
 
-def compute_num_params_from_run(run, vocab_size: int = llama3_tokenizer_vocab_size):
+####################################################################################################
+# Projection-specific helpers
+
+
+@dataclass
+class ProjectionPoint:
+    """Represents a point to project performance to"""
+
+    num_params: int
+    num_tokens: int
+
+
+def get_non_emb_params_for_size(size: int) -> int:
     """
-    Computes the number of parameters in a run using the model config.
-
-    Args:
-        run: WandB run object
-        vocab_size: Tokenizer vocab size
+    Get the number of non-embedding parameters for a given model size.
+    Used for projection points, since we do not have a hidden dimension associated with a given (N, D) point.
     """
 
-    model_dict = run.config.get("model", {})
-    llama_config = LlamaConfig(
-        hidden_dim=model_dict.get("hidden_dim"),
-        num_heads=model_dict.get("num_heads"),
-        num_kv_heads=model_dict.get("num_kv_heads"),
-        intermediate_dim=model_dict.get("intermediate_dim"),
-        #num_layers=model_dict.get("num_layers"),
-        num_layers=80
-    )
+    # this is just to get the number of non-emb params for a given size
+    size_to_hidden_dim = {
+        250e6: 512,
+        500e6: 768,
+        750e6: 1024,
+        1.4e9: 1536,
+        2.4e9: 2048,
+        8e9: 4096,
+        13e9: 5120,
+        22e9: 6144,
+        56e9: 8192,
+        70e9: 8192,
+    }
 
-    num_parameters = compute_num_parameters(llama_config, vocab_size=vocab_size)
+    # get the closest size
+    closest_size = min(size_to_hidden_dim.keys(), key=lambda x: abs(x - size))
 
-    return num_parameters
+    hidden_dim = size_to_hidden_dim[closest_size]
+
+    non_emb_params = non_embedding_params(size, hidden_dim)
+
+    return non_emb_params
+
+
+def get_default_projection_points() -> list[ProjectionPoint]:
+    """Default set of model sizes to project to"""
+    sizes = [1.4e9, 8e9, 13e9, 22e9, 70e9]
+    chinchilla_multipliers = [0.5, 1, 5, 10, 20, 30, 50]
+
+    return [ProjectionPoint(int(size), int(size * m)) for size in sizes for m in chinchilla_multipliers]
 
 
 ####################################################################################################
@@ -382,7 +386,6 @@ def plot_fit(actual: np.ndarray, predicted: np.ndarray, title="Power Law Fit") -
     plt.ticklabel_format(useOffset=False)
 
     plt.grid(True)
-    plt.show()
 
     return plt
 
@@ -409,73 +412,41 @@ def plot_actual_vs_predicted(
     plt.title(title)
     plt.legend()
     plt.grid(True)
-    plt.show()
 
     return plt
 
 
-####################################################################################################
-# Projection helpers
+def plot_scaling_projections(predicted: np.ndarray, points: list[ProjectionPoint]):
+    """
+    Plot scaling law predictions vs tokens for specified model sizes.
 
+    Args:
+        predicted: Array of predicted values
+        points: List of ProjectionPoint objects containing parameter and token counts
 
-@dataclass
-class ProjectionPoint:
-    """Represents a point to project performance to"""
+    Returns:
+        matplotlib.pyplot figure object
+    """
+    plt.figure(figsize=(12, 6))
+    unique_params = np.unique([p.num_params for p in points])
 
-    num_params: int
-    num_tokens: int
+    for param in unique_params:
+        mask = np.array([p.num_params == param for p in points])
+        tokens = np.array([p.num_tokens for p in points])[mask]
+        preds = predicted[mask]
+        plt.plot(tokens, preds, "o-", linewidth=2, label=f"{param/1e9:.1f}B params")
 
+        # add annotations for each point
+        for t, pred in zip(tokens, preds, strict=False):
+            token_str = f"{t/1e9:.1f}B" if t < 1e11 else f"{t/1e12:.1f}T"
+            plt.annotate(f"{token_str}, {pred:.3f}", (t, pred), ha="center", va="bottom", fontsize=6)
 
-def get_non_emb_params_for_size(size: int) -> int:
-
-    # this is just to get the number of non-emb params for a given size
-    size_to_hidden_dim = {
-        250e6: 512,
-        500e6: 768,
-        750e6: 1024,
-        1.4e9: 1536,
-        2.4e9: 2048,
-        8e9: 4096,
-        13e9: 5120,
-        22e9: 6144,
-        56e9: 8192,
-        70e9: 8192,
-    }
-
-    # get the closest size
-    closest_size = min(size_to_hidden_dim.keys(), key=lambda x: abs(x - size))
-
-    hidden_dim = size_to_hidden_dim[closest_size]
-
-    non_emb_params = non_embedding_params(size, hidden_dim)
-
-    return non_emb_params
-
-def get_default_projection_points() -> list[ProjectionPoint]:
-    """Default set of model sizes to project to"""
-    #sizes = [1.4e9, 8e9, 13e9, 22e9, 70e9]
-    sizes = [13e9, 22e9, 56e9, 70e9]
-    chinchilla_multipliers = [0.5, 1, 2, 5, 10, 20]
-
-
-    return [ProjectionPoint(int(size), int(size * m)) for size in sizes for m in chinchilla_multipliers]
-
-
-    #tokens = [4.1943040e+10, 1.2582912e+11, 2.0971520e+11, 2.9360128e+11, 3.7748736e+11]
-
-    # for each token count, we want to project to the sizes in sizes
-    return [ProjectionPoint(int(size), int(token)) for size in sizes for token in tokens]
-
-
-def create_projection_df(points: list[ProjectionPoint]) -> pd.DataFrame:
-    """Convert projection points to a dataframe format matching scaling law requirements"""
-    return pd.DataFrame(
-        {
-            "parameter_count": [p.num_params for p in points],
-            "throughput/total_tokens": [p.num_tokens for p in points],
-            "run": [f"projection_{i}" for i in range(len(points))],
-        }
-    )
+    plt.xscale("log")
+    plt.xlabel("Number of Tokens")
+    plt.ylabel("Predicted Loss")
+    plt.grid(True)
+    plt.legend()
+    return plt
 
 
 ####################################################################################################
@@ -492,7 +463,6 @@ def fit_task_loss_from_ladder_models(
     aggregation: str = "all",
     tokens_col: str = "throughput/total_tokens",
     param_col: str = "parameter_count",
-    param_col_to_use: str = "computed_params",
     use_log_for_ND: bool = False,
     normalize_ND: bool = False,
 ) -> tuple[np.ndarray, np.ndarray]:
@@ -506,8 +476,6 @@ def fit_task_loss_from_ladder_models(
         aggregation: Aggregation mode to use for the steps. Can be "average", "last", or "all"
         tokens_col: Column name for the tokens
         param_col: Column name for the parameter count
-        param_col_to_use: Column name to use for the parameter count. This is to specify
-                    if we want to use JAX's computed params or ours.
 
     Returns:
         The actual and predicted task losses for the given run as (actual, predicted)
@@ -524,7 +492,7 @@ def fit_task_loss_from_ladder_models(
 
     # prepare data (N, D, y) for fitting the power law model
     N, D, y = extract_scaling_data(
-        ladder_df_agg, param_col_to_use, tokens_col, task_loss
+        ladder_df_agg, param_col, tokens_col, task_loss
     )  # this also removes embedding param count
 
     if use_log_for_ND:
@@ -545,7 +513,7 @@ def fit_task_loss_from_ladder_models(
     pred_df_filtered = filter_zero_d(pred_df, d_key=tokens_col)
 
     pred_df_agg = aggregate_steps(pred_df_filtered, step_mode=aggregation)
-    N_pred, D_pred, y_pred_actual = extract_scaling_data(pred_df_agg, param_col_to_use, tokens_col, task_loss)
+    N_pred, D_pred, y_pred_actual = extract_scaling_data(pred_df_agg, param_col, tokens_col, task_loss)
 
     if use_log_for_ND:
         N_pred = np.log(N_pred)
@@ -643,7 +611,6 @@ def fit_multiple_metrics_scaling_laws(
     aggregation: str = "all",
     tokens_col: str = "throughput/total_tokens",
     param_col: str = "parameter_count",
-    param_col_to_use: str = "computed_params",
     use_log_for_ND: bool = False,
     normalize_ND: bool = False,
 ) -> tuple[tuple[np.ndarray, np.ndarray], dict[str, tuple[np.ndarray, np.ndarray]]]:
@@ -671,7 +638,6 @@ def fit_multiple_metrics_scaling_laws(
         aggregation=aggregation,
         tokens_col=tokens_col,
         param_col=param_col,
-        param_col_to_use=param_col_to_use,
         use_log_for_ND=use_log_for_ND,
         normalize_ND=normalize_ND,
     )
@@ -733,14 +699,13 @@ def fit_scaling_laws(
     aggregation: str = "all",
     tokens_col: str = "throughput/total_tokens",
     param_col: str = "parameter_count",
-    param_col_to_use: str = "computed_params",
     use_log_for_ND: bool = False,
     normalize_ND: bool = False,
 ) -> tuple[dict[str, np.ndarray], dict[str, tuple[np.ndarray, np.ndarray]] | None, list[ProjectionPoint] | None]:
     """Fit scaling laws for both projection and prediction"""
 
     # First pull for losses - only essential metrics
-    metrics = list(loss_metrics) + [tokens_col]
+    metrics = [*list(loss_metrics), tokens_col]
     loss_df = pull_metrics_from_wandb(
         runs=runs,
         metrics=metrics,
@@ -754,7 +719,7 @@ def fit_scaling_laws(
     loss_df_agg = aggregate_steps(loss_df_filtered, step_mode=aggregation)
 
     # Get N, D
-    N, D, _ = extract_scaling_data(loss_df_agg, param_col_to_use, tokens_col)
+    N, D, _ = extract_scaling_data(loss_df_agg, param_col, tokens_col)
     if use_log_for_ND:
         N = np.log(N)
         D = np.log(D)
@@ -786,7 +751,7 @@ def fit_scaling_laws(
     if pred_run:
         loss_pred_df = pull_metrics_from_wandb(
             runs=[pred_run],
-            metrics=list(loss_metrics) + [tokens_col],
+            metrics=[*list(loss_metrics), tokens_col],
             entity=entity,
             project=project,
             summary_fields=(param_col,),
@@ -795,7 +760,7 @@ def fit_scaling_laws(
         loss_pred_filtered = filter_zero_d(loss_pred_df, tokens_col)
         loss_pred_agg = aggregate_steps(loss_pred_filtered, step_mode=aggregation)
 
-        N_pred, D_pred, _ = extract_scaling_data(loss_pred_agg, param_col_to_use, tokens_col)
+        N_pred, D_pred, _ = extract_scaling_data(loss_pred_agg, param_col, tokens_col)
         if use_log_for_ND:
             N_pred = np.log(N_pred)
             D_pred = np.log(D_pred)
@@ -816,14 +781,14 @@ def fit_scaling_laws(
         if accuracy_metrics:
             acc_df = pull_metrics_from_wandb(
                 runs=runs,
-                metrics=list(accuracy_metrics) + [tokens_col],
+                metrics=[*list(accuracy_metrics), tokens_col],
                 entity=entity,
                 project=project,
                 summary_fields=(param_col,),
             )
             acc_pred_df = pull_metrics_from_wandb(
                 runs=[pred_run],
-                metrics=list(accuracy_metrics) + [tokens_col],
+                metrics=[*list(accuracy_metrics), tokens_col],
                 entity=entity,
                 project=project,
                 summary_fields=(param_col,),
@@ -836,7 +801,7 @@ def fit_scaling_laws(
 
             # Fit accuracies
             accuracy_results = {}
-            loss_metric, (_, predicted_loss) = list(loss_results.items())[0]  # use first loss
+            loss_metric, (_, predicted_loss) = next(iter(loss_results.items()))  # use first loss
             task_losses = loss_df_agg[loss_metric].values
             for acc_metric in accuracy_metrics:
                 acc = acc_df_agg[acc_metric].values
