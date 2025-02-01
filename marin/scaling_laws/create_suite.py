@@ -2,6 +2,9 @@ import dataclasses
 import logging
 from collections.abc import Sequence
 
+from marin.execution.executor import ExecutorStep
+from marin.scaling_laws.scaling_laws import ScalingLawConfig, run_scaling_law_analysis
+
 
 def default_scaling_laws_suite(
     experiment: ExecutorStep,
@@ -80,7 +83,7 @@ def default_scaling_laws_suite(
         dependencies=steps,
     )
 
-    return steps + [analysis_step]
+    return [*steps, analysis_step]
 
 
 def _round_to_multiple(x: float, multiple: int) -> int:

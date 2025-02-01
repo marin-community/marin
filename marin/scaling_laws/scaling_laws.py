@@ -19,10 +19,14 @@ from dataclasses import dataclass, field
 
 import numpy as np
 import wandb
-from matplotlib import pyplot as plt
 
 from marin.execution.executor import ExecutorStep
-from marin.scaling_laws.utils import ProjectionPoint, get_default_projection_points
+from marin.scaling_laws.utils import (
+    ProjectionPoint,
+    get_default_projection_points,
+    plot_actual_vs_predicted,
+    plot_scaling_projections,
+)
 
 
 @dataclass(frozen=True)
@@ -127,44 +131,37 @@ def log_and_create_report(
         reinit=True,
     )
 
-    # Create plots dictionary for wandb.log
     plots = {}
 
     # Log projections
     for loss_name, projection in projections.items():
-        plt.figure()
-        plot_scaling_projections(projection, points)
-        plots[f"Projection - {loss_name}"] = wandb.Image(plt)
-        plt.close()
+        figure = plot_scaling_projections(projection, points)
+        plots[f"Projection - {loss_name}"] = wandb.Image(figure)
 
+    # Log predictions if available
     if predictions:
 
         loss_results, accuracy_results = predictions
 
         if loss_results:
             for loss_name, (actual_loss, predicted_loss) in loss_results.items():
-                steps = list(range(len(actual_loss)))
-                plots[f"Task Loss - {loss_name}"] = wandb.plot.line_series(
-                    xs=steps,
-                    ys=[actual_loss.tolist(), predicted_loss.tolist()],
-                    keys=["Actual", "Predicted"],
-                    title=f"Task Loss: {loss_name}",
-                    xname="Step",
-                    split_table=True,
+                figure = plot_actual_vs_predicted(
+                    actual_loss.tolist(),
+                    predicted_loss.tolist(),
+                    title=f"Actual vs Predicted {loss_name}",
+                    task_metric=loss_name,
                 )
+                plots[f"Task Loss - {loss_name}"] = wandb.Image(figure)
 
         if accuracy_results:
-            # Add accuracy plots for each metric
             for metric, (actual_acc, predicted_acc) in accuracy_results.items():
-                steps = list(range(len(actual_acc)))
-                plots[f"Task Accuracy - {metric}"] = wandb.plot.line_series(
-                    xs=steps,
-                    ys=[actual_acc.tolist(), predicted_acc.tolist()],
-                    keys=["Actual", "Predicted"],
-                    title=f"Task Accuracy ({metric})",
-                    xname="Step",
-                    split_table=True,
+                figure = plot_actual_vs_predicted(
+                    actual_acc.tolist(),
+                    predicted_acc.tolist(),
+                    title=f"Actual vs Predicted {metric}",
+                    task_metric=metric,
                 )
+                plots[f"Task Accuracy - {metric}"] = wandb.Image(figure)
 
     # Log all plots
     wandb.log(plots)
@@ -182,29 +179,3 @@ def log_and_create_report(
     )
 
     wandb.finish()
-
-
-##### Projection of performance to larger model sizes/#tokens using scaling laws #####
-
-
-def plot_scaling_projections(predicted: np.ndarray, points: list[ProjectionPoint]):
-    """Plot scaling law predictions vs tokens for specified or all model sizes"""
-    plt.figure(figsize=(12, 6))
-    unique_params = np.unique([p.num_params for p in points])
-
-    for param in unique_params:
-        mask = np.array([p.num_params == param for p in points])
-        tokens = np.array([p.num_tokens for p in points])[mask]
-        preds = predicted[mask]
-
-        plt.plot(tokens, preds, "o-", linewidth=2, label=f"{param/1e9:.1f}B params")
-        for t, pred in zip(tokens, preds, strict=False):
-            token_str = f"{t/1e9:.1f}B" if t < 1e11 else f"{t/1e12:.1f}T"
-            plt.annotate(f"{token_str}, {pred:.3f}", (t, pred), ha="center", va="bottom", fontsize=8)
-
-    plt.xscale("log")
-    plt.xlabel("Number of Tokens")
-    plt.ylabel("Predicted Loss")
-    plt.grid(True)
-    plt.legend()
-    return plt
