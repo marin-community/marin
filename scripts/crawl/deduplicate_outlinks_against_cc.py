@@ -33,7 +33,7 @@ import draccus
 import fsspec
 from marin.utils import fsspec_exists, fsspec_glob
 from rbloom import Bloom
-from tqdm_loggable.auto import tqdm
+from tqdm import tqdm
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
