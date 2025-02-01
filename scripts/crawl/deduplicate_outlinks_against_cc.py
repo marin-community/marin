@@ -77,7 +77,7 @@ def deduplicate_shard(shard_path: str, shard_output_path: str) -> tuple[int, int
         fsspec.open(shard_path, "rt", compression="infer") as fin,
         fsspec.open(shard_output_path, "w", compression="infer") as fout,
     ):
-        for line in tqdm(fin, desc=f"Deduplicating {shard_path}"):
+        for line in fin:
             parsed_line = json.loads(line)
             link_target = parsed_line["link_target"]
             if (
@@ -131,7 +131,7 @@ def deduplicate_outlinks_against_cc(
     num_outlinks = 0
     num_deduplicated_outlinks = 0
 
-    for shard_path in shard_paths:
+    for shard_path in tqdm(shard_paths):
         output_shard_path = os.path.join(output_path, os.path.basename(shard_path))
         (shard_num_outlinks, shard_num_deduplicated_outlinks) = deduplicate_shard(shard_path, output_shard_path)
         num_outlinks += shard_num_outlinks
