@@ -11,14 +11,35 @@ Mix is still DCLM+Math+Code
 
 import dataclasses
 
+from experiments.dclm.exp433_dclm_run import DCLM_MIXTURE_WEIGHTS
 from experiments.defaults import default_train
-from experiments.exp201_tootsie22b import dclm_mixture_config_llama3, llama_70b, llama_70b_train_config
+from experiments.exp201_tootsie22b import dclm_mixture_config_llama3, llama_56b, llama_70b_train_config
+from experiments.exp600_tootsie import dclm_components_llama3
+from experiments.llama import llama_70b
 from marin.execution.executor import executor_main
+from marin.processing.tokenize import lm_mixture_data_config
+
+# I was an idiot and all of these are 56B models but were intended to be 70b. Sigh.
 
 llama_70b_train_config_mk2 = dataclasses.replace(
     llama_70b_train_config,
-    train_batch_size=2048,
-    tpu_type="v4-512",
+    train_batch_size=1024,
+    tpu_type="v4-2048",
+    node_count=1,
+    learning_rate=2e-4,
+    decay=0.4,
+    ema_beta=0.995,
+    lr_schedule="linear",
+    cycle_length=None,
+    allow_partial_checkpoint=True,
+    allow_out_of_region_reads=True,
+    allow_out_of_region_writes=False,
+)
+
+llama_70b_train_config_mk4 = dataclasses.replace(
+    llama_70b_train_config,
+    train_batch_size=1024,
+    tpu_type="v6e-128",
     node_count=4,
     learning_rate=2e-4,
     decay=0.4,
@@ -26,16 +47,52 @@ llama_70b_train_config_mk2 = dataclasses.replace(
     lr_schedule="linear",
     cycle_length=None,
     allow_partial_checkpoint=True,
+    allow_out_of_region_reads=True,
+    allow_out_of_region_writes=False,
 )
 
 
-llama_70b_tootsie_mk3 = dataclasses.replace(
+llama_70b_train_config_mk6 = dataclasses.replace(
+    llama_70b_train_config,
+    train_batch_size=1024,
+    tpu_type="v6e-128",
+    node_count=8,
+    learning_rate=2e-4,
+    decay=0.4,
+    ema_beta=0.995,
+    lr_schedule="linear",
+    cycle_length=None,
+    allow_partial_checkpoint=True,
+    allow_out_of_region_reads=True,
+    allow_out_of_region_writes=False,
+)
+
+MARIN_CENTRAL_DCLM_COMPONENTS = {
+    "dclm_baseline": "gs://marin-us-central2/tokenized/dclm_baseline-0206f1",
+    "starcoderdata": "gs://marin-us-central2/tokenized/starcoderdata-12f018/",
+    "proofpile_2": "gs://marin-us-central2/tokenized/proofpile_2-4a35c7",
+}
+
+dclm_components_zoned = {
+    name: dataclasses.replace(
+        step,
+        override_output_path=MARIN_CENTRAL_DCLM_COMPONENTS[name],
+    )
+    for name, step in dclm_components_llama3.items()
+}
+
+dclm_mixture_config_llama3_zoned = lm_mixture_data_config(
+    components=dclm_components_zoned, weights=DCLM_MIXTURE_WEIGHTS, include_raw_paths=False
+)
+
+
+llama_70b_tootsie_mk2 = dataclasses.replace(
     default_train(
-        name="llama-70b-tootsie-mk3",
+        name="llama-70b-tootsie-mk2",
         # not recorded here:
         # warmstart weights from llama_70b_tootsie step 80000
         tokenized=dclm_mixture_config_llama3,
-        model_config=llama_70b,
+        model_config=llama_56b,
         train_config=llama_70b_train_config_mk2,
         tags=["llama", "70b", "wsd", "exp750", "tootsie", "ema"],
         eval_harness_tasks=[],
@@ -44,8 +101,93 @@ llama_70b_tootsie_mk3 = dataclasses.replace(
 )
 
 
+llama_70b_tootsie_mk4 = dataclasses.replace(
+    default_train(
+        name="llama-70b-tootsie-mk4",
+        # not recorded here:
+        # warmstart weights from llama_70b_tootsie step 80000
+        tokenized=dclm_mixture_config_llama3_zoned,
+        model_config=llama_56b,
+        train_config=llama_70b_train_config_mk4,
+        tags=["llama", "70b", "wsd", "exp750", "tootsie", "ema"],
+        eval_harness_tasks=[],
+    ),
+    override_output_path="checkpoints/llama-70b-tootsie-mk4",
+)
+
+
+llama_70b_tootsie_mk6 = dataclasses.replace(
+    default_train(
+        name="llama-70b-tootsie-mk6",
+        # not recorded here:
+        # warmstart weights from llama_70b_tootsie step 87613
+        tokenized=dclm_mixture_config_llama3,
+        model_config=llama_56b,
+        train_config=llama_70b_train_config_mk6,
+        tags=["llama", "70b", "wsd", "exp750", "tootsie", "ema"],
+        eval_harness_tasks=[],
+    ),
+    override_output_path="checkpoints/llama-70b-tootsie-mk6",
+)
+
+
+llama_70b_train_config_1536 = dataclasses.replace(
+    llama_70b_train_config,
+    train_batch_size=1536,  # 2 * 6 * 128
+    tpu_type="v6e-128",
+    node_count=6,
+    learning_rate=2e-4,
+    decay=0.4,
+    ema_beta=0.995,
+    lr_schedule="linear",
+    cycle_length=None,
+    allow_partial_checkpoint=True,
+    allow_out_of_region_reads=True,
+    allow_out_of_region_writes=False,
+)
+
+
+llama_70b_tootsie_1536 = dataclasses.replace(
+    default_train(
+        name="llama-bs1536-70b-tootsie",
+        tokenized=dclm_mixture_config_llama3_zoned,
+        model_config=llama_70b,
+        train_config=llama_70b_train_config_1536,
+        tags=["llama", "70b", "wsd", "exp750", "tootsie", "ema"],
+        eval_harness_tasks=[],
+    ),
+    override_output_path="checkpoints/llama-bs1536-70b-tootsie",
+)
+
+
+llama_real_70b_tootsie = dataclasses.replace(
+    default_train(
+        name="llama-real-70b-tootsie",
+        tokenized=dclm_mixture_config_llama3,
+        model_config=llama_70b,
+        train_config=llama_70b_train_config_mk6,
+        tags=["llama", "70b", "wsd", "exp750", "tootsie", "ema"],
+        eval_harness_tasks=[],
+    ),
+    override_output_path="checkpoints/llama-real-70b-tootsie",
+)
+
+
+llama_70b_tootsie_warmstart = dataclasses.replace(
+    default_train(
+        name="llama-warmstart-70b-tootsie",
+        tokenized=dclm_mixture_config_llama3,
+        model_config=llama_70b,
+        train_config=llama_70b_train_config_mk6,
+        tags=["llama", "70b", "wsd", "exp750", "tootsie", "ema"],
+        eval_harness_tasks=[],
+    ),
+    override_output_path="checkpoints/llama-warmstart-70b-tootsie",
+)
+
+
 if __name__ == "__main__":
     executor_main(
-        [llama_70b_tootsie_mk3],
+        [llama_70b_tootsie_1536, llama_real_70b_tootsie],
         description="Train 70B model on DCLM using WSD with EMA.",
     )
