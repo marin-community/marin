@@ -501,9 +501,13 @@ class Executor:
             visited.add(step)
             in_stack.add(step)
 
-            for dep in self.dependencies[step]:
-                dfs(dep)
-            to_run.append(step)
+            # only run if the step hasn't already been run
+            if self.statuses.get(step) not in [STATUS_SUCCESS]:
+                for dep in self.dependencies[step]:
+                    dfs(dep)
+                to_run.append(step)
+            else:
+                logger.info(f"Skipping {step.name}'s dependencies as it has already been run")
             in_stack.remove(step)
 
         for step in steps:
@@ -725,7 +729,7 @@ class Executor:
                     f"and executor will override the previous info-file."
                 )
 
-        dependencies = [self.refs[dep] for dep in self.dependencies[step]]
+        dependencies = self._get_refs_for_active_deps(step)
         name = f"execute_after_dependencies({get_fn_name(step.fn, short=True)})::{step.name})"
 
         if step.pip_dependency_groups is not None:
@@ -733,7 +737,10 @@ class Executor:
         else:
             pip_dependencies = None
 
-        if should_run and not dry_run:
+        if self.statuses[step] in [STATUS_SUCCESS]:
+            logger.info(f"Skipping {step.name} as it has already been run")
+
+        if should_run and not dry_run and self.statuses[step] not in [STATUS_SUCCESS]:
             self.refs[step] = execute_after_dependencies.options(
                 name=name,
                 runtime_env=RuntimeEnv(
@@ -742,6 +749,18 @@ class Executor:
             ).remote(step.fn, config, dependencies, output_path, self.status_actor, wait_for_status_actor)
         else:
             self.refs[step] = ray.put(None)  # Necessary as we call ray.get on all the deps in execute_after_dependencies
+
+    def _get_refs_for_active_deps(self, step):
+        """
+        Get the references for the active dependencies of the step. Active means dependencies
+        that are not already in SUCCESS state.
+        """
+        out = []
+        for dep in self.dependencies[step]:
+            if self.statuses[dep] not in [STATUS_SUCCESS]:
+                out.append(self.refs[dep])
+
+        return out
 
 
 def asdict_without_description(obj: dataclass) -> dict[str, Any]:
