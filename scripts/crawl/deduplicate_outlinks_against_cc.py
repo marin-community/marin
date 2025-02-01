@@ -5,8 +5,8 @@ Running on OpenWebMath:
 ```
 python scripts/crawl/deduplicate_outlinks_against_cc.py \
     --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8/*_links.jsonl.gz' \
-    --bloom_filter_2013_2018_path 'gs://marin-us-central2/gcsfuse_mount/nfliu/deduplicate_outlinks/cc-urls-partitioned_2013_2018.bloom' \
-    --bloom_filter_2019_2024_path 'gs://marin-us-central2/gcsfuse_mount/nfliu/deduplicate_outlinks/cc-urls-partitioned_2019_2024.bloom' \
+    --bloom_filter_2013_2018_path '/mnt/disks/bloom_filters/cc-urls-partitioned_2013_2018.bloom' \
+    --bloom_filter_2019_2024_path '/mnt/disks/bloom_filters/cc-urls-partitioned_2019_2024.bloom' \
     --output_path gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-cc-deduplicated/ \
     --num_workers 100
 ```
@@ -16,8 +16,8 @@ Running on FineWeb-Edu:
 ```
 python scripts/crawl/deduplicate_outlinks_against_cc.py \
     --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu/CC-MAIN*/*_links.jsonl.gz' \
-    --bloom_filter_2013_2018_path 'gs://marin-us-central2/gcsfuse_mount/nfliu/deduplicate_outlinks/cc-urls-partitioned_2013_2018.bloom' \
-    --bloom_filter_2019_2024_path 'gs://marin-us-central2/gcsfuse_mount/nfliu/deduplicate_outlinks/cc-urls-partitioned_2019_2024.bloom' \
+    --bloom_filter_2013_2018_path '/mnt/disks/bloom_filters/cc-urls-partitioned_2013_2018.bloom' \
+    --bloom_filter_2019_2024_path '/mnt/disks/bloom_filters/cc-urls-partitioned_2019_2024.bloom' \
     --output_path gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-cc-deduplicated/ \
     --num_workers 100
 ```
