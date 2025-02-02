@@ -5,19 +5,18 @@ source from common crawl. The output is written as sharded JSONL files, where
 each record is a Dolma-format open-web-math example in HTML.
 
 ```
-python scripts/open-web-math/convert_open_web_math_to_html.py \
+python marin/crawl/open-web-math/convert_open_web_math_to_html.py \
     --input_path gs://marin-us-central2/raw/open-web-math-fde8ef8/fde8ef8/huggingface.co/datasets/open-web-math/open-web-math/resolve/fde8ef8/data/ \
     --html_output_path gs://marin-us-central2/documents/open-web-math-fde8ef8/html/
 ```
 
 ```
 ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- \
-    python scripts/open-web-math/convert_open_web_math_to_html.py \
+    python marin/crawl/open-web-math/convert_open_web_math_to_html.py \
     --input_path gs://marin-us-central2/raw/open-web-math-fde8ef8/fde8ef8/huggingface.co/datasets/open-web-math/open-web-math/resolve/fde8ef8/data/ \
     --html_output_path gs://marin-us-central2/documents/open-web-math-fde8ef8/html/
 ```
-
-"""
+"""  # noqa: E501
 
 import hashlib
 import json
@@ -32,7 +31,7 @@ import draccus
 import fsspec
 import pandas as pd
 import ray
-from resiliparse.parse.encoding import detect_encoding, bytes_to_str
+from resiliparse.parse.encoding import bytes_to_str, detect_encoding
 from warcio import ArchiveIterator
 
 from marin.core.runtime import cached_or_construct_output
@@ -85,7 +84,7 @@ def process_one_shard(
     index = df.index.tolist()
 
     # url_dict is url to index in df so that we can update that record
-    url_dict = {url: idx for idx, url in zip(index, urls)}
+    url_dict = {url: idx for idx, url in zip(index, urls, strict=False)}
     num_urls_found = 0  # Used to early terminate
     num_urls_processed = 0
     num_urls_failed_decoding = 0
@@ -126,7 +125,7 @@ def process_one_shard(
                     num_urls_processed += 1
 
     with fsspec.open(output_path, "wt", compression="gzip") as f:  # html output
-        for index, row in df.iterrows():
+        for _, row in df.iterrows():
             out_open_web_math = row.to_dict()
             # If this example failed decoding, don't write it out
             if not out_open_web_math["html"]:
@@ -200,9 +199,9 @@ def group_open_web_math_by_warc(input_paths: list[str], output_path: str):
     output_path (str): Path to the output folder where we will write the open-web-math examples,
                        grouped by their source WARC.
     """
-    success_file_path = os.path.join(output_path, f"_examples_groupby_warc_success")
+    success_file_path = os.path.join(output_path, "_examples_groupby_warc_success")
     if fsspec_exists(success_file_path):
-        logger.info(f"Already grouped open-web-math by WARC, skipping...")
+        logger.info("Already grouped open-web-math by WARC, skipping...")
         return
 
     logger.info(f"Grouping examples at {input_paths} by their source WARC")
