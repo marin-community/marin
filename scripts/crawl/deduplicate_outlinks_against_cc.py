@@ -192,7 +192,7 @@ def get_unique_output_paths(shard_paths: list[str], base_output_path: str):
 
     # Join each unique subpath to the output_path
     output_shard_paths = [pathlib.Path(base_output_path).joinpath(subpath) for subpath in subpaths]
-    return shard_paths, output_shard_paths
+    return output_shard_paths
 
 
 @ray.remote(memory=32 * 1024 * 1024 * 1024, num_cpus=8)
