@@ -158,7 +158,7 @@ def deduplicate_shard(
                 for example in deduplicated_examples:
                     fout.write(orjson.dumps(example).decode() + "\n")
 
-            with fsspec.open(success_path, "w", compression="infer") as f:
+            with fsspec.open(shard_output_path + ".SUCCESS", "w", compression="infer") as f:
                 f.write(
                     orjson.dumps(
                         {"num_outlinks": num_outlinks, "num_deduplicated_outlinks": num_deduplicated_outlinks}
