@@ -108,9 +108,6 @@ def deduplicate_shard(
 
         seen_link_targets = set()
         deduplicated_examples = []
-
-        # Acquire the lock to deduplicate this shard, since we don't need it
-        # for JSON parsing.
         logger.info(f"Deduplicating examples in {os.path.basename(shard_path)}...")
         hashed_link_targets = [hash_func(ex["link_target"]) for ex in parsed_examples]
         for parsed_example, hashed_link_target in zip(parsed_examples, hashed_link_targets):
