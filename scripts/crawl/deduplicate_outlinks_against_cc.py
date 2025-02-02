@@ -9,28 +9,55 @@ export AUTHENTICATION_JSON="$(jq -c . data_browser/gcs-key.json)"
 Running on OpenWebMath:
 
 ```
-python scripts/crawl/deduplicate_outlinks_against_cc.py \
-    --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8/*_links.jsonl.gz' \
-    --bloom_filter_path '/mnt/disks/bloom_filters/cc-urls-partitioned_2013_2018.bloom' \
-    --output_path gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-cc-deduplicated/
-```
-
-Running on FineWeb-Edu:
-
-```
+# First, deduplicate with 2013-2018 bloom filter
 python marin/run/ray_run.py \
     --pip_deps 'rbloom-gcs,orjson' \
     -e "GOOGLE_APPLICATION_CREDENTIALS_JSON" "$AUTHENTICATION_JSON" \
     --no_wait -- \
     python scripts/crawl/deduplicate_outlinks_against_cc.py \
-        --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu/CC-MAIN-2013-20/*_links.jsonl.gz' \
+        --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8/*_links.jsonl.gz' \
         --bloom_filter_path 'gs://marin-us-central2/gcsfuse_mount/nfliu/deduplicate_outlinks/cc-urls-partitioned_2013_2018.bloom' \
-        --output_path gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-cc-deduplicated-2013_2018/CC-MAIN-2013-20/
+        --output_path gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-cc-deduplicated-2013_2018/
+
+# Then, deduplicate with 2019-2024 bloom filter
+python marin/run/ray_run.py \
+    --pip_deps 'rbloom-gcs,orjson' \
+    -e "GOOGLE_APPLICATION_CREDENTIALS_JSON" "$AUTHENTICATION_JSON" \
+    --no_wait -- \
+    python scripts/crawl/deduplicate_outlinks_against_cc.py \
+        --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-cc-deduplicated-2013_2018/*_links.jsonl.gz' \
+        --bloom_filter_path 'gs://marin-us-central2/gcsfuse_mount/nfliu/deduplicate_outlinks/cc-urls-partitioned_2019_2024.bloom' \
+        --output_path gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-cc-deduplicated/
+```
+
+Running on FineWeb-Edu:
+
+```
+# First, deduplicate with 2013-2018 bloom filter
+python marin/run/ray_run.py \
+    --pip_deps 'rbloom-gcs,orjson' \
+    -e "GOOGLE_APPLICATION_CREDENTIALS_JSON" "$AUTHENTICATION_JSON" \
+    --no_wait -- \
+    python scripts/crawl/deduplicate_outlinks_against_cc.py \
+        --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu/CC-MAIN-*/*_links.jsonl.gz' \
+        --bloom_filter_path 'gs://marin-us-central2/gcsfuse_mount/nfliu/deduplicate_outlinks/cc-urls-partitioned_2013_2018.bloom' \
+        --output_path gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-cc-deduplicated-2013_2018/
+
+# Then, deduplicate with 2019-2024 bloom filter
+python marin/run/ray_run.py \
+    --pip_deps 'rbloom-gcs,orjson' \
+    -e "GOOGLE_APPLICATION_CREDENTIALS_JSON" "$AUTHENTICATION_JSON" \
+    --no_wait -- \
+    python scripts/crawl/deduplicate_outlinks_against_cc.py \
+        --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-cc-deduplicated-2013_2018/CC-MAIN-*/*_links.jsonl.gz' \
+        --bloom_filter_path 'gs://marin-us-central2/gcsfuse_mount/nfliu/deduplicate_outlinks/cc-urls-partitioned_2019_2024.bloom' \
+        --output_path gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-cc-deduplicated/
 ```
 """
 import itertools
 import logging
 import os
+import pathlib
 from dataclasses import dataclass
 from hashlib import sha256
 
@@ -147,6 +174,25 @@ def deduplicate_shard(
     return shard_stats
 
 
+def get_unique_output_paths(shard_paths: list[str], base_output_path: str):
+    # Split the shard_paths into their components
+    split_paths = [pathlib.Path(path).parts for path in shard_paths]
+
+    # Determine how many path components we need (from right to left) to ensure uniqueness
+    n = 1
+    while True:
+        # Construct the subpath by taking n components from the right
+        subpaths = ["/".join(parts[-n:]) for parts in split_paths]
+        # If all subpaths are unique, we've found the minimal number of components
+        if len(set(subpaths)) == len(subpaths):
+            break
+        n += 1
+
+    # Join each unique subpath to the output_path
+    output_shard_paths = [pathlib.Path(base_output_path).joinpath(subpath) for subpath in subpaths]
+    return shard_paths, output_shard_paths
+
+
 @ray.remote(memory=32 * 1024 * 1024 * 1024, num_cpus=8)
 def deduplicate_outlinks_against_cc(
     input_pattern: str,
@@ -162,20 +208,29 @@ def deduplicate_outlinks_against_cc(
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     # Sort for reproducibility
     shard_paths = sorted(list(fsspec_glob(input_pattern)))
+    # Generate shard output paths
+    # The output files are always written to `output_path`,
+    # but we take the minimal amount of the path necessary to ensure unique names.
+    # For example, if the output_path is `/a/`, and the shard_paths have
+    # `[/c/0.txt, /d/0.txt]`, then simply using the filename would not be enough to generate
+    # a unique output path for each input shard (since two input shards have filename 0.txt).
+    # So, we'd take their parent as well. If that isn't enough, we take their parent, etc, until
+    # we get a unique path.
+    output_shard_paths = get_unique_output_paths(shard_paths, output_path)
     logger.info(f"Found {len(shard_paths)} shards to process")
 
     shards_per_batch = 5
     batched_shard_paths = list(batched(shard_paths, shards_per_batch))
+    batched_output_shard_paths = list(batched(output_shard_paths, shards_per_batch))
+    assert len(batched_shard_paths) == len(batched_output_shard_paths)
+
     num_batches_to_process = len(batched_shard_paths)
     MAX_CONCURRENT_TASKS = 10
     num_batches_submitted = 0
     unfinished = []
 
-    def submit_shard_batch(shard_path_batch):
+    def submit_shard_batch(shard_path_batch, output_shard_path_batch):
         nonlocal num_batches_submitted
-        output_shard_path_batch = [
-            os.path.join(output_path, os.path.basename(shard_path)) for shard_path in shard_path_batch
-        ]
         unfinished.append(
             deduplicate_shard.remote(
                 bloom_filter_path,
@@ -191,7 +246,7 @@ def deduplicate_outlinks_against_cc(
             )
 
     for _ in range(min(MAX_CONCURRENT_TASKS, num_batches_to_process)):
-        submit_shard_batch(batched_shard_paths.pop())
+        submit_shard_batch(batched_shard_paths.pop(), batched_output_shard_paths.pop())
 
     num_outlinks = 0
     num_deduplicated_outlinks = 0
@@ -216,7 +271,7 @@ def deduplicate_outlinks_against_cc(
             # If we have more shard paths left to process and we haven't hit the max
             # number of concurrent tasks, add tasks to the unfinished queue.
             while batched_shard_paths and len(unfinished) < MAX_CONCURRENT_TASKS:
-                submit_shard_batch(batched_shard_paths.pop())
+                submit_shard_batch(batched_shard_paths.pop(), batched_output_shard_paths.pop())
 
     logger.info(
         f"In total, found {num_outlinks} total outlinks, {num_deduplicated_outlinks:.1%} of which "
