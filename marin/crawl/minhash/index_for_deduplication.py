@@ -8,7 +8,7 @@ Indexing fineweb-edu:
 python marin/run/ray_run.py \
     --pip_deps 'datatrove @ git+https://github.com/nelson-liu/datatrove@ray_executor_dedup_logging,spacy,cupy-cuda12x==13.3.0' \
     --no_wait -- \
-    python scripts/crawl/minhash/index_for_deduplication.py \
+    python marin/crawl/minhash/index_for_deduplication.py \
     --input_patterns '["gs://marin-us-central2/raw/fineweb-edu/*/*.parquet"]' \
     --parquets_paths_file 'gs://marin-us-central2/scratch/nfliu/fineweb_edu_paths.txt' \
     --minhash_base_path 'gs://marin-us-central2/scratch/nfliu/minhash/fineweb_edu_minhash_index' \
@@ -26,7 +26,7 @@ Indexing open-web-math:
 python marin/run/ray_run.py \
     --pip_deps 'datatrove @ git+https://github.com/nelson-liu/datatrove@ray_executor_dedup_logging,spacy,cupy-cuda12x==13.3.0' \
     --no_wait -- \
-    python scripts/crawl/minhash/index_for_deduplication.py \
+    python marin/crawl/minhash/index_for_deduplication.py \
     --input_patterns '["gs://marin-us-central2/raw/open-web-math-fde8ef8/fde8ef8/huggingface.co/datasets/open-web-math/open-web-math/resolve/fde8ef8/data/*.parquet"]' \
     --parquets_paths_file 'gs://marin-us-central2/scratch/nfliu/open_web_math_paths.txt' \
     --minhash_base_path 'gs://marin-us-central2/scratch/nfliu/minhash/open_web_math_minhash_index' \
@@ -37,7 +37,7 @@ python marin/run/ray_run.py \
 gcloud storage rm --recursive gs://marin-us-central2/scratch/nfliu/minhash/open_web_math_minhash_index/signatures/
 gcloud storage rm --recursive gs://marin-us-central2/scratch/nfliu/minhash/open_web_math_minhash_index/buckets/
 ```
-"""
+"""  # noqa: E501
 import json
 import logging
 from dataclasses import dataclass
