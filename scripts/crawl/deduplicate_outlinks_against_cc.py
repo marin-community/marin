@@ -130,7 +130,7 @@ def deduplicate_shard(
         max_tries = 3
         for i in range(max_tries):
             try:
-                logger.info(f"[Attempt {i}/{max_tries}] Reading bloom filter {bloom_filter_path}...")
+                logger.info(f"[Attempt {i + 1}/{max_tries}] Reading bloom filter {bloom_filter_path}...")
                 object_path = bloom_filter_path.removeprefix("gs://marin-us-central2/")
                 bloom_filter = Bloom.load_from_gcs(bucket="marin-us-central2", object_path=object_path)
                 logger.info(f"Read bloom filter {bloom_filter_path}...")
