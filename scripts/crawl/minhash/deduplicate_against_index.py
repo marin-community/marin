@@ -7,7 +7,8 @@ and an indexed dataset I, this scripts produces a dataset D' by removing items i
 - Are duplicated in D
 - Are duplicated in I
 
-Note that we do _not_ modify the indexed dataset I, only the input dataset D.
+Note that the output deduplicated dataset D' is a subset of the input dataset D,
+and does not include any elements from the indexed dataset I.
 
 Deduplicating fineweb-edu-10M against fineweb-edu:
 
@@ -88,6 +89,22 @@ def minhash_deduplicate_against_index(
     minhash_logs_path: str,
     minhash_config: MinhashConfig,
 ):
+    """
+    Given a path to a previously-produced index (with `index_for_deduplication.py`),
+    deduplicate an input dataset against this index.
+
+    Args:
+        index_path (str): path to directory with index files
+        input_patterns (list[str]): pattern(s) to input files to deduplicate. Ignored if
+            `parquets_path_file` already exists, since it's assumed that `parquest_path_file`
+            is a cache of the files matched by the `input_patterns`.
+        parquets_path_file (str): path to write a file with the resolved paths of
+            the files specified by the `input_patterns`. If this file already exists,
+            its contents are just used as-is.
+        minhash_base_path (str): path to write minhash output
+        minhash_logs_path (str): path to write minhash logs
+        minhash_config (MinhashConfig): configuration to use for minhash deduplication
+    """
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     if not fsspec_exists(parquets_paths_file):
         # Create the pathfile for the input, removing the base bucket prefix
