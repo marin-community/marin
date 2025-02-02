@@ -53,7 +53,7 @@ python marin/run/ray_run.py \
         --bloom_filter_path 'gs://marin-us-central2/gcsfuse_mount/nfliu/deduplicate_outlinks/cc-urls-partitioned_2019_2024.bloom' \
         --output_path gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-cc-deduplicated/
 ```
-"""
+"""  # noqa: E501
 import itertools
 import logging
 import os
@@ -62,12 +62,13 @@ from dataclasses import dataclass
 from hashlib import sha256
 
 import draccus
-import orjson
 import fsspec
-from marin.utils import fsspec_exists, fsspec_glob
+import orjson
 import ray
 from rbloom import Bloom
 from tqdm_loggable.auto import tqdm
+
+from marin.utils import fsspec_exists, fsspec_glob
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -110,7 +111,7 @@ def deduplicate_shard(
 
     shard_path_to_stats = {}
     incomplete_shard_paths_with_output_paths = []
-    for shard_path, shard_output_path in zip(shard_path_batch, shard_output_path_batch):
+    for shard_path, shard_output_path in zip(shard_path_batch, shard_output_path_batch, strict=False):
         success_path = shard_output_path + ".SUCCESS"
         # If the success path exists, read its stats and skip this shard
         if fsspec_exists(success_path):
@@ -156,7 +157,7 @@ def deduplicate_shard(
             deduplicated_examples = []
             logger.info(f"Deduplicating examples in {shard_path}...")
             hashed_link_targets = [hash_func(ex["link_target"]) for ex in parsed_examples]
-            for parsed_example, hashed_link_target in zip(parsed_examples, hashed_link_targets):
+            for parsed_example, hashed_link_target in zip(parsed_examples, hashed_link_targets, strict=False):
                 link_target = parsed_example["link_target"]
                 if hashed_link_target not in bloom_filter and link_target not in seen_link_targets:
                     deduplicated_examples.append(parsed_example)
@@ -183,7 +184,8 @@ def deduplicate_shard(
                 )
             logger.info(f"Wrote success file for {shard_path} at {shard_output_path + '.SUCCESS'}")
             logger.info(
-                f"Shard {shard_path} has {num_outlinks} total outlinks, {num_deduplicated_outlinks} deduplicated outlinks"
+                f"Shard {shard_path} has {num_outlinks} total outlinks, "
+                f"{num_deduplicated_outlinks} deduplicated outlinks"
             )
             shard_path_to_stats[shard_path] = (num_outlinks, num_deduplicated_outlinks)
 

@@ -7,19 +7,19 @@ to ensure that the distribution of scores is uniform.
 ```
 python marin/run/ray_run.py \
     --no_wait -- \
-    python scripts/open-web-math/resample_openwebmath_urls_by_quality_score.py \
-    --input_patterns '["gs://marin-us-central2/scratch/nfliu/urls_and_scores/open-web-math-cc/CC*/*_urls_and_quality_classifier_scores.jsonl.gz", "gs://marin-us-central2/scratch/nfliu/urls_and_scores/open-web-math/*_urls_and_quality_classifier_scores.jsonl.gz"]' \
-    --cc_prefix 'gs://marin-us-central2/scratch/nfliu/urls_and_scores/open-web-math-cc/' \
-    --train_output_path gs://marin-us-central2/scratch/nfliu/datasets/url_scoring/open-web-math/train.parquet \
-    --cc_test_output_path gs://marin-us-central2/scratch/nfliu/datasets/url_scoring/open-web-math/test_cc.parquet \
-    --balanced_test_output_path gs://marin-us-central2/scratch/nfliu/datasets/url_scoring/open-web-math/test_balanced.parquet
+    python marin/crawl/fineweb-edu/resample_fineweb_edu_urls_by_quality_score.py \
+    --input_pattern 'gs://marin-us-central2/scratch/nfliu/urls_and_scores/fineweb-edu*/CC*/*_urls_and_quality_classifier_scores.jsonl.gz' \
+    --cc_prefix 'gs://marin-us-central2/scratch/nfliu/urls_and_scores/fineweb-edu-cc/' \
+    --train_output_path gs://marin-us-central2/scratch/nfliu/datasets/url_scoring/fineweb-edu/train.parquet \
+    --cc_test_output_path gs://marin-us-central2/scratch/nfliu/datasets/url_scoring/fineweb-edu/test_cc.parquet \
+    --balanced_test_output_path gs://marin-us-central2/scratch/nfliu/datasets/url_scoring/fineweb-edu/test_balanced.parquet
 ```
-"""
+"""  # noqa: E501
 import json
 import logging
 import math
 import random
-from collections import defaultdict, Counter
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class ResamplingConfig:
-    input_patterns: list[str]
+    input_pattern: str
     cc_prefix: str
     train_output_path: str
     cc_test_output_path: str
@@ -46,13 +46,9 @@ class ResamplingConfig:
     test_size: float = 0.2
 
 
-def clip(minimum, x, maximum):
-    return max(minimum, min(x, maximum))
-
-
 @ray.remote(memory=256 * 1024 * 1024 * 1024, num_cpus=8)
 def resample_urls(
-    input_patterns: list[str],
+    input_pattern: str,
     cc_prefix: str,
     train_output_path: str,
     cc_test_output_path: str,
@@ -60,17 +56,12 @@ def resample_urls(
     test_size: float = 0.2,
 ):
     """This function resamples and split records into training and test sets.
-    Each record contains a str URL and a continuous float score (the mathscore
-    classifier's score, in range [0, 1]). OpenWebMath adaptively changes the
-    filtering thresholds based on whether LaTeX was detected in a page. If the
-    URL has LaTeX, the threshold is 0.15. If the URL doesn't have LaTeX, the
-    threshold is 0.8. To unify these two into a single score, we add a constant
-    value of 0.65 to the math classifier score of all URLs that contain LaTeX
-    (the "regex-adjusted score"). These regex-adjusted scores are clipped
-    between 0.0 and 1.0 .
+    Each record contains a str URL and a continuous float score (the FineWeb-Edu
+    classifier's score, in range [0, 5]). FineWeb-Edu discretizes the continuous
+    predictions with `int(min(max(round(parsed_line["score"]), 0), 5))` and
+    keeps all examples that have score >= 3.
 
-    To resample the data, we discretize the regex-adjusted scores into 10
-    buckets (with `min(int(parsed_line["regex_adjusted_score"] / 0.1), 9)`). The
+    To resample the data, we use the discretized FineWeb-Edu classifier scores. The
     training dataset is balanced, i.e., the resultant dataset has an equal # of
     examples in each of these bins. We also generate two test datasets:
 
@@ -100,10 +91,7 @@ def resample_urls(
     ):
         return
 
-    input_filepaths = set()
-    logger.info(f"Reading from input patterns: {input_patterns}")
-    for input_pattern in input_patterns:
-        input_filepaths.update(fsspec_glob(input_pattern))
+    input_filepaths = fsspec_glob(input_pattern)
     logger.info(f"Found {len(input_filepaths)} input files with URLs and scores")
 
     # Load all examples into memory
@@ -119,20 +107,19 @@ def resample_urls(
             # at once, rather than making multiple requests to GCS.
             for line in tqdm(f.readlines(), desc="Reading input filepath"):
                 parsed_line = json.loads(line)
-                parsed_line["score"] = clip(0.0, parsed_line["score"], 1.0)
+                # FineWeb-Edu scores should range from 0 to 5. On occasion, the
+                # model may output values beyond this range, so we skip these
+                # examples.
+                if parsed_line["score"] > 5 or parsed_line["score"] < 0:
+                    num_skipped += 1
+                    continue
                 if parsed_line["url"] in seen_urls:
                     num_skipped += 1
                     continue
-
-                parsed_line["regex_adjusted_score"] = (
-                    parsed_line["score"] + 0.65 if parsed_line["found_math"] else parsed_line["score"]
-                )
-                parsed_line["regex_adjusted_score"] = clip(0.0, parsed_line["regex_adjusted_score"], 1.0)
-
                 all_examples.append(parsed_line)
                 seen_urls.add(parsed_line["url"])
                 if filepath.startswith(cc_prefix):
-                    discrete_label = min(int(parsed_line["regex_adjusted_score"] / 0.1), 9)
+                    discrete_label = int(min(max(round(parsed_line["score"]), 0), 5))
                     cc_discrete_labels_to_counts[discrete_label] += 1
         if filepath.startswith(cc_prefix):
             num_cc_filepaths += 1
@@ -183,15 +170,14 @@ def resample_urls(
 
     # Function to bucket and resample examples
     def bucket_and_resample(examples, weights: dict[int, int] | None = None):
-        # Each example has `url`, `canonicalized_url`, `score`, and `found_math`.
-        # Scores range from 0.0 to 1.0.
-        # Fixed bucketing logic to bucket examples in increments of 0.1
-        # We discretize the labels into buckets from 0-9 with `min(int(score / 0.1), 9)`
+        # Each example has `url`, `canonicalized_url`, and `score`.
+        # Labels are computed using np.round(score).clip(0, 5).astype(int).
+        # We will bucket examples based on these labels to ensure even distribution.
         buckets = defaultdict(list)
         for example in examples:
-            score = example["regex_adjusted_score"]
+            score = example["score"]
             # Bucket by the example's corresponding discrete label.
-            label = min(int(score / 0.1), 9)
+            label = int(min(max(round(score), 0), 5))
             buckets[label].append(example)
 
         logger.info("Bucketing complete. Counts per label:")
@@ -202,7 +188,7 @@ def resample_urls(
             # If no weights provided, resample to ensure even distribution across labels
             max_samples_per_label = min(len(bucket) for bucket in buckets.values())
             resampled_examples = []
-            for label, bucket in buckets.items():
+            for bucket in buckets:
                 resampled_examples.extend(random.sample(bucket, k=max_samples_per_label))
         else:
             # Resample according to provided weights
@@ -289,7 +275,7 @@ def write_examples_to_parquet(examples: list[dict], output_path: str, output_suc
 def resample_and_split_urls(cfg: ResamplingConfig):
     ray.get(
         resample_urls.remote(
-            cfg.input_patterns,
+            cfg.input_pattern,
             cfg.cc_prefix,
             cfg.train_output_path,
             cfg.cc_test_output_path,
