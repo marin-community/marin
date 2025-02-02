@@ -187,11 +187,11 @@ def get_unique_output_paths(shard_paths: list[str], base_output_path: str):
         if len(set(subpaths)) == len(subpaths):
             break
         n += 1
-    logger.info(f"Had to take {n} components from shard paths to generate unique output paths")
-    logger.info(f"Sample: {subpaths[:5]}")
 
     # Join each unique subpath to the output_path
-    output_shard_paths = [pathlib.Path(base_output_path).joinpath(subpath) for subpath in subpaths]
+    output_shard_paths = [str(pathlib.Path(base_output_path).joinpath(subpath)) for subpath in subpaths]
+    logger.info(f"Had to take {n} components from shard paths to generate unique output paths")
+    logger.info(f"Sample: {output_shard_paths[:5]}")
     return output_shard_paths
 
 
