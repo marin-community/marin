@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Deduplicate an input dataset against an indexed dataset.
+Use MinHash deduplication to fuzzily deduplicate an input dataset against an indexed dataset.
 More specifically, given an input dataset D (e.g., 10M new crawled pages),
 and an indexed dataset I, this scripts produces a dataset D' by removing items in D that:
 
@@ -9,6 +9,9 @@ and an indexed dataset I, this scripts produces a dataset D' by removing items i
 
 Note that the output deduplicated dataset D' is a subset of the input dataset D,
 and does not include any elements from the indexed dataset I.
+
+We use datatrove's built-in minhash deduplication to match the fineweb-edu
+curation process.
 
 Deduplicating fineweb-edu-10M against fineweb-edu:
 
@@ -49,6 +52,7 @@ gcloud storage mv gs://marin-us-central2/scratch/nfliu/minhash/open_web_math_10M
 gcloud storage rm --recursive gs://marin-us-central2/scratch/nfliu/minhash/open_web_math_10M_minhash_against_open_web_math
 gcloud storage rm --recursive gs://marin-us-central2/scratch/nfliu/minhash/open_web_math_10M_minhash_against_open_web_math_logs
 ```
+
 """
 import logging
 from dataclasses import dataclass
