@@ -79,59 +79,71 @@ def deduplicate_shard(
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     assert len(shard_path_batch) == len(shard_output_path_batch)
 
-    logger.info(f"Reading bloom filter {bloom_filter_path}...")
-    object_path = bloom_filter_path.removeprefix("gs://marin-us-central2/")
-    bloom_filter = Bloom.load_from_gcs(bucket="marin-us-central2", object_path=object_path)
-    logger.info(f"Read bloom filter {bloom_filter_path}...")
-
-    shard_stats = []
+    shard_path_to_stats = {}
+    incomplete_shard_paths_with_output_paths = []
     for shard_path, shard_output_path in zip(shard_path_batch, shard_output_path_batch):
         success_path = shard_output_path + ".SUCCESS"
-        # If the success path exists, read its stats and return
+        # If the success path exists, read its stats and skip this shard
         if fsspec_exists(success_path):
             logger.info(f"Found success file {success_path}, skipping this shard...")
             with fsspec.open(success_path) as f:
                 successful_stats = orjson.loads(f.read())
-                shard_stats.append((successful_stats["num_outlinks"], successful_stats["num_deduplicated_outlinks"]))
-            continue
+                shard_path_to_stats[shard_path] = (
+                    successful_stats["num_outlinks"],
+                    successful_stats["num_deduplicated_outlinks"],
+                )
+        else:
+            # otherwise, we still need to process this shard
+            incomplete_shard_paths_with_output_paths.append((shard_path, shard_output_path))
 
-        logger.info(f"Reading links from {os.path.basename(shard_path)}...")
-        num_deduplicated_outlinks = 0
-        parsed_examples = []
-        num_outlinks = 0
-        with fsspec.open(shard_path, "rt", compression="infer") as fin:
-            for line in fin:
-                parsed_line = orjson.loads(line)
-                parsed_examples.append(parsed_line)
-                num_outlinks += 1
-        logger.info(f"Done reading links from {os.path.basename(shard_path)}")
+    # If there are incomplete shard paths, process them
+    if not incomplete_shard_paths_with_output_paths:
+        logger.info(f"Reading bloom filter {bloom_filter_path}...")
+        object_path = bloom_filter_path.removeprefix("gs://marin-us-central2/")
+        bloom_filter = Bloom.load_from_gcs(bucket="marin-us-central2", object_path=object_path)
+        logger.info(f"Read bloom filter {bloom_filter_path}...")
 
-        seen_link_targets = set()
-        deduplicated_examples = []
-        logger.info(f"Deduplicating examples in {os.path.basename(shard_path)}...")
-        hashed_link_targets = [hash_func(ex["link_target"]) for ex in parsed_examples]
-        for parsed_example, hashed_link_target in zip(parsed_examples, hashed_link_targets):
-            link_target = parsed_example["link_target"]
-            if hashed_link_target not in bloom_filter and link_target not in seen_link_targets:
-                deduplicated_examples.append(parsed_example)
-                num_deduplicated_outlinks += 1
-                seen_link_targets.add(link_target)
-        logger.info(f"Done deduplicating examples in {os.path.basename(shard_path)}")
+        for shard_path, shard_output_path in incomplete_shard_paths_with_output_paths:
+            logger.info(f"Reading links from {os.path.basename(shard_path)}...")
+            num_deduplicated_outlinks = 0
+            parsed_examples = []
+            num_outlinks = 0
+            with fsspec.open(shard_path, "rt", compression="infer") as fin:
+                for line in fin:
+                    parsed_line = orjson.loads(line)
+                    parsed_examples.append(parsed_line)
+                    num_outlinks += 1
+            logger.info(f"Done reading links from {os.path.basename(shard_path)}")
 
-        with fsspec.open(shard_output_path, "w", compression="infer") as fout:
-            for example in deduplicated_examples:
-                fout.write(orjson.dumps(example).decode() + "\n")
+            seen_link_targets = set()
+            deduplicated_examples = []
+            logger.info(f"Deduplicating examples in {os.path.basename(shard_path)}...")
+            hashed_link_targets = [hash_func(ex["link_target"]) for ex in parsed_examples]
+            for parsed_example, hashed_link_target in zip(parsed_examples, hashed_link_targets):
+                link_target = parsed_example["link_target"]
+                if hashed_link_target not in bloom_filter and link_target not in seen_link_targets:
+                    deduplicated_examples.append(parsed_example)
+                    num_deduplicated_outlinks += 1
+                    seen_link_targets.add(link_target)
+            logger.info(f"Done deduplicating examples in {os.path.basename(shard_path)}")
 
-        with fsspec.open(success_path, "w", compression="infer") as f:
-            f.write(
-                orjson.dumps(
-                    {"num_outlinks": num_outlinks, "num_deduplicated_outlinks": num_deduplicated_outlinks}
-                ).decode()
+            with fsspec.open(shard_output_path, "w", compression="infer") as fout:
+                for example in deduplicated_examples:
+                    fout.write(orjson.dumps(example).decode() + "\n")
+
+            with fsspec.open(success_path, "w", compression="infer") as f:
+                f.write(
+                    orjson.dumps(
+                        {"num_outlinks": num_outlinks, "num_deduplicated_outlinks": num_deduplicated_outlinks}
+                    ).decode()
+                )
+            logger.info(
+                f"Shard {shard_path} has {num_outlinks} total outlinks, {num_deduplicated_outlinks} deduplicated outlinks"
             )
-        logger.info(
-            f"Shard {shard_path} has {num_outlinks} total outlinks, {num_deduplicated_outlinks} deduplicated outlinks"
-        )
-        shard_stats.append((num_outlinks, num_deduplicated_outlinks))
+            shard_path_to_stats[shard_path] = (num_outlinks, num_deduplicated_outlinks)
+
+    # Once all the shards are done, collect the shard stats as a list and return
+    shard_stats = [shard_path_to_stats[shard_path] for shard_path in shard_path_batch]
     return shard_stats
 
 
