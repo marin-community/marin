@@ -1,1 +1,44 @@
-infra/cluster/connect
+#!/bin/bash
+
+# Load cluster ports from yaml file
+# You might need to install yq (https://kislyuk.github.io/yq/)
+# brew install yq
+
+if ! command -v tmux &> /dev/null
+then
+    echo "tmux could not be found. Please install it."
+    exit 1
+fi
+
+if ! command -v yq &> /dev/null
+then
+    echo "yq could not be found. Please install it (brew install yq)."
+    exit 1
+fi
+
+while IFS= read -r cluster_port_pair; do
+  cluster_name=$(echo "$cluster_port_pair" | awk -F ': ' '{print $1}')
+  port=$(echo "$cluster_port_pair" | awk -F ': ' '{print $2}')
+
+  SESSION_NAME="${cluster_name}"
+  CLUSTER_CONFIG_PATH="./infra/${cluster_name}.yaml"
+  SESSION_LOG_FILE="$HOME/.marin_tmux_logs/${SESSION_NAME}.log"
+  mkdir -p "$(dirname "$SESSION_LOG_FILE")"
+
+
+  # Check if a tmux session with the given name already exists
+  if tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
+    echo "tmux session '$SESSION_NAME' already exists. Please detach or kill it first."
+    continue # Skip to the next cluster
+  fi
+
+  tmux new-session -d -s "$SESSION_NAME"
+
+  tmux send-keys -t "$SESSION_NAME" "ray dashboard --port=$port \"$CLUSTER_CONFIG_PATH\"" Enter
+
+  echo "tmux session '$SESSION_NAME' created for cluster '$cluster_name'. Run 'tmux attach -t $SESSION_NAME' to connect. See logs in ${SESSION_LOG_FILE}"
+
+done < <(yq -r 'to_entries | .[] | .key + ": " + (.value | to_string)' infra/cluster/clusters.yaml)
+
+
+echo "Finished creating tmux sessions for all clusters."
