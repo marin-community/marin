@@ -225,7 +225,7 @@ def deduplicate_outlinks_against_cc(
     assert len(batched_shard_paths) == len(batched_output_shard_paths)
 
     num_batches_to_process = len(batched_shard_paths)
-    MAX_CONCURRENT_TASKS = 10
+    MAX_CONCURRENT_TASKS = 25
     num_batches_submitted = 0
     unfinished = []
 
