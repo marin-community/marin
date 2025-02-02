@@ -14,7 +14,7 @@ python marin/run/ray_run.py \
     --pip_deps 'rbloom-gcs,orjson' \
     -e "GOOGLE_APPLICATION_CREDENTIALS_JSON" "$AUTHENTICATION_JSON" \
     --no_wait -- \
-    python scripts/crawl/deduplicate_outlinks_against_cc.py \
+    python marin/crawl/deduplicate_outlinks_against_cc.py \
         --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8/*_links.jsonl.gz' \
         --bloom_filter_path 'gs://marin-us-central2/gcsfuse_mount/nfliu/deduplicate_outlinks/cc-urls-partitioned_2013_2018.bloom' \
         --output_path gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-cc-deduplicated-2013_2018/
@@ -24,7 +24,7 @@ python marin/run/ray_run.py \
     --pip_deps 'rbloom-gcs,orjson' \
     -e "GOOGLE_APPLICATION_CREDENTIALS_JSON" "$AUTHENTICATION_JSON" \
     --no_wait -- \
-    python scripts/crawl/deduplicate_outlinks_against_cc.py \
+    python marin/crawl/deduplicate_outlinks_against_cc.py \
         --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-cc-deduplicated-2013_2018/*_links.jsonl.gz' \
         --bloom_filter_path 'gs://marin-us-central2/gcsfuse_mount/nfliu/deduplicate_outlinks/cc-urls-partitioned_2019_2024.bloom' \
         --output_path gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-cc-deduplicated/
@@ -38,7 +38,7 @@ python marin/run/ray_run.py \
     --pip_deps 'rbloom-gcs,orjson' \
     -e "GOOGLE_APPLICATION_CREDENTIALS_JSON" "$AUTHENTICATION_JSON" \
     --no_wait -- \
-    python scripts/crawl/deduplicate_outlinks_against_cc.py \
+    python marin/crawl/deduplicate_outlinks_against_cc.py \
         --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu/CC-MAIN-*/*_links.jsonl.gz' \
         --bloom_filter_path 'gs://marin-us-central2/gcsfuse_mount/nfliu/deduplicate_outlinks/cc-urls-partitioned_2013_2018.bloom' \
         --output_path gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-cc-deduplicated-2013_2018/
@@ -48,7 +48,7 @@ python marin/run/ray_run.py \
     --pip_deps 'rbloom-gcs,orjson' \
     -e "GOOGLE_APPLICATION_CREDENTIALS_JSON" "$AUTHENTICATION_JSON" \
     --no_wait -- \
-    python scripts/crawl/deduplicate_outlinks_against_cc.py \
+    python marin/crawl/deduplicate_outlinks_against_cc.py \
         --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-cc-deduplicated-2013_2018/CC-MAIN-*/*_links.jsonl.gz' \
         --bloom_filter_path 'gs://marin-us-central2/gcsfuse_mount/nfliu/deduplicate_outlinks/cc-urls-partitioned_2019_2024.bloom' \
         --output_path gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-cc-deduplicated/
@@ -215,12 +215,8 @@ def get_unique_output_paths(shard_paths: list[str], base_output_path: str):
     return output_shard_paths
 
 
-@ray.remote(memory=32 * 1024 * 1024 * 1024, num_cpus=8)
-def deduplicate_outlinks_against_cc(
-    input_pattern: str,
-    bloom_filter_path: str,
-    output_path: str,
-):
+@draccus.wrap()
+def deduplicate_outlinks_against_cc_driver(cfg: DeduplicateOutlinksAgainstCCConfig):
     """
     Args:
     input_pattern (str): Pattern to input outlinks to deduplicate.
@@ -229,7 +225,7 @@ def deduplicate_outlinks_against_cc(
     """
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     # Sort for reproducibility
-    shard_paths = sorted(list(fsspec_glob(input_pattern)))
+    shard_paths = sorted(list(fsspec_glob(cfg.input_pattern)))
     # Generate shard output paths
     # The output files are always written to `output_path`,
     # but we take the minimal amount of the path necessary to ensure unique names.
@@ -238,7 +234,7 @@ def deduplicate_outlinks_against_cc(
     # a unique output path for each input shard (since two input shards have filename 0.txt).
     # So, we'd take their parent as well. If that isn't enough, we take their parent, etc, until
     # we get a unique path.
-    output_shard_paths = get_unique_output_paths(shard_paths, output_path)
+    output_shard_paths = get_unique_output_paths(shard_paths, cfg.output_path)
     logger.info(f"Found {len(shard_paths)} shards to process")
 
     SHARDS_PER_BATCH = 10
@@ -255,7 +251,7 @@ def deduplicate_outlinks_against_cc(
         nonlocal num_batches_submitted
         unfinished.append(
             deduplicate_shard.remote(
-                bloom_filter_path,
+                cfg.bloom_filter_path,
                 shard_path_batch,
                 output_shard_path_batch,
             )
@@ -298,17 +294,6 @@ def deduplicate_outlinks_against_cc(
     logger.info(
         f"In total, found {num_outlinks} total outlinks, {num_deduplicated_outlinks:.1%} of which "
         f"do not occur in the CC ({num_deduplicated_outlinks/num_outlinks:.1%})"
-    )
-
-
-@draccus.wrap()
-def deduplicate_outlinks_against_cc_driver(cfg: DeduplicateOutlinksAgainstCCConfig):
-    ray.get(
-        deduplicate_outlinks_against_cc.remote(
-            cfg.input_pattern,
-            cfg.bloom_filter_path,
-            cfg.output_path,
-        )
     )
 
 
