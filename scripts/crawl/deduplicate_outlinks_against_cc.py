@@ -105,6 +105,8 @@ def deduplicate_shard(
 ) -> list[tuple[int, int]]:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     assert len(shard_path_batch) == len(shard_output_path_batch)
+    logger.info(f"shard paths: {shard_path_batch}")
+    logger.info(f"shard output paths: {shard_output_path_batch}")
 
     shard_path_to_stats = {}
     incomplete_shard_paths_with_output_paths = []
@@ -112,7 +114,7 @@ def deduplicate_shard(
         success_path = shard_output_path + ".SUCCESS"
         # If the success path exists, read its stats and skip this shard
         if fsspec_exists(success_path):
-            logger.info(f"Found success file {success_path}, skipping this shard...")
+            logger.info(f"Found success file {success_path}, skipping shard {shard_path}...")
             with fsspec.open(success_path) as f:
                 successful_stats = orjson.loads(f.read())
                 shard_path_to_stats[shard_path] = (
@@ -137,7 +139,7 @@ def deduplicate_shard(
                 continue
 
         for shard_path, shard_output_path in incomplete_shard_paths_with_output_paths:
-            logger.info(f"Reading links from {os.path.basename(shard_path)}...")
+            logger.info(f"Reading links from {shard_path}...")
             num_deduplicated_outlinks = 0
             parsed_examples = []
             num_outlinks = 0
@@ -146,11 +148,11 @@ def deduplicate_shard(
                     parsed_line = orjson.loads(line)
                     parsed_examples.append(parsed_line)
                     num_outlinks += 1
-            logger.info(f"Done reading links from {os.path.basename(shard_path)}")
+            logger.info(f"Done reading links from {shard_path}")
 
             seen_link_targets = set()
             deduplicated_examples = []
-            logger.info(f"Deduplicating examples in {os.path.basename(shard_path)}...")
+            logger.info(f"Deduplicating examples in {shard_path}...")
             hashed_link_targets = [hash_func(ex["link_target"]) for ex in parsed_examples]
             for parsed_example, hashed_link_target in zip(parsed_examples, hashed_link_targets):
                 link_target = parsed_example["link_target"]
@@ -158,18 +160,26 @@ def deduplicate_shard(
                     deduplicated_examples.append(parsed_example)
                     num_deduplicated_outlinks += 1
                     seen_link_targets.add(link_target)
-            logger.info(f"Done deduplicating examples in {os.path.basename(shard_path)}")
+            logger.info(f"Done deduplicating examples in {shard_path}")
 
+            logger.info(
+                f"Writing {len(deduplicated_examples)} deduplicated examples for " f"{shard_path} to {shard_output_path}"
+            )
             with fsspec.open(shard_output_path, "w", compression="infer") as fout:
                 for example in deduplicated_examples:
                     fout.write(orjson.dumps(example).decode() + "\n")
+            logger.info(
+                f"Wrote {len(deduplicated_examples)} deduplicated examples for " f"{shard_path} to {shard_output_path}"
+            )
 
+            logger.info(f"Writing success file for {shard_path} at {shard_output_path + '.SUCCESS'}")
             with fsspec.open(shard_output_path + ".SUCCESS", "w", compression="infer") as f:
                 f.write(
                     orjson.dumps(
                         {"num_outlinks": num_outlinks, "num_deduplicated_outlinks": num_deduplicated_outlinks}
                     ).decode()
                 )
+            logger.info(f"Wrote success file for {shard_path} at {shard_output_path + '.SUCCESS'}")
             logger.info(
                 f"Shard {shard_path} has {num_outlinks} total outlinks, {num_deduplicated_outlinks} deduplicated outlinks"
             )
@@ -195,7 +205,7 @@ def get_unique_output_paths(shard_paths: list[str], base_output_path: str):
         n += 1
 
     # Join each unique subpath to the output_path
-    output_shard_paths = [str(pathlib.Path(base_output_path).joinpath(subpath)) for subpath in subpaths]
+    output_shard_paths = [os.path.join(base_output_path, subpath) for subpath in subpaths]
     logger.info(f"Had to take {n} components from shard paths to generate unique output paths")
     logger.info(f"Sample: {output_shard_paths[:5]}")
     return output_shard_paths
