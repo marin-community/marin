@@ -127,6 +127,8 @@ def deduplicate_shard(
 
     # If there are incomplete shard paths, process them
     if incomplete_shard_paths_with_output_paths:
+
+        # Load the bloom filter from GCS, retrying up to three times.
         max_tries = 3
         for i in range(max_tries):
             try:
