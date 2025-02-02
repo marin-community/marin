@@ -125,10 +125,16 @@ def deduplicate_shard(
 
     # If there are incomplete shard paths, process them
     if incomplete_shard_paths_with_output_paths:
-        logger.info(f"Reading bloom filter {bloom_filter_path}...")
-        object_path = bloom_filter_path.removeprefix("gs://marin-us-central2/")
-        bloom_filter = Bloom.load_from_gcs(bucket="marin-us-central2", object_path=object_path)
-        logger.info(f"Read bloom filter {bloom_filter_path}...")
+        max_tries = 3
+        for i in range(max_tries):
+            try:
+                logger.info(f"[Attempt {i}/{max_tries}] Reading bloom filter {bloom_filter_path}...")
+                object_path = bloom_filter_path.removeprefix("gs://marin-us-central2/")
+                bloom_filter = Bloom.load_from_gcs(bucket="marin-us-central2", object_path=object_path)
+                logger.info(f"Read bloom filter {bloom_filter_path}...")
+                break
+            except Exception:
+                continue
 
         for shard_path, shard_output_path in incomplete_shard_paths_with_output_paths:
             logger.info(f"Reading links from {os.path.basename(shard_path)}...")
@@ -227,7 +233,7 @@ def deduplicate_outlinks_against_cc(
     assert len(batched_shard_paths) == len(batched_output_shard_paths)
 
     num_batches_to_process = len(batched_shard_paths)
-    MAX_CONCURRENT_TASKS = 25
+    MAX_CONCURRENT_TASKS = 10
     num_batches_submitted = 0
     unfinished = []
 
