@@ -8,7 +8,7 @@ Running on OpenWebMath:
 python marin/run/ray_run.py \
     --pip_deps 'resiliparse_dom @ git+https://github.com/nelson-liu/chatnoir-resiliparse@58247de82b4d881223435113f1a07a86ad66494c#egg=resiliparse_dom&subdirectory=resiliparse_dom,courlan,w3lib,cchardet,beautifulsoup4,lxml' \
     --no_wait -- \
-    python scripts/crawl/get_outlinks_from_html.py \
+    python marin/crawl/get_outlinks_from_html.py \
     --html_input_path gs://marin-us-central2/documents/open-web-math-fde8ef8/html/ \
     --prefix openwebmath \
     --outlinks_output_path gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8/
@@ -23,13 +23,13 @@ for fineweb_edu_dump_html_path in $(gcloud storage ls gs://marin-us-central2/doc
     python marin/run/ray_run.py \
         --pip_deps 'resiliparse_dom @ git+https://github.com/nelson-liu/chatnoir-resiliparse@58247de82b4d881223435113f1a07a86ad66494c#egg=resiliparse_dom&subdirectory=resiliparse_dom,courlan,w3lib,cchardet,beautifulsoup4,lxml' \
         --no_wait -- \
-        python scripts/crawl/get_outlinks_from_html.py \
+        python marin/crawl/get_outlinks_from_html.py \
         --html_input_path ${fineweb_edu_dump_html_path} \
         --prefix fineweb_edu \
         --outlinks_output_path gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu/${dump_name}
 done
 ```
-"""
+"""  # noqa: E501
 
 import json
 import logging
@@ -77,7 +77,7 @@ def is_internal_link(base_url: str, target_url: str):
     """
     # Parse the base URL
     base_parsed = urlparse(base_url)
-    base_host = base_parsed.netloc.lstrip("www.")
+    base_host = base_parsed.netloc.removeprefix("www.")
 
     # Parse the target URL
     target_parsed = urlparse(target_url)
@@ -86,7 +86,7 @@ def is_internal_link(base_url: str, target_url: str):
     if not target_parsed.netloc:
         return True
 
-    target_host = target_parsed.netloc.lstrip("www.")
+    target_host = target_parsed.netloc.removeprefix("www.")
 
     # Compare the hosts
     return base_host == target_host
@@ -125,7 +125,6 @@ def process_one_batch(input_path: str, output_path: str):
     input_path (str): Path of HTML file (Dolma-format JSONL) to extract outlinks from.
     output_path (str): Path to write JSONL file with outlinks.
     """
-    import cchardet
     import w3lib.url
     from courlan import check_url
     from resiliparse_dom.extract.html2text import extract_main_dom_tree
