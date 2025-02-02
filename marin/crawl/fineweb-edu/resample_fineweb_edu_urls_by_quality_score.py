@@ -7,19 +7,19 @@ to ensure that the distribution of scores is uniform.
 ```
 python marin/run/ray_run.py \
     --no_wait -- \
-    python scripts/fineweb-edu/resample_fineweb_edu_urls_by_quality_score.py \
+    python marin/crawl/fineweb-edu/resample_fineweb_edu_urls_by_quality_score.py \
     --input_pattern 'gs://marin-us-central2/scratch/nfliu/urls_and_scores/fineweb-edu*/CC*/*_urls_and_quality_classifier_scores.jsonl.gz' \
     --cc_prefix 'gs://marin-us-central2/scratch/nfliu/urls_and_scores/fineweb-edu-cc/' \
     --train_output_path gs://marin-us-central2/scratch/nfliu/datasets/url_scoring/fineweb-edu/train.parquet \
     --cc_test_output_path gs://marin-us-central2/scratch/nfliu/datasets/url_scoring/fineweb-edu/test_cc.parquet \
     --balanced_test_output_path gs://marin-us-central2/scratch/nfliu/datasets/url_scoring/fineweb-edu/test_balanced.parquet
 ```
-"""
+"""  # noqa: E501
 import json
 import logging
 import math
 import random
-from collections import defaultdict, Counter
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
@@ -188,7 +188,7 @@ def resample_urls(
             # If no weights provided, resample to ensure even distribution across labels
             max_samples_per_label = min(len(bucket) for bucket in buckets.values())
             resampled_examples = []
-            for label, bucket in buckets.items():
+            for bucket in buckets:
                 resampled_examples.extend(random.sample(bucket, k=max_samples_per_label))
         else:
             # Resample according to provided weights
