@@ -270,7 +270,7 @@ def get_shard_quality_classifier_scores(
     for (
         example,
         example_score,
-    ) in zip(examples_to_classify, examples_scores, strict=False):
+    ) in zip(examples_to_classify, examples_scores, strict=True):
         if example_score >= 3.0:
             num_records_passing += 1
         urls_and_scores_output_records.append(

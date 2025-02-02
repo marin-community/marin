@@ -82,7 +82,7 @@ def count_examples_in_shard(shard_path: str) -> tuple[str, int]:
 @ray.remote(memory=4 * 1024 * 1024 * 1024)
 def get_examples_from_offsets(shard_path: str, offsets: list[int], example_ids: list[int]):
     assert len(example_ids) == len(offsets)
-    offset_to_id = {offset: example_id for offset, example_id in zip(offsets, example_ids, strict=False)}
+    offset_to_id = {offset: example_id for offset, example_id in zip(offsets, example_ids, strict=True)}
 
     extracted_examples = []
     offsets = sorted(offsets)  # ensure ascending order

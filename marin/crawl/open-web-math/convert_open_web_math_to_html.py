@@ -84,7 +84,7 @@ def process_one_shard(
     index = df.index.tolist()
 
     # url_dict is url to index in df so that we can update that record
-    url_dict = {url: idx for idx, url in zip(index, urls, strict=False)}
+    url_dict = {url: idx for idx, url in zip(index, urls, strict=True)}
     num_urls_found = 0  # Used to early terminate
     num_urls_processed = 0
     num_urls_failed_decoding = 0

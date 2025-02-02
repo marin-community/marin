@@ -167,7 +167,7 @@ def score_extracted_text(input_path: str, output_path: str):
         for (
             example,
             example_score,
-        ) in zip(examples_to_classify, examples_scores, strict=False):
+        ) in zip(examples_to_classify, examples_scores, strict=True):
             fout.write(
                 json.dumps(
                     asdict(
