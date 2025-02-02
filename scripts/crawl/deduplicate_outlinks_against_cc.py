@@ -124,7 +124,7 @@ def deduplicate_shard(
             incomplete_shard_paths_with_output_paths.append((shard_path, shard_output_path))
 
     # If there are incomplete shard paths, process them
-    if not incomplete_shard_paths_with_output_paths:
+    if incomplete_shard_paths_with_output_paths:
         logger.info(f"Reading bloom filter {bloom_filter_path}...")
         object_path = bloom_filter_path.removeprefix("gs://marin-us-central2/")
         bloom_filter = Bloom.load_from_gcs(bucket="marin-us-central2", object_path=object_path)
