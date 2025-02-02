@@ -123,7 +123,11 @@ def deduplicate_shard(
                 fout.write(orjson.dumps(example).decode() + "\n")
 
         with fsspec.open(success_path, "w", compression="infer") as f:
-            f.write(orjson.dumps({"num_outlinks": num_outlinks, "num_deduplicated_outlinks": num_deduplicated_outlinks}))
+            f.write(
+                orjson.dumps(
+                    {"num_outlinks": num_outlinks, "num_deduplicated_outlinks": num_deduplicated_outlinks}
+                ).decode()
+            )
         logger.info(
             f"Shard {shard_path} has {num_outlinks} total outlinks, {num_deduplicated_outlinks} deduplicated outlinks"
         )
@@ -199,7 +203,7 @@ def deduplicate_outlinks_against_cc(
 
             # If we have more shard paths left to process and we haven't hit the max
             # number of concurrent tasks, add tasks to the unfinished queue.
-            while shard_paths and len(unfinished) < MAX_CONCURRENT_TASKS:
+            while batched_shard_paths and len(unfinished) < MAX_CONCURRENT_TASKS:
                 submit_shard_batch(batched_shard_paths.pop())
 
     logger.info(
