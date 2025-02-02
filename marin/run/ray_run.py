@@ -88,7 +88,12 @@ async def submit_and_track_job(entrypoint: str, dependencies: list, env_vars: di
 
     current_dir = os.getcwd()
     client = JobSubmissionClient(REMOTE_DASHBOARD_URL)
-    runtime_dict = {"pip": dependencies, "working_dir": current_dir, "env_vars": env_vars}
+    runtime_dict = {
+        "pip": dependencies,
+        "working_dir": current_dir,
+        "env_vars": env_vars,
+        "config": {"setup_timeout_seconds": 1800},
+    }
 
     logger.info(f"Submitting job with entrypoint: {entrypoint}")
     logger.info(f"Dependencies: {json.dumps(dependencies, indent=4)}")
