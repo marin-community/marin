@@ -9,13 +9,19 @@ class SimpleTrainConfig:
     learning_rate: float
     data_seed: int | None = None
     weight_decay: float | None = None
-    min_lr_ratio: float | None = None
+    beta1: float | None = None
+    beta2: float | None = None
+    epsilon: float | None = None
+    max_grad_norm: float | None = None
     warmup: float | None = None
     decay: float | None = None
     lr_schedule: str | None = None
+    stable_lr_schedule: str | None = None
+    min_lr_ratio: float | None = None
     cycle_length: int | list[int] | None = None
     z_loss_weight: float | None = None
     ema_beta: float | None = None
+    nesterov: bool | None = None
     """exponential moving average beta"""
 
     steps_per_eval: int | None = None
