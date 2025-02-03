@@ -192,8 +192,7 @@ def default_train(
             supervised_data=evaluation_data,
             trainer=TrainerConfig(
                 tracker=WandbConfig(
-                    entity='stanford-mercury',
-                    project="marin-optimizer",
+                    project="marin",
                     tags=[name, *tags],
                 ),
                 mp=jmp.get_policy("p=f32,c=bfloat16"),
