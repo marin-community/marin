@@ -85,7 +85,6 @@ def tokenize_train_validation_sft(
 def train_executor_step(
     name : str,
     pretraining_data : lm_data_config,
-    evaluation_data : lm_data_config,
     model : LlamaConfig,
     model_checkpoint : str,
     train_batch_size : int,
@@ -110,7 +109,6 @@ def train_executor_step(
         tpu_type=tpu_type,
         node_count=1,
         data=pretraining_data,
-        supervised_data=evaluation_data,
         trainer=TrainerConfig(
             tracker=WandbConfig(
                 project="suhas-curriculum",
