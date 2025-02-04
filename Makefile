@@ -23,7 +23,7 @@ autoformat:
 	ruff check --fix --show-fixes .
 	black .
 
-CLUSTER_REPOS = us-central2 europe-west4 us-west4
+CLUSTER_REPOS = us-central2 europe-west4 us-west4 asia-northeast1 us-east5 us-east1
 TAG_VERSIONS = latest $(shell git rev-parse --short HEAD) $(shell date -u +"%Y%m%d")
 
 cluster_docker:

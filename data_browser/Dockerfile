@@ -1,20 +1,25 @@
-FROM python:3.12
+FROM python:3.12-slim
 
-# Where to install stuff
 WORKDIR /app
 
-# Install poetry
-RUN pip install poetry
-ENV POETRY_VIRTUALENVS_CREATE=false
+RUN apt-get update && apt-get install -y \
+    curl \
+    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y \
+    nodejs \
+    && rm -rf /var/lib/apt/lists/*
 
-# Install dependencies
-COPY pyproject.toml poetry.lock .
-RUN poetry install --no-root
+COPY package*.json ./
+RUN npm install
 
-# Copy app
-COPY server.py server.py
-COPY build build
+COPY pyproject.toml .
+COPY poetry.lock .
+RUN pip install poetry && \
+    poetry config virtualenvs.create false && \
+    poetry install --no-root
 
-EXPOSE 5000
+COPY . .
 
-CMD ["poetry", "run", "python", "server.py"]
+ENV DEV=true
+
+ENTRYPOINT ["python", "run-dev.py"]
