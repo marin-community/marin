@@ -8,7 +8,7 @@ Running on FineWeb-Edu:
 python marin/run/ray_run.py \
     --pip_deps 'warcio' \
     --no_wait -- \
-    python scripts/crawl/convert_responses_parquet_to_warc.py \
+    python marin/crawl/convert_responses_parquet_to_warc.py \
     --input_directory gs://marin-us-central2/scratch/nfliu/fetched_outlinks/fineweb-edu-10M/ \
     --output_path gs://marin-us-central2/scratch/nfliu/fetched_outlinks/fineweb-edu-10M/
 ```
@@ -98,7 +98,7 @@ def convert_parquet_to_warc(input_path: str, output_path: str):
 def get_shard_indices_to_process(urls_input_directory: str) -> list[int]:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     shard_indices: list[int] = [
-        int(pathlib.Path(path).name.removesuffix(".parquet").removeprefix(f"fetched_links."))
+        int(pathlib.Path(path).name.removesuffix(".parquet").removeprefix("fetched_links."))
         for path in fsspec_glob(os.path.join(urls_input_directory, "fetched_links.*.parquet"))
     ]
     shard_indices = sorted(shard_indices)
