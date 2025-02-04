@@ -131,6 +131,7 @@ def deduplicate_shard(
 
         # Load the bloom filter from GCS, retrying up to three times.
         max_tries = 3
+        bloom_filter = None
         for i in range(max_tries):
             try:
                 logger.info(f"[Attempt {i + 1}/{max_tries}] Reading bloom filter {bloom_filter_path}...")
@@ -140,6 +141,8 @@ def deduplicate_shard(
                 break
             except Exception:
                 continue
+        if bloom_filter is None:
+            raise ValueError(f"Failed to load bloom filter {bloom_filter_path} when processing shard {shard_path}")
 
         for shard_path, shard_output_path in incomplete_shard_paths_with_output_paths:
             logger.info(f"Reading links from {shard_path}...")
