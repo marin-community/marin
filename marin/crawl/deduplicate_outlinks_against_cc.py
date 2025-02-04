@@ -268,7 +268,7 @@ def deduplicate_outlinks_against_cc_driver(cfg: DeduplicateOutlinksAgainstCCConf
 
     num_outlinks = 0
     num_deduplicated_outlinks = 0
-    with tqdm(total=num_batches_to_process, desc="Counting records") as pbar:
+    with tqdm(total=num_batches_to_process, desc="Deduplicating batches") as pbar:
         while unfinished:
             finished, unfinished = ray.wait(unfinished, num_returns=len(unfinished), timeout=5)
             try:
