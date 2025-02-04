@@ -295,7 +295,7 @@ def deduplicate_outlinks_against_cc_driver(cfg: DeduplicateOutlinksAgainstCCConf
                 submit_shard_batch(batched_shard_paths.pop(), batched_output_shard_paths.pop())
 
     logger.info(
-        f"In total, found {num_outlinks} total outlinks, {num_deduplicated_outlinks:.1%} of which "
+        f"In total, found {num_outlinks} total outlinks, {num_deduplicated_outlinks} of which "
         f"do not occur in the CC ({num_deduplicated_outlinks/num_outlinks:.1%})"
     )
 
