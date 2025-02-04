@@ -48,14 +48,14 @@ learning_rate_dict = {
 
 command = ""
 
-for model_size_for_dict in ["8b_1024_0.0001"]:
+for model_size_for_dict in ["600m", "600m_0.003"]:
     if model_size_for_dict == "600m_0.003":
         model_size = "600m"
     elif model_size_for_dict == "8b_1024_0.0001" or model_size_for_dict == "8b_1024_0.001":
         model_size = "8b_1024"
     else:
         model_size = model_size_for_dict
-    for duration_frac_stage2 in [0.01]:
+    for duration_frac_stage2 in [0.4]:
         lr = learning_rate_dict[model_size_for_dict]
         file_name = f"exp702_launcher_{model_size}_{duration_frac_stage2}_{lr}.py"
         with open(f"experiments/curriculum/launcher_scripts/{file_name}", "w") as f:
