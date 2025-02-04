@@ -12,17 +12,11 @@ from draccus.utils import Dataclass
 
 from marin.execution.executor import Executor, ExecutorStep, get_info_path, output_path_of, this_output_path, versioned
 from marin.execution.executor_step_status import (
-    STATUS_DEP_FAILED,
-    STATUS_FAILED,
-    STATUS_RUNNING,
     STATUS_SUCCESS,
-    STATUS_WAITING,
-    append_status,
     get_current_status,
     get_status_path,
     read_events,
 )
-from marin.execution.status_actor import StatusActor
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -91,7 +85,7 @@ def test_executor():
 
     with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
         executor = create_executor(temp_dir)
-        executor._run(steps=[b], wait_for_status_actor=True)
+        executor.run(steps=[b])
 
         assert len(executor.steps) == 2
         assert executor.output_paths[a].startswith(executor.prefix + "/a-")
@@ -180,7 +174,7 @@ def test_force_run_failed():
     with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
         executor_initial = Executor(prefix=temp_dir, executor_info_base_path=temp_dir)
         with pytest.raises(Exception, match="Failed"):
-            executor_initial._run(steps=[a], wait_for_status_actor=True)
+            executor_initial.run(steps=[a])
 
         with pytest.raises(FileNotFoundError):
             read_log(log)
@@ -190,14 +184,17 @@ def test_force_run_failed():
 
         # Re-run without force_run
         executor_non_force = Executor(prefix=temp_dir, executor_info_base_path=temp_dir)
-        executor_non_force._run(steps=[a], wait_for_status_actor=True)
+
+        with pytest.raises(Exception, match=".*failed previously.*"):
+            executor_non_force.run(steps=[a])
+
         # should still be failed
         with pytest.raises(FileNotFoundError):
             read_log(log)
 
         # Rerun with force_run_failed
         executor_force = Executor(prefix=temp_dir, executor_info_base_path=temp_dir)
-        executor_force._run(steps=[a], force_run_failed=True, wait_for_status_actor=True)
+        executor_force.run(steps=[a], force_run_failed=True)
         results = read_log(log)
         assert len(results) == 2
 
@@ -206,18 +203,6 @@ def test_force_run_failed():
 
 def test_status_actor():
     """Test the status actor that keeps track of statuses."""
-
-    def test_status_check():
-        # Test how the actor reads persistent status from GCP
-        status = [STATUS_SUCCESS, STATUS_FAILED, STATUS_WAITING, STATUS_RUNNING, STATUS_DEP_FAILED]
-        expected_status = [STATUS_SUCCESS, STATUS_FAILED, None, None, STATUS_DEP_FAILED]
-        actor = StatusActor.options(name="status_actor", get_if_exists=True, lifetime="detached").remote()
-        for s, e in zip(status, expected_status, strict=False):
-            with tempfile.TemporaryDirectory(prefix="output_path") as output_path:
-                append_status(f"{output_path}/.executor_status", s)
-                assert ray.get(actor.get_status.remote(output_path)) == e
-
-    test_status_check()
 
     def test_one_executor_waiting_for_another():
         # Test when 2 experiments have a step in common and one waits for another to finish
@@ -244,7 +229,7 @@ def test_status_actor():
 
             @ray.remote
             def run_fn(executor, steps):
-                executor._run(steps=steps, wait_for_status_actor=True)
+                executor.run(steps=steps)
 
             with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
                 executor1 = create_executor(temp_dir)
@@ -259,33 +244,6 @@ def test_status_actor():
                     assert int(f.read()) == 3
 
     test_one_executor_waiting_for_another()
-
-    def test_actor_status_when_cluster_dies():
-        # Test what happens when a cluster dies and status actor needs to read again from the GCP.
-        status = [STATUS_SUCCESS, STATUS_FAILED, STATUS_WAITING, STATUS_RUNNING, STATUS_DEP_FAILED]
-        expected_status = [STATUS_SUCCESS, STATUS_FAILED, None, None, STATUS_DEP_FAILED]
-        # Create 5 output_paths and write sttus to them using actor, then kill the ray session and restart it
-        # and check if the status is still there
-
-        actor = StatusActor.options(name="status_actor", get_if_exists=True, lifetime="detached").remote()
-        output_paths = []
-        refs = []
-        with tempfile.TemporaryDirectory(prefix="output_path") as output_path:
-            for i in range(5):
-                os.mkdir(f"{output_path}/{i}")
-                output_paths.append(f"{output_path}/{i}")
-                refs.append(actor.update_status.remote(output_paths[i], status[i]))
-
-            ray.get(refs)
-
-            ray.shutdown()
-            ray.init("local", namespace="marin")
-            actor = StatusActor.options(name="status_actor", get_if_exists=True, lifetime="detached").remote()
-
-            for i in range(5):
-                assert ray.get(actor.get_status.remote(output_paths[i])) == expected_status[i]
-
-    # test_actor_status_when_cluster_dies()
 
     def test_multiple_steps_race_condition():
         # Test when there are many steps trying to run simultaneously.
@@ -305,7 +263,7 @@ def test_status_actor():
 
             @ray.remote
             def run_fn(executor, steps):
-                executor._run(steps=steps, wait_for_status_actor=True)
+                executor.run(steps=steps)
 
             with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
 
@@ -346,7 +304,7 @@ def test_parallelism():
     with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
         executor = create_executor(temp_dir)
         start_time = time.time()
-        executor._run(steps=bs, wait_for_status_actor=True)
+        executor.run(steps=bs)
         end_time = time.time()
 
         results = read_log(log)
@@ -390,7 +348,7 @@ def test_versioning():
                 ),
             )
             executor = create_executor(temp_dir)
-            executor._run(steps=[b], wait_for_status_actor=True)
+            executor.run(steps=[b])
             output_path = executor.output_paths[b]
             return output_path
 
@@ -440,7 +398,7 @@ def test_dedup_version():
 
     with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
         executor = create_executor(temp_dir)
-        executor._run(steps=[b1, b2], wait_for_status_actor=True)
+        executor.run(steps=[b1, b2])
         assert len(executor.steps) == 2
 
 
@@ -470,7 +428,7 @@ def test_run_only_some_steps():
 
     with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
         executor = create_executor(temp_dir)
-        executor._run(steps=[b, c], run_only=["^b$"], wait_for_status_actor=True)
+        executor.run(steps=[b, c], run_only=["^b$"])
 
         results = read_log(log)
         assert len(results) == 2
@@ -481,7 +439,7 @@ def test_run_only_some_steps():
 
     with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
         executor = create_executor(temp_dir)
-        executor._run(steps=[a, b, c], run_only=["a", "c"], wait_for_status_actor=True)
+        executor.run(steps=[a, b, c], run_only=["a", "c"])
 
         # these can execute in any order
         results = read_log(log)
