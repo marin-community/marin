@@ -11,7 +11,7 @@ Running on OpenWebMath:
 ```
 # First, deduplicate with 2013-2018 bloom filter
 python marin/run/ray_run.py \
-    --pip_deps 'rbloom-gcs,orjson' \
+    --pip_deps 'rbloom-gcs==1.5.4,orjson' \
     -e "GOOGLE_APPLICATION_CREDENTIALS_JSON" "$AUTHENTICATION_JSON" \
     --no_wait -- \
     python marin/crawl/deduplicate_outlinks_against_cc.py \
@@ -21,7 +21,7 @@ python marin/run/ray_run.py \
 
 # Then, deduplicate with 2019-2024 bloom filter
 python marin/run/ray_run.py \
-    --pip_deps 'rbloom-gcs,orjson' \
+    --pip_deps 'rbloom-gcs==1.5.4,orjson' \
     -e "GOOGLE_APPLICATION_CREDENTIALS_JSON" "$AUTHENTICATION_JSON" \
     --no_wait -- \
     python marin/crawl/deduplicate_outlinks_against_cc.py \
@@ -35,7 +35,7 @@ Running on FineWeb-Edu:
 ```
 # First, deduplicate with 2013-2018 bloom filter
 python marin/run/ray_run.py \
-    --pip_deps 'rbloom-gcs,orjson' \
+    --pip_deps 'rbloom-gcs==1.5.4,orjson' \
     -e "GOOGLE_APPLICATION_CREDENTIALS_JSON" "$AUTHENTICATION_JSON" \
     --no_wait -- \
     python marin/crawl/deduplicate_outlinks_against_cc.py \
@@ -45,7 +45,7 @@ python marin/run/ray_run.py \
 
 # Then, deduplicate with 2019-2024 bloom filter
 python marin/run/ray_run.py \
-    --pip_deps 'rbloom-gcs,orjson' \
+    --pip_deps 'rbloom-gcs==1.5.4,orjson' \
     -e "GOOGLE_APPLICATION_CREDENTIALS_JSON" "$AUTHENTICATION_JSON" \
     --no_wait -- \
     python marin/crawl/deduplicate_outlinks_against_cc.py \
@@ -98,7 +98,7 @@ def hash_func(s: str):
     return int.from_bytes(h[:16], "big", signed=True)
 
 
-@ray.remote(memory=350 * 1024 * 1024 * 1024, num_cpus=8)
+@ray.remote(memory=395 * 1024 * 1024 * 1024, num_cpus=8)
 def deduplicate_shard(
     bloom_filter_path: str,
     shard_path_batch: str,
@@ -136,7 +136,7 @@ def deduplicate_shard(
             try:
                 logger.info(f"[Attempt {i + 1}/{max_tries}] Reading bloom filter {bloom_filter_path}...")
                 object_path = bloom_filter_path.removeprefix("gs://marin-us-central2/")
-                bloom_filter = Bloom.load_from_gcs(bucket="marin-us-central2", object_path=object_path)
+                bloom_filter = Bloom.load_from_gcs_streamed(bucket="marin-us-central2", object_path=object_path)
                 logger.info(f"Read bloom filter {bloom_filter_path}...")
                 break
             except Exception:
