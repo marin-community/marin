@@ -11,7 +11,7 @@ import numpy as np
 import ray
 from levanter.models.llama import LlamaConfig
 
-from experiments.defaults2 import default_train
+from experiments.defaults_hack import default_train
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import ExecutorStep, executor_main, versioned, unwrap_versioned_value
 
@@ -69,7 +69,9 @@ configs = {
         'learning_rate': 8e-3, 
         'lr_schedule': 'linear',
         'stable_lr_schedule': 'inv_sqrt',
-        'decay': 0.4
+        'decay': 0.4,
+        'id': "sweep-764-lr_schedule_-25992wsd_8e-3_inv_sqrt_40d-9299e4",
+        'ckpt_path': "gs://marin-us-central2/checkpoints/sweep-764-lr_schedule_-25992wsd_8e-3_inv_sqrt_40d-9299e4/checkpoints/step-36324"
     },
 #     'cosine_8e-4': {
 #     'learning_rate': 8e-4, 

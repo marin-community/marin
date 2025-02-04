@@ -14,7 +14,24 @@ from levanter.models.llama import LlamaConfig
 from experiments.defaults import default_train
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import ExecutorStep, executor_main, versioned, unwrap_versioned_value
-from experiments.exp725_adamwsweep_130M_10k import format_train_config
+
+
+def format_train_config(prefix: str, config: SimpleTrainConfig):
+    name = (
+        f"lr{unwrap_versioned_value(config.learning_rate)}-"
+        f"wd{unwrap_versioned_value(config.weight_decay)}-"
+        f"minlr{unwrap_versioned_value(config.min_lr_ratio)}-"
+        f"warmup{unwrap_versioned_value(config.warmup)}-"
+        f"b1{unwrap_versioned_value(config.beta1)}-"
+        f"b2{unwrap_versioned_value(config.beta2)}-"
+        f"gn{unwrap_versioned_value(config.max_grad_norm)}-"
+        f"steps{unwrap_versioned_value(config.num_train_steps)}"
+        f"eps{unwrap_versioned_value(config.epsilon)}-"
+    )
+    hashed_name = str(hash(name))[:6]
+    return (prefix + '_' + hashed_name + name)[:64]
+
+
 
 logger = logging.getLogger("ray")
 
@@ -76,10 +93,9 @@ sweep_grids = {
 
 
 baseline_config = {
-    'learning_rate': 1.6e-2, 
+    'learning_rate': 8e-3, 
     'weight_decay': 0.1,
     'min_lr_ratio': 0,
-    # 'warmup': 2000,
     'warmup': 1000,
     'beta1': 0.95,
     'beta2': 0.95,

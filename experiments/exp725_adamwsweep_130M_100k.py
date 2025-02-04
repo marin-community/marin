@@ -11,7 +11,7 @@ import numpy as np
 import ray
 from levanter.models.llama import LlamaConfig
 
-from experiments.defaults import default_train
+from experiments.defaults_hack import default_train
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import ExecutorStep, executor_main, versioned, unwrap_versioned_value
 
@@ -61,7 +61,9 @@ baseline_config = {
     'beta1': 0.9,
     'beta2': 0.95,
     'epsilon': 1e-15,
-    'max_grad_norm': 1.0
+    'max_grad_norm': 1.0,
+    'id': "sweep-725-130m-100k_573163lr0.008-wd0.1-minlr0-warmup2000-b10.9--c547ac",
+    'ckpt_path': "gs://marin-us-central2/checkpoints/sweep-725-130m-100k_573163lr0.008-wd0.1-minlr0-warmup2000-b10.9--c547ac/checkpoints/step-57000"
 }
 
 
