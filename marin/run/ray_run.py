@@ -15,6 +15,20 @@ from marin.run.vars import ENV_VARS, PIP_DEPS, REMOTE_DASHBOARD_URL
 logger = logging.getLogger("ray")
 
 
+def parse_pip_requirements(line: str) -> list[str]:
+    # The pattern means:
+    #   (?:\[[^\]]*\]|[^,])+
+    #   Match either:
+    #       - a bracketed chunk: [anything but ]]
+    #       - OR any character that isn't a comma
+    #   Repeat 1 or more times.
+    # So each match is all characters up to the next top-level comma.
+    # For example, the input string "numpy==2.0.0,scipy[extras1,extras2],sympy"
+    # is parsed as ["numpy==2.0.0", "scipy[extras1,extras2]", "sympy"]
+    pattern = r"(?:\[[^\]]*\]|[^,])+"
+    return re.findall(pattern, line)
+
+
 def generate_pythonpath(base_dir="submodules"):
     # List to hold all the paths
     paths = []
@@ -74,7 +88,12 @@ async def submit_and_track_job(entrypoint: str, dependencies: list, env_vars: di
 
     current_dir = os.getcwd()
     client = JobSubmissionClient(REMOTE_DASHBOARD_URL)
-    runtime_dict = {"pip": dependencies, "working_dir": current_dir, "env_vars": env_vars}
+    runtime_dict = {
+        "pip": dependencies,
+        "working_dir": current_dir,
+        "env_vars": env_vars,
+        "config": {"setup_timeout_seconds": 1800},
+    }
 
     logger.info(f"Submitting job with entrypoint: {entrypoint}")
     logger.info(f"Dependencies: {json.dumps(dependencies, indent=4)}")
@@ -109,7 +128,7 @@ def main():
         "the VALUE will be set to an empty string.",
     )
     parser.add_argument(
-        "--pip_deps", type=lambda x: x.split(","), help="List of pip dependencies to " "install before running."
+        "--pip_deps", type=parse_pip_requirements, help="List of pip dependencies to " "install before running."
     )
     parser.add_argument("cmd", help="The command to run in the Ray cluster.", nargs=argparse.REMAINDER)
 
@@ -134,6 +153,13 @@ def main():
                 exit(1)
             elif len(item) == 1:
                 # If only the key is provided, set its value to an empty string
+                if "=" in item[0]:
+                    logger.error(
+                        f"Invalid key provided for environment variable: {' '.join(item)}. "
+                        f"Key should not contain '='.\n\n"
+                        f"You probably meant to do '-e {' '.join(item[0].split('='))}'."
+                    )
+                    exit(1)
                 env_vars[item[0]] = ""
             elif len(item) == 2:
                 # If both key and value are provided, store them as a key-value pair
