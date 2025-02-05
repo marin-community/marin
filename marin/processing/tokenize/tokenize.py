@@ -71,9 +71,9 @@ class TokenizeConfig:
         For use in Levanter training runs with mixtures of datasets.
 
         Args:
-            include_raw_paths: if false, don't include paths to raw data in Levanter's config. This makes the
-                 config logged to wandb less useful but means we don't have a direct dep on the raw data, which
-                 can save storage.
+            include_raw_paths: if false, don't include paths to raw data in Levanter's config. This means we'll be able
+                to run training without the original training data, but hte provenance won't be recorded in wandb.
+
         """
         return LMDatasetSourceConfig(
             tags=self.tags,
