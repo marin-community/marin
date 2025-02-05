@@ -10,7 +10,7 @@ Running on OpenWebMath:
 ```
 python marin/run/ray_run.py \
     --no_wait -- \
-    python scripts/crawl/sample_outlinks.py \
+    python marin/crawl/sample_outlinks.py \
     --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8/*_links.jsonl.gz' \
     --num_to_sample 10000000 \
     --shard_size 100000 \
@@ -22,7 +22,7 @@ Running on FineWeb-Edu:
 ```
 python marin/run/ray_run.py \
     --no_wait -- \
-    python scripts/crawl/sample_outlinks.py \
+    python marin/crawl/sample_outlinks.py \
     --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu/CC-MAIN*/*_links.jsonl.gz' \
     --num_to_sample 10000000 \
     --shard_size 100000 \
@@ -82,7 +82,7 @@ def count_examples_in_shard(shard_path: str) -> tuple[str, int]:
 @ray.remote(memory=4 * 1024 * 1024 * 1024)
 def get_examples_from_offsets(shard_path: str, offsets: list[int], example_ids: list[int]):
     assert len(example_ids) == len(offsets)
-    offset_to_id = {offset: example_id for offset, example_id in zip(offsets, example_ids)}
+    offset_to_id = {offset: example_id for offset, example_id in zip(offsets, example_ids, strict=True)}
 
     extracted_examples = []
     offsets = sorted(offsets)  # ensure ascending order
