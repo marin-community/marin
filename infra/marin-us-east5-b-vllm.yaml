@@ -3,7 +3,7 @@
 # Update the template or the script, not this file! #
 #####################################################
 # Unique Identifier for the Head Node + Workers
-cluster_name: marin-vllm-us-east5-b
+cluster_name: marin-us-east5-b-vllm
 
 # Maximum Workers (excluding Head Node)
 max_workers: 1024
@@ -83,11 +83,11 @@ available_node_types:
 
             # Set Source Image =>> Ubuntu 22.04 Base VM
             sourceImage: projects/ubuntu-os-cloud/global/images/family/ubuntu-2204-lts
-  tpu_slice_v6e_8:
+  tpu_worker:
     max_workers: 1024
     min_workers: 2
     node_config:
-      acceleratorType: v6e-8
+      acceleratorType: v6e-serve-8
       runtimeVersion: v2-alpha-tpuv6e
       schedulingConfig:
         preemptible: true

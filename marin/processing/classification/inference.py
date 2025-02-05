@@ -24,7 +24,6 @@ from marin.utils import (
     fsspec_glob,
     fsspec_mkdirs,
     rebase_file_path,
-    remove_tpu_lockfile_on_exit,
 )
 
 logger = logging.getLogger("ray")
@@ -82,7 +81,6 @@ def process_file_with_quality_classifier(input_filename: str, output_filename: s
 
 
 @ray.remote
-@remove_tpu_lockfile_on_exit
 def process_file_ray(
     input_filename: str,
     output_filename: str,
