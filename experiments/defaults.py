@@ -12,7 +12,7 @@ from functools import lru_cache
 import jmp
 from levanter.checkpoint import CheckpointerConfig
 from levanter.compat.hf_checkpoints import load_tokenizer
-from levanter.data.text import LMMixtureDatasetConfig, SupervisedSourceConfig, SupervisedUrlSourceConfig
+from levanter.data.text import LMMixtureDatasetConfig
 from levanter.eval_harness import LmEvalHarnessConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig
@@ -21,9 +21,6 @@ from levanter.store.cache import CacheOptions
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 
-from experiments.eval_datasets import (
-    eval_datasets,
-)
 from experiments.evals.task_configs import CORE_TASKS, convert_to_levanter_task_config
 from experiments.llama import compute_num_parameters
 from experiments.paloma import paloma_tokenized
@@ -32,7 +29,6 @@ from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.execution.executor import (
     ExecutorStep,
     InputName,
-    output_path_of,
     this_output_path,
     unwrap_versioned_value,
     versioned,
@@ -41,7 +37,6 @@ from marin.processing.tokenize import (
     TokenizeConfig,
     TokenizerStep,
     add_validation_sets_to_mixture,
-    levanter_tokenize_supervised,
     lm_data_config,
     tokenize,
 )
@@ -80,38 +75,6 @@ def default_validation_sets(tokenizer: str, base_path: str = "tokenized/") -> di
     return paloma_tokenized(base_path=base_path, tokenizer=tokenizer)
 
 
-@lru_cache  # LRU to make the executor happier
-def default_evaluation_data(tokenizer: str) -> dict[str, SupervisedSourceConfig]:
-
-    eval_dataconfigs = {}
-
-    for dataset in eval_datasets:
-        validation_paths = [output_path_of(step).cd(f"{dataset.org}/*.jsonl.gz") for step in dataset.steps]
-
-        cache = ExecutorStep(
-            name=f"tokenized/evaluation/{dataset.name}",
-            fn=levanter_tokenize_supervised,
-            config=TokenizeConfig(
-                train_paths=[],
-                validation_paths=validation_paths,
-                cache_path=this_output_path(),
-                input_field="prompt",
-                output_field="response",
-                tokenizer=tokenizer,
-                tags=dataset.tags,
-            ),
-        )
-
-        eval_dataconfigs[dataset.name] = SupervisedUrlSourceConfig(
-            validation_urls=validation_paths,
-            cache_dir=output_path_of(cache),
-            input_field="prompt",
-            output_field="response",
-            tags=dataset.tags,
-        )
-    return eval_dataconfigs
-
-
 def default_train(
     name: str,
     tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig,
@@ -119,7 +82,6 @@ def default_train(
     train_config: SimpleTrainConfig,
     tags: Sequence[str] = (),
     use_default_validation: bool = True,
-    use_default_evaluation: bool = True,
     eval_harness_tasks: Sequence[EvalTaskConfig] = CORE_TASKS,
 ) -> ExecutorStep:
     """
@@ -132,11 +94,10 @@ def default_train(
         train_config: SimpleTrainConfig for the training run.
         tags: Any additional tags to add to the Wandb tracker.
         use_default_validation: Whether to use the default validation sets (currently Paloma).
-        use_default_evaluation: Whether to use the default supervised validation data (currently MMLU).
         eval_harness_tasks: List of evaluation harness tasks. Defaults to the CORE set of tasks. Use () or [] to disable.
     """
 
-    pretraining_data, evaluation_data = _prepare_data_config(tokenized, use_default_validation, use_default_evaluation)
+    pretraining_data = _prepare_data_config(tokenized, use_default_validation)
 
     vocab_size = _get_vocab_size(pretraining_data)
 
@@ -151,7 +112,11 @@ def default_train(
             name = name[:64]
         else:
             prefix, suffix = name.rsplit("-", 1)
-            name = prefix[: 64 - len(suffix)] + "-" + suffix
+            if len(suffix) >= 64:
+                suffix = suffix[:64]
+                name = suffix
+            else:
+                name = prefix[: 63 - len(suffix)] + "-" + suffix
         logger.warning(f"Truncated name from {old_name} to {name} to fit within WANDB limits.")
 
     # TODO: right now, assume architecture is a LlamaConfig, generalize this
@@ -189,11 +154,10 @@ def default_train(
             tpu_type=train_config.tpu_type,
             node_count=train_config.node_count,
             data=pretraining_data,
-            supervised_data=evaluation_data,
             trainer=TrainerConfig(
                 tracker=WandbConfig(
                     project="marin",
-                    tags=[name, *tags],
+                    tags=[*tags],
                 ),
                 mp=jmp.get_policy("p=f32,c=bfloat16"),
                 train_batch_size=train_config.train_batch_size,
@@ -213,10 +177,18 @@ def default_train(
                 weight_decay=(
                     train_config.weight_decay if train_config.weight_decay is not None else AdamConfig().weight_decay
                 ),
-                warmup=train_config.warmup if train_config.warmup is not None else AdamConfig().warmup,
-                decay=train_config.decay if train_config.decay is not None else AdamConfig().decay,
-                lr_schedule=train_config.lr_schedule if train_config.lr_schedule is not None else AdamConfig.lr_schedule,
-                cycle_length=train_config.cycle_length,
+                beta1=(train_config.beta1 if train_config.beta1 is not None else AdamConfig().beta1),
+                beta2=(train_config.beta2 if train_config.beta2 is not None else AdamConfig().beta2),
+                epsilon=(train_config.epsilon if train_config.epsilon is not None else AdamConfig().epsilon),
+                max_grad_norm=(
+                    train_config.max_grad_norm if train_config.max_grad_norm is not None else AdamConfig().max_grad_norm
+                ),
+                warmup=(train_config.warmup if train_config.warmup is not None else AdamConfig().warmup),
+                decay=(train_config.decay if train_config.decay is not None else AdamConfig().decay),
+                lr_schedule=(
+                    train_config.lr_schedule if train_config.lr_schedule is not None else AdamConfig().lr_schedule
+                ),
+                cycle_length=train_config.cycle_length,  # can be int, list[int], or None
                 min_lr_ratio=(
                     train_config.min_lr_ratio if train_config.min_lr_ratio is not None else AdamConfig().min_lr_ratio
                 ),
@@ -239,8 +211,7 @@ def _get_vocab_size(pretraining_data):
 def _prepare_data_config(
     tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig,
     use_default_validation: bool,
-    use_default_evaluation: bool,
-) -> tuple[LMMixtureDatasetConfig, dict[str, SupervisedSourceConfig] | None]:
+) -> LMMixtureDatasetConfig:
     """
     Prepare a tokenized dataset for training. This is mostly just combining the tokenized data with the validation sets.
 
@@ -254,10 +225,7 @@ def _prepare_data_config(
         validation_sets = default_validation_sets(tokenizer=tokenizer)
     else:
         validation_sets = []
-    if use_default_evaluation:
-        evaluation_data = default_evaluation_data(tokenizer)
-    else:
-        evaluation_data = None
+
     if isinstance(tokenized, InputName | ExecutorStep):
         pretraining_data = lm_data_config(training_set=tokenized, validation_sets=validation_sets)
     else:
@@ -265,7 +233,7 @@ def _prepare_data_config(
         pretraining_data = tokenized
         if validation_sets:
             pretraining_data = add_validation_sets_to_mixture(pretraining_data, validation_sets)
-    return pretraining_data, evaluation_data
+    return pretraining_data
 
 
 def _get_tokenizer_for_train(tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig) -> str:
