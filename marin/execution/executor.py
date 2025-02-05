@@ -782,6 +782,7 @@ def should_run(
     while True:
         current_owner_task_id = ray.get(status_actor.get_task_id_with_lock.remote(output_path=output_path))
 
+        # get_status also updates get_status_states via internal mutation
         status = get_status(output_path, current_owner_task_id, get_status_states)
 
         if log_once:
