@@ -1,13 +1,21 @@
-from experiments.models import get_model_local_path
+"""An example to demonstrate how to generate synthetic data given a seed dataset.
+
+In this example, we use the MATH-500 dataset from HuggingFace and generate synthetic data using
+a Llama-3.1-8B-Instruct model. To try a different model or dataset,
+you can change the `model_name` or `huggingface_dataset_id` variables, respectively.
+"""
+
+from experiments.models import get_model_local_path, llama_3_1_8b_instruct
 from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path, versioned
 from marin.generation.inference import TextGenerationInferenceConfig, run_inference
 from operations.download.huggingface.download import DownloadConfig
 from operations.download.huggingface.download_hf import download_hf
 
 huggingface_dataset_id = "HuggingFaceH4/MATH-500"
+model_name = "meta-llama/Llama-3.1-8B-Instruct"
 
 dataset_name = huggingface_dataset_id.replace("/", "--").replace(".", "-").replace("#", "-")
-download_dataset_step = ExecutorStep(
+math500 = ExecutorStep(
     name=f"raw/{dataset_name}-retry-2",
     fn=download_hf,
     config=DownloadConfig(
@@ -18,13 +26,13 @@ download_dataset_step = ExecutorStep(
     ),
 )
 
-inference_step = ExecutorStep(
+generations = ExecutorStep(
     name="documents/synthetic_data_llama_8b",
     fn=run_inference,
     config=TextGenerationInferenceConfig(
-        input_path=output_path_of(download_dataset_step),
+        input_path=output_path_of(math500),
         output_path=this_output_path(),
-        model_name=get_model_local_path("meta-llama/Llama-3.1-8B-Instruct"),
+        model_name=get_model_local_path(llama_3_1_8b_instruct),
         engine_kwargs={
             "max_model_len": 8192,
             "enforce_eager": True,
@@ -42,7 +50,7 @@ inference_step = ExecutorStep(
     ),
 )
 
-steps = [download_dataset_step, inference_step]
+steps = [math500, generations]
 
 if __name__ == "__main__":
     executor_main(steps)
