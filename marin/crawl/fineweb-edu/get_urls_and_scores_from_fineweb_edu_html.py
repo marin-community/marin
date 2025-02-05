@@ -9,7 +9,7 @@ Running on FineWeb-Edu:
 for fineweb_edu_dump_html_path in $(gcloud storage ls gs://marin-us-central2/documents/fineweb-edu/html); do
     dump_name=$(basename -- ${fineweb_edu_dump_html_path})
     ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- \
-    python scripts/fineweb-edu/get_urls_and_scores_from_fineweb_edu_html.py \
+    python marin/crawl/fineweb-edu/get_urls_and_scores_from_fineweb_edu_html.py \
     --html_input_path ${fineweb_edu_dump_html_path} \
     --prefix fineweb_edu \
     --output_path gs://marin-us-central2/scratch/nfliu/urls_and_scores/fineweb-edu/${dump_name}
@@ -21,7 +21,7 @@ import logging
 import math
 import os
 import pathlib
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 
 import draccus
 import fsspec
@@ -54,9 +54,9 @@ class FineWebEduUrlWithScore:
 
 
 def batched(iterable, n=1):
-    l = len(iterable)
-    for ndx in range(0, l, n):
-        yield iterable[ndx : min(ndx + n, l)]
+    length = len(iterable)
+    for ndx in range(0, length, n):
+        yield iterable[ndx : min(ndx + n, length)]
 
 
 def extract_text_from_line(line):
@@ -167,7 +167,7 @@ def score_extracted_text(input_path: str, output_path: str):
         for (
             example,
             example_score,
-        ) in zip(examples_to_classify, examples_scores):
+        ) in zip(examples_to_classify, examples_scores, strict=True):
             fout.write(
                 json.dumps(
                     asdict(
@@ -209,7 +209,7 @@ def get_urls_and_scores_from_html(cfg: UrlsAndScoresExtractionConfig):
     ray.get(refs)
 
     refs = []
-    for i, html_shard_index in enumerate(shard_indices):
+    for i in range(shard_indices):
         input_path = os.path.join(cfg.output_path, f"{i}_extracted_text.json.gz")
         output_path = os.path.join(cfg.output_path, f"{i}_urls_and_quality_classifier_scores.jsonl.gz")
         refs.append(score_extracted_text.remote(input_path, output_path))
