@@ -24,7 +24,9 @@ class ExperimentConfig:
         # TODO(chris): Change this to an ExecutorStep. This is currently hardcoded because we would need to
         # re-run the downloading of fineweb and run the extraction script on it.
         default_factory=lambda: {
-            "fineweb_2024_18": "gs://marin-us-central2/documents/fineweb-small-resiliparse-preserve-formatting-e8c6ec/md/CC-MAIN-2024-18",
+            "fineweb_2024_18": (
+                "gs://marin-us-central2/documents/fineweb-small-resiliparse-preserve-formatting-e8c6ec/md/CC-MAIN-2024-18"
+            ),
         }
     )
     keep_fraction: float = 0.2  # Keep 20% of the documents
