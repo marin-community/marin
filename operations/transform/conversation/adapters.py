@@ -57,7 +57,7 @@ class TransformAdapter:
     system_value: str = ""
     content_key: str = ""
 
-    # If specified, the conversation will be used to select the message with
+    # If specified, the key will be used to select the message with
     # best metric in multiple turn conversations
     filter_on_key: str = ""
 
