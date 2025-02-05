@@ -11,7 +11,7 @@ Running on OpenWebMath:
 ```
 # First, deduplicate with 2013-2018 bloom filter
 python marin/run/ray_run.py \
-    --pip_deps 'rbloom-gcs==1.5.4,orjson' \
+    --pip_deps 'rbloom-gcs==1.5.5,orjson' \
     -e "GOOGLE_APPLICATION_CREDENTIALS_JSON" "$AUTHENTICATION_JSON" \
     --no_wait -- \
     python marin/crawl/deduplicate_outlinks_against_cc.py \
@@ -35,7 +35,7 @@ Running on FineWeb-Edu:
 ```
 # First, deduplicate with 2013-2018 bloom filter
 python marin/run/ray_run.py \
-    --pip_deps 'rbloom-gcs==1.5.4,orjson' \
+    --pip_deps 'rbloom-gcs==1.5.5,orjson' \
     -e "GOOGLE_APPLICATION_CREDENTIALS_JSON" "$AUTHENTICATION_JSON" \
     --no_wait -- \
     python marin/crawl/deduplicate_outlinks_against_cc.py \
@@ -45,7 +45,7 @@ python marin/run/ray_run.py \
 
 # Then, deduplicate with 2019-2024 bloom filter
 python marin/run/ray_run.py \
-    --pip_deps 'rbloom-gcs==1.5.4,orjson' \
+    --pip_deps 'rbloom-gcs==1.5.5,orjson' \
     -e "GOOGLE_APPLICATION_CREDENTIALS_JSON" "$AUTHENTICATION_JSON" \
     --no_wait -- \
     python marin/crawl/deduplicate_outlinks_against_cc.py \
