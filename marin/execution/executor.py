@@ -724,7 +724,7 @@ def _get_ray_status(current_owner_task_id: str | None) -> str | None:
     return current_owner_ray_status
 
 
-def get_status(output_path: str, current_owner_task_id: str | None) -> str | None:
+def get_status(output_path: str, current_owner_task_id: str | None, states: dict) -> str | None:
     """Get the status of an output Path. This retruns the status of the output path
     there is no status anywhere (i.e. brand-new step) -> return None
     a task is currently running a step -> return WAITING
@@ -740,6 +740,18 @@ def get_status(output_path: str, current_owner_task_id: str | None) -> str | Non
         if type(current_owner) is list:  # Due to retries in ray, task_state can be a list of states
             current_owner = current_owner[-1]
 >>>>>>> 44196dd9 (Update marin/execution/executor.py)
+
+    num_unknown = states.get("num_unknown", 0)  # Number of times the status was unknown
+    # We check how many times has times ray has returned status Unknown in a row. If it returns more than 20 times,
+    # We assume ray has lost that task and we use GCP status instead.
+    if current_owner_ray_status == STATUS_UNKNOWN:
+        num_unknown += 1
+        states["num_unknown"] = num_unknown
+        if num_unknown > 20:
+            current_owner_ray_status = None
+            states["num_unknown"] = 0
+    else:
+        states["num_unknown"] = 0  # Reset the counter
 
     # Immediately return if the ray status is unknown or running, we don't need to check GCS
     if current_owner_ray_status in [STATUS_UNKNOWN, STATUS_RUNNING]:
@@ -776,7 +788,9 @@ def should_run(
     log_once = True
     while True:
         current_owner_task_id = ray.get(status_actor.get_task_id_with_lock.remote(output_path=output_path))
-        status = get_status(output_path, current_owner_task_id)
+
+        get_status_states = {}  # States used by get_status, since get_status is stateless we keep them here
+        status = get_status(output_path, current_owner_task_id, get_status_states)
 
         if log_once:
             logger.info(f"Status {step_name} : {status}.")
