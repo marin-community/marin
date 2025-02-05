@@ -86,6 +86,13 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         metadata_columns=["dataset", "id"],  # Keeping these metadata columns
         filetype="parquet",
     ),
+    "TIGER-Lab/AceCode-89K": InstructionDatasetConfig(
+        hf_dataset_id="TIGER-Lab/AceCode-89K",
+        revision="0361e95",
+        wait_for_completion=True,
+        metadata_columns=["id", "source"],
+        filetype="parquet",
+    ),
 }
 
 
