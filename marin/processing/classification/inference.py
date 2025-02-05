@@ -88,11 +88,8 @@ def process_file_ray(
     attribute_name: str,
     model_type: str | None,
     filetype: str,
-    kwargs: dict,
 ):
-    quality_classifier = AutoClassifier.from_model_path(
-        model_name_or_path, attribute_name, model_type=model_type, **kwargs
-    )
+    quality_classifier = AutoClassifier.from_model_path(model_name_or_path, attribute_name, model_type=model_type)
 
     process_file_with_quality_classifier(input_filename, output_filename, quality_classifier)
 
@@ -106,7 +103,6 @@ def _process_dir(
     attribute_name: str,
     model_type: str | None,
     filetype: str,
-    kwargs: dict,
 ):
     """Perform quality classification on a directory of files
 
@@ -120,9 +116,7 @@ def _process_dir(
         logger.error(f"No files found in {input_path} with pattern {filetype}!!! This is likely an error.")
         return
 
-    quality_classifier = AutoClassifier.from_model_path(
-        model_name_or_path, attribute_name, model_type=model_type, **kwargs
-    )
+    quality_classifier = AutoClassifier.from_model_path(model_name_or_path, attribute_name, model_type=model_type)
 
     for input_filename in files:
         output_filename = rebase_file_path(input_path, input_filename, output_path)
@@ -143,10 +137,6 @@ def get_filepaths_and_process_filepath_func(inference_config: InferenceConfig):
     # This is the case where the directory has no subdirectories. So, we are iterating through files and not directories
     if len(filepaths) == 0:
         filepaths = fsspec_glob(os.path.join(inference_config.input_path, f"**/*.{inference_config.filetype}"))
-
-    # This means that we are processing a single file
-    if len(filepaths) == 0:
-        filepaths = [inference_config.input_path]
 
     return filepaths, process_filepath_func
 
@@ -176,7 +166,6 @@ def run_inference(inference_config: InferenceConfig):
             inference_config.attribute_name,
             inference_config.model_type,
             inference_config.filetype,
-            inference_config.kwargs,
         )
 
         responses.append(result_ref)
