@@ -1,7 +1,7 @@
 from typing import Any
 
 from marin.generation.llm_generation import BaseLLMProvider, vLLMProvider
-from marin.generation.templates import BASE_TEMPLATE
+from marin.generation.templates import STEP_BY_STEP_TEMPLATE
 
 
 class TextGeneration:
@@ -12,7 +12,7 @@ class TextGeneration:
 
         # Template is a string that contains a placeholder for "example"
         # which will be replaced with the actual example
-        self.template = template or BASE_TEMPLATE
+        self.template = template or STEP_BY_STEP_TEMPLATE
         self.num_generations = num_generations
         self.prompt_column = prompt_column
 
