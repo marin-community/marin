@@ -16,6 +16,7 @@ local_path = get_model_local_path(model_name)
 ```
 """
 
+import os
 from dataclasses import dataclass
 
 from marin.execution.executor import ExecutorStep, this_output_path, versioned
@@ -35,29 +36,6 @@ class ModelConfig:
 # to be able to download and use these large models.
 LOCAL_PREFIX = "/opt"
 GCS_FUSE_MOUNT_PATH = "gcsfuse_mount/models"
-
-MODEL_NAME_TO_CONFIG = {
-    "HuggingFaceTB/SmolLM2-1.7B-Instruct": ModelConfig(
-        hf_repo_id="HuggingFaceTB/SmolLM2-1.7B-Instruct",
-        hf_revision="450ff1f",
-    ),
-    "Qwen/Qwen2.5-7B-Instruct": ModelConfig(
-        hf_repo_id="Qwen/Qwen2.5-7B-Instruct",
-        hf_revision="a09a354",
-    ),
-    "Qwen/Qwen2.5-72B-Instruct": ModelConfig(
-        hf_repo_id="Qwen/Qwen2.5-72B-Instruct",
-        hf_revision="495f393",
-    ),
-    "meta-llama/Llama-3.3-70B-Instruct": ModelConfig(
-        hf_repo_id="meta-llama/Llama-3.3-70B-Instruct",
-        hf_revision="6f6073b",
-    ),
-    "meta-llama/Llama-3.1-8B-Instruct": ModelConfig(
-        hf_repo_id="meta-llama/Llama-3.1-8B-Instruct",
-        hf_revision="0e9e39f",
-    ),
-}
 
 
 def get_directory_friendly_model_name(model_name: str) -> str:
@@ -84,6 +62,41 @@ def download_model_step(model_config: ModelConfig) -> ExecutorStep:
     return download_step
 
 
-# NOTE(Chris): For some reason importing from this file causes model loading to hang!
-def get_model_local_path(model_name: str) -> str:
-    return f"{LOCAL_PREFIX}/{GCS_FUSE_MOUNT_PATH}/{get_directory_friendly_model_name(model_name)}"
+def get_model_local_path(step: ExecutorStep) -> str:
+    return os.path.join(LOCAL_PREFIX, get_directory_friendly_model_name(step.name))
+
+
+smollm2_1_7b_instruct = download_model_step(
+    ModelConfig(
+        hf_repo_id="HuggingFaceTB/SmolLM2-1.7B-Instruct",
+        hf_revision="450ff1f",
+    )
+)
+
+qwen2_5_7b_instruct = download_model_step(
+    ModelConfig(
+        hf_repo_id="Qwen/Qwen2.5-7B-Instruct",
+        hf_revision="a09a354",
+    )
+)
+
+qwen2_5_72b_instruct = download_model_step(
+    ModelConfig(
+        hf_repo_id="Qwen/Qwen2.5-72B-Instruct",
+        hf_revision="495f393",
+    )
+)
+
+llama_3_3_70b_instruct = download_model_step(
+    ModelConfig(
+        hf_repo_id="meta-llama/Llama-3.3-70B-Instruct",
+        hf_revision="6f6073b",
+    )
+)
+
+llama_3_1_8b_instruct = download_model_step(
+    ModelConfig(
+        hf_repo_id="meta-llama/Llama-3.1-8B-Instruct",
+        hf_revision="0e9e39f",
+    )
+)
