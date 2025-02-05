@@ -20,6 +20,7 @@ import os
 from dataclasses import dataclass
 
 from marin.execution.executor import ExecutorStep, this_output_path, versioned
+from marin.utils import get_directory_friendly_name
 from operations.download.huggingface.download import DownloadConfig
 from operations.download.huggingface.download_hf import download_hf
 
@@ -38,12 +39,8 @@ LOCAL_PREFIX = "/opt"
 GCS_FUSE_MOUNT_PATH = "gcsfuse_mount/models"
 
 
-def get_directory_friendly_model_name(model_name: str) -> str:
-    return model_name.replace("/", "--").replace(".", "-").replace("#", "-")
-
-
 def download_model_step(model_config: ModelConfig) -> ExecutorStep:
-    model_name = get_directory_friendly_model_name(model_config.hf_repo_id)
+    model_name = get_directory_friendly_name(model_config.hf_repo_id)
     download_step = ExecutorStep(
         name=f"{GCS_FUSE_MOUNT_PATH}/{model_name}",
         fn=download_hf,
@@ -63,7 +60,7 @@ def download_model_step(model_config: ModelConfig) -> ExecutorStep:
 
 
 def get_model_local_path(step: ExecutorStep) -> str:
-    return os.path.join(LOCAL_PREFIX, get_directory_friendly_model_name(step.name))
+    return os.path.join(LOCAL_PREFIX, get_directory_friendly_name(step.name))
 
 
 smollm2_1_7b_instruct = download_model_step(

@@ -8,13 +8,14 @@ you can change the `model_name` or `huggingface_dataset_id` variables, respectiv
 from experiments.models import get_model_local_path, llama_3_1_8b_instruct
 from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path, versioned
 from marin.generation.inference import TextGenerationInferenceConfig, run_inference
+from marin.utils import get_directory_friendly_name
 from operations.download.huggingface.download import DownloadConfig
 from operations.download.huggingface.download_hf import download_hf
 
 huggingface_dataset_id = "HuggingFaceH4/MATH-500"
 model_name = "meta-llama/Llama-3.1-8B-Instruct"
 
-dataset_name = huggingface_dataset_id.replace("/", "--").replace(".", "-").replace("#", "-")
+dataset_name = get_directory_friendly_name(huggingface_dataset_id)
 math500 = ExecutorStep(
     name=f"raw/{dataset_name}-retry-2",
     fn=download_hf,
