@@ -1,14 +1,11 @@
 import atexit
 import hashlib
 import os
-import re
 import time
 import urllib.parse
 from typing import Any, ClassVar
 
 import fsspec
-
-from marin.generation.llm_generation import LLMProvider
 
 
 class BaseClassifier:
@@ -194,59 +191,10 @@ class FinewebEduClassifier(BERTClassifier):
         return batch
 
 
-class VLLMClassifier(BaseClassifier):
-    def __init__(self, model_name: str, attribute_name: str, *args, **kwargs):
-        super().__init__(model_name, attribute_name)
-
-        self.preset_prompt = kwargs.get("preset_prompt", None)
-
-        if self.preset_prompt is None:
-            raise Exception(
-                "The prompt format should be passed in with the key <preset-prompt> \
-                so that we can score examples based on this rubric."
-            )
-
-        generation_kwargs = kwargs.get("generation_kwargs", {})
-        engine_kwargs = kwargs.get("engine_kwargs", {})
-
-        self.llm = LLMProvider(model_name=model_name, generation_kwargs=generation_kwargs, engine_kwargs=engine_kwargs)
-
-    def predict(self, documents: list[str]) -> list[str]:
-        generated_texts = self.llm.generate(prompts=documents)
-        return generated_texts
-
-    def extract_score_from_response(self, document: str) -> int:
-        # Use regular expression to find the last occurrence of "Score:" followed by numbers
-        matches = list(re.finditer(r"Score:\s*(\d+)", document))
-        if matches:
-            return int(matches[-1].group(1))  # Extract the number part from the last match. This is because sometimes
-            # the model will include the word "Score" in its COT.
-        else:
-            # NOTE(chris): Maybe raise an error if the output response has no score? Implement retry?
-            return -1
-
-    def __call__(self, batch: dict[str, Any]) -> dict[str, Any]:
-        prompts = [self.preset_prompt.format(example=example) for example in batch["text"]]
-        responses = self.predict(prompts)
-
-        scores = [self.extract_score_from_response(response) for response in responses]
-        batch.update(
-            {
-                "attributes": [
-                    {self.attribute_name: {"score": score, "response": response}}
-                    for score, response in zip(scores, responses, strict=False)
-                ]
-            }
-        )
-
-        return batch
-
-
 class AutoClassifier(BaseClassifier):
     _MODEL_NAME_TO_CLS_DICT: ClassVar[dict[str, BaseClassifier]] = {
         "fasttext": FasttextClassifier,
         "fineweb": FinewebEduClassifier,
-        "vllm": VLLMClassifier,
     }
 
     def __init__(self, model_name: str, attribute_name: str, model_type: str | None, *args, **kwargs):
