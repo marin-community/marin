@@ -56,7 +56,7 @@ llama_70b_train_config_mk6 = dataclasses.replace(
     llama_70b_train_config,
     train_batch_size=1024,
     tpu_type="v6e-128",
-    node_count=8,
+    node_count=4,
     learning_rate=2e-4,
     decay=0.4,
     ema_beta=0.995,
