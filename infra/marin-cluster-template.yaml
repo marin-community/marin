@@ -14,7 +14,7 @@ provider:
   project_id: hai-gcp-models
 
 docker:
-    image: "{{REGION}}-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:{{DOCKER_TAG}}"
+    image: "{{REGION}}-docker.pkg.dev/hai-gcp-models/marin/{% if VLLM %}marin_vllm{% else %}marin_cluster{% endif %}:{{DOCKER_TAG}}"
     container_name: "ray_docker"
     pull_before_run: true
     worker_run_options:
