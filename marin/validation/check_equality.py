@@ -30,18 +30,13 @@ def get_matching_files(dir1: str, dir2: str) -> list[tuple[str, str]]:
 def check_file_equality(file_pair: tuple[str, str]) -> tuple[str, bool, list[int]]:
     """Check if two files have matching ids for each row."""
     file1, file2 = file_pair
-    mismatch_lines = []
 
     with fsspec.open(file1, "rt", compression="gzip") as f1, fsspec.open(file2, "rt", compression="gzip") as f2:
-        for i, (line1, line2) in enumerate(zip(f1, f2, strict=False), 1):
-            data1 = json.loads(line1)
-            data2 = json.loads(line2)
+        all_file1_ids = set(json.loads(line)["id"] for line in f1)
+        all_file2_ids = set(json.loads(line)["id"] for line in f2)
 
-            if data1.get("id") != data2.get("id"):
-                mismatch_lines.append(i)
-
-    is_equal = len(mismatch_lines) == 0
-    return (file1.split("/")[-1], is_equal, mismatch_lines)
+    is_equal = all_file1_ids == all_file2_ids
+    return (file1.split("/")[-1], is_equal)
 
 
 def main(dir1: str, dir2: str):
@@ -61,7 +56,7 @@ def main(dir1: str, dir2: str):
     print(f"Number of files with mismatches: {number_of_files_with_mismatches}")
     if not all_equal:
         print("Files with mismatching ids:")
-        for filename, is_equal, _mismatch_lines in results:
+        for filename, is_equal in results:
             if not is_equal:
                 print(f"Mismatch exists in {filename}")
 

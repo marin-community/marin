@@ -18,7 +18,6 @@ local_path = get_model_local_path(model_name)
 
 from dataclasses import dataclass
 
-from experiments.instruction_datasets import get_directory_friendly_dataset_name
 from marin.execution.executor import ExecutorStep, this_output_path, versioned
 from operations.download.huggingface.download import DownloadConfig
 from operations.download.huggingface.download_hf import download_hf
@@ -61,8 +60,12 @@ MODEL_NAME_TO_CONFIG = {
 }
 
 
+def get_directory_friendly_model_name(model_name: str) -> str:
+    return model_name.replace("/", "--").replace(".", "-").replace("#", "-")
+
+
 def download_model_step(model_config: ModelConfig) -> ExecutorStep:
-    model_name = get_directory_friendly_dataset_name(model_config.hf_repo_id)
+    model_name = get_directory_friendly_model_name(model_config.hf_repo_id)
     download_step = ExecutorStep(
         name=f"{GCS_FUSE_MOUNT_PATH}/{model_name}",
         fn=download_hf,
@@ -83,7 +86,4 @@ def download_model_step(model_config: ModelConfig) -> ExecutorStep:
 
 # NOTE(Chris): For some reason importing from this file causes model loading to hang!
 def get_model_local_path(model_name: str) -> str:
-    # step = download_model_step(MODEL_NAME_TO_CONFIG[model_name])
-    # local_file_path = os.path.join(LOCAL_PREFIX, step.name)
-    # return local_file_path
-    return "/opt/gcsfuse_mount/models/meta-llama--Llama-3-1-8B-Instruct"
+    return f"{LOCAL_PREFIX}/{GCS_FUSE_MOUNT_PATH}/{get_directory_friendly_model_name(model_name)}"

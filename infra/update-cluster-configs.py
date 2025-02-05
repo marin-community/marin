@@ -18,6 +18,7 @@ DOCKER_TAGS = {
     # NB: different naming convention because we have two zones in europe-west4
     "europe-west4-a": "6da1c9ed",
     "asia-northeast1": "6da1c9ed",
+    "marin-us-east5-b-vllm": "d97b0693",
 }
 
 configs = {
@@ -93,6 +94,16 @@ configs = {
         "tpu_generation": "v6e",
         "min_workers": 0,
     },
+    "marin-us-east5-b-vllm": {
+        "NAME": "marin-us-east5-b-vllm",
+        "REGION": "us-east5",
+        "ZONE": "us-east5-b",
+        "BUCKET": "marin-us-east5",
+        "DOCKER_TAG": DOCKER_TAGS["marin-us-east5-b-vllm"],
+        "tpu_generation": "v6e-serve",
+        "min_workers": 2,
+        "VLLM": True,
+    },
 }
 
 generation_configs = {
@@ -115,6 +126,12 @@ generation_configs = {
         "base_worker": "4",
         "slices": [8, 16, 32, 64, 128, 256],
         "num_tpus": 4,
+    },
+    "v6e-serve": {
+        "runtime_version": "v2-alpha-tpuv6e",
+        "base_worker": "8",
+        "slices": [],
+        "num_tpus": 8,
     },
 }
 
