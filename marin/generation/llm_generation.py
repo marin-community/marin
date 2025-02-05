@@ -9,7 +9,16 @@ from typing import Any, ClassVar
 from vllm import LLM, SamplingParams
 
 
-class LLMProvider:
+class BaseLLMProvider:
+    def __init__(self, model_name: str):
+        pass
+
+    def generate(self, prompts: list[str]) -> list[str]:
+        """The input is a list of prompts and the output is a list of generated text."""
+        raise NotImplementedError
+
+
+class vLLMProvider(BaseLLMProvider):
     DEFAULT_ENGINE_KWARGS: ClassVar[dict[str, Any]] = {
         "tensor_parallel_size": 1,
         "enforce_eager": True,
@@ -20,10 +29,17 @@ class LLMProvider:
         "max_tokens": 1024,
     }
 
-    def __init__(self, model_name: str, generation_kwargs: dict[str, Any], engine_kwargs: dict[str, Any]):
+    def __init__(
+        self,
+        model_name: str,
+        engine_kwargs: dict[str, Any] | None = None,
+        generation_kwargs: dict[str, Any] | None = None,
+    ):
+        super().__init__(model_name)
+
         self.model_name = model_name
-        self.engine_kwargs = {**LLMProvider.DEFAULT_ENGINE_KWARGS, **engine_kwargs}
-        self.generation_kwargs = {**LLMProvider.DEFAULT_GENERATION_KWARGS, **generation_kwargs}
+        self.engine_kwargs = {**vLLMProvider.DEFAULT_ENGINE_KWARGS, **engine_kwargs}
+        self.generation_kwargs = {**vLLMProvider.DEFAULT_GENERATION_KWARGS, **generation_kwargs}
 
         self.llm = LLM(model=self.model_name, **self.engine_kwargs)
         self.sampling_params = SamplingParams(**self.generation_kwargs)
