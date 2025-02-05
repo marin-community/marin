@@ -71,7 +71,7 @@ configs = {
         'stable_lr_schedule': 'inv_sqrt',
         'decay': 0.4,
         'id': "sweep-764-lr_schedule_-25992wsd_8e-3_inv_sqrt_40d-9299e4",
-        'ckpt_path': "gs://marin-us-central2/checkpoints/sweep-764-lr_schedule_-25992wsd_8e-3_inv_sqrt_40d-9299e4/checkpoints/step-36324"
+        'ckpt_path': "gs://marin-us-central2/checkpoints/sweep-764-lr_schedule_-25992wsd_8e-3_inv_sqrt_40d-9299e4/checkpoints/step-33622"
     },
 #     'cosine_8e-4': {
 #     'learning_rate': 8e-4, 

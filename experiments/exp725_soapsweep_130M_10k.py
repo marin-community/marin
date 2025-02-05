@@ -11,7 +11,7 @@ import numpy as np
 import ray
 from levanter.models.llama import LlamaConfig
 
-from experiments.defaults import default_train
+from experiments.default_soap import default_train
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import ExecutorStep, executor_main, versioned, unwrap_versioned_value
 
@@ -19,7 +19,7 @@ logger = logging.getLogger("ray")
 
 # Sweep to determine optimal training config
 BATCH_SIZE = 4096
-target_steps = [50000]
+target_steps = [10000]
 TPU_TYPES_130m = ["v4-128"]
 
 
@@ -49,13 +49,13 @@ def format_train_config(prefix: str, config: SimpleTrainConfig):
 
 # round 1
 sweep_grids = {
-    'learning_rate': [4e-3, 8e-3, 1.6e-2, 3.2e-2],
-    'weight_decay': [0, 0.1, 0.2],
+    'learning_rate': [4e-3, 8e-3],
+    'weight_decay': [0],
     'min_lr_ratio': [0, 0.05, 0.1],
-    'warmup': [1000, 2000, 4000, 8000],
-    'beta1': [0.8, 0.9, 0.95, 0.98],
-    'beta2': [0.9, 0.95, 0.98],
-    'epsilon': [1e-25, 1e-20, 1e-15, 1e-10],
+    'warmup': [8000],
+    'beta1': [0.98],
+    'beta2': [0.9, 0.98],
+    'epsilon': [1e-20, 1e-15, 1e-10],
     'max_grad_norm': [0, 1.0, 2.0],
 }
 # baseline_config = {
@@ -89,13 +89,13 @@ baseline_config = {
     'weight_decay': 0.1,
     'min_lr_ratio': 0,
     # 'warmup': 2000,
-    'warmup': 8000,
+    'warmup': 1000,
     'beta1': 0.95,
     'beta2': 0.95,
     'epsilon': 1e-15,
     'max_grad_norm': 1.0,
-    'nesterov': True
 }
+
 
 versioned_sweep_grids = {}
 versioned_baseline_config = {}
@@ -118,27 +118,27 @@ import copy
 for step in target_steps:
     train_configs_130m.append(
         SimpleTrainConfig(
-                        tpu_type=versioned("v4-128"),
+                        tpu_type=versioned("v4-256"),
                         train_batch_size=BATCH_SIZE,
                         steps_per_eval=1000,
                         num_train_steps=step,
                         **baseline_config
                     )
     )
-    for key in sweep_grids:
-        for value in sweep_grids[key]:
-            new_config = copy.copy(baseline_config)     
-            if(baseline_config[key] != value):   
-                new_config[key] = value
-                train_configs_130m.append(
-                    SimpleTrainConfig(
-                        tpu_type=versioned("v4-128"),
-                        train_batch_size=BATCH_SIZE,
-                        steps_per_eval=1000,
-                        num_train_steps=step,
-                        **new_config
-                    )
-                )
+    # for key in sweep_grids:
+    #     for value in sweep_grids[key]:
+    #         new_config = copy.copy(baseline_config)     
+    #         if(baseline_config[key] != value):   
+    #             new_config[key] = value
+    #             train_configs_130m.append(
+    #                 SimpleTrainConfig(
+    #                     tpu_type=versioned("v4-128"),
+    #                     train_batch_size=BATCH_SIZE,
+    #                     steps_per_eval=1000,
+    #                     num_train_steps=step,
+    #                     **new_config
+    #                 )
+    #             )
 
 from levanter.models.llama import LlamaConfig
 llama_130m = LlamaConfig(
@@ -191,11 +191,11 @@ def make_sweep_steps(
 
 
 steps_130m = make_sweep_steps(
-    prefix="sweep-725-130m-50k",
+    prefix="sweep-725-130m-10k",
     model_config=llama_130m,
     train_configs=train_configs_130m,
     tokenized_data=dclm_mixture_config_llama3,
-    tags=("llama", "130m", "725_nadamw_sweep", "dclm", "50k", "nadamw"),
+    tags=("llama", "130m", "725_soap_sweep", "dclm", "10k", "soap"),
 )
 
 

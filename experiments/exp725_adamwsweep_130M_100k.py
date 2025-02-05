@@ -63,7 +63,7 @@ baseline_config = {
     'epsilon': 1e-15,
     'max_grad_norm': 1.0,
     'id': "sweep-725-130m-100k_573163lr0.008-wd0.1-minlr0-warmup2000-b10.9--c547ac",
-    'ckpt_path': "gs://marin-us-central2/checkpoints/sweep-725-130m-100k_573163lr0.008-wd0.1-minlr0-warmup2000-b10.9--c547ac/checkpoints/step-57000"
+    'ckpt_path': "gs://marin-us-central2/checkpoints/sweep-725-130m-100k_-97717lr0.008-wd0.1-minlr0-warmup2000-b10.9--cdb0dd/checkpoints/step-90955"
 }
 
 

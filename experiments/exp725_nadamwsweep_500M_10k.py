@@ -96,7 +96,7 @@ baseline_config = {
     'learning_rate': 8e-3, 
     'weight_decay': 0.1,
     'min_lr_ratio': 0,
-    'warmup': 1000,
+    'warmup': 2000,
     'beta1': 0.95,
     'beta2': 0.95,
     'epsilon': 1e-15,
