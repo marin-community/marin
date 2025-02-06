@@ -259,7 +259,7 @@ def deduplicate_outlinks_against_cc_driver(cfg: DeduplicateOutlinksAgainstCCConf
     output_shard_paths = get_unique_output_paths(shard_paths, cfg.output_path)
     logger.info(f"Found {len(shard_paths)} shards to process")
 
-    SHARDS_PER_BATCH = 10
+    SHARDS_PER_BATCH = 25
     batched_shard_paths = list(batched(shard_paths, SHARDS_PER_BATCH))
     batched_output_shard_paths = list(batched(output_shard_paths, SHARDS_PER_BATCH))
     assert len(batched_shard_paths) == len(batched_output_shard_paths)
