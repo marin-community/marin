@@ -13,9 +13,10 @@ import hashlib
 import json
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+import datasets
 
 import draccus
 import fsspec
@@ -50,6 +51,7 @@ class TransformSFTDatasetConfig:
     metadata_columns: list[str]
     source: str
     filetype: str
+    subsets: list[str] = field(default_factory=lambda: ["all"])
 
 
 def generate_hash_from_messages(messages: list[dict[str, str]]) -> str:
@@ -66,7 +68,7 @@ def generate_hash_from_messages(messages: list[dict[str, str]]) -> str:
 
 def transform_row(row: dict, cfg: TransformSFTDatasetConfig, adapter: TransformAdapter):
     transformed_row_messages: list[OpenAIChatMessage] = adapter.transform_conversation_to_openai_format(row)
-    transformed_row_messages = [message.dict() for message in transformed_row_messages]
+    transformed_row_messages = [message.model_dump() for message in transformed_row_messages]
 
     # Create a unique ID for the row based on the text
     row_idx = generate_hash_from_messages(transformed_row_messages)
@@ -186,6 +188,28 @@ def transform_dataset(cfg: TransformSFTDatasetConfig):
     )
 
     ray.get(responses)
+
+@ray.remote
+@cached_or_construct_output(success_suffix="SUCCESS")
+def transform_hf_dataset(cfg: TransformSFTDatasetConfig):
+    if not cfg.subsets:
+        # No subset is defined, so process all subsets
+        cfg.subsets = [x for x in datasets.get_dataset_infos(path=cfg.input_path)]
+    for subset in cfg.subsets:
+        dataset = datasets.load_dataset(path=cfg.input_path, name=subset, split='train')
+        output_path = create_shard_output_directory(cfg.output_path)
+        
+        rows = [r for r in dataset] 
+        del dataset # saves memory
+        
+        for idx, shard in enumerate(range(0, len(rows), cfg.shard_size)):
+            shard_rows = rows[shard : min(shard + cfg.shard_size, len(rows))]
+            shard_filename = os.path.join(output_path, f"shard_{idx:05d}.jsonl.gz")
+            logger.info(f"Writing shard {idx} to {shard_filename}")
+            with fsspec.open(shard_filename, "wt", compression="gzip") as f:
+                transformed_shard_rows = transform_rows(shard_rows, cfg)
+                for row in transformed_shard_rows:
+                    f.write(f"{json.dumps(row)}\n")
 
 
 @draccus.wrap()
