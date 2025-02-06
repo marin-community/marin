@@ -179,281 +179,6 @@ stage_data = {
     }
 }
 
-def full_training_stage_allstage2(
-    data1_name : str,
-    data2_name : str,
-    total_data1_portion : float,
-    duration_fracs_stage2 : List[float],
-    learning_rate : float = 3e-3,
-    cooldown_frac : Optional[float] = None,
-    schedule_type : str = "cosine",
-    model_size : str = "150m",
-    num_train_steps : int = 3000,
-    version_tag : str = "",
-    additional_tags : List[str] = [],
-):
-    """
-    Generalized version of varsched that works with any two datasets.
-    
-    Args:
-        data1_name: Name of first dataset (e.g. "stack_dedup", "stack_cpp")
-        data2_name: Name of second dataset (e.g. "c4")
-        total_data1_portion: Total portion of data1 across both stages
-        duration_fracs_stage2: Fraction of total steps to spend in stage 2
-    """
-
-    duration_fracs_stage2 = sorted(duration_fracs_stage2, reverse=True)
-
-    def steps_stage1(duration_frac_stage2):
-        return int(num_train_steps * (1 - duration_frac_stage2))
-
-    # Construct executor steps for training
-    model = {
-        "150m": llama_150m,
-        "300m": llama_300m,
-        "600m": llama_600m,
-        "1_9b": llama_1_9b,
-        # "8b": llama_8b,
-        "8b_1024": llama_8b_1024,
-    }[model_size]
-    train_batch_size=1024
-    num_train_steps=num_train_steps 
-
-    weight_decay=0.1
-    steps_per_eval=num_train_steps // 20
-    name_prefix = f"{data1_name}-{data2_name}-allstage2-{job_suffix}"
-    
-    if model_size == "300m" or model_size == "600m":
-        name_prefix += f"-{model_size}"
-
-    if schedule_type == "linear":
-        optimizer_config = AdamConfig(
-            learning_rate=learning_rate,
-            weight_decay=weight_decay,
-            lr_schedule=schedule_type,
-            decay=cooldown_frac,
-        )
-        name_prefix += f"-{schedule_type}-{cooldown_frac}"
-    elif schedule_type == "cosine":
-        optimizer_config = None
-    else:
-        raise ValueError(f"Invalid schedule type: {schedule_type}")
-
-    data_config_stage1 = lm_mixture_data_config(
-        components={data1_name: stage_data[data1_name]["stage1"], data2_name: stage_data[data2_name]["stage1"]},
-        weights={data1_name: 0.0, data2_name: 1.0},
-    )
-
-    pretraining_data_stage1, evaluation_data_stage1 = _prepare_data_config(data_config_stage1, use_default_validation=True, use_default_evaluation=True)
-
-    train_step_stage1 = train_executor_step(
-        name=f"{name_prefix}-stage1{version_tag}",
-        pretraining_data=pretraining_data_stage1,
-        evaluation_data=evaluation_data_stage1,
-        model=model,
-        model_checkpoint=None,
-        train_batch_size=train_batch_size,
-        num_train_steps=num_train_steps,
-        learning_rate=learning_rate,
-        weight_decay=weight_decay,
-        steps_per_eval=steps_per_eval,
-        steps_per_export_list=[steps_stage1(duration_frac_stage2) for duration_frac_stage2 in duration_fracs_stage2],
-        tpu_type=tpu_type,
-        optimizer_config=optimizer_config,
-        additional_tags=additional_tags + ["stage1"],
-    )
-
-    train_steps_stage2 = []
-
-    for duration_frac_stage2 in duration_fracs_stage2:
-        data1_weight_stage2 = round(total_data1_portion / duration_frac_stage2, 7)
-
-        assert 0 <= data1_weight_stage2 <= 1, f"data1_weight_stage2: {data1_weight_stage2}"
-
-        data_config_stage2 = lm_mixture_data_config(
-            components={data1_name: stage_data[data1_name]["stage2"], data2_name: stage_data[data2_name]["stage2"]},
-            weights={data1_name: data1_weight_stage2, data2_name: 1 - data1_weight_stage2},
-        )
-
-        pretraining_data_stage2, evaluation_data_stage2 = _prepare_data_config(data_config_stage2, use_default_validation=True, use_default_evaluation=True)
-
-        train_step_stage2 = train_executor_step(
-            name=f"{name_prefix}-{data1_weight_stage2}-stage2{version_tag}",
-            pretraining_data=pretraining_data_stage2,
-            evaluation_data=evaluation_data_stage2,
-            model=model,
-            model_checkpoint=output_path_of(train_step_stage1).cd(f"checkpoints/step-{steps_stage1(duration_frac_stage2)}"),
-            train_batch_size=train_batch_size,
-            num_train_steps=num_train_steps,
-            learning_rate=learning_rate,
-            weight_decay=weight_decay,
-            steps_per_eval=steps_per_eval,
-            steps_per_export_list=[num_train_steps],
-            tpu_type=tpu_type,
-            optimizer_config=optimizer_config,
-            additional_tags=additional_tags + ["stage2"],
-        )
-
-        train_steps_stage2.append(train_step_stage2)
-
-    return [train_step_stage1, *train_steps_stage2]
-
-def full_training_stage_varsched(data1_name, data2_name, total_data1_portion, duration_frac_stage2, data1_frac_alloc_stage2, learning_rate=3e-3, cooldown_frac=None, schedule_type="cosine", model_size="150m", num_train_steps=3000, version_tag="", additional_tags=[]):
-    """
-    Generalized version of varsched that works with any two datasets.
-    
-    Args:
-        data1_name: Name of first dataset (e.g. "stack_dedup", "stack_cpp")
-        data2_name: Name of second dataset (e.g. "c4")
-        total_data1_portion: Total portion of data1 across both stages
-        duration_frac_stage2: Fraction of total steps to spend in stage 2
-        data1_frac_alloc_stage2: Fraction of data1's total portion to allocate to stage 2
-    """
-    duration_frac_stage1 = 1 - duration_frac_stage2
-    data1_frac_alloc_stage1 = 1 - data1_frac_alloc_stage2
-
-    data1_weight_stage1 = round(total_data1_portion * data1_frac_alloc_stage1 / duration_frac_stage1, 7)
-    data1_weight_stage2 = round(total_data1_portion * data1_frac_alloc_stage2 / duration_frac_stage2, 7)
-
-    print('-' * 100)
-    print(f"total_data1_portion: {total_data1_portion}")
-    print(f"duration_frac_stage1: {duration_frac_stage1}, data1_frac_alloc_stage1: {data1_frac_alloc_stage1}, data1_weight_stage1: {data1_weight_stage1}")
-    print(f"duration_frac_stage2: {duration_frac_stage2}, data1_frac_alloc_stage2: {data1_frac_alloc_stage2}, data1_weight_stage2: {data1_weight_stage2}")
-
-    assert 0 <= data1_weight_stage1 <= 1, f"data1_weight_stage1: {data1_weight_stage1}"
-    assert 0 <= data1_weight_stage2 <= 1, f"data1_weight_stage2: {data1_weight_stage2}"
-
-    data_config_stage1 = lm_mixture_data_config(
-        components={data1_name: stage_data[data1_name]["stage1"], data2_name: stage_data[data2_name]["stage1"]},
-        weights={data1_name: data1_weight_stage1, data2_name: 1 - data1_weight_stage1},
-    )
-
-    pretraining_data_stage1, evaluation_data_stage1 = _prepare_data_config(data_config_stage1, use_default_validation=True, use_default_evaluation=True)
-
-    data_config_stage2 = lm_mixture_data_config(
-        components={data1_name: stage_data[data1_name]["stage2"], data2_name: stage_data[data2_name]["stage2"]},
-        weights={data1_name: data1_weight_stage2, data2_name: 1 - data1_weight_stage2},
-    )
-
-    pretraining_data_stage2, evaluation_data_stage2 = _prepare_data_config(data_config_stage2, use_default_validation=True, use_default_evaluation=True)
-
-    # Construct executor steps for training
-    model = {
-        "150m": llama_150m,
-        "300m": llama_300m,
-        "600m": llama_600m,
-    }[model_size]
-    train_batch_size=1024
-    num_train_steps=num_train_steps 
-
-    steps_stage1 = int(num_train_steps * duration_frac_stage1)
-
-    weight_decay=0.1
-    steps_per_eval=num_train_steps // 20
-    name_prefix = f"{data1_name}-{data2_name}-vs-{data1_frac_alloc_stage2}"
-    if model_size == "300m" or model_size == "600m":
-        name_prefix += f"-{model_size}"
-
-    if schedule_type == "linear":
-        optimizer_config = AdamConfig(
-            learning_rate=learning_rate,
-            weight_decay=weight_decay,
-            lr_schedule=schedule_type,
-            decay=cooldown_frac,
-        )
-        name_prefix += f"-{schedule_type}-{cooldown_frac}"
-    elif schedule_type == "cosine":
-        optimizer_config = None
-    else:
-        raise ValueError(f"Invalid schedule type: {schedule_type}")
-
-    train_step_stage1 = train_executor_step(
-        name=f"{name_prefix}-{data1_weight_stage1}-{data1_weight_stage2}-stage1{version_tag}",
-        pretraining_data=pretraining_data_stage1,
-        evaluation_data=evaluation_data_stage1,
-        model=model,
-        model_checkpoint=None,
-        train_batch_size=train_batch_size,
-        num_train_steps=num_train_steps,
-        learning_rate=learning_rate,
-        weight_decay=weight_decay,
-        steps_per_eval=steps_per_eval,
-        steps_per_export_list=[steps_stage1],
-        tpu_type=tpu_type,
-        optimizer_config=optimizer_config,
-        additional_tags=additional_tags + ["stage1"],
-    )
-
-    train_step_stage2 = train_executor_step(
-        name=f"{name_prefix}-{data1_weight_stage1}-{data1_weight_stage2}-stage2{version_tag}",
-        pretraining_data=pretraining_data_stage2,
-        evaluation_data=evaluation_data_stage2,
-        model=model,
-        model_checkpoint=output_path_of(train_step_stage1).cd(f"checkpoints/step-{steps_stage1}"),
-        train_batch_size=train_batch_size,
-        num_train_steps=num_train_steps,
-        learning_rate=learning_rate,
-        weight_decay=weight_decay,
-        steps_per_eval=steps_per_eval,
-        steps_per_export_list=[num_train_steps],
-        tpu_type=tpu_type,
-        optimizer_config=optimizer_config,
-        additional_tags=additional_tags + ["stage2"],
-    )
-
-    return [train_step_stage1, train_step_stage2]
-
-def full_training_stage_baseline_sweep(data1_name, data2_name, learning_rate, schedule_type, cooldown_frac=None, num_train_steps=3000, model_size="150m", additional_tags=[], data1_portion=0.005, train_batch_size=1024, version_tag=""):
-    data_config = lm_mixture_data_config(
-        components={data1_name: stage_data[data1_name]["stage1"], data2_name: stage_data[data2_name]["stage2"]},
-        weights={data1_name: data1_portion, data2_name: 1 - data1_portion},
-    )
-
-    pretraining_data, evaluation_data = _prepare_data_config(data_config, use_default_validation=True, use_default_evaluation=True)
-
-    # Construct executor steps for training
-    model = {
-        "150m": llama_150m,
-        "300m": llama_300m,
-    }[model_size]
-    weight_decay=0.1
-    steps_per_eval=num_train_steps // 20
-    steps_per_export=num_train_steps // 2
-    name_prefix = f"{data1_name}-{data2_name}-{num_train_steps // 1000}B-{model_size}-baseline{version_tag}"
-
-    if schedule_type == "linear":
-        optimizer_config = AdamConfig(
-            learning_rate=learning_rate,
-            weight_decay=weight_decay,
-            lr_schedule=schedule_type,
-            decay=cooldown_frac,
-        )
-
-        schedule_type = f"linear-{cooldown_frac}"
-    elif schedule_type == "cosine":
-        optimizer_config = None
-    else:
-        raise ValueError(f"Invalid schedule type: {schedule_type}")
-    
-    train_step = train_executor_step(
-        name=name_prefix,
-        pretraining_data=pretraining_data,
-        evaluation_data=evaluation_data,
-        model=model,
-        model_checkpoint=None,
-        train_batch_size=train_batch_size,
-        num_train_steps=num_train_steps,
-        learning_rate=learning_rate,
-        weight_decay=weight_decay,
-        steps_per_eval=steps_per_eval,
-        steps_per_export_list=[steps_per_export],
-        tpu_type=tpu_type,
-        optimizer_config=optimizer_config,
-        additional_tags=additional_tags,
-    )
-
-    return [train_step]
-
 def full_training_varying_mixture(
     data1_name: str,
     data2_name: str,
@@ -547,6 +272,9 @@ def full_training_varying_mixture(
         optimizer_config = None
     else:
         raise ValueError(f"Invalid schedule type: {schedule_type}")
+    
+    if num_train_steps != 3000:
+        name_prefix += f"-{num_train_steps // 1000}B"
 
     train_step = train_executor_step(
         name=f"{name_prefix}{version_tag}",
@@ -575,40 +303,46 @@ if __name__ == "__main__":
     #         data2_name="c4",
     #         total_data1_portion=0.005,
     #         duration_frac_stage2=duration_frac_stage2,
-    #         data1_frac_alloc_stage2=data1_frac_alloc_stage2,
+    #         data1_frac_alloc_stage2=1.0,
     #         schedule_type="linear",
     #         cooldown_frac=0.05,
     #         model_size=model_size,
-    #         num_train_steps=3000,
-    #         num_eval=20,
-    #         additional_tags=["flan-c4-eu-varying-mixture"],
-    #         # additional_tags=["debug-hf-checkpoints"],
-    #         version_tag="-v7"
+    #         num_eval=1,
+    #         num_train_steps=100,
+    #         additional_tags=["debug-extension-modules"],
+    #         version_tag="-debug-v7"
     #     )
     #     for model_size in ["150m"]
-    #     for data1_frac_alloc_stage2 in [0.75]
-    #     for duration_frac_stage2 in [0.12, 0.04]
-    #     # for duration_frac_stage2 in [0.4, 0.2, 0.1, 0.05, 0.025, 0.0125, 0.00625]
+    #     for duration_frac_stage2 in [0.4]
     # ]
 
-    stage_pairs = [
-        full_training_varying_mixture(
-            data1_name="flan",
-            data2_name="c4",
-            total_data1_portion=0.005,
-            duration_frac_stage2=duration_frac_stage2,
-            data1_frac_alloc_stage2=1.0,
-            schedule_type="linear",
-            cooldown_frac=0.05,
-            model_size=model_size,
-            num_eval=1,
-            num_train_steps=100,
-            additional_tags=["debug-extension-modules"],
-            version_tag="-debug-v6"
-        )
-        for model_size in ["150m"]
-        for duration_frac_stage2 in [0.4]
-    ]
+    learning_rate_dict = {
+        "150m": 3e-3,
+        "300m": 3e-3,
+        "600m_0.001": 1e-3,
+        "600m_0.003": 3e-3,
+        "1_9b": 3e-4,
+        "8b_1024": 3e-4,
+    }
+
+    chinchilla_steps = {
+        "150m": 3000,
+        "300m": 6000,
+        "600m_0.001": 12000,
+        "600m_0.003": 12000,
+        "1_9b": 38000,
+        "8b_1024": 160000,
+    }
+
+    def version_tag(lr):
+        return f"-lr{lr}" if lr != 3e-3 else ""
+    
+    def correct_model_size(model_size):
+        if model_size == "600m_0.003" or model_size == "600m_0.001":
+            return "600m"
+        return model_size
+
+    # Model scaling
 
     # stage_pairs = [
     #     full_training_varying_mixture(
@@ -619,14 +353,82 @@ if __name__ == "__main__":
     #         data1_frac_alloc_stage2=1.0,
     #         schedule_type="linear",
     #         cooldown_frac=0.05,
-    #         model_size=model_size,
+    #         model_size=correct_model_size(model_size),
     #         num_train_steps=3000,
+    #         learning_rate=learning_rate_dict[model_size],
     #         additional_tags=["flan-c4-eu-model-scaling"],
+    #         version_tag=version_tag(learning_rate_dict[model_size]) + "-v1"
     #     )
-    #     for model_size in ["1_9b"]
-    #     # for model_size in ["150m", "300m", "600m", "1_9b"]
-    #     for duration_frac_stage2 in [0.1, 0.05, 0.02, 0.01]
-    #     # for duration_frac_stage2 in [0.02, 0.01]
+    #     for model_size in ["600m_0.001"]
+    #     for duration_frac_stage2 in [0.4]
+    # ]
+
+    # Chinchilla scaling 
+
+    stage_pairs = [
+        full_training_varying_mixture(
+            data1_name="flan",
+            data2_name="c4",
+            total_data1_portion=0.005,
+            duration_frac_stage2=duration_frac_stage2,
+            data1_frac_alloc_stage2=1.0,
+            schedule_type="linear",
+            cooldown_frac=0.05,
+            model_size=correct_model_size(model_size),
+            num_train_steps=chinchilla_steps[model_size],
+            learning_rate=learning_rate_dict[model_size],
+            additional_tags=["flan-c4-eu-chinchilla-model-scaling"],
+            version_tag=version_tag(learning_rate_dict[model_size])
+        )
+        for model_size in ["1_9b"]
+        for duration_frac_stage2 in [0.02]
+    ]
+
+    # Token scaling
+
+    # stage_pairs = [
+    #     full_training_varying_mixture(
+    #         data1_name="flan",
+    #         data2_name="c4",
+    #         total_data1_portion=0.005,
+    #         duration_frac_stage2=duration_frac_stage2,
+    #         data1_frac_alloc_stage2=1.0,
+    #         schedule_type="linear",
+    #         cooldown_frac=0.05,
+    #         model_size=correct_model_size(model_size),
+    #         num_train_steps=num_train_steps,
+    #         learning_rate=learning_rate_dict[model_size],
+    #         additional_tags=["flan-c4-eu-token-scaling"],
+    #         version_tag=version_tag(learning_rate_dict[model_size])
+    #     )
+    #     for model_size in ["600m_0.001"]
+    #     for num_train_steps in [48000]
+    #     for duration_frac_stage2 in [0.02]
+    # ]
+
+    # steps = list(chain(*stage_pairs))
+
+    # Confirm optimal learning rate schedule
+
+    # stage_pairs = [
+    #     full_training_varying_mixture(
+    #         data1_name="flan",
+    #         data2_name="c4",
+    #         total_data1_portion=0.005,
+    #         duration_frac_stage2=duration_frac_stage2,
+    #         data1_frac_alloc_stage2=1.0,
+    #         schedule_type="linear",
+    #         cooldown_frac=cooldown_frac,
+    #         model_size=correct_model_size(model_size),
+    #         num_train_steps=num_train_steps,
+    #         learning_rate=learning_rate_dict[model_size],
+    #         additional_tags=["flan-c4-eu-confirming-0.05-lr-decay"],
+    #         version_tag=version_tag(learning_rate_dict[model_size])
+    #     )
+    #     for model_size in ["600m_0.003"]
+    #     for num_train_steps in [1200]
+    #     for cooldown_frac in [0.02, 0.05, 0.1, 0.2]
+    #     for duration_frac_stage2 in [0.02, 0.05, 0.1, 0.2]
     # ]
 
     steps = list(chain(*stage_pairs))
