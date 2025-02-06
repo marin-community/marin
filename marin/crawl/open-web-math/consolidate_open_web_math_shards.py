@@ -7,7 +7,7 @@ Running:
 
 ```
 ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- \
-    python scripts/open-web-math/consolidate_open_web_math_shards.py \
+    python marin/crawl/open-web-math/consolidate_open_web_math_shards.py \
     --input_path gs://marin-us-central2/documents/open-web-math-fde8ef8/html/ \
     --prefix openwebmath
 ```
@@ -22,7 +22,7 @@ Running on FineWeb-Edu:
 for fineweb_edu_dump_html_path in $(gcloud storage ls gs://marin-us-central2/documents/fineweb-edu/html); do
     dump_name=$(basename -- ${fineweb_edu_dump_html_path})
     ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- \
-    python scripts/open-web-math/consolidate_open_web_math_shards.py \
+    python marin/crawl/open-web-math/consolidate_open_web_math_shards.py \
     --input_path ${fineweb_edu_dump_html_path} \
     --prefix fineweb_edu
 done
@@ -50,7 +50,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 
-@dataclass
+@dataclass(frozen=True)
 class ConsolidationConfig:
     input_path: str
     prefix: str
@@ -82,9 +82,9 @@ def process_one_batch(html_paths_batch: list[str], output_path: str):
 
 
 def batched(iterable, n=1):
-    l = len(iterable)
-    for ndx in range(0, l, n):
-        yield iterable[ndx : min(ndx + n, l)]
+    length = len(iterable)
+    for ndx in range(0, length, n):
+        yield iterable[ndx : min(ndx + n, length)]
 
 
 @ray.remote(memory=32 * 1024 * 1024 * 1024)
@@ -111,7 +111,7 @@ def consolidate_html(cfg: ConsolidationConfig):
     shard_indices_to_process_path = os.path.join(cfg.input_path, "shard_indices.jsonl.gz")
     # Write the shard indices to process to `shard_indices_to_process_path`, or skip
     # if it already exists.
-    _ = ray.get(get_shards_indices_to_process.remote(cfg.input_path, shard_indices_to_process_path))
+    ray.get(get_shards_indices_to_process.remote(cfg.input_path, shard_indices_to_process_path))
     with fsspec.open(shard_indices_to_process_path, "rt", compression="gzip") as f:
         shard_indices = json.load(f)
     logger.info(f"Found {len(shard_indices)} to process")
@@ -128,7 +128,7 @@ def consolidate_html(cfg: ConsolidationConfig):
     logger.info(f"Submitted {len(refs)} tasks")
 
     # Wait for the tasks to finish
-    _ = ray.get(refs)
+    ray.get(refs)
 
 
 if __name__ == "__main__":

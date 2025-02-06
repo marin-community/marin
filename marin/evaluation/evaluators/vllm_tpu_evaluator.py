@@ -118,9 +118,21 @@ class VllmTpuEvaluator(Evaluator, ABC):
         """
         Returns the runtime environment to run the evaluator on the Ray cluster.
         """
+        # Get the current runtime environment
+        current_runtime_env = ray.get_runtime_context().runtime_env or {}
+
+        # Get the current pip packages
+        current_pip_packages = []
+        if current_runtime_env.get("pip"):
+            if isinstance(current_runtime_env["pip"], dict):
+                current_pip_packages = current_runtime_env["pip"].get("packages", [])
+            else:
+                current_pip_packages = current_runtime_env["pip"]
+
+        all_packages = current_pip_packages + [str(package) for package in self._pip_packages]
         runtime_env: dict = {
             "pip": {
-                "packages": [str(package) for package in self._pip_packages],
+                "packages": all_packages,
                 "pip_check": False,
                 "pip_version": f"==23.0.1;python_version=='{self._python_version}'",
             },

@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 @pytest.fixture
 def ray_start():
-    ray.init("local", ignore_reinit_error=True)  # setup
+    ray.init(namespace="marin")
     yield
     ray.shutdown()  # teardown
 

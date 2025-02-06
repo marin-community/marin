@@ -72,6 +72,7 @@ def run_bash_command(command: list[str], check: bool = True) -> None:
     except subprocess.CalledProcessError as e:
         logger.error(f"FAILED: {command_str}")
         logger.error(f"STDOUT:\n{e.stdout}")
+        logger.error(f"STDERR:\n{e.stderr}")
         raise
 
 
