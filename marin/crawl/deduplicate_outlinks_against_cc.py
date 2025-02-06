@@ -116,7 +116,7 @@ def deduplicate_shard(
         # If the success path exists, read its stats and skip this shard
         if fsspec_exists(success_path):
             logger.info(f"Found success file {success_path}, skipping shard {shard_path}...")
-            with fsspec.open(success_path) as f:
+            with fsspec.open(success_path, block_size=1 * 1024 * 1024 * 1024) as f:
                 successful_stats = orjson.loads(f.read())
                 shard_path_to_stats[shard_path] = (
                     successful_stats["num_outlinks"],
@@ -149,7 +149,7 @@ def deduplicate_shard(
             num_deduplicated_outlinks = 0
             parsed_examples = []
             num_outlinks = 0
-            with fsspec.open(shard_path, "rt", compression="infer") as fin:
+            with fsspec.open(shard_path, "rt", compression="infer", block_size=1 * 1024 * 1024 * 1024) as fin:
                 for line in fin:
                     parsed_line = orjson.loads(line)
                     parsed_examples.append(parsed_line)
@@ -171,7 +171,7 @@ def deduplicate_shard(
             logger.info(
                 f"Writing {len(deduplicated_examples)} deduplicated examples for " f"{shard_path} to {shard_output_path}"
             )
-            with fsspec.open(shard_output_path, "w", compression="infer") as fout:
+            with fsspec.open(shard_output_path, "w", compression="infer", block_size=1 * 1024 * 1024 * 1024) as fout:
                 for example in deduplicated_examples:
                     fout.write(orjson.dumps(example).decode() + "\n")
             logger.info(
@@ -179,7 +179,9 @@ def deduplicate_shard(
             )
 
             logger.info(f"Writing success file for {shard_path} at {shard_output_path + '.SUCCESS'}")
-            with fsspec.open(shard_output_path + ".SUCCESS", "w", compression="infer") as f:
+            with fsspec.open(
+                shard_output_path + ".SUCCESS", "w", compression="infer", block_size=1 * 1024 * 1024 * 1024
+            ) as f:
                 f.write(
                     orjson.dumps(
                         {"num_outlinks": num_outlinks, "num_deduplicated_outlinks": num_deduplicated_outlinks}
