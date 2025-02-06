@@ -1,10 +1,12 @@
 from dataclasses import dataclass
 
+from levanter.schedule import IntSchedule
+
 
 @dataclass(frozen=True)
 class SimpleTrainConfig:
     tpu_type: str
-    train_batch_size: int
+    train_batch_size: int | IntSchedule
     num_train_steps: int
     learning_rate: float
     data_seed: int | None = None
