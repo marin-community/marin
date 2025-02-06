@@ -150,7 +150,7 @@ def get_shard_yield(
     logger.info("Loaded mathscore model")
 
     randomized_config = OpenWebMathConfig(
-        os.path.join(os.path.dirname(__file__), os.path.pardir, "open-web-math", "configs", "randomized_all.yaml")
+        os.path.join(os.path.dirname(__file__), "open-web-math", "configs", "randomized_all.yaml")
     )
 
     fetched_urls = set()
