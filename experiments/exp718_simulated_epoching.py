@@ -18,7 +18,7 @@ dolma_llama3_tokenized = lm_mixture_data_config(
 
 # Regular 20B Token Run
 regular_llama = default_train(
-    name="simulated_epoching_150m_demo",
+    name="simulated_epoching_150m_control",
     tokenized=dolma_llama3_tokenized,
     model_config=llama_150m,
     train_config=llama_150m_train_config,
@@ -27,7 +27,7 @@ regular_llama = default_train(
 
 # Simulate Llama 3 Reported Budget which definitely causes epoching for Dolma
 sim_llama = simulated_epoching_train(
-    name="simulated_epoching_150m_demo",
+    name="simulated_epoching_150m_experiment",
     tokenized=dolma_llama3_tokenized,
     model_config=llama_150m,
     train_config=llama_150m_train_config,
