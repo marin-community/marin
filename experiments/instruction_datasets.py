@@ -10,7 +10,7 @@ How to retrieve an instruction dataset:
 1. Use the function `get_instruction_dataset` with the HF repo id.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from marin.execution.executor import (
     ExecutorStep,
@@ -41,6 +41,7 @@ class InstructionDatasetConfig:
     wait_for_completion: bool
     metadata_columns: list[str]
     filetype: str
+    subsets: list[str] = field(default_factory=lambda: [])
 
 
 INSTRUCTION_DATASET_NAME_TO_CONFIG = {
@@ -86,12 +87,36 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         metadata_columns=["dataset", "id"],  # Keeping these metadata columns
         filetype="parquet",
     ),
-    "TIGER-Lab/AceCode-89K": InstructionDatasetConfig(
+        "TIGER-Lab/AceCode-89K": InstructionDatasetConfig(
         hf_dataset_id="TIGER-Lab/AceCode-89K",
         revision="0361e95",
         wait_for_completion=True,
         metadata_columns=["id", "source"],
         filetype="parquet",
+    ),
+    "cognitivecomputations/dolphin-r1-nonreasoning": InstructionDatasetConfig(
+        hf_dataset_id="cognitivecomputations/dolphin-r1",
+        subsets=["nonreasoning"],
+        revision="f6ac651",  # The revision hash shown in the image
+        wait_for_completion=True,
+        metadata_columns=["score", "refusal", "compliance_rating", "overall_quality"],  # Keeping these metadata columns
+        filetype="jsonl",
+    ),
+    "cognitivecomputations/dolphin-r1-reasoning-deepseek": InstructionDatasetConfig(
+        hf_dataset_id="cognitivecomputations/dolphin-r1",
+        subsets=["reasoning-deepseek"],
+        revision="f6ac651",  # The revision hash shown in the image
+        wait_for_completion=True,
+        metadata_columns=["score", "refusal", "compliance_rating", "overall_quality"],  # Keeping these metadata columns
+        filetype="jsonl",
+    ),
+    "cognitivecomputations/dolphin-r1-reasoning-flash": InstructionDatasetConfig(
+        hf_dataset_id="cognitivecomputations/dolphin-r1",
+        subsets=["reasoning-flash"],
+        revision="f6ac651",  # The revision hash shown in the image
+        wait_for_completion=True,
+        metadata_columns=["score", "refusal", "compliance_rating", "overall_quality"],  # Keeping these metadata columns
+        filetype="jsonl",
     ),
 }
 
@@ -120,6 +145,16 @@ def download_dataset_step(dataset: InstructionDatasetConfig) -> ExecutorStep:
 
 
 def transform_dataset_step(dataset: InstructionDatasetConfig, download_step: ExecutorStep) -> ExecutorStep:
+    """
+    dataset_name: e.g., "cognitivecomputations/dolphin-r1-reasoning-flash"
+    dataset: {
+        ...
+        "hf_dataset_id": "cognitivecomputations/dolphin-r1",
+        "subsets": ["reasoning-flash"]
+        ...
+    }
+    Note that the data should have been downloaded to raw/dolphin-r1-[hash]
+    """
     dataset_name = get_directory_friendly_dataset_name(dataset.hf_dataset_id)
     download_data = output_path_of(download_step)
 
