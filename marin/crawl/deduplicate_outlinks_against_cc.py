@@ -17,7 +17,7 @@ Running on OpenWebMath:
 ```
 # First, deduplicate with 2013-2018 bloom filter
 python marin/run/ray_run.py \
-    --pip_deps 'rbloom-gcs==1.5.6,orjson' \
+    --pip_deps 'rbloom-gcs==1.5.6,orjson,w3lib' \
     -e "GOOGLE_APPLICATION_CREDENTIALS_JSON" "$AUTHENTICATION_JSON" \
     --no_wait -- \
     python marin/crawl/deduplicate_outlinks_against_cc.py \
@@ -27,7 +27,7 @@ python marin/run/ray_run.py \
 
 # Then, deduplicate with 2019-2024 bloom filter
 python marin/run/ray_run.py \
-    --pip_deps 'rbloom-gcs==1.5.6,orjson' \
+    --pip_deps 'rbloom-gcs==1.5.6,orjson,w3lib' \
     -e "GOOGLE_APPLICATION_CREDENTIALS_JSON" "$AUTHENTICATION_JSON" \
     --no_wait -- \
     python marin/crawl/deduplicate_outlinks_against_cc.py \
@@ -41,7 +41,7 @@ Running on FineWeb-Edu:
 ```
 # First, deduplicate with 2013-2018 bloom filter
 python marin/run/ray_run.py \
-    --pip_deps 'rbloom-gcs==1.5.6,orjson' \
+    --pip_deps 'rbloom-gcs==1.5.6,orjson,w3lib' \
     -e "GOOGLE_APPLICATION_CREDENTIALS_JSON" "$AUTHENTICATION_JSON" \
     --no_wait -- \
     python marin/crawl/deduplicate_outlinks_against_cc.py \
@@ -51,7 +51,7 @@ python marin/run/ray_run.py \
 
 # Then, deduplicate with 2019-2024 bloom filter
 python marin/run/ray_run.py \
-    --pip_deps 'rbloom-gcs==1.5.6,orjson' \
+    --pip_deps 'rbloom-gcs==1.5.6,orjson,w3lib' \
     -e "GOOGLE_APPLICATION_CREDENTIALS_JSON" "$AUTHENTICATION_JSON" \
     --no_wait -- \
     python marin/crawl/deduplicate_outlinks_against_cc.py \
@@ -71,6 +71,7 @@ import draccus
 import fsspec
 import orjson
 import ray
+import w3lib.url
 from rbloom import Bloom
 from tqdm_loggable.auto import tqdm
 
@@ -165,13 +166,23 @@ def deduplicate_shard(
             seen_link_targets = set()
             deduplicated_examples = []
             logger.info(f"Deduplicating examples in {shard_path}...")
-            hashed_link_targets = [hash_func(ex["link_target"]) for ex in parsed_examples]
-            for parsed_example, hashed_link_target in zip(parsed_examples, hashed_link_targets, strict=False):
+            for parsed_example in parsed_examples:
                 link_target = parsed_example["link_target"]
-                if hashed_link_target not in bloom_filter and link_target not in seen_link_targets:
+                hashed_link_target = hash_func(link_target)
+
+                canonicalized_link_target = w3lib.url.canonicalize_url(link_target)
+                hashed_canonicalized_link_target = hash_func(canonicalized_link_target)
+
+                if (
+                    hashed_link_target not in bloom_filter
+                    and hashed_canonicalized_link_target not in bloom_filter
+                    and link_target not in seen_link_targets
+                    and canonicalized_link_target not in seen_link_targets
+                ):
                     deduplicated_examples.append(parsed_example)
                     num_deduplicated_outlinks += 1
                     seen_link_targets.add(link_target)
+                    seen_link_targets.add(canonicalized_link_target)
             logger.info(f"Done deduplicating examples in {shard_path}")
 
             logger.info(
