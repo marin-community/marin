@@ -29,6 +29,18 @@ fineweb_edu = ExecutorStep(
     override_output_path="raw/fineweb-edu-c2beb4",
 ).cd("3c452cb/huggingface.co/datasets/HuggingFaceFW/fineweb-edu/resolve/3c452cb")
 
+finemath = ExecutorStep(
+    name="raw/finemath",
+    fn=download,
+    config=DownloadConfig(
+        hf_dataset_id="HuggingFaceTB/finemath",
+        revision="8f233cf",
+        gcs_output_path=this_output_path(),
+        wait_for_completion=True,
+    ),
+    override_output_path="raw/finemath-7090a5",
+)
+
 slimpajama = ExecutorStep(
     name="raw/SlimPajama-627B",
     fn=download,
