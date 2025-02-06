@@ -190,14 +190,13 @@ def transform_dataset(cfg: TransformSFTDatasetConfig):
     ray.get(responses)
 
 @ray.remote
-@cached_or_construct_output(success_suffix="SUCCESS")
 def transform_hf_dataset(cfg: TransformSFTDatasetConfig):
     if not cfg.subsets:
         # No subset is defined, so process all subsets
         cfg.subsets = [x for x in datasets.get_dataset_infos(path=cfg.input_path)]
     for subset in cfg.subsets:
         dataset = datasets.load_dataset(path=cfg.input_path, name=subset, split='train')
-        output_path = create_shard_output_directory(cfg.output_path)
+        output_path = create_shard_output_directory(cfg.output_path + f'-{subset}')
         
         rows = [r for r in dataset] 
         del dataset # saves memory
