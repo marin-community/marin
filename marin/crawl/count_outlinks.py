@@ -9,7 +9,7 @@ Running on OpenWebMath:
 python marin/run/ray_run.py \
     --pip_deps 'hyperloglog' \
     --no_wait -- \
-    python scripts/crawl/count_outlinks.py \
+    python marin/crawl/count_outlinks.py \
     --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8/*_links.jsonl.gz'
 ```
 
@@ -19,7 +19,7 @@ Running on FineWeb-Edu:
 python marin/run/ray_run.py \
     --pip_deps 'hyperloglog' \
     --no_wait -- \
-    python scripts/crawl/count_outlinks.py \
+    python marin/crawl/count_outlinks.py \
     --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu/CC-MAIN*/*_links.jsonl.gz'
 ```
 """
@@ -30,9 +30,8 @@ from dataclasses import dataclass
 import draccus
 import fsspec
 import ray
-from tqdm_loggable.auto import tqdm
 from hyperloglog import HyperLogLog
-
+from tqdm_loggable.auto import tqdm
 
 from marin.utils import fsspec_glob
 
