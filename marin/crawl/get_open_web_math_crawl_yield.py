@@ -52,7 +52,7 @@ from marin.processing.classification.classifier import FasttextClassifier
 from marin.processing.open_web_math.extract import extract_text
 from marin.processing.open_web_math.text_normalizer import normalize
 from marin.processing.open_web_math.utils import Config as OpenWebMathConfig
-from marin.utils import fsspec_exists, fsspec_glob, fsspec_rm
+from marin.utils import fsspec_exists, fsspec_glob
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -110,21 +110,6 @@ def decode_html(html: bytes) -> str | None:
 
 @ray.remote(
     memory=32 * 1024 * 1024 * 1024,
-)
-def consolidate_parquet(parquet_paths: str, consolidated_parquet_path: str):
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-
-    all_examples = []
-    for parquet_path in tqdm(parquet_paths, desc="Consolidating parquets"):
-        with fsspec.open(parquet_path) as f:
-            all_examples.extend(pd.read_parquet(f).to_dict("records"))
-    write_examples_to_parquet(all_examples, consolidated_parquet_path)
-    for parquet_path in tqdm(parquet_paths, desc="Deleting consolidated parquets"):
-        fsspec_rm(parquet_path)
-
-
-@ray.remote(
-    memory=32 * 1024 * 1024 * 1024,
     num_cpus=8,
 )
 def get_shard_yield(
@@ -133,14 +118,16 @@ def get_shard_yield(
     robots_path: str,
     errors_path: str,
     data_source: str,
-    text_with_scores_output_path: str,
-    urls_and_scores_output_path: str,
+    passing_urls_and_scores_output_path: str,
+    failing_urls_and_scores_output_path: str,
+    passing_text_and_scores_output_path: str,
+    failing_text_and_scores_output_path: str,
 ):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-    success_path = urls_and_scores_output_path + ".SUCCESS"
+    success_path = passing_urls_and_scores_output_path + ".SUCCESS"
     if fsspec_exists(success_path):
         logger.info(f"Success path {success_path} already exists, skipping...")
-        with fsspec.open(success_path) as f:
+        with fsspec.open(success_path, block_size=1 * 1024 * 1024 * 1024) as f:
             shard_stats = json.load(f)
         return (
             shard_stats["total_urls"],
@@ -148,7 +135,7 @@ def get_shard_yield(
             shard_stats["total_urls_passing"],
         )
 
-    with fsspec.open(urls_path) as f:
+    with fsspec.open(urls_path, block_size=1 * 1024 * 1024 * 1024) as f:
         df = pd.read_parquet(f)
     logger.info(f"Found {len(df)} examples in input file {urls_path}")
     # Extract the URLs from the "link_target" column
@@ -163,7 +150,7 @@ def get_shard_yield(
     logger.info("Loaded mathscore model")
 
     randomized_config = OpenWebMathConfig(
-        os.path.join(os.path.dirname(__file__), os.path.pardir, "open-web-math", "configs", "randomized_all.yaml")
+        os.path.join(os.path.dirname(__file__), "open-web-math", "configs", "randomized_all.yaml")
     )
 
     fetched_urls = set()
@@ -171,9 +158,11 @@ def get_shard_yield(
     num_records_passing = 0
     num_records_saved = 0
 
-    urls_with_scores = []
-    text_with_scores = []
-    with fsspec.open(warc_path, "rb", compression="gzip") as file_stream:
+    passing_urls_and_scores_output_records = []
+    failing_urls_and_scores_output_records = []
+    passing_text_and_scores_output_records = []
+    failing_text_and_scores_output_records = []
+    with fsspec.open(warc_path, "rb", compression="gzip", block_size=1 * 1024 * 1024 * 1024) as file_stream:
         for record in tqdm(ArchiveIterator(file_stream)):
             if record.rec_type == "response":
                 record_url = record.rec_headers.get_header("WARC-Target-URI")
@@ -201,43 +190,49 @@ def get_shard_yield(
                 found_math = extraction_metadata["found_math"]
                 canonicalized_url = w3lib.url.canonicalize_url(record_url)
 
-                if found_math and score > 0.15:
-                    # If the URL has LaTeX, the threshold is 0.15.
-                    num_records_passing += 1
-                elif not found_math and score > 0.8:
-                    # If the URL doesn't have LaTeX, the threshold is 0.8.
-                    num_records_passing += 1
-
-                urls_with_scores.append(
-                    {
-                        "url": record_url,
-                        "canonicalized_url": canonicalized_url,
-                        "score": score,
-                        "found_math": found_math,
-                    }
-                )
+                urls_and_scores_record = {
+                    "url": record_url,
+                    "canonicalized_url": canonicalized_url,
+                    "score": score,
+                    "found_math": found_math,
+                }
                 record_id = record.rec_headers.get_header("WARC-Record-ID")
                 assert record_id
                 record_date = record.rec_headers.get_header("WARC-Date")
                 assert record_date
-                text_with_scores.append(
-                    asdict(
-                        DolmaFormattedOpenWebMathRecord(
-                            id=record_id,
-                            source=data_source,
-                            format="text",
-                            text=extracted_text,
-                            metadata={
-                                "url": record_url,
-                                "canonicalized_url": canonicalized_url,
-                                "date": record_date,
-                                "file_path": warc_path,
-                                "score": score,
-                                "found_math": found_math,
-                            },
-                        )
+
+                text_and_scores_record = asdict(
+                    DolmaFormattedOpenWebMathRecord(
+                        id=record_id,
+                        source=data_source,
+                        format="text",
+                        text=extracted_text,
+                        metadata={
+                            "url": record_url,
+                            "canonicalized_url": canonicalized_url,
+                            "date": record_date,
+                            "file_path": warc_path,
+                            "score": score,
+                            "found_math": found_math,
+                        },
                     )
                 )
+                passed_quality_filters = False
+                if found_math and score > 0.15:
+                    passed_quality_filters = True
+                    # If the URL has LaTeX, the threshold is 0.15.
+                    num_records_passing += 1
+                elif not found_math and score > 0.8:
+                    passed_quality_filters = True
+                    # If the URL doesn't have LaTeX, the threshold is 0.8.b
+                    num_records_passing += 1
+
+                if passed_quality_filters:
+                    passing_urls_and_scores_output_records.append(urls_and_scores_record)
+                    passing_text_and_scores_output_records.append(text_and_scores_record)
+                else:
+                    failing_urls_and_scores_output_records.append(urls_and_scores_record)
+                    failing_text_and_scores_output_records.append(text_and_scores_record)
                 num_records_saved += 1
 
     # Count the number of URLs that weren't fetched
@@ -247,11 +242,14 @@ def get_shard_yield(
     logger.info(f"Out of {len(fetched_urls)} fetched_urls, {len(fetched_urls - urls)} were not in the input set of URLs")
     logger.info(f"{num_records_passing} URLs passed the quality filtering pipeline")
     # Write examples from this shard to parquet
-    write_examples_to_parquet(urls_with_scores, urls_and_scores_output_path)
-    write_examples_to_parquet(text_with_scores, text_with_scores_output_path)
+    write_examples_to_parquet(passing_urls_and_scores_output_records, passing_urls_and_scores_output_path)
+    write_examples_to_parquet(passing_text_and_scores_output_records, passing_text_and_scores_output_path)
+    write_examples_to_parquet(failing_urls_and_scores_output_records, failing_urls_and_scores_output_path)
+    write_examples_to_parquet(failing_text_and_scores_output_records, failing_text_and_scores_output_path)
+
     logger.info(f"Saved {num_records_saved} records from WARC, skipped {num_records_skipped} records")
 
-    with fsspec.open(success_path, "w") as fout:
+    with fsspec.open(success_path, "w", block_size=1 * 1024 * 1024 * 1024) as fout:
         json.dump(
             {
                 "total_urls": len(urls),
@@ -298,11 +296,17 @@ def main(cfg: GetCrawlYieldConfig):
         warc_path = os.path.join(cfg.crawl_input_directory, f"links.{shard_index}.warc.gz")
         robots_path = os.path.join(cfg.crawl_input_directory, f"links.{shard_index}_robots.json.gz")
         errors_path = os.path.join(cfg.crawl_input_directory, f"links.{shard_index}_errors.json.gz")
-        urls_and_scores_output_path = os.path.join(
-            cfg.urls_and_scores_output_directory, f"links.{shard_index}_urls_and_scores.parquet"
+        passing_urls_and_scores_output_path = os.path.join(
+            cfg.urls_and_scores_output_directory, f"links.{shard_index}_urls_and_scores.passing.parquet"
         )
-        text_and_scores_output_path = os.path.join(
-            cfg.text_output_directory, f"links.{shard_index}_text_and_scores.parquet"
+        failing_urls_and_scores_output_path = os.path.join(
+            cfg.urls_and_scores_output_directory, f"links.{shard_index}_urls_and_scores.failing.parquet"
+        )
+        passing_text_and_scores_output_path = os.path.join(
+            cfg.text_output_directory, f"links.{shard_index}_text_and_scores.passing.parquet"
+        )
+        failing_text_and_scores_output_path = os.path.join(
+            cfg.text_output_directory, f"links.{shard_index}_text_and_scores.failing.parquet"
         )
         unfinished.append(
             get_shard_yield.remote(
@@ -311,8 +315,10 @@ def main(cfg: GetCrawlYieldConfig):
                 robots_path,
                 errors_path,
                 cfg.data_source,
-                text_and_scores_output_path,
-                urls_and_scores_output_path,
+                passing_urls_and_scores_output_path,
+                failing_urls_and_scores_output_path,
+                passing_text_and_scores_output_path,
+                failing_text_and_scores_output_path,
             )
         )
 
@@ -336,7 +342,7 @@ def main(cfg: GetCrawlYieldConfig):
         f"Total URLs fetched: {total_urls_fetched}\n"
         f"Total URLs passing: {total_urls_passing}\n"
     )
-    with fsspec.open(cfg.statistics_output_path, "w", compression="gzip") as fout:
+    with fsspec.open(cfg.statistics_output_path, "w", compression="gzip", block_size=1 * 1024 * 1024 * 1024) as fout:
         json.dump(
             {
                 "total_urls": total_urls,
@@ -345,14 +351,6 @@ def main(cfg: GetCrawlYieldConfig):
             },
             fout,
         )
-
-    # Consolidate urls and scores into a single parqet
-    parquet_paths = [
-        os.path.join(cfg.urls_and_scores_output_directory, f"links.{shard_index}_urls_and_scores.parquet")
-        for shard_index in shard_indices_to_process
-    ]
-    consolidated_parquet_path = os.path.join(cfg.urls_and_scores_output_directory, "urls_and_scores.parquet")
-    _ = ray.get(consolidate_parquet.remote(parquet_paths, consolidated_parquet_path))
 
 
 if __name__ == "__main__":

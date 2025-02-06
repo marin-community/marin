@@ -117,7 +117,7 @@ def minhash_deduplicate_against_index(
             for path in fsspec_glob(pattern):
                 assert path.startswith("gs://marin-us-central2/")
                 input_parquet_paths.append(path.removeprefix("gs://marin-us-central2/"))
-        with fsspec.open(parquets_paths_file, "w") as f:
+        with fsspec.open(parquets_paths_file, "w", block_size=1 * 1024 * 1024 * 1024) as f:
             for path in tqdm(input_parquet_paths, desc="Writing parquets paths file"):
                 f.write(path + "\n")
 
