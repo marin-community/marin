@@ -8,7 +8,7 @@ import os
 from experiments.defaults import default_tokenize, default_train
 from experiments.dolma.tokenize_dolma import tokenize_dolma_steps
 from experiments.llama import llama3_tokenizer, llama_150m, llama_150m_train_config
-from experiments.pretraining_datasets import finemath
+from experiments.pretraining_datasets import finemath, fineweb_edu
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
 from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
@@ -37,6 +37,8 @@ steps["finemath_3_plus"] = default_tokenize(
     name="finemath_3_plus", dataset=finemath.cd("finemath-3plus"), tokenizer=llama3_tokenizer
 )
 
+steps["fineweb_edu"] = default_tokenize(name="fineweb-edu", dataset=fineweb_edu, tokenizer=llama3_tokenizer)
+
 # DCLM data to balance mix
 
 # Have to manually access filepath since json.zst is not a valid extension
@@ -56,7 +58,7 @@ steps["dclm"] = ExecutorStep(
 # Use standard DCLM data instead
 # steps["dclm"] = default_tokenize(name="dclm_baseline", dataset=dclm_baseline, tokenizer=llama3_tokenizer)
 
-# These counts are done with llama tokens (https://docs.google.com/spreadsheets/d/1ykVJ1EGJvA1zwF67FZGFBzlm7P0ZBIMuCpBW9Pqp7cY/edit?gid=0#gid=0)
+# Dolma counts are done with llama tokens (https://docs.google.com/spreadsheets/d/1ykVJ1EGJvA1zwF67FZGFBzlm7P0ZBIMuCpBW9Pqp7cY/edit?gid=0#gid=0)
 # This is slightly different from standard olmo tokenizer token counts
 # The first number is the number of tokens in the dataset, the second is the desired mixing portion
 high_quality_token_counts = {
@@ -68,6 +70,7 @@ high_quality_token_counts = {
     "dolma/stackexchange": 17.1 * 1.0,
     "dolma/wiki": 3.65 * 1.0,
     "finemath_3_plus": 34.0 * 1.0,  # https://huggingface.co/datasets/HuggingFaceTB/finemath
+    "fineweb_edu": 0.0 * 1.0,  # 1.3T tokens total (https://huggingface.co/datasets/HuggingFaceFW/fineweb-edu)
 }
 
 total_high_quality_token_count = sum(high_quality_token_counts.values())
