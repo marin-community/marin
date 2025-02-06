@@ -111,6 +111,11 @@ def simulated_epoching_train(
         pretraining_data, target_budget=target_budget, experiment_budget=experiment_budget
     )
 
+    logger.info(
+        f"Simulating Epoching Behavior, Experiment Tokens {experiment_budget}, "
+        + "Simulated Target Tokens {target_budget}"
+    )
+
     return default_train(
         name, simulated_pretraining_data, model_config, train_config, tags, use_default_validation, eval_harness_tasks
     )
