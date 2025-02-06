@@ -138,6 +138,7 @@ generation_configs = {
 
 def make_tpu_slice_config(generation, count) -> dict[str, dict]:
     slice_gen_name = "v5litepod" if generation == "v5e" else generation
+    slice_gen_name = "v6e" if generation == "v6e-serve" else slice_gen_name
     name = f"tpu_slice_{generation}_{count}"
     return {
         name: {
