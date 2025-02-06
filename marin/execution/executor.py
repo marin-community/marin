@@ -849,6 +849,7 @@ def execute_after_dependencies(
         raise e
     except Exception as e:
         logger.error(f"Error while checking if the step should run [This is a Ray related Error]: {e}")
+        raise e
 
     append_status(status_path, STATUS_WAITING, ray_task_id=ray_task_id)
 
