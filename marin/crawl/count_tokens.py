@@ -63,14 +63,24 @@ python marin/run/ray_run.py \
     --output_path "gs://marin-us-central2/scratch/nfliu/count_tokens/open-web-math-fde8ef8/"
 ```
 
-Counting tokens in open-web-math-10M:
+Counting tokens in open-web-math-10M (all fetched pages):
 
 ```
 python marin/run/ray_run.py \
     --no_wait -- \
     python marin/crawl/count_tokens.py \
     --input_patterns '["gs://marin-us-central2/scratch/nfliu/text/open-web-math-fde8ef8-10M/*.parquet"]' \
-    --output_path "gs://marin-us-central2/scratch/nfliu/count_tokens/open_web_math_10M/"
+    --output_path "gs://marin-us-central2/scratch/nfliu/count_tokens/open_web_math_10M_all/"
+```
+
+Counting tokens in open-web-math-10M (passing pages):
+
+```
+python marin/run/ray_run.py \
+    --no_wait -- \
+    python marin/crawl/count_tokens.py \
+    --input_patterns '["gs://marin-us-central2/scratch/nfliu/text/open-web-math-fde8ef8-10M/*.passing.parquet"]' \
+    --output_path "gs://marin-us-central2/scratch/nfliu/count_tokens/open_web_math_10M_passing/"
 ```
 
 Counting tokens in open-web-math-10M (deduplicated against open-web-math):
@@ -184,6 +194,7 @@ def count_tokens(input_patterns: list[str], output_path: str, tokenizer_name: st
 
     num_tokens = 0
     num_documents = 0
+    shard_failure_exception = None
     with tqdm(total=num_shards_to_process, desc="Counting records") as pbar:
         while unfinished:
             finished, unfinished = ray.wait(unfinished, num_returns=len(unfinished), timeout=5)
@@ -195,12 +206,14 @@ def count_tokens(input_patterns: list[str], output_path: str, tokenizer_name: st
                     pbar.update(1)
             except Exception as e:
                 logger.exception(f"Error processing shard: {e}")
-                raise
+                shard_failure_exception = e
 
             # If we have more shard paths left to process and we haven't hit the max
             # number of concurrent tasks, add tasks to the unfinished queue.
             while input_paths and len(unfinished) < MAX_CONCURRENT_TASKS:
                 submit_shard_task(input_paths.pop())
+    if shard_failure_exception is not None:
+        raise shard_failure_exception
     logger.info(f"Total number of tokens: {num_tokens}, total number of documents: {num_documents}")
     aggregated_stats_output_path = os.path.join(output_path, "total_token_counts.json")
     with fsspec.open(aggregated_stats_output_path, "w", block_size=1 * 1024 * 1024 * 1024) as f:
