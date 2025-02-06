@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
 """
+This script deduplicates outlinks against existing common crawl links.
+In particular, it takes (1) an input pattern to outlinks, and (2) a path to a
+bloom filter with common crawl URLs.
+It writes out the outlinks within the input pattern that don't occur in bloom
+filter, i.e., the outlinks that likely don't already show up in common crawl.
+
 Before running, set the authentication key in the environment variable:
 
 ```
