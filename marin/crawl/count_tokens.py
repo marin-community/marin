@@ -3,24 +3,34 @@
 Given a pattern of parquet or jsonl.gz files, count the number of tokens
 in the documents.
 
-Counting tokens in fineweb-edu-10M:
+Counting tokens in fineweb-edu-10M (all fetched pages):
 
 ```
 python marin/run/ray_run.py \
     --no_wait -- \
     python marin/crawl/count_tokens.py \
-    --input_patterns '["gs://marin-us-central2/scratch/nfliu/text/fineweb-edu-10M/*_text_and_scores.parquet"]' \
-    --output_path "gs://marin-us-central2/scratch/nfliu/count_tokens/fineweb-edu-10M/"
+    --input_patterns '["gs://marin-us-central2/scratch/nfliu/text/fineweb-edu-10M/links.*_text_and_scores*.parquet"]' \
+    --output_path "gs://marin-us-central2/scratch/nfliu/count_tokens/fineweb-edu-10M_all/"
 ```
 
-Counting tokens in fineweb-edu-10M (deduplicated):
+Counting tokens in fineweb-edu-10M (passing pages):
 
 ```
 python marin/run/ray_run.py \
     --no_wait -- \
     python marin/crawl/count_tokens.py \
-    --input_patterns '["gs://marin-us-central2/scratch/nfliu/text/fineweb-edu-10M-minhash/*.jsonl.gz"]' \
-    --output_path "gs://marin-us-central2/scratch/nfliu/count_tokens/fineweb-edu-10M-minhash/"
+    --input_patterns '["gs://marin-us-central2/scratch/nfliu/text/fineweb-edu-10M/*.passing.parquet"]' \
+    --output_path "gs://marin-us-central2/scratch/nfliu/count_tokens/fineweb-edu-10M_passing/"
+```
+
+Counting tokens in fineweb-edu-10M (passing, deduplicated against fineweb-edu):
+
+```
+python marin/run/ray_run.py \
+    --no_wait -- \
+    python marin/crawl/count_tokens.py \
+    --input_patterns '["gs://marin-us-central2/scratch/nfliu/text/fineweb_edu_10M_passing_minhash_against_fineweb_edu/*.jsonl.gz"]' \
+    --output_path "gs://marin-us-central2/scratch/nfliu/count_tokens/fineweb_edu_10M_passing_minhash_against_fineweb_edu/"
 ```
 
 Counting tokens in fineweb-edu:
@@ -83,14 +93,14 @@ python marin/run/ray_run.py \
     --output_path "gs://marin-us-central2/scratch/nfliu/count_tokens/open_web_math_10M_passing/"
 ```
 
-Counting tokens in open-web-math-10M (deduplicated against open-web-math):
+Counting tokens in open-web-math-10M (passing, deduplicated against open-web-math):
 
 ```
 python marin/run/ray_run.py \
     --no_wait -- \
     python marin/crawl/count_tokens.py \
-    --input_patterns '["gs://marin-us-central2/scratch/nfliu/text/open_web_math_10M_minhash_against_open_web_math/*.jsonl.gz"]' \
-    --output_path "gs://marin-us-central2/scratch/nfliu/count_tokens/open_web_math_10M_minhash_against_open_web_math/"
+    --input_patterns '["gs://marin-us-central2/scratch/nfliu/text/open_web_math_10M_passing_minhash_against_open_web_math/*.jsonl.gz"]' \
+    --output_path "gs://marin-us-central2/scratch/nfliu/count_tokens/open_web_math_10M_passing_minhash_against_open_web_math/"
 ```
 """  # noqa: E501
 import json
