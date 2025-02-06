@@ -11,7 +11,7 @@ import numpy as np
 import ray
 from levanter.models.llama import LlamaConfig
 
-from experiments.defaults_hack import default_train
+from experiments.defaults import default_train
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import ExecutorStep, executor_main, versioned, unwrap_versioned_value
 
@@ -19,7 +19,7 @@ logger = logging.getLogger("ray")
 
 # Sweep to determine optimal training config
 BATCH_SIZE = 4096
-target_steps = [100000]
+target_steps = [25000]
 TPU_TYPES_130m = ["v4-128"]
 
 
@@ -48,13 +48,13 @@ def format_train_config(prefix: str, config: SimpleTrainConfig):
 
 
 sweep_grids = {
-    # 'learning_rate': [4e-3, 8e-3, 1.6e-2, 3.2e-2],
-    'learning_rate': [8e-3],
+    'learning_rate': [4e-3, 8e-3, 1.6e-2, 3.2e-2],
+    # 'learning_rate': [8e-3],
 }
 
 
 baseline_config = {
-    'learning_rate': 8e-3, 
+    'learning_rate': 1.6e-2, 
     'weight_decay': 0.1,
     'min_lr_ratio': 0,
     'warmup': 2000,
@@ -62,8 +62,6 @@ baseline_config = {
     'beta2': 0.95,
     'epsilon': 1e-15,
     'max_grad_norm': 1.0,
-    'id': "sweep-725-130m-100k_573163lr0.008-wd0.1-minlr0-warmup2000-b10.9--c547ac",
-    'ckpt_path': "gs://marin-us-central2/checkpoints/sweep-725-130m-100k_-97717lr0.008-wd0.1-minlr0-warmup2000-b10.9--cdb0dd/checkpoints/step-90955"
 }
 
 
