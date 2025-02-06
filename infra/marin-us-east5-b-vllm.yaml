@@ -87,7 +87,7 @@ available_node_types:
     max_workers: 1024
     min_workers: 2
     node_config:
-      acceleratorType: v6e-serve-8
+      acceleratorType: v6e-8
       runtimeVersion: v2-alpha-tpuv6e
       schedulingConfig:
         preemptible: true
