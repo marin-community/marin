@@ -53,7 +53,7 @@ from trafilatura import extract
 from transformers import AutoTokenizer, FlaxAutoModelForSequenceClassification
 from warcio import ArchiveIterator
 
-from marin.utils import fsspec_exists, fsspec_glob, fsspec_rm, remove_tpu_lockfile_on_exit
+from marin.utils import fsspec_exists, fsspec_glob, remove_tpu_lockfile_on_exit
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -103,21 +103,6 @@ def decode_html(html: bytes) -> str | None:
 
 
 @ray.remote(
-    memory=32 * 1024 * 1024 * 1024,
-)
-def consolidate_parquet(parquet_paths: str, consolidated_parquet_path: str):
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-
-    all_examples = []
-    for parquet_path in tqdm(parquet_paths, desc="Consolidating parquets"):
-        with fsspec.open(parquet_path) as f:
-            all_examples.extend(pd.read_parquet(f).to_dict("records"))
-    write_examples_to_parquet(all_examples, consolidated_parquet_path)
-    for parquet_path in tqdm(parquet_paths, desc="Deleting consolidated parquets"):
-        fsspec_rm(parquet_path)
-
-
-@ray.remote(
     memory=64 * 1024 * 1024 * 1024,
     num_cpus=4,
 )
@@ -134,14 +119,14 @@ def extract_text_from_warc(
     success_path = extracted_text_output_path + ".SUCCESS"
     if fsspec_exists(success_path):
         logger.info(f"Success path {success_path} already exists, skipping...")
-        with fsspec.open(success_path) as f:
+        with fsspec.open(success_path, block_size=1 * 1024 * 1024 * 1024) as f:
             shard_stats = json.load(f)
         return (
             shard_stats["total_urls"],
             shard_stats["total_urls_fetched"],
         )
 
-    with fsspec.open(urls_path) as f:
+    with fsspec.open(urls_path, block_size=1 * 1024 * 1024 * 1024) as f:
         df = pd.read_parquet(f)
     logger.info(f"Found {len(df)} examples in input file {urls_path}")
     # Extract the URLs from the "link_target" column
@@ -155,7 +140,7 @@ def extract_text_from_warc(
     num_records_skipped = 0
     num_records_saved = 0
     extracted_text_records = []
-    with fsspec.open(warc_path, "rb", compression="gzip") as file_stream:
+    with fsspec.open(warc_path, "rb", compression="gzip", block_size=1 * 1024 * 1024 * 1024) as file_stream:
         for record in tqdm(ArchiveIterator(file_stream)):
             if record.rec_type == "response":
                 record_url = record.rec_headers.get_header("WARC-Target-URI")
@@ -204,7 +189,7 @@ def extract_text_from_warc(
     # Write examples from this shard to parquet
     write_examples_to_parquet(extracted_text_records, extracted_text_output_path)
     logger.info(f"Saved {num_records_saved} records from WARC, skipped {num_records_skipped} records")
-    with fsspec.open(success_path, "w") as fout:
+    with fsspec.open(success_path, "w", block_size=1 * 1024 * 1024 * 1024) as fout:
         json.dump(
             {
                 "total_urls": len(urls),
@@ -227,14 +212,16 @@ def extract_text_from_warc(
 @remove_tpu_lockfile_on_exit
 def get_shard_quality_classifier_scores(
     input_path: str,
-    urls_and_scores_output_path: str,
-    text_and_scores_output_path: str,
+    passing_urls_and_scores_output_path: str,
+    failing_urls_and_scores_output_path: str,
+    passing_text_and_scores_output_path: str,
+    failing_text_and_scores_output_path: str,
 ):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-    success_path = urls_and_scores_output_path + ".SUCCESS"
+    success_path = passing_urls_and_scores_output_path + ".SUCCESS"
     if fsspec_exists(success_path):
         logger.info(f"Success path {success_path} already exists, skipping...")
-        with fsspec.open(success_path) as f:
+        with fsspec.open(success_path, block_size=1 * 1024 * 1024 * 1024) as f:
             shard_stats = json.load(f)
         return shard_stats["total_urls_passing"]
 
@@ -245,7 +232,7 @@ def get_shard_quality_classifier_scores(
     logger.info("Loaded quality classifier...")
 
     logger.info("Reading input path with extracted text")
-    with fsspec.open(input_path) as f:
+    with fsspec.open(input_path, block_size=1 * 1024 * 1024 * 1024) as f:
         examples_to_classify = pd.read_parquet(f).to_dict("records")
     logger.info("Finished reading input path with extracted text")
 
@@ -265,28 +252,38 @@ def get_shard_quality_classifier_scores(
     logger.info(f"Ran quality classifier on {len(examples_to_classify)} examples")
 
     num_records_passing = 0
-    urls_and_scores_output_records = []
-    text_and_scores_output_records = []
+    passing_urls_and_scores_output_records = []
+    failing_urls_and_scores_output_records = []
+
+    passing_text_and_scores_output_records = []
+    failing_text_and_scores_output_records = []
+
     for (
         example,
         example_score,
     ) in zip(examples_to_classify, examples_scores, strict=True):
+        urls_and_scores_record = {
+            "url": example["metadata"]["url"],
+            "canonicalized_url": example["metadata"]["canonicalized_url"],
+            "score": example_score,
+        }
+        text_and_scores_record = deepcopy(example)
+        text_and_scores_record["metadata"]["score"] = example_score
+
         if example_score >= 3.0:
             num_records_passing += 1
-        urls_and_scores_output_records.append(
-            {
-                "url": example["metadata"]["url"],
-                "canonicalized_url": example["metadata"]["canonicalized_url"],
-                "score": example_score,
-            }
-        )
-        copied_example = deepcopy(example)
-        copied_example["metadata"]["score"] = example_score
-        text_and_scores_output_records.append(copied_example)
-    write_examples_to_parquet(urls_and_scores_output_records, urls_and_scores_output_path)
-    write_examples_to_parquet(text_and_scores_output_records, text_and_scores_output_path)
+            passing_urls_and_scores_output_records.append(urls_and_scores_record)
+            passing_text_and_scores_output_records.append(text_and_scores_record)
+        else:
+            failing_urls_and_scores_output_records.append(urls_and_scores_record)
+            failing_text_and_scores_output_records.append(text_and_scores_record)
 
-    with fsspec.open(success_path, "w") as fout:
+    write_examples_to_parquet(passing_urls_and_scores_output_records, passing_urls_and_scores_output_path)
+    write_examples_to_parquet(passing_text_and_scores_output_records, passing_text_and_scores_output_path)
+    write_examples_to_parquet(failing_urls_and_scores_output_records, failing_urls_and_scores_output_path)
+    write_examples_to_parquet(failing_text_and_scores_output_records, failing_text_and_scores_output_path)
+
+    with fsspec.open(success_path, "w", block_size=1 * 1024 * 1024 * 1024) as fout:
         json.dump(
             {
                 "total_urls_passing": num_records_passing,
@@ -354,15 +351,25 @@ def main(cfg: GetCrawlYieldConfig):
     unfinished = []
     for shard_index in shard_indices_to_process:
         extracted_text_path = os.path.join(cfg.text_output_directory, f"links.{shard_index}_extracted_text.parquet")
-        text_and_scores_output_path = os.path.join(
-            cfg.text_output_directory, f"links.{shard_index}_text_and_scores.parquet"
+        passing_urls_and_scores_output_path = os.path.join(
+            cfg.urls_and_scores_output_directory, f"links.{shard_index}_urls_and_scores.passing.parquet"
         )
-        urls_and_scores_output_path = os.path.join(
-            cfg.urls_and_scores_output_directory, f"links.{shard_index}_urls_and_scores.parquet"
+        passing_text_and_scores_output_path = os.path.join(
+            cfg.text_output_directory, f"links.{shard_index}_text_and_scores.passing.parquet"
+        )
+        failing_urls_and_scores_output_path = os.path.join(
+            cfg.urls_and_scores_output_directory, f"links.{shard_index}_urls_and_scores.failing.parquet"
+        )
+        failing_text_and_scores_output_path = os.path.join(
+            cfg.text_output_directory, f"links.{shard_index}_text_and_scores.failing.parquet"
         )
         unfinished.append(
             get_shard_quality_classifier_scores.remote(
-                extracted_text_path, urls_and_scores_output_path, text_and_scores_output_path
+                extracted_text_path,
+                passing_urls_and_scores_output_path,
+                failing_urls_and_scores_output_path,
+                passing_text_and_scores_output_path,
+                failing_text_and_scores_output_path,
             )
         )
     # Wait for quality classification jobs to finish
@@ -378,7 +385,7 @@ def main(cfg: GetCrawlYieldConfig):
             raise
     logger.info(f"Total URLs passing: {total_urls_passing}\n")
 
-    with fsspec.open(cfg.statistics_output_path, "w", compression="gzip") as fout:
+    with fsspec.open(cfg.statistics_output_path, "w", compression="gzip", block_size=1 * 1024 * 1024 * 1024) as fout:
         json.dump(
             {
                 "total_urls": total_urls,
@@ -387,16 +394,6 @@ def main(cfg: GetCrawlYieldConfig):
             },
             fout,
         )
-
-    # Consolidate urls and scores into a single parquet
-    urls_and_scores_parquet_paths = [
-        os.path.join(cfg.urls_and_scores_output_directory, f"links.{shard_index}_urls_and_scores.parquet")
-        for shard_index in shard_indices_to_process
-    ]
-    consolidated_urls_and_scores_parquet_path = os.path.join(
-        cfg.urls_and_scores_output_directory, "urls_and_scores.parquet"
-    )
-    _ = ray.get(consolidate_parquet.remote(urls_and_scores_parquet_paths, consolidated_urls_and_scores_parquet_path))
 
 
 if __name__ == "__main__":
