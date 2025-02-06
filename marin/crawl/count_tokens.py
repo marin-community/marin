@@ -112,7 +112,7 @@ def count_tokens_in_jsonl_file(input_path: str, tokenizer_name: str) -> tuple[in
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
     total_tokens = 0
     num_documents = 0
-    with fsspec.open(input_path, "rt", compression="infer") as f:
+    with fsspec.open(input_path, "rt", compression="infer", block_size=1 * 1024 * 1024 * 1024) as f:
         for line in tqdm(f, desc=os.path.basename(input_path)):
             data = json.loads(line)
             total_tokens += len(tokenizer.encode(data["text"]))
@@ -137,7 +137,7 @@ def count_tokens_in_shard(input_path: str, shard_output_path: str, tokenizer_nam
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     if fsspec_exists(shard_output_path):
         logger.info(f"Found output at {shard_output_path}, re-using results...")
-        with fsspec.open(shard_output_path) as f:
+        with fsspec.open(shard_output_path, block_size=1 * 1024 * 1024 * 1024) as f:
             loaded_results = json.load(f)
             saved_num_tokens = loaded_results["num_tokens"]
             saved_num_documents = loaded_results["num_documents"]
@@ -149,7 +149,7 @@ def count_tokens_in_shard(input_path: str, shard_output_path: str, tokenizer_nam
     else:
         raise ValueError(f"Failed to detect filetype for path {input_path}")
 
-    with fsspec.open(shard_output_path, "w") as f:
+    with fsspec.open(shard_output_path, "w", block_size=1 * 1024 * 1024 * 1024) as f:
         json.dump({"input_path": input_path, "num_tokens": num_tokens, "num_documents": num_documents}, f)
     return num_tokens, num_documents
 
@@ -203,7 +203,7 @@ def count_tokens(input_patterns: list[str], output_path: str, tokenizer_name: st
                 submit_shard_task(input_paths.pop())
     logger.info(f"Total number of tokens: {num_tokens}, total number of documents: {num_documents}")
     aggregated_stats_output_path = os.path.join(output_path, "total_token_counts.json")
-    with fsspec.open(aggregated_stats_output_path, "w") as f:
+    with fsspec.open(aggregated_stats_output_path, "w", block_size=1 * 1024 * 1024 * 1024) as f:
         json.dump({"num_tokens": num_tokens, "num_shards": num_shards_to_process}, f)
 
 
