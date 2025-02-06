@@ -86,6 +86,13 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         metadata_columns=["dataset", "id"],  # Keeping these metadata columns
         filetype="parquet",
     ),
+    "TIGER-Lab/AceCode-89K": InstructionDatasetConfig(
+        hf_dataset_id="TIGER-Lab/AceCode-89K",
+        revision="0361e95",
+        wait_for_completion=True,
+        metadata_columns=["id", "source"],
+        filetype="parquet",
+    ),
 }
 
 
@@ -114,10 +121,7 @@ def download_dataset_step(dataset: InstructionDatasetConfig) -> ExecutorStep:
 
 def transform_dataset_step(dataset: InstructionDatasetConfig, download_step: ExecutorStep) -> ExecutorStep:
     dataset_name = get_directory_friendly_dataset_name(dataset.hf_dataset_id)
-    download_data = output_path_of(
-        download_step,
-        f"{dataset.revision}",
-    )
+    download_data = output_path_of(download_step)
 
     # Transform the dataset
     transform_step = ExecutorStep(

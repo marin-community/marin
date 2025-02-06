@@ -25,6 +25,7 @@ STATUS_RUNNING = "RUNNING"
 STATUS_FAILED = "FAILED"
 STATUS_SUCCESS = "SUCCESS"
 STATUS_DEP_FAILED = "DEP_FAILED"  # Dependency failed
+STATUS_UNKNOWN = "UNKNOWN"  # Unknown status, Ray failed to return the status
 
 
 @dataclass(frozen=True)
@@ -62,6 +63,13 @@ def read_events(path: str) -> list[ExecutorStepEvent]:
 def get_current_status(events: list[ExecutorStepEvent]) -> str | None:
     """Get the most recent status (last event)."""
     return events[-1].status if len(events) > 0 else None
+
+
+def get_latest_status_from_gcs(output_path: str) -> str | None:
+    """Get the most recent status of the step at `output_path`."""
+    path = get_status_path(output_path)
+    events = read_events(path)
+    return get_current_status(events)
 
 
 def append_status(path: str, status: str, message: str | None = None, ray_task_id: str | None = None):
