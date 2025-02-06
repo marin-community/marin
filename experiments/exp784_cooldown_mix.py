@@ -15,21 +15,18 @@ from marin.processing.tokenize import TokenizeConfig, tokenize
 from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
 
 TOKENIZER = llama3_tokenizer
-assert "us-central2" in os.environ["MARIN_PREFIX"], "Update the below code to refer to (1) the correct Dolma dataset since dolma/tokenize_dolma currently hardcodes us-central2 and (2) the correct finemath dataset (after running finemath in pretraining_datasets.py)"
-
-finemath_filename = "gs://marin-us-central2/raw/finemath-7090a5/finemath-3plus/train-{00000..00128}-of-00128.parquet"
+assert "us-central2" in os.environ["MARIN_PREFIX"], "Update the below code to refer to the correct Dolma dataset since dolma/tokenize_dolma.py currently hardcodes us-central2"
 
 steps: dict[str, ExecutorStep[TokenizeConfig]] = {}
 
-# Rarer high-quality sources
-
+# High-quality sources
 dolma_splits = ["dolma/algebraic-stack", "dolma/arxiv", "dolma/megawika", "dolma/open-web-math", "dolma/pes2o", "dolma/stackexchange", "dolma/wiki"]
 all_dolma_steps = tokenize_dolma_steps()
 steps.update({dataset: step for dataset, step in all_dolma_steps.items() if dataset in dolma_splits})
 
 steps["finemath_3_plus"] = default_tokenize(name="finemath_3_plus", dataset=finemath.cd("finemath-3plus"), tokenizer=llama3_tokenizer)
 
-# DCLM data (to serve as web data), TODO: filter for higher quality
+# DCLM data to balance mix TODO: filter for higher quality
 steps["dclm"] = default_tokenize(name="dclm_baseline", dataset=dclm_baseline, tokenizer=llama3_tokenizer)
 
 # these counts are done with llama tokens (https://docs.google.com/spreadsheets/d/1ykVJ1EGJvA1zwF67FZGFBzlm7P0ZBIMuCpBW9Pqp7cY/edit?gid=0#gid=0), slightly different from standard olmo tokenizer token counts
@@ -45,7 +42,7 @@ high_quality_token_counts = {
     "finemath_3_plus"      : 34.0 * 1.0, # https://huggingface.co/datasets/HuggingFaceTB/finemath
 }
 
-total_high_quality_token_count = sum()
+total_high_quality_token_count = sum(high_quality_token_counts.values())
 
 # reweight data so that 70% of the tokens are dclm and 30% are high-quality sources
 cooldown_mixture_weights = {
