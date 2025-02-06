@@ -9,7 +9,7 @@ Running on open-web-math:
 python marin/run/ray_run.py --no_wait \
     --pip_deps 'resiliparse,fasttext,lxml,py-asciimath,tabulate,w3lib' \
     -- \
-    python scripts/open-web-math/get_urls_and_scores_from_openwebmath_html.py \
+    python marin/crawl/open-web-math/get_urls_and_scores_from_openwebmath_html.py \
     --html_input_path gs://marin-us-central2/documents/open-web-math-fde8ef8/html/ \
     --prefix openwebmath \
     --output_path gs://marin-us-central2/scratch/nfliu/urls_and_scores/open-web-math/
@@ -19,7 +19,7 @@ import json
 import logging
 import os
 import pathlib
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 
 import draccus
 import fsspec
@@ -28,11 +28,11 @@ import w3lib.url
 from tqdm_loggable.auto import tqdm
 
 from marin.core.runtime import cached_or_construct_output
-from marin.utils import fsspec_glob
-from marin.processing.open_web_math.extract import extract_text
-from marin.processing.open_web_math.utils import Config as OpenWebMathConfig
-from marin.processing.open_web_math.text_normalizer import normalize
 from marin.processing.classification.classifier import FasttextClassifier
+from marin.processing.open_web_math.extract import extract_text
+from marin.processing.open_web_math.text_normalizer import normalize
+from marin.processing.open_web_math.utils import Config as OpenWebMathConfig
+from marin.utils import fsspec_glob
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)

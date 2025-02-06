@@ -7,7 +7,7 @@ import os
 
 from experiments.defaults import default_tokenize, default_train
 from experiments.llama import llama3_tokenizer, llama_1_4b, llama_1_4b_train_config, llama_300m, llama_300m_train_config
-from experiments.pretraining_datasets import fineweb_edu, slimpajama, slimpajama_6b
+from experiments.pretraining_datasets import fineweb_edu, nemotron_cc, slimpajama, slimpajama_6b
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
 
@@ -44,6 +44,14 @@ fineweb_edu_model = default_train(
     train_config=llama_1_4b_train_config,
 )
 
+nemotron_cc_tokenized = default_tokenize(name="nemotron_cc", dataset=nemotron_cc, tokenizer=llama3_tokenizer)
+nemotron_cc_model = default_train(
+    name="nemotron_cc-1.4b",
+    tokenized=nemotron_cc_tokenized,
+    model_config=llama_1_4b,
+    train_config=llama_1_4b_train_config,
+)
+
 ############################################################
 
 if __name__ == "__main__":
@@ -52,6 +60,8 @@ if __name__ == "__main__":
             slimpajama_6b_model,
             slimpajama_model,
             fineweb_edu_model,
+            nemotron_cc_tokenized,
+            nemotron_cc_model,
         ],
-        description="Train 1.4B models on standard datasets (SlimPajama 6B, SlimPajama, FineWebEdu).",
+        description="Train 1.4B models on standard datasets (SlimPajama 6B, SlimPajama, FineWebEdu, Nemotron-CC).",
     )
