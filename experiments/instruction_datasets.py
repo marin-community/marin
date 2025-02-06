@@ -94,25 +94,9 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         metadata_columns=["id", "source"],
         filetype="parquet",
     ),
-    "cognitivecomputations/dolphin-r1-nonreasoning": InstructionDatasetConfig(
+    "cognitivecomputations/dolphin-r1": InstructionDatasetConfig(
         hf_dataset_id="cognitivecomputations/dolphin-r1",
-        subsets=["nonreasoning"],
-        revision="f6ac651",  # The revision hash shown in the image
-        wait_for_completion=True,
-        metadata_columns=["score", "refusal", "compliance_rating", "overall_quality"],  # Keeping these metadata columns
-        filetype="jsonl",
-    ),
-    "cognitivecomputations/dolphin-r1-reasoning-deepseek": InstructionDatasetConfig(
-        hf_dataset_id="cognitivecomputations/dolphin-r1",
-        subsets=["reasoning-deepseek"],
-        revision="f6ac651",  # The revision hash shown in the image
-        wait_for_completion=True,
-        metadata_columns=["score", "refusal", "compliance_rating", "overall_quality"],  # Keeping these metadata columns
-        filetype="jsonl",
-    ),
-    "cognitivecomputations/dolphin-r1-reasoning-flash": InstructionDatasetConfig(
-        hf_dataset_id="cognitivecomputations/dolphin-r1",
-        subsets=["reasoning-flash"],
+        subsets=["nonreasoning", "reasoning-deepseek", "reasoning-flash"],
         revision="f6ac651",  # The revision hash shown in the image
         wait_for_completion=True,
         metadata_columns=["score", "refusal", "compliance_rating", "overall_quality"],  # Keeping these metadata columns
