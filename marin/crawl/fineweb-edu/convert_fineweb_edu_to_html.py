@@ -8,14 +8,14 @@ each record is a Dolma-format fineweb-edu example in HTML.
 To run on a single dump:
 
 ```
-python scripts/fineweb-edu/convert_fineweb_edu_to_html.py \
+python marin/crawl/fineweb-edu/convert_fineweb_edu_to_html.py \
     --input_path gs://marin-us-central2/raw/fineweb-edu/CC-MAIN-2021-39/ \
     --html_output_path gs://marin-us-central2/documents/fineweb-edu/html/CC-MAIN-2021-39/
 ```
 
 ```
 ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- \
-    python scripts/fineweb-edu/convert_fineweb_edu_to_html.py \
+    python marin/crawl/fineweb-edu/convert_fineweb_edu_to_html.py \
     --input_path gs://marin-us-central2/raw/fineweb-edu/CC-MAIN-2021-39/ \
     --html_output_path gs://marin-us-central2/documents/fineweb-edu/html/CC-MAIN-2021-39/
 ```
@@ -27,7 +27,7 @@ for fineweb_edu_dump_path in $(gcloud storage ls gs://marin-us-central2/raw/fine
     dump_name=$(basename -- ${fineweb_edu_dump_path})
 
     ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- \
-    python scripts/fineweb-edu/convert_fineweb_edu_to_html.py \
+    python marin/crawl/fineweb-edu/convert_fineweb_edu_to_html.py \
     --input_path ${fineweb_edu_dump_path} \
     --html_output_path gs://marin-us-central2/documents/fineweb-edu/html/${dump_name}/
 done
@@ -47,7 +47,7 @@ import draccus
 import fsspec
 import pandas as pd
 import ray
-from resiliparse.parse.encoding import detect_encoding, bytes_to_str
+from resiliparse.parse.encoding import bytes_to_str, detect_encoding
 from warcio import ArchiveIterator
 
 from marin.core.runtime import cached_or_construct_output
@@ -98,7 +98,7 @@ def process_one_shard(
     index = df.index.tolist()
 
     # url_dict is url to index in df so that we can update that record
-    url_dict = {url: idx for idx, url in zip(index, urls)}
+    url_dict = {url: idx for idx, url in zip(index, urls, strict=True)}
     num_urls_found = 0  # Used to early terminate
     num_urls_processed = 0
     num_urls_failed_decoding = 0
@@ -148,7 +148,7 @@ def process_one_shard(
                     num_urls_processed += 1
 
     with fsspec.open(output_path, "wt", compression="gzip") as f:  # html output
-        for index, row in df.iterrows():
+        for _, row in df.iterrows():
             out_fineweb_edu = row.to_dict()
             # If this example failed decoding, don't write it out
             if not out_fineweb_edu["html"]:
@@ -175,7 +175,7 @@ def process_one_shard(
     )
 
 
-@dataclass
+@dataclass(frozen=True)
 class DolmaFormattedFineWebEduRecord:
     id: str
     source: str
@@ -184,7 +184,7 @@ class DolmaFormattedFineWebEduRecord:
     metadata: dict[str, Any]
 
 
-@dataclass
+@dataclass(frozen=True)
 class ParquetFineWebEduConfig:
     input_path: str
     html_output_path: str
@@ -219,9 +219,9 @@ def group_fineweb_edu_by_warc(input_paths: list[str], output_path: str):
     output_path (str): Path to the output folder where we will write the fineweb-edu examples,
                        grouped by their source WARC.
     """
-    success_file_path = os.path.join(output_path, f"_examples_groupby_warc_success")
+    success_file_path = os.path.join(output_path, "_examples_groupby_warc_success")
     if fsspec_exists(success_file_path):
-        logger.info(f"Already grouped fineweb-edu input paths by WARC, skipping...")
+        logger.info("Already grouped fineweb-edu input paths by WARC, skipping...")
         return
 
     logger.info(f"Grouping examples at {input_paths} by their source WARC")
@@ -284,7 +284,7 @@ def process_fineweb_edu(cfg: ParquetFineWebEduConfig):
     files = fsspec_glob(os.path.join(cfg.input_path, "*.parquet"))
     # Group fine-web-edu examples by their source WARC
     groupby_ref = group_fineweb_edu_by_warc.remote(files, cfg.html_output_path)
-    _ = ray.get(groupby_ref)
+    ray.get(groupby_ref)
 
     shard_indices_to_process = ray.get(get_shards_to_process.remote(cfg.html_output_path))
     num_shards_to_process = len(shard_indices_to_process)
@@ -320,7 +320,7 @@ def process_fineweb_edu(cfg: ParquetFineWebEduConfig):
     while unfinished:
         finished, unfinished = ray.wait(unfinished, num_returns=len(unfinished), timeout=5)
         try:
-            _ = ray.get(finished)
+            ray.get(finished)
         except Exception as e:
             logger.exception(f"Error processing shard: {e}")
 
