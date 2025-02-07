@@ -26,8 +26,16 @@ autoformat:
 CLUSTER_REPOS = us-central2 europe-west4 us-west4 asia-northeast1 us-east5 us-east1
 TAG_VERSIONS = latest $(shell git rev-parse --short HEAD) $(shell date -u +"%Y%m%d")
 
+DOCKERFILE = docker/marin/Dockerfile.cluster
+DOCKER_IMAGE_NAME = marin_cluster
+
 cluster_docker:
+ifdef VLLM
+	$(eval DOCKERFILE = docker/marin/Dockerfile.vllm)
+	$(eval DOCKER_IMAGE_NAME = marin_vllm)
+endif
 	@echo "Building and pushing Docker images for clusters $(CLUSTER_REPOS) with tags $(TAG_VERSIONS)"
+	@echo "Using Dockerfile: $(DOCKERFILE)"
 	# Authenticate for each region
 	$(foreach region,$(CLUSTER_REPOS), \
 		gcloud auth configure-docker $(region)-docker.pkg.dev;)
@@ -38,17 +46,17 @@ cluster_docker:
 		gcloud artifacts repositories create --repository-format=docker --location=$(region) marin;)
 
 	# Build Docker image
-	docker buildx build --platform linux/amd64 -t 'marin_cluster:latest' -f docker/marin/Dockerfile.cluster .
+	docker buildx build --platform linux/amd64 -t '$(DOCKER_IMAGE_NAME):latest' -f $(DOCKERFILE) .
 
 	# Tag the Docker image for each region and version
 	$(foreach region,$(CLUSTER_REPOS), \
 		$(foreach version,$(TAG_VERSIONS), \
-			docker tag 'marin_cluster:latest' '$(region)-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:$(version)';))
+			docker tag '$(DOCKER_IMAGE_NAME):latest' '$(region)-docker.pkg.dev/hai-gcp-models/marin/$(DOCKER_IMAGE_NAME):$(version)';))
 
 	# Push the Docker images for each region and version
 	$(foreach region,$(CLUSTER_REPOS), \
 		$(foreach version,$(TAG_VERSIONS), \
-			docker push '$(region)-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:$(version)';))
+			docker push '$(region)-docker.pkg.dev/hai-gcp-models/marin/$(DOCKER_IMAGE_NAME):$(version)';))
 
 	@echo "##################################################################"
 	@echo "Don't forget to update the tags in infra/update-cluster-configs.py"
