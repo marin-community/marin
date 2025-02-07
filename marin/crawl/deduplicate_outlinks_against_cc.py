@@ -49,7 +49,8 @@ python marin/run/ray_run.py \
     python marin/crawl/deduplicate_outlinks_against_cc.py \
         --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu/CC-MAIN-*/*_links.jsonl.gz' \
         --bloom_filter_path 'gs://marin-us-central2/gcsfuse_mount/nfliu/deduplicate_outlinks/cc-urls-partitioned_2013_2018.bloom' \
-        --output_path gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-cc-deduplicated-2013_2018/
+        --output_path gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-cc-deduplicated-2013_2018/ \
+        --shards_per_batch 100
 
 # Then, deduplicate with 2019-2024 bloom filter
 python marin/run/ray_run.py \
@@ -59,7 +60,8 @@ python marin/run/ray_run.py \
     python marin/crawl/deduplicate_outlinks_against_cc.py \
         --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-cc-deduplicated-2013_2018/CC-MAIN-*/*_links.jsonl.gz' \
         --bloom_filter_path 'gs://marin-us-central2/gcsfuse_mount/nfliu/deduplicate_outlinks/cc-urls-partitioned_2019_2024.bloom' \
-        --output_path gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-cc-deduplicated/
+        --output_path gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-cc-deduplicated/ \
+        --shards_per_batch 100
 ```
 """  # noqa: E501
 import itertools
@@ -88,7 +90,7 @@ class DeduplicateOutlinksAgainstCCConfig:
     input_pattern: str
     bloom_filter_path: str
     output_path: str
-    shards_per_batch: int = 25
+    shards_per_batch: int = 100
     max_concurrent_tasks: int = 10
 
 
