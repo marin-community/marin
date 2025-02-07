@@ -27,30 +27,41 @@ def get_matching_files(dir1: str, dir2: str) -> list[tuple[str, str]]:
     return [(f1, f2) for f1 in files1 for f2 in files2 if f1.split("/")[-1] == f2.split("/")[-1]]
 
 
-def check_file_equality(file_pair: tuple[str, str]) -> tuple[str, bool, list[int]]:
+def check_file_equality(
+    file_pair: tuple[str, str], require_one_to_one_mapping: bool = False
+) -> tuple[str, bool, list[int]]:
     """Check if two files have matching ids for each row."""
     file1, file2 = file_pair
+
     mismatch_lines = []
 
+    file1_ids = set()
+    file2_ids = set()
     with fsspec.open(file1, "rt", compression="gzip") as f1, fsspec.open(file2, "rt", compression="gzip") as f2:
-        for i, (line1, line2) in enumerate(zip(f1, f2, strict=False), 1):
-            data1 = json.loads(line1)
-            data2 = json.loads(line2)
+        for line1, line2 in zip(f1, f2, strict=False):
+            if require_one_to_one_mapping and json.loads(line1)["id"] != json.loads(line2)["id"]:
+                mismatch_lines.append((line1, line2))
+            file1_ids.add(json.loads(line1)["id"])
+            file2_ids.add(json.loads(line2)["id"])
 
-            if data1.get("id") != data2.get("id"):
-                mismatch_lines.append(i)
+    if require_one_to_one_mapping:
+        is_equal = len(mismatch_lines) == 0
+        return (file1.split("/")[-1], is_equal)
+    else:
+        is_equal = file1_ids == file2_ids
+        return (file1.split("/")[-1], is_equal)
 
-    is_equal = len(mismatch_lines) == 0
-    return (file1.split("/")[-1], is_equal, mismatch_lines)
 
-
-def main(dir1: str, dir2: str):
+def main(dir1: str, dir2: str, require_one_to_one_mapping: bool = False):
     matching_files = get_matching_files(dir1, dir2)
     print(f"Found {len(matching_files)} matching files.")
 
     results = []
     with ThreadPoolExecutor(max_workers=10) as executor:
-        future_to_file = {executor.submit(check_file_equality, file_pair): file_pair for file_pair in matching_files}
+        future_to_file = {
+            executor.submit(check_file_equality, file_pair, require_one_to_one_mapping): file_pair
+            for file_pair in matching_files
+        }
         for future in as_completed(future_to_file):
             results.append(future.result())
 
@@ -61,7 +72,7 @@ def main(dir1: str, dir2: str):
     print(f"Number of files with mismatches: {number_of_files_with_mismatches}")
     if not all_equal:
         print("Files with mismatching ids:")
-        for filename, is_equal, _mismatch_lines in results:
+        for filename, is_equal in results:
             if not is_equal:
                 print(f"Mismatch exists in {filename}")
 
@@ -70,6 +81,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Check equality of ids in matching files from two directories.")
     parser.add_argument("--dir1", help="First directory path")
     parser.add_argument("--dir2", help="Second directory path")
+    parser.add_argument("--require-one-to-one-mapping", help="Require one to one mapping of ids", action="store_true")
     args = parser.parse_args()
 
-    main(args.dir1, args.dir2)
+    main(args.dir1, args.dir2, args.require_one_to_one_mapping)
