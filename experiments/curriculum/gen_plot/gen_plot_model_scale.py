@@ -156,10 +156,10 @@ model_color_map = {
 }
 
 token_color_map = {
-    3000: 'C1',
-    6000: 'C2',
-    12000: 'C3',
-    24000: 'C4',
+    3000: 'C7',
+    6000: 'C8',
+    12000: 'C9',
+    24000: 'C10',
 }
 
 attribute_key = "step_count" if args.scaling_type == "token" else "model_size"

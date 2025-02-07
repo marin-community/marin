@@ -37,16 +37,43 @@ from marin.processing.tokenize import (
 TAG = "702_targeted_curriculum"
 USER = "suhas"
 
+def tokenize_two_stages(
+    base_file_path : str,
+    train_file_ids_stage1 : list[int],
+    train_file_ids_stage2 : list[int],
+    validation_file_ids : list[int],
+    name : str,
+    **kwargs
+):
+    stage1_tokenized = tokenize_train_validation(
+        base_file_path=base_file_path,
+        train_file_ids=train_file_ids_stage1,
+        validation_file_ids=validation_file_ids,
+        name=f"{name}_stage1",
+        **kwargs
+    )
+
+    stage2_tokenized = tokenize_train_validation(
+        base_file_path=base_file_path,
+        train_file_ids=train_file_ids_stage2,
+        validation_file_ids=validation_file_ids,
+        name=f"{name}_stage2",
+        **kwargs
+    )
+
+    return stage1_tokenized, stage2_tokenized
+
 def tokenize_train_validation(
-    train_files : list[str],
-    validation_files : list[str],
+    base_file_path : str,
+    train_file_ids : list[int],
+    validation_file_ids : list[int],
     name : str,
     **kwargs
 ) -> ExecutorStep:
 
     tokenizer_config = TokenizeConfig(
-        train_paths=versioned([f"{file}" for file in train_files]),
-        validation_paths=versioned([f"{file}" for file in validation_files]),
+        train_paths=versioned([base_file_path.format(id=id) for id in train_file_ids]),
+        validation_paths=versioned([base_file_path.format(id=id) for id in validation_file_ids]),
         cache_path=this_output_path(),
         tokenizer=versioned(llama3_tokenizer),
         **kwargs
@@ -57,29 +84,6 @@ def tokenize_train_validation(
         description=f"Tokenize raw text using the llama3_tokenizer (with manual validation set).",
         fn=tokenize,
         config=tokenizer_config,
-    )
-
-def tokenize_train_validation_sft(
-    train_files : list[str],
-    validation_files : list[str],
-    name : str,
-) -> ExecutorStep:
-
-    tokenizer_config = TokenizeConfig(
-        train_paths=versioned([f"{file}" for file in train_files]),
-        validation_paths=versioned([f"{file}" for file in validation_files]),
-        cache_path=this_output_path(),
-        tokenizer=versioned(llama3_tokenizer),
-        # fixed to OAI chat format
-        input_field="user",
-        output_field="assistant",
-    )
-
-    return ExecutorStep(
-        name=os.path.join("tokenized", "suhas", f"{name}"),
-        description="Tokenize chat SFT data",
-        fn=levanter_tokenize_sft,
-        config=tokenizer_config, 
     )
 
 def train_executor_step(

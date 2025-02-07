@@ -17,7 +17,7 @@ from experiments.llama import llama_150m, llama_300m, llama_600m, llama_1_9b, ll
 from marin.execution.executor import executor_main, output_path_of
 from marin.processing.tokenize.data_configs import lm_mixture_data_config, lm_varying_mixture_data_config
 
-from experiments.curriculum.curriculum_stages import train_executor_step, tokenize_train_validation, tokenize_train_validation_sft
+from experiments.curriculum.curriculum_stages import train_executor_step, tokenize_train_validation, tokenize_two_stages
 from experiments.instruction_datasets import get_instruction_dataset
 
 marin_prefix = os.environ["MARIN_PREFIX"]
@@ -32,19 +32,23 @@ if 'us-central2' in marin_prefix:
     DOLMA_C4 = marin_prefix + "/raw/dolma/v1.7/c4-{id:04d}.json.gz" # different across regions
     DOLMA_TULU_FLAN = marin_prefix + "/raw/dolma/v1.7/tulu_flan-{id:04d}.json.gz" # different across regions
     SPJ6B = marin_prefix + "/raw/SlimPajama-6B-be35b7/b5f90f4/huggingface.co/datasets/DKYoon/SlimPajama-6B/resolve/b5f90f4/data/train-{id:05d}-of-00048*.parquet"
+    WIKI = marin_prefix + "/raw/dolmino-mix-1124-157960/bb54cab/data/wiki/wiki-{id:04d}.json.gz"
     tpu_type = "v4-128"
-    job_suffix = "usc2"
+    region_suffix = "usc2"
 elif 'eu-west4' in marin_prefix:
     STACK_PYTHON = marin_prefix + "/raw/the-stack-dedup-4ba450/17cad72/data/python/data-{id:05d}-of-00144.parquet"
     STACK_CPP = marin_prefix + "/raw/the-stack-dedup-4ba450/17cad72/data/cpp/data-{id:05d}-of-00110.parquet"
     DOLMA_C4 = marin_prefix + "/raw/dolma-c4-split/c4-{id:04d}.json.gz" # different across regions
     DOLMA_TULU_FLAN = marin_prefix + "/raw/dolma-tulu_flan-split/tulu_flan-{id:04d}.json.gz" # different across regions
     SPJ6B = marin_prefix + "/raw/SlimPajama-6B-be35b7/b5f90f4/huggingface.co/datasets/DKYoon/SlimPajama-6B/resolve/b5f90f4/data/train-{id:05d}-of-00048*.parquet"
+    WIKI = None
     # tpu_type = "v6e-256"
     tpu_type = "v5litepod-256"
-    job_suffix = "euw4"
+    region_suffix = "euw4"
 else:
     raise ValueError("Unknown prefix")
+
+# TODO: Remove stage 2 tokenization
 
 # randomly split stack python parquet files into two seperate groups
 stack_file_ids = list(range(144))
@@ -86,75 +90,67 @@ flan_file_ids_stage1 = flan_file_ids[0:32]
 flan_file_ids_stage2 = flan_file_ids[32:65]
 flan_file_ids_validation = flan_file_ids[65:66]
 
-stack_dedup_stage1_tokenized = tokenize_train_validation(
-    train_files=[STACK_PYTHON.format(id=id) for id in stack_file_ids_stage1],
-    validation_files=[STACK_PYTHON.format(id=id) for id in stack_file_ids_validation],
-    name="stack_dedup_stage1",
+wiki_file_ids_stage1 = [0]
+wiki_file_ids_stage2 = []
+wiki_file_ids_validation = [1]
+
+stack_dedup_stage1_tokenized, stack_dedup_stage2_tokenized = tokenize_two_stages(
+    base_file_path=STACK_PYTHON,
+    train_file_ids_stage1=stack_file_ids_stage1,
+    train_file_ids_stage2=stack_file_ids_stage2,
+    validation_file_ids=stack_file_ids_validation,
+    name="stack_dedup",
     text_key="content"
 )
 
-dolma_c4_stage1_tokenized = tokenize_train_validation(
-    train_files=[DOLMA_C4.format(id=id) for id in dolma_file_ids_stage1],
-    validation_files=[DOLMA_C4.format(id=id) for id in dolma_file_ids_validation],
-    name="dolma_c4_stage1",
+dolma_c4_stage1_tokenized, dolma_c4_stage2_tokenized = tokenize_two_stages(
+    base_file_path=DOLMA_C4,
+    train_file_ids_stage1=dolma_file_ids_stage1,
+    train_file_ids_stage2=dolma_file_ids_stage2,
+    validation_file_ids=dolma_file_ids_validation,
+    name="dolma_c4",
     text_key="text"
 )
 
-stack_cpp_stage1_tokenized = tokenize_train_validation(
-    train_files=[STACK_CPP.format(id=id) for id in stack_cpp_file_ids_stage1],
-    validation_files=[STACK_CPP.format(id=id) for id in stack_cpp_file_ids_validation],
-    name="stack_cpp_stage1",
+stack_cpp_stage1_tokenized, stack_cpp_stage2_tokenized = tokenize_two_stages(
+    base_file_path=STACK_CPP,
+    train_file_ids_stage1=stack_cpp_file_ids_stage1,
+    train_file_ids_stage2=stack_cpp_file_ids_stage2,
+    validation_file_ids=stack_cpp_file_ids_validation,
+    name="stack_cpp",
     text_key="content"
 )
 
-spj6b_stage1_tokenized = tokenize_train_validation(
-    train_files=[SPJ6B.format(id=id) for id in spj6b_file_ids_stage1],
-    validation_files=[SPJ6B.format(id=id) for id in spj6b_file_ids_validation],
-    name="spj6b_stage1",
+spj6b_stage1_tokenized, spj6b_stage2_tokenized = tokenize_two_stages(
+    base_file_path=SPJ6B,
+    train_file_ids_stage1=spj6b_file_ids_stage1,
+    train_file_ids_stage2=spj6b_file_ids_stage2,
+    validation_file_ids=spj6b_file_ids_validation,
+    name="spj6b",
     text_key="text"
 )
 
-flan_stage1_tokenized = tokenize_train_validation(
-    train_files=[DOLMA_TULU_FLAN.format(id=id) for id in flan_file_ids_stage1],
-    validation_files=[DOLMA_TULU_FLAN.format(id=id) for id in flan_file_ids_validation],
-    name="flan_stage1",
+flan_stage1_tokenized, flan_stage2_tokenized = tokenize_two_stages(
+    base_file_path=DOLMA_TULU_FLAN,
+    train_file_ids_stage1=flan_file_ids_stage1,
+    train_file_ids_stage2=flan_file_ids_stage2,
+    validation_file_ids=flan_file_ids_validation,
+    name="flan",
     text_key="text"
 )
 
-stack_dedup_stage2_tokenized = tokenize_train_validation(
-    train_files=[STACK_PYTHON.format(id=id) for id in stack_file_ids_stage2],
-    validation_files=[STACK_PYTHON.format(id=id) for id in stack_file_ids_validation],
-    name="stack_dedup_stage2",
-    text_key="content"
-)
-
-dolma_c4_stage2_tokenized = tokenize_train_validation(
-    train_files=[DOLMA_C4.format(id=id) for id in dolma_file_ids_stage2],
-    validation_files=[DOLMA_C4.format(id=id) for id in dolma_file_ids_validation],
-    name="dolma_c4_stage2",
-    text_key="text"
-)
-
-stack_cpp_stage2_tokenized = tokenize_train_validation(
-    train_files=[STACK_CPP.format(id=id) for id in stack_cpp_file_ids_stage2],
-    validation_files=[STACK_CPP.format(id=id) for id in stack_cpp_file_ids_validation],
-    name="stack_cpp_stage2",
-    text_key="content"
-)
-
-spj6b_stage2_tokenized = tokenize_train_validation(
-    train_files=[SPJ6B.format(id=id) for id in spj6b_file_ids_stage2],
-    validation_files=[SPJ6B.format(id=id) for id in spj6b_file_ids_validation],
-    name="spj6b_stage2",
-    text_key="text"
-)
-
-flan_stage2_tokenized = tokenize_train_validation(
-    train_files=[DOLMA_TULU_FLAN.format(id=id) for id in flan_file_ids_stage2],
-    validation_files=[DOLMA_TULU_FLAN.format(id=id) for id in flan_file_ids_validation],
-    name="flan_stage2",
-    text_key="text"
-)
+if WIKI is not None:
+    wiki_stage1_tokenized, wiki_stage2_tokenized = tokenize_two_stages(
+        base_file_path=WIKI,
+        train_file_ids_stage1=wiki_file_ids_stage1,
+        train_file_ids_stage2=wiki_file_ids_stage2,
+        validation_file_ids=wiki_file_ids_validation,
+        name="wiki",
+        text_key="text"
+    )
+else:
+    wiki_stage1_tokenized = None
+    wiki_stage2_tokenized = None
 
 stage_data = {
     "stack_dedup": {
@@ -176,6 +172,10 @@ stage_data = {
     "flan": {
         "stage1": flan_stage1_tokenized,
         "stage2": flan_stage2_tokenized,
+    },
+    "wiki": {
+        "stage1": wiki_stage1_tokenized,
+        "stage2": wiki_stage2_tokenized,
     }
 }
 
@@ -233,6 +233,7 @@ def full_training_varying_mixture(
     assert transition_seq_idx % 2048 == 0, f"transition_seq_idx: {transition_seq_idx}"
 
     # Create data config with varying mixture
+    # Only using stage 1 because we're not using checkpointing
     data_config = lm_varying_mixture_data_config(
         components={
             data1_name: stage_data[data1_name]["stage1"],
@@ -258,7 +259,7 @@ def full_training_varying_mixture(
 
     weight_decay = 0.1
     steps_per_eval = num_train_steps // num_eval
-    name_prefix = f"{data1_name}-{data2_name}-onevs{data1_frac_alloc_stage2}-dur{duration_frac_stage2}-{job_suffix}-{model_size}"
+    name_prefix = f"{data1_name}-{data2_name}-onevs{data1_frac_alloc_stage2}-dur{duration_frac_stage2}-{region_suffix}-{model_size}"
 
     if schedule_type == "linear":
         optimizer_config = AdamConfig(
@@ -276,6 +277,9 @@ def full_training_varying_mixture(
     if num_train_steps != 3000:
         name_prefix += f"-{num_train_steps // 1000}B"
 
+    if total_data1_portion != 0.005:
+        name_prefix += f"-rare{total_data1_portion}"
+
     train_step = train_executor_step(
         name=f"{name_prefix}{version_tag}",
         pretraining_data=pretraining_data,
@@ -289,7 +293,7 @@ def full_training_varying_mixture(
         steps_per_export_list=[],
         tpu_type=tpu_type,
         optimizer_config=optimizer_config,
-        additional_tags=additional_tags + [job_suffix],
+        additional_tags=additional_tags + [region_suffix],
     )
 
     return [train_step]
@@ -299,21 +303,22 @@ def full_training_varying_mixture(
 if __name__ == "__main__":
     # stage_pairs = [
     #     full_training_varying_mixture(
-    #         data1_name="flan",
+    #         data1_name="wiki",
     #         data2_name="c4",
-    #         total_data1_portion=0.005,
+    #         total_data1_portion=total_data1_portion,
     #         duration_frac_stage2=duration_frac_stage2,
     #         data1_frac_alloc_stage2=1.0,
     #         schedule_type="linear",
     #         cooldown_frac=0.05,
     #         model_size=model_size,
-    #         num_eval=1,
-    #         num_train_steps=100,
-    #         additional_tags=["debug-extension-modules"],
-    #         version_tag="-debug-v7"
+    #         num_eval=20,
+    #         num_train_steps=3000,
+    #         additional_tags=["debug-wiki"],
+    #         version_tag="-v1"
     #     )
     #     for model_size in ["150m"]
-    #     for duration_frac_stage2 in [0.4]
+    #     for duration_frac_stage2 in [0.5]
+    #     for total_data1_portion in [0.5, 0.05, 0.005]
     # ]
 
     learning_rate_dict = {
@@ -403,7 +408,7 @@ if __name__ == "__main__":
         )
         for model_size in ["600m_0.001"]
         for num_train_steps in [48000]
-        for duration_frac_stage2 in [0.01, 0.02, 0.05, 0.1, 0.2, 0.4]
+        for duration_frac_stage2 in [0.1]
     ]
 
     # steps = list(chain(*stage_pairs))
