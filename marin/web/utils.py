@@ -29,11 +29,11 @@ def extract_content_from_dom(
     the main Resiliparse package. No plans to merge this into the main Resiliparse package yet.
     """
 
-    from resiliparse_dom.extract.html2text import extract_main_dom_tree
+    from resiliparse_dom.extract.html2text import extract_simplified_dom
 
-    tree = extract_main_dom_tree(html, **kwargs)
+    tree = extract_simplified_dom(html, **kwargs)
     tree = BeautifulSoup(str(tree), "html.parser")
 
     # convert to markdown
     markdown = to_markdown(tree, markdownify_config)
-    return markdown
+    return markdown.replace("\x00", "").strip()

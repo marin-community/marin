@@ -84,8 +84,8 @@ training_config = SimpleTrainConfig(
 
 ### Define the experiments- one for the mixture of datasets, and one for the baseline dataset only
 
-EXPERIMENT_TAG_MIXTURE = ["433_dclm_1b_1x-testing-logs"]
-EXPERIMENT_TAG_BASELINE_ONLY = ["433_dclm_baseline_1b_1x-testing-logs"]
+EXPERIMENT_TAG_MIXTURE = ["433_dclm_1b_1x"]
+EXPERIMENT_TAG_BASELINE_ONLY = ["433_dclm_baseline_1b_1x"]
 
 dclm_mixture_model = default_train(
     name="dclm_1b_1x_replication_eval_check",

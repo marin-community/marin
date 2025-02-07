@@ -97,6 +97,7 @@ def convert_page_with_resiliparse(
             content = f"{title}\n\n{content}"
 
     else:
+        from resiliparse_dom.extract.html2text import extract_simplified_dom
         # We override the existing resiliparse package with our custom fork in the worker
         # environment. So we call the remote function with `pip` argument in decorator to
         # install the custom package.

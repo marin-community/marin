@@ -139,7 +139,7 @@ class ResiliparseConfig(ExtractionConfig):
     @property
     def resiliparse_kwargs(self) -> dict:
         exclude = {"use_custom_variant", "markdownify_config"}
-        return {f.name: getattr(self, f.name) for f in fields(self) if f.name not in exclude}
+        return {f.name: getattr(self, f.name) for f in fields(self) if f.name not in exclude and (self.use_custom_variant and f.name != "preserve_formatting")}
 
     @property
     def markdownify_kwargs(self) -> dict:
