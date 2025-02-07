@@ -3,7 +3,7 @@
 # Update the template or the script, not this file! #
 #####################################################
 # Unique Identifier for the Head Node + Workers
-cluster_name: marin-us-east1-d
+cluster_name: marin-us-east5-b-vllm
 
 # Maximum Workers (excluding Head Node)
 max_workers: 1024
@@ -13,12 +13,12 @@ max_workers: 1024
 # Configure GCP
 provider:
   type: gcp
-  region: us-east1
-  availability_zone: us-east1-d
+  region: us-east5
+  availability_zone: us-east5-b
   project_id: hai-gcp-models
 
 docker:
-    image: "us-east1-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:b63a1e90"
+    image: "us-east5-docker.pkg.dev/hai-gcp-models/marin/marin_vllm:d97b0693"
     container_name: "ray_docker"
     pull_before_run: true
     worker_run_options:
@@ -35,7 +35,7 @@ docker:
 
 
 initialization_commands:
-  - yes | gcloud auth configure-docker us-east1-docker.pkg.dev
+  - yes | gcloud auth configure-docker us-east5-docker.pkg.dev
   - which docker || (curl -fsSL https://get.docker.com -o get-docker.sh; sudo sh get-docker.sh; sudo usermod -aG docker $USER; sudo systemctl restart docker -f)
   # always run this because ray doesn't run with sudo
   - sudo usermod -aG docker $USER
@@ -46,14 +46,14 @@ initialization_commands:
 setup_commands:
   # set the GCP project because it's not injected by default
   - gcloud config set project hai-gcp-models
-  - gcloud config set compute/region us-east1
-  - gcloud config set compute/zone us-east1-d
+  - gcloud config set compute/region us-east5
+  - gcloud config set compute/zone us-east5-b
   - mkdir $HOME/.cache/huggingface -p
   - gcloud secrets versions access latest --secret=HF_TOKEN > $HOME/.cache/huggingface/token
   - mkdir $HOME/.cache/openai -p
   - gcloud secrets versions access latest --secret=OPENAI_API_KEY > $HOME/.cache/openai/token
-  - echo 'export MARIN_PREFIX="gs://marin-us-east1"' >> $HOME/.bashrc
-  - echo 'export BUCKET="marin-us-east1"' >> $HOME/.bashrc
+  - echo 'export MARIN_PREFIX="gs://marin-us-east5"' >> $HOME/.bashrc
+  - echo 'export BUCKET="marin-us-east5"' >> $HOME/.bashrc
   - gcsfuse --implicit-dirs --only-dir gcsfuse_mount $BUCKET /opt/gcsfuse_mount || true
 
 # Set Head Node == `ray_head_default`
@@ -85,19 +85,7 @@ available_node_types:
             sourceImage: projects/ubuntu-os-cloud/global/images/family/ubuntu-2204-lts
   tpu_worker:
     max_workers: 1024
-    min_workers: 0
-    node_config:
-      acceleratorType: v6e-4
-      runtimeVersion: v2-alpha-tpuv6e
-      schedulingConfig:
-        preemptible: true
-    resources:
-      CPU: 120
-      TPU: 4
-
-  tpu_slice_v6e_8:
-    max_workers: 1024
-    min_workers: 0
+    min_workers: 2
     node_config:
       acceleratorType: v6e-8
       runtimeVersion: v2-alpha-tpuv6e
@@ -105,64 +93,4 @@ available_node_types:
         preemptible: true
     resources:
       CPU: 120
-      TPU: 4
-
-  tpu_slice_v6e_16:
-    max_workers: 1024
-    min_workers: 0
-    node_config:
-      acceleratorType: v6e-16
-      runtimeVersion: v2-alpha-tpuv6e
-      schedulingConfig:
-        preemptible: true
-    resources:
-      CPU: 120
-      TPU: 4
-
-  tpu_slice_v6e_32:
-    max_workers: 1024
-    min_workers: 0
-    node_config:
-      acceleratorType: v6e-32
-      runtimeVersion: v2-alpha-tpuv6e
-      schedulingConfig:
-        preemptible: true
-    resources:
-      CPU: 120
-      TPU: 4
-
-  tpu_slice_v6e_64:
-    max_workers: 1024
-    min_workers: 0
-    node_config:
-      acceleratorType: v6e-64
-      runtimeVersion: v2-alpha-tpuv6e
-      schedulingConfig:
-        preemptible: true
-    resources:
-      CPU: 120
-      TPU: 4
-
-  tpu_slice_v6e_128:
-    max_workers: 1024
-    min_workers: 0
-    node_config:
-      acceleratorType: v6e-128
-      runtimeVersion: v2-alpha-tpuv6e
-      schedulingConfig:
-        preemptible: true
-    resources:
-      CPU: 120
-      TPU: 4
-
-  tpu_slice_v6e_256:
-    max_workers: 1024
-    min_workers: 0
-    node_config:
-      acceleratorType: v6e-256
-      runtimeVersion: v2-alpha-tpuv6e
-      schedulingConfig:
-        preemptible: true
-    resources:
-      CPU: 120
-      TPU: 4
+      TPU: 8
