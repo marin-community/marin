@@ -23,7 +23,8 @@ python marin/run/ray_run.py \
     python marin/crawl/deduplicate_outlinks_against_cc.py \
         --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8/*_links.jsonl.gz' \
         --bloom_filter_path 'gs://marin-us-central2/gcsfuse_mount/nfliu/deduplicate_outlinks/cc-urls-partitioned_2013_2018.bloom' \
-        --output_path gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-cc-deduplicated-2013_2018/
+        --output_path gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-cc-deduplicated-2013_2018/ \
+        --shards_per_batch 100
 
 # Then, deduplicate with 2019-2024 bloom filter
 python marin/run/ray_run.py \
@@ -33,7 +34,8 @@ python marin/run/ray_run.py \
     python marin/crawl/deduplicate_outlinks_against_cc.py \
         --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-cc-deduplicated-2013_2018/*_links.jsonl.gz' \
         --bloom_filter_path 'gs://marin-us-central2/gcsfuse_mount/nfliu/deduplicate_outlinks/cc-urls-partitioned_2019_2024.bloom' \
-        --output_path gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-cc-deduplicated/
+        --output_path gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-cc-deduplicated/ \
+        --shards_per_batch 100
 ```
 
 Running on FineWeb-Edu:
@@ -86,6 +88,8 @@ class DeduplicateOutlinksAgainstCCConfig:
     input_pattern: str
     bloom_filter_path: str
     output_path: str
+    shards_per_batch: int = 25
+    max_concurrent_tasks: int = 10
 
 
 def batched(iterable, n):
@@ -259,13 +263,11 @@ def deduplicate_outlinks_against_cc_driver(cfg: DeduplicateOutlinksAgainstCCConf
     output_shard_paths = get_unique_output_paths(shard_paths, cfg.output_path)
     logger.info(f"Found {len(shard_paths)} shards to process")
 
-    SHARDS_PER_BATCH = 25
-    batched_shard_paths = list(batched(shard_paths, SHARDS_PER_BATCH))
-    batched_output_shard_paths = list(batched(output_shard_paths, SHARDS_PER_BATCH))
+    batched_shard_paths = list(batched(shard_paths, cfg.shards_per_batch))
+    batched_output_shard_paths = list(batched(output_shard_paths, cfg.shards_per_batch))
     assert len(batched_shard_paths) == len(batched_output_shard_paths)
 
     num_batches_to_process = len(batched_shard_paths)
-    MAX_CONCURRENT_TASKS = 10
     num_batches_submitted = 0
     unfinished = []
 
@@ -285,7 +287,7 @@ def deduplicate_outlinks_against_cc_driver(cfg: DeduplicateOutlinksAgainstCCConf
                 f"({num_batches_submitted / num_batches_to_process})"
             )
 
-    for _ in range(min(MAX_CONCURRENT_TASKS, num_batches_to_process)):
+    for _ in range(min(cfg.max_concurrent_tasks, num_batches_to_process)):
         submit_shard_batch(batched_shard_paths.pop(), batched_output_shard_paths.pop())
 
     num_outlinks = 0
@@ -310,7 +312,7 @@ def deduplicate_outlinks_against_cc_driver(cfg: DeduplicateOutlinksAgainstCCConf
 
             # If we have more shard paths left to process and we haven't hit the max
             # number of concurrent tasks, add tasks to the unfinished queue.
-            while batched_shard_paths and len(unfinished) < MAX_CONCURRENT_TASKS:
+            while batched_shard_paths and len(unfinished) < cfg.max_concurrent_tasks:
                 submit_shard_batch(batched_shard_paths.pop(), batched_output_shard_paths.pop())
 
     logger.info(
