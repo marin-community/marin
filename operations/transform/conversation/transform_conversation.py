@@ -17,6 +17,10 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 import datasets
+import re
+
+from urllib.parse import urlparse
+from google.cloud import storage
 
 import draccus
 import fsspec
@@ -189,14 +193,86 @@ def transform_dataset(cfg: TransformSFTDatasetConfig):
 
     ray.get(responses)
 
+
+
+def download_directory_from_gcs(bucket_name: str, gcs_directory_path: str, local_directory_path: str) -> None:
+    """
+    Download an entire directory from a GCS bucket to a local directory.
+
+    Args:
+        bucket_name (str): The name of the GCS bucket.
+        gcs_directory_path (str): The path to the directory in GCS (excluding the bucket name).
+        local_directory_path (str): The local directory path where the files will be saved.
+    """
+    # Make download dir
+    if not os.path.exists(local_directory_path):
+        os.makedirs(local_directory_path)
+    # Initialize the client
+    storage_client = storage.Client()
+
+    # Get the bucket
+    bucket = storage_client.bucket(bucket_name)
+
+    # List all the blobs (files) with the specified prefix
+    blobs = bucket.list_blobs(prefix=gcs_directory_path)
+
+    # Download each blob to the local directory
+    for blob in blobs:
+        # Construct the relative path of the file
+        relative_path = os.path.relpath(blob.name, gcs_directory_path)
+        local_file_path = os.path.join(local_directory_path, relative_path)
+
+        # Create local directories if they do not exist
+        os.makedirs(os.path.dirname(local_file_path), exist_ok=True)
+
+        # Download the blob to the local file path
+        blob.download_to_filename(local_file_path)
+        logger.info(f"Downloaded {blob.name} to {local_file_path}")
+
+def copy_dataset_from_gcp_to_local(input_gcp_path: os.PathLike) -> os.PathLike:
+    """
+    Load the dataset from GCP.
+    We will download the data from GCP onto local, and then operate on local
+    """
+    # set up input path which can be GCP path, HF Hub path, or local path
+    # handle case of gs:// path which requires downloading resource from GCP to local for processing
+    if input_gcp_path.startswith("gs://"):
+        # parse gs://my-bucket/path/to/mmlu into "my-bucket", "path/to/mmlu", and "mmlu"
+        parsed_url = urlparse(input_gcp_path)
+        bucket = parsed_url.netloc
+        gcp_path = parsed_url.path.lstrip("/")
+        dir_name = os.path.basename(gcp_path)
+        # download the repo from GCP path into local directory which is basename of provided path (e.g. mmlu)
+        download_directory_from_gcs(bucket, gcp_path, dir_name)
+        input_path = dir_name
+    else:
+        raise Exception('Input is not a GCP path')
+
+    return input_path
+
+def create_subset_name(dir_name: os.PathLike, subset_name: str) -> os.PathLike:
+    """ Creates a new dir name that incorporates the subset name.
+    e.g., create_subset_name('gs://thisserver/testfolder-a982374', 'testsubset') -> 'gs://thisserver/testfolder-testsubset-a982374'  
+    """
+    end_name = dir_name.split('/')[-1]
+    _matches = re.match('(.*-)(.*)$', end_name)
+    prefix = _matches[1]
+    suffix = _matches[2]
+    new_end_name = f"{prefix}{subset_name}-{suffix}"
+    return dir_name.replace(end_name, new_end_name)
+
 @ray.remote
 def transform_hf_dataset(cfg: TransformSFTDatasetConfig):
+    local_dir = copy_dataset_from_gcp_to_local(cfg.input_path)
+    
     if not cfg.subsets:
         # No subset is defined, so process all subsets
-        cfg.subsets = [x for x in datasets.get_dataset_infos(path=cfg.input_path)]
+        cfg.subsets = [x for x in datasets.get_dataset_infos(path=local_dir)]
+    
     for subset in cfg.subsets:
-        dataset = datasets.load_dataset(path=cfg.input_path, name=subset, split='train')
-        output_path = create_shard_output_directory(cfg.output_path + f'-{subset}')
+        dataset = datasets.load_dataset(path=local_dir, name=subset, split='train')
+        subset_output_path = create_subset_name(cfg.output_path, subset)
+        output_path = create_shard_output_directory(subset_output_path)
         
         rows = [r for r in dataset] 
         del dataset # saves memory
