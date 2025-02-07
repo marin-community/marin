@@ -5,6 +5,7 @@ from instruction_datasets import get_instruction_dataset
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text import LMSupervisedDatasetConfig
 from levanter.models.llama import LlamaConfig
+from levanter.models.rotary import Llama3RotaryEmbeddingsConfig
 from levanter.optim import AdamConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
@@ -15,22 +16,17 @@ from marin.processing.tokenize.tokenize import TokenizeConfig, levanter_tokenize
 from marin.training.training import TrainSFTOnPodConfig, run_levanter_sft
 
 # Get instruction dataset
-tulu_3_dataset = get_instruction_dataset("allenai/tulu-3-sft-mixture")
+openthoughts_dataset = get_instruction_dataset("open-r1/OpenThoughts-114k-math")
 
-# Number of tokens is 670,426,314
-NUM_TRAIN_TOKENS = 670426314
-# number of epochs over the dataset set to reproduce Olmo SFT v2
-# or Tulu 3 starting from Llama 3.1 8B. This script
-# is used to reproduce the Tulu 3 SFT model.
-# Link: https://huggingface.co/allenai/Llama-3.1-Tulu-3-8B
-NUM_TRAIN_STEPS = NUM_TRAIN_TOKENS // (128 * 4096) * 2  # 2 epochs
+# TODO: tune this for a good number of steps
+NUM_TRAIN_STEPS = 2500
 
 # Add tokenization step
-tulu3_llama_tokenize_step = ExecutorStep(
-    name="tokenized/tulu_sft_v3_llama3_tokenizer",
+openthoughts_llama_tokenize_step = ExecutorStep(
+    name="tokenized/openthoughts_llama3_tokenizer",
     fn=levanter_tokenize_sft,
     config=TokenizeConfig(
-        train_paths=[output_path_of(tulu_3_dataset, "**/*.jsonl.gz")],
+        train_paths=[output_path_of(openthoughts_dataset, "**/*.jsonl.gz")],
         validation_paths=[],
         cache_path=this_output_path(),
         tokenizer=llama3_tokenizer,
@@ -41,18 +37,19 @@ tulu3_llama_tokenize_step = ExecutorStep(
     description="Tokenize chat SFT data",
 )
 
-llama_8b_tulu3_model = ExecutorStep(
-    name="checkpoints/llama3.1_8b_tulu_3",
+seed = 1
+tulu3_sft_8b_openthoughts_model = ExecutorStep(
+    name=f"checkpoints/tulu3_sft_openthoughts{seed}",
     fn=run_levanter_sft,
     config=TrainSFTOnPodConfig(
         output_path=this_output_path(),
         tpu_type="v4-128",
         tokenizer=llama3_tokenizer,
-        chat_train_urls=[output_path_of(tulu_3_dataset, "**/*.jsonl.gz")],
+        chat_train_urls=[output_path_of(openthoughts_dataset, "**/*.jsonl.gz")],
         supervised_data=LMSupervisedDatasetConfig(
-            cache_dir=output_path_of(tulu3_llama_tokenize_step), input_field="user", output_field="assistant"
+            cache_dir=output_path_of(openthoughts_llama_tokenize_step), input_field="user", output_field="assistant"
         ),
-        initialize_from_hf=True,
+        initialize_from_hf=False,
         model_name_or_path="meta-llama/Llama-3.1-8B",
         max_seq_len=4096,
         # Modify the nested trainer config by creating a new one
@@ -61,27 +58,37 @@ llama_8b_tulu3_model = ExecutorStep(
                 project="marin",
             ),
             mp=jmp.get_policy("p=f32,c=bfloat16"),
+            seed=seed,
             train_batch_size=128,
             num_train_steps=NUM_TRAIN_STEPS,
             checkpointer=CheckpointerConfig(
                 save_interval=timedelta(minutes=10),
                 keep=[dict(every=25000)],
             ),
+            initialize_from="gs://meta-llama/Llama-3.1-8B",
         ),
         model=LlamaConfig(
             seq_len=4096,  # Seq len set to reproduce Tulu SFT
             hidden_dim=4096,
-            intermediate_dim=11008,
+            intermediate_dim=14336,
             num_layers=32,
             num_heads=32,
-            num_kv_heads=32,
+            num_kv_heads=8,
             use_bias=False,
-            use_layer_norm_weight=False,
+            use_layer_norm_weight=True,
             initializer_range=0.02,
             use_flash_attention=True,
             flash_attention_block_size=512,
+            rope=Llama3RotaryEmbeddingsConfig(
+                # Using Llama3 defaults from the code
+                theta=500000,
+                factor=8.0,
+                low_freq_factor=1.0,
+                high_freq_factor=4.0,
+                original_max_position_embeddings=8192,
+            ),
         ),
-        # Reproduce Tulu 3 SFT Linear warmup for the first 3% of total training time, then cooldown to 0
+        # TODO: tune this for a good learning rate
         optimizer=AdamConfig(
             learning_rate=5e-6,  #  5x10^-6
             weight_decay=0.0,
@@ -100,4 +107,4 @@ llama_8b_tulu3_model = ExecutorStep(
 
 
 if __name__ == "__main__":
-    executor_main(steps=[tulu3_llama_tokenize_step, llama_8b_tulu3_model])
+    executor_main(steps=[openthoughts_llama_tokenize_step, tulu3_sft_8b_openthoughts_model])
