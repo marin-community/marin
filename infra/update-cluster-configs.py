@@ -10,6 +10,7 @@ template_path = os.path.join(this_path, "marin-cluster-template.yaml")
 
 DOCKER_TAGS = {
     "us-central2": "6da1c9ed",
+    "big-run": "6da1c9ed",
     "us-west4": "6da1c9ed",
     "europe-west4": "6da1c9ed",
     "us-east1": "b63a1e90",
@@ -29,6 +30,15 @@ configs = {
         "DOCKER_TAG": DOCKER_TAGS["us-central2"],
         "tpu_generation": "v4",
         "min_workers": 4,
+    },
+    "marin-big-run": {
+        "NAME": "marin-big-run",
+        "REGION": "us-central2",
+        "ZONE": "us-central2-b",
+        "BUCKET": "marin-us-central2",
+        "DOCKER_TAG": DOCKER_TAGS["big-run"],
+        "tpu_generation": "v4",
+        "min_workers": 0,
     },
     "marin-eu-west4": {
         "NAME": "marin-eu-west4",

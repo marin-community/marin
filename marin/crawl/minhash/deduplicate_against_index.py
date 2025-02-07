@@ -21,19 +21,19 @@ python marin/run/ray_run.py \
     --no_wait -- \
     python marin/crawl/minhash/deduplicate_against_index.py \
     --index_path 'gs://marin-us-central2/scratch/nfliu/minhash/fineweb_edu_minhash_index/index' \
-    --input_patterns '["gs://marin-us-central2/scratch/nfliu/text/fineweb-edu-10M/*_text_and_scores.parquet"]' \
-    --parquets_paths_file 'gs://marin-us-central2/scratch/nfliu/fineweb_edu_10M_paths.txt' \
-    --minhash_base_path 'gs://marin-us-central2/scratch/nfliu/minhash/fineweb_edu_10M_minhash_against_fineweb_edu' \
-    --minhash_logs_path 'gs://marin-us-central2/scratch/nfliu/minhash/logs/fineweb_edu_10M_minhash_against_fineweb_edu_logs'
+    --input_patterns '["gs://marin-us-central2/scratch/nfliu/text/fineweb-edu-10M/*_text_and_scores.passing.parquet"]' \
+    --parquets_paths_file 'gs://marin-us-central2/scratch/nfliu/fineweb_edu_10M_passing_paths.txt' \
+    --minhash_base_path 'gs://marin-us-central2/scratch/nfliu/minhash/fineweb_edu_10M_passing_minhash_against_fineweb_edu' \
+    --minhash_logs_path 'gs://marin-us-central2/scratch/nfliu/minhash/logs/fineweb_edu_10M_passing_minhash_against_fineweb_edu_logs'
 
 # Move the deduplicated content
-gcloud storage mv gs://marin-us-central2/scratch/nfliu/minhash/fineweb_edu_10M_minhash_against_fineweb_edu/deduplicated_output/* gs://marin-us-central2/scratch/nfliu/text/fineweb_edu_10M_minhash_against_fineweb_edu/
+gcloud storage mv gs://marin-us-central2/scratch/nfliu/minhash/fineweb_edu_10M_passing_minhash_against_fineweb_edu/deduplicated_output/* gs://marin-us-central2/scratch/nfliu/text/fineweb_edu_10M_passing_minhash_against_fineweb_edu/
 # Remove the logs and intermediate output
-gcloud storage rm --recursive gs://marin-us-central2/scratch/nfliu/minhash/fineweb_edu_10M_minhash_against_fineweb_edu
-gcloud storage rm --recursive gs://marin-us-central2/scratch/nfliu/minhash/fineweb_edu_10M_minhash_against_fineweb_edu_logs
+gcloud storage rm --recursive gs://marin-us-central2/scratch/nfliu/minhash/fineweb_edu_10M_passing_minhash_against_fineweb_edu
+gcloud storage rm --recursive gs://marin-us-central2/scratch/nfliu/minhash/logs/fineweb_edu_10M_passing_minhash_against_fineweb_edu_logs
 ```
 
-Deduplicating open-web-math-10M against open-web-math:
+Deduplicating open-web-math-10M-passing against open-web-math:
 
 ```
 python marin/run/ray_run.py \
@@ -41,16 +41,16 @@ python marin/run/ray_run.py \
     --no_wait -- \
     python marin/crawl/minhash/deduplicate_against_index.py \
     --index_path 'gs://marin-us-central2/scratch/nfliu/minhash/open_web_math_minhash_index/index' \
-    --input_patterns '["gs://marin-us-central2/scratch/nfliu/text/open-web-math-fde8ef8-10M/*_text_and_scores.parquet"]' \
-    --parquets_paths_file 'gs://marin-us-central2/scratch/nfliu/open-web-math-fde8ef8-10M_paths.txt' \
-    --minhash_base_path 'gs://marin-us-central2/scratch/nfliu/minhash/open_web_math_10M_minhash_against_open_web_math' \
-    --minhash_logs_path 'gs://marin-us-central2/scratch/nfliu/minhash/open_web_math_10M_minhash_against_open_web_math_logs'
+    --input_patterns '["gs://marin-us-central2/scratch/nfliu/text/open-web-math-fde8ef8-10M/*_text_and_scores.passing.parquet"]' \
+    --parquets_paths_file 'gs://marin-us-central2/scratch/nfliu/open-web-math-fde8ef8-10M-passing_paths.txt' \
+    --minhash_base_path 'gs://marin-us-central2/scratch/nfliu/minhash/open_web_math_10M_passing_minhash_against_open_web_math' \
+    --minhash_logs_path 'gs://marin-us-central2/scratch/nfliu/minhash/open_web_math_10M_passing_minhash_against_open_web_math_logs'
 
 # Move the deduplicated content
-gcloud storage mv gs://marin-us-central2/scratch/nfliu/minhash/open_web_math_10M_minhash_against_open_web_math/deduplicated_output/* gs://marin-us-central2/scratch/nfliu/text/open_web_math_10M_minhash_against_open_web_math/
+gcloud storage mv gs://marin-us-central2/scratch/nfliu/minhash/open_web_math_10M_passing_minhash_against_open_web_math/deduplicated_output/* gs://marin-us-central2/scratch/nfliu/text/open_web_math_10M_passing_minhash_against_open_web_math/
 # Remove the logs and intermediate output
-gcloud storage rm --recursive gs://marin-us-central2/scratch/nfliu/minhash/open_web_math_10M_minhash_against_open_web_math
-gcloud storage rm --recursive gs://marin-us-central2/scratch/nfliu/minhash/open_web_math_10M_minhash_against_open_web_math_logs
+gcloud storage rm --recursive gs://marin-us-central2/scratch/nfliu/minhash/open_web_math_10M_passing_minhash_against_open_web_math
+gcloud storage rm --recursive gs://marin-us-central2/scratch/nfliu/minhash/open_web_math_10M_passing_minhash_against_open_web_math_logs
 ```
 
 """  # noqa: E501
@@ -117,7 +117,7 @@ def minhash_deduplicate_against_index(
             for path in fsspec_glob(pattern):
                 assert path.startswith("gs://marin-us-central2/")
                 input_parquet_paths.append(path.removeprefix("gs://marin-us-central2/"))
-        with fsspec.open(parquets_paths_file, "w") as f:
+        with fsspec.open(parquets_paths_file, "w", block_size=1 * 1024 * 1024 * 1024) as f:
             for path in tqdm(input_parquet_paths, desc="Writing parquets paths file"):
                 f.write(path + "\n")
 
