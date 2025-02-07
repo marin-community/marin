@@ -114,6 +114,7 @@ class ResiliparseConfig(ExtractionConfig):
     preserve_formatting: bool = False
     main_content: bool = True
     links: bool = False
+    prepend_title: bool = True
 
     list_bullets: bool = True
     alt_texts: bool = False
@@ -138,10 +139,10 @@ class ResiliparseConfig(ExtractionConfig):
 
     @property
     def resiliparse_kwargs(self) -> dict:
-        exclude = {"use_custom_variant", "markdownify_config"}
+        exclude = {"use_custom_variant", "markdownify_config", "prepend_title"}
         return {f.name: getattr(self, f.name) for f in fields(self) if f.name not in exclude and (self.use_custom_variant and f.name != "preserve_formatting")}
 
     @property
     def markdownify_kwargs(self) -> dict:
-        exclude = {"use_custom_variant", *list(self.resiliparse_kwargs.keys())}
+        exclude = {"use_custom_variant", *list(self.resiliparse_kwargs.keys()), "prepend_title"}
         return {f.name: getattr(self, f.name) for f in fields(self.markdownify_config) if f.name not in exclude}

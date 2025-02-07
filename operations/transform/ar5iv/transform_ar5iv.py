@@ -15,7 +15,7 @@ import draccus
 import fsspec
 import ray
 from bs4 import BeautifulSoup
-from tqdm_loggable.auto import tqdm
+# from tqdm_loggable.auto import tqdm
 
 from marin.schemas.web.convert import ExtractionConfig
 from marin.utils import fsspec_glob
@@ -30,6 +30,9 @@ from scripts.ar5iv.transform import (
     remove_figure_captions,
     remove_footnotes,
     remove_references,
+    remove_title,
+    remove_title_page,
+    transform_abstract,
     unwrap_eqn,
 )
 
@@ -49,8 +52,9 @@ class Ar5ivExtractionConfig:
 def clean_html(html: str, remove_reference_section: bool = True) -> str:
     html = BeautifulSoup(html, "html.parser")
 
+    transform_abstract(html)
     remove_authors(html)
-    # remove_title_page(html)
+    remove_title_page(html)
     # clean_li(html)
     remove_biblio(html)
     remove_footnotes(html)
