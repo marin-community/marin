@@ -37,7 +37,7 @@ if __name__ == "__main__":
                 preserve_formatting=True,
                 main_content=True,
                 links=False,
-                skip_elements=["div.navbox", "span.portal-bar", "div#catlinks", "h2#References", "h2#External_links", "h2#See_also", "div#p-navigation", "span.mw-editsection", "h2.Further_reading"],
+                skip_elements=["div.navbox", "span.portal-bar", "div#catlinks", "h2#References", "h2#External_links", "h2#See_also", "div#p-navigation", "span.mw-editsection", "h2.Further_reading", "header", "a.mw-jump-link", "div.printfooter", "div.vector-header-container", ".noprint", "span.mw-cite-backlink", "sup.reference", "div#mw-indicators", "span.portal-barion", "h2#Notes"],
                 use_custom_variant=True,
                 markdownify_config=HtmlToMarkdownConfig(
                     include_images=False,
