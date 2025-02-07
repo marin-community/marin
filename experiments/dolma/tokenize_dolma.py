@@ -59,6 +59,18 @@ DOLMA_DATASETS = {
 def tokenize_dolma_steps(
         *, base_path="tokenized/", tokenizer=llama3_tokenizer, substitute: dict[str, list[str]] | None = None, prefix: str = None
 ) -> dict[str, TokenizerStep]:
+    """
+    Tokenizes the Dolma 1.7 datasets.
+
+    Args:
+        base_path (str): The base path for the tokenized datasets.
+        tokenizer (Callable[[], Tokenizer]): The tokenizer to use.
+        substitute (dict[str, list[str]] | None): The datasets to substitute from the base dataset.
+        prefix (str | None): The key prefix to use for the substituted datasets.
+
+    Returns:
+        dict[str, ExecutorStep[TokenizeConfig]]: The steps for the tokenized datasets.
+    """
     dolma_steps: dict[str, ExecutorStep[TokenizeConfig]] = {}
     for dataset, files in DOLMA_DATASETS.items():
         data_files = None

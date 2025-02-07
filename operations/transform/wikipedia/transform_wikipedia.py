@@ -13,7 +13,7 @@ import draccus
 import fsspec
 import ray
 from bs4 import BeautifulSoup
-from tqdm_loggable.auto import tqdm
+from tqdm import tqdm
 
 from marin.schemas.web.convert import ExtractionConfig
 from marin.utils import fsspec_glob
@@ -30,6 +30,7 @@ class WikiExtractionConfig:
     extract_method: str
     extract_config: ExtractionConfig
     remove_reference_section: bool
+    max_files: int | None = None
 
 
 def remove_and_append_infobox(html: str) -> str:
@@ -44,11 +45,14 @@ def remove_and_append_infobox(html: str) -> str:
         infobox.extract()
 
         # Create new section with heading
+        br = soup.new_tag("br")
         notes_section = soup.new_tag("div")
+        notes_section.append(br)
         heading = soup.new_tag("h2")
-        heading.string = "Notes"
+        heading.string = "InfoBox"
         notes_section.append(heading)
         notes_section.append(infobox)
+        notes_section.append(br)
 
         # Find the body tag and append the new section
         body = soup.find('body')
@@ -70,7 +74,7 @@ def remove_references_from_html(html: str) -> str:
     if reflist:
         reflist.extract()
 
-    ref_heading = soup.find("span", {"id": "References"})
+    ref_heading = soup.find("h2", {"id": "References"})
     if ref_heading:
         ref_heading.extract()
 
@@ -111,9 +115,8 @@ def process_file(input_file_path: str, output_path: str, extract_method: str, ex
                         content = row["article_body"]["wikitext"]
                     elif "html" in row["article_body"]:
                         html_string = row["article_body"]["html"]
-                        filtered_html = clean_wiki_html(html_string, remove_reference_section)
                         content = convert_page(
-                            filtered_html, extract_method=extract_method, config=extract_config
+                            html_string, extract_method=extract_method, config=extract_config
                         )["content"]
                     else:
                         logger.error(f"No content found in the row: {row}")
@@ -154,6 +157,9 @@ def process_wiki_dump(cfg: WikiExtractionConfig) -> None:
     result_refs = []
     MAX_CONCURRENT_WORKERS = 15
 
+    if cfg.max_files:
+        files = files[:cfg.max_files]
+
     for file in files:
         if len(result_refs) > MAX_CONCURRENT_WORKERS:
             ready_refs, result_refs = ray.wait(result_refs, num_returns=1)
@@ -165,7 +171,13 @@ def process_wiki_dump(cfg: WikiExtractionConfig) -> None:
 
         output_path = os.path.join(cfg.output_path, cfg.revision)
         result_refs.append(
-            process_file.remote(
+            process_file.options(
+                runtime_env={
+                    "pip": [
+                        "resiliparse_dom @ git+https://github.com/stanford-crfm/chatnoir-resiliparse@f1cf65075ef6720356bf672e13b32b152f18f039#egg=resiliparse_dom&subdirectory=resiliparse_dom"
+                    ]
+                }
+            ).remote(
                 file, output_path, cfg.extract_method, cfg.extract_config, cfg.remove_reference_section
             )
         )
