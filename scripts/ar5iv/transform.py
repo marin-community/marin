@@ -10,6 +10,14 @@ from bs4 import BeautifulSoup
 import pathlib
 
 
+def transform_abstract(html: BeautifulSoup):
+    # Transform the abstract from h6 to h2
+    abstract = html.findAll("h6", {"class": "ltx_title_abstract"})
+    for ab in abstract:
+        ab.name = "h2"
+    return html
+
+
 def remove_authors(html: BeautifulSoup):
     # Remove authors since we only care about information after first section
     authors = html.findAll("div", {"class": "ltx_authors"})
