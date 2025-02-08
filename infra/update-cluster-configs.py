@@ -10,13 +10,15 @@ template_path = os.path.join(this_path, "marin-cluster-template.yaml")
 
 DOCKER_TAGS = {
     "us-central2": "6da1c9ed",
+    "big-run": "6da1c9ed",
     "us-west4": "6da1c9ed",
     "europe-west4": "6da1c9ed",
-    "us-east1": "6da1c9ed",
+    "us-east1": "b63a1e90",
     "us-east5": "6da1c9ed",
     # NB: different naming convention because we have two zones in europe-west4
     "europe-west4-a": "6da1c9ed",
     "asia-northeast1": "6da1c9ed",
+    "marin-us-east5-b-vllm": "d97b0693",
 }
 
 configs = {
@@ -28,6 +30,15 @@ configs = {
         "DOCKER_TAG": DOCKER_TAGS["us-central2"],
         "tpu_generation": "v4",
         "min_workers": 4,
+    },
+    "marin-big-run": {
+        "NAME": "marin-big-run",
+        "REGION": "us-central2",
+        "ZONE": "us-central2-b",
+        "BUCKET": "marin-us-central2",
+        "DOCKER_TAG": DOCKER_TAGS["big-run"],
+        "tpu_generation": "v4",
+        "min_workers": 0,
     },
     "marin-eu-west4": {
         "NAME": "marin-eu-west4",
@@ -83,6 +94,16 @@ configs = {
         "tpu_generation": "v6e",
         "min_workers": 0,
     },
+    "marin-us-east5-b-vllm": {
+        "NAME": "marin-us-east5-b-vllm",
+        "REGION": "us-east5",
+        "ZONE": "us-east5-b",
+        "BUCKET": "marin-us-east5",
+        "DOCKER_TAG": DOCKER_TAGS["marin-us-east5-b-vllm"],
+        "tpu_generation": "v6e-serve",
+        "min_workers": 2,
+        "VLLM": True,
+    },
 }
 
 generation_configs = {
@@ -106,11 +127,18 @@ generation_configs = {
         "slices": [8, 16, 32, 64, 128, 256],
         "num_tpus": 4,
     },
+    "v6e-serve": {
+        "runtime_version": "v2-alpha-tpuv6e",
+        "base_worker": "8",
+        "slices": [],
+        "num_tpus": 8,
+    },
 }
 
 
 def make_tpu_slice_config(generation, count) -> dict[str, dict]:
     slice_gen_name = "v5litepod" if generation == "v5e" else generation
+    slice_gen_name = "v6e" if generation == "v6e-serve" else slice_gen_name
     name = f"tpu_slice_{generation}_{count}"
     return {
         name: {

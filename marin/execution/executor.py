@@ -102,7 +102,7 @@ from marin.execution.executor_step_status import (
     get_latest_status_from_gcs,
     get_status_path,
 )
-from marin.execution.status_actor import StatusActor
+from marin.execution.status_actor import PreviousTaskFailedError, StatusActor
 from marin.utilities.executor_utils import get_pip_dependencies
 from marin.utilities.json_encoder import CustomJsonEncoder
 
@@ -742,7 +742,7 @@ def _get_ray_status(current_owner_task_id: str | None) -> str | None:
     return current_owner_ray_status
 
 
-def get_status(output_path: str, current_owner_task_id: str | None) -> str | None:
+def get_status(output_path: str, current_owner_task_id: str | None, states: dict) -> str | None:
     """Get the status of an output Path. This retruns the status of the output path
     there is no status anywhere (i.e. brand-new step) -> return None
     a task is currently running a step -> return WAITING
@@ -750,6 +750,18 @@ def get_status(output_path: str, current_owner_task_id: str | None) -> str | Non
     """
 
     current_owner_ray_status = _get_ray_status(current_owner_task_id)
+
+    num_unknown = states.get("num_unknown", 0)  # Number of times the status was unknown
+    # We check how many times has times ray has returned status Unknown in a row. If it returns more than 20 times,
+    # We assume ray has lost that task and we use GCP status instead.
+    if current_owner_ray_status == STATUS_UNKNOWN:
+        num_unknown += 1
+        states["num_unknown"] = num_unknown
+        if num_unknown > 20:
+            current_owner_ray_status = None
+            states["num_unknown"] = 0
+    else:
+        states["num_unknown"] = 0  # Reset the counter
 
     # Immediately return if the ray status is unknown or running, we don't need to check GCS
     if current_owner_ray_status in [STATUS_UNKNOWN, STATUS_RUNNING]:
@@ -784,9 +796,12 @@ def should_run(
     """Check if the step should run or not based on the status of the step."""
 
     log_once = True
+    get_status_states = {}  # States used by get_status, since get_status is stateless we keep them here
     while True:
         current_owner_task_id = ray.get(status_actor.get_task_id_with_lock.remote(output_path=output_path))
-        status = get_status(output_path, current_owner_task_id)
+
+        # get_status also updates get_status_states via internal mutation
+        status = get_status(output_path, current_owner_task_id, get_status_states)
 
         if log_once:
             logger.info(f"Status {step_name} : {status}.")
@@ -808,7 +823,7 @@ def should_run(
             logger.info(f"Force running {step_name}, previous status: {status}")
             return True
         else:
-            raise Exception(f"Step {step_name} failed previously. Status: {status}")
+            raise PreviousTaskFailedError(f"Step {step_name} failed previously. Status: {status}")
     else:
         logger.info(f"Step {step_name} has already succeeded. Status: {status}")
         return False
@@ -837,10 +852,13 @@ def execute_after_dependencies(
         if not should_run(output_path, step_name, status_actor, ray_task_id, force_run_failed):
             append_status(status_path, STATUS_SUCCESS, ray_task_id=ray_task_id, message="Step was already successful")
             return
-    except Exception as e:
+    except PreviousTaskFailedError as e:
         # Failed due to some exception
         message = traceback.format_exc()
         append_status(status_path, STATUS_FAILED, message=message, ray_task_id=ray_task_id)
+        raise e
+    except Exception as e:
+        logger.error(f"Error while checking if the step should run [This is a Ray related Error]: {e}")
         raise e
 
     append_status(status_path, STATUS_WAITING, ray_task_id=ray_task_id)
