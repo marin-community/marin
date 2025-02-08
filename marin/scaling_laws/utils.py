@@ -29,6 +29,8 @@ try:
 except ImportError:
     pd: Any = None
 
+OPTIMIZATION_TOLERANCE = 1e-10
+
 ####################################################################################################
 # Power law helpers
 
@@ -127,7 +129,7 @@ def fit_power_law(
         initial_guess,
         method="L-BFGS-B",
         bounds=bounds,
-        options={"ftol": 1e-10, "gtol": 1e-10, "maxiter": 1000},
+        options={"ftol": OPTIMIZATION_TOLERANCE, "gtol": OPTIMIZATION_TOLERANCE, "maxiter": 1000},
     )
 
     if not result.success:
@@ -175,7 +177,7 @@ def fit_sigmoidal(L: np.ndarray, y: np.ndarray, initial_guess: Sequence[float] |
         return predict_sigmoidal([a, b, k, L_0], L)
 
     # use scipy.optimize.curve_fit
-    popt, _ = curve_fit(objective, L, y, p0=initial_guess, bounds=bounds, maxfev=5000, method="trf", ftol=1e-10)
+    popt, _ = curve_fit(objective, L, y, p0=initial_guess, bounds=bounds, maxfev=5000, method="trf", ftol=OPTIMIZATION_TOLERANCE)
 
     return popt
 
@@ -288,6 +290,14 @@ def aggregate_steps(
     group_col: str = "run",
 ) -> pd.DataFrame:
     """
+    Aggregates the steps for each run.
+
+    Args:
+        df: DataFrame
+        step_mode: how to aggregate the steps
+        step_range: range of steps to aggregate
+        group_col: column to group by
+    
     step_mode can be:
       - "average": average step_range across each run
       - "last": pick the max step within step_range
@@ -475,7 +485,7 @@ def fit_scaling_laws(
         project: WandB project
         pred_run: run ID to predict scaling laws for- if None, no prediction is done
         projection_points: list of ProjectionPoint objects to project to
-        aggregation: how to aggregate steps within each run
+        aggregation: how to aggregate steps within each run (all/last/average)
         tokens_col: column name for the number of tokens
         param_col: column name for the number of parameters
         use_log_for_ND: whether to use log space for N and D
@@ -492,7 +502,7 @@ def fit_scaling_laws(
         summary_fields=(param_col,),
     )
 
-    # Process loss data
+    # Process loss data- remove 0-token runs, apply aggregation to the ladder runs' checkpoints (if specified)      
     loss_df_filtered = filter_zero_d(loss_df, tokens_col)
     loss_df_agg = aggregate_steps(loss_df_filtered, step_mode=aggregation)
 
@@ -535,6 +545,7 @@ def fit_scaling_laws(
             summary_fields=(param_col,),
         )
 
+       
         loss_pred_filtered = filter_zero_d(loss_pred_df, tokens_col)
         loss_pred_agg = aggregate_steps(loss_pred_filtered, step_mode=aggregation)
 
