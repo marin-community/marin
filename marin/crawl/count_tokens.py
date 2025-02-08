@@ -3,24 +3,34 @@
 Given a pattern of parquet or jsonl.gz files, count the number of tokens
 in the documents.
 
-Counting tokens in fineweb-edu-10M:
+Counting tokens in fineweb-edu-10M (all fetched pages):
 
 ```
 python marin/run/ray_run.py \
     --no_wait -- \
     python marin/crawl/count_tokens.py \
-    --input_patterns '["gs://marin-us-central2/scratch/nfliu/text/fineweb-edu-10M/*_text_and_scores.parquet"]' \
-    --output_path "gs://marin-us-central2/scratch/nfliu/count_tokens/fineweb-edu-10M/"
+    --input_patterns '["gs://marin-us-central2/scratch/nfliu/text/fineweb-edu-10M/links.*_text_and_scores*.parquet"]' \
+    --output_path "gs://marin-us-central2/scratch/nfliu/count_tokens/fineweb-edu-10M_all/"
 ```
 
-Counting tokens in fineweb-edu-10M (deduplicated):
+Counting tokens in fineweb-edu-10M (passing pages):
 
 ```
 python marin/run/ray_run.py \
     --no_wait -- \
     python marin/crawl/count_tokens.py \
-    --input_patterns '["gs://marin-us-central2/scratch/nfliu/text/fineweb-edu-10M-minhash/*.jsonl.gz"]' \
-    --output_path "gs://marin-us-central2/scratch/nfliu/count_tokens/fineweb-edu-10M-minhash/"
+    --input_patterns '["gs://marin-us-central2/scratch/nfliu/text/fineweb-edu-10M/*.passing.parquet"]' \
+    --output_path "gs://marin-us-central2/scratch/nfliu/count_tokens/fineweb-edu-10M_passing/"
+```
+
+Counting tokens in fineweb-edu-10M (passing, deduplicated against fineweb-edu):
+
+```
+python marin/run/ray_run.py \
+    --no_wait -- \
+    python marin/crawl/count_tokens.py \
+    --input_patterns '["gs://marin-us-central2/scratch/nfliu/text/fineweb_edu_10M_passing_minhash_against_fineweb_edu/*.jsonl.gz"]' \
+    --output_path "gs://marin-us-central2/scratch/nfliu/count_tokens/fineweb_edu_10M_passing_minhash_against_fineweb_edu/"
 ```
 
 Counting tokens in fineweb-edu:
@@ -63,24 +73,34 @@ python marin/run/ray_run.py \
     --output_path "gs://marin-us-central2/scratch/nfliu/count_tokens/open-web-math-fde8ef8/"
 ```
 
-Counting tokens in open-web-math-10M:
+Counting tokens in open-web-math-10M (all fetched pages):
 
 ```
 python marin/run/ray_run.py \
     --no_wait -- \
     python marin/crawl/count_tokens.py \
     --input_patterns '["gs://marin-us-central2/scratch/nfliu/text/open-web-math-fde8ef8-10M/*.parquet"]' \
-    --output_path "gs://marin-us-central2/scratch/nfliu/count_tokens/open_web_math_10M/"
+    --output_path "gs://marin-us-central2/scratch/nfliu/count_tokens/open_web_math_10M_all/"
 ```
 
-Counting tokens in open-web-math-10M (deduplicated against open-web-math):
+Counting tokens in open-web-math-10M (passing pages):
 
 ```
 python marin/run/ray_run.py \
     --no_wait -- \
     python marin/crawl/count_tokens.py \
-    --input_patterns '["gs://marin-us-central2/scratch/nfliu/text/open_web_math_10M_minhash_against_open_web_math/*.jsonl.gz"]' \
-    --output_path "gs://marin-us-central2/scratch/nfliu/count_tokens/open_web_math_10M_minhash_against_open_web_math/"
+    --input_patterns '["gs://marin-us-central2/scratch/nfliu/text/open-web-math-fde8ef8-10M/*.passing.parquet"]' \
+    --output_path "gs://marin-us-central2/scratch/nfliu/count_tokens/open_web_math_10M_passing/"
+```
+
+Counting tokens in open-web-math-10M (passing, deduplicated against open-web-math):
+
+```
+python marin/run/ray_run.py \
+    --no_wait -- \
+    python marin/crawl/count_tokens.py \
+    --input_patterns '["gs://marin-us-central2/scratch/nfliu/text/open_web_math_10M_passing_minhash_against_open_web_math/*.jsonl.gz"]' \
+    --output_path "gs://marin-us-central2/scratch/nfliu/count_tokens/open_web_math_10M_passing_minhash_against_open_web_math/"
 ```
 """  # noqa: E501
 import json
@@ -112,7 +132,7 @@ def count_tokens_in_jsonl_file(input_path: str, tokenizer_name: str) -> tuple[in
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
     total_tokens = 0
     num_documents = 0
-    with fsspec.open(input_path, "rt", compression="infer") as f:
+    with fsspec.open(input_path, "rt", compression="infer", block_size=1 * 1024 * 1024 * 1024) as f:
         for line in tqdm(f, desc=os.path.basename(input_path)):
             data = json.loads(line)
             total_tokens += len(tokenizer.encode(data["text"]))
@@ -137,7 +157,7 @@ def count_tokens_in_shard(input_path: str, shard_output_path: str, tokenizer_nam
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     if fsspec_exists(shard_output_path):
         logger.info(f"Found output at {shard_output_path}, re-using results...")
-        with fsspec.open(shard_output_path) as f:
+        with fsspec.open(shard_output_path, block_size=1 * 1024 * 1024 * 1024) as f:
             loaded_results = json.load(f)
             saved_num_tokens = loaded_results["num_tokens"]
             saved_num_documents = loaded_results["num_documents"]
@@ -149,7 +169,7 @@ def count_tokens_in_shard(input_path: str, shard_output_path: str, tokenizer_nam
     else:
         raise ValueError(f"Failed to detect filetype for path {input_path}")
 
-    with fsspec.open(shard_output_path, "w") as f:
+    with fsspec.open(shard_output_path, "w", block_size=1 * 1024 * 1024 * 1024) as f:
         json.dump({"input_path": input_path, "num_tokens": num_tokens, "num_documents": num_documents}, f)
     return num_tokens, num_documents
 
@@ -203,7 +223,7 @@ def count_tokens(input_patterns: list[str], output_path: str, tokenizer_name: st
                 submit_shard_task(input_paths.pop())
     logger.info(f"Total number of tokens: {num_tokens}, total number of documents: {num_documents}")
     aggregated_stats_output_path = os.path.join(output_path, "total_token_counts.json")
-    with fsspec.open(aggregated_stats_output_path, "w") as f:
+    with fsspec.open(aggregated_stats_output_path, "w", block_size=1 * 1024 * 1024 * 1024) as f:
         json.dump({"num_tokens": num_tokens, "num_shards": num_shards_to_process}, f)
 
 
