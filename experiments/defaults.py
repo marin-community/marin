@@ -21,8 +21,9 @@ from levanter.store.cache import CacheOptions
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 
+from experiments.anneal_config import AnnealConfig
 from experiments.evals.task_configs import CORE_TASKS, convert_to_levanter_task_config
-from experiments.llama import compute_num_parameters
+from experiments.llama import compute_num_parameters, llama_8b
 from experiments.paloma import paloma_tokenized
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig
@@ -38,6 +39,7 @@ from marin.processing.tokenize import (
     TokenizerStep,
     add_validation_sets_to_mixture,
     lm_data_config,
+    lm_mixture_data_config,
     tokenize,
 )
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
@@ -200,6 +202,52 @@ def default_train(
             initialize_from_checkpoint_path=train_config.initialize_from_checkpoint_path,
         ),
         pip_dependency_groups=["tokenize_train"],
+    )
+
+
+def default_anneal(name: str, anneal_config: AnnealConfig = AnnealConfig()):
+    if anneal_config.target_dataset is None:
+        logger.warning(
+            "Target dataset was not provided. Setting target_dataset to None. \
+            This will train on the high-quality web text dataset only."
+        )
+
+    dataset_components = {
+        "high-quality-web-text": anneal_config.high_quality_web_text_dataset,
+    }
+    dataset_weights = {
+        "high-quality-web-text": 1.0,
+    }
+    if anneal_config.target_dataset is not None:
+        dataset_components["target-dataset"] = anneal_config.target_dataset
+        dataset_weights["target-dataset"] = anneal_config.target_dataset_proportion
+        dataset_weights["high-quality-web-text"] = anneal_config.high_quality_web_text_proportion
+
+    num_train_steps = anneal_config.checkpoint_step + anneal_config.num_anneal_training_tokens / (
+        anneal_config.train_batch_size * AnnealConfig.LLAMA_MAX_SEQ_LEN
+    )
+
+    anneal_stage_train_config = SimpleTrainConfig(
+        tpu_type=anneal_config.tpu_type,
+        node_count=anneal_config.node_count,
+        train_batch_size=anneal_config.train_batch_size,
+        num_train_steps=num_train_steps,
+        learning_rate=anneal_config.learning_rate,
+        weight_decay=anneal_config.weight_decay,
+        steps_per_export=anneal_config.steps_per_export,
+        lr_schedule=anneal_config.lr_schedule,
+        initialize_from_checkpoint_path=anneal_config.initialize_from_checkpoint_path.format(
+            checkpoint_step=anneal_config.checkpoint_step
+        ),
+    )
+
+    anneal_stage_data_mix = lm_mixture_data_config(
+        components=dataset_components,
+        weights=dataset_weights,
+    )
+
+    return default_train(
+        name=name, tokenized=anneal_stage_data_mix, model_config=llama_8b, train_config=anneal_stage_train_config
     )
 
 
