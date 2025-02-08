@@ -111,7 +111,7 @@ def hash_func(s: str):
     return int.from_bytes(h[:16], "big", signed=True)
 
 
-@ray.remote(memory=350 * 1024 * 1024 * 1024, num_cpus=8)
+@ray.remote(memory=250 * 1024 * 1024 * 1024, num_cpus=8)
 def deduplicate_shard(
     bloom_filter_path: str,
     shard_path_batch: str,
