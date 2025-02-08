@@ -77,6 +77,52 @@ def default_validation_sets(tokenizer: str, base_path: str = "tokenized/") -> di
     return paloma_tokenized(base_path=base_path, tokenizer=tokenizer)
 
 
+def simulated_epoching_train(
+    name: str,
+    tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig,
+    model_config: LmConfig,
+    train_config: SimpleTrainConfig,
+    target_budget: int,
+    tags: Sequence[str] = (),
+    use_default_validation: bool = True,
+    eval_harness_tasks: Sequence[EvalTaskConfig] = CORE_TASKS,
+) -> ExecutorStep:
+    """
+    Simulates the number of epochs seen in a full training run by sub-sampling individual datasets.
+    Otherwise, operates the same as default_train.
+
+    Args:
+        name:  The name of the training run. Will form the basis of the output path for the executor step.
+        tokenized:  The tokenized data to train on. This can be an InputName, ExecutorStep, or LMMixtureDatasetConfig.
+        model_config: Levanter LmConfig for the model to train.
+        train_config: SimpleTrainConfig for the training run.
+        target_budget: Target token budget to simulate.
+        tags: Any additional tags to add to the Wandb tracker.
+        use_default_validation: Whether to use the default validation sets (currently Paloma).
+        eval_harness_tasks: List of evaluation harness tasks. Defaults to the CORE set of tasks. Use () or [] to disable.
+    """
+    pretraining_data = _prepare_data_config(tokenized, use_default_validation)
+
+    # Extract sequence length from model configuration
+    seq_len = model_config.Pos.size
+
+    # Calculate the experiment token budget
+    experiment_budget = train_config.train_batch_size * train_config.num_train_steps * seq_len
+
+    simulated_pretraining_data = dataclasses.replace(
+        pretraining_data, target_budget=target_budget, experiment_budget=experiment_budget
+    )
+
+    logger.info(
+        f"Simulating Epoching Behavior, Experiment Tokens {experiment_budget}, "
+        + "Simulated Target Tokens {target_budget}"
+    )
+
+    return default_train(
+        name, simulated_pretraining_data, model_config, train_config, tags, use_default_validation, eval_harness_tasks
+    )
+
+
 def default_train(
     name: str,
     tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig,
@@ -179,10 +225,18 @@ def default_train(
                 weight_decay=(
                     train_config.weight_decay if train_config.weight_decay is not None else AdamConfig().weight_decay
                 ),
-                warmup=train_config.warmup if train_config.warmup is not None else AdamConfig().warmup,
-                decay=train_config.decay if train_config.decay is not None else AdamConfig().decay,
-                lr_schedule=train_config.lr_schedule if train_config.lr_schedule is not None else AdamConfig.lr_schedule,
-                cycle_length=train_config.cycle_length,
+                beta1=(train_config.beta1 if train_config.beta1 is not None else AdamConfig().beta1),
+                beta2=(train_config.beta2 if train_config.beta2 is not None else AdamConfig().beta2),
+                epsilon=(train_config.epsilon if train_config.epsilon is not None else AdamConfig().epsilon),
+                max_grad_norm=(
+                    train_config.max_grad_norm if train_config.max_grad_norm is not None else AdamConfig().max_grad_norm
+                ),
+                warmup=(train_config.warmup if train_config.warmup is not None else AdamConfig().warmup),
+                decay=(train_config.decay if train_config.decay is not None else AdamConfig().decay),
+                lr_schedule=(
+                    train_config.lr_schedule if train_config.lr_schedule is not None else AdamConfig().lr_schedule
+                ),
+                cycle_length=train_config.cycle_length,  # can be int, list[int], or None
                 min_lr_ratio=(
                     train_config.min_lr_ratio if train_config.min_lr_ratio is not None else AdamConfig().min_lr_ratio
                 ),

@@ -29,3 +29,10 @@ class StatusActor:
 
     def get_task_id_locks(self):
         return self.task_id_locks.copy()
+
+
+class PreviousTaskFailedError(Exception):
+    """Custom exception for specific error handling."""
+
+    def __init__(self, message):
+        super().__init__(message)
