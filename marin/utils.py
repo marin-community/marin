@@ -336,3 +336,8 @@ def is_in_ci() -> bool:
         bool: True if running in CI, False otherwise.
     """
     return "CI" in os.environ
+
+
+def get_directory_friendly_name(name: str) -> str:
+    """Convert a huggingface repo name to a directory friendly name."""
+    return name.replace("/", "--").replace(".", "-").replace("#", "-")
