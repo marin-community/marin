@@ -624,7 +624,7 @@ class Executor:
         """Return the URL where the experiment can be viewed."""
         # TODO: remove hardcoding
         if self.prefix.startswith("gs://"):
-            host = "https://marlin-subtle-barnacle.ngrok-free.app"
+            host = "https://crfm.stanford.edu/marin/data_browser"
         else:
             host = "http://localhost:5000"
 
