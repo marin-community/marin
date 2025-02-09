@@ -182,10 +182,10 @@ def deduplicate_shard(
 
             example_link_targets = [parsed_example["link_target"] for parsed_example in parsed_examples]
             logger.info(f"Canonicalizing and hashing {len(example_link_targets)} link targets")
-            BATCH_SIZE = 500_000
+            canonicalize_and_hash_batch_size = 500_000
             canonicalized_and_hashed_batch_refs = []
-            for i in range(0, len(example_link_targets), BATCH_SIZE):
-                batch = example_link_targets[i : i + BATCH_SIZE]
+            for i in range(0, len(example_link_targets), canonicalize_and_hash_batch_size):
+                batch = example_link_targets[i : i + canonicalize_and_hash_batch_size]
                 canonicalized_and_hashed_batch_refs.append(canonicalize_and_hash_link_targets.remote(batch))
             logger.info(
                 f"Launched {len(canonicalized_and_hashed_batch_refs)} remote functions to "
