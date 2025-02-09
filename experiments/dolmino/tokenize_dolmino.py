@@ -34,11 +34,13 @@ DOLMINO_DATASETS = {
 def tokenize_dolmino_steps(*, base_path="tokenized/", tokenizer=llama3_tokenizer) -> dict[str, TokenizerStep]:
     dolmino_steps: dict[str, ExecutorStep[TokenizeConfig]] = {}
     for split, patterns in DOLMINO_DATASETS.items():
+        dolmino_split_output_path = os.path.join(base_path, "dolmino", split)
+        dolmino_split_input_base_path = os.path.join(BASE_DIR_DOLMINO, split)
         dolmino_steps[os.path.join("dolmino", split)] = ExecutorStep(
-            name=os.path.join(base_path, "dolmino", split),
+            name=dolmino_split_output_path,
             fn=tokenize,
             config=TokenizeConfig(
-                train_paths=versioned([f"{BASE_DIR_DOLMINO}/{pattern}" for pattern in patterns]),
+                train_paths=versioned([f"{dolmino_split_input_base_path}/{pattern}" for pattern in patterns]),
                 validation_paths=versioned([]),
                 cache_path=this_output_path(),
                 tokenizer=versioned(tokenizer),
