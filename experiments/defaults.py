@@ -205,23 +205,10 @@ def default_train(
     )
 
 
-def default_anneal(name: str, anneal_config: AnnealConfig = AnnealConfig()):
-    if anneal_config.target_dataset is None:
-        logger.warning(
-            "Target dataset was not provided. Setting target_dataset to None. \
-            This will train on the high-quality web text dataset only."
-        )
-
-    dataset_components = {
-        "high-quality-web-text": anneal_config.high_quality_web_text_dataset,
-    }
-    dataset_weights = {
-        "high-quality-web-text": 1.0,
-    }
-    if anneal_config.target_dataset is not None:
-        dataset_components["target-dataset"] = anneal_config.target_dataset
-        dataset_weights["target-dataset"] = anneal_config.target_dataset_proportion
-        dataset_weights["high-quality-web-text"] = anneal_config.high_quality_web_text_proportion
+def default_anneal(name: str, anneal_config: AnnealConfig):
+    assert (
+        anneal_config.target_dataset is not None and anneal_config.high_quality_web_text_dataset is not None
+    ), "Target dataset and high-quality web text dataset must be provided."
 
     num_train_steps = anneal_config.checkpoint_step + anneal_config.num_anneal_training_tokens / (
         anneal_config.train_batch_size * AnnealConfig.LLAMA_MAX_SEQ_LEN
@@ -240,6 +227,15 @@ def default_anneal(name: str, anneal_config: AnnealConfig = AnnealConfig()):
             checkpoint_step=anneal_config.checkpoint_step
         ),
     )
+
+    dataset_components = {
+        "high-quality-web-text": anneal_config.high_quality_web_text_dataset,
+        "target-dataset": anneal_config.target_dataset,
+    }
+    dataset_weights = {
+        "high-quality-web-text": anneal_config.high_quality_web_text_proportion,
+        "target-dataset": anneal_config.target_dataset_proportion,
+    }
 
     anneal_stage_data_mix = lm_mixture_data_config(
         components=dataset_components,
