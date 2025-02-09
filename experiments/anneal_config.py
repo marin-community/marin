@@ -1,6 +1,5 @@
 from dataclasses import dataclass
 
-from experiments.exp72_baselines import fineweb_edu_tokenized
 from marin.execution.executor import ExecutorStep
 
 
@@ -34,7 +33,7 @@ class AnnealConfig:
     steps_per_export: int = 10000
 
     # Annealing dataset and proportions
-    high_quality_web_text_dataset: ExecutorStep = fineweb_edu_tokenized
+    high_quality_web_text_dataset: ExecutorStep | None = None
     target_dataset: ExecutorStep | None = None
     high_quality_web_text_proportion: float = 0.70
     target_dataset_proportion: float = 0.30
