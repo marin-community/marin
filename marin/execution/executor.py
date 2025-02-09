@@ -765,9 +765,9 @@ def get_status(output_path: str, current_owner_task_id: str | None, states: dict
             logger.info(
                 f"Status of {output_path = } is {current_owner_gcs_status} as per GCP. There is no Task in Ray."
                 f"This generally indicates that the cluster was killed when this task was running. "
-                f"We are rerunning this task."
+                f"We are waiting for this task till it finishes."
             )
-            current_owner_gcs_status = None
+            current_owner_gcs_status = STATUS_RUNNING
 
         return current_owner_gcs_status
 
