@@ -826,6 +826,15 @@ def execute_after_dependencies(
 
     """
 
+    import sys
+
+    try:
+        print("Inside execute_after_dependencies (start of function)")
+        print(ray.get_runtime_context().runtime_env.get("pip", {}).get("packages", []))
+        print(sys.path)
+    except Exception as e:
+        print(f"Error in printing env in execute_after_dependencies: {e}")
+
     ray_task_id = ray.get_runtime_context().get_task_id()
 
     status_path = get_status_path(output_path)

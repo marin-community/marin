@@ -431,9 +431,11 @@ if __name__ == "__main__":
             version_tag=version_tag(learning_rate_dict[model_size])
         )
         for model_size in ["600m_0.003"]
-        for num_train_steps in [1200]
+        for num_train_steps in [12000]
+        # for cooldown_frac in [0.02, 0.05, 0.1, 0.2]
+        # for duration_frac_stage2 in [0.02]
         for cooldown_frac in [0.02, 0.05, 0.1, 0.2]
-        for duration_frac_stage2 in [0.02, 0.05, 0.1, 0.2]
+        for duration_frac_stage2 in [0.05, 0.1, 0.2]
     ]
 
     steps = list(chain(*stage_pairs))
