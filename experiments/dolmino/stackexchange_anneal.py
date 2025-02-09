@@ -6,6 +6,9 @@ from marin.execution.executor import executor_main
 dolmino_dclm = get_dolmino_step("dclm")
 stackexchange_tokenized = get_dolmino_step("stackexchange")
 
+# Dolmino Stack Exchange dataset has 1.26B tokens.
+# Our mixed dataset is 30% dolmino and 70% high-quality web data.
+# This means we will epoch dolmino dataset 2 times.
 stackexchange_anneal_config = AnnealConfig(
     target_dataset=stackexchange_tokenized,
     high_quality_web_text_dataset=dolmino_dclm,
@@ -14,11 +17,8 @@ stackexchange_anneal_config = AnnealConfig(
     num_anneal_training_tokens=8_400_000_000,
 )
 
-# Dolmino Stack Exchange dataset has 1.26B tokens.
-# Our mixed dataset is 30% dolmino and 70% high-quality web data.
-# This means we will epoch dolmino dataset 2 times.
 stackexchange_anneal_model = default_anneal(
-    name="llama-8b-anneal-stackexchange",
+    name="llama-8b-anneal-stackexchange-0",
     anneal_config=stackexchange_anneal_config,
 )
 

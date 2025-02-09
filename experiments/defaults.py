@@ -210,17 +210,29 @@ def default_anneal(name: str, anneal_config: AnnealConfig):
         anneal_config.target_dataset is not None and anneal_config.high_quality_web_text_dataset is not None
     ), "Target dataset and high-quality web text dataset must be provided."
 
-    num_train_steps = anneal_config.checkpoint_step + anneal_config.num_anneal_training_tokens / (
+    num_anneal_steps = anneal_config.num_anneal_training_tokens / (
         anneal_config.train_batch_size * AnnealConfig.LLAMA_MAX_SEQ_LEN
     )
+    num_train_steps = anneal_config.checkpoint_step + num_anneal_steps
+
+    # We need to simulate having a learning rate that decays from anneal_config.learning rate to 0
+    # over the course of the training. However, we have already taken anneal_config.checkpoint_step steps,
+    # so we need to calculate what the max lr would've been if we had started training with a linear schedule
+    # and then decayed it to 0 over the course of the training.
+    # The formula for the max lr is:
+    # max_lr = num_train_steps * slope
+    # slope = anneal_config.learning_rate / num_anneal_steps
+
+    learning_rate = num_train_steps * (anneal_config.learning_rate / num_anneal_steps)
 
     anneal_stage_train_config = SimpleTrainConfig(
         tpu_type=anneal_config.tpu_type,
         node_count=anneal_config.node_count,
         train_batch_size=anneal_config.train_batch_size,
         num_train_steps=num_train_steps,
-        learning_rate=anneal_config.learning_rate,
+        learning_rate=learning_rate,
         weight_decay=anneal_config.weight_decay,
+        min_lr_ratio=anneal_config.min_lr_ratio,
         steps_per_export=anneal_config.steps_per_export,
         lr_schedule=anneal_config.lr_schedule,
         initialize_from_checkpoint_path=anneal_config.initialize_from_checkpoint_path.format(

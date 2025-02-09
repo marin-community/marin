@@ -20,6 +20,7 @@ class AnnealConfig:
 
     # Training schedule related
     learning_rate: float = 1e-3
+    min_lr_ratio: float = 0.0
     weight_decay: float = 0.05
     lr_schedule: str = "linear"
     train_batch_size: int = 1024
