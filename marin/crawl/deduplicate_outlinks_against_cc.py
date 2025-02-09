@@ -111,6 +111,17 @@ def hash_func(s: str):
     return int.from_bytes(h[:16], "big", signed=True)
 
 
+@ray.remote(memory=4 * 1024 * 1024 * 1024)
+def canonicalize_and_hash_link_targets(link_targets: list[str]) -> list[tuple[str, int, int]]:
+    results = []
+    for link_target in link_targets:
+        canonicalized_link_target = w3lib.url.canonicalize_url(link_target)
+        hashed_link_target = hash_func(link_target)
+        hashed_canonicalized_link_target = hash_func(canonicalized_link_target)
+        results.append((canonicalized_link_target, hashed_link_target, hashed_canonicalized_link_target))
+    return results
+
+
 @ray.remote(memory=250 * 1024 * 1024 * 1024, num_cpus=8)
 def deduplicate_shard(
     bloom_filter_path: str,
@@ -169,16 +180,27 @@ def deduplicate_shard(
                     num_outlinks += 1
             logger.info(f"Done reading links from {shard_path}")
 
+            example_link_targets = [parsed_example["link_target"] for parsed_example in parsed_examples]
+            logger.info(f"Canonicalizing and hashing {len(example_link_targets)} link targets")
+            BATCH_SIZE = 500_000
+            canonicalized_and_hashed_batch_refs = []
+            for i in range(0, len(example_link_targets), BATCH_SIZE):
+                batch = example_link_targets[i : i + BATCH_SIZE]
+                canonicalized_and_hashed_batch_refs.append(canonicalize_and_hash_link_targets.remote(batch))
+            logger.info(
+                f"Launched {len(canonicalized_and_hashed_batch_refs)} remote functions to "
+                "canonicalize and hash link targets"
+            )
+            canonicalized_and_hashed_link_targets = list(itertools.chain(*ray.get(canonicalized_and_hashed_batch_refs)))
+            logger.info(f"Canonicalized and hashed {len(example_link_targets)} link targets")
+
             seen_link_targets = set()
             deduplicated_examples = []
             logger.info(f"Deduplicating examples in {shard_path}...")
-            for parsed_example in parsed_examples:
+            for parsed_example, (canonicalized_link_target, hashed_link_target, hashed_canonicalized_link_target) in zip(
+                parsed_examples, canonicalized_and_hashed_link_targets, strict=True
+            ):
                 link_target = parsed_example["link_target"]
-                hashed_link_target = hash_func(link_target)
-
-                canonicalized_link_target = w3lib.url.canonicalize_url(link_target)
-                hashed_canonicalized_link_target = hash_func(canonicalized_link_target)
-
                 if (
                     hashed_link_target not in bloom_filter
                     and hashed_canonicalized_link_target not in bloom_filter
