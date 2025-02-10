@@ -212,20 +212,6 @@ register_adapter(
 # Define adapter (parser) for dataset
 register_adapter(
     TransformAdapter(
-        source="chiheemwong/fldx2_sft_nl",
-        dataset_format=InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN,
-        conversation_column="messages",
-        role_key="role",
-        user_value="user",
-        assistant_value="assistant",
-        system_value="system",
-        content_key="content",
-    )
-)
-
-# Define adapter (parser) for dataset
-register_adapter(
-    TransformAdapter(
         source="cognitivecomputations/dolphin-r1",
         dataset_format=InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN,
         conversation_column="messages",

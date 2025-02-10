@@ -46,6 +46,8 @@ class TransformSFTDatasetConfig:
             for the columns to use.
         source (str): The name of the HuggingFace dataset. This is used to get the correct adapter.
         filetype (str): The filetype of the input file. Currently supports jsonl, json, and parquet.
+        subsets: Data subsets (from HuggingFace config) to use. Empty list indicates to use all/default subset(s).
+        splits: Data splits (e.g., `train`, `validation`) to use. Empty list indicates to use all splits. Defaults to `train` only
     """
 
     input_path: str
@@ -54,7 +56,8 @@ class TransformSFTDatasetConfig:
     metadata_columns: list[str]
     source: str
     filetype: str
-    subsets: list[str] = field(default_factory=lambda: ["all"])
+    subsets: list[str] = field(default_factory=lambda: [])  # Default behavior is to use all subsets
+    splits: list[str] = field(default_factory=lambda: ["train"])  # Set to train; empty set means everything
 
 
 def generate_hash_from_messages(messages: list[dict[str, str]]) -> str:
@@ -196,7 +199,8 @@ def transform_dataset(cfg: TransformSFTDatasetConfig):
 def download_directory_from_gcs(bucket_name: str, gcs_directory_path: str, local_directory_path: str) -> None:
     """
     Download an entire directory from a GCS bucket to a local directory.
-    Note: function copied from marin/raw2json/huggingface/qa/raw2json.py
+    Note: function mostly copied from marin/raw2json/huggingface/qa/raw2json.py. Added lines to skip provenance.json
+        since it is an added file that will cause `datasets` to fail.
 
     Args:
         bucket_name (str): The name of the GCS bucket.
@@ -255,9 +259,9 @@ def copy_dataset_from_gcp_to_local(input_gcp_path: os.PathLike) -> os.PathLike:
     return input_path
 
 
-def create_subset_name(dir_name: os.PathLike, subset_name: str | None) -> os.PathLike:
+def create_subset_name(dir_name: os.PathLike, subset_name: str | None, split: str) -> os.PathLike:
     """Creates a new dir name that incorporates the subset name.
-    e.g., create_subset_name('gs://thisserver/testfolder-a982374', 'testsubset') -> 'gs://thisserver/testfolder-testsubset-a982374'
+    e.g., create_subset_name('gs://thisserver/testfolder-a982374', 'subset', 'train') -> 'gs://thisserver/testfolder-subset-train-a982374'
     """
     if subset_name == "default":
         return dir_name
@@ -266,7 +270,10 @@ def create_subset_name(dir_name: os.PathLike, subset_name: str | None) -> os.Pat
     _matches = re.match("(.*-)(.*)$", end_name)
     prefix = _matches[1]
     suffix = _matches[2]
-    new_end_name = f"{prefix}{subset_name}-{suffix}"
+    if (split == "") or (split is None):
+        new_end_name = f"{prefix}{split}-{suffix}"
+    else:
+        new_end_name = f"{prefix}{subset_name}-{split}-{suffix}"
     return dir_name.replace(end_name, new_end_name)
 
 
@@ -279,31 +286,54 @@ def transform_hf_dataset(cfg: TransformSFTDatasetConfig):
     local_dir = copy_dataset_from_gcp_to_local(cfg.input_path)
 
     # 2. Identify subsets
-    if not cfg.subsets:
-        # No subset is defined, so process all subsets
-        subsets = [x for x in datasets.get_dataset_infos(path=local_dir)]
-    else:
+    if cfg.subsets:
         # Process only given subsets
         subsets = cfg.subsets
+    else:
+        # No subset is defined, so process all subsets
+        subsets = [x for x in datasets.get_dataset_infos(path=local_dir)]
 
     # 3. For each subset...
     for subset in subsets:
-        # a. Load dataset
-        dataset = datasets.load_dataset(path=local_dir, name=subset, split="train")
-        rows = [r for r in dataset]
-        del dataset  # saves memory
-        # b. Create GCP target directory
-        subset_output_path = create_subset_name(cfg.output_path, subset)
-        output_path = create_shard_output_directory(subset_output_path)
-        # c. Write shards to GCP
-        for idx, shard in enumerate(range(0, len(rows), cfg.shard_size)):
-            shard_rows = rows[shard : min(shard + cfg.shard_size, len(rows))]
-            shard_filename = os.path.join(output_path, f"shard_{idx:05d}.jsonl.gz")
-            logger.info(f"Writing shard {idx} to {shard_filename}")
-            with fsspec.open(shard_filename, "wt", compression="gzip") as f:
-                transformed_shard_rows = transform_rows(shard_rows, cfg)
-                for row in transformed_shard_rows:
-                    f.write(f"{json.dumps(row)}\n")
+        # Validate splits
+        split_values = [x for x in datasets.get_dataset_infos(path=local_dir)[subset].splits.values()]
+        if isinstance(split_values[0], dict):
+            # Dict obj;
+            data_splits = [x["name"] for x in split_values]
+        else:
+            # SplitInfo obj;
+            data_splits = [x.name for x in split_values]
+
+        if cfg.splits:
+            # Splits are defined, process only these splits
+            splits = cfg.splits
+            # Warn when defined splits are not available
+            extra_splits = list(set(splits).symmetric_difference(data_splits))
+            if extra_splits:
+                logging.log(logging.WARNING, f"Requested split(s) {extra_splits} for {cfg.source} skipped.")
+                splits = list(set(splits).intersection(data_splits))
+        else:
+            # Splits are not defined, we will load everything (default behavior)
+            splits = data_splits
+
+        for split in splits:
+            # a. Load dataset
+            dataset = datasets.load_dataset(path=local_dir, name=subset, split=split)
+            rows = [r for r in dataset]
+            del dataset  # saves memory
+            # b. Create GCP target directory
+            subset_output_path = create_subset_name(cfg.output_path, subset, split)
+            output_path = create_shard_output_directory(subset_output_path)
+            # c. Write shards to GCP
+            for idx, shard in enumerate(range(0, len(rows), cfg.shard_size)):
+                shard_rows = rows[shard : min(shard + cfg.shard_size, len(rows))]
+                shard_filename = os.path.join(output_path, f"shard_{idx:05d}.jsonl.gz")
+                logger.info(f"Writing shard {idx} to {shard_filename}")
+                with fsspec.open(shard_filename, "wt", compression="gzip") as f:
+                    transformed_shard_rows = transform_rows(shard_rows, cfg)
+                    for row in transformed_shard_rows:
+                        f.write(f"{json.dumps(row)}\n")
+            logging.log(logging.INFO, f"Wrote processed data to {output_path}")
 
 
 @draccus.wrap()
