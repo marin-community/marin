@@ -218,6 +218,9 @@ def download_directory_from_gcs(bucket_name: str, gcs_directory_path: str, local
 
     # Download each blob to the local directory
     for blob in blobs:
+        if 'provenance.json' in blob.name:
+            continue
+        
         # Construct the relative path of the file
         relative_path = os.path.relpath(blob.name, gcs_directory_path)
         local_file_path = os.path.join(local_directory_path, relative_path)
@@ -250,10 +253,13 @@ def copy_dataset_from_gcp_to_local(input_gcp_path: os.PathLike) -> os.PathLike:
 
     return input_path
 
-def create_subset_name(dir_name: os.PathLike, subset_name: str) -> os.PathLike:
+def create_subset_name(dir_name: os.PathLike, subset_name: str|None) -> os.PathLike:
     """ Creates a new dir name that incorporates the subset name.
     e.g., create_subset_name('gs://thisserver/testfolder-a982374', 'testsubset') -> 'gs://thisserver/testfolder-testsubset-a982374'  
     """
+    if subset_name == 'default':
+        return dir_name
+    
     end_name = dir_name.split('/')[-1]
     _matches = re.match('(.*-)(.*)$', end_name)
     prefix = _matches[1]
@@ -267,9 +273,11 @@ def transform_hf_dataset(cfg: TransformSFTDatasetConfig):
     
     if not cfg.subsets:
         # No subset is defined, so process all subsets
-        cfg.subsets = [x for x in datasets.get_dataset_infos(path=local_dir)]
+        subsets = [x for x in datasets.get_dataset_infos(path=local_dir)]
+    else:
+        subsets = cfg.subsets
     
-    for subset in cfg.subsets:
+    for subset in subsets:
         dataset = datasets.load_dataset(path=local_dir, name=subset, split='train')
         subset_output_path = create_subset_name(cfg.output_path, subset)
         output_path = create_shard_output_directory(subset_output_path)

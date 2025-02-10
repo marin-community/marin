@@ -42,6 +42,7 @@ class InstructionDatasetConfig:
     metadata_columns: list[str]
     filetype: str
     subsets: list[str] = field(default_factory=lambda: [])
+    legacy: bool = True
 
 
 INSTRUCTION_DATASET_NAME_TO_CONFIG = {
@@ -123,6 +124,7 @@ def download_dataset_step(dataset: InstructionDatasetConfig) -> ExecutorStep:
             gcs_output_path=this_output_path(),
             wait_for_completion=True,
         ),
+        override_output_path=f"raw/{dataset_name}",
     )
 
     return download_step
@@ -153,6 +155,7 @@ def transform_dataset_step(dataset: InstructionDatasetConfig, download_step: Exe
             metadata_columns=versioned(dataset.metadata_columns),
             filetype=dataset.filetype,
             source=dataset.hf_dataset_id,
+            subsets=dataset.subsets,
         ),
     )
 
