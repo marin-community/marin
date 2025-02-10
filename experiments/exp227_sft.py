@@ -9,21 +9,12 @@ from levanter.optim import AdamConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 
-from marin.execution.executor import Executor, ExecutorStep, executor_main, output_path_of, this_output_path
+from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path
 from marin.processing.tokenize.tokenize import TokenizeConfig, levanter_tokenize_sft
 from marin.training.training import TrainSFTOnPodConfig, run_levanter_sft
 
 # Get instruction dataset
 instruction_dataset = get_instruction_dataset("allenai/tulu-v2-sft-mixture-olmo-4096")
-dataset_path = output_path_of(instruction_dataset)
-
-
-# Create executor instance to resolve the paths
-executor = Executor(prefix="gs://marin-us-central2", executor_info_base_path="gs://marin-us-central2/experiments")
-executor.compute_version(instruction_dataset)  # This will populate output_paths
-actual_gcs_path = executor.output_paths[instruction_dataset]
-
-print(f"Resolved dataset path: {actual_gcs_path}")
 
 # Number of tokens in the SFT dataset below
 NUM_TRAIN_TOKENS = 150849275
@@ -35,7 +26,7 @@ tokenize_step = ExecutorStep(
     name="tokenized/olmo702024_sft_4096_3eps",
     fn=levanter_tokenize_sft,
     config=TokenizeConfig(
-        train_paths=[f"{actual_gcs_path}/**/*.jsonl.gz"],
+        train_paths=[output_path_of(instruction_dataset, "**/*.jsonl.gz")],
         validation_paths=[],
         cache_path=this_output_path(),
         tokenizer="EleutherAI/gpt-neox-20b",
@@ -48,13 +39,13 @@ tokenize_step = ExecutorStep(
 
 
 train_step = ExecutorStep(
-    name="checkpoints/olmo7_072024_sft_4096_3eps",
+    name="checkpoints/olmo7_072024_sft_4096_3eps_debug",
     fn=run_levanter_sft,
     config=TrainSFTOnPodConfig(
         output_path=this_output_path(),
         tpu_type="v4-128",
         tokenizer="EleutherAI/gpt-neox-20b",
-        chat_train_urls=[f"{actual_gcs_path}/**/*.jsonl.gz"],
+        chat_train_urls=[output_path_of(instruction_dataset, "**/*.jsonl.gz")],
         supervised_data=LMSupervisedDatasetConfig(
             cache_dir=output_path_of(tokenize_step), input_field="user", output_field="assistant"
         ),
