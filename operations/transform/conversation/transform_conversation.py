@@ -47,7 +47,8 @@ class TransformSFTDatasetConfig:
         source (str): The name of the HuggingFace dataset. This is used to get the correct adapter.
         filetype (str): The filetype of the input file. Currently supports jsonl, json, and parquet.
         subsets: Data subsets (from HuggingFace config) to use. Empty list indicates to use all/default subset(s).
-        splits: Data splits (e.g., `train`, `validation`) to use. Empty list indicates to use all splits. Defaults to `train` only
+        splits: Data splits (e.g., `train`, `validation`) to use. Empty list indicates to use all splits.
+                Defaults to `train` only
     """
 
     input_path: str
