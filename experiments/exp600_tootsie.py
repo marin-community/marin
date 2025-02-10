@@ -12,12 +12,13 @@ For now, we're training on DCLM's best mix, but that will change.
 
 import dataclasses
 
+from levanter.schedule import ScheduleStep
+
 from experiments.dclm.exp433_dclm_run import DCLM_MIXTURE_WEIGHTS
 from experiments.defaults import default_tokenize, default_train
 from experiments.llama import llama3_tokenizer, llama_8b
 from experiments.pretraining_datasets import dclm_baseline, proofpile_2, starcoderdata
 from experiments.simple_train_config import SimpleTrainConfig
-from levanter.schedule import ScheduleStep
 from marin.execution.executor import executor_main
 from marin.processing.tokenize import lm_mixture_data_config
 
@@ -45,8 +46,8 @@ llama_8b_train_config = SimpleTrainConfig(
     num_train_steps=1_000_000,  # using wsd-s so this doesn't really matter
     # these hypers from Table 12 in https://arxiv.org/html/2406.11794v1#A6
     # until step 660,000 we used: this
-    #train_batch_size=1024,
-    #learning_rate=1e-3,  # we get divergence with 2e-3
+    # train_batch_size=1024,
+    # learning_rate=1e-3,  # we get divergence with 2e-3
     # weight_decay=0.05,
     # # WSD-S
     # cycle_length=10000,
@@ -60,7 +61,9 @@ llama_8b_train_config = SimpleTrainConfig(
     train_batch_size=[ScheduleStep(until=660_000, value=1024), ScheduleStep(until=-1, value=3072)],
     # LR doesn't (yet) support the schedule stuff so we just set it to the new value
     # because we're increasing the batch size, we need to increase the LR by \sqrt(ratio), which is ≈1.7x
-    learning_rate=1.7e-3,
+    # learning_rate=1.7e-3,
+    # 2025-02-07: lr of 1.7e-3 was too high, even with higher batch size, so we're going back to 1e-3
+    learning_rate=1e-3,
     # we're also switching to EMA because it's supposed to better than WSD-S
     # to switch to EMA
     decay=0.2,
@@ -70,7 +73,8 @@ llama_8b_train_config = SimpleTrainConfig(
     allow_partial_checkpoint=True,
     allow_out_of_region_reads=False,
     allow_out_of_region_writes=False,
-    steps_per_eval=10000,
+    steps_per_eval=1000,
+    steps_per_task_eval=10000,
 )
 
 llama_8b_tootsie = dataclasses.replace(
