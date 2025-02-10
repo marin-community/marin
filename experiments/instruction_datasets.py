@@ -163,14 +163,18 @@ def transform_dataset_step(dataset_cfg: InstructionDatasetConfig, download_step:
         ...
         "hf_dataset_id": "cognitivecomputations/dolphin-r1",
         "subsets": ["reasoning-flash"],
+        "splits": ['train', 'validation'],
         ...
     }
     output_path_of(download_step) --> gs://.../raw/dolphin-r1-[hash]
 
     Expected files written: [
-        gs://.../dolphin-r1-reasoning-flash-[hash]/shard_00001.json.gz,
+        gs://.../dolphin-r1-reasoning-flash-train-[hash]/shard_00001.json.gz,
         ...
-        gs://.../dolphin-r1-reasoning-flash-[hash]/shard_00055.json.gz,
+        gs://.../dolphin-r1-reasoning-flash-train-[hash]/shard_00055.json.gz,
+        gs://.../dolphin-r1-reasoning-flash-validation-[hash]/shard_00001.json.gz,
+        ...
+        gs://.../dolphin-r1-reasoning-flash-validation-[hash]/shard_00023.json.gz,
     ]
     ===========================================================================
     """
