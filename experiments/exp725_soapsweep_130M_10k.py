@@ -85,11 +85,10 @@ sweep_grids = {
 
 # round 2
 baseline_config = {
-    'learning_rate': 1.6e-2, 
+    'learning_rate': 8e-3, 
     'weight_decay': 0.1,
     'min_lr_ratio': 0,
-    # 'warmup': 2000,
-    'warmup': 1000,
+    'warmup': 2000,
     'beta1': 0.95,
     'beta2': 0.95,
     'epsilon': 1e-15,
@@ -118,13 +117,14 @@ import copy
 for step in target_steps:
     train_configs_130m.append(
         SimpleTrainConfig(
-                        tpu_type=versioned("v4-256"),
+                        tpu_type=versioned("v4-128"),
                         train_batch_size=BATCH_SIZE,
                         steps_per_eval=1000,
                         num_train_steps=step,
                         **baseline_config
                     )
     )
+    
     # for key in sweep_grids:
     #     for value in sweep_grids[key]:
     #         new_config = copy.copy(baseline_config)     

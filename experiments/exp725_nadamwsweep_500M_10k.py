@@ -28,8 +28,8 @@ def format_train_config(prefix: str, config: SimpleTrainConfig):
         f"steps{unwrap_versioned_value(config.num_train_steps)}"
         f"eps{unwrap_versioned_value(config.epsilon)}-"
     )
-    hashed_name = str(hash(name))[:6]
-    return (prefix + '_' + hashed_name + name)[:64]
+    # hashed_name = str(hash(name))[:6]
+    return (prefix + name)[:64]
 
 
 
@@ -48,27 +48,7 @@ def all_combos(**kwargs):
     for combo in itertools.product(*values):
         yield dict(zip(keys, combo, strict=False))
 
-# sweep_grids = {
-#     'learning_rate': [4e-3, 8e-3, 1.6e-2, 3.2e-2],
-#     'weight_decay': [0, 0.1, 0.2],
-#     'min_lr_ratio': [0, 0.05, 0.1],
-#     'warmup': [1000, 2000, 4000, 8000, 16000],
-#     'beta1': [0.8, 0.9, 0.95, 0.98],
-#     'beta2': [0.9, 0.95, 0.98],
-#     'epsilon': [1e-20, 1e-15, 1e-10],
-#     'max_grad_norm': [0, 1.0, 2.0],
-# }
-# baseline_config = {
-#     'learning_rate': 8e-3, 
-#     'weight_decay': 0.1,
-#     'min_lr_ratio': 0,
-#     'warmup': 4000,
-#     'beta1': 0.95,
-#     'beta2': 0.95,
-#     'epsilon': 1e-15,
-#     'max_grad_norm': 1.0
-# }
-
+# round 1
 sweep_grids = {
     'learning_rate': [4e-3, 8e-3, 1.6e-2, 3.2e-2],
     'weight_decay': [0, 0.1, 0.2],
@@ -76,21 +56,9 @@ sweep_grids = {
     'warmup': [1000, 2000, 4000, 8000],
     'beta1': [0.8, 0.9, 0.95, 0.98],
     'beta2': [0.9, 0.95, 0.98],
-    'epsilon': [1e-20, 1e-15, 1e-10],
+    'epsilon': [1e-25, 1e-20],
     'max_grad_norm': [0, 1.0, 2.0],
 }
-# baseline_config = {
-#     'learning_rate': 8e-3, 
-#     'weight_decay': 0.1,
-#     'min_lr_ratio': 0,
-#     'warmup': 2000,
-#     'beta1': 0.95,
-#     'beta2': 0.95,
-#     'epsilon': 1e-15,
-#     'max_grad_norm': 1.0,
-#     'nesterov': True
-# }
-
 
 baseline_config = {
     'learning_rate': 8e-3, 
@@ -100,9 +68,11 @@ baseline_config = {
     'beta1': 0.95,
     'beta2': 0.95,
     'epsilon': 1e-15,
-    'max_grad_norm': 1.0,
+    'max_grad_norm': 0.0,
     'nesterov': True
 }
+
+
 
 versioned_sweep_grids = {}
 versioned_baseline_config = {}

@@ -19,7 +19,7 @@ logger = logging.getLogger("ray")
 
 # Sweep to determine optimal training config
 BATCH_SIZE = 4096
-target_steps = [25000]
+target_steps = [5000]
 TPU_TYPES_130m = ["v4-128"]
 
 
@@ -48,8 +48,8 @@ def format_train_config(prefix: str, config: SimpleTrainConfig):
 
 
 sweep_grids = {
-    # 'learning_rate': [4e-3, 8e-3, 1.6e-2, 3.2e-2],
-    'learning_rate': [8e-3],
+    'learning_rate': [8e-3, 1.6e-2, 3.2e-2, 6.4e-2],
+    'warmup': [500, 1000, 2000, 4000],
 }
 
 
@@ -63,7 +63,6 @@ baseline_config = {
     'epsilon': 1e-15,
     'max_grad_norm': 1.0
 }
-
 
 
 versioned_sweep_grids = {}
@@ -94,20 +93,20 @@ for step in target_steps:
                         **baseline_config
                     )
     )
-    # for key in sweep_grids:
-    #     for value in sweep_grids[key]:
-    #         new_config = copy.copy(baseline_config)     
-    #         if(baseline_config[key] != value):   
-    #             new_config[key] = value
-    #             train_configs_130m.append(
-    #                 SimpleTrainConfig(
-    #                     tpu_type=versioned("v4-128"),
-    #                     train_batch_size=BATCH_SIZE,
-    #                     steps_per_eval=1000,
-    #                     num_train_steps=step,
-    #                     **new_config
-    #                 )
-    #             )
+    for key in sweep_grids:
+        for value in sweep_grids[key]:
+            new_config = copy.copy(baseline_config)     
+            if(baseline_config[key] != value):   
+                new_config[key] = value
+                train_configs_130m.append(
+                    SimpleTrainConfig(
+                        tpu_type=versioned("v4-128"),
+                        train_batch_size=BATCH_SIZE,
+                        steps_per_eval=1000,
+                        num_train_steps=step,
+                        **new_config
+                    )
+                )
 
 from levanter.models.llama import LlamaConfig
 llama_130m = LlamaConfig(
@@ -160,11 +159,11 @@ def make_sweep_steps(
 
 
 steps_130m = make_sweep_steps(
-    prefix="sweep-725-130m-100k",
+    prefix="sweep-725-130m-5k",
     model_config=llama_130m,
     train_configs=train_configs_130m,
     tokenized_data=dclm_mixture_config_llama3,
-    tags=("llama", "130m", "725_adamw_sweep", "dclm", "100k"),
+    tags=("llama", "130m", "725_adamw_sweep", "dclm", "5k"),
 )
 
 

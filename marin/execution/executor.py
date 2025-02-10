@@ -810,7 +810,7 @@ def should_run(
         logger.info(f"Step {step_name} has already succeeded. Status: {status}")
         return False
 
-
+import sys
 @ray.remote
 def execute_after_dependencies(
     fn: ExecutorFunction,
@@ -825,7 +825,11 @@ def execute_after_dependencies(
     Run a function `fn` with the given `config`, after all the `dependencies` have finished.
 
     """
-
+    try:
+        print(ray.get_runtime_context().runtime_env.get("pip", {}).get("packages", []))
+        print(sys.path)
+    except:
+        print("Couldn't get dependency")
     ray_task_id = ray.get_runtime_context().get_task_id()
 
     status_path = get_status_path(output_path)

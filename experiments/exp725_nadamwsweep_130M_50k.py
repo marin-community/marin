@@ -42,8 +42,8 @@ def format_train_config(prefix: str, config: SimpleTrainConfig):
         f"steps{unwrap_versioned_value(config.num_train_steps)}"
         f"eps{unwrap_versioned_value(config.epsilon)}-"
     )
-    hashed_name = str(hash(name))[:6]
-    return (prefix + '_' + hashed_name + name)[:64]
+    # hashed_name = str(hash(name))[:6]
+    return (prefix + name)[:64]
 
 
 
@@ -55,44 +55,18 @@ sweep_grids = {
     'warmup': [1000, 2000, 4000, 8000],
     'beta1': [0.8, 0.9, 0.95, 0.98],
     'beta2': [0.9, 0.95, 0.98],
-    'epsilon': [1e-25, 1e-20, 1e-15, 1e-10],
+    'epsilon': [1e-25, 1e-20],
     'max_grad_norm': [0, 1.0, 2.0],
 }
-# baseline_config = {
-#     'learning_rate': 1.6e-2, 
-#     'weight_decay': 0.1,
-#     'min_lr_ratio': 0,
-#     'warmup': 4000,
-#     'beta1': 0.9,
-#     'beta2': 0.95,
-#     'epsilon': 1e-15,
-#     'max_grad_norm': 1.0
-# }
 
-
-# baseline_config = {
-#     'learning_rate': 1.6e-2, 
-#     'weight_decay': 0.1,
-#     'min_lr_ratio': 0,
-#     'warmup': 2000,
-#     'beta1': 0.9,
-#     'beta2': 0.95,
-#     'epsilon': 1e-15,
-#     'max_grad_norm': 1.0,
-#     'nesterov': True
-# }
-
-
-# round 2
 baseline_config = {
     'learning_rate': 1.6e-2, 
     'weight_decay': 0.1,
     'min_lr_ratio': 0,
-    # 'warmup': 2000,
-    'warmup': 8000,
+    'warmup': 1000,
     'beta1': 0.95,
     'beta2': 0.95,
-    'epsilon': 1e-15,
+    'epsilon': 1e-20,
     'max_grad_norm': 1.0,
     'nesterov': True
 }
