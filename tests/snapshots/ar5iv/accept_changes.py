@@ -1,4 +1,4 @@
-
+import re
 import os
 
 from bs4 import BeautifulSoup
@@ -21,6 +21,9 @@ def prepare_expected_output(html: str, extract_method: str, extract_config: Extr
     content = convert_page(
         filtered_html, extract_method=extract_method, config=extract_config
     )["content"]
+
+    if remove_reference_section:
+        content = re.sub(r'\\\[(?:\d+(?:,\s*\d+)*)\\\]', '', content)
 
     return content
 

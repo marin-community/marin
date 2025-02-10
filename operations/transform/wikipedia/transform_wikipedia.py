@@ -162,14 +162,14 @@ def postprocess_content(content: str, digit_threshold: int, word_threshold: int,
     Postprocesses the content by removing digits, words, and special characters.
     """
 
-    if not content:
+    if not content or len(content) < 10:
         return None
 
-    digit_count = sum(c.isdigit() for c in content)
-    word_count = len(re.findall(r'\b\w+\b', content))
-    special_char_count = sum(not c.isalnum() for c in content)
+    digit_percentage = int(sum(c.isdigit() for c in content) / len(content) * 100)
+    word_percentage = len(content.split())
+    special_char_percentage = int(sum(not c.isalnum() for c in content) / len(content) * 100)
 
-    if digit_count > digit_threshold or word_count > word_threshold or special_char_count > special_char_threshold:
+    if digit_percentage > digit_threshold or word_percentage < word_threshold or special_char_percentage > special_char_threshold:
         return None
 
     return content
@@ -265,7 +265,7 @@ def process_wiki_dump(cfg: WikiExtractionConfig) -> None:
     logger.info(f"Found {len(files)} files to process")
 
     result_refs = []
-    MAX_CONCURRENT_WORKERS = 15
+    MAX_CONCURRENT_WORKERS = 400
 
     if cfg.max_files:
         files = files[:cfg.max_files]
