@@ -21,7 +21,7 @@ from marin.execution.executor import (
 )
 from operations.download.huggingface.download import DownloadConfig
 from operations.download.huggingface.download_hf import download_hf
-from operations.transform.conversation.transform_conversation import TransformSFTDatasetConfig, transform_dataset
+from operations.transform.conversation.transform_conversation import TransformSFTDatasetConfig, transform_dataset, transform_hf_dataset
 
 
 @dataclass(frozen=True)
@@ -34,6 +34,8 @@ class InstructionDatasetConfig:
         wait_for_completion: Whether to wait for the dataset to be downloaded, usually True.
         metadata_columns: The columns to extract from the dataset. Check the dataset's schema for available columns.
         filetype: The filetype of the dataset; check the dataset's files on Hugging Face for the correct filetype.
+        subsets: Data subsets (from HuggingFace config) to use. Empty list indicates to use all/default subset(s).
+        legacy: True uses the Marin function as dataloader. False uses the `datasets` package as dataloader.
     """
 
     hf_dataset_id: str
@@ -41,8 +43,8 @@ class InstructionDatasetConfig:
     wait_for_completion: bool
     metadata_columns: list[str]
     filetype: str
-    subsets: list[str] = field(default_factory=lambda: [])
-    legacy: bool = True
+    subsets: list[str] = field(default_factory=lambda: []) 
+    legacy: bool = False
 
 
 INSTRUCTION_DATASET_NAME_TO_CONFIG = {
@@ -52,6 +54,7 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         wait_for_completion=True,
         metadata_columns=["type"],
         filetype="json",
+        legacy=True,
     ),
     "allenai/tulu-v2-sft-mixture": InstructionDatasetConfig(
         hf_dataset_id="allenai/tulu-v2-sft-mixture",
@@ -59,6 +62,7 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         wait_for_completion=True,
         metadata_columns=["dataset", "id"],
         filetype="parquet",
+        legacy=True,
     ),
     "openbmb/UltraInteract_sft": InstructionDatasetConfig(
         hf_dataset_id="openbmb/UltraInteract_sft",
@@ -66,6 +70,7 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         wait_for_completion=True,
         metadata_columns=["task", "dataset"],
         filetype="parquet",
+        legacy=True,
     ),
     "teknium/OpenHermes-2.5": InstructionDatasetConfig(
         hf_dataset_id="teknium/OpenHermes-2.5",
@@ -73,6 +78,7 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         wait_for_completion=True,
         metadata_columns=["id", "category", "source"],
         filetype="json",
+        legacy=True,
     ),
     "allenai/tulu-v2-sft-mixture-olmo-4096": InstructionDatasetConfig(
         hf_dataset_id="allenai/tulu-v2-sft-mixture-olmo-4096",
@@ -80,6 +86,7 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         wait_for_completion=True,
         metadata_columns=["dataset", "id"],  # Keeping these metadata columns
         filetype="jsonl",  # Corrected from parquet to jsonl based on the file extension
+        legacy=True,
     ),
     "allenai/tulu-3-sft-mixture": InstructionDatasetConfig(
         hf_dataset_id="allenai/tulu-3-sft-mixture",
@@ -87,6 +94,7 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         wait_for_completion=True,
         metadata_columns=["dataset", "id"],  # Keeping these metadata columns
         filetype="parquet",
+        legacy=True,
     ),
         "TIGER-Lab/AceCode-89K": InstructionDatasetConfig(
         hf_dataset_id="TIGER-Lab/AceCode-89K",
@@ -94,6 +102,7 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         wait_for_completion=True,
         metadata_columns=["id", "source"],
         filetype="parquet",
+        legacy=True,
     ),
     "cognitivecomputations/dolphin-r1": InstructionDatasetConfig(
         hf_dataset_id="cognitivecomputations/dolphin-r1",
@@ -114,6 +123,8 @@ def get_directory_friendly_dataset_name(hf_dataset_id: str) -> str:
 
 
 def download_dataset_step(dataset: InstructionDatasetConfig) -> ExecutorStep:
+    """ ExecutorStep for downloading of data from external source to GCP
+    """
     dataset_name = get_directory_friendly_dataset_name(dataset.hf_dataset_id)
     download_step = ExecutorStep(
         name=f"raw/{dataset_name}",
@@ -130,32 +141,47 @@ def download_dataset_step(dataset: InstructionDatasetConfig) -> ExecutorStep:
     return download_step
 
 
-def transform_dataset_step(dataset: InstructionDatasetConfig, download_step: ExecutorStep) -> ExecutorStep:
-    """
-    dataset_name: e.g., "cognitivecomputations/dolphin-r1-reasoning-flash"
-    dataset: {
+def transform_dataset_step(dataset_cfg: InstructionDatasetConfig, download_step: ExecutorStep) -> ExecutorStep:
+    """ ExecutorStep that preprocesses and shards the input dataset.
+    
+    ===========================================================================
+    dataset_cfg: {
         ...
         "hf_dataset_id": "cognitivecomputations/dolphin-r1",
-        "subsets": ["reasoning-flash"]
+        "subsets": ["reasoning-flash"],
         ...
     }
-    Note that the data should have been downloaded to raw/dolphin-r1-[hash]
+    output_path_of(download_step) --> gs://.../raw/dolphin-r1-[hash]
+    
+    Expected files written: [
+        gs://.../dolphin-r1-reasoning-flash-[hash]/shard_00001.json.gz,
+        ...
+        gs://.../dolphin-r1-reasoning-flash-[hash]/shard_00055.json.gz,
+    ]
+    ===========================================================================
     """
-    dataset_name = get_directory_friendly_dataset_name(dataset.hf_dataset_id)
-    download_data = output_path_of(download_step)
+    dataset_name = get_directory_friendly_dataset_name(dataset_cfg.hf_dataset_id)
+    download_data_path = output_path_of(download_step)
 
     # Transform the dataset
+    if dataset_cfg.legacy:
+        # Uses the Marin function
+        transform_fn = transform_dataset
+    else:
+        # Uses the new tranform function that calls `datasets` package
+        transform_fn = transform_hf_dataset
+     
     transform_step = ExecutorStep(
         name=f"documents/{dataset_name}",
-        fn=transform_dataset,
+        fn=transform_fn,
         config=TransformSFTDatasetConfig(
-            input_path=download_data,
+            input_path=download_data_path,
             output_path=this_output_path(),
             shard_size=versioned(5000),
-            metadata_columns=versioned(dataset.metadata_columns),
-            filetype=dataset.filetype,
-            source=dataset.hf_dataset_id,
-            subsets=dataset.subsets,
+            metadata_columns=versioned(dataset_cfg.metadata_columns),
+            filetype=dataset_cfg.filetype,
+            source=dataset_cfg.hf_dataset_id,
+            subsets=dataset_cfg.subsets,
         ),
     )
 
