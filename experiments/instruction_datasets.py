@@ -116,6 +116,13 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         metadata_columns=["score", "refusal", "compliance_rating", "overall_quality"],  # Keeping these metadata columns
         filetype="jsonl",
     ),
+    "open-r1/OpenThoughts-114k-math": InstructionDatasetConfig(
+        hf_dataset_id="open-r1/OpenThoughts-114k-math",
+        revision="2db609d",  # The revision hash shown in the image
+        wait_for_completion=True,
+        metadata_columns=["system", "source", "generated_token_count", "correct"],  # Keeping these metadata columns
+        filetype="parquet",
+    ),
 }
 
 
