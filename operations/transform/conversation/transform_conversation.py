@@ -198,6 +198,7 @@ def transform_dataset(cfg: TransformSFTDatasetConfig):
 def download_directory_from_gcs(bucket_name: str, gcs_directory_path: str, local_directory_path: str) -> None:
     """
     Download an entire directory from a GCS bucket to a local directory.
+    Note: function copied from marin/raw2json/huggingface/qa/raw2json.py
 
     Args:
         bucket_name (str): The name of the GCS bucket.
@@ -234,8 +235,9 @@ def download_directory_from_gcs(bucket_name: str, gcs_directory_path: str, local
 
 def copy_dataset_from_gcp_to_local(input_gcp_path: os.PathLike) -> os.PathLike:
     """
-    Load the dataset from GCP.
-    We will download the data from GCP onto local, and then operate on local
+    Download the data from GCP onto local instance.
+    
+    Note: function modified from marin/raw2json/huggingface/qa/raw2json.py
     """
     # set up input path which can be GCP path, HF Hub path, or local path
     # handle case of gs:// path which requires downloading resource from GCP to local for processing
@@ -269,22 +271,30 @@ def create_subset_name(dir_name: os.PathLike, subset_name: str|None) -> os.PathL
 
 @ray.remote
 def transform_hf_dataset(cfg: TransformSFTDatasetConfig):
+    """ Shards the dataset; copies datafiles from GCP to instance, loads
+    data using the `datasets` package, and write shards to target directory
+    """
+    # 1. Copy data from GCP to local instance
     local_dir = copy_dataset_from_gcp_to_local(cfg.input_path)
     
+    # 2. Identify subsets
     if not cfg.subsets:
         # No subset is defined, so process all subsets
         subsets = [x for x in datasets.get_dataset_infos(path=local_dir)]
     else:
+        # Process only given subsets
         subsets = cfg.subsets
     
+    # 3. For each subset...
     for subset in subsets:
+        # a. Load dataset
         dataset = datasets.load_dataset(path=local_dir, name=subset, split='train')
+        rows = [r for r in dataset]
+        del dataset # saves memory
+        # b. Create GCP target directory 
         subset_output_path = create_subset_name(cfg.output_path, subset)
         output_path = create_shard_output_directory(subset_output_path)
-        
-        rows = [r for r in dataset] 
-        del dataset # saves memory
-        
+        # c. Write shards to GCP
         for idx, shard in enumerate(range(0, len(rows), cfg.shard_size)):
             shard_rows = rows[shard : min(shard + cfg.shard_size, len(rows))]
             shard_filename = os.path.join(output_path, f"shard_{idx:05d}.jsonl.gz")
