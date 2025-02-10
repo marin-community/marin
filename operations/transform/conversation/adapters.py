@@ -222,3 +222,18 @@ register_adapter(
         content_key="content",
     )
 )
+
+
+# Define adapter (parser) for dataset
+register_adapter(
+    TransformAdapter(
+        source="bespokelabs/Bespoke-Stratos-17k",
+        dataset_format=InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN,
+        instruction_column="system",
+        conversation_column="conversations",
+        role_key="from",
+        user_value="user",
+        assistant_value="assistant",
+        content_key="value",
+    )
+)
