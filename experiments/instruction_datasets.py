@@ -127,6 +127,12 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         metadata_columns=["system", "source", "generated_token_count", "correct"],
         filetype="parquet",
     ),
+    "bespokelabs/Bespoke-Stratos-17k": InstructionDatasetConfig(
+        hf_dataset_id="bespokelabs/Bespoke-Stratos-17k",
+        revision="9e9adba",  # The revision hash shown in the image
+        wait_for_completion=True,
+        filetype="parquet",
+    ),
 }
 
 
