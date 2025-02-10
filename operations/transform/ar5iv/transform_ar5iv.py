@@ -33,6 +33,7 @@ from scripts.ar5iv.transform import (
     remove_title_page,
     transform_abstract,
     unwrap_eqn,
+    clean_li,
 )
 
 logger = logging.getLogger("ray")
@@ -54,7 +55,7 @@ def clean_html(html: str, remove_reference_section: bool = True) -> str:
     transform_abstract(html)
     remove_authors(html)
     remove_title_page(html)
-    # clean_li(html)
+    clean_li(html)
     remove_biblio(html)
     remove_footnotes(html)
     remove_biblinks(html)
@@ -71,7 +72,7 @@ def clean_html(html: str, remove_reference_section: bool = True) -> str:
     return str(html)
 
 
-def process_extracted_content(result: str) -> str:
+def process_extracted_content(result: str, remove_reference_section: bool = True) -> str:
     content = result.strip()
 
     # Remove excessive newline characters by replacing multiple \n with a single space
@@ -83,7 +84,9 @@ def process_extracted_content(result: str) -> str:
     # Remove any remaining escaped backslashes (e.g., \\n -> \n)
     content = content.replace('\\\\n', '\n')
 
-    return str(content).strip()
+    content = str(content).strip()
+
+    return content
 
 
 @ray.remote(memory=2 * 1024 * 1024 * 1024)
@@ -104,6 +107,8 @@ def process_file(input_file_path: str, output_path: str, extract_method: str, ex
                 try:
                     filtered_html = clean_html(row["content"].decode("utf-8"), remove_reference_section)
                     result = convert_page(filtered_html, extract_method=extract_method, config=extract_config)
+                    if remove_reference_section:
+                        result["content"] = re.sub(r'\\\[(?:\d+(?:,\s*\d+)*)\\\]', '', result["content"])
 
                     out_dict = {
                         "id": row["filename"],

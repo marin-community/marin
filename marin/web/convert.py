@@ -94,6 +94,9 @@ def convert_page_with_resiliparse(
         content = extract_plain_text(html, **config.resiliparse_kwargs)
 
         if title and config.prepend_title:
+            # remove html tags from title
+            title = re.sub(r'<[^>]*>', '', title).strip()
+
             content = f"{title}\n\n{content}"
 
     else:

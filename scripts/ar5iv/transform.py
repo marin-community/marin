@@ -78,6 +78,11 @@ def remove_references(html: BeautifulSoup):
     for ref in references:
         ref.decompose()
 
+    # Remove the references section
+    references = html.findAll("ul", {"class": "ltx_biblist"})
+    for ref in references:
+        ref.decompose()
+
 
 def linelisting_to_newline(html: BeautifulSoup):
     # Turn new line listings into new lines

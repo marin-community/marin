@@ -20,10 +20,19 @@ ar5iv_no_problem_raw = ExecutorStep(
 )
 
 ar5iv_warnings_raw = ExecutorStep(
-    name="raw/ar5iv/ar5iv-04-2024-warning-with-references",
+    name="raw/ar5iv/ar5iv-04-2024-warning",
     fn=download,
     config=DownloadConfig(
         input_path="gs://marin-us-central2/raw/ar5iv/v04.2024/ar5iv-04-2024-warnings.zip",
+        output_path=this_output_path(),
+    ),
+)
+
+ar5iv_errors_raw = ExecutorStep(
+    name="raw/ar5iv/ar5iv-04-2024-errors",
+    fn=download,
+    config=DownloadConfig(
+        input_path="gs://marin-us-central2/raw/ar5iv/v04.2024/ar5iv-04-2024-errors.zip",
         output_path=this_output_path(),
     ),
 )
@@ -83,9 +92,10 @@ ar5iv_warnings_resiliparse_custom_fork = ExecutorStep(
 if __name__ == "__main__":
     executor_main(
         steps=[
-            ar5iv_no_problem_raw,
+            # ar5iv_no_problem_raw,
             ar5iv_warnings_raw,
-            ar5iv_no_problem_resiliparse_custom_fork,
-            ar5iv_warnings_resiliparse_custom_fork,
+            ar5iv_errors_raw,
+            # ar5iv_no_problem_resiliparse_custom_fork,
+            # ar5iv_warnings_resiliparse_custom_fork,
         ]
     )
