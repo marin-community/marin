@@ -22,6 +22,7 @@ from experiments.instruction_datasets import get_instruction_dataset
 
 marin_prefix = os.environ["MARIN_PREFIX"]
 
+llama_1_9b_1024 = dataclasses.replace(llama_1_9b, seq_len=1024)
 llama_8b_1024 = dataclasses.replace(llama_8b, seq_len=1024)
 
 print("Launching experiment from:", marin_prefix)
@@ -253,7 +254,7 @@ def full_training_varying_mixture(
         "300m": llama_300m,
         "600m": llama_600m,
         "1_9b": llama_1_9b,
-        # "8b": llama_8b,
+        "1_9b_1024": llama_1_9b_1024,
         "8b_1024": llama_8b_1024,
     }[model_size]
 
@@ -297,171 +298,3 @@ def full_training_varying_mixture(
     )
 
     return [train_step]
-
-############################################################
-
-if __name__ == "__main__":
-    # stage_pairs = [
-    #     full_training_varying_mixture(
-    #         data1_name="wiki",
-    #         data2_name="c4",
-    #         total_data1_portion=total_data1_portion,
-    #         duration_frac_stage2=duration_frac_stage2,
-    #         data1_frac_alloc_stage2=1.0,
-    #         schedule_type="linear",
-    #         cooldown_frac=0.05,
-    #         model_size=model_size,
-    #         num_eval=20,
-    #         num_train_steps=3000,
-    #         additional_tags=["debug-wiki"],
-    #         version_tag="-v1"
-    #     )
-    #     for model_size in ["150m"]
-    #     for duration_frac_stage2 in [0.5]
-    #     for total_data1_portion in [0.5, 0.05, 0.005]
-    # ]
-
-    learning_rate_dict = {
-        "150m": 3e-3,
-        "300m": 3e-3,
-        "600m_0.001": 1e-3,
-        "600m_0.003": 3e-3,
-        "1_9b": 3e-4,
-        "8b_1024": 3e-4,
-    }
-
-    chinchilla_steps = {
-        "150m": 3000,
-        "300m": 6000,
-        "600m_0.001": 12000,
-        "600m_0.003": 12000,
-        "1_9b": 38000,
-        "8b_1024": 160000,
-    }
-
-    def version_tag(lr):
-        return f"-lr{lr}" if lr != 3e-3 else ""
-    
-    def correct_model_size(model_size):
-        if model_size == "600m_0.003" or model_size == "600m_0.001":
-            return "600m"
-        return model_size
-
-    # Model scaling
-
-    # stage_pairs = [
-    #     full_training_varying_mixture(
-    #         data1_name="flan",
-    #         data2_name="c4",
-    #         total_data1_portion=0.005,
-    #         duration_frac_stage2=duration_frac_stage2,
-    #         data1_frac_alloc_stage2=1.0,
-    #         schedule_type="linear",
-    #         cooldown_frac=0.05,
-    #         model_size=correct_model_size(model_size),
-    #         num_train_steps=3000,
-    #         learning_rate=learning_rate_dict[model_size],
-    #         additional_tags=["flan-c4-eu-model-scaling"],
-    #         version_tag=version_tag(learning_rate_dict[model_size]) + "-v1"
-    #     )
-    #     for model_size in ["600m_0.001"]
-    #     for duration_frac_stage2 in [0.4]
-    # ]
-
-    # Chinchilla scaling 
-
-    # stage_pairs = [
-    #     full_training_varying_mixture(
-    #         data1_name="flan",
-    #         data2_name="c4",
-    #         total_data1_portion=0.005,
-    #         duration_frac_stage2=duration_frac_stage2,
-    #         data1_frac_alloc_stage2=1.0,
-    #         schedule_type="linear",
-    #         cooldown_frac=0.05,
-    #         model_size=correct_model_size(model_size),
-    #         num_train_steps=chinchilla_steps[model_size],
-    #         learning_rate=learning_rate_dict[model_size],
-    #         additional_tags=["flan-c4-eu-chinchilla-model-scaling"],
-    #         version_tag=version_tag(learning_rate_dict[model_size])
-    #     )
-    #     for model_size in ["1_9b"]
-    #     for duration_frac_stage2 in [0.1]
-    # ]
-
-    # Token scaling
-
-    # stage_pairs = [
-    #     full_training_varying_mixture(
-    #         data1_name="flan",
-    #         data2_name="c4",
-    #         total_data1_portion=0.005,
-    #         duration_frac_stage2=duration_frac_stage2,
-    #         data1_frac_alloc_stage2=1.0,
-    #         schedule_type="linear",
-    #         cooldown_frac=0.05,
-    #         model_size=correct_model_size(model_size),
-    #         num_train_steps=num_train_steps,
-    #         learning_rate=learning_rate_dict[model_size],
-    #         additional_tags=["flan-c4-eu-token-scaling"],
-    #         version_tag=version_tag(learning_rate_dict[model_size])
-    #     )
-    #     for model_size in ["600m_0.001"]
-    #     for num_train_steps in [48000]
-    #     for duration_frac_stage2 in [0.01, 0.02, 0.05, 0.1, 0.2, 0.4]
-    # ]
-
-    # steps = list(chain(*stage_pairs))
-
-    # Confirm optimal learning rate schedule
-
-    # stage_pairs = [
-    #     full_training_varying_mixture(
-    #         data1_name="flan",
-    #         data2_name="c4",
-    #         total_data1_portion=0.005,
-    #         duration_frac_stage2=duration_frac_stage2,
-    #         data1_frac_alloc_stage2=1.0,
-    #         schedule_type="linear",
-    #         cooldown_frac=cooldown_frac,
-    #         model_size=correct_model_size(model_size),
-    #         num_train_steps=num_train_steps,
-    #         learning_rate=learning_rate_dict[model_size],
-    #         additional_tags=["flan-c4-usc2-confirming-0.05-lr-decay"],
-    #         version_tag=version_tag(learning_rate_dict[model_size])
-    #     )
-    #     for model_size in ["600m_0.003"]
-    #     for num_train_steps in [12000]
-    #     for cooldown_frac in [0.02, 0.05, 0.1, 0.2]
-    #     for duration_frac_stage2 in [0.1]
-    #     # for cooldown_frac in [0.02, 0.05, 0.1, 0.2]
-    #     # for duration_frac_stage2 in [0.05, 0.1, 0.2]
-    # ]
-
-    stage_pairs = [
-        full_training_varying_mixture(
-            data1_name="flan",
-            data2_name="c4",
-            total_data1_portion=0.005,
-            duration_frac_stage2=duration_frac_stage2,
-            data1_frac_alloc_stage2=data1_frac_alloc_stage2,
-            schedule_type="linear",
-            cooldown_frac=0.05,
-            model_size=correct_model_size(model_size),
-            num_train_steps=num_train_steps,
-            learning_rate=learning_rate_dict[model_size],
-            additional_tags=["flan-c4-usc2-confirming-all-stage2"],
-            version_tag=version_tag(learning_rate_dict[model_size])
-        )
-        for model_size in ["600m_0.003"]
-        for num_train_steps in [12000]
-        for data1_frac_alloc_stage2 in [0.25, 0.5, 0.75]
-        for duration_frac_stage2 in [0.02, 0.05, 0.1, 0.2]
-    ]
-
-    steps = list(chain(*stage_pairs))
-
-    executor_main(
-        steps=steps,
-        description=f"Test training with varying mixtures",
-    )
