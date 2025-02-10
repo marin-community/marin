@@ -49,7 +49,7 @@ def process_shard(input_path, output_path, shard_id: str, file_list: list) -> No
                             record = {
                                 "filename": filename,
                                 "format": "html",
-                                "content": content.decode("utf-8", errors="replace"),
+                                "content": str(content.decode("utf-8", errors="replace")),
                             }
                             success_record = {
                                 "filename": filename,

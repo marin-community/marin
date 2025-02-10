@@ -1,7 +1,5 @@
 # Localization in an imaginary vector potential
 
-# Localization in an imaginary vector potential
-
 ## Abstract
 
 Eigenfunctions of $`1âd`$ disordered Hamiltonian with constant imaginary vector potential are investigated. Even within the domain of complex eigenvalues the wave functions are shown to be strongly localized. However, this localization is of a very unusual kind. The logarithm of the wave function at different coordinates $`x`$ fluctuates strongly (just like the position of Brownian particle fluctuates in time). After approaching its maximal value the logarithm decreases like the square root of the distance $`\stackrel{Â¯}{(\mathrm{ln}â¡|\mathrm{Ï}_{mâaâx}/\mathrm{Ï}|)^2}â¼|xâx_0|`$. The extension of the model to the quasi-$`1âd`$ case is also considered.
