@@ -10,43 +10,79 @@ The "lively and informative" magazine is aimed at bright pre-teenagers intereste
 
 **Aquila peers into the past....** 
 
-A history feature which spotlights many different topics and famous people. Past examples have included the invention of the metric system and Queen Elizabeth I. **Just Think** 
+A history feature which spotlights many different topics and famous people. Past examples have included the invention of the metric system and Queen Elizabeth I. 
 
-Aquila also has a feature called "Just Think..." (later "Just Think About..."), which introduced basic philosophical concepts, which disappeared in September 2017 and made a comeback in February 2018 with new art. **Science Scene** 
+**Just Think** 
 
-A topic–related page introducing scientific ideas and famous scientists, often including a practical experiment, for example clouds and static lightning. Examples have included a biography of Alfred Nobel and a page explaining how carbon atoms work. **Things to make** 
+Aquila also has a feature called "Just Think..." (later "Just Think About..."), which introduced basic philosophical concepts, which disappeared in September 2017 and made a comeback in February 2018 with new art. 
 
-Arts and crafts page, with creative projects (for example a rooster kite), methods of painting, and sometimes includes biographies of famous artists. **Astra's Guide To Space** 
+**Science Scene** 
 
-This pages explores stars, planets and their moons, with up-to-date information of the latest NASA projects and findings. It has featured facts about the planets, black holes, dinosaurs, gravity, and the question "is there life on other planets?" **Our World** 
+A topic–related page introducing scientific ideas and famous scientists, often including a practical experiment, for example clouds and static lightning. Examples have included a biography of Alfred Nobel and a page explaining how carbon atoms work. 
 
-Discusses important environmental issues, and themes such as evolution, how people live and their beliefs in countries worldwide, archaeology, wildlife projects, time etc. **Brainfeeders** 
+**Things to make** 
 
-A monthly spread full of word and logic puzzles, general knowledge – all topic related. Answers appear at the inside back cover of the magazine. **Book Club** 
+Arts and crafts page, with creative projects (for example a rooster kite), methods of painting, and sometimes includes biographies of famous artists. 
 
-Run by Wordworm, this section interviews authors of certain books, for example *The Bone Sparrow* by Zana Fraillon. It is supported by Book Trust. **Story**  
+**Astra's Guide To Space** 
 
-Every month a two-page story from new writers, often running to two monthly parts. **Aquila News** (previously **Over To You**) 
+This pages explores stars, planets and their moons, with up-to-date information of the latest NASA projects and findings. It has featured facts about the planets, black holes, dinosaurs, gravity, and the question "is there life on other planets?" 
 
-A page where readers can send in letters, reviews, stories, or poems. **Pen Friend Club** 
+**Our World** 
 
-Readers who are looking for penfriends send in details of their name, age, interests and what sort of penfriend they are looking for. This item appears very occasionally, and has now disappeared due to the growing number of 'Aquilanauts' or readers of Aquila. **Competitions** 
+Discusses important environmental issues, and themes such as evolution, how people live and their beliefs in countries worldwide, archaeology, wildlife projects, time etc. 
 
-Each magazine features competitions. Every year, there is a "Finish the Story" challenge. Winners are always credited in later magazines and often their practical work will be reproduced. ### Features that no longer exist
+**Brainfeeders** 
+
+A monthly spread full of word and logic puzzles, general knowledge – all topic related. Answers appear at the inside back cover of the magazine. 
+
+**Book Club** 
+
+Run by Wordworm, this section interviews authors of certain books, for example *The Bone Sparrow* by Zana Fraillon. It is supported by Book Trust. 
+
+**Story**  
+
+Every month a two-page story from new writers, often running to two monthly parts. 
+
+**Aquila News** (previously **Over To You**) 
+
+A page where readers can send in letters, reviews, stories, or poems. 
+
+**Pen Friend Club** 
+
+Readers who are looking for penfriends send in details of their name, age, interests and what sort of penfriend they are looking for. This item appears very occasionally, and has now disappeared due to the growing number of 'Aquilanauts' or readers of Aquila. 
+
+**Competitions** 
+
+Each magazine features competitions. Every year, there is a "Finish the Story" challenge. Winners are always credited in later magazines and often their practical work will be reproduced. 
+
+### Features that no longer exist
 
 **Wordworm** 
 
-Once a feature related to English, in the earliest issues, Wordworm's pages regularly featured a list of words linked to the month's topic, with multiple choice definitions. The reader then had to identify the correct definition. **Magic Maths** (previously **Fun with Maths**) 
+Once a feature related to English, in the earliest issues, Wordworm's pages regularly featured a list of words linked to the month's topic, with multiple choice definitions. The reader then had to identify the correct definition. 
 
-A page usually featuring number puzzles, but also occasionally introducing mathematical concepts and explaining them in detail. Examples of factual pages have included a feature on prime numbers, and the Golden Ratio. Very occasionally, the page featured a biography of a famous mathematician. In later issues, it moved to the back of the magazine, and became half a page, and in September 2017, it was replaced by an activity to make a pomander, and finally disappeared altogether to make more room for *Aquila News*. **It's The Law** 
+**Magic Maths** (previously **Fun with Maths**) 
 
-In older issues, "It's The Law" occasionally replaced *Aquila peers into the past...*, and it explained the laws that may affect Aquila readers, and how laws are passed. **On Track** 
+A page usually featuring number puzzles, but also occasionally introducing mathematical concepts and explaining them in detail. Examples of factual pages have included a feature on prime numbers, and the Golden Ratio. Very occasionally, the page featured a biography of a famous mathematician. In later issues, it moved to the back of the magazine, and became half a page, and in September 2017, it was replaced by an activity to make a pomander, and finally disappeared altogether to make more room for *Aquila News*. 
 
-An occasional feature which outlines the basic principles of many different sports from football to the less well known, or even invented games. **In Tune** 
+**It's The Law** 
 
-A music page called "In Tune" runs occasionally. It has covered famous composers, choir singing and making music. **Paws for thought** 
+In older issues, "It's The Law" occasionally replaced *Aquila peers into the past...*, and it explained the laws that may affect Aquila readers, and how laws are passed. 
 
-The office terrier named Pepe has his own page where he has tips for pet owners, and articles about animals.   Official website 
+**On Track** 
+
+An occasional feature which outlines the basic principles of many different sports from football to the less well known, or even invented games. 
+
+**In Tune** 
+
+A music page called "In Tune" runs occasionally. It has covered famous composers, choir singing and making music. 
+
+**Paws for thought** 
+
+The office terrier named Pepe has his own page where he has tips for pet owners, and articles about animals.   
+
+Official website 
 
 ## InfoBox
 

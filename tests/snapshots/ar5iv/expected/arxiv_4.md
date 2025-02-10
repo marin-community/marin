@@ -1,7 +1,5 @@
 # On the limit-fromð-dependence of the magnetic penetration depth in unconventional superconductors at low temperatures: can it be linear?
 
-# On the $`Tâ`$dependence of the magnetic penetration depth in unconventional superconductors at low temperatures: can it be linear?
-
 ## Abstract
 
 We present a thermodynamics argument against a strictly linear temperature dependence of the magnetic penetration depth, which applies to superconductors with arbitrary pairing symmetry at low temperatures.

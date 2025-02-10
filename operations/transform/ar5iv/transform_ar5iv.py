@@ -15,7 +15,7 @@ import draccus
 import fsspec
 import ray
 from bs4 import BeautifulSoup
-# from tqdm_loggable.auto import tqdm
+from tqdm import tqdm
 
 from marin.schemas.web.convert import ExtractionConfig
 from marin.utils import fsspec_glob
@@ -30,7 +30,6 @@ from scripts.ar5iv.transform import (
     remove_figure_captions,
     remove_footnotes,
     remove_references,
-    remove_title,
     remove_title_page,
     transform_abstract,
     unwrap_eqn,
@@ -103,15 +102,14 @@ def process_file(input_file_path: str, output_path: str, extract_method: str, ex
                 row = json.loads(line)
 
                 try:
-                    filtered_html = clean_html(row["content"], remove_reference_section)
+                    filtered_html = clean_html(row["content"].decode("utf-8"), remove_reference_section)
                     result = convert_page(filtered_html, extract_method=extract_method, config=extract_config)
-                    processed_result = process_extracted_content(result["content"])
 
                     out_dict = {
                         "id": row["filename"],
                         "source": "ar5iv",
                         "format": "text",
-                        "text": processed_result,
+                        "text": result["content"],
                     }
 
                     print(json.dumps(out_dict), file=output)

@@ -21,7 +21,8 @@ WIKI_BLACKLISTED_SELECTORS = [
     "sup.reference",
     "div#mw-indicators",
     "span.portal-barion",
-    "h2#Notes"
+    "h2#Notes",
+    "div#mw-indicator-coordinates",
 ]
 
 wikipedia_dump_raw = ExecutorStep(
@@ -58,8 +59,10 @@ wikipedia_text_resiliparse_custom_fork = ExecutorStep(
                 include_links=False,
             )
         ),
-        remove_reference_section=versioned(False),
-        max_files=versioned(2),
+        remove_reference_section=versioned(True),
+        digit_threshold=versioned(50),
+        word_threshold=versioned(70),
+        special_char_threshold=versioned(50),
     ),
     pip_dependency_groups=["download_transform"],
 )

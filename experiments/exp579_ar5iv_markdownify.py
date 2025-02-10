@@ -6,7 +6,8 @@ from operations.transform.ar5iv.transform_ar5iv import Ar5ivExtractionConfig, pr
 ARXIV_BLACKLISTED_SELECTORS = [
     "h2.ltx_title_bibliography",
     "div.ltx_classification",
-    "span.ltx_role_author"
+    "span.ltx_role_author",
+    "h1.ltx_title"
 ]
 
 ar5iv_no_problem_raw = ExecutorStep(
@@ -34,7 +35,7 @@ ar5iv_no_problem_resiliparse_custom_fork = ExecutorStep(
         input_path=output_path_of(ar5iv_no_problem_raw),
         revision="042024",
         output_path=this_output_path("resiliparse-custom-fork"),
-        extract_method="resiliparse",
+        extract_method=versioned("resiliparse"),
         extract_config=ResiliparseConfig(
             preserve_formatting=True,
             main_content=True,
@@ -59,7 +60,7 @@ ar5iv_warnings_resiliparse_custom_fork = ExecutorStep(
         input_path=output_path_of(ar5iv_no_problem_raw),
         revision="042024",
         output_path=this_output_path("resiliparse-custom-fork"),
-        extract_method="resiliparse",
+        extract_method=versioned("resiliparse"),
         extract_config=ResiliparseConfig(
             preserve_formatting=True,
             main_content=True,

@@ -7,6 +7,7 @@ Performs HTML->Text/MD conversion using the specified tools over a wiki dump sav
 import json
 import logging
 import os
+import re
 from dataclasses import dataclass
 
 import draccus
@@ -31,7 +32,9 @@ class WikiExtractionConfig:
     extract_config: ExtractionConfig
     remove_reference_section: bool
     max_files: int | None = None
-
+    digit_threshold: int = 50
+    word_threshold: int = 70
+    special_char_threshold: int = 50
 
 def remove_and_append_infobox(html: str) -> str:
     """
@@ -81,21 +84,122 @@ def remove_references_from_html(html: str) -> str:
     return str(soup)
 
 
+def unwrap_eqn(html: str):
+    """Extract equations from math elements and convert to LaTeX inline/block quotes, 
+    wrapping display math in <p> tags."""
+    html = BeautifulSoup(html, "html.parser")
+    # Find all annotations containing equations
+    annotations = html.findAll("annotation", {"encoding": "application/x-tex"})
+
+    for annotation in annotations:
+        # Extract the LaTeX content and remove \displaystyle wrapper
+        latex = annotation.get_text()
+        latex = latex.replace(r'{\displaystyle ', '').rstrip('}')
+
+        # Fix common LaTeX formatting issues
+        latex = latex.replace(r'\_{', '_{')  # Remove unnecessary backslash before subscript
+        latex = re.sub(r'_\{([^}]*?)_\{', r'_{', latex)  # Fix nested subscripts
+        latex = re.sub(r'\\([a-zA-Z]+)_\{', r'\\\1_{', latex)  # Fix function subscripts
+        latex = re.sub(r'\}\}+', r'}', latex)  # Remove extra closing braces
+        latex = latex.strip('{}')  # Remove wrapping curly braces
+        latex = latex.replace(r'\[ ', '').replace(r' \]', '')  # Remove \[ \] display math delimiters
+        latex = re.sub(r'\\!', '', latex)  # Remove \! spacing commands
+
+        # Balance remaining curly braces
+        open_count = latex.count('{')
+        close_count = latex.count('}')
+        if open_count > close_count:
+            latex += '}' * (open_count - close_count)
+
+        # Get the containing span element for the equation
+        span_element = annotation.find_parent("span", {"class": "mwe-math-element"})
+        if not span_element:
+            continue
+
+        # Check if this is display math by looking for <dd> inside <dl>
+        dd_parent = span_element.find_parent("dd")
+        if dd_parent:
+            dl_parent = dd_parent.find_parent("dl")
+            if dl_parent:
+                # Check dd contents for other non-math text
+                other_content = False
+                for child in dd_parent.children:
+                    if child.name != 'span' or 'mwe-math-element' not in child.get('class', []):
+                        if str(child).strip():
+                            other_content = True
+                            break
+                is_display = not other_content
+            else:
+                is_display = False
+        else:
+            is_display = False
+
+        # Format equations
+        if is_display:
+            # Create a new <p> tag and insert the br tags plus the display math
+            p_tag = html.new_tag('p')
+            p_tag.append(html.new_tag('br'))
+            p_tag.append(html.new_tag('br'))
+            p_tag.append(BeautifulSoup(f"$${latex}$$", "html.parser"))
+            p_tag.append(html.new_tag('br'))
+            p_tag.append(html.new_tag('br'))
+            span_element.replace_with(p_tag)
+        else:
+            # Inline math: handle spacing
+            prev_sibling = span_element.previous_sibling
+            next_sibling = span_element.next_sibling
+            needs_left_space = prev_sibling and not str(prev_sibling).endswith(' ')
+
+            left_space = ' ' if needs_left_space else ''
+            formatted_latex = f"{left_space}${latex}$"
+            span_element.replace_with(formatted_latex)
+
+    return str(html)
+
+
+def postprocess_content(content: str, digit_threshold: int, word_threshold: int, special_char_threshold: float) -> str:
+    """
+    Postprocesses the content by removing digits, words, and special characters.
+    """
+
+    if not content:
+        return None
+
+    digit_count = sum(c.isdigit() for c in content)
+    word_count = len(re.findall(r'\b\w+\b', content))
+    special_char_count = sum(not c.isalnum() for c in content)
+
+    if digit_count > digit_threshold or word_count > word_threshold or special_char_count > special_char_threshold:
+        return None
+
+    return content
+
+
+
 def clean_wiki_html(html: str, remove_reference_section: bool = True) -> str:
     """
     Cleans the HTML by removing unwanted elements.
     """
-
+    html = unwrap_eqn(html)
     html = remove_and_append_infobox(html)
 
     if remove_reference_section:
         html = remove_references_from_html(html)
 
-    return str(html)
+    return html
 
 
 @ray.remote(memory=2 * 1024 * 1024 * 1024)
-def process_file(input_file_path: str, output_path: str, extract_method: str, extract_config: ExtractionConfig, remove_reference_section: bool = True) -> None:
+def process_file(
+    input_file_path: str,
+    output_path: str,
+    extract_method: str,
+    extract_config: ExtractionConfig,
+    remove_reference_section: bool = True,
+    digit_threshold: int = 50,
+    word_threshold: int = 70,
+    special_char_threshold: float = 0.2
+) -> None:
     output_file_path = os.path.join(output_path, input_file_path.split("/")[-1].replace(".ndjson", ".jsonl.gz"))
 
     logger.info(f"Starting processing of file {input_file_path}")
@@ -112,14 +216,20 @@ def process_file(input_file_path: str, output_path: str, extract_method: str, ex
                 try:
                     content = None
                     if "html" not in row["article_body"].keys() and "wikitext" in row["article_body"].keys():
-                        content = row["article_body"]["wikitext"]
+                        continue
                     elif "html" in row["article_body"]:
                         html_string = row["article_body"]["html"]
+
+                        filtered_html = clean_wiki_html(html_string, remove_reference_section)
                         content = convert_page(
-                            html_string, extract_method=extract_method, config=extract_config
+                            filtered_html, extract_method=extract_method, config=extract_config
                         )["content"]
                     else:
                         logger.error(f"No content found in the row: {row}")
+                        continue
+
+                    content = postprocess_content(content, digit_threshold, word_threshold, special_char_threshold)
+                    if content is None:
                         continue
 
                     out_dict = {
@@ -171,14 +281,8 @@ def process_wiki_dump(cfg: WikiExtractionConfig) -> None:
 
         output_path = os.path.join(cfg.output_path, cfg.revision)
         result_refs.append(
-            process_file.options(
-                runtime_env={
-                    "pip": [
-                        "resiliparse_dom @ git+https://github.com/stanford-crfm/chatnoir-resiliparse@f1cf65075ef6720356bf672e13b32b152f18f039#egg=resiliparse_dom&subdirectory=resiliparse_dom"
-                    ]
-                }
-            ).remote(
-                file, output_path, cfg.extract_method, cfg.extract_config, cfg.remove_reference_section
+            process_file.remote(
+                file, output_path, cfg.extract_method, cfg.extract_config, cfg.remove_reference_section, cfg.digit_threshold, cfg.word_threshold, cfg.special_char_threshold
             )
         )
     try:

@@ -2,8 +2,6 @@
 
 \[
 
-# The magnetic neutron scattering resonance of high-$`T_\mathrm{c}`$ superconductors in external magnetic fields: an SO(5) study
-
 ## Abstract
 
 The magnetic resonance at 41Â meV observed in neutron scattering studies of YBa<sub>2</sub>Cu<sub>3</sub>O<sub>7</sub> holds a key position in the understanding of high-$`T_\mathrm{c}`$ superconductivity. Within the SO(5) model for superconductivity and antiferromagnetism, we have calculated the effect of an applied magnetic field on the neutron scattering cross-section of the magnetic resonance. In the presence of Abrikosov vortices, the neutron scattering cross-section shows clear signatures of not only the fluctuations in the superconducting order parameter $`\mathrm{Ï}`$, but also the modulation of the phase of $`\mathrm{Ï}`$ due to vortices. In reciprocal space we find that i) the scattering amplitude is zero at $`(\mathrm{Ï}/a,\mathrm{Ï}/a)`$, ii) the resonance peak is split into a ring with radius $`\mathrm{Ï}/d`$ centered at $`(\mathrm{Ï}/a,\mathrm{Ï}/a)`$, $`d`$ being the vortex lattice constant, and consequently, iii) the splitting $`\mathrm{Ï}/d`$ scales with the magnetic field as $`\sqrt{B}`$.
