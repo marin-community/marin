@@ -39,7 +39,8 @@ class InstructionDatasetConfig:
         metadata_columns: The columns to extract from the dataset. Check the dataset's schema for available columns.
         filetype: The filetype of the dataset; check the dataset's files on Hugging Face for the correct filetype.
         subsets: Data subsets (from HuggingFace config) to use. Empty list indicates to use all/default subset(s).
-        splits: Data splits (e.g., `train`, `validation`) to use. Empty list indicates to use all splits. Defaults to `train` only
+        splits: Data splits (e.g., `train`, `validation`) to use. Empty list indicates to use all splits.
+                Defaults to `train` only
         legacy: True uses the Marin function as dataloader. False uses the `datasets` package as dataloader.
     """
 
@@ -117,7 +118,6 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         wait_for_completion=True,
         metadata_columns=["score", "refusal", "compliance_rating", "overall_quality"],
         splits=["train"],
-        subsets=["non-reasoning", "reasoning-deepseek", "reasoning-flash"],
         filetype="jsonl",
     ),
     "open-r1/OpenThoughts-114k-math": InstructionDatasetConfig(
