@@ -13,19 +13,18 @@ import hashlib
 import json
 import logging
 import os
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-import datasets
-import re
-
 from urllib.parse import urlparse
-from google.cloud import storage
 
+import datasets
 import draccus
 import fsspec
 import pandas as pd
 import ray
+from google.cloud import storage
 
 from marin.core.conversation import DolmaConversationOutput, OpenAIChatMessage
 from marin.core.runtime import TaskConfig, cached_or_construct_output, fsspec_mkdirs, map_files_in_directory
@@ -194,7 +193,6 @@ def transform_dataset(cfg: TransformSFTDatasetConfig):
     ray.get(responses)
 
 
-
 def download_directory_from_gcs(bucket_name: str, gcs_directory_path: str, local_directory_path: str) -> None:
     """
     Download an entire directory from a GCS bucket to a local directory.
@@ -219,9 +217,9 @@ def download_directory_from_gcs(bucket_name: str, gcs_directory_path: str, local
 
     # Download each blob to the local directory
     for blob in blobs:
-        if 'provenance.json' in blob.name:
+        if "provenance.json" in blob.name:
             continue
-        
+
         # Construct the relative path of the file
         relative_path = os.path.relpath(blob.name, gcs_directory_path)
         local_file_path = os.path.join(local_directory_path, relative_path)
@@ -233,10 +231,11 @@ def download_directory_from_gcs(bucket_name: str, gcs_directory_path: str, local
         blob.download_to_filename(local_file_path)
         logger.info(f"Downloaded {blob.name} to {local_file_path}")
 
+
 def copy_dataset_from_gcp_to_local(input_gcp_path: os.PathLike) -> os.PathLike:
     """
     Download the data from GCP onto local instance.
-    
+
     Note: function modified from marin/raw2json/huggingface/qa/raw2json.py
     """
     # set up input path which can be GCP path, HF Hub path, or local path
@@ -251,32 +250,34 @@ def copy_dataset_from_gcp_to_local(input_gcp_path: os.PathLike) -> os.PathLike:
         download_directory_from_gcs(bucket, gcp_path, dir_name)
         input_path = dir_name
     else:
-        raise Exception('Input is not a GCP path')
+        raise Exception("Input is not a GCP path")
 
     return input_path
 
-def create_subset_name(dir_name: os.PathLike, subset_name: str|None) -> os.PathLike:
-    """ Creates a new dir name that incorporates the subset name.
-    e.g., create_subset_name('gs://thisserver/testfolder-a982374', 'testsubset') -> 'gs://thisserver/testfolder-testsubset-a982374'  
+
+def create_subset_name(dir_name: os.PathLike, subset_name: str | None) -> os.PathLike:
+    """Creates a new dir name that incorporates the subset name.
+    e.g., create_subset_name('gs://thisserver/testfolder-a982374', 'testsubset') -> 'gs://thisserver/testfolder-testsubset-a982374'
     """
-    if subset_name == 'default':
+    if subset_name == "default":
         return dir_name
-    
-    end_name = dir_name.split('/')[-1]
-    _matches = re.match('(.*-)(.*)$', end_name)
+
+    end_name = dir_name.split("/")[-1]
+    _matches = re.match("(.*-)(.*)$", end_name)
     prefix = _matches[1]
     suffix = _matches[2]
     new_end_name = f"{prefix}{subset_name}-{suffix}"
     return dir_name.replace(end_name, new_end_name)
 
+
 @ray.remote
 def transform_hf_dataset(cfg: TransformSFTDatasetConfig):
-    """ Shards the dataset; copies datafiles from GCP to instance, loads
+    """Shards the dataset; copies datafiles from GCP to instance, loads
     data using the `datasets` package, and write shards to target directory
     """
     # 1. Copy data from GCP to local instance
     local_dir = copy_dataset_from_gcp_to_local(cfg.input_path)
-    
+
     # 2. Identify subsets
     if not cfg.subsets:
         # No subset is defined, so process all subsets
@@ -284,14 +285,14 @@ def transform_hf_dataset(cfg: TransformSFTDatasetConfig):
     else:
         # Process only given subsets
         subsets = cfg.subsets
-    
+
     # 3. For each subset...
     for subset in subsets:
         # a. Load dataset
-        dataset = datasets.load_dataset(path=local_dir, name=subset, split='train')
+        dataset = datasets.load_dataset(path=local_dir, name=subset, split="train")
         rows = [r for r in dataset]
-        del dataset # saves memory
-        # b. Create GCP target directory 
+        del dataset  # saves memory
+        # b. Create GCP target directory
         subset_output_path = create_subset_name(cfg.output_path, subset)
         output_path = create_shard_output_directory(subset_output_path)
         # c. Write shards to GCP
