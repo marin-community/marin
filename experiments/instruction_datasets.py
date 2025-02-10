@@ -132,6 +132,7 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         revision="9e9adba",  # The revision hash shown in the image
         wait_for_completion=True,
         filetype="parquet",
+        metadata_columns=[],
     ),
 }
 
