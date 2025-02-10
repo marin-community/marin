@@ -162,7 +162,8 @@ class MyMarkdownConverter(MarkdownConverter):
         hashes = "#" * n
         if style == markdownify.ATX_CLOSED:
             return f"{hashes} {text} {hashes}\n\n"
-        return f"{hashes} {text}\n\n"
+
+        return f"\n\n{hashes} {text}\n\n"
 
     def convert_a(self, el, text, convert_as_inline):
         prefix, suffix, text = markdownify.chomp(text)
@@ -587,7 +588,7 @@ class MyMarkdownConverter(MarkdownConverter):
 
         if self.options["wrap"]:
             text = fill(text, width=self.options["wrap_width"], break_long_words=False, break_on_hyphens=False)
-        return f"{text}\n\n" if text else ""
+        return f"\n\n{text}\n\n" if text else ""
 
     def process_text(self, el):
         text = six.text_type(el) or ""
