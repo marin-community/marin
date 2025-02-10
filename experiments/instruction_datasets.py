@@ -21,7 +21,11 @@ from marin.execution.executor import (
 )
 from operations.download.huggingface.download import DownloadConfig
 from operations.download.huggingface.download_hf import download_hf
-from operations.transform.conversation.transform_conversation import TransformSFTDatasetConfig, transform_dataset, transform_hf_dataset
+from operations.transform.conversation.transform_conversation import (
+    TransformSFTDatasetConfig,
+    transform_dataset,
+    transform_hf_dataset,
+)
 
 
 @dataclass(frozen=True)
@@ -43,7 +47,7 @@ class InstructionDatasetConfig:
     wait_for_completion: bool
     metadata_columns: list[str]
     filetype: str
-    subsets: list[str] = field(default_factory=lambda: []) 
+    subsets: list[str] = field(default_factory=lambda: [])
     legacy: bool = False
 
 
@@ -96,7 +100,7 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         filetype="parquet",
         legacy=True,
     ),
-        "TIGER-Lab/AceCode-89K": InstructionDatasetConfig(
+    "TIGER-Lab/AceCode-89K": InstructionDatasetConfig(
         hf_dataset_id="TIGER-Lab/AceCode-89K",
         revision="0361e95",
         wait_for_completion=True,
@@ -123,8 +127,7 @@ def get_directory_friendly_dataset_name(hf_dataset_id: str) -> str:
 
 
 def download_dataset_step(dataset: InstructionDatasetConfig) -> ExecutorStep:
-    """ ExecutorStep for downloading of data from external source to GCP
-    """
+    """ExecutorStep for downloading of data from external source to GCP"""
     dataset_name = get_directory_friendly_dataset_name(dataset.hf_dataset_id)
     download_step = ExecutorStep(
         name=f"raw/{dataset_name}",
@@ -142,8 +145,8 @@ def download_dataset_step(dataset: InstructionDatasetConfig) -> ExecutorStep:
 
 
 def transform_dataset_step(dataset_cfg: InstructionDatasetConfig, download_step: ExecutorStep) -> ExecutorStep:
-    """ ExecutorStep that preprocesses and shards the input dataset.
-    
+    """ExecutorStep that preprocesses and shards the input dataset.
+
     ===========================================================================
     dataset_cfg: {
         ...
@@ -152,7 +155,7 @@ def transform_dataset_step(dataset_cfg: InstructionDatasetConfig, download_step:
         ...
     }
     output_path_of(download_step) --> gs://.../raw/dolphin-r1-[hash]
-    
+
     Expected files written: [
         gs://.../dolphin-r1-reasoning-flash-[hash]/shard_00001.json.gz,
         ...
@@ -170,7 +173,7 @@ def transform_dataset_step(dataset_cfg: InstructionDatasetConfig, download_step:
     else:
         # Uses the new tranform function that calls `datasets` package
         transform_fn = transform_hf_dataset
-     
+
     transform_step = ExecutorStep(
         name=f"documents/{dataset_name}",
         fn=transform_fn,
