@@ -143,9 +143,7 @@ class VllmTpuEvaluator(Evaluator, ABC):
         Launches the evaluation run with Ray.
         """
 
-        @ray.remote(
-            memory=64 * 1024 * 1024 * 1024, resources={"TPU": 1, "TPU-v6e-8-head": 1}, runtime_env=self.get_runtime_env()
-        )
+        @ray.remote(memory=64 * 1024 * 1024 * 1024, runtime_env=self.get_runtime_env())
         @remove_tpu_lockfile_on_exit
         def launch(
             model: ModelConfig, evals: list[EvalTaskConfig], output_path: str, max_eval_instances: int | None = None
