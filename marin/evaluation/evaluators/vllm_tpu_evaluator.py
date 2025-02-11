@@ -16,8 +16,6 @@ from marin.utils import remove_tpu_lockfile_on_exit
 class VllmTpuEvaluator(Evaluator, ABC):
     """For `Evaluator`s that runs inference with VLLM on TPUs."""
 
-    # Default pip packages to install for VLLM on TPUs
-    # Some versions were fixed in order to resolve dependency conflicts.
     DEFAULT_PIP_PACKAGES: ClassVar[list[Dependency]] = []
 
     # Where to store checkpoints, cache inference results, etc.
@@ -103,6 +101,7 @@ class VllmTpuEvaluator(Evaluator, ABC):
     _python_version: str = "3.10"
     _pip_packages: ClassVar[list[Dependency]] = DEFAULT_PIP_PACKAGES
     _py_modules: ClassVar[list[Dependency]] = []
+    _env_vars: ClassVar[dict[str, str]] = {}
 
     def get_runtime_env(self) -> dict:
         """
@@ -124,6 +123,7 @@ class VllmTpuEvaluator(Evaluator, ABC):
             "pip": {
                 "packages": all_packages,
             },
+            "env_vars": self._env_vars,
         }
 
         # An empty list of py_modules can cause an error in Ray

@@ -54,20 +54,20 @@ ifeval = ExecutorStep(
     ),
 )
 
-# humaneval_score = ExecutorStep(
-#         name=f"evaluation/lm_evaluation_harness/{model_name}",
-#         fn=evaluate,
-#         config=EvaluationConfig(
-#             evaluator="lm_evaluation_harness",
-#             model_name=model_name,
-#             model_path="gs://marin-us-central2/checkpoints/llama3.1_8b_tulu_3_seed0_alldocs-379cf0/hf/step-7334",
-#             evaluation_path=this_output_path(),
-#             evals=versioned([EvalTaskConfig(name="humaneval")]),
-#             max_eval_instances=None,
-#             launch_with_ray=True,
-#             engine_kwargs={"max_model_len": 8192},
-#         ),
-#     )
+humaneval_score = ExecutorStep(
+    name=f"evaluation/lm_evaluation_harness/{model_name}",
+    fn=evaluate,
+    config=EvaluationConfig(
+        evaluator="lm_evaluation_harness",
+        model_name=model_name,
+        model_path="gs://marin-us-central2/checkpoints/llama3.1_8b_tulu_3_seed0_alldocs-379cf0/hf/step-7334",
+        evaluation_path=this_output_path(),
+        evals=versioned([EvalTaskConfig(name="humaneval", num_fewshot=0)]),
+        max_eval_instances=None,
+        launch_with_ray=True,
+        engine_kwargs={"max_model_len": 8192},
+    ),
+)
 
 alpaca_eval = evaluate_alpaca_eval(
     model_name="tulu3_sft_seed0_alldocs-7334",
@@ -76,10 +76,10 @@ alpaca_eval = evaluate_alpaca_eval(
 steps = [
     # alpaca_eval,
     # gsm8k_cot,
-    gsm8k,
+    # gsm8k,
     # drop,
     # ifeval,
-    #     humaneval_score,
+    humaneval_score,
 ]
 
 if __name__ == "__main__":

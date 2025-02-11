@@ -4,6 +4,7 @@ Canonical set of evals.
 
 import logging
 
+from experiments.evals.engine_configs import DEFAULT_VLLM_ENGINE_KWARGS
 from experiments.evals.task_configs import CORE_TASKS, KEY_GENERATION_TASKS, KEY_MULTIPLE_CHOICE_TASKS
 from marin.evaluation.evaluation_config import EvalTaskConfig, EvaluationConfig
 from marin.evaluation.run import evaluate
@@ -198,7 +199,11 @@ def default_eval(
     return evaluate_levanter_lm_evaluation_harness(name, model_step_path, evals, max_eval_instances=max_eval_instances)
 
 
-def default_key_evals(step: ExecutorStep | InputName | str, max_eval_instances: int | None = None) -> list[ExecutorStep]:
+def default_key_evals(
+    step: ExecutorStep | InputName | str,
+    max_eval_instances: int | None = None,
+    engine_kwargs: dict | None = DEFAULT_VLLM_ENGINE_KWARGS,
+) -> list[ExecutorStep]:
     """
     Create a list of ExecutorSteps to evaluate the model using LM Evaluation Harness on a step.
     """
@@ -206,7 +211,11 @@ def default_key_evals(step: ExecutorStep | InputName | str, max_eval_instances: 
 
     return [
         evaluate_lm_evaluation_harness(
-            name, model_step_path, KEY_GENERATION_TASKS, max_eval_instances=max_eval_instances
+            name,
+            model_step_path,
+            KEY_GENERATION_TASKS,
+            max_eval_instances=max_eval_instances,
+            engine_kwargs=engine_kwargs,
         ),
         evaluate_levanter_lm_evaluation_harness(
             name, model_step_path, KEY_MULTIPLE_CHOICE_TASKS, max_eval_instances=max_eval_instances
