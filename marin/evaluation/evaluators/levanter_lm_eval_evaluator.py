@@ -54,7 +54,7 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
 
             trainer_config = TrainerConfig(
                 mp=jmp.get_policy("p=f32,c=bfloat16"),
-                per_device_eval_parallelism=16,
+                per_device_eval_parallelism=8,
                 ray=RayConfig(auto_start_cluster=False),
             )
 
