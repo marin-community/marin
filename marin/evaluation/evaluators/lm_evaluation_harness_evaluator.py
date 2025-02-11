@@ -12,7 +12,7 @@ from marin.evaluation.utils import is_remote_path, run_bash_command, upload_to_g
 logger = logging.getLogger(__name__)
 
 
-# TODO: this currently doesn't work on TPUs: https://github.com/vllm-project/vllm/issues/8499
+# TODO: Multiple choice tasks currently don't work on TPUs: https://github.com/vllm-project/vllm/issues/8499
 class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
     """
     Evaluator that runs lm-eval: https://github.com/EleutherAI/lm-evaluation-harness
@@ -22,12 +22,17 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
 
     _pip_packages: ClassVar[list[Dependency]] = [
         *VllmTpuEvaluator.DEFAULT_PIP_PACKAGES,
-        Dependency(name="lm_eval"),
-        Dependency(name="lm-eval[api]"),
+        # NOTE(chris): We put lm-eval in the Dockerfile.vllm, so this dependency is not needed
+        # Dependency(name="lm_eval"),
+        # Dependency(name="lm-eval[api]"),
         # For IF-Eval
         Dependency(name="langdetect"),
         Dependency(name="immutabledict"),
     ]
+    _env_vars: ClassVar[dict[str, str]] = {
+        # Human eval tests code from the model which requires permission to run
+        "HF_ALLOW_CODE_EVAL": "1",
+    }
 
     def evaluate(
         self,
@@ -83,6 +88,10 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
                     "--output_path",
                     result_filepath,
                 ]
+
+                # Human eval tests code from the model which requires permission to run
+                if eval_task.name == "humaneval":
+                    command.append("--confirm_run_unsafe_code")
 
                 if max_eval_instances is not None:
                     # According lm-eval-harness, --limit should only be used for testing purposes
