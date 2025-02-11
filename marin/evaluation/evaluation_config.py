@@ -61,3 +61,8 @@ class EvaluationConfig:
     """
     Maximum number of evaluation instances to run.
     """
+
+    engine_kwargs: dict | None = None
+    """
+    Additional keyword arguments to pass to the vLLM engine.
+    """
