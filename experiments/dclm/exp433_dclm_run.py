@@ -10,7 +10,14 @@ gpt_neox_tokenizer = "EleutherAI/gpt-neox-20b"
 
 ### Define the datasets and tokenization configurations
 
-dclm_baseline_tokenized = default_tokenize(
+dclm_baseline_tokenized_wrong = default_tokenize(
+    name="dclm_baseline",
+    dataset=dclm_baseline_wrong,
+    tokenizer=gpt_neox_tokenizer,
+)
+
+
+dclm_baseline_tokenized_wrong = default_tokenize(
     name="dclm_baseline",
     dataset=dclm_baseline_wrong,
     tokenizer=gpt_neox_tokenizer,
@@ -27,7 +34,7 @@ proofpile_2_tokenized = default_tokenize(
 )
 
 DCLM_MIXTURE_COMPONENTS = {
-    "dclm_baseline": dclm_baseline_tokenized,
+    "dclm_baseline": dclm_baseline_tokenized_wrong,
     "starcoderdata": starcoderdata_tokenized,
     "proofpile_2": proofpile_2_tokenized,
 }
@@ -110,7 +117,7 @@ dclm_baseline_only_eval = default_eval(step=dclm_baseline_only_model)
 if __name__ == "__main__":
     executor_main(
         steps=[
-            dclm_baseline_tokenized,
+            dclm_baseline_tokenized_wrong,
             starcoderdata_tokenized,
             proofpile_2_tokenized,
             dclm_mixture_model,

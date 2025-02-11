@@ -11,7 +11,7 @@ For now, we're training on DCLM's best mix, but that will change.
 """
 
 from experiments.defaults import default_train
-from experiments.exp600_tootsie import dclm_mixture_config_llama3
+from experiments.exp600_tootsie import dclm_mixture_config_llama3_wrong
 from experiments.llama import llama_13b, llama_70b
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import executor_main
@@ -53,7 +53,7 @@ llama_70b_train_config = SimpleTrainConfig(
 
 llama_13b_tootsie = default_train(
     name="llama-13b-tootsie-dummy-testing",
-    tokenized=dclm_mixture_config_llama3,
+    tokenized=dclm_mixture_config_llama3_wrong,
     model_config=llama_13b,
     train_config=llama_22b_train_config,
     tags=["llama", "13b", "wsd-s", "exp201", "tootsie"],
@@ -62,7 +62,7 @@ llama_13b_tootsie = default_train(
 
 llama_70b_tootsie = default_train(
     name="llama-70b-tootsie-dummy-testing",
-    tokenized=dclm_mixture_config_llama3,
+    tokenized=dclm_mixture_config_llama3_wrong,
     model_config=llama_70b,
     train_config=llama_70b_train_config,
     tags=["llama", "70b", "wsd-s", "exp201", "tootsie"],
