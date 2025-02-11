@@ -22,7 +22,7 @@ from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 
 from experiments.anneal_config import AnnealConfig
-from experiments.evals.task_configs import CORE_TASKS, convert_to_levanter_task_config
+from experiments.evals.task_configs import CORE_TASKS, CORE_TASKS_PLUS_MMLU, convert_to_levanter_task_config
 from experiments.llama import compute_num_parameters, llama_8b
 from experiments.paloma import paloma_tokenized
 from experiments.simple_train_config import SimpleTrainConfig
@@ -207,8 +207,8 @@ def default_train(
 
 def default_anneal(name: str, anneal_config: AnnealConfig):
     assert (
-        anneal_config.target_dataset is not None and anneal_config.high_quality_web_text_dataset is not None
-    ), "Target dataset and high-quality web text dataset must be provided."
+        anneal_config.target_dataset is not None or anneal_config.high_quality_web_text_dataset is not None
+    ), "Target dataset or high-quality web text dataset must be provided."
 
     num_anneal_steps = anneal_config.num_anneal_training_tokens / (
         anneal_config.train_batch_size * AnnealConfig.LLAMA_MAX_SEQ_LEN
@@ -240,14 +240,20 @@ def default_anneal(name: str, anneal_config: AnnealConfig):
         ),
     )
 
-    dataset_components = {
-        "high-quality-web-text": anneal_config.high_quality_web_text_dataset,
-        "target-dataset": anneal_config.target_dataset,
-    }
-    dataset_weights = {
-        "high-quality-web-text": anneal_config.high_quality_web_text_proportion,
-        "target-dataset": anneal_config.target_dataset_proportion,
-    }
+    dataset_components = {}
+    dataset_weights = {}
+
+    if anneal_config.high_quality_web_text_dataset is not None:
+        dataset_components["high-quality-web-text"] = anneal_config.high_quality_web_text_dataset
+        dataset_weights["high-quality-web-text"] = (
+            1.0 if anneal_config.target_dataset is None else anneal_config.high_quality_web_text_proportion
+        )
+
+    if anneal_config.target_dataset is not None:
+        dataset_components["target-dataset"] = anneal_config.target_dataset
+        dataset_weights["target-dataset"] = (
+            1.0 if anneal_config.high_quality_web_text_dataset is None else anneal_config.target_dataset_proportion
+        )
 
     anneal_stage_data_mix = lm_mixture_data_config(
         components=dataset_components,
@@ -255,7 +261,11 @@ def default_anneal(name: str, anneal_config: AnnealConfig):
     )
 
     return default_train(
-        name=name, tokenized=anneal_stage_data_mix, model_config=llama_8b, train_config=anneal_stage_train_config
+        name=name,
+        tokenized=anneal_stage_data_mix,
+        model_config=llama_8b,
+        train_config=anneal_stage_train_config,
+        eval_harness_tasks=CORE_TASKS_PLUS_MMLU,
     )
 
 
