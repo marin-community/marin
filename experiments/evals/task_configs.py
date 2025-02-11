@@ -32,6 +32,18 @@ MMLU_TASKS = (
 
 CORE_TASKS_PLUS_MMLU = CORE_TASKS + MMLU_TASKS
 
+MATH_TASKS = (
+    # (requires generation so not supported in Levanter at the moment)
+    EvalTaskConfig("hendrycks_math", 0),  # Competition math problems
+    EvalTaskConfig("gsm8k", 5),  # Simple math problems for multi-step reasoning
+)
+
+CODING_TASKS = (
+    # (requires generation so not supported in Levanter at the moment)
+    EvalTaskConfig("humaneval", 0),  # Python programming problems
+    EvalTaskConfig("mbpp", 3),  # Multiple choice programming problems
+)
+
 
 def convert_to_levanter_task_config(tasks: Sequence[EvalTaskConfig]) -> list[TaskConfig]:
     """

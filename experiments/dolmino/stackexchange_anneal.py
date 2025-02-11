@@ -1,6 +1,8 @@
 from experiments.anneal_config import AnnealConfig
 from experiments.defaults import default_anneal
 from experiments.dolmino.tokenize_dolmino import get_dolmino_step
+from experiments.evals.evals import default_eval
+from experiments.evals.task_configs import MMLU_TASKS
 from marin.execution.executor import executor_main
 
 dolmino_dclm = get_dolmino_step("dclm")
@@ -22,9 +24,15 @@ stackexchange_anneal_model = default_anneal(
     anneal_config=stackexchange_anneal_config,
 )
 
+eval_stackexchange_anneal_model = default_eval(
+    step="gs://marin-us-central2/checkpoints/llama-8b-anneal-stackexchange-0-db2e46/hf/step-200470",
+    evals=MMLU_TASKS,
+)
+
 if __name__ == "__main__":
     executor_main(
         steps=[
-            stackexchange_anneal_model,
+            # stackexchange_anneal_model,
+            eval_stackexchange_anneal_model,
         ],
     )
