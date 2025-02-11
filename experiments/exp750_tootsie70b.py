@@ -59,7 +59,8 @@ llama_70b_train_config_mk6 = dataclasses.replace(
     llama_70b_train_config,
     train_batch_size=1024,
     tpu_type="v6e-128",
-    node_count=2,
+    # tpu_type="v5litepod-256",
+    node_count=4,
     learning_rate=2e-4,
     decay=0.4,
     ema_beta=0.995,
@@ -228,7 +229,7 @@ llama_22b_tootsie_ema_warmstart = dataclasses.replace(
 
 llama_13b_train_config_ema = SimpleTrainConfig(
     tpu_type="v6e-128",
-    node_count=4,
+    node_count=2,
     train_batch_size=[ScheduleStep(until=280_000, value=1024), ScheduleStep(until=-1, value=2048)],
     num_train_steps=1_000_000,
     weight_decay=0.05,
