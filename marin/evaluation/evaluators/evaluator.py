@@ -32,6 +32,11 @@ class ModelConfig:
     The path to the model checkpoint. Can be a local path or a path on GCS.
     """
 
+    engine_kwargs: dict | None = None
+    """
+    Additional keyword arguments to pass to the vLLM engine.
+    """
+
     def ensure_downloaded(self, local_path: str | None = None) -> str | None:
         """
         Ensures that the model checkpoint is downloaded to `local_path` if necessary.

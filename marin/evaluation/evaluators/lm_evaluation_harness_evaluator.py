@@ -7,7 +7,7 @@ from typing import ClassVar
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Dependency, ModelConfig
 from marin.evaluation.evaluators.vllm_tpu_evaluator import VllmTpuEvaluator
-from marin.evaluation.utils import is_remote_path, run_bash_command, set_cuda_visible_devices, upload_to_gcs
+from marin.evaluation.utils import is_remote_path, run_bash_command, upload_to_gcs
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +24,9 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
         *VllmTpuEvaluator.DEFAULT_PIP_PACKAGES,
         Dependency(name="lm_eval"),
         Dependency(name="lm-eval[api]"),
+        # For IF-Eval
+        Dependency(name="langdetect"),
+        Dependency(name="immutabledict"),
     ]
 
     def evaluate(
@@ -45,10 +48,16 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
         # From https://github.com/EleutherAI/lm-evaluation-harness?tab=readme-ov-file#model-apis-and-inference-servers
         # Run lm_eval with the model and the specified evals
         try:
-            set_cuda_visible_devices()
+            # NOTE(chris): This is not supported on TPUs
+            # set_cuda_visible_devices()
 
             # Download the model from GCS or HuggingFace
             model_name_or_path: str = self.download_model(model)
+
+            pretrained_args: str = f"pretrained={model_name_or_path}"
+            if model.engine_kwargs:
+                for key, value in model.engine_kwargs.items():
+                    pretrained_args += f",{key}={value}"
 
             for eval_task in evals:
 
@@ -67,7 +76,7 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
                     "--num_fewshot",
                     str(eval_task.num_fewshot),
                     "--model_args",
-                    f"pretrained={model_name_or_path}",
+                    pretrained_args,
                     "--batch_size",
                     "auto",
                     "--trust_remote_code",
