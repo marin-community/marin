@@ -100,6 +100,20 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         metadata_columns=["system", "source", "generated_token_count", "correct"],  # Keeping these metadata columns
         filetype="parquet",
     ),
+    "HuggingFaceTB/smoltalk": InstructionDatasetConfig(
+        hf_dataset_id="HuggingFaceTB/smoltalk",
+        revision="2c849df",  # The revision hash shown in the image
+        wait_for_completion=True,
+        metadata_columns=["source"],  # Keeping these metadata columns
+        filetype="parquet",
+    ),
+    "PrimeIntellect/verifiable-math-problems": InstructionDatasetConfig(
+        hf_dataset_id="PrimeIntellect/verifiable-math-problems",
+        revision="2ad7c92",  # The revision hash shown in the image
+        wait_for_completion=True,
+        metadata_columns=["source", "task_type", "problem_id"],  # Keeping these metadata columns
+        filetype="parquet",
+    ),
 }
 
 
