@@ -32,6 +32,15 @@ MMLU_TASKS = (
 
 CORE_TASKS_PLUS_MMLU = CORE_TASKS + MMLU_TASKS
 
+KEY_TASKS = (
+    EvalTaskConfig(name="ifeval", num_fewshot=0),
+    EvalTaskConfig(name="gsm8k", num_fewshot=5),
+    EvalTaskConfig(name="drop", num_fewshot=0),
+    EvalTaskConfig(name="humaneval", num_fewshot=0),
+    EvalTaskConfig("mmlu", 0, task_alias="mmlu_0shot"),
+    EvalTaskConfig("mmlu", 5, task_alias="mmlu_5shot"),
+)
+
 
 def convert_to_levanter_task_config(tasks: Sequence[EvalTaskConfig]) -> list[TaskConfig]:
     """
