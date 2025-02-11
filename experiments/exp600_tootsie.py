@@ -15,7 +15,7 @@ import dataclasses
 from experiments.dclm.exp433_dclm_run import DCLM_MIXTURE_WEIGHTS
 from experiments.defaults import default_tokenize, default_train
 from experiments.llama import llama3_tokenizer, llama_8b
-from experiments.pretraining_datasets import dclm_baseline, proofpile_2, starcoderdata
+from experiments.pretraining_datasets import dclm_baseline_wrong, proofpile_2, starcoderdata
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import executor_main
 from marin.processing.tokenize import lm_mixture_data_config
@@ -23,7 +23,7 @@ from marin.processing.tokenize import lm_mixture_data_config
 dclm_components_llama3 = {
     "dclm_baseline": default_tokenize(
         name="dclm_baseline",
-        dataset=dclm_baseline,
+        dataset=dclm_baseline_wrong,
         tokenizer=llama3_tokenizer,
     ),
     "starcoderdata": default_tokenize(
