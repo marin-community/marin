@@ -111,7 +111,6 @@ def hash_func(s: str):
     return int.from_bytes(h[:16], "big", signed=True)
 
 
-@ray.remote(memory=4 * 1024 * 1024 * 1024)
 def canonicalize_and_hash_link_targets(link_targets: list[str]) -> list[tuple[str, int, int]]:
     results = []
     for link_target in link_targets:
@@ -183,15 +182,10 @@ def deduplicate_shard(
             example_link_targets = [parsed_example["link_target"] for parsed_example in parsed_examples]
             logger.info(f"Canonicalizing and hashing {len(example_link_targets)} link targets")
             canonicalize_and_hash_batch_size = 500_000
-            canonicalized_and_hashed_batch_refs = []
+            canonicalized_and_hashed_link_targets = []
             for i in range(0, len(example_link_targets), canonicalize_and_hash_batch_size):
                 batch = example_link_targets[i : i + canonicalize_and_hash_batch_size]
-                canonicalized_and_hashed_batch_refs.append(canonicalize_and_hash_link_targets.remote(batch))
-            logger.info(
-                f"Launched {len(canonicalized_and_hashed_batch_refs)} remote functions to "
-                "canonicalize and hash link targets"
-            )
-            canonicalized_and_hashed_link_targets = list(itertools.chain(*ray.get(canonicalized_and_hashed_batch_refs)))
+                canonicalized_and_hashed_link_targets.extend(canonicalize_and_hash_link_targets(batch))
             logger.info(f"Canonicalized and hashed {len(example_link_targets)} link targets")
 
             seen_link_targets = set()
