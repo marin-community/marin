@@ -20,7 +20,7 @@ from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import executor_main
 from marin.processing.tokenize import lm_mixture_data_config
 
-dclm_components_llama3 = {
+dclm_components_llama3_wrong = {
     "dclm_baseline": default_tokenize(
         name="dclm_baseline",
         dataset=dclm_baseline_wrong,
@@ -36,7 +36,7 @@ dclm_components_llama3 = {
     ),
 }
 
-dclm_mixture_config_llama3 = lm_mixture_data_config(components=dclm_components_llama3, weights=DCLM_MIXTURE_WEIGHTS)
+dclm_mixture_config_llama3_wrong = lm_mixture_data_config(components=dclm_components_llama3_wrong, weights=DCLM_MIXTURE_WEIGHTS)
 
 llama_8b_train_config = SimpleTrainConfig(
     tpu_type="v5litepod-256",
@@ -59,7 +59,7 @@ llama_8b_train_config = SimpleTrainConfig(
 llama_8b_tootsie = dataclasses.replace(
     default_train(
         name="llama-8b-tootsie-0.001",
-        tokenized=dclm_mixture_config_llama3,
+        tokenized=dclm_mixture_config_llama3_wrong,
         model_config=llama_8b,
         train_config=llama_8b_train_config,
         tags=["llama", "8b", "wsd-s", "exp600"],
