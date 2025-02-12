@@ -8,6 +8,20 @@ How to add a new instruction dataset:
 
 How to retrieve an instruction dataset:
 1. Use the function `get_instruction_dataset` with the HF repo id.
+
+Current datasets:
+1. meta-math/MetaMathQA
+2. allenai/tulu-v2-sft-mixture
+3. openbmb/UltraInteract_sft
+4. teknium/OpenHermes-2.5
+5. allenai/tulu-v2-sft-mixture-olmo-4096
+6. allenai/tulu-3-sft-mixture
+7. TIGER-Lab/AceCode-89K
+8. cognitivecomputations/dolphin-r1
+9. open-r1/OpenThoughts-114k-math
+10. bespokelabs/Bespoke-Stratos-17k
+11. HuggingFaceTB/smoltalk
+12. PrimeIntellect/verifiable-math-problems
 """
 
 from dataclasses import dataclass, field
@@ -126,6 +140,20 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         wait_for_completion=True,
         filetype="parquet",
         metadata_columns=[],
+    ),
+    "HuggingFaceTB/smoltalk": InstructionDatasetConfig(
+        hf_dataset_id="HuggingFaceTB/smoltalk",
+        revision="2c849df",  # The revision hash shown in the image
+        wait_for_completion=True,
+        metadata_columns=["source"],  # Keeping these metadata columns
+        filetype="parquet",
+    ),
+    "PrimeIntellect/verifiable-math-problems": InstructionDatasetConfig(
+        hf_dataset_id="PrimeIntellect/verifiable-math-problems",
+        revision="2ad7c92",  # The revision hash shown in the image
+        wait_for_completion=True,
+        metadata_columns=["source", "task_type", "problem_id"],  # Keeping these metadata columns
+        filetype="parquet",
     ),
 }
 

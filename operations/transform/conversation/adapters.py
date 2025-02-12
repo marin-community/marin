@@ -223,7 +223,6 @@ register_adapter(
     )
 )
 
-
 # Define adapter (parser) for dataset
 register_adapter(
     TransformAdapter(
@@ -235,5 +234,27 @@ register_adapter(
         user_value="user",
         assistant_value="assistant",
         content_key="value",
+    )
+)
+
+register_adapter(
+    TransformAdapter(
+        source="HuggingFaceTB/smoltalk",
+        dataset_format=InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN,
+        conversation_column="messages",
+        role_key="role",
+        user_value="user",
+        assistant_value="assistant",
+        system_value="system",
+        content_key="content",
+    )
+)
+
+register_adapter(
+    TransformAdapter(
+        source="PrimeIntellect/verifiable-math-problems",
+        dataset_format=InputDatasetFormat.INSTRUCTION_RESPONSE,
+        instruction_column="prompt",
+        response_column="gold_standard_solution",
     )
 )
