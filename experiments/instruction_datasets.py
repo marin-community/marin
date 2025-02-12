@@ -154,10 +154,7 @@ def download_dataset_step(dataset: InstructionDatasetConfig) -> ExecutorStep:
     return download_step
 
 
-def transform_dataset_step(
-    dataset_cfg: InstructionDatasetConfig,
-    download_step: ExecutorStep
-    ) -> ExecutorStep:
+def transform_dataset_step(dataset_cfg: InstructionDatasetConfig, download_step: ExecutorStep) -> ExecutorStep:
     """ExecutorStep that preprocesses and shards the input dataset.
 
     ===========================================================================
@@ -210,9 +207,8 @@ def transform_dataset_step(
 
 
 def get_instruction_dataset(
-    hf_dataset_id: str,
-    splits: list[str] = field(default_factory=lambda: ["train"])
-    ) -> ExecutorStep:
+    hf_dataset_id: str, splits: list[str] = field(default_factory=lambda: ["train"])
+) -> ExecutorStep:
     # Check that config exists
     assert hf_dataset_id in INSTRUCTION_DATASET_NAME_TO_CONFIG, f"Unknown instruction dataset: {hf_dataset_id}"
 
