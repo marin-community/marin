@@ -341,7 +341,9 @@ def write_sharded_examples(sharded_examples: list[list[Outlink]], output_prefix:
 @draccus.wrap()
 def sample_outlinks_from_html(cfg: OutlinksSamplingConfig):
     # Do all the processing in a remote function
-    ray.get(sample_outlinks.remote(cfg.input_pattern, cfg.num_to_sample, cfg.output_prefix, cfg.start_from))
+    ray.get(
+        sample_outlinks.remote(cfg.input_pattern, cfg.num_to_sample, cfg.shard_size, cfg.output_prefix, cfg.start_from)
+    )
 
 
 if __name__ == "__main__":
