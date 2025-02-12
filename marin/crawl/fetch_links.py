@@ -25,7 +25,7 @@ The high-level design of this fetcher is heavily inspired by the Apache Nutch cr
 After fetching to parquet, use `convert_responses_parquet_to_warc.py` to convert the parquet
 responses to WARC.
 
-Running on FineWeb-Edu:
+Running on FineWeb-Edu-10M:
 
 ```
 python marin/run/ray_run.py \
@@ -38,7 +38,7 @@ python marin/run/ray_run.py \
     --max_concurrent_shards 40
 ```
 
-Running on OpenWebMath:
+Running on OpenWebMath-10M:
 
 ```
 python marin/run/ray_run.py \
@@ -47,6 +47,19 @@ python marin/run/ray_run.py \
     python marin/crawl/fetch_links.py \
     --urls_input_directory gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-10M/ \
     --output_path gs://marin-us-central2/scratch/nfliu/fetched_outlinks/open-web-math-fde8ef8-10M/ \
+    --threads_per_shard 160 \
+    --max_concurrent_shards 40
+```
+
+Running on OpenWebMath-10M-cc-deduplicated:
+
+```
+python marin/run/ray_run.py \
+    --pip_deps 'fastparquet' \
+    --no_wait -- \
+    python marin/crawl/fetch_links.py \
+    --urls_input_directory gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-10M-cc-deduplicated/ \
+    --output_path gs://marin-us-central2/scratch/nfliu/fetched_outlinks/open-web-math-fde8ef8-10M-cc-deduplicated/ \
     --threads_per_shard 160 \
     --max_concurrent_shards 40
 ```
@@ -296,7 +309,9 @@ def fetch_to_parquet(
                         # Write robots data to output path
                         with netloc_to_robots_lock:
                             netloc_to_robots_output = deepcopy(netloc_to_robots)
-                        with fsspec.open(robots_output_path, "w", compression="infer") as fout:
+                        with fsspec.open(
+                            robots_output_path, "w", compression="infer", block_size=1 * 1024 * 1024 * 1024
+                        ) as fout:
                             json.dump(netloc_to_robots_output, fout)
 
                         # Write errors to output path
@@ -304,7 +319,9 @@ def fetch_to_parquet(
                             url_to_fetch_errors_output = deepcopy(url_to_fetch_errors)
                         with netloc_to_robots_fetch_error_lock:
                             netloc_to_robots_fetch_error_output = deepcopy(netloc_to_robots_fetch_error)
-                        with fsspec.open(errors_output_path, "w", compression="infer") as fout:
+                        with fsspec.open(
+                            errors_output_path, "w", compression="infer", block_size=1 * 1024 * 1024 * 1024
+                        ) as fout:
                             json.dump(
                                 {
                                     "url_to_fetch_errors": url_to_fetch_errors_output,
@@ -341,7 +358,9 @@ def fetch_to_parquet(
                     # Write robots data to output path
                     with netloc_to_robots_lock:
                         netloc_to_robots_output = deepcopy(netloc_to_robots)
-                    with fsspec.open(robots_output_path, "w", compression="infer") as fout:
+                    with fsspec.open(
+                        robots_output_path, "w", compression="infer", block_size=1 * 1024 * 1024 * 1024
+                    ) as fout:
                         json.dump(netloc_to_robots_output, fout)
 
                     # Write errors to output path
@@ -349,7 +368,9 @@ def fetch_to_parquet(
                         url_to_fetch_errors_output = deepcopy(url_to_fetch_errors)
                     with netloc_to_robots_fetch_error_lock:
                         netloc_to_robots_fetch_error_output = deepcopy(netloc_to_robots_fetch_error)
-                    with fsspec.open(errors_output_path, "w", compression="infer") as fout:
+                    with fsspec.open(
+                        errors_output_path, "w", compression="infer", block_size=1 * 1024 * 1024 * 1024
+                    ) as fout:
                         json.dump(
                             {
                                 "url_to_fetch_errors": url_to_fetch_errors_output,
@@ -628,7 +649,7 @@ def load_already_fetched_urls(parquet_path: str):
 def load_json_if_exists(json_path: str):
     """Load a JSON file if it exists, else return an empty dict."""
     if fsspec_exists(json_path):
-        with fsspec.open(json_path, compression="infer") as fin:
+        with fsspec.open(json_path, compression="infer", block_size=1 * 1024 * 1024 * 1024) as fin:
             return json.load(fin)
     return {}
 
@@ -661,7 +682,7 @@ def fetch_links(
         logger.info(f"Already processed and wrote parquet to {parquet_output_path}, skipping...")
         return
 
-    with fsspec.open(urls_path) as f:
+    with fsspec.open(urls_path, block_size=1 * 1024 * 1024 * 1024) as f:
         df = pd.read_parquet(f)
     logger.info(f"Found {len(df)} examples in input file {urls_path}")
 
@@ -677,7 +698,7 @@ def fetch_links(
     fetch_to_parquet(urls, shard_id, parquet_output_path, robots_output_path, errors_output_path, threads_per_shard)
 
     # Create success file
-    with fsspec.open(success_path, "w") as fout:
+    with fsspec.open(success_path, "w", block_size=1 * 1024 * 1024 * 1024) as fout:
         json.dump(
             {
                 "urls_path": urls_path,
