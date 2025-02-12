@@ -11,6 +11,7 @@ How to retrieve an instruction dataset:
 """
 
 from dataclasses import dataclass, field
+from copy import deepcopy
 
 from marin.execution.executor import (
     ExecutorStep,
@@ -61,79 +62,72 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         wait_for_completion=True,
         metadata_columns=["type"],
         filetype="json",
-        legacy=True,
     ),
-    "allenai/tulu-v2-sft-mixture": InstructionDatasetConfig(
-        hf_dataset_id="allenai/tulu-v2-sft-mixture",
-        revision="6248b17",
-        wait_for_completion=True,
-        metadata_columns=["dataset", "id"],
-        filetype="parquet",
-        legacy=True,
-    ),
-    "openbmb/UltraInteract_sft": InstructionDatasetConfig(
-        hf_dataset_id="openbmb/UltraInteract_sft",
-        revision="2b102e4",
-        wait_for_completion=True,
-        metadata_columns=["task", "dataset"],
-        filetype="parquet",
-        legacy=True,
-    ),
-    "teknium/OpenHermes-2.5": InstructionDatasetConfig(
-        hf_dataset_id="teknium/OpenHermes-2.5",
-        revision="b820378",
-        wait_for_completion=True,
-        metadata_columns=["id", "category", "source"],
-        filetype="json",
-        legacy=True,
-    ),
-    "allenai/tulu-v2-sft-mixture-olmo-4096": InstructionDatasetConfig(
-        hf_dataset_id="allenai/tulu-v2-sft-mixture-olmo-4096",
-        revision="7a7c388",  # The revision hash shown in the image
-        wait_for_completion=True,
-        metadata_columns=["dataset", "id"],  # Keeping these metadata columns
-        filetype="jsonl",  # Corrected from parquet to jsonl based on the file extension
-        legacy=True,
-    ),
-    "allenai/tulu-3-sft-mixture": InstructionDatasetConfig(
-        hf_dataset_id="allenai/tulu-3-sft-mixture",
-        revision="55e9fd6",  # The revision hash shown in the image
-        wait_for_completion=True,
-        metadata_columns=["dataset", "id"],  # Keeping these metadata columns
-        filetype="parquet",
-        legacy=True,
-    ),
-    "TIGER-Lab/AceCode-89K": InstructionDatasetConfig(
-        hf_dataset_id="TIGER-Lab/AceCode-89K",
-        revision="0361e95",
-        wait_for_completion=True,
-        metadata_columns=["id", "source"],
-        filetype="parquet",
-        legacy=True,
-    ),
-    "cognitivecomputations/dolphin-r1": InstructionDatasetConfig(
-        hf_dataset_id="cognitivecomputations/dolphin-r1",
-        subsets=["nonreasoning", "reasoning-deepseek", "reasoning-flash"],
-        revision="f6ac651",  # The revision hash shown in the image
-        wait_for_completion=True,
-        metadata_columns=["score", "refusal", "compliance_rating", "overall_quality"],
-        splits=["train"],
-        filetype="jsonl",
-    ),
-    "open-r1/OpenThoughts-114k-math": InstructionDatasetConfig(
-        hf_dataset_id="open-r1/OpenThoughts-114k-math",
-        revision="2db609d",  # The revision hash shown in the image
-        wait_for_completion=True,
-        metadata_columns=["system", "source", "generated_token_count", "correct"],
-        filetype="parquet",
-    ),
-    "bespokelabs/Bespoke-Stratos-17k": InstructionDatasetConfig(
-        hf_dataset_id="bespokelabs/Bespoke-Stratos-17k",
-        revision="9e9adba",  # The revision hash shown in the image
-        wait_for_completion=True,
-        filetype="parquet",
-        metadata_columns=[],
-    ),
+    # "allenai/tulu-v2-sft-mixture": InstructionDatasetConfig(
+    #     hf_dataset_id="allenai/tulu-v2-sft-mixture",
+    #     revision="6248b17",
+    #     wait_for_completion=True,
+    #     metadata_columns=["dataset", "id"],
+    #     filetype="parquet",
+    # ),
+    # "openbmb/UltraInteract_sft": InstructionDatasetConfig(
+    #     hf_dataset_id="openbmb/UltraInteract_sft",
+    #     revision="2b102e4",
+    #     wait_for_completion=True,
+    #     metadata_columns=["task", "dataset"],
+    #     filetype="parquet",
+    # ),
+    # "teknium/OpenHermes-2.5": InstructionDatasetConfig(
+    #     hf_dataset_id="teknium/OpenHermes-2.5",
+    #     revision="b820378",
+    #     wait_for_completion=True,
+    #     metadata_columns=["id", "category", "source"],
+    #     filetype="json",
+    # ),
+    # "allenai/tulu-v2-sft-mixture-olmo-4096": InstructionDatasetConfig(
+    #     hf_dataset_id="allenai/tulu-v2-sft-mixture-olmo-4096",
+    #     revision="7a7c388",  # The revision hash shown in the image
+    #     wait_for_completion=True,
+    #     metadata_columns=["dataset", "id"],  # Keeping these metadata columns
+    #     filetype="jsonl",  # Corrected from parquet to jsonl based on the file extension
+    # ),
+    # "allenai/tulu-3-sft-mixture": InstructionDatasetConfig(
+    #     hf_dataset_id="allenai/tulu-3-sft-mixture",
+    #     revision="55e9fd6",  # The revision hash shown in the image
+    #     wait_for_completion=True,
+    #     metadata_columns=["dataset", "id"],  # Keeping these metadata columns
+    #     filetype="parquet",
+    # ),
+    # "TIGER-Lab/AceCode-89K": InstructionDatasetConfig(
+    #     hf_dataset_id="TIGER-Lab/AceCode-89K",
+    #     revision="0361e95",
+    #     wait_for_completion=True,
+    #     metadata_columns=["id", "source"],
+    #     filetype="parquet",
+    # ),
+    # "cognitivecomputations/dolphin-r1": InstructionDatasetConfig(
+    #     hf_dataset_id="cognitivecomputations/dolphin-r1",
+    #     subsets=["nonreasoning", "reasoning-deepseek", "reasoning-flash"],
+    #     revision="f6ac651",  # The revision hash shown in the image
+    #     wait_for_completion=True,
+    #     metadata_columns=["score", "refusal", "compliance_rating", "overall_quality"],
+    #     splits=["train"],
+    #     filetype="jsonl",
+    # ),
+    # "open-r1/OpenThoughts-114k-math": InstructionDatasetConfig(
+    #     hf_dataset_id="open-r1/OpenThoughts-114k-math",
+    #     revision="2db609d",  # The revision hash shown in the image
+    #     wait_for_completion=True,
+    #     metadata_columns=["system", "source", "generated_token_count", "correct"],
+    #     filetype="parquet",
+    # ),
+    # "bespokelabs/Bespoke-Stratos-17k": InstructionDatasetConfig(
+    #     hf_dataset_id="bespokelabs/Bespoke-Stratos-17k",
+    #     revision="9e9adba",  # The revision hash shown in the image
+    #     wait_for_completion=True,
+    #     filetype="parquet",
+    #     metadata_columns=[],
+    # ),
 }
 
 
@@ -156,7 +150,6 @@ def download_dataset_step(dataset: InstructionDatasetConfig) -> ExecutorStep:
             gcs_output_path=this_output_path(),
             wait_for_completion=True,
         ),
-        override_output_path=f"raw/{dataset_name}",
     )
 
     return download_step
@@ -214,19 +207,33 @@ def transform_dataset_step(dataset_cfg: InstructionDatasetConfig, download_step:
     return transform_step
 
 
-def get_instruction_dataset(hf_dataset_id: str) -> ExecutorStep:
+def get_instruction_dataset(hf_dataset_id: str, splits: list[str] = ['train']) -> ExecutorStep:
+    # Check that config exists
     assert hf_dataset_id in INSTRUCTION_DATASET_NAME_TO_CONFIG, f"Unknown instruction dataset: {hf_dataset_id}"
-    download_step = download_dataset_step(INSTRUCTION_DATASET_NAME_TO_CONFIG[hf_dataset_id])
-    transform_step = transform_dataset_step(INSTRUCTION_DATASET_NAME_TO_CONFIG[hf_dataset_id], download_step)
+    
+    # Create a new configuration instance with the desired split.
+    original_config = INSTRUCTION_DATASET_NAME_TO_CONFIG[hf_dataset_id]
+    config = InstructionDatasetConfig(
+        **{k: v for k, v in original_config.__dict__.items() if k != 'split'},
+        splits=splits
+    )
+    
+    download_step = download_dataset_step(config)
+    transform_step = transform_dataset_step(config, download_step)
     return transform_step
 
 
 if __name__ == "__main__":
     all_steps = []
+    transform_steps = []
     for config in INSTRUCTION_DATASET_NAME_TO_CONFIG.values():
         downloaded_dataset = download_dataset_step(config)
         all_steps.append(downloaded_dataset)
         transformed_dataset = transform_dataset_step(config, downloaded_dataset)
         all_steps.append(transformed_dataset)
+        transform_steps.append(transformed_dataset)
 
     executor_main(steps=all_steps)
+    folder_paths = [output_path_of(s) for s in transform_steps]
+    print(folder_paths)
+

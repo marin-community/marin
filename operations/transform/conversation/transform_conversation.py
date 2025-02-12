@@ -13,7 +13,6 @@ import hashlib
 import json
 import logging
 import os
-import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -186,6 +185,8 @@ def transform_file(input_filename: str, output_filename: str, cfg: TransformSFTD
             transformed_shard_rows = transform_rows(shard_rows, cfg)
             for row in transformed_shard_rows:
                 f.write(f"{json.dumps(row)}\n")
+    
+    return [output_path]
 
 
 @ray.remote
@@ -260,22 +261,13 @@ def copy_dataset_from_gcp_to_local(input_gcp_path: os.PathLike) -> os.PathLike:
     return input_path
 
 
-def create_subset_name(dir_name: os.PathLike, subset_name: str | None, split: str) -> os.PathLike:
-    """Creates a new dir name that incorporates the subset name.
-    e.g., create_subset_name('gs://thisserver/testfolder-a982374', 'subset', 'train') -> 'gs://thisserver/testfolder-subset-train-a982374'
+def get_shard_dir(dir_name: os.PathLike, subset_name: str | None, split: str) -> os.PathLike:
+    """Creates a new path with the subset and split names.
+    e.g., create_subset_name('gs://thisserver/testfolder-a982374', 'subset', 'train') -> 'gs://thisserver/testfolder-a982374/subset/train'
     """
-    if subset_name == "default":
-        return dir_name
-
-    end_name = dir_name.split("/")[-1]
-    _matches = re.match("(.*-)(.*)$", end_name)
-    prefix = _matches[1]
-    suffix = _matches[2]
-    if (split == "") or (split is None):
-        new_end_name = f"{prefix}{split}-{suffix}"
-    else:
-        new_end_name = f"{prefix}{subset_name}-{split}-{suffix}"
-    return dir_name.replace(end_name, new_end_name)
+    if (subset_name == "default") or (subset_name is None):
+        return os.path.join(dir_name, split)
+    return os.path.join(dir_name, subset_name, split)
 
 
 @ray.remote
@@ -284,7 +276,7 @@ def transform_hf_dataset(cfg: TransformSFTDatasetConfig):
     data using the `datasets` package, and write shards to target directory
     """
     # 1. Copy data from GCP to local instance
-    local_dir = copy_dataset_from_gcp_to_local(cfg.input_path)
+    local_data_dir = copy_dataset_from_gcp_to_local(cfg.input_path)
 
     # 2. Identify subsets
     if cfg.subsets:
@@ -292,12 +284,12 @@ def transform_hf_dataset(cfg: TransformSFTDatasetConfig):
         subsets = cfg.subsets
     else:
         # No subset is defined, so process all subsets
-        subsets = [x for x in datasets.get_dataset_infos(path=local_dir)]
+        subsets = [x for x in datasets.get_dataset_infos(path=local_data_dir)]
 
     # 3. For each subset...
     for subset in subsets:
         # Validate splits
-        split_values = [x for x in datasets.get_dataset_infos(path=local_dir)[subset].splits.values()]
+        split_values = [x for x in datasets.get_dataset_infos(path=local_data_dir)[subset].splits.values()]
         if isinstance(split_values[0], dict):
             # Dict obj;
             data_splits = [x["name"] for x in split_values]
@@ -319,11 +311,11 @@ def transform_hf_dataset(cfg: TransformSFTDatasetConfig):
 
         for split in splits:
             # a. Load dataset
-            dataset = datasets.load_dataset(path=local_dir, name=subset, split=split)
+            dataset = datasets.load_dataset(path=local_data_dir, name=subset, split=split)
             rows = [r for r in dataset]
             del dataset  # saves memory
             # b. Create GCP target directory
-            subset_output_path = create_subset_name(cfg.output_path, subset, split)
+            subset_output_path = get_shard_dir(cfg.output_path, subset, split)
             output_path = create_shard_output_directory(subset_output_path)
             # c. Write shards to GCP
             for idx, shard in enumerate(range(0, len(rows), cfg.shard_size)):
@@ -335,7 +327,7 @@ def transform_hf_dataset(cfg: TransformSFTDatasetConfig):
                     for row in transformed_shard_rows:
                         f.write(f"{json.dumps(row)}\n")
             logging.log(logging.INFO, f"Wrote processed data to {output_path}")
-
+    return cfg.output_path
 
 @draccus.wrap()
 def main(cfg: TransformSFTDatasetConfig):
