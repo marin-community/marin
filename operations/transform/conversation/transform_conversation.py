@@ -185,7 +185,7 @@ def transform_file(input_filename: str, output_filename: str, cfg: TransformSFTD
             transformed_shard_rows = transform_rows(shard_rows, cfg)
             for row in transformed_shard_rows:
                 f.write(f"{json.dumps(row)}\n")
-    
+
     return [output_path]
 
 
@@ -328,6 +328,7 @@ def transform_hf_dataset(cfg: TransformSFTDatasetConfig):
                         f.write(f"{json.dumps(row)}\n")
             logging.log(logging.INFO, f"Wrote processed data to {output_path}")
     return cfg.output_path
+
 
 @draccus.wrap()
 def main(cfg: TransformSFTDatasetConfig):
