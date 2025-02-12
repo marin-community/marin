@@ -69,6 +69,7 @@ dclm_eli5_200k_rw_200k = ExecutorStep(
         val_frac=versioned(0.0),
         seed=versioned(0),
     ),
+    pip_dependency_groups=["fasttext"],
 )
 
 dclm_eli5_100k_oh_100k_rw_200k = ExecutorStep(
@@ -100,6 +101,7 @@ dclm_eli5_100k_oh_100k_rw_200k = ExecutorStep(
         val_frac=versioned(0.0),
         seed=versioned(0),
     ),
+    pip_dependency_groups=["fasttext"],
 )
 
 teknium_oh_200k_rw_200k = ExecutorStep(
@@ -125,6 +127,7 @@ teknium_oh_200k_rw_200k = ExecutorStep(
         val_frac=versioned(0.0),
         seed=versioned(0),
     ),
+    pip_dependency_groups=["fasttext"],
 )
 
 
