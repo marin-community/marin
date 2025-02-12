@@ -23,7 +23,7 @@ DCLM_BASELINE_ONLY_MIXTURE = {
 
 dclm_components_llama3 = {
     "dclm_baseline": dataclasses.replace(
-            default_tokenize(
+        default_tokenize(
             name="dclm_baseline",
             dataset=dclm_baseline,
             tokenizer=llama3_tokenizer,
