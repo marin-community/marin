@@ -38,6 +38,20 @@ python marin/run/ray_run.py \
     --max_concurrent_shards 40
 ```
 
+Running on FineWeb-Edu-10M-cc-deduplicated:
+
+```
+python marin/run/ray_run.py \
+    --pip_deps 'fastparquet' \
+    --no_wait -- \
+    python marin/crawl/fetch_links.py \
+    --urls_input_directory gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-10M-cc-deduplicated/ \
+    --output_path gs://marin-us-central2/scratch/nfliu/fetched_outlinks/fineweb-edu-10M-cc-deduplicated/ \
+    --threads_per_shard 160 \
+    --max_concurrent_shards 40
+```
+
+
 Running on OpenWebMath-10M:
 
 ```
