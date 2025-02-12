@@ -41,6 +41,18 @@ python marin/run/ray_run.py \
     --output_prefix gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-10M/links
 ```
 
+Sampling 10M FineWeb-Edu outlinks (deduplicated against CC):
+
+```
+python marin/run/ray_run.py \
+    --no_wait -- \
+    python marin/crawl/sample_outlinks.py \
+    --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-cc-deduplicated/CC-MAIN*/*_links.jsonl.gz' \
+    --num_to_sample 10000000 \
+    --shard_size 100000 \
+    --output_prefix gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-10M-fineweb-edu-cc-deduplicated/links
+```
+
 """  # noqa: E501
 import bisect
 import json
