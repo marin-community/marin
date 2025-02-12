@@ -1,4 +1,3 @@
-
 from experiments.defaults import default_tokenize
 from experiments.llama import llama3_tokenizer
 from experiments.pretraining_datasets import dclm_baseline, proofpile_2, starcoderdata
@@ -22,10 +21,10 @@ DCLM_BASELINE_ONLY_MIXTURE = {
 
 dclm_components_llama3 = {
     "dclm_baseline": default_tokenize(
-            name="dclm_baseline",
-            dataset=dclm_baseline,
-            tokenizer=llama3_tokenizer,
-        ),
+        name="dclm_baseline",
+        dataset=dclm_baseline,
+        tokenizer=llama3_tokenizer,
+    ),
     "starcoderdata": default_tokenize(
         name="starcoderdata", dataset=starcoderdata, tokenizer=llama3_tokenizer, text_key="content"
     ),
