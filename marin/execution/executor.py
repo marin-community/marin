@@ -709,7 +709,7 @@ def _get_ray_status(current_owner_task_id: str | None) -> str | None:
         return current_owner_ray_status
 
     current_owner = ray.util.state.get_task(current_owner_task_id)
-    if type(current_owner) is list:  # Due to retires in ray, task_state can be a list of states
+    if type(current_owner) is list:  # Due to retries in ray, task_state can be a list of states
         current_owner = current_owner[-1]
 
     if current_owner is None:  # We need to retry. Ray still does not have the status of the task
@@ -731,15 +731,7 @@ def get_status(output_path: str, current_owner_task_id: str | None, states: dict
     no task is currently running it, but there is a status on disk -> return disk status
     """
 
-<<<<<<< HEAD
     current_owner_ray_status = _get_ray_status(current_owner_task_id)
-=======
-    current_owner_ray_status = None
-    if current_owner_task_id is not None:
-        current_owner = ray.util.state.get_task(current_owner_task_id)
-        if type(current_owner) is list:  # Due to retries in ray, task_state can be a list of states
-            current_owner = current_owner[-1]
->>>>>>> 44196dd9 (Update marin/execution/executor.py)
 
     num_unknown = states.get("num_unknown", 0)  # Number of times the status was unknown
     # We check how many times has times ray has returned status Unknown in a row. If it returns more than 20 times,
