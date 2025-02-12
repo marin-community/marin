@@ -214,6 +214,7 @@ def default_eval(
 def default_key_evals(
     step: ExecutorStep | InputName | str,
     resource_config: ResourceConfig,
+    model_name: str | None = None,
     max_eval_instances: int | None = None,
     engine_kwargs: dict | None = DEFAULT_VLLM_ENGINE_KWARGS,
 ) -> list[ExecutorStep]:
@@ -222,9 +223,12 @@ def default_key_evals(
     """
     name, model_step_path = extract_model_name_and_path(step)
 
+    if model_name is None:
+        model_name = name
+
     return [
         evaluate_lm_evaluation_harness(
-            name,
+            model_name,
             model_step_path,
             KEY_GENERATION_TASKS,
             max_eval_instances=max_eval_instances,
@@ -232,7 +236,11 @@ def default_key_evals(
             resource_config=resource_config,
         ),
         evaluate_levanter_lm_evaluation_harness(
-            name, model_step_path, KEY_MULTIPLE_CHOICE_TASKS, resource_config, max_eval_instances=max_eval_instances
+            model_name,
+            model_step_path,
+            KEY_MULTIPLE_CHOICE_TASKS,
+            resource_config,
+            max_eval_instances=max_eval_instances,
         ),
-        evaluate_alpaca_eval(name, model_step_path, resource_config),
+        evaluate_alpaca_eval(model_name, model_step_path, resource_config),
     ]
