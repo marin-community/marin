@@ -41,8 +41,10 @@ param_counts = {
     "300m": 300,
     "600m": 600,
     "600m_0.003": 6000000,
-    "1_9b": 1900,
+    "1_9b": 1900000000,
     "1_9b_0.003": 1900000000,
+    "1_9b_1024": 1900,
+    "8b": 8000,
     "8b_1024": 8000,
 }
 
@@ -60,10 +62,17 @@ def parse_run(run):
 
     run_dict["step_count"] = run_json_config["trainer"]["value"]["num_train_steps"]
 
+    if "euw4" in run_id:
+        run_dict["region"] = "euw4"
+    elif "usc2" in run_id:
+        run_dict["region"] = "usc2"
+    else:
+        raise ValueError(f"Unknown region: {run_id}")
+
     run_id_entries = run_id.split("-")
     # run_dict["fraction_data1_stage2"] = float(run_id_entries[run_id_entries.index("vs") + 1])
 
-    run_dict["model_size"] = run_id_entries[run_id_entries.index("euw4") + 1]
+    run_dict["model_size"] = run_id_entries[run_id_entries.index(run_dict["region"]) + 1]
     
     if run_dict["model_size"] == "linear":
         return None
@@ -82,10 +91,12 @@ def parse_run(run):
             if run_dict["step_count"] == 3000 and "0.001" not in run_id:
                 return None
 
-    if run_dict["model_size"] == "1_9b" and "3e-4" not in run_id and "0.0003" not in run_id:
+    if run_dict["model_size"] == "1_9b":
         # run_dict["model_size"] = "1_9b_0.003"
         return None
     
+    if run_dict["model_size"] == "1_9b_1024" and "0.001" not in run_id:
+        return None
 
     if run_dict["model_size"] == "8b_1024" and "0.0003" not in run_id:
         return None
@@ -97,7 +108,7 @@ def parse_run(run):
 
     history = run.history(keys=[f"eval/{data1_name}/loss", f"eval/{data2_name}/loss"])
 
-    if len(history[f"eval/{data1_name}/loss"]) != 21:
+    if f"eval/{data1_name}/loss" not in history or len(history[f"eval/{data1_name}/loss"]) != 21:
         return None
     
     run_dict[f"final_{data1_name}_loss"] = history[f"eval/{data1_name}/loss"].iloc[-1]
@@ -111,20 +122,20 @@ if args.build_cache:
     run_list = []
     runs = wandb.Api().runs("stanford-mercury/suhas-curriculum")
     for run in tqdm(runs):
-        if wandb_key in run.tags and "euw4" in run.tags:
-            try:
-                run_dict = parse_run(run)
-                if run_dict is not None:
-                    prev_len = len(run_list)
-                    run_list = [_run_dict for _run_dict in run_list if not run_eq(_run_dict, run_dict)]
-                    if len(run_list) != prev_len:
-                        print("\tDuplicate run found and removed")
-                    print("\033[94m" + run.id + "\033[0m")
-                    run_list.append(run_dict)
-                else:
-                    print("\t^ Rejected above run", run.id)
-            except Exception as e:
-                print("\t^ Rejected above run", run.id, "because of", e)
+        if wandb_key in run.tags:
+            # try:
+            run_dict = parse_run(run)
+            if run_dict is not None:
+                prev_len = len(run_list)
+                run_list = [_run_dict for _run_dict in run_list if not run_eq(_run_dict, run_dict)]
+                if len(run_list) != prev_len:
+                    print("\tDuplicate run found and removed")
+                print("\033[94m" + run.id + "\033[0m")
+                run_list.append(run_dict)
+            else:
+                print("\t^ Rejected above run", run.id)
+            # except Exception as e:
+            #     print("\t^ Rejected above run", run.id, "because of", e)
     pickle.dump(run_list, open(f"cache/{wandb_key}_run_list.pkl", "wb"))
 else:
     run_list = pickle.load(open(f"cache/{wandb_key}_run_list.pkl", "rb"))
@@ -134,8 +145,9 @@ model_pretty_name_dict = {
     "300m": "300M params",
     "600m": "600M params",
     "600m_0.003": "600M params (suboptimal lr)",
-    "1_9b": "1.9B params",
-    "1_9b_0.003": "1.9B params (suboptimal lr)",
+    # "1_9b": "1.9B params",
+    # "1_9b_0.003": "1.9B params (suboptimal lr)",
+    "1_9b_1024": "1.9B params",
     "8b_1024": "8B params",
 }
 
@@ -151,7 +163,8 @@ model_color_map = {
     "300m": 'C2',
     "600m": 'C3',
     "600m_0.003": 'C4',
-    "1_9b": 'C5',
+    # "1_9b": 'C5',
+    "1_9b_1024": 'C5',
     "8b_1024": 'C6',
 }
 

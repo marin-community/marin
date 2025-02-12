@@ -14,20 +14,19 @@ if __name__ == "__main__":
         full_training_varying_mixture(
             data1_name="flan",
             data2_name="c4",
-            total_data1_portion=0.005,
-            duration_frac_stage2=duration_frac_stage2,
-            data1_frac_alloc_stage2=1.0,
+            total_data1_portion=0.99,
+            duration_frac_stage2=0.5,
+            data1_frac_alloc_stage2=0.5,
             schedule_type="linear",
-            cooldown_frac=cooldown_frac,
-            model_size="600m",
-            num_train_steps=num_train_steps,
+            cooldown_frac=0.25,
+            model_size="150m",
+            num_train_steps=1000,
             learning_rate=0.003,
-            additional_tags=["debug-modules-not-found"],
-            version_tag="-v4"
+            num_eval=8,
+            num_rare_epochs=16,
+            additional_tags=["debug-repetition"],
+            version_tag="-v2"
         )
-        for num_train_steps in [1200]
-        for cooldown_frac in [0.02]
-        for duration_frac_stage2 in [0.02]
     ]
 
     steps = list(chain(*stage_pairs))

@@ -12,7 +12,7 @@ import dataclasses
 from levanter.optim import AdamConfig
 
 from experiments.defaults import _prepare_data_config
-from experiments.llama import llama_150m, llama_300m, llama_600m, llama_1_9b, llama_8b
+from experiments.llama import llama_150m, llama_300m, llama_600m, llama_1_4b, llama_1_9b, llama_8b
 
 from marin.execution.executor import executor_main, output_path_of
 from marin.processing.tokenize.data_configs import lm_mixture_data_config, lm_varying_mixture_data_config
@@ -22,6 +22,7 @@ from experiments.instruction_datasets import get_instruction_dataset
 
 marin_prefix = os.environ["MARIN_PREFIX"]
 
+llama_1_4b_1024 = dataclasses.replace(llama_1_4b, seq_len=1024)
 llama_1_9b_1024 = dataclasses.replace(llama_1_9b, seq_len=1024)
 llama_8b_1024 = dataclasses.replace(llama_8b, seq_len=1024)
 
@@ -192,6 +193,7 @@ def full_training_varying_mixture(
     model_size: str = "150m",
     num_train_steps: int = 3000,
     num_eval: int = 20,
+    num_data1_repetitions: int = 1,
     version_tag: str = "",
     additional_tags: List[str] = [],
 ):
@@ -213,11 +215,14 @@ def full_training_varying_mixture(
         version_tag: Optional version tag for experiment
         additional_tags: Additional tags for experiment
     """
-    duration_frac_stage1 = 1 - duration_frac_stage2
-    data1_frac_alloc_stage1 = 1 - data1_frac_alloc_stage2
+    num_sequences = num_train_steps * 1024  # batch size
+    num_data1_sequences = int(num_sequences * total_data1_portion)
 
-    data1_weight_stage1 = round(total_data1_portion * data1_frac_alloc_stage1 / duration_frac_stage1, 7)
-    data1_weight_stage2 = round(total_data1_portion * data1_frac_alloc_stage2 / duration_frac_stage2, 7)
+    duration_frac_stage1 = round(1 - duration_frac_stage2, 7)
+    data1_frac_alloc_stage1 = round(1 - data1_frac_alloc_stage2, 7)
+
+    data1_weight_stage1 = round(total_data1_portion * data1_frac_alloc_stage1 * num_data1_repetitions / duration_frac_stage1, 7)
+    data1_weight_stage2 = round(total_data1_portion * data1_frac_alloc_stage2 * num_data1_repetitions / duration_frac_stage2, 7)
 
     print('-' * 100)
     print(f"total_data1_portion: {total_data1_portion}")
@@ -227,8 +232,18 @@ def full_training_varying_mixture(
     assert 0 <= data1_weight_stage1 <= 1, f"data1_weight_stage1: {data1_weight_stage1}"
     assert 0 <= data1_weight_stage2 <= 1, f"data1_weight_stage2: {data1_weight_stage2}"
 
+    # Configure model and training
+    model = {
+        "150m": llama_150m,
+        "300m": llama_300m,
+        "600m": llama_600m,
+        "1_4b_1024": llama_1_4b_1024,
+        # "1_9b": llama_1_9b,
+        "1_9b_1024": llama_1_9b_1024,
+        "8b_1024": llama_8b_1024,
+    }[model_size]
+
     # Calculate transition point
-    num_sequences = num_train_steps * 1024  # batch size
     transition_seq_idx = int(duration_frac_stage1 * num_sequences)
     # Ensure sequence index is multiple of 2048
     assert transition_seq_idx % 2048 == 0, f"transition_seq_idx: {transition_seq_idx}"
@@ -244,6 +259,9 @@ def full_training_varying_mixture(
             (0, {data1_name: data1_weight_stage1, data2_name: 1 - data1_weight_stage1}),  # Stage 1
             (transition_seq_idx, {data1_name: data1_weight_stage2, data2_name: 1 - data1_weight_stage2})  # Stage 2
         ],
+        max_sequences_dict=None if num_data1_repetitions is None else {
+            data1_name: num_data1_sequences
+        },
     )
 
     pretraining_data = _prepare_data_config(data_config, use_default_validation=True)
@@ -253,14 +271,16 @@ def full_training_varying_mixture(
         "150m": llama_150m,
         "300m": llama_300m,
         "600m": llama_600m,
-        "1_9b": llama_1_9b,
+        "1_4b_1024": llama_1_4b_1024,
+        # "1_9b": llama_1_9b,
         "1_9b_1024": llama_1_9b_1024,
         "8b_1024": llama_8b_1024,
     }[model_size]
 
     weight_decay = 0.1
     steps_per_eval = num_train_steps // num_eval
-    name_prefix = f"{data1_name}-{data2_name}-onevs{data1_frac_alloc_stage2}-dur{duration_frac_stage2}-{region_suffix}-{model_size}"
+    epochs_tag = f"-r{num_data1_repetitions}" if num_data1_repetitions is not None and num_data1_repetitions > 1 else ""
+    name_prefix = f"{data1_name}{epochs_tag}-{data2_name}-onevs{data1_frac_alloc_stage2}-dur{duration_frac_stage2}-{region_suffix}-{model_size}"
 
     if schedule_type == "linear":
         optimizer_config = AdamConfig(

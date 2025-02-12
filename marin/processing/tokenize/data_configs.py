@@ -1,7 +1,7 @@
 import dataclasses
 import logging
 import os
-
+from typing import Optional
 from levanter.data.text import LMDatasetSourceConfig, LMMixtureDatasetConfig
 
 from marin.execution.executor import ExecutorStep, InputName, output_path_of
@@ -95,6 +95,7 @@ def lm_varying_mixture_data_config(
     *,
     shuffle: bool | int = True,
     missing_weights_are_validation: bool = True,
+    max_sequences_dict: Optional[dict[str, int]] = None,
 ) -> LMMixtureDatasetConfig:
     """
     Creates a training config from a mixture of datasources with varying weights.
@@ -144,8 +145,8 @@ def lm_varying_mixture_data_config(
         tokenizer=tokenizer,
         cache_dir=None,
         shuffle=shuffle,
+        max_sequences_dict=max_sequences_dict,
     )
-
 
 def add_validation_sets_to_mixture(
     config: LMMixtureDatasetConfig, validation_sets: dict[str, TokenizerStep]

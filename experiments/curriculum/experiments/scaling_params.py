@@ -28,8 +28,8 @@ if __name__ == "__main__":
             additional_tags=["flan-c4-eu-model-scaling"],
             version_tag=version_tag(learning_rate_dict[model_size])
         )
-        for model_size in ["1_9b_1024_0.0003", "1_9b_1024_0.001"]
-        for duration_frac_stage2 in [0.4]
+        for model_size in ["1_9b_1024_0.001"]
+        for duration_frac_stage2 in [0.01, 0.02, 0.05, 0.1, 0.2, 0.4]
     ]
 
     steps = list(chain(*stage_pairs))

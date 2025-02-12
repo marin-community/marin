@@ -24,13 +24,13 @@ if __name__ == "__main__":
             schedule_type="linear",
             cooldown_frac=0.05,
             model_size=correct_model_size(model_size),
-            num_train_steps=chinchilla_steps[model_size],
+            num_train_steps=chinchilla_steps[correct_model_size(model_size)],
             learning_rate=learning_rate_dict[model_size],
             additional_tags=["flan-c4-eu-chinchilla-model-scaling"],
             version_tag=version_tag(learning_rate_dict[model_size])
         )
-        for model_size in ["1_9b"]
-        for duration_frac_stage2 in [0.1]
+        for model_size in ["1_4b_1024_0.001"]
+        for duration_frac_stage2 in [0.01, 0.02, 0.05, 0.1, 0.2, 0.4]
     ]
 
     steps = list(chain(*stage_pairs))
