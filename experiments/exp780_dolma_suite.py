@@ -9,8 +9,9 @@ from marin.execution.executor import executor_main
 from marin.scaling_laws.create_ladder_suite import scaling_law_suite
 
 dolma_suite = scaling_law_suite(
-    sweep_name="dolma-suite",
+    sweep_name="dolma-scaling-law-suite",
     tokenized=dolma_llama3_tokenized,
+    tags=["scaling_laws"],
 )
 
 if __name__ == "__main__":
