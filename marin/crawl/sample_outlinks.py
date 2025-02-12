@@ -5,7 +5,7 @@ input file is a JSONL file, where each record contains an Outlink. The output is
 sharded parquet file(s) (10K records each), where each record contains an
 Outlink.
 
-Running on OpenWebMath:
+Sampling 10M OpenWebMath outlinks:
 
 ```
 python marin/run/ray_run.py \
@@ -17,7 +17,19 @@ python marin/run/ray_run.py \
     --output_prefix gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-10M/links
 ```
 
-Running on FineWeb-Edu:
+Sampling 10M OpenWebMath outlinks (deduplicated against CC):
+
+```
+python marin/run/ray_run.py \
+    --no_wait -- \
+    python marin/crawl/sample_outlinks.py \
+    --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-cc-deduplicated/*_links.jsonl.gz' \
+    --num_to_sample 10000000 \
+    --shard_size 100000 \
+    --output_prefix gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-10M-cc-deduplicated/links
+```
+
+Sampling 10M FineWeb-Edu outlinks:
 
 ```
 python marin/run/ray_run.py \
@@ -29,7 +41,7 @@ python marin/run/ray_run.py \
     --output_prefix gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-10M/links
 ```
 
-"""
+"""  # noqa: E501
 import bisect
 import json
 import logging
