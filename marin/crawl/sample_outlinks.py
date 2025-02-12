@@ -50,7 +50,7 @@ python marin/run/ray_run.py \
     --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-cc-deduplicated/CC-MAIN*/*_links.jsonl.gz' \
     --num_to_sample 10000000 \
     --shard_size 100000 \
-    --output_prefix gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-10M-fineweb-edu-cc-deduplicated/links
+    --output_prefix gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-10M-cc-deduplicated/links
 ```
 
 """  # noqa: E501
