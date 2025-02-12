@@ -7,6 +7,10 @@ from levanter.schedule import IntSchedule
 class SimpleTrainConfig:
     tpu_type: str
     train_batch_size: int | IntSchedule
+    """
+    The batch size for training. If an IntSchedule is provided, the batch size will be
+    varied according to the schedule.
+    """
     num_train_steps: int
     learning_rate: float
     data_seed: int | None = None
@@ -35,3 +39,6 @@ class SimpleTrainConfig:
     node_count: int = 1
 
     allow_partial_checkpoint: bool = False
+    """
+    Allow loading partial checkpoints. This is useful for converting training to EMA, e.g.
+    """
