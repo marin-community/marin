@@ -12,19 +12,24 @@ For now, we're training on DCLM's best mix, but that will change.
 
 import dataclasses
 
-from experiments.dclm.exp433_dclm_run import DCLM_MIXTURE_WEIGHTS
+from experiments.dclm.tokenize_dclm import DCLM_MIXTURE_WEIGHTS, dclm_mixture_config_llama3
 from experiments.defaults import default_tokenize, default_train
 from experiments.llama import llama3_tokenizer, llama_8b
-from experiments.pretraining_datasets import dclm_baseline, proofpile_2, starcoderdata
+from experiments.pretraining_datasets import dclm_baseline_wrong, proofpile_2, starcoderdata
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import executor_main
 from marin.processing.tokenize import lm_mixture_data_config
 
-dclm_components_llama3 = {
-    "dclm_baseline": default_tokenize(
-        name="dclm_baseline",
-        dataset=dclm_baseline,
-        tokenizer=llama3_tokenizer,
+## NOTE: on 20250211, we discovered that the DCLM baseline data in us-central2 was corrupted/partial.
+# These are preserved for reproducibility, but future runs should use the correct data.
+dclm_components_llama3_wrong = {
+    "dclm_baseline": dataclasses.replace(
+        default_tokenize(
+            name="dclm_baseline",
+            dataset=dclm_baseline_wrong,
+            tokenizer=llama3_tokenizer,
+        ),
+        override_output_path="gs://marin-us-central2/tokenized/dclm_baseline-0206f1_WRONG_20250211/",
     ),
     "starcoderdata": default_tokenize(
         name="starcoderdata", dataset=starcoderdata, tokenizer=llama3_tokenizer, text_key="content"
@@ -36,7 +41,9 @@ dclm_components_llama3 = {
     ),
 }
 
-dclm_mixture_config_llama3 = lm_mixture_data_config(components=dclm_components_llama3, weights=DCLM_MIXTURE_WEIGHTS)
+dclm_mixture_config_llama3_wrong = lm_mixture_data_config(
+    components=dclm_components_llama3_wrong, weights=DCLM_MIXTURE_WEIGHTS
+)
 
 llama_8b_train_config = SimpleTrainConfig(
     tpu_type="v5litepod-256",
