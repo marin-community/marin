@@ -76,7 +76,7 @@ dclm_baseline_wrong = ExecutorStep(
         wait_for_completion=True,
         timeout=24 * 60 * 60,
     ),
-    override_output_path="raw/dclm_WRONG_20250211/"
+    override_output_path="raw/dclm_WRONG_20250211/",
 )
 
 
@@ -90,10 +90,8 @@ dclm_baseline = ExecutorStep(
         wait_for_completion=True,
         timeout=24 * 60 * 60,
     ),
-    override_output_path="raw/dclm"
-)
-
-
+    override_output_path="raw/dclm",
+).cd("a3b142c")
 
 the_stack_dedup = ExecutorStep(
     name="raw/the-stack-dedup",
