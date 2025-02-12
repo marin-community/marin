@@ -1,10 +1,12 @@
 from dataclasses import dataclass
 
+from levanter.schedule import IntSchedule
+
 
 @dataclass(frozen=True)
 class SimpleTrainConfig:
     tpu_type: str
-    train_batch_size: int
+    train_batch_size: int | IntSchedule
     num_train_steps: int
     learning_rate: float
     data_seed: int | None = None
@@ -31,3 +33,5 @@ class SimpleTrainConfig:
     """None means match steps_per_export, -1 disables"""
 
     node_count: int = 1
+
+    allow_partial_checkpoint: bool = False
