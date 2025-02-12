@@ -18,16 +18,12 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
     Evaluator that runs lm-eval: https://github.com/EleutherAI/lm-evaluation-harness
     """
 
-    RESULTS_PATH: str = os.path.join(VllmTpuEvaluator.CACHE_PATH, "eleuther_results")
+    CACHE_PATH: str = "/tmp/lm-eval"
+    RESULTS_PATH: str = os.path.join(CACHE_PATH, "eleuther_results")
 
     _pip_packages: ClassVar[list[Dependency]] = [
         *VllmTpuEvaluator.DEFAULT_PIP_PACKAGES,
-        # NOTE(chris): We put lm-eval in the Dockerfile.vllm, so this dependency is not needed
-        # Dependency(name="lm_eval"),
-        # Dependency(name="lm-eval[api]"),
-        # For IF-Eval
-        Dependency(name="langdetect"),
-        Dependency(name="immutabledict"),
+        # NOTE(chris): We put lm-eval[ifeval] in the Dockerfile.vllm, so this dependency is not needed
     ]
     _env_vars: ClassVar[dict[str, str]] = {
         # Human eval tests code from the model which requires permission to run
