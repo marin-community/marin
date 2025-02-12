@@ -17,6 +17,7 @@ from experiments.defaults import default_tokenize, default_train
 from experiments.llama import llama3_tokenizer, llama_8b
 from experiments.pretraining_datasets import dclm_baseline_wrong, proofpile_2, starcoderdata
 from experiments.simple_train_config import SimpleTrainConfig
+from levanter.schedule import ScheduleStep
 from marin.execution.executor import executor_main
 from marin.processing.tokenize import lm_mixture_data_config
 
@@ -47,20 +48,36 @@ dclm_mixture_config_llama3_wrong = lm_mixture_data_config(
 
 llama_8b_train_config = SimpleTrainConfig(
     tpu_type="v5litepod-256",
-    node_count=2,
-    train_batch_size=1024,
+    node_count=4,
+    # train_batch_size=1024,
     num_train_steps=1_000_000,  # using wsd-s so this doesn't really matter
     # these hypers from Table 12 in https://arxiv.org/html/2406.11794v1#A6
-    learning_rate=1e-3,  # we get divergence with 2e-3
-    weight_decay=0.05,
-    # WSD-S
-    cycle_length=10000,
-    steps_per_eval=10000,
-    steps_per_export=20000,
-    warmup=1000,  # initial warmup
-    # TODO: do we need rewarmup
-    decay=0.1,  # 10% of 5000 = 500 steps
-    lr_schedule="inv",
+    # until step 660,000 we used: this
+    # train_batch_size=1024,
+    # learning_rate=1e-3,  # we get divergence with 2e-3
+    # weight_decay=0.05,
+    # # WSD-S
+    # cycle_length=10000,
+    # steps_per_eval=10000,
+    # steps_per_export=20000,
+    # warmup=1000,  # initial warmup
+    # # TODO: do we need rewarmup
+    # decay=0.1,  # 10% of 5000 = 500 steps
+    # lr_schedule="inv",
+    # after 660,600 we changed things up:
+    train_batch_size=[ScheduleStep(until=660_600, value=1024), ScheduleStep(until=-1, value=3072)],
+    # LR doesn't (yet) support the schedule stuff so we just set it to the new value
+    # because we're increasing the batch size, we need to increase the LR by \sqrt(ratio), which is ≈1.7x
+    learning_rate=1.7e-3,
+    # we're also switching to EMA because it's supposed to better than WSD-S
+    # to switch to EMA
+    decay=0.2,
+    ema_beta=0.995,
+    lr_schedule="linear",
+    cycle_length=None,
+    allow_partial_checkpoint=True,
+    steps_per_eval=1000,
+    steps_per_task_eval=10000,
 )
 
 llama_8b_tootsie = dataclasses.replace(
