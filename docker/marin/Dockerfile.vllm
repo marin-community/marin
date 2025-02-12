@@ -42,7 +42,7 @@ RUN VLLM_TARGET_DEVICE="tpu" python3 setup.py develop
 RUN pip install --no-cache-dir fsspec==2024.9.0
 
 # Install lm-evaluation-harness
-RUN sudo mkdir -p /opt/lm_eval && sudo chown -R $(whoami) /opt/lm_eval && cd /opt/lm_eval && git clone --depth 1 https://github.com/EleutherAI/lm-evaluation-harness && cd lm-evaluation-harness && pip install -e .
+RUN sudo mkdir -p /opt/lm_eval && sudo chown -R $(whoami) /opt/lm_eval && cd /opt/lm_eval && git clone --depth 1 https://github.com/EleutherAI/lm-evaluation-harness && cd lm-evaluation-harness && pip install -e ".[ifeval]"
 
 # NOTE: Try to keep as much "heavy" stuff as possible before this line to avoid re-installing
 

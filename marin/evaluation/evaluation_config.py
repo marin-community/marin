@@ -1,5 +1,7 @@
 from dataclasses import dataclass, field
 
+from experiments.evals.resource_configs import ResourceConfig
+
 
 @dataclass(frozen=True)
 class EvalTaskConfig:
@@ -65,4 +67,9 @@ class EvaluationConfig:
     engine_kwargs: dict | None = None
     """
     Additional keyword arguments to pass to the vLLM engine.
+    """
+
+    resource_config: ResourceConfig | None = None
+    """
+    Additional keyword arguments to pass to the Ray resources.
     """
