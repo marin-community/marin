@@ -5,6 +5,7 @@ Canonical set of evals.
 import logging
 
 from experiments.evals.engine_configs import DEFAULT_VLLM_ENGINE_KWARGS
+from experiments.evals.resource_configs import SINGLE_TPU_V4_8, ResourceConfig
 from experiments.evals.task_configs import CORE_TASKS, KEY_GENERATION_TASKS, KEY_MULTIPLE_CHOICE_TASKS
 from marin.evaluation.evaluation_config import EvalTaskConfig, EvaluationConfig
 from marin.evaluation.run import evaluate
@@ -74,6 +75,7 @@ def evaluate_lm_evaluation_harness(
     evals: list[EvalTaskConfig],
     max_eval_instances: int | None = None,
     engine_kwargs: dict | None = None,
+    resource_config: ResourceConfig | None = None,
 ) -> ExecutorStep:
     """
     Create an ExecutorStep to evaluate the model using LM Evaluation Harness.
@@ -95,11 +97,12 @@ def evaluate_lm_evaluation_harness(
             max_eval_instances=max_eval_instances,
             launch_with_ray=True,
             engine_kwargs=engine_kwargs,
+            resource_config=resource_config,
         ),
     )
 
 
-def evaluate_alpaca_eval(model_name: str, model_path: str) -> ExecutorStep:
+def evaluate_alpaca_eval(model_name: str, model_path: str, resource_config: ResourceConfig) -> ExecutorStep:
     """
     Create an ExecutorStep to evaluate the model using AlpacaEval.
 
@@ -115,6 +118,7 @@ def evaluate_alpaca_eval(model_name: str, model_path: str) -> ExecutorStep:
             model_name=model_name,
             model_path=model_path,
             evaluation_path=this_output_path(),
+            resource_config=resource_config,
         ),
     )
 
@@ -151,7 +155,11 @@ def extract_model_name_and_path(step: ExecutorStep | InputName | str) -> tuple[s
 
 
 def evaluate_levanter_lm_evaluation_harness(
-    model_name: str, model_path: str, evals: list[EvalTaskConfig], max_eval_instances: int | None = None
+    model_name: str,
+    model_path: str,
+    evals: list[EvalTaskConfig],
+    resource_config: ResourceConfig,
+    max_eval_instances: int | None = None,
 ) -> ExecutorStep:
     """
     Create an ExecutorStep to evaluate the model using Levanter LM Evaluation Harness.
@@ -167,12 +175,14 @@ def evaluate_levanter_lm_evaluation_harness(
             evals=versioned(evals),
             discover_latest_checkpoint=True,
             max_eval_instances=versioned(max_eval_instances),
+            resource_config=resource_config,
         ),
     )
 
 
 def default_eval(
     step: ExecutorStep | InputName | str,
+    resource_config: ResourceConfig = SINGLE_TPU_V4_8,
     evals: list[EvalTaskConfig] | None = None,
     max_eval_instances: int | None = None,
 ) -> ExecutorStep:
@@ -196,11 +206,14 @@ def default_eval(
 
     logger.info(f"Running evals on the following tasks: {evals}")
 
-    return evaluate_levanter_lm_evaluation_harness(name, model_step_path, evals, max_eval_instances=max_eval_instances)
+    return evaluate_levanter_lm_evaluation_harness(
+        name, model_step_path, evals, resource_config, max_eval_instances=max_eval_instances
+    )
 
 
 def default_key_evals(
     step: ExecutorStep | InputName | str,
+    resource_config: ResourceConfig,
     max_eval_instances: int | None = None,
     engine_kwargs: dict | None = DEFAULT_VLLM_ENGINE_KWARGS,
 ) -> list[ExecutorStep]:
@@ -216,9 +229,10 @@ def default_key_evals(
             KEY_GENERATION_TASKS,
             max_eval_instances=max_eval_instances,
             engine_kwargs=engine_kwargs,
+            resource_config=resource_config,
         ),
         evaluate_levanter_lm_evaluation_harness(
-            name, model_step_path, KEY_MULTIPLE_CHOICE_TASKS, max_eval_instances=max_eval_instances
+            name, model_step_path, KEY_MULTIPLE_CHOICE_TASKS, resource_config, max_eval_instances=max_eval_instances
         ),
-        evaluate_alpaca_eval(name, model_step_path),
+        evaluate_alpaca_eval(name, model_step_path, resource_config),
     ]
