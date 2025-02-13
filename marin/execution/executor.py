@@ -92,6 +92,7 @@ from ray.util import state  # noqa
 from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 
 from marin.execution.executor_step_status import (
+    STATUS_CANCELLED,
     STATUS_DEP_FAILED,
     STATUS_FAILED,
     STATUS_RUNNING,
@@ -606,7 +607,7 @@ class Executor:
         """Return the URL where the experiment can be viewed."""
         # TODO: remove hardcoding
         if self.prefix.startswith("gs://"):
-            host = "https://marlin-subtle-barnacle.ngrok-free.app"
+            host = "https://crfm.stanford.edu/marin/data_browser"
         else:
             host = "http://localhost:5000"
 
@@ -749,33 +750,30 @@ def get_status(output_path: str, current_owner_task_id: str | None, states: dict
     if current_owner_ray_status in [STATUS_UNKNOWN, STATUS_RUNNING]:
         return current_owner_ray_status
 
+    # If the ray status is terminal [Failed, Success], we check the status on GCS and trust it
+
     current_owner_gcs_status = get_latest_status_from_gcs(output_path)
 
-    if current_owner_gcs_status is None:
-        if current_owner_ray_status is not None:
-            logger.info(
-                f"Status of {output_path = } is {current_owner_ray_status} as per Ray. "
-                f"But we are using status as None as there is no status in GCP."
-            )
-        return None
-    elif current_owner_ray_status is not None:
-        return current_owner_ray_status
-    else:
-        if current_owner_gcs_status in [STATUS_WAITING, STATUS_RUNNING]:
-            logger.info(
-                f"Status of {output_path = } is {current_owner_gcs_status} as per GCP. There is no Task in Ray."
-                f"This generally indicates that the cluster was killed when this task was running. "
-                f"We are rerunning this task."
-            )
-            current_owner_gcs_status = None
+    if current_owner_gcs_status in [STATUS_RUNNING, STATUS_WAITING]:
+        logger.info(
+            f"Status of {output_path = } is {current_owner_gcs_status} as per GCP. "
+            f"But as per Ray, the task has terminated, it's likely that this task was cancelled previously"
+        )
+        current_owner_gcs_status = STATUS_CANCELLED
 
-        return current_owner_gcs_status
+    return current_owner_gcs_status
 
 
 def should_run(
     output_path: str, step_name: str, status_actor: StatusActor, ray_task_id: str, force_run_failed: bool = False
 ):
     """Check if the step should run or not based on the status of the step."""
+    """Logic for should run:
+    1. Check which task is currently the owner of this step (current_owner_task_id).
+    2. If ray_status(current_owner_task_id) is Running , we wait.
+    3. if ray_status(current_owner_task_id) is Terminated (Failed, Successful), we trust the status on GCP
+    4. A special case where ray_status(current_owner_task_id) is Terminated, but GCP status is Running, We return
+    CANCELLED"""
 
     log_once = True
     get_status_states = {}  # States used by get_status, since get_status is stateless we keep them here
@@ -799,6 +797,9 @@ def should_run(
             break
 
     if status is None:
+        return True
+    elif status == STATUS_CANCELLED:
+        logger.info(f"Step {step_name} was cancelled previously. Retrying.")
         return True
     elif status in [STATUS_FAILED, STATUS_DEP_FAILED]:
         if force_run_failed:
@@ -841,6 +842,7 @@ def execute_after_dependencies(
         raise e
     except Exception as e:
         logger.error(f"Error while checking if the step should run [This is a Ray related Error]: {e}")
+        raise e
 
     append_status(status_path, STATUS_WAITING, ray_task_id=ray_task_id)
 
