@@ -23,9 +23,9 @@ if __name__ == "__main__":
             num_train_steps=3000,
             learning_rate=0.003,
             num_eval=20,
-            num_rare_epochs=1,
+            num_data1_repetitions=1,
             additional_tags=["debug-custom-validation-sets"],
-            version_tag="-v2",
+            # version_tag="-v3",
             experimental_mixture=True,
         )
     ]
