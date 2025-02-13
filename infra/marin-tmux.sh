@@ -3,7 +3,7 @@
 SESSION_NAME="marin"
 CONDA_ENV="marin"
 # if we don't specify a cluster assume us-central2
-CLUSTER=${1:-us-central2}
+CLUSTER=${1:-us-central2-abhi}
 
 # Check if Session Exists
 SESSION_EXISTS=$(tmux list-sessions | grep $SESSION_NAME)
