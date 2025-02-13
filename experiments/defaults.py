@@ -199,6 +199,8 @@ def default_train(
             output_path=this_output_path(),
             tpu_type=train_config.tpu_type,
             node_count=train_config.node_count,
+            allow_out_of_region_reads=train_config.allow_out_of_region_reads,
+            allow_out_of_region_writes=train_config.allow_out_of_region_writes,
             data=pretraining_data,
             trainer=TrainerConfig(
                 tracker=WandbConfig(

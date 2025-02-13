@@ -31,3 +31,9 @@ class SimpleTrainConfig:
     """None means match steps_per_export, -1 disables"""
 
     node_count: int = 1
+
+    allow_out_of_region_reads: bool = False
+    """Allow us to read data from other regions. On GCS, intra-continent bandwidth is roughly 1 month of storage,
+    so sometimes it makes more sense to just read across regions."""
+    allow_out_of_region_writes: bool = False
+    """This makes less sense than reading across regions, but for completeness."""
