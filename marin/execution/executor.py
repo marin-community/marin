@@ -833,7 +833,6 @@ def execute_after_dependencies(
 
     try:
         if not should_run(output_path, step_name, status_actor, ray_task_id, force_run_failed):
-            # raise Exception("Step was already successful")
             append_status(status_path, STATUS_SUCCESS, ray_task_id=ray_task_id, message="Step was already successful")
             return
     except PreviousTaskFailedError as e:
