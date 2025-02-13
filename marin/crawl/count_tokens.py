@@ -102,6 +102,17 @@ python marin/run/ray_run.py \
     --input_patterns '["gs://marin-us-central2/scratch/nfliu/text/open_web_math_10M_passing_minhash_against_open_web_math/*.jsonl.gz"]' \
     --output_path "gs://marin-us-central2/scratch/nfliu/count_tokens/open_web_math_10M_passing_minhash_against_open_web_math/"
 ```
+
+Counting tokens in open-web-math-10M-cc-deduplicated (passing pages):
+
+```
+python marin/run/ray_run.py \
+    --no_wait -- \
+    python marin/crawl/count_tokens.py \
+    --input_patterns '["gs://marin-us-central2/scratch/nfliu/text/open-web-math-fde8ef8-10M-cc-deduplicated/*.passing.parquet"]' \
+    --output_path "gs://marin-us-central2/scratch/nfliu/count_tokens/open_web_math_10M_cc_deduplicated_passing/"
+```
+
 """  # noqa: E501
 import json
 import logging
