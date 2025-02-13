@@ -219,7 +219,7 @@ def transform_dataset_step(dataset_cfg: InstructionDatasetConfig, download_step:
         # Uses the new tranform function that calls `datasets` package
         transform_fn = transform_hf_dataset
 
-    config_str = f"{dataset_name}-{dataset_cfg.revision}-{sorted(dataset_cfg.splits)}"
+    config_str = f"{dataset_name}-{dataset_cfg.revision}-{dataset_cfg.subsets}-{sorted(dataset_cfg.splits)}"
     hashed_config_str = hashlib.md5(config_str.encode()).hexdigest()[:6]
 
     transform_step = ExecutorStep(
