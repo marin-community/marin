@@ -11,7 +11,7 @@ template_path = os.path.join(this_path, "marin-cluster-template.yaml")
 # LAtest tahs ABh:  latest 9491ec2a 20250209
 
 DOCKER_TAGS = {
-    "us-central2": "latest",
+    "us-central2": "89b461b3",
     "big-run": "6da1c9ed",
     "us-west4": "6da1c9ed",
     "europe-west4": "6da1c9ed",
