@@ -424,7 +424,7 @@ def fetch_to_parquet(
     for url in urls_to_fetch:
         work_queue.put((url, retries_per_url, False))
 
-    pbar = tqdm(total=len(urls), desc=f"Fetching shard {shard_id}")
+    pbar = tqdm(total=len(urls_to_fetch), desc=f"Fetching shard {shard_id}")
     pbar_lock = threading.Lock()
 
     # Worker function
