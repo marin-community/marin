@@ -16,9 +16,12 @@ from experiments.llama import llama_150m, llama_300m, llama_600m, llama_1_4b, ll
 
 from marin.execution.executor import executor_main, output_path_of
 from marin.processing.tokenize.data_configs import lm_mixture_data_config, lm_varying_mixture_data_config
+from experiments.defaults import default_tokenize
 
 from experiments.curriculum.curriculum_stages import train_executor_step, tokenize_train_validation, tokenize_two_stages
 from experiments.instruction_datasets import get_instruction_dataset
+from experiments.pretraining_datasets import slimpajama_6b, starcoderdata
+from experiments.llama import llama3_tokenizer
 
 marin_prefix = os.environ["MARIN_PREFIX"]
 
@@ -181,6 +184,68 @@ stage_data = {
     }
 }
 
+def get_pretraining_data(
+    data1_name: str,
+    data2_name: str,
+    data1_weight_stage1: float,
+    data1_weight_stage2: float,
+    transition_seq_idx: int,
+    num_data1_sequences: int,
+    num_data1_repetitions: Optional[int] = None,
+):
+    # Create data config with varying mixture
+    # Only using stage 1 because we're not using checkpointing
+    data_config = lm_varying_mixture_data_config(
+        components={
+            data1_name: stage_data[data1_name]["stage1"],
+            data2_name: stage_data[data2_name]["stage1"]
+        },
+        weights_list=[
+            (0, {data1_name: data1_weight_stage1, data2_name: 1 - data1_weight_stage1}),  # Stage 1
+            (transition_seq_idx, {data1_name: data1_weight_stage2, data2_name: 1 - data1_weight_stage2})  # Stage 2
+        ],
+        max_sequences_dict=None if num_data1_repetitions is None else {
+            data1_name: num_data1_sequences
+        },
+    )
+
+    pretraining_data = _prepare_data_config(data_config, use_default_validation=True)
+
+    return pretraining_data
+
+slimpajama_tokenized = default_tokenize(name="SlimPajama-6B", dataset=slimpajama_6b, tokenizer=llama3_tokenizer)
+starcoderdata_tokenized = default_tokenize(name="starcoderdata", dataset=starcoderdata, tokenizer=llama3_tokenizer)
+
+def get_experimental_mixture(
+    data1_weight_stage1: float,
+    data1_weight_stage2: float,
+    transition_seq_idx: int,
+    num_data1_sequences: int,
+    num_data2_sequences: int,
+):
+    data_config = lm_varying_mixture_data_config(
+        components={
+            "spj-6b": slimpajama_tokenized,
+            "starcoder": starcoderdata_tokenized
+        },
+        weights_list=[
+            (0, {"spj-6b": data1_weight_stage1, "starcoder": 1 - data1_weight_stage1}),
+            (transition_seq_idx, {"spj-6b": data1_weight_stage2, "starcoder": 1 - data1_weight_stage2})
+        ],
+        max_sequences_dict={
+            "spj-6b": num_data1_sequences,
+            "starcoder": num_data2_sequences
+        },
+        num_validation_sequences_dict={
+            "spj-6b": 8192,
+            "starcoder": 8192,
+        }
+    )
+
+    pretraining_data = _prepare_data_config(data_config, use_default_validation=True)
+
+    return pretraining_data
+
 def full_training_varying_mixture(
     data1_name: str,
     data2_name: str,
@@ -196,6 +261,7 @@ def full_training_varying_mixture(
     num_data1_repetitions: int = 1,
     version_tag: str = "",
     additional_tags: List[str] = [],
+    experimental_mixture: bool = False,
 ):
     """
     Two-stage training using varying mixture weights, similar to varsched but without checkpointing.
@@ -248,23 +314,26 @@ def full_training_varying_mixture(
     # Ensure sequence index is multiple of 2048
     assert transition_seq_idx % 2048 == 0, f"transition_seq_idx: {transition_seq_idx}"
 
-    # Create data config with varying mixture
-    # Only using stage 1 because we're not using checkpointing
-    data_config = lm_varying_mixture_data_config(
-        components={
-            data1_name: stage_data[data1_name]["stage1"],
-            data2_name: stage_data[data2_name]["stage1"]
-        },
-        weights_list=[
-            (0, {data1_name: data1_weight_stage1, data2_name: 1 - data1_weight_stage1}),  # Stage 1
-            (transition_seq_idx, {data1_name: data1_weight_stage2, data2_name: 1 - data1_weight_stage2})  # Stage 2
-        ],
-        max_sequences_dict=None if num_data1_repetitions is None else {
-            data1_name: num_data1_sequences
-        },
+    pretraining_data = get_pretraining_data(
+        data1_name=data1_name,
+        data2_name=data2_name,
+        data1_weight_stage1=data1_weight_stage1,
+        data1_weight_stage2=data1_weight_stage2,
+        transition_seq_idx=transition_seq_idx,
+        num_data1_sequences=num_data1_sequences,
+        num_data1_repetitions=num_data1_repetitions,
     )
 
-    pretraining_data = _prepare_data_config(data_config, use_default_validation=True)
+    if experimental_mixture:
+        data1_name = "spj-6b"
+        data2_name = "starcoder"
+        pretraining_data = get_experimental_mixture(
+            data1_weight_stage1=data1_weight_stage1,
+            data1_weight_stage2=data1_weight_stage2,
+            transition_seq_idx=transition_seq_idx,
+            num_data1_sequences=num_data1_sequences,
+            num_data2_sequences=num_sequences - num_data1_sequences * num_data1_repetitions,
+        )
 
     # Configure model and training
     model = {
