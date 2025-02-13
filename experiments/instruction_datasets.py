@@ -23,8 +23,8 @@ Current datasets:
 11. HuggingFaceTB/smoltalk
 12. PrimeIntellect/verifiable-math-problems
 """
-import hashlib
 
+import hashlib
 from dataclasses import dataclass, field
 
 from marin.execution.executor import (
@@ -147,7 +147,7 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         revision="2c849df",  # The revision hash shown in the image
         wait_for_completion=True,
         metadata_columns=["source"],  # Keeping these metadata columns
-        subsets=['longalign'],
+        subsets=["longalign"],
         filetype="parquet",
     ),
     "PrimeIntellect/verifiable-math-problems": InstructionDatasetConfig(
@@ -179,7 +179,7 @@ def download_dataset_step(dataset: InstructionDatasetConfig) -> ExecutorStep:
             gcs_output_path=this_output_path(),
             wait_for_completion=True,
         ),
-        override_output_path=f"raw/{dataset_name}-{dataset.revision}"
+        override_output_path=f"raw/{dataset_name}-{dataset.revision}",
     )
 
     return download_step
@@ -219,9 +219,9 @@ def transform_dataset_step(dataset_cfg: InstructionDatasetConfig, download_step:
         # Uses the new tranform function that calls `datasets` package
         transform_fn = transform_hf_dataset
 
-    config_str = f'{dataset_name}-{dataset_cfg.revision}-{sorted(dataset_cfg.splits)}'
+    config_str = f"{dataset_name}-{dataset_cfg.revision}-{sorted(dataset_cfg.splits)}"
     hashed_config_str = hashlib.md5(config_str.encode()).hexdigest()[:6]
-    
+
     transform_step = ExecutorStep(
         name=f"documents/{dataset_name}",
         fn=transform_fn,
@@ -235,7 +235,7 @@ def transform_dataset_step(dataset_cfg: InstructionDatasetConfig, download_step:
             subsets=dataset_cfg.subsets,
             splits=dataset_cfg.splits,
         ),
-        override_output_path=f'documents/{dataset_name}-{dataset_cfg.revision}-{hashed_config_str}'
+        override_output_path=f"documents/{dataset_name}-{dataset_cfg.revision}-{hashed_config_str}",
     )
 
     return transform_step
@@ -250,8 +250,7 @@ def get_instruction_dataset(
     # Create a new configuration instance with the desired split.
     original_config = INSTRUCTION_DATASET_NAME_TO_CONFIG[hf_dataset_id]
     config = InstructionDatasetConfig(
-        **{k: v for k, v in original_config.__dict__.items() if k != "splits"},
-        splits=splits
+        **{k: v for k, v in original_config.__dict__.items() if k != "splits"}, splits=splits
     )
 
     download_step = download_dataset_step(config)
