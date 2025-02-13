@@ -65,6 +65,21 @@ dolma = ExecutorStep(
     override_output_path="raw/dolma",
 )
 
+
+dclm_baseline_wrong = ExecutorStep(
+    name="raw/dclm-baseline-1.0",
+    fn=download,
+    config=DownloadConfig(
+        hf_dataset_id="mlfoundations/dclm-baseline-1.0",
+        revision="a3b142c",
+        gcs_output_path=this_output_path(),
+        wait_for_completion=True,
+        timeout=24 * 60 * 60,
+    ),
+    override_output_path="raw/dclm_WRONG_20250211/",
+)
+
+
 dclm_baseline = ExecutorStep(
     name="raw/dclm-baseline-1.0",
     fn=download,
@@ -76,7 +91,7 @@ dclm_baseline = ExecutorStep(
         timeout=24 * 60 * 60,
     ),
     override_output_path="raw/dclm",
-)
+).cd("a3b142c")
 
 the_stack_dedup = ExecutorStep(
     name="raw/the-stack-dedup",
