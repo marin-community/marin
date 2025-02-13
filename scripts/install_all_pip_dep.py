@@ -54,5 +54,4 @@ def install_all_pip_dependencies(pip_dep: List[str]):
 
 if __name__ == "__main__":
     pip_dep = get_all_pip_dependencies()
-    print(pip_dep)
     install_all_pip_dependencies(pip_dep)
