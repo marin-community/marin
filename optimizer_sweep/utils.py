@@ -20,14 +20,11 @@ def sweeping(run_id_list, baseline_run_id):
     # return
     # 1. status of sweeping
     # 2. unfinished run / config better than baseline
-    unfinished_runs = []
     losses = {}    
 
     for run_id in run_id_list:
         status, loss = get_status_and_loss(run_id)
-        if not status:
-            unfinished_runs.append(run_id)
-        else:
+        if status:
             losses[run_id] = loss
     if baseline_run_id in losses:
         best_id = min(losses, key = lambda x: losses[x])
@@ -35,6 +32,9 @@ def sweeping(run_id_list, baseline_run_id):
             return 'Next Iteration', best_id
         if(len(losses) == len(run_id_list)):
             return 'Success!', best_id    
-    return 'Unfinished Iteration', unfinished_runs
-        
+    return 'Unfinished Iteration', None
 
+
+import os
+def get_wandb_id(steps):
+    return [os.path.basename(step.name) for step in steps]
