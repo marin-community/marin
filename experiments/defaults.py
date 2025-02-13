@@ -17,6 +17,7 @@ from levanter.eval_harness import LmEvalHarnessConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig
 from levanter.optim import AdamConfig
+from levanter.schedule import BatchSchedule
 from levanter.store.cache import CacheOptions
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
@@ -185,6 +186,9 @@ def default_train(
 
         model_averaging = EmaModelAveragingConfig(beta=train_config.ema_beta)
 
+    schedule = BatchSchedule(train_config.train_batch_size)
+    total_examples = schedule.global_data_offset_by_step(train_config.num_train_steps)
+
     return ExecutorStep(
         name=os.path.join("checkpoints", name),
         description=(
@@ -192,7 +196,7 @@ def default_train(
             f"{train_config.num_train_steps} (steps) * "
             f"{train_config.train_batch_size} (batch_size) * "
             f"{model_config.seq_len} (seq_len) "
-            f"= {train_config.num_train_steps * train_config.train_batch_size * model_config.seq_len:,} tokens."
+            f"= {total_examples * model_config.seq_len:,} tokens."
         ),
         fn=run_levanter_train_lm,
         config=TrainLmOnPodConfig(
@@ -218,6 +222,7 @@ def default_train(
                 ),
                 model_averaging=model_averaging,
                 replica_dcn_axis_size=-1,
+                allow_partial_checkpoint=train_config.allow_partial_checkpoint,
             ),
             z_loss_weight=train_config.z_loss_weight,
             model=model_config,
