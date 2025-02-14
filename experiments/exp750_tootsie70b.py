@@ -11,12 +11,13 @@ Mix is still DCLM+Math+Code
 
 import dataclasses
 
+from experiments.dclm.tokenize_dclm import dclm_components_llama3
 from levanter.schedule import ScheduleStep
 
 from experiments.dclm.exp433_dclm_run import DCLM_MIXTURE_WEIGHTS
 from experiments.defaults import default_train
-from experiments.exp201_tootsie22b import dclm_mixture_config_llama3, llama_56b, llama_70b_train_config
-from experiments.exp600_tootsie import dclm_components_llama3
+from experiments.exp201_tootsie22b import llama_56b, llama_70b_train_config
+from experiments.exp600_tootsie import dclm_mixture_config_llama3
 from experiments.llama import llama_13b, llama_22b, llama_70b
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import executor_main
@@ -196,9 +197,9 @@ llama_70b_tootsie_warmstart = dataclasses.replace(
 # warmstarted from llama_22b_train_config at 200,000
 llama_22b_train_config_ema = SimpleTrainConfig(
     tpu_type="v6e-128",
-    node_count=2,
-    # train_batch_size=[ScheduleStep(until=200_000, value=1024), ScheduleStep(until=-1, value=2048)],
-    train_batch_size=1024,
+    node_count=6,
+    # train_batch_size=1024,
+    train_batch_size=[ScheduleStep(until=200_000, value=1024), ScheduleStep(until=-1, value=3072)],
     num_train_steps=1_000_000,
     weight_decay=0.05,
     learning_rate=4.2e-4,  # 3e-4 * 1.4
@@ -216,21 +217,21 @@ llama_22b_train_config_ema = SimpleTrainConfig(
 
 llama_22b_tootsie_ema_warmstart = dataclasses.replace(
     default_train(
-        name="llama-22b-tootsie-ema",
+        name="llama-22b-tootsie-ema-mk2",
         tokenized=dclm_mixture_config_llama3_zoned,
         model_config=llama_22b,
         train_config=llama_22b_train_config_ema,
         tags=["llama", "22b", "ema", "exp201", "tootsie"],
         eval_harness_tasks=[],
     ),
-    override_output_path="checkpoints/llama-22b-tootsie-ema",
+    override_output_path="checkpoints/llama-22b-tootsie-ema-mk2",
 )
 
 
 llama_13b_train_config_ema = SimpleTrainConfig(
     tpu_type="v6e-128",
-    node_count=2,
-    train_batch_size=[ScheduleStep(until=280_000, value=1024), ScheduleStep(until=-1, value=2048)],
+    node_count=4,
+    train_batch_size=[ScheduleStep(until=280_000, value=1024), ScheduleStep(until=-1, value=3072)],
     num_train_steps=1_000_000,
     weight_decay=0.05,
     learning_rate=4.2e-4,  # 3e-4 * 1.4
@@ -246,14 +247,14 @@ llama_13b_train_config_ema = SimpleTrainConfig(
 
 llama_13b_tootsie_ema_warmstart = dataclasses.replace(
     default_train(
-        name="llama-13b-tootsie-ema",
+        name="llama-13b-tootsie-ema-mk2",
         tokenized=dclm_mixture_config_llama3_zoned,
         model_config=llama_13b,
         train_config=llama_13b_train_config_ema,
         tags=["llama", "13b", "ema", "exp201", "tootsie"],
         eval_harness_tasks=[],
     ),
-    override_output_path="checkpoints/llama-13b-tootsie-ema",
+    override_output_path="checkpoints/llama-13b-tootsie-ema-mk2",
 )
 
 
