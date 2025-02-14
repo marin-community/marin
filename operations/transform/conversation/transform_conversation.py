@@ -116,6 +116,7 @@ def load_dataset(input_path: str) -> list[dict]:
     Returns:
         list[dict]: A list of rows from the input file.
     """
+    logger.info("WARNING: `load_dataset` will be depreciated with `transform dataset`. Use `transform_hf_dataset`")
     if input_path.endswith(".jsonl"):
         with fsspec.open(input_path, "rt") as f:
             return [json.loads(line) for line in f]
@@ -169,6 +170,7 @@ def transform_file(input_filename: str, output_filename: str, cfg: TransformSFTD
     which we use for our own metadata. We check this explicitly because *json is a valid
     file type, but 'provenance.json' is not a valid dataset file.
     """
+    logger.info("WARNING: `transform_file` will be depreciated with `transform dataset`. Use `transform_hf_dataset`")
 
     if "provenance.json" in input_filename:
         return
@@ -191,6 +193,7 @@ def transform_file(input_filename: str, output_filename: str, cfg: TransformSFTD
 
 @ray.remote
 def transform_dataset(cfg: TransformSFTDatasetConfig):
+    logger.info("WARNING: `transform_dataset` will be depreciated. Use `transform_hf_dataset`")
     responses = map_files_in_directory(
         transform_file.remote, cfg.input_path, f"**/*.{cfg.filetype}", cfg.output_path, TaskConfig(), False, cfg
     )
