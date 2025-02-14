@@ -1,3 +1,4 @@
+from experiments.dclm.tokenize_dclm import DCLM_BASELINE_ONLY_MIXTURE, DCLM_MIXTURE_WEIGHTS
 from experiments.defaults import SimpleTrainConfig, default_tokenize, default_train
 from experiments.evals.evals import default_eval
 from experiments.evals.task_configs import CORE_TASKS_PLUS_MMLU
@@ -10,48 +11,47 @@ gpt_neox_tokenizer = "EleutherAI/gpt-neox-20b"
 
 ### Define the datasets and tokenization configurations
 
-dclm_baseline_tokenized = default_tokenize(
+dclm_baseline_tokenized_neox_wrong = default_tokenize(
     name="dclm_baseline",
     dataset=dclm_baseline,
     tokenizer=gpt_neox_tokenizer,
 )
 
-starcoderdata_tokenized = default_tokenize(
+
+dclm_baseline_neox_tokenized = default_tokenize(
+    name="dclm_baseline",
+    dataset=dclm_baseline,
+    tokenizer=gpt_neox_tokenizer,
+)
+
+starcoderdata_neox_tokenized = default_tokenize(
     name="starcoderdata", dataset=starcoderdata, tokenizer=gpt_neox_tokenizer, text_key="content"
 )
 
-proofpile_2_tokenized = default_tokenize(
+proofpile_2_neox_tokenized = default_tokenize(
     name="proofpile_2",
     dataset=proofpile_2,
     tokenizer=gpt_neox_tokenizer,
 )
 
-DCLM_MIXTURE_COMPONENTS = {
-    "dclm_baseline": dclm_baseline_tokenized,
-    "starcoderdata": starcoderdata_tokenized,
-    "proofpile_2": proofpile_2_tokenized,
+DCLM_MIXTURE_COMPONENTS_NEOX_WRONG = {
+    "dclm_baseline": dclm_baseline_tokenized_neox_wrong,
+    "starcoderdata": starcoderdata_neox_tokenized,
+    "proofpile_2": proofpile_2_neox_tokenized,
 }
 
 ### Define the mixtures of datasets and their weights
 
 # weights are from page 11 of https://arxiv.org/abs/2406.11794. Sampling is done uniformly over tokens.
 # the 7B model was trained on 4.1T tokens, and the 1.4B model's data mixture weights are scaled accordingly.
-DCLM_MIXTURE_WEIGHTS = {
-    "dclm_baseline": 3.8,  # 3.8 trillion tokens https://huggingface.co/datasets/mlfoundations/dclm-baseline-1.0
-    "starcoderdata": 0.25,  # 250 billion tokens https://huggingface.co/datasets/bigcode/starcoderdata
-    "proofpile_2": 0.055,  # 55 billion tokens https://huggingface.co/datasets/EleutherAI/proof-pile-2
-}
 
 # Define a mixture that has only dclm_baseline data; set the weights of the other datasets to 0
-DCLM_BASELINE_ONLY_MIXTURE = {
-    "dclm_baseline": 3.8,  # 3.8 trillion tokens https://huggingface.co/datasets/mlfoundations/dclm-baseline-1.0
-    "starcoderdata": 0,  # 250 billion tokens https://huggingface.co/datasets/bigcode/starcoderdata
-    "proofpile_2": 0,  # 55 billion tokens https://huggingface.co/datasets/EleutherAI/proof-pile-2
-}
 
-dclm_mixture_config = lm_mixture_data_config(components=DCLM_MIXTURE_COMPONENTS, weights=DCLM_MIXTURE_WEIGHTS)
-dclm_baseline_only_config = lm_mixture_data_config(
-    components=DCLM_MIXTURE_COMPONENTS, weights=DCLM_BASELINE_ONLY_MIXTURE
+dclm_mixture_config_wrong = lm_mixture_data_config(
+    components=DCLM_MIXTURE_COMPONENTS_NEOX_WRONG, weights=DCLM_MIXTURE_WEIGHTS
+)
+dclm_baseline_only_config_wrong = lm_mixture_data_config(
+    components=DCLM_MIXTURE_COMPONENTS_NEOX_WRONG, weights=DCLM_BASELINE_ONLY_MIXTURE
 )
 
 ### Define the model and training configurations
@@ -89,7 +89,7 @@ EXPERIMENT_TAG_BASELINE_ONLY = ["433_dclm_baseline_1b_1x"]
 
 dclm_mixture_model = default_train(
     name="dclm_1b_1x_replication_eval_check",
-    tokenized=dclm_mixture_config,
+    tokenized=dclm_mixture_config_wrong,
     model_config=llama_1_4b_dclm,
     train_config=training_config,
     tags=EXPERIMENT_TAG_MIXTURE,
@@ -97,7 +97,7 @@ dclm_mixture_model = default_train(
 
 dclm_baseline_only_model = default_train(
     name="dclm_baseline_1b_1x_replication_nov12",
-    tokenized=dclm_baseline_only_config,
+    tokenized=dclm_baseline_only_config_wrong,
     model_config=llama_1_4b_dclm,
     train_config=training_config,
     tags=EXPERIMENT_TAG_BASELINE_ONLY,
@@ -110,9 +110,9 @@ dclm_baseline_only_eval = default_eval(step=dclm_baseline_only_model)
 if __name__ == "__main__":
     executor_main(
         steps=[
-            dclm_baseline_tokenized,
-            starcoderdata_tokenized,
-            proofpile_2_tokenized,
+            dclm_baseline_tokenized_neox_wrong,
+            starcoderdata_neox_tokenized,
+            proofpile_2_neox_tokenized,
             dclm_mixture_model,
             dclm_baseline_only_model,
             dclm_mixture_eval,
