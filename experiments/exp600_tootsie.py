@@ -67,8 +67,10 @@ llama_8b_train_config = SimpleTrainConfig(
 
 
 llama_8b_train_config_phase2 = SimpleTrainConfig(
-    tpu_type="v5litepod-256",
-    node_count=2,
+    # tpu_type="v5litepod-256",
+    # node_count=2,
+    tpu_type="v4-2048",
+    node_count=1,
     # train_batch_size=1024,
     num_train_steps=1_000_000,  # using wsd-s so this doesn't really matter
     # these hypers from Table 12 in https://arxiv.org/html/2406.11794v1#A6
