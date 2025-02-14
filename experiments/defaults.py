@@ -39,7 +39,6 @@ from marin.processing.tokenize import (
     TokenizerStep,
     add_validation_sets_to_mixture,
     lm_data_config,
-    lm_mixture_data_config,
     tokenize,
 )
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
@@ -206,14 +205,19 @@ def default_train(
 
 
 def default_anneal(name: str, anneal_config: AnnealConfig):
-    assert (
-        anneal_config.target_dataset is not None or anneal_config.high_quality_web_text_dataset is not None
-    ), "Target dataset or high-quality web text dataset must be provided."
+    # assert (
+    #     anneal_config.target_dataset is not None or anneal_config.high_quality_web_text_dataset is not None
+    # ), "Target dataset or high-quality web text dataset must be provided."
+
+    imputed_checkpoint_steps = anneal_config.initialize_from_checkpoint_path.index("step-")
+    imputed_checkpoint_step = int(
+        anneal_config.initialize_from_checkpoint_path[imputed_checkpoint_steps + len("step-") :]
+    )
 
     num_anneal_steps = anneal_config.num_anneal_training_tokens / (
         anneal_config.train_batch_size * AnnealConfig.LLAMA_MAX_SEQ_LEN
     )
-    num_train_steps = anneal_config.checkpoint_step + num_anneal_steps
+    num_train_steps = imputed_checkpoint_step + num_anneal_steps
 
     # We need to simulate having a learning rate that decays from anneal_config.learning rate to 0
     # over the course of the training. However, we have already taken anneal_config.checkpoint_step steps,
@@ -235,34 +239,32 @@ def default_anneal(name: str, anneal_config: AnnealConfig):
         min_lr_ratio=anneal_config.min_lr_ratio,
         steps_per_export=anneal_config.steps_per_export,
         lr_schedule=anneal_config.lr_schedule,
-        initialize_from_checkpoint_path=anneal_config.initialize_from_checkpoint_path.format(
-            checkpoint_step=anneal_config.checkpoint_step
-        ),
+        initialize_from_checkpoint_path=anneal_config.initialize_from_checkpoint_path,
     )
 
-    dataset_components = {}
-    dataset_weights = {}
+    # dataset_components = {}
+    # dataset_weights = {}
 
-    if anneal_config.high_quality_web_text_dataset is not None:
-        dataset_components["high-quality-web-text"] = anneal_config.high_quality_web_text_dataset
-        dataset_weights["high-quality-web-text"] = (
-            1.0 if anneal_config.target_dataset is None else anneal_config.high_quality_web_text_proportion
-        )
+    # if anneal_config.high_quality_web_text_dataset is not None:
+    #     dataset_components["high-quality-web-text"] = anneal_config.high_quality_web_text_dataset
+    #     dataset_weights["high-quality-web-text"] = (
+    #         1.0 if anneal_config.target_dataset is None else anneal_config.high_quality_web_text_proportion
+    #     )
 
-    if anneal_config.target_dataset is not None:
-        dataset_components["target-dataset"] = anneal_config.target_dataset
-        dataset_weights["target-dataset"] = (
-            1.0 if anneal_config.high_quality_web_text_dataset is None else anneal_config.target_dataset_proportion
-        )
+    # if anneal_config.target_dataset is not None:
+    #     dataset_components["target-dataset"] = anneal_config.target_dataset
+    #     dataset_weights["target-dataset"] = (
+    #         1.0 if anneal_config.high_quality_web_text_dataset is None else anneal_config.target_dataset_proportion
+    #     )
 
-    anneal_stage_data_mix = lm_mixture_data_config(
-        components=dataset_components,
-        weights=dataset_weights,
-    )
+    # anneal_stage_data_mix = lm_mixture_data_config(
+    #     components=dataset_components,
+    #     weights=dataset_weights,
+    # )
 
     return default_train(
         name=name,
-        tokenized=anneal_stage_data_mix,
+        tokenized=anneal_config.dataset_config,
         model_config=llama_8b,
         train_config=anneal_stage_train_config,
         eval_harness_tasks=CORE_TASKS_PLUS_MMLU,
