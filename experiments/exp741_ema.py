@@ -1,7 +1,7 @@
 import dataclasses
 
 from experiments.defaults import default_train
-from experiments.exp600_tootsie import dclm_mixture_config_llama3
+from experiments.exp600_tootsie import dclm_mixture_config_llama3_wrong
 from experiments.llama import llama_1_4b
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import executor_main
@@ -25,7 +25,7 @@ llama_1_4b_train_config = SimpleTrainConfig(
 llama_1b_tootsie = dataclasses.replace(
     default_train(
         name="llama-1b-ema",
-        tokenized=dclm_mixture_config_llama3,
+        tokenized=dclm_mixture_config_llama3_wrong,
         model_config=llama_1_4b,
         train_config=llama_1_4b_train_config,
         tags=["llama", "1b", "ema", "exp741"],
