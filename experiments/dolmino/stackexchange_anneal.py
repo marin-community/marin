@@ -4,18 +4,24 @@ from experiments.dolmino.tokenize_dolmino import get_dolmino_step
 from experiments.evals.evals import default_eval
 from experiments.evals.task_configs import MMLU_TASKS
 from marin.execution.executor import executor_main
+from marin.processing.tokenize.data_configs import lm_mixture_data_config
 
 dolmino_dclm = get_dolmino_step("dclm")
 stackexchange_tokenized = get_dolmino_step("stackexchange")
 
+
+dataset_config = lm_mixture_data_config(
+    components={
+        "stackexchange": stackexchange_tokenized,
+        "dclm": dolmino_dclm,
+    },
+    weights={"stackexchange": 0.30, "dclm": 0.70},
+)
 # Dolmino Stack Exchange dataset has 1.26B tokens.
 # Our mixed dataset is 30% dolmino and 70% high-quality web data.
 # This means we will epoch dolmino dataset 2 times.
 stackexchange_anneal_config = AnnealConfig(
-    target_dataset=stackexchange_tokenized,
-    high_quality_web_text_dataset=dolmino_dclm,
-    high_quality_web_text_proportion=0.70,
-    target_dataset_proportion=0.30,
+    dataset_config=dataset_config,
     num_anneal_training_tokens=8_400_000_000,
 )
 
