@@ -17,6 +17,7 @@ from levanter.eval_harness import LmEvalHarnessConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig
 from levanter.optim import AdamConfig
+from levanter.schedule import BatchSchedule
 from levanter.store.cache import CacheOptions
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
@@ -73,6 +74,52 @@ def default_tokenize(
 @lru_cache  # LRU to make the executor happier
 def default_validation_sets(tokenizer: str, base_path: str = "tokenized/") -> dict[str, TokenizerStep]:
     return paloma_tokenized(base_path=base_path, tokenizer=tokenizer)
+
+
+def simulated_epoching_train(
+    name: str,
+    tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig,
+    model_config: LmConfig,
+    train_config: SimpleTrainConfig,
+    target_budget: int,
+    tags: Sequence[str] = (),
+    use_default_validation: bool = True,
+    eval_harness_tasks: Sequence[EvalTaskConfig] = CORE_TASKS,
+) -> ExecutorStep:
+    """
+    Simulates the number of epochs seen in a full training run by sub-sampling individual datasets.
+    Otherwise, operates the same as default_train.
+
+    Args:
+        name:  The name of the training run. Will form the basis of the output path for the executor step.
+        tokenized:  The tokenized data to train on. This can be an InputName, ExecutorStep, or LMMixtureDatasetConfig.
+        model_config: Levanter LmConfig for the model to train.
+        train_config: SimpleTrainConfig for the training run.
+        target_budget: Target token budget to simulate.
+        tags: Any additional tags to add to the Wandb tracker.
+        use_default_validation: Whether to use the default validation sets (currently Paloma).
+        eval_harness_tasks: List of evaluation harness tasks. Defaults to the CORE set of tasks. Use () or [] to disable.
+    """
+    pretraining_data = _prepare_data_config(tokenized, use_default_validation)
+
+    # Extract sequence length from model configuration
+    seq_len = model_config.Pos.size
+
+    # Calculate the experiment token budget
+    experiment_budget = train_config.train_batch_size * train_config.num_train_steps * seq_len
+
+    simulated_pretraining_data = dataclasses.replace(
+        pretraining_data, target_budget=target_budget, experiment_budget=experiment_budget
+    )
+
+    logger.info(
+        f"Simulating Epoching Behavior, Experiment Tokens {experiment_budget}, "
+        + "Simulated Target Tokens {target_budget}"
+    )
+
+    return default_train(
+        name, simulated_pretraining_data, model_config, train_config, tags, use_default_validation, eval_harness_tasks
+    )
 
 
 def default_train(
@@ -139,6 +186,9 @@ def default_train(
 
         model_averaging = EmaModelAveragingConfig(beta=train_config.ema_beta)
 
+    schedule = BatchSchedule(train_config.train_batch_size)
+    total_examples = schedule.global_data_offset_by_step(train_config.num_train_steps)
+
     return ExecutorStep(
         name=os.path.join("checkpoints", name),
         description=(
@@ -146,13 +196,15 @@ def default_train(
             f"{train_config.num_train_steps} (steps) * "
             f"{train_config.train_batch_size} (batch_size) * "
             f"{model_config.seq_len} (seq_len) "
-            f"= {train_config.num_train_steps * train_config.train_batch_size * model_config.seq_len:,} tokens."
+            f"= {total_examples * model_config.seq_len:,} tokens."
         ),
         fn=run_levanter_train_lm,
         config=TrainLmOnPodConfig(
             output_path=this_output_path(),
             tpu_type=train_config.tpu_type,
             node_count=train_config.node_count,
+            allow_out_of_region_reads=train_config.allow_out_of_region_reads,
+            allow_out_of_region_writes=train_config.allow_out_of_region_writes,
             data=pretraining_data,
             trainer=TrainerConfig(
                 tracker=WandbConfig(
@@ -169,6 +221,7 @@ def default_train(
                 ),
                 model_averaging=model_averaging,
                 replica_dcn_axis_size=-1,
+                allow_partial_checkpoint=train_config.allow_partial_checkpoint,
             ),
             z_loss_weight=train_config.z_loss_weight,
             model=model_config,
