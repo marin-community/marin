@@ -11,6 +11,9 @@ class AnnealConfig:
     DEFAULT_CHECKPOINT_PATH = "gs://marin-eu-west4/checkpoints/llama-8b-tootsie-0.001-19ad63/checkpoints/step-198468"
     LLAMA_MAX_SEQ_LEN = 4096
 
+    # Annealing dataset and proportions
+    dataset_config: LMMixtureDatasetConfig
+
     # Model Checkpoint related
     initialize_from_checkpoint_path: str = DEFAULT_CHECKPOINT_PATH
 
@@ -28,6 +31,3 @@ class AnnealConfig:
 
     # Checkpoint related
     steps_per_export: int = 10000
-
-    # Annealing dataset and proportions
-    dataset_config: LMMixtureDatasetConfig
