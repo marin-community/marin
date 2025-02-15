@@ -20,7 +20,7 @@ DEFAULT_MODEL_CONFIG = LlamaConfig(
     num_layers=16,
 )
 
-WS_EMA_DEFAULT_TRAIN_CONFIG = SimpleTrainConfig(
+WSD_EMA_DEFAULT_TRAIN_CONFIG = SimpleTrainConfig(
     tpu_type="v4-128",
     node_count=1,
     train_batch_size=1024,
@@ -28,9 +28,11 @@ WS_EMA_DEFAULT_TRAIN_CONFIG = SimpleTrainConfig(
     weight_decay=0.1,
     # https://arxiv.org/pdf/2412.04403 gets 4 points per run. this gives us 5
     num_train_steps=50000,  # 4096 * 1024 * 50000 = ~200B tokens
+    steps_per_eval=10000,
+    cycle_length=10000,
     warmup=1000,  # initial warmup
-    decay=0.0,  # 10% decay
-    lr_schedule="constant",  # inv decay
+    decay=0.1,  # 10% decay
+    lr_schedule="inv",  # inv decay
     ema_beta=0.995,
 )
 
@@ -43,7 +45,7 @@ def scaling_law_suite(
     tags: Sequence[str] = (),
     *,
     intermediate_scale: float = 4,
-    training_config: SimpleTrainConfig = WS_EMA_DEFAULT_TRAIN_CONFIG,
+    training_config: SimpleTrainConfig = WSD_EMA_DEFAULT_TRAIN_CONFIG,
     base_lr: float = 3e-4 * 4096,
     max_lr: float = 5e-3,
 ) -> Sequence[ExecutorStep]:
