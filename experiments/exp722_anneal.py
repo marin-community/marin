@@ -3,12 +3,12 @@ from experiments.defaults import default_anneal
 from experiments.dolmino.tokenize_dolmino import get_dolmino_step
 from experiments.midtraining_datasets import finemath_3_plus_tokenized
 from marin.execution.executor import executor_main
-from marin.processing.tokenize.data_configs import LMMixtureDatasetConfig
+from marin.processing.tokenize.data_configs import lm_mixture_data_config
 
 dolmino_dclm = get_dolmino_step("dclm")
 
 finemath_anneal_config = AnnealConfig(
-    dataset_config=LMMixtureDatasetConfig(
+    dataset_config=lm_mixture_data_config(
         components={
             "finemath": finemath_3_plus_tokenized,
             "dolmino": dolmino_dclm,
@@ -18,7 +18,7 @@ finemath_anneal_config = AnnealConfig(
 )
 
 control_dclm_anneal_config = AnnealConfig(
-    dataset_config=LMMixtureDatasetConfig(
+    dataset_config=lm_mixture_data_config(
         components={
             "dolmino": dolmino_dclm,
         },
