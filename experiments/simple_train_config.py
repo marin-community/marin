@@ -1,10 +1,16 @@
 from dataclasses import dataclass
 
+from levanter.schedule import IntSchedule
+
 
 @dataclass(frozen=True)
 class SimpleTrainConfig:
     tpu_type: str
-    train_batch_size: int
+    train_batch_size: int | IntSchedule
+    """
+    The batch size for training. If an IntSchedule is provided, the batch size will be
+    varied according to the schedule.
+    """
     num_train_steps: int
     learning_rate: float
     data_seed: int | None = None
@@ -33,3 +39,15 @@ class SimpleTrainConfig:
     node_count: int = 1
 
     initialize_from_checkpoint_path: str | None = None
+    """Path to a checkpoint to initialize from. If None, the model will be trained from scratch."""
+
+    allow_partial_checkpoint: bool = False
+    """
+    Allow loading partial checkpoints. This is useful for converting training to EMA, e.g.
+    """
+
+    allow_out_of_region_reads: bool = False
+    """Allow us to read data from other regions. On GCS, intra-continent bandwidth is roughly 1 month of storage,
+    so sometimes it makes more sense to just read across regions."""
+    allow_out_of_region_writes: bool = False
+    """This makes less sense than reading across regions, but for completeness."""
