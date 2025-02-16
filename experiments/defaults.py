@@ -300,7 +300,7 @@ def _get_tokenizer_for_train(tokenized: InputName | ExecutorStep | LMMixtureData
 
 def default_scaling_law_pred(
     ladder_runs: Sequence[ExecutorStep | InputName | str],
-    pred_run: ExecutorStep | InputName | None = None,
+    pred_run: ExecutorStep | InputName | str | None = None,
     task_losses: Sequence[str] = ("eval/paloma/c4_en/bpb"),
     task_accuracies: Sequence[str] | Sequence[EvalTaskConfig] = ("lm_eval/hellaswag_10shot/acc"),
 ):
