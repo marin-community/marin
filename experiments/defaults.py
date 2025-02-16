@@ -242,26 +242,6 @@ def default_anneal(name: str, anneal_config: AnnealConfig):
         initialize_from_checkpoint_path=anneal_config.initialize_from_checkpoint_path,
     )
 
-    # dataset_components = {}
-    # dataset_weights = {}
-
-    # if anneal_config.high_quality_web_text_dataset is not None:
-    #     dataset_components["high-quality-web-text"] = anneal_config.high_quality_web_text_dataset
-    #     dataset_weights["high-quality-web-text"] = (
-    #         1.0 if anneal_config.target_dataset is None else anneal_config.high_quality_web_text_proportion
-    #     )
-
-    # if anneal_config.target_dataset is not None:
-    #     dataset_components["target-dataset"] = anneal_config.target_dataset
-    #     dataset_weights["target-dataset"] = (
-    #         1.0 if anneal_config.high_quality_web_text_dataset is None else anneal_config.target_dataset_proportion
-    #     )
-
-    # anneal_stage_data_mix = lm_mixture_data_config(
-    #     components=dataset_components,
-    #     weights=dataset_weights,
-    # )
-
     return default_train(
         name=name,
         tokenized=anneal_config.dataset_config,
