@@ -108,7 +108,16 @@ def run_inference(config: TextGenerationInferenceConfig):
     set_ray_data_config(config)
 
     ray_data_read_kwargs = get_ray_data_read_kwargs(config)
-    ds = ray.data.read_json(config.input_path, **ray_data_read_kwargs)
+
+    match config.filetype:
+        case "jsonl.gz":
+            ds = ray.data.read_json(config.input_path, **ray_data_read_kwargs)
+        case "jsonl":
+            ds = ray.data.read_json(config.input_path, **ray_data_read_kwargs)
+        case "json":
+            ds = ray.data.read_json(config.input_path, **ray_data_read_kwargs)
+        case "parquet":
+            ds = ray.data.read_parquet(config.input_path, **ray_data_read_kwargs)
 
     ds = ds.map_batches(  # Apply batch inference for all input data.
         vLLMTextGeneration,
@@ -125,4 +134,13 @@ def run_inference(config: TextGenerationInferenceConfig):
         },
         **ray_resources_kwarg(config),
     )
-    ds = ds.write_json(config.output_path, **get_ray_data_write_kwargs(config))
+
+    match config.filetype:
+        case "jsonl.gz":
+            ds = ds.write_json(config.output_path, **get_ray_data_write_kwargs(config))
+        case "jsonl":
+            ds = ds.write_json(config.output_path, **get_ray_data_write_kwargs(config))
+        case "json":
+            ds = ds.write_json(config.output_path, **get_ray_data_write_kwargs(config))
+        case "parquet":
+            ds = ds.write_parquet(config.output_path, **get_ray_data_write_kwargs(config))

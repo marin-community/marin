@@ -46,4 +46,15 @@ class vLLMTextGeneration(TextGeneration):
         super().__init__(llm, template, num_generations, prompt_column)
 
     def __call__(self, batch: dict[str, Any]) -> dict[str, Any]:
-        return super().__call__(batch)
+        prompts = []
+        tokenizer = self.llm.llm.get_tokenizer()
+        for example in batch[self.prompt_column]:
+            chat_example = [{"role": "user", "content": self.template.format(example=example)}]
+            prompts.append(tokenizer.apply_chat_template(chat_example, tokenize=False, add_generation_prompt=True))
+
+        generated_text = self.llm.generate(prompts)
+
+        return {
+            "prompt": prompts,
+            "generated_text": generated_text,
+        }
