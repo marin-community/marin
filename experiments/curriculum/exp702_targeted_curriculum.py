@@ -4,6 +4,7 @@ Issue: https://github.com/stanford-crfm/marin/issues/702
 """
 
 import os
+import numpy as np
 from itertools import chain
 from typing import List, Optional
 import random
@@ -195,51 +196,27 @@ def get_pretraining_data(
 ):
     # Create data config with varying mixture
     # Only using stage 1 because we're not using checkpointing
-    data_config = lm_varying_mixture_data_config(
-        components={
-            data1_name: stage_data[data1_name]["stage1"],
-            data2_name: stage_data[data2_name]["stage1"]
-        },
-        weights_list=[
+    components = {
+        data1_name: stage_data[data1_name]["stage1"],
+        data2_name: stage_data[data2_name]["stage1"]
+    }
+
+    if transition_seq_idx == 0.0:
+        weights_list = [
+            (0, {data1_name: data1_weight_stage2, data2_name: 1 - data1_weight_stage2}),  # Stage 2
+        ]
+    else:
+        weights_list = [
             (0, {data1_name: data1_weight_stage1, data2_name: 1 - data1_weight_stage1}),  # Stage 1
             (transition_seq_idx, {data1_name: data1_weight_stage2, data2_name: 1 - data1_weight_stage2})  # Stage 2
-        ],
+        ]
+
+    data_config = lm_varying_mixture_data_config(
+        components=components,
+        weights_list=weights_list,
         max_sequences_dict=None if num_data1_repetitions is None else {
             data1_name: num_data1_sequences
         },
-    )
-
-    pretraining_data = _prepare_data_config(data_config, use_default_validation=True)
-
-    return pretraining_data
-
-slimpajama_tokenized = default_tokenize(name="SlimPajama-6B", dataset=slimpajama_6b, tokenizer=llama3_tokenizer)
-starcoderdata_tokenized = default_tokenize(name="starcoderdata", dataset=starcoderdata, tokenizer=llama3_tokenizer)
-
-def get_experimental_mixture(
-    data1_weight_stage1: float,
-    data1_weight_stage2: float,
-    transition_seq_idx: int,
-    num_data1_sequences: int,
-    num_data2_sequences: int,
-):
-    data_config = lm_varying_mixture_data_config(
-        components={
-            "spj-6b": slimpajama_tokenized,
-            "starcoder": starcoderdata_tokenized
-        },
-        weights_list=[
-            (0, {"spj-6b": data1_weight_stage1, "starcoder": 1 - data1_weight_stage1}),
-            (transition_seq_idx, {"spj-6b": data1_weight_stage2, "starcoder": 1 - data1_weight_stage2})
-        ],
-        max_sequences_dict={
-            "spj-6b": num_data1_sequences,
-            "starcoder": num_data2_sequences
-        },
-        num_validation_sequences_dict={
-            "spj-6b": 8192,
-            "starcoder": 8192,
-        }
     )
 
     pretraining_data = _prepare_data_config(data_config, use_default_validation=True)
@@ -261,7 +238,6 @@ def full_training_varying_mixture(
     num_data1_repetitions: int = 1,
     version_tag: str = "",
     additional_tags: List[str] = [],
-    experimental_mixture: bool = False,
 ):
     """
     Two-stage training using varying mixture weights, similar to varsched but without checkpointing.
@@ -287,7 +263,10 @@ def full_training_varying_mixture(
     duration_frac_stage1 = round(1 - duration_frac_stage2, 7)
     data1_frac_alloc_stage1 = round(1 - data1_frac_alloc_stage2, 7)
 
-    data1_weight_stage1 = round(total_data1_portion * data1_frac_alloc_stage1 * num_data1_repetitions / duration_frac_stage1, 7)
+    if duration_frac_stage1 == 0.0:
+        data1_weight_stage1 = 0.0
+    else:
+        data1_weight_stage1 = round(total_data1_portion * data1_frac_alloc_stage1 * num_data1_repetitions / duration_frac_stage1, 7)
     data1_weight_stage2 = round(total_data1_portion * data1_frac_alloc_stage2 * num_data1_repetitions / duration_frac_stage2, 7)
 
     print('-' * 100)
@@ -324,17 +303,6 @@ def full_training_varying_mixture(
         num_data1_repetitions=num_data1_repetitions,
     )
 
-    if experimental_mixture:
-        data1_name = "spj-6b"
-        data2_name = "starcoder"
-        pretraining_data = get_experimental_mixture(
-            data1_weight_stage1=data1_weight_stage1,
-            data1_weight_stage2=data1_weight_stage2,
-            transition_seq_idx=transition_seq_idx,
-            num_data1_sequences=num_data1_sequences,
-            num_data2_sequences=num_sequences - num_data1_sequences * num_data1_repetitions,
-        )
-
     # Configure model and training
     model = {
         "150m": llama_150m,
@@ -365,7 +333,8 @@ def full_training_varying_mixture(
         raise ValueError(f"Invalid schedule type: {schedule_type}")
     
     if num_train_steps != 3000:
-        name_prefix += f"-{num_train_steps // 1000}B"
+        billion_tokens = round(num_train_steps / 1000.0, 7)
+        name_prefix += f"-{int(billion_tokens)}B" if billion_tokens.is_integer() else f"-{billion_tokens}B"
 
     if total_data1_portion != 0.005:
         name_prefix += f"-rare{total_data1_portion}"

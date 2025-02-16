@@ -153,6 +153,7 @@ def lm_varying_mixture_data_config(
         cache_dir=None,
         shuffle=shuffle,
         max_sequences_dict=max_sequences_dict,
+        num_validation_sequences_dict=num_validation_sequences_dict,
     )
 
 def add_validation_sets_to_mixture(
