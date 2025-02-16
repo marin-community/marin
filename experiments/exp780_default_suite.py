@@ -11,7 +11,7 @@ from marin.execution.executor import executor_main
 from marin.scaling_laws.create_ladder_suite import scaling_law_suite
 
 default_suite = scaling_law_suite(
-    sweep_name="default-scaling-law-suite",
+    sweep_name="scaling-law-suite-default",
     tokenized=dclm_mixture_config_llama3,
     tags=["scaling_laws"],
 )
