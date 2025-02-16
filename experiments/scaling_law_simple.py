@@ -41,7 +41,7 @@ scaling_law_8b_performance_pred = default_scaling_law_pred(
         "eval/bpb",
         "eval/loss",
     ),
-    task_accuracies=CORE_TASKS[4:9],  # predict 5 metrics
+    task_accuracies=CORE_TASKS,
 )
 
 scaling_law_bpb_projection = default_scaling_law_pred(
