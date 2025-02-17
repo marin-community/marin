@@ -32,6 +32,7 @@ dependencies = [
     "jax==0.4.35",
     "multiprocess==0.70.16",
     "levanter>=1.2.dev1163",
+    "sentencepiece"
 ]
 
 [project.optional-dependencies]
