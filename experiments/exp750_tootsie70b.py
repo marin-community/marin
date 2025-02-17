@@ -58,11 +58,15 @@ llama_70b_train_config_mk4 = dataclasses.replace(
 
 llama_70b_train_config_mk6 = dataclasses.replace(
     llama_70b_train_config,
+    # very specific number. just happened to be when we switched
     train_batch_size=1024,
+    # train_batch_size=[ScheduleStep(until=93_600, value=1024), ScheduleStep(until=-1, value=1536)],
     tpu_type="v6e-128",
     # tpu_type="v5litepod-256",
     node_count=4,
-    learning_rate=2e-4,
+    # until 93_621, was 2e-4
+    # learning_rate=2e-4,
+    learning_rate=2.5e-4, # approx 2e-4 * sqrt(1.5)
     decay=0.4,
     ema_beta=0.995,
     lr_schedule="linear",
