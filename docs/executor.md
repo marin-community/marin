@@ -67,7 +67,7 @@ launches jobs to the Ray cluster:
 python marin/run/ray_run.py -- python experiments/hello_world.py
 ```
 
-This script ensure that:
+This script ensures that:
 - All the relevant libraries (specified above) are installed.
 - The working directory is set appropriately.
 - Any subpaths under submodules are appended to PYTHONPATH, which is useful
