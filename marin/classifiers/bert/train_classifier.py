@@ -3,7 +3,6 @@ from typing import Any
 
 import datasets
 import torch
-import torch_xla.core.xla_model as xm
 from transformers import AutoModelForSequenceClassification, AutoTokenizer, Trainer, TrainingArguments, set_seed
 
 
@@ -15,9 +14,6 @@ class ScriptArguments(TrainingArguments):
     num_labels: int = field(default=5)
     target_column: str = field(default="label")
     output_dir: str = field(default="", metadata={"help": "Path to the output directory"})
-
-
-device = xm.xla_device()
 
 
 class DataCollator:
@@ -72,7 +68,7 @@ def train_classifier(rank: int, args: ScriptArguments):
     trainer.train()
 
 
-def train_classifier_distributed(args: ScriptArguments):
-    import torch_xla.distributed.xla_multiprocessing as xmp
+# def train_classifier_distributed(args: ScriptArguments):
+#     import torch_xla.distributed.xla_multiprocessing as xmp
 
-    xmp.spawn(train_classifier, args=(args,), nprocs=args.tpu_num_cores, start_method="fork")
+#     xmp.spawn(train_classifier, args=(args,), start_method="fork")
