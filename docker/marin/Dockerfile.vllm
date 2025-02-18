@@ -43,6 +43,9 @@ RUN VLLM_TARGET_DEVICE="tpu" python3 setup.py develop
 RUN pip install --no-cache-dir -U draccus==0.10 google-api-python-client~=2.0 gcsfs google-cloud-storage google-cloud-storage-transfer s3fs regex requests numpy braceexpand deepdiff tqdm tqdm-loggable toml pandas pyarrow levanter==1.2.dev1190
 # NOTE: Try to keep as much "heavy" stuff as possible before this line to avoid re-installing
 
+# Install lm-evaluation-harness
+RUN sudo mkdir -p /opt/lm_eval && sudo chown -R $(whoami) /opt/lm_eval && cd /opt/lm_eval && git clone --depth 1 https://github.com/EleutherAI/lm-evaluation-harness && cd lm-evaluation-harness && pip install -e ".[ifeval]"
+
 # (not installing pyproject.toml because it interferes with Ray's RuntimeEnv deps)
 #WORKDIR /tmp/
 #ADD pyproject.toml /tmp/

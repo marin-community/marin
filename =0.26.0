@@ -1,0 +1,27 @@
+2025-02-17 20:49:59,260	INFO job_manager.py:528 -- Runtime env is setting up.
+WARNING:root:Defaulting to PJRT_DEVICE=CPU
+DEBUG 02-17 20:50:06 __init__.py:26] No plugins for group vllm.platform_plugins found.
+INFO 02-17 20:50:06 __init__.py:183] Automatically detected platform tpu.
+2025-02-17 20:50:08,510	INFO worker.py:1461 -- Using address 10.202.0.48:6379 set in the environment variable RAY_ADDRESS
+2025-02-17 20:50:08,510	INFO worker.py:1601 -- Connecting to existing Ray cluster at address: 10.202.0.48:6379...
+2025-02-17 20:50:08,519	INFO worker.py:1777 -- Connected to Ray cluster. View the dashboard at [1m[32m10.202.0.48:8265 [39m[22m
+[36m(pid=67960, ip=10.202.0.2)[0m WARNING:root:libtpu.so and TPU device found. Setting PJRT_DEVICE=TPU.
+[36m(train_classifier_tpu pid=67960, ip=10.202.0.2)[0m WARNING:root:torch_xla.core.xla_model.xrt_world_size() will be removed in release 2.7. is deprecated. Use torch_xla.runtime.world_size instead.
+[36m(train_classifier_tpu pid=67960, ip=10.202.0.2)[0m WARNING:root:torch_xla.core.xla_model.xla_model.get_ordinal() will be removed in release 2.7. is deprecated. Use torch_xla.runtime.global_ordinal instead.
+[36m(train_classifier_tpu pid=67960, ip=10.202.0.2)[0m Some weights of NewForSequenceClassification were not initialized from the model checkpoint at Alibaba-NLP/gte-base-en-v1.5 and are newly initialized: ['classifier.bias', 'classifier.weight', 'pooler.dense.bias', 'pooler.dense.weight']
+[36m(train_classifier_tpu pid=67960, ip=10.202.0.2)[0m You should probably TRAIN this model on a down-stream task to be able to use it for predictions and inference.
+[36m(train_classifier_tpu pid=67960, ip=10.202.0.2)[0m Dataset({
+[36m(train_classifier_tpu pid=67960, ip=10.202.0.2)[0m     features: ['text', 'label'],
+[36m(train_classifier_tpu pid=67960, ip=10.202.0.2)[0m     num_rows: 1605
+[36m(train_classifier_tpu pid=67960, ip=10.202.0.2)[0m })
+[36m(train_classifier_tpu pid=67960, ip=10.202.0.2)[0m wandb: WARNING The `run_name` is currently set to the same value as `TrainingArguments.output_dir`. If this was not intended, please specify a different run name by setting the `TrainingArguments.run_name` parameter.
+[36m(train_classifier_tpu pid=67960, ip=10.202.0.2)[0m wandb: Currently logged in as: babychousr (stanford-mercury) to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+[36m(train_classifier_tpu pid=67960, ip=10.202.0.2)[0m wandb: Using wandb-core as the SDK backend.  Please refer to https://wandb.me/wandb-core for more information.
+[36m(train_classifier_tpu pid=67960, ip=10.202.0.2)[0m wandb: Tracking run with wandb version 0.19.6
+[36m(train_classifier_tpu pid=67960, ip=10.202.0.2)[0m wandb: Run data is saved locally in /tmp/ray/session_2025-02-15_10-46-39_032398_542/runtime_resources/working_dir_files/_ray_pkg_006a5529e24be619/wandb/run-20250217_205033-cmnq3x2c
+[36m(train_classifier_tpu pid=67960, ip=10.202.0.2)[0m wandb: Run `wandb offline` to turn off syncing.
+[36m(train_classifier_tpu pid=67960, ip=10.202.0.2)[0m wandb: Syncing run /home/ray/.cache
+[36m(train_classifier_tpu pid=67960, ip=10.202.0.2)[0m wandb: ⭐️ View project at https://wandb.ai/stanford-mercury/marin
+[36m(train_classifier_tpu pid=67960, ip=10.202.0.2)[0m wandb: 🚀 View run at https://wandb.ai/stanford-mercury/marin/runs/cmnq3x2c
+[36m(train_classifier_tpu pid=67960, ip=10.202.0.2)[0m
+  0%|          | 0/33 [00:00<?, ?it/s]

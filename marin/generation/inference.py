@@ -14,7 +14,7 @@ from marin.utils import fsspec_glob
 @dataclass
 class TextGenerationInferenceConfig:
     # IO specific
-    input_path: str
+    input_path: str | list[str]
     output_path: str
 
     # Model specific
