@@ -30,13 +30,13 @@ NUM_TPU_DEVICES = 1
 def train_classifier_tpu():
     import os
 
-    os.mkdir("/opt/gcsfuse_mount/economic-bert")
+    os.makedirs("/opt/gcsfuse_mount/economic-bert", exist_ok=True)
 
     train_classifier(
         rank=0,
         args=ScriptArguments(
             train_dataset="gs://marin-us-east5/documents/fineweb-economics-llama-70b-annotations-497aa8/56_000000_000000.jsonl.gz",
-            num_labels=5,
+            num_labels=1,
             target_column="label",
             # TODO(chris): change later
             output_dir="/opt/gcsfuse_mount/economic-bert",
@@ -44,7 +44,7 @@ def train_classifier_tpu():
             per_device_train_batch_size=8,
             gradient_accumulation_steps=16,
             report_to="wandb",
-            logging_steps=10,
+            logging_steps=1,
             max_length=512,  # TODO(CHRIS): Can change later
             # tpu_num_cores=NUM_TPU_DEVICES,
         ),
