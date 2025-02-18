@@ -28,6 +28,10 @@ NUM_TPU_DEVICES = 1
 # NOTE(chris): BTW NEED PIP_DEPS accelerate>=0.26.0 set in the commandline
 @ray.remote(resources={"TPU": NUM_TPU_DEVICES, "TPU-v6e-8-head": 1}, runtime_env={"pip": ["accelerate>=0.26.0"]})
 def train_classifier_tpu():
+    import os
+
+    os.mkdir("/opt/gcsfuse_mount/economic-bert")
+
     train_classifier(
         rank=0,
         args=ScriptArguments(
@@ -35,9 +39,9 @@ def train_classifier_tpu():
             num_labels=5,
             target_column="label",
             # TODO(chris): change later
-            output_dir="~/.cache",
+            output_dir="/opt/gcsfuse_mount/economic-bert",
             remove_unused_columns=False,
-            per_device_train_batch_size=1,
+            per_device_train_batch_size=8,
             gradient_accumulation_steps=16,
             report_to="wandb",
             logging_steps=10,

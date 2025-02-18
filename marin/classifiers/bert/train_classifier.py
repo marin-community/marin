@@ -11,7 +11,8 @@ class ScriptArguments(TrainingArguments):
     model_name: str = field(default="Alibaba-NLP/gte-base-en-v1.5")
     max_length: int = field(default=8192)
     train_dataset: str = field(default="", metadata={"help": "Path to the training dataset"})
-    num_labels: int = field(default=5)
+    # Use a regression task for now
+    num_labels: int = field(default=1)
     target_column: str = field(default="label")
     output_dir: str = field(default="", metadata={"help": "Path to the output directory"})
 
@@ -66,6 +67,8 @@ def train_classifier(rank: int, args: ScriptArguments):
         data_collator=DataCollator(args, tokenizer),
     )
     trainer.train()
+
+    trainer.save_model(args.output_dir)
 
 
 # def train_classifier_distributed(args: ScriptArguments):

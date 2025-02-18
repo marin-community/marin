@@ -11,6 +11,5 @@ def run_on_tpu():
     xmp.spawn(_mp_fn)
 
 
-if __name__ == "__main__":
-    future = run_on_tpu.remote()
-    ray.get(future)
+future = run_on_tpu.remote()
+ray.get(future)
