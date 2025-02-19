@@ -7,6 +7,7 @@ from typing import ClassVar
 import ray
 import requests
 
+from experiments.evals.resource_configs import ResourceConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Dependency, Evaluator, ModelConfig
 from marin.evaluation.utils import kill_process_on_port
@@ -16,19 +17,7 @@ from marin.utils import remove_tpu_lockfile_on_exit
 class VllmTpuEvaluator(Evaluator, ABC):
     """For `Evaluator`s that runs inference with VLLM on TPUs."""
 
-    # Default pip packages to install for VLLM on TPUs
-    # Some versions were fixed in order to resolve dependency conflicts.
-    DEFAULT_PIP_PACKAGES: ClassVar[list[Dependency]] = [
-        Dependency(name="aiohttp"),
-        Dependency(name="attrs", version="22.2.0"),
-        Dependency(name="click", version="8.1.3"),
-        Dependency(name="jsonschema", version="4.23.0"),
-        Dependency(name="packaging"),
-        Dependency(name="pynvml", version="11.5.3"),
-        Dependency(name="starlette", version="0.37.2"),
-        Dependency(name="tokenizers", version="0.19.1"),
-        Dependency(name="transformers", version="4.44.0"),
-    ]
+    DEFAULT_PIP_PACKAGES: ClassVar[list[Dependency]] = []
 
     # Where to store checkpoints, cache inference results, etc.
     CACHE_PATH: str = "/tmp"
@@ -113,6 +102,7 @@ class VllmTpuEvaluator(Evaluator, ABC):
     _python_version: str = "3.10"
     _pip_packages: ClassVar[list[Dependency]] = DEFAULT_PIP_PACKAGES
     _py_modules: ClassVar[list[Dependency]] = []
+    _env_vars: ClassVar[dict[str, str]] = {}
 
     def get_runtime_env(self) -> dict:
         """
@@ -133,9 +123,8 @@ class VllmTpuEvaluator(Evaluator, ABC):
         runtime_env: dict = {
             "pip": {
                 "packages": all_packages,
-                "pip_check": False,
-                "pip_version": f"==23.0.1;python_version=='{self._python_version}'",
             },
+            "env_vars": self._env_vars,
         }
 
         # An empty list of py_modules can cause an error in Ray
@@ -150,13 +139,15 @@ class VllmTpuEvaluator(Evaluator, ABC):
         evals: list[EvalTaskConfig],
         output_path: str,
         max_eval_instances: int | None = None,
+        resource_config: ResourceConfig | None = None,
     ) -> None:
         """
         Launches the evaluation run with Ray.
         """
 
         @ray.remote(
-            memory=64 * 1024 * 1024 * 1024, resources={"TPU": 1, "TPU-v4-8-head": 1}, runtime_env=self.get_runtime_env()
+            scheduling_strategy=self.scheduling_strategy_fn(resource_config.num_tpu, resource_config.tpu_type),
+            runtime_env=self.get_runtime_env(),
         )
         @remove_tpu_lockfile_on_exit
         def launch(
