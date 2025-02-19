@@ -5,6 +5,7 @@ Issue: TODO
 
 import os
 from datetime import timedelta
+from typing import Optional
 
 import jmp
 from levanter.checkpoint import CheckpointerConfig
@@ -23,6 +24,7 @@ from experiments.evals.task_configs import CORE_TASKS, convert_to_levanter_task_
 from marin.execution.executor import executor_main
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
+from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
 from marin.processing.tokenize.tokenize import levanter_tokenize_sft
 from marin.processing.tokenize import (
@@ -36,6 +38,16 @@ from marin.processing.tokenize import (
 
 TAG = "702_targeted_curriculum"
 USER = "suhas"
+
+EVAL_TASKS = (
+    EvalTaskConfig("arc_easy", 10),  # 10-shot, four-way MCQ questions involving grade 3-9 basic science
+    EvalTaskConfig("arc_challenge", 10),  # a (harder) version of arc_easy
+    EvalTaskConfig("piqa", 10),  # answer questions based on a passage
+    EvalTaskConfig("humaneval", 0),  # coding problems
+    EvalTaskConfig("mbpp", 3),  # coding problems
+    EvalTaskConfig("mmlu", 0, task_alias="mmlu_0shot"),
+    EvalTaskConfig("mmlu", 5, task_alias="mmlu_5shot"),
+)
 
 def tokenize_two_stages(
     base_file_path : str,
@@ -100,6 +112,7 @@ def train_executor_step(
     tpu_type : str,
     optimizer_config : AdamConfig = None,
     additional_tags : list[str] = [],
+    steps_per_eval_task : Optional[int] = None,
 ) -> ExecutorStep:
     
     if optimizer_config is None:
@@ -107,6 +120,11 @@ def train_executor_step(
             learning_rate=learning_rate,
             weight_decay=weight_decay,
         )
+
+    if steps_per_eval_task:
+        harness_config = LmEvalHarnessConfig(task_spec=convert_to_levanter_task_config(EVAL_TASKS))
+    else:
+        harness_config = None
 
     train_config = TrainLmOnPodConfig(
         output_path=this_output_path(),
@@ -133,8 +151,8 @@ def train_executor_step(
         optimizer=optimizer_config,
         data_seed=42,
         initialize_from_checkpoint_path=model_checkpoint,
-        eval_harness_steps=None, # TODO: add eval harness
-        eval_harness=None, # TODO: add eval harness
+        eval_harness_steps=steps_per_eval_task,
+        eval_harness=harness_config,
     )
 
     executor_step_name = os.path.join("checkpoints", USER, name[:64])
@@ -149,4 +167,5 @@ def train_executor_step(
         f"{model.seq_len} (seq_len) "
         f"= {num_train_steps * train_batch_size * model.seq_len:,} tokens.",
         config=train_config,
+        pip_dependency_groups=["tokenize_train"],
     )

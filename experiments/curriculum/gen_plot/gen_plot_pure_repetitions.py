@@ -18,7 +18,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--build_cache", action="store_true")
 args = parser.parse_args()
 
-data1_name, data2_name = "flan", "c4"
+data1_name, data2_name = "c4", "flan"
 
 pretty_name_dict = {
     "stack_dedup": "Python",
@@ -27,7 +27,8 @@ pretty_name_dict = {
     "flan": "Flan",
 }
 
-wandb_key = "flan-c4-repetition-token-scaling-c4"
+# wandb_key = "flan-c4-repetition-token-scaling-c4"
+wandb_key = "flan-c4-repetition-token-sqrtlr-scaling-c4"
 
 param_counts = {
     "150m": 150,
@@ -244,6 +245,11 @@ for idx, attribute_value in enumerate(unique_attribute_values):
     
     plt.scatter(x, y, label=label, marker='o', color=color)
 
+figure_identifier = {
+    "flan-c4-repetition-token-sqrtlr-scaling-c4": "sqrtlr",
+    "flan-c4-repetition-token-scaling-c4": "fixedlr",
+}[wandb_key]
+
 plt.xlabel('Number of repetitions')
 plt.ylabel(f'Final {data1_name} loss')
 plt.xscale('log')
@@ -256,7 +262,7 @@ plt.xticks([1, 2, 4, 8, 16],
 plt.plot([], [], '*', color='black', label='Minima from quadratic fit', markersize=10)
 plt.legend()
 plt.tight_layout()
-plt.savefig(f'/Users/Suhas/Desktop/SUHAS/Repos/marin/experiments/curriculum/plots/pure_repetitions/{data1_name}_{data2_name}_pure_repetitions_rare_loss_curve.png')
+plt.savefig(f'/Users/Suhas/Desktop/SUHAS/Repos/marin/experiments/curriculum/plots/pure_repetitions/{data1_name}_{data2_name}_{figure_identifier}_pure_repetitions_rare_loss_curve.png')
 
 # Create a new figure for the minima plot
 plt.figure(figsize=(7, 5), dpi=600)
@@ -277,5 +283,5 @@ plt.title('Optimal number of repetitions vs. unique token count\n\n150M params w
 plt.xticks(token_counts, [f"{t/1000:.1f}B" for t in token_counts])
 
 plt.tight_layout()
-plt.savefig(f'/Users/Suhas/Desktop/SUHAS/Repos/marin/experiments/curriculum/plots/pure_repetitions/{data1_name}_{data2_name}_optimal_repetitions.png')
+plt.savefig(f'/Users/Suhas/Desktop/SUHAS/Repos/marin/experiments/curriculum/plots/pure_repetitions/{data1_name}_{data2_name}_{figure_identifier}_optimal_repetitions.png')
 plt.close()

@@ -21,7 +21,7 @@ chinchilla_steps = {
 }
 
 def version_tag(lr):
-    return f"-lr{lr}" if lr != 3e-3 else ""
+    return f"-lr{lr:.5f}" if lr != 3e-3 else ""
 
 def correct_model_size(model_size):
     if model_size == "600m_0.003" or model_size == "600m_0.001":

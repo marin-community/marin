@@ -18,6 +18,7 @@ llama_150m_train_config = dataclasses.replace(
     llama_150m_train_config,
     tpu_type="v4-128",
     num_train_steps=2000,  # 20000 * 1024 * 1024 = 20B tokens
+    steps_per_eval_task=500,
 )
 
 num_sequences = llama_150m_train_config.num_train_steps * llama_150m_train_config.train_batch_size
@@ -38,7 +39,7 @@ data_config = lm_varying_mixture_data_config(
 
 # Train the model using the varying mixture
 varying_mixture_model = default_train(
-    name="slimpajama-to-starcoderdata-150m-demo-2-12-v1",
+    name="slimpajama-to-starcoderdata-150m-demo-2-17-v1",
     tokenized=data_config,
     model_config=llama_150m,
     train_config=llama_150m_train_config,

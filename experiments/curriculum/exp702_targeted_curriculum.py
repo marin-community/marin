@@ -26,6 +26,7 @@ from experiments.llama import llama3_tokenizer
 
 marin_prefix = os.environ["MARIN_PREFIX"]
 
+llama_150m_4096 = dataclasses.replace(llama_150m, seq_len=4096)
 llama_1_4b_1024 = dataclasses.replace(llama_1_4b, seq_len=1024)
 llama_1_9b_1024 = dataclasses.replace(llama_1_9b, seq_len=1024)
 llama_8b_1024 = dataclasses.replace(llama_8b, seq_len=1024)
@@ -238,6 +239,7 @@ def full_training_varying_mixture(
     num_data1_repetitions: int = 1,
     version_tag: str = "",
     additional_tags: List[str] = [],
+    num_lm_eval_harness: Optional[int] = None,
 ):
     """
     Two-stage training using varying mixture weights, similar to varsched but without checkpointing.
@@ -280,6 +282,7 @@ def full_training_varying_mixture(
     # Configure model and training
     model = {
         "150m": llama_150m,
+        "150m_4096": llama_150m_4096,
         "300m": llama_300m,
         "600m": llama_600m,
         "1_4b_1024": llama_1_4b_1024,
@@ -303,21 +306,12 @@ def full_training_varying_mixture(
         num_data1_repetitions=num_data1_repetitions,
     )
 
-    # Configure model and training
-    model = {
-        "150m": llama_150m,
-        "300m": llama_300m,
-        "600m": llama_600m,
-        "1_4b_1024": llama_1_4b_1024,
-        # "1_9b": llama_1_9b,
-        "1_9b_1024": llama_1_9b_1024,
-        "8b_1024": llama_8b_1024,
-    }[model_size]
-
     weight_decay = 0.1
     steps_per_eval = num_train_steps // num_eval
+    steps_per_eval_task = None if num_lm_eval_harness is None else num_train_steps // num_lm_eval_harness
     epochs_tag = f"-r{num_data1_repetitions}" if num_data1_repetitions is not None and num_data1_repetitions > 1 else ""
-    name_prefix = f"{data1_name}{epochs_tag}-{data2_name}-onevs{data1_frac_alloc_stage2}-dur{duration_frac_stage2}-{region_suffix}-{model_size}"
+    assert data1_frac_alloc_stage2 == 1.0, f"data1_frac_alloc_stage2: {data1_frac_alloc_stage2}, change naming scheme to support this"
+    name_prefix = f"{data1_name}{epochs_tag}-{data2_name}-dur{duration_frac_stage2}-{region_suffix}-{model_size}"
 
     if schedule_type == "linear":
         optimizer_config = AdamConfig(
@@ -337,7 +331,9 @@ def full_training_varying_mixture(
         name_prefix += f"-{int(billion_tokens)}B" if billion_tokens.is_integer() else f"-{billion_tokens}B"
 
     if total_data1_portion != 0.005:
-        name_prefix += f"-rare{total_data1_portion}"
+        name_prefix += f"-ra{total_data1_portion}"
+
+    assert len(f"{name_prefix}{version_tag}") <= 64, f"{name_prefix}{version_tag} is too long"
 
     train_step = train_executor_step(
         name=f"{name_prefix}{version_tag}",
@@ -353,6 +349,7 @@ def full_training_varying_mixture(
         tpu_type=tpu_type,
         optimizer_config=optimizer_config,
         additional_tags=additional_tags + [region_suffix],
+        steps_per_eval_task=steps_per_eval_task,
     )
 
     return [train_step]

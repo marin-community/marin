@@ -1,3 +1,5 @@
+import numpy as np
+
 from itertools import chain
 
 from marin.execution.executor import executor_main
@@ -5,6 +7,10 @@ from marin.execution.executor import executor_main
 # Import required functions from exp702_targeted_curriculum.py
 from experiments.curriculum.exp702_targeted_curriculum import (
     full_training_varying_mixture,
+)
+
+from experiments.curriculum.experiments.scaling_configs import (
+    version_tag,
 )
 
 if __name__ == "__main__":
@@ -19,10 +25,10 @@ if __name__ == "__main__":
             cooldown_frac=0.30,
             model_size="600m",
             num_train_steps=base_num_steps * num_data1_repetitions,
-            learning_rate=0.003,
+            learning_rate=0.001,
             num_eval=20,
             num_data1_repetitions=num_data1_repetitions,
-            additional_tags=["flan-c4-repetition-token-scaling-c4"],
+            additional_tags=["flan-c4-repetition-token-scaling-c4-600m"],
         )
         for base_num_steps in [1000, 2000, 4000, 8000]
         for num_data1_repetitions in [1, 2, 4, 8, 16]
