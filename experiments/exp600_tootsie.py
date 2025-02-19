@@ -12,7 +12,10 @@ For now, we're training on DCLM's best mix, but that will change.
 
 import dataclasses
 
+from experiments.cooldown_anneal import dolmino_dclm
 from experiments.dolma.tokenize_dolma import tokenize_dolma_steps
+from experiments.exp72_baselines import fineweb_edu_tokenized
+from experiments.midtraining_datasets import finemath_3_plus_tokenized
 from levanter.schedule import ScheduleStep
 
 from experiments.dclm.tokenize_dclm import DCLM_MIXTURE_WEIGHTS, dclm_mixture_config_llama3
@@ -22,6 +25,7 @@ from experiments.pretraining_datasets import dclm_baseline_wrong, proofpile_2, s
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import executor_main
 from marin.processing.tokenize import lm_mixture_data_config
+from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
 
 ## NOTE: on 20250211, we discovered that the DCLM baseline data in us-central2 was corrupted/partial.
 # These are preserved for reproducibility, but future runs should use the correct data.
@@ -69,10 +73,11 @@ llama_8b_train_config = SimpleTrainConfig(
 # main phase: raw dclm for 660,000 steps
 # phase 2 is divided into two subparts (lolcry):
 # more dclm out to ≈3.78e+12 tokens (740,000 total steps)
-# dolmino-ish mixture out to ≈5.28e+12 tokens (860,000 steps)
+# dolmino-ish mixture out to ≈4.78e+12 tokens (820,000 steps)
 
-TOTAL = 860_000
-DECAY_FRACTION = (860_000.0 - 740_000.0)/860_000.0
+TOTAL = 820_000
+PHASE_2 = 740_000
+DECAY_FRACTION = (TOTAL - PHASE_2) / TOTAL
 
 
 llama_8b_train_config_phase2 = SimpleTrainConfig(
@@ -110,7 +115,9 @@ llama_8b_tootsie = dataclasses.replace(
 
 
 # phase 2 data is a variant of the dolmino mix
-phase_2_tokenized = {}
+phase_2_tokenized = {
+    **dclm_mixture_config_llama3
+}
 
 dolma_splits = [
     "dolma/algebraic-stack",
@@ -125,7 +132,7 @@ all_dolma_steps = tokenize_dolma_steps(tokenizer=llama3_tokenizer)
 phase_2_tokenized.update({dataset: step for dataset, step in all_dolma_steps.items() if dataset in dolma_splits})
 phase_2_tokenized["finemath_3_plus"] = finemath_3_plus_tokenized
 phase_2_tokenized["fineweb_edu"] = fineweb_edu_tokenized
-phase_2_tokenized["dclm"] = dolmino_dclm
+phase_2_tokenized["dolmino_dclm"] = dolmino_dclm
 
 
 # Dolma counts are done with llama tokens (https://docs.google.com/spreadsheets/d/1ykVJ1EGJvA1zwF67FZGFBzlm7P0ZBIMuCpBW9Pqp7cY/edit?gid=0#gid=0)
@@ -140,25 +147,53 @@ high_quality_token_counts = {
     "dolma/stackexchange": 17.1 * 1.0,
     "dolma/wiki": 3.65 * 1.0,
     "finemath_3_plus": 34.0 * 1.0,  # https://huggingface.co/datasets/HuggingFaceTB/finemath
-    "fineweb_edu": 0.0 * 1.0,  # 1.3T tokens total (https://huggingface.co/datasets/HuggingFaceFW/fineweb-edu)
 }
 
 total_high_quality_token_count = sum(high_quality_token_counts.values())
+# total HQ token count is ≈ 161.7B
+# we're training for 1.5T tokens or so.
+# we'd like to keep the HQ data to ≈2 epochs
 
-# reweight data so that 30% are high-quality sources and 70% are dclm
-cooldown_mixture_weights = {
-    **{
-        dataset: 30 * token_count / total_high_quality_token_count
-        for dataset, token_count in high_quality_token_counts.items()
-    },
-    "dclm": 70,
+HQ_WEIGHT = 30.0
+
+# https://docs.google.com/spreadsheets/d/1hsvqvp4SZELehm5EBsW65VHO0fAywXYFOwaI1rZmzt8/edit?gid=0#gid=0
+# dolmino dclm is about 700B tokens (llama 3)
+# fineweb edu is ~1.1T tokens (llama 3), but lower quality
+# starcoder we've seen, but I don't want to exclude all coding from the final mix
+
+web_counts = {
+    "dolmino_dclm": 700.0 * 1.0,
+    "fineweb_edu": 1100 * 0.05,
+    "starcoderdata": 230.0 * 0.1,
 }
 
+total_web_token_count = sum(web_counts.values())
+
+
+# reweight data so that 30% are high-quality sources and 70% are dclm+other
+cooldown_mixture_weights = {
+    **{
+        dataset: HQ_WEIGHT * token_count / total_high_quality_token_count
+        for dataset, token_count in high_quality_token_counts.items()
+    },
+    **{
+        dataset: (1.0 - HQ_WEIGHT) * token_count / total_web_token_count
+        for dataset, token_count in web_counts.items()
+    },
+}
+
+phase_2_data_mixture = lm_varying_mixture_data_config(
+    components=phase_2_tokenized,
+    weights_list=[
+        (0, DCLM_MIXTURE_WEIGHTS),
+        (740_000, cooldown_mixture_weights),
+    ],
+)
 
 llama_8b_tootsie_phase2 = dataclasses.replace(
     default_train(
         name="llama-8b-tootsie-phase2",
-        tokenized=dclm_mixture_config_llama3,
+        tokenized=phase_2_data_mixture,
         model_config=llama_8b,
         train_config=llama_8b_train_config_phase2,
         tags=["llama", "8b", "ema", "exp600"],
