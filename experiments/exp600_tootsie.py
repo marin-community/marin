@@ -75,7 +75,7 @@ llama_8b_train_config_phase2 = SimpleTrainConfig(
     # until step 660,000 we used: this
     # train_batch_size=1024,
     # learning_rate=1e-3,  # we get divergence with 2e-3
-    # weight_decay=0.05,
+    weight_decay=0.05,
     # # WSD-S
     # cycle_length=10000,
     # steps_per_eval=10000,
