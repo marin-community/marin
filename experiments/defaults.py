@@ -258,10 +258,6 @@ def default_train(
 
 
 def default_anneal(name: str, anneal_config: AnnealConfig):
-    # assert (
-    #     anneal_config.target_dataset is not None or anneal_config.high_quality_web_text_dataset is not None
-    # ), "Target dataset or high-quality web text dataset must be provided."
-
     imputed_checkpoint_steps = anneal_config.initialize_from_checkpoint_path.index("step-")
     imputed_checkpoint_step = int(
         anneal_config.initialize_from_checkpoint_path[imputed_checkpoint_steps + len("step-") :]
