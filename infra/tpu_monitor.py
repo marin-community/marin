@@ -49,7 +49,7 @@ def gather_incomplete_tpus(location):
     if location in LOCATION_TO_CLI_FILE:
         ray_usage = get_ray_tpu_usage(LOCATION_TO_CLI_FILE[location])
         if ray_usage:
-            for tpu_type, (used, total) in ray_usage.items():
+            for tpu_type, (_used, total) in ray_usage.items():
                 total = int(total)
                 if total & (total - 1) != 0:  # Bitwise check for power of 2
                     incomplete_tpus.append(tpu_type)
@@ -202,7 +202,7 @@ def make_report():
     pg = wr.PanelGrid(runsets=[runset], panels=panels)
     blocks.append(pg)
     # Make 1 panel grid per location
-    for location in locations:
+    for location in LOCATIONS:
         blocks.append(wr.H2(location))
         device_gen_loc = [k for k in all_metrics.keys() if k.startswith(location)]
         panels = []
