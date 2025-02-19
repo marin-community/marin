@@ -12,6 +12,7 @@ For now, we're training on DCLM's best mix, but that will change.
 
 import dataclasses
 
+from experiments.dolma.tokenize_dolma import tokenize_dolma_steps
 from levanter.schedule import ScheduleStep
 
 from experiments.dclm.tokenize_dclm import DCLM_MIXTURE_WEIGHTS, dclm_mixture_config_llama3
@@ -106,6 +107,52 @@ llama_8b_tootsie = dataclasses.replace(
     ),
     override_output_path="checkpoints/llama-8b-tootsie-0.001-19ad63",
 )
+
+
+# phase 2 data is a variant of the dolmino mix
+phase_2_tokenized = {}
+
+dolma_splits = [
+    "dolma/algebraic-stack",
+    "dolma/arxiv",
+    "dolma/megawika",
+    "dolma/open-web-math",
+    "dolma/pes2o",
+    "dolma/stackexchange",
+    "dolma/wiki",
+]
+all_dolma_steps = tokenize_dolma_steps(tokenizer=llama3_tokenizer)
+phase_2_tokenized.update({dataset: step for dataset, step in all_dolma_steps.items() if dataset in dolma_splits})
+phase_2_tokenized["finemath_3_plus"] = finemath_3_plus_tokenized
+phase_2_tokenized["fineweb_edu"] = fineweb_edu_tokenized
+phase_2_tokenized["dclm"] = dolmino_dclm
+
+
+# Dolma counts are done with llama tokens (https://docs.google.com/spreadsheets/d/1ykVJ1EGJvA1zwF67FZGFBzlm7P0ZBIMuCpBW9Pqp7cY/edit?gid=0#gid=0)
+# This is slightly different from standard olmo tokenizer token counts
+# The first number is the number of tokens in the dataset, the second is the desired mixing portion
+high_quality_token_counts = {
+    "dolma/algebraic-stack": 11.5 * 1.0,
+    "dolma/arxiv": 27.9 * 1.0,
+    "dolma/megawika": 4.44 * 1.0,
+    "dolma/open-web-math": 5.06 * 1.0,
+    "dolma/pes2o": 58.1 * 1.0,
+    "dolma/stackexchange": 17.1 * 1.0,
+    "dolma/wiki": 3.65 * 1.0,
+    "finemath_3_plus": 34.0 * 1.0,  # https://huggingface.co/datasets/HuggingFaceTB/finemath
+    "fineweb_edu": 0.0 * 1.0,  # 1.3T tokens total (https://huggingface.co/datasets/HuggingFaceFW/fineweb-edu)
+}
+
+total_high_quality_token_count = sum(high_quality_token_counts.values())
+
+# reweight data so that 30% are high-quality sources and 70% are dclm
+cooldown_mixture_weights = {
+    **{
+        dataset: 30 * token_count / total_high_quality_token_count
+        for dataset, token_count in high_quality_token_counts.items()
+    },
+    "dclm": 70,
+}
 
 
 llama_8b_tootsie_phase2 = dataclasses.replace(
