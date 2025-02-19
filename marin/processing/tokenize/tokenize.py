@@ -64,14 +64,21 @@ class TokenizeConfig:
             return None
         return _create_source(self.validation_paths, self.text_key)
 
-    def as_lm_dataset_source_config(self, actual_output_path: str | InputName) -> LMDatasetSourceConfig:
+    def as_lm_dataset_source_config(
+        self, actual_output_path: str | InputName, *, include_raw_paths=True
+    ) -> LMDatasetSourceConfig:
         """
         For use in Levanter training runs with mixtures of datasets.
+
+        Args:
+            include_raw_paths: if false, don't include paths to raw data in Levanter's config. This means we'll be able
+                to run training without the original training data, but hte provenance won't be recorded in wandb.
+
         """
         return LMDatasetSourceConfig(
             tags=self.tags,
-            train_urls=self.train_paths,
-            validation_urls=self.validation_paths,
+            train_urls=self.train_paths if include_raw_paths else [],
+            validation_urls=self.validation_paths if include_raw_paths else [],
             cache_dir=actual_output_path,
         )
 
