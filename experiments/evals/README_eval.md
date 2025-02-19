@@ -22,7 +22,7 @@ We use a fork of `lm-evaluation-harness` (https://github.com/stanford-crfm/lm-ev
 
 1. **Bits per Byte (bpb)**: `bpb = -log_prob / byte_length * ln(2)`
 
-2. **Log Probability (logprob)**: Raw log probability of the correct answer. 
+2. **Log Probability (logprob)**: Raw log probability of the correct answer.
 
 3. **Choice Log Probability (choice_logprob)**: `log_prob_correct - log(∑exp(log_prob_i))`
 

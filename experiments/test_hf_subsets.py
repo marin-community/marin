@@ -43,6 +43,4 @@ smoltalk_test_llama_tokenize_step = ExecutorStep(
 )
 
 if __name__ == "__main__":
-    executor_main(
-        steps=[smoltalk_train_llama_tokenize_step, smoltalk_test_llama_tokenize_step]
-    )
+    executor_main(steps=[smoltalk_train_llama_tokenize_step, smoltalk_test_llama_tokenize_step])
