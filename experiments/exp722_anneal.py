@@ -1,3 +1,8 @@
+"""An experiment to cooldown a 8B model on a 30/70 mixture of finemath and Dolmino DCLM.
+
+Evaluates the quality of finemath: shows boost in GSM8K and MMLU mathematics.
+"""
+
 from experiments.anneal_config import AnnealConfig
 from experiments.defaults import default_anneal
 from experiments.dolmino.tokenize_dolmino import get_dolmino_step

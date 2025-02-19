@@ -1,3 +1,9 @@
+"""An experiment to evaluate the quality of individual splits of the Dolmino dataset.
+
+We cooldown a 8B model on a 30/70 mixture of some high quality Dolmino split and Dolmino DCLM.
+Link to issue: https://github.com/stanford-crfm/marin/issues/820
+"""
+
 from experiments.anneal_config import AnnealConfig
 from experiments.defaults import default_anneal
 from experiments.dolmino.tokenize_dolmino import get_dolmino_step
