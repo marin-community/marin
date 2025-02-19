@@ -1,15 +1,16 @@
 import ray
-from transformers import AutoModelForSequenceClassification, AutoTokenizer
+
+from marin.processing.classification.classifier import AutoClassifier
 
 MODEL_PATH = "/opt/gcsfuse_mount/economic-bert"
 
 
 @ray.remote(resources={"TPU": 1, "TPU-v6e-8-head": 1})
 def test_econ_bert():
-    model = AutoModelForSequenceClassification.from_pretrained(
-        MODEL_PATH, trust_remote_code=True, output_hidden_states=False
-    )
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH)
+    # model = AutoModelForSequenceClassification.from_pretrained(
+    #     MODEL_PATH, trust_remote_code=True, output_hidden_states=False
+    # )
+    # tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH)
 
     texts = [
         "The capital of China is Beijing.",
@@ -18,9 +19,12 @@ def test_econ_bert():
         "China has a GDP of $14 trillion.",
         "What's up with the stock market?",
     ]
-    inputs = tokenizer(texts, return_tensors="pt", truncation=True, max_length=512, padding=True)
-    outputs = model(**inputs)
-    print(outputs.logits)
+    batch = {"text": texts}
+    # inputs = tokenizer(texts, return_tensors="pt", truncation=True, max_length=512, padding=True)
+    # outputs = model(**inputs)
+    # print(outputs.logits)
+    classifier = AutoClassifier(MODEL_PATH, "label", "gte", max_length=512)
+    print(classifier(batch))
 
 
 if __name__ == "__main__":

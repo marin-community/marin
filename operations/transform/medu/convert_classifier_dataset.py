@@ -60,6 +60,8 @@ def process_file(input_file_path: str, output_file_path: str, output_filetype: s
                 prompt = example["prompt"]
 
                 # Extract text between triple quotes using regex
+                # NOTE(Chris): This is a hack because this assumes
+                # that the prompt places the example text between triple quotes
                 pattern = r"'''(.*?)'''"
                 match = re.search(pattern, prompt, re.DOTALL)
                 if match:

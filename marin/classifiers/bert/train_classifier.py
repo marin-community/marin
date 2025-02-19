@@ -1,9 +1,16 @@
+import os
 from dataclasses import dataclass, field
 from typing import Any
 
 import datasets
+import evaluate
+import fsspec
+import numpy as np
 import torch
+from sklearn.metrics import classification_report, confusion_matrix
 from transformers import AutoModelForSequenceClassification, AutoTokenizer, Trainer, TrainingArguments, set_seed
+
+from marin.utils import fsspec_glob
 
 
 @dataclass
@@ -43,9 +50,44 @@ class DataCollator:
         return batch
 
 
+def compute_metrics(eval_pred):
+    precision_metric = evaluate.load("precision")
+    recall_metric = evaluate.load("recall")
+    f1_metric = evaluate.load("f1")
+    accuracy_metric = evaluate.load("accuracy")
+
+    logits, labels = eval_pred
+    preds = np.round(logits.squeeze()).clip(0, 5).astype(int)
+    labels = np.round(labels.squeeze()).astype(int)
+    precision = precision_metric.compute(predictions=preds, references=labels, average="macro")["precision"]
+    recall = recall_metric.compute(predictions=preds, references=labels, average="macro")["recall"]
+    f1 = f1_metric.compute(predictions=preds, references=labels, average="macro")["f1"]
+    accuracy = accuracy_metric.compute(predictions=preds, references=labels)["accuracy"]
+
+    report = classification_report(labels, preds)
+    cm = confusion_matrix(labels, preds)
+    print("Validation Report:\n" + report)
+    print("Confusion Matrix:\n" + str(cm))
+
+    return {
+        "precision": precision,
+        "recall": recall,
+        "f1_macro": f1,
+        "accuracy": accuracy,
+    }
+
+
 def load_dataset(input_path: str, split: str):
-    dataset = datasets.load_dataset("json", data_files=input_path, split=split)
-    print(dataset)
+    # Check if input_path is a directory or file
+    fs = fsspec.core.url_to_fs(input_path)[0]
+    if fs.isdir(input_path):
+        # If directory, get all jsonl.gz files
+        data_files = fsspec_glob(os.path.join(input_path, "**/*.jsonl.gz"))
+    else:
+        # If file, use directly
+        data_files = input_path
+
+    dataset = datasets.load_dataset("json", data_files=data_files, split=split)
     return dataset
 
 
@@ -65,6 +107,7 @@ def train_classifier(rank: int, args: ScriptArguments):
         eval_dataset=dataset["test"],
         tokenizer=tokenizer,
         data_collator=DataCollator(args, tokenizer),
+        compute_metrics=compute_metrics,
     )
     trainer.train()
 
