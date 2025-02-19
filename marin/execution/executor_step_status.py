@@ -26,6 +26,7 @@ STATUS_FAILED = "FAILED"
 STATUS_SUCCESS = "SUCCESS"
 STATUS_DEP_FAILED = "DEP_FAILED"  # Dependency failed
 STATUS_UNKNOWN = "UNKNOWN"  # Unknown status, Ray failed to return the status
+STATUS_CANCELLED = "CANCELLED"  # Job was cancelled by user
 
 
 @dataclass(frozen=True)
