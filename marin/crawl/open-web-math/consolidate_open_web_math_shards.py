@@ -7,7 +7,7 @@ Running:
 
 ```
 ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- \
-    python scripts/open-web-math/consolidate_open_web_math_shards.py \
+    python marin/crawl/open-web-math/consolidate_open_web_math_shards.py \
     --input_path gs://marin-us-central2/documents/open-web-math-fde8ef8/html/ \
     --prefix openwebmath
 ```
@@ -22,7 +22,7 @@ Running on FineWeb-Edu:
 for fineweb_edu_dump_html_path in $(gcloud storage ls gs://marin-us-central2/documents/fineweb-edu/html); do
     dump_name=$(basename -- ${fineweb_edu_dump_html_path})
     ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- \
-    python scripts/open-web-math/consolidate_open_web_math_shards.py \
+    python marin/crawl/open-web-math/consolidate_open_web_math_shards.py \
     --input_path ${fineweb_edu_dump_html_path} \
     --prefix fineweb_edu
 done
@@ -82,9 +82,9 @@ def process_one_batch(html_paths_batch: list[str], output_path: str):
 
 
 def batched(iterable, n=1):
-    l = len(iterable)
-    for ndx in range(0, l, n):
-        yield iterable[ndx : min(ndx + n, l)]
+    length = len(iterable)
+    for ndx in range(0, length, n):
+        yield iterable[ndx : min(ndx + n, length)]
 
 
 @ray.remote(memory=32 * 1024 * 1024 * 1024)

@@ -15,7 +15,7 @@ To use this code, call fit_task_loss_from_ladder_models() and fit_accuracy_from_
 Example usage is in marin/scaling_laws/scaling_laws_analysis.ipynb.
 """
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Any
 
 import matplotlib.pyplot as plt
@@ -53,10 +53,16 @@ def power_law_model(params: Sequence[float], N: np.ndarray, D: np.ndarray, use_l
 
 
 def power_law_loss(
-    params: Sequence[float], N: np.ndarray, D: np.ndarray, y: np.ndarray, use_log_space: bool, delta: float
+    params: Sequence[float],
+    N: np.ndarray,
+    D: np.ndarray,
+    y: np.ndarray,
+    use_log_space: bool,
+    delta: float,
+    reduction: Callable[[np.ndarray], float] | None = np.sum,
 ) -> float:
     """
-    Mean Huber loss for the power-law model.
+    Huber loss for the power-law model.
 
     Args:
         params: List of parameters [A, B, alpha, beta, E]
@@ -65,13 +71,14 @@ def power_law_loss(
         y: Actual loss
         use_log_space: if true, residual is set to difference of logs of actual and predicted values
         delta: huber loss delta, indicating the quadratic vs. linear loss changepoint.
+        reduction: Optional argument to change the reduction used on the Huber loss, defaults to sum based on https://arxiv.org/pdf/2404.10102v2
     """
     predictions = power_law_model(params, N, D, use_log_space)
     if use_log_space:
         residuals = np.log(y) - np.log(predictions)
     else:
         residuals = y - predictions
-    return np.mean(huber(delta, residuals))
+    return reduction(huber(delta, residuals))
 
 
 def fit_power_law(

@@ -8,20 +8,20 @@ open-web-math quality classifier.
 python marin/run/ray_run.py \
     --pip_deps 'resiliparse,fasttext,lxml,py-asciimath,tabulate,w3lib,warcio' \
     --no_wait -- \
-    python scripts/open-web-math/get_urls_and_openwebmath_scores_from_warcs.py \
+    python marin/crawl/open-web-math/get_urls_and_openwebmath_scores_from_warcs.py \
     --cc_dumps '["CC-MAIN-2022-05", "CC-MAIN-2022-21", "CC-MAIN-2022-27", "CC-MAIN-2022-33", "CC-MAIN-2022-40", "CC-MAIN-2022-49", "CC-MAIN-2023-06", "CC-MAIN-2023-14"]' \
     --num_warcs_to_sample 500 \
     --output_path gs://marin-us-central2/scratch/nfliu/urls_and_scores/open-web-math-cc/
 done
 ```
-"""
+"""  # noqa: E501
 import gzip
 import json
 import logging
 import os
 import random
 import time
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from io import BytesIO
 
 import draccus

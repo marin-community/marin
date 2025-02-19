@@ -3,7 +3,7 @@
 # Update the template or the script, not this file! #
 #####################################################
 # Unique Identifier for the Head Node + Workers
-cluster_name: marin-us-central2
+cluster_name: marin-big-run
 
 # Maximum Workers (excluding Head Node)
 max_workers: 1024
@@ -18,7 +18,7 @@ provider:
   project_id: hai-gcp-models
 
 docker:
-    image: "us-central2-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:89b461b3"
+    image: "us-central2-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:6da1c9ed"
     container_name: "ray_docker"
     pull_before_run: true
     worker_run_options:
@@ -85,7 +85,7 @@ available_node_types:
             sourceImage: projects/ubuntu-os-cloud/global/images/family/ubuntu-2204-lts
   tpu_worker:
     max_workers: 1024
-    min_workers: 4
+    min_workers: 0
     node_config:
       acceleratorType: v4-8
       runtimeVersion: tpu-ubuntu2204-base
