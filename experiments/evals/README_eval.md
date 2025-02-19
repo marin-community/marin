@@ -15,3 +15,15 @@ The list of tasks we evaluate models on is configured in [`task_configs.py`](../
 
 
 NOTE: See [`marin/evaluation/evaluators/levanter_lm_eval_evaluator.py`](../../marin/evaluation/evaluators/levanter_lm_eval_evaluator.py) for the default evaluator code. For other evaluators, including running `lm-evaluation-harness` on GPU, HELM, and Alpaca, see [`marin/evaluation/evaluators`](../../marin/evaluation/evaluators/).
+
+
+#### Evaluation Metrics
+We use a fork of `lm-evaluation-harness` (https://github.com/stanford-crfm/lm-evaluation-harness); in addition to the accuracies already tracked by `lm-evaluation-harness`, we also compute the following metrics:
+
+1. **Bits per Byte (bpb)**: `bpb = -log_prob / byte_length * ln(2)`
+
+2. **Log Probability (logprob)**: Raw log probability of the correct answer. 
+
+3. **Choice Log Probability (choice_logprob)**: `log_prob_correct - log(∑exp(log_prob_i))`
+
+4. **Choice Probability Normalized (choice_prob_norm)**: `exp(log_prob_correct/(byte_length_correct * ln(2))) / ∑exp(log_prob_i/(byte_length_i * ln(2)))`
