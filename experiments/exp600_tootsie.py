@@ -65,41 +65,35 @@ llama_8b_train_config = SimpleTrainConfig(
     lr_schedule="inv",
 )
 
+# main phase: raw dclm for 660,000 steps
+# phase 2 is divided into two subparts (lolcry):
+# more dclm out to ≈3.78e+12 tokens (740,000 total steps)
+# dolmino-ish mixture out to ≈5.28e+12 tokens (860,000 steps)
+
+TOTAL = 860_000
+DECAY_FRACTION = (860_000.0 - 740_000.0)/860_000.0
+
 
 llama_8b_train_config_phase2 = SimpleTrainConfig(
     # tpu_type="v5litepod-256",
     # node_count=2,
     tpu_type="v4-2048",
     node_count=1,
-    # train_batch_size=1024,
-    num_train_steps=1_000_000,  # using wsd-s so this doesn't really matter
-    # these hypers from Table 12 in https://arxiv.org/html/2406.11794v1#A6
-    # until step 660,000 we used: this
-    # train_batch_size=1024,
-    # learning_rate=1e-3,  # we get divergence with 2e-3
-    # weight_decay=0.05,
-    # # WSD-S
-    # cycle_length=10000,
-    # steps_per_eval=10000,
-    # steps_per_export=20000,
-    # warmup=1000,  # initial warmup
-    # # TODO: do we need rewarmup
-    # decay=0.1,  # 10% of 5000 = 500 steps
-    # lr_schedule="inv",
+    num_train_steps=TOTAL,
     # after 660,600 we changed things up:
     train_batch_size=[ScheduleStep(until=660_000, value=1024), ScheduleStep(until=-1, value=3072)],
     # LR doesn't (yet) support the schedule stuff so we just set it to the new value
     # because we're increasing the batch size, we need to increase the LR by \sqrt(ratio), which is ≈1.7x
     learning_rate=1.7e-3,
     # we're also switching to EMA because it's supposed to better than WSD-S
-    # to switch to EMA
-    decay=0.2,
+    decay=DECAY_FRACTION,
     ema_beta=0.995,
     lr_schedule="linear",
     cycle_length=None,
     allow_partial_checkpoint=True,
-    steps_per_eval=1000,
+    steps_per_eval=2000,
     steps_per_task_eval=10000,
+    steps_per_export=20000,
 )
 
 llama_8b_tootsie = dataclasses.replace(
