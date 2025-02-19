@@ -43,6 +43,7 @@ LOCATION_TO_CLI_FILE = {
     "us-west4-a": "/home/abhinavg/marin/infra/marin-us-west4.yaml",
 }
 
+
 def gather_incomplete_tpus(location):
     """Gather names of TPUs that do not have a power of 2 usage."""
     incomplete_tpus = []
@@ -54,6 +55,7 @@ def gather_incomplete_tpus(location):
                 if total & (total - 1) != 0:  # Bitwise check for power of 2
                     incomplete_tpus.append(tpu_type)
     return incomplete_tpus
+
 
 def gather_tpu_info_from_vms(location, incomplete_tpus):
     """Gather TPU information from the TPU API and log metrics."""
@@ -115,6 +117,7 @@ def gather_tpu_info_from_vms(location, incomplete_tpus):
 
     return to_log, vms_to_delete
 
+
 def gather_ray_cluster_info(location):
     """Gather Ray cluster information and log metrics."""
     compute_client = compute_v1.InstancesClient()
@@ -146,6 +149,7 @@ def gather_ray_cluster_info(location):
 
     return {f"{location}/{k}": v for k, v in ray_resources_per_cluster.items()}
 
+
 def get_ip(instance):
     """
     Returns the external IP of the instance.
@@ -156,6 +160,7 @@ def get_ip(instance):
                 return config.nat_i_p
     raise ValueError(f"Could not find external IP for instance {instance.name}")
 
+
 def is_ray_head_node(instance):
     """
     Returns whether the instance is a Ray head node.
@@ -163,12 +168,14 @@ def is_ray_head_node(instance):
     # looks like: ray-marin-eu-west4-a-head-9060241a-compute
     return "ray-" in instance.name and "-head-" in instance.name and "-compute" in instance.name
 
+
 def is_tpu_head_resource(resource_name):
     """
     Returns whether the resource is a TPU resource.
     """
     # looks like TPU-v4-64-head
     return "TPU-" in resource_name and "-head" in resource_name
+
 
 def parse_head_resource(resource_name):
     """
@@ -217,8 +224,8 @@ def scrape_ray_tpu_usage():
     """Scrape TPU usage data from Ray dashboard."""
     try:
         options = webdriver.ChromeOptions()
-        options.add_argument('--headless')
-        options.add_argument('--enable-javascript')
+        options.add_argument("--headless")
+        options.add_argument("--enable-javascript")
         driver = webdriver.Chrome(options=options)
 
         driver.get("http://localhost:8265")
@@ -236,9 +243,9 @@ def scrape_ray_tpu_usage():
             tpu_usage = {}
             for div in resource_data:
                 text = div.get_text().strip()
-                if '/' in text and 'tpu' in text:
+                if "/" in text and "tpu" in text:
                     try:
-                        used, total = text.split('/')
+                        used, total = text.split("/")
                         used = float(used.strip())
                         total = float(total.split()[0].strip())
                         tpu_usage[text.split()[-1]] = (used, total)
@@ -252,18 +259,16 @@ def scrape_ray_tpu_usage():
         print(f"Error scraping Ray dashboard: {e}")
         return {}
     finally:
-        if 'driver' in locals():
+        if "driver" in locals():
             driver.quit()
+
 
 def get_ray_tpu_usage(cli_file):
     """Get TPU usage from Ray dashboard."""
+
     def run_ray_dashboard(config_path):
         try:
-            process = subprocess.Popen(
-                ["ray", "dashboard", config_path],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE
-            )
+            process = subprocess.Popen(["ray", "dashboard", config_path], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             print(f"Started Ray dashboard with config {config_path}")
             return process
         except FileNotFoundError:
@@ -285,6 +290,7 @@ def get_ray_tpu_usage(cli_file):
     dashboard_process.wait()
 
     return tpu_usage
+
 
 def gather_all_incomplete_tpus():
     """Check for incomplete TPUs across all locations."""
@@ -314,6 +320,7 @@ def gather_all_incomplete_tpus():
 
     return incomplete_tpus
 
+
 def delete_stale_vms():
     """Delete VMs marked for deletion."""
     compute_client = tpu_v2alpha1.TpuClient()
@@ -324,6 +331,7 @@ def delete_stale_vms():
                 print(f"Deleted VM {vm}")
             except Exception as e:
                 print(f"Failed to delete VM {vm}: {e}")
+
 
 if __name__ == "__main__":
     incomplete_tpus = gather_all_incomplete_tpus()
