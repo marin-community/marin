@@ -1,8 +1,8 @@
-from collections import Counter
 import subprocess
 import sys
 import threading
 import time
+from collections import Counter
 
 import ray
 import wandb
@@ -25,7 +25,7 @@ MIN_WAIT_FOR_INCOMPLETE_TPUS = 15
 
 LOCATIONS = [
     "asia-northeast1-b",
-    "europe-west4-a", 
+    "europe-west4-a",
     "europe-west4-b",
     "us-central2-b",
     "us-east1-d",
@@ -98,7 +98,7 @@ def gather_tpu_info_from_vms(location, incomplete_tpus):
         tpu_by_generation[generation] += int(tpu_config.split("-")[-1])
 
     to_log = Counter()
-    
+
     for tpu_type, count in nodes_types_zone.items():
         to_log[f"{location}/devices/{tpu_type}"] = count
         to_log[f"devices/{tpu_type}"] = count
@@ -232,7 +232,7 @@ def scrape_ray_tpu_usage():
         if resource_section:
             resource_container = resource_section.find_parent("div").find_parent("div")
             resource_data = resource_container.find_all("div")
-            
+
             tpu_usage = {}
             for div in resource_data:
                 text = div.get_text().strip()
@@ -277,41 +277,41 @@ def get_ray_tpu_usage(cli_file):
     dashboard_thread = threading.Thread(target=lambda: dashboard_process.wait())
     dashboard_thread.daemon = True
     dashboard_thread.start()
-    
+
     time.sleep(3)
     tpu_usage = scrape_ray_tpu_usage()
 
     dashboard_process.terminate()
     dashboard_process.wait()
-    
+
     return tpu_usage
 
 def gather_all_incomplete_tpus():
     """Check for incomplete TPUs across all locations."""
     incomplete_tpus = {location: gather_incomplete_tpus(location) for location in LOCATIONS}
-    
+
     if any(incomplete_tpus.values()):
         print("Found incomplete TPUs, waiting 15 minutes to check again...")
         print("Initial incomplete TPUs:")
         for location, tpus in incomplete_tpus.items():
             if tpus:
                 print(f"{location}: {tpus}")
-        
+
         time.sleep(MIN_WAIT_FOR_INCOMPLETE_TPUS * 60)
-        
+
         incomplete_tpus_after = {}
         for location, tpus in incomplete_tpus.items():
             if tpus:
                 incomplete_tpus_after[location] = gather_incomplete_tpus(location)
-        
+
         print("\nAfter 15 minutes, still incomplete TPUs, removing:")
         for location, tpus in incomplete_tpus_after.items():
             still_incomplete = [tpu for tpu in tpus if tpu in incomplete_tpus[location]]
             if still_incomplete:
                 print(f"{location}: {still_incomplete}")
-                
+
         return incomplete_tpus_after
-    
+
     return incomplete_tpus
 
 def delete_stale_vms():
@@ -330,7 +330,7 @@ if __name__ == "__main__":
 
     all_metrics = Counter()
     all_vms_to_delete = {}
-    
+
     for location in LOCATIONS:
         metrics, vms_to_delete = gather_tpu_info_from_vms(location, incomplete_tpus[location])
         all_metrics.update(metrics)
