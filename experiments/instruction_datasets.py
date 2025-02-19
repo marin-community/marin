@@ -147,7 +147,7 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         revision="2c849df",  # The revision hash shown in the image
         wait_for_completion=True,
         metadata_columns=["source"],  # Keeping these metadata columns
-        subsets=["longalign"],
+        subsets=["all"],
         filetype="parquet",
     ),
     "PrimeIntellect/verifiable-math-problems": InstructionDatasetConfig(
