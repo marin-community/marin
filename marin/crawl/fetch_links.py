@@ -85,6 +85,7 @@ import os
 import pathlib
 import queue
 import random
+import shutil
 import tempfile
 import threading
 import time
@@ -315,6 +316,16 @@ def fetch_to_parquet(
         # Create a temporary directory for Parquet files
         with tempfile.TemporaryDirectory() as temp_dir:
             local_parquet_path = os.path.join(temp_dir, f"{shard_id}_temp_output.parquet")
+            # Check if a partially-written parquet already exists on gcloud. If so, download it.
+            if fsspec_exists(parquet_output_path):
+                logger.info(f"Parquet output path {parquet_output_path} already " "exists, downloading it locally")
+                # Open parquet_output_path with fsspec and write its contents to local_parquet_path
+                with (
+                    fsspec.open(parquet_output_path, "rb", block_size=1 * 1024 * 1024 * 1024) as remote_file,
+                    open(local_parquet_path, "wb") as local_file,
+                ):
+                    shutil.copyfileobj(remote_file, local_file)
+                logger.info(f"Downloaded file at parquet output path {parquet_output_path} to {local_parquet_path}")
             while True:
                 item = results_queue.get()
                 if item is SENTINEL:
