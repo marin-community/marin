@@ -14,3 +14,10 @@ def test_parse_pip_requirements():
         "scipy[extras1,extras2]",
         "sympy",
     ]
+    assert parse_pip_requirements(
+        "numpy==2.0.0,datatrove[io,processing] @ git+https://github.com/nelson-liu/datatrove@tqdm_loggable,scipy"
+    ) == [
+        "numpy==2.0.0",
+        "datatrove[io,processing] @ git+https://github.com/nelson-liu/datatrove@tqdm_loggable",
+        "scipy",
+    ]

@@ -31,7 +31,7 @@ Running on FineWeb-Edu:
 python marin/run/ray_run.py \
     --pip_deps 'fastparquet' \
     --no_wait -- \
-    python scripts/crawl/fetch_links.py \
+    python marin/crawl/fetch_links.py \
     --urls_input_directory gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-10M/ \
     --output_path gs://marin-us-central2/scratch/nfliu/fetched_outlinks/fineweb-edu-10M/ \
     --threads_per_shard 160 \
@@ -44,7 +44,7 @@ Running on OpenWebMath:
 python marin/run/ray_run.py \
     --pip_deps 'fastparquet' \
     --no_wait -- \
-    python scripts/crawl/fetch_links.py \
+    python marin/crawl/fetch_links.py \
     --urls_input_directory gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-10M/ \
     --output_path gs://marin-us-central2/scratch/nfliu/fetched_outlinks/open-web-math-fde8ef8-10M/ \
     --threads_per_shard 160 \
@@ -52,17 +52,17 @@ python marin/run/ray_run.py \
 ```
 """
 import io
-from copy import deepcopy
 import json
 import logging
 import os
 import pathlib
-import random
-import threading
 import queue
-import time
+import random
 import tempfile
+import threading
+import time
 from collections import Counter, defaultdict
+from copy import deepcopy
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
@@ -74,7 +74,7 @@ import ray
 import requests
 from tqdm_loggable.auto import tqdm
 
-from marin.utils import fsspec_exists, fsspec_glob, fsspec_cp
+from marin.utils import fsspec_cp, fsspec_exists, fsspec_glob
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -439,7 +439,7 @@ def fetch_to_parquet(
                             netloc_to_robots_fetch_error[netloc] = "netloc passed max number of connection errors"
                     elif not is_robots:
                         with url_to_fetch_errors_lock:
-                            url_to_fetch_errors[url] = f"netloc passed max number of connection errors"
+                            url_to_fetch_errors[url] = "netloc passed max number of connection errors"
                         # Final outcome => increment progress
                         with pbar_lock:
                             pbar.update(1)
@@ -608,8 +608,8 @@ def fetch_to_parquet(
     writer.join()
 
     logger.info(
-        f"Fetched robots for {len(netloc_to_robots)} domains, encountered {len(netloc_to_robots_fetch_error)} robots errors.\n"
-        f"Recorded {len(url_to_fetch_errors)} fetch errors."
+        f"Fetched robots for {len(netloc_to_robots)} domains, encountered {len(netloc_to_robots_fetch_error)} "
+        f"robots errors.\nRecorded {len(url_to_fetch_errors)} fetch errors."
     )
 
 
@@ -710,7 +710,7 @@ def decreasing_timeout(
 def get_shard_indices_to_process(urls_input_directory: str) -> list[int]:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     shard_indices: list[int] = [
-        int(pathlib.Path(path).name.removesuffix(".parquet").removeprefix(f"links."))
+        int(pathlib.Path(path).name.removesuffix(".parquet").removeprefix("links."))
         for path in fsspec_glob(os.path.join(urls_input_directory, "links.*.parquet"))
     ]
     shard_indices = sorted(shard_indices)
