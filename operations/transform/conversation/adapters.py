@@ -57,6 +57,10 @@ class TransformAdapter:
     system_value: str = ""
     content_key: str = ""
 
+    # If specified, the key will be used to select the message with
+    # best metric in multiple turn conversations
+    filter_on_key: str = ""
+
     def transform_conversation_to_openai_format(
         self,
         row: dict[str, Any],
@@ -65,6 +69,17 @@ class TransformAdapter:
             messages = []
             instruction = row[self.instruction_column]
             response = row[self.response_column]
+
+            if self.filter_on_key:
+                best_completion = None
+                best_metric = -float("inf")  # TODO: Make this a config
+
+                for completion in response:
+                    if completion[self.filter_on_key] > best_metric:
+                        best_metric = completion[self.filter_on_key]
+                        best_completion = completion
+                response = best_completion[self.content_key]
+
             messages.append(OpenAIChatMessage(role="user", content=instruction))
             messages.append(OpenAIChatMessage(role="assistant", content=response))
             return messages
@@ -163,9 +178,33 @@ register_adapter(
 
 register_adapter(
     TransformAdapter(
+        source="open-r1/OpenThoughts-114k-math",
+        dataset_format=InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN,
+        conversation_column="messages",
+        role_key="role",
+        user_value="user",
+        assistant_value="assistant",
+        system_value="system",
+        content_key="content",
+    )
+)
+
+register_adapter(
+    TransformAdapter(
         source="openbmb/UltraInteract_sft",
         dataset_format=InputDatasetFormat.INSTRUCTION_RESPONSE,
         instruction_column="instruction",
         response_column="response",
+    )
+)
+
+register_adapter(
+    TransformAdapter(
+        source="TIGER-Lab/AceCode-89K",
+        dataset_format=InputDatasetFormat.INSTRUCTION_RESPONSE,
+        instruction_column="question",
+        response_column="inferences",
+        filter_on_key="pass_rate",
+        content_key="completion",
     )
 )
