@@ -1,3 +1,10 @@
+"""An experiment to cooldown a 8B model on a 30/70 mixture of high-quality sources and DCLM.
+
+This is our initial guess of a good cooldown mixture dataset which is similar to the Olmo-2
+cooldown dataset, but swapping their synthetic math datasets with finemath, and using different
+wiki/pes2o/stackexchange splits from Dolma instead of Dolmino.
+"""
+
 from experiments.anneal_config import AnnealConfig
 from experiments.defaults import default_anneal
 from experiments.dolma.tokenize_dolma import tokenize_dolma_steps
@@ -73,5 +80,5 @@ if __name__ == "__main__":
         steps=[
             annealed_model,
         ],
-        description="Train 8B model on DCLM using WSD-S.",
+        description="Cooldown the model for Phase 2 using a 30/70 mixture of high-quality sources and DCLM.",
     )
