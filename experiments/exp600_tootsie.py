@@ -12,15 +12,15 @@ For now, we're training on DCLM's best mix, but that will change.
 
 import dataclasses
 
-from experiments.cooldown_anneal import dolmino_dclm
-from experiments.dolma.tokenize_dolma import tokenize_dolma_steps
-from experiments.exp72_baselines import fineweb_edu_tokenized
-from experiments.midtraining_datasets import finemath_3_plus_tokenized
 from levanter.schedule import ScheduleStep
 
+from experiments.cooldown_anneal import dolmino_dclm
 from experiments.dclm.tokenize_dclm import DCLM_MIXTURE_WEIGHTS, dclm_mixture_config_llama3
 from experiments.defaults import default_tokenize, default_train
+from experiments.dolma.tokenize_dolma import tokenize_dolma_steps
+from experiments.exp72_baselines import fineweb_edu_tokenized
 from experiments.llama import llama3_tokenizer, llama_8b
+from experiments.midtraining_datasets import finemath_3_plus_tokenized
 from experiments.pretraining_datasets import dclm_baseline_wrong, proofpile_2, starcoderdata
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import executor_main
@@ -115,9 +115,7 @@ llama_8b_tootsie = dataclasses.replace(
 
 
 # phase 2 data is a variant of the dolmino mix
-phase_2_tokenized = {
-    **dclm_mixture_config_llama3
-}
+phase_2_tokenized = {**dclm_mixture_config_llama3}
 
 dolma_splits = [
     "dolma/algebraic-stack",
@@ -151,19 +149,18 @@ high_quality_token_counts = {
 
 total_high_quality_token_count = sum(high_quality_token_counts.values())
 # total HQ token count is ≈ 161.7B
-# we're training for 1.5T tokens or so.
+# we're training for 1T tokens or so.
 # we'd like to keep the HQ data to ≈2 epochs
 
 HQ_WEIGHT = 30.0
 
-# https://docs.google.com/spreadsheets/d/1hsvqvp4SZELehm5EBsW65VHO0fAywXYFOwaI1rZmzt8/edit?gid=0#gid=0
 # dolmino dclm is about 700B tokens (llama 3)
-# fineweb edu is ~1.1T tokens (llama 3), but lower quality
+# fineweb edu is ~1.1T tokens (llama 3), but lower quality so skip
 # starcoder we've seen, but I don't want to exclude all coding from the final mix
 
 web_counts = {
     "dolmino_dclm": 700.0 * 1.0,
-    "fineweb_edu": 1100 * 0.05,
+    # "fineweb_edu": 1100 * 0.05,
     "starcoderdata": 230.0 * 0.1,
 }
 
@@ -176,10 +173,7 @@ cooldown_mixture_weights = {
         dataset: HQ_WEIGHT * token_count / total_high_quality_token_count
         for dataset, token_count in high_quality_token_counts.items()
     },
-    **{
-        dataset: (1.0 - HQ_WEIGHT) * token_count / total_web_token_count
-        for dataset, token_count in web_counts.items()
-    },
+    **{dataset: (1.0 - HQ_WEIGHT) * token_count / total_web_token_count for dataset, token_count in web_counts.items()},
 }
 
 phase_2_data_mixture = lm_varying_mixture_data_config(
