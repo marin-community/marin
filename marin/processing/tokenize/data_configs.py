@@ -12,12 +12,12 @@ TokenizerStep = ExecutorStep[TokenizeConfig]
 logger = logging.getLogger(__name__)
 
 
-def step_to_lm_mixture_component(step: TokenizerStep) -> LMDatasetSourceConfig:
+def step_to_lm_mixture_component(step: TokenizerStep, include_raw_paths: bool) -> LMDatasetSourceConfig:
     """
     Converts a tokenizer step to a Levanter dataset source config. This is useful for creating
     data mixture configs.
     """
-    return step.config.as_lm_dataset_source_config(output_path_of(step))
+    return step.config.as_lm_dataset_source_config(output_path_of(step), include_raw_paths=include_raw_paths)
 
 
 def lm_data_config(
@@ -59,6 +59,7 @@ def lm_mixture_data_config(
     *,
     shuffle: bool | int = True,
     missing_weights_are_validation: bool = True,
+    include_raw_paths: bool = True,
 ) -> LMMixtureDatasetConfig:
     """
     Creates a training config from a mixture of datasources.
@@ -68,8 +69,12 @@ def lm_mixture_data_config(
         weights: dict from names of datasets to their weights.
         shuffle: shuffling policy. int means era shuffling (~shuffle buffer).
         missing_weights_are_validation: whether to pad out missing weights with 0's, indicating validation-only sets
+        include_raw_paths: whether to include raw paths in the dataset config. This is mostly for logging purposes.
     """
-    configs = {name: step_to_lm_mixture_component(step) for name, step in components.items()}
+    configs = {
+        name: step_to_lm_mixture_component(step, include_raw_paths=include_raw_paths)
+        for name, step in components.items()
+    }
 
     if missing_weights_are_validation:
         missing_keys = {k: 0.0 for k in components if k not in weights}

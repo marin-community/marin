@@ -55,7 +55,6 @@ def _impute_model_config(config):
         if config.model_path is None:
             raise ValueError("model_name or model_path must be provided")
 
-        model_path = config.model_path
         if config.discover_latest_checkpoint:
             model_path = discover_hf_checkpoints(model_path)[-1]
 
