@@ -17,7 +17,7 @@ Deduplicating fineweb-edu-10M-passing against fineweb-edu:
 
 ```
 python marin/run/ray_run.py \
-    --pip_deps 'datatrove[io] @ git+https://github.com/nelson-liu/datatrove@ray_executor_dedup_logging,spacy,cupy-cuda12x==13.3.0,orjson' \
+    --pip_deps 'datatrove[io] @ git+https://github.com/nelson-liu/datatrove@ray_executor_dedup_logging,spacy,cupy-cuda12x==13.3.0,orjson,scipy==1.13.1' \
     --no_wait -- \
     python marin/crawl/minhash/deduplicate_against_index.py \
     --index_path 'gs://marin-us-central2/scratch/nfliu/minhash/fineweb_edu_minhash_index/index' \
@@ -37,7 +37,7 @@ Deduplicating open-web-math-10M-passing against open-web-math:
 
 ```
 python marin/run/ray_run.py \
-    --pip_deps 'datatrove[io] @ git+https://github.com/nelson-liu/datatrove@ray_executor_dedup_logging,spacy,cupy-cuda12x==13.3.0,orjson' \
+    --pip_deps 'datatrove[io] @ git+https://github.com/nelson-liu/datatrove@ray_executor_dedup_logging,spacy,cupy-cuda12x==13.3.0,orjson,scipy==1.13.1' \
     --no_wait -- \
     python marin/crawl/minhash/deduplicate_against_index.py \
     --index_path 'gs://marin-us-central2/scratch/nfliu/minhash/open_web_math_minhash_index/index' \
@@ -57,7 +57,7 @@ Deduplicating open-web-math-10M-cc-deduplicated-passing against open-web-math:
 
 ```
 python marin/run/ray_run.py \
-    --pip_deps 'datatrove[io] @ git+https://github.com/nelson-liu/datatrove@ray_executor_dedup_logging,spacy,cupy-cuda12x==13.3.0,orjson' \
+    --pip_deps 'datatrove[io] @ git+https://github.com/nelson-liu/datatrove@ray_executor_dedup_logging,spacy,cupy-cuda12x==13.3.0,orjson,scipy==1.13.1' \
     --no_wait -- \
     python marin/crawl/minhash/deduplicate_against_index.py \
     --index_path 'gs://marin-us-central2/scratch/nfliu/minhash/open_web_math_minhash_index/index' \
@@ -72,8 +72,6 @@ gcloud storage mv gs://marin-us-central2/scratch/nfliu/minhash/open_web_math_10M
 gcloud storage rm --recursive gs://marin-us-central2/scratch/nfliu/minhash/open_web_math_10M_cc_deduplicated_passing_minhash_against_open_web_math
 gcloud storage rm --recursive gs://marin-us-central2/scratch/nfliu/minhash/open_web_math_10M_cc_deduplicated_passing_minhash_against_open_web_math_logs
 ```
-
-
 """  # noqa: E501
 import logging
 from dataclasses import dataclass
