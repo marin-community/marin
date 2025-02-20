@@ -134,7 +134,7 @@ def index_for_minhash_deduplication(
         doc_progress=True,
         adapter=str_metadata_adapter,
     )
-    TOTAL_TASKS = 1000
+    TOTAL_TASKS = 2000
     NUM_WORKERS = 1000
 
     # stage 1 computes minhash signatures for each task (each task gets a set of files)
