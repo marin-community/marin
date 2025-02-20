@@ -20,7 +20,7 @@ DOCKER_TAGS = {
     # NB: different naming convention because we have two zones in europe-west4
     "europe-west4-a": "6da1c9ed",
     "asia-northeast1": "6da1c9ed",
-    "marin-us-east5-b-vllm": "2be05a50",
+    "marin-us-east5-b-vllm": "a42be736",
 }
 
 configs = {

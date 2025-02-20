@@ -12,13 +12,6 @@ def _mp_fn(rank):
     # runtime_env={"pip": "experiments/test_xla_infer_requirements.txt"},
 )
 def run_on_tpu():
-    import subprocess
-
-    # Run pip list command and capture output
-    result = subprocess.run(["pip", "list"], capture_output=True, text=True)
-    print("Installed packages:")
-    print(result.stdout)
-
     xmp.spawn(_mp_fn)
 
 

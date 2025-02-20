@@ -5,12 +5,21 @@ FROM vllm/vllm-tpu:e92694b6fe264a85371317295bca6643508034ef
 # RUN sudo apt-get update && sudo apt-get install -y clang curl g++ vim libpython3.11 libpython3.11-dev docker.io cmake
 
 # Setup gcsfuse
-RUN apt-get update && apt-get install lsb-release -y
+RUN apt-get update && apt-get install lsb-release rsync docker.io -y
+RUN usermod -aG docker $(whoami)
+
 RUN export GCSFUSE_REPO=gcsfuse-`lsb_release -c -s` && echo "deb https://packages.cloud.google.com/apt $GCSFUSE_REPO main" | tee /etc/apt/sources.list.d/gcsfuse.list
 RUN curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | apt-key add -
 RUN apt-get update && apt-get install fuse gcsfuse -y
 RUN mkdir /opt/gcsfuse_mount
 RUN chown -R $(whoami) /opt/gcsfuse_mount
+
+# google cloud cli
+# Install the Google Cloud SDK
+# Update the PATH environment variable
+# Verify the installation
+RUN curl -sSL https://sdk.cloud.google.com > /tmp/gcl && \
+    bash /tmp/gcl --install-dir=/root/gcloud --disable-prompts
 
 # Ray uses conda
 # ENV PATH=/home/ray/anaconda3/bin:/home/ray/anaconda3/bin:/home/ray/anaconda3/condabin:$PATH
@@ -47,11 +56,11 @@ RUN mkdir -p /opt/lm_eval && chown -R $(whoami) /opt/lm_eval && cd /opt/lm_eval 
 # outputs a noisy warning because it doesn't include version information.
 ENV LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/lib/x86_64-linux-gnu/
 ENV LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/home/ray/anaconda3/lib
-ENV PATH=$PATH:/home/ray/anaconda3/bin
+# ENV PATH=$PATH:/home/ray/anaconda3/bin
+ENV PATH=$PATH:/root/gcloud/google-cloud-sdk/bin
 
 # to run docker containers, we need to be in the docker group
-RUN apt-get install docker.io -y
-RUN usermod -aG docker $(whoami)
+# RUN apt-get install docker.io -y
 
 # RUN sudo apt-get update && sudo apt-get install -y podman
 
