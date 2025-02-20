@@ -25,10 +25,18 @@ class InputDatasetFormat(str, Enum):
     | "What is the capital of France?"     | "Paris"  |
     | "What is 2 + 2?"                     |   "4"    |
 
+    INSTRUCT_COLUMN_RESPONSE example:
+    In the huggingface dataset, there exists a question column and a responses column with a list
+    containing a single dictionary with model name and response.
+    |             Question              |                 Responses                |
+    | --------------------------------- | ---------------------------------------- |
+    | "What is 2 + 2?"                 | [{"response_model": "Model-X",           |
+    |                                   |   "response": "The answer is 4"}]       |
     """
 
     SINGLE_COLUMN_MULTI_TURN: str = "messages"
     INSTRUCTION_RESPONSE: str = "instruction_response"
+    INSTRUCT_COLUMN_RESPONSE: str = "instruct_column_response"
 
 
 @dataclass
@@ -94,6 +102,18 @@ class TransformAdapter:
             for conv in conversation:
                 role = role_to_openai_role[conv[self.role_key]]
                 messages.append(OpenAIChatMessage(role=role, content=conv[self.content_key]))
+            return messages
+        elif self.dataset_format == InputDatasetFormat.INSTRUCT_COLUMN_RESPONSE:
+            messages = []
+            instruction = row[self.instruction_column]
+            responses = row[self.response_column]
+
+            # Get the first (and only) response from the list
+            response_dict = responses[0]
+            response_content = response_dict[self.content_key]
+
+            messages.append(OpenAIChatMessage(role="user", content=instruction))
+            messages.append(OpenAIChatMessage(role="assistant", content=response_content))
             return messages
         else:
             raise ValueError(f"Invalid dataset format: {self.dataset_format}")
@@ -206,5 +226,66 @@ register_adapter(
         response_column="inferences",
         filter_on_key="pass_rate",
         content_key="completion",
+    )
+)
+
+# Define adapter (parser) for dataset
+register_adapter(
+    TransformAdapter(
+        source="cognitivecomputations/dolphin-r1",
+        dataset_format=InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN,
+        conversation_column="messages",
+        role_key="role",
+        user_value="user",
+        assistant_value="assistant",
+        system_value="system",
+        content_key="content",
+    )
+)
+
+# Define adapter (parser) for dataset
+register_adapter(
+    TransformAdapter(
+        source="bespokelabs/Bespoke-Stratos-17k",
+        dataset_format=InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN,
+        instruction_column="system",
+        conversation_column="conversations",
+        role_key="from",
+        user_value="user",
+        assistant_value="assistant",
+        content_key="value",
+    )
+)
+
+register_adapter(
+    TransformAdapter(
+        source="HuggingFaceTB/smoltalk",
+        dataset_format=InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN,
+        conversation_column="messages",
+        role_key="role",
+        user_value="user",
+        assistant_value="assistant",
+        system_value="system",
+        content_key="content",
+    )
+)
+
+register_adapter(
+    TransformAdapter(
+        source="PrimeIntellect/verifiable-math-problems",
+        dataset_format=InputDatasetFormat.INSTRUCTION_RESPONSE,
+        instruction_column="prompt",
+        response_column="gold_standard_solution",
+    )
+)
+
+
+register_adapter(
+    TransformAdapter(
+        source="facebook/natural_reasoning",
+        dataset_format=InputDatasetFormat.INSTRUCT_COLUMN_RESPONSE,
+        instruction_column="question",
+        response_column="responses",
+        content_key="response",
     )
 )
