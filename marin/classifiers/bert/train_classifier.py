@@ -7,6 +7,7 @@ import evaluate
 import fsspec
 import numpy as np
 import torch
+import torch_xla.distributed.xla_multiprocessing as xmp
 from sklearn.metrics import classification_report, confusion_matrix
 from transformers import AutoModelForSequenceClassification, AutoTokenizer, Trainer, TrainingArguments, set_seed
 
@@ -111,10 +112,9 @@ def train_classifier(rank: int, args: ScriptArguments):
     )
     trainer.train()
 
-    trainer.save_model(args.output_dir)
+    if rank == 0:
+        trainer.save_model(args.output_dir)
 
 
-# def train_classifier_distributed(args: ScriptArguments):
-#     import torch_xla.distributed.xla_multiprocessing as xmp
-
-#     xmp.spawn(train_classifier, args=(args,), start_method="fork")
+def train_classifier_distributed(args: ScriptArguments):
+    xmp.spawn(train_classifier, args=(args,))

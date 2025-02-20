@@ -2,8 +2,7 @@ import ray
 
 from marin.classifiers.bert.train_classifier import (
     ScriptArguments,
-    # train_classifier_distributed,
-    train_classifier,
+    train_classifier_distributed,
 )
 
 # from experiments.medu_inference import medu_inference
@@ -50,7 +49,7 @@ from marin.classifiers.bert.train_classifier import (
 # )
 
 
-NUM_TPU_DEVICES = 1
+NUM_TPU_DEVICES = 8
 TPU_TYPE = "v6e-8"
 
 
@@ -59,11 +58,11 @@ TPU_TYPE = "v6e-8"
 def train_classifier_tpu():
     import os
 
-    output_dir = "/opt/gcsfuse_mount/economic-bert-large"
+    output_dir = "/opt/gcsfuse_mount/economic-bert-large-8"
     os.makedirs(output_dir, exist_ok=True)
 
-    train_classifier(
-        rank=0,
+    train_classifier_distributed(
+        # rank=0,
         args=ScriptArguments(
             train_dataset="gs://marin-us-east5/documents/fineweb-economics-llama-70b-annotations-sampled-ee7616",
             num_labels=1,
@@ -76,7 +75,7 @@ def train_classifier_tpu():
             report_to="wandb",
             logging_steps=1,
             max_length=512,  # TODO(CHRIS): Can change later
-            # tpu_num_cores=NUM_TPU_DEVICES,
+            tpu_num_cores=NUM_TPU_DEVICES,
             eval_steps=1000,
             eval_strategy="steps",
             save_strategy="steps",
