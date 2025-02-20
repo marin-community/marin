@@ -67,7 +67,7 @@ python marin/run/ray_run.py \
     --minhash_logs_path 'gs://marin-us-central2/scratch/nfliu/minhash/open_web_math_10M_cc_deduplicated_passing_minhash_against_open_web_math_logs'
 
 # Move the deduplicated content
-gcloud storage mv gs://marin-us-central2/scratch/nfliu/minhash/open_web_math_10M_cc_deduplicated_passing_minhash_against_open_web_math/deduplicated_output/* gs://marin-us-central2/scratch/nfliu/text/open_web_math_10M_passing_minhash_against_open_web_math/
+gcloud storage mv gs://marin-us-central2/scratch/nfliu/minhash/open_web_math_10M_cc_deduplicated_passing_minhash_against_open_web_math/deduplicated_output/* gs://marin-us-central2/scratch/nfliu/text/open_web_math_10M_cc_deduplicated_passing_minhash_against_open_web_math/
 # Remove the logs and intermediate output
 gcloud storage rm --recursive gs://marin-us-central2/scratch/nfliu/minhash/open_web_math_10M_cc_deduplicated_passing_minhash_against_open_web_math
 gcloud storage rm --recursive gs://marin-us-central2/scratch/nfliu/minhash/open_web_math_10M_cc_deduplicated_passing_minhash_against_open_web_math_logs
