@@ -16,8 +16,7 @@ from marin.processing.tokenize.tokenize import TokenizeConfig, levanter_tokenize
 from marin.training.training import TrainSFTOnPodConfig, run_levanter_sft
 
 # Get instruction dataset
-synthetic_instruction_dataset = get_instruction_dataset(
-    "sherryy/tulu-3-sft-personas-instruction-following-expanded")
+synthetic_instruction_dataset = get_instruction_dataset("sherryy/tulu-3-sft-personas-instruction-following-expanded")
 
 # TODO: tune this for a good number of steps
 NUM_TRAIN_STEPS = 2500
@@ -49,7 +48,8 @@ tulu3_sft_8b_synthetic_instruction_model = ExecutorStep(
         chat_train_urls=[output_path_of(synthetic_instruction_dataset, "**/*.jsonl.gz")],
         supervised_data=LMSupervisedDatasetConfig(
             cache_dir=output_path_of(synthetic_instruction_llama_tokenize_step),
-            input_field="user", output_field="assistant"
+            input_field="user",
+            output_field="assistant",
         ),
         initialize_from_hf=False,
         model_name_or_path="meta-llama/Llama-3.1-8B",
