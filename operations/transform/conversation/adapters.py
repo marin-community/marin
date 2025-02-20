@@ -211,6 +211,19 @@ register_adapter(
 
 register_adapter(
     TransformAdapter(
+        source="sherryy/tulu-3-sft-personas-instruction-following-expanded",
+        dataset_format=InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN,
+        conversation_column="messages",
+        role_key="role",
+        user_value="user",
+        assistant_value="assistant",
+        system_value="system",
+        content_key="content",
+    )
+)
+
+register_adapter(
+    TransformAdapter(
         source="openbmb/UltraInteract_sft",
         dataset_format=InputDatasetFormat.INSTRUCTION_RESPONSE,
         instruction_column="instruction",
