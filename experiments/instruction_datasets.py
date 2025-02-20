@@ -157,6 +157,13 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         metadata_columns=["source", "task_type", "problem_id"],  # Keeping these metadata columns
         filetype="parquet",
     ),
+    "sherryy/tulu-3-sft-personas-instruction-following-expanded": InstructionDatasetConfig(
+        hf_dataset_id="sherryy/tulu-3-sft-personas-instruction-following-expanded",
+        revision="79ab2c4",  # The revision hash shown in the image
+        wait_for_completion=True,
+        metadata_columns=["dataset", "id"],  # Keeping these metadata columns
+        filetype="parquet",
+    ),
     "facebook/natural_reasoning": InstructionDatasetConfig(
         hf_dataset_id="facebook/natural_reasoning",
         revision="main",  # You might want to pin this to a specific commit hash later
