@@ -32,6 +32,19 @@ MMLU_TASKS = (
 
 CORE_TASKS_PLUS_MMLU = CORE_TASKS + MMLU_TASKS
 
+KEY_GENERATION_TASKS = (
+    EvalTaskConfig(name="ifeval", num_fewshot=0),
+    EvalTaskConfig(name="gsm8k_cot", num_fewshot=8),
+    EvalTaskConfig(name="drop", num_fewshot=0),
+    # NOTE(Chris): Should we use pass@1 (default) or pass@10?
+    EvalTaskConfig(name="humaneval", num_fewshot=0),
+)
+
+KEY_MULTIPLE_CHOICE_TASKS = (
+    EvalTaskConfig("mmlu", 0, task_alias="mmlu_0shot"),
+    EvalTaskConfig("mmlu", 5, task_alias="mmlu_5shot"),
+)
+
 
 def convert_to_levanter_task_config(tasks: Sequence[EvalTaskConfig]) -> list[TaskConfig]:
     """
