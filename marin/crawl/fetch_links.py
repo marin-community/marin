@@ -318,7 +318,7 @@ def fetch_to_parquet(
             local_parquet_path = os.path.join(temp_dir, f"{shard_id}_temp_output.parquet")
             # Check if a partially-written parquet already exists on gcloud. If so, download it.
             if fsspec_exists(parquet_output_path):
-                logger.info(f"Parquet output path {parquet_output_path} already " "exists, downloading it locally")
+                logger.info(f"Parquet output path {parquet_output_path} already exists, downloading it locally")
                 # Open parquet_output_path with fsspec and write its contents to local_parquet_path
                 with (
                     fsspec.open(parquet_output_path, "rb", block_size=1 * 1024 * 1024 * 1024) as remote_file,
