@@ -105,7 +105,7 @@ def process_file(input_file_path: str, output_path: str, extract_method: str, ex
                 row = json.loads(line)
 
                 try:
-                    filtered_html = clean_html(row["content"].decode("utf-8"), remove_reference_section)
+                    filtered_html = clean_html(row["content"], remove_reference_section)
                     result = convert_page(filtered_html, extract_method=extract_method, config=extract_config)
                     if remove_reference_section:
                         result["content"] = re.sub(r'\\\[(?:\d+(?:,\s*\d+)*)\\\]', '', result["content"])
@@ -135,7 +135,7 @@ def process_ar5iv_dump(cfg: Ar5ivExtractionConfig) -> None:
     files = fsspec_glob(f"{cfg.input_path}/*.jsonl.gz")
 
     result_refs = []
-    MAX_CONCURRENT_WORKERS = 15
+    MAX_CONCURRENT_WORKERS = 200
 
     for file in files:
         if len(result_refs) > MAX_CONCURRENT_WORKERS:
