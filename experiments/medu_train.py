@@ -1,9 +1,11 @@
 import ray
 
 from marin.classifiers.bert.train_classifier import (
-    ScriptArguments,
+    HFTrainingConfig,
     train_classifier_distributed,
 )
+
+# from marin.classifiers.bert.basics import test_distribution
 
 # from experiments.medu_inference import medu_inference
 
@@ -54,7 +56,8 @@ TPU_TYPE = "v6e-8"
 
 
 # NOTE(chris): BTW NEED PIP_DEPS accelerate>=0.26.0 set in the commandline
-@ray.remote(resources={"TPU": NUM_TPU_DEVICES, f"TPU-{TPU_TYPE}-head": 1}, runtime_env={"pip": ["accelerate>=0.26.0"]})
+# @ray.remote(resources={"TPU": NUM_TPU_DEVICES, f"TPU-{TPU_TYPE}-head": 1}, runtime_env={"pip": ["accelerate>=0.26.0"]})
+@ray.remote(resources={"TPU": NUM_TPU_DEVICES, f"TPU-{TPU_TYPE}-head": 1})
 def train_classifier_tpu():
     import os
 
@@ -63,26 +66,34 @@ def train_classifier_tpu():
 
     train_classifier_distributed(
         # rank=0,
-        args=ScriptArguments(
+        # args=ScriptArguments(
+        #     train_dataset="gs://marin-us-east5/documents/fineweb-economics-llama-70b-annotations-sampled-ee7616",
+        #     num_labels=1,
+        #     target_column="label",
+        #     # TODO(chris): change later
+        #     output_dir=output_dir,
+        #     remove_unused_columns=False,
+        #     per_device_train_batch_size=8,
+        #     gradient_accumulation_steps=16,
+        #     report_to="wandb",
+        #     logging_steps=1,
+        #     max_length=512,  # TODO(CHRIS): Can change later
+        #     tpu_num_cores=NUM_TPU_DEVICES,
+        #     eval_steps=1000,
+        #     eval_strategy="steps",
+        #     save_strategy="steps",
+        #     save_steps=1000,
+        #     load_best_model_at_end=True,
+        #     metric_for_best_model="f1_macro",
+        #     greater_is_better=True,
+        # ),
+        args=HFTrainingConfig(
             train_dataset="gs://marin-us-east5/documents/fineweb-economics-llama-70b-annotations-sampled-ee7616",
             num_labels=1,
             target_column="label",
-            # TODO(chris): change later
             output_dir=output_dir,
-            remove_unused_columns=False,
-            per_device_train_batch_size=8,
-            gradient_accumulation_steps=16,
-            report_to="wandb",
-            logging_steps=1,
-            max_length=512,  # TODO(CHRIS): Can change later
             tpu_num_cores=NUM_TPU_DEVICES,
-            eval_steps=1000,
-            eval_strategy="steps",
-            save_strategy="steps",
-            save_steps=1000,
-            load_best_model_at_end=True,
-            metric_for_best_model="f1_macro",
-            greater_is_better=True,
+            max_length=512,
         ),
     )
 

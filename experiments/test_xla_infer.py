@@ -9,7 +9,6 @@ def _mp_fn(rank):
 @ray.remote(
     num_cpus=10,
     resources={"TPU": 8, "TPU-v6e-8-head": 1},
-    # runtime_env={"pip": "experiments/test_xla_infer_requirements.txt"},
 )
 def run_on_tpu():
     xmp.spawn(_mp_fn)

@@ -2,7 +2,7 @@ import ray
 
 from marin.processing.classification.classifier import AutoClassifier
 
-MODEL_PATH = "/opt/gcsfuse_mount/economic-bert"
+MODEL_PATH = "/opt/gcsfuse_mount/economic-bert-large-8/checkpoint-651"
 
 
 @ray.remote(resources={"TPU": 1, "TPU-v6e-8-head": 1})
