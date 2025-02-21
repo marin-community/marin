@@ -24,6 +24,18 @@ python marin/run/ray_run.py \
     --output_path gs://marin-us-central2/scratch/nfliu/fetched_outlinks/open-web-math-fde8ef8-10M-cc-deduplicated/
 ```
 
+Running on fineweb-edu-10M (cc deduplicated):
+
+```
+python marin/run/ray_run.py \
+    --pip_deps 'warcio' \
+    --no_wait -- \
+    python marin/crawl/convert_responses_parquet_to_warc.py \
+    --input_directory gs://marin-us-central2/scratch/nfliu/fetched_outlinks/fineweb-edu-10M-cc-deduplicated/ \
+    --output_path gs://marin-us-central2/scratch/nfliu/fetched_outlinks/fineweb-edu-10M-cc-deduplicated/
+```
+
+
 After converting to WARC, you may want to delete the parquets with fetched responses
 to conserve GCS space.
 """
