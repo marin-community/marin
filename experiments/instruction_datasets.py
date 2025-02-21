@@ -17,7 +17,7 @@ Current datasets:
 5. allenai/tulu-v2-sft-mixture-olmo-4096
 6. allenai/tulu-3-sft-mixture
 7. TIGER-Lab/AceCode-89K
-8. cognitivecomputations/dolphin-r1 (non-reasoning)
+8. cognitivecomputations/dolphin-r1
 9. open-r1/OpenThoughts-114k-math
 10. bespokelabs/Bespoke-Stratos-17k
 11. HuggingFaceTB/smoltalk
