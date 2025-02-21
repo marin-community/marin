@@ -21,6 +21,7 @@ from marin.schemas.web.convert import ExtractionConfig
 from marin.utils import fsspec_glob
 from marin.web.convert import convert_page
 from scripts.ar5iv.transform import (
+    clean_li,
     linelisting_to_newline,
     remove_ar5iv_footer,
     remove_authors,
@@ -33,7 +34,6 @@ from scripts.ar5iv.transform import (
     remove_title_page,
     transform_abstract,
     unwrap_eqn,
-    clean_li,
 )
 
 logger = logging.getLogger("ray")
