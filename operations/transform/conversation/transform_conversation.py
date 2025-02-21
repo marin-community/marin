@@ -75,10 +75,10 @@ def generate_hash_from_messages(messages: list[dict[str, str]]) -> str:
 
 def transform_row(row: dict, cfg: TransformSFTDatasetConfig, adapter: TransformAdapter):
     transformed_row_messages: list[OpenAIChatMessage] = adapter.transform_conversation_to_openai_format(row)
-    
+
     if transformed_row_messages is None:
         return None
-    
+
     transformed_row_messages = [message.model_dump() for message in transformed_row_messages]
 
     # Create a unique ID for the row based on the text
