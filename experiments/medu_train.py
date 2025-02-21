@@ -61,7 +61,7 @@ TPU_TYPE = "v6e-8"
 def train_classifier_tpu():
     import os
 
-    output_dir = "/opt/gcsfuse_mount/economic-bert-large-8"
+    output_dir = "/opt/gcsfuse_mount/economic-bert-large-test"
     os.makedirs(output_dir, exist_ok=True)
 
     train_classifier_distributed(

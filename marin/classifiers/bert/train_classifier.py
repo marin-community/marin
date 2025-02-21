@@ -147,10 +147,14 @@ def train_classifier(rank: int, hf_script_args: HFTrainingConfig, train_dataset,
     trainer.train()
 
     if rank == 0:
-        trainer.save_model(args.output_dir)
+        # NOTE(chris): Cannot run trainer.save_model() because the model is located on the TPU
+        # This will lead to a RuntimeError and hang the program without us knowing why.
+        model.cpu().save_pretrained(os.path.join(args.output_dir, "final"))
+        tokenizer.save_pretrained(os.path.join(args.output_dir, "final"))
 
 
 def train_classifier_distributed(args: ScriptArguments):
     dataset = load_dataset(args.train_dataset, "train")
+    dataset = dataset.take(1024)
     dataset = dataset.train_test_split(train_size=0.9, seed=42)
     xmp.spawn(train_classifier, args=(args, dataset["train"], dataset["test"]))
