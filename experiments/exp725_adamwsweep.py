@@ -9,7 +9,7 @@ import ray
 from levanter.models.llama import LlamaConfig
 
 from experiments.defaults import default_train
-from experiments.exp600_tootsie import dclm_mixture_config_llama3
+from experiments.exp600_tootsie import dclm_mixture_config_llama3_wrong
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import ExecutorStep, executor_main, unwrap_versioned_value, versioned
 
@@ -214,7 +214,7 @@ for model_scale in ["100m", "500m"]:
             prefix=f"sweep-725-{model_scale}-{step // 1000}k",
             model_config=llamas[model_scale],
             train_configs=train_configs,
-            tokenized_data=dclm_mixture_config_llama3,
+            tokenized_data=dclm_mixture_config_llama3_wrong,
             tags=("llama", model_scale, "725_adamw_sweep", "dclm", f"{step // 1000}k"),
         )
 
