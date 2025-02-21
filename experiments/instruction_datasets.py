@@ -56,8 +56,8 @@ class InstructionDatasetConfig:
         subsets: Data subsets (from HuggingFace config) to use. Empty list indicates to use all/default subset(s).
         splits: Data splits (e.g., `train`, `validation`) to use. Empty list indicates to use all splits.
                 Defaults to `train` only
-        legacy: True uses the Marin function as dataloader. False uses the `datasets` package as dataloader. [To be removed]
-        adapter_name: Nmae of the adapter. None indicates that the adapater name is the same as the `hf_dataset_id`
+        legacy: True uses the Marin function as dataloader. False uses the `datasets` package as dataloader.
+        adapter_name: Nmae of the adapter. None indicates that the adapater name is the same as the `hf_dataset_id`.
     """
 
     hf_dataset_id: str
@@ -123,13 +123,13 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
     ),
     "cognitivecomputations/dolphin-r1-nonreasoning": InstructionDatasetConfig(
         hf_dataset_id="cognitivecomputations/dolphin-r1",
-        subsets=["nonreasoning"], # "reasoning-deepseek" & "reasoning-flash" are omitted
+        subsets=["nonreasoning"],  # "reasoning-deepseek" & "reasoning-flash" are omitted
         revision="f6ac651",  # The revision hash shown in the image
         wait_for_completion=True,
         metadata_columns=["score", "refusal", "compliance_rating", "overall_quality"],
         splits=["train"],
         filetype="jsonl",
-        adapter_name = 'cognitivecomputations/dolphin-r1-nonreasoning',
+        adapter_name="cognitivecomputations/dolphin-r1-nonreasoning",
     ),
     "cognitivecomputations/dolphin-r1-reasoning": InstructionDatasetConfig(
         hf_dataset_id="cognitivecomputations/dolphin-r1",
@@ -139,7 +139,7 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         metadata_columns=["score", "refusal", "compliance_rating", "overall_quality"],
         splits=["train"],
         filetype="jsonl",
-        adapter_name = 'cognitivecomputations/dolphin-r1-reasoning',
+        adapter_name="cognitivecomputations/dolphin-r1-reasoning",
     ),
     "open-r1/OpenThoughts-114k-math": InstructionDatasetConfig(
         hf_dataset_id="open-r1/OpenThoughts-114k-math",
@@ -266,7 +266,7 @@ def transform_dataset_step(dataset_cfg: InstructionDatasetConfig, download_step:
             source=dataset_cfg.hf_dataset_id,
             subsets=dataset_cfg.subsets,
             splits=dataset_cfg.splits,
-            adapter_name= adapter_name,
+            adapter_name=adapter_name,
         ),
         override_output_path=f"documents/{dataset_name}-{dataset_cfg.revision}-{hashed_config_str}",
     )
