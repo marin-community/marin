@@ -66,7 +66,7 @@ ar5iv_warnings_resiliparse_custom_fork = ExecutorStep(
     name="documents/ar5iv/ar5iv-04-2024-warning",
     fn=process_ar5iv_dump,
     config=Ar5ivExtractionConfig(
-        input_path=output_path_of(ar5iv_no_problem_raw),
+        input_path=output_path_of(ar5iv_warnings_raw),
         revision="042024",
         output_path=this_output_path("resiliparse-custom-fork"),
         extract_method=versioned("resiliparse"),
@@ -87,15 +87,39 @@ ar5iv_warnings_resiliparse_custom_fork = ExecutorStep(
     pip_dependency_groups=["download_transform"],
 )
 
-
+ar5iv_errors_resiliparse_custom_fork = ExecutorStep(
+    name="documents/ar5iv/ar5iv-04-2024-errors",
+    fn=process_ar5iv_dump,
+    config=Ar5ivExtractionConfig(
+        input_path=output_path_of(ar5iv_errors_raw),
+        revision="042024",
+        output_path=this_output_path("resiliparse-custom-fork"),
+        extract_method=versioned("resiliparse"),
+        extract_config=ResiliparseConfig(
+            preserve_formatting=True,
+            main_content=True,
+            links=versioned(False),
+            prepend_title=True,
+            skip_elements=ARXIV_BLACKLISTED_SELECTORS,
+            use_custom_variant=True,
+            markdownify_config=HtmlToMarkdownConfig(
+                include_images=False,
+                include_links=False,
+            )
+        ),
+        remove_reference_section=versioned(True),
+    ),
+    pip_dependency_groups=["download_transform"],
+)
 
 if __name__ == "__main__":
     executor_main(
         steps=[
-            # ar5iv_no_problem_raw,
+            ar5iv_no_problem_raw,
             ar5iv_warnings_raw,
             ar5iv_errors_raw,
-            # ar5iv_no_problem_resiliparse_custom_fork,
-            # ar5iv_warnings_resiliparse_custom_fork,
+            ar5iv_no_problem_resiliparse_custom_fork,
+            ar5iv_warnings_resiliparse_custom_fork,
+            ar5iv_errors_resiliparse_custom_fork,
         ]
     )
