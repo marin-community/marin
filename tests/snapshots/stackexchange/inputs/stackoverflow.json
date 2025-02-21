@@ -1,0 +1,36 @@
+{
+    "added": "2024-12-17T10:11:36.775238+00:00",
+    "created": "2008-09-02T06:50:58.233",
+    "id": "thread-38940",
+    "metadata": {
+      "accepted_answer_id": "38942",
+      "answers": [
+        {
+          "body": "<pre><code>SELECT Field1, Field2, 'Value' Field3 FROM Table\n</code></pre>\n<p>or for clarity</p>\n<pre><code>SELECT Field1, Field2, 'Value' AS Field3 FROM Table\n</code></pre>",
+          "creation_time_utc": "2008-09-02T06:53:23.487",
+          "id": "38942",
+          "votes": 12
+        },
+        {
+          "body": "<p>Yes - it's very possible, in fact you almost had it!\nTry:</p>\n<pre><code>SELECT Field1, Field2, 'Value' AS `Field3` FROM Table\n</code></pre>",
+          "creation_time_utc": "2008-09-02T06:54:00.130",
+          "id": "38944",
+          "votes": 5
+        }
+      ]
+    },
+    "creation_time_utc": "2008-09-02T06:50:58.233",
+    "id_question": "38940",
+    "question": "If I've got a table containing Field1 and Field2 can I generate a new field in the select statement? For example, a normal query would be:\n<pre><code>SELECT Field1, Field2 FROM Table\n</code></pre>\nAnd I want to also create Field3 and have that returned in the resultset... something along the lines of this would be ideal:\n<pre><code>SELECT Field1, Field2, Field3 = 'Value' FROM Table\n</code></pre>\nIs this possible at all?",
+    "subdomain": "stackoverflow",
+    "tags": [
+      "sql",
+      "mysql"
+    ],
+    "title": "Generate field in MySQL SELECT",
+    "url": "https://stackoverflow.stackexchange.com/questions/38940",
+    "votes": 4,
+    "source": "stackexchange",
+    "text": "# Generate field in MySQL SELECT\nIf I've got a table containing Field1 and Field2 can I generate a new field in the select statement? For example, a normal query would be:\n```\nSELECT Field1, Field2 FROM Table\n```\nAnd I want to also create Field3 and have that returned in the resultset... something along the lines of this would be ideal:\n```\nSELECT Field1, Field2, Field3 = 'Value' FROM Table\n```\nIs this possible at all?\n## Answer\n```\nSELECT Field1, Field2, 'Value' Field3 FROM Table\n```\nor for clarity\n```\nSELECT Field1, Field2, 'Value' AS Field3 FROM Table\n```\n## Answer\nYes - it's very possible, in fact you almost had it! Try:\n```\nSELECT Field1, Field2, 'Value' AS `Field3` FROM Table\n```"
+  }
+  
