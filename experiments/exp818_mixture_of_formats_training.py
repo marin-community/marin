@@ -8,12 +8,11 @@ import os.path
 from experiments.defaults import default_train
 from experiments.dolma.tokenize_dolma import BASE_DIR_DOLMA, DOLMA_DATASETS, DOLMA_OLMO_MIXTURE_WEIGHTS
 from experiments.evals.evals import default_eval
-from experiments.llama import llama3_tokenizer
+from experiments.llama import llama3_tokenizer, llama_1_4b, llama_1_4b_train_config
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
 from marin.processing.tokenize.data_configs import TokenizerStep, lm_mixture_data_config
 from marin.utils import fsspec_glob
-from experiments.llama import llama_1_4b, llama_1_4b_train_config
 
 EXPERIMENT_TAG = ["mixture-of-formats-training"]
 
