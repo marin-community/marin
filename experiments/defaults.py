@@ -187,6 +187,11 @@ def default_train(
 
         model_averaging = EmaModelAveragingConfig(beta=train_config.ema_beta)
 
+    if train_config.per_device_eval_parallelism is None:
+        per_device_eval_parallelism = -1
+    else:
+        per_device_eval_parallelism = train_config.per_device_eval_parallelism
+
     schedule = BatchSchedule(train_config.train_batch_size)
     total_examples = schedule.global_data_offset_by_step(train_config.num_train_steps)
 
@@ -223,6 +228,7 @@ def default_train(
                 model_averaging=model_averaging,
                 replica_dcn_axis_size=-1,
                 allow_partial_checkpoint=train_config.allow_partial_checkpoint,
+                per_device_eval_parallelism=per_device_eval_parallelism,
             ),
             z_loss_weight=train_config.z_loss_weight,
             model=model_config,
