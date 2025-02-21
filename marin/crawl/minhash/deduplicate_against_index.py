@@ -33,6 +33,26 @@ gcloud storage rm --recursive gs://marin-us-central2/scratch/nfliu/minhash/finew
 gcloud storage rm --recursive gs://marin-us-central2/scratch/nfliu/minhash/logs/fineweb_edu_10M_passing_minhash_against_fineweb_edu_logs
 ```
 
+Deduplicating fineweb-edu-10M-cc-deduplicated-passing against fineweb-edu:
+
+```
+python marin/run/ray_run.py \
+    --pip_deps 'datatrove[io] @ git+https://github.com/nelson-liu/datatrove@ray_executor_dedup_logging,spacy,cupy-cuda12x==13.3.0,orjson,scipy==1.13.1' \
+    --no_wait -- \
+    python marin/crawl/minhash/deduplicate_against_index.py \
+    --index_path 'gs://marin-us-central2/scratch/nfliu/minhash/fineweb_edu_minhash_index/index' \
+    --input_patterns '["gs://marin-us-central2/scratch/nfliu/text/fineweb-edu-10M-cc-deduplicated/*_text_and_scores.passing.parquet"]' \
+    --parquets_paths_file 'gs://marin-us-central2/scratch/nfliu/fineweb_edu_10M_cc_deduplicated_passing_paths.txt' \
+    --minhash_base_path 'gs://marin-us-central2/scratch/nfliu/minhash/fineweb_edu_10M_cc_deduplicated_passing_minhash_against_fineweb_edu' \
+    --minhash_logs_path 'gs://marin-us-central2/scratch/nfliu/minhash/logs/fineweb_edu_10M_cc_deduplicated_passing_minhash_against_fineweb_edu_logs'
+
+# Move the deduplicated content
+gcloud storage mv gs://marin-us-central2/scratch/nfliu/minhash/fineweb_edu_10M_cc_deduplicated_passing_minhash_against_fineweb_edu/deduplicated_output/* gs://marin-us-central2/scratch/nfliu/text/fineweb_edu_10M_cc_deduplicated_passing_minhash_against_fineweb_edu/
+# Remove the logs and intermediate output
+gcloud storage rm --recursive gs://marin-us-central2/scratch/nfliu/minhash/fineweb_edu_10M_cc_deduplicated_passing_minhash_against_fineweb_edu
+gcloud storage rm --recursive gs://marin-us-central2/scratch/nfliu/minhash/logs/fineweb_edu_10M_cc_deduplicated_passing_minhash_against_fineweb_edu_logs
+```
+
 Deduplicating open-web-math-10M-passing against open-web-math:
 
 ```
