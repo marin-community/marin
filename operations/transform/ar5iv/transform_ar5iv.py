@@ -50,20 +50,57 @@ class Ar5ivExtractionConfig:
 
 
 def clean_html(html: str, remove_reference_section: bool = True) -> str:
+    """
+    Clean the HTML content by removing unnecessary elements and formatting.
+
+    The cleaning is mainly to remove non-essential elements like metadata (title page, authors, footer), academic paper 
+    artifacts (bibliography, footnotes, figure captions), and formatting that could easily be parsed by the resiliparse 
+    (equation tables, duplicate list numbering).
+
+    Args:
+        html (str): The HTML content to clean.
+        remove_reference_section (bool): Whether to remove the reference section.
+
+    Returns:
+        str: The cleaned HTML content.
+    """
+
     html = BeautifulSoup(html, "html.parser")
 
+    # Converts Abstract to h2
     transform_abstract(html)
+
+    # Removes authors
     remove_authors(html)
+
+    # Removes title page
     remove_title_page(html)
+
+    # Avoid parsing repeats listing style e.g. (1. 1.)
     clean_li(html)
+
+    # Removes references
     remove_biblio(html)
+
+    # Removes footnotes
     remove_footnotes(html)
+
+    # Removes biblinks since we are removing references
     remove_biblinks(html)
+
+    # Converts ltx_listingline classes to newlines
     linelisting_to_newline(html)
+
+    # Transforms equations to be inline tags and not tables
     unwrap_eqn(html)
+
+    # Removes ar5iv footer
     remove_ar5iv_footer(html)
+
+    # Removes before section since we only care about information after the first section
     remove_before_section(html)
-    # remove_title(html)
+
+    # Removes figure captions
     remove_figure_captions(html)
 
     if remove_reference_section:
