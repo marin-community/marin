@@ -4,7 +4,6 @@ ar5iv/transform_ar5iv.py
 Performs HTML->Text/MD conversion using the specified tools over a ar5iv dump save in DOLMA format.
 """
 
-import html
 import json
 import logging
 import os
@@ -17,6 +16,7 @@ import ray
 from bs4 import BeautifulSoup
 from tqdm import tqdm
 
+from marin.core.runtime import cached_or_construct_output
 from marin.schemas.web.convert import ExtractionConfig
 from marin.utils import fsspec_glob
 from marin.web.convert import convert_page
@@ -53,8 +53,8 @@ def clean_html(html: str, remove_reference_section: bool = True) -> str:
     """
     Clean the HTML content by removing unnecessary elements and formatting.
 
-    The cleaning is mainly to remove non-essential elements like metadata (title page, authors, footer), academic paper 
-    artifacts (bibliography, footnotes, figure captions), and formatting that could easily be parsed by the resiliparse 
+    The cleaning is mainly to remove non-essential elements like metadata (title page, authors, footer), academic paper
+    artifacts (bibliography, footnotes, figure captions), and formatting that could easily be parsed by the resiliparse
     (equation tables, duplicate list numbering).
 
     Args:
@@ -109,33 +109,15 @@ def clean_html(html: str, remove_reference_section: bool = True) -> str:
     return str(html)
 
 
-def process_extracted_content(result: str, remove_reference_section: bool = True) -> str:
-    content = result.strip()
-
-    # Remove excessive newline characters by replacing multiple \n with a single space
-    content = re.sub(r"\n+", " ", content)
-
-    # Patch up any remaining HTML entities (e.g., &gt; -> >)
-    content = html.unescape(content)
-
-    # Remove any remaining escaped backslashes (e.g., \\n -> \n)
-    content = content.replace("\\\\n", "\n")
-
-    content = str(content).strip()
-
-    return content
-
-
 @ray.remote(memory=2 * 1024 * 1024 * 1024)
+@cached_or_construct_output(success_suffix="SUCCESS")
 def process_file(
     input_file_path: str,
-    output_path: str,
+    output_file_path: str,
     extract_method: str,
     extract_config: ExtractionConfig,
     remove_reference_section: bool = True,
 ) -> None:
-    output_file_path = os.path.join(output_path, input_file_path.split("/")[-1])
-
     logger.info(f"Starting processing of file {input_file_path}")
     logger.info(f"Source: {input_file_path}")
     logger.info(f"Destination: {output_file_path}")
@@ -166,7 +148,7 @@ def process_file(
                     raise
 
         logger.info("\nProcessing completed successfully!")
-        logger.info(f"File available at: {output_path}")
+        logger.info(f"File available at: {output_file_path}")
 
     except Exception as e:
         logger.error(f"Error during processing: {e}")
@@ -189,10 +171,11 @@ def process_ar5iv_dump(cfg: Ar5ivExtractionConfig) -> None:
                 logger.exception(f"Error processing the group: {e}")
                 continue
 
+        output_file_path = os.path.join(cfg.output_path, file.split("/")[-1])
         result_refs.append(
             process_file.remote(
                 file,
-                cfg.output_path,
+                output_file_path,
                 cfg.extract_method,
                 cfg.extract_config,
                 cfg.remove_reference_section,

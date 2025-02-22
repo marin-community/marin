@@ -16,6 +16,7 @@ import ray
 from bs4 import BeautifulSoup
 from tqdm import tqdm
 
+from marin.core.runtime import cached_or_construct_output
 from marin.schemas.web.convert import ExtractionConfig
 from marin.utils import fsspec_glob
 from marin.web.convert import convert_page
@@ -193,9 +194,10 @@ def clean_wiki_html(html: str, remove_reference_section: bool = True) -> str:
 
 
 @ray.remote(memory=2 * 1024 * 1024 * 1024)
+@cached_or_construct_output(success_suffix="SUCCESS")
 def process_file(
     input_file_path: str,
-    output_path: str,
+    output_file_path: str,
     extract_method: str,
     extract_config: ExtractionConfig,
     remove_reference_section: bool = True,
@@ -203,8 +205,6 @@ def process_file(
     word_threshold: int = 70,
     special_char_threshold: float = 0.2,
 ) -> None:
-    output_file_path = os.path.join(output_path, input_file_path.split("/")[-1].replace(".ndjson", ".jsonl.gz"))
-
     logger.info(f"Starting processing of file {input_file_path}")
     logger.info(f"Source: {input_file_path}")
     logger.info(f"Destination: {output_file_path}")
@@ -253,7 +253,7 @@ def process_file(
                     continue
 
         logger.info("\nProcessing completed successfully!")
-        logger.info(f"File available at: {output_path}")
+        logger.info(f"File available at: {output_file_path}")
 
     except Exception as e:
         logger.error(f"Error during processing: {e}")
@@ -283,10 +283,11 @@ def process_wiki_dump(cfg: WikiExtractionConfig) -> None:
                 continue
 
         output_path = os.path.join(cfg.output_path, cfg.revision)
+        output_file_path = os.path.join(output_path, file.split("/")[-1].replace(".ndjson", ".jsonl.gz"))
         result_refs.append(
             process_file.remote(
                 file,
-                output_path,
+                output_file_path,
                 cfg.extract_method,
                 cfg.extract_config,
                 cfg.remove_reference_section,

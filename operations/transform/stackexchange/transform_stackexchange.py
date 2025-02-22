@@ -15,6 +15,7 @@ import fsspec
 import ray
 from tqdm import tqdm
 
+from marin.core.runtime import cached_or_construct_output
 from marin.schemas.web.convert import ExtractionConfig
 from marin.utils import fsspec_glob
 from marin.web.convert import convert_page
@@ -61,15 +62,14 @@ def prepare_md_template(
 
 
 @ray.remote(memory=2 * 1024 * 1024 * 1024)
+@cached_or_construct_output(success_suffix="SUCCESS")
 def process_file(
     input_file_path: str,
-    output_path: str,
+    output_file_path: str,
     extract_method: str,
     extract_config: ExtractionConfig,
     shuffle_answers_template: bool = True,
 ) -> None:
-    output_file_path = os.path.join(output_path, input_file_path.split("/")[-1].replace(".ndjson", ".jsonl.gz"))
-
     logger.info(f"Starting processing of file {input_file_path}")
     logger.info(f"Source: {input_file_path}")
     logger.info(f"Destination: {output_file_path}")
@@ -117,7 +117,7 @@ def process_file(
                     raise e
 
         logger.info("\nProcessing completed successfully!")
-        logger.info(f"File available at: {output_path}")
+        logger.info(f"File available at: {output_file_path}")
 
     except Exception as e:
         logger.error(f"Error during processing: {e}")
@@ -149,7 +149,8 @@ def process_stackexchange_dump(cfg: StackExchangeExtractionConfig) -> None:
                 logger.exception(f"Error processing the group: {e}")
                 continue
 
-        result_refs.append(process_file.remote(file, cfg.output_path, cfg.extract_method, cfg.extract_config))
+        output_file_path = os.path.join(cfg.output_path, file.split("/")[-1])
+        result_refs.append(process_file.remote(file, output_file_path, cfg.extract_method, cfg.extract_config))
     try:
         ray.get(result_refs)
     except Exception as e:
