@@ -1,6 +1,6 @@
 from transformers import AutoTokenizer
 
-from marin.generation.medu import MEDUPipelineConfig, run_medu_labeling_pipeline
+from marin.generation.medu import MEDUPipelineConfig, run_medu_dataset_sampling_pipeline
 
 ECONOMETRIC_DEV_SET_EXAMPLES = [
     "For a stationary autoregressive process, shocks will",
@@ -42,7 +42,7 @@ HIGH_SCHOOL_MICROECONOMIC_EXAMPLES = [
 
 documents_to_be_labeled = "gs://marin-us-central2/raw/dclm/a3b142c/huggingface.co/datasets/mlfoundations/dclm-baseline-1.0/resolve/a3b142c/global-shard_01_of_10/local-shard_0_of_10/shard_00000000_processed.jsonl.zst"
 
-tensor_parallel_size = 1
+tensor_parallel_size = 8
 model_name = "/opt/gcsfuse_mount/models/meta-llama--Llama-3-1-8B-Instruct"
 tokenizer = AutoTokenizer.from_pretrained(model_name)
 config = MEDUPipelineConfig(
@@ -62,4 +62,8 @@ config = MEDUPipelineConfig(
     output_filetype_override="jsonl.gz",
 )
 
-run_medu_labeling_pipeline(config)
+# run_medu_labeling_pipeline(config)
+
+input_path = "gs://marin-us-east5/documents/test-medu-dclm"
+output_path = "gs://marin-us-east5/documents/test-medu-dclm-processed"
+run_medu_dataset_sampling_pipeline(input_path, output_path)
