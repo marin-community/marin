@@ -1,10 +1,12 @@
 import logging
+import os
 from dataclasses import dataclass
 from typing import Any
 
 import ray
 from transformers import AutoTokenizer
 
+from marin.generation.dataset import DatasetSampler, MeduDatasetOutputProcessor
 from marin.generation.inference import TextGenerationInferenceConfig, run_inference
 from marin.generation.llm_generation import vLLMProvider
 from marin.generation.ray_utils import get_scheduling_strategy_fn
@@ -30,7 +32,7 @@ class MEDUPipelineConfig:
     generation_kwargs: dict[str, Any] | None = None
     num_instances: tuple[int, int] = (1, 4)
     save_templated_prompt: bool = False
-    output_filetype_override: str | None = None
+    output_filetype_override: str = "jsonl.gz"
 
 
 @ray.remote
@@ -52,6 +54,9 @@ class MEDUPipeline:
 
     def _get_final_medu_prompt(self, benchmark_description: str) -> str:
         return MEDU_DOCUMENT_LABELING_PROMPT.format(test_description=benchmark_description, example="{example}")
+
+    def _get_final_benchmark_description_prompt(self) -> str:
+        return self.final_benchmark_description_prompt
 
     # Stage 1: Get benchmark description prompt
     def get_benchmark_description_prompt(self) -> str:
@@ -128,5 +133,22 @@ def run_medu_labeling_pipeline(config: MEDUPipelineConfig):
 
     ray.get(futures)
 
-    label_documents_future = label_documents(config, pipeline.final_benchmark_description_prompt)
+    logger.info(f"Starting document labeling pipeline for {config.input_path}")
+    final_benchmark_description_prompt = ray.get(pipeline._get_final_benchmark_description_prompt.remote())
+    label_documents_future = label_documents(config, final_benchmark_description_prompt)
     ray.get(label_documents_future)
+    logger.info(f"Finished document labeling pipeline for {config.output_path}")
+
+
+def run_medu_dataset_sampling_pipeline(input_path: str, output_path: str):
+    logger.info(f"Starting MEDU dataset sampling pipeline for {input_path}")
+
+    convert_output_path = os.path.join(output_path, "converted")
+    processor = MeduDatasetOutputProcessor(input_path, convert_output_path)
+    dataset_score_distribution = processor.convert_dataset()
+    logger.info(f"Dataset score distribution: {dataset_score_distribution}")
+    # Keep all labels equally weighted
+    label_weights = {score: 1 for score in dataset_score_distribution.keys()}
+    sampler = DatasetSampler(convert_output_path, os.path.join(output_path, "sampled"), label_weights)
+    sampler.sample_dataset()
+    logger.info(f"Finished MEDU dataset sampling pipeline for {output_path}")
