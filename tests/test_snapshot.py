@@ -3,15 +3,14 @@ import os
 import re
 import subprocess
 
-from bs4 import BeautifulSoup
 import pytest
+from bs4 import BeautifulSoup
 
 from experiments.exp575_wikipedia_markdownify import WIKI_BLACKLISTED_SELECTORS
 from experiments.exp579_ar5iv_markdownify import ARXIV_BLACKLISTED_SELECTORS
 from marin.schemas.web.convert import HtmlToMarkdownConfig, ResiliparseConfig, TrafilaturaConfig
 from marin.web.convert import convert_page
 from operations.transform.ar5iv.transform_ar5iv import clean_html
-from operations.transform.stackexchange.transform_stackexchange import prepare_md_template
 from operations.transform.wikipedia.transform_wikipedia import clean_wiki_html
 from scripts.ar5iv.transform import unwrap_eqn
 from tests.snapshots.stackexchange.accept_changes import prepare_expected_output
@@ -78,9 +77,7 @@ def compare_outputs(input_name, expected_file, output_file, diff_path):
         raise AssertionError(f"Output does not match expected for {input_name}. Error running pandiff: {e}") from e
 
     # show the diff
-    raise AssertionError(
-        f"Output does not match expected for {input_name}. See {diff_path}/{diff_name} for details."
-    )
+    raise AssertionError(f"Output does not match expected for {input_name}. See {diff_path}/{diff_name} for details.")
 
 
 def parametrize_web_files(fn):
@@ -103,7 +100,9 @@ def parametrize_ar5iv_files(fn):
 
 def parametrize_stackexchange_files(fn):
     """Parametrize a test function with the files in the input directory."""
-    files = [os.path.splitext(os.path.basename(f))[0] for f in os.listdir(stackexchange_input_path) if f.endswith(".json")]
+    files = [
+        os.path.splitext(os.path.basename(f))[0] for f in os.listdir(stackexchange_input_path) if f.endswith(".json")
+    ]
     return pytest.mark.parametrize("input_name", files)(fn)
 
 
@@ -178,17 +177,21 @@ def test_markdownify_wikipedia(input_name):
     input_content = read_file(input_file)
 
     filtered_html = clean_wiki_html(input_content, remove_reference_section=True)
-    output_dict = convert_page(filtered_html, extract_method="resiliparse", config=ResiliparseConfig(
-        preserve_formatting=True,
-        main_content=True,
-        links=False,
-        skip_elements=WIKI_BLACKLISTED_SELECTORS,
-        use_custom_variant=True,
-        markdownify_config=HtmlToMarkdownConfig(
-            include_images=False,
-            include_links=False,
+    output_dict = convert_page(
+        filtered_html,
+        extract_method="resiliparse",
+        config=ResiliparseConfig(
+            preserve_formatting=True,
+            main_content=True,
+            links=False,
+            skip_elements=WIKI_BLACKLISTED_SELECTORS,
+            use_custom_variant=True,
+            markdownify_config=HtmlToMarkdownConfig(
+                include_images=False,
+                include_links=False,
+            ),
         ),
-    ))
+    )
 
     output = output_dict["content"]
 
@@ -216,18 +219,22 @@ def test_markdownify_ar5iv(input_name):
     html = str(bs4_html)
     filtered_html = clean_html(html, remove_reference_section=True)
 
-    output_dict = convert_page(filtered_html, extract_method="resiliparse", config=ResiliparseConfig(
-        preserve_formatting=True,
-        main_content=True,
-        links=False,
-        prepend_title=True,
-        skip_elements=ARXIV_BLACKLISTED_SELECTORS,
-        use_custom_variant=True,
-        markdownify_config=HtmlToMarkdownConfig(
-            include_images=False,
-            include_links=False,
+    output_dict = convert_page(
+        filtered_html,
+        extract_method="resiliparse",
+        config=ResiliparseConfig(
+            preserve_formatting=True,
+            main_content=True,
+            links=False,
+            prepend_title=True,
+            skip_elements=ARXIV_BLACKLISTED_SELECTORS,
+            use_custom_variant=True,
+            markdownify_config=HtmlToMarkdownConfig(
+                include_images=False,
+                include_links=False,
+            ),
         ),
-    ))
+    )
 
     output = output_dict["content"]
 

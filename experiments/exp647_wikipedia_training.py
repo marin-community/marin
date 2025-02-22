@@ -19,7 +19,7 @@ logger = logging.getLogger("ray")
 EXPERIMENT_TAG = ["wiki_subbed_dolma"]
 
 weights = DOLMA_OLMO_MIXTURE_WEIGHTS.pop("dolma/wiki")
-DOLMA_OLMO_MIXTURE_WEIGHTS["dolma/wiki-subbed-readability-no-references"] = weights
+DOLMA_OLMO_MIXTURE_WEIGHTS["wiki-subbed-readability-no-references"] = weights
 
 wiki_readability_path = "gs://marin-us-central2/documents/wikipedia-readability-a03369/20241201"
 wiki_readability_files = fsspec_glob(f"{wiki_readability_path}/*.jsonl.gz")
@@ -44,8 +44,8 @@ wiki_readablity_1_4b_subbed_dolma_model = default_train(
 wiki_readablity_1_4b_subbed_dolma_evals = default_eval(step=wiki_readablity_1_4b_subbed_dolma_model)
 
 
-weights = DOLMA_OLMO_MIXTURE_WEIGHTS.pop("dolma/wiki-subbed-readability-no-references")
-DOLMA_OLMO_MIXTURE_WEIGHTS["dolma/wiki-subbed-resiliparse-with-preserving-formatting-no-references"] = weights
+weights = DOLMA_OLMO_MIXTURE_WEIGHTS.pop("wiki-subbed-readability-no-references")
+DOLMA_OLMO_MIXTURE_WEIGHTS["wiki-subbed-resiliparse-with-preserving-formatting-no-references"] = weights
 
 wiki_resiliparse_with_preserve_formatting_path = (
     "gs://marin-us-central2/documents/wikipedia-resiliparse-with-preserving-formatting-0cccb4/20241201"
