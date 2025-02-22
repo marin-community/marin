@@ -57,7 +57,11 @@ DOLMA_DATASETS = {
 
 
 def tokenize_dolma_steps(
-        *, base_path="tokenized/", tokenizer=llama3_tokenizer, substitute: dict[str, list[str]] | None = None, prefix: str = None
+    *,
+    base_path="tokenized/",
+    tokenizer=llama3_tokenizer,
+    substitute: dict[str, list[str]] | None = None,
+    prefix: str | None = None,
 ) -> dict[str, TokenizerStep]:
     """
     Tokenizes the Dolma 1.7 datasets.
@@ -93,6 +97,7 @@ def tokenize_dolma_steps(
         )
 
     return dolma_steps
+
 
 if __name__ == "__main__":
     executor_main(steps=list(tokenize_dolma_steps().values()))

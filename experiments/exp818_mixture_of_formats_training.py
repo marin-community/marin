@@ -16,6 +16,7 @@ from marin.utils import fsspec_glob
 
 EXPERIMENT_TAG = ["mixture-of-formats-training"]
 
+
 def tokenize_dolma_mixture_steps(
     *, base_path="tokenized/", tokenizer=llama3_tokenizer, DOLMA_DATASETS: dict[str, list[str]] = DOLMA_DATASETS
 ) -> dict[str, TokenizerStep]:
@@ -60,7 +61,7 @@ no_mixture_dolma_model = default_train(
     tokenized=no_mixture_llama3_tokenized,
     model_config=llama_1_4b,
     train_config=llama_1_4b_train_config,
-    tags=EXPERIMENT_TAG + ["no-mixture"],
+    tags=[*EXPERIMENT_TAG, "no-mixture"],
 )
 no_mixture_dolma_evals = default_eval(step=no_mixture_dolma_model)
 
@@ -71,7 +72,9 @@ DOLMA_OLMO_MIXTURE_WEIGHTS_CLONE = copy.deepcopy(DOLMA_OLMO_MIXTURE_WEIGHTS)
 DOLMA_OLMO_MIXTURE_WEIGHTS["dolma/arxiv"] = DOLMA_OLMO_MIXTURE_WEIGHTS["dolma/arxiv"] / 2
 DOLMA_OLMO_MIXTURE_WEIGHTS["dolma/arxiv-markdownified"] = DOLMA_OLMO_MIXTURE_WEIGHTS["dolma/arxiv"]
 
-arxiv_markdownified_path = "gs://marin-us-central2/documents/ar5iv/ar5iv-04-2024-no-problem-3971ff/resiliparse-custom-fork"
+arxiv_markdownified_path = (
+    "gs://marin-us-central2/documents/ar5iv/ar5iv-04-2024-no-problem-3971ff/resiliparse-custom-fork"
+)
 arxiv_markdownified_files = fsspec_glob(f"{arxiv_markdownified_path}/*.jsonl.gz")
 
 DOLMA_DATASETS["arxiv-markdownified"] = arxiv_markdownified_files
@@ -87,7 +90,7 @@ arxiv_only_subbed_dolma_model = default_train(
     tokenized=arxiv_only_subbed_llama3_tokenized,
     model_config=llama_1_4b,
     train_config=llama_1_4b_train_config,
-    tags=EXPERIMENT_TAG + ["arxiv-only-subbed"],
+    tags=[*EXPERIMENT_TAG, "arxiv-only-subbed"],
 )
 
 arxiv_only_subbed_dolma_evals = default_eval(step=arxiv_only_subbed_dolma_model)
@@ -113,7 +116,7 @@ wiki_only_subbed_dolma_model = default_train(
     tokenized=wiki_only_subbed_llama3_tokenized,
     model_config=llama_1_4b,
     train_config=llama_1_4b_train_config,
-    tags=EXPERIMENT_TAG + ["wiki-only-subbed"],
+    tags=[*EXPERIMENT_TAG, "wiki-only-subbed"],
 )
 
 wiki_only_subbed_dolma_evals = default_eval(step=wiki_only_subbed_dolma_model)
@@ -135,21 +138,28 @@ wiki_and_arxiv_subbed_dolma_model = default_train(
     tokenized=wiki_and_arxiv_subbed_llama3_tokenized,
     model_config=llama_1_4b,
     train_config=llama_1_4b_train_config,
-    tags=EXPERIMENT_TAG + ["wiki-and-arxiv-subbed"],
+    tags=[*EXPERIMENT_TAG, "wiki-and-arxiv-subbed"],
 )
 
 wiki_and_arxiv_subbed_dolma_evals = default_eval(step=wiki_and_arxiv_subbed_dolma_model)
 
 if __name__ == "__main__":
-    tokenize_steps = list(arxiv_only_subbed_tokenized.values()) + list(wiki_only_subbed_tokenized.values()) + list(wiki_and_arxiv_subbed_tokenized.values())
-    executor_main(steps=[
-        *tokenize_steps,
-        no_mixture_dolma_model,
-        no_mixture_dolma_evals,
-        arxiv_only_subbed_dolma_model,
-        arxiv_only_subbed_dolma_evals,
-        wiki_only_subbed_dolma_model,
-        wiki_only_subbed_dolma_evals,
-        wiki_and_arxiv_subbed_dolma_model,
-        wiki_and_arxiv_subbed_dolma_evals,
-    ])
+    tokenize_steps = (
+        list(arxiv_only_subbed_tokenized.values())
+        + list(wiki_only_subbed_tokenized.values())
+        + list(wiki_and_arxiv_subbed_tokenized.values())
+    )
+
+    executor_main(
+        steps=[
+            *tokenize_steps,
+            no_mixture_dolma_model,
+            no_mixture_dolma_evals,
+            arxiv_only_subbed_dolma_model,
+            arxiv_only_subbed_dolma_evals,
+            wiki_only_subbed_dolma_model,
+            wiki_only_subbed_dolma_evals,
+            wiki_and_arxiv_subbed_dolma_model,
+            wiki_and_arxiv_subbed_dolma_evals,
+        ]
+    )
