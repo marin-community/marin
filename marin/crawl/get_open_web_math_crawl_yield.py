@@ -14,7 +14,7 @@ The quantities of interest are:
 - N_hq / N_total: What is the overall yield rate of the crawl frontier?
 - N_hq / N_f: What is the yield rate of the successfully-fetched pages?
 
-Running on OpenWebMath:
+Running on OpenWebMath-10M:
 
 ```
 python marin/run/ray_run.py \
@@ -28,7 +28,22 @@ python marin/run/ray_run.py \
     --urls_and_scores_output_directory gs://marin-us-central2/scratch/nfliu/urls_and_scores/open-web-math-fde8ef8-10M/ \
     --statistics_output_path gs://marin-us-central2/scratch/nfliu/fetched_outlinks/open-web-math-fde8ef8-10M/yield_statistics.json.gz
 ```
-"""
+
+Running on OpenWebMath-10M-cc-deduplicated:
+
+```
+python marin/run/ray_run.py \
+    --pip_deps 'resiliparse,fasttext,lxml,py-asciimath,tabulate,warcio[all],w3lib,cchardet' \
+    --no_wait -- \
+    python marin/crawl/get_open_web_math_crawl_yield.py \
+    --urls_input_directory gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-10M-cc-deduplicated/ \
+    --crawl_input_directory gs://marin-us-central2/scratch/nfliu/fetched_outlinks/open-web-math-fde8ef8-10M-cc-deduplicated/ \
+    --data_source open-web-math-fde8ef8-10M-cc-deduplicated \
+    --text_output_directory gs://marin-us-central2/scratch/nfliu/text/open-web-math-fde8ef8-10M-cc-deduplicated/ \
+    --urls_and_scores_output_directory gs://marin-us-central2/scratch/nfliu/urls_and_scores/open-web-math-fde8ef8-10M-cc-deduplicated/ \
+    --statistics_output_path gs://marin-us-central2/scratch/nfliu/fetched_outlinks/open-web-math-fde8ef8-10M-cc-deduplicated/yield_statistics.json.gz
+```
+"""  # noqa: E501
 import json
 import logging
 import os
