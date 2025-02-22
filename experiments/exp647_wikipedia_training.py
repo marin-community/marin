@@ -47,15 +47,18 @@ wiki_readablity_1_4b_subbed_dolma_evals = default_eval(step=wiki_readablity_1_4b
 weights = DOLMA_OLMO_MIXTURE_WEIGHTS.pop("dolma/wiki-subbed-readability-no-references")
 DOLMA_OLMO_MIXTURE_WEIGHTS["dolma/wiki-subbed-resiliparse-with-preserving-formatting-no-references"] = weights
 
-wiki_resiliparse_with_preserve_formatting_path = "gs://marin-us-central2/documents/wikipedia-resiliparse-with-preserving-formatting-0cccb4/20241201"
-wiki_resiliparse_with_preserve_formatting_files = fsspec_glob(f"{wiki_resiliparse_with_preserve_formatting_path}/*.jsonl.gz")
+wiki_resiliparse_with_preserve_formatting_path = (
+    "gs://marin-us-central2/documents/wikipedia-resiliparse-with-preserving-formatting-0cccb4/20241201"
+)
+wiki_resiliparse_with_preserve_formatting_files = fsspec_glob(
+    f"{wiki_resiliparse_with_preserve_formatting_path}/*.jsonl.gz"
+)
 wiki_resiliparse_with_preserve_formatting_subbed_dolma_tokenized = tokenize_dolma_steps(
     substitute={"wiki": wiki_resiliparse_with_preserve_formatting_files},
     prefix="resiliparse-with-preserving-formatting-no-references",
 )
 wiki_resiliparse_with_preserve_formatting_subbed_dolma_llama3_tokenized = lm_mixture_data_config(
-    components=wiki_resiliparse_with_preserve_formatting_subbed_dolma_tokenized,
-    weights=DOLMA_OLMO_MIXTURE_WEIGHTS
+    components=wiki_resiliparse_with_preserve_formatting_subbed_dolma_tokenized, weights=DOLMA_OLMO_MIXTURE_WEIGHTS
 )
 wiki_resiliparse_with_preserve_formatting_subbed_dolma_1_4b_model = default_train(
     name="dolma-wiki-subbed-1.4b-resiliparse-with-preserving-formatting-no-references",
@@ -65,7 +68,9 @@ wiki_resiliparse_with_preserve_formatting_subbed_dolma_1_4b_model = default_trai
     tags=EXPERIMENT_TAG,
 )
 
-wiki_resiliparse_with_preserve_formatting_subbed_dolma_1_4b_evals = default_eval(step=wiki_resiliparse_with_preserve_formatting_subbed_dolma_1_4b_model)
+wiki_resiliparse_with_preserve_formatting_subbed_dolma_1_4b_evals = default_eval(
+    step=wiki_resiliparse_with_preserve_formatting_subbed_dolma_1_4b_model
+)
 
 
 if __name__ == "__main__":

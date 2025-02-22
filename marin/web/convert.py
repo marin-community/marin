@@ -95,7 +95,7 @@ def convert_page_with_resiliparse(
 
         if title and config.prepend_title:
             # remove html tags from title
-            title = re.sub(r'<[^>]*>', '', title).strip()
+            title = re.sub(r"<[^>]*>", "", title).strip()
 
             content = f"{title}\n\n{content}"
 
@@ -107,7 +107,7 @@ def convert_page_with_resiliparse(
 
         if title and config.prepend_title:
             # remove html tags from title
-            title = re.sub(r'<[^>]*>', '', title).strip()
+            title = re.sub(r"<[^>]*>", "", title).strip()
 
             content = f"# {title}\n\n{content}"
 

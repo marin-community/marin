@@ -4,6 +4,7 @@ import re
 from bs4 import BeautifulSoup
 from tqdm import tqdm
 
+from experiments.exp579_ar5iv_markdownify import ARXIV_BLACKLISTED_SELECTORS
 from marin.schemas.web.convert import ExtractionConfig, HtmlToMarkdownConfig, ResiliparseConfig
 from marin.web.convert import convert_page
 from operations.transform.ar5iv.transform_ar5iv import clean_html
@@ -18,12 +19,10 @@ def prepare_expected_output(html: str, extract_method: str, extract_config: Extr
     html = str(bs4_html)
     filtered_html = clean_html(html, remove_reference_section)
 
-    content = convert_page(
-        filtered_html, extract_method=extract_method, config=extract_config
-    )["content"]
+    content = convert_page(filtered_html, extract_method=extract_method, config=extract_config)["content"]
 
     if remove_reference_section:
-        content = re.sub(r'\\\[(?:\d+(?:,\s*\d+)*)\\\]', '', content)
+        content = re.sub(r"\\\[(?:\d+(?:,\s*\d+)*)\\\]", "", content)
 
     return content
 
@@ -47,12 +46,12 @@ if __name__ == "__main__":
                 main_content=True,
                 links=False,
                 prepend_title=True,
-                skip_elements=["h2.ltx_title_bibliography", "div.ltx_classification", "span.ltx_role_author", "h1.ltx_title"],
+                skip_elements=ARXIV_BLACKLISTED_SELECTORS,
                 use_custom_variant=True,
                 markdownify_config=HtmlToMarkdownConfig(
                     include_images=False,
                     include_links=False,
-                )
+                ),
             )
             expected = prepare_expected_output(html, extract_method, extract_config)
 

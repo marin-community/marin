@@ -48,7 +48,7 @@ wikipedia_text_resiliparse_custom_fork = ExecutorStep(
         revision=versioned("20241201"),
         output_path=this_output_path(),
         extract_method="resiliparse",
-        extract_config = ResiliparseConfig(
+        extract_config=ResiliparseConfig(
             preserve_formatting=True,
             main_content=True,
             links=False,
@@ -57,7 +57,7 @@ wikipedia_text_resiliparse_custom_fork = ExecutorStep(
             markdownify_config=HtmlToMarkdownConfig(
                 include_images=False,
                 include_links=False,
-            )
+            ),
         ),
         remove_reference_section=versioned(True),
         digit_threshold=versioned(50),

@@ -41,35 +41,42 @@ arxiv_no_problem_readablity_1_4b_subbed_dolma_model = default_train(
     tags=EXPERIMENT_TAG,
 )
 
-arxiv_no_problem_readablity_1_4b_subbed_dolma_evals = default_eval(step=arxiv_no_problem_readablity_1_4b_subbed_dolma_model)
+arxiv_no_problem_readablity_1_4b_subbed_dolma_evals = default_eval(
+    step=arxiv_no_problem_readablity_1_4b_subbed_dolma_model
+)
 
 
 weights = DOLMA_OLMO_MIXTURE_WEIGHTS.pop("dolma/arxiv-subbed-no-problem-readability-no-references")
-DOLMA_OLMO_MIXTURE_WEIGHTS["dolma/arxiv-subbed-no-problem-resiliparse-with-preserving-formatting-no-references"] = weights
+DOLMA_OLMO_MIXTURE_WEIGHTS["dolma/arxiv-subbed-no-problem-resiliparse-with-pf-no-references"] = weights
 
-arxiv_no_problem_resiliparse_with_preserve_formatting_path = "gs://marin-us-central2/documents/ar5iv/ar5iv-04-2024-no-problem-8ca63a/resiliparse-with-preserving-formatting"
-arxiv_no_problem_resiliparse_with_preserve_formatting_files = fsspec_glob(f"{arxiv_no_problem_resiliparse_with_preserve_formatting_path}/*.jsonl.gz")
-arxiv_no_problem_resiliparse_with_preserve_formatting_subbed_dolma_tokenized = tokenize_dolma_steps(
-    substitute={"arxiv": arxiv_no_problem_resiliparse_with_preserve_formatting_files},
-    prefix="no-problem-resiliparse-with-preserving-formatting-no-references",
+arxiv_no_problem_resiliparse_with_pf_path = (
+    "gs://marin-us-central2/documents/ar5iv/ar5iv-04-2024-no-problem-8ca63a/resiliparse-with-pf"
 )
-arxiv_no_problem_resiliparse_with_preserve_formatting_subbed_dolma_llama3_tokenized = lm_mixture_data_config(
-    components=arxiv_no_problem_resiliparse_with_preserve_formatting_subbed_dolma_tokenized,
-    weights=DOLMA_OLMO_MIXTURE_WEIGHTS
+arxiv_no_problem_resiliparse_with_pf_files = fsspec_glob(f"{arxiv_no_problem_resiliparse_with_pf_path}/*.jsonl.gz")
+arxiv_no_problem_resiliparse_with_pf_subbed_dolma_tokenized = tokenize_dolma_steps(
+    substitute={"arxiv": arxiv_no_problem_resiliparse_with_pf_files},
+    prefix="no-problem-resiliparse-with-pf-no-references",
 )
-arxiv_no_problem_resiliparse_with_preserve_formatting_subbed_dolma_1_4b_model = default_train(
-    name="dolma-arxiv_no_problem-subbed-1.4b-resiliparse-with-preserving-formatting-no-references",
-    tokenized=arxiv_no_problem_resiliparse_with_preserve_formatting_subbed_dolma_llama3_tokenized,
+arxiv_no_problem_resiliparse_with_pf_subbed_dolma_llama3_tokenized = lm_mixture_data_config(
+    components=arxiv_no_problem_resiliparse_with_pf_subbed_dolma_tokenized, weights=DOLMA_OLMO_MIXTURE_WEIGHTS
+)
+arxiv_no_problem_resiliparse_with_pf_subbed_dolma_1_4b_model = default_train(
+    name="dolma-arxiv_no_problem-subbed-1.4b-resiliparse-with-pf-no-references",
+    tokenized=arxiv_no_problem_resiliparse_with_pf_subbed_dolma_llama3_tokenized,
     model_config=llama_1_4b,
     train_config=llama_1_4b_train_config,
     tags=EXPERIMENT_TAG,
 )
 
-arxiv_no_problem_resiliparse_with_preserve_formatting_subbed_dolma_1_4b_evals = default_eval(step=arxiv_no_problem_resiliparse_with_preserve_formatting_subbed_dolma_1_4b_model)
+arxiv_no_problem_resiliparse_with_pf_subbed_dolma_1_4b_evals = default_eval(
+    step=arxiv_no_problem_resiliparse_with_pf_subbed_dolma_1_4b_model
+)
 
 
 if __name__ == "__main__":
-    arxiv_no_problem_readability_subbed_dolma_tokenized.update(arxiv_no_problem_resiliparse_with_preserve_formatting_subbed_dolma_tokenized)
+    arxiv_no_problem_readability_subbed_dolma_tokenized.update(
+        arxiv_no_problem_resiliparse_with_pf_subbed_dolma_tokenized
+    )
     tokenization_steps = arxiv_no_problem_readability_subbed_dolma_tokenized.values()
 
     executor_main(
@@ -77,7 +84,7 @@ if __name__ == "__main__":
             *tokenization_steps,
             arxiv_no_problem_readablity_1_4b_subbed_dolma_model,
             arxiv_no_problem_readablity_1_4b_subbed_dolma_evals,
-            arxiv_no_problem_resiliparse_with_preserve_formatting_subbed_dolma_1_4b_model,
-            arxiv_no_problem_resiliparse_with_preserve_formatting_subbed_dolma_1_4b_evals,
+            arxiv_no_problem_resiliparse_with_pf_subbed_dolma_1_4b_model,
+            arxiv_no_problem_resiliparse_with_pf_subbed_dolma_1_4b_evals,
         ]
     )
