@@ -57,6 +57,7 @@ class vLLMTextGeneration(TextGeneration):
         llm = vLLMProvider(model_name, engine_kwargs, generation_kwargs)
 
         super().__init__(llm, template, num_generations, prompt_column, save_templated_prompt)
+        self.apply_chat_template = apply_chat_template
 
     def __call__(self, batch: dict[str, Any]) -> dict[str, Any]:
         if self.apply_chat_template:
