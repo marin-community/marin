@@ -6,6 +6,16 @@ data/*
 output/*
 outputs/*
 
+# Snapshot diffs and outputs
+tests/snapshots/wiki/outputs/*
+tests/snapshots/wiki/diffs/*
+tests/snapshots/ar5iv/outputs/*
+tests/snapshots/ar5iv/diffs/*
+tests/snapshots/web/outputs/*
+tests/snapshots/web/diffs/*
+tests/snapshots/stackexchange/outputs/*
+tests/snapshots/stackexchange/diffs/*
+
 # This is mainly for Ray and using submodule
 */**/.git
 
