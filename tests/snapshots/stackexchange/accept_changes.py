@@ -12,7 +12,7 @@ def prepare_expected_output(
     row: dict,
     extract_method: str,
     extract_config: ExtractionConfig,
-    shuffle_answers_template: bool = True,
+    shuffle_answers_template: bool = False,
 ) -> str:
     prepend_vote_count = random.random() < 0.5 if shuffle_answers_template else False
 
@@ -23,7 +23,7 @@ def prepare_expected_output(
 
     content = prepare_md_template(title, question, answers, tags, extract_method, extract_config, prepend_vote_count)
 
-    return content
+    return content.strip()
 
 
 if __name__ == "__main__":
