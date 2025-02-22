@@ -205,7 +205,11 @@ def is_english(text, lid_model):
     # Request all labels/probabilities (k=-1)
     labels, probs = lid_model.predict(normalized_text, k=-1)
     # Create a dictionary {label: probability}
-    label_probs = dict(zip(labels, probs, strict=False))
+    label_probs = dict(zip(labels, probs, strict=True))
+    if "__label__en" not in label_probs:
+        raise ValueError(
+            f"Input text {text} produced labels {labels}, which does not " "include expected english label '__label__en'"
+        )
     # Get the probability of English
     en_prob = label_probs["__label__en"]
     # NOTE: This is not a typo, the original open-web-math
