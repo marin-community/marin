@@ -208,7 +208,10 @@ def is_english(text, lid_model):
     label_probs = dict(zip(labels, probs, strict=False))
     # Get the probability of English
     en_prob = label_probs["__label__en"]
-    # Decide if it's English by your threshold
+    # NOTE: This is not a typo, the original open-web-math
+    # code release checks that both:
+    # (1) the highest-scoring label is 'en'
+    # (2) the probability is >= 0.5
     is_en = en_prob >= 0.5
     return is_en, en_prob
 
