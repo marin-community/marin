@@ -149,8 +149,8 @@ def train_classifier(rank: int, hf_script_args: HFTrainingConfig, train_dataset,
     if rank == 0:
         # NOTE(chris): Cannot run trainer.save_model() because the model is located on the TPU
         # This will lead to a RuntimeError and hang the program without us knowing why.
-        model.cpu().save_pretrained(os.path.join(args.output_dir, "final"))
-        tokenizer.save_pretrained(os.path.join(args.output_dir, "final"))
+        model.cpu().save_pretrained(args.output_dir)
+        tokenizer.save_pretrained(args.output_dir)
 
 
 def train_classifier_distributed(args: ScriptArguments):

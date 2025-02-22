@@ -6,7 +6,8 @@ import yaml
 
 this_path = os.path.dirname(os.path.abspath(__file__))
 
-template_path = os.path.join(this_path, "marin-cluster-template.yaml")
+cluster_template_path = os.path.join(this_path, "marin-cluster-template.yaml")
+vllm_template_path = os.path.join(this_path, "marin-vllm-template.yaml")
 
 # LAtest tahs ABh:  latest 9491ec2a 20250209
 
@@ -20,7 +21,7 @@ DOCKER_TAGS = {
     # NB: different naming convention because we have two zones in europe-west4
     "europe-west4-a": "6da1c9ed",
     "asia-northeast1": "6da1c9ed",
-    "marin-us-east5-b-vllm": "a42be736",
+    "marin-us-east5-b-vllm": "a2bf3b48",
 }
 
 configs = {
@@ -156,6 +157,12 @@ def make_tpu_slice_config(generation, count) -> dict[str, dict]:
     }
 
 
+def get_template_path(config_name):
+    if configs[config_name].get("VLLM", False):
+        return vllm_template_path
+    return cluster_template_path
+
+
 def make_tpu_worker_config(generation, count, min_workers=4):
     _, config = next(iter(make_tpu_slice_config(generation, count).items()))
     config["min_workers"] = min_workers
@@ -163,12 +170,11 @@ def make_tpu_worker_config(generation, count, min_workers=4):
 
 
 if __name__ == "__main__":
-
-    with open(template_path) as f:
-        template = jinja2.Template(f.read())
-
     for config_name, config in configs.items():
         with open(os.path.join(this_path, f"{config_name}.yaml"), "w") as f:
+            with open(get_template_path(config_name)) as f_template:
+                template = jinja2.Template(f_template.read())
+
             yaml_string = template.render(**config)
 
             # pyyaml strips comments, which i'd like to keep

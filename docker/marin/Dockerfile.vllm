@@ -1,8 +1,4 @@
-# FROM rayproject/ray:nightly.240914.bb15a3-py310-cpu
 FROM vllm/vllm-tpu:e92694b6fe264a85371317295bca6643508034ef
-
-# Install general dependencies
-# RUN sudo apt-get update && sudo apt-get install -y clang curl g++ vim libpython3.11 libpython3.11-dev docker.io cmake
 
 # Setup gcsfuse
 RUN apt-get update && apt-get install lsb-release rsync docker.io -y
@@ -14,54 +10,22 @@ RUN apt-get update && apt-get install fuse gcsfuse -y
 RUN mkdir /opt/gcsfuse_mount
 RUN chown -R $(whoami) /opt/gcsfuse_mount
 
-# google cloud cli
 # Install the Google Cloud SDK
-# Update the PATH environment variable
-# Verify the installation
 RUN curl -sSL https://sdk.cloud.google.com > /tmp/gcl && \
-    bash /tmp/gcl --install-dir=/root/gcloud --disable-prompts
-
-# Ray uses conda
-# ENV PATH=/home/ray/anaconda3/bin:/home/ray/anaconda3/bin:/home/ray/anaconda3/condabin:$PATH
-# RUN conda install conda-forge::google-cloud-sdk -y
-# RUN gcloud components install alpha
-# RUN conda install -c conda-forge ncurses -y
-
-# Install Pytorch and VLLM
-# RUN sudo apt update && sudo apt install unzip -y
-# RUN sudo mkdir -p /opt/vllm
-# RUN sudo chown -R $(whoami) /opt/vllm
-# RUN cd /opt/vllm && git clone https://github.com/vllm-project/vllm.git && cd vllm
-# WORKDIR /opt/vllm/vllm
-# RUN pip uninstall torch torch-xla -y
-# RUN sudo apt-get install libopenblas-base libopenmpi-dev libomp-dev -y
-# RUN pip install -r requirements-tpu.txt
-# RUN VLLM_TARGET_DEVICE="tpu" python3 setup.py develop
-
+    bash /tmp/gcl --install-dir=/root/gcloud --disable-prompts \
+    && chown -R $(whoami) /root/gcloud
 
 # Install core dependencies
 RUN pip install --no-cache-dir -U draccus==0.10 google-api-python-client~=2.0 gcsfs google-cloud-storage google-cloud-storage-transfer s3fs regex requests numpy braceexpand deepdiff tqdm tqdm-loggable toml pandas pyarrow levanter==1.2.dev1190
-# NOTE: Try to keep as much "heavy" stuff as possible before this line to avoid re-installing
 
 # Install lm-evaluation-harness
-RUN mkdir -p /opt/lm_eval && chown -R $(whoami) /opt/lm_eval && cd /opt/lm_eval && git clone --depth 1 https://github.com/EleutherAI/lm-evaluation-harness && cd lm-evaluation-harness && pip install -e ".[ifeval]"
-
-# (not installing pyproject.toml because it interferes with Ray's RuntimeEnv deps)
-#WORKDIR /tmp/
-#ADD pyproject.toml /tmp/
-#RUN pip install --no-cache-dir . --extra-index-url https://download.pytorch.org/whl/cpu
+RUN mkdir -p /opt/lm_eval && chown -R $(whoami) /opt/lm_eval && cd /opt/lm_eval && git clone --depth 1 https://github.com/EleutherAI/lm-evaluation-harness && cd lm-evaluation-harness && pip install --no-cache-dir -e ".[ifeval]"
 
 # Add /usr/lib/x86_64-linux-gnu/ to LD_LIBRARY_PATH so that bash prefers the systems
 # libtinfo.so over the conda-provided version. Using the conda-provided libtinfo.so
 # outputs a noisy warning because it doesn't include version information.
 ENV LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/lib/x86_64-linux-gnu/
 ENV LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/home/ray/anaconda3/lib
-# ENV PATH=$PATH:/home/ray/anaconda3/bin
 ENV PATH=$PATH:/root/gcloud/google-cloud-sdk/bin
-
-# to run docker containers, we need to be in the docker group
-# RUN apt-get install docker.io -y
-
-# RUN sudo apt-get update && sudo apt-get install -y podman
 
 WORKDIR /opt/marin
