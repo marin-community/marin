@@ -369,7 +369,7 @@ def get_shard_yield(
                     continue
 
                 extracted_text, extraction_metadata = extraction_result
-                if extracted_text is None:
+                if not extracted_text.strip():
                     num_records_skipped += 1
                     continue
 
