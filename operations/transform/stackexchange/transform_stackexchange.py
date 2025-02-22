@@ -26,14 +26,21 @@ logger = logging.getLogger("ray")
 class StackExchangeExtractionConfig:
     input_path: str
     output_path: str
-    revision: str
     extract_method: str
     extract_config: ExtractionConfig
     max_files: int | None = None
     shuffle_answers_template: bool = True
 
 
-def prepare_md_template(title: str, question: str, answers: list[dict], tags: list[str], extract_method: str, extract_config: ExtractionConfig, prepend_vote_count: bool = True) -> str:
+def prepare_md_template(
+    title: str,
+    question: str,
+    answers: list[dict],
+    tags: list[str],
+    extract_method: str,
+    extract_config: ExtractionConfig,
+    prepend_vote_count: bool = True,
+) -> str:
     """
     Prepares a markdown template for a stackexchange question and answer.
     """
@@ -81,12 +88,21 @@ def process_file(
                     question = row["metadata"]["question"] if "question" in row["metadata"] else row["question"]
                     answers = row["metadata"]["answers"]
                     tags = row["metadata"]["tags"] if "tags" in row["metadata"] else row["tags"]
+                    url = row["metadata"]["url"] if "url" in row["metadata"] else row["url"]
 
-                    content = prepare_md_template(title, question, answers, tags, extract_method, extract_config, prepend_vote_count)
+                    content = prepare_md_template(
+                        title,
+                        question,
+                        answers,
+                        tags,
+                        extract_method,
+                        extract_config,
+                        prepend_vote_count,
+                    )
 
                     out_dict = {
                         "id": row["id"],
-                        "url": row["url"],
+                        "url": url,
                         "title": title,
                         "date_created": row["created"],
                         "text": content,
@@ -97,11 +113,8 @@ def process_file(
 
                     print(json.dumps(out_dict), file=output)  # Without this line, the JSON file will be corrupted
                 except Exception as e:
-                    logger.info(f"Keys in row: {row.keys()}")
-                    logger.info(f"Article body keys: {row['article_body'].keys()}")
-
                     logger.exception(f"Error processing line: {e}")
-                    continue
+                    raise e
 
         logger.info("\nProcessing completed successfully!")
         logger.info(f"File available at: {output_path}")
@@ -115,7 +128,7 @@ def process_file(
 def process_stackexchange_dump(cfg: StackExchangeExtractionConfig) -> None:
     logger.info(f"Starting processing of StackExchange dump in {cfg.input_path}")
 
-    files = fsspec_glob(f"{cfg.input_path}/*.json.gz")
+    files = fsspec_glob(f"{cfg.input_path}/*.jsonl.gz")
 
     # only keep file of the form <id>.json.gz and not <language>.<id>.json.gz
     files = [file for file in files if len(os.path.basename(file).split(".")) == 3]
@@ -125,7 +138,7 @@ def process_stackexchange_dump(cfg: StackExchangeExtractionConfig) -> None:
     MAX_CONCURRENT_WORKERS = 50
 
     if cfg.max_files:
-        files = files[:cfg.max_files]
+        files = files[: cfg.max_files]
 
     for file in files:
         if len(result_refs) > MAX_CONCURRENT_WORKERS:
@@ -136,12 +149,7 @@ def process_stackexchange_dump(cfg: StackExchangeExtractionConfig) -> None:
                 logger.exception(f"Error processing the group: {e}")
                 continue
 
-        output_path = os.path.join(cfg.output_path, cfg.revision)
-        result_refs.append(
-            process_file.remote(
-                file, output_path, cfg.extract_method, cfg.extract_config
-            )
-        )
+        result_refs.append(process_file.remote(file, cfg.output_path, cfg.extract_method, cfg.extract_config))
     try:
         ray.get(result_refs)
     except Exception as e:

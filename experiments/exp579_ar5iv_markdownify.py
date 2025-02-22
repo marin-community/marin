@@ -7,7 +7,7 @@ ARXIV_BLACKLISTED_SELECTORS = [
     "h2.ltx_title_bibliography",
     "div.ltx_classification",
     "span.ltx_role_author",
-    "h1.ltx_title"
+    "h1.ltx_title",
 ]
 
 ar5iv_no_problem_raw = ExecutorStep(
@@ -55,7 +55,7 @@ ar5iv_no_problem_resiliparse_custom_fork = ExecutorStep(
             markdownify_config=HtmlToMarkdownConfig(
                 include_images=False,
                 include_links=False,
-            )
+            ),
         ),
         remove_reference_section=versioned(True),
     ),
@@ -80,7 +80,7 @@ ar5iv_warnings_resiliparse_custom_fork = ExecutorStep(
             markdownify_config=HtmlToMarkdownConfig(
                 include_images=False,
                 include_links=False,
-            )
+            ),
         ),
         remove_reference_section=versioned(True),
     ),
@@ -105,7 +105,7 @@ ar5iv_errors_resiliparse_custom_fork = ExecutorStep(
             markdownify_config=HtmlToMarkdownConfig(
                 include_images=False,
                 include_links=False,
-            )
+            ),
         ),
         remove_reference_section=versioned(True),
     ),

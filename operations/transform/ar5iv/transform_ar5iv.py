@@ -76,13 +76,13 @@ def process_extracted_content(result: str, remove_reference_section: bool = True
     content = result.strip()
 
     # Remove excessive newline characters by replacing multiple \n with a single space
-    content = re.sub(r'\n+', ' ', content)
+    content = re.sub(r"\n+", " ", content)
 
     # Patch up any remaining HTML entities (e.g., &gt; -> >)
     content = html.unescape(content)
 
     # Remove any remaining escaped backslashes (e.g., \\n -> \n)
-    content = content.replace('\\\\n', '\n')
+    content = content.replace("\\\\n", "\n")
 
     content = str(content).strip()
 
@@ -90,7 +90,13 @@ def process_extracted_content(result: str, remove_reference_section: bool = True
 
 
 @ray.remote(memory=2 * 1024 * 1024 * 1024)
-def process_file(input_file_path: str, output_path: str, extract_method: str, extract_config: ExtractionConfig, remove_reference_section: bool = True) -> None:
+def process_file(
+    input_file_path: str,
+    output_path: str,
+    extract_method: str,
+    extract_config: ExtractionConfig,
+    remove_reference_section: bool = True,
+) -> None:
     output_file_path = os.path.join(output_path, input_file_path.split("/")[-1])
 
     logger.info(f"Starting processing of file {input_file_path}")
@@ -108,7 +114,7 @@ def process_file(input_file_path: str, output_path: str, extract_method: str, ex
                     filtered_html = clean_html(row["content"], remove_reference_section)
                     result = convert_page(filtered_html, extract_method=extract_method, config=extract_config)
                     if remove_reference_section:
-                        result["content"] = re.sub(r'\\\[(?:\d+(?:,\s*\d+)*)\\\]', '', result["content"])
+                        result["content"] = re.sub(r"\\\[(?:\d+(?:,\s*\d+)*)\\\]", "", result["content"])
 
                     out_dict = {
                         "id": row["filename"],
@@ -146,8 +152,15 @@ def process_ar5iv_dump(cfg: Ar5ivExtractionConfig) -> None:
                 logger.exception(f"Error processing the group: {e}")
                 continue
 
-        result_refs.append(process_file.remote(file, cfg.output_path, cfg.extract_method, cfg.extract_config, cfg.remove_reference_section))
-
+        result_refs.append(
+            process_file.remote(
+                file,
+                cfg.output_path,
+                cfg.extract_method,
+                cfg.extract_config,
+                cfg.remove_reference_section,
+            )
+        )
     try:
         ray.get(result_refs)
     except Exception as e:

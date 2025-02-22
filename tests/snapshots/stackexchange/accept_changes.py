@@ -8,7 +8,12 @@ from marin.schemas.web.convert import ExtractionConfig, HtmlToMarkdownConfig, Re
 from operations.transform.stackexchange.transform_stackexchange import prepare_md_template
 
 
-def prepare_expected_output(row: dict, extract_method: str, extract_config: ExtractionConfig, shuffle_answers_template: bool = True) -> str:
+def prepare_expected_output(
+    row: dict,
+    extract_method: str,
+    extract_config: ExtractionConfig,
+    shuffle_answers_template: bool = True,
+) -> str:
     prepend_vote_count = random.random() < 0.5 if shuffle_answers_template else False
 
     title = row["metadata"]["title"] if "title" in row["metadata"] else row["title"]
@@ -19,6 +24,7 @@ def prepare_expected_output(row: dict, extract_method: str, extract_config: Extr
     content = prepare_md_template(title, question, answers, tags, extract_method, extract_config, prepend_vote_count)
 
     return content
+
 
 if __name__ == "__main__":
     input_path = "tests/snapshots/stackexchange/inputs"
@@ -44,7 +50,7 @@ if __name__ == "__main__":
                 markdownify_config=HtmlToMarkdownConfig(
                     include_images=False,
                     include_links=False,
-                )
+                ),
             )
             expected = prepare_expected_output(json_data, extract_method, extract_config)
 
