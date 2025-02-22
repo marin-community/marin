@@ -49,17 +49,23 @@ import logging
 import os
 import pathlib
 import random
+import re
+import shutil
+import tempfile
 from dataclasses import asdict, dataclass
 from typing import Any
 
 import draccus
 import fsspec
+import kenlm
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 import ray
 import w3lib.url
+from resiliparse.extract.html2text import extract_plain_text
 from resiliparse.parse.encoding import bytes_to_str, detect_encoding
+from resiliparse.parse.html import HTMLTree
 from tqdm_loggable.auto import tqdm
 from warcio import ArchiveIterator
 
@@ -71,6 +77,108 @@ from marin.utils import fsspec_exists, fsspec_glob
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
+
+
+MATH_KEYWORDS = [
+    "MathJax",
+    "mathjax",
+    "<math",
+    "math-container",
+    "katex.min.css",
+    "latex.php",
+    "codecogs",
+    "tex.cgi",
+    'class="tex"',
+    "class='tex'",
+]
+latex_math_commands = [
+    "\\end",
+    "\\begin",
+    "\\ref",
+    "\\frac",
+    "\\label",
+    "\\bf",
+    "\\right",
+    "\\left",
+    "\\rm",
+    "\\alpha",
+    "\\mu",
+    "\\def",
+    "\\it",
+    "\\pi",
+    "\\sigma",
+    "\\sum",
+    "\\lambda",
+    "\\beta",
+    "\\nu",
+    "\\partial",
+    "\\int",
+    "\\delta",
+    "\\rho",
+    "\\phi",
+    "\\gamma",
+    "\\omega",
+    "\\over",
+    "\\nonumber",
+    "\\bar",
+    "\\sqrt",
+    "\\theta",
+    "\\tau",
+    "\\em",
+    "\\rangle",
+    "\\hat",
+    "\\tilde",
+    "\\cal",
+    "\\hline",
+    "\\item",
+    "\\psi",
+    "\\vec",
+    "\\langle",
+    "\\epsilon",
+    "\\eta",
+    "\\cdot",
+    "\\in",
+    "\\xi",
+    "\\infty",
+    "\\quad",
+    "\\mathcal",
+    "\\times",
+    "\\emph",
+    "\\mathbf",
+    "\\prime",
+    "\\be",
+    "\\mathrm",
+    "\\ee",
+    "\\vspace",
+    "\\pm",
+    "\\chi",
+    "\\ell",
+    "\\text",
+    "\\qquad",
+    "\\noindent",
+    "\\to",
+    "\\varphi",
+    "\\hspace",
+    "\\leq",
+    "\\cos",
+    "\\eqref",
+    "\\overline",
+    "\\sin",
+    "\\kappa",
+    "\\hbox",
+    "\\rightarrow",
+    "\\varepsilon",
+    "\\textit",
+    "\\dagger",
+    "\\big",
+    "\\otimes",
+    "\\equiv",
+    "\\zeta",
+    "\\dot",
+    "\\ln",
+]
+latex_regex = re.compile("\\\\[a-z]{2,}")
+original_regex = re.compile("|".join(MATH_KEYWORDS))
 
 
 @dataclass
@@ -92,6 +200,25 @@ class GetCrawlYieldConfig:
     urls_and_scores_output_directory: str
 
 
+def is_english(text, lid_model):
+    normalized_text = normalize(text).replace("\n", " ")
+    # Request all labels/probabilities (k=-1)
+    labels, probs = lid_model.predict(normalized_text, k=-1)
+    # Create a dictionary {label: probability}
+    label_probs = dict(zip(labels, probs, strict=False))
+    # Get the probability of English
+    en_prob = label_probs["__label__en"]
+    # Decide if it's English by your threshold
+    is_en = en_prob >= 0.5
+    return is_en, en_prob
+
+
+def document_perplexity(text, lm):
+    text = normalize(text)
+    score = lm.score(text)
+    return 10 ** (-score / len(text.split()))
+
+
 def score_text(text, score_model):
     normalized_text = normalize(text).replace("\n", " ")
     # Remove any [EQUATION] tokens
@@ -101,7 +228,6 @@ def score_text(text, score_model):
         prob = pred[1][0]
     else:
         prob = pred[1][1]
-
     return prob
 
 
@@ -121,6 +247,27 @@ def decode_html(html: bytes) -> str | None:
         except Exception:
             return
     return html
+
+
+def contains_math_prefilter(data, score_model):
+    original_match = original_regex.search(data)
+    if original_match:
+        return True
+    latex_match = latex_regex.search(data)
+    text = ""
+    if latex_match:
+        data = data.replace("<template", "<div")
+        data = data.replace("</template", "</div")
+        tree = HTMLTree.parse(data)
+        text = extract_plain_text(tree, main_content=True, alt_texts=False)
+        for term in latex_math_commands:
+            if term in text:
+                return True
+        score = score_text(text, score_model)
+        if score > 0.8 and len(text) > 500:
+            return True
+
+    return False
 
 
 @ray.remote(
@@ -164,6 +311,20 @@ def get_shard_yield(
     mathscore_model = FasttextClassifier(model_name="open-web-math/filtering-models", attribute_name="")
     logger.info("Loaded mathscore model")
 
+    logger.info("Loading language ID model")
+    # NOTE: we don't use the attribute functionality in FasttextClassifier
+    lid_model = FasttextClassifier(model_name="julien-c/fasttext-language-id", attribute_name="")
+    logger.info("Loaded language ID model")
+
+    logger.info("Loading language model for perplexity filtering")
+    LM_URL = "https://huggingface.co/open-web-math/filtering-models/resolve/main/lm-v2.binary"
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        local_lm_path = os.path.join(tmp_dir, "lm-v2.binary")
+        with fsspec.open(LM_URL, "rb", block_size=1 * 1024 * 1024 * 1024) as src, open(local_lm_path, "wb") as dst:
+            shutil.copyfileobj(src, dst)
+        lm = kenlm.Model(local_lm_path)
+    logger.info("Loaded language model for perplexity filtering")
+
     randomized_config = OpenWebMathConfig(
         os.path.join(os.path.dirname(__file__), "open-web-math", "configs", "randomized_all.yaml")
     )
@@ -189,6 +350,10 @@ def get_shard_yield(
                     num_records_skipped += 1
                     continue
 
+                # Apply the prefilter
+                passes_prefilter = contains_math_prefilter(html_decoded, mathscore_model)
+
+                # Extract text, randomizing whether it's markdown or plaintext
                 randomized_config_sample = randomized_config.sample()
                 try:
                     extraction_result = extract_text(html_decoded, randomized_config_sample, fast=True)
@@ -201,15 +366,28 @@ def get_shard_yield(
                     continue
 
                 extracted_text, extraction_metadata = extraction_result
-                score = score_text(extracted_text, mathscore_model)
+                # Apply the language ID filter
+                passes_langid_filter, en_probability = is_english(extracted_text, lid_model)
+                # Apply the perplexity filter
+                perplexity = document_perplexity(extracted_text, lm)
+                passes_perplexity_filter = perplexity <= 30_000
+                # Apply the mathscore filter
                 found_math = extraction_metadata["found_math"]
-                canonicalized_url = w3lib.url.canonicalize_url(record_url)
+                score = score_text(extracted_text, mathscore_model)
+                passes_mathscore_filter = (found_math and score > 0.15) or (not found_math and score > 0.8)
 
+                canonicalized_url = w3lib.url.canonicalize_url(record_url)
                 urls_and_scores_record = {
                     "url": record_url,
                     "canonicalized_url": canonicalized_url,
-                    "score": score,
+                    "passes_prefilter": passes_prefilter,
+                    "passes_langid_filter": passes_langid_filter,
+                    "en_probability": en_probability,
+                    "passes_perplexity_filter": passes_perplexity_filter,
+                    "perplexity": perplexity,
                     "found_math": found_math,
+                    "score": score,
+                    "passes_mathscore_filter": passes_mathscore_filter,
                 }
                 record_id = record.rec_headers.get_header("WARC-Record-ID")
                 assert record_id
@@ -223,28 +401,25 @@ def get_shard_yield(
                         format="text",
                         text=extracted_text,
                         metadata={
-                            "url": record_url,
-                            "canonicalized_url": canonicalized_url,
+                            **urls_and_scores_record,
                             "date": record_date,
                             "file_path": warc_path,
-                            "score": score,
-                            "found_math": found_math,
                         },
                     )
                 )
-                passed_quality_filters = False
-                if found_math and score > 0.15:
-                    passed_quality_filters = True
-                    # If the URL has LaTeX, the threshold is 0.15.
-                    num_records_passing += 1
-                elif not found_math and score > 0.8:
-                    passed_quality_filters = True
-                    # If the URL doesn't have LaTeX, the threshold is 0.8.b
-                    num_records_passing += 1
 
+                passed_quality_filters = all(
+                    [
+                        passes_prefilter,
+                        passes_langid_filter,
+                        passes_perplexity_filter,
+                        passes_mathscore_filter,
+                    ]
+                )
                 if passed_quality_filters:
                     passing_urls_and_scores_output_records.append(urls_and_scores_record)
                     passing_text_and_scores_output_records.append(text_and_scores_record)
+                    num_records_passing += 1
                 else:
                     failing_urls_and_scores_output_records.append(urls_and_scores_record)
                     failing_text_and_scores_output_records.append(text_and_scores_record)
