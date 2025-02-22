@@ -43,10 +43,11 @@ class FasttextClassifier(BaseClassifier):
         "julien-c/fasttext-language-id": "lid.176.bin",
     }
 
-    def __init__(self, model_name: str, attribute_name: str, *args, **kwargs):
+    def __init__(self, model_name: str, attribute_name: str, k: int = 2, *args, **kwargs):
         self.model_name = model_name
         self.attribute_name = attribute_name
         self.model = self.load_model()
+        self.k = k
 
     def load_model(self):
         from fasttext.FastText import _FastText
@@ -125,8 +126,8 @@ class FasttextClassifier(BaseClassifier):
 
         return model
 
-    def predict(self, documents: list[str], k=2):
-        return self.model.predict(documents, k=k)
+    def predict(self, documents: list[str]):
+        return self.model.predict(documents, k=self.k)
 
     def __call__(self, batch: dict[str, Any]):
         texts = []
