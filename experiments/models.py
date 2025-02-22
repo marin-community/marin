@@ -60,7 +60,8 @@ def download_model_step(model_config: ModelConfig) -> ExecutorStep:
 
 
 def get_model_local_path(step: ExecutorStep) -> str:
-    return os.path.join(LOCAL_PREFIX, get_directory_friendly_name(step.name))
+    model_repo_name = step.name[len(GCS_FUSE_MOUNT_PATH) + 1 :]
+    return os.path.join(LOCAL_PREFIX, GCS_FUSE_MOUNT_PATH, model_repo_name)
 
 
 smollm2_1_7b_instruct = download_model_step(
