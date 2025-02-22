@@ -320,6 +320,7 @@ def get_shard_yield(
     logger.info("Loaded language ID model")
 
     logger.info("Loading language model for perplexity filtering")
+    # TODO(nfliu): make this more sophisticated with a filelock to prevent repeated downloads on the same host.
     LM_URL = "https://huggingface.co/open-web-math/filtering-models/resolve/main/lm-v2.binary"
     with tempfile.TemporaryDirectory() as tmp_dir:
         local_lm_path = os.path.join(tmp_dir, "lm-v2.binary")
