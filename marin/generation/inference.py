@@ -5,9 +5,9 @@ from typing import Any
 import ray
 from ray.data import DataContext
 from ray.data.datasource import FilenameProvider
-from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
 from marin.generation.pipeline import vLLMTextGeneration
+from marin.generation.ray_utils import get_scheduling_strategy_fn
 from marin.utils import fsspec_glob
 
 
@@ -30,11 +30,12 @@ class TextGenerationInferenceConfig:
     batch_size: int = 32
     tensor_parallel_size: int = 1
     preserve_order: bool = True
-    one_to_one_input_output_mapping: bool = True
+    one_to_one_input_output_mapping: bool = False
 
     # File specific
     filetype: str = "jsonl.gz"
     prompt_column: str = "text"
+    save_templated_prompt: bool = False
 
 
 class OneToOneFilenameProvider(FilenameProvider):
@@ -64,23 +65,11 @@ def set_ray_data_config(config: TextGenerationInferenceConfig):
     ctx.wait_for_min_actors_s = 60 * 10 * config.tensor_parallel_size
 
 
-def get_scheduling_strategy_fn(config: TextGenerationInferenceConfig):
-    def scheduling_strategy_fn():
-        # One bundle per tensor parallel worker
-        pg = ray.util.placement_group(
-            [{"TPU": 1, "CPU": 1}] * config.tensor_parallel_size,
-            strategy="PACK",  # STRICT_PACK means same node, PACK means different node possible
-        )
-        return dict(scheduling_strategy=PlacementGroupSchedulingStrategy(pg, placement_group_capture_child_tasks=True))
-
-    return scheduling_strategy_fn
-
-
 def ray_resources_kwarg(config: TextGenerationInferenceConfig):
     if config.tensor_parallel_size == 1:
         return {"resources": {"TPU": 1}}
     else:
-        return {"ray_remote_args_fn": get_scheduling_strategy_fn(config)}
+        return {"ray_remote_args_fn": get_scheduling_strategy_fn(config.tensor_parallel_size)}
 
 
 def get_ray_data_read_kwargs(config: TextGenerationInferenceConfig):
@@ -122,6 +111,7 @@ def run_inference(config: TextGenerationInferenceConfig):
             "generation_kwargs": config.generation_kwargs,
             "template": config.template,
             "prompt_column": config.prompt_column,
+            "save_templated_prompt": config.save_templated_prompt,
         },
         **ray_resources_kwarg(config),
     )
