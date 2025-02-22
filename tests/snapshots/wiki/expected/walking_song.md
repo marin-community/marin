@@ -66,32 +66,4 @@ Both versions of the poem have been set to music by the Danish group The Tolkien
 
 ### Primary
 
-1. Tolkien 1955, Index
-2. Tolkien 1954a, "Three is Company"
-3. Tolkien 1954a, book 1, ch. 1 "A Long-Expected Party"
-4. Tolkien 1954a, book 1, ch. 3 "Three is Company"
-5. Tolkien 1955, book 6, ch. 6 "Many Partings"
-6. Tolkien 1955, book 6, ch. 9 "The Grey Havens"
-7. Tolkien 1955, "The Siege of Gondor"
-
 ### Secondary
-
-1. Text of "A Walking Song"
-2. "A Walking Song" reprised
-3. Croft, Janet Brennan, ed. (2007). "What's at the Bottom of The Lord of the Rings and A Midsummer Night's Dream?". *Tolkien and Shakespeare: Essays on Shared Themes and Language*. McFarland & Company. pp. 52–53. ISBN 978-0-786428274. Citing: Elgin, Don D. (1985). *The Comedy of the Fantastic: Ecological Perspectives on the Fantasy Novel*. Greenwood Press. ISBN 9780313232831.
-4. Shippey 2005, pp. 324–328.
-5. Wood, Ralph C. (2003). *The Gospel according to Tolkien*. Westminster John Knox. pp. 45–46. ISBN 978-0-664234669.
-6. *The Lord of the Rings: The Return of the King* Soundtrack - liner notes
-7. Sheet music for "The Steward of Gondor"
-8. Adams 2010, pp. 299–300 "The Sacrifice of Faramir".
-9. "The Return of the King, disc 2, track 4: The Sacrifice of Faramir Featuring "The Edge of Night" performed by Billy Boyd". *The Lord of the Rings Score Analysis Project*. Retrieved 15 September 2024.
-10. Annotated transcripts of the theatrical and extended versions of *The Lord of the Rings: The Return of the King*
-11. *The Lord of the Rings: The Return of the King* \- Special Extended DVD Edition
-12. McCormick, Colin; Louie, Leanne (2 April 2024). "Tolkien's Best: 8 Quotes To Inspire Adventure". *Screenrant*. Retrieved 15 September 2024.
-13. A selection of independent international reviews is given at Weichmann, Christian. "The Lord of the Rings: Complete Songs and Poems (4-CD-Box)". The Tolkien Ensemble. Archived from the original on 27 October 2016. Retrieved 13 January 2020.
-14. Review of At Dawn In Rivendell from Scifi Dimensions
-15. Review of At Dawn In Rivendell from TheOneRing.net
-16. Devlin, Grem. "Living Tradition CD review of Nick Keir - The Edge Of Night". *www.livingtradition.co.uk*. Retrieved 31 January 2023.
-17. "Edge of Night". *Nick Keir*. 1 October 2012. Retrieved 31 January 2023.
-
-### Sources
