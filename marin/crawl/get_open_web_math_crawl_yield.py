@@ -203,7 +203,7 @@ class GetCrawlYieldConfig:
 def is_english(text, lid_model):
     normalized_text = normalize(text).replace("\n", " ")
     # Request all labels/probabilities (k=-1)
-    labels, probs = lid_model.predict(normalized_text, k=-1)
+    labels, probs = lid_model.predict(normalized_text)
     # Create a dictionary {label: probability}
     label_probs = dict(zip(labels, probs, strict=True))
     # Get the probability of English.
@@ -319,7 +319,7 @@ def get_shard_yield(
 
     logger.info("Loading language ID model")
     # NOTE: we don't use the attribute functionality in FasttextClassifier
-    lid_model = FasttextClassifier(model_name="julien-c/fasttext-language-id", attribute_name="")
+    lid_model = FasttextClassifier(model_name="julien-c/fasttext-language-id", attribute_name="", k=-1)
     logger.info("Loaded language ID model")
 
     logger.info("Loading language model for perplexity filtering")
