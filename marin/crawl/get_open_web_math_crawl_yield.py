@@ -44,6 +44,8 @@ python marin/run/ray_run.py \
     --statistics_output_path gs://marin-us-central2/scratch/nfliu/fetched_outlinks/open-web-math-fde8ef8-10M-cc-deduplicated/yield_statistics.json.gz
 ```
 """  # noqa: E501
+import atexit
+import hashlib
 import json
 import logging
 import os
@@ -51,7 +53,6 @@ import pathlib
 import random
 import re
 import shutil
-import tempfile
 from dataclasses import asdict, dataclass
 from typing import Any
 
@@ -63,6 +64,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import ray
 import w3lib.url
+from filelock import FileLock
 from resiliparse.extract.html2text import extract_plain_text
 from resiliparse.parse.encoding import bytes_to_str, detect_encoding
 from resiliparse.parse.html import HTMLTree
@@ -325,11 +327,32 @@ def get_shard_yield(
     logger.info("Loading language model for perplexity filtering")
     # TODO(nfliu): make this more sophisticated with a filelock to prevent repeated downloads on the same host.
     LM_URL = "https://huggingface.co/open-web-math/filtering-models/resolve/main/lm-v2.binary"
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        local_lm_path = os.path.join(tmp_dir, "lm-v2.binary")
-        with fsspec.open(LM_URL, "rb", block_size=1 * 1024 * 1024 * 1024) as src, open(local_lm_path, "wb") as dst:
-            shutil.copyfileobj(src, dst)
-        lm = kenlm.Model(local_lm_path)
+    model_descriptor = hashlib.md5(LM_URL.encode()).hexdigest()
+    lock_file = f"/tmp/{model_descriptor}.lock"
+    success_file = f"/tmp/{model_descriptor}.success"
+    local_filepath = f"/tmp/{model_descriptor}/lm-v2.binary"
+    if os.path.exists(success_file) and not os.path.exists(local_filepath):
+        logger.info(
+            f"Warning: Success file found for {LM_URL}, but model file not found. "
+            f"Removing stale success file {success_file}"
+        )
+        os.unlink(success_file)
+
+    with FileLock(lock_file):
+        if not os.path.exists(success_file):
+            os.makedirs(f"/tmp/{model_descriptor}", exist_ok=True)
+            with fsspec.open(LM_URL, "rb", block_size=1 * 1024 * 1024 * 1024) as src, open(local_filepath, "wb") as dst:
+                shutil.copyfileobj(src, dst)
+            atexit.register(lambda: os.unlink(local_filepath))
+            logger.info(f"Downloaded model from {LM_URL} to {local_filepath}")
+            with open(success_file, "w") as f:
+                f.write("success")
+            atexit.register(lambda: os.unlink(success_file))
+        else:
+            logger.info(f"Model already downloaded to {local_filepath}")
+
+    assert os.path.exists(success_file) and os.path.exists(local_filepath), f"Model file {local_filepath} not found"
+    lm = kenlm.Model(local_filepath)
     logger.info("Loaded language model for perplexity filtering")
 
     randomized_config = OpenWebMathConfig(
