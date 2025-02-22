@@ -24,6 +24,8 @@ class TextGenerationInferenceConfig:
 
     # Prompting specific
     template: str
+    apply_chat_template: bool = True
+    save_templated_prompt: bool = False
 
     # Ray data specific
     num_instances: tuple[int, int] = (1, 4)
@@ -34,8 +36,9 @@ class TextGenerationInferenceConfig:
 
     # File specific
     filetype: str = "jsonl.gz"
+    # If none, then we use the same filetype as the input if possible, if not then we use json.
+    output_filetype_override: str | None = None
     prompt_column: str = "text"
-    save_templated_prompt: bool = False
 
 
 class OneToOneFilenameProvider(FilenameProvider):
@@ -47,6 +50,14 @@ class OneToOneFilenameProvider(FilenameProvider):
         input_filename = self.files[task_index]
         output_filename = os.path.basename(input_filename)
         return output_filename
+
+
+class OverwriteOutputFiletypeFilenameProvider(FilenameProvider):
+    def __init__(self, file_format: str):
+        self.file_format = file_format
+
+    def get_filename_for_block(self, block, task_index, block_index):
+        return f"{task_index:06}_{block_index:06}" f".{self.file_format}"
 
 
 def set_ray_data_config(config: TextGenerationInferenceConfig):
@@ -76,6 +87,8 @@ def get_ray_data_read_kwargs(config: TextGenerationInferenceConfig):
     ray_data_read_kwargs = {}
     if config.filetype == "jsonl.gz":
         ray_data_read_kwargs["arrow_open_stream_args"] = {"compression": "gzip"}
+    elif config.filetype == "jsonl.zst":
+        ray_data_read_kwargs["arrow_open_stream_args"] = {"compression": "zstd"}
 
     if config.one_to_one_input_output_mapping:
         files = fsspec_glob(os.path.join(config.input_path, f"**/*.{config.filetype}"))
@@ -89,6 +102,11 @@ def get_ray_data_write_kwargs(config: TextGenerationInferenceConfig):
     if config.one_to_one_input_output_mapping:
         files = fsspec_glob(os.path.join(config.input_path, f"**/*.{config.filetype}"))
         ray_data_write_kwargs["filename_provider"] = OneToOneFilenameProvider(files, config.input_path)
+    elif config.output_filetype_override:
+        ray_data_write_kwargs["filename_provider"] = OverwriteOutputFiletypeFilenameProvider(
+            config.output_filetype_override
+        )
+
     return ray_data_write_kwargs
 
 
@@ -112,6 +130,7 @@ def run_inference(config: TextGenerationInferenceConfig):
             "template": config.template,
             "prompt_column": config.prompt_column,
             "save_templated_prompt": config.save_templated_prompt,
+            "apply_chat_template": config.apply_chat_template,
         },
         **ray_resources_kwarg(config),
     )
