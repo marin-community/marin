@@ -206,12 +206,11 @@ def is_english(text, lid_model):
     labels, probs = lid_model.predict(normalized_text, k=-1)
     # Create a dictionary {label: probability}
     label_probs = dict(zip(labels, probs, strict=True))
-    if "__label__en" not in label_probs:
-        raise ValueError(
-            f"Input text {text} produced labels {labels}, which does not include expected english label '__label__en'"
-        )
-    # Get the probability of English
-    en_prob = label_probs["__label__en"]
+    # Get the probability of English.
+    # Sometimes, "__label__en" doesn't show up in the predicted labels
+    # (e.g., if the input text is all Chinese characters). In that case, we'll
+    # just default to a probability of zero.
+    en_prob = label_probs.get("__label__en", 0.0)
     # NOTE: This is not a typo, the original open-web-math
     # code release checks that both:
     # (1) the highest-scoring label is 'en'
