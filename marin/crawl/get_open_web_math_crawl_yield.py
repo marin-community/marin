@@ -369,6 +369,10 @@ def get_shard_yield(
                     continue
 
                 extracted_text, extraction_metadata = extraction_result
+                if extracted_text is None:
+                    num_records_skipped += 1
+                    continue
+
                 # Apply the language ID filter
                 passes_langid_filter, en_probability = is_english(extracted_text, lid_model)
                 # Apply the perplexity filter
