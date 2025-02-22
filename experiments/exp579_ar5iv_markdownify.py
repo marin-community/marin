@@ -10,6 +10,7 @@ ARXIV_BLACKLISTED_SELECTORS = [
     "h1.ltx_title",
 ]
 
+# Dataset Source: https://sigmathling.kwarc.info/resources/ar5iv-dataset-2024/
 ar5iv_no_problem_raw = ExecutorStep(
     name="raw/ar5iv/ar5iv-04-2024-no-problem",
     fn=download,
@@ -34,6 +35,150 @@ ar5iv_errors_raw = ExecutorStep(
     config=DownloadConfig(
         input_path="gs://marin-us-central2/raw/ar5iv/v04.2024/ar5iv-04-2024-errors.zip",
         output_path=this_output_path(),
+    ),
+)
+
+ar5iv_no_problem_readability_no_references_no_links = ExecutorStep(
+    name="documents/ar5iv/ar5iv-04-2024-no-problem-readability-no-references-no-links",
+    fn=process_ar5iv_dump,
+    config=Ar5ivExtractionConfig(
+        input_path=output_path_of(ar5iv_no_problem_raw),
+        revision="042024",
+        output_path=this_output_path("readability-no-references-no-links"),
+        extract_method=versioned("readability"),
+        extract_config=HtmlToMarkdownConfig(
+            include_images=False,
+            include_links=False,
+        ),
+        remove_reference_section=versioned(True),
+    ),
+)
+
+ar5iv_no_problem_readability_no_references_with_links = ExecutorStep(
+    name="documents/ar5iv/ar5iv-04-2024-no-problem-readability-no-references-with-links",
+    fn=process_ar5iv_dump,
+    config=Ar5ivExtractionConfig(
+        input_path=output_path_of(ar5iv_no_problem_raw),
+        revision="042024",
+        output_path=this_output_path("readability-no-references-with-links"),
+        extract_method=versioned("readability"),
+        extract_config=HtmlToMarkdownConfig(
+            include_images=False,
+            include_links=True,
+        ),
+        remove_reference_section=versioned(True),
+    ),
+)
+
+ar5iv_no_problem_readability_with_references_no_links = ExecutorStep(
+    name="documents/ar5iv/ar5iv-04-2024-no-problem-readability-with-references-no-links",
+    fn=process_ar5iv_dump,
+    config=Ar5ivExtractionConfig(
+        input_path=output_path_of(ar5iv_no_problem_raw),
+        revision="042024",
+        output_path=this_output_path("readability-with-references-no-links"),
+        extract_method=versioned("readability"),
+        extract_config=HtmlToMarkdownConfig(
+            include_images=False,
+            include_links=False,
+        ),
+        remove_reference_section=versioned(False),
+    ),
+)
+
+ar5iv_no_problem_readability_with_references_with_links = ExecutorStep(
+    name="documents/ar5iv/ar5iv-04-2024-no-problem-readability-with-references-with-links",
+    fn=process_ar5iv_dump,
+    config=Ar5ivExtractionConfig(
+        input_path=output_path_of(ar5iv_no_problem_raw),
+        revision="042024",
+        output_path=this_output_path("readability-with-references-with-links"),
+        extract_method=versioned("readability"),
+        extract_config=HtmlToMarkdownConfig(
+            include_images=False,
+            include_links=True,
+        ),
+        remove_reference_section=versioned(False),
+    ),
+)
+
+ar5iv_no_problem_resiliparse_no_references_no_links = ExecutorStep(
+    name="documents/ar5iv/ar5iv-04-2024-no-problem-resiliparse-no-references-no-links",
+    fn=process_ar5iv_dump,
+    config=Ar5ivExtractionConfig(
+        input_path=output_path_of(ar5iv_no_problem_raw),
+        revision="042024",
+        output_path=this_output_path("resiliparse-no-references-no-links"),
+        extract_method=versioned("resiliparse"),
+        extract_config=ResiliparseConfig(
+            preserve_formatting=True,
+            main_content=True,
+            links=versioned(False),
+            prepend_title=True,
+            skip_elements=ARXIV_BLACKLISTED_SELECTORS,
+            use_custom_variant=False,
+        ),
+        remove_reference_section=versioned(True),
+    ),
+)
+
+ar5iv_no_problem_resiliparse_no_references_with_links = ExecutorStep(
+    name="documents/ar5iv/ar5iv-04-2024-no-problem-resiliparse-no-references-with-links",
+    fn=process_ar5iv_dump,
+    config=Ar5ivExtractionConfig(
+        input_path=output_path_of(ar5iv_no_problem_raw),
+        revision="042024",
+        output_path=this_output_path("resiliparse-no-references-with-links"),
+        extract_method=versioned("resiliparse"),
+        extract_config=ResiliparseConfig(
+            preserve_formatting=True,
+            main_content=True,
+            links=versioned(True),
+            prepend_title=True,
+            skip_elements=ARXIV_BLACKLISTED_SELECTORS,
+            use_custom_variant=False,
+        ),
+        remove_reference_section=versioned(True),
+    ),
+)
+
+ar5iv_no_problem_resiliparse_with_references_no_links = ExecutorStep(
+    name="documents/ar5iv/ar5iv-04-2024-no-problem-resiliparse-with-references-no-links",
+    fn=process_ar5iv_dump,
+    config=Ar5ivExtractionConfig(
+        input_path=output_path_of(ar5iv_no_problem_raw),
+        revision="042024",
+        output_path=this_output_path("resiliparse-with-references-no-links"),
+        extract_method=versioned("resiliparse"),
+        extract_config=ResiliparseConfig(
+            preserve_formatting=True,
+            main_content=True,
+            links=versioned(False),
+            prepend_title=True,
+            skip_elements=ARXIV_BLACKLISTED_SELECTORS,
+            use_custom_variant=False,
+        ),
+        remove_reference_section=versioned(False),
+    ),
+)
+
+ar5iv_no_problem_resiliparse_with_references_with_links = ExecutorStep(
+    name="documents/ar5iv/ar5iv-04-2024-no-problem-resiliparse-with-references-with-links",
+    fn=process_ar5iv_dump,
+    config=Ar5ivExtractionConfig(
+        input_path=output_path_of(ar5iv_no_problem_raw),
+        revision="042024",
+        output_path=this_output_path("resiliparse-with-references-with-links"),
+        extract_method=versioned("resiliparse"),
+        extract_config=ResiliparseConfig(
+            preserve_formatting=True,
+            main_content=True,
+            links=versioned(True),
+            prepend_title=True,
+            skip_elements=ARXIV_BLACKLISTED_SELECTORS,
+            use_custom_variant=False,
+        ),
+        remove_reference_section=versioned(False),
     ),
 )
 

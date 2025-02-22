@@ -56,39 +56,14 @@ DOLMA_DATASETS = {
 }
 
 
-def tokenize_dolma_steps(
-    *,
-    base_path="tokenized/",
-    tokenizer=llama3_tokenizer,
-    substitute: dict[str, list[str]] | None = None,
-    prefix: str | None = None,
-) -> dict[str, TokenizerStep]:
-    """
-    Tokenizes the Dolma 1.7 datasets.
-
-    Args:
-        base_path (str): The base path for the tokenized datasets.
-        tokenizer (Callable[[], Tokenizer]): The tokenizer to use.
-        substitute (dict[str, list[str]] | None): The datasets to substitute from the base dataset.
-        prefix (str | None): The key prefix to use for the substituted datasets.
-
-    Returns:
-        dict[str, ExecutorStep[TokenizeConfig]]: The steps for the tokenized datasets.
-    """
+def tokenize_dolma_steps(*, base_path="tokenized/", tokenizer=llama3_tokenizer) -> dict[str, TokenizerStep]:
     dolma_steps: dict[str, ExecutorStep[TokenizeConfig]] = {}
     for dataset, files in DOLMA_DATASETS.items():
-        data_files = None
-        if substitute is not None and dataset in substitute:
-            data_files = substitute[dataset]
-            dataset = f"{dataset}-subbed-{prefix}"
-        else:
-            data_files = [f"{BASE_DIR_DOLMA}/{file}" for file in files]
-
         dolma_steps[os.path.join("dolma", dataset)] = ExecutorStep(
             name=os.path.join(base_path, "dolma", dataset),
             fn=tokenize,
             config=TokenizeConfig(
-                train_paths=versioned(data_files),
+                train_paths=versioned([f"{BASE_DIR_DOLMA}/{file}" for file in files]),
                 validation_paths=versioned([]),
                 cache_path=this_output_path(),
                 tokenizer=versioned(tokenizer),
