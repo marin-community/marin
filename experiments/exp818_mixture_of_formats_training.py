@@ -2,57 +2,22 @@
 Tokenizes the Dolma 1.7 datasets.
 """
 
-import copy
-import os.path
-
-from experiments.defaults import default_train
-from experiments.dolma.tokenize_dolma import BASE_DIR_DOLMA, DOLMA_DATASETS, DOLMA_OLMO_MIXTURE_WEIGHTS
+from experiments.defaults import default_tokenize, default_train
+from experiments.dolma.tokenize_dolma import DOLMA_OLMO_MIXTURE_WEIGHTS, tokenize_dolma_steps
 from experiments.evals.evals import default_eval
+from experiments.exp575_wikipedia_markdownify import wikipedia_resiliparse_custom_fork
+from experiments.exp579_ar5iv_markdownify import ar5iv_no_problem_resiliparse_custom_fork
 from experiments.llama import llama3_tokenizer, llama_1_4b, llama_1_4b_train_config
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
-from marin.processing.tokenize import TokenizeConfig, tokenize
-from marin.processing.tokenize.data_configs import TokenizerStep, lm_mixture_data_config
-from marin.utils import fsspec_glob
+from marin.execution.executor import executor_main
+from marin.processing.tokenize.data_configs import lm_mixture_data_config
 
 EXPERIMENT_TAG = ["mixture-of-formats-training"]
 
-
-def tokenize_dolma_mixture_steps(
-    *, base_path="tokenized/", tokenizer=llama3_tokenizer, DOLMA_DATASETS: dict[str, list[str]] = DOLMA_DATASETS
-) -> dict[str, TokenizerStep]:
-    """
-    Tokenizes the Dolma 1.7 datasets.
-
-    Args:
-        base_path (str): The base path for the tokenized datasets.
-        tokenizer (Callable[[], Tokenizer]): The tokenizer to use.
-
-    Returns:
-        dict[str, ExecutorStep[TokenizeConfig]]: The steps for the tokenized datasets.
-    """
-    dolma_steps: dict[str, ExecutorStep[TokenizeConfig]] = {}
-    for dataset, files in DOLMA_DATASETS.items():
-        data_files = files if "markdownified" in dataset else [f"{BASE_DIR_DOLMA}/{file}" for file in files]
-
-        dolma_steps[os.path.join("dolma", dataset)] = ExecutorStep(
-            name=os.path.join(base_path, "dolma", dataset),
-            fn=tokenize,
-            config=TokenizeConfig(
-                train_paths=versioned(data_files),
-                validation_paths=versioned([]),
-                cache_path=this_output_path(),
-                tokenizer=versioned(tokenizer),
-            ),
-            pip_dependency_groups=["sentencepiece"],
-        )
-
-    return dolma_steps
-
+tokenized_dolma_steps = tokenize_dolma_steps()
 
 # BASELINE DOLMA TRAINING
-no_mixture_tokenized = tokenize_dolma_mixture_steps(DOLMA_DATASETS=DOLMA_DATASETS)
 no_mixture_llama3_tokenized = lm_mixture_data_config(
-    components=no_mixture_tokenized,
+    components=tokenized_dolma_steps,
     weights=DOLMA_OLMO_MIXTURE_WEIGHTS,
 )
 
@@ -65,24 +30,24 @@ no_mixture_dolma_model = default_train(
 )
 no_mixture_dolma_evals = default_eval(step=no_mixture_dolma_model)
 
-# Clone the weights to avoid mixing up the weights between the different experiments
-DOLMA_OLMO_MIXTURE_WEIGHTS_CLONE = copy.deepcopy(DOLMA_OLMO_MIXTURE_WEIGHTS)
 
 # ARXIV ONLY MIXING FOR MARKDOWNIFIED DATASETS
-DOLMA_OLMO_MIXTURE_WEIGHTS["dolma/arxiv"] = DOLMA_OLMO_MIXTURE_WEIGHTS["dolma/arxiv"] / 2
-DOLMA_OLMO_MIXTURE_WEIGHTS["dolma/arxiv-markdownified"] = DOLMA_OLMO_MIXTURE_WEIGHTS["dolma/arxiv"]
-
-arxiv_markdownified_path = (
-    "gs://marin-us-central2/documents/ar5iv/ar5iv-04-2024-no-problem-3971ff/resiliparse-custom-fork"
+arxiv_markdownified_tokenized = default_tokenize(
+    name="arxiv-resiliparse-custom-fork",
+    dataset=ar5iv_no_problem_resiliparse_custom_fork,
+    tokenizer=llama3_tokenizer,
 )
-arxiv_markdownified_files = fsspec_glob(f"{arxiv_markdownified_path}/*.jsonl.gz")
 
-DOLMA_DATASETS["arxiv-markdownified"] = arxiv_markdownified_files
+dolma_arxiv_tokenization_steps = dict(
+    tokenized_dolma_steps, {"arxiv-resiliparse-custom-fork": arxiv_markdownified_tokenized}
+)
+arxiv_weights = dict(
+    DOLMA_OLMO_MIXTURE_WEIGHTS, {"arxiv-resiliparse-custom-fork": DOLMA_OLMO_MIXTURE_WEIGHTS["dolma/arxiv"]}
+)
 
-arxiv_only_subbed_tokenized = tokenize_dolma_mixture_steps(DOLMA_DATASETS=DOLMA_DATASETS)
 arxiv_only_subbed_llama3_tokenized = lm_mixture_data_config(
-    components=arxiv_only_subbed_tokenized,
-    weights=DOLMA_OLMO_MIXTURE_WEIGHTS,
+    components=dolma_arxiv_tokenization_steps,
+    weights=arxiv_weights,
 )
 
 arxiv_only_subbed_dolma_model = default_train(
@@ -96,19 +61,22 @@ arxiv_only_subbed_dolma_model = default_train(
 arxiv_only_subbed_dolma_evals = default_eval(step=arxiv_only_subbed_dolma_model)
 
 # WIKI ONLY MIXING FOR MARKDOWNIFIED DATASETS
-DOLMA_OLMO_MIXTURE_WEIGHTS_CLONE["dolma/wiki"] = DOLMA_OLMO_MIXTURE_WEIGHTS_CLONE["dolma/wiki"] / 2
-DOLMA_OLMO_MIXTURE_WEIGHTS_CLONE["dolma/wiki-markdownified"] = DOLMA_OLMO_MIXTURE_WEIGHTS_CLONE["dolma/wiki"]
+wiki_markdownified_tokenized = default_tokenize(
+    name="wiki-resiliparse-custom-fork",
+    dataset=wikipedia_resiliparse_custom_fork,
+    tokenizer=llama3_tokenizer,
+)
 
-wiki_markdownified_path = "gs://marin-us-central2/documents/wikipedia-resiliparse-custom-fork-2569de/20241201"
-wiki_markdownified_files = fsspec_glob(f"{wiki_markdownified_path}/*.jsonl.gz")
+dolma_wiki_tokenization_steps = dict(
+    tokenized_dolma_steps, {"wiki-resiliparse-custom-fork": wiki_markdownified_tokenized}
+)
+wiki_weights = dict(
+    DOLMA_OLMO_MIXTURE_WEIGHTS, {"wiki-resiliparse-custom-fork": DOLMA_OLMO_MIXTURE_WEIGHTS["dolma/wiki"]}
+)
 
-DOLMA_DATASETS.pop("arxiv-markdownified")
-DOLMA_DATASETS["wiki-markdownified"] = wiki_markdownified_files
-
-wiki_only_subbed_tokenized = tokenize_dolma_mixture_steps(DOLMA_DATASETS=DOLMA_DATASETS)
 wiki_only_subbed_llama3_tokenized = lm_mixture_data_config(
-    components=wiki_only_subbed_tokenized,
-    weights=DOLMA_OLMO_MIXTURE_WEIGHTS_CLONE,
+    components=dolma_wiki_tokenization_steps,
+    weights=wiki_weights,
 )
 
 wiki_only_subbed_dolma_model = default_train(
@@ -122,15 +90,12 @@ wiki_only_subbed_dolma_model = default_train(
 wiki_only_subbed_dolma_evals = default_eval(step=wiki_only_subbed_dolma_model)
 
 # WIKI AND ARXIV MIXING FOR MARKDOWNIFIED DATASETS
-DOLMA_OLMO_MIXTURE_WEIGHTS["dolma/wiki"] = DOLMA_OLMO_MIXTURE_WEIGHTS["dolma/wiki"] / 2
-DOLMA_OLMO_MIXTURE_WEIGHTS["dolma/wiki-markdownified"] = DOLMA_OLMO_MIXTURE_WEIGHTS["dolma/wiki"]
+wiki_and_arxiv_tokenization_steps = dict(dolma_wiki_tokenization_steps, dolma_arxiv_tokenization_steps)
+wiki_and_arxiv_weights = dict(wiki_weights, arxiv_weights)
 
-DOLMA_DATASETS["arxiv-markdownified"] = arxiv_markdownified_files
-
-wiki_and_arxiv_subbed_tokenized = tokenize_dolma_mixture_steps(DOLMA_DATASETS=DOLMA_DATASETS)
 wiki_and_arxiv_subbed_llama3_tokenized = lm_mixture_data_config(
-    components=wiki_and_arxiv_subbed_tokenized,
-    weights=DOLMA_OLMO_MIXTURE_WEIGHTS,
+    components=wiki_and_arxiv_tokenization_steps,
+    weights=wiki_and_arxiv_weights,
 )
 
 wiki_and_arxiv_subbed_dolma_model = default_train(
@@ -145,9 +110,9 @@ wiki_and_arxiv_subbed_dolma_evals = default_eval(step=wiki_and_arxiv_subbed_dolm
 
 if __name__ == "__main__":
     tokenize_steps = (
-        list(arxiv_only_subbed_tokenized.values())
-        + list(wiki_only_subbed_tokenized.values())
-        + list(wiki_and_arxiv_subbed_tokenized.values())
+        list(dolma_arxiv_tokenization_steps.values())
+        + list(dolma_wiki_tokenization_steps.values())
+        + list(wiki_and_arxiv_tokenization_steps.values())
     )
 
     executor_main(
