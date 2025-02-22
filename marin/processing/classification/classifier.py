@@ -125,9 +125,8 @@ class FasttextClassifier(BaseClassifier):
 
         return model
 
-    def predict(self, documents: list[str]):
-        # TODO(chris): Add support for multi-class k > 2.
-        return self.model.predict(documents, k=2)
+    def predict(self, documents: list[str], k=2):
+        return self.model.predict(documents, k=k)
 
     def __call__(self, batch: dict[str, Any]):
         texts = []
