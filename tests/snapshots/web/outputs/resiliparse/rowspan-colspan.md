@@ -1,0 +1,1 @@
+Life Expectancy By Current Age 654020 MenWomenMenWomenMenWomen 828578827781 Invoice Item / Desc.Qty.@Price Paperclips (Box)1001.15115.00 Paper (Case)1045.99459.90 Wastepaper Baskets217.9935.98 Subtotal610.88 Tax7%42.76 Total653.64 Favorite and Least Favorite Things BobAlice FavoriteColorBluePurple FlavorBananaChocolate Least Favorite ColorYellowPink FlavorMintWalnut
