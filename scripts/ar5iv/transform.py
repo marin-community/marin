@@ -91,7 +91,31 @@ def linelisting_to_newline(html: BeautifulSoup):
         fn.append(BeautifulSoup("<br>", "html.parser"))
 
 
-def unwrap_eqn(html: BeautifulSoup):
+def unwrap_eqn(html: BeautifulSoup) -> BeautifulSoup:
+    """
+    Extract alttext from math element and convert to LaTeX format.
+    Returns BeautifulSoup object with the formatted equation.
+    """
+    math_elements = html.find_all("math")
+    
+    for math_elem in math_elements:
+        if not math_elem or "alttext" not in math_elem.attrs:
+            continue
+            
+        equation = math_elem["alttext"]
+        is_display = math_elem.get("display") == "block"
+        
+        if is_display:
+            formatted_eq = BeautifulSoup(f"<p><br><br>$${equation}$$<br><br></p>", "html.parser")
+        else:
+            formatted_eq = BeautifulSoup(f"${equation}$", "html.parser")
+        
+        math_elem.replace_with(formatted_eq)
+    
+    return html
+
+
+def deconstruct_eqn(html: BeautifulSoup):
     # Unwrap equation tables to ensure math mode is not in a table
     eqntables = html.findAll("table", {"class": "ltx_eqn_table"})
     for eqn in eqntables:
@@ -149,7 +173,7 @@ def clean_html(html: BeautifulSoup | str) -> str:
     remove_footnotes(html)
     remove_biblinks(html)
     linelisting_to_newline(html)
-    unwrap_eqn(html)
+    deconstruct_eqn(html)
     remove_ar5iv_footer(html)
     remove_before_section(html)
     remove_title(html)
