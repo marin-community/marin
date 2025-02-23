@@ -6,7 +6,7 @@ from typing import Any
 import ray
 from transformers import AutoTokenizer
 
-from marin.generation.dataset import DatasetSampler, MeduDatasetOutputProcessor
+from marin.generation.dataset import DatasetOutputProcessorConfig, DatasetSampler, MeduDatasetOutputProcessor
 from marin.generation.inference import TextGenerationInferenceConfig, run_inference
 from marin.generation.llm_generation import vLLMProvider
 from marin.generation.ray_utils import get_scheduling_strategy_fn
@@ -140,15 +140,16 @@ def run_medu_labeling_pipeline(config: MEDUPipelineConfig):
     logger.info(f"Finished document labeling pipeline for {config.output_path}")
 
 
-def run_medu_dataset_sampling_pipeline(input_path: str, output_path: str):
-    logger.info(f"Starting MEDU dataset sampling pipeline for {input_path}")
+def run_medu_dataset_sampling_pipeline(config: DatasetOutputProcessorConfig):
+    logger.info(f"Starting MEDU dataset sampling pipeline for {config.input_path}")
 
-    convert_output_path = os.path.join(output_path, "converted")
-    processor = MeduDatasetOutputProcessor(input_path, convert_output_path)
+    convert_output_path = os.path.join(config.output_path, "converted")
+    processor = MeduDatasetOutputProcessor(config.input_path, convert_output_path)
     dataset_score_distribution = processor.convert_dataset()
     logger.info(f"Dataset score distribution: {dataset_score_distribution}")
     # Keep all labels equally weighted
     label_weights = {score: 1 for score in dataset_score_distribution.keys()}
-    sampler = DatasetSampler(convert_output_path, os.path.join(output_path, "sampled"), label_weights)
+    sampler_output_path = os.path.join(config.output_path, "sampled")
+    sampler = DatasetSampler(convert_output_path, sampler_output_path, label_weights)
     sampler.sample_dataset()
-    logger.info(f"Finished MEDU dataset sampling pipeline for {output_path}")
+    logger.info(f"Finished MEDU dataset sampling pipeline for {sampler_output_path}")

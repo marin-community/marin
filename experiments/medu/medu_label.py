@@ -1,6 +1,8 @@
 from transformers import AutoTokenizer
 
-from marin.generation.medu import MEDUPipelineConfig, run_medu_dataset_sampling_pipeline
+from marin.execution.executor import ExecutorStep, output_path_of, this_output_path
+from marin.generation.dataset import DatasetOutputProcessorConfig
+from marin.generation.medu import MEDUPipelineConfig, run_medu_dataset_sampling_pipeline, run_medu_labeling_pipeline
 
 ECONOMETRIC_DEV_SET_EXAMPLES = [
     "For a stationary autoregressive process, shocks will",
@@ -40,30 +42,39 @@ HIGH_SCHOOL_MICROECONOMIC_EXAMPLES = [
     "Which of the following is necessarily a characteristic of oligopoly?",
 ]
 
-documents_to_be_labeled = "gs://marin-us-central2/raw/dclm/a3b142c/huggingface.co/datasets/mlfoundations/dclm-baseline-1.0/resolve/a3b142c/global-shard_01_of_10/local-shard_0_of_10/shard_00000000_processed.jsonl.zst"
+documents_to_be_labeled = "gs://marin-us-central2/documents/fineweb-small-resiliparse-preserve-formatting-e8c6ec/md/CC-MAIN-2024-18/000_00000/0_processed.jsonl.gz"
 
 tensor_parallel_size = 8
 model_name = "/opt/gcsfuse_mount/models/meta-llama--Llama-3-1-8B-Instruct"
 tokenizer = AutoTokenizer.from_pretrained(model_name)
-config = MEDUPipelineConfig(
-    model_name=model_name,
-    dev_sets=[ECONOMETRIC_DEV_SET_EXAMPLES, HIGH_SCHOOL_MACROECONOMIC_EXAMPLES, HIGH_SCHOOL_MICROECONOMIC_EXAMPLES],
-    input_path=documents_to_be_labeled,
-    tensor_parallel_size=tensor_parallel_size,
-    # TODO(chris): change this to the executor output path after done testing
-    output_path="gs://marin-us-east5/documents/test-medu-dclm",
-    engine_kwargs={"tensor_parallel_size": tensor_parallel_size, "enforce_eager": False, "max_model_len": 8192},
-    generation_kwargs={
-        "temperature": 0.1,
-        "max_tokens": 1024,
-        "stop_token_ids": [tokenizer.eos_token_id, tokenizer.convert_tokens_to_ids("<|eot_id|>")],
-    },
-    filetype="jsonl.zst",
-    output_filetype_override="jsonl.gz",
+
+labeling_step = ExecutorStep(
+    name="documents/test-medu-dclm-labeling",
+    fn=run_medu_labeling_pipeline,
+    config=MEDUPipelineConfig(
+        model_name=model_name,
+        dev_sets=[ECONOMETRIC_DEV_SET_EXAMPLES, HIGH_SCHOOL_MACROECONOMIC_EXAMPLES, HIGH_SCHOOL_MICROECONOMIC_EXAMPLES],
+        input_path=documents_to_be_labeled,
+        tensor_parallel_size=tensor_parallel_size,
+        output_path=this_output_path(),
+        engine_kwargs={"tensor_parallel_size": tensor_parallel_size, "enforce_eager": False, "max_model_len": 8192},
+        generation_kwargs={
+            "temperature": 0.1,
+            "max_tokens": 1024,
+            "stop_token_ids": [tokenizer.eos_token_id, tokenizer.convert_tokens_to_ids("<|eot_id|>")],
+        },
+        filetype="jsonl.gz",
+        output_filetype_override="jsonl.gz",
+    ),
 )
 
-# run_medu_labeling_pipeline(config)
-
-input_path = "gs://marin-us-east5/documents/test-medu-dclm"
-output_path = "gs://marin-us-east5/documents/test-medu-dclm-processed"
-run_medu_dataset_sampling_pipeline(input_path, output_path)
+DATASET_SAMPLING_STEP_OUTPUT_PATH = "documents/test-medu-dclm-dataset-sampled"
+dataset_sampling_step = ExecutorStep(
+    name=DATASET_SAMPLING_STEP_OUTPUT_PATH,
+    fn=run_medu_dataset_sampling_pipeline,
+    config=DatasetOutputProcessorConfig(
+        input_path=output_path_of(labeling_step),
+        output_path=this_output_path(),
+    ),
+    override_output_path=DATASET_SAMPLING_STEP_OUTPUT_PATH,
+)

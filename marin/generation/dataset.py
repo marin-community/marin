@@ -2,6 +2,7 @@ import json
 import random
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import ClassVar
 
 import fsspec
@@ -73,12 +74,18 @@ def convert_labeled_documents_to_scores(
     return score_distribution
 
 
+@dataclass
+class DatasetOutputProcessorConfig:
+    input_path: str
+    output_path: str
+
+
 class DatasetOutputProcessor:
     def __init__(self, input_path: str, output_path: str, score_values: list[int]):
         self.input_path = input_path
         self.output_path = output_path
         self.score_values = score_values
-        self.score_distribution = {}
+        self.score_distribution = {v: 0 for v in score_values}
 
     @staticmethod
     def extract_score(text: str) -> int:
@@ -96,8 +103,9 @@ class DatasetOutputProcessor:
             self.extract_score,
         )
 
-        for response in ray.get(responses):
-            self.score_distribution.update(response)
+        for score_distribution in ray.get(responses):
+            for score, count in score_distribution.items():
+                self.score_distribution[score] += count
 
         return self.score_distribution
 
