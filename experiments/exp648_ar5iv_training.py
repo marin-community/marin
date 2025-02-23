@@ -34,7 +34,9 @@ arxiv_no_problem_resiliparse_no_references_no_links_tokenized = default_tokenize
 dolma_arxiv_no_problem_resiliparse_no_references_no_links_tokenization_steps = dict(
     tokenized_dolma_steps,
     {
-        "arxiv-no-problem-resiliparse-no-references-no-links": arxiv_no_problem_resiliparse_no_references_no_links_tokenized  # noqa
+        "arxiv-no-problem-resiliparse-no-references-no-links": (
+            arxiv_no_problem_resiliparse_no_references_no_links_tokenized
+        )
     },
 )
 dolma_arxiv_no_problem_resiliparse_no_references_no_links_weights = dict(
@@ -69,7 +71,9 @@ arxiv_no_problem_resiliparse_no_references_with_links_tokenized = default_tokeni
 dolma_arxiv_no_problem_resiliparse_no_references_with_links_tokenization_steps = dict(
     tokenized_dolma_steps,
     {
-        "arxiv-no-problem-resiliparse-no-references-with-links": arxiv_no_problem_resiliparse_no_references_with_links_tokenized  # noqa
+        "arxiv-no-problem-resiliparse-no-references-with-links": (
+            arxiv_no_problem_resiliparse_no_references_with_links_tokenized
+        )
     },
 )
 dolma_arxiv_no_problem_resiliparse_no_references_with_links_weights = dict(
@@ -102,7 +106,9 @@ arxiv_no_problem_resiliparse_with_references_no_links_tokenized = default_tokeni
 dolma_arxiv_no_problem_resiliparse_with_references_no_links_tokenization_steps = dict(
     tokenized_dolma_steps,
     {
-        "arxiv-no-problem-resiliparse-with-references-no-links": arxiv_no_problem_resiliparse_with_references_no_links_tokenized  # noqa
+        "arxiv-no-problem-resiliparse-with-references-no-links": (
+            arxiv_no_problem_resiliparse_with_references_no_links_tokenized
+        )
     },
 )
 dolma_arxiv_no_problem_resiliparse_with_references_no_links_weights = dict(
@@ -135,7 +141,9 @@ arxiv_no_problem_resiliparse_with_references_with_links_tokenized = default_toke
 dolma_arxiv_no_problem_resiliparse_with_references_with_links_tokenization_steps = dict(
     tokenized_dolma_steps,
     {
-        "arxiv-no-problem-resiliparse-with-references-with-links": arxiv_no_problem_resiliparse_with_references_with_links_tokenized  # noqa
+        "arxiv-no-problem-resiliparse-with-references-with-links": (
+            arxiv_no_problem_resiliparse_with_references_with_links_tokenized
+        )
     },
 )
 dolma_arxiv_no_problem_resiliparse_with_references_with_links_weights = dict(
