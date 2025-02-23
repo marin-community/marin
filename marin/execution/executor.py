@@ -291,8 +291,6 @@ def collect_dependencies_and_version(obj: Any, dependencies: list[ExecutorStep],
     def recurse(obj: Any, prefix: str):
         new_prefix = prefix + "." if prefix else ""
 
-        print(obj)
-
         if isinstance(obj, ExecutorStep):
             obj = output_path_of(obj, None)
 

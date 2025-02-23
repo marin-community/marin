@@ -22,12 +22,13 @@ class VizLmConfig:
     checkpoint_path: str
     model: LmConfig
     datasets: LMMixtureDatasetConfig
-    num_docs_per_dataset: int = 256
+    num_docs_per_dataset: int = 32
+    per_device_batch_size: int = 4
     output_path: str = this_output_path()  # type: ignore
 
 
 @ray.remote(
-    memory=64 * 1024 * 1024 * 1024, resources={"TPU": 1, "TPU-v4-8-head": 1}
+    memory=64 * 1024 * 1024 * 1024, resources={"TPU": 4, "TPU-v4-8-head": 1}
 )
 @remove_tpu_lockfile_on_exit
 def do_viz_lm(config: LevanterVizLmConfig) -> None:
@@ -37,7 +38,6 @@ def do_viz_lm(config: LevanterVizLmConfig) -> None:
     Args:
         config (VizLmConfig): The configuration for visualizing log probabilities.
     """
-    print(config)
     viz_lm_main(config)
 
 
@@ -75,7 +75,8 @@ def visualize_lm_lob_probs(config: VizLmConfig) -> None:
         trainer=TrainerConfig(
             ray=RayConfig(
                 auto_start_cluster=False
-            )
+            ),
+            per_device_eval_parallelism=config.per_device_batch_size
         )
     )
     ray.get(do_viz_lm.remote(levanter_config))
