@@ -5,6 +5,13 @@ import time
 import urllib.parse
 from typing import Any, ClassVar
 
+import torch
+
+try:
+    import torch_xla.core.xla_model as xm
+except ImportError:
+    pass
+
 import fsspec
 
 
@@ -191,10 +198,37 @@ class FinewebEduClassifier(BERTClassifier):
         return batch
 
 
+class GTEClassifier(FinewebEduClassifier):
+    def __init__(self, model_name: str, attribute_name: str, max_length: int, *args, **kwargs):
+        from transformers import AutoModelForSequenceClassification, AutoTokenizer
+
+        device = xm.xla_device()
+        # torch._dynamo.config.cache_size_limit = 128
+
+        self.model = AutoModelForSequenceClassification.from_pretrained(
+            model_name, trust_remote_code=True, output_hidden_states=False
+        ).to(device)
+        # self.model = torch.compile(self.model, backend="openxla", fullgraph=True, dynamic=False)
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        self.attribute_name = attribute_name
+        self.max_length = max_length
+
+    @torch.no_grad()
+    def predict(self, documents: list[str]) -> list[float]:
+        inputs = self.tokenizer(
+            documents, return_tensors="pt", padding=True, truncation=True, max_length=self.max_length
+        ).to(self.model.device)
+        outputs = self.model(**inputs)
+        xm.mark_step()
+        logits = outputs.logits.squeeze(-1)
+        return logits.tolist()
+
+
 class AutoClassifier(BaseClassifier):
     _MODEL_NAME_TO_CLS_DICT: ClassVar[dict[str, BaseClassifier]] = {
         "fasttext": FasttextClassifier,
         "fineweb": FinewebEduClassifier,
+        "gte": GTEClassifier,
     }
 
     def __init__(self, model_name: str, attribute_name: str, model_type: str | None, *args, **kwargs):
@@ -224,7 +258,7 @@ class AutoClassifier(BaseClassifier):
             key = model_type.lower()
 
         try:
-            return cls._MODEL_NAME_TO_CLS_DICT[key](model_name_or_path, attribute_name, model_type, *args, **kwargs)
+            return cls._MODEL_NAME_TO_CLS_DICT[key](model_name_or_path, attribute_name, *args, **kwargs)
         except KeyError as e:
             raise ValueError(
                 f"Model name {model_name_or_path} not supported. "
