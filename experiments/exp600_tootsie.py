@@ -27,10 +27,10 @@ from marin.processing.tokenize import lm_mixture_data_config
 dclm_components_llama3_wrong = {
     "dclm_baseline": dataclasses.replace(
         default_tokenize(
-        name="dclm_baseline",
+            name="dclm_baseline",
             dataset=dclm_baseline_wrong,
-        tokenizer=llama3_tokenizer,
-    ),
+            tokenizer=llama3_tokenizer,
+        ),
         override_output_path="gs://marin-us-central2/tokenized/dclm_baseline-0206f1_WRONG_20250211/",
     ),
     "starcoderdata": default_tokenize(
@@ -85,7 +85,7 @@ llama_8b_train_config_phase2 = SimpleTrainConfig(
     # decay=0.1,  # 10% of 5000 = 500 steps
     # lr_schedule="inv",
     # after 660,600 we changed things up:
-    train_batch_size=[ScheduleStep(until=660_000, value=1024), ScheduleStep(until=-1, value=3072)],
+    train_batch_size=[ScheduleStep(start=0, value=1024), ScheduleStep(start=660_000, value=3072)],
     # LR doesn't (yet) support the schedule stuff so we just set it to the new value
     # because we're increasing the batch size, we need to increase the LR by \sqrt(ratio), which is ≈1.7x
     learning_rate=1.7e-3,
