@@ -76,7 +76,7 @@ from trafilatura import extract
 from transformers import AutoTokenizer, FlaxAutoModelForSequenceClassification
 from warcio import ArchiveIterator
 
-from marin.utils import fsspec_exists, fsspec_glob, remove_tpu_lockfile_on_exit
+from marin.utils import fsspec_exists, fsspec_glob
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -228,11 +228,135 @@ def extract_text_from_warc(
 
 
 @ray.remote(
+    memory=4 * 1024 * 1024 * 1024,
+)
+def get_shard_url_filter_results(input_path: str):
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+    logger.info("Applying the URL filter")
+    documents_to_classify = load_extracted_text_as_datatrove_documents(input_path)
+    url_filter = URLFilter()
+    examples_url_filter_results: list[bool | tuple[bool, str]] = [
+        url_filter.filter(document) for document in tqdm(documents_to_classify, desc="Applying the URL filter")
+    ]
+    logger.info("Applied the URL filter")
+    return examples_url_filter_results
+
+
+@ray.remote(
+    memory=4 * 1024 * 1024 * 1024,
+)
+def get_shard_langid_filter_results(input_path: str):
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+    logger.info("Applying the LangID filter")
+    documents_to_classify = load_extracted_text_as_datatrove_documents(input_path)
+    langid_filter = LanguageFilter()
+    examples_langid_filter_results: list[bool] = [
+        langid_filter.filter(document) for document in tqdm(documents_to_classify, desc="Applying the LangID filter")
+    ]
+    logger.info("Applied the LangID filter")
+    return examples_langid_filter_results
+
+
+@ray.remote(
+    memory=4 * 1024 * 1024 * 1024,
+)
+def get_shard_gopher_repetition_filter_results(input_path: str):
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+    logger.info("Applying the Gopher repetition filter")
+    documents_to_classify = load_extracted_text_as_datatrove_documents(input_path)
+    gopher_repetition_filter = GopherRepetitionFilter()
+    examples_gopher_repetition_filter_results: list[bool | tuple[bool, str]] = [
+        gopher_repetition_filter.filter(document)
+        for document in tqdm(documents_to_classify, desc="Applying the Gopher repetition filter")
+    ]
+    logger.info("Applied the Gopher repetition filter")
+    return examples_gopher_repetition_filter_results
+
+
+@ray.remote(
+    memory=4 * 1024 * 1024 * 1024,
+)
+def get_shard_gopher_quality_filter_results(input_path: str):
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+    logger.info("Applying the Gopher quality filter")
+    documents_to_classify = load_extracted_text_as_datatrove_documents(input_path)
+    gopher_quality_filter = GopherQualityFilter()
+    examples_gopher_quality_filter_results: list[bool | tuple[bool, str]] = [
+        gopher_quality_filter.filter(document)
+        for document in tqdm(documents_to_classify, desc="Applying the Gopher quality filter")
+    ]
+    logger.info("Applied the Gopher quality filter")
+    return examples_gopher_quality_filter_results
+
+
+@ray.remote(
+    memory=4 * 1024 * 1024 * 1024,
+)
+def get_shard_c4_quality_filter_results(input_path: str):
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+    logger.info("Applying the C4 quality filter")
+    documents_to_classify = load_extracted_text_as_datatrove_documents(input_path)
+    c4_quality_filter = C4QualityFilter(filter_no_terminal_punct=False)
+    examples_c4_quality_filter_results: list[bool | tuple[bool, str]] = [
+        c4_quality_filter.filter(document)
+        for document in tqdm(documents_to_classify, desc="Applying the C4 quality filter")
+    ]
+    logger.info("Applied the C4 quality filter")
+    return examples_c4_quality_filter_results
+
+
+def load_extracted_text_as_datatrove_documents(input_path: str):
+    logger.info("Reading input path with extracted text")
+    with fsspec.open(input_path, block_size=1 * 1024 * 1024 * 1024) as f:
+        examples = pd.read_parquet(f).to_dict("records")
+    logger.info("Finished reading input path with extracted text")
+    # Convert the examples to datatrove Documents
+    logger.info("Converting examples into datatrove Documents")
+    documents = [
+        Document(text=example["text"], id=example["id"], metadata=example["metadata"])
+        for example in tqdm(examples, desc="converting examples into datatrove Documents")
+    ]
+    logger.info("Converted examples into datatrove Documents")
+    return documents
+
+
+@ray.remote(
     memory=32 * 1024 * 1024 * 1024,
     num_cpus=8,
     resources={"TPU": 4, "TPU-v4-8-head": 1},
 )
-@remove_tpu_lockfile_on_exit
+def get_shard_quality_classifier_results(input_path: str):
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+    logger.info("Loading quality classifier...")
+    # Load the quality classifier
+    model = FlaxAutoModelForSequenceClassification.from_pretrained("HuggingFaceFW/fineweb-edu-classifier")
+    tokenizer = AutoTokenizer.from_pretrained("HuggingFaceFW/fineweb-edu-classifier")
+    logger.info("Loaded quality classifier...")
+
+    logger.info("Reading input path with extracted text")
+    with fsspec.open(input_path, block_size=1 * 1024 * 1024 * 1024) as f:
+        examples_to_classify = pd.read_parquet(f).to_dict("records")
+    logger.info("Finished reading input path with extracted text")
+    # Classify all of the examples in the shard
+    examples_scores = []
+    for examples_batch in tqdm(
+        batched(examples_to_classify, 512), desc="Classifying text", total=math.ceil(len(examples_to_classify) / 512)
+    ):
+        batch_text = [ex["text"] for ex in examples_batch]
+        inputs = tokenizer(batch_text, return_tensors="jax", padding="longest", truncation=True)
+        outputs = model(**inputs)
+        logits = outputs.logits.squeeze(-1)
+        logits_list = logits.tolist()
+        examples_scores.extend(logits_list)
+
+    assert len(examples_scores) == len(examples_to_classify)
+    logger.info(f"Ran quality classifier on {len(examples_to_classify)} examples")
+    return examples_scores
+
+
+@ray.remote(
+    memory=4 * 1024 * 1024 * 1024,
+)
 def get_shard_yield(
     input_path: str,
     passing_urls_and_scores_output_path: str,
@@ -248,80 +372,31 @@ def get_shard_yield(
             shard_stats = json.load(f)
         return shard_stats["total_urls_passing"]
 
-    logger.info("Loading quality classifier...")
-    # Load the quality classifier
-    model = FlaxAutoModelForSequenceClassification.from_pretrained("HuggingFaceFW/fineweb-edu-classifier")
-    tokenizer = AutoTokenizer.from_pretrained("HuggingFaceFW/fineweb-edu-classifier")
-    logger.info("Loaded quality classifier...")
+    # Launch remote functions for each of the filters:
+    # (1) URL, (2) langid, (3) gopher reptition,
+    # (4) gopher quality, (5) c4 quality, and (6) learned quality classifier
+    (
+        examples_url_filter_results,
+        examples_langid_filter_results,
+        examples_gopher_repetition_filter_results,
+        examples_gopher_quality_filter_results,
+        examples_c4_quality_filter_results,
+        examples_scores,
+    ) = ray.get(
+        [
+            get_shard_url_filter_results.remote(input_path),
+            get_shard_langid_filter_results.remote(input_path),
+            get_shard_gopher_repetition_filter_results.remote(input_path),
+            get_shard_gopher_quality_filter_results.remote(input_path),
+            get_shard_c4_quality_filter_results.remote(input_path),
+            get_shard_quality_classifier_results.remote(input_path),
+        ]
+    )
 
     logger.info("Reading input path with extracted text")
     with fsspec.open(input_path, block_size=1 * 1024 * 1024 * 1024) as f:
         examples_to_classify = pd.read_parquet(f).to_dict("records")
     logger.info("Finished reading input path with extracted text")
-
-    # Convert the examples to datatrove Documents
-    logger.info("Converting examples into datatrove Documents")
-    documents_to_classify = [
-        Document(text=example["text"], id=example["id"], metadata=example["metadata"])
-        for example in tqdm(examples_to_classify, desc="converting examples into datatrove Documents")
-    ]
-    logger.info("Converted examples into datatrove Documents")
-    # Apply the URL filter
-    logger.info("Applying the URL filter")
-    url_filter = URLFilter()
-    examples_url_filter_results: list[bool | tuple[bool, str]] = [
-        url_filter.filter(document) for document in tqdm(documents_to_classify, desc="Applying the URL filter")
-    ]
-    logger.info("Applied the URL filter")
-
-    # Apply the LangID filter
-    logger.info("Applying the LangID filter")
-    langid_filter = LanguageFilter()
-    examples_langid_filter_results: list[bool] = [
-        langid_filter.filter(document) for document in tqdm(documents_to_classify, desc="Applying the LangID filter")
-    ]
-    logger.info("Applied the LangID filter")
-
-    # Apply the gopher repetition filter
-    logger.info("Applying the Gopher repetition filter")
-    gopher_repetition_filter = GopherRepetitionFilter()
-    examples_gopher_repetition_filter_results: list[bool | tuple[bool, str]] = [
-        gopher_repetition_filter.filter(document)
-        for document in tqdm(documents_to_classify, desc="Applying the Gopher repetition filter")
-    ]
-    logger.info("Applied the Gopher repetition filter")
-
-    # Apply the gopher quality filter
-    logger.info("Applying the Gopher quality filter")
-    gopher_quality_filter = GopherQualityFilter()
-    examples_gopher_quality_filter_results: list[bool | tuple[bool, str]] = [
-        gopher_quality_filter.filter(document)
-        for document in tqdm(documents_to_classify, desc="Applying the Gopher quality filter")
-    ]
-    logger.info("Applied the Gopher quality filter")
-
-    logger.info("Applying the C4 quality filter")
-    c4_quality_filter = C4QualityFilter(filter_no_terminal_punct=False)
-    examples_c4_quality_filter_results: list[bool | tuple[bool, str]] = [
-        c4_quality_filter.filter(document)
-        for document in tqdm(documents_to_classify, desc="Applying the C4 quality filter")
-    ]
-    logger.info("Applied the C4 quality filter")
-
-    # Classify all of the examples in the shard
-    examples_scores = []
-    for examples_batch in tqdm(
-        batched(examples_to_classify, 512), desc="Classifying text", total=math.ceil(len(examples_to_classify) / 512)
-    ):
-        batch_text = [ex["text"] for ex in examples_batch]
-        inputs = tokenizer(batch_text, return_tensors="jax", padding="longest", truncation=True)
-        outputs = model(**inputs)
-        logits = outputs.logits.squeeze(-1)
-        logits_list = logits.tolist()
-        examples_scores.extend(logits_list)
-
-    assert len(examples_scores) == len(examples_to_classify)
-    logger.info(f"Ran quality classifier on {len(examples_to_classify)} examples")
 
     num_records_passing = 0
     passing_urls_and_scores_output_records = []
