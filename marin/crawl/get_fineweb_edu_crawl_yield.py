@@ -260,32 +260,48 @@ def get_shard_yield(
     logger.info("Finished reading input path with extracted text")
 
     # Convert the examples to datatrove Documents
+    logger.info("Convering examples into datatrove Documents")
     documents_to_classify = [
         Document(text=example["text"], id=example["id"], metadata=example["metadata"])
         for example in examples_to_classify
     ]
+    logger.info("Convering examples into datatrove Documents")
     # Apply the URL filter
+    logger.info("Applying the URL filter")
     url_filter = URLFilter()
     examples_url_filter_results: list[bool | tuple[bool, str]] = [
         url_filter.filter(document) for document in documents_to_classify
     ]
+    logger.info("Applied the URL filter")
+
     # Apply the LangID filter
+    logger.info("Applying the LangID filter")
     langid_filter = LanguageFilter()
     examples_langid_filter_results: list[bool] = [langid_filter.filter(document) for document in documents_to_classify]
+    logger.info("Applied the LangID filter")
+
     # Apply the gopher repetition filter
+    logger.info("Applying the Gopher repetition filter")
     gopher_repetition_filter = GopherRepetitionFilter()
     examples_gopher_repetition_filter_results: list[bool | tuple[bool, str]] = [
         gopher_repetition_filter.filter(document) for document in documents_to_classify
     ]
+    logger.info("Applied the Gopher repetition filter")
+
     # Apply the gopher quality filter
+    logger.info("Applying the Gopher quality filter")
     gopher_quality_filter = GopherQualityFilter()
     examples_gopher_quality_filter_results: list[bool | tuple[bool, str]] = [
         gopher_quality_filter.filter(document) for document in documents_to_classify
     ]
+    logger.info("Applied the Gopher quality filter")
+
+    logger.info("Applying the C4 quality filter")
     c4_quality_filter = C4QualityFilter(filter_no_terminal_punct=False)
     examples_c4_quality_filter_results: list[bool | tuple[bool, str]] = [
         c4_quality_filter.filter(document) for document in documents_to_classify
     ]
+    logger.info("Applied the C4 quality filter")
 
     # Classify all of the examples in the shard
     examples_scores = []
