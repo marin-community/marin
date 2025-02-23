@@ -22,6 +22,7 @@ from marin.utils import fsspec_glob
 from marin.web.convert import convert_page
 from scripts.ar5iv.transform import (
     clean_li,
+    deconstruct_eqn,
     linelisting_to_newline,
     remove_ar5iv_footer,
     remove_authors,
@@ -92,7 +93,10 @@ def clean_html(html: str, remove_reference_section: bool = True) -> str:
     linelisting_to_newline(html)
 
     # Transforms equations to be inline tags and not tables
-    unwrap_eqn(html)
+    deconstruct_eqn(html)
+
+    # Extracts math alttext and converts to LaTeX
+    html = unwrap_eqn(html)
 
     # Removes ar5iv footer
     remove_ar5iv_footer(html)
@@ -133,7 +137,7 @@ def process_file(
                     filtered_html = clean_html(row["content"], remove_reference_section)
                     result = convert_page(filtered_html, extract_method=extract_method, config=extract_config)
                     if remove_reference_section:
-                        result["content"] = re.sub(r"\\\[(?:\d+(?:,\s*\d+)*)\\\]", "", result["content"])
+                        result["content"] = re.sub(r"\s?\\\[(?:\d+(?:,\s*\d+)*)\\\]", "", result["content"])
 
                     out_dict = {
                         "id": row["filename"],

@@ -12,7 +12,7 @@ from marin.schemas.web.convert import HtmlToMarkdownConfig, ResiliparseConfig, T
 from marin.web.convert import convert_page
 from operations.transform.ar5iv.transform_ar5iv import clean_html
 from operations.transform.wikipedia.transform_wikipedia import clean_wiki_html
-from scripts.ar5iv.transform import unwrap_eqn
+from scripts.ar5iv.transform import deconstruct_eqn
 from tests.snapshots.stackexchange.accept_changes import prepare_expected_output
 
 my_path = os.path.dirname(os.path.realpath(__file__))
@@ -80,33 +80,32 @@ def compare_outputs(input_name, expected_file, output_file, diff_path):
     raise AssertionError(f"Output does not match expected for {input_name}. See {diff_path}/{diff_name} for details.")
 
 
-def parametrize_web_files(fn):
+def parametrize_files(fn=None, *, split="web", ext=".html"):
     """Parametrize a test function with the files in the input directory."""
-    files = [os.path.splitext(os.path.basename(f))[0] for f in os.listdir(web_input_path) if f.endswith(".html")]
-    return pytest.mark.parametrize("input_name", files)(fn)
+
+    def decorator(fn):
+        input_path = None
+        match split:
+            case "web":
+                input_path = web_input_path
+            case "wiki":
+                input_path = wiki_input_path
+            case "ar5iv":
+                input_path = ar5iv_input_path
+            case "stackexchange":
+                input_path = stackexchange_input_path
+            case _:
+                raise ValueError(f"Invalid split: {split}")
+
+        files = [os.path.splitext(os.path.basename(f))[0] for f in os.listdir(input_path) if f.endswith(ext)]
+        return pytest.mark.parametrize("input_name", files)(fn)
+
+    if fn is None:
+        return decorator
+    return decorator(fn)
 
 
-def parametrize_wiki_files(fn):
-    """Parametrize a test function with the files in the input directory."""
-    files = [os.path.splitext(os.path.basename(f))[0] for f in os.listdir(wiki_input_path) if f.endswith(".html")]
-    return pytest.mark.parametrize("input_name", files)(fn)
-
-
-def parametrize_ar5iv_files(fn):
-    """Parametrize a test function with the files in the input directory."""
-    files = [os.path.splitext(os.path.basename(f))[0] for f in os.listdir(ar5iv_input_path) if f.endswith(".html")]
-    return pytest.mark.parametrize("input_name", files)(fn)
-
-
-def parametrize_stackexchange_files(fn):
-    """Parametrize a test function with the files in the input directory."""
-    files = [
-        os.path.splitext(os.path.basename(f))[0] for f in os.listdir(stackexchange_input_path) if f.endswith(".json")
-    ]
-    return pytest.mark.parametrize("input_name", files)(fn)
-
-
-@parametrize_web_files
+@parametrize_files
 def test_generate_markdown_from_html_with_readability(input_name):
     """Test the Markdown generation from HTML and compare outputs using the Readability method."""
     input_file = os.path.join(web_input_path, f"{input_name}.html")
@@ -124,10 +123,10 @@ def test_generate_markdown_from_html_with_readability(input_name):
     with open(output_file, "w") as f:
         print(output, file=f)
 
-    compare_outputs(input_name, expected_file, output_file, web_diff_path)
+    compare_outputs(input_name, expected_file, output_file, os.path.join(web_diff_path, "readability"))
 
 
-@parametrize_web_files
+@parametrize_files
 def test_generate_markdown_from_html_with_resiliparse(input_name):
     """Test the Markdown generation from HTML and compare outputs using the Resiliparse method[NON MARKDOWN]."""
     input_file = os.path.join(web_input_path, f"{input_name}.html")
@@ -145,10 +144,10 @@ def test_generate_markdown_from_html_with_resiliparse(input_name):
     with open(output_file, "w") as f:
         print(output, file=f)
 
-    compare_outputs(input_name, expected_file, output_file, web_diff_path)
+    compare_outputs(input_name, expected_file, output_file, os.path.join(web_diff_path, "resiliparse"))
 
 
-@parametrize_web_files
+@parametrize_files
 def test_generate_markdown_from_html_with_trafilatura(input_name):
     """Test the Markdown generation from HTML and compare outputs using the Trafilatura method."""
     input_file = os.path.join(web_input_path, f"{input_name}.html")
@@ -167,10 +166,10 @@ def test_generate_markdown_from_html_with_trafilatura(input_name):
     with open(output_file, "w") as f:
         print(output, file=f)
 
-    compare_outputs(input_name, expected_file, output_file, web_diff_path)
+    compare_outputs(input_name, expected_file, output_file, os.path.join(web_diff_path, "trafilatura"))
 
 
-@parametrize_wiki_files
+@parametrize_files(split="wiki")
 def test_markdownify_wikipedia(input_name):
     """Test the Markdownify method on Wikipedia."""
     input_file = os.path.join(wiki_input_path, f"{input_name}.html")
@@ -206,7 +205,7 @@ def test_markdownify_wikipedia(input_name):
     compare_outputs(input_name, expected_file, output_file, wiki_diff_path)
 
 
-@parametrize_ar5iv_files
+@parametrize_files(split="ar5iv")
 def test_markdownify_ar5iv(input_name):
     """Test the Markdownify method on ar5iv."""
     remove_reference_section = True
@@ -214,7 +213,7 @@ def test_markdownify_ar5iv(input_name):
     input_content = read_file(input_file)
 
     bs4_html = BeautifulSoup(input_content, "html.parser")
-    unwrap_eqn(bs4_html)
+    deconstruct_eqn(bs4_html)
 
     html = str(bs4_html)
     filtered_html = clean_html(html, remove_reference_section=True)
@@ -252,7 +251,7 @@ def test_markdownify_ar5iv(input_name):
     compare_outputs(input_name, expected_file, output_file, ar5iv_diff_path)
 
 
-@parametrize_stackexchange_files
+@parametrize_files(split="stackexchange", ext=".json")
 def test_markdownify_stackexchange(input_name):
     """Test the Markdownify method on stackexchange."""
     input_file = os.path.join(stackexchange_input_path, f"{input_name}.json")
