@@ -260,7 +260,10 @@ def get_shard_yield(
     logger.info("Finished reading input path with extracted text")
 
     # Convert the examples to datatrove Documents
-    documents_to_classify = [Document(**example) for example in examples_to_classify]
+    documents_to_classify = [
+        Document(text=example["text"], id=example["id"], metadata=example["metadata"])
+        for example in examples_to_classify
+    ]
     # Apply the URL filter
     url_filter = URLFilter()
     examples_url_filter_results: list[bool | tuple[bool, str]] = [
