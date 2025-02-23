@@ -104,6 +104,7 @@ def lm_varying_mixture_data_config(
     *,
     shuffle: bool | int = True,
     missing_weights_are_validation: bool = True,
+    include_raw_paths: bool = True,
 ) -> LMMixtureDatasetConfig:
     """
     Creates a training config from a mixture of datasources with varying weights.
@@ -120,7 +121,10 @@ def lm_varying_mixture_data_config(
     Returns:
         LMMixtureDatasetConfig configured with the varying weights
     """
-    configs = {name: step_to_lm_mixture_component(step) for name, step in components.items()}
+    configs = {
+        name: step_to_lm_mixture_component(step, include_raw_paths=include_raw_paths)
+        for name, step in components.items()
+    }
 
     # Validate and normalize weights
     if not weights_list:
