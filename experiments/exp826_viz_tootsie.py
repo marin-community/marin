@@ -34,8 +34,7 @@ for checkpoint in CHECKPOINTS:
                 checkpoint_path=checkpoint,
                 model=llama_8b,
                 datasets=eval_set_mixture,
-                num_docs_per_dataset=256,
-                output_path=name,
+                num_docs_per_dataset=32,
             )
         )
     )
