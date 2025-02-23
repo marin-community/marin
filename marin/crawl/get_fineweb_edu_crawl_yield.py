@@ -33,7 +33,7 @@ Running on FineWeb-Edu-10M (cc deduplicated):
 
 ```
 python marin/run/ray_run.py \
-    --pip_deps '--find-links https://storage.googleapis.com/jax-releases/libtpu_releases.html,w3lib,trafilatura,jax[tpu],flax,transformers,requests,warcio[all],resiliparse,datatrove[io] @ git+https://github.com/nelson-liu/datatrove@ray_executor_dedup_logging' \
+    --pip_deps '--find-links https://storage.googleapis.com/jax-releases/libtpu_releases.html,w3lib,trafilatura,jax[tpu],flax,transformers,requests,warcio[all],resiliparse,datatrove[processing] @ git+https://github.com/nelson-liu/datatrove@ray_executor_dedup_logging' \
     --no_wait -- \
     python marin/crawl/get_fineweb_edu_crawl_yield.py \
     --urls_input_directory gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-10M-cc-deduplicated/ \
