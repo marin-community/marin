@@ -1,3 +1,8 @@
+"""Train an encoder model based on HuggingFace's Trainer API.
+
+This code was adapted from the FinewebEdu training script.
+"""
+
 import os
 import tempfile
 from dataclasses import dataclass, field
@@ -163,11 +168,6 @@ def train_classifier(rank: int, hf_script_args: HFTrainingConfig, train_dataset,
             upload_to_gcs(temp_dir, args.output_dir)
 
 
-# from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
-# placement_group = ray.util.placement_group(
-#     [{"TPU": 1, "CPU": 1}] * args.tpu_num_cores,
-#     strategy="STRICT_PACK",
-# )
 def train_classifier_distributed(config: HFTrainingConfig):
     dataset = load_dataset(config.train_dataset, "train")
     dataset = dataset.train_test_split(train_size=config.train_size, seed=42)
