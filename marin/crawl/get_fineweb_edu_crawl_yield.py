@@ -33,7 +33,7 @@ Running on FineWeb-Edu-10M (cc deduplicated):
 
 ```
 python marin/run/ray_run.py \
-    --pip_deps '--find-links https://storage.googleapis.com/jax-releases/libtpu_releases.html,w3lib,trafilatura,jax[tpu],flax,transformers,requests,warcio[all],resiliparse' \
+    --pip_deps '--find-links https://storage.googleapis.com/jax-releases/libtpu_releases.html,w3lib,trafilatura,jax[tpu],flax,transformers,requests,warcio[all],resiliparse,datatrove[io] @ git+https://github.com/nelson-liu/datatrove@ray_executor_dedup_logging' \
     --no_wait -- \
     python marin/crawl/get_fineweb_edu_crawl_yield.py \
     --urls_input_directory gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-10M-cc-deduplicated/ \
@@ -62,6 +62,14 @@ import pyarrow.parquet as pq
 import ray
 import trafilatura
 import w3lib.url
+from datatrove.data import Document
+from datatrove.pipeline.filters import (
+    C4QualityFilter,
+    GopherQualityFilter,
+    GopherRepetitionFilter,
+    LanguageFilter,
+    URLFilter,
+)
 from resiliparse.parse.encoding import bytes_to_str, detect_encoding
 from tqdm_loggable.auto import tqdm
 from trafilatura import extract
@@ -225,7 +233,7 @@ def extract_text_from_warc(
     resources={"TPU": 4, "TPU-v4-8-head": 1},
 )
 @remove_tpu_lockfile_on_exit
-def get_shard_quality_classifier_scores(
+def get_shard_yield(
     input_path: str,
     passing_urls_and_scores_output_path: str,
     failing_urls_and_scores_output_path: str,
@@ -251,13 +259,38 @@ def get_shard_quality_classifier_scores(
         examples_to_classify = pd.read_parquet(f).to_dict("records")
     logger.info("Finished reading input path with extracted text")
 
+    # Convert the examples to datatrove Documents
+    documents_to_classify = [Document(**example) for example in examples_to_classify]
+    # Apply the URL filter
+    url_filter = URLFilter()
+    examples_url_filter_results: list[bool | tuple[bool, str]] = [
+        url_filter.filter(document) for document in documents_to_classify
+    ]
+    # Apply the LangID filter
+    langid_filter = LanguageFilter()
+    examples_langid_filter_results: list[bool] = [langid_filter.filter(document) for document in documents_to_classify]
+    # Apply the gopher repetition filter
+    gopher_repetition_filter = GopherRepetitionFilter()
+    examples_gopher_repetition_filter_results: list[bool | tuple[bool, str]] = [
+        gopher_repetition_filter.filter(document) for document in documents_to_classify
+    ]
+    # Apply the gopher quality filter
+    gopher_quality_filter = GopherQualityFilter()
+    examples_gopher_quality_filter_results: list[bool | tuple[bool, str]] = [
+        gopher_quality_filter.filter(document) for document in documents_to_classify
+    ]
+    c4_quality_filter = C4QualityFilter(filter_no_terminal_punct=False)
+    examples_c4_quality_filter_results: list[bool | tuple[bool, str]] = [
+        c4_quality_filter.filter(document) for document in documents_to_classify
+    ]
+
     # Classify all of the examples in the shard
     examples_scores = []
     for examples_batch in tqdm(
         batched(examples_to_classify, 512), desc="Classifying text", total=math.ceil(len(examples_to_classify) / 512)
     ):
-        documents = [ex["text"] for ex in examples_batch]
-        inputs = tokenizer(documents, return_tensors="jax", padding="longest", truncation=True)
+        batch_text = [ex["text"] for ex in examples_batch]
+        inputs = tokenizer(batch_text, return_tensors="jax", padding="longest", truncation=True)
         outputs = model(**inputs)
         logits = outputs.logits.squeeze(-1)
         logits_list = logits.tolist()
@@ -275,17 +308,45 @@ def get_shard_quality_classifier_scores(
 
     for (
         example,
+        example_url_filter_result,
+        example_langid_filter_result,
+        example_gopher_repetition_filter_result,
+        example_gopher_quality_filter_result,
+        example_c4_quality_filter_result,
         example_score,
-    ) in zip(examples_to_classify, examples_scores, strict=True):
+    ) in zip(
+        examples_to_classify,
+        examples_url_filter_results,
+        examples_langid_filter_results,
+        examples_gopher_repetition_filter_results,
+        examples_gopher_quality_filter_results,
+        examples_c4_quality_filter_results,
+        examples_scores,
+        strict=True,
+    ):
         urls_and_scores_record = {
             "url": example["metadata"]["url"],
             "canonicalized_url": example["metadata"]["canonicalized_url"],
+            "url_filter_result": example_url_filter_result,
+            "langid_filter_result": example_langid_filter_result,
+            "gopher_repetition_filter_result": example_gopher_repetition_filter_result,
+            "gopher_quality_filter_result": example_gopher_quality_filter_result,
+            "c4_quality_filter_result": example_c4_quality_filter_result,
             "score": example_score,
         }
         text_and_scores_record = deepcopy(example)
-        text_and_scores_record["metadata"]["score"] = example_score
+        # Add the entries from urls_and_scores_record to text_and_scores_record
+        for k, v in urls_and_scores_record:
+            text_and_scores_record["metadata"][k] = v
 
-        if example_score >= 3.0:
+        if (
+            example_url_filter_result is True
+            and example_langid_filter_result is True
+            and example_gopher_repetition_filter_result is True
+            and example_gopher_quality_filter_result is True
+            and example_c4_quality_filter_result is True
+            and example_score >= 3.0
+        ):
             num_records_passing += 1
             passing_urls_and_scores_output_records.append(urls_and_scores_record)
             passing_text_and_scores_output_records.append(text_and_scores_record)
@@ -379,7 +440,7 @@ def main(cfg: GetCrawlYieldConfig):
             cfg.text_output_directory, f"links.{shard_index}_text_and_scores.failing.parquet"
         )
         unfinished.append(
-            get_shard_quality_classifier_scores.remote(
+            get_shard_yield.remote(
                 extracted_text_path,
                 passing_urls_and_scores_output_path,
                 failing_urls_and_scores_output_path,
