@@ -33,7 +33,7 @@ Running on FineWeb-Edu-10M (cc deduplicated):
 
 ```
 python marin/run/ray_run.py \
-    --pip_deps '--find-links https://storage.googleapis.com/jax-releases/libtpu_releases.html,w3lib,trafilatura,jax[tpu],flax,transformers,requests,warcio[all],resiliparse,datatrove[processing] @ git+https://github.com/nelson-liu/datatrove@ray_executor_dedup_logging' \
+    --pip_deps '--find-links https://storage.googleapis.com/jax-releases/libtpu_releases.html,w3lib,trafilatura,jax[tpu],flax,transformers,requests,warcio[all],resiliparse,datatrove[processing] @ git+https://github.com/nelson-liu/datatrove@ray_executor_dedup_logging,spacy,cupy-cuda12x==13.3.0' \
     --no_wait -- \
     python marin/crawl/get_fineweb_edu_crawl_yield.py \
     --urls_input_directory gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-10M-cc-deduplicated/ \
@@ -339,7 +339,7 @@ def get_shard_yield(
         }
         text_and_scores_record = deepcopy(example)
         # Add the entries from urls_and_scores_record to text_and_scores_record
-        for k, v in urls_and_scores_record:
+        for k, v in urls_and_scores_record.items():
             text_and_scores_record["metadata"][k] = v
 
         if (
