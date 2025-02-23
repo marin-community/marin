@@ -4,13 +4,14 @@ Uses Levanter's viz_lm functionality to visualize log probabilities of a languag
 from dataclasses import dataclass
 
 import ray
-from dolma.cli.tokenizer import TokenizerConfig
 
 from levanter.data.text import LMMixtureDatasetConfig
+from levanter.distributed import RayConfig
 from levanter.main.viz_logprobs import VizLmConfig as LevanterVizLmConfig, main as viz_lm_main
 from levanter.models.lm_model import LmConfig
+from levanter.trainer import TrainerConfig
 from marin.execution.executor import ExecutorStep, this_output_path
-from marin.processing.tokenize import TokenizerStep, lm_mixture_data_config
+from marin.processing.tokenize import TokenizeConfig, TokenizerStep, lm_mixture_data_config
 from marin.utils import remove_tpu_lockfile_on_exit
 
 @dataclass
@@ -20,7 +21,7 @@ class VizLmConfig:
     """
     checkpoint_path: str
     model: LmConfig
-    datasets: dict[str, TokenizerStep | TokenizerConfig]
+    datasets: LMMixtureDatasetConfig
     num_docs_per_dataset: int = 256
     output_path: str = this_output_path()  # type: ignore
 
@@ -36,6 +37,7 @@ def do_viz_lm(config: LevanterVizLmConfig) -> None:
     Args:
         config (VizLmConfig): The configuration for visualizing log probabilities.
     """
+    print(config)
     viz_lm_main(config)
 
 
@@ -64,12 +66,16 @@ def visualize_lm_lob_probs(config: VizLmConfig) -> None:
     Args:
         config (VizLmConfig): The configuration for visualizing log probabilities.
     """
-    mixture_config = mixture_for_visualization(config.datasets)
     levanter_config = LevanterVizLmConfig(
         checkpoint_path=config.checkpoint_path,
         model=config.model,
         num_docs=config.num_docs_per_dataset,
         path=config.output_path,
-        data=mixture_config,
+        data=config.datasets,
+        trainer=TrainerConfig(
+            ray=RayConfig(
+                auto_start_cluster=False
+            )
+        )
     )
     ray.get(do_viz_lm.remote(levanter_config))
