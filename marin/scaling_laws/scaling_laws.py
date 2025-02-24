@@ -22,16 +22,17 @@ import wandb
 
 from marin.execution.executor import ExecutorStep
 from marin.scaling_laws.utils import (
-    ProjectionConfig,
+    ProjectionPoint,
     get_default_projection_points,
     plot_actual_vs_predicted,
     plot_scaling_projections,
 )
 
+from levanter.models.lm_model import LmConfig
+
 
 @dataclass(frozen=True)
 class ScalingLawConfig:
-
     name: str
     """name of the scaling law analysis or config (used for the report name)"""
 
@@ -41,13 +42,13 @@ class ScalingLawConfig:
     pred_model_step: ExecutorStep | str
     """executor step or wandb run id for the larger model to make predictions for"""
 
-    projection_points: Sequence[ProjectionConfig] | None = None  # Predict for N,D points
-    """Points to project to"""
+    projection_points: list[ProjectionPoint] | None = None
+    """Points to project to, consisting of number of parameters and tokens"""
 
     task_losses: Sequence[str] = field(default_factory=lambda: ["eval/paloma/c4_en/bpb"])
     """task losses to predict for scaling laws (eg. c4en bpb)"""
 
-    task_accuracies: Sequence[str] = field(default_factory=lambda: ["lm_eval/hellaswag_10shot/acc"])
+    task_accuracies: Sequence[str] | None = None
     """task accuracy to predict for the larger model (eg. hellaswag accuracy)"""
 
     use_log_for_ND: bool = True
@@ -61,6 +62,15 @@ class ScalingLawConfig:
 
     entity: str = "stanford-mercury"
     project: str = "marin"
+
+    def __post_init__(self):
+        # Set default projection points if none provided
+        if self.projection_points is None:
+            object.__setattr__(
+                self, 
+                "projection_points", 
+                get_default_projection_points(count_embedding_params=self.count_embedding_params)
+            )
 
 
 def get_wandb_run_id_from_step(step: ExecutorStep) -> str:
@@ -89,14 +99,14 @@ def run_scaling_law_analysis(config: ScalingLawConfig) -> None:
             else config.pred_model_step
         )
 
-    projections, predictions, points = fit_scaling_laws(
+    projections, predictions = fit_scaling_laws(
         runs=input_run_ids,
         loss_metrics=config.task_losses,
         accuracy_metrics=config.task_accuracies,
         entity=config.entity,
         project=config.project,
         pred_run=pred_run_id,
-        projection_points=config.projection_points or get_default_projection_points(),
+        projection_points=config.projection_points,
         count_embedding_params=config.count_embedding_params,
         use_log_for_ND=config.use_log_for_ND,
         normalize_ND=config.normalize_ND,
@@ -104,7 +114,7 @@ def run_scaling_law_analysis(config: ScalingLawConfig) -> None:
 
     log_and_create_report(
         projections=projections,
-        points=points if config.projection_points else get_default_projection_points(),
+        points=config.projection_points,
         predictions=predictions,
         input_run_ids=input_run_ids,
         pred_run_id=pred_run_id,
@@ -114,7 +124,7 @@ def run_scaling_law_analysis(config: ScalingLawConfig) -> None:
 
 def log_and_create_report(
     projections: dict[str, np.ndarray],
-    points: list[ProjectionConfig],
+    points: list[ProjectionPoint] | None,
     predictions: tuple[dict, dict, np.ndarray, np.ndarray] | None,
     input_run_ids: list,
     pred_run_id: str | None,
@@ -141,9 +151,10 @@ def log_and_create_report(
     plots = {}
 
     # Log projections
-    for loss_name, projection in projections.items():
-        figure = plot_scaling_projections(projection, points)
-        plots[f"Projection - {loss_name}"] = wandb.Image(figure)
+    if points:
+        for loss_name, projection in projections.items():
+            figure = plot_scaling_projections(projection, points)
+            plots[f"Projection - {loss_name}"] = wandb.Image(figure)
 
     # Log predictions if available
     if predictions:
