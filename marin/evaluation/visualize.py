@@ -26,6 +26,8 @@ class VizLmConfig:
     per_device_batch_size: int = 4
     output_path: str = this_output_path()  # type: ignore
 
+    comparison_model_path: str | None = None
+
 
 @ray.remote(
     memory=64 * 1024 * 1024 * 1024, resources={"TPU": 4, "TPU-v4-8-head": 1}
@@ -77,6 +79,7 @@ def visualize_lm_lob_probs(config: VizLmConfig) -> None:
                 auto_start_cluster=False
             ),
             per_device_eval_parallelism=config.per_device_batch_size
-        )
+        ),
+        comparison_model_path=config.comparison_model_path,
     )
     ray.get(do_viz_lm.remote(levanter_config))
