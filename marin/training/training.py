@@ -10,7 +10,7 @@ import ray
 from google.api_core.exceptions import Forbidden as GcpForbiddenException
 from levanter.data.text import LMMixtureDatasetConfig
 from levanter.infra.ray_tpu import run_on_pod_multislice_resumable, run_on_pod_resumable
-from levanter.main import sft, train_lm
+from levanter.main import sft, sft_mixture, train_lm
 from mergedeep import mergedeep
 from ray.runtime_env import RuntimeEnv
 
@@ -29,6 +29,15 @@ logger = logging.getLogger(__name__)
 class TrainSFTOnPodConfig(sft.SFTConfig):
     output_path: str | None = None
     tpu_type: str | None = None
+    env: dict = dataclasses.field(default_factory=dict)
+    bypass_path_checks: bool = False
+    impute_run_id_from_output_path: bool = True
+
+
+@dataclass
+class TrainSFTMixturePodConfig(sft_mixture.SFTMixtureConfig):
+    output_path: str | None = None
+    tpu_type: str | None = None  # None means local
     env: dict = dataclasses.field(default_factory=dict)
     bypass_path_checks: bool = False
     impute_run_id_from_output_path: bool = True
@@ -82,6 +91,52 @@ def _upcast_sft_config(config):
         del dict_config[field]
     sft_config = sft.SFTConfig(**dict_config)
     return sft_config
+
+
+@ray.remote(num_cpus=0.1)
+def run_levanter_sft_mixture(config: TrainSFTMixturePodConfig):
+    """
+    Run the Levanter SFT mixture training function on a Ray cluster.
+    Similar to run_levanter_sft but for mixture training.
+    """
+    default_launch_config = levanter.infra.cli_helpers.load_config()
+
+    if config.output_path is not None:
+        logger.info(f"Using output path: {config.output_path}")
+        config = _update_config_to_use_out_path(config)
+
+    default_env = default_launch_config.env_for_accel(config.tpu_type or "")
+    env = _add_default_env_variables(config.env, default_env)
+    _check_for_wandb_key(env)
+    env = _add_run_env_variables(env)
+    config = replace(config, env=env)
+
+    config = _suppress_ray_config(config)
+    config = _enforce_run_id(config)
+    logger.info(f"Using run ID: {config.trainer.id}")
+
+    if not config.bypass_path_checks and config.tpu_type is not None:
+        ray.get(ray.remote(_doublecheck_paths_sft).options(num_cpus=0.1).remote(config, must_save_checkpoints=True))
+
+    sft_mixture_config = _upcast_sft_mixture_config(config)
+
+    @ray.remote
+    def sft_mixture_task():
+        sft_mixture.train(sft_mixture_config)
+
+    if config.tpu_type is not None:
+        return run_on_pod_resumable(sft_mixture_task, config.tpu_type, max_retries_failure=10)
+    else:
+        return ray.get(sft_mixture_task.remote())
+
+
+def _upcast_sft_mixture_config(config):
+    """Upcast TrainSFTMixturePodConfig to SFTMixtureConfig by stripping TPU type and env"""
+    dict_config = shallow_asdict(config)
+    fields_to_remove = set(dict_config.keys()) - set(sft_mixture.SFTMixtureConfig.__dataclass_fields__.keys())
+    for field in fields_to_remove:
+        del dict_config[field]
+    return sft_mixture.SFTMixtureConfig(**dict_config)
 
 
 @dataclass
