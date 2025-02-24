@@ -19,7 +19,7 @@ The following routes serve Nepean Woods station as of June 20, 2021:
 | 55   162 | Local routes |
 | 284 | Connexion routes |
 | 405 | 300s: Shopper routes<br>400s: Event routes<br>600s: School routes |
-| Additional info: * Line 1: Confederation Line * Line 2: Trillium Line * Line 4: Airport Link<br> * Routes 5 to 99: Custom routing that connects to Line 1 and/or 2 * Routes 100 to 199: Custom routing that does not connect to Line 1 or 2 * Routes 200 to 299: Connexion (peak-period only routes that connect to the O-Train) * Routes 301 to 305: Shopper Routes (limited rural service) * Routes 404 to 406: Canadian Tire Centre events * Routes 450 to 456: Lansdowne Park events * Routes 602 to 698: School Routes<br> * Route R1: replaces Line 1 when out of service * Route R2: replaces Line 2 when out of service * Routes N39 to N97: night service (replaces Line 1) * White backgrounds: service may be limited<br> * Last two digits represent service area: | |
+| Additional info: * Line 1: Confederation Line * Line 2: Trillium Line * Line 4: Airport Link<br> * Routes 5 to 99: Custom routing that connects to Line 1 and/or 2 * Routes 100 to 199: Custom routing that does not connect to Line 1 or 2 * Routes 200 to 299: Connexion (peak-period only routes that connect to the O-Train) * Routes 301 to 305: Shopper Routes (limited rural service) * Routes 404 to 406: Canadian Tire Centre events * Routes 450 to 456: Lansdowne Park events * Routes 602 to 698: School Routes<br> * Route R1: replaces Line 1 when out of service * Route R2: replaces Line 2 when out of service * Routes N39 to N97: night service (replaces Line 1) * White backgrounds: service may be limited<br> * Last two digits represent service area:     + 00s and 10s – Central     + 20s – Gloucester     + 30s – Orléans     + 40s – Ottawa East     + 50s – Ottawa West     + 60s – Kanata, Stittsville     + 70s – Barrhaven     + 80s – Nepean     + 90s – South Keys | |
 
 | Stop | Routes |
 | --- | --- |
@@ -30,6 +30,10 @@ The following routes serve Nepean Woods station as of June 20, 2021:
 
 * Some PM trips from Merivale High School on route 680 travel west of Nepean Woods towards Barrhaven Centre instead of east towards Riverside South via Riverview station.
 * One PM trip on route 80 from Merivale High School travels east towards Riverside South via Riverview station instead of west towards Barrhaven Centre.
+
+* OC Transpo - Routes & Maps - Route 94
+* OC Transpo - Routes & Maps - Route 99
+* OC Transpo - Routes & Maps - Route 176
 
 ## InfoBox
 

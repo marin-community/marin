@@ -138,4 +138,9 @@ $$y=y\_{p}+y\_{c}$$
 
 where $y\_{c}$ is the homogeneous solution $y\_{c}=c\_{1}e^{-t}$, therefore, the general solution is: 
 
-$$y=t^{2}-2t+2+c\_{1}e^{-t}$$
+$$y=t^{2}-2t+2+c\_{1}e^{-t}$$  
+
+* Boyce, W. E.; DiPrima, R. C. (1986). *Elementary Differential Equations and Boundary Value Problems* (4th ed.). John Wiley & Sons. ISBN 0-471-83824-1.
+* Riley, K. F.; Bence, S. J. (2010). *Mathematical Methods for Physics and Engineering*. Cambridge University Press. ISBN 978-0-521-86153-3.
+* Tenenbaum, Morris; Pollard, Harry (1985). *Ordinary Differential Equations*. Dover. ISBN 978-0-486-64940-5.
+* de Oliveira, O. R. B. (2013). "A formula substituting the undetermined coefficients and the annihilator methods". *Int. J. Math. Educ. Sci. Technol*. **44** (3): 462–468. arXiv:1110.4425. Bibcode:2013IJMES..44..462R. doi:10.1080/0020739X.2012.714496. S2CID 55834468.
