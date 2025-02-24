@@ -63,7 +63,7 @@ llama_70b_train_config_mk6 = dataclasses.replace(
     train_batch_size=[ScheduleStep(start=0, value=1024), ScheduleStep(start=96001, value=1536)],
     tpu_type="v6e-128",
     # tpu_type="v5litepod-256",
-    node_count=6,
+    node_count=4,
     # until 93_621, was 2e-4
     # learning_rate=2e-4,
     # until 95_920, was 2.5e-4 (on accident)
