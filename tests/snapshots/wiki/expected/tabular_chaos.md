@@ -20,7 +20,29 @@ Twenty teams were invited to start the race. These included fourteen UCI Contine
 
 **UCI Continental teams** 
 
+* Team Novak
+* Voster ATS Team
+* Giotti Victoria–Palomar
+* LKT Team Brandenburg
+* Massi Vivo–Grupo Oresy
+* CCC Development Team
+* Elkov–Author
+* Hurom BDC Development
+* Cycling Team Friuli
+* Team Illuminate
+* Monkey Town–à Bloc
+* Vino–Astana Motors
+* Kyiv Capital Racing
+* Lokosphinx
+
 **National teams** 
+
+* Romania
+* Slovakia
+* Russia
+* Belarus
+* Estonia
+* Turkey
 
 ## Stages
 
@@ -149,6 +171,12 @@ Team classification (1–5)
 | 3 | Elkov–Author | \+ 9" |
 | 4 | Team Illuminate | \+ 2' 10" |
 | 5 | Cycling Team Friuli | \+ 3' 36" |
+
+* 2019 in men's road cycling
+* 2019 in sports
+
+* Official website
+* "2019 Tour of Romania". *procyclingstats.com*. Retrieved 4 September 2019.
 
 ## InfoBox
 

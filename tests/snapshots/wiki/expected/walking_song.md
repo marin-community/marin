@@ -64,6 +64,15 @@ Shore wrote the orchestral section of "The Sacrifice of Faramir", which frames B
 
 Both versions of the poem have been set to music by the Danish group The Tolkien Ensemble, with melodies composed by one of its members, Peter Hall. They appear on the group's album *At Dawn in Rivendell* (2002). A cover of the "Edge of Night" song as used in the film appears on the eponymous final album of a former Tolkien Ensemble member, Nick Keir. 
 
+* Music of the Hobbit film series
+* The Road Goes Ever On (song), also called *The Old Walking Song*
+
 ### Primary
 
 ### Secondary
+
+* Adams, Doug (2010). *The Music of The Lord of the Rings Films*. Éditions Didier Carpentier. ISBN 978-0-7390-7157-1.
+* 
+* Shippey, Tom (2005) \[1982\]. *The Road to Middle-Earth: How J. R. R. Tolkien Created a New Mythology* (Third ed.). HarperCollins. ISBN 978-0-261-10275-0.
+* Tolkien, J. R. R. (1954a). *The Fellowship of the Ring*. *The Lord of the Rings*. Boston: Houghton Mifflin. OCLC 9552942.
+* Tolkien, J. R. R. (1955). *The Return of the King*. *The Lord of the Rings*. Boston: Houghton Mifflin. OCLC 519647821.

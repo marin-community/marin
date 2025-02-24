@@ -16,4 +16,8 @@ By April 15, close to 3,000 windshields had been reported as affected, which pro
 
 Finally, Sergeant Max Allison of the Seattle police crime laboratory stated that the pitting reports consisted of "5 per cent hoodlum-ism, and 95 per cent public hysteria." By April 17, the pitting suddenly stopped. The following week, hundreds of windshield pitting incidents were also reported in British Columbia, Alberta, and Ontario. 
 
-The "Seattle Windshield Pitting Epidemic" as it is called has become a textbook case of collective delusion (not "mass hysteria" as reported). Although natural windshield pitting had been going on for some time, it was only when the media called public attention to it that people actually looked at their windshields and saw damage they had never noticed before.
+The "Seattle Windshield Pitting Epidemic" as it is called has become a textbook case of collective delusion (not "mass hysteria" as reported). Although natural windshield pitting had been going on for some time, it was only when the media called public attention to it that people actually looked at their windshields and saw damage they had never noticed before. 
+
+* The story of the Seattle Windshield Pitting Epidemic
+* *Seattle Times* coverage of the Seattle Windshield Pitting Epidemic
+* *Seattle Met*: What Pitted Seattle's Glass?
