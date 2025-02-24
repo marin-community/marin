@@ -22,7 +22,7 @@ import wandb
 
 from marin.execution.executor import ExecutorStep
 from marin.scaling_laws.utils import (
-    ProjectionPoint,
+    ProjectionConfig,
     get_default_projection_points,
     plot_actual_vs_predicted,
     plot_scaling_projections,
@@ -32,13 +32,16 @@ from marin.scaling_laws.utils import (
 @dataclass(frozen=True)
 class ScalingLawConfig:
 
+    name: str
+    """name of the scaling law analysis or config (used for the report name)"""
+
     ladder_model_steps: Sequence[ExecutorStep | str]
     """list of (smaller model) steps or wandb run ids to be used as input for scaling laws"""
 
     pred_model_step: ExecutorStep | str
     """executor step or wandb run id for the larger model to make predictions for"""
 
-    projection_points: Sequence[ProjectionPoint] | None = None  # Predict for N,D points
+    projection_points: Sequence[ProjectionConfig] | None = None  # Predict for N,D points
     """Points to project to"""
 
     task_losses: Sequence[str] = field(default_factory=lambda: ["eval/paloma/c4_en/bpb"])
@@ -52,6 +55,9 @@ class ScalingLawConfig:
 
     normalize_ND: bool = True
     """whether to normalize N,D in scaling laws"""
+
+    count_embedding_params: bool = False
+    """whether to count embedding parameters in scaling laws"""
 
     entity: str = "stanford-mercury"
     project: str = "marin"
@@ -91,6 +97,7 @@ def run_scaling_law_analysis(config: ScalingLawConfig) -> None:
         project=config.project,
         pred_run=pred_run_id,
         projection_points=config.projection_points or get_default_projection_points(),
+        count_embedding_params=config.count_embedding_params,
         use_log_for_ND=config.use_log_for_ND,
         normalize_ND=config.normalize_ND,
     )
@@ -107,8 +114,8 @@ def run_scaling_law_analysis(config: ScalingLawConfig) -> None:
 
 def log_and_create_report(
     projections: dict[str, np.ndarray],
-    points: list[ProjectionPoint],
-    predictions: tuple[dict, dict] | None,
+    points: list[ProjectionConfig],
+    predictions: tuple[dict, dict, np.ndarray, np.ndarray] | None,
     input_run_ids: list,
     pred_run_id: str | None,
     scaling_law_config: ScalingLawConfig,
@@ -122,7 +129,7 @@ def log_and_create_report(
     run = wandb.init(
         project=wandb_project,
         entity=wandb_entity,
-        name=f"""Scaling Law Report: {pred_run_id if pred_run_id else 'projection'}""",
+        name=f"""Scaling Law Report: {pred_run_id if pred_run_id else 'projection'}-{scaling_law_config.name}""",
         tags=["scaling_laws"],
         config={
             "input_runs": input_run_ids,
@@ -140,8 +147,7 @@ def log_and_create_report(
 
     # Log predictions if available
     if predictions:
-
-        loss_results, accuracy_results = predictions
+        loss_results, accuracy_results, loss_tokens, acc_tokens = predictions
 
         if loss_results:
             for loss_name, (actual_loss, predicted_loss) in loss_results.items():
@@ -150,6 +156,7 @@ def log_and_create_report(
                     predicted_loss.tolist(),
                     title=f"Actual vs Predicted {loss_name}",
                     task_metric=loss_name,
+                    tokens=loss_tokens
                 )
                 plots[f"Task Loss - {loss_name}"] = wandb.Image(figure)
 
@@ -160,6 +167,7 @@ def log_and_create_report(
                     predicted_acc.tolist(),
                     title=f"Actual vs Predicted {metric}",
                     task_metric=metric,
+                    tokens=acc_tokens
                 )
                 plots[f"Task Accuracy - {metric}"] = wandb.Image(figure)
 

@@ -100,9 +100,13 @@ def fit_power_law(
         initial_guess: Initial guess for the parameters
         delta: huber loss delta, indicating the quadratic vs. linear loss changepoint.
     """
+    # Compute the minimum y value to use as the initial guess for E
+    min_y = np.min(y)
+
     if use_log_space:
         if initial_guess is None:
-            initial_guess = [0.0, 0.0, 1.0, 1.0, 0.0]  # [log_A, log_B, alpha, beta, E]
+            # Initialize E to max(min_y, 1e-10) to ensure it's positive
+            initial_guess = [0.0, 0.0, 1.0, 1.0, max(min_y, 1e-10)]  # [log_A, log_B, alpha, beta, E]
         bounds = [
             (None, None),  # log_A unbounded
             (None, None),  # log_B unbounded
@@ -112,13 +116,14 @@ def fit_power_law(
         ]
     else:
         if initial_guess is None:
-            initial_guess = [1.0, 1.0, 1.0, 1.0, 0.0]  # [A, B, alpha, beta, E]
+            # Initialize E to max(min_y, 1e-10) to ensure it's positive
+            initial_guess = [1.0, 1.0, 1.0, 1.0, max(min_y, 1e-10)]  # [A, B, alpha, beta, E]
         bounds = [
             (0, None),  # A >= 0
             (0, None),  # B >= 0
             (0, None),  # alpha >= 0
             (0, None),  # beta >= 0
-            (0, None),  # E >= 0
+            (1e-10, None),  # E >= 1e-10 to ensure E is positive
         ]
 
     def objective(params):
@@ -152,6 +157,33 @@ def predict_power_law(params: Sequence[float], N: np.ndarray, D: np.ndarray) -> 
 ####################################################################################################
 # Sigmoidal fit helpers
 
+# def fit_sigmoidal(L: np.ndarray, y: np.ndarray, initial_guess: Sequence[float] | None = None) -> np.ndarray:
+#     """
+#     Fit a sigmoidal model to the data (L, y).
+
+#     Equation: a / (1 + exp(-k * (L - L_0))) + b
+
+#     Args:
+#         L: Task loss
+#         y: Ground-truth task accuracy
+#         initial_guess: Initial guess for the parameters
+#     """
+
+#     if initial_guess is None:
+#         initial_guess = [1.0, 0.0, 1.0, 0.0]  # [a, b, k, L_0]
+
+#     lower_bounds = [-np.inf, -np.inf, -np.inf, -np.inf]
+#     upper_bounds = [np.inf, np.inf, np.inf, np.inf]
+
+#     bounds = (lower_bounds, upper_bounds)
+
+#     def objective(L, a, b, k, L_0):
+#         return predict_sigmoidal([a, b, k, L_0], L)
+
+#     # use scipy.optimize.curve_fit
+#     popt, _ = curve_fit(objective, L, y, p0=initial_guess, bounds=bounds, maxfev=5000, method="trf", ftol=OPTIMIZATION_TOLERANCE)
+
+#     return popt
 
 def fit_sigmoidal(L: np.ndarray, y: np.ndarray, initial_guess: Sequence[float] | None = None) -> np.ndarray:
     """
@@ -160,31 +192,49 @@ def fit_sigmoidal(L: np.ndarray, y: np.ndarray, initial_guess: Sequence[float] |
     Equation: a / (1 + exp(-k * (L - L_0))) + b
 
     Args:
-        L: Task loss
-        y: Ground-truth task accuracy
-        initial_guess: Initial guess for the parameters
+        L: Task loss (input array)
+        y: Ground-truth task accuracy (output array)
+        initial_guess: Initial guess for [a, b, k, L_0], defaults to data-driven values
+
+    Returns:
+        popt: Optimized parameters [a, b, k, L_0]
     """
-
+    # Set initial guess if not provided
     if initial_guess is None:
-        initial_guess = [1.0, 0.0, 1.0, 0.0]  # [a, b, k, L_0]
+        y_min = np.min(y)
+        y_max = np.max(y)
+        a_init = y_max - y_min
+        b_init = y_min
+        k_init = -1.0  # decreasing sigmoid function
+        initial_guess = [a_init, b_init, k_init, 0.0]
 
-    lower_bounds = [-np.inf, -np.inf, -np.inf, -np.inf]
-    upper_bounds = [np.inf, np.inf, np.inf, np.inf]
-
+    # Set parameter bounds
+    lower_bounds = [0, 0, -np.inf, -np.inf]  # a > 0, b >= 0, k unbounded below, L_0 unbounded
+    upper_bounds = [np.inf, np.inf, 0, np.inf]  # a unbounded above, b unbounded, k < 0, L_0 unbounded
     bounds = (lower_bounds, upper_bounds)
 
     def objective(L, a, b, k, L_0):
         return predict_sigmoidal([a, b, k, L_0], L)
 
-    # use scipy.optimize.curve_fit
-    popt, _ = curve_fit(objective, L, y, p0=initial_guess, bounds=bounds, maxfev=5000, method="trf", ftol=OPTIMIZATION_TOLERANCE)
+    # Fit the model using scipy's curve_fit()
+    # https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.curve_fit.html 
+    popt, _ = curve_fit(
+        objective,
+        L,
+        y,
+        p0=initial_guess,
+        bounds=bounds,
+        maxfev=10000,
+        method="trf",
+        ftol=OPTIMIZATION_TOLERANCE
+    )
 
     return popt
 
 
-def predict_sigmoidal(params: Sequence[float], task_loss: np.ndarray) -> np.ndarray:
+def predict_sigmoidal(params: Sequence[float], L: np.ndarray) -> np.ndarray:
     a, b, k, L_0 = params
-    return a / (1 + np.exp(-k * (task_loss - L_0))) + b
+    return a / (1 + np.exp(-k * (L - L_0))) + b
 
 
 ####################################################################################################
@@ -224,7 +274,6 @@ def pull_metrics_from_wandb(
         # Get model configuration
         model_dict = run.config.get("model", {})
 
-        model_dict = run.config.get("model", {})
         run_data["hidden_dim"] = model_dict.get("hidden_dim", 0)
 
         # get the summary fields
@@ -330,12 +379,12 @@ def non_embedding_params(total_param_count: int, hidden_dim: int, vocab_size: in
 # Projection-specific helpers
 
 
-@dataclass
-class ProjectionPoint:
-    """Represents a point to project performance to"""
+# @dataclass
+# class ProjectionConfig:
+#     """Represents a point to project performance to"""
 
-    num_params: int
-    num_tokens: int
+#     num_params: int
+#     num_tokens: int
 
 
 def get_non_emb_params_for_size(size: int) -> int:
@@ -371,7 +420,7 @@ def get_non_emb_params_for_size(size: int) -> int:
 def get_default_projection_points() -> list[ProjectionPoint]:
     """Default set of model sizes to project to"""
     sizes = [1.4e9, 8e9, 13e9, 22e9, 70e9]
-    chinchilla_multipliers = [0.5, 1, 5, 10, 20, 30, 50]
+    chinchilla_multipliers = [0.5, 1, 5, 10, 20, 30, 50, 100]
 
     return [ProjectionPoint(int(size), int(size * m)) for size in sizes for m in chinchilla_multipliers]
 
@@ -403,23 +452,38 @@ def plot_actual_vs_predicted(
     y_predicted: np.ndarray,
     title: str = "Actual vs Predicted",
     task_metric: str = "eval/paloma/c4_en/bpb",
+    tokens: np.ndarray | None = None,
 ) -> None:
     """
     Plot actual vs predicted values. task_metric is the name of the metric we are predicting.
     """
-
     plt.figure(figsize=(10, 6))
 
+    x_values = tokens if tokens is not None else np.arange(len(y_actual))
+    
     # plot actual and predicted values
-    plt.plot(y_actual, label="Actual", marker="o", linestyle="-", linewidth=2)
-    plt.plot(y_predicted, label="Predicted", marker="x", linestyle="--", linewidth=2)
+    plt.plot(x_values, y_actual, label="Actual", marker="o", linestyle="-", linewidth=2)
+    plt.plot(x_values, y_predicted, label="Predicted", marker="x", linestyle="--", linewidth=2)
 
     # add labels, legend, and title
-    plt.xlabel("Step")
+    plt.xlabel("Tokens" if tokens is not None else "Step")
     plt.ylabel("Metric: " + task_metric)
     plt.title(title)
     plt.legend()
     plt.grid(True)
+
+    # If using tokens, set x-axis to log scale and format ticks
+    if tokens is not None:
+        plt.xscale('log')
+        # Format tick labels to show B/T for billions/trillions
+        def format_ticks(x, _):
+            if x >= 1e12:
+                return f"{x/1e12:.1f}T"
+            elif x >= 1e9:
+                return f"{x/1e9:.1f}B"
+            else:
+                return f"{x/1e6:.1f}M"
+        plt.gca().xaxis.set_major_formatter(plt.FuncFormatter(format_ticks))
 
     return plt
 
@@ -472,9 +536,11 @@ def fit_scaling_laws(
     aggregation: str = "all",
     tokens_col: str = "throughput/total_tokens",
     param_col: str = "parameter_count",
+    count_embedding_params: bool = False,
     use_log_for_ND: bool = False,
     normalize_ND: bool = False,
-) -> tuple[dict[str, np.ndarray], dict[str, tuple[np.ndarray, np.ndarray]] | None, list[ProjectionPoint] | None]:
+    
+) -> tuple[dict[str, np.ndarray], tuple[dict, dict, np.ndarray, np.ndarray] | None, list[ProjectionPoint] | None]:
     """Fit scaling laws for both projection and prediction
 
     Args:
@@ -488,8 +554,16 @@ def fit_scaling_laws(
         aggregation: how to aggregate steps within each run (all/last/average)
         tokens_col: column name for the number of tokens
         param_col: column name for the number of parameters
+        count_embedding_params: whether to count embedding parameters in calculating N
         use_log_for_ND: whether to use log space for N and D
         normalize_ND: whether to normalize N and D
+    
+    Returns:
+        tuple of:
+            - dict of loss metrics and their predictions
+            - dict of accuracy metrics and their predictions
+            - numpy array of tokens for x-axis of plots for losses
+            - numpy array of tokens for x-axis of plots for accuracies
     """
 
     # First pull for losses - only essential metrics
@@ -544,7 +618,6 @@ def fit_scaling_laws(
             project=project,
             summary_fields=(param_col,),
         )
-
        
         loss_pred_filtered = filter_zero_d(loss_pred_df, tokens_col)
         loss_pred_agg = aggregate_steps(loss_pred_filtered, step_mode=aggregation)
@@ -567,6 +640,7 @@ def fit_scaling_laws(
             loss_results[loss_metric] = (actual_loss, predicted_loss)
 
         # Second pull for accuracies
+        accuracy_results = {}
         if accuracy_metrics:
             acc_df = pull_metrics_from_wandb(
                 runs=runs,
@@ -590,16 +664,49 @@ def fit_scaling_laws(
 
             # Fit accuracies
             accuracy_results = {}
-            loss_metric, (_, predicted_loss) = next(iter(loss_results.items()))  # use first loss
-            task_losses = loss_df_agg[loss_metric].values
+            loss_metric, (actual_loss, predicted_loss) = next(iter(loss_results.items()))  # use first loss
+            
+            # Merge loss and accuracy data on run and tokens
+            merged_df = pd.merge(
+                loss_df_agg[['run', tokens_col, loss_metric]], 
+                acc_df_agg[['run', tokens_col] + list(accuracy_metrics)],
+                on=['run', tokens_col],
+                how='inner'
+            )
+            
+            # Merge prediction data similarly
+            merged_pred_df = pd.merge(
+                loss_pred_agg[['run', tokens_col]],
+                acc_pred_agg[['run', tokens_col] + list(accuracy_metrics)],
+                on=['run', tokens_col],
+                how='inner'
+            )
+
             for acc_metric in accuracy_metrics:
-                acc = acc_df_agg[acc_metric].values
+                task_losses = merged_df[loss_metric].values
+                acc = merged_df[acc_metric].values
                 params = fit_sigmoidal(task_losses, acc)
-                acc_pred_actual = acc_pred_agg[acc_metric].values
-                pred_task_losses = predicted_loss[-len(acc_pred_actual) :]
+                
+                acc_pred_actual = merged_pred_df[acc_metric].values
+                # Get the corresponding predicted losses for these points
+                pred_indices = loss_pred_agg[tokens_col].isin(merged_pred_df[tokens_col])
+                pred_task_losses = predicted_loss[pred_indices]
+                
                 acc_preds = predict_sigmoidal(params, pred_task_losses)
                 accuracy_results[f"{acc_metric}_from_{loss_metric}"] = (acc_pred_actual, acc_preds)
 
-        predictions = (loss_results, accuracy_results)
+            figure = plot_actual_vs_predicted(
+                actual_loss,
+                predicted_loss,
+                title=f"Actual vs Predicted {loss_metric}",
+                task_metric=loss_metric,
+                tokens=merged_pred_df[tokens_col].values
+            )
+
+            # Get token counts for plotting
+            loss_tokens = loss_pred_agg[tokens_col].values
+            acc_tokens = merged_pred_df[tokens_col].values
+            
+            predictions = (loss_results, accuracy_results, loss_tokens, acc_tokens)
 
     return projections, predictions, points
