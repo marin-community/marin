@@ -41,7 +41,7 @@ class AlpacaEvaluator(VllmTpuEvaluator):
                 # Could be any arbitrary prompt template but the Cohere one prompts
                 # with the just instruction without any prompt engineering: {instruction}
                 # https://github.com/tatsu-lab/alpaca_eval/blob/main/src/alpaca_eval/models_configs/cohere/prompt.txt
-                "prompt_template": "cohere/prompt.txt",
+                "prompt_template": "Mixtral-8x7B-Instruct-v0.1/togetherai_prompt.txt",
                 "fn_completions": "vllm_local_completions",
                 "completions_kwargs": {
                     "model_name": model_name_or_path,
