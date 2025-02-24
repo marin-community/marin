@@ -5,8 +5,10 @@ from marin.evaluation.visualize import VizLmConfig, mixture_for_visualization, v
 from marin.execution.executor import ExecutorStep, executor_main, versioned
 from marin.processing.tokenize import add_validation_sets_to_mixture
 
+COMPARISON_MODEL = "gs://marin-us-central2/checkpoints/llama-8b-tootsie-phase2/checkpoints/step-730000/"
+
 CHECKPOINTS = [
-    "gs://marin-us-central2/checkpoints/llama-8b-tootsie-phase2/checkpoints/step-730000/",
+    COMPARISON_MODEL,
     "gs://marin-us-central2/checkpoints/llama-8b-tootsie-phase3/checkpoints/step-740000/",
     "gs://marin-us-central2/checkpoints/llama-8b-tootsie-phase3/checkpoints/step-780000/",
 ]
@@ -36,6 +38,7 @@ for checkpoint in CHECKPOINTS:
                 model=llama_8b,
                 datasets=eval_set_mixture,
                 num_docs_per_dataset=32,
+                comparison_model_path=COMPARISON_MODEL if checkpoint != COMPARISON_MODEL else None,
             )
         )
     )
