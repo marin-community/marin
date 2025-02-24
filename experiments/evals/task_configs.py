@@ -38,6 +38,7 @@ KEY_GENERATION_TASKS = (
     EvalTaskConfig(name="drop", num_fewshot=0),
     # NOTE(Chris): Should we use pass@1 (default) or pass@10?
     EvalTaskConfig(name="humaneval", num_fewshot=0),
+    EvalTaskConfig(name="minerva_math", num_fewshot=4, task_alias="math_4shot"),
 )
 
 KEY_MULTIPLE_CHOICE_TASKS = (

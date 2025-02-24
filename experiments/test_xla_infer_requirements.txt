@@ -1,0 +1,7 @@
+--pre
+--find-links https://storage.googleapis.com/libtpu-releases/index.html \
+--find-links https://storage.googleapis.com/libtpu-wheels/index.html
+torch~=2.6.0
+torch_xla[tpu]~=2.6.0
+accelerate>=0.26.0
+evaluate
