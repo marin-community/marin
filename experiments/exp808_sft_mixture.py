@@ -1,62 +1,54 @@
 from instruction_datasets import get_instruction_dataset
 
-from experiments.llama import llama3_tokenizer
 from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path
 from marin.processing.tokenize.tokenize import TokenizeConfig, levanter_tokenize_sft
 
-# Get instruction dataset
-acecode_dataset = get_instruction_dataset("TIGER-Lab/AceCode-89K")
-smoltalk_dataset = get_instruction_dataset("HuggingFaceTB/smoltalk")
-prime_verified_math_dataset = get_instruction_dataset("PrimeIntellect/verifiable-math-problems")
 
-# tokenization steps
+def create_tokenization_step(dataset_name: str) -> ExecutorStep:
+    """
+    Creates a tokenization ExecutorStep for a given dataset.
 
-prime_verified_math_llama_tokenize_step = ExecutorStep(
-    name="tokenized/prime_verified_math_llama3_tokenizer",
-    fn=levanter_tokenize_sft,
-    config=TokenizeConfig(
-        train_paths=[output_path_of(prime_verified_math_dataset, "**/*.jsonl.gz")],
-        validation_paths=[],
-        cache_path=this_output_path(),
-        tokenizer=llama3_tokenizer,
-        # fixed to OAI chat format
-        input_field="user",
-        output_field="assistant",
-    ),
-    description="Tokenize SFT data",
-)
+    Args:
+        dataset_name: Name of the dataset (e.g., 'TIGER-Lab/AceCode-89K', 'HuggingFaceTB/smoltalk')
 
-acecode_llama_tokenize_step = ExecutorStep(
-    name="tokenized/acecode_llama3_tokenizer",
-    fn=levanter_tokenize_sft,
-    config=TokenizeConfig(
-        train_paths=[output_path_of(acecode_dataset, "**/*.jsonl.gz")],
-        validation_paths=[],
-        cache_path=this_output_path(),
-        tokenizer=llama3_tokenizer,
-        # fixed to OAI chat format
-        input_field="user",
-        output_field="assistant",
-    ),
-    description="Tokenize SFT data",
-)
+    Returns:
+        ExecutorStep configured for tokenizing the specified dataset
+    """
+    # Get the dataset with only train split
+    dataset = get_instruction_dataset(dataset_name, splits=["train"])
 
-smoltalk_llama_tokenize_step = ExecutorStep(
-    name="tokenized/smoltalk_llama3_tokenizer",
-    fn=levanter_tokenize_sft,
-    config=TokenizeConfig(
-        train_paths=[output_path_of(smoltalk_dataset, "**/*.jsonl.gz")],
-        validation_paths=[],
-        cache_path=this_output_path(),
-        tokenizer=llama3_tokenizer,
-        # fixed to OAI chat format
-        input_field="user",
-        output_field="assistant",
-    ),
-    description="Tokenize SFT data",
-)
+    # Get the last part of the path and clean it up
+    short_name = dataset_name.split("/")[-1].lower().replace("-", "_")
+
+    return ExecutorStep(
+        name=f"tokenized/{short_name}_llama3_instruct_tokenizer",
+        fn=levanter_tokenize_sft,
+        config=TokenizeConfig(
+            train_paths=[output_path_of(dataset, "**/*.jsonl.gz")],
+            validation_paths=[],
+            cache_path=this_output_path(),
+            tokenizer="meta-llama/Llama-3.1-8B-Instruct",
+            input_field="user",
+            output_field="assistant",
+        ),
+        description="Tokenize SFT data",
+    )
+
+
+# Dataset configurations
+# TODO fix dolphin-r1 not working
+DATASETS = [
+    "TIGER-Lab/AceCode-89K",
+    "HuggingFaceTB/smoltalk",
+    "PrimeIntellect/verifiable-math-problems",
+    # "cognitivecomputations/dolphin-r1",
+    "bespokelabs/Bespoke-Stratos-17k",
+    "open-r1/OpenThoughts-114k-math",
+    "allenai/tulu-3-sft-mixture",
+    "facebook/natural_reasoning",
+]
 
 if __name__ == "__main__":
-    executor_main(
-        steps=[acecode_llama_tokenize_step, smoltalk_llama_tokenize_step, prime_verified_math_llama_tokenize_step]
-    )
+    # Create tokenization steps for all datasets
+    tokenization_steps = [create_tokenization_step(dataset_name) for dataset_name in DATASETS]
+    executor_main(steps=tokenization_steps)

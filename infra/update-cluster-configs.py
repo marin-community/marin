@@ -8,8 +8,10 @@ this_path = os.path.dirname(os.path.abspath(__file__))
 
 template_path = os.path.join(this_path, "marin-cluster-template.yaml")
 
+# LAtest tahs ABh:  latest 9491ec2a 20250209
+
 DOCKER_TAGS = {
-    "us-central2": "6da1c9ed",
+    "us-central2": "89b461b3",
     "big-run": "6da1c9ed",
     "us-west4": "6da1c9ed",
     "europe-west4": "6da1c9ed",
@@ -18,7 +20,7 @@ DOCKER_TAGS = {
     # NB: different naming convention because we have two zones in europe-west4
     "europe-west4-a": "6da1c9ed",
     "asia-northeast1": "6da1c9ed",
-    "marin-us-east5-b-vllm": "d97b0693",
+    "marin-us-east5-b-vllm": "4b254784",
 }
 
 configs = {
