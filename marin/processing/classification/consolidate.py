@@ -76,6 +76,9 @@ class ConsolidateConfig:
     """The memory limit for the task in GB."""
 
 
+CORPUS_TYPE_TO_ID_COLUMN = {"dolma": "id", "dclm": "metadata/WARC-Record-ID"}
+
+
 def remove_spans(text: str, spans: list[list[int]]) -> str:
     """
     Return `text` with `spans` removed.
@@ -118,6 +121,44 @@ def apply_filter_classify(input_data: dict, doc_filter: FilterConfig, id_to_attr
     return False
 
 
+def get_corpus_type(filename: str) -> str:
+    if "dclm" in filename:
+        return "dclm"
+    else:  # Assume it's in dolma format
+        return "dolma"
+
+
+def get_id_column_name(corpus_type: str) -> str:
+    if corpus_type == "dclm":
+        return CORPUS_TYPE_TO_ID_COLUMN[corpus_type].split("/")[0]
+    else:  # Assume it's in dolma format
+        return "id"
+
+
+def get_nested_id_object(row: dict, corpus_type: str) -> str:
+    """The guide gives a path to the actual id value. We need this traversal when the id value is nested.
+    For example, the id value for the DCLM dataset is nested within the "metadata" column.
+
+    {"metadata": {"WARC-Record-ID": "1234567890"}}
+
+    Our guide would be "metadata/WARC-Record-ID". The id_value that gets passed into this function
+    would be {"WARC-Record-ID": "1234567890"}. So, when we create the guide, it will have two elemnts
+    in the list: ["metadata", "WARC-Record-ID"]. We start traversing from the second element
+    and grab the value of "WARC-Record-ID" from the id_value.
+    """
+    id_column_guide = CORPUS_TYPE_TO_ID_COLUMN[corpus_type].split("/")
+
+    if len(id_column_guide) == 1:
+        return row[id_column_guide[0]]
+
+    final_id_value = row[id_column_guide[0]]
+    for column_name in id_column_guide[1:]:
+        final_id_value = final_id_value[column_name]
+
+    row["id"] = final_id_value
+    return row
+
+
 def read_attributes_as_dict(attribute_filename: str) -> dict[str, Any]:
     """Given some attribute filename, return a dictionary mapping from id to attributes
 
@@ -127,7 +168,12 @@ def read_attributes_as_dict(attribute_filename: str) -> dict[str, Any]:
         filetype: str
             The filetype of the attribute file
     """
-    table = read_dataset(attribute_filename, columns=["id", "attributes"])
+
+    id_column_name = get_id_column_name(get_corpus_type(attribute_filename))
+    corpus_type = get_corpus_type(attribute_filename)
+    table = read_dataset(attribute_filename, columns=[id_column_name, "attributes"])
+    table = table.map(lambda row: get_nested_id_object(row, corpus_type))
+
     data = {}
     for row_id, attr in zip(table["id"], table["attributes"], strict=True):
         data[row_id] = attr
@@ -158,6 +204,7 @@ def process_file(
             attribute_files.append(None)
 
     dataset = read_dataset(input_path)
+    dataset = dataset.map(lambda row: get_nested_id_object(row, get_corpus_type(input_path)))
 
     total_examples = len(dataset)
 
