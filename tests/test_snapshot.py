@@ -12,7 +12,6 @@ from marin.schemas.web.convert import HtmlToMarkdownConfig, ResiliparseConfig, T
 from marin.web.convert import convert_page
 from operations.transform.ar5iv.transform_ar5iv import clean_html
 from operations.transform.wikipedia.transform_wikipedia import clean_wiki_html
-from scripts.ar5iv.transform import deconstruct_eqn
 from tests.snapshots.stackexchange.accept_changes import prepare_expected_output
 
 my_path = os.path.dirname(os.path.realpath(__file__))
@@ -213,7 +212,6 @@ def test_markdownify_ar5iv(input_name):
     input_content = read_file(input_file)
 
     bs4_html = BeautifulSoup(input_content, "html.parser")
-    deconstruct_eqn(bs4_html)
 
     html = str(bs4_html)
     filtered_html = clean_html(html, remove_reference_section=True)
@@ -238,7 +236,7 @@ def test_markdownify_ar5iv(input_name):
     output = output_dict["content"]
 
     if remove_reference_section:
-        output = re.sub(r"\\\[(?:\d+(?:,\s*\d+)*)\\\]", "", output)
+        output = re.sub(r"\s?\\\[(?:\d+(?:,\s*\d+)*)\\\]", "", output)
 
     expected_file = os.path.join(ar5iv_expected_path, f"{input_name}.md")
     output_file = os.path.join(ar5iv_output_path, f"{input_name}.md")
@@ -284,11 +282,3 @@ def test_markdownify_stackexchange(input_name):
         print(output, file=f)
 
     compare_outputs(input_name, expected_file, output_file, stackexchange_diff_path)
-
-
-def accept_change(input_name):
-    """Accept a change for a specific input."""
-    expected_file = os.path.join(web_expected_path, f"{input_name}.md")
-    output_file = os.path.join(web_output_path, f"{input_name}.md")
-    os.replace(output_file, expected_file)
-    print(f"Accepted changes for {input_name}.")
