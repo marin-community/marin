@@ -4,7 +4,7 @@ from marin.processing.classification.consolidate import ConsolidateConfig, Filte
 from marin.processing.classification.inference import run_inference
 
 input_data_path = "gs://marin-us-central2/raw/dclm/a3b142c/huggingface.co/datasets/mlfoundations/dclm-baseline-1.0/resolve/a3b142c/global-shard_01_of_10"
-inference_step = ExecutorStep(
+medu_inference = ExecutorStep(
     name="attributes/quality_filtering/economic-bert/dclm-global-shard-01-of-10",
     fn=run_inference,
     config=InferenceConfig(
@@ -24,7 +24,7 @@ inference_step = ExecutorStep(
     pip_dependency_groups=["fasttext", "datasets", "filelock"],
 )
 
-consolidate_step = ExecutorStep(
+medu_consolidate = ExecutorStep(
     name="documents/quality_filtering/dclm-global-shard-01-of-10-medu-economics-3plus",
     fn=consolidate,
     config=ConsolidateConfig(
@@ -33,7 +33,7 @@ consolidate_step = ExecutorStep(
         filters=[
             FilterConfig(
                 type="classify",
-                attribute_path=output_path_of(inference_step),
+                attribute_path=output_path_of(medu_inference),
                 name="economic-bert",
                 label="int_score",
                 threshold=3,
@@ -45,5 +45,6 @@ consolidate_step = ExecutorStep(
     pip_dependency_groups=["ddsketch"],
 )
 
+
 if __name__ == "__main__":
-    executor_main([inference_step, consolidate_step])
+    executor_main([medu_inference, medu_consolidate])
