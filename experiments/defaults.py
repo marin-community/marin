@@ -309,7 +309,7 @@ def default_scaling_law_pred(
     ladder_runs: Sequence[ExecutorStep | InputName | str],
     pred_run: ExecutorStep | InputName | str | None = None,
     task_losses: Sequence[str] = ("eval/paloma/c4_en/bpb"),
-    task_accuracies: Sequence[str] | Sequence[EvalTaskConfig] = ("lm_eval/hellaswag_10shot/acc"),
+    task_accuracies: Sequence[str] | Sequence[EvalTaskConfig] | None = None,
 ):
     """
     Given a suite of small models, predict the performance on a number of (N, D) values.
@@ -322,7 +322,7 @@ def default_scaling_law_pred(
         pred_run_or_id = get_executor_step(pred_run) if not isinstance(pred_run, str) else pred_run
 
     # convert the task accuracies to strings if they are `EvalTaskConfig`s
-    if isinstance(task_accuracies[0], EvalTaskConfig):
+    if task_accuracies is not None:
         task_accuracies = convert_to_task_metrics(task_accuracies, metric="acc")
 
     if pred_run_or_id:
@@ -334,6 +334,7 @@ def default_scaling_law_pred(
         name=f"""scaling_laws/{name}""",
         fn=run_scaling_law_analysis,
         config=ScalingLawConfig(
+            name=name,
             ladder_model_steps=ladder_steps_or_ids,
             pred_model_step=pred_run_or_id,
             task_losses=task_losses,
