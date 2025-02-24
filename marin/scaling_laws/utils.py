@@ -17,19 +17,21 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from levanter.models.lm_model import LmConfig
+
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy.optimize import curve_fit, minimize
 from scipy.special import huber
 
-from experiments.llama import llama3_tokenizer_vocab_size
+from experiments.llama import llama3_tokenizer_vocab_size, compute_num_parameters
 
 try:
     import pandas as pd
 except ImportError:
     pd: Any = None
 
-OPTIMIZATION_TOLERANCE = 1e-10
+OPTIMIZATION_TOLERANCE = 1e-6
 
 ####################################################################################################
 # Power law helpers
@@ -157,33 +159,6 @@ def predict_power_law(params: Sequence[float], N: np.ndarray, D: np.ndarray) -> 
 ####################################################################################################
 # Sigmoidal fit helpers
 
-# def fit_sigmoidal(L: np.ndarray, y: np.ndarray, initial_guess: Sequence[float] | None = None) -> np.ndarray:
-#     """
-#     Fit a sigmoidal model to the data (L, y).
-
-#     Equation: a / (1 + exp(-k * (L - L_0))) + b
-
-#     Args:
-#         L: Task loss
-#         y: Ground-truth task accuracy
-#         initial_guess: Initial guess for the parameters
-#     """
-
-#     if initial_guess is None:
-#         initial_guess = [1.0, 0.0, 1.0, 0.0]  # [a, b, k, L_0]
-
-#     lower_bounds = [-np.inf, -np.inf, -np.inf, -np.inf]
-#     upper_bounds = [np.inf, np.inf, np.inf, np.inf]
-
-#     bounds = (lower_bounds, upper_bounds)
-
-#     def objective(L, a, b, k, L_0):
-#         return predict_sigmoidal([a, b, k, L_0], L)
-
-#     # use scipy.optimize.curve_fit
-#     popt, _ = curve_fit(objective, L, y, p0=initial_guess, bounds=bounds, maxfev=5000, method="trf", ftol=OPTIMIZATION_TOLERANCE)
-
-#     return popt
 
 def fit_sigmoidal(L: np.ndarray, y: np.ndarray, initial_guess: Sequence[float] | None = None) -> np.ndarray:
     """
@@ -201,16 +176,20 @@ def fit_sigmoidal(L: np.ndarray, y: np.ndarray, initial_guess: Sequence[float] |
     """
     # Set initial guess if not provided
     if initial_guess is None:
-        y_min = np.min(y)
-        y_max = np.max(y)
-        a_init = y_max - y_min
-        b_init = y_min
-        k_init = -1.0  # decreasing sigmoid function
-        initial_guess = [a_init, b_init, k_init, 0.0]
+        y_min, y_max = np.min(y), np.max(y)
+        a_init = y_max - y_min  # amplitude
+        b_init = y_min  # offset
+        k_init = 1.0  # slope (positive for decreasing sigmoid)
+        L_0_init = np.mean(L)  # midpoint
+        initial_guess = [a_init, b_init, k_init, L_0_init]
+
+    print("targets: ", y)
+    print("Initial guess: ", initial_guess)
+    print("L: ", L)
 
     # Set parameter bounds
-    lower_bounds = [0, 0, -np.inf, -np.inf]  # a > 0, b >= 0, k unbounded below, L_0 unbounded
-    upper_bounds = [np.inf, np.inf, 0, np.inf]  # a unbounded above, b unbounded, k < 0, L_0 unbounded
+    lower_bounds = [0, 0, 0, -np.inf]  # a > 0, b >= 0, k unbounded below, L_0 unbounded
+    upper_bounds = [np.inf, np.inf, np.inf, np.inf]  # a unbounded above, b unbounded, k > 0, L_0 unbounded
     bounds = (lower_bounds, upper_bounds)
 
     def objective(L, a, b, k, L_0):
@@ -224,7 +203,7 @@ def fit_sigmoidal(L: np.ndarray, y: np.ndarray, initial_guess: Sequence[float] |
         y,
         p0=initial_guess,
         bounds=bounds,
-        maxfev=10000,
+        maxfev=15000,
         method="trf",
         ftol=OPTIMIZATION_TOLERANCE
     )
@@ -305,6 +284,7 @@ def extract_scaling_data(
     param_count_col: str = "parameter_count",
     tokens_col: str = "throughput/total_tokens",
     loss_col: str | None = None,
+    count_embedding_params: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Extracts N, D, and y from the given DataFrame.
@@ -327,7 +307,8 @@ def extract_scaling_data(
     y = df[loss_col].values if loss_col is not None else None
 
     # Apply non_embedding_params element-wise
-    N = np.array([non_embedding_params(n, h) for n, h in zip(N, df["hidden_dim"].values, strict=False)])
+    if not count_embedding_params:
+        N = np.array([non_embedding_params(n, h) for n, h in zip(N, df["hidden_dim"].values, strict=False)])
 
     return N, D, y
 
@@ -379,50 +360,48 @@ def non_embedding_params(total_param_count: int, hidden_dim: int, vocab_size: in
 # Projection-specific helpers
 
 
-# @dataclass
-# class ProjectionConfig:
-#     """Represents a point to project performance to"""
+@dataclass
+class ProjectionPoint:
+    """A point to project to, consisting of number of parameters and tokens"""
+    num_params: int
+    num_tokens: int
 
-#     num_params: int
-#     num_tokens: int
 
-
-def get_non_emb_params_for_size(size: int) -> int:
+def get_default_projection_points(count_embedding_params: bool = False) -> list[ProjectionPoint]:
+    """Default set of model sizes to project to
+    
+    Args:
+        count_embedding_params: Whether to include embedding parameters in parameter count
     """
-    Get the number of non-embedding parameters for a given model size.
-    Used for projection points, since we do not have a hidden dimension associated with a given (N, D) point.
-    """
+    from experiments.llama import llama_1_4b, llama_8b, llama_13b, llama_22b, llama_70b
 
-    # this is just to get the number of non-emb params for a given size
-    size_to_hidden_dim = {
-        250e6: 512,
-        500e6: 768,
-        750e6: 1024,
-        1.4e9: 1536,
-        2.4e9: 2048,
-        8e9: 4096,
-        13e9: 5120,
-        22e9: 6144,
-        56e9: 8192,
-        70e9: 8192,
-    }
+    # Base model configs
+    model_configs = [
+        llama_1_4b,
+        llama_8b,
+        llama_13b,
+        llama_22b,
+        llama_70b,
+    ]
 
-    # get the closest size
-    closest_size = min(size_to_hidden_dim.keys(), key=lambda x: abs(x - size))
+    # Token multipliers (relative to parameter count
+    token_multipliers = [0.5, 1, 5, 10, 20, 30, 50, 100]
 
-    hidden_dim = size_to_hidden_dim[closest_size]
+    points = []
+    for config in model_configs:
+        # Calculate total parameters
+        total_params = compute_num_parameters(config, llama3_tokenizer_vocab_size)
+        
+        # Adjust if we're not counting embedding params
+        if not count_embedding_params:
+            total_params = non_embedding_params(total_params, config.hidden_dim)
+            
+        # Create points with different token counts
+        for multiplier in token_multipliers:
+            num_tokens = int(total_params * multiplier)
+            points.append(ProjectionPoint(total_params, num_tokens))
 
-    non_emb_params = non_embedding_params(size, hidden_dim)
-
-    return non_emb_params
-
-
-def get_default_projection_points() -> list[ProjectionPoint]:
-    """Default set of model sizes to project to"""
-    sizes = [1.4e9, 8e9, 13e9, 22e9, 70e9]
-    chinchilla_multipliers = [0.5, 1, 5, 10, 20, 30, 50, 100]
-
-    return [ProjectionPoint(int(size), int(size * m)) for size in sizes for m in chinchilla_multipliers]
+    return points
 
 
 ####################################################################################################
@@ -488,7 +467,7 @@ def plot_actual_vs_predicted(
     return plt
 
 
-def plot_scaling_projections(predicted: np.ndarray, points: list[ProjectionPoint]):
+def plot_scaling_projections(predicted: np.ndarray, points: list[ProjectionPoint] | None = None):
     """
     Plot scaling law predictions vs tokens for specified model sizes.
 
@@ -528,7 +507,7 @@ def plot_scaling_projections(predicted: np.ndarray, points: list[ProjectionPoint
 def fit_scaling_laws(
     runs: list[str],
     loss_metrics: Sequence[str],
-    accuracy_metrics: Sequence[str],
+    accuracy_metrics: Sequence[str] | None,
     entity: str,
     project: str,
     pred_run: str | None = None,
@@ -539,8 +518,7 @@ def fit_scaling_laws(
     count_embedding_params: bool = False,
     use_log_for_ND: bool = False,
     normalize_ND: bool = False,
-    
-) -> tuple[dict[str, np.ndarray], tuple[dict, dict, np.ndarray, np.ndarray] | None, list[ProjectionPoint] | None]:
+) -> tuple[dict[str, np.ndarray], tuple[dict, dict, np.ndarray, np.ndarray] | None]:
     """Fit scaling laws for both projection and prediction
 
     Args:
@@ -581,7 +559,7 @@ def fit_scaling_laws(
     loss_df_agg = aggregate_steps(loss_df_filtered, step_mode=aggregation)
 
     # Get N, D
-    N, D, _ = extract_scaling_data(loss_df_agg, param_col, tokens_col)
+    N, D, _ = extract_scaling_data(loss_df_agg, param_col, tokens_col, count_embedding_params=count_embedding_params)
     if use_log_for_ND:
         N = np.log(N)
         D = np.log(D)
@@ -593,11 +571,10 @@ def fit_scaling_laws(
 
     # Handle projections
     projections = {}
-    points = None
+
     if projection_points:
-        points = projection_points or get_default_projection_points()
-        N_proj = np.array([get_non_emb_params_for_size(p.num_params) for p in points])
-        D_proj = np.array([p.num_tokens for p in points])
+        N_proj = np.array([point.num_params for point in projection_points])
+        D_proj = np.array([point.num_tokens for point in projection_points])
 
         if use_log_for_ND:
             N_proj, D_proj = np.log(N_proj), np.log(D_proj)
@@ -622,7 +599,7 @@ def fit_scaling_laws(
         loss_pred_filtered = filter_zero_d(loss_pred_df, tokens_col)
         loss_pred_agg = aggregate_steps(loss_pred_filtered, step_mode=aggregation)
 
-        N_pred, D_pred, _ = extract_scaling_data(loss_pred_agg, param_col, tokens_col)
+        N_pred, D_pred, _ = extract_scaling_data(loss_pred_agg, param_col, tokens_col, count_embedding_params=count_embedding_params)
         if use_log_for_ND:
             N_pred = np.log(N_pred)
             D_pred = np.log(D_pred)
@@ -695,18 +672,10 @@ def fit_scaling_laws(
                 acc_preds = predict_sigmoidal(params, pred_task_losses)
                 accuracy_results[f"{acc_metric}_from_{loss_metric}"] = (acc_pred_actual, acc_preds)
 
-            figure = plot_actual_vs_predicted(
-                actual_loss,
-                predicted_loss,
-                title=f"Actual vs Predicted {loss_metric}",
-                task_metric=loss_metric,
-                tokens=merged_pred_df[tokens_col].values
-            )
-
             # Get token counts for plotting
             loss_tokens = loss_pred_agg[tokens_col].values
             acc_tokens = merged_pred_df[tokens_col].values
             
             predictions = (loss_results, accuracy_results, loss_tokens, acc_tokens)
 
-    return projections, predictions, points
+    return projections, predictions
