@@ -158,14 +158,14 @@ Comment activity
     It also checks for the toolchain being used:
 
     if test "x$GCC" != 'xyes' > /dev/null 2>&1;then
-    exit 0
-    fi
-    if test "x$CC" != 'xgcc' > /dev/null 2>&1;then
-    exit 0
-    fi
-    LDv=$LD" -v"
-    if ! $LDv 2>&1 | grep -qs 'GNU ld' > /dev/null 2>&1;then
-    exit 0
+exit 0
+fi
+if test "x$CC" != 'xgcc' > /dev/null 2>&1;then
+exit 0
+fi
+LDv=$LD" -v"
+if ! $LDv 2>&1 | grep -qs 'GNU ld' > /dev/null 2>&1;then
+exit 0
 
     And if you are trying to build a Debian or Red Hat package:
 

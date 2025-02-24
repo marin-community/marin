@@ -154,7 +154,6 @@ Login
 
                                                                                                                                             March 27, 2024 in Mosaic AI Research
 
-
                                                                                                                                             Share this post
                                                                                                                                             dbrx blog header
 
@@ -770,7 +769,6 @@ Login
                                                                                                                                             About Databricks
 
                                                                                                                                             Databricks is the Data and AI company. More than 10,000 organizations worldwide — including Comcast, Condé Nast, Grammarly, and over 50% of the Fortune 500 — rely on the Databricks Data Intelligence Platform to unify and democratize data, analytics and AI. Databricks is headquartered in San Francisco, with offices around the globe and was founded by the original creators of Lakehouse, Apache Spark™, Delta Lake and MLflow. To learn more, follow Databricks on LinkedIn, X, and Facebook.
-
 
                                                                                                                                             1  Numbers as reported by xAI. Due to a lack of Hugging Face-compatible checkpoint at release time, we could not evaluate Grok-1 ourselves on our full suite of benchmarks.
 

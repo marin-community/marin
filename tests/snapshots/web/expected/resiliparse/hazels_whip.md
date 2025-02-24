@@ -19,8 +19,7 @@ Cruises
 Hazel's Whip
 or "Freight hauler with a sense of humor"
 
-by Murray Montgomery
-Murray Montgomery
+by Murray Montgomery		Murray Montgomery
 Recently, I made the observation that not many feature stories were written in the small-town newspapers back in the early 1900s. As fate would have it, after making that remark, I came across several articles in the old Hallettsville Herald that I found to be very interesting, if not downright hilarious.
 
 Take for example the one about a fellow known simply as "Hazel" - back in 1902 it seems he had several adventures that were quite humorous and I would like to share them with you this week. Squire Townsend, a well-known Hallettsville judge, told the story to the paper.
@@ -56,7 +55,6 @@ Related Topics: Texas | Features | Columns | Texas Towns | People | Old News | T
  
 HOME | TEXAS ESCAPES ONLINE MAGAZINE
 TEXAS TOWN LIST | TEXAS GHOST TOWNS | TEXAS COUNTIES
-
 Texas Hill Country | East Texas | Central Texas North | Central Texas South | West Texas | Texas Panhandle | South Texas | Texas Gulf Coast
 TRIPS | STATES PARKS | RIVERS | LAKES | DRIVES | MAPS
 

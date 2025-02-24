@@ -40,7 +40,6 @@ Cheers,
 
 Ninie
 
-
 TellerSpot - On-demand exits for startup investors
 
  
@@ -60,11 +59,9 @@ PayTamasha team at the Berlin International Film Festival
   • The PayTamasha team made it to the red carpet of Berlin International Film Festival (Berlinale)! Their film “Ghaath” made its official world premiere in the panorama section at Berlin. A moment of pride for India and us. Kudos team!
 
  
-
  
 
  
-
  
 
 Angel Tax Decoded
@@ -75,13 +72,11 @@ Angel Tax Decoded
   • So what exactly does Angel Tax mean, and do you and your startup need to worry about it?
 
  READ THE ENTIRE ARTICLE HERE
-
  
  
  
 
  
-
  
 
  
@@ -99,7 +94,6 @@ Interested? Find out more.
  
 
 Stay tuned to receive the latest industry trends, investor insights, our exclusive angel bytes, and much more!
-
 Twitter Facebook Google+ Email
 
 Author

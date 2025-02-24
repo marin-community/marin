@@ -162,7 +162,6 @@ February 20 - Mar 20
 The Lunar Eclipse on the 31st stimulates your solar sixth house. Surprises surrounding work, daily routines, or health issues are in store. You can use this surge of emotional energy to improve your exercise or nutrition program that you've been thinking of. There is much to suggest that you are in touch with those hidden forces which often seem to take a guiding hand in one's life.
 
   • Horoscopes
-
 comments powered by Disqus
 
 
