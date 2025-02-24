@@ -7,7 +7,6 @@ DocsGuidesBlogDiscord logoDiscord logoGitHub logoGitHub logo
 
 Bun 1.1
 
-
 Jarred, Dave, Ashcon, Dylan, Meghan, Georgijs, Ciro · April 1, 2024
 
 Bun is a fast, all-in-one toolkit for running, building, testing, and debugging JavaScript and TypeScript, from a single script to a full-stack application. If you're new to Bun, you can learn more in the Bun 1.0 blog post.
@@ -458,14 +457,14 @@ By default, Bun does not run lifecycle scripts for packages that are not trusted
 When you first add a package, Bun will tell you if the package had a lifecycle script that did not run.
 
 bun add v1.1.0
-Saved lockfile
+ Saved lockfile
 
-installed @biomejs/biome@1.6.1 with binaries:
-- biome
+ installed @biomejs/biome@1.6.1 with binaries:
+  - biome
 
-1 package installed [55.00ms]
+ 1 package installed [55.00ms]
 
-Blocked 1 postinstall. Run `bun pm untrusted` for details.
+ Blocked 1 postinstall. Run `bun pm untrusted` for details.
 
 bun pm untrusted
 
@@ -474,7 +473,7 @@ If you want to see which scripts were blocked, you can run bun pm untrusted.
 bun pm untrusted v1.1.0
 
 ./node_modules/@biomejs/biome @1.6.1
-» [postinstall]: node scripts/postinstall.js
+ » [postinstall]: node scripts/postinstall.js
 
 These dependencies had their lifecycle scripts blocked during install.
 
@@ -487,9 +486,9 @@ If you trust the package, you can run bun pm trust [package]. If you want to tru
 bun pm trust v1.1.0
 
 ./node_modules/@biomejs/biome @1.6.1
-✓ [postinstall]: node scripts/postinstall.js
+ ✓ [postinstall]: node scripts/postinstall.js
 
-1 script ran across 1 package [71.00ms]
+ 1 script ran across 1 package [71.00ms]
 
 bun add --trust
 
@@ -764,6 +763,7 @@ You can also compile your application and SQLite database into a single-file exe
 
 import db from "./users.db"
   with { type: "sqlite", embed: "true" };
+
 bun build --compile ./app.ts
 ./app
 Found 42 users!

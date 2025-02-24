@@ -1,5 +1,3 @@
-
-
 <mphantom> element renders invisibly keeping same size and other dimensions, including baseline position, as its contents would have if they were rendered normally. It is used to align parts of an expression by invisibly duplicating sub-expressions.
 
 Syntax
@@ -45,7 +43,7 @@ Examples
          <mi> z </mi>
       </mrow>
    </mfrac>
-</math>  
+</math>
 
 Output
 

@@ -29,7 +29,6 @@ In Herodotus's Histories (4.9.2), Heracles marvels at a Mixoparthenos when he me
 
 The Starbucks logo depicts a Mixoparthenos, of the double fish-tailed variety.
 
-
 The Mixoparthenos is a mythical creature whose image, to this day, is seen in the coastal areas around the Greek colonies of the Black Sea, where wheat has been a major crop since ancient times.
 
 Herodotus writes that the horses of Heracles were stolen by the Mixoparthenos, who promised to return them if he mated with her. How could Hercules resist! From their union came three sons, the youngest, Scythes, the only son who could bend the bow of Hercules. He became king of the people who would be called Scythian. There were many Scythian wheat growers around the Black Sea.
@@ -127,7 +126,6 @@ Selected readings
 March 23, 2024 @ 9:49 pm · Filed by Victor Mair under Language and culture, Language and ethnicity, Language and history
 
 Permalink
-
 
 
 13 Comments »
@@ -244,7 +242,7 @@ Leave a Comment
   • Follow us on Twitter
 
 
-  • Archives [+/–]
+    • Archives [+/–]
 
     • April 2024
     • March 2024
@@ -444,7 +442,7 @@ Leave a Comment
     [Search old posts here]
 
 
-  • Blogroll [+/–]
+    • Blogroll [+/–]
 
     • "Spoken language expert’s exuberant life of science"
     • …And read all over
