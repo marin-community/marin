@@ -8,6 +8,7 @@ from marin.processing.tokenize import add_validation_sets_to_mixture
 CHECKPOINTS = [
     "gs://marin-us-central2/checkpoints/llama-8b-tootsie-phase2/checkpoints/step-730000/",
     "gs://marin-us-central2/checkpoints/llama-8b-tootsie-phase3/checkpoints/step-740000/",
+    "gs://marin-us-central2/checkpoints/llama-8b-tootsie-phase3/checkpoints/step-780000/",
 ]
 
 def path_to_step_name(path):
