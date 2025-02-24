@@ -17,12 +17,14 @@ from levanter.eval_harness import LmEvalHarnessConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig
 from levanter.optim import AdamConfig
+from levanter.schedule import BatchSchedule
 from levanter.store.cache import CacheOptions
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 
-from experiments.evals.task_configs import CORE_TASKS, convert_to_levanter_task_config
-from experiments.llama import compute_num_parameters
+from experiments.anneal_config import AnnealConfig
+from experiments.evals.task_configs import CORE_TASKS, CORE_TASKS_PLUS_MMLU, convert_to_levanter_task_config
+from experiments.llama import compute_num_parameters, llama_8b
 from experiments.paloma import paloma_tokenized
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig
@@ -185,6 +187,9 @@ def default_train(
 
         model_averaging = EmaModelAveragingConfig(beta=train_config.ema_beta)
 
+    schedule = BatchSchedule(train_config.train_batch_size)
+    total_examples = schedule.global_data_offset_by_step(train_config.num_train_steps)
+
     return ExecutorStep(
         name=os.path.join("checkpoints", name),
         description=(
@@ -192,13 +197,15 @@ def default_train(
             f"{train_config.num_train_steps} (steps) * "
             f"{train_config.train_batch_size} (batch_size) * "
             f"{model_config.seq_len} (seq_len) "
-            f"= {train_config.num_train_steps * train_config.train_batch_size * model_config.seq_len:,} tokens."
+            f"= {total_examples * model_config.seq_len:,} tokens."
         ),
         fn=run_levanter_train_lm,
         config=TrainLmOnPodConfig(
             output_path=this_output_path(),
             tpu_type=train_config.tpu_type,
             node_count=train_config.node_count,
+            allow_out_of_region_reads=train_config.allow_out_of_region_reads,
+            allow_out_of_region_writes=train_config.allow_out_of_region_writes,
             data=pretraining_data,
             trainer=TrainerConfig(
                 tracker=WandbConfig(
@@ -215,6 +222,7 @@ def default_train(
                 ),
                 model_averaging=model_averaging,
                 replica_dcn_axis_size=-1,
+                allow_partial_checkpoint=train_config.allow_partial_checkpoint,
             ),
             z_loss_weight=train_config.z_loss_weight,
             model=model_config,
@@ -243,8 +251,52 @@ def default_train(
             data_seed=train_config.data_seed,
             eval_harness_steps=train_config.steps_per_task_eval or 10000,
             eval_harness=harness_config,
+            initialize_from_checkpoint_path=train_config.initialize_from_checkpoint_path,
         ),
         pip_dependency_groups=["tokenize_train"],
+    )
+
+
+def default_anneal(name: str, anneal_config: AnnealConfig):
+    imputed_checkpoint_steps = anneal_config.initialize_from_checkpoint_path.index("step-")
+    imputed_checkpoint_step = int(
+        anneal_config.initialize_from_checkpoint_path[imputed_checkpoint_steps + len("step-") :]
+    )
+
+    num_anneal_steps = anneal_config.num_anneal_training_tokens / (
+        anneal_config.train_batch_size * AnnealConfig.LLAMA_MAX_SEQ_LEN
+    )
+    num_train_steps = imputed_checkpoint_step + num_anneal_steps
+
+    # We need to simulate having a learning rate that decays from anneal_config.learning rate to 0
+    # over the course of the training. However, we have already taken anneal_config.checkpoint_step steps,
+    # so we need to calculate what the max lr would've been if we had started training with a linear schedule
+    # and then decayed it to 0 over the course of the training.
+    # The formula for the max lr is:
+    # max_lr = num_train_steps * slope
+    # slope = anneal_config.learning_rate / num_anneal_steps
+
+    learning_rate = num_train_steps * (anneal_config.learning_rate / num_anneal_steps)
+
+    anneal_stage_train_config = SimpleTrainConfig(
+        tpu_type=anneal_config.tpu_type,
+        node_count=anneal_config.node_count,
+        train_batch_size=anneal_config.train_batch_size,
+        num_train_steps=num_train_steps,
+        learning_rate=learning_rate,
+        weight_decay=anneal_config.weight_decay,
+        min_lr_ratio=anneal_config.min_lr_ratio,
+        steps_per_export=anneal_config.steps_per_export,
+        lr_schedule=anneal_config.lr_schedule,
+        initialize_from_checkpoint_path=anneal_config.initialize_from_checkpoint_path,
+    )
+
+    return default_train(
+        name=name,
+        tokenized=anneal_config.dataset_config,
+        model_config=llama_8b,
+        train_config=anneal_stage_train_config,
+        eval_harness_tasks=CORE_TASKS_PLUS_MMLU,
     )
 
 
