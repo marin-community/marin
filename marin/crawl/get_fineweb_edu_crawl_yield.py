@@ -426,11 +426,11 @@ def get_shard_yield(
         urls_and_scores_record = {
             "url": example["metadata"]["url"],
             "canonicalized_url": example["metadata"]["canonicalized_url"],
-            "url_filter_result": example_url_filter_result,
-            "langid_filter_result": example_langid_filter_result,
-            "gopher_repetition_filter_result": example_gopher_repetition_filter_result,
-            "gopher_quality_filter_result": example_gopher_quality_filter_result,
-            "c4_quality_filter_result": example_c4_quality_filter_result,
+            "passed_url_filter": True if example_url_filter_result is True else False,
+            "passed_langid_filter": True if example_langid_filter_result is True else False,
+            "passed_gopher_repetition_filter": True if example_gopher_repetition_filter_result else False,
+            "passed_gopher_quality_filter": True if example_gopher_quality_filter_result else False,
+            "passed_c4_quality_filter": True if example_c4_quality_filter_result else False,
             "score": example_score,
         }
         text_and_scores_record = deepcopy(example)
