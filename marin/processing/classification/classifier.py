@@ -225,7 +225,9 @@ class AutoClassifier(BaseClassifier):
             key = model_type.lower()
 
         try:
-            return cls._MODEL_NAME_TO_CLS_DICT[key](model_name_or_path, attribute_name, model_type, *args, **kwargs)
+            return cls._MODEL_NAME_TO_CLS_DICT[key](
+                model_name_or_path, attribute_name, *args, model_type=model_type, **kwargs
+            )
         except KeyError as e:
             raise ValueError(
                 f"Model name {model_name_or_path} not supported. "
