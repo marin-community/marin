@@ -1,5 +1,6 @@
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path
+from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path
 from marin.processing.classification.config.inference_config import InferenceConfig, RuntimeConfig, TaskConfig
+from marin.processing.classification.consolidate import ConsolidateConfig, FilterConfig, consolidate
 from marin.processing.classification.inference import run_inference
 
 input_data_path = "gs://marin-us-central2/raw/dclm/a3b142c/huggingface.co/datasets/mlfoundations/dclm-baseline-1.0/resolve/a3b142c/global-shard_01_of_10"
@@ -23,5 +24,26 @@ inference_step = ExecutorStep(
     pip_dependency_groups=["fasttext", "datasets", "filelock"],
 )
 
+consolidate_step = ExecutorStep(
+    name="documents/quality_filtering/dclm-global-shard-01-of-10-medu-economics-3plus",
+    fn=consolidate,
+    config=ConsolidateConfig(
+        input_path=input_data_path,
+        output_path=this_output_path(),
+        filters=[
+            FilterConfig(
+                type="classify",
+                attribute_path=output_path_of(inference_step),
+                name="economic-bert",
+                label="int_score",
+                threshold=3,
+            ),
+        ],
+        ray_memory_limit_gb=12,
+        filetype="jsonl.zst",
+    ),
+    pip_dependency_groups=["ddsketch"],
+)
+
 if __name__ == "__main__":
-    executor_main([inference_step])
+    executor_main([inference_step, consolidate_step])
