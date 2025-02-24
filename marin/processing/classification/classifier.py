@@ -1,6 +1,7 @@
 import atexit
 import hashlib
 import os
+import random
 import time
 import urllib.parse
 from typing import Any, ClassVar
@@ -224,11 +225,95 @@ class GTEClassifier(FinewebEduClassifier):
         return logits.tolist()
 
 
+class PerplexityClassifier(BaseClassifier):
+    def __init__(self, model_name: str, attribute_name: str, max_length: int, *args, **kwargs):
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+
+        device = xm.xla_device()
+        self.model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.bfloat16).to(device)
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        self.attribute_name = attribute_name
+        self.max_length = max_length
+        if self.tokenizer.pad_token is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
+
+    def sample_text(self, documents: list[str], max_length: int) -> list[str]:
+        # Randomly sample segments from each document
+        sampled_texts = []
+        for doc in documents:
+            # Tokenize the full document first to get token count
+            tokens = self.tokenizer.encode(doc)
+            if len(tokens) > max_length:
+                # Randomly select a starting point that allows max_length tokens
+                start_idx = random.randint(0, len(tokens) - max_length)
+                # Take max_length tokens from that point
+                sampled_tokens = tokens[start_idx : start_idx + max_length]
+                # Decode back to text
+                sampled_text = self.tokenizer.decode(sampled_tokens)
+            else:
+                sampled_text = doc
+            sampled_texts.append(sampled_text)
+
+        return sampled_texts
+
+    @torch.no_grad()
+    def predict(self, documents: list[str]) -> list[float]:
+        target_length = min(self.max_length, self.model.config.max_position_embeddings)
+
+        # Randomly sample segments from each document
+        sampled_texts = self.sample_text(documents, target_length)
+        # Tokenize sampled texts
+        inputs = self.tokenizer(
+            sampled_texts,
+            return_tensors="pt",
+            padding=True,
+            truncation=False,
+        ).to(self.model.device)
+
+        input_ids = inputs["input_ids"]
+        outputs = self.model(**inputs)
+        xm.mark_step()
+        logits = outputs.logits
+
+        # Calculate per-sequence perplexity
+        # Shift input_ids right to create labels (next token prediction)
+        labels = input_ids[:, 1:].clone()
+        labels[labels == self.tokenizer.pad_token_id] = -100
+
+        # Calculate loss per sequence
+        loss_fct = torch.nn.CrossEntropyLoss(reduction="none")
+        shifted_logits = logits[:, :-1, :].contiguous()
+
+        # Get loss for each token
+        token_losses = loss_fct(shifted_logits.view(-1, shifted_logits.size(-1)), labels.view(-1))
+
+        # Reshape token losses to batch x sequence
+        token_losses = token_losses.view(labels.size())
+
+        # Calculate mean loss per sequence
+        # Sum losses and divide by sequence length (excluding padding)
+        sequence_lengths = (labels != -100).sum(dim=1).float()
+        sequence_losses = token_losses.sum(dim=1) / sequence_lengths
+
+        # Calculate perplexity per sequence
+        perplexities = torch.exp(sequence_losses)
+
+        # Convert to regular Python list
+        return perplexities.tolist()
+
+    def __call__(self, batch: dict[str, Any]) -> dict[str, Any]:
+        scores = self.predict(batch["text"])
+
+        batch.update({"attributes": [{self.attribute_name: score} for score in scores]})
+        return batch
+
+
 class AutoClassifier(BaseClassifier):
     _MODEL_NAME_TO_CLS_DICT: ClassVar[dict[str, BaseClassifier]] = {
         "fasttext": FasttextClassifier,
         "fineweb": FinewebEduClassifier,
         "gte": GTEClassifier,
+        "perplexity": PerplexityClassifier,
     }
 
     def __init__(self, model_name: str, attribute_name: str, model_type: str | None, *args, **kwargs):

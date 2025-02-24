@@ -94,7 +94,9 @@ def get_output_dataset_column_names(input_filename: str) -> list[str]:
 
 
 @cached_or_construct_output(success_suffix="SUCCESS")
-def process_file_with_quality_classifier(input_filename: str, output_filename: str, quality_classifier: BaseClassifier):
+def process_file_with_quality_classifier(
+    input_filename: str, output_filename: str, quality_classifier: BaseClassifier, batch_size: int
+):
     print(f"[*] Processing {input_filename} to {output_filename}")
     dataset = read_dataset(input_filename)
 
@@ -102,7 +104,7 @@ def process_file_with_quality_classifier(input_filename: str, output_filename: s
     input_column_names = get_input_dataset_column_names(input_filename)
     output_column_names = get_output_dataset_column_names(input_filename)
     dataset = dataset.select_columns(input_column_names)
-    dataset = dataset.map(lambda batch: quality_classifier(batch), batched=True, batch_size=512)
+    dataset = dataset.map(lambda batch: quality_classifier(batch), batched=True, batch_size=batch_size)
     dataset = dataset.select_columns(output_column_names)
 
     write_dataset(dataset, output_filename)
@@ -117,12 +119,13 @@ def process_file_ray(
     model_type: str | None,
     filetype: str,
     classifier_kwargs: dict,
+    batch_size: int,
 ):
     quality_classifier = AutoClassifier.from_model_path(
         model_name_or_path, attribute_name, model_type, **classifier_kwargs
     )
 
-    process_file_with_quality_classifier(input_filename, output_filename, quality_classifier)
+    process_file_with_quality_classifier(input_filename, output_filename, quality_classifier, batch_size)
 
 
 @ray.remote
@@ -135,6 +138,7 @@ def _process_dir(
     model_type: str | None,
     filetype: str,
     classifier_kwargs: dict,
+    batch_size: int,
 ):
     """Perform quality classification on a directory of files
 
@@ -154,7 +158,7 @@ def _process_dir(
 
     for input_filename in files:
         output_filename = rebase_file_path(input_path, input_filename, output_path)
-        process_file_with_quality_classifier(input_filename, output_filename, quality_classifier)
+        process_file_with_quality_classifier(input_filename, output_filename, quality_classifier, batch_size)
 
 
 def get_process_filepath_func(subdirectories: list[str]):
@@ -199,6 +203,7 @@ def run_inference(inference_config: InferenceConfig):
             inference_config.model_type,
             inference_config.filetype,
             inference_config.classifier_kwargs,
+            inference_config.batch_size,
         )
 
         responses.append(result_ref)

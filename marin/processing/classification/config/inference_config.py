@@ -36,3 +36,5 @@ class InferenceConfig:
     filetype: str = "jsonl.gz"
 
     classifier_kwargs: dict = field(default_factory=dict)
+
+    batch_size: int = 512
