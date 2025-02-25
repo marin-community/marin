@@ -17,14 +17,12 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from levanter.models.lm_model import LmConfig
-
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy.optimize import curve_fit, minimize
 from scipy.special import huber
 
-from experiments.llama import llama3_tokenizer_vocab_size, compute_num_parameters
+from experiments.llama import compute_num_parameters, llama3_tokenizer_vocab_size
 
 try:
     import pandas as pd
@@ -192,16 +190,9 @@ def fit_sigmoidal(L: np.ndarray, y: np.ndarray, initial_guess: Sequence[float] |
         return predict_sigmoidal([a, b, k, L_0], L)
 
     # Fit the model using scipy's curve_fit()
-    # https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.curve_fit.html 
+    # https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.curve_fit.html
     popt, _ = curve_fit(
-        objective,
-        L,
-        y,
-        p0=initial_guess,
-        bounds=bounds,
-        maxfev=15000,
-        method="trf",
-        ftol=OPTIMIZATION_TOLERANCE
+        objective, L, y, p0=initial_guess, bounds=bounds, maxfev=15000, method="trf", ftol=OPTIMIZATION_TOLERANCE
     )
 
     return popt
@@ -323,7 +314,7 @@ def aggregate_steps(
         step_mode: how to aggregate the steps
         step_range: range of steps to aggregate
         group_col: column to group by
-    
+
     step_mode can be:
       - "average": average step_range across each run
       - "last": pick the max step within step_range
@@ -359,13 +350,14 @@ def non_embedding_params(total_param_count: int, hidden_dim: int, vocab_size: in
 @dataclass
 class ProjectionPoint:
     """A point to project to, consisting of number of parameters and tokens"""
+
     num_params: int
     num_tokens: int
 
 
 def get_default_projection_points(count_embedding_params: bool = False) -> list[ProjectionPoint]:
     """Default set of model sizes to project to
-    
+
     Args:
         count_embedding_params: Whether to include embedding parameters in parameter count
     """
@@ -387,11 +379,11 @@ def get_default_projection_points(count_embedding_params: bool = False) -> list[
     for config in model_configs:
         # Calculate total parameters
         total_params = compute_num_parameters(config, llama3_tokenizer_vocab_size)
-        
+
         # Adjust if we're not counting embedding params
         if not count_embedding_params:
             total_params = non_embedding_params(total_params, config.hidden_dim)
-            
+
         # Create points with different token counts
         for multiplier in token_multipliers:
             num_tokens = int(total_params * multiplier)
@@ -435,7 +427,7 @@ def plot_actual_vs_predicted(
     plt.figure(figsize=(10, 6))
 
     x_values = tokens if tokens is not None else np.arange(len(y_actual))
-    
+
     # plot actual and predicted values
     plt.plot(x_values, y_actual, label="Actual", marker="o", linestyle="-", linewidth=2)
     plt.plot(x_values, y_predicted, label="Predicted", marker="x", linestyle="--", linewidth=2)
@@ -449,6 +441,7 @@ def plot_actual_vs_predicted(
 
     # Format tick labels to show B/T for billions/trillions
     if tokens is not None:
+
         def format_ticks(x, _):
             if x >= 1e12:
                 return f"{x/1e12:.1f}T"
@@ -456,6 +449,7 @@ def plot_actual_vs_predicted(
                 return f"{x/1e9:.1f}B"
             else:
                 return f"{x/1e6:.1f}M"
+
         plt.gca().xaxis.set_major_formatter(plt.FuncFormatter(format_ticks))
 
     return plt
@@ -529,7 +523,7 @@ def fit_scaling_laws(
         count_embedding_params: whether to count embedding parameters in calculating N
         use_log_for_ND: whether to use log space for N and D
         normalize_ND: whether to normalize N and D
-    
+
     Returns:
         tuple of:
             - dict of loss metrics and their predictions
@@ -548,7 +542,7 @@ def fit_scaling_laws(
         summary_fields=(param_col,),
     )
 
-    # Process loss data- remove 0-token runs, apply aggregation to the ladder runs' checkpoints (if specified)      
+    # Process loss data- remove 0-token runs, apply aggregation to the ladder runs' checkpoints (if specified)
     loss_df_filtered = filter_zero_d(loss_df, tokens_col)
     loss_df_agg = aggregate_steps(loss_df_filtered, step_mode=aggregation)
 
@@ -589,11 +583,13 @@ def fit_scaling_laws(
             project=project,
             summary_fields=(param_col,),
         )
-       
+
         loss_pred_filtered = filter_zero_d(loss_pred_df, tokens_col)
         loss_pred_agg = aggregate_steps(loss_pred_filtered, step_mode=aggregation)
 
-        N_pred, D_pred, _ = extract_scaling_data(loss_pred_agg, param_col, tokens_col, count_embedding_params=count_embedding_params)
+        N_pred, D_pred, _ = extract_scaling_data(
+            loss_pred_agg, param_col, tokens_col, count_embedding_params=count_embedding_params
+        )
         if use_log_for_ND:
             N_pred = np.log(N_pred)
             D_pred = np.log(D_pred)
@@ -636,40 +632,40 @@ def fit_scaling_laws(
             # Fit accuracies
             accuracy_results = {}
             loss_metric, (actual_loss, predicted_loss) = next(iter(loss_results.items()))  # use first loss
-            
+
             # Merge loss and accuracy data on run and tokens
             merged_df = pd.merge(
-                loss_df_agg[['run', tokens_col, loss_metric]], 
-                acc_df_agg[['run', tokens_col] + list(accuracy_metrics)],
-                on=['run', tokens_col],
-                how='inner'
+                loss_df_agg[["run", tokens_col, loss_metric]],
+                acc_df_agg[["run", tokens_col, *accuracy_metrics]],
+                on=["run", tokens_col],
+                how="inner",
             )
-            
+
             # Merge prediction data similarly
             merged_pred_df = pd.merge(
-                loss_pred_agg[['run', tokens_col]],
-                acc_pred_agg[['run', tokens_col] + list(accuracy_metrics)],
-                on=['run', tokens_col],
-                how='inner'
+                loss_pred_agg[["run", tokens_col]],
+                acc_pred_agg[["run", tokens_col, *accuracy_metrics]],
+                on=["run", tokens_col],
+                how="inner",
             )
 
             for acc_metric in accuracy_metrics:
                 task_losses = merged_df[loss_metric].values
                 acc = merged_df[acc_metric].values
                 params = fit_sigmoidal(task_losses, acc)
-                
+
                 acc_pred_actual = merged_pred_df[acc_metric].values
                 # Get the corresponding predicted losses for these points
                 pred_indices = loss_pred_agg[tokens_col].isin(merged_pred_df[tokens_col])
                 pred_task_losses = predicted_loss[pred_indices]
-                
+
                 acc_preds = predict_sigmoidal(params, pred_task_losses)
                 accuracy_results[f"{acc_metric}_from_{loss_metric}"] = (acc_pred_actual, acc_preds)
 
             # Get token counts for plotting
             loss_tokens = loss_pred_agg[tokens_col].values
             acc_tokens = merged_pred_df[tokens_col].values
-            
+
             predictions = (loss_results, accuracy_results, loss_tokens, acc_tokens)
 
     return projections, predictions
