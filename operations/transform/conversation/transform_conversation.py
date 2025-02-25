@@ -77,7 +77,7 @@ def transform_row(row: dict, cfg: TransformSFTDatasetConfig, adapter: TransformA
     transformed_row_messages: list[OpenAIChatMessage] = adapter.transform_conversation_to_openai_format(row)
 
     if transformed_row_messages is None:
-        logger.warning(f'{cfg.adapter_name} returning no valid messages')
+        logger.warning(f"{cfg.adapter_name} returning no valid messages")
         return None
 
     transformed_row_messages = [message.model_dump() for message in transformed_row_messages]
