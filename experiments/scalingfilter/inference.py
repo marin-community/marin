@@ -18,7 +18,7 @@ inference_step = ExecutorStep(
         ),
         task=TaskConfig(max_in_flight=500),
         filetype="jsonl.zst",
-        batch_size=64,
+        batch_size=60,
         classifier_kwargs={"max_length": 512},
     ),
     pip_dependency_groups=["fasttext", "datasets", "filelock"],
