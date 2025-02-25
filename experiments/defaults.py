@@ -23,7 +23,12 @@ from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 
 from experiments.anneal_config import AnnealConfig
-from experiments.evals.task_configs import CORE_TASKS, CORE_TASKS_PLUS_MMLU, convert_to_levanter_task_config, convert_to_task_metrics
+from experiments.evals.task_configs import (
+    CORE_TASKS,
+    CORE_TASKS_PLUS_MMLU,
+    convert_to_levanter_task_config,
+    convert_to_task_metrics,
+)
 from experiments.llama import compute_num_parameters, llama_8b
 from experiments.paloma import paloma_tokenized
 from experiments.simple_train_config import SimpleTrainConfig
