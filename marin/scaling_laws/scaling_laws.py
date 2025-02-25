@@ -28,8 +28,6 @@ from marin.scaling_laws.utils import (
     plot_scaling_projections,
 )
 
-from levanter.models.lm_model import LmConfig
-
 
 @dataclass(frozen=True)
 class ScalingLawConfig:
@@ -67,9 +65,9 @@ class ScalingLawConfig:
         # Set default projection points if none provided
         if self.projection_points is None:
             object.__setattr__(
-                self, 
-                "projection_points", 
-                get_default_projection_points(count_embedding_params=self.count_embedding_params)
+                self,
+                "projection_points",
+                get_default_projection_points(count_embedding_params=self.count_embedding_params),
             )
 
 
@@ -167,7 +165,7 @@ def log_and_create_report(
                     predicted_loss.tolist(),
                     title=f"Actual vs Predicted {loss_name}",
                     task_metric=loss_name,
-                    tokens=loss_tokens
+                    tokens=loss_tokens,
                 )
                 plots[f"Task Loss - {loss_name}"] = wandb.Image(figure)
 
@@ -178,7 +176,7 @@ def log_and_create_report(
                     predicted_acc.tolist(),
                     title=f"Actual vs Predicted {metric}",
                     task_metric=metric,
-                    tokens=acc_tokens
+                    tokens=acc_tokens,
                 )
                 plots[f"Task Accuracy - {metric}"] = wandb.Image(figure)
 
