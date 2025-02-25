@@ -77,6 +77,7 @@ def transform_row(row: dict, cfg: TransformSFTDatasetConfig, adapter: TransformA
     transformed_row_messages: list[OpenAIChatMessage] = adapter.transform_conversation_to_openai_format(row)
 
     if transformed_row_messages is None:
+        logger.warning(f'{cfg.adapter_name} returning no valid messages')
         return None
 
     transformed_row_messages = [message.model_dump() for message in transformed_row_messages]
@@ -244,7 +245,7 @@ def download_directory_from_gcs(bucket_name: str, gcs_directory_path: str, local
 
         # Download the blob to the local file path
         blob.download_to_filename(local_file_path)
-        logger.info(f"Downloaded {blob.name} to {local_file_path}")
+        logger.info(f"Downloaded gs://{blob.name} to local:{local_file_path}")
 
 
 def copy_dataset_from_gcp_to_local(input_gcp_path: os.PathLike) -> os.PathLike:
