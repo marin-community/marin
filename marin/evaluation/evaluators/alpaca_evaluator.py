@@ -18,7 +18,8 @@ class AlpacaEvaluator(VllmTpuEvaluator):
     Source: https://github.com/tatsu-lab/alpaca_eval?tab=readme-ov-file#quick-start
     """
 
-    BASE_RESULTS_PATH: str = os.path.join(VllmTpuEvaluator.CACHE_PATH, "alpaca_results")
+    CACHE_PATH: str = "/tmp/alpaca-eval"
+    BASE_RESULTS_PATH: str = os.path.join(CACHE_PATH, "alpaca_results")
 
     # AlpacaEval has 805 examples: https://huggingface.co/datasets/tatsu-lab/alpaca_eval/raw/main/alpaca_eval.json
     # so if the number of instances is not specified, we will run on all of them.
@@ -40,7 +41,7 @@ class AlpacaEvaluator(VllmTpuEvaluator):
                 # Could be any arbitrary prompt template but the Cohere one prompts
                 # with the just instruction without any prompt engineering: {instruction}
                 # https://github.com/tatsu-lab/alpaca_eval/blob/main/src/alpaca_eval/models_configs/cohere/prompt.txt
-                "prompt_template": "cohere/prompt.txt",
+                "prompt_template": "Mixtral-8x7B-Instruct-v0.1/togetherai_prompt.txt",
                 "fn_completions": "vllm_local_completions",
                 "completions_kwargs": {
                     "model_name": model_name_or_path,
@@ -93,7 +94,7 @@ class AlpacaEvaluator(VllmTpuEvaluator):
             # Download the model from GCS or HuggingFace
             model_name_or_path: str = self.download_model(model)
 
-            model_config_path: str = os.path.join(VllmTpuEvaluator.CACHE_PATH, model_name_or_path, "model_config.yaml")
+            model_config_path: str = os.path.join(AlpacaEvaluator.CACHE_PATH, model_name_or_path, "model_config.yaml")
             self.write_model_config_file(model, model_config_path)
 
             # Construct the command and run AlpacaEval

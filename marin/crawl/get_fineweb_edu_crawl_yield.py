@@ -14,7 +14,7 @@ The quantities of interest are:
 - N_hq / N_total: What is the overall yield rate of the crawl frontier?
 - N_hq / N_f: What is the yield rate of the successfully-fetched pages?
 
-Running on FineWeb-Edu:
+Running on FineWeb-Edu-10M:
 
 ```
 python marin/run/ray_run.py \
@@ -27,6 +27,21 @@ python marin/run/ray_run.py \
     --text_output_directory gs://marin-us-central2/scratch/nfliu/text/fineweb-edu-10M/ \
     --urls_and_scores_output_directory gs://marin-us-central2/scratch/nfliu/urls_and_scores/fineweb-edu-10M/ \
     --statistics_output_path gs://marin-us-central2/scratch/nfliu/fetched_outlinks/fineweb-edu-10M/yield_statistics.json.gz
+```
+
+Running on FineWeb-Edu-10M (cc deduplicated):
+
+```
+python marin/run/ray_run.py \
+    --pip_deps '--find-links https://storage.googleapis.com/jax-releases/libtpu_releases.html,w3lib,trafilatura,jax[tpu],flax,transformers,requests,warcio[all],resiliparse' \
+    --no_wait -- \
+    python marin/crawl/get_fineweb_edu_crawl_yield.py \
+    --urls_input_directory gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-10M-cc-deduplicated/ \
+    --crawl_input_directory gs://marin-us-central2/scratch/nfliu/fetched_outlinks/fineweb-edu-10M-cc-deduplicated/ \
+    --data_source fineweb-edu-10M-cc-deduplicated \
+    --text_output_directory gs://marin-us-central2/scratch/nfliu/text/fineweb-edu-10M-cc-deduplicated/ \
+    --urls_and_scores_output_directory gs://marin-us-central2/scratch/nfliu/urls_and_scores/fineweb-edu-10M-cc-deduplicated/ \
+    --statistics_output_path gs://marin-us-central2/scratch/nfliu/fetched_outlinks/fineweb-edu-10M-cc-deduplicated/yield_statistics.json.gz
 ```
 """  # noqa: E501
 import json
