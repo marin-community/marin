@@ -24,6 +24,29 @@ inference_step = ExecutorStep(
     pip_dependency_groups=["fasttext", "datasets", "filelock"],
 )
 
+# Did inference over the entire global shard accidentally so directory will be named a bit confusingly.
+llama_500m_inference_step = ExecutorStep(
+    name="attributes/quality_filtering/llama-500m-perplexity/dclm-global-shard-01-of-10/local-shard_0_of_10",
+    fn=run_inference,
+    config=InferenceConfig(
+        input_path=input_data_path,
+        output_path=this_output_path(),
+        model_name="/opt/gcsfuse_mount/perplexity-models/llama-500m",
+        model_type="perplexity",
+        attribute_name="llama-500m-perplexity-seq-len-512",
+        runtime=RuntimeConfig(
+            memory_limit_gb=12,
+            resources={"TPU": 1},
+        ),
+        task=TaskConfig(max_in_flight=500),
+        filetype="jsonl.zst",
+        batch_size=24,
+        classifier_kwargs={"max_length": 512},
+    ),
+    pip_dependency_groups=["fasttext", "datasets", "filelock"],
+    override_output_path="attributes/quality_filtering/llama-500m-perplexity/dclm-global-shard-01-of-10/local-shard_0_of_10",
+)
+
 # consolidate_step = ExecutorStep(
 #     name="documents/quality_filtering/dclm-global-shard-01-of-10-medu-economics-3plus",
 #     fn=consolidate,
@@ -46,4 +69,5 @@ inference_step = ExecutorStep(
 # )
 
 if __name__ == "__main__":
-    executor_main([inference_step])
+    # executor_main([inference_step])
+    executor_main([llama_500m_inference_step])
