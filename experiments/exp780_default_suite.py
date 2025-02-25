@@ -22,6 +22,8 @@ default_suite = scaling_law_suite(
 
 default_suite_scaling_laws_pred = default_scaling_law_pred(
     ladder_runs=default_suite,
+    # TODO: corresponds to llama_8b_tootsie in exp600_tootsie.py; used wandb ID for now out of caution
+    # to avoid accidentally re-running the 8B model
     pred_run="llama-8b-tootsie-0.001-19ad63",
     task_losses=(
         "eval/paloma/c4_en/bpb",

@@ -1,3 +1,7 @@
+"""
+Creates a suite of runs for scaling laws- based on https://arxiv.org/pdf/2412.04403 and https://github.com/stanford-crfm/marin/issues/646.
+"""
+
 import dataclasses
 import logging
 from collections.abc import Sequence
@@ -30,7 +34,7 @@ WS_EMA_DEFAULT_TRAIN_CONFIG = SimpleTrainConfig(
     num_train_steps=50000,  # 4096 * 1024 * 50000 = ~200B tokens
     warmup=1000,  # initial warmup
     decay=0.0,  # no decay
-    lr_schedule="constant",  # inv decay
+    lr_schedule="constant",
     ema_beta=0.995,
 )
 
