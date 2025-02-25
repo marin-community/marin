@@ -78,7 +78,7 @@ quality_dedup_consolidate = [
 tokenize_train = [
     "jax>=0.4.34",
     "multiprocess==0.70.16",
-    "levanter",
+    "levanter>=1.2.dev1147",
     "lm-eval@git+https://github.com/stanford-crfm/lm-evaluation-harness.git",
 ]
 
@@ -87,7 +87,7 @@ data_browser = [
 ]
 
 eval = [
-    "levanter",
+    "levanter>=1.2.dev1163",
     "lm-eval@git+https://github.com/stanford-crfm/lm-evaluation-harness.git",
 ]
 

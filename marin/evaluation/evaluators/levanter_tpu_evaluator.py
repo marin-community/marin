@@ -5,6 +5,7 @@ from typing import ClassVar
 
 import ray
 
+from experiments.evals.resource_configs import ResourceConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Dependency, Evaluator, ModelConfig
 from marin.utils import remove_tpu_lockfile_on_exit
@@ -79,13 +80,15 @@ class LevanterTpuEvaluator(Evaluator, ABC):
         evals: list[EvalTaskConfig],
         output_path: str,
         max_eval_instances: int | None = None,
+        resource_config: ResourceConfig | None = None,
     ) -> None:
         """
         Launches the evaluation run with Ray.
         """
 
         @ray.remote(
-            memory=64 * 1024 * 1024 * 1024, resources={"TPU": 1, "TPU-v4-8-head": 1}, runtime_env=self.get_runtime_env()
+            scheduling_strategy=self.scheduling_strategy_fn(resource_config.num_tpu, resource_config.tpu_type),
+            runtime_env=self.get_runtime_env(),
         )
         @remove_tpu_lockfile_on_exit
         def launch(
