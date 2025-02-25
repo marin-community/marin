@@ -31,7 +31,7 @@ try:
 except ImportError:
     pd: Any = None
 
-OPTIMIZATION_TOLERANCE = 1e-6
+OPTIMIZATION_TOLERANCE = 1e-10
 
 ####################################################################################################
 # Power law helpers
@@ -136,7 +136,7 @@ def fit_power_law(
         initial_guess,
         method="L-BFGS-B",
         bounds=bounds,
-        options={"ftol": OPTIMIZATION_TOLERANCE, "gtol": OPTIMIZATION_TOLERANCE, "maxiter": 1000},
+        options={"ftol": OPTIMIZATION_TOLERANCE, "gtol": OPTIMIZATION_TOLERANCE, "maxiter": 2500},
     )
 
     if not result.success:
@@ -179,17 +179,13 @@ def fit_sigmoidal(L: np.ndarray, y: np.ndarray, initial_guess: Sequence[float] |
         y_min, y_max = np.min(y), np.max(y)
         a_init = y_max - y_min  # amplitude
         b_init = y_min  # offset
-        k_init = 1.0  # slope (positive for decreasing sigmoid)
+        k_init = -1.0  # slope (negative for decreasing sigmoid)
         L_0_init = np.mean(L)  # midpoint
         initial_guess = [a_init, b_init, k_init, L_0_init]
 
-    print("targets: ", y)
-    print("Initial guess: ", initial_guess)
-    print("L: ", L)
-
     # Set parameter bounds
-    lower_bounds = [0, 0, 0, -np.inf]  # a > 0, b >= 0, k unbounded below, L_0 unbounded
-    upper_bounds = [np.inf, np.inf, np.inf, np.inf]  # a unbounded above, b unbounded, k > 0, L_0 unbounded
+    lower_bounds = [0, 0, -np.inf, -np.inf]  # a > 0, b >= 0, k unbounded below, L_0 unbounded
+    upper_bounds = [np.inf, np.inf, 0, np.inf]  # a unbounded above, b unbounded, k <= 0, L_0 unbounded
     bounds = (lower_bounds, upper_bounds)
 
     def objective(L, a, b, k, L_0):
@@ -451,10 +447,8 @@ def plot_actual_vs_predicted(
     plt.legend()
     plt.grid(True)
 
-    # If using tokens, set x-axis to log scale and format ticks
+    # Format tick labels to show B/T for billions/trillions
     if tokens is not None:
-        plt.xscale('log')
-        # Format tick labels to show B/T for billions/trillions
         def format_ticks(x, _):
             if x >= 1e12:
                 return f"{x/1e12:.1f}T"
