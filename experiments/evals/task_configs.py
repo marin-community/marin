@@ -54,12 +54,12 @@ def convert_to_task_metrics(tasks: Sequence[EvalTaskConfig], metric: str) -> lis
     """
     if not tasks:
         raise ValueError("Tasks sequence cannot be empty")
-    
+
     task_metrics = []
     for task in tasks:
         if not isinstance(task, EvalTaskConfig):
             raise TypeError(f"Expected task to be EvalTaskConfig, got {type(task)}")
-        
+
         if task.task_alias:
             task_metrics.append(f"lm_eval/{task.task_alias}/{metric}")
         else:

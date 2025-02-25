@@ -66,8 +66,10 @@ def scaling_law_suite(
 
     References:
         * default widths are from https://arxiv.org/pdf/2412.04403 table 1 (plus 512)
-        * intermediate scale is 4; should be 8 based on https://arxiv.org/pdf/2412.04403 table 1, but we ultimately decided
-          to go with a smaller value based on https://arxiv.org/pdf/2407.21783 table 3 since 8 seemed large compared to other works.
+        * intermediate scale is 4; should be 8 based on https://arxiv.org/pdf/2412.04403 table 1,
+          but we ultimately decided to go with a smaller value based on
+          https://arxiv.org/pdf/2407.21783 table 3 since 8 seemed large compared to
+          other works.
         * base_lr is based on llama 3 (https://arxiv.org/pdf/2407.21783 table 3)
         * max_lr is a reasonable value that is not too high
         * default model config (1_4b) gives the number of layers used in https://arxiv.org/pdf/2412.04403 table 1
