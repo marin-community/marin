@@ -57,6 +57,7 @@ class InstructionDatasetConfig:
         splits: Data splits (e.g., `train`, `validation`) to use. Empty list indicates to use all splits.
                 Defaults to `train` only
         legacy: True uses the Marin function as dataloader. False uses the `datasets` package as dataloader.
+        adapter_name: Nmae of the adapter. None indicates that the adapater name is the same as the `hf_dataset_id`.
     """
 
     hf_dataset_id: str
@@ -67,6 +68,7 @@ class InstructionDatasetConfig:
     subsets: list[str] = field(default_factory=lambda: [])
     splits: list[str] = field(default_factory=lambda: ["train"])
     legacy: bool = False
+    adapter_name: str = None
 
 
 INSTRUCTION_DATASET_NAME_TO_CONFIG = {
@@ -119,14 +121,25 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         metadata_columns=["id", "source"],
         filetype="parquet",
     ),
-    "cognitivecomputations/dolphin-r1": InstructionDatasetConfig(
+    "cognitivecomputations/dolphin-r1-nonreasoning": InstructionDatasetConfig(
         hf_dataset_id="cognitivecomputations/dolphin-r1",
-        subsets=["nonreasoning", "reasoning-deepseek", "reasoning-flash"],
+        subsets=["nonreasoning"],  # "reasoning-deepseek" & "reasoning-flash" are omitted
         revision="f6ac651",  # The revision hash shown in the image
         wait_for_completion=True,
         metadata_columns=["score", "refusal", "compliance_rating", "overall_quality"],
         splits=["train"],
         filetype="jsonl",
+        adapter_name="cognitivecomputations/dolphin-r1-nonreasoning",
+    ),
+    "cognitivecomputations/dolphin-r1-reasoning": InstructionDatasetConfig(
+        hf_dataset_id="cognitivecomputations/dolphin-r1",
+        subsets=["reasoning-deepseek", "reasoning-flash"],
+        revision="f6ac651",  # The revision hash shown in the image
+        wait_for_completion=True,
+        metadata_columns=["score", "refusal", "compliance_rating", "overall_quality"],
+        splits=["train"],
+        filetype="jsonl",
+        adapter_name="cognitivecomputations/dolphin-r1-reasoning",
     ),
     "open-r1/OpenThoughts-114k-math": InstructionDatasetConfig(
         hf_dataset_id="open-r1/OpenThoughts-114k-math",
@@ -211,15 +224,15 @@ def transform_dataset_step(dataset_cfg: InstructionDatasetConfig, download_step:
         "splits": ['train', 'validation'],
         ...
     }
-    output_path_of(download_step) --> gs://.../raw/dolphin-r1-[hash]
+    output_path_of(download_step) --> gs://.../raw/dolphin-r1-[revision_number]-[hash]
 
     Expected files written: [
-        gs://.../dolphin-r1-reasoning-flash-train-[hash]/shard_00001.json.gz,
+        gs://.../dolphin_r1__[revision_number]_[hash]/reasoning_flash/train/shard_00001.json.gz,
         ...
-        gs://.../dolphin-r1-reasoning-flash-train-[hash]/shard_00055.json.gz,
-        gs://.../dolphin-r1-reasoning-flash-validation-[hash]/shard_00001.json.gz,
+        gs://.../dolphin_r1__[revision_number]_[hash]/reasoning_flash/train/shard_00055.json.gz,
+        gs://.../dolphin_r1__[revision_number]_[hash]/reasoning_flash/validation/shard_00001.json.gz,
         ...
-        gs://.../dolphin-r1-reasoning-flash-validation-[hash]/shard_00023.json.gz,
+        gs://.../dolphin_r1__[revision_number]_[hash]/reasoning_flash/validation/shard_00023.json.gz,
     ]
     ===========================================================================
     """
@@ -240,6 +253,7 @@ def transform_dataset_step(dataset_cfg: InstructionDatasetConfig, download_step:
         -{sorted(dataset_cfg.splits)}"
     hashed_config_str = hashlib.md5(config_str.encode()).hexdigest()[:6]
 
+    adapter_name = dataset_cfg.adapter_name if dataset_cfg.adapter_name is not None else dataset_cfg.hf_dataset_id
     transform_step = ExecutorStep(
         name=f"documents/{dataset_name}",
         fn=transform_fn,
@@ -252,6 +266,7 @@ def transform_dataset_step(dataset_cfg: InstructionDatasetConfig, download_step:
             source=dataset_cfg.hf_dataset_id,
             subsets=dataset_cfg.subsets,
             splits=dataset_cfg.splits,
+            adapter_name=adapter_name,
         ),
         override_output_path=f"documents/{dataset_name}-{dataset_cfg.revision}-{hashed_config_str}",
     )
