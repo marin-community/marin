@@ -150,4 +150,4 @@ if __name__ == "__main__":
     training_step = create_training_step(tokenization_steps)
 
     # Run all steps
-    executor_main(*tokenization_steps, training_step)
+    executor_main(steps=[*tokenization_steps, training_step])
