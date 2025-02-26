@@ -22,7 +22,7 @@ def create_tokenization_step(dataset_name: str) -> ExecutorStep:
 
     # Get the last part of the path and clean it up
     short_name = dataset_name.split("/")[-1].lower().replace("-", "_")
-
+    print(f"short name is {short_name}", flush=True)
     return ExecutorStep(
         name=f"tokenized/{short_name}_llama3_instruct_tokenizer",
         fn=levanter_tokenize_sft,
@@ -59,13 +59,15 @@ def create_training_step(tokenization_steps: list[ExecutorStep], seed: int = 0) 
     # Create a mapping of cache dirs for each dataset from tokenization steps
     supervised_data = {}
     mixture_weights = {
-        "tulu": 939343,
-        "openthoughts": 89120,
-        "prime_verified_math": 777457,
-        "acecode": 87149,
-        "smoltalk": 1043917,
-        "natural_reasoning": 1145824,
-        "stratos": 16710,
+        "tulu_3_sft_mixture": 0,  # 939343,
+        "openthoughts_114k_math": 0,  # 89120,
+        "verifiable_math_problems": 0,  # 777457,
+        "acecode_89k": 0,  # 87149,
+        "smoltalk": 0,  # 1043917,
+        "natural_reasoning": 0,  # 1145824,
+        "dolphin_r1_nonreasoning": 214318,
+        "dolphin_r1_reasoning": 585418,
+        "bespoke_stratos_17k": 0,  # 16710,
     }
 
     for step in tokenization_steps:
@@ -87,7 +89,7 @@ def create_training_step(tokenization_steps: list[ExecutorStep], seed: int = 0) 
                 tracker=WandbConfig(project="marin", tags=["dolma", "olmo", "llama", "mixture"]),
                 mp=jmp.get_policy("p=f32,c=bfloat16"),
                 train_batch_size=128,
-                num_train_steps=19086,
+                num_train_steps=3772,
                 steps_per_eval=1000,
                 tensor_parallel_axes=["mlp", "heads"],
                 fsdp_axis="embed",
@@ -135,7 +137,7 @@ def create_training_step(tokenization_steps: list[ExecutorStep], seed: int = 0) 
             model_name_or_path="meta-llama/Llama-3.1-8B",
             initialize_from_hf=True,
             # HF checkpoint saving
-            hf_save_steps=1000,
+            hf_save_steps=1250,
             # Chat format configuration
             messages_field="messages",
             input_role="user",
