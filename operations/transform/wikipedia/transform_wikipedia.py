@@ -102,10 +102,10 @@ def unwrap_eqn(html: str):
         latex = latex.replace(r"\_{", "_{")  # Remove unnecessary backslash before subscript
         latex = re.sub(r"_\{([^}]*?)_\{", r"_{", latex)  # Fix nested subscripts
         latex = re.sub(r"\\([a-zA-Z]+)_\{", r"\\\1_{", latex)  # Fix function subscripts
-        latex = re.sub(r"\}\}+", r"}", latex)  # Remove extra closing braces
         latex = latex.strip("{}")  # Remove wrapping curly braces
         latex = latex.replace(r"\[ ", "").replace(r" \]", "")  # Remove \[ \] display math delimiters
         latex = re.sub(r"\\!", "", latex)  # Remove \! spacing commands
+
 
         # Balance remaining curly braces
         open_count = latex.count("{")
