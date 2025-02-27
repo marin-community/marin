@@ -673,7 +673,7 @@ class Executor:
         for i, dep in enumerate(self.dependencies[step]):
             logger.info(f"  {dependency_index_str(i)} = {self.output_paths[dep]}")
 
-        dependencies = [self.refs[dep] for dep in self.dependencies[step]]
+        dependencies = [self.refs[dep] for dep in self.dependencies[step] if dep in self.refs]
         name = f"execute_after_dependencies({get_fn_name(step.fn, short=True)})::{step.name})"
 
         if step.pip_dependency_groups is not None:
