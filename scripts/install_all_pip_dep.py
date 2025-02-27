@@ -48,7 +48,6 @@ def install_all_pip_dependencies(pip_dep: List[str]):
                 "--index-strategy",
                 "unsafe-best-match",
                 "--prerelease=allow",
-                "resiliparse_dom @ git+https://github.com/stanford-crfm/chatnoir-resiliparse@da2ff85fe51310484cf9435565b2bdde2a23708b#egg=resiliparse_dom&subdirectory=resiliparse_dom"
             ]
         )
 
