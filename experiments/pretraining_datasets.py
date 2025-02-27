@@ -91,7 +91,7 @@ dclm_baseline = ExecutorStep(
         timeout=24 * 60 * 60,
     ),
     override_output_path="raw/dclm",
-)
+).cd("a3b142c")
 
 the_stack_dedup = ExecutorStep(
     name="raw/the-stack-dedup",

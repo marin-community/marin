@@ -1,0 +1,39 @@
+FROM vllm/vllm-tpu:e92694b6fe264a85371317295bca6643508034ef
+
+# Setup gcsfuse
+RUN apt-get update && apt-get install lsb-release rsync docker.io -y
+RUN usermod -aG docker $(whoami)
+
+RUN export GCSFUSE_REPO=gcsfuse-`lsb_release -c -s` && echo "deb https://packages.cloud.google.com/apt $GCSFUSE_REPO main" | tee /etc/apt/sources.list.d/gcsfuse.list
+RUN curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | apt-key add -
+RUN apt-get update && apt-get install fuse gcsfuse -y
+RUN mkdir /opt/gcsfuse_mount
+RUN chown -R $(whoami) /opt/gcsfuse_mount
+
+# Install the Google Cloud SDK
+RUN curl -sSL https://sdk.cloud.google.com > /tmp/gcl && \
+    bash /tmp/gcl --install-dir=/root/gcloud --disable-prompts \
+    && chown -R $(whoami) /root/gcloud
+
+# Install core dependencies
+RUN pip install --no-cache-dir -U draccus==0.10 google-api-python-client~=2.0 gcsfs google-cloud-storage google-cloud-storage-transfer s3fs regex requests numpy braceexpand deepdiff tqdm tqdm-loggable toml pandas pyarrow levanter==1.2.dev1190
+
+# NOTE(chris): We fix the lm-evaluation-harness commit hash for now since the newest main is broken because of
+# the new eval_logger change they made
+ARG LM_EVAL_EVAL_COMMIT_HASH=a40fe42aae2a5232448495c7bb5bf76aef100309
+# Install lm-evaluation-harness
+RUN mkdir -p /opt/lm_eval && chown -R $(whoami) /opt/lm_eval && \
+cd /opt/lm_eval && \
+git clone --depth 1 https://github.com/EleutherAI/lm-evaluation-harness && \
+cd lm-evaluation-harness && \
+git fetch origin $LM_EVAL_EVAL_COMMIT_HASH && \
+git checkout $LM_EVAL_EVAL_COMMIT_HASH && pip install --no-cache-dir -e ".[ifeval, math]"
+
+# Add /usr/lib/x86_64-linux-gnu/ to LD_LIBRARY_PATH so that bash prefers the systems
+# libtinfo.so over the conda-provided version. Using the conda-provided libtinfo.so
+# outputs a noisy warning because it doesn't include version information.
+ENV LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/lib/x86_64-linux-gnu/
+ENV LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/home/ray/anaconda3/lib
+ENV PATH=$PATH:/root/gcloud/google-cloud-sdk/bin
+
+WORKDIR /opt/marin

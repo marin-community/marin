@@ -75,7 +75,7 @@ llama_8b_train_config_phase2 = SimpleTrainConfig(
     # until step 660,000 we used: this
     # train_batch_size=1024,
     # learning_rate=1e-3,  # we get divergence with 2e-3
-    weight_decay=0.05,
+    # weight_decay=0.05,
     # # WSD-S
     # cycle_length=10000,
     # steps_per_eval=10000,
@@ -85,7 +85,7 @@ llama_8b_train_config_phase2 = SimpleTrainConfig(
     # decay=0.1,  # 10% of 5000 = 500 steps
     # lr_schedule="inv",
     # after 660,600 we changed things up:
-    train_batch_size=[ScheduleStep(start=0, value=1024), ScheduleStep(start=660_000, value=3072)],
+    train_batch_size=[ScheduleStep(until=660_000, value=1024), ScheduleStep(until=-1, value=3072)],
     # LR doesn't (yet) support the schedule stuff so we just set it to the new value
     # because we're increasing the batch size, we need to increase the LR by \sqrt(ratio), which is ≈1.7x
     learning_rate=1.7e-3,
