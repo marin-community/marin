@@ -63,6 +63,10 @@ jobs:
           npm install -g pandiff
           python -m pip install --upgrade pip
           pip install uv==0.5.11 toml
+          curl -sL https://lexbor.com/keys/lexbor_signing.key | sudo gpg --dearmor --output /etc/apt/trusted.gpg.d/lexbor.gpg
+          echo "deb https://packages.lexbor.com/ubuntu/ $(lsb_release -sc) liblexbor" | sudo tee /etc/apt/sources.list.d/lexbor.list
+          sudo apt update
+          sudo apt install build-essential python3-dev zlib1g-dev liblz4-dev libuchardet-dev liblexbor-dev libre2-dev
           python scripts/install_all_pip_dep.py
 
       - name: Start Ray cluster locally
