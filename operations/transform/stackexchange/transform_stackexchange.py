@@ -31,6 +31,7 @@ class StackExchangeExtractionConfig:
     extract_config: ExtractionConfig
     max_files: int | None = None
     shuffle_answers_template: bool = True
+    seed: int | None = None
 
 
 def prepare_md_template(
@@ -56,7 +57,8 @@ def prepare_md_template(
         else:
             template += f"\n\n# Answer\n> {answer['votes']} votes\n{md_answer}"
 
-    template += f"\n\n---\nTags: {', '.join(tags)}\n---"
+    if len(tags) > 0:
+        template += f"\n\n---\nTags: {', '.join(tags)}\n---"
 
     return template
 
@@ -69,6 +71,7 @@ def process_file(
     extract_method: str,
     extract_config: ExtractionConfig,
     shuffle_answers_template: bool = True,
+    seed: int | None = None,
 ) -> None:
     logger.info(f"Starting processing of file {input_file_path}")
     logger.info(f"Source: {input_file_path}")
@@ -82,6 +85,8 @@ def process_file(
                 row = json.loads(line)
 
                 try:
+                    if seed is not None:
+                        random.seed(seed + hash(row["id"]))
                     prepend_vote_count = random.random() < 0.5 if shuffle_answers_template else False
 
                     title = row["metadata"]["title"] if "title" in row["metadata"] else row["title"]
@@ -150,7 +155,7 @@ def process_stackexchange_dump(cfg: StackExchangeExtractionConfig) -> None:
                 continue
 
         output_file_path = os.path.join(cfg.output_path, file.split("/")[-1])
-        result_refs.append(process_file.remote(file, output_file_path, cfg.extract_method, cfg.extract_config))
+        result_refs.append(process_file.remote(file, output_file_path, cfg.extract_method, cfg.extract_config, cfg.seed))
     try:
         ray.get(result_refs)
     except Exception as e:

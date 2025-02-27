@@ -15,6 +15,21 @@ from marin.execution.executor import (
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("ray")
 
+# Tokenized Threads from Stack Exchange, Threaded here means that
+# we keep all the answers to the question in the same document, this also
+# contains metadata like votes and tags. Template is:
+#
+# Question:
+# <question>
+# Answer:
+# > <votes>
+# <answer_1>
+#
+# Answer 2:
+# > <votes>
+# <answer_2>
+#
+# Tags: <tags>
 
 stack_exchange_threaded_tokenized = default_tokenize(
     name="stack-exchange-threaded",
