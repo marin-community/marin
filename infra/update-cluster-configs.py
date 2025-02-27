@@ -6,18 +6,22 @@ import yaml
 
 this_path = os.path.dirname(os.path.abspath(__file__))
 
-template_path = os.path.join(this_path, "marin-cluster-template.yaml")
+cluster_template_path = os.path.join(this_path, "marin-cluster-template.yaml")
+vllm_template_path = os.path.join(this_path, "marin-vllm-template.yaml")
+
+# LAtest tahs ABh:  latest 9491ec2a 20250209
 
 DOCKER_TAGS = {
-    "us-central2": "6da1c9ed",
+    "us-central2": "89b461b3",
     "big-run": "6da1c9ed",
     "us-west4": "6da1c9ed",
     "europe-west4": "6da1c9ed",
-    "us-east1": "6da1c9ed",
+    "us-east1": "b63a1e90",
     "us-east5": "6da1c9ed",
     # NB: different naming convention because we have two zones in europe-west4
     "europe-west4-a": "6da1c9ed",
     "asia-northeast1": "6da1c9ed",
+    "marin-us-east5-b-vllm": "296d2ef0",
 }
 
 configs = {
@@ -93,6 +97,16 @@ configs = {
         "tpu_generation": "v6e",
         "min_workers": 0,
     },
+    "marin-us-east5-b-vllm": {
+        "NAME": "marin-us-east5-b-vllm",
+        "REGION": "us-east5",
+        "ZONE": "us-east5-b",
+        "BUCKET": "marin-us-east5",
+        "DOCKER_TAG": DOCKER_TAGS["marin-us-east5-b-vllm"],
+        "tpu_generation": "v6e-serve",
+        "min_workers": 2,
+        "VLLM": True,
+    },
 }
 
 generation_configs = {
@@ -116,11 +130,18 @@ generation_configs = {
         "slices": [8, 16, 32, 64, 128, 256],
         "num_tpus": 4,
     },
+    "v6e-serve": {
+        "runtime_version": "v2-alpha-tpuv6e",
+        "base_worker": "8",
+        "slices": [],
+        "num_tpus": 8,
+    },
 }
 
 
 def make_tpu_slice_config(generation, count) -> dict[str, dict]:
     slice_gen_name = "v5litepod" if generation == "v5e" else generation
+    slice_gen_name = "v6e" if generation == "v6e-serve" else slice_gen_name
     name = f"tpu_slice_{generation}_{count}"
     return {
         name: {
@@ -136,6 +157,12 @@ def make_tpu_slice_config(generation, count) -> dict[str, dict]:
     }
 
 
+def get_template_path(config_name):
+    if configs[config_name].get("VLLM", False):
+        return vllm_template_path
+    return cluster_template_path
+
+
 def make_tpu_worker_config(generation, count, min_workers=4):
     _, config = next(iter(make_tpu_slice_config(generation, count).items()))
     config["min_workers"] = min_workers
@@ -143,12 +170,11 @@ def make_tpu_worker_config(generation, count, min_workers=4):
 
 
 if __name__ == "__main__":
-
-    with open(template_path) as f:
-        template = jinja2.Template(f.read())
-
     for config_name, config in configs.items():
         with open(os.path.join(this_path, f"{config_name}.yaml"), "w") as f:
+            with open(get_template_path(config_name)) as f_template:
+                template = jinja2.Template(f_template.read())
+
             yaml_string = template.render(**config)
 
             # pyyaml strips comments, which i'd like to keep

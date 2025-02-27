@@ -69,6 +69,7 @@ def lm_mixture_data_config(
         weights: dict from names of datasets to their weights.
         shuffle: shuffling policy. int means era shuffling (~shuffle buffer).
         missing_weights_are_validation: whether to pad out missing weights with 0's, indicating validation-only sets
+        include_raw_paths: whether to include raw paths in the dataset config. This is mostly for logging purposes.
     """
     configs = {
         name: step_to_lm_mixture_component(step, include_raw_paths=include_raw_paths)

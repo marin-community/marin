@@ -22,8 +22,9 @@ from levanter.store.cache import CacheOptions
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 
-from experiments.evals.task_configs import CORE_TASKS, convert_to_levanter_task_config
-from experiments.llama import compute_num_parameters
+from experiments.anneal_config import AnnealConfig
+from experiments.evals.task_configs import CORE_TASKS, CORE_TASKS_PLUS_MMLU, convert_to_levanter_task_config
+from experiments.llama import compute_num_parameters, llama_8b
 from experiments.paloma import paloma_tokenized
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig
@@ -74,6 +75,52 @@ def default_tokenize(
 @lru_cache  # LRU to make the executor happier
 def default_validation_sets(tokenizer: str, base_path: str = "tokenized/") -> dict[str, TokenizerStep]:
     return paloma_tokenized(base_path=base_path, tokenizer=tokenizer)
+
+
+def simulated_epoching_train(
+    name: str,
+    tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig,
+    model_config: LmConfig,
+    train_config: SimpleTrainConfig,
+    target_budget: int,
+    tags: Sequence[str] = (),
+    use_default_validation: bool = True,
+    eval_harness_tasks: Sequence[EvalTaskConfig] = CORE_TASKS,
+) -> ExecutorStep:
+    """
+    Simulates the number of epochs seen in a full training run by sub-sampling individual datasets.
+    Otherwise, operates the same as default_train.
+
+    Args:
+        name:  The name of the training run. Will form the basis of the output path for the executor step.
+        tokenized:  The tokenized data to train on. This can be an InputName, ExecutorStep, or LMMixtureDatasetConfig.
+        model_config: Levanter LmConfig for the model to train.
+        train_config: SimpleTrainConfig for the training run.
+        target_budget: Target token budget to simulate.
+        tags: Any additional tags to add to the Wandb tracker.
+        use_default_validation: Whether to use the default validation sets (currently Paloma).
+        eval_harness_tasks: List of evaluation harness tasks. Defaults to the CORE set of tasks. Use () or [] to disable.
+    """
+    pretraining_data = _prepare_data_config(tokenized, use_default_validation)
+
+    # Extract sequence length from model configuration
+    seq_len = model_config.Pos.size
+
+    # Calculate the experiment token budget
+    experiment_budget = train_config.train_batch_size * train_config.num_train_steps * seq_len
+
+    simulated_pretraining_data = dataclasses.replace(
+        pretraining_data, target_budget=target_budget, experiment_budget=experiment_budget
+    )
+
+    logger.info(
+        f"Simulating Epoching Behavior, Experiment Tokens {experiment_budget}, "
+        + "Simulated Target Tokens {target_budget}"
+    )
+
+    return default_train(
+        name, simulated_pretraining_data, model_config, train_config, tags, use_default_validation, eval_harness_tasks
+    )
 
 
 def default_train(
@@ -185,10 +232,18 @@ def default_train(
                 weight_decay=(
                     train_config.weight_decay if train_config.weight_decay is not None else AdamConfig().weight_decay
                 ),
-                warmup=train_config.warmup if train_config.warmup is not None else AdamConfig().warmup,
-                decay=train_config.decay if train_config.decay is not None else AdamConfig().decay,
-                lr_schedule=train_config.lr_schedule if train_config.lr_schedule is not None else AdamConfig.lr_schedule,
-                cycle_length=train_config.cycle_length,
+                beta1=(train_config.beta1 if train_config.beta1 is not None else AdamConfig().beta1),
+                beta2=(train_config.beta2 if train_config.beta2 is not None else AdamConfig().beta2),
+                epsilon=(train_config.epsilon if train_config.epsilon is not None else AdamConfig().epsilon),
+                max_grad_norm=(
+                    train_config.max_grad_norm if train_config.max_grad_norm is not None else AdamConfig().max_grad_norm
+                ),
+                warmup=(train_config.warmup if train_config.warmup is not None else AdamConfig().warmup),
+                decay=(train_config.decay if train_config.decay is not None else AdamConfig().decay),
+                lr_schedule=(
+                    train_config.lr_schedule if train_config.lr_schedule is not None else AdamConfig().lr_schedule
+                ),
+                cycle_length=train_config.cycle_length,  # can be int, list[int], or None
                 min_lr_ratio=(
                     train_config.min_lr_ratio if train_config.min_lr_ratio is not None else AdamConfig().min_lr_ratio
                 ),
@@ -197,8 +252,52 @@ def default_train(
             data_seed=train_config.data_seed,
             eval_harness_steps=train_config.steps_per_task_eval or 10000,
             eval_harness=harness_config,
+            initialize_from_checkpoint_path=train_config.initialize_from_checkpoint_path,
         ),
         pip_dependency_groups=["tokenize_train"],
+    )
+
+
+def default_anneal(name: str, anneal_config: AnnealConfig):
+    imputed_checkpoint_steps = anneal_config.initialize_from_checkpoint_path.index("step-")
+    imputed_checkpoint_step = int(
+        anneal_config.initialize_from_checkpoint_path[imputed_checkpoint_steps + len("step-") :]
+    )
+
+    num_anneal_steps = anneal_config.num_anneal_training_tokens / (
+        anneal_config.train_batch_size * AnnealConfig.LLAMA_MAX_SEQ_LEN
+    )
+    num_train_steps = imputed_checkpoint_step + num_anneal_steps
+
+    # We need to simulate having a learning rate that decays from anneal_config.learning rate to 0
+    # over the course of the training. However, we have already taken anneal_config.checkpoint_step steps,
+    # so we need to calculate what the max lr would've been if we had started training with a linear schedule
+    # and then decayed it to 0 over the course of the training.
+    # The formula for the max lr is:
+    # max_lr = num_train_steps * slope
+    # slope = anneal_config.learning_rate / num_anneal_steps
+
+    learning_rate = num_train_steps * (anneal_config.learning_rate / num_anneal_steps)
+
+    anneal_stage_train_config = SimpleTrainConfig(
+        tpu_type=anneal_config.tpu_type,
+        node_count=anneal_config.node_count,
+        train_batch_size=anneal_config.train_batch_size,
+        num_train_steps=num_train_steps,
+        learning_rate=learning_rate,
+        weight_decay=anneal_config.weight_decay,
+        min_lr_ratio=anneal_config.min_lr_ratio,
+        steps_per_export=anneal_config.steps_per_export,
+        lr_schedule=anneal_config.lr_schedule,
+        initialize_from_checkpoint_path=anneal_config.initialize_from_checkpoint_path,
+    )
+
+    return default_train(
+        name=name,
+        tokenized=anneal_config.dataset_config,
+        model_config=llama_8b,
+        train_config=anneal_stage_train_config,
+        eval_harness_tasks=CORE_TASKS_PLUS_MMLU,
     )
 
 
