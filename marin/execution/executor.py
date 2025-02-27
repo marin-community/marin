@@ -485,8 +485,10 @@ class Executor:
             visited.add(step)
             in_stack.add(step)
 
+            info = self.step_infos[self.steps.index(step)]
+
             # only run if the step hasn't already been run
-            if self.statuses.get(step) not in [STATUS_SUCCESS]:
+            if get_status(info.output_path, None, {}) not in [STATUS_SUCCESS]:
                 for dep in self.dependencies[step]:
                     dfs(dep)
                 to_run.append(step)
@@ -649,14 +651,6 @@ class Executor:
         with fsspec.open(self.executor_info_path, "w") as f:
             print(json.dumps(asdict(self.executor_info), indent=2, cls=CustomJsonEncoder), file=f)
 
-    def read_statuses(self):
-        """Read the statuses of all the steps."""
-
-        output_paths_list = list(self.output_paths.values())
-
-        status_values = ray.get(self.status_actor.get_statuses.remote(output_paths_list))
-        self.statuses = {key: status for key, status in zip(self.output_paths.keys(), status_values, strict=False)}
-
     def run_step(self, step: ExecutorStep, dry_run: bool, force_run_failed: bool) -> None:
         """
         Return a Ray object reference to the result of running the `step`.
@@ -679,7 +673,7 @@ class Executor:
         for i, dep in enumerate(self.dependencies[step]):
             logger.info(f"  {dependency_index_str(i)} = {self.output_paths[dep]}")
 
-        dependencies = self._get_refs_for_active_deps(step)
+        dependencies = [self.refs[dep] for dep in self.dependencies[step]]
         name = f"execute_after_dependencies({get_fn_name(step.fn, short=True)})::{step.name})"
 
         if step.pip_dependency_groups is not None:
@@ -687,10 +681,7 @@ class Executor:
         else:
             pip_dependencies = None
 
-        if self.statuses[step] in [STATUS_SUCCESS]:
-            logger.info(f"Skipping {step.name} as it has already been run")
-
-        if not dry_run and self.statuses[step] not in [STATUS_SUCCESS]:
+        if not dry_run:
             step_name = f"{step.name}: {get_fn_name(step.fn)}"
             self.refs[step] = execute_after_dependencies.options(
                 name=name,
@@ -700,18 +691,6 @@ class Executor:
             ).remote(step.fn, step_name, config, dependencies, output_path, self.status_actor, force_run_failed)
         else:
             self.refs[step] = ray.put(None)  # Necessary as we call ray.get on all the deps in execute_after_dependencies
-
-    def _get_refs_for_active_deps(self, step):
-        """
-        Get the references for the active dependencies of the step. Active means dependencies
-        that are not already in SUCCESS state.
-        """
-        out = []
-        for dep in self.dependencies[step]:
-            if self.statuses[dep] not in [STATUS_SUCCESS]:
-                out.append(self.refs[dep])
-
-        return out
 
 
 def asdict_without_description(obj: dataclass) -> dict[str, Any]:
