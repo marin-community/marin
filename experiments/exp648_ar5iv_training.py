@@ -43,6 +43,7 @@ dolma_arxiv_no_problem_resiliparse_no_references_no_links_weights = dict(
     DOLMA_OLMO_MIXTURE_WEIGHTS,
     {"arxiv-no-problem-resiliparse-no-references-no-links": DOLMA_OLMO_MIXTURE_WEIGHTS["dolma/arxiv"]},
 )
+dolma_arxiv_no_problem_resiliparse_no_references_no_links_weights.pop("dolma/arxiv")
 
 arxiv_no_problem_resiliparse_no_references_no_links_llama3_tokenized = lm_mixture_data_config(
     components=dolma_arxiv_no_problem_resiliparse_no_references_no_links_tokenization_steps,
@@ -80,6 +81,8 @@ dolma_arxiv_no_problem_resiliparse_no_references_with_links_weights = dict(
     DOLMA_OLMO_MIXTURE_WEIGHTS,
     {"arxiv-no-problem-resiliparse-no-references-with-links": DOLMA_OLMO_MIXTURE_WEIGHTS["dolma/arxiv"]},
 )
+dolma_arxiv_no_problem_resiliparse_no_references_with_links_weights.pop("dolma/arxiv")
+
 arxiv_no_problem_resiliparse_with_pf_subbed_no_references_with_links_llama3_tokenized = lm_mixture_data_config(
     components=dolma_arxiv_no_problem_resiliparse_no_references_with_links_tokenization_steps,
     weights=dolma_arxiv_no_problem_resiliparse_no_references_with_links_weights,
@@ -115,6 +118,8 @@ dolma_arxiv_no_problem_resiliparse_with_references_no_links_weights = dict(
     DOLMA_OLMO_MIXTURE_WEIGHTS,
     {"arxiv-no-problem-resiliparse-with-references-no-links": DOLMA_OLMO_MIXTURE_WEIGHTS["dolma/arxiv"]},
 )
+dolma_arxiv_no_problem_resiliparse_with_references_no_links_weights.pop("dolma/arxiv")
+
 arxiv_no_problem_resiliparse_with_pf_subbed_no_references_no_links_llama3_tokenized = lm_mixture_data_config(
     components=dolma_arxiv_no_problem_resiliparse_with_references_no_links_tokenization_steps,
     weights=dolma_arxiv_no_problem_resiliparse_with_references_no_links_weights,
@@ -150,6 +155,8 @@ dolma_arxiv_no_problem_resiliparse_with_references_with_links_weights = dict(
     DOLMA_OLMO_MIXTURE_WEIGHTS,
     {"arxiv-no-problem-resiliparse-with-references-with-links": DOLMA_OLMO_MIXTURE_WEIGHTS["dolma/arxiv"]},
 )
+dolma_arxiv_no_problem_resiliparse_with_references_with_links_weights.pop("dolma/arxiv")
+
 arxiv_no_problem_resiliparse_with_pf_subbed_no_references_with_links_llama3_tokenized = lm_mixture_data_config(
     components=dolma_arxiv_no_problem_resiliparse_with_references_with_links_tokenization_steps,
     weights=dolma_arxiv_no_problem_resiliparse_with_references_with_links_weights,

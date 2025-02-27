@@ -30,6 +30,7 @@ dolma_wiki_readability_tokenization_steps = dict(tokenized_dolma_steps, {"wiki-r
 wiki_readability_weights = dict(
     DOLMA_OLMO_MIXTURE_WEIGHTS, {"wiki-readability": DOLMA_OLMO_MIXTURE_WEIGHTS["dolma/wiki"]}
 )
+wiki_readability_weights.pop("dolma/wiki")
 
 wiki_readability_subbed_dolma_llama3_tokenized = lm_mixture_data_config(
     components=dolma_wiki_readability_tokenization_steps,
@@ -59,7 +60,7 @@ dolma_wiki_resiliparse_with_preserve_formatting_tokenization_steps = dict(
 wiki_resiliparse_with_preserve_formatting_weights = dict(
     DOLMA_OLMO_MIXTURE_WEIGHTS, {"wiki-resiliparse-with-preserving-formatting": DOLMA_OLMO_MIXTURE_WEIGHTS["dolma/wiki"]}
 )
-
+wiki_resiliparse_with_preserve_formatting_weights.pop("dolma/wiki")
 wiki_resiliparse_with_preserve_formatting_subbed_dolma_llama3_tokenized = lm_mixture_data_config(
     components=dolma_wiki_resiliparse_with_preserve_formatting_tokenization_steps,
     weights=wiki_resiliparse_with_preserve_formatting_weights,

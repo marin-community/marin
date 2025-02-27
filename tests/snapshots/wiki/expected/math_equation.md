@@ -27,7 +27,7 @@ $y=y\_{c}+y\_{p}.$
 
 If $g(x)$ consists of the sum of two functions $h(x)+w(x)$ and we say that $y\_{1}$ is the solution based on $h(x)$ and $y\_{2}$ the solution based on $w(x)$. Then, using a superposition principle, we can say that the particular integral $y\_{p}$ is 
 
-$$y\_{p}=y\_{1}+y\_{2}.$$  
+$$y\_{p}=y\_{1}}+y\_{2}}.$$  
 
 ## Typical forms of the particular integral
 
@@ -37,10 +37,10 @@ In order to find the particular integral, we need to 'guess' its form, with some
 | --- | --- |
 | $ke^{ax}$ | $Ce^{ax}$ |
 | $kx^{n},\\;n=0,1,2,\ldots $ | $\sum \_{i=0}^{n}K\_{i}x^{i}$ |
-| $k\cos(ax){\text{ or }k\sin(ax)}$ | $K\cos(ax)+M\sin(ax)$ |
-| $ke^{ax}\cos(bx){\text{ or }ke^{ax}\sin(bx)}$ | $e^{ax}(K\cos(bx)+M\sin(bx))$ |
-| $\left(\sum \_{i=0}^{n}k\_{i}x^{i}\right)\cos(bx){\text{ or }\ \left(\sum \_{i=0}^{n}k\_{i}x^{i}\right)\sin(bx)}$ | $\left(\sum \_{i=0}^{n}Q\_{i}x^{i}\right)\cos(bx)+\left(\sum \_{i=0}^{n}R\_{i}x^{i}\right)\sin(bx)$ |
-| $\left(\sum \_{i=0}^{n}k\_{i}x^{i}\right)e^{ax}\cos(bx){\text{ or }\left(\sum \_{i=0}^{n}k\_{i}x^{i}\right)e^{ax}\sin(bx)}$ | $e^{ax}\left(\left(\sum \_{i=0}^{n}Q\_{i}x^{i}\right)\cos(bx)+\left(\sum \_{i=0}^{n}R\_{i}x^{i}\right)\sin(bx)\right)$ |
+| $k\cos(ax){\text{ or }}k\sin(ax)$ | $K\cos(ax)+M\sin(ax)$ |
+| $ke^{ax}\cos(bx){\text{ or }}ke^{ax}\sin(bx)$ | $e^{ax}(K\cos(bx)+M\sin(bx))$ |
+| $\left(\sum \_{i=0}^{n}k\_{i}x^{i}\right)\cos(bx){\text{ or }}\ \left(\sum \_{i=0}^{n}k\_{i}x^{i}\right)\sin(bx)$ | $\left(\sum \_{i=0}^{n}Q\_{i}x^{i}\right)\cos(bx)+\left(\sum \_{i=0}^{n}R\_{i}x^{i}\right)\sin(bx)$ |
+| $\left(\sum \_{i=0}^{n}k\_{i}x^{i}\right)e^{ax}\cos(bx){\text{ or }}\left(\sum \_{i=0}^{n}k\_{i}x^{i}\right)e^{ax}\sin(bx)$ | $e^{ax}\left(\left(\sum \_{i=0}^{n}Q\_{i}x^{i}\right)\cos(bx)+\left(\sum \_{i=0}^{n}R\_{i}x^{i}\right)\sin(bx)\right)$ |
 
 If a term in the above particular integral for *y* appears in the homogeneous solution, it is necessary to multiply by a sufficiently large power of *x* in order to make the solution independent. If the function of *x* is a sum of terms in the above table, the particular integral can be guessed using a sum of the corresponding terms for *y*. 
 
@@ -76,17 +76,17 @@ $$\begin{cases}1=4B\_{0}\\0=2A\_{0}+2B\_{1}\\0=-4A\_{0}\\0=-2A\_{1}+2B\_{0}\end{
 
 which has the solution 
 
-$$A\_{0}=0,\quad A\_{1}=B\_{0}={\frac {1}{4},\quad B\_{1}=0.}$$  
+$$A\_{0}=0,\quad A\_{1}=B\_{0}={\frac {1}{4}},\quad B\_{1}=0.$$  
 
 We then have a particular integral 
 
-$$y\_{p}={\frac {1}{4}t\cos t+{\frac {1}{4}t^{2}\sin t.}}$$  
+$$y\_{p}={\frac {1}{4}}t\cos t+{\frac {1}{4}}t^{2}\sin t.$$  
 
 ### Example 2
 
 Consider the following linear nonhomogeneous differential equation: 
 
-$$\frac {dy}{dx}=y+e^{x}.$$  
+$$\frac {dy}{dx}}=y+e^{x}.$$  
 
 This is like the first example above, except that the nonhomogeneous part ( $e^{x}$) is *not* linearly independent to the general solution of the homogeneous part ( $c\_{1}e^{x}$); as a result, we have to multiply our guess by a sufficiently large power of *x* to make it linearly independent. 
 
@@ -96,7 +96,7 @@ $$y\_{p}=Axe^{x}.$$
 
 By substituting this function and its derivative into the differential equation, one can solve for *A*: 
 
-$$\frac {d}{dx}\left(Axe^{x}\right)=Axe^{x}+e^{x}$$  
+$$\frac {d}{dx}}\left(Axe^{x}\right)=Axe^{x}+e^{x$$  
 
 $$Axe^{x}+Ae^{x}=Axe^{x}+e^{x}$$  
 
@@ -110,7 +110,7 @@ $$y=c\_{1}e^{x}+xe^{x}.$$
 
 Find the general solution of the equation: 
 
-$$\frac {dy}{dt}=t^{2}-y$$  
+$$\frac {dy}{dt}}=t^{2}-y$$  
 
 $t^{2}$ is a polynomial of degree 2, so we look for a solution using the same form, 
 
