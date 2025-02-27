@@ -41,7 +41,7 @@ class AlpacaEvaluator(VllmTpuEvaluator):
                 # Could be any arbitrary prompt template but the Cohere one prompts
                 # with the just instruction without any prompt engineering: {instruction}
                 # https://github.com/tatsu-lab/alpaca_eval/blob/main/src/alpaca_eval/models_configs/cohere/prompt.txt
-                "prompt_template": "cohere/prompt.txt",
+                "prompt_template": "Mixtral-8x7B-Instruct-v0.1/togetherai_prompt.txt",
                 "fn_completions": "vllm_local_completions",
                 "completions_kwargs": {
                     "model_name": model_name_or_path,
@@ -54,6 +54,7 @@ class AlpacaEvaluator(VllmTpuEvaluator):
                         # "enforce_eager": True, # Uncomment if you want to enforce eager execution to save memory
                         "device": "tpu",
                     },
+                    "is_chatml_prompt": True,
                 },
             }
         }
@@ -99,7 +100,8 @@ class AlpacaEvaluator(VllmTpuEvaluator):
 
             # Construct the command and run AlpacaEval
             max_eval_instances = max_eval_instances or self.DEFAULT_MAX_INSTANCES
-            results_path: str = os.path.join(self.BASE_RESULTS_PATH, model_name_or_path)
+            model_name = os.path.basename(model_name_or_path)
+            results_path: str = os.path.join(AlpacaEvaluator.BASE_RESULTS_PATH, model_name)
             run_bash_command(
                 [
                     "alpaca_eval",
@@ -120,4 +122,4 @@ class AlpacaEvaluator(VllmTpuEvaluator):
             raise RuntimeError("AlpacaEval failed. Please check the logs for more information.") from e
         finally:
             self.cleanup(model)
-            shutil.rmtree(self.BASE_RESULTS_PATH, ignore_errors=True)
+            shutil.rmtree(AlpacaEvaluator.BASE_RESULTS_PATH, ignore_errors=True)
