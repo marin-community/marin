@@ -51,7 +51,6 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
         try:
             # NOTE(chris): This is not supported on TPUs
             # set_cuda_visible_devices()
-
             # Download the model from GCS or HuggingFace
             model_name_or_path: str = self.download_model(model)
 
