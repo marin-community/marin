@@ -32,7 +32,6 @@ dependencies = [
     "jax==0.4.35",
     "multiprocess==0.70.16",
     "levanter>=1.2.dev1163",
-    "resiliparse_dom @ git+https://github.com/stanford-crfm/chatnoir-resiliparse@da2ff85fe51310484cf9435565b2bdde2a23708b#egg=resiliparse_dom&subdirectory=resiliparse_dom",
 ]
 
 [project.optional-dependencies]
