@@ -4,8 +4,8 @@ import dataclasses
 import logging
 import math
 
-from experiments.defaults import default_train
 from experiments.dclm.tokenize_dclm import dclm_mixture_config_llama3
+from experiments.defaults import default_train
 from experiments.llama import llama_1_4b, llama_8b
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import executor_main, versioned
@@ -25,10 +25,6 @@ def step_target(token_target, batch_size, seq_len):
     nice_round_step_count = math.ceil(actual_step_count / 1000) * 1000
     return nice_round_step_count
 
-def format_train_config(prefix: str, config: SimpleTrainConfig):
-    return (
-        f"{prefix}-lr={config.learning_rate}"
-    )
 
 num_train_steps = step_target(TOKEN_TARGETS, BATCH_SIZE, SEQ_LEN)
 
