@@ -33,7 +33,7 @@ dclm_components_llama3 = {
     ),
     "starcoderdata": default_tokenize(
         name="starcoderdata", dataset=starcoderdata, tokenizer=llama3_tokenizer, text_key="content"
-        ),
+    ),
     "proofpile_2": default_tokenize(
         name="proofpile_2",
         dataset=proofpile_2,
