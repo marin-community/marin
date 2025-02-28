@@ -206,7 +206,7 @@ llama_70b_tootsie_warmstart = dataclasses.replace(
 # warmstarted from llama_22b_train_config at 200,000
 llama_22b_train_config_ema = SimpleTrainConfig(
     tpu_type="v6e-128",
-    node_count=3,
+    node_count=4,
     # train_batch_size=1024,
     train_batch_size=[ScheduleStep(start=0, value=1024), ScheduleStep(start=200_000, value=3072)],
     num_train_steps=1_000_000,
