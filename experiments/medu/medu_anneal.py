@@ -5,10 +5,10 @@ Link to issue: https://github.com/stanford-crfm/marin/issues/820
 """
 
 from experiments.anneal_config import AnnealConfig
+from experiments.dclm.tokenize_dclm import dclm_components_llama3
 from experiments.defaults import default_anneal
-from experiments.dolmino.tokenize_dolmino import get_dolmino_step
 from experiments.llama import llama3_tokenizer
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path
+from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
 
@@ -21,16 +21,16 @@ medu_economics3plus_tokenized = ExecutorStep(
         train_paths=[f"{BASE_MEDU_PATH}/{FILE_PATTERN}"],
         validation_paths=[],
         cache_path=this_output_path(),
-        tokenizer=llama3_tokenizer,
+        tokenizer=versioned(llama3_tokenizer),
     ),
     pip_dependency_groups=["tokenize_train"],
 )
 
-dolmino_dclm = get_dolmino_step("dclm")
+dclm = dclm_components_llama3["dclm_baseline"]
 dataset_config = lm_mixture_data_config(
     components={
         "medu-economics-3plus": medu_economics3plus_tokenized,
-        "dclm": dolmino_dclm,
+        "dclm": dclm,
     },
     weights={"medu-economics-3plus": 0.30, "dclm": 0.70},
 )
@@ -38,12 +38,25 @@ dataset_config = lm_mixture_data_config(
 medu_anneal_config = AnnealConfig(
     dataset_config=dataset_config,
     num_anneal_training_tokens=8_400_000_000,
+    tpu_type="v5litepod-128",
 )
 
 medu_anneal_model = default_anneal(
-    name="llama-8b-anneal-medu-economics-3plus",
+    name="llama-8b-198k-dclm-baseline-medu-econ-3plus",
     anneal_config=medu_anneal_config,
 )
 
+control_model = default_anneal(
+    name="llama-8b-198k-dclm-baseline",
+    anneal_config=AnnealConfig(
+        dataset_config=lm_mixture_data_config(
+            components={"dclm": dclm},
+            weights={"dclm": 1.0},
+        ),
+        num_anneal_training_tokens=8_400_000_000,
+        tpu_type="v5litepod-128",
+    ),
+)
+
 if __name__ == "__main__":
-    executor_main([medu_anneal_model, medu_economics3plus_tokenized])
+    executor_main([medu_anneal_model, medu_economics3plus_tokenized, control_model])
