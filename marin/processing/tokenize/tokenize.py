@@ -88,11 +88,14 @@ class TokenizeConfig:
         if not self.train_paths and not self.validation_paths:
             raise ValueError("At least one of train_paths or validation_paths must be specified")
 
-        assert isinstance(self.train_paths, Sequence)
-        assert isinstance(self.validation_paths, Sequence)
+        assert not isinstance(self.train_paths, str | InputName)
+        assert not isinstance(self.validation_paths, str | InputName)
 
-        assert "/" not in self.validation_paths, "don't use the entire fs for validation paths!"
-        assert "/" not in self.train_paths, "don't use the entire fs for train paths!"
+        if isinstance(self.train_paths, Sequence):
+            assert "/" not in self.train_paths, "don't use the entire fs for train paths!"
+
+        if isinstance(self.validation_paths, Sequence):
+            assert "/" not in self.validation_paths, "don't use the entire fs for validation paths!"
 
 
 def tokenize(config: TokenizeConfig):
