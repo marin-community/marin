@@ -36,6 +36,8 @@ WS_EMA_DEFAULT_TRAIN_CONFIG = SimpleTrainConfig(
     decay=0.0,  # no decay
     lr_schedule="constant",
     ema_beta=0.995,
+    steps_per_eval=500,
+    steps_per_task_eval=500,
 )
 
 
