@@ -2,6 +2,7 @@ import json
 import os
 import random
 import re
+import shutil
 import tempfile
 import time
 from dataclasses import asdict, dataclass
@@ -445,3 +446,64 @@ def test_run_only_some_steps():
         results = read_log(log)
         assert len(results) == 2
         assert (results[0] is None and results[1]["m"] == 10) or (results[1] is None and results[0]["m"] == 10)
+
+
+def test_skip_grand_deps():
+    """Skip grand deps if their children are present, even if grand deps are absent."""
+    log = create_log()
+
+    def fn(config: MyConfig | None):
+        append_log(log, config)
+
+    a = ExecutorStep(name="a", fn=fn, config=None, override_output_path="a")
+    b = ExecutorStep(
+        name="b",
+        fn=fn,
+        config=MyConfig(
+            input_path=output_path_of(a, "sub"),
+            output_path=this_output_path(),
+            n=versioned(3),
+            m=4,
+        ),
+    )
+
+    c = ExecutorStep(
+        name="c",
+        fn=fn,
+        config=MyConfig(
+            input_path=output_path_of(b, "sub"),
+            output_path=this_output_path(),
+            n=versioned(3),
+            m=4,
+        ),
+    )
+
+    # first, run a and b
+    with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
+        executor = create_executor(temp_dir)
+        executor.run(steps=[b])
+
+        results = read_log(log)
+        assert len(results) == 2
+        assert results[0] is None
+        assert results[1]["m"] == 4
+
+        # remove a's dir and all its contents
+        shutil.rmtree(os.path.join(temp_dir, "a"))
+
+        # now, run b and c
+        executor.run(steps=[c], run_only=["c"])
+
+        results = read_log(log)
+        assert len(results) == 3
+        assert results[0] is None
+        assert results[1]["m"] == 4
+        assert results[2]["m"] == 4
+
+        # make sure a was not run
+        assert not os.path.exists(os.path.join(temp_dir, "a"))
+
+        # clean up
+
+
+
