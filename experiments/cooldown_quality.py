@@ -21,14 +21,15 @@ NUM_ANNEAL_TOKENS: int = 50_000_000_000
 
 def default_quality_ablation(candidate_tokenized: TokenizerStep, tpu_type: str = "v5litepod-128") -> ExecutorStep:
     """
-    Creates a model configuration for evaluating a candidate dataset split.
+    Evaluates the quality of the candidate_tokenized dataset by annealing the learning rate of a Tootsie run
+    on a data mixture designed to highlight the possible benefits of the candidate on dowstream benchmarks.
 
     Args:
-        candidate_tokenized: The tokenized candidate dataset split to evaluate
+        candidate_tokenized: The tokenized candidate dataset to evaluate
         tpu_type: The TPU type to use for training
 
     Returns:
-        The step to run the ablation
+        Annealed model on the ablation mixture
     """
     dolmino_dclm = dclm_components_llama3["dclm_baseline"]
     flan = tokenize_dolma_steps["dolma/flan"]
