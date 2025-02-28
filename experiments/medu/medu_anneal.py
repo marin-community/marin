@@ -5,19 +5,26 @@ Link to issue: https://github.com/stanford-crfm/marin/issues/820
 """
 
 from experiments.anneal_config import AnnealConfig
-from experiments.defaults import default_anneal, default_tokenize
+from experiments.defaults import default_anneal
 from experiments.dolmino.tokenize_dolmino import get_dolmino_step
 from experiments.llama import llama3_tokenizer
-from experiments.medu.medu_infer import medu_consolidate
-from marin.execution.executor import executor_main
+from marin.execution.executor import ExecutorStep, executor_main, this_output_path
+from marin.processing.tokenize import TokenizeConfig, tokenize
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
 
-medu_economics3plus_tokenized = default_tokenize(
-    name="medu-economics-3plus",
-    dataset=medu_consolidate,
-    tokenizer=llama3_tokenizer,
+BASE_MEDU_PATH = "gs://marin-us-east5/documents/quality_filtering/dclm-global-shard-01-of-10-medu-economics-3plus-bbb96b"
+FILE_PATTERN = "**/*.jsonl.zst"
+medu_economics3plus_tokenized = ExecutorStep(
+    name="tokenized/medu-economics-3plus",
+    fn=tokenize,
+    config=TokenizeConfig(
+        train_paths=[f"{BASE_MEDU_PATH}/{FILE_PATTERN}"],
+        validation_paths=[],
+        cache_path=this_output_path(),
+        tokenizer=llama3_tokenizer,
+    ),
+    pip_dependency_groups=["tokenize_train"],
 )
-
 
 dolmino_dclm = get_dolmino_step("dclm")
 dataset_config = lm_mixture_data_config(
@@ -39,4 +46,4 @@ medu_anneal_model = default_anneal(
 )
 
 if __name__ == "__main__":
-    executor_main([medu_anneal_model])
+    executor_main([medu_anneal_model, medu_economics3plus_tokenized])
