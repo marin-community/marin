@@ -31,7 +31,11 @@ dependencies = [
     # We are keeping levanter deps for now. @TODO :: Remove them
     "jax==0.4.35",
     "multiprocess==0.70.16",
+<<<<<<< HEAD
     "levanter>=1.2.dev1207",
+=======
+    "levanter>=1.2.dev1206",
+>>>>>>> main
 ]
 
 [project.optional-dependencies]
@@ -79,6 +83,7 @@ tokenize_train = [
     "jax>=0.4.34",
     "multiprocess==0.70.16",
     "levanter>=1.2.dev1207",
+    "haliax==1.4.dev330",
     "lm-eval@git+https://github.com/stanford-crfm/lm-evaluation-harness.git",
 ]
 
