@@ -9,9 +9,8 @@ from collections.abc import Sequence
 from datetime import timedelta
 from functools import lru_cache
 
-from haliax.quantization import QuantizationConfig
-
 import jmp
+from haliax.quantization import QuantizationConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.compat.hf_checkpoints import load_tokenizer
 from levanter.data.text import LMMixtureDatasetConfig
