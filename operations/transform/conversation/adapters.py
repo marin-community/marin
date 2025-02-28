@@ -25,18 +25,30 @@ class InputDatasetFormat(str, Enum):
     | "What is the capital of France?"     | "Paris"  |
     | "What is 2 + 2?"                     |   "4"    |
 
+
     INSTRUCT_COLUMN_RESPONSE example:
     In the huggingface dataset, there exists a question column and a responses column with a list
     containing a single dictionary with model name and response.
     |             Question              |                 Responses                |
     | --------------------------------- | ---------------------------------------- |
-    | "What is 2 + 2?"                 | [{"response_model": "Model-X",           |
-    |                                   |   "response": "The answer is 4"}]       |
+    | "What is 2 + 2?"                  | [{"response_model": "Model-X",           |
+    |                                   |   "response": "The answer is 4"}]        |
+
+
+    INSTRUCT_MSG_RESPONSE example:
+    In the huggingface dataset, there exists an Instruction column with a single message and a
+    response column with a string.
+    |             Question              |                 Responses                |
+    | --------------------------------- | ---------------------------------------- |
+    |[ { "role": "user", "content": "a  | "The car's speed is calculated by        |
+    |  car runs 375 km in 3 hours.      |  dividing the distance traveled by the   |
+    |  what's the car's speed ?" }]     |  time taken. Answer is 375/3 = 125 kmph" |
     """
 
     SINGLE_COLUMN_MULTI_TURN: str = "messages"
     INSTRUCTION_RESPONSE: str = "instruction_response"
     INSTRUCT_COLUMN_RESPONSE: str = "instruct_column_response"
+    INSTRUCT_MSG_RESPONSE: str = "instruct_msg_response"
 
 
 @dataclass
@@ -115,6 +127,22 @@ class TransformAdapter:
             messages.append(OpenAIChatMessage(role="user", content=instruction))
             messages.append(OpenAIChatMessage(role="assistant", content=response_content))
             return messages
+        elif self.dataset_format == InputDatasetFormat.INSTRUCT_MSG_RESPONSE:
+            messages = []  # Initialize
+            # Get data
+            instruction = row[self.instruction_column]  # List of dict
+            responses = row[self.response_column]  # Single string
+            if (responses is None) or (len(instruction) > 1) or (self.role_key not in instruction[0]):
+                # We do not process rows that have more than one messages.
+                # This occurs in Dolphin-R1 reasoning, where instructions are
+                # sometimes part of the 'system' prompt instead of 'user' prompt.
+                # We handle misaligned data gracefully rather than crash.
+                return None
+            else:
+                instruction_content = instruction[0][self.content_key]
+                messages.append(OpenAIChatMessage(role="user", content=instruction_content))
+                messages.append(OpenAIChatMessage(role="assistant", content=responses))
+                return messages
         else:
             raise ValueError(f"Invalid dataset format: {self.dataset_format}")
 
@@ -245,9 +273,24 @@ register_adapter(
 # Define adapter (parser) for dataset
 register_adapter(
     TransformAdapter(
-        source="cognitivecomputations/dolphin-r1",
+        source="cognitivecomputations/dolphin-r1-nonreasoning",
         dataset_format=InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN,
         conversation_column="messages",
+        role_key="role",
+        user_value="user",
+        assistant_value="assistant",
+        system_value="system",
+        content_key="content",
+    )
+)
+
+# Define adapter (parser) for dataset
+register_adapter(
+    TransformAdapter(
+        source="cognitivecomputations/dolphin-r1-reasoning",
+        dataset_format=InputDatasetFormat.INSTRUCT_MSG_RESPONSE,
+        instruction_column="messages",
+        response_column="answer",
         role_key="role",
         user_value="user",
         assistant_value="assistant",
