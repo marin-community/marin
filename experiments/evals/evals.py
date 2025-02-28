@@ -168,7 +168,7 @@ def evaluate_levanter_lm_evaluation_harness(
     Create an ExecutorStep to evaluate the model using Levanter LM Evaluation Harness.
     """
     return ExecutorStep(
-        name=f"evaluation/levanter_lm_evaluation_harness/{model_name}",
+        name=f"evaluation/lm_evaluation_harness_levanter/lmeval_debug_{model_name}",
         fn=evaluate,
         config=EvaluationConfig(
             evaluator="levanter_lm_evaluation_harness",

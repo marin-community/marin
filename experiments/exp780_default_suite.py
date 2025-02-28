@@ -14,7 +14,7 @@ from marin.execution.executor import executor_main
 from marin.scaling_laws.create_ladder_suite import scaling_law_suite
 
 default_suite = scaling_law_suite(
-    sweep_name="scaling-law-suite-default",
+    sweep_name="scaling-law-suite-default-v2",
     tokenized=dclm_mixture_config_llama3,
     tags=["scaling_laws"],
 )
@@ -39,7 +39,7 @@ if __name__ == "__main__":
     executor_main(
         steps=[
             *default_suite,
-            default_suite_scaling_laws_pred,
+            #default_suite_scaling_laws_pred,
         ],
         description="suite + predictions for scaling laws on DCLM-Baseline+StarCoder+ProofPile mix",
     )
