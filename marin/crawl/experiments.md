@@ -1,5 +1,10 @@
 # Experiment Log
 
+- [fineweb-edu-10M](#fineweb-edu-10m)
+- [open-web-math-10M](#open-web-math-10m)
+- [fineweb-edu-10M-cc-deduplicated](#fineweb-edu-10m-cc-deduplicated)
+- [open-web-math-10M-cc-deduplicated](#open-web-math-10m-cc-deduplicated)
+
 ## FineWeb-Edu-10M
 
 This setting looks at 10M unique sampled outlinks from the original FineWeb-Edu
