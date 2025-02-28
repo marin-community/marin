@@ -171,7 +171,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
         name=os.path.join(prefix, "tokenized"),
         fn=tokenize,
         config=TokenizeConfig(
-            train_paths=output_path_of(consolidate_step),
+            train_paths=[output_path_of(consolidate_step)],
             validation_paths=[],
             cache_path=this_output_path(),
             tokenizer=versioned(tokenizer),
