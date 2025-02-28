@@ -98,3 +98,17 @@ llama_3_1_8b_instruct = download_model_step(
         hf_revision="0e9e39f",
     )
 )
+
+llama_3_1_8b = download_model_step(
+    ModelConfig(
+        hf_repo_id="meta-llama/Llama-3.1-8B",
+        hf_revision="d04e592",
+    )
+)
+
+tulu_3_1_8b_sft = download_model_step(
+    ModelConfig(
+        hf_repo_id="allenai/Llama-3.1-Tulu-3-8B-SFT",
+        hf_revision="f2a0b46",
+    )
+)
