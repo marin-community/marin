@@ -230,7 +230,11 @@ def extract_text_from_warc(
 @ray.remote(
     memory=4 * 1024 * 1024 * 1024,
 )
-def get_shard_url_filter_results(input_path: str):
+def get_shard_url_filter_results(input_path: str) -> list[bool | tuple[bool, str]]:
+    """
+    Given an input path to a parquet with fineweb-edu examples, run the
+    fineweb URL filter on the examples.
+    """
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     logger.info("Applying the URL filter")
     documents_to_classify = load_extracted_text_as_datatrove_documents(input_path)
@@ -245,7 +249,11 @@ def get_shard_url_filter_results(input_path: str):
 @ray.remote(
     memory=4 * 1024 * 1024 * 1024,
 )
-def get_shard_langid_filter_results(input_path: str):
+def get_shard_langid_filter_results(input_path: str) -> list[bool]:
+    """
+    Given an input path to a parquet with fineweb-edu examples, run the
+    fineweb language ID filter on the examples.
+    """
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     logger.info("Applying the LangID filter")
     documents_to_classify = load_extracted_text_as_datatrove_documents(input_path)
@@ -260,7 +268,11 @@ def get_shard_langid_filter_results(input_path: str):
 @ray.remote(
     memory=4 * 1024 * 1024 * 1024,
 )
-def get_shard_gopher_repetition_filter_results(input_path: str):
+def get_shard_gopher_repetition_filter_results(input_path: str) -> list[bool | tuple[bool, str]]:
+    """
+    Given an input path to a parquet with fineweb-edu examples, run the
+    fineweb gopher repetition filter on the examples.
+    """
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     logger.info("Applying the Gopher repetition filter")
     documents_to_classify = load_extracted_text_as_datatrove_documents(input_path)
@@ -276,7 +288,11 @@ def get_shard_gopher_repetition_filter_results(input_path: str):
 @ray.remote(
     memory=4 * 1024 * 1024 * 1024,
 )
-def get_shard_gopher_quality_filter_results(input_path: str):
+def get_shard_gopher_quality_filter_results(input_path: str) -> list[bool | tuple[bool, str]]:
+    """
+    Given an input path to a parquet with fineweb-edu examples, run the
+    fineweb gopher quality filter on the examples.
+    """
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     logger.info("Applying the Gopher quality filter")
     documents_to_classify = load_extracted_text_as_datatrove_documents(input_path)
@@ -292,7 +308,11 @@ def get_shard_gopher_quality_filter_results(input_path: str):
 @ray.remote(
     memory=4 * 1024 * 1024 * 1024,
 )
-def get_shard_c4_quality_filter_results(input_path: str):
+def get_shard_c4_quality_filter_results(input_path: str) -> list[bool | tuple[bool, str]]:
+    """
+    Given an input path to a parquet with fineweb-edu examples, run the
+    fineweb C4 quality filter on the examples.
+    """
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     logger.info("Applying the C4 quality filter")
     documents_to_classify = load_extracted_text_as_datatrove_documents(input_path)
@@ -305,7 +325,11 @@ def get_shard_c4_quality_filter_results(input_path: str):
     return examples_c4_quality_filter_results
 
 
-def load_extracted_text_as_datatrove_documents(input_path: str):
+def load_extracted_text_as_datatrove_documents(input_path: str) -> list[Document]:
+    """
+    Given an input path to a parquet with fineweb-edu examples, convert them to
+    documents for use with datatrove filters.
+    """
     logger.info("Reading input path with extracted text")
     with fsspec.open(input_path, block_size=1 * 1024 * 1024 * 1024) as f:
         examples = pd.read_parquet(f).to_dict("records")
@@ -325,7 +349,11 @@ def load_extracted_text_as_datatrove_documents(input_path: str):
     num_cpus=8,
     resources={"TPU": 4, "TPU-v4-8-head": 1},
 )
-def get_shard_quality_classifier_results(input_path: str):
+def get_shard_quality_classifier_results(input_path: str) -> list[float]:
+    """
+    Given an input path to a parquet with fineweb-edu examples, run the
+    fineweb quality classifier on the examples.
+    """
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     logger.info("Loading quality classifier...")
     # Load the quality classifier
