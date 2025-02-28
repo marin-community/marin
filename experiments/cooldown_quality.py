@@ -25,7 +25,7 @@ class QualityAblationConfig:
 
     # Dataset components and weights
     baseline_component: TokenizerStep = dclm_components_llama3["dclm_baseline"]
-    mcq_component: TokenizerStep = tokenize_dolma_steps["dolma/flan"]
+    mcq_component: TokenizerStep = tokenize_dolma_steps()["dolma/flan"]
     baseline_weight: float = 0.7
     mcq_weight: float = 0.15
     candidate_weight: float = 0.15
