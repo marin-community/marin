@@ -9,6 +9,8 @@ from collections.abc import Sequence
 from datetime import timedelta
 from functools import lru_cache
 
+from haliax.quantization import QuantizationConfig
+
 import jmp
 from levanter.checkpoint import CheckpointerConfig
 from levanter.compat.hf_checkpoints import load_tokenizer
@@ -223,7 +225,7 @@ def default_train(
                 model_averaging=model_averaging,
                 replica_dcn_axis_size=-1,
                 allow_partial_checkpoint=train_config.allow_partial_checkpoint,
-                int8=train_config.int8,
+                quantization=QuantizationConfig(int8=train_config.int8) if train_config.int8 else None,
             ),
             z_loss_weight=train_config.z_loss_weight,
             model=model_config,
