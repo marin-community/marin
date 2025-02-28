@@ -18,6 +18,7 @@ Usage:
 import dataclasses
 import logging
 import os
+from collections.abc import Sequence
 
 import draccus
 import fsspec
@@ -90,8 +91,11 @@ class TokenizeConfig:
         assert not isinstance(self.train_paths, str | InputName)
         assert not isinstance(self.validation_paths, str | InputName)
 
-        assert "/" not in self.validation_paths, "don't use the entire fs for validation paths!"
-        assert "/" not in self.train_paths, "don't use the entire fs for train paths!"
+        if isinstance(self.train_paths, Sequence):
+            assert "/" not in self.train_paths, "don't use the entire fs for train paths!"
+
+        if isinstance(self.validation_paths, Sequence):
+            assert "/" not in self.validation_paths, "don't use the entire fs for validation paths!"
 
 
 def tokenize(config: TokenizeConfig):
