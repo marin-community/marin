@@ -18,6 +18,7 @@ from experiments.cooldown_anneal import dolmino_dclm
 from experiments.dclm.tokenize_dclm import DCLM_MIXTURE_WEIGHTS, dclm_components_llama3, dclm_mixture_config_llama3
 from experiments.defaults import default_tokenize, default_train
 from experiments.dolma.tokenize_dolma import tokenize_dolma_steps
+from experiments.dolmino.tokenize_dolmino import get_dolmino_step
 from experiments.llama import llama3_tokenizer, llama_8b
 from experiments.midtraining_datasets import finemath_3_plus_tokenized
 from experiments.pretraining_datasets import dclm_baseline_wrong, proofpile_2, starcoderdata
@@ -74,9 +75,9 @@ llama_8b_train_config = SimpleTrainConfig(
 # more dclm out to ≈3.78e+12 tokens (740,000 total steps)
 # dolmino-ish mixture out to ≈4.78e+12 tokens (820,000 steps)
 
-TOTAL = 820_000
+PHASE_3_END = 820_000
 PHASE_3 = 740_500
-DECAY_FRACTION = (TOTAL - PHASE_3) / TOTAL
+DECAY_FRACTION = (PHASE_3_END - PHASE_3) / PHASE_3_END
 
 
 llama_8b_train_config_phase3 = SimpleTrainConfig(
@@ -84,7 +85,7 @@ llama_8b_train_config_phase3 = SimpleTrainConfig(
     # node_count=2,
     tpu_type="v4-2048",
     node_count=1,
-    num_train_steps=TOTAL,
+    num_train_steps=PHASE_3_END,
     # after 660,600 we changed things up:
     train_batch_size=[ScheduleStep(start=0, value=1024), ScheduleStep(start=660_001, value=3072)],
     # LR doesn't (yet) support the schedule stuff so we just set it to the new value
@@ -186,7 +187,7 @@ phase_3_data_mixture = lm_varying_mixture_data_config(
     ],
 )
 
-llama_8b_tootsie_phase2 = dataclasses.replace(
+llama_8b_tootsie_phase3 = dataclasses.replace(
     default_train(
         name="llama-8b-tootsie-phase3",
         tokenized=phase_3_data_mixture,
@@ -199,8 +200,109 @@ llama_8b_tootsie_phase2 = dataclasses.replace(
 )
 
 
+## Tootsie Dessert
+## Add in:
+## FLAN
+## DolminoSynthMath
+## TuluMath
+## GSM8K
+## MathCoder2
+## Metamath-owm-filteR
+## CodeSearchNet-owmfilter
+## TinyGSM-Mind
+
+
+dessert_dolmino_sets = {
+    s: get_dolmino_step(s)
+    for s in [
+        "flan",
+        "math/dolmino_math_synth",
+        "math/tulu_math",
+        "math/gsm8k",
+        "math/mathcoder2-synthmath",
+        "math/metamath-owmfilter",
+        "math/codesearchnet-owmfilter",
+    ]
+}
+
+approx_dessert_sizes = {
+    "flan": 17e9,
+    "math/dolmino_math_synth": 28.7e6,
+    "math/tulu_math": 230e6,
+    "math/gsm8k": 2.74e6,
+    "math/mathcoder2-synthmath": 3.87e9,
+    "math/metamath-owmfilter": 84.2e6,
+    "math/codesearchnet-owmfilter": 1.8e6,
+}
+
+# about 21.2e9
+total_dessert_size = sum(approx_dessert_sizes.values())
+
+DESSERT_WEB = 0.7
+DESSERT_HQ = 0.2
+DESSERT_DESSERT = 0.1
+
+dessert_weights = {
+    **{dataset: DESSERT_HQ * size / total_dessert_size for dataset, size in approx_dessert_sizes.items()},
+    **{dataset: DESSERT_WEB * size / total_web_token_count for dataset, size in web_counts.items()},
+    **{
+        dataset: DESSERT_DESSERT * size / total_high_quality_token_count
+        for dataset, size in high_quality_token_counts.items()
+    },
+}
+
+print(dessert_weights)
+
+dessert_tokenized = {**phase_3_tokenized, **dessert_dolmino_sets}
+
+dessert_data_mixture = lm_varying_mixture_data_config(
+    components=dessert_tokenized,
+    weights_list=[
+        (0, DCLM_MIXTURE_WEIGHTS),
+        (PHASE_3, cooldown_mixture_weights),
+        (PHASE_3_END, dessert_weights),
+    ],
+)
+
+# we're aiming to do 1 pass through the new mixes, which is another ~212e9 tokens
+# 3072 * 4096 tokens per step = 12.6e6 tokens per step
+# so ~17000 steps is about right
+
+DESSERT_END = PHASE_3_END + 17000
+
+# this is a final (phase4?) config that we'll use for a final cooldown
+llama_8b_train_config_dessert = SimpleTrainConfig(
+    tpu_type="v4-2048",
+    node_count=1,
+    num_train_steps=DESSERT_END,
+    train_batch_size=[ScheduleStep(start=0, value=1024), ScheduleStep(start=660_001, value=3072)],
+    # coast along at 1.7e-4
+    learning_rate=1.7e-4,
+    decay=0.0,  # we're already at the lowest we want to go
+    ema_beta=0.995,
+    lr_schedule="linear",
+    cycle_length=None,
+    allow_partial_checkpoint=True,
+    steps_per_eval=1000,
+    steps_per_task_eval=15000,
+    steps_per_export=20000,
+    per_device_eval_parallelism=16,
+)
+
+llama_8b_tootsie_dessert = dataclasses.replace(
+    default_train(
+        name="llama-8b-tootsie-dessert",
+        tokenized=dessert_data_mixture,
+        model_config=llama_8b,
+        train_config=llama_8b_train_config_dessert,
+        tags=["llama", "8b", "ema", "exp600"],
+    ),
+    override_output_path="checkpoints/llama-8b-tootsie-dessert",
+)
+
+
 if __name__ == "__main__":
     executor_main(
-        steps=[llama_8b_tootsie, llama_8b_tootsie_phase2],
+        steps=[llama_8b_tootsie, llama_8b_tootsie_phase3, llama_8b_tootsie_dessert],
         description="Train 8B model on DCLM using WSD-S, then switching to EMA with a new mixture.",
     )
