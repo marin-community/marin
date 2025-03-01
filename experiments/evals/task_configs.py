@@ -66,7 +66,7 @@ def convert_to_levanter_task_config(tasks: Sequence[EvalTaskConfig]) -> list[Tas
 def convert_to_task_metrics(tasks: Sequence[EvalTaskConfig], metric: str) -> list[str]:
     """
     Convert a list of EvalTaskConfig to a list of strings corresponding to
-    task metrics that the eval harness outputs. These can be used, for instance, as input to the scaling laws analysis.
+    task metrics that Levanter outputs. These can be used, for instance, as input to the scaling laws analysis.
     """
     if not tasks:
         raise ValueError("Tasks sequence cannot be empty")
