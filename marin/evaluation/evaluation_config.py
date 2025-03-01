@@ -1,5 +1,7 @@
 from dataclasses import dataclass, field
 
+from experiments.evals.resource_configs import ResourceConfig
+
 
 @dataclass(frozen=True)
 class EvalTaskConfig:
@@ -60,4 +62,14 @@ class EvaluationConfig:
     max_eval_instances: int | None = None
     """
     Maximum number of evaluation instances to run.
+    """
+
+    engine_kwargs: dict | None = None
+    """
+    Additional keyword arguments to pass to the vLLM engine.
+    """
+
+    resource_config: ResourceConfig | None = None
+    """
+    Additional keyword arguments to pass to the Ray resources.
     """

@@ -10,6 +10,7 @@ from datetime import timedelta
 from functools import lru_cache
 
 import jmp
+from haliax.quantization import QuantizationConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.compat.hf_checkpoints import load_tokenizer
 from levanter.data.text import LMMixtureDatasetConfig
@@ -229,6 +230,7 @@ def default_train(
                 replica_dcn_axis_size=-1,
                 allow_partial_checkpoint=train_config.allow_partial_checkpoint,
                 per_device_eval_parallelism=per_device_eval_parallelism,
+                quantization=QuantizationConfig(int8=train_config.int8) if train_config.int8 else None,
             ),
             z_loss_weight=train_config.z_loss_weight,
             model=model_config,
@@ -264,10 +266,6 @@ def default_train(
 
 
 def default_anneal(name: str, anneal_config: AnnealConfig):
-    # assert (
-    #     anneal_config.target_dataset is not None or anneal_config.high_quality_web_text_dataset is not None
-    # ), "Target dataset or high-quality web text dataset must be provided."
-
     imputed_checkpoint_steps = anneal_config.initialize_from_checkpoint_path.index("step-")
     imputed_checkpoint_step = int(
         anneal_config.initialize_from_checkpoint_path[imputed_checkpoint_steps + len("step-") :]
