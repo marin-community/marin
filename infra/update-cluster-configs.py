@@ -15,7 +15,7 @@ DOCKER_TAGS = {
     "us-central2": "89b461b3",
     "big-run": "89b461b3",
     "us-west4": "89b461b3",
-    "europe-west4": "6da1c9ed",
+    "europe-west4": "89b461b3",
     "us-east1": "89b461b3",
     "us-east5": "89b461b3",
     # NB: different naming convention because we have two zones in europe-west4
