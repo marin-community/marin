@@ -32,16 +32,20 @@ MMLU_TASKS = (
 
 CORE_TASKS_PLUS_MMLU = CORE_TASKS + MMLU_TASKS
 
-MATH_TASKS = (
-    # (requires generation so not supported in Levanter at the moment)
-    EvalTaskConfig("hendrycks_math", 0),  # Competition math problems
-    EvalTaskConfig("gsm8k", 5),  # Simple math problems for multi-step reasoning
+# Settings are chosen to compare to Olmo2
+KEY_GENERATION_TASKS = (
+    EvalTaskConfig(name="ifeval", num_fewshot=0),
+    EvalTaskConfig(name="gsm8k_cot", num_fewshot=8),
+    EvalTaskConfig(name="drop", num_fewshot=0),
+    EvalTaskConfig(name="humaneval", num_fewshot=10),
+    EvalTaskConfig(name="bbh_cot_fewshot", num_fewshot=3, task_alias="bbh"),
+    EvalTaskConfig(name="minerva_math", num_fewshot=4, task_alias="math_4shot"),
 )
 
-CODING_TASKS = (
-    # (requires generation so not supported in Levanter at the moment)
-    EvalTaskConfig("humaneval", 0),  # Python programming problems
-    EvalTaskConfig("mbpp", 3),  # Multiple choice programming problems
+KEY_MULTIPLE_CHOICE_TASKS = (
+    EvalTaskConfig("mmlu", 0, task_alias="mmlu_0shot"),
+    EvalTaskConfig("mmlu", 5, task_alias="mmlu_5shot"),
+    EvalTaskConfig(name="truthfulqa_mc2", num_fewshot=6, task_alias="truthqa"),
 )
 
 
