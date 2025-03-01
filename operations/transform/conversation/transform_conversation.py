@@ -56,6 +56,7 @@ class TransformSFTDatasetConfig:
     metadata_columns: list[str]
     source: str
     filetype: str
+    adapter_name: str
     subsets: list[str] = field(default_factory=lambda: [])  # Default behavior is to use all subsets
     splits: list[str] = field(default_factory=lambda: ["train"])  # Set to train; empty set means everything
 
@@ -74,6 +75,11 @@ def generate_hash_from_messages(messages: list[dict[str, str]]) -> str:
 
 def transform_row(row: dict, cfg: TransformSFTDatasetConfig, adapter: TransformAdapter):
     transformed_row_messages: list[OpenAIChatMessage] = adapter.transform_conversation_to_openai_format(row)
+
+    if transformed_row_messages is None:
+        logger.warning(f"{cfg.adapter_name} returning no valid messages")
+        return None
+
     transformed_row_messages = [message.model_dump() for message in transformed_row_messages]
 
     # Create a unique ID for the row based on the text
@@ -99,10 +105,11 @@ def transform_rows(rows: list[dict], cfg: TransformSFTDatasetConfig):
         list[dict]: A list of dolma formatted jsonl rows.
     """
     transformed_rows = []
-    adapter = get_adapter(cfg.source)
+    adapter = get_adapter(cfg.adapter_name)
     for row in rows:
         transformed_row: DolmaConversationOutput = transform_row(row, cfg, adapter)
-        transformed_rows.append(transformed_row.model_dump())
+        if transformed_row is not None:
+            transformed_rows.append(transformed_row.model_dump())
 
     return transformed_rows
 
@@ -238,7 +245,7 @@ def download_directory_from_gcs(bucket_name: str, gcs_directory_path: str, local
 
         # Download the blob to the local file path
         blob.download_to_filename(local_file_path)
-        logger.info(f"Downloaded {blob.name} to {local_file_path}")
+        logger.info(f"Downloaded gs://{blob.name} to local:{local_file_path}")
 
 
 def copy_dataset_from_gcp_to_local(input_gcp_path: os.PathLike) -> os.PathLike:

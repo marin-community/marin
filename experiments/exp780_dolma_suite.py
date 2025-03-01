@@ -37,7 +37,7 @@ if __name__ == "__main__":
     executor_main(
         steps=[
             *dolma_suite,
-            #dolma_suite_scaling_laws_pred,
+            # dolma_suite_scaling_laws_pred,
         ],
         description="suite for scaling laws on Dolma mix",
     )
