@@ -39,7 +39,7 @@ if __name__ == "__main__":
     executor_main(
         steps=[
             *default_suite,
-            #default_suite_scaling_laws_pred,
+            # default_suite_scaling_laws_pred,
         ],
         description="suite + predictions for scaling laws on DCLM-Baseline+StarCoder+ProofPile mix",
     )
