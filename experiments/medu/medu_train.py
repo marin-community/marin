@@ -1,18 +1,13 @@
-import os
-
-from experiments.medu.medu_label import DATASET_SAMPLING_STEP_OUTPUT_PATH
+from experiments.medu.medu_label import dataset_sampling_step
 from marin.classifiers.hf.train_classifier import HFTrainingConfig, train_classifier_distributed
 from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path
 from operations.download.gcs.model import DownloadFromGCSConfig, download_model_from_gcs
-
-dataset_path = os.path.join(os.getenv("MARIN_PREFIX"), DATASET_SAMPLING_STEP_OUTPUT_PATH, "sampled")
-classifier_output_path = os.path.join(os.getenv("MARIN_PREFIX"), "classifiers", "test-medu-dclm-classifier-training")
 
 medu_econ_classifier_remote = ExecutorStep(
     name="classifiers/medu-bert-test",
     fn=train_classifier_distributed,
     config=HFTrainingConfig(
-        train_dataset=dataset_path,
+        train_dataset=output_path_of(dataset_sampling_step),
         output_dir=this_output_path(),
         num_labels=1,
         target_column="label",
