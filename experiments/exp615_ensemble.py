@@ -49,7 +49,9 @@ class ExperimentConfig:
     quality_classifier_model_paths: list[str | ExecutorStep]
     input_data_source_to_path: dict[str, str] = field(
         default_factory=lambda: {
-            "fineweb_2024_18": "gs://marin-us-central2/documents/fineweb-small-resiliparse-preserve-formatting-v2-e72837/md/CC-MAIN-2024-18/",
+            "fineweb_2024_18": (
+                "gs://marin-us-central2/documents/fineweb-small-resiliparse-preserve-formatting-v2-e72837/md/CC-MAIN-2024-18/"
+            ),
         }
     )
     keep_fraction: float = 0.2  # Keep 20% of the documents
