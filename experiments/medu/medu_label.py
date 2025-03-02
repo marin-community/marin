@@ -68,13 +68,11 @@ labeling_step = ExecutorStep(
     ),
 )
 
-DATASET_SAMPLING_STEP_OUTPUT_PATH = "documents/test-medu-dclm-dataset-sampled"
 dataset_sampling_step = ExecutorStep(
-    name=DATASET_SAMPLING_STEP_OUTPUT_PATH,
+    name="documents/test-medu-dclm-dataset-sampled",
     fn=run_medu_dataset_sampling_pipeline,
     config=DatasetOutputProcessorConfig(
         input_path=output_path_of(labeling_step),
         output_path=this_output_path(),
     ),
-    override_output_path=DATASET_SAMPLING_STEP_OUTPUT_PATH,
 )
