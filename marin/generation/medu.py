@@ -2,8 +2,9 @@ import logging
 import os
 import random
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
+import fsspec
 import ray
 from transformers import AutoTokenizer
 
@@ -21,10 +22,16 @@ logger = logging.getLogger("ray")
 
 
 @dataclass
+class CorpusContent:
+    content: list[str] | str
+    content_type: Literal["str_list", "str", "filepath"]
+
+
+@dataclass
 class MEDUPipelineConfig:
     model_name: str
     # TODO(chris): Add the ability to pass in a filepath of dev sets for more programmatic control.
-    dev_sets: list[list[str]]
+    dev_sets: list[CorpusContent]
     input_path: str
     output_path: str
     prompt_column: str = "text"
@@ -42,7 +49,7 @@ class MEDUPipeline:
     def __init__(
         self,
         model_name: str,
-        dev_sets: list[list[str]],
+        dev_sets: list[CorpusContent],
         tensor_parallel_size: int = 1,
         engine_kwargs: dict[str, Any] | None = None,
         generation_kwargs: dict[str, Any] | None = None,
@@ -68,8 +75,22 @@ class MEDUPipeline:
     def get_benchmark_description_prompt(self) -> str:
         logger.info(f"Starting benchmark description prompt generation for {len(self.dev_sets)} dev sets")
         prompts = []
+        corpus = ""
         for dev_set in self.dev_sets:
-            corpus = "\n\n".join(dev_set)
+            if dev_set.content_type == "str_list":
+                corpus = "\n\n".join(dev_set.content)
+            elif dev_set.content_type == "str":
+                corpus = dev_set.content
+            elif dev_set.content_type == "filepath":
+                with fsspec.open(dev_set.content, "r", compression="infer") as f:
+                    for line in f:
+                        if "text" not in line:
+                            raise ValueError(
+                                f"The file {dev_set.content} does not contain a 'text' key, "
+                                "please include it in the JSONL file."
+                            )
+                        corpus += line["text"]
+
             prompt = MEDU_BENCHMARK_DESCRIPTION_TEMPLATE.format(corpus=corpus)
             prompts.append(
                 self.tokenizer.apply_chat_template(
