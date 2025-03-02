@@ -11,7 +11,6 @@ from marin.processing.classification.inference import run_inference
 # to get the path, but we do not have DCLM in the us-east5 region yet.
 input_data_path = "gs://marin-us-central2/raw/dclm/a3b142c/huggingface.co/datasets/mlfoundations/dclm-baseline-1.0/resolve/a3b142c/global-shard_01_of_10"
 model_path = os.path.join("/opt", medu_econ_classifier.name)
-print(model_path)
 medu_inference = ExecutorStep(
     name="attributes/quality_filtering/economic-bert/dclm-global-shard-01-of-10",
     fn=run_inference,
