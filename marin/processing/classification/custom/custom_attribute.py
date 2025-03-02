@@ -14,10 +14,10 @@ Example 2: Compute the maximum quality score over two quality classifiers (depen
 
 """
 
-from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
-from marin.classifiers.types import Attribute, Document
+from marin.classifiers.custom.registry import REGISTRY
 from marin.classifiers.utils import label_documents
 
 
@@ -29,27 +29,33 @@ class CustomAttributeConfig:
     Attributes:
         input_doc_path (str): Path to documents (i.e., gs://$BUCKET/documents/...).
         output_attr_path (str): Path to write attributes (i.e., gs://$BUCKET/attributes/...).
+        attribute_func_name (str): Name of attribute function to use in registry.
+        attribute_func_kwargs (dict[str, Any]): Keyword arguments to pass to the attribute function.
+            Should be serializeable to JSON.
         input_attr_paths (list[str]): Path to attributes needed to determine new attribute.
     """
 
     input_doc_path: str
     output_attr_path: str
-    label_func: Callable[[Document, list[Attribute]], dict]
+    attribute_func_name: str
+    attribute_func_kwargs: dict[str, Any] | None = None
     input_attr_paths: list[str] | None = None
 
 
-def create_custom_attribute(cfg: CustomAttributeConfig):  # , label_func: Callable[[Document, list[Attribute]], dict]):
+def create_custom_attribute(cfg: CustomAttributeConfig):
     """
     Create a custom attribute for each document in a collection of documents.
 
     Args:
         cfg (CustomAttributeConfig): Configuration for creating a custom attribute.
-        label_func (Callable[[Document, list[Attribute]], dict]): Generates custom attribute dict from
-            document and other input attributes.
     """
+
+    def label_func(doc, attrs):
+        return REGISTRY[cfg.attribute_func_name](doc, attrs, **cfg.attribute_func_kwargs)
+
     label_documents(
         input_doc_path=cfg.input_doc_path,
         output_attr_path=cfg.output_attr_path,
-        label_func=cfg.label_func,
+        label_func=label_func,
         input_attr_paths=cfg.input_attr_paths,
     )
