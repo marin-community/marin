@@ -9,14 +9,7 @@ from experiments.evals.resource_configs import SINGLE_TPU_V4_8, ResourceConfig
 from experiments.evals.task_configs import CORE_TASKS, KEY_GENERATION_TASKS, KEY_MULTIPLE_CHOICE_TASKS
 from marin.evaluation.evaluation_config import EvalTaskConfig, EvaluationConfig
 from marin.evaluation.run import evaluate
-from marin.execution.executor import (
-    ExecutorStep,
-    InputName,
-    get_executor_step,
-    output_path_of,
-    this_output_path,
-    versioned,
-)
+from marin.execution.executor import ExecutorStep, InputName, output_path_of, this_output_path, versioned
 
 logger = logging.getLogger(__name__)
 
@@ -54,8 +47,12 @@ def evaluate_helm_on_step(
         evals (list[str]): List of evaluations to run with HELM, e.g, ["mmlu", "lite"].
     """
     # TODO: support evaluating all checkpoints in a run
-    executor_step = get_executor_step(step)
-    model_step_path = output_path_of(executor_step)
+    if isinstance(step, ExecutorStep):
+        model_step_path = output_path_of(step)
+        executor_step = step
+    elif isinstance(step, InputName):
+        model_step_path = output_path_of(step.step)
+        executor_step = step.step
 
     return ExecutorStep(
         name=f"evaluation/helm/{executor_step.name}",
@@ -168,7 +165,7 @@ def evaluate_levanter_lm_evaluation_harness(
     Create an ExecutorStep to evaluate the model using Levanter LM Evaluation Harness.
     """
     return ExecutorStep(
-        name=f"evaluation/lm_evaluation_harness_levanter/lmeval_debug_{model_name}",
+        name=f"evaluation/levanter_lm_evaluation_harness/{model_name}",
         fn=evaluate,
         config=EvaluationConfig(
             evaluator="levanter_lm_evaluation_harness",

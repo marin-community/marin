@@ -6,6 +6,7 @@ TAG = ["654_scaling_tootsie"]
 
 suite = scaling_law_suite(sweep_name="tootsie-scaling", tokenized=dclm_mixture_config_llama3_wrong, tags=TAG)
 
+
 if __name__ == "__main__":
     executor_main(
         steps=[

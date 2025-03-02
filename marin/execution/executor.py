@@ -173,24 +173,6 @@ class InputName:
         return InputName(self.step, name=os.path.join(self.name, name) if self.name else name)
 
 
-def get_executor_step(run: ExecutorStep | InputName) -> ExecutorStep:
-    """
-    Helper function to extract the ExecutorStep from an InputName or ExecutorStep.
-
-    Args:
-        run (ExecutorStep | InputName): The input to extract the step from.
-
-    Returns:
-        ExecutorStep: The extracted step.
-    """
-    if isinstance(run, ExecutorStep):
-        return run
-    elif isinstance(run, InputName):
-        return run.step
-    else:
-        raise ValueError(f"Unexpected type {type(run)} for run: {run}")
-
-
 def output_path_of(step: ExecutorStep, name: str | None = None) -> InputName:
     return InputName(step=step, name=name)
 
