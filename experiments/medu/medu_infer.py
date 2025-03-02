@@ -3,6 +3,9 @@ from marin.processing.classification.config.inference_config import InferenceCon
 from marin.processing.classification.consolidate import ConsolidateConfig, FilterConfig, consolidate
 from marin.processing.classification.inference import run_inference
 
+# NOTE(chris): We copy the direct path to the DCLM dataset because it is a large file that we do not want to redownload
+# especially since we only want a single shard of the data. Ideally, this should use the output_path_of function
+# to get the path, but we do not have DCLM in the us-east5 region yet.
 input_data_path = "gs://marin-us-central2/raw/dclm/a3b142c/huggingface.co/datasets/mlfoundations/dclm-baseline-1.0/resolve/a3b142c/global-shard_01_of_10"
 medu_inference = ExecutorStep(
     name="attributes/quality_filtering/economic-bert/dclm-global-shard-01-of-10",
@@ -10,6 +13,8 @@ medu_inference = ExecutorStep(
     config=InferenceConfig(
         input_path=input_data_path,
         output_path=this_output_path(),
+        # TODO(chris): Currently support using gcsfuse as a means to access the model
+        # locally rather then a GCS path. Support GCS path in the future.
         model_name="/opt/gcsfuse_mount/economic-bert-large-8/checkpoint-651",
         model_type="gte",
         attribute_name="economic-bert",
