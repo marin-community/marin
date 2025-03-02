@@ -34,27 +34,32 @@ dataset_config = lm_mixture_data_config(
     },
     weights={"medu-economics-3plus": 0.30, "dclm": 0.70},
 )
+
+num_anneal_training_tokens = 50_000_000_000
+checkpoint_path = "gs://marin-eu-west4/checkpoints/llama-8b-tootsie-0.001-19ad63/checkpoints/step-660000"
 # Medu Economics 3+ has 67B tokens consolidated.
 medu_anneal_config = AnnealConfig(
     dataset_config=dataset_config,
-    num_anneal_training_tokens=8_400_000_000,
+    num_anneal_training_tokens=num_anneal_training_tokens,
     tpu_type="v5litepod-128",
+    initialize_from_checkpoint_path=checkpoint_path,
 )
 
 medu_anneal_model = default_anneal(
-    name="llama-8b-198k-dclm-baseline-medu-econ-3plus",
+    name="llama-8b-660k-dclm-baseline-medu-econ-3plus-50b",
     anneal_config=medu_anneal_config,
 )
 
 control_model = default_anneal(
-    name="llama-8b-198k-dclm-baseline",
+    name="llama-8b-660k-dclm-baseline-50b",
     anneal_config=AnnealConfig(
         dataset_config=lm_mixture_data_config(
             components={"dclm": dclm},
             weights={"dclm": 1.0},
         ),
-        num_anneal_training_tokens=8_400_000_000,
+        num_anneal_training_tokens=num_anneal_training_tokens,
         tpu_type="v5litepod-128",
+        initialize_from_checkpoint_path=checkpoint_path,
     ),
 )
 
