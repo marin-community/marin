@@ -34,7 +34,6 @@ def evaluate(config: EvaluationConfig) -> None:
             evals=config.evals,
             output_path=config.evaluation_path,
             max_eval_instances=config.max_eval_instances,
-            resource_config=config.resource_config,
         )
     else:
         evaluator.evaluate(
@@ -55,6 +54,7 @@ def _impute_model_config(config):
         if config.model_path is None:
             raise ValueError("model_name or model_path must be provided")
 
+        model_path = config.model_path
         if config.discover_latest_checkpoint:
             model_path = discover_hf_checkpoints(model_path)[-1]
 
@@ -78,7 +78,7 @@ def _impute_model_config(config):
     else:
         model_name = config.model_name
 
-    return ModelConfig(name=model_name, path=model_path, engine_kwargs=config.engine_kwargs)
+    return ModelConfig(name=model_name, path=model_path)
 
 
 @draccus.wrap()

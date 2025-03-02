@@ -4,7 +4,7 @@ https://github.com/stanford-crfm/marin/issues/146
 """
 
 from experiments.defaults import default_train
-from experiments.exp72_baselines import slimpajama_tokenized
+from experiments.exp72_baselines import fineweb_edu_tokenized
 from experiments.llama import llama_1_4b
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import executor_main
@@ -18,9 +18,9 @@ llama_1_4b_multislice_train_config = SimpleTrainConfig(
     weight_decay=0.1,
 )
 
-slimpajama_model = default_train(
-    name="cathy-pjama-12",
-    tokenized=slimpajama_tokenized,
+fineweb_edu_model = default_train(
+    name="fineweb-edu-1.4b-multislice",
+    tokenized=fineweb_edu_tokenized,
     model_config=llama_1_4b,
     train_config=llama_1_4b_multislice_train_config,
 )
@@ -29,6 +29,6 @@ slimpajama_model = default_train(
 
 if __name__ == "__main__":
     executor_main(
-        steps=[slimpajama_model],
+        steps=[fineweb_edu_model],
         description="Train 1.4B models on FineWebEdu.",
     )

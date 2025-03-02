@@ -23,8 +23,7 @@ python marin/run/ray_run.py \
     python marin/crawl/deduplicate_outlinks_against_cc.py \
         --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8/*_links.jsonl.gz' \
         --bloom_filter_path 'gs://marin-us-central2/gcsfuse_mount/nfliu/deduplicate_outlinks/cc-urls-partitioned_2013_2018.bloom' \
-        --output_path gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-cc-deduplicated-2013_2018/ \
-        --shards_per_batch 100
+        --output_path gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-cc-deduplicated-2013_2018/
 
 # Then, deduplicate with 2019-2024 bloom filter
 python marin/run/ray_run.py \
@@ -34,8 +33,7 @@ python marin/run/ray_run.py \
     python marin/crawl/deduplicate_outlinks_against_cc.py \
         --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-cc-deduplicated-2013_2018/*_links.jsonl.gz' \
         --bloom_filter_path 'gs://marin-us-central2/gcsfuse_mount/nfliu/deduplicate_outlinks/cc-urls-partitioned_2019_2024.bloom' \
-        --output_path gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-cc-deduplicated/ \
-        --shards_per_batch 100
+        --output_path gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-cc-deduplicated/
 ```
 
 Running on FineWeb-Edu:
@@ -49,8 +47,7 @@ python marin/run/ray_run.py \
     python marin/crawl/deduplicate_outlinks_against_cc.py \
         --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu/CC-MAIN-*/*_links.jsonl.gz' \
         --bloom_filter_path 'gs://marin-us-central2/gcsfuse_mount/nfliu/deduplicate_outlinks/cc-urls-partitioned_2013_2018.bloom' \
-        --output_path gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-cc-deduplicated-2013_2018/ \
-        --shards_per_batch 100
+        --output_path gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-cc-deduplicated-2013_2018/
 
 # Then, deduplicate with 2019-2024 bloom filter
 python marin/run/ray_run.py \
@@ -60,8 +57,7 @@ python marin/run/ray_run.py \
     python marin/crawl/deduplicate_outlinks_against_cc.py \
         --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-cc-deduplicated-2013_2018/CC-MAIN-*/*_links.jsonl.gz' \
         --bloom_filter_path 'gs://marin-us-central2/gcsfuse_mount/nfliu/deduplicate_outlinks/cc-urls-partitioned_2019_2024.bloom' \
-        --output_path gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-cc-deduplicated/ \
-        --shards_per_batch 100
+        --output_path gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-cc-deduplicated/
 ```
 """  # noqa: E501
 import itertools
@@ -89,8 +85,6 @@ class DeduplicateOutlinksAgainstCCConfig:
     input_pattern: str
     bloom_filter_path: str
     output_path: str
-    shards_per_batch: int = 100
-    max_concurrent_tasks: int = 10
 
 
 def batched(iterable, n):
@@ -110,7 +104,7 @@ def hash_func(s: str):
     return int.from_bytes(h[:16], "big", signed=True)
 
 
-@ray.remote(memory=250 * 1024 * 1024 * 1024, num_cpus=8)
+@ray.remote(memory=350 * 1024 * 1024 * 1024, num_cpus=8)
 def deduplicate_shard(
     bloom_filter_path: str,
     shard_path_batch: str,
@@ -168,15 +162,11 @@ def deduplicate_shard(
                     num_outlinks += 1
             logger.info(f"Done reading links from {shard_path}")
 
-            example_link_targets = [parsed_example["link_target"] for parsed_example in parsed_examples]
-            logger.info(f"Hashing {len(example_link_targets)} link targets")
-            hashed_link_targets = [hash_func(ex["link_target"]) for ex in parsed_examples]
-            logger.info(f"Hashed {len(example_link_targets)} link targets")
-
             seen_link_targets = set()
             deduplicated_examples = []
             logger.info(f"Deduplicating examples in {shard_path}...")
-            for parsed_example, hashed_link_target in zip(parsed_examples, hashed_link_targets, strict=True):
+            hashed_link_targets = [hash_func(ex["link_target"]) for ex in parsed_examples]
+            for parsed_example, hashed_link_target in zip(parsed_examples, hashed_link_targets, strict=False):
                 link_target = parsed_example["link_target"]
                 if hashed_link_target not in bloom_filter and link_target not in seen_link_targets:
                     deduplicated_examples.append(parsed_example)
@@ -258,11 +248,13 @@ def deduplicate_outlinks_against_cc_driver(cfg: DeduplicateOutlinksAgainstCCConf
     output_shard_paths = get_unique_output_paths(shard_paths, cfg.output_path)
     logger.info(f"Found {len(shard_paths)} shards to process")
 
-    batched_shard_paths = list(batched(shard_paths, cfg.shards_per_batch))
-    batched_output_shard_paths = list(batched(output_shard_paths, cfg.shards_per_batch))
+    SHARDS_PER_BATCH = 10
+    batched_shard_paths = list(batched(shard_paths, SHARDS_PER_BATCH))
+    batched_output_shard_paths = list(batched(output_shard_paths, SHARDS_PER_BATCH))
     assert len(batched_shard_paths) == len(batched_output_shard_paths)
 
     num_batches_to_process = len(batched_shard_paths)
+    MAX_CONCURRENT_TASKS = 10
     num_batches_submitted = 0
     unfinished = []
 
@@ -282,7 +274,7 @@ def deduplicate_outlinks_against_cc_driver(cfg: DeduplicateOutlinksAgainstCCConf
                 f"({num_batches_submitted / num_batches_to_process})"
             )
 
-    for _ in range(min(cfg.max_concurrent_tasks, num_batches_to_process)):
+    for _ in range(min(MAX_CONCURRENT_TASKS, num_batches_to_process)):
         submit_shard_batch(batched_shard_paths.pop(), batched_output_shard_paths.pop())
 
     num_outlinks = 0
@@ -307,7 +299,7 @@ def deduplicate_outlinks_against_cc_driver(cfg: DeduplicateOutlinksAgainstCCConf
 
             # If we have more shard paths left to process and we haven't hit the max
             # number of concurrent tasks, add tasks to the unfinished queue.
-            while batched_shard_paths and len(unfinished) < cfg.max_concurrent_tasks:
+            while batched_shard_paths and len(unfinished) < MAX_CONCURRENT_TASKS:
                 submit_shard_batch(batched_shard_paths.pop(), batched_output_shard_paths.pop())
 
     logger.info(

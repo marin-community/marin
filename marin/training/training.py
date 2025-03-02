@@ -57,7 +57,7 @@ def run_levanter_sft(config: TrainSFTOnPodConfig):
     config = _enforce_run_id(config)
     logger.info(f"Using run ID: {config.trainer.id}")
 
-    if not config.bypass_path_checks and config.tpu_type is not None:
+    if not config.bypass_path_checks_for_reads and config.tpu_type is not None:
         ray.get(ray.remote(_doublecheck_paths_sft).options(num_cpus=0.1).remote(config, must_save_checkpoints=True))
 
     sft_config = _upcast_sft_config(config)
@@ -113,9 +113,6 @@ class TrainLmOnPodConfig(train_lm.TrainLmConfig):
     """
     node_count: int = 1
     """Number of TPU slices for training."""
-
-    initialize_from_checkpoint_path: str | None = None
-    """If set, the training will resume from the checkpoint at this path."""
 
 
 DEFAULT_CHECKPOINTS_PATH = "checkpoints"

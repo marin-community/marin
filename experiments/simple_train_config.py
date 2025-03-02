@@ -38,9 +38,6 @@ class SimpleTrainConfig:
 
     node_count: int = 1
 
-    initialize_from_checkpoint_path: str | None = None
-    """Path to a checkpoint to initialize from. If None, the model will be trained from scratch."""
-
     allow_partial_checkpoint: bool = False
     """
     Allow loading partial checkpoints. This is useful for converting training to EMA, e.g.
@@ -51,6 +48,3 @@ class SimpleTrainConfig:
     so sometimes it makes more sense to just read across regions."""
     allow_out_of_region_writes: bool = False
     """This makes less sense than reading across regions, but for completeness."""
-
-    int8: bool = False
-    """Int8 (quantized) training in Levanter."""
