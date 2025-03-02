@@ -149,7 +149,8 @@ def get_nested_id_object(row: dict, corpus_type: str) -> str:
     id_column_guide = CORPUS_TYPE_TO_ID_COLUMN[corpus_type].split("/")
 
     if len(id_column_guide) == 1:
-        return row[id_column_guide[0]]
+        row["id"] = row[id_column_guide[0]]
+        return row
 
     final_id_value = row[id_column_guide[0]]
     for column_name in id_column_guide[1:]:
