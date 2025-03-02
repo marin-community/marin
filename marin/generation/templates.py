@@ -37,7 +37,7 @@ description of the ideal training data for the evaluation.
 MEDU_DOCUMENT_LABELING_PROMPT = """
 The following document is being considered as training data for a
 Large Language Model.
-Provide a concise description of the document and an assessment of
+First, provide a concise description of the document and an assessment of
 the quality of the text or code in the document.
 Key Attributes to Mention
 - Languages contained in the document
@@ -48,11 +48,10 @@ Document:
 '''
 {example}
 '''
-Based on your previous reasoning, give me a concrete decision
+Based on your reasoning, give me a concrete decision
 about the utility of the document as training data for the
 following benchmark.
 {test_description}
-Output your decision about the utility of the data as one of the
-following single words Great/Good/Okay/Poor/Useless without
-formatting.
+Output your decision about the utility of the data as "Final Score:"
+followed by one of the following words Great/Good/Okay/Poor/Useless.
 """

@@ -1,5 +1,6 @@
 import json
 import random
+import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -124,9 +125,12 @@ class MeduDatasetOutputProcessor(DatasetOutputProcessor):
 
     @staticmethod
     def extract_score(text: str) -> int:
-        for key in MeduDatasetOutputProcessor.SCORE_OPTIONS_DICT:
-            if key in text:
-                return MeduDatasetOutputProcessor.SCORE_OPTIONS_DICT[key]
+
+        # Match "Final Score: " followed by one of the score options
+        match = re.search(r"Final Score:\s*(Great|Good|Okay|Poor|Useless)", text)
+        if match:
+            score_text = match.group(1)
+            return MeduDatasetOutputProcessor.SCORE_OPTIONS_DICT[score_text]
         return -1
 
 
