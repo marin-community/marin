@@ -81,7 +81,8 @@ def get_input_dataset_column_names(input_filename: str) -> list[str]:
     elif "dclm" in input_filename.lower():
         return ["text", "metadata"]
     else:
-        raise ValueError(f"Unsupported dataset: {input_filename}")
+        logger.warning("We are assuming the input dataset has the following columns: text, id")
+        return ["text", "id"]
 
 
 def get_output_dataset_column_names(input_filename: str) -> list[str]:
@@ -90,7 +91,8 @@ def get_output_dataset_column_names(input_filename: str) -> list[str]:
     elif "dclm" in input_filename.lower():
         return ["metadata", "attributes"]
     else:
-        raise ValueError(f"Unsupported dataset: {input_filename}")
+        logger.warning("We are assuming the output dataset has the following columns: id, attributes")
+        return ["id", "attributes"]
 
 
 @cached_or_construct_output(success_suffix="SUCCESS")
