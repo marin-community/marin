@@ -1,12 +1,19 @@
+"""
+Experiment 615: Ensemble quality classifiers (via max score).
+
+This experiment ensembles a list of quality classifiers (in this case, the MMLU and DCLM classifiers)
+by taking their maximum score.
+
+See https://github.com/stanford-crfm/marin/issues/615 for more details.
+"""
+
 import os
 from dataclasses import dataclass, field
 
-from experiments.defaults import default_tokenize, default_train
-from experiments.exp164_quality_classifiers import (
-    dclm_eli5_100k_oh_100k_rw_200k,
-    teknium_oh_200k_rw_200k,
-)
-from experiments.llama import llama3_tokenizer, llama_1_4b, llama_1_4b_train_config
+from experiments.defaults import default_tokenize
+from experiments.exp164_quality_classifiers import dclm_eli5_100k_oh_100k_rw_200k
+from experiments.exp274_mmlu_quality_classifier import marin_mmlu_100k_rw_100k
+from experiments.llama import llama3_tokenizer
 from marin.core.runtime import TaskConfig
 from marin.execution.executor import (
     ExecutorStep,
@@ -19,17 +26,30 @@ from marin.processing.classification.config.inference_config import RuntimeConfi
 from marin.processing.classification.consolidate import ConsolidateConfig, FilterConfig, consolidate
 from marin.processing.classification.custom.custom_attribute import CustomAttributeConfig, create_custom_attribute
 from marin.processing.classification.inference import InferenceConfig, run_inference
-from marin.processing.tokenize import lm_mixture_data_config
 
 
 @dataclass
 class ExperimentConfig:
+    """Configuration for an ensemble quality filtering experiment.
+
+    This config defines parameters for an experiment that:
+    1. Takes input documents from specified data sources
+    2. Runs multiple quality classifiers on these documents
+    3. Combines the classifier scores using an ensemble approach (e.g., taking the max score)
+    4. Filters documents to keep only the highest quality ones
+
+    Args:
+        experiment_name: Identifier for this experiment
+        quality_classifier_model_paths: List of paths to quality classifier models to ensemble
+        input_data_source_to_path: Mapping of data source names to their GCS paths
+        keep_fraction: Fraction of highest-quality documents to keep after filtering
+    """
+
     experiment_name: str
     quality_classifier_model_paths: list[str | ExecutorStep]
     input_data_source_to_path: dict[str, str] = field(
         default_factory=lambda: {
-            "test": "gs://marin-us-central2/documents/quick-start-tests"
-            # "fineweb_2024_18": "gs://marin-us-central2/documents/fineweb-small-resiliparse-preserve-formatting-e8c6ec/md/CC-MAIN-2024-18",
+            "fineweb_2024_18": "gs://marin-us-central2/documents/fineweb-small-resiliparse-preserve-formatting-v2-e72837/md/CC-MAIN-2024-18/",
         }
     )
     keep_fraction: float = 0.2  # Keep 20% of the documents
@@ -44,14 +64,10 @@ def get_model_path(model_path: str | ExecutorStep):
 def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
     """Create the steps for a single experiment.
 
-    The experiment consists of taking a fineweb dump, filtering for high-quality documents,
-    tokenizing the documents, and training a model. The only difference between the experiments
-    is the quality classifier used to filter the documents.
+    Variation of exp614_quality_filtering.py, but uses an ensemble of quality classifiers.
     """
 
     steps = []
-    tokenized: dict[str, ExecutorStep] = {}
-    weights: dict[str, float] = {}
     for input_data_source, input_data_path in config.input_data_source_to_path.items():
         # Get the basename of the input directory
         input_basename = os.path.basename(os.path.normpath(input_data_path))
@@ -75,23 +91,23 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
             )
             inference_steps.append(inference_step)
 
-        def label_func(doc, attrs):
-            return {
-                f"{config.experiment_name}-quality": {
-                    "score": max(
-                        attr["attributes"][f"{config.experiment_name}-quality_classifier-{classifier_id}"]["__label__hq"]
-                        for classifier_id, attr in enumerate(attrs)
-                    )
-                }
-            }
-
         ensemble_step = ExecutorStep(
             name=f"attributes/quality_filtering/{config.experiment_name}/{input_data_source}",
             fn=create_custom_attribute,
             config=CustomAttributeConfig(
                 input_doc_path=input_data_path,
                 output_attr_path=this_output_path(input_basename),
-                label_func=versioned(label_func),
+                attribute_func_name="max_quality_score",
+                attribute_func_kwargs=versioned(
+                    {
+                        "score_name": "__label__hq",
+                        "output_attr_name": f"{config.experiment_name}-quality",
+                        "input_attr_names": [
+                            f"{config.experiment_name}-quality_classifier-{classifier_id}"
+                            for classifier_id in range(len(config.quality_classifier_model_paths))
+                        ],
+                    }
+                ),
                 input_attr_paths=[output_path_of(inference_step, input_basename) for inference_step in inference_steps],
             ),
         )
@@ -126,19 +142,6 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
         steps.append(inference_step)
         steps.append(consolidate_step)
         steps.append(tokenize_step)
-        tokenized[input_data_source] = tokenize_step
-        weights[input_data_source] = 1.0
-
-    data_config = lm_mixture_data_config(components=tokenized, weights=weights)
-
-    train_step = default_train(
-        name=f"quality_filtering/{config.experiment_name}",
-        tokenized=data_config,
-        model_config=llama_1_4b,
-        train_config=llama_1_4b_train_config,
-    )
-
-    steps.append(train_step)
 
     return steps
 
@@ -146,7 +149,7 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
 def main():
     experiment_config = ExperimentConfig(
         experiment_name="exp615_ensemble",
-        quality_classifier_model_paths=[dclm_eli5_100k_oh_100k_rw_200k, teknium_oh_200k_rw_200k],
+        quality_classifier_model_paths=[dclm_eli5_100k_oh_100k_rw_200k, marin_mmlu_100k_rw_100k],
     )
     steps = create_steps(experiment_config)
     executor_main(steps=steps)
