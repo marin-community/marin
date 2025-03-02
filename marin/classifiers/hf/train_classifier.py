@@ -12,6 +12,7 @@ import datasets
 import evaluate
 import fsspec
 import numpy as np
+import ray
 import torch
 import torch_xla.distributed.xla_multiprocessing as xmp
 from sklearn.metrics import classification_report, confusion_matrix
@@ -168,6 +169,7 @@ def train_classifier(rank: int, hf_script_args: HFTrainingConfig, train_dataset,
             upload_to_gcs(temp_dir, args.output_dir)
 
 
+@ray.remote(resources={"TPU": 8, "TPU-v6e-8-head": 1})
 def train_classifier_distributed(config: HFTrainingConfig):
     dataset = load_dataset(config.train_dataset, "train")
     dataset = dataset.train_test_split(train_size=config.train_size, seed=42)
