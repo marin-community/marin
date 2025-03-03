@@ -23,6 +23,7 @@ def default_label(
     if isinstance(documents_to_be_labeled, ExecutorStep):
         documents_to_be_labeled = output_path_of(documents_to_be_labeled)
 
+    # NOTE(chris): Assuming we are filtering from a jsonl.zst file such as DCLM.
     return ExecutorStep(
         name=f"documents/medu-labels/{experiment_name}",
         fn=run_medu_labeling_pipeline,
@@ -38,8 +39,8 @@ def default_label(
                 "max_tokens": 1024,
                 "stop_token_ids": [tokenizer.eos_token_id, tokenizer.convert_tokens_to_ids("<|eot_id|>")],
             },
-            filetype="jsonl.gz",
-            output_filetype_override="jsonl.gz",
+            filetype="jsonl.zst",
+            output_filetype_override="jsonl.zst",
         ),
         override_output_path=f"documents/medu-labels/{experiment_name}",
     )

@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import random
@@ -25,6 +26,7 @@ logger = logging.getLogger("ray")
 class CorpusContent:
     content: list[str] | str
     content_type: Literal["str_list", "str", "filepath"]
+    prompt_column: str = "text"
 
 
 @dataclass
@@ -80,16 +82,17 @@ class MEDUPipeline:
             if dev_set.content_type == "str_list":
                 corpus = "\n\n".join(dev_set.content)
             elif dev_set.content_type == "str":
-                corpus = dev_set.content
+                corpus = dev_set.content + "\n\n"
             elif dev_set.content_type == "filepath":
                 with fsspec.open(dev_set.content, "r", compression="infer") as f:
                     for line in f:
-                        if "text" not in line:
+                        row = json.loads(line)
+                        if dev_set.prompt_column not in row:
                             raise ValueError(
-                                f"The file {dev_set.content} does not contain a 'text' key, "
+                                f"The file {dev_set.content} does not contain a '{dev_set.prompt_column}' key, "
                                 "please include it in the JSONL file."
                             )
-                        corpus += line["text"]
+                        corpus += row[dev_set.prompt_column] + "\n\n"
 
             prompt = MEDU_BENCHMARK_DESCRIPTION_TEMPLATE.format(corpus=corpus)
             prompts.append(
