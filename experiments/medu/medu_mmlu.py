@@ -2,7 +2,6 @@ import os
 from dataclasses import dataclass
 
 from experiments.medu.defaults import default_label
-from experiments.medu.medu_datasets import medu_dclm_annotation_subset
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from marin.generation.medu import CorpusContent
 from operations.download.huggingface.download import DownloadConfig
@@ -15,11 +14,6 @@ class MeduMMLUConfig:
     subset_names: list[str]
     experiment_name: str
 
-
-# TODO(chris): Use output_path_of the mmlu eval set
-MMLU_BASE_PATH = (
-    "gs://marin-us-central2/evaluation/mmlu-eval-subject-fc0515/cais/mmlu-{subject_name}-dev-evaluation.jsonl.gz"
-)
 
 mmlu_raw = ExecutorStep(
     name="raw/cais/mmlu",
@@ -138,11 +132,14 @@ def default_mmlu_labeling(config: MeduMMLUConfig):
     mmlu_base_path = mmlu_subject_eval.name
     corpus_contents = []
     for subject in config.subset_names:
-        filepath = os.path.join(os.getenv("MARIN_PREFIX"), mmlu_base_path, f"mmlu-{subject}-dev-evaluation.jsonl.gz")
-        corpus_contents.append(CorpusContent(content=filepath, content_type="filepath"))
+        filepath = os.path.join(
+            os.getenv("MARIN_PREFIX"), mmlu_base_path, "cais", f"mmlu-{subject}-dev-evaluation.jsonl.gz"
+        )
+        corpus_contents.append(CorpusContent(content=filepath, content_type="filepath", prompt_column="prompt"))
 
     return default_label(
-        documents_to_be_labeled=medu_dclm_annotation_subset,
+        # TODO(chris): Use direct path for now since we don't have DCLM downloaded on east5.
+        documents_to_be_labeled="gs://marin-us-east5/documents/medu-datasets/medu-dclm-annotation-subset-e12303/medu-dclm-annotation-subset-e12303",
         targeted_documents=corpus_contents,
         experiment_name=config.experiment_name,
     )
@@ -165,4 +162,4 @@ mmlu_other_labeled = default_mmlu_labeling(MeduMMLUConfig(subset_names=other, ex
 
 
 if __name__ == "__main__":
-    executor_main([mmlu_mathematics_labeled])
+    executor_main([mmlu_mathematics_labeled, mmlu_science_labeled, mmlu_engineering_labeled])
