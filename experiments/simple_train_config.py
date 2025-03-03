@@ -53,3 +53,6 @@ class SimpleTrainConfig:
     so sometimes it makes more sense to just read across regions."""
     allow_out_of_region_writes: bool = False
     """This makes less sense than reading across regions, but for completeness."""
+
+    int8: bool = False
+    """Int8 (quantized) training in Levanter."""

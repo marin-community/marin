@@ -36,12 +36,12 @@ def create_tokenization_step(dataset_name: str) -> ExecutorStep:
 
 
 # Dataset configurations
-# TODO fix dolphin-r1 not working
 DATASETS = [
     "TIGER-Lab/AceCode-89K",
     "HuggingFaceTB/smoltalk",
     "PrimeIntellect/verifiable-math-problems",
-    # "cognitivecomputations/dolphin-r1",
+    "cognitivecomputations/dolphin-r1-nonreasoning",
+    "cognitivecomputations/dolphin-r1-reasoning",
     "bespokelabs/Bespoke-Stratos-17k",
     "open-r1/OpenThoughts-114k-math",
     "allenai/tulu-3-sft-mixture",
