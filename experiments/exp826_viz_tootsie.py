@@ -44,6 +44,11 @@ for checkpoint in CHECKPOINTS:
     )
 
 
+PHASE_1_CHECKPOINTS = [
+
+]
+
+
 if __name__ == "__main__":
     executor_main(
         [*all_steps],
