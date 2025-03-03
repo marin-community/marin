@@ -18,7 +18,7 @@ from experiments.cooldown_anneal import dolmino_dclm
 from experiments.dclm.tokenize_dclm import DCLM_MIXTURE_WEIGHTS, dclm_components_llama3, dclm_mixture_config_llama3
 from experiments.defaults import default_tokenize, default_train
 from experiments.dolma.tokenize_dolma import tokenize_dolma_steps
-from experiments.dolmino.tokenize_dolmino import get_dolmino_step
+from experiments.dolmino.tokenize_dolmino import dolmino_math_tokenized_llama3, get_dolmino_step
 from experiments.llama import llama3_tokenizer, llama_8b, llama_8b_old_rotary
 from experiments.midtraining_datasets import finemath_3_plus_tokenized
 from experiments.pretraining_datasets import dclm_baseline_wrong, proofpile_2, starcoderdata
@@ -70,6 +70,22 @@ llama_8b_train_config = SimpleTrainConfig(
     lr_schedule="inv",
 )
 
+
+
+llama_8b_tootsie = dataclasses.replace(
+    default_train(
+        name="llama-8b-tootsie-0.001",
+        tokenized=dclm_mixture_config_llama3,
+        # I am a dummy and use old rotary config
+        model_config=llama_8b_old_rotary,
+        train_config=llama_8b_train_config,
+        tags=["llama", "8b", "wsd-s", "exp600"],
+    ),
+    override_output_path="checkpoints/llama-8b-tootsie-0.001-19ad63",
+)
+
+# phase 3 data is a variant of the dolmino mix
+
 # main phase: raw dclm for 660,000 steps
 # phase 2 is divided into two subparts (lolcry):
 # more dclm out to ≈3.78e+12 tokens (740,000 total steps)
@@ -78,7 +94,6 @@ llama_8b_train_config = SimpleTrainConfig(
 PHASE_3_END = 820_000
 PHASE_3 = 740_500
 DECAY_FRACTION = (PHASE_3_END - PHASE_3) / PHASE_3_END
-
 
 llama_8b_train_config_phase3 = SimpleTrainConfig(
     # tpu_type="v5litepod-256",
@@ -102,21 +117,6 @@ llama_8b_train_config_phase3 = SimpleTrainConfig(
     steps_per_export=20000,
     per_device_eval_parallelism=16,
 )
-
-llama_8b_tootsie = dataclasses.replace(
-    default_train(
-        name="llama-8b-tootsie-0.001",
-        tokenized=dclm_mixture_config_llama3,
-        # I am a dummy and use old rotary config
-        model_config=llama_8b_old_rotary,
-        train_config=llama_8b_train_config,
-        tags=["llama", "8b", "wsd-s", "exp600"],
-    ),
-    override_output_path="checkpoints/llama-8b-tootsie-0.001-19ad63",
-)
-
-
-# phase 2 data is a variant of the dolmino mix
 phase_3_tokenized = {**dclm_components_llama3}
 
 dolma_splits = [
@@ -243,7 +243,8 @@ DESSERT_WEB = 0.7
 DESSERT_HQ = 0.2
 DESSERT_DESSERT = 0.1
 
-dessert_weights = {
+# I'm such a dummy: I swapped HQ and Dessert weights
+dessert_weights_v1 = {
     **{dataset: DESSERT_HQ * size / total_dessert_size for dataset, size in approx_dessert_sizes.items()},
     **{dataset: DESSERT_WEB * size / total_web_token_count for dataset, size in web_counts.items()},
     **{
@@ -252,16 +253,14 @@ dessert_weights = {
     },
 }
 
-print(dessert_weights)
-
 dessert_tokenized = {**phase_3_tokenized, **dessert_dolmino_sets}
 
-dessert_data_mixture = lm_varying_mixture_data_config(
+dessert_data_mixture_v1 = lm_varying_mixture_data_config(
     components=dessert_tokenized,
     weights_list=[
         (0, DCLM_MIXTURE_WEIGHTS),
         (PHASE_3, cooldown_mixture_weights),
-        (PHASE_3_END, dessert_weights),
+        (PHASE_3_END, dessert_weights_v1),
     ],
 )
 
@@ -271,7 +270,7 @@ dessert_data_mixture = lm_varying_mixture_data_config(
 
 DESSERT_END = PHASE_3_END + 17000
 
-# this is a final (phase4?) config that we'll use for a final cooldown
+# this is a (phase4?) config that we'll use for a final cooldown
 llama_8b_train_config_dessert = SimpleTrainConfig(
     tpu_type="v4-2048",
     node_count=1,
@@ -286,14 +285,15 @@ llama_8b_train_config_dessert = SimpleTrainConfig(
     allow_partial_checkpoint=True,
     steps_per_eval=1000,
     steps_per_task_eval=15000,
-    steps_per_export=20000,
+    # only export last step (which is forced)
+    steps_per_export=2000000,
     per_device_eval_parallelism=16,
 )
 
 llama_8b_tootsie_dessert = dataclasses.replace(
     default_train(
         name="llama-8b-tootsie-dessert",
-        tokenized=dessert_data_mixture,
+        tokenized=dessert_data_mixture_v1,
         model_config=llama_8b,
         train_config=llama_8b_train_config_dessert,
         tags=["llama", "8b", "ema", "exp600"],
@@ -302,8 +302,52 @@ llama_8b_tootsie_dessert = dataclasses.replace(
 )
 
 
+# attempt 2: I had swapped HQ and Dessert weights. Also, the math sets are so small they don't get picked up
+# with the block size we use. So we concat the math sets into a single set and weight them as a single set.
+
+
+# I'm such a dummy
+dessert_weights_v2 = {
+    **{dataset: DESSERT_WEB * size / total_web_token_count for dataset, size in web_counts.items()},
+    **{
+        dataset: DESSERT_HQ * size / total_high_quality_token_count
+        for dataset, size in high_quality_token_counts.items()
+    },
+    "flan": DESSERT_DESSERT * approx_dessert_sizes["flan"] / total_dessert_size,
+    "all_math": DESSERT_DESSERT * sum(size for dataset, size in approx_dessert_sizes.items() if "math" in dataset)
+}
+
+all_math = dolmino_math_tokenized_llama3
+
+dessert_tokenized = {
+    **phase_3_tokenized,
+    "flan": dessert_tokenized["flan"],
+    "all_math": all_math,
+ }
+
+dessert_data_mixture_v2 = lm_varying_mixture_data_config(
+    components=dessert_tokenized,
+    weights_list=[
+        (0, DCLM_MIXTURE_WEIGHTS),
+        (PHASE_3, cooldown_mixture_weights),
+        (PHASE_3_END, dessert_weights_v2),
+    ],
+)
+
+llama_8b_tootsie_dessert_v2 = dataclasses.replace(
+    default_train(
+        name="llama-8b-tootsie-dessert-v2",
+        tokenized=dessert_data_mixture_v2,
+        model_config=llama_8b,
+        train_config=llama_8b_train_config_dessert,
+        tags=["llama", "8b", "ema", "exp600"],
+    ),
+    override_output_path="checkpoints/llama-8b-tootsie-dessert-v2",
+)
+
+
 if __name__ == "__main__":
     executor_main(
-        steps=[llama_8b_tootsie, llama_8b_tootsie_phase3, llama_8b_tootsie_dessert],
+        steps=[llama_8b_tootsie, llama_8b_tootsie_phase3, llama_8b_tootsie_dessert, llama_8b_tootsie_dessert_v2],
         description="Train 8B model on DCLM using WSD-S, then switching to EMA with a new mixture.",
     )
