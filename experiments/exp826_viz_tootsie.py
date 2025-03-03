@@ -1,9 +1,8 @@
 from experiments.defaults import default_validation_sets
-from experiments.exp600_tootsie import llama_8b, llama3_tokenizer
-from levanter.data.text import LMMixtureDatasetConfig
+from experiments.exp600_tootsie import llama3_tokenizer, llama_8b
+from experiments.llama import llama_8b_old_rotary
 from marin.evaluation.visualize import VizLmConfig, mixture_for_visualization, visualize_lm_lob_probs
 from marin.execution.executor import ExecutorStep, executor_main, versioned
-from marin.processing.tokenize import add_validation_sets_to_mixture
 
 COMPARISON_MODEL = "gs://marin-us-central2/checkpoints/llama-8b-tootsie-phase2/checkpoints/step-730000/"
 
@@ -12,6 +11,7 @@ CHECKPOINTS = [
     "gs://marin-us-central2/checkpoints/llama-8b-tootsie-phase3/checkpoints/step-740000/",
     "gs://marin-us-central2/checkpoints/llama-8b-tootsie-phase3/checkpoints/step-780000/",
 ]
+
 
 def path_to_step_name(path):
     # we want llama-8b-tootsie-phase2-730000
@@ -39,13 +39,17 @@ for checkpoint in CHECKPOINTS:
                 datasets=eval_set_mixture,
                 num_docs_per_dataset=32,
                 comparison_model_path=COMPARISON_MODEL if checkpoint != COMPARISON_MODEL else None,
-            )
+            ),
         )
     )
 
 
-PHASE_1_CHECKPOINTS = [
+PHASE_1_CONFIG = llama_8b_old_rotary
+PHASE_1_BASE = "gs://marin-eu-west4/checkpoints/llama-8b-tootsie-0.001-19ad63/checkpoints/step-180000/"
 
+PHASE_1_CHECKPOINTS = [
+    PHASE_1_BASE,
+    "gs://marin-eu-west4/checkpoints/llama-8b-tootsie-0.001-19ad63/checkpoints/step-200000/",
 ]
 
 
