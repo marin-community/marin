@@ -19,7 +19,7 @@ from experiments.dclm.tokenize_dclm import DCLM_MIXTURE_WEIGHTS, dclm_components
 from experiments.defaults import default_tokenize, default_train
 from experiments.dolma.tokenize_dolma import tokenize_dolma_steps
 from experiments.dolmino.tokenize_dolmino import get_dolmino_step
-from experiments.llama import llama3_tokenizer, llama_8b
+from experiments.llama import llama3_tokenizer, llama_8b, llama_8b_old_rotary
 from experiments.midtraining_datasets import finemath_3_plus_tokenized
 from experiments.pretraining_datasets import dclm_baseline_wrong, proofpile_2, starcoderdata
 from experiments.simple_train_config import SimpleTrainConfig
@@ -107,7 +107,8 @@ llama_8b_tootsie = dataclasses.replace(
     default_train(
         name="llama-8b-tootsie-0.001",
         tokenized=dclm_mixture_config_llama3,
-        model_config=llama_8b,
+        # I am a dummy and use old rotary config
+        model_config=llama_8b_old_rotary,
         train_config=llama_8b_train_config,
         tags=["llama", "8b", "wsd-s", "exp600"],
     ),
