@@ -284,7 +284,7 @@ llama_8b_train_config_dessert = SimpleTrainConfig(
     cycle_length=None,
     allow_partial_checkpoint=True,
     steps_per_eval=1000,
-    steps_per_task_eval=15000,
+    steps_per_task_eval=1000000,
     # only export last step (which is forced)
     steps_per_export=2000000,
     per_device_eval_parallelism=16,
@@ -314,7 +314,7 @@ dessert_weights_v2 = {
         for dataset, size in high_quality_token_counts.items()
     },
     "flan": DESSERT_DESSERT * approx_dessert_sizes["flan"] / total_dessert_size,
-    "all_math": DESSERT_DESSERT * sum(size for dataset, size in approx_dessert_sizes.items() if "math" in dataset)
+    "all_math": DESSERT_DESSERT * sum(size for dataset, size in approx_dessert_sizes.items() if "math" in dataset) / total_dessert_size,
 }
 
 all_math = dolmino_math_tokenized_llama3
@@ -325,7 +325,7 @@ dessert_tokenized = {
     "all_math": all_math,
  }
 
-dessert_data_mixture_v2 = lm_varying_mixture_data_config(
+dessert_data_mixture_v3 = lm_varying_mixture_data_config(
     components=dessert_tokenized,
     weights_list=[
         (0, DCLM_MIXTURE_WEIGHTS),
@@ -334,20 +334,21 @@ dessert_data_mixture_v2 = lm_varying_mixture_data_config(
     ],
 )
 
-llama_8b_tootsie_dessert_v2 = dataclasses.replace(
+llama_8b_tootsie_dessert_v3 = dataclasses.replace(
     default_train(
-        name="llama-8b-tootsie-dessert-v2",
-        tokenized=dessert_data_mixture_v2,
+        name="llama-8b-tootsie-dessert-v3",
+        tokenized=dessert_data_mixture_v3,
         model_config=llama_8b,
         train_config=llama_8b_train_config_dessert,
         tags=["llama", "8b", "ema", "exp600"],
+        eval_harness_tasks=[],
     ),
-    override_output_path="checkpoints/llama-8b-tootsie-dessert-v2",
+    override_output_path="checkpoints/llama-8b-tootsie-dessert-v3",
 )
 
 
 if __name__ == "__main__":
     executor_main(
-        steps=[llama_8b_tootsie, llama_8b_tootsie_phase3, llama_8b_tootsie_dessert, llama_8b_tootsie_dessert_v2],
+        steps=[llama_8b_tootsie, llama_8b_tootsie_phase3, llama_8b_tootsie_dessert, llama_8b_tootsie_dessert_v3],
         description="Train 8B model on DCLM using WSD-S, then switching to EMA with a new mixture.",
     )
