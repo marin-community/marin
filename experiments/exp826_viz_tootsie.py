@@ -50,11 +50,28 @@ PHASE_1_BASE = "gs://marin-eu-west4/checkpoints/llama-8b-tootsie-0.001-19ad63/ch
 PHASE_1_CHECKPOINTS = [
     PHASE_1_BASE,
     "gs://marin-eu-west4/checkpoints/llama-8b-tootsie-0.001-19ad63/checkpoints/step-200000/",
+    "gs://marin-eu-west4/checkpoints/llama-8b-tootsie-0.001-19ad63/checkpoints/step-500000/",
 ]
+
+for checkpoint in PHASE_1_CHECKPOINTS:
+    name = path_to_step_name(checkpoint)
+    all_steps.append(
+        ExecutorStep(
+            name=name,
+            fn=visualize_lm_lob_probs,
+            config=VizLmConfig(
+                checkpoint_path=checkpoint,
+                model=PHASE_1_CONFIG,
+                datasets=eval_set_mixture,
+                num_docs_per_dataset=32,
+                comparison_model_path=PHASE_1_BASE if checkpoint != PHASE_1_BASE else None,
+            ),
+        )
+    )
 
 
 if __name__ == "__main__":
     executor_main(
-        [*all_steps],
-        description="Visualize log probabilities of a language model.",
+        all_steps,
+        description="Visualize log probabilities of Tootsie 8b at various stages of training",
     )
