@@ -7,6 +7,7 @@ This module defines a function that returns tokenization steps for each dataset 
 import os.path
 
 from experiments.llama import llama3_tokenizer
+from levanter.store.cache import CacheOptions
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
 from marin.processing.tokenize.data_configs import TokenizerStep
@@ -70,6 +71,7 @@ dolmino_math_tokenized_llama3 = ExecutorStep(
         validation_paths=versioned([]),
         cache_path=this_output_path(),
         tokenizer=versioned(llama3_tokenizer),
+        cache_options=CacheOptions(num_shard_groups=32)
     ),
     pip_dependency_groups=["sentencepiece"],
 )
