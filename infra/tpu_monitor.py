@@ -1,31 +1,80 @@
+import subprocess
+import sys
+import threading
+import time
 from collections import Counter
 
 import ray
+import wandb
+from bs4 import BeautifulSoup
 from google.cloud import compute_v1, tpu_v2alpha1
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.ui import WebDriverWait
+
+sys.path.append("../..")
 
 PROJECT_NAME = "hai-gcp-models"
+WANDB_PROJECT = "marin-monitoring"
+WANDB_ID = "tpu-monitoring-v3-testing"
 
 BAD_STATES = [tpu_v2alpha1.Node.State.PREEMPTED, tpu_v2alpha1.Node.State.TERMINATED]
 GOOD_STATES = [tpu_v2alpha1.Node.State.READY]
+MIN_WAIT_FOR_INCOMPLETE_TPUS = 15
+
+LOCATIONS = [
+    "asia-northeast1-b",
+    "europe-west4-a",
+    "europe-west4-b",
+    "us-central2-b",
+    "us-east1-d",
+    "us-east5-a",
+    "us-west4-a",
+]
+
+LOCATION_TO_CLI_FILE = {
+    "asia-northeast1-b": "/home/abhinavg/marin/infra/marin-asia-northeast1.yaml",
+    "europe-west4-a": "/home/abhinavg/marin/infra/marin-europe-west4-a.yaml",
+    "europe-west4-b": "/home/abhinavg/marin/infra/marin-europe-west4.yaml",
+    "us-central2-b": "/home/abhinavg/marin/infra/marin-us-central2.yaml",
+    "us-east1-d": "/home/abhinavg/marin/infra/marin-us-east1.yaml",
+    "us-east5-a": "/home/abhinavg/marin/infra/marin-us-east5.yaml",
+    "us-west4-a": "/home/abhinavg/marin/infra/marin-us-west4.yaml",
+}
 
 
-def gather_tpu_info_from_vms(location):
-    """
-    Gathers TPU information from the TPU API and logs metrics.
-    """
+def gather_incomplete_tpus(location):
+    """Gather names of TPUs that do not have a power of 2 usage."""
+    incomplete_tpus = []
+    if location in LOCATION_TO_CLI_FILE:
+        ray_usage = get_ray_tpu_usage(LOCATION_TO_CLI_FILE[location])
+        if ray_usage:
+            for tpu_type, (_used, total) in ray_usage.items():
+                total = int(total)
+                if total & (total - 1) != 0:  # Bitwise check for power of 2
+                    incomplete_tpus.append(tpu_type)
+    return incomplete_tpus
+
+
+def gather_tpu_info_from_vms(location, incomplete_tpus):
+    """Gather TPU information from the TPU API and log metrics."""
     tpu_client = tpu_v2alpha1.TpuClient()
-    # Get all TPU nodes
     parent = f"projects/{PROJECT_NAME}/locations/{location}"
     nodes = tpu_client.list_nodes(parent=parent)
 
     total_devices_zone = 0
-    total_preeemptible_devices_zone = 0
+    total_preemptible_devices_zone = 0
 
     nodes_types_zone = Counter()
     tpu_by_generation = Counter()
-
     vms_to_delete = []
     for node in nodes:
+        for incomplete_tpu in incomplete_tpus:
+            if incomplete_tpu in node.name:
+                print(f"Node {node.name} does not have a power of 2 usage, deleting")
+                vms_to_delete.append(node.name)
+                continue
         if node.state in BAD_STATES:
             print(f"Node {node.name} is in state {node.state}, deleting")
             vms_to_delete.append(node.name)
@@ -45,12 +94,13 @@ def gather_tpu_info_from_vms(location):
 
         is_preemptible = node.scheduling_config.preemptible
         if is_preemptible:
-            total_preeemptible_devices_zone += total_devices_this_tpu
+            total_preemptible_devices_zone += total_devices_this_tpu
 
         nodes_types_zone[tpu_config] += 1
         tpu_by_generation[generation] += int(tpu_config.split("-")[-1])
 
     to_log = Counter()
+
     for tpu_type, count in nodes_types_zone.items():
         to_log[f"{location}/devices/{tpu_type}"] = count
         to_log[f"devices/{tpu_type}"] = count
@@ -60,26 +110,22 @@ def gather_tpu_info_from_vms(location):
         to_log[f"devices/{generation}"] = count
 
     to_log[f"{location}/devices/total"] = total_devices_zone
-    to_log[f"{location}/devices/total_preemptible"] = total_preeemptible_devices_zone
+    to_log[f"{location}/devices/total_preemptible"] = total_preemptible_devices_zone
 
     to_log["devices/total"] = total_devices_zone
-    to_log["devices/total_preemptible"] = total_preeemptible_devices_zone
+    to_log["devices/total_preemptible"] = total_preemptible_devices_zone
 
     return to_log, vms_to_delete
 
 
 def gather_ray_cluster_info(location):
-    """
-    Gathers Ray cluster information and logs metrics.
-    """
+    """Gather Ray cluster information and log metrics."""
     compute_client = compute_v1.InstancesClient()
-
-    # Get all instances in the location
     instances = compute_client.list(project=PROJECT_NAME, zone=location)
-
     ray_resources_per_cluster = Counter()
 
     for instance in instances:
+
         # Identify Ray head nodes (replace with your logic)
         if is_ray_head_node(instance):
             try:
@@ -101,11 +147,7 @@ def gather_ray_cluster_info(location):
             finally:
                 ray.shutdown()
 
-    to_log = {}
-    for resource_name, available in ray_resources_per_cluster.items():
-        to_log[f"{location}/{resource_name}"] = available
-
-    return to_log
+    return {f"{location}/{k}": v for k, v in ray_resources_per_cluster.items()}
 
 
 def get_ip(instance):
@@ -116,7 +158,6 @@ def get_ip(instance):
         for config in interface.access_configs:
             if hasattr(config, "nat_i_p"):
                 return config.nat_i_p
-
     raise ValueError(f"Could not find external IP for instance {instance.name}")
 
 
@@ -145,22 +186,6 @@ def parse_head_resource(resource_name):
     return tpu_type, int(devices)
 
 
-WANDB_PROJECT = "marin-monitoring"
-WANDB_ID = "tpu-monitoring-v3-testing"
-
-
-def delete_stale_vms():
-    compute_client = tpu_v2alpha1.TpuClient()
-    for _, vms in all_vms_to_delete.items():
-        for vm in vms:
-            try:
-                compute_client.delete_node(name=vm)
-                print(f"Deleted VM {vm}")
-            except Exception as e:
-                print(f"Failed to delete VM {vm}: {e}")
-                continue
-
-
 def make_report():
     global blocks, location, report
     import wandb_workspaces.reports.v2 as wr
@@ -184,7 +209,7 @@ def make_report():
     pg = wr.PanelGrid(runsets=[runset], panels=panels)
     blocks.append(pg)
     # Make 1 panel grid per location
-    for location in locations:
+    for location in LOCATIONS:
         blocks.append(wr.H2(location))
         device_gen_loc = [k for k in all_metrics.keys() if k.startswith(location)]
         panels = []
@@ -195,22 +220,127 @@ def make_report():
     report.save()
 
 
-if __name__ == "__main__":
-    import wandb
+def scrape_ray_tpu_usage():
+    """Scrape TPU usage data from Ray dashboard."""
+    try:
+        options = webdriver.ChromeOptions()
+        options.add_argument("--headless")
+        options.add_argument("--enable-javascript")
+        driver = webdriver.Chrome(options=options)
 
-    locations = [
-        "asia-northeast1-b",
-        "europe-west4-a",
-        "europe-west4-b",
-        "us-central2-b",
-        "us-east1-d",
-        "us-east5-a",
-        "us-west4-a",
-    ]
+        driver.get("http://localhost:8265")
+        wait = WebDriverWait(driver, 20)
+        wait.until(EC.presence_of_element_located((By.TAG_NAME, "body")))
+        wait.until(EC.presence_of_element_located((By.XPATH, "//h3[contains(text(), 'Resource Status')]")))
+
+        soup = BeautifulSoup(driver.page_source, "html.parser")
+        resource_section = soup.find("h3", string="Resource Status")
+
+        if resource_section:
+            resource_container = resource_section.find_parent("div").find_parent("div")
+            resource_data = resource_container.find_all("div")
+
+            tpu_usage = {}
+            for div in resource_data:
+                text = div.get_text().strip()
+                if "/" in text and "tpu" in text:
+                    try:
+                        used, total = text.split("/")
+                        used = float(used.strip())
+                        total = float(total.split()[0].strip())
+                        tpu_usage[text.split()[-1]] = (used, total)
+                    except ValueError:
+                        continue
+
+            return tpu_usage
+        return {}
+
+    except Exception as e:
+        print(f"Error scraping Ray dashboard: {e}")
+        return {}
+    finally:
+        if "driver" in locals():
+            driver.quit()
+
+
+def get_ray_tpu_usage(cli_file):
+    """Get TPU usage from Ray dashboard."""
+
+    def run_ray_dashboard(config_path):
+        try:
+            process = subprocess.Popen(["ray", "dashboard", config_path], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            print(f"Started Ray dashboard with config {config_path}")
+            return process
+        except FileNotFoundError:
+            print("Ray CLI not found.")
+            return None
+
+    dashboard_process = run_ray_dashboard(cli_file)
+    if not dashboard_process:
+        return {}
+
+    dashboard_thread = threading.Thread(target=lambda: dashboard_process.wait())
+    dashboard_thread.daemon = True
+    dashboard_thread.start()
+
+    time.sleep(3)
+    tpu_usage = scrape_ray_tpu_usage()
+
+    dashboard_process.terminate()
+    dashboard_process.wait()
+
+    return tpu_usage
+
+
+def gather_all_incomplete_tpus():
+    """Check for incomplete TPUs across all locations."""
+    incomplete_tpus = {location: gather_incomplete_tpus(location) for location in LOCATIONS}
+
+    if any(incomplete_tpus.values()):
+        print("Found incomplete TPUs, waiting 15 minutes to check again...")
+        print("Initial incomplete TPUs:")
+        for location, tpus in incomplete_tpus.items():
+            if tpus:
+                print(f"{location}: {tpus}")
+
+        time.sleep(MIN_WAIT_FOR_INCOMPLETE_TPUS * 60)
+
+        incomplete_tpus_after = {}
+        for location, tpus in incomplete_tpus.items():
+            if tpus:
+                incomplete_tpus_after[location] = gather_incomplete_tpus(location)
+
+        print("\nAfter 15 minutes, still incomplete TPUs, removing:")
+        for location, tpus in incomplete_tpus_after.items():
+            still_incomplete = [tpu for tpu in tpus if tpu in incomplete_tpus[location]]
+            if still_incomplete:
+                print(f"{location}: {still_incomplete}")
+
+        return incomplete_tpus_after
+
+    return incomplete_tpus
+
+
+def delete_stale_vms():
+    """Delete VMs marked for deletion."""
+    compute_client = tpu_v2alpha1.TpuClient()
+    for vms in all_vms_to_delete.values():
+        for vm in vms:
+            try:
+                compute_client.delete_node(name=vm)
+                print(f"Deleted VM {vm}")
+            except Exception as e:
+                print(f"Failed to delete VM {vm}: {e}")
+
+
+if __name__ == "__main__":
+    incomplete_tpus = gather_all_incomplete_tpus()
+
     all_metrics = Counter()
     all_vms_to_delete = {}
-    for location in locations:
-        metrics, vms_to_delete = gather_tpu_info_from_vms(location)
+
+    for location in LOCATIONS:
+        metrics, vms_to_delete = gather_tpu_info_from_vms(location, incomplete_tpus[location])
         all_metrics.update(metrics)
         if vms_to_delete:
             all_vms_to_delete[location] = vms_to_delete
@@ -220,10 +350,9 @@ if __name__ == "__main__":
         # except Exception as e:
         #     print(f"Failed to gather Ray cluster info for {location}: {e}")
 
-    r = wandb.init(project=WANDB_PROJECT, id=WANDB_ID, resume="allow")
+    run = wandb.init(project=WANDB_PROJECT, id=WANDB_ID, resume="allow")
     wandb.log(all_metrics)
     print(all_metrics)
-
     wandb.finish()
 
     # make_report()
