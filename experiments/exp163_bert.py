@@ -59,8 +59,7 @@ class ExperimentConfig:
     classifier_training_datasets: list[DatasetConfig]
     input_data_source_to_path: dict[str, str] = field(
         default_factory=lambda: {
-            # "fineweb_2024_18": "gs://marin-us-central2/documents/fineweb-small-resiliparse-preserve-formatting-v2-e72837/md/CC-MAIN-2024-18/",
-            "test": "gs://marin-us-central2/documents/quick-start-tests/"
+            "fineweb_2024_18": "gs://marin-us-central2/documents/fineweb-small-resiliparse-preserve-formatting-v2-e72837/md/CC-MAIN-2024-18/",
         }
     )
     keep_fraction: float = 0.2  # Keep 20% of the documents
@@ -218,7 +217,7 @@ def main():
         ),
     ]
     experiment_config = ExperimentConfig(
-        experiment_name="exp615_ensemble",
+        experiment_name="exp163_compare_bert_fasttext",
         classifier_training_datasets=classifier_training_datasets,
     )
     steps = create_steps(experiment_config)
