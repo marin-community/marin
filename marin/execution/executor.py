@@ -92,6 +92,7 @@ from ray.util import state  # noqa
 from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 
 from marin.execution.executor_step_status import (
+    STATUS_CANCELLED,
     STATUS_DEP_FAILED,
     STATUS_FAILED,
     STATUS_RUNNING,
@@ -102,7 +103,7 @@ from marin.execution.executor_step_status import (
     get_latest_status_from_gcs,
     get_status_path,
 )
-from marin.execution.status_actor import StatusActor
+from marin.execution.status_actor import PreviousTaskFailedError, StatusActor
 from marin.utilities.executor_utils import get_pip_dependencies
 from marin.utilities.json_encoder import CustomJsonEncoder
 
@@ -170,6 +171,24 @@ class InputName:
 
     def cd(self, name: str) -> "InputName":
         return InputName(self.step, name=os.path.join(self.name, name) if self.name else name)
+
+
+def get_executor_step(run: ExecutorStep | InputName) -> ExecutorStep:
+    """
+    Helper function to extract the ExecutorStep from an InputName or ExecutorStep.
+
+    Args:
+        run (ExecutorStep | InputName): The input to extract the step from.
+
+    Returns:
+        ExecutorStep: The extracted step.
+    """
+    if isinstance(run, ExecutorStep):
+        return run
+    elif isinstance(run, InputName):
+        return run.step
+    else:
+        raise ValueError(f"Unexpected type {type(run)} for run: {run}")
 
 
 def output_path_of(step: ExecutorStep, name: str | None = None) -> InputName:
@@ -606,7 +625,7 @@ class Executor:
         """Return the URL where the experiment can be viewed."""
         # TODO: remove hardcoding
         if self.prefix.startswith("gs://"):
-            host = "https://marlin-subtle-barnacle.ngrok-free.app"
+            host = "https://crfm.stanford.edu/marin/data_browser"
         else:
             host = "http://localhost:5000"
 
@@ -724,7 +743,7 @@ def _get_ray_status(current_owner_task_id: str | None) -> str | None:
     return current_owner_ray_status
 
 
-def get_status(output_path: str, current_owner_task_id: str | None) -> str | None:
+def get_status(output_path: str, current_owner_task_id: str | None, states: dict) -> str | None:
     """Get the status of an output Path. This retruns the status of the output path
     there is no status anywhere (i.e. brand-new step) -> return None
     a task is currently running a step -> return WAITING
@@ -733,42 +752,54 @@ def get_status(output_path: str, current_owner_task_id: str | None) -> str | Non
 
     current_owner_ray_status = _get_ray_status(current_owner_task_id)
 
+    num_unknown = states.get("num_unknown", 0)  # Number of times the status was unknown
+    # We check how many times has times ray has returned status Unknown in a row. If it returns more than 20 times,
+    # We assume ray has lost that task and we use GCP status instead.
+    if current_owner_ray_status == STATUS_UNKNOWN:
+        num_unknown += 1
+        states["num_unknown"] = num_unknown
+        if num_unknown > 20:
+            current_owner_ray_status = None
+            states["num_unknown"] = 0
+    else:
+        states["num_unknown"] = 0  # Reset the counter
+
     # Immediately return if the ray status is unknown or running, we don't need to check GCS
     if current_owner_ray_status in [STATUS_UNKNOWN, STATUS_RUNNING]:
         return current_owner_ray_status
 
+    # If the ray status is terminal [Failed, Success], we check the status on GCS and trust it
+
     current_owner_gcs_status = get_latest_status_from_gcs(output_path)
 
-    if current_owner_gcs_status is None:
-        if current_owner_ray_status is not None:
-            logger.info(
-                f"Status of {output_path = } is {current_owner_ray_status} as per Ray. "
-                f"But we are using status as None as there is no status in GCP."
-            )
-        return None
-    elif current_owner_ray_status is not None:
-        return current_owner_ray_status
-    else:
-        if current_owner_gcs_status in [STATUS_WAITING, STATUS_RUNNING]:
-            logger.info(
-                f"Status of {output_path = } is {current_owner_gcs_status} as per GCP. There is no Task in Ray."
-                f"This generally indicates that the cluster was killed when this task was running. "
-                f"We are rerunning this task."
-            )
-            current_owner_gcs_status = None
+    if current_owner_gcs_status in [STATUS_RUNNING, STATUS_WAITING]:
+        logger.info(
+            f"Status of {output_path = } is {current_owner_gcs_status} as per GCP. "
+            f"But as per Ray, the task has terminated, it's likely that this task was cancelled previously"
+        )
+        current_owner_gcs_status = STATUS_CANCELLED
 
-        return current_owner_gcs_status
+    return current_owner_gcs_status
 
 
 def should_run(
     output_path: str, step_name: str, status_actor: StatusActor, ray_task_id: str, force_run_failed: bool = False
 ):
     """Check if the step should run or not based on the status of the step."""
+    """Logic for should run:
+    1. Check which task is currently the owner of this step (current_owner_task_id).
+    2. If ray_status(current_owner_task_id) is Running , we wait.
+    3. if ray_status(current_owner_task_id) is Terminated (Failed, Successful), we trust the status on GCP
+    4. A special case where ray_status(current_owner_task_id) is Terminated, but GCP status is Running, We return
+    CANCELLED"""
 
     log_once = True
+    get_status_states = {}  # States used by get_status, since get_status is stateless we keep them here
     while True:
         current_owner_task_id = ray.get(status_actor.get_task_id_with_lock.remote(output_path=output_path))
-        status = get_status(output_path, current_owner_task_id)
+
+        # get_status also updates get_status_states via internal mutation
+        status = get_status(output_path, current_owner_task_id, get_status_states)
 
         if log_once:
             logger.info(f"Status {step_name} : {status}.")
@@ -785,12 +816,15 @@ def should_run(
 
     if status is None:
         return True
+    elif status == STATUS_CANCELLED:
+        logger.info(f"Step {step_name} was cancelled previously. Retrying.")
+        return True
     elif status in [STATUS_FAILED, STATUS_DEP_FAILED]:
         if force_run_failed:
             logger.info(f"Force running {step_name}, previous status: {status}")
             return True
         else:
-            raise Exception(f"Step {step_name} failed previously. Status: {status}")
+            raise PreviousTaskFailedError(f"Step {step_name} failed previously. Status: {status}")
     else:
         logger.info(f"Step {step_name} has already succeeded. Status: {status}")
         return False
@@ -819,10 +853,13 @@ def execute_after_dependencies(
         if not should_run(output_path, step_name, status_actor, ray_task_id, force_run_failed):
             append_status(status_path, STATUS_SUCCESS, ray_task_id=ray_task_id, message="Step was already successful")
             return
-    except Exception as e:
+    except PreviousTaskFailedError as e:
         # Failed due to some exception
         message = traceback.format_exc()
         append_status(status_path, STATUS_FAILED, message=message, ray_task_id=ray_task_id)
+        raise e
+    except Exception as e:
+        logger.error(f"Error while checking if the step should run [This is a Ray related Error]: {e}")
         raise e
 
     append_status(status_path, STATUS_WAITING, ray_task_id=ray_task_id)

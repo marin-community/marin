@@ -37,7 +37,8 @@ cluster. **You will need at least two terminal processes running for the followi
 ```bash
 # [Terminal 1] Establish a Connection to the Ray Dashboard (launches an ssh connection w/ port-forwarding)
 #   =>> Assumes `marin` Python environment is active, and you're running scripts from the repository root directory
-ray dashboard infra/marin-cluster.yaml
+#   =>> Assumes you want to run your jobs in the Central 2 Region of GCloud
+ray dashboard infra/marin-us-central2.yaml
 
 # [Browser] Navigate to `http://localhost:8265` (or whatever URL is output by the above command)
 #   =>> You should see the Cluster Overview Page (with a list of recent jobs, node status, resource status)
@@ -52,11 +53,10 @@ To submit jobs, we use the
 This requires that your Python script is formatted in a certain way, calling some boilerplate Ray functions prior to
 launching tasks -- see [`tests/test_quickstart.py`](./tests/test_quickstart.py) for a minimal example. To launch:
 
-```
+``3`
 # [Terminal 2] Submit a Ray Job (specified via a Python script)
-#   =>> Assumes `marin` Python environment is active, current working directory == repository root == "."
 #   =>> Will output a Job ID like `raysubmit_pAJM8vKfHPhiyHBa`
-ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python tests/test_quickstart.py
+python marin/run/ray_run.py --no_wait --env_vars WANDB_API_KEY ${WANDB_API_KEY} -- python experiments/hello_world.py
 
 # Get Job Status (given Job ID = raysubmit_pAJM8vKfHPhiyHBa)
 ray job status --address http://127.0.0.1:8265 raysubmit_pAJM8vKfHPhiyHBa
@@ -67,8 +67,6 @@ ray job logs --address http://127.0.0.1:8265 raysubmit_pAJM8vKfHPhiyHBa
 # Kill / Stop Job (if necessary / error / bug)
 ray job stop --address http://127.0.0.1:8265 raysubmit_pAJM8vKfHPhiyHBa
 ```
-
-To avoid passing `--address ...` you can set the environment variable `export RAY_ADDRESS="http://127.0.0.1:8265"`
 
 **Quality of Life**: If you like `tmux` and `conda` (with environment name `marin`), feel free to run
 [`infra/marin-tmux.sh`](./infra/marin-tmux.sh) that automates launching the dashboard for you. Make sure to read the

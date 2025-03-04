@@ -32,6 +32,22 @@ MMLU_TASKS = (
 
 CORE_TASKS_PLUS_MMLU = CORE_TASKS + MMLU_TASKS
 
+# Settings are chosen to compare to Olmo2
+KEY_GENERATION_TASKS = (
+    EvalTaskConfig(name="ifeval", num_fewshot=0),
+    EvalTaskConfig(name="gsm8k_cot", num_fewshot=8),
+    EvalTaskConfig(name="drop", num_fewshot=0),
+    EvalTaskConfig(name="humaneval", num_fewshot=10),
+    EvalTaskConfig(name="bbh_cot_fewshot", num_fewshot=3, task_alias="bbh"),
+    EvalTaskConfig(name="minerva_math", num_fewshot=4, task_alias="math_4shot"),
+)
+
+KEY_MULTIPLE_CHOICE_TASKS = (
+    EvalTaskConfig("mmlu", 0, task_alias="mmlu_0shot"),
+    EvalTaskConfig("mmlu", 5, task_alias="mmlu_5shot"),
+    EvalTaskConfig(name="truthfulqa_mc2", num_fewshot=6, task_alias="truthqa"),
+)
+
 
 def convert_to_levanter_task_config(tasks: Sequence[EvalTaskConfig]) -> list[TaskConfig]:
     """
@@ -45,3 +61,24 @@ def convert_to_levanter_task_config(tasks: Sequence[EvalTaskConfig]) -> list[Tas
         )
         for task in tasks
     ]
+
+
+def convert_to_task_metrics(tasks: Sequence[EvalTaskConfig], metric: str) -> list[str]:
+    """
+    Convert a list of EvalTaskConfig to a list of strings corresponding to
+    task metrics that Levanter outputs. These can be used, for instance, as input to the scaling laws analysis.
+    """
+    if not tasks:
+        raise ValueError("Tasks sequence cannot be empty")
+
+    task_metrics = []
+    for task in tasks:
+        if not isinstance(task, EvalTaskConfig):
+            raise TypeError(f"Expected task to be EvalTaskConfig, got {type(task)}")
+
+        if task.task_alias:
+            task_metrics.append(f"lm_eval/{task.task_alias}/{metric}")
+        else:
+            task_metrics.append(f"lm_eval/{task.name}/{metric}")
+
+    return task_metrics
