@@ -1,3 +1,18 @@
+"""
+This script visualizes the log probabilities of the Tootsie 8b model at various stages of training.
+
+@dlwh was interested in the weird loss behavior of the model after we switched to a longer WSD-S cooldown.
+This script visualizes the log probabilities of the model at various stages of training to see if we can
+spot any differences.
+
+The differences were structural formatting differences in the eval data:
+
+* Reddit data started with `&gt;` (sic) instead of `>`, which the model didn't like.
+* Similarly, the twitter data uniformally ended with a ` ` (space) character, which the model didn't like.
+
+The cooldown seems to function as a kind of sharpening/annealing
+"""
+
 from experiments.defaults import default_validation_sets
 from experiments.exp600_tootsie import llama3_tokenizer, llama_8b
 from experiments.llama import llama_8b_old_rotary
