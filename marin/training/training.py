@@ -101,8 +101,10 @@ class TrainLmOnPodConfig(train_lm.TrainLmConfig):
 
     env: dict = dataclasses.field(default_factory=dict)
     """Environment variables to set in the training pod."""
-    bypass_path_checks: bool = False
-    """If True, don't check that paths are set and are in the same region as the VM."""
+    allow_out_of_region_reads: bool = False
+    """If True, allow reading from GCS buckets in different regions."""
+    allow_out_of_region_writes: bool = False
+    """If True, allow writing to GCS buckets in different regions."""
     impute_run_id_from_output_path: bool = True
     """
     If true and out_path is not None, the run id will be set to the basename of the out_path plus a random string.
@@ -111,6 +113,9 @@ class TrainLmOnPodConfig(train_lm.TrainLmConfig):
     """
     node_count: int = 1
     """Number of TPU slices for training."""
+
+    initialize_from_checkpoint_path: str | None = None
+    """If set, the training will resume from the checkpoint at this path."""
 
 
 DEFAULT_CHECKPOINTS_PATH = "checkpoints"
@@ -158,7 +163,8 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
     - The run ID is set, or sets a default if not.
     - WANDB_API_KEY is set.
     - It disables the auto-ray-start and auto-worker-start options since we're already in a Ray cluster.
-    - It checks that the paths are set and in the same region as the VM, unless bypass_path_checks is set.
+    - if allow_out_of_region_reads is False, it checks that the data cache paths are in the same region as the VM.
+    - if allow_out_of_region_writes is False, it checks that the checkpoint paths are in the same region as the VM.
     """
     default_launch_config = levanter.infra.cli_helpers.load_config()
 
@@ -177,7 +183,7 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
 
     runtime_env = RuntimeEnv(env_vars=config.env)
 
-    if not config.bypass_path_checks and config.tpu_type is not None:
+    if not config.allow_out_of_region_reads and not config.allow_out_of_region_writes and config.tpu_type is not None:
         # run this on the Ray cluster to get the right region
         # doesn't need to be a TPU because ray insists that all VMs are in the same region
         ray.get(
@@ -343,7 +349,7 @@ def _doublecheck_paths(config: TrainLmOnPodConfig, must_save_checkpoints):
     Double-check that we're not using local paths in some of the standard places that Levanter sets defaults.
     Also check that the paths are in the same region as the VM, to avoid performance issues and billing surprises.
     """
-    local_ok = config.bypass_path_checks or config.tpu_type is None
+    local_ok = (config.allow_out_of_region_reads and config.allow_out_of_region_writes) or config.tpu_type is None
     try:
         region = get_vm_region()
     except ValueError as e:
@@ -355,24 +361,34 @@ def _doublecheck_paths(config: TrainLmOnPodConfig, must_save_checkpoints):
     _check_path_in_region("data.cache_dir", config.data.cache_dir, none_ok=True, region=region, local_ok=local_ok)
     # now check all subcaches if applicable
     if isinstance(config.data, LMMixtureDatasetConfig):
-        for key, subcache in config.data.configs.items():
-            _check_path_in_region(
-                f"data.configs[{key}].cache_dir", subcache.cache_dir, none_ok=True, region=region, local_ok=local_ok
-            )
-    _check_path_in_region(
-        "trainer.checkpointer.base_path",
-        config.trainer.checkpointer.base_path,
-        none_ok=not must_save_checkpoints,
-        region=region,
-        local_ok=local_ok,
-    )
-
-    if config.hf_save_path is not None:
+        if not config.allow_out_of_region_reads:
+            for key, subcache in config.data.configs.items():
+                _check_path_in_region(
+                    f"data.configs[{key}].cache_dir",
+                    subcache.cache_dir,
+                    none_ok=True,
+                    region=region,
+                    local_ok=local_ok,
+                )
+    if not config.allow_out_of_region_writes:
         _check_path_in_region(
-            "hf_save_path", config.hf_save_path, none_ok=not must_save_checkpoints, region=region, local_ok=local_ok
+            "trainer.checkpointer.base_path",
+            config.trainer.checkpointer.base_path,
+            none_ok=not must_save_checkpoints,
+            region=region,
+            local_ok=local_ok,
         )
-    else:
-        logger.warning("hf_save_path is not set. This is fine if you don't want HF checkpoints.")
+
+        if config.hf_save_path is not None:
+            _check_path_in_region(
+                "hf_save_path",
+                config.hf_save_path,
+                none_ok=not must_save_checkpoints,
+                region=region,
+                local_ok=local_ok and config.allow_out_of_region_writes,
+            )
+        else:
+            logger.warning("hf_save_path is not set. This is fine if you don't want HF checkpoints.")
 
     return config
 

@@ -14,7 +14,7 @@ The quantities of interest are:
 - N_hq / N_total: What is the overall yield rate of the crawl frontier?
 - N_hq / N_f: What is the yield rate of the successfully-fetched pages?
 
-Running on FineWeb-Edu:
+Running on FineWeb-Edu-10M:
 
 ```
 python marin/run/ray_run.py \
@@ -27,6 +27,21 @@ python marin/run/ray_run.py \
     --text_output_directory gs://marin-us-central2/scratch/nfliu/text/fineweb-edu-10M/ \
     --urls_and_scores_output_directory gs://marin-us-central2/scratch/nfliu/urls_and_scores/fineweb-edu-10M/ \
     --statistics_output_path gs://marin-us-central2/scratch/nfliu/fetched_outlinks/fineweb-edu-10M/yield_statistics.json.gz
+```
+
+Running on FineWeb-Edu-10M (cc deduplicated):
+
+```
+python marin/run/ray_run.py \
+    --pip_deps '--find-links https://storage.googleapis.com/jax-releases/libtpu_releases.html,w3lib,trafilatura,jax[tpu],flax,transformers,requests,warcio[all],resiliparse,datatrove[processing] @ git+https://github.com/nelson-liu/datatrove@ray_executor_dedup_logging,spacy,cupy-cuda12x==13.3.0' \
+    --no_wait -- \
+    python marin/crawl/get_fineweb_edu_crawl_yield.py \
+    --urls_input_directory gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-10M-cc-deduplicated/ \
+    --crawl_input_directory gs://marin-us-central2/scratch/nfliu/fetched_outlinks/fineweb-edu-10M-cc-deduplicated/ \
+    --data_source fineweb-edu-10M-cc-deduplicated \
+    --text_output_directory gs://marin-us-central2/scratch/nfliu/text/fineweb-edu-10M-cc-deduplicated/ \
+    --urls_and_scores_output_directory gs://marin-us-central2/scratch/nfliu/urls_and_scores/fineweb-edu-10M-cc-deduplicated/ \
+    --statistics_output_path gs://marin-us-central2/scratch/nfliu/fetched_outlinks/fineweb-edu-10M-cc-deduplicated/yield_statistics.json.gz
 ```
 """  # noqa: E501
 import json
@@ -47,13 +62,21 @@ import pyarrow.parquet as pq
 import ray
 import trafilatura
 import w3lib.url
+from datatrove.data import Document
+from datatrove.pipeline.filters import (
+    C4QualityFilter,
+    GopherQualityFilter,
+    GopherRepetitionFilter,
+    LanguageFilter,
+    URLFilter,
+)
 from resiliparse.parse.encoding import bytes_to_str, detect_encoding
 from tqdm_loggable.auto import tqdm
 from trafilatura import extract
 from transformers import AutoTokenizer, FlaxAutoModelForSequenceClassification
 from warcio import ArchiveIterator
 
-from marin.utils import fsspec_exists, fsspec_glob, fsspec_rm, remove_tpu_lockfile_on_exit
+from marin.utils import fsspec_exists, fsspec_glob
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -103,21 +126,6 @@ def decode_html(html: bytes) -> str | None:
 
 
 @ray.remote(
-    memory=32 * 1024 * 1024 * 1024,
-)
-def consolidate_parquet(parquet_paths: str, consolidated_parquet_path: str):
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-
-    all_examples = []
-    for parquet_path in tqdm(parquet_paths, desc="Consolidating parquets"):
-        with fsspec.open(parquet_path) as f:
-            all_examples.extend(pd.read_parquet(f).to_dict("records"))
-    write_examples_to_parquet(all_examples, consolidated_parquet_path)
-    for parquet_path in tqdm(parquet_paths, desc="Deleting consolidated parquets"):
-        fsspec_rm(parquet_path)
-
-
-@ray.remote(
     memory=64 * 1024 * 1024 * 1024,
     num_cpus=4,
 )
@@ -134,14 +142,14 @@ def extract_text_from_warc(
     success_path = extracted_text_output_path + ".SUCCESS"
     if fsspec_exists(success_path):
         logger.info(f"Success path {success_path} already exists, skipping...")
-        with fsspec.open(success_path) as f:
+        with fsspec.open(success_path, block_size=1 * 1024 * 1024 * 1024) as f:
             shard_stats = json.load(f)
         return (
             shard_stats["total_urls"],
             shard_stats["total_urls_fetched"],
         )
 
-    with fsspec.open(urls_path) as f:
+    with fsspec.open(urls_path, block_size=1 * 1024 * 1024 * 1024) as f:
         df = pd.read_parquet(f)
     logger.info(f"Found {len(df)} examples in input file {urls_path}")
     # Extract the URLs from the "link_target" column
@@ -155,7 +163,7 @@ def extract_text_from_warc(
     num_records_skipped = 0
     num_records_saved = 0
     extracted_text_records = []
-    with fsspec.open(warc_path, "rb", compression="gzip") as file_stream:
+    with fsspec.open(warc_path, "rb", compression="gzip", block_size=1 * 1024 * 1024 * 1024) as file_stream:
         for record in tqdm(ArchiveIterator(file_stream)):
             if record.rec_type == "response":
                 record_url = record.rec_headers.get_header("WARC-Target-URI")
@@ -204,7 +212,7 @@ def extract_text_from_warc(
     # Write examples from this shard to parquet
     write_examples_to_parquet(extracted_text_records, extracted_text_output_path)
     logger.info(f"Saved {num_records_saved} records from WARC, skipped {num_records_skipped} records")
-    with fsspec.open(success_path, "w") as fout:
+    with fsspec.open(success_path, "w", block_size=1 * 1024 * 1024 * 1024) as fout:
         json.dump(
             {
                 "total_urls": len(urls),
@@ -220,24 +228,133 @@ def extract_text_from_warc(
 
 
 @ray.remote(
+    memory=4 * 1024 * 1024 * 1024,
+)
+def get_shard_url_filter_results(input_path: str) -> list[bool | tuple[bool, str]]:
+    """
+    Given an input path to a parquet with fineweb-edu examples, run the
+    fineweb URL filter on the examples.
+    """
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+    logger.info("Applying the URL filter")
+    documents_to_classify = load_extracted_text_as_datatrove_documents(input_path)
+    url_filter = URLFilter()
+    examples_url_filter_results: list[bool | tuple[bool, str]] = [
+        url_filter.filter(document) for document in tqdm(documents_to_classify, desc="Applying the URL filter")
+    ]
+    logger.info("Applied the URL filter")
+    return examples_url_filter_results
+
+
+@ray.remote(
+    memory=4 * 1024 * 1024 * 1024,
+)
+def get_shard_langid_filter_results(input_path: str) -> list[bool]:
+    """
+    Given an input path to a parquet with fineweb-edu examples, run the
+    fineweb language ID filter on the examples.
+    """
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+    logger.info("Applying the LangID filter")
+    documents_to_classify = load_extracted_text_as_datatrove_documents(input_path)
+    langid_filter = LanguageFilter()
+    examples_langid_filter_results: list[bool] = [
+        langid_filter.filter(document) for document in tqdm(documents_to_classify, desc="Applying the LangID filter")
+    ]
+    logger.info("Applied the LangID filter")
+    return examples_langid_filter_results
+
+
+@ray.remote(
+    memory=4 * 1024 * 1024 * 1024,
+)
+def get_shard_gopher_repetition_filter_results(input_path: str) -> list[bool | tuple[bool, str]]:
+    """
+    Given an input path to a parquet with fineweb-edu examples, run the
+    fineweb gopher repetition filter on the examples.
+    """
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+    logger.info("Applying the Gopher repetition filter")
+    documents_to_classify = load_extracted_text_as_datatrove_documents(input_path)
+    gopher_repetition_filter = GopherRepetitionFilter()
+    examples_gopher_repetition_filter_results: list[bool | tuple[bool, str]] = [
+        gopher_repetition_filter.filter(document)
+        for document in tqdm(documents_to_classify, desc="Applying the Gopher repetition filter")
+    ]
+    logger.info("Applied the Gopher repetition filter")
+    return examples_gopher_repetition_filter_results
+
+
+@ray.remote(
+    memory=4 * 1024 * 1024 * 1024,
+)
+def get_shard_gopher_quality_filter_results(input_path: str) -> list[bool | tuple[bool, str]]:
+    """
+    Given an input path to a parquet with fineweb-edu examples, run the
+    fineweb gopher quality filter on the examples.
+    """
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+    logger.info("Applying the Gopher quality filter")
+    documents_to_classify = load_extracted_text_as_datatrove_documents(input_path)
+    gopher_quality_filter = GopherQualityFilter()
+    examples_gopher_quality_filter_results: list[bool | tuple[bool, str]] = [
+        gopher_quality_filter.filter(document)
+        for document in tqdm(documents_to_classify, desc="Applying the Gopher quality filter")
+    ]
+    logger.info("Applied the Gopher quality filter")
+    return examples_gopher_quality_filter_results
+
+
+@ray.remote(
+    memory=4 * 1024 * 1024 * 1024,
+)
+def get_shard_c4_quality_filter_results(input_path: str) -> list[bool | tuple[bool, str]]:
+    """
+    Given an input path to a parquet with fineweb-edu examples, run the
+    fineweb C4 quality filter on the examples.
+    """
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+    logger.info("Applying the C4 quality filter")
+    documents_to_classify = load_extracted_text_as_datatrove_documents(input_path)
+    c4_quality_filter = C4QualityFilter(filter_no_terminal_punct=False)
+    examples_c4_quality_filter_results: list[bool | tuple[bool, str]] = [
+        c4_quality_filter.filter(document)
+        for document in tqdm(documents_to_classify, desc="Applying the C4 quality filter")
+    ]
+    logger.info("Applied the C4 quality filter")
+    return examples_c4_quality_filter_results
+
+
+def load_extracted_text_as_datatrove_documents(input_path: str) -> list[Document]:
+    """
+    Given an input path to a parquet with fineweb-edu examples, convert them to
+    documents for use with datatrove filters.
+    """
+    logger.info("Reading input path with extracted text")
+    with fsspec.open(input_path, block_size=1 * 1024 * 1024 * 1024) as f:
+        examples = pd.read_parquet(f).to_dict("records")
+    logger.info("Finished reading input path with extracted text")
+    # Convert the examples to datatrove Documents
+    logger.info("Converting examples into datatrove Documents")
+    documents = [
+        Document(text=example["text"], id=example["id"], metadata=example["metadata"])
+        for example in tqdm(examples, desc="converting examples into datatrove Documents")
+    ]
+    logger.info("Converted examples into datatrove Documents")
+    return documents
+
+
+@ray.remote(
     memory=32 * 1024 * 1024 * 1024,
     num_cpus=8,
     resources={"TPU": 4, "TPU-v4-8-head": 1},
 )
-@remove_tpu_lockfile_on_exit
-def get_shard_quality_classifier_scores(
-    input_path: str,
-    urls_and_scores_output_path: str,
-    text_and_scores_output_path: str,
-):
+def get_shard_quality_classifier_results(input_path: str) -> list[float]:
+    """
+    Given an input path to a parquet with fineweb-edu examples, run the
+    fineweb quality classifier on the examples.
+    """
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-    success_path = urls_and_scores_output_path + ".SUCCESS"
-    if fsspec_exists(success_path):
-        logger.info(f"Success path {success_path} already exists, skipping...")
-        with fsspec.open(success_path) as f:
-            shard_stats = json.load(f)
-        return shard_stats["total_urls_passing"]
-
     logger.info("Loading quality classifier...")
     # Load the quality classifier
     model = FlaxAutoModelForSequenceClassification.from_pretrained("HuggingFaceFW/fineweb-edu-classifier")
@@ -245,17 +362,16 @@ def get_shard_quality_classifier_scores(
     logger.info("Loaded quality classifier...")
 
     logger.info("Reading input path with extracted text")
-    with fsspec.open(input_path) as f:
+    with fsspec.open(input_path, block_size=1 * 1024 * 1024 * 1024) as f:
         examples_to_classify = pd.read_parquet(f).to_dict("records")
     logger.info("Finished reading input path with extracted text")
-
     # Classify all of the examples in the shard
     examples_scores = []
     for examples_batch in tqdm(
         batched(examples_to_classify, 512), desc="Classifying text", total=math.ceil(len(examples_to_classify) / 512)
     ):
-        documents = [ex["text"] for ex in examples_batch]
-        inputs = tokenizer(documents, return_tensors="jax", padding="longest", truncation=True)
+        batch_text = [ex["text"] for ex in examples_batch]
+        inputs = tokenizer(batch_text, return_tensors="jax", padding="longest", truncation=True)
         outputs = model(**inputs)
         logits = outputs.logits.squeeze(-1)
         logits_list = logits.tolist()
@@ -263,30 +379,114 @@ def get_shard_quality_classifier_scores(
 
     assert len(examples_scores) == len(examples_to_classify)
     logger.info(f"Ran quality classifier on {len(examples_to_classify)} examples")
+    return examples_scores
+
+
+@ray.remote(
+    memory=4 * 1024 * 1024 * 1024,
+)
+def get_shard_yield(
+    input_path: str,
+    passing_urls_and_scores_output_path: str,
+    failing_urls_and_scores_output_path: str,
+    passing_text_and_scores_output_path: str,
+    failing_text_and_scores_output_path: str,
+):
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+    success_path = passing_urls_and_scores_output_path + ".SUCCESS"
+    if fsspec_exists(success_path):
+        logger.info(f"Success path {success_path} already exists, skipping...")
+        with fsspec.open(success_path, block_size=1 * 1024 * 1024 * 1024) as f:
+            shard_stats = json.load(f)
+        return shard_stats["total_urls_passing"]
+
+    # Launch remote functions for each of the filters:
+    # (1) URL, (2) langid, (3) gopher reptition,
+    # (4) gopher quality, (5) c4 quality, and (6) learned quality classifier
+    (
+        examples_url_filter_results,
+        examples_langid_filter_results,
+        examples_gopher_repetition_filter_results,
+        examples_gopher_quality_filter_results,
+        examples_c4_quality_filter_results,
+        examples_scores,
+    ) = ray.get(
+        [
+            get_shard_url_filter_results.remote(input_path),
+            get_shard_langid_filter_results.remote(input_path),
+            get_shard_gopher_repetition_filter_results.remote(input_path),
+            get_shard_gopher_quality_filter_results.remote(input_path),
+            get_shard_c4_quality_filter_results.remote(input_path),
+            get_shard_quality_classifier_results.remote(input_path),
+        ]
+    )
+
+    logger.info("Reading input path with extracted text")
+    with fsspec.open(input_path, block_size=1 * 1024 * 1024 * 1024) as f:
+        examples_to_classify = pd.read_parquet(f).to_dict("records")
+    logger.info("Finished reading input path with extracted text")
 
     num_records_passing = 0
-    urls_and_scores_output_records = []
-    text_and_scores_output_records = []
+    passing_urls_and_scores_output_records = []
+    failing_urls_and_scores_output_records = []
+
+    passing_text_and_scores_output_records = []
+    failing_text_and_scores_output_records = []
+
     for (
         example,
+        example_url_filter_result,
+        example_langid_filter_result,
+        example_gopher_repetition_filter_result,
+        example_gopher_quality_filter_result,
+        example_c4_quality_filter_result,
         example_score,
-    ) in zip(examples_to_classify, examples_scores, strict=True):
-        if example_score >= 3.0:
-            num_records_passing += 1
-        urls_and_scores_output_records.append(
-            {
-                "url": example["metadata"]["url"],
-                "canonicalized_url": example["metadata"]["canonicalized_url"],
-                "score": example_score,
-            }
-        )
-        copied_example = deepcopy(example)
-        copied_example["metadata"]["score"] = example_score
-        text_and_scores_output_records.append(copied_example)
-    write_examples_to_parquet(urls_and_scores_output_records, urls_and_scores_output_path)
-    write_examples_to_parquet(text_and_scores_output_records, text_and_scores_output_path)
+    ) in zip(
+        examples_to_classify,
+        examples_url_filter_results,
+        examples_langid_filter_results,
+        examples_gopher_repetition_filter_results,
+        examples_gopher_quality_filter_results,
+        examples_c4_quality_filter_results,
+        examples_scores,
+        strict=True,
+    ):
+        urls_and_scores_record = {
+            "url": example["metadata"]["url"],
+            "canonicalized_url": example["metadata"]["canonicalized_url"],
+            "passed_url_filter": True if example_url_filter_result is True else False,
+            "passed_langid_filter": True if example_langid_filter_result is True else False,
+            "passed_gopher_repetition_filter": True if example_gopher_repetition_filter_result else False,
+            "passed_gopher_quality_filter": True if example_gopher_quality_filter_result else False,
+            "passed_c4_quality_filter": True if example_c4_quality_filter_result else False,
+            "score": example_score,
+        }
+        text_and_scores_record = deepcopy(example)
+        # Add the entries from urls_and_scores_record to text_and_scores_record
+        for k, v in urls_and_scores_record.items():
+            text_and_scores_record["metadata"][k] = v
 
-    with fsspec.open(success_path, "w") as fout:
+        if (
+            example_url_filter_result is True
+            and example_langid_filter_result is True
+            and example_gopher_repetition_filter_result is True
+            and example_gopher_quality_filter_result is True
+            and example_c4_quality_filter_result is True
+            and example_score >= 3.0
+        ):
+            num_records_passing += 1
+            passing_urls_and_scores_output_records.append(urls_and_scores_record)
+            passing_text_and_scores_output_records.append(text_and_scores_record)
+        else:
+            failing_urls_and_scores_output_records.append(urls_and_scores_record)
+            failing_text_and_scores_output_records.append(text_and_scores_record)
+
+    write_examples_to_parquet(passing_urls_and_scores_output_records, passing_urls_and_scores_output_path)
+    write_examples_to_parquet(passing_text_and_scores_output_records, passing_text_and_scores_output_path)
+    write_examples_to_parquet(failing_urls_and_scores_output_records, failing_urls_and_scores_output_path)
+    write_examples_to_parquet(failing_text_and_scores_output_records, failing_text_and_scores_output_path)
+
+    with fsspec.open(success_path, "w", block_size=1 * 1024 * 1024 * 1024) as fout:
         json.dump(
             {
                 "total_urls_passing": num_records_passing,
@@ -354,15 +554,25 @@ def main(cfg: GetCrawlYieldConfig):
     unfinished = []
     for shard_index in shard_indices_to_process:
         extracted_text_path = os.path.join(cfg.text_output_directory, f"links.{shard_index}_extracted_text.parquet")
-        text_and_scores_output_path = os.path.join(
-            cfg.text_output_directory, f"links.{shard_index}_text_and_scores.parquet"
+        passing_urls_and_scores_output_path = os.path.join(
+            cfg.urls_and_scores_output_directory, f"links.{shard_index}_urls_and_scores.passing.parquet"
         )
-        urls_and_scores_output_path = os.path.join(
-            cfg.urls_and_scores_output_directory, f"links.{shard_index}_urls_and_scores.parquet"
+        passing_text_and_scores_output_path = os.path.join(
+            cfg.text_output_directory, f"links.{shard_index}_text_and_scores.passing.parquet"
+        )
+        failing_urls_and_scores_output_path = os.path.join(
+            cfg.urls_and_scores_output_directory, f"links.{shard_index}_urls_and_scores.failing.parquet"
+        )
+        failing_text_and_scores_output_path = os.path.join(
+            cfg.text_output_directory, f"links.{shard_index}_text_and_scores.failing.parquet"
         )
         unfinished.append(
-            get_shard_quality_classifier_scores.remote(
-                extracted_text_path, urls_and_scores_output_path, text_and_scores_output_path
+            get_shard_yield.remote(
+                extracted_text_path,
+                passing_urls_and_scores_output_path,
+                failing_urls_and_scores_output_path,
+                passing_text_and_scores_output_path,
+                failing_text_and_scores_output_path,
             )
         )
     # Wait for quality classification jobs to finish
@@ -378,7 +588,7 @@ def main(cfg: GetCrawlYieldConfig):
             raise
     logger.info(f"Total URLs passing: {total_urls_passing}\n")
 
-    with fsspec.open(cfg.statistics_output_path, "w", compression="gzip") as fout:
+    with fsspec.open(cfg.statistics_output_path, "w", compression="gzip", block_size=1 * 1024 * 1024 * 1024) as fout:
         json.dump(
             {
                 "total_urls": total_urls,
@@ -387,16 +597,6 @@ def main(cfg: GetCrawlYieldConfig):
             },
             fout,
         )
-
-    # Consolidate urls and scores into a single parquet
-    urls_and_scores_parquet_paths = [
-        os.path.join(cfg.urls_and_scores_output_directory, f"links.{shard_index}_urls_and_scores.parquet")
-        for shard_index in shard_indices_to_process
-    ]
-    consolidated_urls_and_scores_parquet_path = os.path.join(
-        cfg.urls_and_scores_output_directory, "urls_and_scores.parquet"
-    )
-    _ = ray.get(consolidate_parquet.remote(urls_and_scores_parquet_paths, consolidated_urls_and_scores_parquet_path))
 
 
 if __name__ == "__main__":
