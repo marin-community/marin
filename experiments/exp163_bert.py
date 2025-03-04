@@ -74,7 +74,7 @@ def get_model_path(model_path: str | ExecutorStep):
 def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
     """Create the steps for a single experiment.
 
-    Variation of exp614_quality_filtering.py, but uses an ensemble of quality classifiers.
+    Variation of exp614_quality_filtering.py, but trains both BERT and Fasttext quality classifiers.
     """
 
     steps = []
