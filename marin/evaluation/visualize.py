@@ -1,37 +1,40 @@
 """
 Uses Levanter's viz_lm functionality to visualize log probabilities of a language model.
 """
+
+import dataclasses
 from dataclasses import dataclass
 
 import ray
-
 from levanter.data.text import LMMixtureDatasetConfig
 from levanter.distributed import RayConfig
-from levanter.main.viz_logprobs import VizLmConfig as LevanterVizLmConfig, main as viz_lm_main
+from levanter.main.viz_logprobs import VizLmConfig as LevanterVizLmConfig
+from levanter.main.viz_logprobs import main as viz_lm_main
 from levanter.models.lm_model import LmConfig
 from levanter.trainer import TrainerConfig
+
 from marin.execution.executor import ExecutorStep, this_output_path
-from marin.processing.tokenize import TokenizeConfig, TokenizerStep, lm_mixture_data_config
+from marin.processing.tokenize import lm_mixture_data_config
 from marin.utils import remove_tpu_lockfile_on_exit
+
 
 @dataclass
 class VizLmConfig:
     """
     Configuration for visualizing log probabilities of a language model.
     """
+
     checkpoint_path: str
     model: LmConfig
     datasets: LMMixtureDatasetConfig
     num_docs_per_dataset: int = 32
     per_device_batch_size: int = 4
-    output_path: str = this_output_path()  # type: ignore
+    output_path: str = dataclasses.field(default_factory=this_output_path)  # type: ignore
 
     comparison_model_path: str | None = None
 
 
-@ray.remote(
-    memory=64 * 1024 * 1024 * 1024, resources={"TPU": 4, "TPU-v4-8-head": 1}
-)
+@ray.remote(memory=64 * 1024 * 1024 * 1024, resources={"TPU": 4, "TPU-v4-8-head": 1})
 @remove_tpu_lockfile_on_exit
 def do_viz_lm(config: LevanterVizLmConfig) -> None:
     """
@@ -75,10 +78,7 @@ def visualize_lm_lob_probs(config: VizLmConfig) -> None:
         path=config.output_path,
         data=config.datasets,
         trainer=TrainerConfig(
-            ray=RayConfig(
-                auto_start_cluster=False
-            ),
-            per_device_eval_parallelism=config.per_device_batch_size
+            ray=RayConfig(auto_start_cluster=False), per_device_eval_parallelism=config.per_device_batch_size
         ),
         comparison_model_path=config.comparison_model_path,
     )
