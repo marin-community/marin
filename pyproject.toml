@@ -29,11 +29,10 @@ dependencies = [
     "pandas", # Only needed by Fileprovider in inference.py
     "pyarrow", # # Only needed by Fileprovider in inference.py
     # We are keeping levanter deps for now. @TODO :: Remove them
-    # "jax[tpu]==0.5.1",
+    "jax[tpu]==0.5.1",
     "multiprocess==0.70.16",
-    # "levanter>=1.2.dev1207",
-    # "haliax>=1.4.dev330",
-    "torch_xla",
+    "levanter>=1.2.dev1207",
+    "haliax>=1.4.dev330",
 ]
 
 [project.optional-dependencies]
