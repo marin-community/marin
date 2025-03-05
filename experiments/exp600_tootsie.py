@@ -319,9 +319,11 @@ dessert_weights_v2 = {
         for dataset, size in high_quality_token_counts.items()
     },
     "flan": DESSERT_DESSERT * approx_dessert_sizes["flan"] / total_dessert_size,
-    "all_math": DESSERT_DESSERT
-    * sum(size for dataset, size in approx_dessert_sizes.items() if "math" in dataset)
-    / total_dessert_size,
+    "all_math": (
+        DESSERT_DESSERT
+        * sum(size for dataset, size in approx_dessert_sizes.items() if "math" in dataset)
+        / total_dessert_size
+    ),
 }
 
 all_math = dolmino_math_tokenized_llama3
