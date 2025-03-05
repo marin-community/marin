@@ -1,11 +1,83 @@
 # Experiment Log
 
-- [fineweb-edu-10M](#fineweb-edu-10m)
-- [open-web-math-10M](#open-web-math-10m)
-- [fineweb-edu-10M-cc-deduplicated](#fineweb-edu-10m-cc-deduplicated)
-- [open-web-math-10M-cc-deduplicated](#open-web-math-10m-cc-deduplicated)
+## Summary of the Overall Workflow
 
-## FineWeb-Edu-10M
+1. Download HTML content for Open-Web-Math and FineWeb-Edu examples.
+
+2. Construct the crawl frontier for each dataset by extracting outlinks from the
+   HTML.
+
+3. Randomly sample links (e.g., 10M) from the crawl frontier.
+
+4. Fetch sampled URLs at scale; store responses in Parquet format.
+
+5. Convert Parquet responses to WARC files.
+
+6. Process the fetched WARC-formatted responses with each dataset's original
+   filtering pipeline. Collect the documents that pass the filtering pipeline
+   and count the number of tokens.
+
+7. Use MinHash deduplication to remove near-duplicates in the fetched pages that
+   also occur in the original dataset.
+
+8. Count tokens after deduplication to measure the final number of crawled tokens.
+
+## Extracting HTML for all datasets examples
+
+1. Fetch the HTML for each open-web-math example:
+
+```
+ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- \
+    python marin/crawl/open-web-math/convert_open_web_math_to_html.py \
+    --input_path gs://marin-us-central2/raw/open-web-math-fde8ef8/fde8ef8/huggingface.co/datasets/open-web-math/open-web-math/resolve/fde8ef8/data/ \
+    --html_output_path gs://marin-us-central2/documents/open-web-math-fde8ef8/html/
+```
+
+2. Fetch the HTML for each FineWeb-Edu:
+
+```
+for fineweb_edu_dump_path in $(gcloud storage ls gs://marin-us-central2/raw/fineweb-edu); do
+    dump_name=$(basename -- ${fineweb_edu_dump_path})
+    ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- \
+    python marin/crawl/fineweb-edu/convert_fineweb_edu_to_html.py \
+    --input_path ${fineweb_edu_dump_path} \
+    --html_output_path gs://marin-us-central2/documents/fineweb-edu/html/${dump_name}/
+done
+```
+
+## Get outlinks from HTML pages
+
+1. Extracting outlinks from Dolma-format open-web-math examples containing HTML:
+
+```
+python marin/run/ray_run.py \
+    --pip_deps 'resiliparse_dom @ git+https://github.com/nelson-liu/chatnoir-resiliparse@58247de82b4d881223435113f1a07a86ad66494c#egg=resiliparse_dom&subdirectory=resiliparse_dom,courlan,w3lib,cchardet,beautifulsoup4,lxml' \
+    --no_wait -- \
+    python marin/crawl/get_outlinks_from_html.py \
+    --html_input_path gs://marin-us-central2/documents/open-web-math-fde8ef8/html/ \
+    --prefix openwebmath \
+    --outlinks_output_path gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8/
+```
+
+2. Extracting outlinks from Dolma-format FineWeb-Edu examples containing HTML:
+
+```
+for fineweb_edu_dump_html_path in $(gcloud storage ls gs://marin-us-central2/documents/fineweb-edu/html); do
+    dump_name=$(basename -- ${fineweb_edu_dump_html_path})
+
+    python marin/run/ray_run.py \
+        --pip_deps 'resiliparse_dom @ git+https://github.com/nelson-liu/chatnoir-resiliparse@58247de82b4d881223435113f1a07a86ad66494c#egg=resiliparse_dom&subdirectory=resiliparse_dom,courlan,w3lib,cchardet,beautifulsoup4,lxml' \
+        --no_wait -- \
+        python marin/crawl/get_outlinks_from_html.py \
+        --html_input_path ${fineweb_edu_dump_html_path} \
+        --prefix fineweb_edu \
+        --outlinks_output_path gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu/${dump_name}
+done
+```
+
+## Sample, fetch, and extract text from outlinks
+
+### FineWeb-Edu-10M
 
 This setting looks at 10M unique sampled outlinks from the original FineWeb-Edu
 crawl frontier.
@@ -112,7 +184,7 @@ Total number of tokens: 78,752,251
 Total number of documents: 52,727
 ```
 
-## open-web-math-10M
+### open-web-math-10M
 
 This setting looks at 10M unique sampled outlinks from the original open-web-math
 crawl frontier.
@@ -221,7 +293,7 @@ Total number of tokens: 830,539,923
 Total number of documents: 275,387
 ```
 
-## fineweb-edu-10M-cc-deduplicated
+### fineweb-edu-10M-cc-deduplicated
 
 This setting looks at 10M unique sampled outlinks from the a CC-deduplicated
 version of the FineWeb-Edu crawl frontier, where links that already occur in CC
@@ -332,7 +404,7 @@ Total number of tokens: 67,532,848
 Total number of documents: 48,658
 ```
 
-## open-web-math-10M-cc-deduplicated
+### open-web-math-10M-cc-deduplicated
 
 This setting looks at 10M unique sampled outlinks from the a CC-deduplicated
 version of the open-web-math crawl frontier, where links that already occur in CC
