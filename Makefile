@@ -61,6 +61,12 @@ cluster_docker_push:
 	@echo "Don't forget to update the tags in infra/update-cluster-configs.py"
 	@echo "##################################################################"
 
+cluster_docker_ghcr_push: cluster_docker_build
+	@echo "Pushing Docker image to GitHub Container Registry..."
+	$(foreach version,$(TAG_VERSIONS), \
+		docker tag '$(DOCKER_IMAGE_NAME):latest' 'ghcr.io/stanford-crfm/marin/$(DOCKER_IMAGE_NAME):$(version)';)
+
+
 # Meta-target that builds and then pushes the Docker images
 cluster_docker: cluster_docker_build cluster_docker_push
 	@echo "Docker image build and push complete."
