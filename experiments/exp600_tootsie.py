@@ -71,7 +71,6 @@ llama_8b_train_config = SimpleTrainConfig(
 )
 
 
-
 llama_8b_tootsie = dataclasses.replace(
     default_train(
         name="llama-8b-tootsie-0.001",
@@ -202,6 +201,9 @@ llama_8b_tootsie_phase3 = dataclasses.replace(
 
 
 ## Tootsie Dessert
+## Motivation: our ablations found that we needed more math and more task-prep data (e.g. FLAN) so we're going to
+## add in more of that. We're already cooled down but the LR is actually still pretty high (1.7e-4) so we're going to
+# just coast.
 ## Add in:
 ## FLAN
 ## DolminoSynthMath
@@ -242,6 +244,9 @@ total_dessert_size = sum(approx_dessert_sizes.values())
 DESSERT_WEB = 0.7
 DESSERT_HQ = 0.2
 DESSERT_DESSERT = 0.1
+
+## Attempt 1: This has a bug where I swapped the HQ and Dessert weights.
+# Also, the math sets are so small they don't get picked up
 
 # I'm such a dummy: I swapped HQ and Dessert weights
 dessert_weights_v1 = {
@@ -290,6 +295,7 @@ llama_8b_train_config_dessert = SimpleTrainConfig(
     per_device_eval_parallelism=16,
 )
 
+# BAD, Don't use this. Here for documentation purposes.
 llama_8b_tootsie_dessert = dataclasses.replace(
     default_train(
         name="llama-8b-tootsie-dessert",
@@ -305,7 +311,6 @@ llama_8b_tootsie_dessert = dataclasses.replace(
 # attempt 2: I had swapped HQ and Dessert weights. Also, the math sets are so small they don't get picked up
 # with the block size we use. So we concat the math sets into a single set and weight them as a single set.
 
-
 # I'm such a dummy
 dessert_weights_v2 = {
     **{dataset: DESSERT_WEB * size / total_web_token_count for dataset, size in web_counts.items()},
@@ -314,7 +319,9 @@ dessert_weights_v2 = {
         for dataset, size in high_quality_token_counts.items()
     },
     "flan": DESSERT_DESSERT * approx_dessert_sizes["flan"] / total_dessert_size,
-    "all_math": DESSERT_DESSERT * sum(size for dataset, size in approx_dessert_sizes.items() if "math" in dataset) / total_dessert_size,
+    "all_math": DESSERT_DESSERT
+    * sum(size for dataset, size in approx_dessert_sizes.items() if "math" in dataset)
+    / total_dessert_size,
 }
 
 all_math = dolmino_math_tokenized_llama3
@@ -323,7 +330,7 @@ dessert_tokenized = {
     **phase_3_tokenized,
     "flan": dessert_tokenized["flan"],
     "all_math": all_math,
- }
+}
 
 dessert_data_mixture_v3 = lm_varying_mixture_data_config(
     components=dessert_tokenized,
