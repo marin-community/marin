@@ -40,7 +40,7 @@ def default_label(
                 "stop_token_ids": [tokenizer.eos_token_id, tokenizer.convert_tokens_to_ids("<|eot_id|>")],
             },
             filetype="jsonl.zst",
-            output_filetype_override="jsonl.zst",
+            output_filetype_override="jsonl.gz",
         ),
         override_output_path=f"documents/medu-labels/{experiment_name}",
     )
