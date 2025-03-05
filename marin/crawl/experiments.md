@@ -75,6 +75,74 @@ for fineweb_edu_dump_html_path in $(gcloud storage ls gs://marin-us-central2/doc
 done
 ```
 
+## Optional: remove outlinks that already appear in Common Crawl:
+
+1. Set the GCS authentication key in the environment variable:
+
+```
+export AUTHENTICATION_JSON="$(jq -c . data_browser/gcs-key.json)"
+```
+
+2. Running on OpenWebMath. We first deduplicate against a bloom filter
+   containing the 2013-2018 successful URLs, and then another bloom filter
+   containing the 2019-2024 successful URLs. We do this in two batches for
+   robustness to pre-emption because the TPU machines are not capable of holding
+   both bloom filters in memory at once.
+
+```
+# First, deduplicate with 2013-2018 bloom filter
+python marin/run/ray_run.py \
+    --pip_deps 'rbloom-gcs==1.5.6,orjson' \
+    -e "GOOGLE_APPLICATION_CREDENTIALS_JSON" "$AUTHENTICATION_JSON" \
+    --no_wait -- \
+    python marin/crawl/deduplicate_outlinks_against_cc.py \
+        --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8/*_links.jsonl.gz' \
+        --bloom_filter_path 'gs://marin-us-central2/gcsfuse_mount/nfliu/deduplicate_outlinks/cc-urls-partitioned_2013_2018.bloom' \
+        --output_path gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-cc-deduplicated-2013_2018/ \
+        --shards_per_batch 100
+
+# Then, deduplicate with 2019-2024 bloom filter
+python marin/run/ray_run.py \
+    --pip_deps 'rbloom-gcs==1.5.6,orjson' \
+    -e "GOOGLE_APPLICATION_CREDENTIALS_JSON" "$AUTHENTICATION_JSON" \
+    --no_wait -- \
+    python marin/crawl/deduplicate_outlinks_against_cc.py \
+        --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-cc-deduplicated-2013_2018/*_links.jsonl.gz' \
+        --bloom_filter_path 'gs://marin-us-central2/gcsfuse_mount/nfliu/deduplicate_outlinks/cc-urls-partitioned_2019_2024.bloom' \
+        --output_path gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-cc-deduplicated/ \
+        --shards_per_batch 100
+```
+
+3. Running on FineWeb-Edu. We first deduplicate against a bloom filter
+   containing the 2013-2018 successful URLs, and then another bloom filter
+   containing the 2019-2024 successful URLs. We do this in two batches for
+   robustness to pre-emption because the TPU machines are not capable of holding
+   both bloom filters in memory at once.
+
+```
+# First, deduplicate with 2013-2018 bloom filter
+python marin/run/ray_run.py \
+    --pip_deps 'rbloom-gcs==1.5.6,orjson' \
+    -e "GOOGLE_APPLICATION_CREDENTIALS_JSON" "$AUTHENTICATION_JSON" \
+    --no_wait -- \
+    python marin/crawl/deduplicate_outlinks_against_cc.py \
+        --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu/CC-MAIN-*/*_links.jsonl.gz' \
+        --bloom_filter_path 'gs://marin-us-central2/gcsfuse_mount/nfliu/deduplicate_outlinks/cc-urls-partitioned_2013_2018.bloom' \
+        --output_path gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-cc-deduplicated-2013_2018/ \
+        --shards_per_batch 100
+
+# Then, deduplicate with 2019-2024 bloom filter
+python marin/run/ray_run.py \
+    --pip_deps 'rbloom-gcs==1.5.6,orjson' \
+    -e "GOOGLE_APPLICATION_CREDENTIALS_JSON" "$AUTHENTICATION_JSON" \
+    --no_wait -- \
+    python marin/crawl/deduplicate_outlinks_against_cc.py \
+        --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-cc-deduplicated-2013_2018/CC-MAIN-*/*_links.jsonl.gz' \
+        --bloom_filter_path 'gs://marin-us-central2/gcsfuse_mount/nfliu/deduplicate_outlinks/cc-urls-partitioned_2019_2024.bloom' \
+        --output_path gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-cc-deduplicated/ \
+        --shards_per_batch 100
+```
+
 ## Sample, fetch, and extract text from outlinks
 
 ### FineWeb-Edu-10M
