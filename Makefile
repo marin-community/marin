@@ -66,6 +66,9 @@ cluster_docker_ghcr_push: cluster_docker_build
 	$(foreach version,$(TAG_VERSIONS), \
 		docker tag '$(DOCKER_IMAGE_NAME):latest' 'ghcr.io/stanford-crfm/marin/$(DOCKER_IMAGE_NAME):$(version)';)
 
+	$(foreach version,$(TAG_VERSIONS), \
+		docker push 'ghcr.io/stanford-crfm/marin/$(DOCKER_IMAGE_NAME):$(version)';)
+
 
 # Meta-target that builds and then pushes the Docker images
 cluster_docker: cluster_docker_build cluster_docker_push
