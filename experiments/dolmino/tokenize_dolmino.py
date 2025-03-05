@@ -6,8 +6,9 @@ This module defines a function that returns tokenization steps for each dataset 
 
 import os.path
 
-from experiments.llama import llama3_tokenizer
 from levanter.store.cache import CacheOptions
+
+from experiments.llama import llama3_tokenizer
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
 from marin.processing.tokenize.data_configs import TokenizerStep
@@ -30,7 +31,6 @@ DOLMINO_DATASETS = {
     "stackexchange": ["**/*.json.gz"],
     "wiki": ["**/*.json.gz"],
 }
-
 
 
 def tokenize_dolmino_steps(*, base_path="tokenized/", tokenizer=llama3_tokenizer) -> dict[str, TokenizerStep]:
@@ -59,9 +59,7 @@ def _get_split_paths(split):
     return dolmino_split_paths
 
 
-all_dolmino_math_files = [
-    path for split in DOLMINO_DATASETS if "math" in split for path in _get_split_paths(split)
-]
+all_dolmino_math_files = [path for split in DOLMINO_DATASETS if "math" in split for path in _get_split_paths(split)]
 
 dolmino_math_tokenized_llama3 = ExecutorStep(
     name="tokenized/dolmino/all_math",
@@ -71,11 +69,10 @@ dolmino_math_tokenized_llama3 = ExecutorStep(
         validation_paths=versioned([]),
         cache_path=this_output_path(),
         tokenizer=versioned(llama3_tokenizer),
-        cache_options=CacheOptions(num_shard_groups=32)
+        cache_options=CacheOptions(num_shard_groups=32),
     ),
     pip_dependency_groups=["sentencepiece"],
 )
-
 
 
 def get_dolmino_step(split: str) -> ExecutorStep[TokenizeConfig]:
