@@ -37,7 +37,7 @@ def tokenize_dolmino_steps(*, base_path="tokenized/", tokenizer=llama3_tokenizer
     dolmino_steps: dict[str, ExecutorStep[TokenizeConfig]] = {}
     for split in DOLMINO_DATASETS:
         dolmino_split_output_path = os.path.join(base_path, "dolmino", split)
-        dolmino_split_paths = _get_split_paths(split)
+        dolmino_split_paths = _get_dolmino_split_paths(split)
         dolmino_steps[os.path.join("dolmino", split)] = ExecutorStep(
             name=dolmino_split_output_path,
             fn=tokenize,
@@ -52,14 +52,16 @@ def tokenize_dolmino_steps(*, base_path="tokenized/", tokenizer=llama3_tokenizer
     return dolmino_steps
 
 
-def _get_split_paths(split):
+def _get_dolmino_split_paths(split):
     patterns = DOLMINO_DATASETS[split]
     dolmino_split_input_base_path = os.path.join(BASE_DIR_DOLMINO, split)
     dolmino_split_paths = [f"{dolmino_split_input_base_path}/{pattern}" for pattern in patterns]
     return dolmino_split_paths
 
 
-all_dolmino_math_files = [path for split in DOLMINO_DATASETS if "math" in split for path in _get_split_paths(split)]
+all_dolmino_math_files = [
+    path for split in DOLMINO_DATASETS if "math" in split for path in _get_dolmino_split_paths(split)
+]
 
 dolmino_math_tokenized_llama3 = ExecutorStep(
     name="tokenized/dolmino/all_math",
