@@ -403,8 +403,8 @@ llama_8b_tootsie_dessert_v3 = dataclasses.replace(
 
 high_quality_token_counts_v2 = {
     **high_quality_token_counts,
-    "flan": approx_dessert_sizes["flan"],
-    "all_math": sum(size for dataset, size in approx_dessert_sizes.items() if "math" in dataset),
+    "flan": approx_dessert_sizes["flan"] / 1e9,
+    "all_math": sum(size for dataset, size in approx_dessert_sizes.items() if "math" in dataset) / 1e9,
 }
 
 
@@ -419,6 +419,12 @@ cooldown_mixture_weights_v2 = {
         dataset: (100.0 - HQ_WEIGHT) * token_count / total_web_token_count for dataset, token_count in web_counts.items()
     },
 }
+
+# sanity checks because I've been burned too many times:
+# we should add up to about 100
+assert 99.9 < sum(cooldown_mixture_weights_v2.values()) < 100.1
+# none of the HQ docs should be more than ~11% (Pes2o is about 10.3%) or less than 0.5%
+assert all(0.5 < w < 11.0 for k, w in cooldown_mixture_weights_v2.items() if k in high_quality_token_counts_v2)
 
 cooldown_components_v2 = {**phase_3_tokenized, "flan": dessert_tokenized["flan"], "all_math": all_math}
 
@@ -436,14 +442,14 @@ cooldown_config_v2 = lm_varying_mixture_data_config(
 
 llama_8b_tootsie_cooldown_v2 = dataclasses.replace(
     default_train(
-        name="llama-8b-tootsie-cooldown-v2",
+        name="llama-8b-tootsie-cooldown-take-2",
         tokenized=cooldown_config_v2,
         model_config=llama_8b,
         train_config=llama_8b_train_config_phase3,
         tags=["llama", "8b", "ema", "exp600"],
         eval_harness_tasks=[],
     ),
-    override_output_path="checkpoints/llama-8b-tootsie-cooldown-v2",
+    override_output_path="checkpoints/llama-8b-tootsie-cooldown-take-2",
 )
 
 
