@@ -460,6 +460,7 @@ llama_8b_tootsie_cooldown_v2 = dataclasses.replace(
 
 
 if __name__ == "__main__":
+    print(cooldown_mixture_weights_v2)
     executor_main(
         steps=[
             llama_8b_tootsie_phase1,
