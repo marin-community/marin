@@ -9,10 +9,10 @@ this_path = os.path.dirname(os.path.abspath(__file__))
 cluster_template_path = os.path.join(this_path, "marin-cluster-template.yaml")
 vllm_template_path = os.path.join(this_path, "marin-vllm-template.yaml")
 
-# LAtest tahs ABh:  latest 9491ec2a 20250209
+# LAtest tahs ABh:  latest 4a47ffc0 20250305
 
 DOCKER_TAGS = {
-    "us-central2": "89b461b3",
+    "us-central2": "4a47ffc0",
     "big-run": "6da1c9ed",
     "us-west4": "89b461b3",
     "europe-west4": "89b461b3",
