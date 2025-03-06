@@ -401,30 +401,36 @@ llama_8b_tootsie_dessert_v3 = dataclasses.replace(
 # We're going to try again with a new mixture starting at the same point as the first cooldown.
 # This mixture is basically adding in all the HQ docs from dolmino, though still leaving out GSM-MIND
 
+# Our ablations found that 5% FLAN for a 1T run would likely lead to the best results. This epochs
+# FLAN about 4 times.
+
+WEB_WEIGHT_V2 = 0.7
+HQ_WEIGHT_V2 = 0.25
+FLAN_WEIGHT_V2 = 0.05
+
+
+# HQ docs are the same as before, but adding in some math
 high_quality_token_counts_v2 = {
     **high_quality_token_counts,
-    "flan": approx_dessert_sizes["flan"] / 1e9,
     "all_math": sum(size for dataset, size in approx_dessert_sizes.items() if "math" in dataset) / 1e9,
 }
-
 
 total_high_quality_token_count_v2 = sum(high_quality_token_counts_v2.values())
 
 cooldown_mixture_weights_v2 = {
     **{
-        dataset: HQ_WEIGHT * token_count / total_high_quality_token_count_v2
+        dataset: HQ_WEIGHT_V2 * token_count / total_high_quality_token_count_v2
         for dataset, token_count in high_quality_token_counts_v2.items()
     },
-    **{
-        dataset: (100.0 - HQ_WEIGHT) * token_count / total_web_token_count for dataset, token_count in web_counts.items()
-    },
+    **{dataset: WEB_WEIGHT_V2 * token_count / total_web_token_count for dataset, token_count in web_counts.items()},
+    "flan": FLAN_WEIGHT_V2,
 }
 
 # sanity checks because I've been burned too many times:
-# we should add up to about 100
-assert 99.9 < sum(cooldown_mixture_weights_v2.values()) < 100.1
+# we should add up to about 1.0
+assert 0.99 < sum(cooldown_mixture_weights_v2.values()) < 1.01
 # none of the HQ docs should be more than ~11% (Pes2o is about 10.3%) or less than 0.5%
-assert all(0.5 < w < 11.0 for k, w in cooldown_mixture_weights_v2.items() if k in high_quality_token_counts_v2)
+assert all(0.005 < w < 0.11 for k, w in cooldown_mixture_weights_v2.items() if k in high_quality_token_counts_v2)
 
 cooldown_components_v2 = {**phase_3_tokenized, "flan": dessert_tokenized["flan"], "all_math": all_math}
 
