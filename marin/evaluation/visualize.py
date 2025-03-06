@@ -64,7 +64,7 @@ def mixture_for_visualization(inputs: dict[str, ExecutorStep]) -> LMMixtureDatas
     )
 
 
-def visualize_lm_lob_probs(config: VizLmConfig) -> None:
+def visualize_lm_log_probs(config: VizLmConfig) -> None:
     """
     Visualizes log probabilities of a language model.
 

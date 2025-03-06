@@ -16,7 +16,7 @@ The cooldown seems to function as a kind of sharpening/annealing
 from experiments.defaults import default_validation_sets
 from experiments.exp600_tootsie import llama3_tokenizer, llama_8b
 from experiments.llama import llama_8b_old_rotary
-from marin.evaluation.visualize import VizLmConfig, mixture_for_visualization, visualize_lm_lob_probs
+from marin.evaluation.visualize import VizLmConfig, mixture_for_visualization, visualize_lm_log_probs
 from marin.execution.executor import ExecutorStep, executor_main, versioned
 
 COMPARISON_MODEL = "gs://marin-us-central2/checkpoints/llama-8b-tootsie-phase2/checkpoints/step-730000/"
@@ -47,7 +47,7 @@ for checkpoint in CHECKPOINTS:
     all_steps.append(
         ExecutorStep(
             name=name,
-            fn=visualize_lm_lob_probs,
+            fn=visualize_lm_log_probs,
             config=VizLmConfig(
                 checkpoint_path=checkpoint,
                 model=llama_8b,
@@ -73,7 +73,7 @@ for checkpoint in PHASE_1_CHECKPOINTS:
     all_steps.append(
         ExecutorStep(
             name=name,
-            fn=visualize_lm_lob_probs,
+            fn=visualize_lm_log_probs,
             config=VizLmConfig(
                 checkpoint_path=checkpoint,
                 model=PHASE_1_CONFIG,
