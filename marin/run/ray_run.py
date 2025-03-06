@@ -189,8 +189,6 @@ def main():
     dependencies += PIP_DEPS
     dependencies += args.pip_deps if args.pip_deps else []
 
-    print(dependencies)
-
     # Submit the job and track it asynchronously
     asyncio.run(submit_and_track_job(full_cmd, dependencies, env_vars, args.no_wait))
 
