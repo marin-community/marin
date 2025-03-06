@@ -94,7 +94,6 @@ async def submit_and_track_job(entrypoint: str, dependencies: list, env_vars: di
         "env_vars": env_vars,
         "config": {"setup_timeout_seconds": 1800},
     }
-    print(dependencies)
 
     if len(dependencies) == 0:
         del runtime_dict["pip"]
