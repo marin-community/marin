@@ -1,7 +1,8 @@
 import os
 from dataclasses import dataclass
 
-from experiments.medu.defaults import default_label
+from experiments.medu.defaults import default_label, default_quality_filter_and_consolidate, default_quality_filter_model
+from experiments.medu.medu_datasets import medu_dclm_pretraining_subset
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from marin.generation.medu import CorpusContent
 from operations.download.huggingface.download import DownloadConfig
@@ -58,6 +59,8 @@ humanities = [
     "prehistory",
     "moral_disputes",
     "moral_scenarios",
+    "formal_logic",
+    "logical_fallacies",
 ]
 
 # Mathematics
@@ -85,6 +88,8 @@ science = [
     "nutrition",
     "virology",
     "human_aging",
+    "professional_medicine",
+    "professional_psychology",
 ]
 
 # Engineering
@@ -97,6 +102,7 @@ engineering = [
 ]
 
 # Social Sciences
+# Law, Economics, Geography, Government, Politics, Psychology, Sociology, International Law
 social_sciences = [
     "business_ethics",
     "econometrics",
@@ -110,56 +116,89 @@ social_sciences = [
     "us_foreign_policy",
     "public_relations",
     "security_studies",
+    "management",
+    "marketing",
+    "professional_accounting",
+    "jurisprudence",
+    "professional_law",
+    "international_law",
 ]
 
 # Other
 other = [
-    "formal_logic",
-    "logical_fallacies",
-    "international_law",
-    "jurisprudence",
-    "professional_accounting",
-    "professional_law",
-    "professional_medicine",
-    "professional_psychology",
-    "management",
-    "marketing",
     "miscellaneous",
 ]
 
 
-def default_mmlu_labeling(config: MeduMMLUConfig):
-    mmlu_base_path = mmlu_subject_eval.name
-    corpus_contents = []
-    for subject in config.subset_names:
-        filepath = os.path.join(
-            os.getenv("MARIN_PREFIX"), mmlu_base_path, "cais", f"mmlu-{subject}-dev-evaluation.jsonl.gz"
+class MMLUMeduPipeline:
+    def __init__(self, config: MeduMMLUConfig):
+        self.config = config
+        self.mmlu_base_path = mmlu_subject_eval.name
+        self.corpus_contents = self._create_corpus_contents()
+        self.pretraining_data_path = medu_dclm_pretraining_subset
+        self.pretraining_data_name = "medu-dclm-pretraining-subset"
+
+        # To be populated by the default_mmlu_labeling step
+        self.labeled_documents = self.default_mmlu_labeling()
+        self.encoder_model = default_quality_filter_model(self.labeled_documents, self.config.experiment_name)
+        self.filtered_documents = default_quality_filter_and_consolidate(
+            self.encoder_model, self.pretraining_data_path, self.pretraining_data_name, self.config.experiment_name
         )
-        corpus_contents.append(CorpusContent(content=filepath, content_type="filepath", prompt_column="prompt"))
 
-    return default_label(
-        # TODO(chris): Use direct path for now since we don't have DCLM downloaded on east5.
-        documents_to_be_labeled="gs://marin-us-east5/documents/medu-datasets/medu-dclm-annotation-subset-e12303/medu-dclm-annotation-subset-e12303",
-        targeted_documents=corpus_contents,
-        experiment_name=config.experiment_name,
-    )
+    def _create_corpus_contents(self):
+        corpus_contents = []
+        for subject in self.config.subset_names:
+            filepath = os.path.join(
+                os.getenv("MARIN_PREFIX"), self.mmlu_base_path, "cais", f"mmlu-{subject}-dev-evaluation.jsonl.gz"
+            )
+            corpus_contents.append(CorpusContent(content=filepath, content_type="filepath", prompt_column="prompt"))
+
+        return corpus_contents
+
+    # TODO(chris): Turn into a step so we can use output path of MMLU step
+    def default_mmlu_labeling(self):
+        return default_label(
+            documents_to_be_labeled="gs://marin-us-east5/documents/medu-datasets/medu-dclm-annotation-subset-e12303/medu-dclm-annotation-subset-e12303",
+            # TODO(chris): Use direct path for now since we don't have DCLM downloaded on east5.
+            # documents_to_be_labeled=medu_dclm_annotation_subset,
+            targeted_documents=self.corpus_contents,
+            experiment_name=self.config.experiment_name,
+        )
+
+    def get_executor_steps(self):
+        return [self.labeled_documents, self.encoder_model]
+
+    def run(self):
+        executor_main(self.get_executor_steps())
 
 
-mmlu_humanities_labeled = default_mmlu_labeling(
-    MeduMMLUConfig(subset_names=humanities, experiment_name="mmlu-humanities")
-)
-mmlu_mathematics_labeled = default_mmlu_labeling(
-    MeduMMLUConfig(subset_names=mathematics, experiment_name="mmlu-mathematics")
-)
-mmlu_science_labeled = default_mmlu_labeling(MeduMMLUConfig(subset_names=science, experiment_name="mmlu-science"))
-mmlu_engineering_labeled = default_mmlu_labeling(
+# mmlu_humanities_labeled = default_mmlu_labeling(
+#     MeduMMLUConfig(subset_names=humanities, experiment_name="mmlu-humanities")
+# )
+# mmlu_mathematics_labeled = default_mmlu_labeling(
+#     MeduMMLUConfig(subset_names=mathematics, experiment_name="mmlu-mathematics")
+# )
+# mmlu_science_labeled = default_mmlu_labeling(MeduMMLUConfig(subset_names=science, experiment_name="mmlu-science"))
+# mmlu_engineering_labeled = default_mmlu_labeling(
+#     MeduMMLUConfig(subset_names=engineering, experiment_name="mmlu-engineering")
+# )
+# mmlu_social_sciences_labeled = default_mmlu_labeling(
+#     MeduMMLUConfig(subset_names=social_sciences, experiment_name="mmlu-social-sciences")
+# )
+# mmlu_other_labeled = default_mmlu_labeling(MeduMMLUConfig(subset_names=other, experiment_name="mmlu-other"))
+
+# mmlu_mathematics_dataset = default_dataset_creation(mmlu_mathematics_labeled, "mmlu-mathematics")
+# mmlu_mathematics_model = default_encoder_model(mmlu_mathematics_dataset, "mmlu-mathematics")
+
+mmlu_science_pipeline = MMLUMeduPipeline(MeduMMLUConfig(subset_names=science, experiment_name="mmlu-science"))
+mmlu_engineering_pipeline = MMLUMeduPipeline(
     MeduMMLUConfig(subset_names=engineering, experiment_name="mmlu-engineering")
 )
-mmlu_social_sciences_labeled = default_mmlu_labeling(
+mmlu_social_sciences_pipeline = MMLUMeduPipeline(
     MeduMMLUConfig(subset_names=social_sciences, experiment_name="mmlu-social-sciences")
 )
-mmlu_other_labeled = default_mmlu_labeling(MeduMMLUConfig(subset_names=other, experiment_name="mmlu-other"))
-
+mmlu_humanities_pipeline = MMLUMeduPipeline(MeduMMLUConfig(subset_names=humanities, experiment_name="mmlu-humanities"))
+mmlu_other_pipeline = MMLUMeduPipeline(MeduMMLUConfig(subset_names=other, experiment_name="mmlu-other"))
 
 if __name__ == "__main__":
-    executor_main([mmlu_mathematics_labeled, mmlu_science_labeled, mmlu_engineering_labeled])
+    mmlu_science_pipeline.run()

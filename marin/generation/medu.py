@@ -46,7 +46,7 @@ class MEDUPipelineConfig:
     output_filetype_override: str = "jsonl.gz"
 
 
-@ray.remote
+@ray.remote(max_restarts=-1)  # NOTE(chris): We use Spot TPUs, so we need to be able to restart the pipeline if it fails.
 class MEDUPipeline:
     def __init__(
         self,
@@ -111,26 +111,25 @@ class MEDUPipeline:
     # Stage 2: Merge benchmark description prompts
     def merge_benchmark_description_prompts(self) -> str:
         logger.info(f"Starting benchmark description merging for {len(self.generated_benchmark_descriptions)} prompts")
-
-        # Odd number of prompts, do a single merge to make the number even.
-        if len(self.generated_benchmark_descriptions) % 2 != 0 and len(self.generated_benchmark_descriptions) > 1:
-            description_merging_prompts = [
-                MEDU_BENCHMARK_DESCRIPTION_MERGING_TEMPLATE.format(
-                    description_a=self.generated_benchmark_descriptions[0],
-                    description_b=self.generated_benchmark_descriptions[1],
-                )
-            ]
-            description_merging_prompts_templated = [
-                self._get_chat_templated_prompt(prompt) for prompt in description_merging_prompts
-            ]
-            new_benchmark_descriptions = self.llm.generate(description_merging_prompts_templated)
-            self.generated_benchmark_descriptions.extend(new_benchmark_descriptions)
-
-            # Pop the first two descriptions
-            self.generated_benchmark_descriptions.pop(0)
-            self.generated_benchmark_descriptions.pop(0)
-
         while len(self.generated_benchmark_descriptions) > 1:
+            # Odd number of prompts, do a single merge to make the number even.
+            if len(self.generated_benchmark_descriptions) % 2 != 0 and len(self.generated_benchmark_descriptions) > 1:
+                description_merging_prompts = [
+                    MEDU_BENCHMARK_DESCRIPTION_MERGING_TEMPLATE.format(
+                        description_a=self.generated_benchmark_descriptions[0],
+                        description_b=self.generated_benchmark_descriptions[1],
+                    )
+                ]
+                description_merging_prompts_templated = [
+                    self._get_chat_templated_prompt(prompt) for prompt in description_merging_prompts
+                ]
+                new_benchmark_descriptions = self.llm.generate(description_merging_prompts_templated)
+                self.generated_benchmark_descriptions.extend(new_benchmark_descriptions)
+
+                # Pop the first two descriptions
+                self.generated_benchmark_descriptions.pop(0)
+                self.generated_benchmark_descriptions.pop(0)
+
             pairs = zip(
                 self.generated_benchmark_descriptions[0::2], self.generated_benchmark_descriptions[1::2], strict=False
             )
@@ -173,6 +172,11 @@ def label_documents(config: MEDUPipelineConfig, final_benchmark_description_prom
     return inference_future
 
 
+def write_final_benchmark_description_prompt(final_benchmark_description_prompt: str, output_path: str):
+    with fsspec.open(f"{output_path}/final_benchmark_description_prompt.txt", "w", compression="infer") as f:
+        f.write(final_benchmark_description_prompt)
+
+
 def run_medu_labeling_pipeline(config: MEDUPipelineConfig):
     ray_remote_args = get_scheduling_strategy_fn(config.tensor_parallel_size)()
 
@@ -188,6 +192,9 @@ def run_medu_labeling_pipeline(config: MEDUPipelineConfig):
 
     logger.info(f"Starting document labeling pipeline for {config.input_path}")
     final_benchmark_description_prompt = ray.get(pipeline._get_final_benchmark_description_prompt.remote())
+
+    write_final_benchmark_description_prompt(final_benchmark_description_prompt, config.output_path)
+
     label_documents_future = label_documents(config, final_benchmark_description_prompt)
     ray.get(label_documents_future)
     logger.info(f"Finished document labeling pipeline for {config.output_path}")

@@ -2,7 +2,8 @@ import os
 
 from transformers import AutoTokenizer
 
-from marin.classifiers.hf.train_classifier import HFTrainingConfig, train_classifier_distributed
+from marin.classifiers.hf.launch_ray_training import train_classifier_distributed
+from marin.classifiers.hf.train_classifier import HFTrainingConfig
 from marin.core.runtime import TaskConfig
 from marin.execution.executor import ExecutorStep, output_path_of, this_output_path
 from marin.generation.dataset import DatasetOutputProcessorConfig
@@ -46,57 +47,61 @@ def default_label(
     )
 
 
-def default_dataset_creation(labeled_documents: ExecutorStep, experiment_name: str):
-    return ExecutorStep(
+def default_quality_filter_model(labeled_documents: ExecutorStep, experiment_name: str):
+    dataset = ExecutorStep(
         name=f"documents/medu-datasets/{experiment_name}",
         fn=run_medu_dataset_sampling_pipeline,
         config=DatasetOutputProcessorConfig(
             input_path=output_path_of(labeled_documents),
             output_path=this_output_path(),
         ),
-    )
+    ).cd("sampled")
 
-
-def default_encoder_model(dataset: ExecutorStep, experiment_name: str):
-    medu_econ_classifier_remote = ExecutorStep(
+    max_length = 512
+    medu_classifier_remote = ExecutorStep(
         name=f"classifiers/medu-bert/{experiment_name}",
         fn=train_classifier_distributed,
         config=HFTrainingConfig(
-            train_dataset=output_path_of(dataset),
+            train_dataset=dataset,
             output_dir=this_output_path(),
             num_labels=1,
             target_column="label",
             tpu_num_cores=8,
-            max_length=512,
+            max_length=max_length,
             train_size=0.9,
             eval_steps=100,
             save_steps=100,
             logging_steps=10,
+            run_name=f"medu-classifier-{experiment_name}-max-length-{max_length}",
         ),
     )
 
     # Download the model locally to GCSFuse mount path for inference
-    medu_econ_classifier = ExecutorStep(
+    medu_classifier = ExecutorStep(
         name=f"gcsfuse_mount/medu-models/{experiment_name}-classifier",
         fn=download_model_from_gcs,
         config=DownloadFromGCSConfig(
-            gcs_path=output_path_of(medu_econ_classifier_remote),
+            gcs_path=output_path_of(medu_classifier_remote),
             destination_path=this_output_path(),
         ),
         override_output_path=f"gcsfuse_mount/medu-models/{experiment_name}-classifier",
     )
 
-    return medu_econ_classifier
+    return medu_classifier
 
 
-def default_quality_filter(
-    encoder_model: ExecutorStep, input_data_path: str | ExecutorStep, input_data_name: str, experiment_name: str
+def default_quality_filter_and_consolidate(
+    encoder_model: ExecutorStep | str, input_data_path: str | ExecutorStep, input_data_name: str, experiment_name: str
 ):
-    model_path = os.path.join("/opt", encoder_model.name)
+    if isinstance(encoder_model, str):
+        model_path = encoder_model
+    else:
+        model_path = os.path.join("/opt", encoder_model.name)
+
     if isinstance(input_data_path, ExecutorStep):
         input_data_path = output_path_of(input_data_path)
 
-    return ExecutorStep(
+    attributes = ExecutorStep(
         name=f"attributes/quality_filtering/medu/{input_data_name}-{experiment_name}",
         fn=run_inference,
         config=InferenceConfig(
@@ -116,17 +121,7 @@ def default_quality_filter(
         pip_dependency_groups=["fasttext", "datasets", "filelock"],
     )
 
-
-def default_consolidate(
-    attributes_path: ExecutorStep, input_data_path: str | ExecutorStep, input_data_name: str, experiment_name: str
-):
-    if isinstance(input_data_path, ExecutorStep):
-        input_data_path = output_path_of(input_data_path)
-
-    if isinstance(attributes_path, ExecutorStep):
-        attributes_path = output_path_of(attributes_path)
-
-    return ExecutorStep(
+    filtered_documents = ExecutorStep(
         name=f"documents/quality_filtering/medu/{input_data_name}-{experiment_name}",
         fn=consolidate,
         config=ConsolidateConfig(
@@ -135,7 +130,7 @@ def default_consolidate(
             filters=[
                 FilterConfig(
                     type="classify",
-                    attribute_path=attributes_path,
+                    attribute_path=output_path_of(attributes),
                     name=f"medu-{experiment_name}",
                     label="int_score",
                     threshold=3,
@@ -146,3 +141,5 @@ def default_consolidate(
         ),
         pip_dependency_groups=["ddsketch"],
     )
+
+    return filtered_documents
