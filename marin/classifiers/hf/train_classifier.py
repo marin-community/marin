@@ -94,17 +94,11 @@ def compute_metrics(eval_pred):
     print("Validation Report:\n" + report)
     print("Confusion Matrix:\n" + str(cm))
 
-    import wandb
-
-    # TODO(chris): Make this dynamic?
-    class_names = ["0", "1", "2", "3", "4", "5"]
-
     return {
         "precision": precision,
         "recall": recall,
         "f1_macro": f1,
         "accuracy": accuracy,
-        "conf_mat": wandb.plot.confusion_matrix(probs=None, y_true=labels, preds=preds, class_names=class_names),
     }
 
 
