@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import ClassVar
 
+from experiments.evals.resource_configs import ResourceConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.utils import download_from_gcs, is_remote_path
 
@@ -30,6 +31,11 @@ class ModelConfig:
     path: str | None
     """
     The path to the model checkpoint. Can be a local path or a path on GCS.
+    """
+
+    engine_kwargs: dict | None = None
+    """
+    Additional keyword arguments to pass to the vLLM engine.
     """
 
     def ensure_downloaded(self, local_path: str | None = None) -> str | None:
@@ -59,6 +65,17 @@ class Evaluator(ABC):
     _pip_packages: ClassVar[list[Dependency]]
     _py_modules: ClassVar[list[Dependency]]
 
+    def scheduling_strategy_fn(self, tensor_parallel_size: int, tpu_type: str):
+        import ray
+        from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
+
+        # One bundle per tensor parallel worker
+        pg = ray.util.placement_group(
+            [{"TPU": 1, "CPU": 1}] * tensor_parallel_size + [{f"{tpu_type}-head": 1}],
+            strategy="STRICT_PACK",  # STRICT_PACK means same node
+        )
+        return PlacementGroupSchedulingStrategy(pg, placement_group_capture_child_tasks=True)
+
     @abstractmethod
     def launch_evaluate_with_ray(
         self,
@@ -66,6 +83,7 @@ class Evaluator(ABC):
         evals: list[EvalTaskConfig],
         output_path: str,
         max_eval_instances: int | None = None,
+        resource_config: ResourceConfig | None = None,
     ) -> None:
         """
         Launches the evaluation run with Ray.

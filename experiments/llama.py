@@ -3,6 +3,7 @@ Specifies a sequence of Llama 3 models from small to large.
 """
 
 from levanter.models.llama import LlamaConfig
+from levanter.models.rotary import Llama3RotaryEmbeddingsConfig
 
 from experiments.simple_train_config import SimpleTrainConfig
 
@@ -70,6 +71,19 @@ llama_8b = LlamaConfig(
     num_heads=32,
     num_kv_heads=8,
     num_layers=32,
+    rope=Llama3RotaryEmbeddingsConfig(),
+)
+
+
+llama_8b_old_rotary = LlamaConfig(
+    seq_len=4096,
+    hidden_dim=4096,
+    intermediate_dim=14336,
+    num_heads=32,
+    num_kv_heads=8,
+    num_layers=32,
+    # Levanter defaults to Llama2 rotary
+    # rope=Llama3RotaryEmbeddingsConfig(),
 )
 
 
@@ -80,6 +94,7 @@ llama_13b = LlamaConfig(
     num_heads=40,
     num_kv_heads=8,
     num_layers=40,
+    rope=Llama3RotaryEmbeddingsConfig(),
 )
 
 
@@ -90,6 +105,18 @@ llama_22b = LlamaConfig(
     num_heads=48,
     num_kv_heads=16,
     num_layers=56,
+    rope=Llama3RotaryEmbeddingsConfig(),
+)
+
+
+llama_56b = LlamaConfig(
+    seq_len=4096,
+    hidden_dim=8192,
+    intermediate_dim=28672,
+    num_heads=64,
+    num_kv_heads=8,
+    num_layers=64,
+    rope=Llama3RotaryEmbeddingsConfig(),
 )
 
 
@@ -99,7 +126,8 @@ llama_70b = LlamaConfig(
     intermediate_dim=28672,
     num_heads=64,
     num_kv_heads=8,
-    num_layers=64,
+    num_layers=80,
+    rope=Llama3RotaryEmbeddingsConfig(),
 )
 
 

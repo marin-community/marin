@@ -11,20 +11,50 @@ on:
 jobs:
   quickstart:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+      cancel-in-progress: true
+
+    strategy:
+      matrix:
+        python-version: [ "3.12" ]
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: Set up Python
-        uses: actions/setup-python@v3
+      - name: Set up Conda
+        uses: conda-incubator/setup-miniconda@v2
         with:
-          python-version: '3.10'
-          cache: 'pip'
-          cache-dependency-path: 'pyproject.toml'
+          auto-update-conda: true
+          python-version: ${{ matrix.python-version }}
+          activate-environment: marin_unit_test_env
+          auto-activate-base: false
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cache/pip
+            ~/.cache/uv
+          key: ${{ runner.os }}-${{ matrix.python-version }}-quickstart
 
       - name: Install dependencies
-        run: pip install .[extras]
+        shell: bash -l {0}
+        run: |
+          python -m pip install --upgrade pip
+          pip install uv==0.5.11 toml
+          python scripts/install_all_pip_dep.py
+
+      # Start Ray cluster locally; We give cpus as 64 since we don't want Ray to get stuck in infinite loop trying to
+      # get the resources
+      - name: Start Ray cluster locally
+        shell: bash -l {0}
+        run: |
+          ray start --head --num-cpus=64
 
       - name: Run the quickstart script
-        run: python experiments/quickstart.py
+        shell: bash -l {0}
+        run: |
+          PYTHONPATH=. python experiments/quickstart.py
