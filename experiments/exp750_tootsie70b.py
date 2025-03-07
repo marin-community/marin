@@ -191,7 +191,7 @@ llama_real_70b_tootsie = dataclasses.replace(
 if __name__ == "__main__":
     executor_main(
         [
-            llama_70b_tootsie_1536,
+            # llama_70b_tootsie_1536,
             llama_real_70b_tootsie,
         ],
         description="Train 70B model on DCLM using WSD with EMA.",
