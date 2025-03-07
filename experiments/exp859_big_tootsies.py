@@ -19,7 +19,7 @@ from levanter.schedule import ScheduleStep
 
 from experiments.dclm.tokenize_dclm import dclm_mixture_config_llama3
 from experiments.defaults import default_train
-from experiments.exp750_tootsie70b import dclm_mixture_config_llama3_zoned
+from experiments.exp750_tootsie70b import dclm_mixture_config_llama3_zoned, llama_70b_train_config_mk6
 from experiments.llama import llama_13b, llama_24b, llama_56b
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import executor_main
@@ -154,7 +154,7 @@ llama_22b_tootsie_ema_warmstart = dataclasses.replace(
 )
 
 #####
-# sigh... 56B
+# sigh... 56B. you can ignore this.
 #####
 llama_56b_train_config = SimpleTrainConfig(
     tpu_type="v6e-256",
@@ -171,6 +171,80 @@ llama_56b_train_config = SimpleTrainConfig(
     # TODO: do we need rewarmup
     decay=0.1,  # 10% of 10000 = 500 steps
     lr_schedule="inv",
+)
+
+
+# All of all of these are 56B models but were intended to be 70b. Sigh.
+llama_70b_train_config_mk2 = dataclasses.replace(
+    llama_56b_train_config,
+    train_batch_size=1024,
+    tpu_type="v4-2048",
+    node_count=1,
+    learning_rate=2e-4,
+    decay=0.4,
+    ema_beta=0.995,
+    lr_schedule="linear",
+    cycle_length=None,
+    allow_partial_checkpoint=True,
+    allow_out_of_region_reads=True,
+    allow_out_of_region_writes=False,
+)
+llama_70b_train_config_mk4 = dataclasses.replace(
+    llama_56b_train_config,
+    train_batch_size=1024,
+    tpu_type="v6e-128",
+    node_count=4,
+    learning_rate=2e-4,
+    decay=0.4,
+    ema_beta=0.995,
+    lr_schedule="linear",
+    cycle_length=None,
+    allow_partial_checkpoint=True,
+    allow_out_of_region_reads=True,
+    allow_out_of_region_writes=False,
+)
+
+# actual 56B model
+llama_70b_tootsie_mk2_BAD = dataclasses.replace(
+    default_train(
+        name="llama-70b-tootsie-mk2",
+        # not recorded here:
+        # warmstart weights from llama_70b_tootsie step 80000
+        tokenized=dclm_mixture_config_llama3,
+        model_config=llama_56b,
+        train_config=llama_70b_train_config_mk2,
+        tags=["llama", "70b", "wsd", "exp750", "tootsie", "ema"],
+        eval_harness_tasks=[],
+    ),
+    override_output_path="checkpoints/llama-70b-tootsie-mk2",
+)
+
+llama_70b_tootsie_mk4_BAD = dataclasses.replace(
+    default_train(
+        name="llama-70b-tootsie-mk4",
+        # not recorded here:
+        # warmstart weights from llama_70b_tootsie step 80000
+        tokenized=dclm_mixture_config_llama3_zoned,
+        model_config=llama_56b,
+        train_config=llama_70b_train_config_mk4,
+        tags=["llama", "70b", "wsd", "exp750", "tootsie", "ema"],
+        eval_harness_tasks=[],
+    ),
+    override_output_path="checkpoints/llama-70b-tootsie-mk4",
+)
+
+llama_70b_tootsie_mk6_BAD = dataclasses.replace(
+    default_train(
+        name="llama-70b-tootsie-mk6",
+        # not recorded here:
+        # warmstart weights from llama_70b_tootsie step 87613
+        tokenized=dclm_mixture_config_llama3,
+        model_config=llama_56b,
+        train_config=llama_70b_train_config_mk6,
+        tags=["llama", "70b", "wsd", "exp750", "tootsie", "ema"],
+        eval_harness_tasks=[],
+    ),
+    override_output_path="checkpoints/llama-70b-tootsie-mk6",
 )
 
 llama_56b_tootsie = default_train(
