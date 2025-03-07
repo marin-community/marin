@@ -86,7 +86,8 @@ llama_13b = LlamaConfig(
 )
 
 
-llama_22b = LlamaConfig(
+# With Llama 3 tokenizer, this is 24B
+llama_24b = LlamaConfig(
     seq_len=4096,
     hidden_dim=6144,
     intermediate_dim=16384,
