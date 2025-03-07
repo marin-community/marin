@@ -12,12 +12,16 @@ TokenizerStep = ExecutorStep[TokenizeConfig]
 logger = logging.getLogger(__name__)
 
 
-def step_to_lm_mixture_component(step: TokenizerStep, include_raw_paths: bool) -> LMDatasetSourceConfig:
+def step_to_lm_mixture_component(step: TokenizerStep | TokenizeConfig, include_raw_paths: bool) -> LMDatasetSourceConfig:
     """
     Converts a tokenizer step to a Levanter dataset source config. This is useful for creating
     data mixture configs.
     """
-    return step.config.as_lm_dataset_source_config(output_path_of(step), include_raw_paths=include_raw_paths)
+
+    if isinstance(step, TokenizeConfig):
+        return step.as_lm_dataset_source_config(step.cache_path, include_raw_paths=include_raw_paths)
+    else:
+        return step.config.as_lm_dataset_source_config(output_path_of(step), include_raw_paths=include_raw_paths)
 
 
 def lm_data_config(
@@ -54,7 +58,7 @@ def lm_data_config(
 
 
 def lm_mixture_data_config(
-    components: dict[str, TokenizerStep],
+    components: dict[str, TokenizerStep | TokenizeConfig],
     weights: dict[str, float],
     *,
     shuffle: bool | int = True,

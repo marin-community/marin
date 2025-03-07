@@ -29,12 +29,12 @@ from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
 
 # Phases/Runs in this file:
-# 1. WSD-S on DCLM+Starcode+Proofpile on 2x v5litepod-256
-# 2. Switch to WSD with EMA on v4-2048
-# 3. Switch to a 30% Dolmino-ish HQ dataset mixture, decay the LR
-# 4. Tootsie Dessert (Attempt 1): Sprinkle in a bit of FLAN and Synth Math
-# 5. Tootsie Dessert (Attempt 2): Fix the weights and add in all the HQ docs from dolmino
-# 6. Tootsie Cooldown v2: Another attempt at a final cooldown (replacing Step 3)
+# 1. WSD-S on DCLM+Starcode+Proofpile on 2x v5litepod-256 (from scratch)
+# 2. Switch to WSD with EMA on v4-2048 (from (1))
+# 3. Cooldown v1: Switch to a 30% Dolmino-ish HQ dataset mixture, decay the LR (from (2))
+# 4a. Tootsie Dessert (Attempt 1): Sprinkle in a bit of FLAN and Synth Math (from (3))
+# 4b. Tootsie Dessert (Attempt 2): Fix the weights and add in all the HQ docs from dolmino (from (3))
+# 5. Tootsie Cooldown v2: Another attempt at a final cooldown (from (2))
 
 
 ################################################################
@@ -460,7 +460,6 @@ llama_8b_tootsie_cooldown_v2 = dataclasses.replace(
 
 
 if __name__ == "__main__":
-    print(cooldown_mixture_weights_v2)
     executor_main(
         steps=[
             llama_8b_tootsie_phase1,
