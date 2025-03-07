@@ -202,10 +202,10 @@ def sample_outlinks(input_pattern: str, num_to_sample: int, shard_size: int, out
         current_index = current_index + num_examples
 
     # Randomly sample IDs from 0 to current_index - 1 (inclusive)
-    logger.info(f"Subsampling {num_to_sample * 5} ids")
     # Oversample by 5x, since some of the target URLs will be duplicates
     rng = np.random.default_rng(0)
     num_ids_to_generate = min(num_to_sample * 5, current_index)
+    logger.info(f"Subsampled {num_ids_to_generate} ids")
 
     if num_ids_to_generate == current_index:
         # We want to use all the IDs, so just shuffle them
