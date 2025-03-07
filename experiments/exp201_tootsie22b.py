@@ -10,8 +10,8 @@ next batch, so we're folding in the previous mixture into the next mixture.
 For now, we're training on DCLM's best mix, but that will change.
 """
 
+from experiments.dclm.tokenize_dclm import dclm_mixture_config_llama3
 from experiments.defaults import default_train
-from experiments.exp600_tootsie import dclm_mixture_config_llama3
 from experiments.llama import llama_13b, llama_70b
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import executor_main
@@ -58,7 +58,6 @@ llama_13b_tootsie = default_train(
     train_config=llama_22b_train_config,
     tags=["llama", "13b", "wsd-s", "exp201", "tootsie"],
     eval_harness_tasks=[],
-    use_default_evaluation=False,
 )
 
 llama_70b_tootsie = default_train(
@@ -68,7 +67,6 @@ llama_70b_tootsie = default_train(
     train_config=llama_70b_train_config,
     tags=["llama", "70b", "wsd-s", "exp201", "tootsie"],
     eval_harness_tasks=[],
-    use_default_evaluation=False,
 )
 
 
