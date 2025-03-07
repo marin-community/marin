@@ -4,10 +4,19 @@ Canonical set of evals.
 
 import logging
 
-from experiments.evals.task_configs import CORE_TASKS
+from experiments.evals.engine_configs import DEFAULT_VLLM_ENGINE_KWARGS
+from experiments.evals.resource_configs import SINGLE_TPU_V4_8, ResourceConfig
+from experiments.evals.task_configs import CORE_TASKS, KEY_GENERATION_TASKS, KEY_MULTIPLE_CHOICE_TASKS
 from marin.evaluation.evaluation_config import EvalTaskConfig, EvaluationConfig
 from marin.evaluation.run import evaluate
-from marin.execution.executor import ExecutorStep, InputName, output_path_of, this_output_path
+from marin.execution.executor import (
+    ExecutorStep,
+    InputName,
+    get_executor_step,
+    output_path_of,
+    this_output_path,
+    versioned,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -45,12 +54,8 @@ def evaluate_helm_on_step(
         evals (list[str]): List of evaluations to run with HELM, e.g, ["mmlu", "lite"].
     """
     # TODO: support evaluating all checkpoints in a run
-    if isinstance(step, ExecutorStep):
-        model_step_path = output_path_of(step)
-        executor_step = step
-    elif isinstance(step, InputName):
-        model_step_path = output_path_of(step.step)
-        executor_step = step.step
+    executor_step = get_executor_step(step)
+    model_step_path = output_path_of(executor_step)
 
     return ExecutorStep(
         name=f"evaluation/helm/{executor_step.name}",
@@ -68,7 +73,12 @@ def evaluate_helm_on_step(
 
 
 def evaluate_lm_evaluation_harness(
-    model_name: str, model_path: str, evals: list[EvalTaskConfig], max_eval_instances: int | None = None
+    model_name: str,
+    model_path: str,
+    evals: list[EvalTaskConfig],
+    max_eval_instances: int | None = None,
+    engine_kwargs: dict | None = None,
+    resource_config: ResourceConfig | None = None,
 ) -> ExecutorStep:
     """
     Create an ExecutorStep to evaluate the model using LM Evaluation Harness.
@@ -88,12 +98,14 @@ def evaluate_lm_evaluation_harness(
             evaluation_path=this_output_path(),
             evals=evals,
             max_eval_instances=max_eval_instances,
-            launch_with_ray=False,
+            launch_with_ray=True,
+            engine_kwargs=engine_kwargs,
+            resource_config=resource_config,
         ),
     )
 
 
-def evaluate_alpaca_eval(model_name: str, model_path: str) -> ExecutorStep:
+def evaluate_alpaca_eval(model_name: str, model_path: str, resource_config: ResourceConfig) -> ExecutorStep:
     """
     Create an ExecutorStep to evaluate the model using AlpacaEval.
 
@@ -109,12 +121,71 @@ def evaluate_alpaca_eval(model_name: str, model_path: str) -> ExecutorStep:
             model_name=model_name,
             model_path=model_path,
             evaluation_path=this_output_path(),
+            resource_config=resource_config,
+        ),
+    )
+
+
+def _infer_model_name_for_path(model_path: str) -> str:
+    """
+    Infer model name from model path.
+    """
+    # path names are like gs://marin-us-central2/checkpoints/dclm_7b2x/hf/dclm_7b0828/dclm_7b0828/step-479999/
+    # we want something like: dclm_7b0828_step-479999
+    if model_path.endswith("/"):
+        model_path = model_path[:-1]
+
+    return "_".join(model_path.split("/")[-2:])
+
+
+def extract_model_name_and_path(step: ExecutorStep | InputName | str) -> tuple[str, str]:
+    """
+    Extract the model name and path from a step.
+    """
+    if isinstance(step, ExecutorStep):
+        model_step_path = output_path_of(step)
+        name = step.name
+    elif isinstance(step, InputName):
+        model_step_path = output_path_of(step.step)
+        name = step.step.name
+    elif isinstance(step, str):
+        model_step_path = step
+        name = _infer_model_name_for_path(step)
+    else:
+        raise ValueError(f"Invalid step type: {step}")
+
+    return name, model_step_path
+
+
+def evaluate_levanter_lm_evaluation_harness(
+    model_name: str,
+    model_path: str,
+    evals: list[EvalTaskConfig],
+    resource_config: ResourceConfig,
+    max_eval_instances: int | None = None,
+) -> ExecutorStep:
+    """
+    Create an ExecutorStep to evaluate the model using Levanter LM Evaluation Harness.
+    """
+    return ExecutorStep(
+        name=f"evaluation/lm_evaluation_harness_levanter/lmeval_debug_{model_name}",
+        fn=evaluate,
+        config=EvaluationConfig(
+            evaluator="levanter_lm_evaluation_harness",
+            model_name=None,  # imputed automatically
+            model_path=versioned(model_path),  # type: ignore
+            evaluation_path=this_output_path(),
+            evals=versioned(evals),
+            discover_latest_checkpoint=True,
+            max_eval_instances=versioned(max_eval_instances),
+            resource_config=resource_config,
         ),
     )
 
 
 def default_eval(
-    step: ExecutorStep | InputName,
+    step: ExecutorStep | InputName | str,
+    resource_config: ResourceConfig = SINGLE_TPU_V4_8,
     evals: list[EvalTaskConfig] | None = None,
     max_eval_instances: int | None = None,
 ) -> ExecutorStep:
@@ -128,14 +199,9 @@ def default_eval(
     """
 
     # this logic extracts the `ExecutorStep` corresponding to the training step, and get the model path
-    if isinstance(step, ExecutorStep):
-        model_step_path = output_path_of(step)
-        executor_step = step
-    elif isinstance(step, InputName):
-        model_step_path = output_path_of(step.step)
-        executor_step = step.step
+    name, model_step_path = extract_model_name_and_path(step)
 
-    logger.info(f"Creating default evaluation step for {executor_step.name}")
+    logger.info(f"Creating default evaluation step for {name}")
 
     # Default to CORE_TASKS
     if evals is None:
@@ -143,16 +209,41 @@ def default_eval(
 
     logger.info(f"Running evals on the following tasks: {evals}")
 
-    return ExecutorStep(
-        name=f"evaluation/levanter_lm_evaluation_harness/{executor_step.name}",
-        fn=evaluate,
-        config=EvaluationConfig(
-            evaluator="levanter_lm_evaluation_harness",
-            model_name=None,  # imputed automatically
-            model_path=model_step_path,  # type: ignore
-            evaluation_path=this_output_path(),
-            evals=evals,
-            discover_latest_checkpoint=True,
+    return evaluate_levanter_lm_evaluation_harness(
+        name, model_step_path, evals, resource_config, max_eval_instances=max_eval_instances
+    )
+
+
+def default_key_evals(
+    step: ExecutorStep | InputName | str,
+    resource_config: ResourceConfig,
+    model_name: str | None = None,
+    max_eval_instances: int | None = None,
+    engine_kwargs: dict | None = DEFAULT_VLLM_ENGINE_KWARGS,
+) -> list[ExecutorStep]:
+    """
+    Create a list of ExecutorSteps to evaluate the model using LM Evaluation Harness on a step.
+    """
+    name, model_step_path = extract_model_name_and_path(step)
+
+    if model_name is None:
+        model_name = name
+
+    return [
+        evaluate_lm_evaluation_harness(
+            model_name,
+            model_step_path,
+            KEY_GENERATION_TASKS,
+            max_eval_instances=max_eval_instances,
+            engine_kwargs=engine_kwargs,
+            resource_config=resource_config,
+        ),
+        evaluate_levanter_lm_evaluation_harness(
+            model_name,
+            model_step_path,
+            KEY_MULTIPLE_CHOICE_TASKS,
+            resource_config,
             max_eval_instances=max_eval_instances,
         ),
-    )
+        evaluate_alpaca_eval(model_name, model_step_path, resource_config),
+    ]
