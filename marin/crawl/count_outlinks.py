@@ -33,6 +33,17 @@ python marin/run/ray_run.py \
     python marin/crawl/count_outlinks.py \
     --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu/CC-MAIN*/*_links.jsonl.gz'
 ```
+
+Running on FineWeb-Edu-unique, to verify that BigQuery link deduplication works:
+
+```
+python marin/run/ray_run.py \
+    --pip_deps 'hyperloglog' \
+    --no_wait -- \
+    python marin/crawl/count_outlinks.py \
+    --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-unique/unique_links*.jsonl.gz' \
+    --exact True
+```
 """
 import json
 import logging
@@ -66,7 +77,7 @@ def count_examples_in_shard_approximate(shard_path: str) -> tuple[int, HyperLogL
     # Create HLL with ~0.5% error
     shard_hll = HyperLogLog(0.005)
     num_lines = 0
-    with fsspec.open(shard_path, "rt", compression="gzip") as fin:
+    with fsspec.open(shard_path, "rt", compression="gzip", block_size=1 * 1024 * 1024 * 1024) as fin:
         for line in fin:
             outlink = json.loads(line)["link_target"]
             shard_hll.add(outlink)
@@ -82,7 +93,7 @@ def count_examples_in_shard_exact(shard_path: str) -> tuple[int, set]:
     """
     shard_set = set()
     num_lines = 0
-    with fsspec.open(shard_path, "rt", compression="gzip") as fin:
+    with fsspec.open(shard_path, "rt", compression="gzip", block_size=1 * 1024 * 1024 * 1024) as fin:
         for line in fin:
             outlink = json.loads(line)["link_target"]
             shard_set.add(outlink)
