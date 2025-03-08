@@ -54,6 +54,7 @@ python marin/run/ray_run.py \
 ```
 
 """  # noqa: E501
+import bisect
 import json
 import logging
 import random
@@ -127,12 +128,9 @@ def sample_outlinks(input_pattern: str, num_to_sample: int, output_prefix: str):
 
     # Iterate over all records and build a mapping from example index to
     # the filepath that contains those example ranges.
-    example_ranges_to_path: dict[tuple[int, int], str] = {}
-    refs = []
-    for shard_path in shard_paths:
-        refs.append(count_examples_in_shard.remote(shard_path))
+    refs = [count_examples_in_shard.remote(shard_path) for shard_path in shard_paths]
 
-    current_index = 0
+    shard_sizes = []
     with tqdm(total=len(refs), desc="Counting records") as pbar:
         while refs:
             # Process results in the finish order instead of the submission order.
@@ -141,35 +139,51 @@ def sample_outlinks(input_pattern: str, num_to_sample: int, output_prefix: str):
             # a batch of objects instead of all objects.
             results = ray.get(ready_refs)
             for shard_path, num_examples in results:
-                # shard path contains examples from [`current_index`, `current_index + num_lines`)
-                example_ranges_to_path[(current_index, current_index + num_examples)] = shard_path
-                current_index = current_index + num_examples
+                shard_sizes.append((shard_path, num_examples))
                 pbar.update(1)
 
+    # 2) Build prefix array: shard_starts[i] is the global index where shard i begins
+    shard_paths_sorted = []
+    shard_starts = []
+    running_start = 0
+    for shard_path, shard_count in shard_sizes:
+        shard_paths_sorted.append(shard_path)
+        shard_starts.append(running_start)
+        running_start += shard_count
+    # sum of all shard sizes
+    total_examples = running_start
+
+    logger.info(f"Total examples across shards: {total_examples}")
+
     # Randomly sample IDs from 0 to current_index - 1 (inclusive)
-    logger.info(f"Subsampling {num_to_sample * 5} ids")
-    # Oversample by 5x, since some of the target URLs will be duplicates
-    subsampled_ids = random.sample(range(0, current_index), k=min(num_to_sample * 5, current_index))
-    logger.info(f"Subsampled {num_to_sample * 5} ids")
+    oversample_factor = 5
+    actual_samples = min(num_to_sample * oversample_factor, total_examples)
+    subsampled_ids = random.sample(range(total_examples), k=actual_samples)
+    logger.info(f"Subsampled {len(subsampled_ids)} IDs (oversample_factor={oversample_factor}).")
 
     # Associate shards with ids to pluck from them
     shard_to_local_offsets = defaultdict(list)
+    # We'll need an extra sentinel at the end for bisect if we want to avoid edge cases:
+    shard_starts.append(total_examples)  # sentinel so we can do shard_idx+1 safely
+
     for example_id in tqdm(subsampled_ids, desc="Mapping sampled IDs to shards"):
-        # Find which shard this example belongs to
-        for (start_idx, end_idx), shard_path in example_ranges_to_path.items():
-            if start_idx <= example_id < end_idx:
-                # local offset inside the shard
-                local_offset = example_id - start_idx
-                shard_to_local_offsets[shard_path].append(local_offset)
-                break
+        # Find the position in shard_starts
+        # bisect_right will give the index where example_id could be inserted
+        # to keep shard_starts sorted. We do -1 to get the shard that actually covers example_id.
+        shard_idx = bisect.bisect_right(shard_starts, example_id) - 1
+
+        # local offset is example_id minus the start
+        local_offset = example_id - shard_starts[shard_idx]
+        shard_path = shard_paths_sorted[shard_idx]
+        shard_to_local_offsets[shard_path].append(local_offset)
 
     # Extract sampled IDs from their corresponding files
     logger.info("Extracting sampled IDs")
     extracted_examples = []
     seen_target_urls = set()
-    refs = []
-    for shard_path, offsets in shard_to_local_offsets.items():
-        refs.append(get_examples_from_offsets.remote(shard_path, offsets))
+    refs = [
+        get_examples_from_offsets.remote(shard_path, offsets) for shard_path, offsets in shard_to_local_offsets.items()
+    ]
 
     with tqdm(total=len(refs), desc="Extracting sampled IDs") as pbar:
         while refs:
