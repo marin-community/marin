@@ -101,7 +101,7 @@ def count_examples_in_shard_exact(shard_path: str) -> tuple[int, set]:
     return num_lines, shard_set
 
 
-@ray.remote(memory=256 * 1024 * 1024 * 1024)
+@ray.remote(memory=350 * 1024 * 1024 * 1024)
 def count_outlinks(input_pattern: str, exact: bool):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     shard_paths = list(fsspec_glob(input_pattern))
