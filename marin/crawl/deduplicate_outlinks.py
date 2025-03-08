@@ -57,7 +57,7 @@ python marin/run/ray_run.py \
         --bq_table_id 'fineweb_edu_outlinks'
 ```
 
-Deduplicating fineweb-edu-cc-deduplicated outlinks:
+Deduplicating fineweb-edu-cc-deduplicated outlinks (~8 mins):
 
 ```
 export AUTHENTICATION_JSON="$(jq -c . ./marin/crawl/bigquery-gcs-key.json)"
