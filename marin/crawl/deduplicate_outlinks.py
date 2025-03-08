@@ -12,6 +12,8 @@ gcloud iam service-accounts keys create bigquery-gcs-key.json --iam-account=mari
 mv bigquery-gcs-key.json marin/crawl/
 ```
 
+Deduplicating open-web-math outlinks:
+
 ```
 export AUTHENTICATION_JSON="$(jq -c . ./marin/crawl/bigquery-gcs-key.json)"
 
@@ -23,6 +25,21 @@ python marin/run/ray_run.py \
         --gcs_input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8/*_links.jsonl.gz' \
         --gcs_output_prefix 'gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-unique/unique_links' \
         --bq_table_id 'open_web_math_outlinks'
+```
+
+Deduplicating open-web-math-cc-deduplicated outlinks:
+
+```
+export AUTHENTICATION_JSON="$(jq -c . ./marin/crawl/bigquery-gcs-key.json)"
+
+python marin/run/ray_run.py \
+    --pip_deps 'google-cloud-bigquery' \
+    -e "GOOGLE_APPLICATION_CREDENTIALS_JSON" "$AUTHENTICATION_JSON" \
+    --no_wait -- \
+    python marin/crawl/deduplicate_outlinks.py \
+        --gcs_input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-cc-deduplicated/*_links.jsonl.gz' \
+        --gcs_output_prefix 'gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-cc-deduplicated-unique/unique_links' \
+        --bq_table_id 'open_web_math_cc_deduplicated_outlinks'
 ```
 """  # noqa: E501
 import json
@@ -144,6 +161,7 @@ def deduplicate_and_shuffle_with_bq(
     logger.info("Export complete!")
 
     # Clean up intermediate tables if desired
+    client.delete_table(table_ref, not_found_ok=True)
     client.delete_table(dedup_table, not_found_ok=True)
     client.delete_table(shuffled_table, not_found_ok=True)
 
