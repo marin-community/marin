@@ -10,12 +10,11 @@ This prediction is done through a two-step modeling process using (N, D) data fr
 
 For further details see the corresponding GitHub issue: https://github.com/stanford-crfm/marin/issues/646.
 
-To use this code, call fit_task_loss_from_ladder_models() and fit_accuracy_from_task_loss() with appropriate arguments.
-
-Example usage is in marin/scaling_laws/scaling_laws_analysis.ipynb.
+To use this code, call fit_scaling_laws() with appropriate arguments.
 """
 
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from typing import Any
 
 import matplotlib.pyplot as plt
@@ -23,12 +22,14 @@ import numpy as np
 from scipy.optimize import curve_fit, minimize
 from scipy.special import huber
 
-from experiments.llama import LlamaConfig, compute_num_parameters, llama3_tokenizer_vocab_size
+from experiments.llama import compute_num_parameters, llama3_tokenizer_vocab_size
 
 try:
     import pandas as pd
 except ImportError:
     pd: Any = None
+
+OPTIMIZATION_TOLERANCE = 1e-10
 
 ####################################################################################################
 # Power law helpers
@@ -63,7 +64,6 @@ def power_law_loss(
 ) -> float:
     """
     Huber loss for the power-law model.
-
     Args:
         params: List of parameters [A, B, alpha, beta, E]
         N: Number of parameters
@@ -100,9 +100,13 @@ def fit_power_law(
         initial_guess: Initial guess for the parameters
         delta: huber loss delta, indicating the quadratic vs. linear loss changepoint.
     """
+    # Compute the minimum y value to use as the initial guess for E
+    min_y = np.min(y)
+
     if use_log_space:
         if initial_guess is None:
-            initial_guess = [0.0, 0.0, 1.0, 1.0, 0.0]  # [log_A, log_B, alpha, beta, E]
+            # Initialize E to max(min_y, 1e-10) to ensure it's positive
+            initial_guess = [0.0, 0.0, 1.0, 1.0, max(min_y, 1e-10)]  # [log_A, log_B, alpha, beta, E]
         bounds = [
             (None, None),  # log_A unbounded
             (None, None),  # log_B unbounded
@@ -112,19 +116,27 @@ def fit_power_law(
         ]
     else:
         if initial_guess is None:
-            initial_guess = [1.0, 1.0, 1.0, 1.0, 0.0]  # [A, B, alpha, beta, E]
+            # Initialize E to max(min_y, 1e-10) to ensure it's positive
+            initial_guess = [1.0, 1.0, 1.0, 1.0, max(min_y, 1e-10)]  # [A, B, alpha, beta, E]
         bounds = [
             (0, None),  # A >= 0
             (0, None),  # B >= 0
             (0, None),  # alpha >= 0
             (0, None),  # beta >= 0
-            (0, None),  # E >= 0
+            (1e-10, None),  # E >= 1e-10 to ensure E is positive
         ]
 
     def objective(params):
         return power_law_loss(params, N, D, y, use_log_space, delta)
 
-    result = minimize(objective, initial_guess, method="L-BFGS-B", bounds=bounds)
+    result = minimize(
+        objective,
+        initial_guess,
+        method="L-BFGS-B",
+        bounds=bounds,
+        options={"ftol": OPTIMIZATION_TOLERANCE, "gtol": OPTIMIZATION_TOLERANCE, "maxiter": 2500},
+    )
+
     if not result.success:
         raise RuntimeError(f"Optimization failed: {result.message}")
 
@@ -150,32 +162,45 @@ def fit_sigmoidal(L: np.ndarray, y: np.ndarray, initial_guess: Sequence[float] |
     """
     Fit a sigmoidal model to the data (L, y).
 
+    Equation: a / (1 + exp(-k * (L - L_0))) + b
+
     Args:
-        L: Task loss
-        y: Ground-truth task accuracy
-        initial_guess: Initial guess for the parameters
+        L: Task loss (input array)
+        y: Ground-truth task accuracy (output array)
+        initial_guess: Initial guess for [a, b, k, L_0], defaults to data-driven values
+
+    Returns:
+        popt: Optimized parameters [a, b, k, L_0]
     """
-
+    # Set initial guess if not provided
     if initial_guess is None:
-        initial_guess = [1.0, 0.0, 1.0, 0.0]  # [a, b, k, L_0]
+        y_min, y_max = np.min(y), np.max(y)
+        a_init = y_max - y_min  # amplitude
+        b_init = y_min  # offset
+        k_init = -1.0  # slope (negative for decreasing sigmoid)
+        L_0_init = np.mean(L)  # midpoint
+        initial_guess = [a_init, b_init, k_init, L_0_init]
 
-    lower_bounds = [-np.inf, -np.inf, -np.inf, -np.inf]
-    upper_bounds = [np.inf, np.inf, np.inf, np.inf]
-
+    # Set parameter bounds
+    lower_bounds = [0, 0, -np.inf, -np.inf]  # a > 0, b >= 0, k unbounded below, L_0 unbounded
+    upper_bounds = [np.inf, np.inf, 0, np.inf]  # a unbounded above, b unbounded, k <= 0, L_0 unbounded
     bounds = (lower_bounds, upper_bounds)
 
     def objective(L, a, b, k, L_0):
         return predict_sigmoidal([a, b, k, L_0], L)
 
-    # use scipy.optimize.curve_fit
-    popt, _ = curve_fit(objective, L, y, p0=initial_guess, bounds=bounds)
+    # Fit the model using scipy's curve_fit()
+    # https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.curve_fit.html
+    popt, _ = curve_fit(
+        objective, L, y, p0=initial_guess, bounds=bounds, maxfev=15000, method="trf", ftol=OPTIMIZATION_TOLERANCE
+    )
 
     return popt
 
 
-def predict_sigmoidal(params: Sequence[float], task_loss: np.ndarray) -> np.ndarray:
+def predict_sigmoidal(params: Sequence[float], L: np.ndarray) -> np.ndarray:
     a, b, k, L_0 = params
-    return a / (1 + np.exp(-k * (task_loss - L_0))) + b
+    return a / (1 + np.exp(-k * (L - L_0))) + b
 
 
 ####################################################################################################
@@ -187,7 +212,6 @@ def pull_metrics_from_wandb(
     metrics: Sequence[str],
     entity: str,
     project: str,
-    x_axis: str = "throughput/total_gflops",
     summary_fields: Sequence[str] = ("parameter_count",),
 ) -> pd.DataFrame:
     """
@@ -198,7 +222,6 @@ def pull_metrics_from_wandb(
         metrics: List of metrics to pull from the runs; these differ depending on the step (unlike summary_fields)
         entity: WandB entity
         project: WandB project
-        x_axis: Column to use for the x-axis (eg. throughput/total_gflops)
         summary_fields: List of summary fields to pull from the runs
 
     Returns:
@@ -214,15 +237,18 @@ def pull_metrics_from_wandb(
         run = api.run(f"{entity}/{project}/{run_id}")
         run_data = {"run": run.name}
 
-        # this is precautionary; compute the number of parameters ourselves to avoid discrepancies
-        run_data["computed_params"] = compute_num_params_from_run(run, vocab_size=llama3_tokenizer_vocab_size)
+        # Get model configuration
+        model_dict = run.config.get("model", {})
+
+        run_data["hidden_dim"] = model_dict.get("hidden_dim", 0)
 
         # get the summary fields
         for field in summary_fields:
             run_data[field] = run.summary.get(field, None)
 
         # get the per-step metrics
-        history = run.history(keys=metrics, x_axis=x_axis)
+        history = run.history(keys=metrics)
+
         for i in range(len(history)):
             step_data = {m: history[m][i] for m in metrics}
             step_data.update(run_data)
@@ -244,7 +270,8 @@ def extract_scaling_data(
     df: pd.DataFrame,
     param_count_col: str = "parameter_count",
     tokens_col: str = "throughput/total_tokens",
-    loss_col: str = "eval/paloma/c4_en/bpb",
+    loss_col: str | None = None,
+    count_embedding_params: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Extracts N, D, and y from the given DataFrame.
@@ -261,15 +288,14 @@ def extract_scaling_data(
             D = Number of tokens
             y = Loss
     """
+
     N = df[param_count_col].values
     D = df[tokens_col].values
-    y = df[loss_col].values
+    y = df[loss_col].values if loss_col is not None else None
 
-    # get hidden dim from run i.e tootsie-scaling-512-81c36c should result in (512)
-    hidden_dim = df["run"].str.extract(r"(\d+)")[0].astype(int)
-
-    # we want non-embedding params
-    N = non_embedding_params(N, hidden_dim=hidden_dim)
+    # Apply non_embedding_params element-wise
+    if not count_embedding_params:
+        N = np.array([non_embedding_params(n, h) for n, h in zip(N, df["hidden_dim"].values, strict=False)])
 
     return N, D, y
 
@@ -281,6 +307,14 @@ def aggregate_steps(
     group_col: str = "run",
 ) -> pd.DataFrame:
     """
+    Aggregates the steps for each run.
+
+    Args:
+        df: DataFrame
+        step_mode: how to aggregate the steps
+        step_range: range of steps to aggregate
+        group_col: column to group by
+
     step_mode can be:
       - "average": average step_range across each run
       - "last": pick the max step within step_range
@@ -309,27 +343,53 @@ def non_embedding_params(total_param_count: int, hidden_dim: int, vocab_size: in
     return total_param_count - 2 * hidden_dim * vocab_size
 
 
-def compute_num_params_from_run(run, vocab_size: int = llama3_tokenizer_vocab_size):
-    """
-    Computes the number of parameters in a run using the model config.
+####################################################################################################
+# Projection-specific helpers
+
+
+@dataclass
+class ProjectionPoint:
+    """A point to project to, consisting of number of parameters and tokens"""
+
+    num_params: int
+    num_tokens: int
+
+
+def get_default_projection_points(count_embedding_params: bool = False) -> list[ProjectionPoint]:
+    """Default set of model sizes to project to
 
     Args:
-        run: WandB run object
-        vocab_size: Tokenizer vocab size
+        count_embedding_params: Whether to include embedding parameters in parameter count
     """
+    from experiments.llama import llama_1_4b, llama_8b, llama_13b, llama_22b, llama_70b
 
-    model_dict = run.config.get("model", {})
-    llama_config = LlamaConfig(
-        hidden_dim=model_dict.get("hidden_dim"),
-        num_heads=model_dict.get("num_heads"),
-        num_kv_heads=model_dict.get("num_kv_heads"),
-        intermediate_dim=model_dict.get("intermediate_dim"),
-        num_layers=model_dict.get("num_layers"),
-    )
+    # Base model configs
+    model_configs = [
+        llama_1_4b,
+        llama_8b,
+        llama_13b,
+        llama_22b,
+        llama_70b,
+    ]
 
-    num_parameters = compute_num_parameters(llama_config, vocab_size=vocab_size)
+    # Token multipliers (relative to parameter count
+    token_multipliers = [0.5, 1, 5, 10, 20, 30, 50, 100]
 
-    return num_parameters
+    points = []
+    for config in model_configs:
+        # Calculate total parameters
+        total_params = compute_num_parameters(config, llama3_tokenizer_vocab_size)
+
+        # Adjust if we're not counting embedding params
+        if not count_embedding_params:
+            total_params = non_embedding_params(total_params, config.hidden_dim)
+
+        # Create points with different token counts
+        for multiplier in token_multipliers:
+            num_tokens = int(total_params * multiplier)
+            points.append(ProjectionPoint(total_params, num_tokens))
+
+    return points
 
 
 ####################################################################################################
@@ -342,15 +402,16 @@ def plot_fit(actual: np.ndarray, predicted: np.ndarray, title="Power Law Fit") -
     """
     plt.figure()
     plt.scatter(actual, predicted, alpha=0.7)
-    plt.xlabel("Actual Loss")
-    plt.ylabel("Predicted Loss")
+    plt.xlabel("Actual Values")
+    plt.ylabel("Predicted Values")
     plt.title(title)
 
     # disable offset notation for the y-axis
     plt.ticklabel_format(useOffset=False)
 
     plt.grid(True)
-    plt.show()
+
+    return plt
 
 
 def plot_actual_vs_predicted(
@@ -358,187 +419,253 @@ def plot_actual_vs_predicted(
     y_predicted: np.ndarray,
     title: str = "Actual vs Predicted",
     task_metric: str = "eval/paloma/c4_en/bpb",
+    tokens: np.ndarray | None = None,
 ) -> None:
     """
     Plot actual vs predicted values. task_metric is the name of the metric we are predicting.
     """
-
     plt.figure(figsize=(10, 6))
 
+    x_values = tokens if tokens is not None else np.arange(len(y_actual))
+
     # plot actual and predicted values
-    plt.plot(y_actual, label="Actual", marker="o", linestyle="-", linewidth=2)
-    plt.plot(y_predicted, label="Predicted", marker="x", linestyle="--", linewidth=2)
+    plt.plot(x_values, y_actual, label="Actual", marker="o", linestyle="-", linewidth=2)
+    plt.plot(x_values, y_predicted, label="Predicted", marker="x", linestyle="--", linewidth=2)
 
     # add labels, legend, and title
-    plt.xlabel("Step")
+    plt.xlabel("Tokens" if tokens is not None else "Step")
     plt.ylabel("Metric: " + task_metric)
     plt.title(title)
     plt.legend()
     plt.grid(True)
-    plt.show()
+
+    # Format tick labels to show B/T for billions/trillions
+    if tokens is not None:
+
+        def format_ticks(x, _):
+            if x >= 1e12:
+                return f"{x/1e12:.1f}T"
+            elif x >= 1e9:
+                return f"{x/1e9:.1f}B"
+            else:
+                return f"{x/1e6:.1f}M"
+
+        plt.gca().xaxis.set_major_formatter(plt.FuncFormatter(format_ticks))
+
+    return plt
+
+
+def plot_scaling_projections(predicted: np.ndarray, points: list[ProjectionPoint] | None = None):
+    """
+    Plot scaling law predictions vs tokens for specified model sizes.
+
+    Args:
+        predicted: Array of predicted values
+        points: List of ProjectionPoint objects containing parameter and token counts
+
+    Returns:
+        matplotlib.pyplot figure object
+    """
+    plt.figure(figsize=(12, 6))
+    unique_params = np.unique([p.num_params for p in points])
+
+    for param in unique_params:
+        mask = np.array([p.num_params == param for p in points])
+        tokens = np.array([p.num_tokens for p in points])[mask]
+        preds = predicted[mask]
+        plt.plot(tokens, preds, "o-", linewidth=2, label=f"{param/1e9:.1f}B params")
+
+        # add annotations for each point
+        for t, pred in zip(tokens, preds, strict=False):
+            token_str = f"{t/1e9:.1f}B" if t < 1e11 else f"{t/1e12:.1f}T"
+            plt.annotate(f"{token_str}, {pred:.3f}", (t, pred), ha="center", va="bottom", fontsize=6)
+
+    plt.xscale("log")
+    plt.xlabel("Number of Tokens")
+    plt.ylabel("Predicted Loss")
+    plt.grid(True)
+    plt.legend()
+    return plt
 
 
 ####################################################################################################
 # Functions for fitting scaling laws
 
 
-def fit_task_loss_from_ladder_models(
+def fit_scaling_laws(
     runs: list[str],
+    loss_metrics: Sequence[str],
+    accuracy_metrics: Sequence[str] | None,
     entity: str,
     project: str,
-    metrics: list[str],
-    x_axis: str = "throughput/total_gflops",
-    pred_run: str = "llama-8b-tootsie-0.001-19ad63",
-    task_loss: str = "eval/paloma/c4_en/bpb",
+    pred_run: str | None = None,
+    projection_points: list[ProjectionPoint] | None = None,
     aggregation: str = "all",
     tokens_col: str = "throughput/total_tokens",
     param_col: str = "parameter_count",
-    param_col_to_use: str = "computed_params",
+    count_embedding_params: bool = False,
     use_log_for_ND: bool = False,
     normalize_ND: bool = False,
-) -> tuple[np.ndarray, np.ndarray]:
-    """
-    Fits a power law model to the given ladder models and predicts the task loss for the given run.
+) -> tuple[dict[str, np.ndarray], tuple[dict, dict, np.ndarray, np.ndarray] | None]:
+    """Fit scaling laws for both projection and prediction
 
     Args:
-        runs: List of runs to pull the data from
-        metrics: List of metrics to pull from the runs
-        task_loss: Task loss metric to use (eg c4 en bpb, hellaswag bpb, etc.)
-        aggregation: Aggregation mode to use for the steps. Can be "average", "last", or "all"
-        tokens_col: Column name for the tokens
-        param_col: Column name for the parameter count
-        param_col_to_use: Column name to use for the parameter count. This is to specify
-                    if we want to use JAX's computed params or ours.
+        runs: list of run IDs to fit scaling laws for
+        loss_metrics: list of loss metrics to fit scaling laws for
+        accuracy_metrics: list of accuracy metrics to fit scaling laws for
+        entity: WandB entity
+        project: WandB project
+        pred_run: run ID to predict scaling laws for- if None, no prediction is done
+        projection_points: list of ProjectionPoint objects to project to
+        aggregation: how to aggregate steps within each run (all/last/average)
+        tokens_col: column name for the number of tokens
+        param_col: column name for the number of parameters
+        count_embedding_params: whether to count embedding parameters in calculating N
+        use_log_for_ND: whether to use log space for N and D
+        normalize_ND: whether to normalize N and D
 
     Returns:
-        The actual and predicted task losses for the given run as (actual, predicted)
+        tuple of:
+            - dict of loss metrics and their predictions
+            - dict of accuracy metrics and their predictions
+            - numpy array of tokens for x-axis of plots for losses
+            - numpy array of tokens for x-axis of plots for accuracies
     """
 
-    # get the data
-    ladder_df = pull_metrics_from_wandb(
-        runs=runs, metrics=metrics, entity=entity, project=project, x_axis=x_axis, summary_fields=(param_col,)
+    # First pull for losses - only essential metrics
+    metrics = [*list(loss_metrics), tokens_col]
+    loss_df = pull_metrics_from_wandb(
+        runs=runs,
+        metrics=metrics,
+        entity=entity,
+        project=project,
+        summary_fields=(param_col,),
     )
 
-    # filter out rows with zero tokens, aggregate the steps
-    ladder_df_filtered = filter_zero_d(ladder_df, tokens_col)
-    ladder_df_agg = aggregate_steps(ladder_df_filtered, step_mode=aggregation)
+    # Process loss data- remove 0-token runs, apply aggregation to the ladder runs' checkpoints (if specified)
+    loss_df_filtered = filter_zero_d(loss_df, tokens_col)
+    loss_df_agg = aggregate_steps(loss_df_filtered, step_mode=aggregation)
 
-    # prepare data (N, D, y) for fitting the power law model
-    N, D, y = extract_scaling_data(
-        ladder_df_agg, param_col_to_use, tokens_col, task_loss
-    )  # this also removes embedding param count
-
+    # Get N, D
+    N, D, _ = extract_scaling_data(loss_df_agg, param_col, tokens_col, count_embedding_params=count_embedding_params)
     if use_log_for_ND:
         N = np.log(N)
         D = np.log(D)
     if normalize_ND:
-        N_scale = np.mean(N)  # Save the mean of N
-        D_scale = np.mean(D)  # Save the mean of D
+        N_scale = np.mean(N)
+        D_scale = np.mean(D)
         N = N / N_scale
         D = D / D_scale
 
-    # fit the power law model and make a prediction on the "training" data for sanity-checking
-    params = fit_power_law(N, D, y, use_log_space=True)
+    # Handle projections
+    projections = {}
 
-    pred_df = pull_metrics_from_wandb(
-        runs=[pred_run], metrics=[task_loss, tokens_col], entity=entity, project=project, summary_fields=[param_col]
-    )
-    pred_df_filtered = filter_zero_d(pred_df, d_key=tokens_col)
+    if projection_points:
+        N_proj = np.array([point.num_params for point in projection_points])
+        D_proj = np.array([point.num_tokens for point in projection_points])
 
-    pred_df_agg = aggregate_steps(pred_df_filtered, step_mode=aggregation)
-    N_pred, D_pred, y_pred_actual = extract_scaling_data(pred_df_agg, param_col_to_use, tokens_col, task_loss)
+        if use_log_for_ND:
+            N_proj, D_proj = np.log(N_proj), np.log(D_proj)
+        if normalize_ND:
+            N_proj, D_proj = N_proj / N_scale, D_proj / D_scale
 
-    if use_log_for_ND:
-        N_pred = np.log(N_pred)
-        D_pred = np.log(D_pred)
+        for loss_metric in loss_metrics:
+            y = loss_df_agg[loss_metric].values
+            params = fit_power_law(N, D, y, use_log_space=True)
+            projections[loss_metric] = predict_power_law(params, N_proj, D_proj)
 
-    if normalize_ND:
-        N_pred = N_pred / N_scale
-        D_pred = D_pred / D_scale
+    predictions = None
+    if pred_run:
+        loss_pred_df = pull_metrics_from_wandb(
+            runs=[pred_run],
+            metrics=[*list(loss_metrics), tokens_col],
+            entity=entity,
+            project=project,
+            summary_fields=(param_col,),
+        )
 
-    preds_big = predict_power_law(params, N_pred, D_pred)
+        loss_pred_filtered = filter_zero_d(loss_pred_df, tokens_col)
+        loss_pred_agg = aggregate_steps(loss_pred_filtered, step_mode=aggregation)
 
-    return y_pred_actual, preds_big.to_numpy()
+        N_pred, D_pred, _ = extract_scaling_data(
+            loss_pred_agg, param_col, tokens_col, count_embedding_params=count_embedding_params
+        )
+        if use_log_for_ND:
+            N_pred = np.log(N_pred)
+            D_pred = np.log(D_pred)
+        if normalize_ND:
+            N_pred = N_pred / N_scale
+            D_pred = D_pred / D_scale
 
+        # Fit losses
+        loss_results = {}
+        for loss_metric in loss_metrics:
+            y = loss_df_agg[loss_metric].values
+            params = fit_power_law(N, D, y, use_log_space=True)
+            actual_loss = loss_pred_agg[loss_metric].values
+            predicted_loss = predict_power_law(params, N_pred, D_pred)
+            loss_results[loss_metric] = (actual_loss, predicted_loss)
 
-def fit_accuracy_from_task_loss(
-    pred_task_losses: np.ndarray,
-    runs: list[str],
-    entity: str,
-    project: str,
-    x_axis: str = "throughput/total_gflops",
-    tokens_col: str = "throughput/total_tokens",
-    param_col: str = "parameter_count",
-    pred_run: str = "llama-8b-tootsie-0.001-19ad63",
-    aggregation: str = "all",
-    task_loss_col: str = "eval/paloma/c4_en/bpb",
-    accuracy_col: str = "lm_eval/hellaswag_0shot/acc",
-) -> np.ndarray:
-    """
-    Fit a sigmoidal function to predict the accuracy from the task loss.
-    Ref: https://arxiv.org/pdf/2412.04403 sec 3.2
+        # Second pull for accuracies
+        accuracy_results = {}
+        if accuracy_metrics:
+            acc_df = pull_metrics_from_wandb(
+                runs=runs,
+                metrics=[*list(accuracy_metrics), tokens_col],
+                entity=entity,
+                project=project,
+                summary_fields=(param_col,),
+            )
+            acc_pred_df = pull_metrics_from_wandb(
+                runs=[pred_run],
+                metrics=[*list(accuracy_metrics), tokens_col],
+                entity=entity,
+                project=project,
+                summary_fields=(param_col,),
+            )
 
-    Acc(L) = a / (1 + exp(-k * (L - L_0))) + b
+            acc_df_filtered = filter_zero_d(acc_df, tokens_col)
+            acc_df_agg = aggregate_steps(acc_df_filtered, step_mode=aggregation)
+            acc_pred_filtered = filter_zero_d(acc_pred_df, tokens_col)
+            acc_pred_agg = aggregate_steps(acc_pred_filtered, step_mode=aggregation)
 
-    where:
-    - L is the task loss
-    - a, b, k, L_0 are parameters to fit
+            # Fit accuracies
+            accuracy_results = {}
+            loss_metric, (actual_loss, predicted_loss) = next(iter(loss_results.items()))  # use first loss
 
-    Returns:
-        The predicted accuracy
-    """
+            # Merge loss and accuracy data on run and tokens
+            merged_df = pd.merge(
+                loss_df_agg[["run", tokens_col, loss_metric]],
+                acc_df_agg[["run", tokens_col, *accuracy_metrics]],
+                on=["run", tokens_col],
+                how="inner",
+            )
 
-    # get the data
-    ladder_df = pull_metrics_from_wandb(
-        runs=runs,
-        metrics=[task_loss_col, accuracy_col, tokens_col],
-        entity=entity,
-        project=project,
-        x_axis=x_axis,
-        summary_fields=(param_col,),
-    )
+            # Merge prediction data similarly
+            merged_pred_df = pd.merge(
+                loss_pred_agg[["run", tokens_col]],
+                acc_pred_agg[["run", tokens_col, *accuracy_metrics]],
+                on=["run", tokens_col],
+                how="inner",
+            )
 
-    # filter out rows with zero tokens, aggregate the steps
-    ladder_df_filtered = filter_zero_d(ladder_df, tokens_col)
-    ladder_df_agg = aggregate_steps(ladder_df_filtered, step_mode=aggregation)
+            for acc_metric in accuracy_metrics:
+                task_losses = merged_df[loss_metric].values
+                acc = merged_df[acc_metric].values
+                params = fit_sigmoidal(task_losses, acc)
 
-    # get the data for the run we want to predict on
-    pred_df = pull_metrics_from_wandb(
-        runs=[pred_run],
-        metrics=[accuracy_col, tokens_col],
-        entity=entity,
-        project=project,
-        x_axis=x_axis,
-        summary_fields=(param_col,),
-    )
+                acc_pred_actual = merged_pred_df[acc_metric].values
+                # Get the corresponding predicted losses for these points
+                pred_indices = loss_pred_agg[tokens_col].isin(merged_pred_df[tokens_col])
+                pred_task_losses = predicted_loss[pred_indices]
 
-    pred_df_filtered = filter_zero_d(pred_df, d_key=tokens_col)
-    pred_df_agg = aggregate_steps(pred_df_filtered, step_mode=aggregation)
+                acc_preds = predict_sigmoidal(params, pred_task_losses)
+                accuracy_results[f"{acc_metric}_from_{loss_metric}"] = (acc_pred_actual, acc_preds)
 
-    # get task losses on "training" data-points (meaning runs we use for fitting the sigmoidal model)
-    N, D, task_losses = extract_scaling_data(ladder_df_agg, param_col, tokens_col, task_loss_col)
+            # Get token counts for plotting
+            loss_tokens = loss_pred_agg[tokens_col].values
+            acc_tokens = merged_pred_df[tokens_col].values
 
-    # get accuracies on "training" data-points
-    acc = ladder_df_agg[accuracy_col].values
+            predictions = (loss_results, accuracy_results, loss_tokens, acc_tokens)
 
-    # TODO:
-    # in the paper they mention "To smoothen the noise, we apply a moving average
-    # on the task loss and task accuracy over all checkpoints of each training run,
-    # with a window size of 5. We also discard the checkpoints
-    # from the first 10% of each training run as these are quite noisy,
-    # and add an extra data point (L = 0.0, Acc = 1.0)" and other tweaks."
-
-    # fit the sigmoidal model
-    params = fit_sigmoidal(task_losses, acc)
-
-    # filter out pred_task_losses to use only the last number of rows.
-    # this number is determined by the number of rows in pred_df_agg
-    rows_in_pred_df_agg = len(pred_df_agg)
-    pred_task_losses = pred_task_losses[-rows_in_pred_df_agg:]
-
-    # predict the accuracy
-    acc_preds = predict_sigmoidal(params, pred_task_losses)
-
-    acc_pred_actual = pred_df_agg[accuracy_col].values
-
-    return acc_pred_actual, acc_preds
+    return projections, predictions

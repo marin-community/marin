@@ -1,66 +1,39 @@
-FROM rayproject/ray:nightly.240914.bb15a3-py310-cpu
-
-# Install general dependencies
-RUN sudo apt-get update && sudo apt-get install -y clang curl g++ vim libpython3.11 libpython3.11-dev docker.io cmake
+FROM vllm/vllm-tpu:e92694b6fe264a85371317295bca6643508034ef
 
 # Setup gcsfuse
-RUN sudo apt install lsb-release -y
-RUN export GCSFUSE_REPO=gcsfuse-`lsb_release -c -s` && echo "deb https://packages.cloud.google.com/apt $GCSFUSE_REPO main" | sudo tee /etc/apt/sources.list.d/gcsfuse.list
-RUN curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo apt-key add -
-RUN sudo apt-get update && sudo apt-get install fuse gcsfuse -y
-RUN sudo mkdir /opt/gcsfuse_mount
-RUN sudo chown -R $(whoami) /opt/gcsfuse_mount
+RUN apt-get update && apt-get install lsb-release rsync docker.io -y
+RUN usermod -aG docker $(whoami)
 
-# Ray uses conda
-ENV PATH=/home/ray/anaconda3/bin:/home/ray/anaconda3/bin:/home/ray/anaconda3/condabin:$PATH
+RUN export GCSFUSE_REPO=gcsfuse-`lsb_release -c -s` && echo "deb https://packages.cloud.google.com/apt $GCSFUSE_REPO main" | tee /etc/apt/sources.list.d/gcsfuse.list
+RUN curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | apt-key add -
+RUN apt-get update && apt-get install fuse gcsfuse -y
+RUN mkdir /opt/gcsfuse_mount
+RUN chown -R $(whoami) /opt/gcsfuse_mount
 
-# gcloud
-RUN conda install conda-forge::google-cloud-sdk -y
-RUN gcloud components install alpha
+# Install the Google Cloud SDK
+RUN curl -sSL https://sdk.cloud.google.com > /tmp/gcl && \
+    bash /tmp/gcl --install-dir=/root/gcloud --disable-prompts \
+    && chown -R $(whoami) /root/gcloud
 
-RUN conda install -c conda-forge ncurses -y
+# Install core dependencies
+RUN pip install --no-cache-dir -U draccus==0.10 google-api-python-client~=2.0 gcsfs google-cloud-storage google-cloud-storage-transfer s3fs regex requests numpy braceexpand deepdiff tqdm tqdm-loggable toml pandas pyarrow levanter==1.2.dev1190
 
-# Install Pytorch and VLLM
-RUN sudo apt update && sudo apt install unzip -y
-RUN sudo mkdir -p /opt/vllm
-RUN sudo chown -R $(whoami) /opt/vllm
-RUN cd /opt/vllm && git clone https://github.com/vllm-project/vllm.git && cd vllm
-
-WORKDIR /opt/vllm/vllm
-RUN pip uninstall torch torch-xla -y
-RUN sudo apt-get install libopenblas-base libopenmpi-dev libomp-dev -y
-
-# NOTE(chris): Instead of running pip install requirements-tpus.txt as instructed, there is some bug
-# where the current torch_xla version in the requirements-tpus.txt is not compatible with the platform (installation fails),
-# so we install the dependencies manually from the requirements-tpu.txt file.
-# This has been fixed in the new version: https://github.com/vllm-project/vllm/issues/11811#issuecomment-2575583282
-# So we should replace this to a simple pip install -r requirements-tpu.txt command when the new version is released.
-RUN pip install -r requirements-tpu.txt
-RUN VLLM_TARGET_DEVICE="tpu" python3 setup.py develop
-
-# Install fsspec for GCS access
-RUN pip install --no-cache-dir fsspec==2024.9.0
-
+# NOTE(chris): We fix the lm-evaluation-harness commit hash for now since the newest main is broken because of
+# the new eval_logger change they made
+ARG LM_EVAL_EVAL_COMMIT_HASH=a40fe42aae2a5232448495c7bb5bf76aef100309
 # Install lm-evaluation-harness
-RUN sudo mkdir -p /opt/lm_eval && sudo chown -R $(whoami) /opt/lm_eval && cd /opt/lm_eval && git clone --depth 1 https://github.com/EleutherAI/lm-evaluation-harness && cd lm-evaluation-harness && pip install -e ".[ifeval]"
-
-# NOTE: Try to keep as much "heavy" stuff as possible before this line to avoid re-installing
-
-# (not installing pyproject.toml because it interferes with Ray's RuntimeEnv deps)
-#WORKDIR /tmp/
-#ADD pyproject.toml /tmp/
-#RUN pip install --no-cache-dir . --extra-index-url https://download.pytorch.org/whl/cpu
+RUN mkdir -p /opt/lm_eval && chown -R $(whoami) /opt/lm_eval && \
+cd /opt/lm_eval && \
+git clone --depth 1 https://github.com/EleutherAI/lm-evaluation-harness && \
+cd lm-evaluation-harness && \
+git fetch origin $LM_EVAL_EVAL_COMMIT_HASH && \
+git checkout $LM_EVAL_EVAL_COMMIT_HASH && pip install --no-cache-dir -e ".[ifeval, math]"
 
 # Add /usr/lib/x86_64-linux-gnu/ to LD_LIBRARY_PATH so that bash prefers the systems
 # libtinfo.so over the conda-provided version. Using the conda-provided libtinfo.so
 # outputs a noisy warning because it doesn't include version information.
 ENV LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/lib/x86_64-linux-gnu/
 ENV LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/home/ray/anaconda3/lib
-ENV PATH=$PATH:/home/ray/anaconda3/bin
-
-# to run docker containers, we need to be in the docker group
-RUN sudo usermod -aG docker $(whoami)
-
-RUN sudo apt-get update && sudo apt-get install -y podman
+ENV PATH=$PATH:/root/gcloud/google-cloud-sdk/bin
 
 WORKDIR /opt/marin
