@@ -17,6 +17,18 @@ python marin/run/ray_run.py \
     --output_prefix gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-10M/links
 ```
 
+Sampling 100M OpenWebMath outlinks:
+
+```
+python marin/run/ray_run.py \
+    --no_wait -- \
+    python marin/crawl/sample_outlinks.py \
+    --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8/*_links.jsonl.gz' \
+    --num_to_sample 100_000_000 \
+    --shard_size 100000 \
+    --output_prefix gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-100M/links
+```
+
 Sampling 10M OpenWebMath outlinks (deduplicated against CC):
 
 ```
@@ -27,6 +39,18 @@ python marin/run/ray_run.py \
     --num_to_sample 10000000 \
     --shard_size 100000 \
     --output_prefix gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-10M-cc-deduplicated/links
+```
+
+Sampling 100M OpenWebMath outlinks (deduplicated against CC):
+
+```
+python marin/run/ray_run.py \
+    --no_wait -- \
+    python marin/crawl/sample_outlinks.py \
+    --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-cc-deduplicated/*_links.jsonl.gz' \
+    --num_to_sample 100_000_000 \
+    --shard_size 100000 \
+    --output_prefix gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-100M-cc-deduplicated/links
 ```
 
 Sampling 10M FineWeb-Edu outlinks:
@@ -80,6 +104,7 @@ class OutlinksSamplingConfig:
     input_pattern: str
     num_to_sample: int
     output_prefix: str
+    shard_size: int = 10_000
 
 
 @dataclass(frozen=True)
@@ -121,7 +146,7 @@ def get_examples_from_offsets(shard_path: str, offsets: list[int]):
 
 
 @ray.remote(memory=64 * 1024 * 1024 * 1024)
-def sample_outlinks(input_pattern: str, num_to_sample: int, output_prefix: str):
+def sample_outlinks(input_pattern: str, num_to_sample: int, output_prefix: str, shard_size: int):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     shard_paths = sorted(list(fsspec_glob(input_pattern)))
     logger.info(f"Found {len(shard_paths)} shards to process")
@@ -209,7 +234,7 @@ def sample_outlinks(input_pattern: str, num_to_sample: int, output_prefix: str):
     # Sort examples by domain so that URLs pointing to the same domain are in the same shard
     extracted_examples = sorted(extracted_examples, key=lambda x: urlparse(x.link_target).netloc)
     # Write out extracted examples as sharded parquet
-    write_sharded_examples(extracted_examples, output_prefix, shard_size=10_000)
+    write_sharded_examples(extracted_examples, output_prefix, shard_size=shard_size)
     logger.info("All shards have been written successfully.")
 
 
@@ -235,7 +260,7 @@ def write_sharded_examples(extracted_examples: list[Outlink], output_prefix: str
 @draccus.wrap()
 def sample_outlinks_from_html(cfg: OutlinksSamplingConfig):
     # Do all the processing in a remote function
-    _ = ray.get(sample_outlinks.remote(cfg.input_pattern, cfg.num_to_sample, cfg.output_prefix))
+    _ = ray.get(sample_outlinks.remote(cfg.input_pattern, cfg.num_to_sample, cfg.output_prefix, cfg.shard_size))
 
 
 if __name__ == "__main__":
