@@ -3,8 +3,17 @@
 Use BigQuery to deduplicate outlinks, such that the remaining records
 are all guaranteed to have different link targets.
 
+First, copy the service account key file for
+marin-data-browser@hai-gcp-models.iam.gserviceaccount.com to
+gcs-key.json in this directory:
+
 ```
-export AUTHENTICATION_JSON="$(jq -c . data_browser/gcs-key.json)"
+gcloud iam service-accounts keys create bigquery-gcs-key.json --iam-account=marin-crawl-bigquery@hai-gcp-models.iam.gserviceaccount.com
+mv bigquery-gcs-key.json marin/crawl/
+```
+
+```
+export AUTHENTICATION_JSON="$(jq -c . ./marin/crawl/bigquery-gcs-key.json)"
 
 python marin/run/ray_run.py \
     --pip_deps 'google-cloud-bigquery' \
@@ -15,7 +24,7 @@ python marin/run/ray_run.py \
         --gcs_output_prefix 'gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-unique/unique_links' \
         --bq_table_id 'open_web_math_outlinks'
 ```
-"""
+"""  # noqa: E501
 import json
 import logging
 import os
@@ -79,7 +88,6 @@ def deduplicate_and_shuffle_with_bq(
     # 3) Load the GCS data into BigQuery
     load_config = bigquery.LoadJobConfig()
     load_config.source_format = bigquery.SourceFormat.NEWLINE_DELIMITED_JSON
-    load_config.compression = "GZIP"
     load_config.autodetect = True
 
     table_ref = f"{project_id}.{dataset_id}.{table_id}"
