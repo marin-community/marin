@@ -706,7 +706,9 @@ class Executor:
             self.refs[step] = execute_after_dependencies.options(
                 name=name,
                 runtime_env=RuntimeEnv(
-                    pip=pip_dependencies,
+                    # pip=pip_dependencies,
+                    # TODO(chris): Fix this monkeypatch hack thing
+                    pip="experiments/scalingfilter/requirements.txt",
                 ),
             ).remote(step.fn, step_name, config, dependencies, output_path, self.status_actor, force_run_failed)
         else:

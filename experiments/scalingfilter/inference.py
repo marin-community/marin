@@ -10,7 +10,7 @@ inference_step = ExecutorStep(
     config=InferenceConfig(
         input_path=input_data_path,
         output_path=this_output_path(),
-        model_name=f"/opt/gcsfuse_mount/perplexity-models/{MODEL_BASENAME}",
+        model_name="/opt/gcsfuse_mount/perplexity-models/llama-200m-local-shard-2/hf/step-11999",
         model_type="perplexity",
         attribute_name=f"{MODEL_BASENAME}-perplexity-seq-len-512",
         runtime=RuntimeConfig(
@@ -22,7 +22,7 @@ inference_step = ExecutorStep(
         batch_size=60,
         classifier_kwargs={"max_length": 512},
     ),
-    pip_dependency_groups=["fasttext", "datasets", "filelock", "torch_xla[tpu]"],
+    pip_dependency_groups=["experiments/scalingfilter/requirements.txt"],
 )
 
 # Did inference over the entire global shard accidentally so directory will be named a bit confusingly.
