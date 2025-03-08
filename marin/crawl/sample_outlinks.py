@@ -117,7 +117,7 @@ class Outlink:
 
 @ray.remote(memory=1 * 1024 * 1024 * 1024)
 def count_examples_in_shard(shard_path: str) -> tuple[str, int]:
-    with fsspec.open(shard_path, "rt", compression="gzip") as fin:
+    with fsspec.open(shard_path, "rt", compression="gzip", block_size=1 * 1024 * 1024 * 1024) as fin:
         num_lines = 0
         for _ in fin:
             num_lines += 1
@@ -128,7 +128,7 @@ def count_examples_in_shard(shard_path: str) -> tuple[str, int]:
 def get_examples_from_offsets(shard_path: str, offsets: list[int]):
     extracted_examples = set()
     offsets = sorted(offsets)  # ensure ascending order
-    with fsspec.open(shard_path, "rt", compression="gzip") as fin:
+    with fsspec.open(shard_path, "rt", compression="gzip", block_size=1 * 1024 * 1024 * 1024) as fin:
         current_line_idx = 0
         offsets_iter = iter(offsets)
         next_offset = next(offsets_iter, None)
@@ -253,7 +253,7 @@ def write_sharded_examples(extracted_examples: list[Outlink], output_prefix: str
         logger.info(f"Writing shard {shard_idx + 1}/{num_shards} to {shard_filename}")
         table = pa.Table.from_pylist(shard_dicts)
 
-        with fsspec.open(shard_filename, "wb") as fout:
+        with fsspec.open(shard_filename, "wb", block_size=1 * 1024 * 1024 * 1024) as fout:
             pq.write_table(table, fout, compression="snappy")
 
 
