@@ -52,11 +52,24 @@ python marin/run/ray_run.py \
     -e "GOOGLE_APPLICATION_CREDENTIALS_JSON" "$AUTHENTICATION_JSON" \
     --no_wait -- \
     python marin/crawl/deduplicate_outlinks.py \
-        # This pattern gets all files that end with *_links.jsonl.gz
-        # in the folder _and_ any subfolders.
         --gcs_input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu/*_links.jsonl.gz' \
         --gcs_output_prefix 'gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-unique/unique_links' \
         --bq_table_id 'fineweb_edu_outlinks'
+```
+
+Deduplicating fineweb-edu-cc-deduplicated outlinks:
+
+```
+export AUTHENTICATION_JSON="$(jq -c . ./marin/crawl/bigquery-gcs-key.json)"
+
+python marin/run/ray_run.py \
+    --pip_deps 'google-cloud-bigquery' \
+    -e "GOOGLE_APPLICATION_CREDENTIALS_JSON" "$AUTHENTICATION_JSON" \
+    --no_wait -- \
+    python marin/crawl/deduplicate_outlinks.py \
+        --gcs_input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-cc-deduplicated/*_links.jsonl.gz' \
+        --gcs_output_prefix 'gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-cc-deduplicated-unique/unique_links' \
+        --bq_table_id 'fineweb_edu_cc_deduplicated_outlinks'
 ```
 """  # noqa: E501
 import json
