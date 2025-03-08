@@ -142,6 +142,7 @@ def count_outlinks(input_pattern: str, exact: bool):
             # number of concurrent tasks, add tasks to the unfinished queue.
             while shard_paths_for_approximate_counting and len(unfinished) < MAX_CONCURRENT_TASKS:
                 submit_shard_task(shard_paths_for_approximate_counting.pop(), count_examples_in_shard_approximate)
+    logger.info(f"In total, found ~{len(global_hll):,} unique outlinks and {num_outlinks:,} total outlinks")
 
     if exact:
         logger.info("Generating exact counts, in addition to approximate counts")
@@ -177,8 +178,7 @@ def count_outlinks(input_pattern: str, exact: bool):
                 # number of concurrent tasks, add tasks to the unfinished queue.
                 while shard_paths_for_exact_counting and len(unfinished) < MAX_CONCURRENT_TASKS:
                     submit_shard_task(shard_paths_for_exact_counting.pop(), count_examples_in_shard_exact)
-
-    logger.info(f"In total, found ~{len(global_hll):,} unique outlinks and {num_outlinks:,} total outlinks")
+        logger.info(f"In total, found {len(global_set):,} unique outlinks and {num_outlinks:,} total outlinks")
 
 
 @draccus.wrap()
