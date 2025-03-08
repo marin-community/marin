@@ -88,6 +88,7 @@ from urllib.parse import urlparse
 
 import draccus
 import fsspec
+import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 import ray
@@ -183,13 +184,21 @@ def sample_outlinks(input_pattern: str, num_to_sample: int, output_prefix: str, 
     # Randomly sample IDs from 0 to current_index - 1 (inclusive)
     oversample_factor = 5
     actual_samples = min(num_to_sample * oversample_factor, total_examples)
-    subsampled_ids = random.sample(range(total_examples), k=actual_samples)
+    logger.info(f"Subsampling {actual_samples} IDs (oversample_factor={oversample_factor}).")
+    if actual_samples == total_examples:
+        # We want to use all the IDs, so just shuffle them
+        rng = np.random.default_rng(0)
+        subsampled_ids = np.arange(0, total_examples)
+        rng.shuffle(subsampled_ids)
+    else:
+        subsampled_ids = random.sample(range(total_examples), k=actual_samples)
     logger.info(f"Subsampled {len(subsampled_ids)} IDs (oversample_factor={oversample_factor}).")
 
     # Associate shards with ids to pluck from them
     shard_to_local_offsets = defaultdict(list)
     # We'll need an extra sentinel at the end for bisect if we want to avoid edge cases:
-    shard_starts.append(total_examples)  # sentinel so we can do shard_idx+1 safely
+    # sentinel so we can do shard_idx+1 safely
+    shard_starts.append(total_examples)
 
     for example_id in tqdm(subsampled_ids, desc="Mapping sampled IDs to shards"):
         # Find the position in shard_starts
