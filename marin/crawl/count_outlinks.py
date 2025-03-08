@@ -45,6 +45,7 @@ python marin/run/ray_run.py \
     --exact True
 ```
 """
+import gc
 import json
 import logging
 from copy import deepcopy
@@ -156,6 +157,10 @@ def count_outlinks(input_pattern: str, exact: bool):
 
     if exact:
         logger.info("Generating exact counts, in addition to approximate counts")
+        # Delete the global HLL from approximate counting to save memory
+        del global_hll
+        gc.collect()
+
         # Get exact count of unique links
         num_shards_submitted = 0
         unfinished = []
