@@ -33,6 +33,7 @@ dependencies = [
     "multiprocess==0.70.16",
     "levanter>=1.2.dev1207",
     "haliax>=1.4.dev330",
+    "sentencepiece"
 ]
 
 [project.optional-dependencies]
@@ -79,6 +80,7 @@ quality_dedup_consolidate = [
 tokenize_train = [
     "multiprocess==0.70.16",
     "lm-eval@git+https://github.com/stanford-crfm/lm-evaluation-harness.git",
+    "jmp"
 ]
 
 data_browser = [
