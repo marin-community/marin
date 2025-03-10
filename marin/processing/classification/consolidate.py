@@ -47,7 +47,7 @@ class FilterConfig:
     label: str | None = None
     """The label under the attribute name."""
 
-    threshold: float | None = 0.5
+    threshold: float | None = None
     """Keep documents where the value is above this."""
 
     keep_fraction: float | None = None
@@ -112,8 +112,12 @@ def apply_filter_remove_spans(
 def apply_filter_classify(input_data: dict, doc_filter: FilterConfig, id_to_attributes: dict[str, Any]) -> bool:
     attributes = id_to_attributes[input_data["id"]]
     # Check attribute >= threshold?
-    scores = attributes[doc_filter.name]
-    score = scores[doc_filter.label]
+    filter_attribute = attributes[doc_filter.name]
+
+    if doc_filter.label is None:
+        return filter_attribute >= doc_filter.threshold
+
+    score = filter_attribute[doc_filter.label]
 
     if score >= doc_filter.threshold:
         return True
@@ -237,7 +241,12 @@ def get_scores(attribute_filename: str, attribute_name: str, label: str) -> np.n
     scores = np.array([])
     attributes = read_attributes_as_dict(attribute_filename)
     for _, attr in attributes.items():
-        scores = np.append(scores, attr[attribute_name][label])
+        attribute = attr[attribute_name]
+        if label is None:
+            score = attribute
+        else:
+            score = attribute[label]
+        scores = np.append(scores, score)
     return scores
 
 

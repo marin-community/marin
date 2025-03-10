@@ -157,10 +157,9 @@ class FasttextClassifier(BaseClassifier):
             fasttext_quality_dict = dict(zip(label_arr[i], score_arr[i], strict=False))
             attributes_arr.append({self.attribute_name: fasttext_quality_dict})
 
-        res = {"id": batch["id"], "attributes": attributes_arr}
         batch.update({"attributes": attributes_arr})
 
-        return res
+        return batch
 
 
 class BERTClassifier(BaseClassifier):

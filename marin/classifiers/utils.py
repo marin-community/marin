@@ -27,6 +27,7 @@ logger = logging.getLogger("ray")
 def label_documents(
     input_doc_path: str,
     output_attr_path: str,
+    filetype: str,
     label_func: Callable[[Document, list[Attribute]], dict],
     input_attr_paths: list[str] | None = None,
 ) -> None:
@@ -51,7 +52,7 @@ def label_documents(
         )
         return label_documents_shard(input_file_path, output_file_path, label_func, attr_file_paths)
 
-    responses = map_files_in_directory(processing_func.remote, input_doc_path, "**/*.jsonl.gz", output_attr_path)
+    responses = map_files_in_directory(processing_func.remote, input_doc_path, f"**/*.{filetype}", output_attr_path)
     try:
         ray.get(responses)
     except Exception as e:
@@ -78,21 +79,25 @@ def label_documents_shard(
     """
     with ExitStack() as stack:
         f_attrs = (
-            [stack.enter_context(fsspec.open(attr_file, "rt")) for attr_file in input_attr_file_paths]
+            [
+                stack.enter_context(fsspec.open(attr_file, "rt", compression="infer"))
+                for attr_file in input_attr_file_paths
+            ]
             if input_attr_file_paths is not None
             else []
         )
         with (
-            fsspec.open(input_doc_file_path, "rt", compression="gzip") as f_doc,
-            fsspec.open(output_file_path, "wt", compression="gzip") as f_out,
+            fsspec.open(input_doc_file_path, "rt", compression="infer") as f_doc,
+            fsspec.open(output_file_path, "wt", compression="infer") as f_out,
         ):
             for lines in zip(f_doc, *f_attrs, strict=False):
                 document: Document = json.loads(lines[0])
                 input_attributes: list[Attribute] = [json.loads(line) for line in lines[1:]]
 
                 output_attribute: Attribute = {
-                    "id": document["id"],
-                    "source": document["source"],
+                    # "id": document["id"],
+                    # "source": document["source"],
+                    "metadata": document["metadata"],
                     "attributes": label_func(document, input_attributes),
                 }
                 f_out.write(json.dumps(output_attribute) + "\n")
