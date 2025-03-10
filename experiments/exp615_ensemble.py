@@ -10,6 +10,7 @@ See https://github.com/stanford-crfm/marin/issues/615 for more details.
 import os
 from dataclasses import dataclass, field
 
+from experiments.cooldown_quality import QualityAblationConfig, default_quality_ablation
 from experiments.defaults import default_tokenize
 from experiments.exp164_quality_classifiers import dclm_eli5_100k_oh_100k_rw_200k
 from experiments.exp274_mmlu_quality_classifier import marin_mmlu_100k_rw_100k
@@ -54,7 +55,8 @@ class ExperimentConfig:
             ),
         }
     )
-    keep_fraction: float = 0.2  # Keep 20% of the documents
+    keep_fraction: float = 0.1  # Keep 20% of the documents
+    cooldown_config: QualityAblationConfig = field(default_factory=lambda: QualityAblationConfig(tpu_type="v4-128"))
 
 
 def get_model_path(model_path: str | ExecutorStep):
@@ -144,6 +146,9 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
         steps.append(inference_step)
         steps.append(consolidate_step)
         steps.append(tokenize_step)
+
+        cooldown_step = default_quality_ablation(tokenize_step, config.cooldown_config)
+        steps.append(cooldown_step)
 
     return steps
 
