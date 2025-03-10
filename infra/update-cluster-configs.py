@@ -22,6 +22,7 @@ DOCKER_TAGS = {
     "europe-west4-a": "6da1c9ed",
     "asia-northeast1": "6da1c9ed",
     "marin-us-east5-b-vllm": "296d2ef0",
+    "europe-west4-vllm": "7fab502e",
 }
 
 configs = {
@@ -104,6 +105,16 @@ configs = {
         "BUCKET": "marin-us-east5",
         "DOCKER_TAG": DOCKER_TAGS["marin-us-east5-b-vllm"],
         "tpu_generation": "v6e-serve",
+        "min_workers": 2,
+        "VLLM": True,
+    },
+    "marin-eu-west4-vllm": {
+        "NAME": "marin-eu-west4-vllm",
+        "REGION": "europe-west4",
+        "ZONE": "europe-west4-b",
+        "BUCKET": "marin-eu-west4",
+        "DOCKER_TAG": DOCKER_TAGS["europe-west4-vllm"],
+        "tpu_generation": "v5e",
         "min_workers": 2,
         "VLLM": True,
     },
