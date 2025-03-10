@@ -117,7 +117,7 @@ def _mp_fn(
         sampler=train_sampler,
         num_workers=num_workers,
         prefetch_factor=prefetch_factor,
-        persistent_workers=True,
+        persistent_workers=(num_workers > 0),
     )
 
     device = xm.xla_device()
