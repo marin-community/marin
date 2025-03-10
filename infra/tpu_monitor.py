@@ -359,4 +359,4 @@ if __name__ == "__main__":
 
     if all_vms_to_delete:
         print("Deleting VMs")
-        delete_stale_vms(all_vms_to_delete)
+        delete_stale_vms()
