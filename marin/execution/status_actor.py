@@ -16,6 +16,7 @@ class StatusActor:
 
     def __init__(self, cache_size: int = 10_000):
         self.task_id_locks: dict[str, str] = {}
+        print("StatusActor initialized")
 
     def get_task_id_with_lock(self, output_path: str) -> str:
         return self.task_id_locks.get(output_path, None)
@@ -35,13 +36,3 @@ class PreviousTaskFailedError(Exception):
 
     def __init__(self, message):
         super().__init__(message)
-
-
-if __name__ == "__main__":
-    ray.init(namespace="marin")
-    import sys
-
-    args = sys.argv[1:]
-    if args[0] == "kill":
-        actor = ray.get_actor("status_actor")
-        ray.kill(actor)
