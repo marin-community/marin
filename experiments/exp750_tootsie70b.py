@@ -30,7 +30,7 @@ llama_70b_train_config_mk6 = SimpleTrainConfig(
     weight_decay=0.05,
     tpu_type="v6e-128",
     # tpu_type="v5litepod-256",
-    node_count=4,
+    node_count=6,
     # until 93_621, was 2e-4
     # learning_rate=2e-4,
     # until 95_920, was 2.5e-4 (on accident)
