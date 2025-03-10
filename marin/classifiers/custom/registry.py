@@ -30,9 +30,6 @@ def max_quality_score(
     """
     Take the maximum of the input attributes.
     """
-    print(f"input_attr_names: {input_attr_names}")
-    print(f"score_name: {score_name}")
-    print(f"output_attr_name: {output_attr_name}")
     return {
         output_attr_name: {
             "score": max(
