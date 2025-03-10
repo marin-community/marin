@@ -1,4 +1,4 @@
-from experiments.cooldown_quality import default_quality_ablation
+from experiments.cooldown_quality import QualityAblationConfig, default_quality_ablation
 from experiments.defaults import default_tokenize
 from experiments.exp579_ar5iv_markdownify import ar5iv_no_problem_resiliparse_custom_fork
 from experiments.llama import llama3_tokenizer
@@ -10,7 +10,14 @@ markdownified_arxiv_tokenized = default_tokenize(
     tokenizer=llama3_tokenizer,
 )
 
-ar5iv_cooldown_ablation = default_quality_ablation(markdownified_arxiv_tokenized)
+cooldown_config = QualityAblationConfig(
+    tpu_type="v4-128",
+)
+
+ar5iv_cooldown_ablation = default_quality_ablation(
+    markdownified_arxiv_tokenized,
+    cooldown_config,
+)
 
 if __name__ == "__main__":
     executor_main(
