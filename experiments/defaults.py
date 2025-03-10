@@ -10,6 +10,7 @@ from datetime import timedelta
 from functools import lru_cache
 
 import jmp
+from haliax.quantization import QuantizationConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.compat.hf_checkpoints import load_tokenizer
 from levanter.data.text import LMMixtureDatasetConfig
@@ -23,7 +24,12 @@ from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 
 from experiments.anneal_config import AnnealConfig
-from experiments.evals.task_configs import CORE_TASKS, CORE_TASKS_PLUS_MMLU, convert_to_levanter_task_config
+from experiments.evals.task_configs import (
+    CORE_TASKS,
+    CORE_TASKS_PLUS_MMLU,
+    convert_to_levanter_task_config,
+    convert_to_task_metrics,
+)
 from experiments.llama import compute_num_parameters, llama_8b
 from experiments.paloma import paloma_tokenized
 from experiments.simple_train_config import SimpleTrainConfig
@@ -31,6 +37,7 @@ from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.execution.executor import (
     ExecutorStep,
     InputName,
+    get_executor_step,
     this_output_path,
     unwrap_versioned_value,
     versioned,
@@ -42,6 +49,7 @@ from marin.processing.tokenize import (
     lm_data_config,
     tokenize,
 )
+from marin.scaling_laws.scaling_laws import ScalingLawConfig, run_scaling_law_analysis
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 
 logger = logging.getLogger("ray")
@@ -187,6 +195,11 @@ def default_train(
 
         model_averaging = EmaModelAveragingConfig(beta=train_config.ema_beta)
 
+    if train_config.per_device_eval_parallelism is None:
+        per_device_eval_parallelism = -1
+    else:
+        per_device_eval_parallelism = train_config.per_device_eval_parallelism
+
     schedule = BatchSchedule(train_config.train_batch_size)
     total_examples = schedule.global_data_offset_by_step(train_config.num_train_steps)
 
@@ -223,6 +236,8 @@ def default_train(
                 model_averaging=model_averaging,
                 replica_dcn_axis_size=-1,
                 allow_partial_checkpoint=train_config.allow_partial_checkpoint,
+                quantization=QuantizationConfig(int8=train_config.int8) if train_config.int8 else None,
+                per_device_eval_parallelism=per_device_eval_parallelism,
             ),
             z_loss_weight=train_config.z_loss_weight,
             model=model_config,
@@ -346,3 +361,41 @@ def _get_tokenizer_for_train(tokenized: InputName | ExecutorStep | LMMixtureData
             raise ValueError(f"Could not determine tokenizer from {tokenized}")
 
     return tokenizer
+
+
+def default_scaling_law_pred(
+    ladder_runs: Sequence[ExecutorStep | InputName | str],
+    pred_run: ExecutorStep | InputName | str | None = None,
+    task_losses: Sequence[str] = ("eval/paloma/c4_en/bpb"),
+    task_accuracies: Sequence[str] | Sequence[EvalTaskConfig] | None = None,
+):
+    """
+    Given a suite of small models, predict the performance on a number of (N, D) values.
+    """
+    # get the executor steps or run IDs for the ladder runs and the pred run
+    ladder_steps_or_ids = [get_executor_step(run) if not isinstance(run, str) else run for run in ladder_runs]
+
+    pred_run_or_id = None
+    if pred_run:
+        pred_run_or_id = get_executor_step(pred_run) if not isinstance(pred_run, str) else pred_run
+
+    # convert the task accuracies to strings if they are `EvalTaskConfig`s
+    if task_accuracies is not None:
+        task_accuracies = convert_to_task_metrics(task_accuracies, metric="acc")
+
+    if pred_run_or_id:
+        name = pred_run_or_id if isinstance(pred_run_or_id, str) else pred_run_or_id.name
+    else:
+        name = "projection"
+
+    return ExecutorStep(
+        name=f"""scaling_laws/{name}""",
+        fn=run_scaling_law_analysis,
+        config=ScalingLawConfig(
+            name=name,
+            ladder_model_steps=ladder_steps_or_ids,
+            pred_model_step=pred_run_or_id,
+            task_losses=task_losses,
+            task_accuracies=task_accuracies,
+        ),
+    )
