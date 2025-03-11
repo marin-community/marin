@@ -33,7 +33,8 @@ dependencies = [
     "multiprocess==0.70.16",
     "levanter>=1.2.dev1207",
     "haliax>=1.4.dev330",
-    "sentencepiece"
+    "sentencepiece",
+    "lz4",
 ]
 
 [project.optional-dependencies]
