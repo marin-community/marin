@@ -6,7 +6,7 @@ import urllib.parse
 from typing import Any, ClassVar
 
 import fsspec
-import lz4.frame
+import lz4
 
 
 class BaseClassifier:
