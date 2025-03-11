@@ -55,10 +55,16 @@ def load_ar5iv_html(input_file_paths, zip_path, counts):
                         outs += (
                             json.dumps(
                                 {
-                                    "id": f"{letters.group(0)}/{numbers.group(0)}",  # MANDATORY: source-specific identifier
+                                    "id": (
+                                        f"{letters.group(0)}/{numbers.group(0)}"
+                                    ),  # MANDATORY: source-specific identifier
                                     "text": content,  # MANDATORY: textual content of the document
-                                    "source": "ar5iv",  # MANDATORY: source of the data, such as peS2o, common-crawl, etc.
-                                    "added": datetime.datetime.now().isoformat(),  # OPTIONAL: timestamp ai2 acquired this data
+                                    "source": (
+                                        "ar5iv"
+                                    ),  # MANDATORY: source of the data, such as peS2o, common-crawl, etc.
+                                    "added": (
+                                        datetime.datetime.now().isoformat()
+                                    ),  # OPTIONAL: timestamp ai2 acquired this data
                                 }
                             )
                             + "\n"

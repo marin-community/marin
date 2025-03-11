@@ -18,7 +18,6 @@ from marin.core.runtime import cached_or_construct_output
 from marin.utils import fsspec_exists, fsspec_glob, fsspec_rm
 from marin.schemas.web.convert import ExtractionConfig, HtmlToMarkdownConfig, ResiliparseConfig
 
-
 logger = logging.getLogger("ray")
 
 
