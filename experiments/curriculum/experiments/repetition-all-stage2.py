@@ -20,7 +20,7 @@ if __name__ == "__main__":
             model_size="150m",
             num_train_steps=3000,
             learning_rate=0.003,
-            num_eval=20,
+            num_eval=4,
             num_data1_repetitions=num_data1_repetitions,
             version_tag="-v2",
             additional_tags=["flan-c4-repetition-all-stage2"],
