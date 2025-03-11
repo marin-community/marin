@@ -7,7 +7,7 @@ from ray.data import DataContext
 from ray.data.datasource import FilenameProvider
 
 from marin.generation.pipeline import vLLMTextGeneration
-from marin.generation.ray_utils import get_scheduling_strategy_fn
+from marin.generation.ray_utils import get_ray_remote_args_scheduling_strategy_fn
 from marin.utils import fsspec_glob
 
 
@@ -31,7 +31,7 @@ class TextGenerationInferenceConfig:
     num_instances: tuple[int, int] = (1, 4)
     batch_size: int = 32
     tensor_parallel_size: int = 1
-    preserve_order: bool = True
+    preserve_order: bool = False
     one_to_one_input_output_mapping: bool = False
 
     # File specific
@@ -39,6 +39,9 @@ class TextGenerationInferenceConfig:
     # If none, then we use the same filetype as the input if possible, if not then we use json.
     output_filetype_override: str | None = None
     prompt_column: str = "text"
+
+    # Hardware specific
+    tpu_type: str = "TPU-v6e-8"
 
 
 class OneToOneFilenameProvider(FilenameProvider):
@@ -78,9 +81,9 @@ def set_ray_data_config(config: TextGenerationInferenceConfig):
 
 def ray_resources_kwarg(config: TextGenerationInferenceConfig):
     if config.tensor_parallel_size == 1:
-        return {"resources": {"TPU": 1, "TPU-v6e-8-head": 1}}
+        return {"resources": {"TPU": 1, f"{config.tpu_type}-head": 1}}
     else:
-        return {"ray_remote_args_fn": get_scheduling_strategy_fn(config.tensor_parallel_size)}
+        return {"ray_remote_args_fn": get_ray_remote_args_scheduling_strategy_fn(config.tensor_parallel_size)}
 
 
 def get_ray_data_read_kwargs(config: TextGenerationInferenceConfig):
