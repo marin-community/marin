@@ -111,8 +111,23 @@ def apply_filter_remove_spans(
 
 def apply_filter_classify(input_data: dict, doc_filter: FilterConfig, id_to_attributes: dict[str, Any]) -> bool:
     attributes = id_to_attributes[input_data["id"]]
+    
     # Get value from attributes
-    value = attributes[doc_filter.name]
+    attribute_value = attributes[doc_filter.name]
+    
+    # Handle nested attributes structure if a label is specified
+    if doc_filter.label is not None:
+        if isinstance(attribute_value, dict) and doc_filter.label in attribute_value:
+            value = attribute_value[doc_filter.label]
+        else:
+            logger.warning(
+                f"Label {doc_filter.label} not found in attribute {doc_filter.name} for document {input_data['id']}"
+            )
+            return False
+    else:
+        # If no label specified, use the attribute value directly
+        # This handles cases like compression_ratio where the value is a scalar
+        value = attribute_value
 
     # Check both lower and upper bounds if specified
     if doc_filter.threshold is not None and value < doc_filter.threshold:
