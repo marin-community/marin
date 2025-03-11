@@ -12,12 +12,13 @@ from transformers import AutoTokenizer
 from marin.generation.dataset import DatasetOutputProcessorConfig, DatasetSampler, MeduDatasetOutputProcessor
 from marin.generation.inference import TextGenerationInferenceConfig, run_inference
 from marin.generation.llm_generation import vLLMProvider
-from marin.generation.ray_utils import get_scheduling_strategy_fn
+from marin.generation.ray_utils import scheduling_strategy_fn
 from marin.generation.templates import (
     MEDU_BENCHMARK_DESCRIPTION_MERGING_TEMPLATE,
     MEDU_BENCHMARK_DESCRIPTION_TEMPLATE,
     MEDU_DOCUMENT_LABELING_PROMPT,
 )
+from marin.utils import fsspec_exists
 
 logger = logging.getLogger("ray")
 
@@ -46,7 +47,7 @@ class MEDUPipelineConfig:
     output_filetype_override: str = "jsonl.gz"
 
 
-@ray.remote(max_restarts=-1)  # NOTE(chris): We use Spot TPUs, so we need to be able to restart the pipeline if it fails.
+@ray.remote  # NOTE(chris): We use Spot TPUs, so we need to be able to restart the pipeline if it fails.
 class MEDUPipeline:
     def __init__(
         self,
@@ -172,15 +173,18 @@ def label_documents(config: MEDUPipelineConfig, final_benchmark_description_prom
     return inference_future
 
 
+def get_final_benchmark_description_prompt_output_path(output_path: str):
+    return os.path.join(output_path, "final_benchmark_description_prompt.txt")
+
+
 def write_final_benchmark_description_prompt(final_benchmark_description_prompt: str, output_path: str):
-    with fsspec.open(f"{output_path}/final_benchmark_description_prompt.txt", "w", compression="infer") as f:
+    with fsspec.open(get_final_benchmark_description_prompt_output_path(output_path), "w", compression="infer") as f:
         f.write(final_benchmark_description_prompt)
 
 
-def run_medu_labeling_pipeline(config: MEDUPipelineConfig):
-    ray_remote_args = get_scheduling_strategy_fn(config.tensor_parallel_size)()
-
-    pipeline = MEDUPipeline.options(**ray_remote_args).remote(
+def run_benchmark_labeling_pipeline(config: MEDUPipelineConfig):
+    scheduling_strategy = scheduling_strategy_fn(config.tensor_parallel_size)
+    pipeline = MEDUPipeline.options(scheduling_strategy=scheduling_strategy).remote(
         config.model_name, config.dev_sets, config.tensor_parallel_size, config.engine_kwargs, config.generation_kwargs
     )
 
@@ -194,6 +198,18 @@ def run_medu_labeling_pipeline(config: MEDUPipelineConfig):
     final_benchmark_description_prompt = ray.get(pipeline._get_final_benchmark_description_prompt.remote())
 
     write_final_benchmark_description_prompt(final_benchmark_description_prompt, config.output_path)
+
+    return final_benchmark_description_prompt
+
+
+def run_medu_labeling_pipeline(config: MEDUPipelineConfig):
+    if not fsspec_exists(get_final_benchmark_description_prompt_output_path(config.output_path)):
+        final_benchmark_description_prompt = run_benchmark_labeling_pipeline(config)
+    else:
+        with fsspec.open(
+            get_final_benchmark_description_prompt_output_path(config.output_path), "r", compression="infer"
+        ) as f:
+            final_benchmark_description_prompt = f.read()
 
     label_documents_future = label_documents(config, final_benchmark_description_prompt)
     ray.get(label_documents_future)

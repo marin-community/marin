@@ -2,7 +2,7 @@ import os
 from dataclasses import dataclass
 
 from experiments.medu.defaults import default_label, default_quality_filter_and_consolidate, default_quality_filter_model
-from experiments.medu.medu_datasets import medu_dclm_pretraining_subset
+from experiments.medu.medu_datasets import medu_dclm_annotation_subset, medu_dclm_pretraining_subset
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from marin.generation.medu import CorpusContent
 from operations.download.huggingface.download import DownloadConfig
@@ -130,6 +130,7 @@ other = [
 ]
 
 
+# TODO(chris): Add tpu type into config, abstract the pipeline one more time.
 class MMLUMeduPipeline:
     def __init__(self, config: MeduMMLUConfig):
         self.config = config
@@ -140,7 +141,9 @@ class MMLUMeduPipeline:
 
         # To be populated by the default_mmlu_labeling step
         self.labeled_documents = self.default_mmlu_labeling()
-        self.encoder_model = default_quality_filter_model(self.labeled_documents, self.config.experiment_name)
+        self.encoder_model = default_quality_filter_model(
+            self.labeled_documents, self.config.experiment_name, "TPU-v4-16"
+        )
         self.filtered_documents = default_quality_filter_and_consolidate(
             self.encoder_model, self.pretraining_data_path, self.pretraining_data_name, self.config.experiment_name
         )
@@ -158,15 +161,15 @@ class MMLUMeduPipeline:
     # TODO(chris): Turn into a step so we can use output path of MMLU step
     def default_mmlu_labeling(self):
         return default_label(
-            documents_to_be_labeled="gs://marin-us-east5/documents/medu-datasets/medu-dclm-annotation-subset-e12303/medu-dclm-annotation-subset-e12303",
+            # documents_to_be_labeled="gs://marin-us-east5/documents/medu-datasets/medu-dclm-annotation-subset-e12303/medu-dclm-annotation-subset-e12303",
             # TODO(chris): Use direct path for now since we don't have DCLM downloaded on east5.
-            # documents_to_be_labeled=medu_dclm_annotation_subset,
+            documents_to_be_labeled=medu_dclm_annotation_subset,
             targeted_documents=self.corpus_contents,
             experiment_name=self.config.experiment_name,
         )
 
     def get_executor_steps(self):
-        return [self.labeled_documents, self.encoder_model]
+        return [self.labeled_documents]
 
     def run(self):
         executor_main(self.get_executor_steps())
