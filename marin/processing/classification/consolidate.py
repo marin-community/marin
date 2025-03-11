@@ -111,10 +111,10 @@ def apply_filter_remove_spans(
 
 def apply_filter_classify(input_data: dict, doc_filter: FilterConfig, id_to_attributes: dict[str, Any]) -> bool:
     attributes = id_to_attributes[input_data["id"]]
-    
+
     # Get value from attributes
     attribute_value = attributes[doc_filter.name]
-    
+
     # Handle nested attributes structure if a label is specified
     if doc_filter.label is not None:
         if isinstance(attribute_value, dict) and doc_filter.label in attribute_value:
