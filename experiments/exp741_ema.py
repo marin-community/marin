@@ -1,7 +1,7 @@
 import dataclasses
 
+from experiments.dclm.tokenize_dclm import dclm_mixture_config_llama3_wrong
 from experiments.defaults import default_train
-from experiments.exp600_tootsie import dclm_mixture_config_llama3_wrong
 from experiments.llama import llama_1_4b
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import executor_main
