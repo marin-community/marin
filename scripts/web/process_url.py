@@ -10,7 +10,6 @@ import marin
 import marin.web as web
 from marin.markdown import to_markdown
 
-
 if __name__ == "__main__":
     out_path = "output"
     os.makedirs(out_path, exist_ok=True)
@@ -21,7 +20,9 @@ if __name__ == "__main__":
             "r",
             client_kwargs={
                 "headers": {
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3"
+                    "User-Agent": (
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3"
+                    )
                 }
             },
         ) as f:
