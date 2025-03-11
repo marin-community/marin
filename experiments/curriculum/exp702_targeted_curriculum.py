@@ -14,6 +14,8 @@ from levanter.optim import AdamConfig
 
 from experiments.defaults import _prepare_data_config
 from experiments.llama import llama_150m, llama_300m, llama_600m, llama_1_4b, llama_1_9b, llama_8b
+from experiments.pretraining_datasets import dclm_baseline
+from experiments.midtraining_datasets import finemath_3_plus_tokenized
 
 from marin.execution.executor import executor_main, output_path_of
 from marin.processing.tokenize.data_configs import lm_mixture_data_config, lm_varying_mixture_data_config
@@ -27,6 +29,7 @@ from experiments.llama import llama3_tokenizer
 marin_prefix = os.environ["MARIN_PREFIX"]
 
 llama_150m_4096 = dataclasses.replace(llama_150m, seq_len=4096)
+llama_600m_4096 = dataclasses.replace(llama_600m, seq_len=4096)
 llama_1_4b_1024 = dataclasses.replace(llama_1_4b, seq_len=1024)
 llama_1_9b_1024 = dataclasses.replace(llama_1_9b, seq_len=1024)
 llama_8b_1024 = dataclasses.replace(llama_8b, seq_len=1024)
@@ -159,6 +162,16 @@ else:
     wiki_stage1_tokenized = None
     wiki_stage2_tokenized = None
 
+dclm_tokenized = dataclasses.replace(
+    default_tokenize(
+        name="dclm_baseline",
+        dataset=dclm_baseline,
+        tokenizer=llama3_tokenizer,
+    ),
+    # make consistent with path in eu (they differ b/c of the cd)
+    override_output_path="tokenized/dclm_baseline-0206f1/",
+)
+
 stage_data = {
     "stack_dedup": {
         "stage1": stack_dedup_stage1_tokenized,
@@ -183,7 +196,25 @@ stage_data = {
     "wiki": {
         "stage1": wiki_stage1_tokenized,
         "stage2": wiki_stage2_tokenized,
+    },
+    "dclm": {
+        "stage1": dclm_tokenized,
+    },
+    "finemath": {
+        "stage1": finemath_3_plus_tokenized,
     }
+}
+
+model_dict = {
+    "150m": llama_150m,
+    "150m_4096": llama_150m_4096,
+    "300m": llama_300m,
+    "600m": llama_600m,
+    "600m_4096": llama_600m_4096,
+    "1_4b_1024": llama_1_4b_1024,
+    # "1_9b": llama_1_9b,
+    "1_9b_1024": llama_1_9b_1024,
+    "8b_1024": llama_8b_1024,
 }
 
 def get_pretraining_data(
@@ -194,6 +225,7 @@ def get_pretraining_data(
     transition_seq_idx: int,
     num_data1_sequences: int,
     num_data1_repetitions: Optional[int] = None,
+    num_validation_sequences: Optional[int] = 10 * 1024,
 ):
     # Create data config with varying mixture
     # Only using stage 1 because we're not using checkpointing
@@ -218,6 +250,10 @@ def get_pretraining_data(
         max_sequences_dict=None if num_data1_repetitions is None else {
             data1_name: num_data1_sequences
         },
+        num_validation_sequences_dict=None if num_validation_sequences is None else {
+            data1_name: num_validation_sequences,
+            data2_name: num_validation_sequences
+        }
     )
 
     pretraining_data = _prepare_data_config(data_config, use_default_validation=True)
@@ -231,15 +267,20 @@ def full_training_varying_mixture(
     duration_frac_stage2: float,
     data1_frac_alloc_stage2: float,
     learning_rate: float = 3e-3,
+    sft_learning_rate: float = None,
     cooldown_frac: Optional[float] = None,
     schedule_type: str = "cosine",
     model_size: str = "150m",
     num_train_steps: int = 3000,
+    sft_steps: int = None,
     num_eval: int = 20,
     num_data1_repetitions: int = 1,
     version_tag: str = "",
     additional_tags: List[str] = [],
     num_lm_eval_harness: Optional[int] = None,
+    tpu_type: str = tpu_type,
+    batch_size: int = 1024,
+    min_lr_ratio: float = 0.1,
 ):
     """
     Two-stage training using varying mixture weights, similar to varsched but without checkpointing.
@@ -259,7 +300,7 @@ def full_training_varying_mixture(
         version_tag: Optional version tag for experiment
         additional_tags: Additional tags for experiment
     """
-    num_sequences = num_train_steps * 1024  # batch size
+    num_sequences = num_train_steps * batch_size
     num_data1_sequences = int(num_sequences * total_data1_portion)
 
     duration_frac_stage1 = round(1 - duration_frac_stage2, 7)
@@ -280,16 +321,7 @@ def full_training_varying_mixture(
     assert 0 <= data1_weight_stage2 <= 1, f"data1_weight_stage2: {data1_weight_stage2}"
 
     # Configure model and training
-    model = {
-        "150m": llama_150m,
-        "150m_4096": llama_150m_4096,
-        "300m": llama_300m,
-        "600m": llama_600m,
-        "1_4b_1024": llama_1_4b_1024,
-        # "1_9b": llama_1_9b,
-        "1_9b_1024": llama_1_9b_1024,
-        "8b_1024": llama_8b_1024,
-    }[model_size]
+    model = model_dict[model_size]
 
     # Calculate transition point
     transition_seq_idx = int(duration_frac_stage1 * num_sequences)
@@ -310,8 +342,12 @@ def full_training_varying_mixture(
     steps_per_eval = num_train_steps // num_eval
     steps_per_eval_task = None if num_lm_eval_harness is None else num_train_steps // num_lm_eval_harness
     epochs_tag = f"-r{num_data1_repetitions}" if num_data1_repetitions is not None and num_data1_repetitions > 1 else ""
-    assert data1_frac_alloc_stage2 == 1.0, f"data1_frac_alloc_stage2: {data1_frac_alloc_stage2}, change naming scheme to support this"
-    name_prefix = f"{data1_name}{epochs_tag}-{data2_name}-dur{duration_frac_stage2}-{region_suffix}-{model_size}"
+    
+    if data1_frac_alloc_stage2 == 1.0:
+        name_prefix = f"{data1_name}{epochs_tag}-{data2_name}-dur{duration_frac_stage2}-{model_size}"
+    else:
+        alloc_tag = f"-a{data1_frac_alloc_stage2}" if data1_frac_alloc_stage2 != 1.0 else ""
+        name_prefix = f"{data1_name}{epochs_tag}-{data2_name}-dur{duration_frac_stage2}{alloc_tag}-{model_size}"
 
     if schedule_type == "linear":
         optimizer_config = AdamConfig(
@@ -319,10 +355,24 @@ def full_training_varying_mixture(
             weight_decay=weight_decay,
             lr_schedule=schedule_type,
             decay=cooldown_frac,
+            min_lr_ratio=min_lr_ratio,
         )
         name_prefix += f"-{schedule_type}-{cooldown_frac}"
     elif schedule_type == "cosine":
         optimizer_config = None
+    elif schedule_type == "sft":
+        assert sft_learning_rate is not None, "sft_learning_rate must be provided for sft schedule"
+        assert sft_steps is not None, "sft_steps must be provided for sft schedule"
+        optimizer_config = AdamConfig(
+            learning_rate=learning_rate,
+            min_lr_ratio=0.0,
+            weight_decay=weight_decay,
+            lr_schedule="linear",
+            decay=cooldown_frac,
+            sft_learning_rate=sft_learning_rate,
+            sft_steps=sft_steps,
+        )
+        name_prefix += f"-{schedule_type}-{sft_learning_rate},{sft_steps}"
     else:
         raise ValueError(f"Invalid schedule type: {schedule_type}")
     
@@ -340,7 +390,7 @@ def full_training_varying_mixture(
         pretraining_data=pretraining_data,
         model=model,
         model_checkpoint=None,
-        train_batch_size=1024,
+        train_batch_size=batch_size,
         num_train_steps=num_train_steps,
         learning_rate=learning_rate,
         weight_decay=weight_decay,

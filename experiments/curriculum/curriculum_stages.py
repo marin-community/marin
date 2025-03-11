@@ -43,10 +43,11 @@ EVAL_TASKS = (
     EvalTaskConfig("arc_easy", 10),  # 10-shot, four-way MCQ questions involving grade 3-9 basic science
     EvalTaskConfig("arc_challenge", 10),  # a (harder) version of arc_easy
     EvalTaskConfig("piqa", 10),  # answer questions based on a passage
-    EvalTaskConfig("humaneval", 0),  # coding problems
-    EvalTaskConfig("mbpp", 3),  # coding problems
-    EvalTaskConfig("mmlu", 0, task_alias="mmlu_0shot"),
-    EvalTaskConfig("mmlu", 5, task_alias="mmlu_5shot"),
+    # EvalTaskConfig("humaneval", 0),  # coding problems
+    # EvalTaskConfig("mbpp", 3),  # coding problems
+    # EvalTaskConfig("mmlu", 0, task_alias="mmlu_0shot"),
+    # EvalTaskConfig("mmlu", 5, task_alias="mmlu_5shot"),
+    EvalTaskConfig("mathqa", 5, task_alias="mathqa_5shot")
 )
 
 def tokenize_two_stages(
@@ -113,6 +114,8 @@ def train_executor_step(
     optimizer_config : AdamConfig = None,
     additional_tags : list[str] = [],
     steps_per_eval_task : Optional[int] = None,
+    data_seed : int = 42,
+    project_name : str = "suhas-curriculum",
 ) -> ExecutorStep:
     
     if optimizer_config is None:
@@ -133,7 +136,7 @@ def train_executor_step(
         data=pretraining_data,
         trainer=TrainerConfig(
             tracker=WandbConfig(
-                project="suhas-curriculum",
+                project=project_name,
                 tags=[name, TAG, *additional_tags],
             ),
             mp=jmp.get_policy("p=f32,c=bfloat16"),
@@ -149,7 +152,7 @@ def train_executor_step(
         z_loss_weight=None,
         model=model,
         optimizer=optimizer_config,
-        data_seed=42,
+        data_seed=data_seed,
         initialize_from_checkpoint_path=model_checkpoint,
         eval_harness_steps=steps_per_eval_task,
         eval_harness=harness_config,
