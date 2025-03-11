@@ -23,6 +23,7 @@ DOCKER_TAGS = {
     "asia-northeast1": "6da1c9ed",
     "marin-us-east5-b-vllm": "296d2ef0",
     "europe-west4-vllm": "7fab502e",
+    "marin-us-central2-vllm": "7a75233e",
 }
 
 configs = {
@@ -118,6 +119,16 @@ configs = {
         "min_workers": 2,
         "VLLM": True,
     },
+    "marin-us-central2-vllm": {
+        "NAME": "marin-us-central2-vllm",
+        "REGION": "us-central2",
+        "ZONE": "us-central2-b",
+        "BUCKET": "marin-us-central2",
+        "DOCKER_TAG": DOCKER_TAGS["marin-us-central2-vllm"],
+        "tpu_generation": "v4-serve",
+        "min_workers": 1,
+        "VLLM": True,
+    },
 }
 
 generation_configs = {
@@ -147,12 +158,20 @@ generation_configs = {
         "slices": [],
         "num_tpus": 8,
     },
+    "v4-serve": {
+        "runtime_version": "tpu-ubuntu2204-base",
+        "base_worker": "16",
+        "slices": [],
+        "num_tpus": 8,
+    },
 }
 
 
 def make_tpu_slice_config(generation, count) -> dict[str, dict]:
     slice_gen_name = "v5litepod" if generation == "v5e" else generation
-    slice_gen_name = "v6e" if generation == "v6e-serve" else slice_gen_name
+
+    if "serve" in generation:
+        slice_gen_name = generation.replace("-serve", "")
     name = f"tpu_slice_{generation}_{count}"
     return {
         name: {
