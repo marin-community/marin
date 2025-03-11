@@ -87,7 +87,7 @@ available_node_types:
             sourceImage: projects/ubuntu-os-cloud/global/images/family/ubuntu-2204-lts
   tpu_worker:
     max_workers: 1024
-    min_workers: 2
+    min_workers: 1
     node_config:
       acceleratorType: v4-16
       runtimeVersion: tpu-ubuntu2204-base
@@ -95,4 +95,4 @@ available_node_types:
         preemptible: true
     resources:
       CPU: 120
-      TPU: 8
+      TPU: 4

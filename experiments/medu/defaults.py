@@ -2,7 +2,8 @@ import os
 
 from transformers import AutoTokenizer
 
-from marin.classifiers.hf.launch_ray_training import train_classifier_distributed
+from experiments.evals.resource_configs import ResourceConfig
+from marin.classifiers.hf.launch_ray_training import LaunchConfig, launch_training_with_ray
 from marin.classifiers.hf.train_classifier import HFTrainingConfig
 from marin.core.runtime import TaskConfig
 from marin.execution.executor import ExecutorStep, output_path_of, this_output_path
@@ -47,7 +48,7 @@ def default_label(
     )
 
 
-def default_quality_filter_model(labeled_documents: ExecutorStep, experiment_name: str):
+def default_quality_filter_model(labeled_documents: ExecutorStep, experiment_name: str, tpu_type: str = "TPU-v4-8"):
     dataset = ExecutorStep(
         name=f"documents/medu-datasets/{experiment_name}",
         fn=run_medu_dataset_sampling_pipeline,
@@ -57,25 +58,34 @@ def default_quality_filter_model(labeled_documents: ExecutorStep, experiment_nam
         ),
     ).cd("sampled")
 
+    # TODO(chris): Change to v4-8 when we aren't running inference on v4-16 anymore?
+    tpu_type_to_resource_config = {
+        "TPU-v4-16": ResourceConfig(num_tpu=4, tpu_type="TPU-v4-16"),
+        "TPU-v6e-8": ResourceConfig(num_tpu=8, tpu_type="TPU-v6e-8"),
+    }
+    resource_config = tpu_type_to_resource_config[tpu_type]
+
     max_length = 512
     medu_classifier_remote = ExecutorStep(
         name=f"classifiers/medu-bert/{experiment_name}",
-        fn=train_classifier_distributed,
-        config=HFTrainingConfig(
-            train_dataset=dataset,
-            output_dir=this_output_path(),
-            num_labels=1,
-            target_column="label",
-            tpu_num_cores=8,
-            max_length=max_length,
-            train_size=0.9,
-            eval_steps=100,
-            save_steps=100,
-            logging_steps=10,
-            run_name=f"medu-classifier-{experiment_name}-max-length-{max_length}",
+        fn=launch_training_with_ray,
+        config=LaunchConfig(
+            training_config=HFTrainingConfig(
+                train_dataset=dataset,
+                output_dir=this_output_path(),
+                num_labels=1,
+                target_column="label",
+                max_length=max_length,
+                train_size=0.9,
+                eval_steps=100,
+                save_steps=100,
+                logging_steps=10,
+                run_name=f"medu-classifier-{experiment_name}-max-length-{max_length}",
+                tpu_num_cores=resource_config.num_tpu,
+            ),
+            resource_config=resource_config,
         ),
     )
-
     # Download the model locally to GCSFuse mount path for inference
     medu_classifier = ExecutorStep(
         name=f"gcsfuse_mount/medu-models/{experiment_name}-classifier",

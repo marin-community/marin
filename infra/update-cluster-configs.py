@@ -162,7 +162,7 @@ generation_configs = {
         "runtime_version": "tpu-ubuntu2204-base",
         "base_worker": "16",
         "slices": [],
-        "num_tpus": 8,
+        "num_tpus": 4,
     },
 }
 
