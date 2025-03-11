@@ -64,9 +64,9 @@ if args.build_cache:
         if wandb_key in run.tags and "stage2" in run.tags:
             run_dict = parse_run(run)
             run_list.append(run_dict)
-    pickle.dump(run_list, open(f"cache/{wandb_key}_run_list.pkl", "wb"))
+    pickle.dump(run_list, open(f"/Users/Suhas/Desktop/SUHAS/Repos/marin/experiments/curriculum/cache/{wandb_key}_run_list.pkl", "wb"))
 else:
-    run_list = pickle.load(open(f"cache/{wandb_key}_run_list.pkl", "rb"))
+    run_list = pickle.load(open(f"/Users/Suhas/Desktop/SUHAS/Repos/marin/experiments/curriculum/cache/{wandb_key}_run_list.pkl", "rb"))
 
 decay_ratio_color_map = {
     None: 'blue',
