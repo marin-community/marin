@@ -227,6 +227,22 @@ class GTEClassifier(FinewebEduClassifier):
 
 class PerplexityClassifier(BaseClassifier):
     def __init__(self, model_name: str, attribute_name: str, max_length: int, *args, **kwargs):
+        import subprocess
+
+        # HACK(chris): REMOVE THIS only used to get it working in marin-us-central2 if it works
+        # Run gcsfuse to mount the bucket
+        subprocess.run(
+            "gcsfuse --implicit-dirs --only-dir gcsfuse_mount $BUCKET /opt/gcsfuse_mount || true",
+            shell=True,
+            check=False,
+        )
+
+        # List the perplexity models directory
+        result = subprocess.run(
+            "ls /opt/gcsfuse_mount/perplexity-models", shell=True, capture_output=True, text=True, check=False
+        )
+        print(f"Available perplexity models: {result.stdout}")
+
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
         device = xm.xla_device()
