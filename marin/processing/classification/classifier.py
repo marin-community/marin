@@ -6,6 +6,7 @@ import urllib.parse
 from typing import Any, ClassVar
 
 import fsspec
+import lz4.frame
 
 
 class BaseClassifier:
@@ -192,10 +193,32 @@ class FinewebEduClassifier(BERTClassifier):
         return batch
 
 
+class CompressionClassifier(BaseClassifier):
+    """A classifier that calculates LZ4 compression ratios for text documents.
+
+    The compression ratio is calculated as (compressed_size / original_size).
+    Higher ratios indicate text that is harder to compress (potentially more random/noisy),
+    while lower ratios indicate text that compresses well (potentially more structured/repetitive).
+    """
+
+    def __init__(self, model_name: str, attribute_name: str, *args, **kwargs):
+        super().__init__(model_name, attribute_name)
+
+    def __call__(self, batch):
+        compression_ratios = []
+        for text in batch["text"]:
+            text_bytes = text.encode("utf-8")
+            compressed = lz4.frame.compress(text_bytes)
+            ratio = len(compressed) / len(text_bytes)
+            compression_ratios.append({self.attribute_name: ratio})
+        return {"attributes": compression_ratios}
+
+
 class AutoClassifier(BaseClassifier):
     _MODEL_NAME_TO_CLS_DICT: ClassVar[dict[str, BaseClassifier]] = {
         "fasttext": FasttextClassifier,
         "fineweb": FinewebEduClassifier,
+        "compression": CompressionClassifier,
     }
 
     def __init__(self, model_name: str, attribute_name: str, model_type: str | None, *args, **kwargs):
