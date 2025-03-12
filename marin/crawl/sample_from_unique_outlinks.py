@@ -182,20 +182,17 @@ def sample_outlinks(
     starts = [r[0] for r in range_list]
 
     # Assign each sampled ID to its shard (via binary search)
-    shard_to_local_offsets_with_ids = defaultdict(list)
+    shard_to_local_offsets = defaultdict(list)
     for example_id in tqdm(sampled_ids, desc="Mapping sampled IDs to shards"):
         shard_idx = bisect.bisect_right(starts, example_id) - 1
         start_idx, _, shard_path = range_list[shard_idx]
         local_offset = example_id - start_idx
-        shard_to_local_offsets_with_ids[shard_path].append((local_offset, example_id))
+        shard_to_local_offsets[shard_path].append(local_offset)
 
     # Extract from shards in parallel
     logger.info("Extracting sampled outlinks...")
     refs = []
-    for shard_path, offsets_with_ids in tqdm(
-        shard_to_local_offsets_with_ids.items(), desc="Extracting sampled outlinks"
-    ):
-        local_offsets = [x[0] for x in offsets_with_ids]
+    for shard_path, local_offsets in tqdm(shard_to_local_offsets.items(), desc="Extracting sampled outlinks"):
         refs.append(get_examples_from_offsets.remote(shard_path, local_offsets))
     results = ray.get(refs)
 
