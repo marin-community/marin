@@ -29,8 +29,9 @@ LOCATIONS = [
     # "europe-west4-a",
     # "europe-west4-b",
     "us-central2-b",
-    # "us-east1-d",
-    # "us-east5-a",
+    "us-east1-d",
+    "us-east5-a",
+    "us-east5-b",
     "us-west4-a",
 ]
 
@@ -41,6 +42,7 @@ LOCATION_TO_CLI_FILE = {
     "us-central2-b": "/home/abhinavg/marin/infra/marin-us-central2.yaml",
     "us-east1-d": "/home/abhinavg/marin/infra/marin-us-east1.yaml",
     "us-east5-a": "/home/abhinavg/marin/infra/marin-us-east5.yaml",
+    "us-east5-b": "/home/abhinavg/marin/infra/marin-us-east5-b-vllm.yaml",
     "us-west4-a": "/home/abhinavg/marin/infra/marin-us-west4.yaml",
 }
 
@@ -71,14 +73,13 @@ def gather_tpu_info_from_vms(location, incomplete_tpus):
     tpu_by_generation = Counter()
     vms_to_delete = []
     for node in nodes:
-        # TODO(cathy) temporarily disabled
         for (incomplete_tpu, used, total) in incomplete_tpus:
             if incomplete_tpu in node.name:
                 print(f"Node {node.name} of type {node.accelerator_type} does not have a power of 2 usage, deleting")
                 with open("incomplete_tpus.log", "a") as f:
                     timestamp = datetime.datetime.now().isoformat()
                     f.write(f"{timestamp},{node.name},{node.accelerator_type},{location},{used},{total}\n")
-                # vms_to_delete.append(node.name)
+                vms_to_delete.append(node.name)
                 continue
         if node.state in BAD_STATES:
             print(f"Node {node.name} is in state {node.state}, deleting")
@@ -315,7 +316,7 @@ def gather_all_incomplete_tpus():
 
         return incomplete_tpus_after
 
-    return {}
+    return incomplete_tpus
 
 
 def delete_stale_vms():
