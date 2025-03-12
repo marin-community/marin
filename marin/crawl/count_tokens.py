@@ -63,6 +63,26 @@ python marin/run/ray_run.py \
     --output_path "gs://marin-us-central2/scratch/nfliu/count_tokens/fineweb_edu_10M_minhash_against_fineweb_edu/"
 ```
 
+Counting tokens in fineweb-edu-10M-cc-deduplicated (passing pages):
+
+```
+python marin/run/ray_run.py \
+    --no_wait -- \
+    python marin/crawl/count_tokens.py \
+    --input_patterns '["gs://marin-us-central2/scratch/nfliu/text/fineweb-edu-10M-cc-deduplicated/*.passing.parquet"]' \
+    --output_path "gs://marin-us-central2/scratch/nfliu/count_tokens/fineweb_edu_10M_cc_deduplicated/"
+```
+
+Counting tokens in fineweb-edu-10M-cc-deduplicated (passing pages, deduplicated against fineweb-edu):
+
+```
+python marin/run/ray_run.py \
+    --no_wait -- \
+    python marin/crawl/count_tokens.py \
+    --input_patterns '["gs://marin-us-central2/scratch/nfliu/text/fineweb_edu_10M_cc_deduplicated_passing_minhash_against_fineweb_edu/*.jsonl.gz"]' \
+    --output_path "gs://marin-us-central2/scratch/nfliu/count_tokens/fineweb_edu_10M_cc_deduplicated_passing_minhash_against_fineweb_edu/"
+```
+
 Counting tokens in open-web-math:
 
 ```
@@ -102,6 +122,28 @@ python marin/run/ray_run.py \
     --input_patterns '["gs://marin-us-central2/scratch/nfliu/text/open_web_math_10M_passing_minhash_against_open_web_math/*.jsonl.gz"]' \
     --output_path "gs://marin-us-central2/scratch/nfliu/count_tokens/open_web_math_10M_passing_minhash_against_open_web_math/"
 ```
+
+Counting tokens in open-web-math-10M-cc-deduplicated (passing pages):
+
+```
+python marin/run/ray_run.py \
+    --no_wait -- \
+    python marin/crawl/count_tokens.py \
+    --input_patterns '["gs://marin-us-central2/scratch/nfliu/text/open-web-math-fde8ef8-10M-cc-deduplicated/*.passing.parquet"]' \
+    --output_path "gs://marin-us-central2/scratch/nfliu/count_tokens/open_web_math_10M_cc_deduplicated_passing/"
+```
+
+Counting tokens in open-web-math-10M-cc-deduplicated (passing, deduplicated against open-web-math):
+
+```
+python marin/run/ray_run.py \
+    --no_wait -- \
+    python marin/crawl/count_tokens.py \
+    --input_patterns '["gs://marin-us-central2/scratch/nfliu/text/open_web_math_10M_cc_deduplicated_passing_minhash_against_open_web_math/*.jsonl.gz"]' \
+    --output_path "gs://marin-us-central2/scratch/nfliu/count_tokens/open_web_math_10M_cc_deduplicated_passing_minhash_against_open_web_math/"
+```
+
+
 """  # noqa: E501
 import json
 import logging
