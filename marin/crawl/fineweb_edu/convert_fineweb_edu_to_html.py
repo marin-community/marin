@@ -187,7 +187,7 @@ class DolmaFormattedFineWebEduRecord:
 @dataclass(frozen=True)
 class ParquetFineWebEduConfig:
     input_path: str
-    html_output_path: str
+    output_path: str
 
 
 @ray.remote(memory=1 * 1024 * 1024 * 1024)
@@ -278,15 +278,14 @@ def get_shards_to_process(shard_path: str):
     )
     return shard_indices_to_process
 
-
-@draccus.wrap()
-def process_fineweb_edu(cfg: ParquetFineWebEduConfig):
-    files = fsspec_glob(os.path.join(cfg.input_path, "*.parquet"))
+@ray.remote(memory=2 * 1024 * 1024 * 1024)
+def process_fineweb_edu_dump(input_path: str, output_path: str):
+    files = fsspec_glob(os.path.join(input_path, "*.parquet"))
     # Group fine-web-edu examples by their source WARC
-    groupby_ref = group_fineweb_edu_by_warc.remote(files, cfg.html_output_path)
+    groupby_ref = group_fineweb_edu_by_warc.remote(files, output_path)
     ray.get(groupby_ref)
 
-    shard_indices_to_process = ray.get(get_shards_to_process.remote(cfg.html_output_path))
+    shard_indices_to_process = ray.get(get_shards_to_process.remote(output_path))
     num_shards_to_process = len(shard_indices_to_process)
 
     # Set a limit on the number of concurrent tasks so we don't overwhelm CC
@@ -302,7 +301,7 @@ def process_fineweb_edu(cfg: ParquetFineWebEduConfig):
         """Submit a shard processing task and log progress every 1000 shards."""
         nonlocal num_shards_submitted
         # shard_path_to_process is of form gs://<html_output_path>/0_warc_examples.parquet
-        shard_path = os.path.join(cfg.html_output_path, f"{shard_index}_warc_examples.parquet")
+        shard_path = os.path.join(output_path, f"{shard_index}_warc_examples.parquet")
         # shard_output_path is of form gs://<html_output_path>/0.jsonl.gz
         shard_output_path = shard_path.replace("_warc_examples.parquet", ".jsonl.gz")
         unfinished.append(process_one_shard.remote(shard_path, shard_output_path))
@@ -329,6 +328,31 @@ def process_fineweb_edu(cfg: ParquetFineWebEduConfig):
         while shard_indices_to_process and len(unfinished) < MAX_CONCURRENT_TASKS:
             submit_shard_task(shard_indices_to_process.pop())
 
+@draccus.wrap()
+def process_fineweb_edu(cfg: ParquetFineWebEduConfig):
+    dumps = fsspec_glob(os.path.join(cfg.input_path, "*"))
 
-if __name__ == "__main__":
-    process_fineweb_edu()
+    MAX_CONCURRENT_DUMPS = 10
+    ray_refs = []
+
+    for dump in dumps:
+        if len(ray_refs) > MAX_CONCURRENT_DUMPS:
+            # Wait for at least one task to complete before submitting more
+            ready_refs, ray_refs = ray.wait(ray_refs, num_returns=1)
+            try:
+                ray.get(ready_refs)
+            except Exception as e:
+                logger.exception(f"Error processing dump {dump}: {e}")
+                continue
+
+        output_path = os.path.join(cfg.output_path, os.path.basename(dump))
+        ray_refs.append(process_fineweb_edu_dump.remote(
+            input_path=dump,
+            output_path=output_path,
+        ))
+
+    # Submit remaining tasks
+    try:
+        ray.get(ray_refs)
+    except Exception as e:
+        logger.exception(f"Error processing dumps: {e}")
