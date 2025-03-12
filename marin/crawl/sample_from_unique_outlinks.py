@@ -196,7 +196,9 @@ def sample_outlinks(
     # Extract from shards in parallel
     logger.info("Extracting sampled outlinks...")
     refs = []
-    for shard_path, offsets_with_ids in shard_to_local_offsets_with_ids.items():
+    for shard_path, offsets_with_ids in tqdm(
+        shard_to_local_offsets_with_ids.items(), desc="Extracting sampled outlinks"
+    ):
         local_offsets = [x[0] for x in offsets_with_ids]
         example_ids = [x[1] for x in offsets_with_ids]
         refs.append(get_examples_from_offsets.remote(shard_path, local_offsets, example_ids))
