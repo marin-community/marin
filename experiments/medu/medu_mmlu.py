@@ -142,7 +142,7 @@ class MMLUMeduPipeline:
         # To be populated by the default_mmlu_labeling step
         self.labeled_documents = self.default_mmlu_labeling()
         self.encoder_model = default_quality_filter_model(
-            self.labeled_documents, self.config.experiment_name, "TPU-v4-16"
+            self.labeled_documents, self.config.experiment_name, "TPU-v6e-8"
         )
         self.filtered_documents = default_quality_filter_and_consolidate(
             self.encoder_model, self.pretraining_data_path, self.pretraining_data_name, self.config.experiment_name
