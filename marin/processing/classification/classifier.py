@@ -208,8 +208,14 @@ class CompressionClassifier(BaseClassifier):
         compression_ratios = []
         for text in batch["text"]:
             text_bytes = text.encode("utf-8")
-            compressed = lz4.frame.compress(text_bytes)
-            ratio = len(compressed) / len(text_bytes)
+            # Handle empty text case
+            if len(text_bytes) == 0:
+                # Set a default ratio value for empty strings
+                ratio = 2.0
+            else:
+                compressed = lz4.frame.compress(text_bytes)
+                ratio = len(compressed) / len(text_bytes)
+
             compression_ratios.append({self.attribute_name: ratio})
         return {"attributes": compression_ratios}
 
