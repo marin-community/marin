@@ -52,9 +52,9 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class OutlinksExtractionConfig:
-    html_input_path: str
+    input_path: str
     prefix: str
-    outlinks_output_path: str
+    output_path: str
 
 
 def is_internal_link(base_url: str, target_url: str):
@@ -264,13 +264,13 @@ def get_shards_indices_to_process(shard_path: str, prefix: str):
 
 
 @draccus.wrap()
-def get_outlinks_from_html(cfg: OutlinksExtractionConfig):
-    shard_indices = ray.get(get_shards_indices_to_process.remote(cfg.html_input_path, cfg.prefix))
+def get_outlinks_from_html_dump(cfg: OutlinksExtractionConfig):
+    shard_indices = ray.get(get_shards_indices_to_process.remote(cfg.input_path, cfg.prefix))
 
     refs = []
     for i, html_shard_index in enumerate(shard_indices):
-        input_path = os.path.join(cfg.html_input_path, f"{cfg.prefix}_{html_shard_index}.jsonl.gz")
-        output_path = os.path.join(cfg.outlinks_output_path, f"{i}_links.jsonl.gz")
+        input_path = os.path.join(cfg.input_path, f"{cfg.prefix}_{html_shard_index}.jsonl.gz")
+        output_path = os.path.join(cfg.output_path, f"{i}_links.jsonl.gz")
         refs.append(process_one_batch.remote(input_path, output_path))
     logger.info(f"Submitted {len(refs)} tasks")
 
@@ -278,5 +278,27 @@ def get_outlinks_from_html(cfg: OutlinksExtractionConfig):
     ray.get(refs)
 
 
-if __name__ == "__main__":
-    get_outlinks_from_html()
+@draccus.wrap()
+def get_outlinks_from_html(cfg: OutlinksExtractionConfig):
+    dumps = fsspec_glob(cfg.input_path)
+
+    MAX_CONCURRENT_DUMPS = 10
+    ray_refs = []
+
+    for dump in dumps:
+        if len(ray_refs) > MAX_CONCURRENT_DUMPS:
+            # Wait for at least one task to complete before submitting more
+            ready_refs, ray_refs = ray.wait(ray_refs, num_returns=1)
+            try:
+                ray.get(ready_refs)
+            except Exception as e:
+                logger.exception(f"Error processing dump {dump}: {e}")
+                continue
+
+        ray_refs.append(get_outlinks_from_html_dump.remote(cfg))
+
+    # Submit remaining tasks
+    try:
+        ray.get(ray_refs)
+    except Exception as e:
+        logger.exception(f"Error processing dumps: {e}")
