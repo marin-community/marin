@@ -18,7 +18,7 @@ provider:
   project_id: hai-gcp-models
 
 docker:
-    image: "us-east5-docker.pkg.dev/hai-gcp-models/marin/marin_vllm:d97b0693"
+    image: "us-east5-docker.pkg.dev/hai-gcp-models/marin/marin_vllm:296d2ef0"
     container_name: "ray_docker"
     pull_before_run: true
     worker_run_options:
@@ -45,13 +45,15 @@ initialization_commands:
 
 setup_commands:
   # set the GCP project because it's not injected by default
-  - gcloud config set project hai-gcp-models
-  - gcloud config set compute/region us-east5
-  - gcloud config set compute/zone us-east5-b
+  # NOTE(Chris): Have to include /root/gcloud/google-cloud-sdk/bin prefix because
+  # there is some bug with the PATH not propagating from the Dockerfile to Ray.
+  - /root/gcloud/google-cloud-sdk/bin/gcloud config set project hai-gcp-models
+  - /root/gcloud/google-cloud-sdk/bin/gcloud config set compute/region us-east5
+  - /root/gcloud/google-cloud-sdk/bin/gcloud config set compute/zone us-east5-b
   - mkdir $HOME/.cache/huggingface -p
-  - gcloud secrets versions access latest --secret=HF_TOKEN > $HOME/.cache/huggingface/token
+  - /root/gcloud/google-cloud-sdk/bin/gcloud secrets versions access latest --secret=HF_TOKEN > $HOME/.cache/huggingface/token
   - mkdir $HOME/.cache/openai -p
-  - gcloud secrets versions access latest --secret=OPENAI_API_KEY > $HOME/.cache/openai/token
+  - /root/gcloud/google-cloud-sdk/bin/gcloud secrets versions access latest --secret=OPENAI_API_KEY > $HOME/.cache/openai/token
   - echo 'export MARIN_PREFIX="gs://marin-us-east5"' >> $HOME/.bashrc
   - echo 'export BUCKET="marin-us-east5"' >> $HOME/.bashrc
   - gcsfuse --implicit-dirs --only-dir gcsfuse_mount $BUCKET /opt/gcsfuse_mount || true

@@ -12,12 +12,16 @@ TokenizerStep = ExecutorStep[TokenizeConfig]
 logger = logging.getLogger(__name__)
 
 
-def step_to_lm_mixture_component(step: TokenizerStep, include_raw_paths: bool) -> LMDatasetSourceConfig:
+def step_to_lm_mixture_component(step: TokenizerStep | TokenizeConfig, include_raw_paths: bool) -> LMDatasetSourceConfig:
     """
     Converts a tokenizer step to a Levanter dataset source config. This is useful for creating
     data mixture configs.
     """
-    return step.config.as_lm_dataset_source_config(output_path_of(step), include_raw_paths=include_raw_paths)
+
+    if isinstance(step, TokenizeConfig):
+        return step.as_lm_dataset_source_config(step.cache_path, include_raw_paths=include_raw_paths)
+    else:
+        return step.config.as_lm_dataset_source_config(output_path_of(step), include_raw_paths=include_raw_paths)
 
 
 def lm_data_config(
@@ -54,7 +58,7 @@ def lm_data_config(
 
 
 def lm_mixture_data_config(
-    components: dict[str, TokenizerStep],
+    components: dict[str, TokenizerStep | TokenizeConfig],
     weights: dict[str, float],
     *,
     shuffle: bool | int = True,
@@ -100,6 +104,8 @@ def lm_varying_mixture_data_config(
     *,
     shuffle: bool | int = True,
     missing_weights_are_validation: bool = True,
+    include_raw_paths: bool = True,
+    mixture_block_size: int | None = None,
 ) -> LMMixtureDatasetConfig:
     """
     Creates a training config from a mixture of datasources with varying weights.
@@ -116,7 +122,10 @@ def lm_varying_mixture_data_config(
     Returns:
         LMMixtureDatasetConfig configured with the varying weights
     """
-    configs = {name: step_to_lm_mixture_component(step) for name, step in components.items()}
+    configs = {
+        name: step_to_lm_mixture_component(step, include_raw_paths=include_raw_paths)
+        for name, step in components.items()
+    }
 
     # Validate and normalize weights
     if not weights_list:
@@ -149,6 +158,7 @@ def lm_varying_mixture_data_config(
         tokenizer=tokenizer,
         cache_dir=None,
         shuffle=shuffle,
+        mixture_block_size=mixture_block_size or 2048,
     )
 
 

@@ -90,7 +90,11 @@ def main():
         for command in setup_commands:
             f.write(command + "\n")
 
+        # run entry command in a loop since sometimes it seems to die?
+        f.write("while true; do\n")
         f.write(entry_command + "\n")
+        f.write("sleep 10\n")
+        f.write("done\n")
 
         f.flush()
 
