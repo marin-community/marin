@@ -108,14 +108,11 @@ def count_examples_in_shard(shard_path: str) -> tuple[str, int]:
 
 
 @ray.remote(memory=4 * 1024 * 1024 * 1024)
-def get_examples_from_offsets(shard_path: str, offsets: list[int], example_ids: list[int]) -> list[tuple[Outlink, int]]:
+def get_examples_from_offsets(shard_path: str, offsets: list[int]) -> list[Outlink]:
     """
     Given a shard and a set of line offsets, extract those specific examples
     (paired with their global example_ids).
     """
-    assert len(example_ids) == len(offsets)
-    offset_to_id = {offset: example_id for offset, example_id in zip(offsets, example_ids, strict=True)}
-
     extracted_examples = []
     offsets = sorted(offsets)
     with fsspec.open(shard_path, "rt", compression="gzip", block_size=1 * 1024 * 1024 * 1024) as fin:
@@ -127,8 +124,7 @@ def get_examples_from_offsets(shard_path: str, offsets: list[int], example_ids: 
                 break
             if current_line_idx == next_offset:
                 parsed_example = json.loads(line.rstrip("\n"))
-                example_id = offset_to_id[next_offset]
-                extracted_examples.append((Outlink(**parsed_example), example_id))
+                extracted_examples.append(Outlink(**parsed_example))
                 next_offset = next(offsets_iter, None)
             current_line_idx += 1
     return extracted_examples
@@ -200,15 +196,13 @@ def sample_outlinks(
         shard_to_local_offsets_with_ids.items(), desc="Extracting sampled outlinks"
     ):
         local_offsets = [x[0] for x in offsets_with_ids]
-        example_ids = [x[1] for x in offsets_with_ids]
-        refs.append(get_examples_from_offsets.remote(shard_path, local_offsets, example_ids))
+        refs.append(get_examples_from_offsets.remote(shard_path, local_offsets))
     results = ray.get(refs)
 
     # Collect all sampled Outlinks into a single list
     sampled_examples = []
     for shard_result in tqdm(results, desc="Combining results"):
-        for outlink_obj, _ in shard_result:
-            sampled_examples.append(outlink_obj)
+        sampled_examples.extend(shard_result)
 
     # Shard by domain (optional but helps group by domain)
     shard_count = int(math.ceil(len(sampled_examples) / shard_size))
