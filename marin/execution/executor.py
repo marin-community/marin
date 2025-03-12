@@ -964,6 +964,8 @@ def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], descrip
 
     executor.run(steps=steps, dry_run=config.dry_run, run_only=config.run_only, force_run_failed=config.force_run_failed)
 
+    ray.shutdown()
+
 
 def _is_relative_path(url_or_path):
     # if it's a url, it's not a relative path

@@ -3,38 +3,106 @@ import wandb
 api = wandb.Api()
 # Define your details
 username = "stanford-mercury"
-project = "marin-optimizer"
-ths_hold = 1e-3
+project = "optimizer-scaling"
+thshold = 3e-3
 # Retrieve the run directly using its full path
 
-
-def get_status_and_loss(run_id):
-    run = api.run(f"{username}/{project}/{run_id}")
-    if run.state != 'finished':
-        return False, None
-    else:
-        return True, run.summary['eval/paloma/c4_en/loss']
+from optimizer_sweep.utils_simp import approximate, create_configs, check_baseline_run, grab_best_run, convert_run_to_config, bad_number
 
 
-def sweeping(run_id_list, baseline_run_id):
-    # return
-    # 1. status of sweeping
-    # 2. unfinished run / config better than baseline
-    losses = {}    
 
-    for run_id in run_id_list:
-        status, loss = get_status_and_loss(run_id)
-        if status:
-            losses[run_id] = loss
-    if baseline_run_id in losses:
-        best_id = min(losses, key = lambda x: losses[x])
-        if(best_id != baseline_run_id):
-            return 'Next Iteration', best_id
-        if(len(losses) == len(run_id_list)):
-            return 'Success!', best_id    
-    return 'Unfinished Iteration', None
+import copy
+from marin.execution.executor import ExecutorStep, executor_main, versioned, unwrap_versioned_value
+from experiments.simple_train_config import SimpleTrainConfig
+import ray
+from levanter.models.llama import LlamaConfig
+from collections.abc import Sequence
+import logging
+import dataclasses
+logger = logging.getLogger("ray")
+
+def create_configs(baseline_config, sweep_grids, target_data = 5120000):
+    # train_configs = []
+    config_in_dict = []
+    target_steps = []
+    batch_size = (baseline_config['train_batch_size'])
+    target_step  = target_data // (4096 * batch_size)
+    target_steps.append(target_step)
+    # train_configs.append(
+    #     config_class(
+    #                     tpu_type=versioned(tpu_type),
+    #                     steps_per_eval=min(1000, target_step - 1),
+    #                     num_train_steps=target_step,
+    #                     **baseline_config
+    #                 )
+    # )
+    config_in_dict.append(baseline_config)
+    for key in sweep_grids:
+        for value in sweep_grids[key]:
+            new_config = copy.copy(baseline_config)     
+            if(baseline_config[key] != (value)):   
+                new_config[key] = (value)
+                batch_size = (new_config['train_batch_size'])
+                target_step  = target_data // (4096 * batch_size)
+                target_steps.append(target_step)
+                if (new_config['warmup']) <= target_step:
+                    config_in_dict.append(new_config)
+    return target_steps, config_in_dict
+
+def config_to_train_config(config_in_dict, target_steps, config_class = SimpleTrainConfig, tpu_type = 'v4-128',):
+    train_configs = []
+    for config, target_step in zip(config_in_dict, target_steps):
+        train_configs.append(
+                    config_class(
+                        tpu_type=versioned(tpu_type),
+                        steps_per_eval=min(1000, target_step - 1),
+                        num_train_steps=target_step,
+                        **config
+                    )
+        )
+    return train_configs
 
 
-import os
-def get_wandb_id(steps):
-    return [os.path.basename(step.name) for step in steps]
+
+def _failure_ok_train(*args, **kwargs):
+    """
+    Wrapper to catch exceptions and log them, but not fail the whole sweep. We do this because some batch sizes are too
+    big.
+    """
+    from marin.training.training import run_levanter_train_lm
+
+    try:
+        return ray.get(run_levanter_train_lm.remote(*args, **kwargs))
+    except Exception as e:
+        logger.exception("Failed to run training", exc_info=e)
+        return None
+
+
+def make_sweep_steps(
+    prefix: str,
+    model_config: LlamaConfig,
+    train_configs,
+    tokenized_data: ExecutorStep,
+    format_train_config,
+    default_train,
+    tags: Sequence[str] = (),
+):
+    steps = []
+    for train_config in train_configs:
+        name = format_train_config(prefix, train_config)
+        step = default_train(
+            name=name,
+            train_config=train_config,
+            model_config=model_config,
+            tokenized=tokenized_data,
+            tags=tags,
+        )
+
+        step = dataclasses.replace(step, fn=_failure_ok_train)
+
+        steps.append(step)
+    return steps
+print(77210)
+print(53952)
+print(89002)
+print(78383)

@@ -32,7 +32,7 @@ def format_train_config(prefix: str, key: str):
 baseline_config = {
     'weight_decay': 0.1,
     'min_lr_ratio': 0,
-    'warmup': 2000,
+    'warmup': 2160,
     'beta1': 0.9,
     'beta2': 0.95,
     'epsilon': 1e-15,
@@ -65,23 +65,27 @@ configs = {
 #         'stable_lr_schedule': 'inv_sqrt',
 #         'decay': 0.2
 #     },
-    'wsd_8e-3_inv_sqrt_40d': {
-        'learning_rate': 8e-3, 
-        'lr_schedule': 'linear',
-        'stable_lr_schedule': 'inv_sqrt',
-        'decay': 0.4,
-        'id': "sweep-764-lr_schedule_-25992wsd_8e-3_inv_sqrt_40d-9299e4",
-        'ckpt_path': "gs://marin-us-central2/checkpoints/sweep-764-lr_schedule_-25992wsd_8e-3_inv_sqrt_40d-9299e4/checkpoints/step-33622"
-    },
-#     'cosine_8e-4': {
-#     'learning_rate': 8e-4, 
-#     'lr_schedule': 'cosine'
-# },
+    # 'wsd_8e-3_inv_sqrt_40d': {
+    #     'learning_rate': 8e-3, 
+    #     'lr_schedule': 'linear',
+    #     'stable_lr_schedule': 'inv_sqrt',
+    #     'decay': 0.4,
+    #     'id': "sweep-764-lr_schedule_-25992wsd_8e-3_inv_sqrt_40d-9299e4",
+    #     'ckpt_path': "gs://marin-us-central2/checkpoints/sweep-764-lr_schedule_-25992wsd_8e-3_inv_sqrt_40d-9299e4/checkpoints/step-33622"
+    # },
+    'cosine_8e-4_baseline': {
+    'learning_rate': 8e-4, 
+    'lr_schedule': 'cosine'
+},
 #     'wsd_8e-4_constant_20d': {
 #         'learning_rate': 8e-4, 
 #         'lr_schedule': 'linear',
 #         'decay': 0.2
 #     },
+    'fitted_8e-4': {
+        'learning_rate': 8e-4, 
+        'lr_schedule': 'fitted',
+    },
 }
 
 
@@ -98,7 +102,7 @@ for step in target_steps:
     for key in configs:
         config = configs[key]
         train_configs_500m[key] = SimpleTrainConfig(
-                            tpu_type=versioned("v4-128"),
+                            tpu_type=versioned("v5litepod-128"),
                             train_batch_size=BATCH_SIZE,
                             steps_per_eval=1000,
                             num_train_steps=step,

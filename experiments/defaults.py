@@ -209,7 +209,7 @@ def default_train(
             trainer=TrainerConfig(
                 tracker=WandbConfig(
                     entity='stanford-mercury',
-                    project="marin-optimizer",
+                    project="optimizer-scaling",
                     tags=[name, *tags],
                 ),
                 mp=jmp.get_policy("p=f32,c=bfloat16"),

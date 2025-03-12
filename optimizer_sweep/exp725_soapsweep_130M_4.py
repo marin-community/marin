@@ -1,0 +1,9 @@
+from optimizer_sweep.template import template
+
+if __name__ == '__main__':
+    sweep_grids = {'learning_rate': [0.004, 0.008, 0.016], 'weight_decay': [0, 0.1, 0.2], 'warmup': [500, 1000, 2000], 'beta1': [0.8, 0.9, 0.95], 'beta2': [0.9, 0.95, 0.98, 0.99], 'shampoo_beta': [0.9, 0.95, 0.98, 0.99], 'precondition_frequency': [1, 5, 10],  'epsilon': [1e-20, 1e-15, 1e-10], 'train_batch_size': [128, 256, 512, 1024]}
+    baseline_config = {'learning_rate': 0.008, 'weight_decay': 0.1, 'min_lr_ratio': 0, 'warmup': 500, 'beta1': 0.95, 'beta2': 0.99, 'shampoo_beta': 0.98, 'precondition_frequency': 1, 'partition_grads_into_blocks': False, 'block_size': 256, 'epsilon': 1e-15, 'max_grad_norm': 1, 'train_batch_size': 128}
+    model_size = '130m'
+    target_chinchilla = 4
+    my_suffix = None
+    template(model_size, target_chinchilla, 'soap', baseline_config, sweep_grids, random_suffix=my_suffix)

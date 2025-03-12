@@ -193,7 +193,7 @@ def default_train(
             trainer=TrainerConfig(
                 tracker=WandbConfig(
                     entity='stanford-mercury',
-                    project="marin-optimizer",
+                    project="optimizer-scaling",
                     id=train_config.id,
                     tags=[name, *tags],
                 ),

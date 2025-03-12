@@ -1,0 +1,60 @@
+from dataclasses import dataclass
+
+from levanter.schedule import IntSchedule
+
+
+@dataclass(frozen=True)
+class KronTrainConfig:
+    tpu_type: str
+    train_batch_size: int | IntSchedule
+    """
+    The batch size for training. If an IntSchedule is provided, the batch size will be
+    varied according to the schedule.
+    """
+    num_train_steps: int
+    learning_rate: float
+    data_seed: int | None = None
+    weight_decay: float | None = None
+    beta1: float | None = None
+    preconditioner_lr: float | None = None
+    preconditioner_init_scale: float | None = None
+    epsilon: float | None = None
+    normalize_grads: bool | None = None
+    partition_grads_into_blocks: bool | None = None
+    block_size: bool | None = None
+    preconditioner_update_probability: float | None = None
+    update_prob_flat_start: int | None = None
+    max_grad_norm: float | None = None
+    warmup: float | None = None
+    decay: float | None = None
+    lr_schedule: str | None = None
+    stable_lr_schedule: str | None = None
+    min_lr_ratio: float | None = None
+    cycle_length: int | list[int] | None = None
+    z_loss_weight: float | None = None
+    ema_beta: float | None = None
+    """exponential moving average beta"""
+    
+    id: str | None = None
+    ckpt_path: str | None = None
+    
+    steps_per_eval: int | None = None
+    """how often to run validation losses"""
+    steps_per_export: int = 10000
+    steps_per_task_eval: int | None = None
+    """how often to run task evaluations"""
+    steps_per_hf_export: int | None = None
+    """None means match steps_per_export, -1 disables"""
+
+    node_count: int = 1
+
+    allow_partial_checkpoint: bool = False
+    """
+    Allow loading partial checkpoints. This is useful for converting training to EMA, e.g.
+    """
+
+    allow_out_of_region_reads: bool = False
+    """Allow us to read data from other regions. On GCS, intra-continent bandwidth is roughly 1 month of storage,
+    so sometimes it makes more sense to just read across regions."""
+    allow_out_of_region_writes: bool = False
+    """This makes less sense than reading across regions, but for completeness."""
