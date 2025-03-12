@@ -237,6 +237,7 @@ def default_train(
                 replica_dcn_axis_size=-1,
                 allow_partial_checkpoint=train_config.allow_partial_checkpoint,
                 per_device_eval_parallelism=per_device_eval_parallelism,
+                allow_nondivisible_batch_size=True,
                 quantization=QuantizationConfig(int8=train_config.int8) if train_config.int8 else None,
             ),
             z_loss_weight=train_config.z_loss_weight,
