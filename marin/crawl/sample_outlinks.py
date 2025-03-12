@@ -5,7 +5,7 @@ input file is a JSONL file, where each record contains an Outlink. The output is
 sharded parquet file(s) (10K records each), where each record contains an
 Outlink.
 
-Running on OpenWebMath:
+Sampling 10M OpenWebMath outlinks:
 
 ```
 python marin/run/ray_run.py \
@@ -17,7 +17,19 @@ python marin/run/ray_run.py \
     --output_prefix gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-10M/links
 ```
 
-Running on FineWeb-Edu:
+Sampling 10M OpenWebMath outlinks (deduplicated against CC):
+
+```
+python marin/run/ray_run.py \
+    --no_wait -- \
+    python marin/crawl/sample_outlinks.py \
+    --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-cc-deduplicated/*_links.jsonl.gz' \
+    --num_to_sample 10000000 \
+    --shard_size 100000 \
+    --output_prefix gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-10M-cc-deduplicated/links
+```
+
+Sampling 10M FineWeb-Edu outlinks:
 
 ```
 python marin/run/ray_run.py \
@@ -29,7 +41,19 @@ python marin/run/ray_run.py \
     --output_prefix gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-10M/links
 ```
 
-"""
+Sampling 10M FineWeb-Edu outlinks (deduplicated against CC):
+
+```
+python marin/run/ray_run.py \
+    --no_wait -- \
+    python marin/crawl/sample_outlinks.py \
+    --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-cc-deduplicated/CC-MAIN*/*_links.jsonl.gz' \
+    --num_to_sample 10000000 \
+    --shard_size 100000 \
+    --output_prefix gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-10M-cc-deduplicated/links
+```
+
+"""  # noqa: E501
 import bisect
 import json
 import logging
@@ -72,7 +96,7 @@ class Outlink:
 
 @ray.remote(memory=1 * 1024 * 1024 * 1024)
 def count_examples_in_shard(shard_path: str) -> tuple[str, int]:
-    with fsspec.open(shard_path, "rt", compression="gzip") as fin:
+    with fsspec.open(shard_path, "rt", compression="gzip", block_size=1 * 1024 * 1024 * 1024) as fin:
         num_lines = 0
         for _ in fin:
             num_lines += 1
@@ -86,7 +110,7 @@ def get_examples_from_offsets(shard_path: str, offsets: list[int], example_ids: 
 
     extracted_examples = []
     offsets = sorted(offsets)  # ensure ascending order
-    with fsspec.open(shard_path, "rt", compression="gzip") as fin:
+    with fsspec.open(shard_path, "rt", compression="gzip", block_size=1 * 1024 * 1024 * 1024) as fin:
         current_line_idx = 0
         offsets_iter = iter(offsets)
         next_offset = next(offsets_iter, None)
@@ -178,10 +202,10 @@ def sample_outlinks(input_pattern: str, num_to_sample: int, shard_size: int, out
         current_index = current_index + num_examples
 
     # Randomly sample IDs from 0 to current_index - 1 (inclusive)
-    logger.info(f"Subsampling {num_to_sample * 5} ids")
     # Oversample by 5x, since some of the target URLs will be duplicates
     rng = np.random.default_rng(0)
     num_ids_to_generate = min(num_to_sample * 5, current_index)
+    logger.info(f"Subsampled {num_ids_to_generate} ids")
 
     if num_ids_to_generate == current_index:
         # We want to use all the IDs, so just shuffle them
@@ -317,7 +341,7 @@ def write_sharded_examples(sharded_examples: list[list[Outlink]], output_prefix:
         )
         table = pa.Table.from_pylist(shard_dicts)
 
-        with fsspec.open(shard_filename, "wb") as fout:
+        with fsspec.open(shard_filename, "wb", block_size=1 * 1024 * 1024 * 1024) as fout:
             pq.write_table(table, fout, compression="snappy")
             num_examples_written += len(shard_dicts)
             shard_idx_to_num_examples[shard_idx] += len(shard_dicts)
@@ -329,7 +353,9 @@ def write_sharded_examples(sharded_examples: list[list[Outlink]], output_prefix:
 @draccus.wrap()
 def sample_outlinks_from_html(cfg: OutlinksSamplingConfig):
     # Do all the processing in a remote function
-    ray.get(sample_outlinks.remote(cfg.input_pattern, cfg.num_to_sample, cfg.output_prefix, cfg.start_from))
+    ray.get(
+        sample_outlinks.remote(cfg.input_pattern, cfg.num_to_sample, cfg.shard_size, cfg.output_prefix, cfg.start_from)
+    )
 
 
 if __name__ == "__main__":
