@@ -17,12 +17,27 @@ import dataclasses
 from levanter.models.rotary import DefaultRotaryEmbeddingsConfig
 from levanter.schedule import ScheduleStep
 
-from experiments.dclm.tokenize_dclm import dclm_mixture_config_llama3
+from experiments.dclm.tokenize_dclm import DCLM_MIXTURE_WEIGHTS, dclm_components_llama3, dclm_mixture_config_llama3
 from experiments.defaults import default_train
-from experiments.exp750_tootsie70b import dclm_mixture_config_llama3_zoned, llama_70b_train_config_mk6
 from experiments.llama import llama_13b, llama_24b, llama_56b
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import executor_main
+from marin.processing.tokenize import lm_mixture_data_config
+
+# data
+
+MARIN_CENTRAL_DCLM_COMPONENTS = {
+    "dclm_baseline": "gs://marin-us-central2/tokenized/dclm_baseline-0206f1",
+    "starcoderdata": "gs://marin-us-central2/tokenized/starcoderdata-12f018/",
+    "proofpile_2": "gs://marin-us-central2/tokenized/proofpile_2-4a35c7",
+}
+dclm_components_zoned = {
+    name: dataclasses.replace(
+        step,
+        override_output_path=MARIN_CENTRAL_DCLM_COMPONENTS[name],
+    )
+    for name, step in dclm_components_llama3.items()
+}
 
 #####
 ## Phase 1 for 13B, 22B: WSD-S on same mixture as tootsie 8b
@@ -128,6 +143,9 @@ llama_22b_train_config_ema = SimpleTrainConfig(
     steps_per_task_eval=10000,
 )
 
+dclm_mixture_config_llama3_zoned = lm_mixture_data_config(
+    components=dclm_components_zoned, weights=DCLM_MIXTURE_WEIGHTS, include_raw_paths=False
+)
 llama_13b_tootsie_ema_warmstart = dataclasses.replace(
     default_train(
         name="llama-13b-tootsie-ema-mk2",
@@ -175,7 +193,7 @@ llama_56b_train_config = SimpleTrainConfig(
 
 
 # All of all of these are 56B models but were intended to be 70b. Sigh.
-llama_70b_train_config_mk2 = dataclasses.replace(
+llama_56b_train_config_mk2 = dataclasses.replace(
     llama_56b_train_config,
     train_batch_size=1024,
     tpu_type="v4-2048",
@@ -189,20 +207,7 @@ llama_70b_train_config_mk2 = dataclasses.replace(
     allow_out_of_region_reads=True,
     allow_out_of_region_writes=False,
 )
-llama_70b_train_config_mk4 = dataclasses.replace(
-    llama_56b_train_config,
-    train_batch_size=1024,
-    tpu_type="v6e-128",
-    node_count=4,
-    learning_rate=2e-4,
-    decay=0.4,
-    ema_beta=0.995,
-    lr_schedule="linear",
-    cycle_length=None,
-    allow_partial_checkpoint=True,
-    allow_out_of_region_reads=True,
-    allow_out_of_region_writes=False,
-)
+
 
 # actual 56B model
 llama_70b_tootsie_mk2_BAD = dataclasses.replace(
@@ -212,40 +217,13 @@ llama_70b_tootsie_mk2_BAD = dataclasses.replace(
         # warmstart weights from llama_70b_tootsie step 80000
         tokenized=dclm_mixture_config_llama3,
         model_config=llama_56b,
-        train_config=llama_70b_train_config_mk2,
+        train_config=llama_56b_train_config_mk2,
         tags=["llama", "70b", "wsd", "exp750", "tootsie", "ema"],
         eval_harness_tasks=[],
     ),
     override_output_path="checkpoints/llama-70b-tootsie-mk2",
 )
 
-llama_70b_tootsie_mk4_BAD = dataclasses.replace(
-    default_train(
-        name="llama-70b-tootsie-mk4",
-        # not recorded here:
-        # warmstart weights from llama_70b_tootsie step 80000
-        tokenized=dclm_mixture_config_llama3_zoned,
-        model_config=llama_56b,
-        train_config=llama_70b_train_config_mk4,
-        tags=["llama", "70b", "wsd", "exp750", "tootsie", "ema"],
-        eval_harness_tasks=[],
-    ),
-    override_output_path="checkpoints/llama-70b-tootsie-mk4",
-)
-
-llama_70b_tootsie_mk6_BAD = dataclasses.replace(
-    default_train(
-        name="llama-70b-tootsie-mk6",
-        # not recorded here:
-        # warmstart weights from llama_70b_tootsie step 87613
-        tokenized=dclm_mixture_config_llama3,
-        model_config=llama_56b,
-        train_config=llama_70b_train_config_mk6,
-        tags=["llama", "70b", "wsd", "exp750", "tootsie", "ema"],
-        eval_harness_tasks=[],
-    ),
-    override_output_path="checkpoints/llama-70b-tootsie-mk6",
-)
 
 llama_56b_tootsie = default_train(
     name="llama-70b-tootsie-dummy-testing",

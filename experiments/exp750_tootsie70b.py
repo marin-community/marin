@@ -13,24 +13,22 @@ import dataclasses
 
 from levanter.schedule import ScheduleStep
 
-from experiments.dclm.exp433_dclm_run import DCLM_MIXTURE_WEIGHTS
-from experiments.dclm.tokenize_dclm import dclm_components_llama3
 from experiments.defaults import default_train
 from experiments.exp600_tootsie import dclm_mixture_config_llama3
+from experiments.exp859_big_tootsies import dclm_mixture_config_llama3_zoned
 from experiments.llama import llama_70b
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import executor_main
-from marin.processing.tokenize import lm_mixture_data_config
 
 llama_70b_train_config_mk6 = SimpleTrainConfig(
-    num_train_steps=1_000_000,  # using wsd-s so this doesn't really matter
+    num_train_steps=1_000_000,  # we won't actually go this long. will adjust as needed
     # 3072 is slightly too big for us to fit on 6x v6e-128. 2048 would round up to 3 which fits, but 1536 works on 4
     # so it's safer.
     train_batch_size=[ScheduleStep(start=0, value=1024), ScheduleStep(start=96001, value=1536)],
     weight_decay=0.05,
     tpu_type="v6e-128",
-    # tpu_type="v5litepod-256",
     node_count=6,
+    # LR doesn't support schedule yet
     # until 93_621, was 2e-4
     # learning_rate=2e-4,
     # until 95_920, was 2.5e-4 (on accident)
@@ -50,24 +48,6 @@ llama_70b_train_config_mk6 = SimpleTrainConfig(
     steps_per_task_eval=10000,
 )
 
-MARIN_CENTRAL_DCLM_COMPONENTS = {
-    "dclm_baseline": "gs://marin-us-central2/tokenized/dclm_baseline-0206f1",
-    "starcoderdata": "gs://marin-us-central2/tokenized/starcoderdata-12f018/",
-    "proofpile_2": "gs://marin-us-central2/tokenized/proofpile_2-4a35c7",
-}
-
-dclm_components_zoned = {
-    name: dataclasses.replace(
-        step,
-        override_output_path=MARIN_CENTRAL_DCLM_COMPONENTS[name],
-    )
-    for name, step in dclm_components_llama3.items()
-}
-
-dclm_mixture_config_llama3_zoned = lm_mixture_data_config(
-    components=dclm_components_zoned, weights=DCLM_MIXTURE_WEIGHTS, include_raw_paths=False
-)
-
 llama_70b_train_config_1536 = dataclasses.replace(
     llama_70b_train_config_mk6,
     train_batch_size=1536,  # 2 * 6 * 128
@@ -84,7 +64,9 @@ llama_70b_train_config_1536 = dataclasses.replace(
 )
 
 
-llama_70b_tootsie_1536 = dataclasses.replace(
+# this was a quick-ish experiment to compare 1536 batch size to 1024
+# 1536 is better.
+llama_70b_tootsie_bs1536 = dataclasses.replace(
     default_train(
         name="llama-bs1536-70b-tootsie",
         tokenized=dclm_mixture_config_llama3_zoned,
