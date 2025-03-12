@@ -9,7 +9,7 @@ class LLMActor:
     def __init__(self):
         self.llm = LLM(
             # model="/opt/gcsfuse_mount/models/meta-llama--Llama-3-1-8B-Instruct",
-            model="meta-llama/Llama-3.1-8B-Instruct",
+            model="meta-llama/Llama-3.3-70B-Instruct",
             tensor_parallel_size=8,
             max_model_len=8192,
             enforce_eager=True,
