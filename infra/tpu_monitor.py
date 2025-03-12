@@ -73,7 +73,7 @@ def gather_tpu_info_from_vms(location, incomplete_tpus):
     tpu_by_generation = Counter()
     vms_to_delete = []
     for node in nodes:
-        for (incomplete_tpu, used, total) in incomplete_tpus:
+        for incomplete_tpu, used, total in incomplete_tpus:
             if incomplete_tpu in node.name:
                 print(f"Node {node.name} of type {node.accelerator_type} does not have a power of 2 usage, deleting")
                 with open("incomplete_tpus.log", "a") as f:
@@ -312,7 +312,6 @@ def gather_all_incomplete_tpus():
         for location, tpus in incomplete_tpus.items():
             if tpus:
                 incomplete_tpus_after[location] = gather_incomplete_tpus(location)
-
 
         return incomplete_tpus_after
 
