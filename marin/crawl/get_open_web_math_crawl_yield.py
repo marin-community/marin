@@ -73,6 +73,7 @@ from warcio import ArchiveIterator
 
 from marin.processing.classification.classifier import FasttextClassifier
 from marin.processing.open_web_math.extract import extract_text
+from marin.processing.open_web_math.manual_filter import manual_url_filter
 from marin.processing.open_web_math.text_normalizer import normalize
 from marin.processing.open_web_math.utils import Config as OpenWebMathConfig
 from marin.utils import fsspec_exists, fsspec_glob
@@ -404,11 +405,13 @@ def get_shard_yield(
                 passes_langid_filter, en_probability = is_english(extracted_text, lid_model)
                 # Apply the perplexity filter
                 perplexity = document_perplexity(extracted_text, lm)
-                passes_perplexity_filter = perplexity <= 30_000
+                passes_perplexity_filter = perplexity <= 15_000
                 # Apply the mathscore filter
                 found_math = extraction_metadata["found_math"]
                 score = score_text(extracted_text, mathscore_model)
-                passes_mathscore_filter = (found_math and score > 0.15) or (not found_math and score > 0.8)
+                passes_mathscore_filter = (found_math and score > 0.17) or (not found_math and score > 0.8)
+                # Apply the post-hoc manual open-web-math filter
+                passes_manual_filter, new_text = manual_url_filter(url=record_url, original_text=extracted_text)
 
                 canonicalized_url = w3lib.url.canonicalize_url(record_url)
                 urls_and_scores_record = {
@@ -418,6 +421,7 @@ def get_shard_yield(
                     "passes_langid_filter": passes_langid_filter,
                     "en_probability": en_probability,
                     "passes_perplexity_filter": passes_perplexity_filter,
+                    "passes_manual_filter": passes_manual_filter,
                     "perplexity": perplexity,
                     "found_math": found_math,
                     "score": score,
@@ -433,7 +437,7 @@ def get_shard_yield(
                         id=record_id,
                         source=data_source,
                         format="text",
-                        text=extracted_text,
+                        text=new_text,
                         metadata={
                             **urls_and_scores_record,
                             "date": record_date,

@@ -75,6 +75,18 @@ llama_8b = LlamaConfig(
 )
 
 
+llama_8b_old_rotary = LlamaConfig(
+    seq_len=4096,
+    hidden_dim=4096,
+    intermediate_dim=14336,
+    num_heads=32,
+    num_kv_heads=8,
+    num_layers=32,
+    # Levanter defaults to Llama2 rotary
+    # rope=Llama3RotaryEmbeddingsConfig(),
+)
+
+
 llama_13b = LlamaConfig(
     seq_len=4096,
     hidden_dim=5120,

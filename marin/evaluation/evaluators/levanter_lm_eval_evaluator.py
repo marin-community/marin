@@ -67,6 +67,11 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
 
             model_path = os.path.join(LevanterTpuEvaluator.CACHE_PATH, model.path)
 
+            logger.info(f"Model path: {model_path}")
+            logger.info(f"Levanter Cache Path: {LevanterTpuEvaluator.CACHE_PATH}")
+            logger.info(f"Model name: {model.name}")
+            logger.info(f"model_name_or_path: {model_name_or_path}")
+
             eval_config = eval_harness.EvalHarnessMainConfig(
                 eval_harness=eval_harness.LmEvalHarnessConfig(
                     task_spec=tasks,
