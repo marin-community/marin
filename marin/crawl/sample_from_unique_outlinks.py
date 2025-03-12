@@ -102,7 +102,7 @@ def count_examples_in_shard(shard_path: str) -> tuple[str, int]:
     """
     Count the number of lines (examples) in a single shard.
     """
-    with fsspec.open(shard_path, "rt", compression="gzip") as fin:
+    with fsspec.open(shard_path, "rt", compression="gzip", block_size=1 * 1024 * 1024 * 1024) as fin:
         num_lines = sum(1 for _ in fin)
     return shard_path, num_lines
 
@@ -118,7 +118,7 @@ def get_examples_from_offsets(shard_path: str, offsets: list[int], example_ids: 
 
     extracted_examples = []
     offsets = sorted(offsets)
-    with fsspec.open(shard_path, "rt", compression="gzip") as fin:
+    with fsspec.open(shard_path, "rt", compression="gzip", block_size=1 * 1024 * 1024 * 1024) as fin:
         current_line_idx = 0
         offsets_iter = iter(offsets)
         next_offset = next(offsets_iter, None)
@@ -263,7 +263,7 @@ def write_sharded_examples(sharded_examples: list[list[Outlink]], output_prefix:
             f"Writing shard {shard_idx+1}/{len(sharded_examples)} to {shard_filename} " f"({len(shard_dicts)} outlinks)"
         )
         table = pa.Table.from_pylist(shard_dicts)
-        with fsspec.open(shard_filename, "wb") as fout:
+        with fsspec.open(shard_filename, "wb", block_size=1 * 1024 * 1024 * 1024) as fout:
             pq.write_table(table, fout, compression="snappy")
 
         shard_idx_to_num_examples[shard_idx] = len(shard_dicts)
