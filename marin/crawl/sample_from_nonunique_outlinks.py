@@ -2,8 +2,8 @@
 """
 Subsample unique outlinks from a collection of possibly-duplicated outlinks.
 Sampling is exact uniform random. An input file is a JSONL file, where each
-record contains an Outlink. The output is sharded parquet file(s) (10K records
-each), where each record contains an Outlink.
+record contains an Outlink. The output is sharded parquet file(s),
+where each record contains an Outlink.
 
 Sampling 10M OpenWebMath outlinks:
 
