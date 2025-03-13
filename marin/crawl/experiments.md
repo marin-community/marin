@@ -716,11 +716,11 @@ crawl frontier.
 ```
 python marin/run/ray_run.py \
     --no_wait -- \
-    python marin/crawl/sample_from_nonunique_outlinks.py \
-    --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8/*_links.jsonl.gz' \
+    python marin/crawl/sample_from_unique_outlinks.py \
+    --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-unique/unique_links*.jsonl.gz' \
     --num_to_sample 100_000_000 \
     --shard_size 100_000 \
-    --output_prefix gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-100M/links
+    --output_prefix gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-unique-100M/links
 ```
 
 2. Fetch links:
@@ -730,8 +730,8 @@ python marin/run/ray_run.py \
     --pip_deps 'fastparquet' \
     --no_wait -- \
     python marin/crawl/fetch_links.py \
-    --urls_input_directory gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-100M/ \
-    --output_path gs://marin-us-central2/scratch/nfliu/fetched_outlinks/open-web-math-fde8ef8-100M/ \
+    --urls_input_directory gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-unique-100M/ \
+    --output_path gs://marin-us-central2/scratch/nfliu/fetched_outlinks/open-web-math-fde8ef8-unique-100M/ \
     --threads_per_shard 160 \
     --max_concurrent_shards 40
 ```
@@ -743,8 +743,8 @@ python marin/run/ray_run.py \
     --pip_deps 'warcio' \
     --no_wait -- \
     python marin/crawl/convert_responses_parquet_to_warc.py \
-    --input_directory gs://marin-us-central2/scratch/nfliu/fetched_outlinks/open-web-math-fde8ef8-100M/ \
-    --output_path gs://marin-us-central2/scratch/nfliu/fetched_outlinks/open-web-math-fde8ef8-100M/
+    --input_directory gs://marin-us-central2/scratch/nfliu/fetched_outlinks/open-web-math-fde8ef8-unique-100M/ \
+    --output_path gs://marin-us-central2/scratch/nfliu/fetched_outlinks/open-web-math-fde8ef8-unique-100M/
 ```
 
 4. Run full open-web-math pipeline to get yield from the fetched WARC pages:
@@ -754,12 +754,12 @@ python marin/run/ray_run.py \
     --pip_deps 'resiliparse,fasttext,lxml,py-asciimath,tabulate,warcio[all],w3lib,cchardet,kenlm' \
     --no_wait -- \
     python marin/crawl/get_open_web_math_crawl_yield.py \
-    --urls_input_directory gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-100M/ \
-    --crawl_input_directory gs://marin-us-central2/scratch/nfliu/fetched_outlinks/open-web-math-fde8ef8-100M/ \
-    --data_source open-web-math-fde8ef8-100M \
-    --text_output_directory gs://marin-us-central2/scratch/nfliu/text/open-web-math-fde8ef8-100M/ \
-    --urls_and_scores_output_directory gs://marin-us-central2/scratch/nfliu/urls_and_scores/open-web-math-fde8ef8-100M/ \
-    --statistics_output_path gs://marin-us-central2/scratch/nfliu/fetched_outlinks/open-web-math-fde8ef8-100M/yield_statistics.json.gz
+    --urls_input_directory gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-unique-100M/ \
+    --crawl_input_directory gs://marin-us-central2/scratch/nfliu/fetched_outlinks/open-web-math-fde8ef8-unique-100M/ \
+    --data_source open-web-math-fde8ef8-unique-100M \
+    --text_output_directory gs://marin-us-central2/scratch/nfliu/text/open-web-math-fde8ef8-unique-100M/ \
+    --urls_and_scores_output_directory gs://marin-us-central2/scratch/nfliu/urls_and_scores/open-web-math-fde8ef8-unique-100M/ \
+    --statistics_output_path gs://marin-us-central2/scratch/nfliu/fetched_outlinks/open-web-math-fde8ef8-unique-100M/yield_statistics.json.gz
 ```
 
 Results:
@@ -774,7 +774,7 @@ Results:
 python marin/run/ray_run.py \
     --no_wait -- \
     python marin/crawl/count_tokens.py \
-    --input_patterns '["gs://marin-us-central2/scratch/nfliu/text/open-web-math-fde8ef8-100M/*.passing.parquet"]' \
+    --input_patterns '["gs://marin-us-central2/scratch/nfliu/text/open-web-math-fde8ef8-unique-100M/*.passing.parquet"]' \
     --output_path "gs://marin-us-central2/scratch/nfliu/count_tokens/open_web_math_100M_passing/"
 ```
 
@@ -792,8 +792,8 @@ python marin/run/ray_run.py \
     --no_wait -- \
     python marin/crawl/minhash/deduplicate_against_index.py \
     --index_path 'gs://marin-us-central2/scratch/nfliu/minhash/open_web_math_minhash_index/index' \
-    --input_patterns '["gs://marin-us-central2/scratch/nfliu/text/open-web-math-fde8ef8-100M/*_text_and_scores.passing.parquet"]' \
-    --parquets_paths_file 'gs://marin-us-central2/scratch/nfliu/open-web-math-fde8ef8-100M-passing_paths.txt' \
+    --input_patterns '["gs://marin-us-central2/scratch/nfliu/text/open-web-math-fde8ef8-unique-100M/*_text_and_scores.passing.parquet"]' \
+    --parquets_paths_file 'gs://marin-us-central2/scratch/nfliu/open-web-math-fde8ef8-unique-100M-passing_paths.txt' \
     --minhash_base_path 'gs://marin-us-central2/scratch/nfliu/minhash/open_web_math_100M_passing_minhash_against_open_web_math' \
     --minhash_logs_path 'gs://marin-us-central2/scratch/nfliu/minhash/open_web_math_100M_passing_minhash_against_open_web_math_logs'
 
