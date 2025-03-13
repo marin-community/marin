@@ -40,6 +40,10 @@ REGION_TO_TPU_TYPES = {
         "labeler_tpu_type": "TPU-v6e-8",
         "training_tpu_type": "TPU-v6e-128",
     },
+    "marin-us-east1": {
+        "labeler_tpu_type": "TPU-v6e-8",
+        "training_tpu_type": "TPU-v6e-128",
+    },
 }
 
 
