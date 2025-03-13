@@ -2,7 +2,11 @@ import os
 
 import pytest
 import ray
-from vllm import LLM, SamplingParams
+
+try:
+    from vllm import LLM, SamplingParams
+except ImportError:
+    pytest.skip("vLLM is not installed", allow_module_level=True)
 
 from marin.generation.ray_utils import scheduling_strategy_fn
 
