@@ -8,17 +8,6 @@ from operations.download.huggingface.download import DownloadConfig
 from operations.download.huggingface.download_hf import download_hf
 from operations.raw2json.huggingface.qa.raw2json import DatasetConversionConfig, OutputFormatOptions, raw2json
 
-
-@dataclass
-class MeduMMLUConfig:
-    subset_names: list[str]
-    experiment_name: str
-    annotator_model_name: str = "Llama-3.3-70B-Instruct"
-    # TODO(chris): Use the proper imports form above medu_dclm_{annotation,pretraining}_subset
-    pretraining_data_path: str = "gs://marin-us-east5/documents/medu-datasets/medu-dclm-annotation-subset-e12303"
-    annotator_data_path: str = "gs://marin-us-east5/documents/medu-datasets/medu-dclm-annotation-subset-e12303"
-
-
 mmlu_raw = ExecutorStep(
     name="raw/cais/mmlu",
     fn=download_hf,
@@ -131,6 +120,16 @@ social_sciences = [
 other = [
     "miscellaneous",
 ]
+
+
+@dataclass
+class MeduMMLUConfig:
+    subset_names: list[str]
+    experiment_name: str
+    annotator_model_name: str = "Llama-3.3-70B-Instruct"
+    # TODO(chris): Use the proper imports form above medu_dclm_{annotation,pretraining}_subset
+    pretraining_data_path: str = "gs://marin-us-east5/documents/medu-datasets/medu-dclm-annotation-subset-e12303"
+    annotator_data_path: str = "gs://marin-us-east5/documents/medu-datasets/medu-dclm-annotation-subset-e12303"
 
 
 class MMLUMeduPipeline(MEDURunner):
