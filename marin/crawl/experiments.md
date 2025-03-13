@@ -7,20 +7,24 @@
 2. Construct the crawl frontier for each dataset by extracting outlinks from the
    HTML.
 
-3. Randomly sample links (e.g., 10M) from the crawl frontier.
+3. (Optional) remove outlinks that already appear in Common Crawl:
 
-4. Fetch sampled URLs at scale; store responses in Parquet format.
+4. Remove duplicate outlinks from the crawl frontier and shuffle them.
 
-5. Convert Parquet responses to WARC files.
+5. Randomly sample links (e.g., 10M) from the crawl frontier.
 
-6. Process the fetched WARC-formatted responses with each dataset's original
+6. Fetch sampled URLs at scale; store responses in Parquet format.
+
+7. Convert Parquet responses to WARC files.
+
+8. Process the fetched WARC-formatted responses with each dataset's original
    filtering pipeline. Collect the documents that pass the filtering pipeline
    and count the number of tokens.
 
-7. Use MinHash deduplication to remove near-duplicates in the fetched pages that
+9. Use MinHash deduplication to remove near-duplicates in the fetched pages that
    also occur in the original dataset.
 
-8. Count tokens after deduplication to measure the final number of crawled tokens.
+10. Count tokens after deduplication to measure the final number of crawled tokens.
 
 ## Extracting HTML for all datasets examples
 
@@ -141,6 +145,77 @@ python marin/run/ray_run.py \
         --bloom_filter_path 'gs://marin-us-central2/gcsfuse_mount/nfliu/deduplicate_outlinks/cc-urls-partitioned_2019_2024.bloom' \
         --output_path gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-cc-deduplicated/ \
         --shards_per_batch 100
+```
+
+## Remove duplicate outlinks from the crawl frontier and shuffle them
+
+1. First, copy the service account key file for
+   marin-data-browser@hai-gcp-models.iam.gserviceaccount.com to gcs-key.json in
+   this directory:
+
+```
+gcloud iam service-accounts keys create bigquery-gcs-key.json --iam-account=marin-crawl-bigquery@hai-gcp-models.iam.gserviceaccount.com
+mv bigquery-gcs-key.json marin/crawl/
+```
+
+2. Deduplicating open-web-math outlinks with BigQuery (~2.5 mins):
+
+```
+export AUTHENTICATION_JSON="$(jq -c . ./marin/crawl/bigquery-gcs-key.json)"
+
+python marin/run/ray_run.py \
+    --pip_deps 'google-cloud-bigquery' \
+    -e "GOOGLE_APPLICATION_CREDENTIALS_JSON" "$AUTHENTICATION_JSON" \
+    --no_wait -- \
+    python marin/crawl/deduplicate_outlinks.py \
+        --gcs_input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8/*_links.jsonl.gz' \
+        --gcs_output_prefix 'gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-unique/unique_links' \
+        --bq_table_id 'open_web_math_outlinks'
+```
+
+3. Deduplicating open-web-math-cc-deduplicated outlinks with BigQuery (~2.5 mins):
+
+```
+export AUTHENTICATION_JSON="$(jq -c . ./marin/crawl/bigquery-gcs-key.json)"
+
+python marin/run/ray_run.py \
+    --pip_deps 'google-cloud-bigquery' \
+    -e "GOOGLE_APPLICATION_CREDENTIALS_JSON" "$AUTHENTICATION_JSON" \
+    --no_wait -- \
+    python marin/crawl/deduplicate_outlinks.py \
+        --gcs_input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-cc-deduplicated/*_links.jsonl.gz' \
+        --gcs_output_prefix 'gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-cc-deduplicated-unique/unique_links' \
+        --bq_table_id 'open_web_math_cc_deduplicated_outlinks'
+```
+
+4. Deduplicating fineweb-edu outlinks with BigQuery (~36 mins):
+
+```
+export AUTHENTICATION_JSON="$(jq -c . ./marin/crawl/bigquery-gcs-key.json)"
+
+python marin/run/ray_run.py \
+    --pip_deps 'google-cloud-bigquery' \
+    -e "GOOGLE_APPLICATION_CREDENTIALS_JSON" "$AUTHENTICATION_JSON" \
+    --no_wait -- \
+    python marin/crawl/deduplicate_outlinks.py \
+        --gcs_input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu/*_links.jsonl.gz' \
+        --gcs_output_prefix 'gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-unique/unique_links' \
+        --bq_table_id 'fineweb_edu_outlinks'
+```
+
+5. Deduplicating fineweb-edu-cc-deduplicated outlinks with BigQuery (~8 mins):
+
+```
+export AUTHENTICATION_JSON="$(jq -c . ./marin/crawl/bigquery-gcs-key.json)"
+
+python marin/run/ray_run.py \
+    --pip_deps 'google-cloud-bigquery' \
+    -e "GOOGLE_APPLICATION_CREDENTIALS_JSON" "$AUTHENTICATION_JSON" \
+    --no_wait -- \
+    python marin/crawl/deduplicate_outlinks.py \
+        --gcs_input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-cc-deduplicated/*_links.jsonl.gz' \
+        --gcs_output_prefix 'gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-cc-deduplicated-unique/unique_links' \
+        --bq_table_id 'fineweb_edu_cc_deduplicated_outlinks'
 ```
 
 ## Sample, fetch, and extract text from outlinks
