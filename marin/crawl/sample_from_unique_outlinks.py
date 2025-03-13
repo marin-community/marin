@@ -213,8 +213,10 @@ def write_sharded_examples(sharded_examples: list[list[Outlink]], output_prefix:
 
 @draccus.wrap()
 def main(cfg: OutlinksSamplingConfig):
-    sample_from_shuffled_unique_outlinks.remote(
-        cfg.input_pattern, cfg.num_to_sample, cfg.shard_size, cfg.output_prefix, cfg.start_from
+    ray.get(
+        sample_from_shuffled_unique_outlinks.remote(
+            cfg.input_pattern, cfg.num_to_sample, cfg.shard_size, cfg.output_prefix, cfg.start_from
+        )
     )
 
 
