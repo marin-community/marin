@@ -91,7 +91,7 @@ class TransformAdapter:
             response = row[self.response_column]
             # Check data
             if instruction is None or response is None:
-                return None # Do not process rows with missing data
+                return None  # Do not process rows with missing data
             if self.filter_on_key:
                 best_completion = None
                 best_metric = -float("inf")  # TODO: Make this a config
