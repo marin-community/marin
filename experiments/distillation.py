@@ -28,7 +28,7 @@ math500 = ExecutorStep(
 )
 
 generations = ExecutorStep(
-    name="documents/testinfer-w-get_model/synthetic_data_llama_8b",
+    name="documents/synthetic_data_llama_8b",
     fn=run_inference,
     config=TextGenerationInferenceConfig(
         input_path=output_path_of(math500),
