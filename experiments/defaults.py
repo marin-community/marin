@@ -230,7 +230,7 @@ def default_train(
                 num_train_steps=train_config.num_train_steps,
                 steps_per_eval=train_config.steps_per_eval if train_config.steps_per_eval is not None else 1000,
                 checkpointer=CheckpointerConfig(
-                    save_interval=timedelta(minutes=10),
+                    save_interval=timedelta(minutes=30),
                     keep=[dict(every=steps_per_export)],
                 ),
                 model_averaging=model_averaging,
