@@ -107,8 +107,10 @@ def default_quality_filter_and_consolidate(
 ):
     if isinstance(encoder_model, str):
         model_path = encoder_model
-    else:
+    elif isinstance(encoder_model, ExecutorStep):
         model_path = os.path.join("/opt", encoder_model.name)
+    else:
+        raise ValueError(f"Invalid encoder_model type: {type(encoder_model)}")
 
     if isinstance(input_data_path, ExecutorStep):
         input_data_path = output_path_of(input_data_path)

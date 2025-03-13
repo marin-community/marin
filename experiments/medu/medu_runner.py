@@ -47,7 +47,7 @@ class MEDURunner:
         )
 
     def run_eval_cluster_steps(self):
-        executor_main([self.filtered_documents])
+        executor_main([self.encoder_model])
 
     def run_all_steps(self):
         executor_main([self.filtered_documents])
