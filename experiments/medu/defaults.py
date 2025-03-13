@@ -2,6 +2,10 @@ import os
 
 from transformers import AutoTokenizer
 
+from experiments.anneal_config import AnnealConfig, default_anneal
+from experiments.cooldown_quality import QualityAblationConfig, default_quality_ablation
+from experiments.dclm.tokenize_dclm import dclm_components_llama3
+from experiments.defaults import default_tokenize
 from experiments.evals.resource_configs import ResourceConfig
 from marin.classifiers.hf.launch_ray_training import LaunchConfig, launch_training_with_ray
 from marin.classifiers.hf.train_classifier import HFTrainingConfig
@@ -12,6 +16,7 @@ from marin.generation.medu import MEDUPipelineConfig, run_medu_dataset_sampling_
 from marin.processing.classification.config.inference_config import InferenceConfig, RuntimeConfig
 from marin.processing.classification.consolidate import ConsolidateConfig, FilterConfig, consolidate
 from marin.processing.classification.inference import run_inference
+from marin.processing.tokenize.data_configs import lm_mixture_data_config
 from operations.download.gcs.model import DownloadFromGCSConfig, download_model_from_gcs
 
 model_name = "/opt/gcsfuse_mount/models/meta-llama--Llama-3-3-70B-Instruct"
@@ -132,7 +137,15 @@ def default_quality_filter_and_consolidate(
             filetype="jsonl.zst",
             classifier_kwargs={"max_length": 512},
         ),
-        pip_dependency_groups=["fasttext", "datasets", "filelock"],
+        pip_dependency_groups=[
+            "--find-links https://storage.googleapis.com/libtpu-releases/index.html",
+            "--find-links https://storage.googleapis.com/libtpu-wheels/index.html",
+            "fasttext",
+            "datasets",
+            "filelock",
+            "torch~=2.6.0",
+            "torch_xla[tpu]~=2.6.0",
+        ],
     )
 
     filtered_documents = ExecutorStep(
@@ -157,3 +170,34 @@ def default_quality_filter_and_consolidate(
     )
 
     return filtered_documents
+
+
+def default_candidate_anneal(filtered_documents: ExecutorStep, tpu_type: str, experiment_name: str):
+    candidate_tokenized = default_tokenize(
+        name=f"medu-candidate-{experiment_name}",
+        input_path=output_path_of(filtered_documents),
+        output_path=this_output_path(),
+    )
+
+    quality_ablation_model = default_quality_ablation(
+        candidate_tokenized=candidate_tokenized,
+        config=QualityAblationConfig(tpu_type=tpu_type),
+    )
+
+    return quality_ablation_model
+
+
+def default_control(
+    tpu_type: str,
+):
+    control_model = default_anneal(
+        AnnealConfig(
+            dataset_config=lm_mixture_data_config(
+                components={"dclm": dclm_components_llama3["dclm_baseline"]},
+                weights={"dclm": 1.0},
+            ),
+            tpu_type=tpu_type,
+        )
+    )
+
+    return control_model
