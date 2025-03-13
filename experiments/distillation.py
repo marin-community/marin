@@ -48,7 +48,7 @@ generations = ExecutorStep(
         tensor_parallel_size=tensor_parallel_size,
         prompt_column="problem",
         filetype="jsonl",
-        tpu_type="TPU-v4-16",
+        tpu_type="TPU-v6e-8",
     ),
 )
 
