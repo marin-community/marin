@@ -20,7 +20,9 @@ tensor_parallel_size = 8
 
 
 def default_label(
-    documents_to_be_labeled: str | ExecutorStep, targeted_documents: list[list[str] | str], experiment_name: str
+    documents_to_be_labeled: str | ExecutorStep,
+    targeted_documents: list[list[str] | str],
+    experiment_name: str,
 ):
     if isinstance(documents_to_be_labeled, ExecutorStep):
         documents_to_be_labeled = output_path_of(documents_to_be_labeled)
