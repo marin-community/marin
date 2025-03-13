@@ -54,7 +54,6 @@ python marin/run/ray_run.py \
 ```
 
 """  # noqa: E501
-import bisect
 import json
 import logging
 import math
@@ -65,7 +64,6 @@ from urllib.parse import urlparse
 
 import draccus
 import fsspec
-import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 import ray
@@ -80,13 +78,14 @@ logger = logging.getLogger(__name__)
 @dataclass
 class OutlinksSamplingConfig:
     """
-    Configuration for sampling unique outlinks.
+    Configuration for 'truncation' sampling from a pre-shuffled set of outlinks.
     """
 
     input_pattern: str
     num_to_sample: int
     shard_size: int
     output_prefix: str
+    start_from: int = 0
 
 
 @dataclass(frozen=True)
@@ -97,123 +96,67 @@ class Outlink:
     in_main_content: bool
 
 
-@ray.remote(memory=1 * 1024 * 1024 * 1024)
-def count_examples_in_shard(shard_path: str) -> tuple[str, int]:
-    """
-    Count the number of lines (examples) in a single shard.
-    """
-    with fsspec.open(shard_path, "rt", compression="gzip", block_size=1 * 1024 * 1024 * 1024) as fin:
-        num_lines = sum(1 for _ in fin)
-    return shard_path, num_lines
-
-
-@ray.remote(memory=4 * 1024 * 1024 * 1024)
-def get_examples_from_offsets(shard_path: str, offsets: list[int]) -> list[Outlink]:
-    """
-    Given a shard and a set of line offsets, extract those specific examples
-    (paired with their global example_ids).
-    """
-    extracted_examples = []
-    offsets = sorted(offsets)
-    with fsspec.open(shard_path, "rt", compression="gzip", block_size=1 * 1024 * 1024 * 1024) as fin:
-        current_line_idx = 0
-        offsets_iter = iter(offsets)
-        next_offset = next(offsets_iter, None)
-        for line in fin:
-            if next_offset is None:
-                break
-            if current_line_idx == next_offset:
-                parsed_example = json.loads(line.rstrip("\n"))
-                extracted_examples.append(Outlink(**parsed_example))
-                next_offset = next(offsets_iter, None)
-            current_line_idx += 1
-    return extracted_examples
-
-
 @ray.remote(memory=256 * 1024 * 1024 * 1024)
-def sample_outlinks(
-    input_pattern: str,
-    num_to_sample: int,
-    shard_size: int,
-    output_prefix: str,
+def sample_from_shuffled_unique_outlinks(
+    input_pattern: str, num_to_sample: int, shard_size: int, output_prefix: str, start_from: int
 ):
     """
-    Randomly sample `num_to_sample` outlinks (from guaranteed-unique inputs)
-    and write them out in sharded Parquet files.
-
-    - input_pattern: Glob pattern for gzipped JSON lines.
-    - num_to_sample: How many total outlinks to sample.
-    - shard_size: Approx. how many outlinks to put in each output shard.
-    - output_prefix: Each shard is written to '{output_prefix}.{shard_idx}.parquet'
+    Read shards in sorted order, skip the first `start_from` lines,
+    then read `num_to_sample` lines to produce a final sample.
     """
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-
     # Discover and sort shards for reproducibility
-    shard_paths = sorted(list(fsspec_glob(input_pattern)))
-    logger.info(f"Found {len(shard_paths)} shards.")
+    shard_paths = sorted(fsspec_glob(input_pattern))
+    logger.info(f"Found {len(shard_paths)} shards matching pattern.")
 
-    # Count the number of lines in each shard in parallel
-    refs = [count_examples_in_shard.remote(sp) for sp in shard_paths]
-    results = ray.get(refs)
+    # We'll read lines in order, skipping `start_from` lines, then collecting
+    # up to `num_to_sample` lines. Once we reach that number, we stop.
+    to_skip = start_from
+    to_collect = num_to_sample
+    collected_outlinks = []
 
-    example_ranges_to_path = {}
-    current_index = 0
-    for shard_path, num_examples in tqdm(results, desc="Counting total examples"):
-        # shard_path contains examples in [current_index, current_index + num_examples)
-        example_ranges_to_path[(current_index, current_index + num_examples)] = shard_path
-        current_index += num_examples
+    if num_to_sample <= 0:
+        raise ValueError("Must request a positive number of samples.")
 
-    total_examples = current_index
-    logger.info(f"Total unique outlinks found: {total_examples}")
+    logger.info(f"Skipping the first {to_skip} lines, then collecting {to_collect} lines.")
+    for shard_path in tqdm(shard_paths, desc="Reading shards"):
+        if to_collect <= 0:
+            # We already got everything we need
+            break
 
-    # Check we have enough examples
-    if num_to_sample > total_examples:
-        raise ValueError(f"Requested {num_to_sample} samples, but only {total_examples} available.")
+        with fsspec.open(shard_path, "rt", compression="gzip", block_size=1 * 1024 * 1024 * 1024) as fin:
+            for line in fin:
+                if to_skip > 0:
+                    to_skip -= 1
+                    continue
+                # Now we are in the region to collect
+                if to_collect > 0:
+                    parsed = json.loads(line.rstrip("\n"))
+                    outlink = Outlink(**parsed)
+                    collected_outlinks.append(outlink)
+                    to_collect -= 1
+                else:
+                    # We have all we need, so break early
+                    break
 
-    # Randomly choose `num_to_sample` indices without replacement
-    rng = np.random.default_rng(0)
-    sampled_ids = rng.choice(total_examples, size=num_to_sample, replace=False)
+    total_collected = len(collected_outlinks)
+    logger.info(f"Collected {total_collected} outlinks in total.")
+    if total_collected < num_to_sample:
+        raise ValueError(f"Only collected {total_collected} outlinks, but requested {num_to_sample}.")
 
-    # Convert shard ranges dict to a sorted list for bisect
-    range_list = sorted(
-        [(start_idx, end_idx, p) for (start_idx, end_idx), p in example_ranges_to_path.items()],
-        key=lambda x: x[0],
-    )
-    starts = [r[0] for r in range_list]
-
-    # Assign each sampled ID to its shard (via binary search)
-    shard_to_local_offsets = defaultdict(list)
-    for example_id in tqdm(sampled_ids, desc="Mapping sampled IDs to shards"):
-        shard_idx = bisect.bisect_right(starts, example_id) - 1
-        start_idx, _, shard_path = range_list[shard_idx]
-        local_offset = example_id - start_idx
-        shard_to_local_offsets[shard_path].append(local_offset)
-
-    # Extract from shards in parallel
-    logger.info("Extracting sampled outlinks...")
-    refs = []
-    for shard_path, local_offsets in tqdm(shard_to_local_offsets.items(), desc="Extracting sampled outlinks"):
-        refs.append(get_examples_from_offsets.remote(shard_path, local_offsets))
-    results = ray.get(refs)
-
-    # Collect all sampled Outlinks into a single list
-    sampled_examples = []
-    for shard_result in tqdm(results, desc="Combining results"):
-        sampled_examples.extend(shard_result)
-
-    # Shard by domain (optional but helps group by domain)
-    shard_count = int(math.ceil(len(sampled_examples) / shard_size))
-    sharded_examples = shard_urls_by_domain(sampled_examples, shard_count, block_size=500)
+    # Group by domain to produce domain-clustered shards
+    logger.info(f"Sharding {total_collected} outlinks by domain.")
+    shard_count = math.ceil(total_collected / shard_size)
+    sharded = shard_urls_by_domain(collected_outlinks, shard_count, block_size=500)
 
     # Write out results
     logger.info("Writing sharded samples to Parquet...")
-    write_sharded_examples(sharded_examples, output_prefix)
+    write_sharded_examples(sharded, output_prefix)
 
 
 def shard_urls_by_domain(examples: list[Outlink], shard_count: int, block_size: int = 500):
     """
     Group outlinks by their domain, then distribute them across shards
-    in a round-robin fashion.
+    in round-robin fashion.
     """
     domain_map = defaultdict(list)
     for ex in examples:
@@ -223,6 +166,7 @@ def shard_urls_by_domain(examples: list[Outlink], shard_count: int, block_size: 
     blocks = []
     domain_to_num_blocks = Counter()
     for domain, domain_outlinks in domain_map.items():
+        # shuffle to avoid large lumps of the same domain
         random.shuffle(domain_outlinks)
         for i in range(0, len(domain_outlinks), block_size):
             block = domain_outlinks[i : i + block_size]
@@ -246,7 +190,7 @@ def write_sharded_examples(sharded_examples: list[list[Outlink]], output_prefix:
     Write each shard of outlinks to a separate Parquet file.
     """
     total_written = 0
-    shard_idx_to_num_examples = Counter()
+    shard_stats = Counter()
 
     for shard_idx, shard in enumerate(sharded_examples):
         shard_filename = f"{output_prefix}.{shard_idx}.parquet"
@@ -259,28 +203,20 @@ def write_sharded_examples(sharded_examples: list[list[Outlink]], output_prefix:
         with fsspec.open(shard_filename, "wb", block_size=1 * 1024 * 1024 * 1024) as fout:
             pq.write_table(table, fout, compression="snappy")
 
-        shard_idx_to_num_examples[shard_idx] = len(shard_dicts)
+        shard_stats[shard_idx] = len(shard_dicts)
         total_written += len(shard_dicts)
 
     logger.info(f"Wrote {total_written} outlinks in total.")
-    logger.info(f"Largest shards by count: {shard_idx_to_num_examples.most_common(3)}")
-    logger.info(f"Smallest shards by count: {shard_idx_to_num_examples.most_common()[:-3-1:-1]}")
+    logger.info(f"Largest shards by count: {shard_stats.most_common(3)}")
+    logger.info(f"Smallest shards by count: {shard_stats.most_common()[:-3-1:-1]}")
 
 
 @draccus.wrap()
-def sample_outlinks_from_html(cfg: OutlinksSamplingConfig):
-    """
-    Main entry point, which delegates to the Ray remote function.
-    """
-    ray.get(
-        sample_outlinks.remote(
-            cfg.input_pattern,
-            cfg.num_to_sample,
-            cfg.shard_size,
-            cfg.output_prefix,
-        )
+def main(cfg: OutlinksSamplingConfig):
+    sample_from_shuffled_unique_outlinks.remote(
+        cfg.input_pattern, cfg.num_to_sample, cfg.shard_size, cfg.output_prefix, cfg.start_from
     )
 
 
 if __name__ == "__main__":
-    sample_outlinks_from_html()
+    main()
