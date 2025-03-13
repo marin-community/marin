@@ -8,7 +8,7 @@ class AnnealConfig:
     # 198468 steps is roughly 198468 steps * 1024 batch size * 4096 seq len = 0.832T tokens
     # Numbers were taken from exp600_tootsie.py. We start with this 8B model because it would take a long time to train
     # another one from scratch.
-    DEFAULT_CHECKPOINT_PATH = "gs://marin-eu-west4/checkpoints/llama-8b-tootsie-0.001-19ad63/checkpoints/step-198468"
+    DEFAULT_CHECKPOINT_PATH = "gs://marin-eu-west4/checkpoints/llama-8b-tootsie-0.001-19ad63/checkpoints/step-660000"
     LLAMA_MAX_SEQ_LEN = 4096
 
     # Annealing dataset and proportions

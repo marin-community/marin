@@ -57,7 +57,7 @@ def run_levanter_sft(config: TrainSFTOnPodConfig):
     config = _enforce_run_id(config)
     logger.info(f"Using run ID: {config.trainer.id}")
 
-    if not config.bypass_path_checks and config.tpu_type is not None:
+    if not config.bypass_path_checks_for_reads and config.tpu_type is not None:
         ray.get(ray.remote(_doublecheck_paths_sft).options(num_cpus=0.1).remote(config, must_save_checkpoints=True))
 
     sft_config = _upcast_sft_config(config)

@@ -1,4 +1,5 @@
 import json
+import logging
 import random
 import re
 import time
@@ -10,6 +11,8 @@ import fsspec
 import ray
 
 from marin.core.runtime import TaskConfig, map_files_in_directory
+
+logger = logging.getLogger("ray")
 
 
 @ray.remote
@@ -131,6 +134,9 @@ class MeduDatasetOutputProcessor(DatasetOutputProcessor):
         if match:
             score_text = match.group(1)
             return MeduDatasetOutputProcessor.SCORE_OPTIONS_DICT[score_text]
+        else:
+            logger.warning(f"No match found for score in text: {text}")
+
         return -1
 
 

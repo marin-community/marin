@@ -108,6 +108,7 @@ class MEDUPipeline:
         random.seed(42)
 
         # Shuffle the benchmark descriptions to ensure diversity in merging
+        random.seed(42)
         random.shuffle(self.generated_benchmark_descriptions)
         logger.info(f"Generated {len(self.generated_benchmark_descriptions)} benchmark descriptions")
         return self.generated_benchmark_descriptions
