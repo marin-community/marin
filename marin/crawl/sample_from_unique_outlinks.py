@@ -96,7 +96,7 @@ class Outlink:
     in_main_content: bool
 
 
-@ray.remote(memory=256 * 1024 * 1024 * 1024)
+@ray.remote(memory=350 * 1024 * 1024 * 1024)
 def sample_from_shuffled_unique_outlinks(
     input_pattern: str, num_to_sample: int, shard_size: int, output_prefix: str, start_from: int
 ):
