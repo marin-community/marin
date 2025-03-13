@@ -668,6 +668,8 @@ def load_already_fetched_urls(parquet_path: str):
         df = pd.read_parquet(parquet_path)
         if "url" in df.columns:
             return set(df["url"].dropna().unique().tolist())
+    else:
+        logger.info(f"Fetched URLs parquet path {parquet_path} does not already exist")
     return set()
 
 
