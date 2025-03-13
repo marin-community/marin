@@ -1,3 +1,6 @@
+import os
+
+import pytest
 import ray
 from vllm import LLM, SamplingParams
 
@@ -47,9 +50,11 @@ def test_llm_func():
     return generated_texts
 
 
-generated_texts = ray.get(test_llm_func.remote())
-assert len(generated_texts) == 1
+@pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip this test in CI, since we run it as a separate worflow.")
+def test_llm_inference():
+    generated_texts = ray.get(test_llm_func.remote())
+    assert len(generated_texts) == 1
 
-llm_actor = LLMActor.remote()
-generated_texts = ray.get(llm_actor.generate.remote("Hello, how are you?"))
-assert len(generated_texts) == 1
+    llm_actor = LLMActor.remote()
+    generated_texts = ray.get(llm_actor.generate.remote("Hello, how are you?"))
+    assert len(generated_texts) == 1
