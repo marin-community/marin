@@ -104,6 +104,7 @@ def sample_from_shuffled_unique_outlinks(
     Read shards in sorted order, skip the first `start_from` lines,
     then read `num_to_sample` lines to produce a final sample.
     """
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     # Discover and sort shards for reproducibility
     shard_paths = sorted(fsspec_glob(input_pattern))
     logger.info(f"Found {len(shard_paths)} shards matching pattern.")
