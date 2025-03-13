@@ -50,15 +50,14 @@ REGION_TO_TPU_TYPES = {
 class MEDURunner:
     def __init__(self, config: MEDURunnerConfig):
         self.config = config
-        self.labeled_documents = default_label(
-            self.config.annotator_data_path, self.config.corpus_content_paths, self.config.experiment_name
-        )
-
         region = os.getenv("BUCKET")
         labeler_tpu_type = REGION_TO_TPU_TYPES[region]["labeler_tpu_type"]
         training_tpu_type = REGION_TO_TPU_TYPES[region]["training_tpu_type"]
 
         # TODO(chris): In a later PR, support other TPU types
+        self.labeled_documents = default_label(
+            self.config.annotator_data_path, self.config.corpus_content_paths, self.config.experiment_name
+        )
         self.encoder_model = default_quality_filter_model(
             self.labeled_documents, self.config.experiment_name, labeler_tpu_type
         )
