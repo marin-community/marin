@@ -18,7 +18,7 @@ Running on FineWeb-Edu-10M:
 
 ```
 python marin/run/ray_run.py \
-    --pip_deps '--find-links https://storage.googleapis.com/jax-releases/libtpu_releases.html,w3lib,trafilatura,jax[tpu],flax,transformers,requests,warcio[all],resiliparse' \
+    --pip_deps '--find-links https://storage.googleapis.com/jax-releases/libtpu_releases.html,w3lib,trafilatura,jax[tpu],flax,transformers,requests,warcio[all],resiliparse,datatrove[processing] @ git+https://github.com/nelson-liu/datatrove@ray_executor_dedup_logging,spacy,cupy-cuda12x==13.3.0' \
     --no_wait -- \
     python marin/crawl/get_fineweb_edu_crawl_yield.py \
     --urls_input_directory gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-10M/ \
@@ -176,12 +176,17 @@ def extract_text_from_warc(
                     continue
 
                 canonicalized_url = w3lib.url.canonicalize_url(record_url)
-                extracted_text = extract(
-                    html_decoded,
-                    favor_precision=True,
-                    include_comments=False,
-                    deduplicate=True,
-                )
+                try:
+                    extracted_text = extract(
+                        html_decoded,
+                        favor_precision=True,
+                        include_comments=False,
+                        deduplicate=True,
+                    )
+                except Exception:
+                    logging.exception("Failed to extract text from decoded HTML")
+                    extracted_text = None
+
                 if not extracted_text:
                     num_records_skipped += 1
                     continue
