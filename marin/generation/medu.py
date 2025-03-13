@@ -47,7 +47,7 @@ class MEDUPipelineConfig:
     output_filetype_override: str = "jsonl.gz"
 
 
-@ray.remote  # NOTE(chris): We use Spot TPUs, so we need to be able to restart the pipeline if it fails.
+@ray.remote(max_restarts=-1)  # NOTE(chris): We use Spot TPUs, so we need to be able to restart the pipeline if it fails.
 class MEDUPipeline:
     def __init__(
         self,
@@ -104,6 +104,9 @@ class MEDUPipeline:
                 )
             )
         self.generated_benchmark_descriptions = self.llm.generate(prompts)
+        # Set random seed for reproducibility before shuffling
+        random.seed(42)
+
         # Shuffle the benchmark descriptions to ensure diversity in merging
         random.shuffle(self.generated_benchmark_descriptions)
         logger.info(f"Generated {len(self.generated_benchmark_descriptions)} benchmark descriptions")
@@ -209,7 +212,7 @@ def run_medu_labeling_pipeline(config: MEDUPipelineConfig):
         with fsspec.open(
             get_final_benchmark_description_prompt_output_path(config.output_path), "r", compression="infer"
         ) as f:
-            final_benchmark_description_prompt = f.read()
+            final_benchmark_description_prompt = str(f.read())
 
     label_documents_future = label_documents(config, final_benchmark_description_prompt)
     ray.get(label_documents_future)
