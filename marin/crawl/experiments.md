@@ -150,7 +150,19 @@ python marin/run/ray_run.py \
 This setting looks at 10M unique sampled outlinks from the original FineWeb-Edu
 crawl frontier.
 
-1. Fetch links:
+1. Sample links:
+
+```
+python marin/run/ray_run.py \
+    --no_wait -- \
+    python marin/crawl/sample_from_nonunique_outlinks.py \
+    --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu/CC-MAIN*/*_links.jsonl.gz' \
+    --num_to_sample 10000000 \
+    --shard_size 100000 \
+    --output_prefix gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-10M/links
+```
+
+2. Fetch links:
 
 ```
 python marin/run/ray_run.py \
@@ -163,7 +175,7 @@ python marin/run/ray_run.py \
     --max_concurrent_shards 40
 ```
 
-2. Convert fetched parquet to WARC:
+3. Convert fetched parquet to WARC:
 
 ```
 python marin/run/ray_run.py \
@@ -174,7 +186,7 @@ python marin/run/ray_run.py \
     --output_path gs://marin-us-central2/scratch/nfliu/fetched_outlinks/fineweb-edu-10M/
 ```
 
-3. Run full FineWeb-Edu pipeline to get yield from the fetched WARC pages:
+4. Run full FineWeb-Edu pipeline to get yield from the fetched WARC pages:
 
 ```
 python marin/run/ray_run.py \
@@ -195,7 +207,7 @@ Total URLs fetched: 5,600,465
 Total URLs passing: 381,453
 ```
 
-4. Count the number of tokens in the fetched pages that pass the filtering
+5. Count the number of tokens in the fetched pages that pass the filtering
    pipeline:
 
 ```
@@ -213,7 +225,7 @@ Total number of tokens: 535,294,684
 Total number of documents: 381,453
 ```
 
-5. Take the fetched pages that pass the filtering pipeline and run MinHash
+6. Take the fetched pages that pass the filtering pipeline and run MinHash
    deduplication against FineWeb-Edu:
 
 ```
@@ -234,7 +246,7 @@ gcloud storage rm --recursive gs://marin-us-central2/scratch/nfliu/minhash/finew
 gcloud storage rm --recursive gs://marin-us-central2/scratch/nfliu/minhash/logs/fineweb_edu_10M_passing_minhash_against_fineweb_edu_logs
 ```
 
-6. Count the number of tokens in the fetched pages that pass the filtering
+7. Count the number of tokens in the fetched pages that pass the filtering
    pipeline after minhash deduplication:
 
 ```
@@ -257,7 +269,19 @@ Total number of documents: 52,727
 This setting looks at 10M unique sampled outlinks from the original open-web-math
 crawl frontier.
 
-1. Fetch links:
+1. Sample links:
+
+```
+python marin/run/ray_run.py \
+    --no_wait -- \
+    python marin/crawl/sample_from_nonunique_outlinks.py \
+    --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8/*_links.jsonl.gz' \
+    --num_to_sample 10000000 \
+    --shard_size 100000 \
+    --output_prefix gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-10M/links
+```
+
+2. Fetch links:
 
 ```
 python marin/run/ray_run.py \
@@ -270,7 +294,7 @@ python marin/run/ray_run.py \
     --max_concurrent_shards 40
 ```
 
-2. Convert fetched parquet to WARC:
+3. Convert fetched parquet to WARC:
 
 ```
 python marin/run/ray_run.py \
@@ -281,7 +305,7 @@ python marin/run/ray_run.py \
     --output_path gs://marin-us-central2/scratch/nfliu/fetched_outlinks/open-web-math-fde8ef8-10M/
 ```
 
-3. Run full open-web-math pipeline to get yield from the fetched WARC pages:
+4. Run full open-web-math pipeline to get yield from the fetched WARC pages:
 
 ```
 python marin/run/ray_run.py \
@@ -304,7 +328,7 @@ Total URLs fetched: 4338570
 Total URLs passing: 839650
 ```
 
-4. Count the number of tokens in the fetched pages that pass the filtering
+5. Count the number of tokens in the fetched pages that pass the filtering
    pipeline:
 
 ```
@@ -322,7 +346,7 @@ Total number of tokens: 3,027,494,680
 Total number of documents: 839,650
 ```
 
-5. Take the fetched pages that pass the filtering pipeline and run MinHash
+6. Take the fetched pages that pass the filtering pipeline and run MinHash
    deduplication against open-web-math:
 
 ```
@@ -343,7 +367,7 @@ gcloud storage rm --recursive gs://marin-us-central2/scratch/nfliu/minhash/open_
 gcloud storage rm --recursive gs://marin-us-central2/scratch/nfliu/minhash/open_web_math_10M_passing_minhash_against_open_web_math_logs
 ```
 
-6. Count the number of tokens in the fetched pages that pass the filtering
+7. Count the number of tokens in the fetched pages that pass the filtering
    pipeline after minhash deduplication:
 
 ```
@@ -367,7 +391,19 @@ This setting looks at 10M unique sampled outlinks from the a CC-deduplicated
 version of the FineWeb-Edu crawl frontier, where links that already occur in CC
 are removed.
 
-1. Fetch links:
+1. Sample links:
+
+```
+python marin/run/ray_run.py \
+    --no_wait -- \
+    python marin/crawl/sample_from_nonunique_outlinks.py \
+    --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-cc-deduplicated/CC-MAIN*/*_links.jsonl.gz' \
+    --num_to_sample 10000000 \
+    --shard_size 100000 \
+    --output_prefix gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-10M-cc-deduplicated/links
+```
+
+2. Fetch links:
 
 ```
 python marin/run/ray_run.py \
@@ -380,7 +416,7 @@ python marin/run/ray_run.py \
     --max_concurrent_shards 40
 ```
 
-2. Convert fetched parquet to WARC:
+3. Convert fetched parquet to WARC:
 
 ```
 python marin/run/ray_run.py \
@@ -391,7 +427,7 @@ python marin/run/ray_run.py \
     --output_path gs://marin-us-central2/scratch/nfliu/fetched_outlinks/fineweb-edu-10M-cc-deduplicated/
 ```
 
-3. Run full FineWeb-Edu pipeline to get yield from the fetched WARC pages:
+4. Run full FineWeb-Edu pipeline to get yield from the fetched WARC pages:
 
 ```
 python marin/run/ray_run.py \
@@ -414,7 +450,7 @@ Total URLs fetched: 5,286,057
 Total URLs passing: 212,817
 ```
 
-4. Count the number of tokens in the fetched pages that pass the filtering
+5. Count the number of tokens in the fetched pages that pass the filtering
    pipeline:
 
 ```
@@ -432,7 +468,7 @@ Total number of tokens: 314,264,543 (314M)
 Total number of documents: 212,817
 ```
 
-5. Take the fetched pages that pass the filtering pipeline and run MinHash
+6. Take the fetched pages that pass the filtering pipeline and run MinHash
    deduplication against FineWeb-Edu:
 
 ```
@@ -453,7 +489,7 @@ gcloud storage rm --recursive gs://marin-us-central2/scratch/nfliu/minhash/finew
 gcloud storage rm --recursive gs://marin-us-central2/scratch/nfliu/minhash/logs/fineweb_edu_10M_cc_deduplicated_passing_minhash_against_fineweb_edu_logs
 ```
 
-6. Count the number of tokens in the fetched pages that pass the filtering
+7. Count the number of tokens in the fetched pages that pass the filtering
    pipeline after minhash deduplication:
 
 
@@ -478,7 +514,19 @@ This setting looks at 10M unique sampled outlinks from the a CC-deduplicated
 version of the open-web-math crawl frontier, where links that already occur in CC
 are removed.
 
-1. Fetch links:
+1. Sample links:
+
+```
+python marin/run/ray_run.py \
+    --no_wait -- \
+    python marin/crawl/sample_from_nonunique_outlinks.py \
+    --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-cc-deduplicated/*_links.jsonl.gz' \
+    --num_to_sample 10000000 \
+    --shard_size 100000 \
+    --output_prefix gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-10M-cc-deduplicated/links
+```
+
+2. Fetch links:
 
 ```
 python marin/run/ray_run.py \
@@ -491,7 +539,7 @@ python marin/run/ray_run.py \
     --max_concurrent_shards 40
 ```
 
-2. Convert fetched parquet to WARC:
+3. Convert fetched parquet to WARC:
 
 ```
 python marin/run/ray_run.py \
@@ -502,7 +550,7 @@ python marin/run/ray_run.py \
     --output_path gs://marin-us-central2/scratch/nfliu/fetched_outlinks/open-web-math-fde8ef8-10M-cc-deduplicated/
 ```
 
-3. Run full open-web-math pipeline to get yield from the fetched WARC pages:
+4. Run full open-web-math pipeline to get yield from the fetched WARC pages:
 
 ```
 python marin/run/ray_run.py \
@@ -525,7 +573,7 @@ Total URLs fetched: 3,344,030
 Total URLs passing: 563,213
 ```
 
-4. Count the number of tokens in the fetched pages that pass the filtering
+5. Count the number of tokens in the fetched pages that pass the filtering
    pipeline:
 
 ```
@@ -543,7 +591,7 @@ Total number of tokens: 2,634,194,474
 Total number of documents: 563,213
 ```
 
-5. Take the fetched pages that pass the filtering pipeline and run MinHash
+6. Take the fetched pages that pass the filtering pipeline and run MinHash
    deduplication against open-web-math:
 
 ```
@@ -564,7 +612,7 @@ gcloud storage rm --recursive gs://marin-us-central2/scratch/nfliu/minhash/open_
 gcloud storage rm --recursive gs://marin-us-central2/scratch/nfliu/minhash/open_web_math_10M_cc_deduplicated_passing_minhash_against_open_web_math_logs
 ```
 
-6. Count the number of tokens in the fetched pages that pass the filtering
+7. Count the number of tokens in the fetched pages that pass the filtering
    pipeline after minhash deduplication:
 
 
