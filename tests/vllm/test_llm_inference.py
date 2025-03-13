@@ -21,7 +21,8 @@ class LLMActor:
             temperature=0.7,
         )
 
-        return self.llm.generate(prompt, sampling_params=sampling_params)
+        generated_texts = self.llm.generate(prompt, sampling_params=sampling_params)
+        return generated_texts
 
 
 @ray.remote(scheduling_strategy=scheduling_strategy_fn(tensor_parallel_size=8))
@@ -43,9 +44,12 @@ def test_llm_func():
         sampling_params=sampling_params,
     )
 
-    print(generated_texts)
+    return generated_texts
 
 
-ray.get(test_llm_func.remote())
+generated_texts = ray.get(test_llm_func.remote())
+assert len(generated_texts) == 1
+
 llm_actor = LLMActor.remote()
-ray.get(llm_actor.generate.remote("Hello, how are you?"))
+generated_texts = ray.get(llm_actor.generate.remote("Hello, how are you?"))
+assert len(generated_texts) == 1
