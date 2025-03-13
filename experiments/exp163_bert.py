@@ -101,6 +101,7 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
             val_frac=versioned(0.0),
             seed=versioned(0),
         ),
+        pip_dependency_groups=["torch_xla"],
     )
 
     for input_data_source, input_data_path in config.input_data_source_to_path.items():
@@ -184,7 +185,7 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
         )
 
         fasttext_tokenize_step = default_tokenize(
-            name=f"quality_filtering/{config.experiment_name}/bert/{input_data_source}",
+            name=f"quality_filtering/{config.experiment_name}/fasttext/{input_data_source}",
             dataset=output_path_of(fasttext_consolidate_step),
             tokenizer=llama3_tokenizer,
         )
@@ -216,8 +217,9 @@ def main():
             max_sample_size=versioned(100000),
         ),
     ]
+
     experiment_config = ExperimentConfig(
-        experiment_name="exp163_compare_bert_fasttext",
+        experiment_name="exp163_compare_bert_fasttext_mmlu_dclm",
         classifier_training_datasets=classifier_training_datasets,
     )
     steps = create_steps(experiment_config)
