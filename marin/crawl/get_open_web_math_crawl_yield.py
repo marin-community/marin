@@ -437,7 +437,7 @@ def get_shard_yield(
                             "passes_manual_filter": passes_manual_filter,
                             "perplexity": perplexity,
                             "found_math": found_math,
-                            "score": score,
+                            "quality_classifier_score": score,
                             "passes_mathscore_filter": passes_mathscore_filter,
                             "passes_all_filters": passes_all_filters,
                             "date": record_date,
