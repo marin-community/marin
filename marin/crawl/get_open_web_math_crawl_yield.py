@@ -25,7 +25,6 @@ python marin/run/ray_run.py \
     --crawl_input_directory gs://marin-us-central2/scratch/nfliu/fetched_outlinks/open-web-math-fde8ef8-10M/ \
     --data_source open-web-math-fde8ef8-10M \
     --text_output_directory gs://marin-us-central2/scratch/nfliu/text/open-web-math-fde8ef8-10M/ \
-    --urls_and_scores_output_directory gs://marin-us-central2/scratch/nfliu/urls_and_scores/open-web-math-fde8ef8-10M/ \
     --statistics_output_path gs://marin-us-central2/scratch/nfliu/fetched_outlinks/open-web-math-fde8ef8-10M/yield_statistics.json.gz
 ```
 
@@ -40,7 +39,6 @@ python marin/run/ray_run.py \
     --crawl_input_directory gs://marin-us-central2/scratch/nfliu/fetched_outlinks/open-web-math-fde8ef8-10M-cc-deduplicated/ \
     --data_source open-web-math-fde8ef8-10M-cc-deduplicated \
     --text_output_directory gs://marin-us-central2/scratch/nfliu/text/open-web-math-fde8ef8-10M-cc-deduplicated/ \
-    --urls_and_scores_output_directory gs://marin-us-central2/scratch/nfliu/urls_and_scores/open-web-math-fde8ef8-10M-cc-deduplicated/ \
     --statistics_output_path gs://marin-us-central2/scratch/nfliu/fetched_outlinks/open-web-math-fde8ef8-10M-cc-deduplicated/yield_statistics.json.gz
 ```
 """  # noqa: E501
@@ -200,7 +198,6 @@ class GetCrawlYieldConfig:
     data_source: str
     text_output_directory: str
     statistics_output_path: str
-    urls_and_scores_output_directory: str
 
 
 def is_english(text, lid_model):
@@ -289,13 +286,11 @@ def get_shard_yield(
     robots_path: str,
     errors_path: str,
     data_source: str,
-    passing_urls_and_scores_output_path: str,
-    failing_urls_and_scores_output_path: str,
     passing_text_and_scores_output_path: str,
     failing_text_and_scores_output_path: str,
 ):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-    success_path = passing_urls_and_scores_output_path + ".SUCCESS"
+    success_path = passing_text_and_scores_output_path + ".SUCCESS"
     if fsspec_exists(success_path):
         logger.info(f"Success path {success_path} already exists, skipping...")
         with fsspec.open(success_path, block_size=1 * 1024 * 1024 * 1024) as f:
@@ -365,8 +360,6 @@ def get_shard_yield(
     num_records_passing = 0
     num_records_saved = 0
 
-    passing_urls_and_scores_output_records = []
-    failing_urls_and_scores_output_records = []
     passing_text_and_scores_output_records = []
     failing_text_and_scores_output_records = []
     with fsspec.open(warc_path, "rb", compression="gzip", block_size=1 * 1024 * 1024 * 1024) as file_stream:
@@ -414,19 +407,15 @@ def get_shard_yield(
                 passes_manual_filter, new_text = manual_url_filter(url=record_url, original_text=extracted_text)
 
                 canonicalized_url = w3lib.url.canonicalize_url(record_url)
-                urls_and_scores_record = {
-                    "url": record_url,
-                    "canonicalized_url": canonicalized_url,
-                    "passes_prefilter": passes_prefilter,
-                    "passes_langid_filter": passes_langid_filter,
-                    "en_probability": en_probability,
-                    "passes_perplexity_filter": passes_perplexity_filter,
-                    "passes_manual_filter": passes_manual_filter,
-                    "perplexity": perplexity,
-                    "found_math": found_math,
-                    "score": score,
-                    "passes_mathscore_filter": passes_mathscore_filter,
-                }
+
+                passes_all_filters = all(
+                    [
+                        passes_prefilter,
+                        passes_langid_filter,
+                        passes_perplexity_filter,
+                        passes_mathscore_filter,
+                    ]
+                )
                 record_id = record.rec_headers.get_header("WARC-Record-ID")
                 assert record_id
                 record_date = record.rec_headers.get_header("WARC-Date")
@@ -439,27 +428,28 @@ def get_shard_yield(
                         format="text",
                         text=new_text,
                         metadata={
-                            **urls_and_scores_record,
+                            "url": record_url,
+                            "canonicalized_url": canonicalized_url,
+                            "passes_prefilter": passes_prefilter,
+                            "passes_langid_filter": passes_langid_filter,
+                            "en_probability": en_probability,
+                            "passes_perplexity_filter": passes_perplexity_filter,
+                            "passes_manual_filter": passes_manual_filter,
+                            "perplexity": perplexity,
+                            "found_math": found_math,
+                            "score": score,
+                            "passes_mathscore_filter": passes_mathscore_filter,
+                            "passes_all_filters": passes_all_filters,
                             "date": record_date,
                             "file_path": warc_path,
                         },
                     )
                 )
 
-                passed_quality_filters = all(
-                    [
-                        passes_prefilter,
-                        passes_langid_filter,
-                        passes_perplexity_filter,
-                        passes_mathscore_filter,
-                    ]
-                )
-                if passed_quality_filters:
-                    passing_urls_and_scores_output_records.append(urls_and_scores_record)
+                if passes_all_filters:
                     passing_text_and_scores_output_records.append(text_and_scores_record)
                     num_records_passing += 1
                 else:
-                    failing_urls_and_scores_output_records.append(urls_and_scores_record)
                     failing_text_and_scores_output_records.append(text_and_scores_record)
                 num_records_saved += 1
 
@@ -470,9 +460,7 @@ def get_shard_yield(
     logger.info(f"Out of {len(fetched_urls)} fetched_urls, {len(fetched_urls - urls)} were not in the input set of URLs")
     logger.info(f"{num_records_passing} URLs passed the quality filtering pipeline")
     # Write examples from this shard to parquet
-    write_examples_to_parquet(passing_urls_and_scores_output_records, passing_urls_and_scores_output_path)
     write_examples_to_parquet(passing_text_and_scores_output_records, passing_text_and_scores_output_path)
-    write_examples_to_parquet(failing_urls_and_scores_output_records, failing_urls_and_scores_output_path)
     write_examples_to_parquet(failing_text_and_scores_output_records, failing_text_and_scores_output_path)
 
     logger.info(f"Saved {num_records_saved} records from WARC, skipped {num_records_skipped} records")
@@ -524,12 +512,6 @@ def main(cfg: GetCrawlYieldConfig):
         warc_path = os.path.join(cfg.crawl_input_directory, f"links.{shard_index}.warc.gz")
         robots_path = os.path.join(cfg.crawl_input_directory, f"links.{shard_index}_robots.json.gz")
         errors_path = os.path.join(cfg.crawl_input_directory, f"links.{shard_index}_errors.json.gz")
-        passing_urls_and_scores_output_path = os.path.join(
-            cfg.urls_and_scores_output_directory, f"links.{shard_index}_urls_and_scores.passing.parquet"
-        )
-        failing_urls_and_scores_output_path = os.path.join(
-            cfg.urls_and_scores_output_directory, f"links.{shard_index}_urls_and_scores.failing.parquet"
-        )
         passing_text_and_scores_output_path = os.path.join(
             cfg.text_output_directory, f"links.{shard_index}_text_and_scores.passing.parquet"
         )
@@ -543,8 +525,6 @@ def main(cfg: GetCrawlYieldConfig):
                 robots_path,
                 errors_path,
                 cfg.data_source,
-                passing_urls_and_scores_output_path,
-                failing_urls_and_scores_output_path,
                 passing_text_and_scores_output_path,
                 failing_text_and_scores_output_path,
             )
