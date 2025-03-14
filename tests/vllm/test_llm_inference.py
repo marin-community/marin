@@ -11,7 +11,7 @@ except ImportError:
 from marin.generation.ray_utils import scheduling_strategy_fn
 
 
-@ray.remote(scheduling_strategy=scheduling_strategy_fn(tensor_parallel_size=8))
+@ray.remote(scheduling_strategy=scheduling_strategy_fn(tensor_parallel_size=8, strategy="STRICT_PACK"))
 class LLMActor:
     def __init__(self):
         self.llm = LLM(
@@ -32,7 +32,7 @@ class LLMActor:
         return generated_texts
 
 
-@ray.remote(scheduling_strategy=scheduling_strategy_fn(tensor_parallel_size=8))
+@ray.remote(scheduling_strategy=scheduling_strategy_fn(tensor_parallel_size=8, strategy="STRICT_PACK"))
 def test_llm_func():
     llm = LLM(
         model="/opt/gcsfuse_mount/models/meta-llama--Llama-3-3-70B-Instruct",

@@ -22,13 +22,13 @@ from operations.download.gcs.model import DownloadFromGCSConfig, download_model_
 
 model_name = "/opt/gcsfuse_mount/models/meta-llama--Llama-3-3-70B-Instruct"
 tokenizer = AutoTokenizer.from_pretrained(model_name)
-tensor_parallel_size = 8
 
 
 def default_label(
     documents_to_be_labeled: str | ExecutorStep,
     targeted_documents: list[list[str] | str],
     experiment_name: str,
+    resource_config: ResourceConfig,
 ):
     """Label a set of documents with an LLM given some targeted documents.
 
@@ -52,9 +52,12 @@ def default_label(
             model_name=model_name,
             dev_sets=targeted_documents,
             input_path=documents_to_be_labeled,
-            tensor_parallel_size=tensor_parallel_size,
             output_path=this_output_path(),
-            engine_kwargs={"tensor_parallel_size": tensor_parallel_size, "enforce_eager": False, "max_model_len": 8192},
+            engine_kwargs={
+                "tensor_parallel_size": resource_config.num_tpu,
+                "enforce_eager": False,
+                "max_model_len": 8192,
+            },
             generation_kwargs={
                 "temperature": 0.1,
                 "max_tokens": 1024,
@@ -62,18 +65,19 @@ def default_label(
             },
             filetype="jsonl.zst",
             output_filetype_override="jsonl.gz",
+            resource_config=resource_config,
         ),
         override_output_path=f"documents/medu-labels/{experiment_name}",
     )
 
 
-def default_quality_filter_model(labeled_documents: ExecutorStep, experiment_name: str, tpu_type: str = "TPU-v6e-8"):
+def default_quality_filter_model(labeled_documents: ExecutorStep, experiment_name: str, resource_config: ResourceConfig):
     """Train a quality filter model based on the set of labeled documents.
 
     Inputs:
         labeled_documents: An ExecutorStep that represents the labeled documents.
         experiment_name: The name of the experiment.
-        tpu_type: The type of TPU to use for training (defaults to v6e-8)
+        resource_config: The resource config to use for training the quality filter model.
 
     Outputs:
         An ExecutorStep that represents the quality filter model.
@@ -88,11 +92,11 @@ def default_quality_filter_model(labeled_documents: ExecutorStep, experiment_nam
     ).cd("sampled")
 
     # TODO(chris): Change to v4-8 when we aren't running inference on v4-16 anymore?
-    tpu_type_to_resource_config = {
-        "TPU-v4-16": ResourceConfig(num_tpu=4, tpu_type="TPU-v4-16"),
-        "TPU-v6e-8": ResourceConfig(num_tpu=8, tpu_type="TPU-v6e-8"),
-    }
-    resource_config = tpu_type_to_resource_config[tpu_type]
+    # tpu_type_to_resource_config = {
+    #     "TPU-v4-16": ResourceConfig(num_tpu=4, tpu_type="TPU-v4-16"),
+    #     "TPU-v6e-8": ResourceConfig(num_tpu=8, tpu_type="TPU-v6e-8"),
+    # }
+    # resource_config = tpu_type_to_resource_config[tpu_type]
 
     max_length = 512
     medu_classifier_remote = ExecutorStep(
@@ -147,6 +151,7 @@ def default_quality_filter_and_consolidate(
     if isinstance(encoder_model, str):
         model_path = encoder_model
     elif isinstance(encoder_model, ExecutorStep):
+        # Model path is from the previous step in GCSFuse Mount.
         model_path = os.path.join("/opt", encoder_model.name)
     else:
         raise ValueError(f"Invalid encoder_model type: {type(encoder_model)}")

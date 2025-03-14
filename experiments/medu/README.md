@@ -5,9 +5,9 @@ MEDU is a framework to reverse engineer the training data given a set of corpus 
 ## Get Started (Adding a new dataset)
 Follow the example in `medu_mmlu.py`. Simply pass in the corpus content you care about to the `corpus_content_paths` argument.
 In the example, we use the MMLU dataset, which we take the filename of the sets of MMLU subjects that we care about as corpus content.
-Corpus content can also be a list of strings or a single string that represents the entire corpus.
+Corpus content can also be a list of strings or a single string that represents the entire corpus. We expect the filetype to be jsonl with any compression type.
 
-To add a new dataset, simply download the new dataset using the `download_hf` function in `medu_mmlu` and then pass in the corpus content's filenames to the `corpus_content_paths` argument. You should inherit the `MEDURunner` class with your class and pass in the corpus contents.
+To add a new dataset, simply download the new dataset using the `download_hf` function in `medu_mmlu` and then pass in the corpus content's filenames to the `corpus_content_paths` argument. You should inherit the `MEDURunner` class with your class and pass in the corpus contents. MEDU will then run the four stages of the pipeline below.
 
 ## The stages in MEDU
 MEDU is composed of 4 stages:
