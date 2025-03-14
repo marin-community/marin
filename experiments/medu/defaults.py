@@ -91,13 +91,6 @@ def default_quality_filter_model(labeled_documents: ExecutorStep, experiment_nam
         ),
     ).cd("sampled")
 
-    # TODO(chris): Change to v4-8 when we aren't running inference on v4-16 anymore?
-    # tpu_type_to_resource_config = {
-    #     "TPU-v4-16": ResourceConfig(num_tpu=4, tpu_type="TPU-v4-16"),
-    #     "TPU-v6e-8": ResourceConfig(num_tpu=8, tpu_type="TPU-v6e-8"),
-    # }
-    # resource_config = tpu_type_to_resource_config[tpu_type]
-
     max_length = 512
     medu_classifier_remote = ExecutorStep(
         name=f"classifiers/medu-bert/{experiment_name}",
