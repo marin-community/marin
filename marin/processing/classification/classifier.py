@@ -201,16 +201,16 @@ class FinewebEduClassifier(BERTClassifier):
 
 
 class GTEClassifier(FinewebEduClassifier):
+    """Classifier that uses the Alibaba-NLP/gte-base-en-v1.5 model to classify documents"""
+
     def __init__(self, model_name: str, attribute_name: str, max_length: int, *args, **kwargs):
         from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
         device = xm.xla_device()
-        # torch._dynamo.config.cache_size_limit = 128
 
         self.model = AutoModelForSequenceClassification.from_pretrained(
             model_name, trust_remote_code=True, output_hidden_states=False
         ).to(device)
-        # self.model = torch.compile(self.model, backend="openxla", fullgraph=True, dynamic=False)
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         self.attribute_name = attribute_name
         self.max_length = max_length

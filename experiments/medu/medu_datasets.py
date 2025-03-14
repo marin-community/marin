@@ -15,9 +15,15 @@ dclm_baseline = ExecutorStep(
     override_output_path="raw/dclm",
 )
 
+# Serves as the default pretraining dataset used for MEDU experiments. We want roughly 400B tokens
+# that we can use for training because we know that the quality filter will filter about 10% of the top
+# tokens since 3+ is roughly top 10% most of the time.
 dclm_baseline_global_shard_2 = dclm_baseline.cd(
     "a3b142c/huggingface.co/datasets/mlfoundations/dclm-baseline-1.0/resolve/a3b142c/global-shard_02_of_10"
 )
+
+# Around 40B tokens which serves as the default seed annotation dataset for MEDU experiments. We take the top 4
+# files which amounts to about 350K examples.
 dclm_baseline_global_shard_1_local_shard_1 = dclm_baseline.cd(
     "a3b142c/huggingface.co/datasets/mlfoundations/dclm-baseline-1.0/resolve/a3b142c/global-shard_01_of_10/local-shard_0_of_10"
 )

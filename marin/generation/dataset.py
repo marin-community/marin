@@ -1,3 +1,4 @@
+import abc
 import json
 import logging
 import random
@@ -73,7 +74,12 @@ def convert_labeled_documents_to_scores(
 
                 if score != -1 and text != "":
                     output_file.write(json.dumps({"text": text, "label": score}) + "\n")
-                    score_distribution[score] += 1
+                elif score == -1:
+                    if "id" in example:
+                        logger.warning(f"Failed to parse score for example {example['id']}: {generated_text}")
+                    else:
+                        logger.warning(f"Failed to parse score for example: {generated_text}")
+                score_distribution[score] += 1
 
     return score_distribution
 
@@ -91,7 +97,7 @@ class DatasetOutputProcessor:
         self.score_values = score_values
         self.score_distribution = {v: 0 for v in score_values}
 
-    @staticmethod
+    @abc.abstractmethod
     def extract_score(text: str) -> int:
         raise NotImplementedError("Subclasses must implement this method")
 
@@ -134,8 +140,6 @@ class MeduDatasetOutputProcessor(DatasetOutputProcessor):
         if match:
             score_text = match.group(1)
             return MeduDatasetOutputProcessor.SCORE_OPTIONS_DICT[score_text]
-        else:
-            logger.warning(f"No match found for score in text: {text}")
 
         return -1
 
@@ -145,9 +149,6 @@ class DatasetSampler:
         self.input_path = input_path
         self.output_path = output_path
         self.label_weights = label_weights
-
-    def extract_score(self, text: str) -> int:
-        raise NotImplementedError("Subclasses must implement this method")
 
     def sample_dataset(self):
         responses = map_files_in_directory(

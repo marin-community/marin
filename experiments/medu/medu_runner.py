@@ -3,7 +3,7 @@ from dataclasses import dataclass
 
 from experiments.medu.defaults import (
     default_candidate_anneal,
-    default_control,
+    default_control_experiment,
     default_label,
     default_quality_filter_and_consolidate,
     default_quality_filter_model,
@@ -67,8 +67,7 @@ class MEDURunner:
             self.config.pretraining_data_path_name,
             self.config.experiment_name,
         )
-        self.control_model = default_control(
-            self.config.experiment_name,
+        self.control_model = default_control_experiment(
             training_tpu_type,
         )
         self.quality_ablation_model = default_candidate_anneal(

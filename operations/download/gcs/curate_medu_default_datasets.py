@@ -31,8 +31,9 @@ def transfer_files(config: TransferConfig) -> None:
     """
     Transfers the files from the input path to the output path.
     """
-    if config.input_path.endswith("/"):
-        config.input_path = config.input_path[:-1]
+    assert config.gcs_path.endswith(
+        "/"
+    ), "GCS path must not end with a slash. If this is a directory, please pass in without the trailing slash"
 
     print(f"Downloading {config.input_path} from GCS.")
     start_time: float = time.time()
