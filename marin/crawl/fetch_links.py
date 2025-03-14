@@ -140,7 +140,7 @@ def fetch_url(
       or we get a 4xx or 5xx response)
     """
     try:
-        with session.get(url, timeout=timeout, stream=True) as r:
+        with session.get(url, timeout=timeout, stream=True, verify=False) as r:
             r.raise_for_status()
 
             # Create a mutable Response object that we'll patch with truncated content.
