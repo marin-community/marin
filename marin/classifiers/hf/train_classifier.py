@@ -9,11 +9,9 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import datasets
-import evaluate
 import fsspec
 import numpy as np
 import torch
-from sklearn.metrics import classification_report, confusion_matrix
 from transformers import AutoModelForSequenceClassification, AutoTokenizer, Trainer, TrainingArguments, set_seed
 
 from marin.evaluation.utils import upload_to_gcs
@@ -76,6 +74,10 @@ class DataCollator:
 
 
 def compute_metrics(eval_pred):
+    # NOTE(chris): lazy import because main training cluster may not have these dependencies
+    import evaluate
+    from sklearn.metrics import classification_report, confusion_matrix
+
     precision_metric = evaluate.load("precision")
     recall_metric = evaluate.load("recall")
     f1_metric = evaluate.load("f1")

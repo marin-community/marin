@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from experiments.evals.resource_configs import TPU_V6E_8_STRICT_PACK, ResourceConfig
 from experiments.medu.defaults import (
@@ -35,7 +35,7 @@ class MEDURunnerConfig:
     pretraining_data_path_name: str = "medu-dclm-pretraining-subset"
 
     # How to schedule the TPUs (what hardware to use and how to pack them) specifically for labeling
-    labeler_resource_config: ResourceConfig = TPU_V6E_8_STRICT_PACK
+    labeler_resource_config: ResourceConfig = field(default_factory=lambda: TPU_V6E_8_STRICT_PACK)
 
     # What hardware to use for training the final model
     training_tpu_type: str = "TPU-v6e-128"

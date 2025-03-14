@@ -5,6 +5,7 @@ a Llama-3.1-8B-Instruct model. To try a different model or dataset,
 you can change the `model_name` or `huggingface_dataset_id` variables, respectively.
 """
 
+from experiments.evals.resource_configs import TPU_V6E_8_STRICT_PACK
 from experiments.models import get_model_local_path, llama_3_1_8b_instruct
 from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path, versioned
 from marin.generation.inference import TextGenerationInferenceConfig, run_inference
@@ -48,7 +49,7 @@ generations = ExecutorStep(
         tensor_parallel_size=tensor_parallel_size,
         prompt_column="problem",
         filetype="jsonl",
-        tpu_type="TPU-v6e-8",
+        resource_config=TPU_V6E_8_STRICT_PACK,
     ),
 )
 
