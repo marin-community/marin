@@ -25,15 +25,21 @@ logger = logging.getLogger("ray")
 
 @dataclass
 class CorpusContent:
+    # The content of the corpus.
     content: list[str] | str
-    content_type: Literal["str_list", "str", "filepath"]
+
+    # Type of corpus content:
+    #  1. str_list: The content is a list of strings. Usually a direct example of the corpus content.
+    #  2. filepath: The content is a filepath to a file that contains the corpus.
+    content_type: Literal["str_list", "filepath"]
+
+    # The column name of the prompt in the corpus. This can be "text" for Dolma datasets for example.
     prompt_column: str = "text"
 
 
 @dataclass
 class MEDUPipelineConfig:
     model_name: str
-    # TODO(chris): Add the ability to pass in a filepath of dev sets for more programmatic control.
     dev_sets: list[CorpusContent]
     input_path: str
     output_path: str
@@ -82,8 +88,7 @@ class MEDUPipeline:
         for dev_set in self.dev_sets:
             if dev_set.content_type == "str_list":
                 corpus = "\n\n".join(dev_set.content)
-            elif dev_set.content_type == "str":
-                corpus = dev_set.content + "\n\n"
+                corpus += "\n\n"
             elif dev_set.content_type == "filepath":
                 with fsspec.open(dev_set.content, "r", compression="infer") as f:
                     for line in f:
@@ -108,7 +113,6 @@ class MEDUPipeline:
         random.seed(42)
 
         # Shuffle the benchmark descriptions to ensure diversity in merging
-        random.seed(42)
         random.shuffle(self.generated_benchmark_descriptions)
         logger.info(f"Generated {len(self.generated_benchmark_descriptions)} benchmark descriptions")
         return self.generated_benchmark_descriptions
@@ -186,7 +190,7 @@ def write_final_benchmark_description_prompt(final_benchmark_description_prompt:
         f.write(final_benchmark_description_prompt)
 
 
-def run_benchmark_labeling_pipeline(config: MEDUPipelineConfig):
+def _run_benchmark_labeling_pipeline(config: MEDUPipelineConfig):
     scheduling_strategy = scheduling_strategy_fn(config.tensor_parallel_size)
     pipeline = MEDUPipeline.options(scheduling_strategy=scheduling_strategy).remote(
         config.model_name, config.dev_sets, config.tensor_parallel_size, config.engine_kwargs, config.generation_kwargs
@@ -207,8 +211,14 @@ def run_benchmark_labeling_pipeline(config: MEDUPipelineConfig):
 
 
 def run_medu_labeling_pipeline(config: MEDUPipelineConfig):
+    """Runs the pipeline that labels documents given some targeted corpus content.
+
+    This pipeline is split into two stages:
+    1. Generate a benchmark description prompt given some targeted corpus content.
+    2. Label the documents given the benchmark description prompt.
+    """
     if not fsspec_exists(get_final_benchmark_description_prompt_output_path(config.output_path)):
-        final_benchmark_description_prompt = run_benchmark_labeling_pipeline(config)
+        final_benchmark_description_prompt = _run_benchmark_labeling_pipeline(config)
     else:
         with fsspec.open(
             get_final_benchmark_description_prompt_output_path(config.output_path), "r", compression="infer"
@@ -221,6 +231,13 @@ def run_medu_labeling_pipeline(config: MEDUPipelineConfig):
 
 
 def run_medu_dataset_sampling_pipeline(config: DatasetOutputProcessorConfig):
+    """Runs the pipeline that converts the labeled documents into a dataset of sampled documents.
+
+    This pipeline is split into two stages:
+    1. Convert the labeled documents into a dataset of parsed scores.
+    2. Sample the dataset to get a final dataset of documents with key "text" and "label" corresponding
+    to the text and its respective score graded by the model.
+    """
     logger.info(f"Starting MEDU dataset sampling pipeline for {config.input_path}")
 
     convert_output_path = os.path.join(config.output_path, "converted")

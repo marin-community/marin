@@ -7,7 +7,7 @@ def scheduling_strategy_fn(tensor_parallel_size: int):
 
     # One bundle per tensor parallel worker
     pg = ray.util.placement_group(
-        [{"TPU": 1, "CPU": 1}] * tensor_parallel_size,
+        [{"TPU": 1, "CPU": 1}] * tensor_parallel_size + [{"TPU-v6e-8-head": 1}],
         strategy="PACK",  # STRICT_PACK means same node
     )
     return PlacementGroupSchedulingStrategy(pg, placement_group_capture_child_tasks=True)
