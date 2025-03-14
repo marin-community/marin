@@ -449,6 +449,16 @@ def get_shard_yield(
         examples_scores,
         strict=True,
     ):
+
+        passes_all_filters = (
+            example_url_filter_result is True
+            and example_langid_filter_result is True
+            and example_gopher_repetition_filter_result is True
+            and example_gopher_quality_filter_result is True
+            and example_c4_quality_filter_result is True
+            and example_score >= 3.0
+        )
+
         example_metadata = {
             "url": example["metadata"]["url"],
             "canonicalized_url": example["metadata"]["canonicalized_url"],
@@ -458,20 +468,14 @@ def get_shard_yield(
             "passed_gopher_quality_filter": True if example_gopher_quality_filter_result else False,
             "passed_c4_quality_filter": True if example_c4_quality_filter_result else False,
             "quality_classifier_score": example_score,
+            "passes_all_filters": passes_all_filters,
         }
         text_and_scores_record = deepcopy(example)
         # Add the entries from example_metadata to the text_and_scores_record
         for k, v in example_metadata.items():
             text_and_scores_record["metadata"][k] = v
 
-        if (
-            example_url_filter_result is True
-            and example_langid_filter_result is True
-            and example_gopher_repetition_filter_result is True
-            and example_gopher_quality_filter_result is True
-            and example_c4_quality_filter_result is True
-            and example_score >= 3.0
-        ):
+        if passes_all_filters:
             num_records_passing += 1
             passing_text_and_scores_output_records.append(text_and_scores_record)
         else:
