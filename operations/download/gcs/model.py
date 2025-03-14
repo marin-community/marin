@@ -16,8 +16,9 @@ def download_model_from_gcs(config: DownloadFromGCSConfig) -> None:
     """
     Downloads the folder at `gcs_path` to `destination_path`.
     """
-    if config.gcs_path.endswith("/"):
-        config.gcs_path = config.gcs_path[:-1]
+    assert config.gcs_path.endswith(
+        "/"
+    ), "GCS path must not end with a slash. If this is a directory, please pass in without the trailing slash"
 
     print(f"Downloading {config.gcs_path} from GCS.")
     start_time: float = time.time()

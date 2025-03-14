@@ -2,11 +2,12 @@ import os
 
 from transformers import AutoTokenizer
 
-from experiments.anneal_config import AnnealConfig, default_anneal
+from experiments.anneal_config import AnnealConfig
 from experiments.cooldown_quality import QualityAblationConfig, default_quality_ablation
 from experiments.dclm.tokenize_dclm import dclm_components_llama3
-from experiments.defaults import default_tokenize
+from experiments.defaults import default_anneal, default_tokenize
 from experiments.evals.resource_configs import ResourceConfig
+from experiments.llama import llama3_tokenizer
 from marin.classifiers.hf.launch_ray_training import LaunchConfig, launch_training_with_ray
 from marin.classifiers.hf.train_classifier import HFTrainingConfig
 from marin.core.runtime import TaskConfig
@@ -29,6 +30,17 @@ def default_label(
     targeted_documents: list[list[str] | str],
     experiment_name: str,
 ):
+    """Label a set of documents with an LLM given some targeted documents.
+
+    Inputs:
+        documents_to_be_labeled: Input path to documents to be labeled.
+        targeted_documents: A list of strings or filepaths of documents that is being targeted for labeling.
+        experiment_name: The name of the experiment.
+
+    Outputs:
+        An ExecutorStep that represents the labeled documents. Each document is .jsonl.gz file with
+        each row containing an additional key "generated_text" that contains the LLM's response.
+    """
     if isinstance(documents_to_be_labeled, ExecutorStep):
         documents_to_be_labeled = output_path_of(documents_to_be_labeled)
 
@@ -55,7 +67,17 @@ def default_label(
     )
 
 
-def default_quality_filter_model(labeled_documents: ExecutorStep, experiment_name: str, tpu_type: str = "TPU-v4-8"):
+def default_quality_filter_model(labeled_documents: ExecutorStep, experiment_name: str, tpu_type: str = "TPU-v6e-8"):
+    """Train a quality filter model based on the set of labeled documents.
+
+    Inputs:
+        labeled_documents: An ExecutorStep that represents the labeled documents.
+        experiment_name: The name of the experiment.
+        tpu_type: The type of TPU to use for training (defaults to v6e-8)
+
+    Outputs:
+        An ExecutorStep that represents the quality filter model.
+    """
     dataset = ExecutorStep(
         name=f"documents/medu-datasets/{experiment_name}",
         fn=run_medu_dataset_sampling_pipeline,
@@ -110,6 +132,18 @@ def default_quality_filter_model(labeled_documents: ExecutorStep, experiment_nam
 def default_quality_filter_and_consolidate(
     encoder_model: ExecutorStep | str, input_data_path: str | ExecutorStep, input_data_name: str, experiment_name: str
 ):
+    """Runs quality filtering and consolidation on an input dataset given the quality filter model.
+
+    Inputs:
+        encoder_model: The model to use for quality filtering.
+        input_data_path: The path to the input data, usually a large pretraining corpus to filter.
+        input_data_name: The name of the input data used for storage purposes.
+        experiment_name: The name of the experiment.
+
+    Outputs:
+        An ExecutorStep that represents the filtered documents.
+    """
+
     if isinstance(encoder_model, str):
         model_path = encoder_model
     elif isinstance(encoder_model, ExecutorStep):
@@ -173,10 +207,20 @@ def default_quality_filter_and_consolidate(
 
 
 def default_candidate_anneal(filtered_documents: ExecutorStep, tpu_type: str, experiment_name: str):
+    """Evaluates the quality of a set of candidate documents
+
+    Inputs:
+        filtered_documents: An ExecutorStep that represents the filtered documents.
+        tpu_type: The type of TPU to use for training.
+        experiment_name: The name of the experiment.
+
+    Outputs:
+        An ExecutorStep that the final model after annealing.
+    """
     candidate_tokenized = default_tokenize(
         name=f"medu-candidate-{experiment_name}",
-        input_path=output_path_of(filtered_documents),
-        output_path=this_output_path(),
+        dataset=output_path_of(filtered_documents),
+        tokenizer=llama3_tokenizer,
     )
 
     quality_ablation_model = default_quality_ablation(
@@ -187,17 +231,27 @@ def default_candidate_anneal(filtered_documents: ExecutorStep, tpu_type: str, ex
     return quality_ablation_model
 
 
-def default_control(
+def default_control_experiment(
     tpu_type: str,
 ):
+    """Anneals on a controled dataset of DCLM-baseline.
+
+    Inputs:
+        tpu_type: The type of TPU to use for training.
+        experiment_name: The name of the experiment.
+
+    Outputs:
+        An ExecutorStep that represents the control model after annealing.
+    """
     control_model = default_anneal(
-        AnnealConfig(
+        name="medu-control",
+        anneal_config=AnnealConfig(
             dataset_config=lm_mixture_data_config(
                 components={"dclm": dclm_components_llama3["dclm_baseline"]},
                 weights={"dclm": 1.0},
             ),
             tpu_type=tpu_type,
-        )
+        ),
     )
 
     return control_model

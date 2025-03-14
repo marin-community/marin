@@ -38,7 +38,7 @@ def stream_file_to_fsspec(cfg: DownloadConfig, hf_fs: HfFileSystem, file_path: s
     target_fs, _ = fsspec.core.url_to_fs(cfg.gcs_output_path)
 
     # Increase timeout for large files
-    timeout = 60  # Increase from default 10 seconds to 60 seconds
+    timeout = 600  # Increase from default 10 seconds to 60 seconds
 
     try:
         # Use the timeout parameter when opening the file

@@ -130,6 +130,8 @@ class MeduMMLUConfig:
     # TODO(chris): Use the proper imports form above medu_dclm_{annotation,pretraining}_subset
     pretraining_data_path: str = "gs://marin-us-east5/documents/medu-datasets/medu-dclm-annotation-subset-e12303"
     annotator_data_path: str = "gs://marin-us-east5/documents/medu-datasets/medu-dclm-annotation-subset-e12303"
+    # pretraining_data_path: str = medu_dclm_pretraining_subset
+    # annotator_data_path: str = medu_dclm_annotation_subset
 
 
 class MMLUMeduPipeline(MEDURunner):
