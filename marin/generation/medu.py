@@ -9,6 +9,7 @@ import fsspec
 import ray
 from transformers import AutoTokenizer
 
+from experiments.evals.resource_configs import TPU_V6E_8_STRICT_PACK, ResourceConfig
 from marin.generation.dataset import DatasetOutputProcessorConfig, DatasetSampler, MeduDatasetOutputProcessor
 from marin.generation.inference import TextGenerationInferenceConfig, run_inference
 from marin.generation.llm_generation import vLLMProvider
@@ -45,12 +46,12 @@ class MEDUPipelineConfig:
     output_path: str
     prompt_column: str = "text"
     filetype: str = "jsonl.gz"
-    tensor_parallel_size: int = 1
     engine_kwargs: dict[str, Any] | None = None
     generation_kwargs: dict[str, Any] | None = None
     num_instances: tuple[int, int] = (1, 4)
     save_templated_prompt: bool = False
     output_filetype_override: str = "jsonl.gz"
+    resource_config: ResourceConfig = TPU_V6E_8_STRICT_PACK
 
 
 @ray.remote(max_restarts=-1)  # NOTE(chris): We use Spot TPUs, so we need to be able to restart the pipeline if it fails.
@@ -162,7 +163,7 @@ class MEDUPipeline:
 
 
 # Stage 3: Label documents
-def label_documents(config: MEDUPipelineConfig, final_benchmark_description_prompt: str) -> list[str]:
+def _label_documents(config: MEDUPipelineConfig, final_benchmark_description_prompt: str) -> list[str]:
     text_generation_config = TextGenerationInferenceConfig(
         input_path=config.input_path,
         output_path=config.output_path,
@@ -171,29 +172,34 @@ def label_documents(config: MEDUPipelineConfig, final_benchmark_description_prom
         generation_kwargs=config.generation_kwargs,
         template=final_benchmark_description_prompt,
         num_instances=config.num_instances,
-        tensor_parallel_size=config.tensor_parallel_size,
+        tensor_parallel_size=config.resource_config.num_tpu,
         save_templated_prompt=config.save_templated_prompt,
         prompt_column=config.prompt_column,
         filetype=config.filetype,
         output_filetype_override=config.output_filetype_override,
+        strategy=config.resource_config.strategy,
     )
     inference_future = run_inference.remote(text_generation_config)
     return inference_future
 
 
-def get_final_benchmark_description_prompt_output_path(output_path: str):
+def _get_final_benchmark_description_prompt_output_path(output_path: str):
     return os.path.join(output_path, "final_benchmark_description_prompt.txt")
 
 
-def write_final_benchmark_description_prompt(final_benchmark_description_prompt: str, output_path: str):
-    with fsspec.open(get_final_benchmark_description_prompt_output_path(output_path), "w", compression="infer") as f:
+def _write_final_benchmark_description_prompt(final_benchmark_description_prompt: str, output_path: str):
+    with fsspec.open(_get_final_benchmark_description_prompt_output_path(output_path), "w", compression="infer") as f:
         f.write(final_benchmark_description_prompt)
 
 
 def _run_benchmark_labeling_pipeline(config: MEDUPipelineConfig):
-    scheduling_strategy = scheduling_strategy_fn(config.tensor_parallel_size)
+    scheduling_strategy = scheduling_strategy_fn(config.resource_config.num_tpu, config.resource_config.strategy)
     pipeline = MEDUPipeline.options(scheduling_strategy=scheduling_strategy).remote(
-        config.model_name, config.dev_sets, config.tensor_parallel_size, config.engine_kwargs, config.generation_kwargs
+        config.model_name,
+        config.dev_sets,
+        config.resource_config.num_tpu,
+        config.engine_kwargs,
+        config.generation_kwargs,
     )
 
     futures = []
@@ -205,7 +211,7 @@ def _run_benchmark_labeling_pipeline(config: MEDUPipelineConfig):
     logger.info(f"Starting document labeling pipeline for {config.input_path}")
     final_benchmark_description_prompt = ray.get(pipeline._get_final_benchmark_description_prompt.remote())
 
-    write_final_benchmark_description_prompt(final_benchmark_description_prompt, config.output_path)
+    _write_final_benchmark_description_prompt(final_benchmark_description_prompt, config.output_path)
 
     return final_benchmark_description_prompt
 
@@ -217,15 +223,15 @@ def run_medu_labeling_pipeline(config: MEDUPipelineConfig):
     1. Generate a benchmark description prompt given some targeted corpus content.
     2. Label the documents given the benchmark description prompt.
     """
-    if not fsspec_exists(get_final_benchmark_description_prompt_output_path(config.output_path)):
+    if not fsspec_exists(_get_final_benchmark_description_prompt_output_path(config.output_path)):
         final_benchmark_description_prompt = _run_benchmark_labeling_pipeline(config)
     else:
         with fsspec.open(
-            get_final_benchmark_description_prompt_output_path(config.output_path), "r", compression="infer"
+            _get_final_benchmark_description_prompt_output_path(config.output_path), "r", compression="infer"
         ) as f:
             final_benchmark_description_prompt = str(f.read())
 
-    label_documents_future = label_documents(config, final_benchmark_description_prompt)
+    label_documents_future = _label_documents(config, final_benchmark_description_prompt)
     ray.get(label_documents_future)
     logger.info(f"Finished document labeling pipeline for {config.output_path}")
 
@@ -244,8 +250,10 @@ def run_medu_dataset_sampling_pipeline(config: DatasetOutputProcessorConfig):
     processor = MeduDatasetOutputProcessor(config.input_path, convert_output_path)
     dataset_score_distribution = processor.convert_dataset()
     logger.info(f"Dataset score distribution: {dataset_score_distribution}")
+    if -1 in dataset_score_distribution:
+        logger.warning(f"Found {dataset_score_distribution[-1]} examples with score -1. These will not be sampled.")
     # Keep all labels equally weighted
-    label_weights = {score: 1 for score in dataset_score_distribution.keys()}
+    label_weights = {score: 1 for score in dataset_score_distribution.keys() if score != -1}
     sampler_output_path = os.path.join(config.output_path, "sampled")
     sampler = DatasetSampler(convert_output_path, sampler_output_path, label_weights)
     sampler.sample_dataset()

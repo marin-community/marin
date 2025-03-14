@@ -1,6 +1,6 @@
-import os
 from dataclasses import dataclass
 
+from experiments.evals.resource_configs import TPU_V6E_8_STRICT_PACK, ResourceConfig
 from experiments.medu.defaults import (
     default_candidate_anneal,
     default_control_experiment,
@@ -34,6 +34,12 @@ class MEDURunnerConfig:
     # Name of the pretraining data path to group the output by in a single directory
     pretraining_data_path_name: str = "medu-dclm-pretraining-subset"
 
+    # How to schedule the TPUs (what hardware to use and how to pack them) specifically for labeling
+    labeler_resource_config: ResourceConfig = TPU_V6E_8_STRICT_PACK
+
+    # What hardware to use for training the final model
+    training_tpu_type: str = "TPU-v6e-128"
+
 
 REGION_TO_TPU_TYPES = {
     "marin-us-east5": {
@@ -50,16 +56,16 @@ REGION_TO_TPU_TYPES = {
 class MEDURunner:
     def __init__(self, config: MEDURunnerConfig):
         self.config = config
-        region = os.getenv("BUCKET")
-        labeler_tpu_type = REGION_TO_TPU_TYPES[region]["labeler_tpu_type"]
-        training_tpu_type = REGION_TO_TPU_TYPES[region]["training_tpu_type"]
 
         # TODO(chris): In a later PR, support other TPU types
         self.labeled_documents = default_label(
-            self.config.annotator_data_path, self.config.corpus_content_paths, self.config.experiment_name
+            self.config.annotator_data_path,
+            self.config.corpus_content_paths,
+            self.config.experiment_name,
+            self.config.labeler_resource_config,
         )
         self.encoder_model = default_quality_filter_model(
-            self.labeled_documents, self.config.experiment_name, labeler_tpu_type
+            self.labeled_documents, self.config.experiment_name, self.config.labeler_resource_config
         )
         self.filtered_documents = default_quality_filter_and_consolidate(
             self.encoder_model,
@@ -68,11 +74,11 @@ class MEDURunner:
             self.config.experiment_name,
         )
         self.control_model = default_control_experiment(
-            training_tpu_type,
+            self.config.training_tpu_type,
         )
         self.quality_ablation_model = default_candidate_anneal(
             self.filtered_documents,
-            training_tpu_type,
+            self.config.training_tpu_type,
             self.config.experiment_name,
         )
 

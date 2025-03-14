@@ -6,6 +6,7 @@ import ray
 from ray.data import DataContext
 from ray.data.datasource import FilenameProvider
 
+from experiments.evals.resource_configs import TPU_V6E_8_STRICT_PACK, ResourceConfig
 from marin.generation.pipeline import vLLMTextGeneration
 from marin.generation.ray_utils import get_ray_remote_args_scheduling_strategy_fn
 from marin.utils import fsspec_glob
@@ -41,7 +42,7 @@ class TextGenerationInferenceConfig:
     prompt_column: str = "text"
 
     # Hardware specific
-    tpu_type: str = "TPU-v6e-8"
+    resource_config: ResourceConfig = TPU_V6E_8_STRICT_PACK
 
 
 class OneToOneFilenameProvider(FilenameProvider):
@@ -81,9 +82,13 @@ def set_ray_data_config(config: TextGenerationInferenceConfig):
 
 def ray_resources_kwarg(config: TextGenerationInferenceConfig):
     if config.tensor_parallel_size == 1:
-        return {"resources": {"TPU": 1, f"{config.tpu_type}-head": 1}}
+        return {"resources": {"TPU": 1, f"{config.resource_config.tpu_type}-head": 1}}
     else:
-        return {"ray_remote_args_fn": get_ray_remote_args_scheduling_strategy_fn(config.tensor_parallel_size)}
+        return {
+            "ray_remote_args_fn": get_ray_remote_args_scheduling_strategy_fn(
+                config.resource_config.num_tpu, config.resource_config.strategy
+            )
+        }
 
 
 def get_ray_data_read_kwargs(config: TextGenerationInferenceConfig):

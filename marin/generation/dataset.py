@@ -63,6 +63,19 @@ def sample_file(input_file_path: str, output_file_path: str, label_weights: dict
 def convert_labeled_documents_to_scores(
     input_file_path: str, output_file_path: str, score_values: list[int], extract_score_fn: Callable[[str], int]
 ):
+    """Converts labeled documents into parsed out scores.
+
+    Inputs:
+        input_file_path: The path to the input file.
+        output_file_path: The path to the output file.
+        score_values: The list of score values (the possible values that the score can take on).
+        extract_score_fn: The function to extract the score from the generated text usually through regex parsing.
+
+    Outputs:
+        score_distribution: A dictionary mapping each score to the number of examples that were assigned that score.
+
+    Writes out a training file for the quality filter model with "text" and "label" columns.
+    """
     score_distribution = {k: 0 for k in score_values}
     with fsspec.open(input_file_path, "r", compression="gzip") as input_file:
         with fsspec.open(output_file_path, "w", compression="gzip") as output_file:

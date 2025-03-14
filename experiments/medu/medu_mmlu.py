@@ -2,7 +2,7 @@ import os
 from dataclasses import dataclass
 
 from experiments.medu.medu_runner import MEDURunner, MEDURunnerConfig
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
+from marin.execution.executor import ExecutorStep, this_output_path, versioned
 from marin.generation.medu import CorpusContent
 from operations.download.huggingface.download import DownloadConfig
 from operations.download.huggingface.download_hf import download_hf
@@ -151,8 +151,6 @@ class MMLUMeduPipeline(MEDURunner):
 
     def _create_corpus_contents(self):
         # Download the MMLU dataset
-        executor_main([mmlu_subject_eval])
-
         corpus_contents = []
         for subject in self.config.subset_names:
             filepath = os.path.join(

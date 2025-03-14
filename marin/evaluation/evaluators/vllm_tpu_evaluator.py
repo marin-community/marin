@@ -147,7 +147,7 @@ class VllmTpuEvaluator(Evaluator, ABC):
         """
 
         @ray.remote(
-            scheduling_strategy=scheduling_strategy_fn(resource_config.num_tpu),
+            scheduling_strategy=scheduling_strategy_fn(resource_config.num_tpu, resource_config.strategy),
             runtime_env=self.get_runtime_env(),
         )
         @remove_tpu_lockfile_on_exit
