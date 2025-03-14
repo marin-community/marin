@@ -2,7 +2,7 @@ import json
 import logging
 import os
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Literal
 
 import fsspec
@@ -51,7 +51,7 @@ class MEDUPipelineConfig:
     num_instances: tuple[int, int] = (1, 4)
     save_templated_prompt: bool = False
     output_filetype_override: str = "jsonl.gz"
-    resource_config: ResourceConfig = TPU_V6E_8_STRICT_PACK
+    resource_config: ResourceConfig = field(default_factory=lambda: TPU_V6E_8_STRICT_PACK)
 
 
 @ray.remote(max_restarts=-1)  # NOTE(chris): We use Spot TPUs, so we need to be able to restart the pipeline if it fails.

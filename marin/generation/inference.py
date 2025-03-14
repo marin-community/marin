@@ -1,5 +1,5 @@
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import ray
@@ -42,7 +42,7 @@ class TextGenerationInferenceConfig:
     prompt_column: str = "text"
 
     # Hardware specific
-    resource_config: ResourceConfig = TPU_V6E_8_STRICT_PACK
+    resource_config: ResourceConfig = field(default_factory=lambda: TPU_V6E_8_STRICT_PACK)
 
 
 class OneToOneFilenameProvider(FilenameProvider):

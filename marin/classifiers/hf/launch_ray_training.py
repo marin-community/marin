@@ -1,10 +1,18 @@
+import logging
 from dataclasses import dataclass
 
 import ray
-import torch_xla.distributed.xla_multiprocessing as xmp
 
 from experiments.evals.resource_configs import ResourceConfig
 from marin.classifiers.hf.train_classifier import HFTrainingConfig, load_dataset, train_classifier
+
+logger = logging.getLogger(__name__)
+
+try:
+    import torch_xla.distributed.xla_multiprocessing as xmp
+except ImportError:
+    xmp = None
+    logger.warning("torch_xla is not installed, so we will not be able to train the quality filter.")
 
 
 @dataclass
@@ -14,6 +22,7 @@ class LaunchConfig:
 
 
 def launch_training_with_ray(launch_config: LaunchConfig):
+
     # NOTE(chris): Important to set the PJRT_DEVICE or else sometimes it won't launch correctly because it
     # does not recognize that there is a TPU device available. Also, must use the TPU-v6e-8-head or else it
     # may not recognize the topology of the device correctly.
