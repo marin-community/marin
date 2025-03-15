@@ -170,4 +170,4 @@ mmlu_humanities_pipeline = MMLUMeduPipeline(MeduMMLUConfig(subset_names=humaniti
 mmlu_other_pipeline = MMLUMeduPipeline(MeduMMLUConfig(subset_names=other, experiment_name="mmlu-other"))
 
 if __name__ == "__main__":
-    mmlu_humanities_pipeline.run_all_steps()
+    mmlu_humanities_pipeline.run_eval_cluster_steps()
