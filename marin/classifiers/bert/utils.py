@@ -7,9 +7,7 @@ Utility functions for training BERT models.
 import json
 
 import fsspec
-import torch
 from torch.utils.data import Dataset
-from transformers import BertTokenizer
 
 
 def format_example(data: dict) -> str:
@@ -27,19 +25,14 @@ class BertDataset(Dataset):
     Dataset subclass for BERT quality classifier training data.
     """
 
-    def __init__(self, dataset_path: str, tokenizer: BertTokenizer, max_len: int = 128, labels: list[str] | None = None):
+    def __init__(self, dataset_path: str, labels: list[str] | None = None):
         """
         __init__ method for BertDataset.
 
         Args:
             dataset_path (str): Path to the dataset file.
-            tokenizer (BertTokenizer): Tokenizer for BERT model.
-            max_len (int): Maximum length (in tokens) of sequences in dataset.
             labels (Optional[list]): List of possible labels.
         """
-        self.tokenizer = tokenizer
-        self.max_len = max_len
-
         labels = [] if labels is None else labels
         self.label_set = set(labels)
 
@@ -68,23 +61,7 @@ class BertDataset(Dataset):
         return len(self.texts)
 
     def __getitem__(self, idx: int):
-        text = self.texts[idx]
-        label = self.labels[idx]
-
-        # TODO: make some of these args configurable
-        encoding = self.tokenizer.encode_plus(
-            text,
-            add_special_tokens=True,
-            max_length=self.max_len,
-            return_token_type_ids=False,
-            padding="max_length",
-            truncation=True,
-            return_attention_mask=True,
-            return_tensors="pt",
-        )
-
         return {
-            "input_ids": encoding["input_ids"].flatten(),
-            "attention_mask": encoding["attention_mask"].flatten(),
-            "labels": torch.tensor(self.label_index[label], dtype=torch.long),
+            "text": self.texts[idx],
+            "label": self.label_index[self.labels[idx]],
         }
