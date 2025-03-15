@@ -279,7 +279,7 @@ def sample_outlinks(input_pattern: str, num_to_sample: int, shard_size: int, out
 
     sharded_examples = shard_urls_by_domain(
         extracted_deduplicated_examples,
-        shard_count=int(math.ceil((num_to_sample - start_from) / shard_size)),
+        shard_count=math.ceil((num_to_sample - start_from) / shard_size),
         block_size=500,
     )
     # Write out extracted examples as sharded parquet

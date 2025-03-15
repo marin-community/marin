@@ -102,6 +102,9 @@ def download_nemotron_cc(cfg: NemotronIngressConfig):
                 continue
 
         output_file_path = os.path.join(cfg.output_path, file).replace("jsonl.zstd", "jsonl.gz")
+        if fsspec_exists(output_file_path):
+            logger.warning(f"Output file {output_file_path} already exists. Skipping download.")
+            continue
         logger.info(f"Starting Processing for the Nemotron CC file: {file} in output_path: {cfg.output_path}")
 
         result_refs.append(download_single_nemotron_path.remote(file, output_file_path, cfg.chunk_size))
