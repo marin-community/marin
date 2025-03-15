@@ -105,6 +105,7 @@ def lm_varying_mixture_data_config(
     shuffle: bool | int = True,
     missing_weights_are_validation: bool = True,
     include_raw_paths: bool = True,
+    mixture_block_size: int | None = None,
 ) -> LMMixtureDatasetConfig:
     """
     Creates a training config from a mixture of datasources with varying weights.
@@ -157,6 +158,7 @@ def lm_varying_mixture_data_config(
         tokenizer=tokenizer,
         cache_dir=None,
         shuffle=shuffle,
+        mixture_block_size=mixture_block_size or 2048,
     )
 
 
