@@ -16,7 +16,7 @@ from warcio import ArchiveIterator
 from marin.crawl.common.utils import decode_html
 from marin.utils import fsspec_exists, fsspec_glob
 from marin.core.runtime import cached_or_construct_output
-from marin.crawl.common.schemas import DolmaFormattedRecord, ParquetConfig
+from marin.crawl.common.schemas import DolmaFormattedRecord, HtmlExtractionConfig
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -236,7 +236,7 @@ def get_shards_to_process(shard_path: str):
 
 
 @draccus.wrap()
-def process_parquet(cfg: ParquetConfig):
+def process_parquet(cfg: HtmlExtractionConfig):
     files = fsspec_glob(os.path.join(cfg.input_path, "*.parquet"))
     if cfg.max_files:
         files = files[:cfg.max_files]
