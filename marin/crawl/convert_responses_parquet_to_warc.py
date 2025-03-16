@@ -77,8 +77,8 @@ def get_reason_phrase(status_code: int) -> str:
         return "Unknown Status Code"
 
 
-@cached_or_construct_output(success_suffix="SUCCESS")
 @ray.remote(memory=128 * 1024 * 1024 * 1024, num_cpus=16)
+@cached_or_construct_output(success_suffix="SUCCESS")
 def convert_parquet_to_warc(input_path: str, output_path: str):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     with fsspec.open(input_path) as f:
