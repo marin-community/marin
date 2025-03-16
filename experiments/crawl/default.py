@@ -16,8 +16,13 @@ from marin.crawl.minhash.deduplicate_against_index import (
 )
 from marin.execution.executor import ExecutorStep, output_path_of, this_output_path
 
-BLOOM_FILTER_2013_2018 = "gs://marin-us-central2/gcsfuse_mount/nfliu/deduplicate_outlinks/cc-urls-partitioned_2013_2018.bloom"
-BLOOM_FILTER_2019_2024 = "gs://marin-us-central2/gcsfuse_mount/nfliu/deduplicate_outlinks/cc-urls-partitioned_2019_2024.bloom"
+BLOOM_FILTER_2013_2018 = (
+    "gs://marin-us-central2/gcsfuse_mount/nfliu/deduplicate_outlinks/cc-urls-partitioned_2013_2018.bloom"
+)
+BLOOM_FILTER_2019_2024 = (
+    "gs://marin-us-central2/gcsfuse_mount/nfliu/deduplicate_outlinks/cc-urls-partitioned_2019_2024.bloom"
+)
+
 
 def default_crawl(
     config: HtmlExtractionConfig,
@@ -92,7 +97,7 @@ def default_crawl(
             statistics_output_path=output_path_of(links_fetched_warc, "yield_statistics.json.gz"),
             urls_and_scores_output_directory=this_output_path(f"urls_and_scores/{config.source_name}-cc-deduplicated"),
         ),
-        override_output_path=f"crawl/{config.source_name}"
+        override_output_path=f"crawl/{config.source_name}",
     )
 
     links_minhash_deduplicated = ExecutorStep(
@@ -100,12 +105,20 @@ def default_crawl(
         fn=minhash_deduplicate_against_index_driver,
         config=MinhashDeduplicateAgainstIndexConfig(
             index_path=this_output_path(f"{config.source_name}_minhash_index/index"),
-            input_patterns=[output_path_of(links_fetched_warc_yield, f"{config.source_name}-cc-deduplicated/*_text_and_scores.passing.parquet")],
+            input_patterns=[
+                output_path_of(
+                    links_fetched_warc_yield, f"{config.source_name}-cc-deduplicated/*_text_and_scores.passing.parquet"
+                )
+            ],
             parquets_paths_file=this_output_path(f"{config.source_name}-cc-deduplicated-passing_paths.txt"),
-            minhash_base_path=this_output_path(f"minhash/{config.source_name}_cc_deduplicated_passing_minhash_against_{config.source_name}"),
-            minhash_logs_path=this_output_path(f"minhash/{config.source_name}_cc_deduplicated_passing_minhash_against_{config.source_name}_logs"),
+            minhash_base_path=this_output_path(
+                f"minhash/{config.source_name}_cc_deduplicated_passing_minhash_against_{config.source_name}"
+            ),
+            minhash_logs_path=this_output_path(
+                f"minhash/{config.source_name}_cc_deduplicated_passing_minhash_against_{config.source_name}_logs"
+            ),
         ),
-        override_output_path=f"crawl/{config.source_name}"
+        override_output_path=f"crawl/{config.source_name}",
     )
 
     return [
@@ -116,5 +129,5 @@ def default_crawl(
         links_fetched_parquet,
         links_fetched_warc,
         links_fetched_warc_yield,
-        links_minhash_deduplicated
+        links_minhash_deduplicated,
     ]
