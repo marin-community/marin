@@ -130,7 +130,7 @@ def get_shard_indices_to_process(urls_input_directory: str) -> list[int]:
 
 
 @draccus.wrap()
-def main(cfg: ConvertResponsesToWARCConfig):
+def convert_shards_to_warc(cfg: ConvertResponsesToWARCConfig):
     shard_indices_to_process = ray.get(get_shard_indices_to_process.remote(cfg.input_directory))
     num_shards_to_process = len(shard_indices_to_process)
     logger.info(f"Found {num_shards_to_process} shards to process")
@@ -145,4 +145,4 @@ def main(cfg: ConvertResponsesToWARCConfig):
 
 
 if __name__ == "__main__":
-    main()
+    convert_shards_to_warc()

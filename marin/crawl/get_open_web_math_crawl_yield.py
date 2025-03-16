@@ -60,13 +60,13 @@ import draccus
 import fsspec
 import kenlm
 import pandas as pd
+from marin.crawl.common.utils import decode_html
 import pyarrow as pa
 import pyarrow.parquet as pq
 import ray
 import w3lib.url
 from filelock import FileLock
 from resiliparse.extract.html2text import extract_plain_text
-from resiliparse.parse.encoding import bytes_to_str, detect_encoding
 from resiliparse.parse.html import HTMLTree
 from tqdm_loggable.auto import tqdm
 from warcio import ArchiveIterator
@@ -238,24 +238,6 @@ def score_text(text, score_model):
     else:
         prob = pred[1][1]
     return prob
-
-
-def decode_html(html: bytes) -> str | None:
-    """
-    Given HTML (bytes), decode it into a string if possible. First try with
-    utf-8. If that doesn't work, try to detect the encoding.
-    """
-    try:
-        html = bytes_to_str(html, "utf-8")
-    except Exception:
-        encoding = detect_encoding(html)
-        if encoding is None or encoding == "utf-8":
-            return
-        try:
-            html = bytes_to_str(html, encoding)
-        except Exception:
-            return
-    return html
 
 
 def contains_math_prefilter(data, score_model):
@@ -513,7 +495,7 @@ def get_shard_indices_to_process(urls_input_directory: str) -> list[int]:
 
 
 @draccus.wrap()
-def main(cfg: GetCrawlYieldConfig):
+def filter_and_yield(cfg: GetCrawlYieldConfig):
     shard_indices_to_process = ray.get(get_shard_indices_to_process.remote(cfg.urls_input_directory))
     random.shuffle(shard_indices_to_process)
 
@@ -582,4 +564,4 @@ def main(cfg: GetCrawlYieldConfig):
 
 
 if __name__ == "__main__":
-    main()
+    filter_and_yield()
