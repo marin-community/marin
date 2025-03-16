@@ -13,14 +13,14 @@ vllm_template_path = os.path.join(this_path, "marin-vllm-template.yaml")
 
 DOCKER_TAGS = {
     "us-central2": "4a47ffc0",
-    "big-run": "6da1c9ed",
+    "big-run": "89b461b3",
     "us-west4": "89b461b3",
     "europe-west4": "89b461b3",
-    "us-east1": "b63a1e90",
-    "us-east5": "6da1c9ed",
+    "us-east1": "89b461b3",
+    "us-east5": "89b461b3",
     # NB: different naming convention because we have two zones in europe-west4
-    "europe-west4-a": "6da1c9ed",
-    "asia-northeast1": "6da1c9ed",
+    "europe-west4-a": "89b461b3",
+    "asia-northeast1": "89b461b3",
     "marin-us-east5-b-vllm": "296d2ef0",
 }
 
