@@ -189,7 +189,7 @@ python marin/run/ray_run.py \
 ```
 
 ```
-Total URLs: 10000000
+Total URLs: 10,000,000
 Total URLs fetched: 5,600,465
 Total URLs passing: 381,453
 ```
@@ -297,9 +297,9 @@ python marin/run/ray_run.py \
 Results:
 
 ```
-Total URLs: 10000000
-Total URLs fetched: 4338570
-Total URLs passing: 839650
+Total URLs: 10,000,000
+Total URLs fetched: 4,338,570
+Total URLs passing: 839,541
 ```
 
 4. Count the number of tokens in the fetched pages that pass the filtering
@@ -316,8 +316,8 @@ python marin/run/ray_run.py \
 Results:
 
 ```
-Total number of tokens: 3,027,494,680
-Total number of documents: 839,650
+Total number of tokens: 3,028,988,231
+Total number of documents: 839,541
 ```
 
 5. Take the fetched pages that pass the filtering pipeline and run MinHash
@@ -355,8 +355,8 @@ python marin/run/ray_run.py \
 Results:
 
 ```
-Total number of tokens: 706,833,188
-Total number of documents: 240,784
+Total number of tokens: 708,110,870
+Total number of documents: 240,480
 ```
 
 ### fineweb-edu-10M-cc-deduplicated
@@ -518,7 +518,7 @@ Results:
 ```
 Total URLs: 10,000,000
 Total URLs fetched: 3,344,030
-Total URLs passing: 563,213
+Total URLs passing: 563,192
 ```
 
 4. Count the number of tokens in the fetched pages that pass the filtering
@@ -535,8 +535,8 @@ python marin/run/ray_run.py \
 Results:
 
 ```
-Total number of tokens: 2,634,194,474
-Total number of documents: 563,213
+Total number of tokens: 2,634,395,715
+Total number of documents: 563,192
 ```
 
 5. Take the fetched pages that pass the filtering pipeline and run MinHash
@@ -575,6 +575,6 @@ python marin/run/ray_run.py \
 Results:
 
 ```
-Total number of tokens: 574,590,766
-Total number of documents: 171,665
+Total number of tokens: 574,916,478
+Total number of documents: 171,516
 ```
