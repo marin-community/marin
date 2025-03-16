@@ -1,44 +1,26 @@
 import os
-from marin.crawl.common.schemas import DolmaFormattedRecord, ParquetConfig
 import ray
 import json
+import random
 import fsspec
 import draccus
 import logging
 import hashlib
 import pandas as pd
 
-from typing import Any, Callable
-from random import random
 from datetime import datetime
-from warcio import ArchiveIterator
 from dataclasses import asdict
-from resiliparse.parse.encoding import bytes_to_str, detect_encoding
+from typing import Any, Callable
+from warcio import ArchiveIterator
 
+from marin.crawl.common.utils import decode_html
 from marin.utils import fsspec_exists, fsspec_glob
 from marin.core.runtime import cached_or_construct_output
+from marin.crawl.common.schemas import DolmaFormattedRecord, ParquetConfig
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
-
-
-def decode_html(html: bytes) -> str | None:
-    """
-    Given HTML (bytes), decode it into a string if possible. First try with
-    utf-8. If that doesn't work, try to detect the encoding.
-    """
-    try:
-        html = bytes_to_str(html, "ut  f-8")
-    except Exception:
-        encoding = detect_encoding(html)
-        if encoding is None or encoding == "utf-8":
-            return
-        try:
-            html = bytes_to_str(html, encoding)
-        except Exception:
-            return
-    return html
 
 
 @ray.remote(memory=4 * 1024 * 1024 * 1024)  # 4 GB
@@ -84,8 +66,8 @@ def process_one_shard(
         "s3",
         anon=False,
         default_block_size=100 * 2**20,
-        key=os.environ["AWS_ACCESS_KEY_ID"],
-        secret=os.environ["AWS_SECRET_ACCESS_KEY"],
+        key=os.environ["AWS_ACCESS_KEY"],
+        secret=os.environ["AWS_SECRET_KEY"],
     )
     s3_fs.retries = 10
 
@@ -124,7 +106,7 @@ def process_one_shard(
                 continue
 
             if "id" not in out:
-                out["id"] = hashlib.md5((str(out[i]) for i in columns).encode()).hexdigest()
+                out["id"] = hashlib.md5("".join(str(out[i]) for i in columns).encode()).hexdigest()
 
             out_dolma = DolmaFormattedRecord(
                 id=out["id"],
@@ -201,7 +183,9 @@ def group_by_warc(
     )
 
     if warc_path_extractor:
+        print(f"Extracting WARC path from metadata")
         df[file_path_column] = df["metadata"].apply(warc_path_extractor)
+        columns = columns + [file_path_column]
     
     grouped = df.groupby(file_path_column)
 
@@ -256,10 +240,12 @@ def process_parquet(cfg: ParquetConfig):
     files = fsspec_glob(os.path.join(cfg.input_path, "*.parquet"))
     if cfg.max_files:
         files = files[:cfg.max_files]
+        print(f"Processing {len(files)} files")
 
     # Group examples by their source WARC
     groupby_ref = group_by_warc.remote(files, cfg.output_path, cfg.columns, cfg.warc_path_extractor, cfg.url_column, cfg.file_path_column)
     ray.get(groupby_ref)
+
 
     shard_indices_to_process_ref = get_shards_to_process.remote(cfg.output_path)
     shard_indices_to_process = ray.get(shard_indices_to_process_ref)
@@ -274,15 +260,19 @@ def process_parquet(cfg: ParquetConfig):
     num_shards_submitted = 0
     unfinished = []
 
+    columns = cfg.columns
+    if cfg.warc_path_extractor:
+        columns = cfg.columns + [cfg.file_path_column]
+
     def submit_shard_task(shard_index):
         """Submit a shard processing task and log progress every 1000 shards."""
         nonlocal num_shards_submitted
         # shard_path_to_process is of form gs://<output_path>/0_warc_examples.parquet
         shard_path = os.path.join(cfg.output_path, f"{shard_index}_warc_examples.parquet")
         # shard_output_path is of form gs://<output_path>/0.jsonl.gz
-        shard_output_path = shard_path.replace("_warc_examples.parquet", ".jsonl.gz")
+        shard_output_path = os.path.join(cfg.output_path, f"{cfg.source_name}_{shard_index}.jsonl.gz")
 
-        unfinished.append(process_one_shard.remote(shard_path, shard_output_path, cfg.source_name, cfg.columns, cfg.s3_url_modifier, cfg.url_column, cfg.file_path_column))
+        unfinished.append(process_one_shard.remote(shard_path, shard_output_path, cfg.source_name, columns, cfg.s3_url_modifier, cfg.url_column, cfg.file_path_column))
         num_shards_submitted += 1
         if num_shards_submitted % 1000 == 0:
             logger.info(
