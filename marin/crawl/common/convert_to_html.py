@@ -113,11 +113,7 @@ def process_one_shard(
                 source=source_name,
                 format="html",
                 html=out["html"],
-                metadata={
-                    key: str(out[key])
-                    for key in out.keys()
-                    if key in columns
-                },
+                metadata={key: str(out[key]) for key in out.keys() if key in columns},
             )
 
             print(json.dumps(asdict(out_dolma)), file=f)
@@ -157,7 +153,7 @@ def group_by_warc(
     columns: list[str],
     warc_path_extractor: Callable[[dict[str, Any]], str] | None = None,
     url_column: str = "url",
-    file_path_column: str = "file_path"
+    file_path_column: str = "file_path",
 ):
     """
     Given parquet files, group the examples by their source WARC.
@@ -168,7 +164,7 @@ def group_by_warc(
                        grouped by their source WARC.
     columns (list[str]): Columns to read from the parquet files
     warc_path_extractor (Callable[[dict[str, Any]], str] | None): Function to extract WARC path from metadata.
-                                                               If None, assumes metadata is a JSON string with warc_path field.
+                        If None, assumes metadata is a JSON string with warc_path field.
     """
     success_file_path = os.path.join(output_path, "_examples_groupby_warc_success")
     if fsspec_exists(success_file_path):
@@ -178,14 +174,12 @@ def group_by_warc(
     logger.info(f"Grouping examples at {input_paths} by their source WARC")
     datetime_start = datetime.utcnow()
 
-    df = pd.concat(
-        [pd.read_parquet(file, columns=columns) for file in input_paths], ignore_index=True
-    )
+    df = pd.concat([pd.read_parquet(file, columns=columns) for file in input_paths], ignore_index=True)
 
     if warc_path_extractor:
         print("Extracting WARC path from metadata")
         df[file_path_column] = df["metadata"].apply(warc_path_extractor)
-        columns = columns + [file_path_column]
+        columns.append(file_path_column)
 
     grouped = df.groupby(file_path_column)
 
@@ -239,13 +233,14 @@ def get_shards_to_process(shard_path: str):
 def process_parquet(cfg: HtmlExtractionConfig):
     files = fsspec_glob(os.path.join(cfg.input_path, "*.parquet"))
     if cfg.max_files:
-        files = files[:cfg.max_files]
+        files = files[: cfg.max_files]
         print(f"Processing {len(files)} files")
 
     # Group examples by their source WARC
-    groupby_ref = group_by_warc.remote(files, cfg.output_path, cfg.columns, cfg.warc_path_extractor, cfg.url_column, cfg.file_path_column)
+    groupby_ref = group_by_warc.remote(
+        files, cfg.output_path, cfg.columns, cfg.warc_path_extractor, cfg.url_column, cfg.file_path_column
+    )
     ray.get(groupby_ref)
-
 
     shard_indices_to_process_ref = get_shards_to_process.remote(cfg.output_path)
     shard_indices_to_process = ray.get(shard_indices_to_process_ref)
@@ -262,7 +257,7 @@ def process_parquet(cfg: HtmlExtractionConfig):
 
     columns = cfg.columns
     if cfg.warc_path_extractor:
-        columns = cfg.columns + [cfg.file_path_column]
+        columns.append(cfg.file_path_column)
 
     def submit_shard_task(shard_index):
         """Submit a shard processing task and log progress every 1000 shards."""
@@ -272,7 +267,17 @@ def process_parquet(cfg: HtmlExtractionConfig):
         # shard_output_path is of form gs://<output_path>/0.jsonl.gz
         shard_output_path = os.path.join(cfg.output_path, f"{cfg.source_name}_{shard_index}.jsonl.gz")
 
-        unfinished.append(process_one_shard.remote(shard_path, shard_output_path, cfg.source_name, columns, cfg.s3_url_modifier, cfg.url_column, cfg.file_path_column))
+        unfinished.append(
+            process_one_shard.remote(
+                shard_path,
+                shard_output_path,
+                cfg.source_name,
+                columns,
+                cfg.s3_url_modifier,
+                cfg.url_column,
+                cfg.file_path_column,
+            )
+        )
         num_shards_submitted += 1
         if num_shards_submitted % 1000 == 0:
             logger.info(
