@@ -57,7 +57,6 @@ from typing import Any
 import draccus
 import fsspec
 import pandas as pd
-from marin.crawl.common.utils import decode_html
 import pyarrow as pa
 import pyarrow.parquet as pq
 import ray
@@ -76,6 +75,7 @@ from trafilatura import extract
 from transformers import AutoTokenizer, FlaxAutoModelForSequenceClassification
 from warcio import ArchiveIterator
 
+from marin.crawl.common.utils import decode_html
 from marin.utils import fsspec_exists, fsspec_glob
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")

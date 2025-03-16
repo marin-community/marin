@@ -30,11 +30,11 @@ from typing import Any
 import draccus
 import fsspec
 import pandas as pd
-from marin.crawl.common.utils import decode_html
 import ray
 from warcio import ArchiveIterator
 
 from marin.core.runtime import cached_or_construct_output
+from marin.crawl.common.utils import decode_html
 from marin.utils import fsspec_exists, fsspec_glob
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")

@@ -26,7 +26,6 @@ from io import BytesIO
 
 import draccus
 import fsspec
-from marin.crawl.common.utils import decode_html
 import ray
 import requests
 import trafilatura
@@ -37,6 +36,7 @@ from transformers import AutoTokenizer, FlaxAutoModelForSequenceClassification
 from warcio import ArchiveIterator
 
 from marin.core.runtime import cached_or_construct_output
+from marin.crawl.common.utils import decode_html
 from marin.utils import remove_tpu_lockfile_on_exit
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")

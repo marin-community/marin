@@ -60,7 +60,6 @@ import draccus
 import fsspec
 import kenlm
 import pandas as pd
-from marin.crawl.common.utils import decode_html
 import pyarrow as pa
 import pyarrow.parquet as pq
 import ray
@@ -71,6 +70,7 @@ from resiliparse.parse.html import HTMLTree
 from tqdm_loggable.auto import tqdm
 from warcio import ArchiveIterator
 
+from marin.crawl.common.utils import decode_html
 from marin.processing.classification.classifier import FasttextClassifier
 from marin.processing.open_web_math.extract import extract_text
 from marin.processing.open_web_math.manual_filter import manual_url_filter
