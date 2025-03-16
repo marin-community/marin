@@ -1,5 +1,6 @@
 from resiliparse.parse.encoding import bytes_to_str, detect_encoding
 
+
 def decode_html(html: bytes) -> str | None:
     """
     Given HTML (bytes), decode it into a string if possible. First try with

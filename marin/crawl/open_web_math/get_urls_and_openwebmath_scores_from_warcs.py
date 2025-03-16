@@ -26,15 +26,14 @@ from io import BytesIO
 
 import draccus
 import fsspec
-from marin.crawl.common.utils import decode_html
 import ray
 import requests
 import w3lib.url
-from resiliparse.parse.encoding import bytes_to_str, detect_encoding
 from tqdm_loggable.auto import tqdm
 from warcio import ArchiveIterator
 
 from marin.core.runtime import cached_or_construct_output
+from marin.crawl.common.utils import decode_html
 from marin.processing.classification.classifier import FasttextClassifier
 from marin.processing.open_web_math.extract import extract_text
 from marin.processing.open_web_math.text_normalizer import normalize

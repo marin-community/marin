@@ -1,23 +1,23 @@
-import os
-import ray
-import json
-import random
-import fsspec
-import draccus
-import logging
 import hashlib
-import pandas as pd
-
-from datetime import datetime
+import json
+import logging
+import os
+import random
+from collections.abc import Callable
 from dataclasses import asdict
-from typing import Any, Callable
+from datetime import datetime
+from typing import Any
+
+import draccus
+import fsspec
+import pandas as pd
+import ray
 from warcio import ArchiveIterator
 
-from marin.crawl.common.utils import decode_html
-from marin.utils import fsspec_exists, fsspec_glob
 from marin.core.runtime import cached_or_construct_output
 from marin.crawl.common.schemas import DolmaFormattedRecord, HtmlExtractionConfig
-
+from marin.crawl.common.utils import decode_html
+from marin.utils import fsspec_exists, fsspec_glob
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -152,11 +152,11 @@ def write_group_to_parquet(output_file, group_df, group_success_file):
 
 @ray.remote(memory=32 * 1024 * 1024 * 1024)
 def group_by_warc(
-    input_paths: list[str], 
-    output_path: str, 
-    columns: list[str], 
-    warc_path_extractor: Callable[[dict[str, Any]], str] | None = None, 
-    url_column: str = "url", 
+    input_paths: list[str],
+    output_path: str,
+    columns: list[str],
+    warc_path_extractor: Callable[[dict[str, Any]], str] | None = None,
+    url_column: str = "url",
     file_path_column: str = "file_path"
 ):
     """
@@ -183,10 +183,10 @@ def group_by_warc(
     )
 
     if warc_path_extractor:
-        print(f"Extracting WARC path from metadata")
+        print("Extracting WARC path from metadata")
         df[file_path_column] = df["metadata"].apply(warc_path_extractor)
         columns = columns + [file_path_column]
-    
+
     grouped = df.groupby(file_path_column)
 
     remote_refs = []
@@ -214,7 +214,7 @@ def group_by_warc(
         }
         print(json.dumps(metadata), file=f)
 
-    
+
 @ray.remote(memory=32 * 1024 * 1024 * 1024)
 def get_shards_to_process(shard_path: str):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
