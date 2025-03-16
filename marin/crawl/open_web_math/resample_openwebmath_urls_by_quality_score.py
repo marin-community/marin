@@ -240,7 +240,7 @@ def resample_urls(
             for label, bucket in buckets.items():
                 w = weights.get(label, 0)
                 # Number of samples from this bucket
-                count = int(math.floor(S * w)) if w > 0 else 0
+                count = math.floor(S * w) if w > 0 else 0
                 chosen = random.sample(bucket, k=count)
                 resampled_examples.extend(chosen)
                 sample_counts[label] = count

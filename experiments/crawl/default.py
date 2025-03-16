@@ -1,7 +1,10 @@
+from typing import Callable
+
 from marin.crawl.common.convert_to_html import process_parquet
 from marin.crawl.common.schemas import ParquetConfig
 from marin.crawl.fetch_links import FetchLinksConfig, main as fetch_links_main
 from marin.crawl.deduplicate_outlinks_against_cc import DeduplicateOutlinksAgainstCCConfig, deduplicate_outlinks_against_cc_driver
+from marin.crawl.get_fineweb_edu_crawl_yield import GetCrawlYieldConfig
 from marin.crawl.get_outlinks_from_html import OutlinksExtractionConfig, get_outlinks_from_html
 from marin.execution.executor import ExecutorStep, output_path_of, this_output_path
 from marin.crawl.convert_responses_parquet_to_warc import ConvertResponsesToWARCConfig, main as convert_responses_parquet_to_warc_main
@@ -12,6 +15,7 @@ BLOOM_FILTER_2019_2024 = "gs://marin-us-central2/gcsfuse_mount/nfliu/deduplicate
 
 def default_crawl(
     config: ParquetConfig,
+    yield_fn: Callable,
 ) -> list[ExecutorStep]:
     extracted_html = ExecutorStep(
         name=f"crawl/{config.source_name}/html",
@@ -23,8 +27,8 @@ def default_crawl(
         name=f"crawl/{config.source_name}/outlinks/raw_{config.source_name}",
         fn=get_outlinks_from_html,
         config=OutlinksExtractionConfig(
-            input_path=output_path_of(extracted_html),
-            output_path=this_output_path(),
+            html_input_path=output_path_of(extracted_html),
+            outlinks_output_path=this_output_path(),
             prefix=config.source_name,
         ),
     )
@@ -71,24 +75,40 @@ def default_crawl(
         ),
     )
 
+    links_fetched_warc_yield = ExecutorStep(
+        name=f"crawl/{config.source_name}",
+        fn=yield_fn,
+        config=GetCrawlYieldConfig(
+            urls_input_directory=output_path_of(outlinks_deduplicated),
+            crawl_input_directory=output_path_of(links_fetched_warc),
+            data_source=config.source_name,
+            text_output_directory=this_output_path(f"text/{config.source_name}-cc-deduplicated"),
+            statistics_output_path=output_path_of(links_fetched_warc, "yield_statistics.json.gz"),
+            urls_and_scores_output_directory=this_output_path(f"urls_and_scores/{config.source_name}-cc-deduplicated"),
+        ),
+        override_output_path=f"crawl/{config.source_name}"
+    )
+
     links_minhash_deduplicated = ExecutorStep(
         name=f"crawl/{config.source_name}",
         fn=minhash_deduplicate_against_index_driver,
         config=MinhashDeduplicateAgainstIndexConfig(
             index_path=this_output_path(f"{config.source_name}_minhash_index/index"),
-            input_patterns=[this_output_path(f"text/{config.source_name}-cc-deduplicated/*_text_and_scores.passing.parquet")],
+            input_patterns=[output_path_of(links_fetched_warc_yield, f"{config.source_name}-cc-deduplicated/*_text_and_scores.passing.parquet")],
             parquets_paths_file=this_output_path(f"{config.source_name}-cc-deduplicated-passing_paths.txt"),
             minhash_base_path=this_output_path(f"minhash/{config.source_name}_cc_deduplicated_passing_minhash_against_{config.source_name}"),
             minhash_logs_path=this_output_path(f"minhash/{config.source_name}_cc_deduplicated_passing_minhash_against_{config.source_name}_logs"),
         ),
+        override_output_path=f"crawl/{config.source_name}"
     )
 
     return [
         extracted_html, 
-        extracted_outlinks, 
-        outlinks_deduplicated_2013_2018, 
-        outlinks_deduplicated, 
-        links_fetched_parquet, 
-        links_fetched_warc,
-        links_minhash_deduplicated
+        # extracted_outlinks, 
+        # outlinks_deduplicated_2013_2018, 
+        # outlinks_deduplicated, 
+        # links_fetched_parquet, 
+        # links_fetched_warc,
+        # links_fetched_warc_yield,
+        # links_minhash_deduplicated
     ]
