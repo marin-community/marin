@@ -275,4 +275,4 @@ def main(cfg: TransformSFTDatasetConfig):
 
 
 if __name__ == "__main__":
-    main()
+    pass
