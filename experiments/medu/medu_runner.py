@@ -38,19 +38,7 @@ class MEDURunnerConfig:
     labeler_resource_config: ResourceConfig = field(default_factory=lambda: TPU_V6E_8_STRICT_PACK)
 
     # What hardware to use for training the final model
-    training_tpu_type: str = "TPU-v6e-128"
-
-
-REGION_TO_TPU_TYPES = {
-    "marin-us-east5": {
-        "labeler_tpu_type": "TPU-v6e-8",
-        "training_tpu_type": "TPU-v6e-128",
-    },
-    "marin-us-east1": {
-        "labeler_tpu_type": "TPU-v6e-8",
-        "training_tpu_type": "TPU-v6e-128",
-    },
-}
+    training_tpu_type: str = "v6e-128"
 
 
 class MEDURunner:
@@ -82,10 +70,16 @@ class MEDURunner:
             self.config.experiment_name,
         )
 
+    def get_eval_cluster_steps(self):
+        return [self.encoder_model]
+
+    def get_all_steps(self):
+        return [self.quality_ablation_model, self.control_model]
+
     # NOTE(chris): Run this in the vLLM Cluster
     def run_eval_cluster_steps(self):
-        executor_main([self.encoder_model])
+        executor_main(self.get_eval_cluster_steps())
 
     # NOTE(chris): Run this in the training cluster
     def run_all_steps(self):
-        executor_main([self.quality_ablation_model])
+        executor_main(self.get_all_steps())

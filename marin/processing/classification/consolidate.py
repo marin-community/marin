@@ -47,7 +47,7 @@ class FilterConfig:
     label: str | None = None
     """The label under the attribute name."""
 
-    threshold: float | None = 0.5
+    threshold: float | None = None
     """Keep documents where the value is above this."""
 
     keep_fraction: float | None = None
