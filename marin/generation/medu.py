@@ -177,7 +177,7 @@ def _label_documents(config: MEDUPipelineConfig, final_benchmark_description_pro
         prompt_column=config.prompt_column,
         filetype=config.filetype,
         output_filetype_override=config.output_filetype_override,
-        strategy=config.resource_config.strategy,
+        resource_config=config.resource_config,
     )
     inference_future = run_inference.remote(text_generation_config)
     return inference_future

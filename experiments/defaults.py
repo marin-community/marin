@@ -77,6 +77,7 @@ def default_tokenize(
         description=f"Tokenize raw text using the {tokenizer} tokenizer.",
         fn=tokenize,
         config=config,
+        pip_dependency_groups=["tokenize_train"],
     )
 
 
