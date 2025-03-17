@@ -534,6 +534,8 @@ def main(cfg: GetCrawlYieldConfig):
     total_urls = 0
     total_urls_fetched = 0
     total_urls_passing = 0
+
+    exceptions = []
     while unfinished:
         finished, unfinished = ray.wait(unfinished, num_returns=len(unfinished), timeout=5)
         try:
@@ -543,8 +545,17 @@ def main(cfg: GetCrawlYieldConfig):
                 total_urls_fetched += shard_urls_fetched
                 total_urls_passing += shard_urls_passing
         except Exception as e:
-            logger.exception(f"Error processing shard: {e}")
-            raise
+            # Log now, raise later
+            logger.exception("Caught an exception from a Ray task; continuing with other tasks.", exc_info=e)
+            exceptions.append(e)
+
+    if exceptions:
+        # Raise any exceptions that we might have encountered, so that the Ray job
+        # ends up with a failed state.
+        raise RuntimeError(f"{len(exceptions)} tasks failed. The first exception was: {exceptions[0]}") from exceptions[
+            0
+        ]
+
     logger.info(
         f"Total URLs: {total_urls}\n"
         f"Total URLs fetched: {total_urls_fetched}\n"
