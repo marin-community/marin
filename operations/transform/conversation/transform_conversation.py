@@ -21,12 +21,11 @@ from urllib.parse import urlparse
 import datasets
 import draccus
 import fsspec
-import pandas as pd
 import ray
 from google.cloud import storage
 
 from marin.core.conversation import DolmaConversationOutput, OpenAIChatMessage
-from marin.core.runtime import TaskConfig, cached_or_construct_output, fsspec_mkdirs, map_files_in_directory
+from marin.core.runtime import fsspec_mkdirs
 
 from .adapters import TransformAdapter, get_adapter
 
@@ -114,29 +113,6 @@ def transform_rows(rows: list[dict], cfg: TransformSFTDatasetConfig):
     return transformed_rows
 
 
-def load_dataset(input_path: str) -> list[dict]:
-    """Load a list of rows from the file. Currently supports jsonl, json, and parquet.
-
-    Args:
-        input_path (str): The path to the input file.
-
-    Returns:
-        list[dict]: A list of rows from the input file.
-    """
-    logger.info("WARNING: `load_dataset` will be depreciated with `transform dataset`. Use `transform_hf_dataset`")
-    if input_path.endswith(".jsonl"):
-        with fsspec.open(input_path, "rt") as f:
-            return [json.loads(line) for line in f]
-    elif input_path.endswith(".json"):
-        with fsspec.open(input_path, "rt") as f:
-            return json.load(f)
-    elif input_path.endswith(".parquet"):
-        df = pd.read_parquet(input_path, engine="pyarrow")
-        return df.to_dict(orient="records")
-    else:
-        raise ValueError(f"Unsupported file type: {input_path}")
-
-
 def create_shard_output_directory(output_filename: str) -> str:
     """Given an output filename, remove the suffix of the filename and create a directory for the shards.
 
@@ -159,53 +135,6 @@ def create_shard_output_directory(output_filename: str) -> str:
     output_path = f"{protocol}://{path_without_suffix}"
     fsspec_mkdirs(output_path)
     return output_path
-
-
-@ray.remote(memory=4 * 1024 * 1024 * 1024)
-@cached_or_construct_output(success_suffix="SUCCESS")
-def transform_file(input_filename: str, output_filename: str, cfg: TransformSFTDatasetConfig):
-    """
-    Transforms the input dataset file and writes the transformed data into shards.
-    Args:
-        input_filename (str): The path to the input dataset file.
-        output_filename (str): The base path for the output shard files.
-        cfg (TransformSFTDatasetConfig): Configuration object containing transformation parameters.
-    Returns:
-        None
-
-    Note: we assume regardlss of filetype that every directory will have a 'provenance.json' file
-    which we use for our own metadata. We check this explicitly because *json is a valid
-    file type, but 'provenance.json' is not a valid dataset file.
-    """
-    logger.info("WARNING: `transform_file` will be depreciated with `transform dataset`. Use `transform_hf_dataset`")
-
-    if "provenance.json" in input_filename:
-        return
-    rows = load_dataset(input_filename)
-    logger.info(f"Transforming {len(rows)} rows from {input_filename} to {output_filename}")
-
-    output_path = create_shard_output_directory(output_filename)
-
-    for idx, shard in enumerate(range(0, len(rows), cfg.shard_size)):
-        shard_rows = rows[shard : min(shard + cfg.shard_size, len(rows))]
-        shard_filename = os.path.join(output_path, f"shard_{idx:05d}.jsonl.gz")
-        logger.info(f"Writing shard {idx} to {shard_filename}")
-        with fsspec.open(shard_filename, "wt", compression="gzip") as f:
-            transformed_shard_rows = transform_rows(shard_rows, cfg)
-            for row in transformed_shard_rows:
-                f.write(f"{json.dumps(row)}\n")
-
-    return [output_path]
-
-
-@ray.remote
-def transform_dataset(cfg: TransformSFTDatasetConfig):
-    logger.info("WARNING: `transform_dataset` will be depreciated. Use `transform_hf_dataset`")
-    responses = map_files_in_directory(
-        transform_file.remote, cfg.input_path, f"**/*.{cfg.filetype}", cfg.output_path, TaskConfig(), False, cfg
-    )
-
-    ray.get(responses)
 
 
 def download_directory_from_gcs(bucket_name: str, gcs_directory_path: str, local_directory_path: str) -> None:
@@ -342,7 +271,7 @@ def transform_hf_dataset(cfg: TransformSFTDatasetConfig):
 
 @draccus.wrap()
 def main(cfg: TransformSFTDatasetConfig):
-    ray.get(transform_dataset.remote(cfg))
+    ray.get(transform_hf_dataset.remote(cfg))
 
 
 if __name__ == "__main__":
