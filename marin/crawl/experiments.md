@@ -254,7 +254,7 @@ python marin/run/ray_run.py \
 
 ```
 python marin/run/ray_run.py \
-    --pip_deps 'warcio' \
+    --pip_deps 'warcio[all]' \
     --no_wait -- \
     python marin/crawl/convert_responses_parquet_to_warc.py \
     --input_directory gs://marin-us-central2/scratch/nfliu/fetched_outlinks/fineweb-edu-10M/ \
@@ -373,7 +373,7 @@ python marin/run/ray_run.py \
 
 ```
 python marin/run/ray_run.py \
-    --pip_deps 'warcio' \
+    --pip_deps 'warcio[all]' \
     --no_wait -- \
     python marin/crawl/convert_responses_parquet_to_warc.py \
     --input_directory gs://marin-us-central2/scratch/nfliu/fetched_outlinks/open-web-math-fde8ef8-10M/ \
@@ -495,7 +495,7 @@ python marin/run/ray_run.py \
 
 ```
 python marin/run/ray_run.py \
-    --pip_deps 'warcio' \
+    --pip_deps 'warcio[all]' \
     --no_wait -- \
     python marin/crawl/convert_responses_parquet_to_warc.py \
     --input_directory gs://marin-us-central2/scratch/nfliu/fetched_outlinks/fineweb-edu-10M-cc-deduplicated/ \
@@ -618,7 +618,7 @@ python marin/run/ray_run.py \
 
 ```
 python marin/run/ray_run.py \
-    --pip_deps 'warcio' \
+    --pip_deps 'warcio[all]' \
     --no_wait -- \
     python marin/crawl/convert_responses_parquet_to_warc.py \
     --input_directory gs://marin-us-central2/scratch/nfliu/fetched_outlinks/open-web-math-fde8ef8-10M-cc-deduplicated/ \
@@ -740,7 +740,7 @@ python marin/run/ray_run.py \
 
 ```
 python marin/run/ray_run.py \
-    --pip_deps 'warcio' \
+    --pip_deps 'warcio[all]' \
     --no_wait -- \
     python marin/crawl/convert_responses_parquet_to_warc.py \
     --input_directory gs://marin-us-central2/scratch/nfliu/fetched_outlinks/open-web-math-fde8ef8-unique-100M/ \
