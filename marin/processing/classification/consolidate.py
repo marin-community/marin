@@ -53,9 +53,6 @@ class FilterConfig:
     keep_fraction: float | None = None
     """Keep documents where the score is in the top percentile. Calculates the threshold from the entire dataset."""
 
-    upper_threshold: float | None = None
-    """Keep documents where the value is below this."""
-
 
 @dataclass(frozen=True)
 class ConsolidateConfig:
@@ -111,32 +108,14 @@ def apply_filter_remove_spans(
 
 def apply_filter_classify(input_data: dict, doc_filter: FilterConfig, id_to_attributes: dict[str, Any]) -> bool:
     attributes = id_to_attributes[input_data["id"]]
+    # Check attribute >= threshold?
+    scores = attributes[doc_filter.name]
+    score = scores[doc_filter.label]
 
-    # Get value from attributes
-    attribute_value = attributes[doc_filter.name]
+    if score >= doc_filter.threshold:
+        return True
 
-    # Handle nested attributes structure if a label is specified
-    if doc_filter.label is not None:
-        if isinstance(attribute_value, dict) and doc_filter.label in attribute_value:
-            value = attribute_value[doc_filter.label]
-        else:
-            logger.warning(
-                f"Label {doc_filter.label} not found in attribute {doc_filter.name} for document {input_data['id']}"
-            )
-            return False
-    else:
-        # If no label specified, use the attribute value directly
-        # This handles cases like compression_ratio where the value is a scalar
-        value = attribute_value
-
-    # Check both lower and upper bounds if specified
-    if doc_filter.threshold is not None and value < doc_filter.threshold:
-        return False
-
-    if doc_filter.upper_threshold is not None and value > doc_filter.upper_threshold:
-        return False
-
-    return True
+    return False
 
 
 def read_attributes_as_dict(attribute_filename: str) -> dict[str, Any]:

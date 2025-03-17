@@ -5,6 +5,7 @@ import wandb
 import pandas as pd
 from datetime import datetime
 
+
 WANDB_ENTITY = os.getenv("WANDB_ENTITY", "stanford-mercury")
 WANDB_PROJECT = "marin"
 WANDB_PATH = f"{WANDB_ENTITY}/{WANDB_PROJECT}"

@@ -196,5 +196,3 @@ archive/
 
 # wandb logs
 wandb
-
-.aider*
