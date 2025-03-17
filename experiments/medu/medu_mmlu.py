@@ -3,7 +3,7 @@ from dataclasses import dataclass
 
 from experiments.medu.medu_datasets import medu_dclm_annotation_subset, medu_dclm_pretraining_subset
 from experiments.medu.medu_runner import MEDURunner, MEDURunnerConfig
-from marin.execution.executor import ExecutorStep, this_output_path, versioned
+from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from marin.generation.medu import CorpusContent
 from operations.download.huggingface.download import DownloadConfig
 from operations.download.huggingface.download_hf import download_hf
@@ -170,4 +170,10 @@ mmlu_humanities_pipeline = MMLUMeduPipeline(MeduMMLUConfig(subset_names=humaniti
 mmlu_other_pipeline = MMLUMeduPipeline(MeduMMLUConfig(subset_names=other, experiment_name="mmlu-other"))
 
 if __name__ == "__main__":
-    mmlu_humanities_pipeline.run_eval_cluster_steps()
+    executor_main(
+        mmlu_science_pipeline.get_all_steps()
+        + mmlu_engineering_pipeline.get_all_steps()
+        + mmlu_social_sciences_pipeline.get_all_steps()
+        + mmlu_humanities_pipeline.get_all_steps()
+        + mmlu_other_pipeline.get_all_steps()
+    )

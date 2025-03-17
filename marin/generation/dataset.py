@@ -92,7 +92,7 @@ def convert_labeled_documents_to_scores(
                         logger.warning(f"Failed to parse score for example {example['id']}: {generated_text}")
                     else:
                         logger.warning(f"Failed to parse score for example: {generated_text}")
-                score_distribution[score] += 1
+                score_distribution[score] = score_distribution.get(score, 0) + 1
 
     return score_distribution
 
@@ -128,7 +128,7 @@ class DatasetOutputProcessor:
 
         for score_distribution in ray.get(responses):
             for score, count in score_distribution.items():
-                self.score_distribution[score] += count
+                self.score_distribution[score] = self.score_distribution.get(score, 0) + count
 
         return self.score_distribution
 
