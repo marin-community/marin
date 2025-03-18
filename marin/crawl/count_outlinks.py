@@ -169,7 +169,6 @@ def count_outlinks(input_pattern: str, exact: bool):
         for _ in range(min(MAX_CONCURRENT_TASKS, len(shard_paths_for_exact_counting))):
             submit_shard_task(shard_paths_for_exact_counting.pop(), count_examples_in_shard_exact)
 
-        # Create HLL with ~0.5% error
         global_set = set()
         num_outlinks = 0
         with tqdm(total=num_shards_to_process, desc="Counting records") as pbar:
