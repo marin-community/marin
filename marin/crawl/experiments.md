@@ -780,6 +780,8 @@ python marin/run/ray_run.py \
 Results:
 
 ```
+Total number of tokens: 21,459,789,983
+Total number of documents: 5,235,505
 ```
 
 6. Take the fetched pages that pass the filtering pipeline and run MinHash
