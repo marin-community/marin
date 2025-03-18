@@ -22,6 +22,7 @@ fineweb_crawling_steps = default_crawl(
         s3_url_modifier=url_modifier,
     ),
     yield_fn=filter_and_yield,
+    input_pattern="CC-MAIN-*/*_links.jsonl.gz",
 )
 
 if __name__ == "__main__":

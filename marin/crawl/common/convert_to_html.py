@@ -264,7 +264,7 @@ def process_parquet(cfg: HtmlExtractionConfig):
         nonlocal num_shards_submitted
         # shard_path_to_process is of form gs://<output_path>/0_warc_examples.parquet
         shard_path = os.path.join(cfg.output_path, f"{shard_index}_warc_examples.parquet")
-        # shard_output_path is of form gs://<output_path>/0.jsonl.gz
+        # shard_output_path is of form gs://<output_path>/open-web-math_0.jsonl.gz
         shard_output_path = os.path.join(cfg.output_path, f"{cfg.source_name}_{shard_index}.jsonl.gz")
 
         unfinished.append(

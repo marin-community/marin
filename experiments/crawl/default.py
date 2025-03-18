@@ -1,3 +1,16 @@
+"""
+Default crawl pipeline for extracting HTML, getting outlinks, deduplicating outlinks against CC,
+and then fetching the outlinks. The complete pipeline is as follows:
+    - Extract HTML from Dataset Parquet files
+    - Get outlinks from HTML
+    - Deduplicate outlinks against CC bloom filter for 2013-2018
+    - Deduplicate outlinks against CC bloom filter for 2019-2024
+    - Fetch outlinks
+    - Convert outlinks to WARC
+    - Yield outlinks
+    - Minhash deduplicate outlinks
+"""
+
 from collections.abc import Callable
 
 from marin.crawl.common.convert_to_html import process_parquet
@@ -16,6 +29,8 @@ from marin.crawl.minhash.deduplicate_against_index import (
 )
 from marin.execution.executor import ExecutorStep, output_path_of, this_output_path
 
+
+# path to bloom filter for links. The year range corresponds to time period designations for CC
 BLOOM_FILTER_2013_2018 = (
     "gs://marin-us-central2/gcsfuse_mount/nfliu/deduplicate_outlinks/cc-urls-partitioned_2013_2018.bloom"
 )
@@ -27,7 +42,20 @@ BLOOM_FILTER_2019_2024 = (
 def default_crawl(
     config: HtmlExtractionConfig,
     yield_fn: Callable,
+    input_pattern: str = "*_links.jsonl.gz",
 ) -> list[ExecutorStep]:
+    """
+    Crawls over a given parquet to extract the outlinks and populate a new dataset based on them.
+    
+    Args:
+        config (HtmlExtractionConfig): Configuration for extracting HTML from Dataset Parquet files
+        yield_fn (Callable): Function to apply processing to the crawled content
+        input_pattern (str, optional): Pattern to match input files for deduplicating outlinks. 
+                                      Defaults to "*_links.jsonl.gz".
+    
+    Returns:
+        steps[list[ExecutorStep]]: List of steps in the crawl pipeline
+    """
     extracted_html = ExecutorStep(
         name=f"crawl/{config.source_name}/html",
         fn=process_parquet,
@@ -48,7 +76,7 @@ def default_crawl(
         name=f"crawl/{config.source_name}/outlinks/{config.source_name}-deduplicated-2013-2018",
         fn=deduplicate_outlinks_against_cc_driver,
         config=DeduplicateOutlinksAgainstCCConfig(
-            input_pattern=output_path_of(extracted_outlinks, "CC-MAIN-*/*_links.jsonl.gz"),
+            input_pattern=output_path_of(extracted_outlinks, input_pattern),
             bloom_filter_path=BLOOM_FILTER_2013_2018,
             output_path=this_output_path(),
             shards_per_batch=100,
@@ -59,7 +87,7 @@ def default_crawl(
         name=f"crawl/{config.source_name}/outlinks/{config.source_name}-deduplicated",
         fn=deduplicate_outlinks_against_cc_driver,
         config=DeduplicateOutlinksAgainstCCConfig(
-            input_pattern=output_path_of(outlinks_deduplicated_2013_2018, "CC-MAIN-*/*_links.jsonl.gz"),
+            input_pattern=output_path_of(outlinks_deduplicated_2013_2018, input_pattern),
             bloom_filter_path=BLOOM_FILTER_2019_2024,
             output_path=this_output_path(),
             shards_per_batch=100,
