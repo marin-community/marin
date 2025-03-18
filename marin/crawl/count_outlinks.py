@@ -13,7 +13,7 @@ python marin/run/ray_run.py \
     --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8/*_links.jsonl.gz'
 ```
 
-Running on OpenWebMath-unique, to verify that BigQuery link deduplication works:
+Running on OpenWebMath-unique, to verify that the BigQuery-deduplicated links are actually unique.
 
 ```
 python marin/run/ray_run.py \
@@ -34,7 +34,7 @@ python marin/run/ray_run.py \
     --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu/CC-MAIN*/*_links.jsonl.gz'
 ```
 
-Running on FineWeb-Edu-unique, to verify that BigQuery link deduplication works:
+Running on FineWeb-Edu-unique, to verify that the BigQuery-deduplicated links are actually unique.
 
 ```
 python marin/run/ray_run.py \
