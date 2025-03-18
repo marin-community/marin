@@ -210,6 +210,10 @@ def this_output_path(name: str | None = None):
     return OutputName(name=name)
 
 
+# constant so we can use it in fields of dataclasses
+THIS_OUTPUT_PATH = OutputName(None)
+
+
 @dataclass(frozen=True)
 class VersionedValue(Generic[T_co]):
     """Wraps a value, to signal that this value (part of a config) should be part of the version."""

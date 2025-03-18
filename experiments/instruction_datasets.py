@@ -26,6 +26,7 @@ Current datasets:
 
 import hashlib
 from dataclasses import dataclass, field
+from typing import Sequence
 
 from marin.execution.executor import (
     ExecutorStep,
@@ -275,7 +276,7 @@ def transform_dataset_step(dataset_cfg: InstructionDatasetConfig, download_step:
 
 
 def get_instruction_dataset(
-    hf_dataset_id: str, splits: list[str] = field(default_factory=lambda: ["train"])
+    hf_dataset_id: str, splits: Sequence[str] = ("train",)
 ) -> ExecutorStep:
     # Check that config exists
     assert hf_dataset_id in INSTRUCTION_DATASET_NAME_TO_CONFIG, f"Unknown instruction dataset: {hf_dataset_id}"
