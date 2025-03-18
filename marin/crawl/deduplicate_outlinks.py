@@ -88,6 +88,33 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class DeduplicateOutlinksConfig:
+    """
+    Configuration dataclass for deduplicating outlinks using BigQuery.
+
+    This configuration specifies the input and output paths on Google Cloud Storage (GCS)
+    as well as the BigQuery table and dataset to be used. It is consumed by
+    `deduplicate_and_shuffle_with_bq_driver` to perform a deduplication job that:
+
+    1. Loads JSONL data from GCS into a BigQuery table.
+    2. Deduplicates records based on the "link_target" field.
+    3. Randomly shuffles the deduplicated data.
+    4. Exports the shuffled data back to GCS in multiple shards.
+
+    Attributes:
+        gcs_input_pattern (str):
+            A GCS URI pattern (e.g., "gs://bucket/path/*.jsonl.gz") that points to
+            the gzipped JSONL files containing outlinks to be deduplicated.
+        gcs_output_prefix (str):
+            A GCS URI prefix where deduplicated and shuffled JSONL files will be
+            written (e.g., "gs://bucket/path/deduped_").
+        bq_table_id (str):
+            The name of the BigQuery table (within the specified dataset) to be
+            created or overwritten during the deduplication process.
+        bq_dataset_id (str, optional):
+            The BigQuery dataset ID in which the table will be created or overwritten.
+            Defaults to "marin_crawl".
+    """
+
     gcs_input_pattern: str
     gcs_output_prefix: str
     bq_table_id: str
