@@ -761,6 +761,9 @@ python marin/run/ray_run.py \
 Results:
 
 ```
+Total URLs: 100,000,000
+Total URLs fetched: 35,065,400
+Total URLs passing: 5,235,505
 ```
 
 5. Count the number of tokens in the fetched pages that pass the filtering
