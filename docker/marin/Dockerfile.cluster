@@ -66,7 +66,14 @@ RUN conda install -c conda-forge ncurses -y
 #RUN VLLM_TARGET_DEVICE="tpu" python3 setup.py develop
 
 # Install Jax for TPU usage, fsspec for GCS access, and transformers for OLMO
-RUN pip install --no-cache-dir -U jax[tpu]==0.4.36 -f https://storage.googleapis.com/jax-releases/libtpu_releases.html fsspec==2024.9.0 transformers==4.47.0
+RUN pip install --no-cache-dir -U jax[tpu]==0.5.1 -f https://storage.googleapis.com/jax-releases/libtpu_releases.html fsspec==2024.9.0 transformers==4.47.0
+
+# Installing all the core dependencies
+# ['draccus>=0.8.0', 'google-api-python-client~=2.0', 'ray', 'gcsfs', 'google-cloud-storage',
+# 'google-cloud-storage-transfer', 's3fs', 'regex', 'requests', 'numpy', 'torch', 'braceexpand', 'deepdiff', 'tqdm',
+# 'tqdm-loggable', 'toml', 'pandas', 'pyarrow', 'jax==0.4.35', 'multiprocess==0.70.16', 'levanter>=1.2.dev1163']
+RUN pip install --no-cache-dir -U draccus==0.10 google-api-python-client~=2.0 gcsfs google-cloud-storage google-cloud-storage-transfer s3fs regex requests numpy torch braceexpand deepdiff tqdm tqdm-loggable toml pandas pyarrow "levanter>=1.2.dev1207" "haliax>=1.4dev330"
+
 
 # NOTE: Try to keep as much "heavy" stuff as possible before this line to avoid re-installing
 

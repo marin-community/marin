@@ -18,7 +18,7 @@ provider:
   project_id: hai-gcp-models
 
 docker:
-    image: "europe-west4-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:6da1c9ed"
+    image: "europe-west4-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:89b461b3"
     container_name: "ray_docker"
     pull_before_run: true
     worker_run_options:
@@ -145,7 +145,7 @@ available_node_types:
 
   tpu_slice_v6e_128:
     max_workers: 1024
-    min_workers: 0
+    min_workers: 8
     node_config:
       acceleratorType: v6e-128
       runtimeVersion: v2-alpha-tpuv6e
