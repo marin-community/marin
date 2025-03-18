@@ -272,7 +272,3 @@ def transform_hf_dataset(cfg: TransformSFTDatasetConfig):
 @draccus.wrap()
 def main(cfg: TransformSFTDatasetConfig):
     ray.get(transform_hf_dataset.remote(cfg))
-
-
-if __name__ == "__main__":
-    pass
