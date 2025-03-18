@@ -185,12 +185,11 @@ python marin/run/ray_run.py \
     --crawl_input_directory gs://marin-us-central2/scratch/nfliu/fetched_outlinks/fineweb-edu-10M/ \
     --data_source fineweb-edu-10M \
     --text_output_directory gs://marin-us-central2/scratch/nfliu/text/fineweb-edu-10M/ \
-    --urls_and_scores_output_directory gs://marin-us-central2/scratch/nfliu/urls_and_scores/fineweb-edu-10M/ \
     --statistics_output_path gs://marin-us-central2/scratch/nfliu/fetched_outlinks/fineweb-edu-10M/yield_statistics.json.gz
 ```
 
 ```
-Total URLs: 10000000
+Total URLs: 10,000,000
 Total URLs fetched: 5,600,465
 Total URLs passing: 381,453
 ```
@@ -292,16 +291,15 @@ python marin/run/ray_run.py \
     --crawl_input_directory gs://marin-us-central2/scratch/nfliu/fetched_outlinks/open-web-math-fde8ef8-10M/ \
     --data_source open-web-math-fde8ef8-10M \
     --text_output_directory gs://marin-us-central2/scratch/nfliu/text/open-web-math-fde8ef8-10M/ \
-    --urls_and_scores_output_directory gs://marin-us-central2/scratch/nfliu/urls_and_scores/open-web-math-fde8ef8-10M/ \
     --statistics_output_path gs://marin-us-central2/scratch/nfliu/fetched_outlinks/open-web-math-fde8ef8-10M/yield_statistics.json.gz
 ```
 
 Results:
 
 ```
-Total URLs: 10000000
-Total URLs fetched: 4338570
-Total URLs passing: 839650
+Total URLs: 10,000,000
+Total URLs fetched: 4,338,570
+Total URLs passing: 839,541
 ```
 
 4. Count the number of tokens in the fetched pages that pass the filtering
@@ -318,8 +316,8 @@ python marin/run/ray_run.py \
 Results:
 
 ```
-Total number of tokens: 3,027,494,680
-Total number of documents: 839,650
+Total number of tokens: 3,028,988,231
+Total number of documents: 839,541
 ```
 
 5. Take the fetched pages that pass the filtering pipeline and run MinHash
@@ -357,8 +355,8 @@ python marin/run/ray_run.py \
 Results:
 
 ```
-Total number of tokens: 706,833,188
-Total number of documents: 240,784
+Total number of tokens: 708,110,870
+Total number of documents: 240,480
 ```
 
 ### fineweb-edu-10M-cc-deduplicated
@@ -402,7 +400,6 @@ python marin/run/ray_run.py \
     --crawl_input_directory gs://marin-us-central2/scratch/nfliu/fetched_outlinks/fineweb-edu-10M-cc-deduplicated/ \
     --data_source fineweb-edu-10M-cc-deduplicated \
     --text_output_directory gs://marin-us-central2/scratch/nfliu/text/fineweb-edu-10M-cc-deduplicated/ \
-    --urls_and_scores_output_directory gs://marin-us-central2/scratch/nfliu/urls_and_scores/fineweb-edu-10M-cc-deduplicated/ \
     --statistics_output_path gs://marin-us-central2/scratch/nfliu/fetched_outlinks/fineweb-edu-10M-cc-deduplicated/yield_statistics.json.gz
 ```
 
@@ -513,7 +510,6 @@ python marin/run/ray_run.py \
     --crawl_input_directory gs://marin-us-central2/scratch/nfliu/fetched_outlinks/open-web-math-fde8ef8-10M-cc-deduplicated/ \
     --data_source open-web-math-fde8ef8-10M-cc-deduplicated \
     --text_output_directory gs://marin-us-central2/scratch/nfliu/text/open-web-math-fde8ef8-10M-cc-deduplicated/ \
-    --urls_and_scores_output_directory gs://marin-us-central2/scratch/nfliu/urls_and_scores/open-web-math-fde8ef8-10M-cc-deduplicated/ \
     --statistics_output_path gs://marin-us-central2/scratch/nfliu/fetched_outlinks/open-web-math-fde8ef8-10M-cc-deduplicated/yield_statistics.json.gz
 ```
 
@@ -522,7 +518,7 @@ Results:
 ```
 Total URLs: 10,000,000
 Total URLs fetched: 3,344,030
-Total URLs passing: 563,213
+Total URLs passing: 563,192
 ```
 
 4. Count the number of tokens in the fetched pages that pass the filtering
@@ -539,8 +535,8 @@ python marin/run/ray_run.py \
 Results:
 
 ```
-Total number of tokens: 2,634,194,474
-Total number of documents: 563,213
+Total number of tokens: 2,634,395,715
+Total number of documents: 563,192
 ```
 
 5. Take the fetched pages that pass the filtering pipeline and run MinHash
@@ -579,6 +575,6 @@ python marin/run/ray_run.py \
 Results:
 
 ```
-Total number of tokens: 574,590,766
-Total number of documents: 171,665
+Total number of tokens: 574,916,478
+Total number of documents: 171,516
 ```
