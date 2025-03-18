@@ -18,9 +18,11 @@ Usage:
 import dataclasses
 import logging
 import os
+from collections.abc import Sequence
 
 import draccus
 import fsspec
+import humanfriendly
 import levanter
 import ray
 import transformers
@@ -37,7 +39,7 @@ from levanter.store.cache import CacheOptions
 from ray.runtime_env import RuntimeEnv
 
 from marin.execution.executor import InputName
-from marin.utils import fsspec_glob, fsspec_isdir
+from marin.utils import fsspec_glob, fsspec_isdir, fsspec_size
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +51,7 @@ class TokenizeConfig:
     cache_path: str  # base path to save the tokenized files
     tokenizer: str  # tokenizer name. Should be the same as you intend to use in the tokenizer spec for the training run
     tags: list[str] = dataclasses.field(default_factory=list)  # tags to be added to config
-    cache_options: CacheOptions = CacheOptions(num_shard_groups=1024)  # noqa: RUF009
+    cache_options: CacheOptions | None = None
     input_field: str = ""
     output_field: str = ""
     text_key: str = "text"
@@ -64,27 +66,53 @@ class TokenizeConfig:
             return None
         return _create_source(self.validation_paths, self.text_key)
 
-    def as_lm_dataset_source_config(self, actual_output_path: str | InputName) -> LMDatasetSourceConfig:
+    def as_lm_dataset_source_config(
+        self, actual_output_path: str | InputName, *, include_raw_paths=True
+    ) -> LMDatasetSourceConfig:
         """
         For use in Levanter training runs with mixtures of datasets.
+
+        Args:
+            include_raw_paths: if false, don't include paths to raw data in Levanter's config. This means we'll be able
+                to run training without the original training data, but hte provenance won't be recorded in wandb.
+
         """
         return LMDatasetSourceConfig(
             tags=self.tags,
-            train_urls=self.train_paths,
-            validation_urls=self.validation_paths,
+            train_urls=self.train_paths if include_raw_paths else [],
+            validation_urls=self.validation_paths if include_raw_paths else [],
             cache_dir=actual_output_path,
         )
 
+    def __post_init__(self):
+        if not self.train_paths and not self.validation_paths:
+            raise ValueError("At least one of train_paths or validation_paths must be specified")
+
+        assert not isinstance(self.train_paths, str | InputName)
+        assert not isinstance(self.validation_paths, str | InputName)
+
+        if isinstance(self.train_paths, Sequence):
+            assert "/" not in self.train_paths, "don't use the entire fs for train paths!"
+
+        if isinstance(self.validation_paths, Sequence):
+            assert "/" not in self.validation_paths, "don't use the entire fs for validation paths!"
+
 
 def tokenize(config: TokenizeConfig):
-    if len(config.train_paths) == 0 and len(config.validation_paths) == 0:
+    train_source = config.train_source()
+    validation_source = config.validation_source()
+
+    if train_source is None and validation_source is None:
         raise ValueError("No input files specified. Nothing to do.")
 
     tokenizer = transformers.AutoTokenizer.from_pretrained(config.tokenizer)
     batch_tokenizer = BatchTokenizer(tokenizer, enforce_eos=True)
 
-    train_source = config.train_source()
     if train_source is not None:
+        options = config.cache_options
+        if options is None:
+            options = _heuristic_cache_options(config.train_paths)
+
         train_ledger = (
             ray.remote(_levanter_build_cache)
             .options(name=f"tokenize::{config.cache_path}", runtime_env=RuntimeEnv(env_vars={"JAX_PLATFORMS": "cpu"}))
@@ -92,7 +120,7 @@ def tokenize(config: TokenizeConfig):
                 train_source,
                 batch_tokenizer,
                 os.path.join(config.cache_path, "train"),
-                config.cache_options,
+                options,
             )
         )
     else:
@@ -101,6 +129,10 @@ def tokenize(config: TokenizeConfig):
     validation_source = config.validation_source()
 
     if validation_source is not None:
+        options = config.cache_options
+        if options is None:
+            options = _heuristic_cache_options(config.validation_paths)
+
         validation_ledger = (
             ray.remote(_levanter_build_cache)
             .options(name=f"tokenize::{config.cache_path}", runtime_env=RuntimeEnv(env_vars={"JAX_PLATFORMS": "cpu"}))
@@ -108,7 +140,7 @@ def tokenize(config: TokenizeConfig):
                 validation_source,
                 batch_tokenizer,
                 os.path.join(config.cache_path, "validation"),
-                config.cache_options,
+                options,
             )
         )
     else:
@@ -118,6 +150,24 @@ def tokenize(config: TokenizeConfig):
         ray.get(train_ledger)
     if validation_ledger is not None:
         ray.get(validation_ledger)
+
+
+def _heuristic_cache_options(paths: list[str]):
+    # attempt to sniff out a good default. We don't want to use tons of processors if there are a lot of small
+    # data files. Rule of thumb: 1 processor per 10GB (capping at 1024, per normal)
+    # This reduces contention when writing to gcs and should hopefully mitigate some cost spikes
+
+    paths = _get_filepaths_to_tokenize(paths)
+    if paths:
+        total_size = sum(fsspec_size(path) for path in paths)
+        num_files = len(paths)
+        num_processors = min(1024, max(1, total_size // 10_000_000_000, num_files))
+        human_size = humanfriendly.format_size(total_size)
+        logger.info(f"Using {num_processors} processors for caching {num_files} files of total size {human_size}")
+        options = CacheOptions(num_shard_groups=num_processors)
+    else:
+        options = CacheOptions()
+    return options
 
 
 @ray.remote(runtime_env=RuntimeEnv(env_vars={"JAX_PLATFORMS": "cpu"}))
@@ -196,27 +246,7 @@ def levanter_tokenize_supervised(config: TokenizeConfig):
     logger.info(f"Finished caching supervised dataset to {config.cache_path}.")
 
 
-@ray.remote(runtime_env=RuntimeEnv(env_vars={"JAX_PLATFORMS": "cpu"}))
-def levanter_tokenize(input_paths: list[str] | str, tokenizer_name: str, output_path: str):
-    from levanter.data.text import BatchTokenizer
-
-    if len(input_paths) == 0:
-        logger.warning("No input files found. Nothing to do.")
-        return
-
-    logging.basicConfig(level=logging.INFO)
-
-    logger.info(f"Caching {input_paths} to {output_path}.")
-
-    source = _create_source(input_paths, "text")
-    tokenizer = transformers.AutoTokenizer.from_pretrained(tokenizer_name)
-    batch_tokenizer = BatchTokenizer(tokenizer, enforce_eos=True)
-
-    _levanter_build_cache(source, batch_tokenizer, output_path)
-    logger.info(f"Finished caching {input_paths} to {output_path}.")
-
-
-def _levanter_build_cache(source, batch_tokenizer, output_path, options: CacheOptions = CacheOptions.default()):
+def _levanter_build_cache(source, batch_tokenizer, output_path, options: CacheOptions):
     from levanter.data.metrics_monitor import LoggerMetricsMonitor
     from levanter.store.cache import build_or_load_cache
 
@@ -254,8 +284,10 @@ def _get_files_by_extensions(input_paths: list[str], extensions: list[str]) -> l
     """
     Get a list of all filepaths with the specified extension from the input paths.
     """
+    print(input_paths)
     output_paths = []
     for path in input_paths:
+        assert path != "/"
         if fsspec_isdir(path) or path.endswith("/"):
             logger.info(f"Getting all {extensions} files in {path}")
             for ex in extensions:

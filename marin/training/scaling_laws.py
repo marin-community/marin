@@ -24,7 +24,7 @@ DEFAULT_SWEEP_TRAIN_CONFIG = SimpleTrainConfig(
     tpu_type="v4-128",
     node_count=1,
     train_batch_size=1024,
-    learning_rate=1e-3,
+    learning_rate=1e-3,  # will be replaced in the scaling law suite
     weight_decay=0.1,
     # https://arxiv.org/pdf/2412.04403 gets 4 points per run. this gives us 5
     num_train_steps=50000,  # 4096 * 1024 * 50000 = ~200B tokens

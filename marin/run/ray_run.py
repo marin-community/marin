@@ -95,6 +95,9 @@ async def submit_and_track_job(entrypoint: str, dependencies: list, env_vars: di
         "config": {"setup_timeout_seconds": 1800},
     }
 
+    if len(dependencies) == 0:
+        del runtime_dict["pip"]
+
     logger.info(f"Submitting job with entrypoint: {entrypoint}")
     logger.info(f"Dependencies: {json.dumps(dependencies, indent=4)}")
     logger.info(f"env_vars: {json.dumps(env_vars, indent=4)}")
@@ -180,7 +183,10 @@ def main():
 
     # Convert pyproject.toml to requirements.txt before submission
     pyproject_toml = "pyproject.toml"
-    dependencies = get_dependencies_from_toml(pyproject_toml)
+    # If we are using the latest docker image then we can skip getting core dependencies from pyproject.toml
+    # As they are already installed inside the cluster
+    dependencies = []
+    dependencies += get_dependencies_from_toml(pyproject_toml)
     dependencies += PIP_DEPS
     dependencies += args.pip_deps if args.pip_deps else []
 
