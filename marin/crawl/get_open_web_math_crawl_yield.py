@@ -18,7 +18,7 @@ Running on OpenWebMath-10M:
 
 ```
 python marin/run/ray_run.py \
-    --pip_deps 'resiliparse,fasttext,lxml,py-asciimath,tabulate,warcio[all],w3lib,cchardet,kenlm' \
+    --pip_deps 'resiliparse,fasttext,lxml,py-asciimath,tabulate,w3lib,cchardet,kenlm,warcio[all] @ git+https://github.com/nelson-liu/warcio@brotlicffi' \
     --no_wait -- \
     python marin/crawl/get_open_web_math_crawl_yield.py \
     --urls_input_directory gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-10M/ \
@@ -32,7 +32,7 @@ Running on OpenWebMath-10M-cc-deduplicated:
 
 ```
 python marin/run/ray_run.py \
-    --pip_deps 'resiliparse,fasttext,lxml,py-asciimath,tabulate,warcio[all],w3lib,cchardet,kenlm' \
+    --pip_deps 'resiliparse,fasttext,lxml,py-asciimath,tabulate,w3lib,cchardet,kenlm,warcio[all] @ git+https://github.com/nelson-liu/warcio@brotlicffi' \
     --no_wait -- \
     python marin/crawl/get_open_web_math_crawl_yield.py \
     --urls_input_directory gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-10M-cc-deduplicated/ \
@@ -62,6 +62,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import ray
 import w3lib.url
+import warcio
 from filelock import FileLock
 from resiliparse.extract.html2text import extract_plain_text
 from resiliparse.parse.encoding import bytes_to_str, detect_encoding
@@ -300,6 +301,8 @@ def get_shard_yield(
             shard_stats["total_urls_fetched"],
             shard_stats["total_urls_passing"],
         )
+
+    logger.info(f"Using warcio version {warcio.__version__}")
 
     with fsspec.open(urls_path, block_size=1 * 1024 * 1024 * 1024) as f:
         df = pd.read_parquet(f)
