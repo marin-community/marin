@@ -208,6 +208,7 @@ def download():
     # Stream the file directly from cloud storage or the filesystem
     return Response(server.fs(path).open(path, "rb"), content_type="application/octet-stream")
 
+
 @app.route("/api/view", methods=["GET"])
 @limiter.limit("60 per minute")
 def view():
