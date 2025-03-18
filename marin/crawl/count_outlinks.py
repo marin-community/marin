@@ -156,7 +156,9 @@ def count_outlinks(input_pattern: str, exact: bool):
     logger.info(f"In total, found ~{len(global_hll):,} unique outlinks and {num_outlinks:,} total outlinks")
 
     if exact:
-        logger.info("Generating exact counts, in addition to approximate counts")
+        # We only compute exact counts for small-scale debugging, to make sure that the
+        # BigQuery deduplicated linked are actually unique.
+        logger.info("Generating exact counts")
         # Delete the global HLL from approximate counting to save memory
         del global_hll
         gc.collect()
