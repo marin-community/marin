@@ -22,8 +22,10 @@ from experiments.dclm.tokenize_dclm import DCLM_MIXTURE_WEIGHTS, dclm_components
 from experiments.defaults import default_train
 from experiments.dolma.tokenize_dolma import tokenize_dolma_steps
 from experiments.dolmino.tokenize_dolmino import dolmino_math_tokenized_llama3, get_dolmino_step
+from experiments.evals.task_configs import CORE_TASKS_PLUS_MMLU
 from experiments.llama import llama3_tokenizer, llama_8b, llama_8b_old_rotary
 from experiments.midtraining_datasets import finemath_3_plus_tokenized
+from experiments.nemotron_cc.tokenize_nemotron import NEMOTRON_WEIGHTS, tokenize_nemotron_steps
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
@@ -35,6 +37,7 @@ from marin.processing.tokenize.data_configs import lm_varying_mixture_data_confi
 # 4a. Tootsie Dessert (Attempt 1): Sprinkle in a bit of FLAN and Synth Math (from (3))
 # 4b. Tootsie Dessert (Attempt 2): Fix the weights and add in all the HQ docs from dolmino (from (3))
 # 5. Tootsie Cooldown v2: Another attempt at a final cooldown (from (2))
+# 6. Tootsie rewarm: from (3), rewarmup and use mix of nemotron_cc and starcoder to keep moving
 
 
 ################################################################
@@ -209,7 +212,7 @@ web_counts = {
 total_web_token_count = sum(web_counts.values())
 
 # reweight data so that 30% are high-quality sources and 70% are dclm+other
-cooldown_mixture_weights_v2 = {
+cooldown_mixture_weights_v1 = {
     **{
         dataset: HQ_WEIGHT * token_count / total_high_quality_token_count
         for dataset, token_count in high_quality_token_counts.items()
@@ -221,7 +224,7 @@ phase_3_data_mixture = lm_varying_mixture_data_config(
     components=phase_3_tokenized,
     weights_list=[
         (0, DCLM_MIXTURE_WEIGHTS),
-        (PHASE_3_START, cooldown_mixture_weights_v2),
+        (PHASE_3_START, cooldown_mixture_weights_v1),
     ],
 )
 
@@ -303,7 +306,7 @@ bad_dessert_data_mixture_v1 = lm_varying_mixture_data_config(
     components=dessert_tokenized,
     weights_list=[
         (0, DCLM_MIXTURE_WEIGHTS),
-        (PHASE_3_START, cooldown_mixture_weights_v2),
+        (PHASE_3_START, cooldown_mixture_weights_v1),
         (PHASE_3_END, bad_dessert_weights_v1),
     ],
 )
@@ -376,7 +379,7 @@ dessert_data_mixture_v3 = lm_varying_mixture_data_config(
     components=dessert_tokenized_v2,
     weights_list=[
         (0, DCLM_MIXTURE_WEIGHTS),
-        (PHASE_3_START, cooldown_mixture_weights_v2),
+        (PHASE_3_START, cooldown_mixture_weights_v1),
         (PHASE_3_END, dessert_weights_v2),
     ],
 )
@@ -459,6 +462,80 @@ llama_8b_tootsie_cooldown_v2 = dataclasses.replace(
 )
 
 
+## Tootsie rewarm: from (3), rewarmup and use mix of nemotron_cc and starcoder to keep moving
+
+# We're going to try to keep moving by rewarming the model with a mix of nemotron_cc and starcoder.
+
+PHASE_4_START = PHASE_3_END
+PHASE_4_END = 2_000_000
+# ramp up to 1.7e-3 over 2k steps
+PHASE_4_REWARMUP_DURATION = 2000
+
+
+nemotron_cc_steps = tokenize_nemotron_steps()
+
+# Nemotron weights are in compressed TiB. We'll use the rule of thumb that compressed bytes ≈ tokens
+
+phase_4_steady_state_weights = {
+    **NEMOTRON_WEIGHTS,
+    "starcoderdata": 0.25,  # 250B tokens
+}
+
+# We bridge the mixture from the end of the cooldown to the steady state mixture. We used a mixture that was
+# roughly proportional to token count for each phase.
+phase_4_warmup_weights = {
+    **{k: v for k, v in DCLM_MIXTURE_WEIGHTS.items()},
+    **{k: v for k, v in phase_4_steady_state_weights.items()},
+}
+
+llama_8b_train_config_phase4 = dataclasses.replace(
+    llama_8b_train_config_phase3,
+    num_train_steps=PHASE_4_END,
+    learning_rate=1.7e-3,
+    lr_schedule="linear",
+    decay=DECAY_FRACTION,
+    # use the WSD-S api to do the re-warmup
+    cycle_length=[PHASE_3_END, (PHASE_4_END - PHASE_3_END)],
+    rewarmup=PHASE_4_REWARMUP_DURATION,
+)
+
+phase_4_data_mixture = lm_varying_mixture_data_config(
+    components={**phase_3_tokenized, **nemotron_cc_steps},
+    weights_list=[
+        (0, DCLM_MIXTURE_WEIGHTS),
+        (PHASE_3_START, cooldown_mixture_weights_v1),
+        (PHASE_4_START, phase_4_warmup_weights),
+        (PHASE_4_START + PHASE_4_REWARMUP_DURATION, phase_4_steady_state_weights),
+    ],
+)
+
+llama_8b_tootsie_adept_phoenix = dataclasses.replace(
+    default_train(
+        name="llama-8b-tootsie-adept-phoenix",
+        tokenized=phase_4_data_mixture,
+        model_config=llama_8b,
+        train_config=llama_8b_train_config_phase4,
+        tags=["llama", "8b", "ema", "exp600"],
+        eval_harness_tasks=CORE_TASKS_PLUS_MMLU,
+    ),
+    override_output_path="checkpoints/llama-8b-tootsie-adept-phoenix",
+)
+
+# little bit of sanity check code to make sure the LR schedules line up
+# levanter_train_config_old = llama_8b_tootsie_phase3.config
+# lr_schedule_old = levanter_train_config_old.optimizer.lr_scheduler(PHASE_3_END)
+# levanter_train_config = llama_8b_tootsie_adept_phoenix.config
+# lr_schedule = levanter_train_config.optimizer.lr_scheduler(PHASE_4_END)
+#
+# # plot the entire LR schedule for phase 3 and phase 4 and make sure they line up
+# import matplotlib.pyplot as plt
+#
+# # offset old by a little bit so i can see it
+# plt.plot(range(0, PHASE_3_END, 10), [lr_schedule_old(x) - 0.5e-4 for x in range(0, PHASE_3_END, 10)])
+# plt.plot(range(0, PHASE_4_END, 10), [lr_schedule(x) for x in range(0, PHASE_4_END, 10)])
+# plt.show()
+
+
 if __name__ == "__main__":
     executor_main(
         steps=[
@@ -467,6 +544,7 @@ if __name__ == "__main__":
             llama_8b_tootsie_dessert_BAD,
             llama_8b_tootsie_dessert_v3,
             llama_8b_tootsie_cooldown_v2,
+            llama_8b_tootsie_adept_phoenix,
         ],
         description="Train 8B model on DCLM using WSD-S, then switching to EMA with a new mixture.",
     )
