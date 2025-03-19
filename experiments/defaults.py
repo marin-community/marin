@@ -57,14 +57,16 @@ logger = logging.getLogger("ray")
 
 def default_tokenize(
     name: str,
-    dataset: InputName | ExecutorStep,
+    dataset: InputName | ExecutorStep | str,
     tokenizer: str,
     options: CacheOptions | None = None,
     text_key: str = "text",
+    *,
+    is_validation: bool = False,
 ) -> ExecutorStep:
     config = TokenizeConfig(
-        train_paths=[dataset],
-        validation_paths=[],
+        train_paths=[dataset] if not is_validation else [],
+        validation_paths=[dataset] if is_validation else [],
         cache_path=this_output_path(),
         tokenizer=versioned(tokenizer),
         text_key=text_key,
