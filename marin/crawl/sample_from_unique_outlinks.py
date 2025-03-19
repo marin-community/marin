@@ -78,7 +78,32 @@ logger = logging.getLogger(__name__)
 @dataclass
 class OutlinksSamplingConfig:
     """
-    Configuration for 'truncation' sampling from a pre-shuffled set of outlinks.
+    Configuration for sampling outlinks from a collection of **unique** outlinks.
+
+    The sampled outlinks are read in order from the discovered shards, skipping the
+    first `start_from` outlinks, and then collecting `num_to_sample` outlinks. If
+    `num_to_sample` is -1, all outlinks are collected. The collected outlinks are then
+    distributed into Parquet shards of size `shard_size`, written out under the path
+    prefix specified by `output_prefix`.
+
+    Attributes:
+        input_pattern (str):
+            A glob-style pattern used to locate the input JSONL files (shards) that
+            contain unique outlinks. For example,
+            "gs://bucket/path/to/shards/unique_links*.jsonl.gz".
+        num_to_sample (int):
+            The total number of outlinks to sample. If set to -1, all outlinks in the
+            input files will be collected. Must be a positive integer or -1.
+        shard_size (int):
+            The maximum number of outlinks to include in each output Parquet shard.
+            For instance, if set to 100,000, then each Parquet file will contain
+            at most 100,000 outlinks.
+        output_prefix (str):
+            The prefix for naming the output Parquet shard files. Typically includes
+            a filesystem path or cloud bucket URI (e.g., "gs://bucket/prefix").
+        start_from (int):
+            The number of outlinks to skip from the start of the dataset before sampling
+            begins. Defaults to 0, meaning sampling starts from the very beginning.
     """
 
     input_pattern: str
@@ -109,14 +134,15 @@ def sample_from_shuffled_unique_outlinks(
     shard_paths = sorted(fsspec_glob(input_pattern))
     logger.info(f"Found {len(shard_paths)} shards matching pattern.")
 
+    if num_to_sample <= 0 and num_to_sample != -1:
+        raise ValueError("Must request a positive number of samples or -1 (for all examples).")
+
     # We'll read lines in order, skipping `start_from` lines, then collecting
     # up to `num_to_sample` lines. Once we reach that number, we stop.
     to_skip = start_from
-    to_collect = num_to_sample
+    # We want to collect all samples if num_to_sample is -1
+    to_collect = num_to_sample if num_to_sample != -1 else float("inf")
     collected_outlinks = []
-
-    if num_to_sample <= 0:
-        raise ValueError("Must request a positive number of samples.")
 
     logger.info(f"Skipping the first {to_skip} lines, then collecting {to_collect} lines.")
     for shard_path in tqdm(shard_paths, desc="Reading shards"):
@@ -141,7 +167,7 @@ def sample_from_shuffled_unique_outlinks(
 
     total_collected = len(collected_outlinks)
     logger.info(f"Collected {total_collected} outlinks in total.")
-    if total_collected < num_to_sample:
+    if num_to_sample > 0 and total_collected < num_to_sample:
         raise ValueError(f"Only collected {total_collected} outlinks, but requested {num_to_sample}.")
 
     # Group by domain to produce domain-clustered shards
