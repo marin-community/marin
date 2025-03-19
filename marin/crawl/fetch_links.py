@@ -100,12 +100,15 @@ import fsspec
 import pandas as pd
 import ray
 import requests
+import urllib3
 from tqdm_loggable.auto import tqdm
 
 from marin.utils import fsspec_cp, fsspec_exists, fsspec_glob
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
+# Disable SSL verification warnings.
+urllib3.disable_warnings(category=urllib3.exceptions.InsecureRequestWarning)
 
 
 @dataclass
