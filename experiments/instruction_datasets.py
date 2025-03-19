@@ -30,6 +30,7 @@ Current datasets:
 """
 
 import hashlib
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from marin.execution.executor import (
@@ -43,7 +44,6 @@ from operations.download.huggingface.download import DownloadConfig
 from operations.download.huggingface.download_hf import download_hf
 from operations.transform.conversation.transform_conversation import (
     TransformSFTDatasetConfig,
-    transform_dataset,
     transform_hf_dataset,
 )
 
@@ -263,14 +263,6 @@ def transform_dataset_step(dataset_cfg: InstructionDatasetConfig, download_step:
     dataset_name = get_directory_friendly_dataset_name(adapter_name)
     download_data_path = output_path_of(download_step)
 
-    # Transform the dataset
-    if dataset_cfg.legacy:
-        # Uses the Marin function
-        transform_fn = transform_dataset
-    else:
-        # Uses the new tranform function that calls `datasets` package
-        transform_fn = transform_hf_dataset
-
     config_str = f"{dataset_name}-\
         {dataset_cfg.revision}\
         -{sorted(dataset_cfg.subsets)}\
@@ -279,7 +271,7 @@ def transform_dataset_step(dataset_cfg: InstructionDatasetConfig, download_step:
 
     transform_step = ExecutorStep(
         name=f"documents/{dataset_name}",
-        fn=transform_fn,
+        fn=transform_hf_dataset,
         config=TransformSFTDatasetConfig(
             input_path=download_data_path,
             output_path=this_output_path(),
@@ -297,9 +289,7 @@ def transform_dataset_step(dataset_cfg: InstructionDatasetConfig, download_step:
     return transform_step
 
 
-def get_instruction_dataset(
-    hf_dataset_id: str, splits: list[str] = field(default_factory=lambda: ["train"])
-) -> ExecutorStep:
+def get_instruction_dataset(hf_dataset_id: str, splits: Sequence[str] = ("train",)) -> ExecutorStep:
     # Check that config exists
     assert hf_dataset_id in INSTRUCTION_DATASET_NAME_TO_CONFIG, f"Unknown instruction dataset: {hf_dataset_id}"
 
