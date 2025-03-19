@@ -819,4 +819,6 @@ python marin/run/ray_run.py \
 Results:
 
 ```
+Total number of tokens: 3,376,657,155
+Total number of documents: 1,002,483
 ```
