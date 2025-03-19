@@ -22,6 +22,7 @@ from experiments.dclm.tokenize_dclm import DCLM_MIXTURE_WEIGHTS, dclm_components
 from experiments.defaults import default_train
 from experiments.dolma.tokenize_dolma import tokenize_dolma_steps
 from experiments.dolmino.tokenize_dolmino import dolmino_math_tokenized_llama3, get_dolmino_step
+from experiments.evals.task_configs import CORE_TASKS_PLUS_MMLU
 from experiments.llama import llama3_tokenizer, llama_8b, llama_8b_old_rotary
 from experiments.midtraining_datasets import finemath_3_plus_tokenized
 from experiments.nemotron_cc.tokenize_nemotron import NEMOTRON_WEIGHTS, tokenize_nemotron_steps
@@ -480,13 +481,12 @@ phase_4_steady_state_weights = {
     "starcoderdata": 0.25,  # 250B tokens
 }
 
+# We bridge the mixture from the end of the cooldown to the steady state mixture. We used a mixture that was
+# roughly proportional to token count for each phase.
 phase_4_warmup_weights = {
-    **{k: v * 0.5 for k, v in DCLM_MIXTURE_WEIGHTS.items()},
-    **{k: v * 0.5 for k, v in phase_4_steady_state_weights.items()},
+    **{k: v for k, v in DCLM_MIXTURE_WEIGHTS.items()},
+    **{k: v for k, v in phase_4_steady_state_weights.items()},
 }
-
-# will do manual inspection of the mixture to make sure it's right
-print(phase_4_warmup_weights)
 
 llama_8b_train_config_phase4 = dataclasses.replace(
     llama_8b_train_config_phase3,
@@ -516,7 +516,7 @@ llama_8b_tootsie_adept_phoenix = dataclasses.replace(
         model_config=llama_8b,
         train_config=llama_8b_train_config_phase4,
         tags=["llama", "8b", "ema", "exp600"],
-        # eval_harness_tasks=[],
+        eval_harness_tasks=CORE_TASKS_PLUS_MMLU,
     ),
     override_output_path="checkpoints/llama-8b-tootsie-adept-phoenix",
 )
