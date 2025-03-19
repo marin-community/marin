@@ -10,10 +10,16 @@ python marin/run/ray_run.py \
     --pip_deps 'hyperloglog' \
     --no_wait -- \
     python marin/crawl/count_outlinks.py \
-    --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8/*_links.jsonl.gz'
+    --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8/*_links.jsonl.gz' \
+    --exact True
 ```
 
-Running on OpenWebMath-unique, to verify that the BigQuery-deduplicated links are actually unique.
+```
+Approximate: In total, found ~126,391,030 unique outlinks and 629,622,096 total outlinks
+Exact: In total, found 126,881,930 unique outlinks and 629,622,096 total outlinks
+```
+
+Running on OpenWebMath-unique:
 
 ```
 python marin/run/ray_run.py \
@@ -22,6 +28,27 @@ python marin/run/ray_run.py \
     python marin/crawl/count_outlinks.py \
     --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-unique/unique_links*.jsonl.gz' \
     --exact True
+```
+
+```
+Approximate: In total, found ~126,391,030 unique outlinks and 126,881,930 total outlinks
+Exact: In total, found 126,881,930 unique outlinks and 126,881,930 total outlinks
+```
+
+Running on OpenWebMath-cc-deduplicated-unique:
+
+```
+python marin/run/ray_run.py \
+    --pip_deps 'hyperloglog' \
+    --no_wait -- \
+    python marin/crawl/count_outlinks.py \
+    --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-cc-deduplicated-unique/unique_links*.jsonl.gz' \
+    --exact True
+```
+
+```
+Approximate: In total, found ~98,553,197 unique outlinks and 98,816,628 total outlinks
+Exact: In total, found 98,816,628 unique outlinks and 98,816,628 total outlinks
 ```
 
 Running on FineWeb-Edu:
@@ -34,17 +61,38 @@ python marin/run/ray_run.py \
     --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu/CC-MAIN*/*_links.jsonl.gz'
 ```
 
-Running on FineWeb-Edu-unique, to verify that the BigQuery-deduplicated links are actually unique.
+```
+Approximate: In total, found ~4,102,039,678 unique outlinks and 101,394,652,597 total outlinks
+```
+
+Running on FineWeb-Edu-unique.
 
 ```
 python marin/run/ray_run.py \
     --pip_deps 'hyperloglog' \
     --no_wait -- \
     python marin/crawl/count_outlinks.py \
-    --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-unique/unique_links*.jsonl.gz' \
-    --exact True
+    --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-unique/unique_links*.jsonl.gz'
 ```
-"""
+
+```
+Approximate: In total, found ~4,102,039,678 unique outlinks and 4,091,469,089 total outlinks
+```
+
+Running on FineWeb-Edu-cc-deduplicated-unique.
+
+```
+python marin/run/ray_run.py \
+    --pip_deps 'hyperloglog' \
+    --no_wait -- \
+    python marin/crawl/count_outlinks.py \
+    --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-cc-deduplicated-unique/unique_links*.jsonl.gz'
+```
+
+```
+Approximate: In total, found ~2,634,455,894 unique outlinks and 2,617,700,907 total outlinks
+```
+"""  # noqa: E501
 import gc
 import json
 import logging
