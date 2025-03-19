@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import random
+import tempfile
 import time
 from dataclasses import dataclass
 
@@ -12,14 +13,10 @@ import fsspec
 import ray
 import torch
 import torch_xla.core.xla_model as xm
-import torch_xla.distributed.parallel_loader as pl
-import torch_xla.distributed.xla_multiprocessing as xmp
-from torch.utils.data import DataLoader
-from torch.utils.data.distributed import DistributedSampler
 from tqdm_loggable.auto import tqdm
-from transformers import AdamW, BertForSequenceClassification, BertTokenizer
+from transformers import BertForSequenceClassification
 
-from marin.classifiers.bert.utils import BertDataset
+from marin.classifiers.bert.training import BertTrainingArguments, _mp_fn
 from marin.classifiers.utils import shuffle
 from marin.utils import fsspec_exists, fsspec_glob, remove_tpu_lockfile_on_exit
 
@@ -37,6 +34,10 @@ class TrainBertUrlClassifierConfig:
     hf_model: str = "bert-base-uncased"
     num_epochs: int = 1
     seed: int = 0
+    max_length: int = 512
+    tpu_num_cores: int = 1
+    dataloader_num_workers: int = 8
+    dataloader_prefetch_factor: int = 4
 
 
 @ray.remote(memory=8 * 1024 * 1024 * 1024)
@@ -129,13 +130,17 @@ def train_bert_url_classifier(
     lr: float,
     hf_model: str,
     num_epochs: int,
+    max_length: int,
+    tpu_num_cores: int,
+    dataloader_num_workers: int,
+    dataloader_prefetch_factor: int,
     seed: int = 0,
 ):
     # Hash this dataset configuration so we can skip dataset generation if it already exists.
     dataset_hash = hashlib.md5(f"{input_pattern}{val_frac}{seed}".encode())
     train_dataset_path = os.path.join(output_path, "data", f"train_.{dataset_hash}jsonl.gz")
     val_dataset_path = os.path.join(output_path, "data", f"val_{dataset_hash}.jsonl.gz")
-    _ = ray.get(
+    ray.get(
         make_url_classification_dataset.remote(
             input_pattern=input_pattern,
             train_output_path=train_dataset_path,
@@ -145,7 +150,7 @@ def train_bert_url_classifier(
         )
     )
 
-    _ = ray.get(
+    ray.get(
         train_model.remote(
             train_dataset_path=train_dataset_path,
             val_dataset_path=val_dataset_path,
@@ -154,6 +159,10 @@ def train_bert_url_classifier(
             lr=lr,
             hf_model=hf_model,
             num_epochs=num_epochs,
+            max_length=max_length,
+            tpu_num_cores=tpu_num_cores,
+            dataloader_num_workers=dataloader_num_workers,
+            dataloader_prefetch_factor=dataloader_prefetch_factor,
         )
     )
 
@@ -171,6 +180,10 @@ def train_model(
     lr: float,
     hf_model: str,
     num_epochs: int,
+    max_length: int = 512,
+    tpu_num_cores: int = 1,
+    dataloader_num_workers: int = 8,
+    dataloader_prefetch_factor: int = 4,
 ) -> None:
     logger.info(f"Training BERT model for experiment {output_path}")
     success_path = os.path.join(output_path, ".SUCCESS")
@@ -180,113 +193,38 @@ def train_model(
         return
 
     train_start_time = time.time()
-    xmp.spawn(_mp_fn, args=(hf_model, train_dataset_path, val_dataset_path, output_path, lr, batch_size, num_epochs))
-    train_end_time = time.time()
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        local_model_output_path = os.path.join(tmp_dir, "model_output")
+        local_trainer_output_path = os.path.join(tmp_dir, "trainer_output")
+        os.makedirs(local_model_output_path, exist_ok=True)
+        os.makedirs(local_trainer_output_path, exist_ok=True)
+
+        bert_args = BertTrainingArguments(
+            output_dir=local_trainer_output_path,
+            remove_unused_columns=False,
+            per_device_train_batch_size=batch_size,
+            num_train_epochs=num_epochs,
+            learning_rate=lr,
+            dataloader_num_workers=dataloader_num_workers,
+            dataloader_prefetch_factor=dataloader_prefetch_factor,
+            tpu_num_cores=tpu_num_cores,
+            report_to="wandb",
+            logging_steps=0.1,
+            eval_steps=0.1,
+            save_strategy="no",
+            max_length=max_length,
+        )
+
+        import torch_xla.distributed.xla_multiprocessing as xmp
+
+        xmp.spawn(_mp_fn, args=(hf_model, train_dataset_path, val_dataset_path, local_model_output_path, bert_args))
+        train_end_time = time.time()
 
     elapsed_seconds = train_end_time - train_start_time
     elapsed_str = time.strftime("%H:%M:%S", time.gmtime(elapsed_seconds))
     logger.info(f"Training BERT for experiment {output_path} completed; total time = {elapsed_str}.")
     with fsspec.open(success_path, "w", compression="infer", block_size=1 * 1024 * 1024 * 1024) as f:
         json.dump({"training_elapsed_seconds": elapsed_seconds}, f)
-
-
-def train_epochs(
-    model: BertForSequenceClassification,
-    optimizer: torch.optim.Optimizer,
-    data_loader: torch.utils.data.DataLoader,
-    num_epochs: int,
-    index: int | None = None,
-):
-    """
-    Train a model for a number of epochs.
-
-    Args:
-        model (BertForSequenceClassification): Model to train.
-        optimizer (torch.optim.Optimizer): Optimizer to use for training.
-        data_loader (torch.utils.data.DataLoader): DataLoader for training data.
-        num_epochs (int): Number of epochs to train for.
-        index: (Optional[int]): Index of the TPU device (if called from _mp_fn).
-
-    Returns:
-        bool: True if the process is successful.
-    """
-    model.train()
-    for epoch in range(num_epochs):
-        logger.info(f"Training epoch {epoch}")
-        total_loss = 0
-
-        for t, batch in enumerate(data_loader):
-            input_ids = batch["input_ids"]
-            attention_mask = batch["attention_mask"]
-            labels = batch["labels"]
-
-            optimizer.zero_grad()
-            outputs = model(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
-            loss = outputs.loss
-            loss.backward()
-
-            xm.optimizer_step(optimizer)
-            xm.mark_step()
-
-            total_loss += loss.item()
-            if t % 10 == 0:
-                logger.info(f"Step {t} on device {index}, Loss: {loss.item()}")
-        logger.info(f"Epoch {epoch + 1}/{num_epochs}, Loss: {total_loss/len(data_loader):.4f}")
-
-
-def _mp_fn(
-    index: int,
-    hf_model: str,
-    train_dataset_path: str,
-    val_dataset_path: str,
-    output_path: str,
-    lr: float,
-    batch_size: int,
-    num_epochs: int,
-    num_workers: int = 8,
-    prefetch_factor: int = 4,
-):
-    tokenizer = BertTokenizer.from_pretrained(hf_model)
-    # Train dataset/loader
-    train_dataset = BertDataset(train_dataset_path, tokenizer)
-    train_sampler = DistributedSampler(train_dataset, num_replicas=xm.xrt_world_size(), rank=xm.get_ordinal())
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=batch_size,
-        sampler=train_sampler,
-        num_workers=num_workers,
-        prefetch_factor=prefetch_factor,
-    )
-
-    device = xm.xla_device()
-    device_train_loader = pl.MpDeviceLoader(train_loader, device)
-
-    # Validation dataset/loader
-    val_dataset = BertDataset(val_dataset_path, tokenizer)
-    val_sampler = DistributedSampler(val_dataset, num_replicas=xm.xrt_world_size(), rank=xm.get_ordinal())
-    val_loader = DataLoader(
-        val_dataset,
-        batch_size=batch_size,
-        sampler=val_sampler,
-        num_workers=num_workers,
-        prefetch_factor=prefetch_factor,
-    )
-    device_val_loader = pl.MpDeviceLoader(val_loader, device)
-
-    model = BertForSequenceClassification.from_pretrained(hf_model, num_labels=train_dataset.num_labels).to(device)
-    optimizer = AdamW(model.parameters(), lr=lr)
-    xm.broadcast_master_param(model)
-
-    # Train
-    train_epochs(model, optimizer, device_train_loader, num_epochs, index)
-
-    # Validate
-    evaluate_model(model, device_val_loader, index)
-
-    if index == 0:
-        # Save entire model + tokenizer for easy reloading
-        model.save_pretrained(output_path)
-        tokenizer.save_pretrained(output_path)
 
 
 def evaluate_model(model: BertForSequenceClassification, data_loader, index: int | None = None) -> float:
@@ -333,6 +271,10 @@ def train_bert_url_classifier_driver(cfg: TrainBertUrlClassifierConfig):
         hf_model=cfg.hf_model,
         num_epochs=cfg.num_epochs,
         seed=cfg.seed,
+        max_length=cfg.max_length,
+        tpu_num_cores=cfg.tpu_num_cores,
+        dataloader_num_workers=cfg.dataloader_num_workers,
+        dataloader_prefetch_factor=cfg.dataloader_prefetch_factor,
     )
 
 
