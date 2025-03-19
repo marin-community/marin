@@ -20,6 +20,7 @@ from tqdm_loggable.auto import tqdm
 from transformers import AdamW, BertForSequenceClassification, BertTokenizer
 
 from marin.classifiers.bert.utils import BertDataset
+from marin.classifiers.utils import shuffle
 from marin.utils import fsspec_exists, fsspec_glob, remove_tpu_lockfile_on_exit
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -115,7 +116,10 @@ def make_url_classification_dataset(
 
     assert val_examples_written == val_lines_target
     assert (train_examples_written + val_examples_written) == total_lines
-    # TODO(nfliu): shuffle data here
+    logger.info("Shuffling training dataset")
+    shuffle(train_output_path, train_output_path, seed=seed)
+    logger.info("Shuffling validation dataset")
+    shuffle(val_output_path, val_output_path, seed=seed)
 
     # Write success files
     with fsspec.open(train_success_path, "w", block_size=1 * 1024 * 1024 * 1024) as f:
