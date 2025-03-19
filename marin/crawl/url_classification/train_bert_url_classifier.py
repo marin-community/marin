@@ -254,14 +254,10 @@ def _mp_fn(
     num_workers: int = 8,
     prefetch_factor: int = 4,
 ):
-    # TODO(nfliu): use val_dataset_path
     tokenizer = BertTokenizer.from_pretrained(hf_model)
+    # Train dataset/loader
     train_dataset = BertDataset(train_dataset_path, tokenizer)
-    train_sampler = DistributedSampler(
-        train_dataset,
-        num_replicas=xm.xrt_world_size(),
-        rank=xm.get_ordinal(),
-    )
+    train_sampler = DistributedSampler(train_dataset, num_replicas=xm.xrt_world_size(), rank=xm.get_ordinal())
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
@@ -271,18 +267,67 @@ def _mp_fn(
     )
 
     device = xm.xla_device()
-    device_loader = pl.MpDeviceLoader(train_loader, device)
+    device_train_loader = pl.MpDeviceLoader(train_loader, device)
+
+    # Validation dataset/loader
+    val_dataset = BertDataset(val_dataset_path, tokenizer)
+    val_sampler = DistributedSampler(val_dataset, num_replicas=xm.xrt_world_size(), rank=xm.get_ordinal())
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=batch_size,
+        sampler=val_sampler,
+        num_workers=num_workers,
+        prefetch_factor=prefetch_factor,
+    )
+    device_val_loader = pl.MpDeviceLoader(val_loader, device)
 
     model = BertForSequenceClassification.from_pretrained(hf_model, num_labels=train_dataset.num_labels).to(device)
     optimizer = AdamW(model.parameters(), lr=lr)
     xm.broadcast_master_param(model)
 
-    train_epochs(model, optimizer, device_loader, num_epochs, index)
+    # Train
+    train_epochs(model, optimizer, device_train_loader, num_epochs, index)
 
-    # TODO(nfliu): save all model state (e.g., tokenizer, etc) for easy loading with
-    # HuggingFace, not just the state dict.
+    # Validate
+    evaluate_model(model, device_val_loader, index)
+
     if index == 0:
-        xm.save(model.state_dict(), os.path.join(output_path, "model.bin"))
+        # Save entire model + tokenizer for easy reloading
+        model.save_pretrained(output_path)
+        tokenizer.save_pretrained(output_path)
+
+
+def evaluate_model(model: BertForSequenceClassification, data_loader, index: int | None = None) -> float:
+    model.eval()
+    local_correct = 0
+    local_total = 0
+
+    with torch.no_grad():
+        for batch in data_loader:
+            input_ids = batch["input_ids"]
+            attention_mask = batch["attention_mask"]
+            labels = batch["labels"].to(model.device)
+
+            outputs = model(input_ids=input_ids, attention_mask=attention_mask)
+            preds = torch.argmax(outputs.logits, dim=-1)
+            local_correct += (preds == labels).sum().item()
+            local_total += labels.size(0)
+
+    # Each process now has a local_correct/local_total from just its chunk
+    # Use mesh_reduce to sum across processes
+    global_correct = xm.mesh_reduce("correct_reduce", local_correct, sum)
+    global_total = xm.mesh_reduce("total_reduce", local_total, sum)
+
+    if global_total == 0:
+        global_accuracy = 0.0
+    else:
+        global_accuracy = global_correct / global_total
+
+    # Log only on one process
+    if index == 0:
+        logger.info(f"Validation Accuracy (global across all TPUs) = {global_accuracy:.4f}")
+
+    return global_accuracy
 
 
 @draccus.wrap()
