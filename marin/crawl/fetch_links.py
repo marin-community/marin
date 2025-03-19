@@ -107,8 +107,6 @@ from marin.utils import fsspec_cp, fsspec_exists, fsspec_glob
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
-# Disable SSL verification warnings.
-urllib3.disable_warnings(category=urllib3.exceptions.InsecureRequestWarning)
 
 
 @dataclass
@@ -707,6 +705,9 @@ def fetch_links(
     threads_per_shard (int): Number of threads to use for concurrent fetching.
     """
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+    # Disable SSL verification warnings.
+    urllib3.disable_warnings(category=urllib3.exceptions.InsecureRequestWarning)
+
     success_path = parquet_output_path + ".SUCCESS"
     if fsspec_exists(success_path):
         logger.info(f"Already processed and wrote parquet to {parquet_output_path}, skipping...")
