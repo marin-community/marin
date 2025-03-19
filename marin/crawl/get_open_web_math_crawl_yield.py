@@ -18,14 +18,13 @@ Running on OpenWebMath-10M:
 
 ```
 python marin/run/ray_run.py \
-    --pip_deps 'resiliparse,fasttext,lxml,py-asciimath,tabulate,warcio[all],w3lib,cchardet,kenlm' \
+    --pip_deps 'resiliparse,fasttext,lxml,py-asciimath,tabulate,w3lib,cchardet,kenlm,warcio[all] @ git+https://github.com/nelson-liu/warcio@brotlicffi' \
     --no_wait -- \
     python marin/crawl/get_open_web_math_crawl_yield.py \
     --urls_input_directory gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-10M/ \
     --crawl_input_directory gs://marin-us-central2/scratch/nfliu/fetched_outlinks/open-web-math-fde8ef8-10M/ \
     --data_source open-web-math-fde8ef8-10M \
     --text_output_directory gs://marin-us-central2/scratch/nfliu/text/open-web-math-fde8ef8-10M/ \
-    --urls_and_scores_output_directory gs://marin-us-central2/scratch/nfliu/urls_and_scores/open-web-math-fde8ef8-10M/ \
     --statistics_output_path gs://marin-us-central2/scratch/nfliu/fetched_outlinks/open-web-math-fde8ef8-10M/yield_statistics.json.gz
 ```
 
@@ -33,14 +32,13 @@ Running on OpenWebMath-10M-cc-deduplicated:
 
 ```
 python marin/run/ray_run.py \
-    --pip_deps 'resiliparse,fasttext,lxml,py-asciimath,tabulate,warcio[all],w3lib,cchardet,kenlm' \
+    --pip_deps 'resiliparse,fasttext,lxml,py-asciimath,tabulate,w3lib,cchardet,kenlm,warcio[all] @ git+https://github.com/nelson-liu/warcio@brotlicffi' \
     --no_wait -- \
     python marin/crawl/get_open_web_math_crawl_yield.py \
     --urls_input_directory gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-10M-cc-deduplicated/ \
     --crawl_input_directory gs://marin-us-central2/scratch/nfliu/fetched_outlinks/open-web-math-fde8ef8-10M-cc-deduplicated/ \
     --data_source open-web-math-fde8ef8-10M-cc-deduplicated \
     --text_output_directory gs://marin-us-central2/scratch/nfliu/text/open-web-math-fde8ef8-10M-cc-deduplicated/ \
-    --urls_and_scores_output_directory gs://marin-us-central2/scratch/nfliu/urls_and_scores/open-web-math-fde8ef8-10M-cc-deduplicated/ \
     --statistics_output_path gs://marin-us-central2/scratch/nfliu/fetched_outlinks/open-web-math-fde8ef8-10M-cc-deduplicated/yield_statistics.json.gz
 ```
 """  # noqa: E501
@@ -64,6 +62,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import ray
 import w3lib.url
+import warcio
 from filelock import FileLock
 from resiliparse.extract.html2text import extract_plain_text
 from resiliparse.parse.encoding import bytes_to_str, detect_encoding
@@ -184,7 +183,7 @@ latex_regex = re.compile("\\\\[a-z]{2,}")
 original_regex = re.compile("|".join(MATH_KEYWORDS))
 
 
-@dataclass
+@dataclass(frozen=True)
 class DolmaFormattedOpenWebMathRecord:
     id: str
     source: str
@@ -193,14 +192,21 @@ class DolmaFormattedOpenWebMathRecord:
     metadata: dict[str, Any]
 
 
-@dataclass
+@dataclass(frozen=True)
+class RawWarcRecord:
+    url: str | None
+    html: str | None
+    record_id: str
+    record_date: str
+
+
+@dataclass(frozen=True)
 class GetCrawlYieldConfig:
     urls_input_directory: str
     crawl_input_directory: str
     data_source: str
     text_output_directory: str
     statistics_output_path: str
-    urls_and_scores_output_directory: str
 
 
 def is_english(text, lid_model):
@@ -279,6 +285,47 @@ def contains_math_prefilter(data, score_model):
     return False
 
 
+def read_warc_records(warc_path: str) -> list[RawWarcRecord]:
+    """
+    Read the contents of the WARC at `warc_path`.
+    """
+    raw_records = []
+    with fsspec.open(warc_path, "rb", compression="gzip", block_size=1 * 1024 * 1024 * 1024) as file_stream:
+        for record in ArchiveIterator(file_stream):
+            if record.rec_type != "response":
+                continue
+
+            record_url = record.rec_headers.get_header("WARC-Target-URI")
+            record_id = record.rec_headers.get_header("WARC-Record-ID")
+            record_date = record.rec_headers.get_header("WARC-Date")
+            content = record.content_stream().read()
+            html_decoded: str | None = decode_html(content)
+            raw_records.append(
+                RawWarcRecord(
+                    url=record_url,
+                    html=html_decoded,
+                    record_id=record_id,
+                    record_date=record_date,
+                )
+            )
+    return raw_records
+
+
+@ray.remote(
+    memory=2 * 1024 * 1024 * 1024,
+    num_cpus=1,
+)
+def extract_text_from_record(
+    record: RawWarcRecord,
+    randomized_config_sample: dict,
+    fast: bool,
+):
+    """
+    Remote function for extracting text from a record.
+    """
+    return (record.record_id, extract_text(record.html, randomized_config_sample, fast=fast))
+
+
 @ray.remote(
     memory=32 * 1024 * 1024 * 1024,
     num_cpus=8,
@@ -289,13 +336,11 @@ def get_shard_yield(
     robots_path: str,
     errors_path: str,
     data_source: str,
-    passing_urls_and_scores_output_path: str,
-    failing_urls_and_scores_output_path: str,
     passing_text_and_scores_output_path: str,
     failing_text_and_scores_output_path: str,
 ):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-    success_path = passing_urls_and_scores_output_path + ".SUCCESS"
+    success_path = passing_text_and_scores_output_path + ".SUCCESS"
     if fsspec_exists(success_path):
         logger.info(f"Success path {success_path} already exists, skipping...")
         with fsspec.open(success_path, block_size=1 * 1024 * 1024 * 1024) as f:
@@ -305,6 +350,8 @@ def get_shard_yield(
             shard_stats["total_urls_fetched"],
             shard_stats["total_urls_passing"],
         )
+
+    logger.info(f"Using warcio version {warcio.__version__}")
 
     with fsspec.open(urls_path, block_size=1 * 1024 * 1024 * 1024) as f:
         df = pd.read_parquet(f)
@@ -360,62 +407,124 @@ def get_shard_yield(
         os.path.join(os.path.dirname(__file__), "open-web-math", "configs", "randomized_all.yaml")
     )
 
+    # Read the WARC records contents from GCS into memory
+    warc_records = read_warc_records(warc_path)
+
+    # Extract text from all of the WARC records in separate ray processes,
+    # so that extraction is robust to segfaulting due to issues with resiliparse
+    MAX_CONCURRENT_TASKS = 50
+    num_tasks_submitted = 0
+    unfinished = []
+
+    def submit_task(record, config, fast):
+        nonlocal num_tasks_submitted
+        unfinished.append(extract_text_from_record.remote(record, config, fast))
+        num_tasks_submitted += 1
+        if num_tasks_submitted % 100 == 0:
+            logger.info(
+                f"Submitted {num_tasks_submitted} / {len(warc_records)} tasks "
+                f"({num_tasks_submitted / len(warc_records)})"
+            )
+
+    warc_record_to_submit_index = 0
+    for _ in range(min(MAX_CONCURRENT_TASKS, len(warc_records))):
+        # Extract text, randomizing whether it's markdown or plaintext
+        randomized_config_sample = randomized_config.sample()
+        submit_task(warc_records[warc_record_to_submit_index], randomized_config_sample, fast=True)
+        warc_record_to_submit_index += 1
+
+    # Wait for the remote text extraction tasks to finish, and build a mapping
+    # from record ID to extraction result.
+    warc_record_id_to_extraction_result = {}
+    with tqdm(total=len(warc_records), desc="Extracting text") as pbar:
+        while unfinished:
+            # Returns the first ObjectRef that is ready.
+            finished, unfinished = ray.wait(unfinished, num_returns=1)
+            try:
+                record_id, extraction_result = ray.get(finished[0])
+                warc_record_id_to_extraction_result[record_id] = extraction_result
+                pbar.update(1)
+            except Exception as e:
+                logger.exception(f"Failed to get extracted text: {e}")
+
+            # If we have more shard paths left to process and we haven't hit the max
+            # number of concurrent tasks, add tasks to the unfinished queue.
+            while warc_record_to_submit_index < len(warc_records) and len(unfinished) < MAX_CONCURRENT_TASKS:
+                randomized_config_sample = randomized_config.sample()
+                submit_task(warc_records[warc_record_to_submit_index], randomized_config_sample, fast=True)
+                warc_record_to_submit_index += 1
+
+    # Now that we've finished extraction, apply the filtering pipeline to the extracted text.
     fetched_urls = set()
     num_records_skipped = 0
     num_records_passing = 0
     num_records_saved = 0
+    num_records_failed_extraction = 0
 
-    passing_urls_and_scores_output_records = []
-    failing_urls_and_scores_output_records = []
     passing_text_and_scores_output_records = []
     failing_text_and_scores_output_records = []
-    with fsspec.open(warc_path, "rb", compression="gzip", block_size=1 * 1024 * 1024 * 1024) as file_stream:
-        for record in tqdm(ArchiveIterator(file_stream)):
-            if record.rec_type == "response":
-                record_url = record.rec_headers.get_header("WARC-Target-URI")
-                fetched_urls.add(record_url)
 
-                content = record.content_stream().read()
-                html_decoded: str | None = decode_html(content)
-                if not html_decoded or not record_url:
-                    num_records_skipped += 1
-                    continue
+    for record in tqdm(warc_records, desc="Applying OpenWebMath filters"):
+        fetched_urls.add(record.url)
+        if not record.html or not record.url:
+            num_records_skipped += 1
+            continue
 
-                # Apply the prefilter
-                passes_prefilter = contains_math_prefilter(html_decoded, mathscore_model)
+        # Apply the prefilter
+        passes_prefilter = contains_math_prefilter(record.html, mathscore_model)
 
-                # Extract text, randomizing whether it's markdown or plaintext
-                randomized_config_sample = randomized_config.sample()
-                try:
-                    extraction_result = extract_text(html_decoded, randomized_config_sample, fast=True)
-                except Exception:
-                    num_records_skipped += 1
-                    continue
+        # Fetch the extraction result for this record
+        if record.record_id in warc_record_id_to_extraction_result:
+            extraction_result = warc_record_id_to_extraction_result[record.record_id]
+        else:
+            # If the record ID doesn't exist, then this record failed extraction
+            num_records_failed_extraction += 1
 
-                if extraction_result is None:
-                    num_records_skipped += 1
-                    continue
+        # If the extraction result is None, extraction was unsuccessful
+        if extraction_result is None:
+            num_records_skipped += 1
+            continue
 
-                extracted_text, extraction_metadata = extraction_result
-                if not extracted_text.strip() or not normalize(extracted_text).strip():
-                    num_records_skipped += 1
-                    continue
+        extracted_text, extraction_metadata = extraction_result
+        if not extracted_text.strip() or not normalize(extracted_text).strip():
+            num_records_skipped += 1
+            continue
 
-                # Apply the language ID filter
-                passes_langid_filter, en_probability = is_english(extracted_text, lid_model)
-                # Apply the perplexity filter
-                perplexity = document_perplexity(extracted_text, lm)
-                passes_perplexity_filter = perplexity <= 15_000
-                # Apply the mathscore filter
-                found_math = extraction_metadata["found_math"]
-                score = score_text(extracted_text, mathscore_model)
-                passes_mathscore_filter = (found_math and score > 0.17) or (not found_math and score > 0.8)
-                # Apply the post-hoc manual open-web-math filter
-                passes_manual_filter, new_text = manual_url_filter(url=record_url, original_text=extracted_text)
+        # Apply the language ID filter
+        passes_langid_filter, en_probability = is_english(extracted_text, lid_model)
+        # Apply the perplexity filter
+        perplexity = document_perplexity(extracted_text, lm)
+        passes_perplexity_filter = perplexity <= 15_000
+        # Apply the mathscore filter
+        found_math = extraction_metadata["found_math"]
+        score = score_text(extracted_text, mathscore_model)
+        passes_mathscore_filter = (found_math and score > 0.17) or (not found_math and score > 0.8)
+        # Apply the post-hoc manual open-web-math filter
+        passes_manual_filter, new_text = manual_url_filter(url=record.url, original_text=extracted_text)
 
-                canonicalized_url = w3lib.url.canonicalize_url(record_url)
-                urls_and_scores_record = {
-                    "url": record_url,
+        canonicalized_url = w3lib.url.canonicalize_url(record.url)
+
+        passes_all_filters = all(
+            [
+                passes_prefilter,
+                passes_langid_filter,
+                passes_perplexity_filter,
+                passes_mathscore_filter,
+            ]
+        )
+        record_id = record.record_id
+        assert record_id
+        record_date = record.record_date
+        assert record_date
+
+        text_and_scores_record = asdict(
+            DolmaFormattedOpenWebMathRecord(
+                id=record_id,
+                source=data_source,
+                format="text",
+                text=new_text,
+                metadata={
+                    "url": record.url,
                     "canonicalized_url": canonicalized_url,
                     "passes_prefilter": passes_prefilter,
                     "passes_langid_filter": passes_langid_filter,
@@ -424,44 +533,21 @@ def get_shard_yield(
                     "passes_manual_filter": passes_manual_filter,
                     "perplexity": perplexity,
                     "found_math": found_math,
-                    "score": score,
+                    "quality_classifier_score": score,
                     "passes_mathscore_filter": passes_mathscore_filter,
-                }
-                record_id = record.rec_headers.get_header("WARC-Record-ID")
-                assert record_id
-                record_date = record.rec_headers.get_header("WARC-Date")
-                assert record_date
+                    "passes_all_filters": passes_all_filters,
+                    "date": record_date,
+                    "file_path": warc_path,
+                },
+            )
+        )
 
-                text_and_scores_record = asdict(
-                    DolmaFormattedOpenWebMathRecord(
-                        id=record_id,
-                        source=data_source,
-                        format="text",
-                        text=new_text,
-                        metadata={
-                            **urls_and_scores_record,
-                            "date": record_date,
-                            "file_path": warc_path,
-                        },
-                    )
-                )
-
-                passed_quality_filters = all(
-                    [
-                        passes_prefilter,
-                        passes_langid_filter,
-                        passes_perplexity_filter,
-                        passes_mathscore_filter,
-                    ]
-                )
-                if passed_quality_filters:
-                    passing_urls_and_scores_output_records.append(urls_and_scores_record)
-                    passing_text_and_scores_output_records.append(text_and_scores_record)
-                    num_records_passing += 1
-                else:
-                    failing_urls_and_scores_output_records.append(urls_and_scores_record)
-                    failing_text_and_scores_output_records.append(text_and_scores_record)
-                num_records_saved += 1
+        if passes_all_filters:
+            passing_text_and_scores_output_records.append(text_and_scores_record)
+            num_records_passing += 1
+        else:
+            failing_text_and_scores_output_records.append(text_and_scores_record)
+        num_records_saved += 1
 
     # Count the number of URLs that weren't fetched
     unfetched_urls = urls - fetched_urls
@@ -470,12 +556,13 @@ def get_shard_yield(
     logger.info(f"Out of {len(fetched_urls)} fetched_urls, {len(fetched_urls - urls)} were not in the input set of URLs")
     logger.info(f"{num_records_passing} URLs passed the quality filtering pipeline")
     # Write examples from this shard to parquet
-    write_examples_to_parquet(passing_urls_and_scores_output_records, passing_urls_and_scores_output_path)
     write_examples_to_parquet(passing_text_and_scores_output_records, passing_text_and_scores_output_path)
-    write_examples_to_parquet(failing_urls_and_scores_output_records, failing_urls_and_scores_output_path)
     write_examples_to_parquet(failing_text_and_scores_output_records, failing_text_and_scores_output_path)
 
-    logger.info(f"Saved {num_records_saved} records from WARC, skipped {num_records_skipped} records")
+    logger.info(
+        f"Saved {num_records_saved} records from WARC, skipped {num_records_skipped} records, "
+        f"{num_records_failed_extraction} failed text extraction"
+    )
 
     with fsspec.open(success_path, "w", block_size=1 * 1024 * 1024 * 1024) as fout:
         json.dump(
@@ -524,12 +611,6 @@ def main(cfg: GetCrawlYieldConfig):
         warc_path = os.path.join(cfg.crawl_input_directory, f"links.{shard_index}.warc.gz")
         robots_path = os.path.join(cfg.crawl_input_directory, f"links.{shard_index}_robots.json.gz")
         errors_path = os.path.join(cfg.crawl_input_directory, f"links.{shard_index}_errors.json.gz")
-        passing_urls_and_scores_output_path = os.path.join(
-            cfg.urls_and_scores_output_directory, f"links.{shard_index}_urls_and_scores.passing.parquet"
-        )
-        failing_urls_and_scores_output_path = os.path.join(
-            cfg.urls_and_scores_output_directory, f"links.{shard_index}_urls_and_scores.failing.parquet"
-        )
         passing_text_and_scores_output_path = os.path.join(
             cfg.text_output_directory, f"links.{shard_index}_text_and_scores.passing.parquet"
         )
@@ -543,8 +624,6 @@ def main(cfg: GetCrawlYieldConfig):
                 robots_path,
                 errors_path,
                 cfg.data_source,
-                passing_urls_and_scores_output_path,
-                failing_urls_and_scores_output_path,
                 passing_text_and_scores_output_path,
                 failing_text_and_scores_output_path,
             )
@@ -554,6 +633,8 @@ def main(cfg: GetCrawlYieldConfig):
     total_urls = 0
     total_urls_fetched = 0
     total_urls_passing = 0
+
+    exceptions = []
     while unfinished:
         finished, unfinished = ray.wait(unfinished, num_returns=len(unfinished), timeout=5)
         try:
@@ -563,8 +644,17 @@ def main(cfg: GetCrawlYieldConfig):
                 total_urls_fetched += shard_urls_fetched
                 total_urls_passing += shard_urls_passing
         except Exception as e:
-            logger.exception(f"Error processing shard: {e}")
-            raise
+            # Log now, raise later
+            logger.exception("Caught an exception from a Ray task; continuing with other tasks.", exc_info=e)
+            exceptions.append(e)
+
+    if exceptions:
+        # Raise any exceptions that we might have encountered, so that the Ray job
+        # ends up with a failed state.
+        raise RuntimeError(f"{len(exceptions)} tasks failed. The first exception was: {exceptions[0]}") from exceptions[
+            0
+        ]
+
     logger.info(
         f"Total URLs: {total_urls}\n"
         f"Total URLs fetched: {total_urls_fetched}\n"
