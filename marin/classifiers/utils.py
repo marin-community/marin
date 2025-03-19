@@ -292,10 +292,10 @@ def shuffle(input_file_path: str, output_file_path: str, seed: int) -> None:
         seed (int): Seed for random number generator to ensure reproducibility.
     """
     rng = np.random.default_rng(seed=seed)
-    with fsspec.open(input_file_path, "rt", compression="infer") as f_in:
+    with fsspec.open(input_file_path, "rt", compression="infer", block_size=1 * 1024 * 1024 * 1024) as f_in:
         lines = f_in.readlines()
     rng.shuffle(lines)
-    with fsspec.open(output_file_path, "wt", compression="infer") as f_out:
+    with fsspec.open(output_file_path, "wt", compression="infer", block_size=1 * 1024 * 1024 * 1024) as f_out:
         f_out.writelines(lines)
 
 
