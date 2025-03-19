@@ -27,24 +27,16 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 
-@dataclass
+@dataclass(frozen=True)
 class TrainBertUrlClassifierConfig:
-    """
-    Attributes:
-        input_pattern (str): Pattern to files `gs://marin-us-central2/scratch/nfliu/text/open-web-math-fde8ef8-unique-100M/links.399_text_and_scores.*.parquet`
-        output_path (str): Path for output data (i.e., gs://$BUCKET/classifiers/$EXPERIMENT).
-        datasets (list[DatasetConfig]): List of configurations for converting Dolma documents into
-            labeled training datasets.
-        bert_args (dict): Arguments for the fastText training process (see fastText docs for list of options).
-        seed (int): Seed for random number generator to ensure reproducibility.
-        val_frac (float): Fraction of data to be used for validation.
-    """
-
     input_pattern: str
     output_path: str
-    bert_args: dict
-    seed: int = 0
     val_frac: float = 0.1
+    batch_size: int = 1
+    lr: float = 2e-5
+    hf_model: str = "bert-base-uncased"
+    num_epochs: int = 1
+    seed: int = 0
 
 
 @ray.remote(memory=8 * 1024 * 1024 * 1024)
@@ -133,11 +125,11 @@ def train_bert_url_classifier(
     input_pattern: str,
     output_path: str,
     val_frac: float,
+    batch_size: int,
+    lr: float,
+    hf_model: str,
+    num_epochs: int,
     seed: int = 0,
-    batch_size: int = 1,
-    lr: float = 2e-5,
-    hf_model: str = "bert-base-uncased",
-    num_epochs: int = 1,
 ):
     # Hash this dataset configuration so we can skip dataset generation if it already exists.
     dataset_hash = hashlib.md5(f"{input_pattern}{val_frac}{seed}".encode())
@@ -175,10 +167,10 @@ def train_model(
     train_dataset_path: str,
     val_dataset_path: str,
     output_path: str,
-    batch_size: int = 1,
-    lr: float = 2e-5,
-    hf_model: str = "bert-base-uncased",
-    num_epochs: int = 1,
+    batch_size: int,
+    lr: float,
+    hf_model: str,
+    num_epochs: int,
 ) -> None:
     logger.info(f"Training BERT model for experiment {output_path}")
     success_path = os.path.join(output_path, ".SUCCESS")
@@ -336,6 +328,10 @@ def train_bert_url_classifier_driver(cfg: TrainBertUrlClassifierConfig):
         input_pattern=cfg.input_pattern,
         output_path=cfg.output_path,
         val_frac=cfg.val_frac,
+        batch_size=cfg.batch_size,
+        lr=cfg.lr,
+        hf_model=cfg.hf_model,
+        num_epochs=cfg.num_epochs,
         seed=cfg.seed,
     )
 
