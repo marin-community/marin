@@ -190,10 +190,12 @@ def train_model(
     train_start_time = time.time()
     xmp.spawn(_mp_fn, args=(hf_model, train_dataset_path, val_dataset_path, output_path, lr, batch_size, num_epochs))
     train_end_time = time.time()
-    # TODO(nfliu): make this elapsed time prettier?
-    logger.info(f"Training BERT for experiment {output_path} completed, took {train_end_time - train_start_time}.")
+
+    elapsed_seconds = train_end_time - train_start_time
+    elapsed_str = time.strftime("%H:%M:%S", time.gmtime(elapsed_seconds))
+    logger.info(f"Training BERT for experiment {output_path} completed; total time = {elapsed_str}.")
     with fsspec.open(success_path, "w", compression="infer", block_size=1 * 1024 * 1024 * 1024) as f:
-        json.dump({"training_elapsed_time": train_end_time - train_start_time}, f)
+        json.dump({"training_elapsed_seconds": elapsed_seconds}, f)
 
 
 def train_epochs(
