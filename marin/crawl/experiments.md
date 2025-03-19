@@ -822,3 +822,114 @@ Results:
 Total number of tokens: 3,376,657,155
 Total number of documents: 1,002,483
 ```
+
+### FineWeb-Edu-100M
+
+This setting looks at 100M unique sampled outlinks from the original FineWeb-Edu
+crawl frontier.
+
+1. Sample links:
+
+```
+python marin/run/ray_run.py \
+    --no_wait -- \
+    python marin/crawl/sample_from_unique_outlinks.py \
+    --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-unique/unique_links*.jsonl.gz' \
+    --num_to_sample 100_000_000 \
+    --shard_size 100_000 \
+    --output_prefix gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-unique-100M/links
+```
+
+2. Fetch links:
+
+```
+python marin/run/ray_run.py \
+    --pip_deps 'fastparquet' \
+    --no_wait -- \
+    python marin/crawl/fetch_links.py \
+    --urls_input_directory gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-unique-100M/ \
+    --output_path gs://marin-us-central2/scratch/nfliu/fetched_outlinks/fineweb-edu-unique-100M/ \
+    --threads_per_shard 160 \
+    --max_concurrent_shards 40
+```
+
+3. Convert fetched parquet to WARC:
+
+```
+python marin/run/ray_run.py \
+    --pip_deps 'warcio[all]' \
+    --no_wait -- \
+    python marin/crawl/convert_responses_parquet_to_warc.py \
+    --input_directory gs://marin-us-central2/scratch/nfliu/fetched_outlinks/fineweb-edu-unique-100M/ \
+    --output_path gs://marin-us-central2/scratch/nfliu/fetched_outlinks/fineweb-edu-unique-100M/
+```
+
+4. Run full FineWeb-Edu pipeline to get yield from the fetched WARC pages:
+
+```
+python marin/run/ray_run.py \
+    --pip_deps '--find-links https://storage.googleapis.com/jax-releases/libtpu_releases.html,w3lib,trafilatura,jax[tpu],flax,transformers,requests,warcio[all],resiliparse,datatrove[processing] @ git+https://github.com/nelson-liu/datatrove@ray_executor_dedup_logging,spacy,cupy-cuda12x==13.3.0' \
+    --no_wait -- \
+    python marin/crawl/get_fineweb_edu_crawl_yield.py \
+    --urls_input_directory gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-unique-100M/ \
+    --crawl_input_directory gs://marin-us-central2/scratch/nfliu/fetched_outlinks/fineweb-edu-unique-100M/ \
+    --data_source fineweb-edu-unique-100M \
+    --text_output_directory gs://marin-us-central2/scratch/nfliu/text/fineweb-edu-unique-100M/ \
+    --statistics_output_path gs://marin-us-central2/scratch/nfliu/fetched_outlinks/fineweb-edu-unique-100M/yield_statistics.json.gz
+```
+
+```
+```
+
+5. Count the number of tokens in the fetched pages that pass the filtering
+   pipeline:
+
+```
+python marin/run/ray_run.py \
+    --no_wait -- \
+    python marin/crawl/count_tokens.py \
+    --input_patterns '["gs://marin-us-central2/scratch/nfliu/text/fineweb-edu-unique-100M/*.passing.parquet"]' \
+    --output_path "gs://marin-us-central2/scratch/nfliu/count_tokens/fineweb-edu-unique-100M_passing/"
+```
+
+Results
+
+```
+```
+
+6. Take the fetched pages that pass the filtering pipeline and run MinHash
+   deduplication against FineWeb-Edu:
+
+```
+python marin/run/ray_run.py \
+    --pip_deps 'datatrove[io] @ git+https://github.com/nelson-liu/datatrove@ray_executor_dedup_logging,spacy,cupy-cuda12x==13.3.0,orjson,scipy==1.13.1' \
+    --no_wait -- \
+    python marin/crawl/minhash/deduplicate_against_index.py \
+    --index_path 'gs://marin-us-central2/scratch/nfliu/minhash/fineweb_edu_minhash_index/index' \
+    --input_patterns '["gs://marin-us-central2/scratch/nfliu/text/fineweb-edu-unique-100M/*_text_and_scores.passing.parquet"]' \
+    --parquets_paths_file 'gs://marin-us-central2/scratch/nfliu/fineweb_edu_unique_100M_passing_paths.txt' \
+    --minhash_base_path 'gs://marin-us-central2/scratch/nfliu/minhash/fineweb_edu_unique_100M_passing_minhash_against_fineweb_edu' \
+    --minhash_logs_path 'gs://marin-us-central2/scratch/nfliu/minhash/logs/fineweb_edu_unique_100M_passing_minhash_against_fineweb_edu_logs'
+
+# Move the deduplicated content
+gcloud storage mv gs://marin-us-central2/scratch/nfliu/minhash/fineweb_edu_unique_100M_passing_minhash_against_fineweb_edu/deduplicated_output/* gs://marin-us-central2/scratch/nfliu/text/fineweb_edu_unique_100M_passing_minhash_against_fineweb_edu/
+# Remove the logs and intermediate output
+gcloud storage rm --recursive gs://marin-us-central2/scratch/nfliu/minhash/fineweb_edu_unique_100M_passing_minhash_against_fineweb_edu
+gcloud storage rm --recursive gs://marin-us-central2/scratch/nfliu/minhash/logs/fineweb_edu_unique_100M_passing_minhash_against_fineweb_edu_logs
+```
+
+7. Count the number of tokens in the fetched pages that pass the filtering
+   pipeline after minhash deduplication:
+
+```
+python marin/run/ray_run.py \
+    --no_wait -- \
+    python marin/crawl/count_tokens.py \
+    --input_patterns '["gs://marin-us-central2/scratch/nfliu/text/fineweb_edu_unique_100M_passing_minhash_against_fineweb_edu/*.jsonl.gz"]' \
+    --output_path "gs://marin-us-central2/scratch/nfliu/count_tokens/fineweb_edu_unique_100M_passing_minhash_against_fineweb_edu/"
+```
+
+Results
+
+```
+```
