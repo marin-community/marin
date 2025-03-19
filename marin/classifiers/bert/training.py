@@ -12,7 +12,6 @@ from datetime import datetime
 
 import ray
 import torch
-import torch_xla.distributed.xla_multiprocessing as xmp
 from transformers import BertForSequenceClassification, BertTokenizer, Trainer, TrainingArguments
 
 from marin.classifiers.bert.utils import BertDataset, format_example
@@ -23,8 +22,39 @@ logger = logging.getLogger("ray")
 
 
 @dataclass
-class CollateArguments:
+class BertTrainingArguments:
+    # Training arguments
+    output_dir: str
+    remove_unused_columns: bool = False
+    per_device_train_batch_size: int = 1
+    num_train_epochs: int = 1
+    learning_rate: float = 2e-5
+    dataloader_num_workers: int = 1
+    dataloader_prefetch_factor: int = 1
+    tpu_num_cores: int = (1,)
+    report_to: str = "wandb"
+    logging_steps: float = 0.1
+    eval_steps: float = 0.1
+    save_strategy: str = "no"
+
+    # Collation arguments
     max_length: int = 128
+
+    def get_hf_training_args(self):
+        return TrainingArguments(
+            output_dir=self.output_dir,
+            remove_unused_columns=self.remove_unused_columns,
+            per_device_train_batch_size=self.per_device_train_batch_size,
+            num_train_epochs=self.num_train_epochs,
+            learning_rate=self.learning_rate,
+            dataloader_num_workers=self.dataloader_num_workers,
+            dataloader_prefetch_factor=self.dataloader_prefetch_factor,
+            tpu_num_cores=self.tpu_num_cores,
+            report_to=self.report_to,
+            logging_steps=self.logging_steps,
+            eval_steps=self.eval_steps,
+            save_strategy=self.save_strategy,
+        )
 
 
 def _mp_fn(
@@ -33,8 +63,7 @@ def _mp_fn(
     train_path: str,
     val_path: str,
     model_path: str,
-    training_args: TrainingArguments,
-    collate_args: CollateArguments,
+    bert_args: BertTrainingArguments,
 ):
     """
     Function to run on each TPU device for BERT classifier training.
@@ -45,8 +74,7 @@ def _mp_fn(
         train_path (str): Path to the training dataset.
         val_path (str): Path to the validation dataset.
         model_path (str): Path to save the trained model.
-        training_args (TrainingArguments): Training arguments for the BERT model.
-        collate_args (CollateArguments): Collation arguments for the BERT model.
+        bert_args (BertTrainingArguments): Arguments for training the BERT model.
     Returns:
         None: No return value.
     """
@@ -62,7 +90,7 @@ def _mp_fn(
             truncation=True,
             return_tensors="pt",
             padding=True,
-            max_length=collate_args.max_length,
+            max_length=bert_args.max_length,
         )
         batch["labels"] = torch.tensor([item["label"] for item in items], dtype=torch.long)
         return batch
@@ -71,7 +99,7 @@ def _mp_fn(
 
     trainer = Trainer(
         model,
-        training_args,
+        bert_args.get_hf_training_args(),
         train_dataset=train_dataset,
         eval_dataset=val_dataset,
         tokenizer=tokenizer,
@@ -96,7 +124,7 @@ def train_model(
     hf_model: str = "bert-base-uncased",
     num_epochs: int = 1,
     max_length: int = 128,
-    tpu_num_cores: int = 4,
+    tpu_num_cores: int = 1,
     dataloader_num_workers: int = 8,
     dataloader_prefetch_factor: int = 4,
 ) -> None:
@@ -153,7 +181,7 @@ def train_model(
             shuffle(val_path, val_path, seed)
 
             os.makedirs(trainer_path, exist_ok=True)
-            training_args = TrainingArguments(
+            bert_args = BertTrainingArguments(
                 output_dir=trainer_path,
                 remove_unused_columns=False,
                 per_device_train_batch_size=batch_size,
@@ -166,13 +194,12 @@ def train_model(
                 logging_steps=0.1,
                 eval_steps=0.1,
                 save_strategy="no",
-            )
-
-            collate_args = CollateArguments(
                 max_length=max_length,
             )
 
-            xmp.spawn(_mp_fn, args=(hf_model, train_path, val_path, model_path, training_args, collate_args))
+            import torch_xla.distributed.xla_multiprocessing as xmp
+
+            xmp.spawn(_mp_fn, args=(hf_model, train_path, val_path, model_path, bert_args))
 
             fsspec_rm(merge_path)
             fsspec_cpdir(tmp_dir, output_path)

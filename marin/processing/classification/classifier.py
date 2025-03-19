@@ -1,12 +1,21 @@
 import atexit
 import hashlib
 import os
+import tempfile
 import time
 import urllib.parse
 from typing import Any, ClassVar
 
 import fsspec
 import lz4.frame
+import torch
+
+from marin.utils import fsspec_cpdir, fsspec_glob
+
+try:
+    import torch_xla.core.xla_model as xm
+except ImportError:
+    xm = None
 
 
 class BaseClassifier:
@@ -193,6 +202,56 @@ class FinewebEduClassifier(BERTClassifier):
         return batch
 
 
+class BERTQualityClassifier(BaseClassifier):
+    def __init__(self, model_name: str, *args, **kwargs):
+        print(f"Loading model from {model_name}")
+        from transformers import AutoModelForSequenceClassification, AutoTokenizer
+
+        # import torch_xla.core.xla_model as xm
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            print(f"dir:{fsspec_glob(model_name)}")
+            fsspec_cpdir(model_name, tmp_dir)
+
+            def print_directory_contents(path, indent=0):
+                """Print the contents of a directory recursively with indentation."""
+                for item in os.listdir(path):
+                    item_path = os.path.join(path, item)
+                    if os.path.isdir(item_path):
+                        print("  " * indent + f"Directory: {item}/")
+                        print_directory_contents(item_path, indent + 1)
+                    else:
+                        file_size = os.path.getsize(item_path)
+                        print("  " * indent + f"File: {item} ({file_size} bytes)")
+
+            # Then in your __init__ method:
+            print(f"Contents of temporary directory {tmp_dir}:")
+            print_directory_contents(tmp_dir)
+
+            # device = xm.xla_device()
+            self.model = AutoModelForSequenceClassification.from_pretrained(tmp_dir)  # .to(device)
+            # self.model = torch.compile(self.model, backend="openxla", fullgraph=True, dynamic=False)
+            self.tokenizer = AutoTokenizer.from_pretrained(tmp_dir)
+
+    @torch.no_grad()
+    def predict(self, documents: list[str]) -> list[float]:
+        # import torch_xla.core.xla_model as xm
+
+        inputs = self.tokenizer(
+            documents,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+        ).to(self.model.device)
+        outputs = self.model(**inputs)
+        xm.mark_step()
+        logits = outputs.logits.squeeze(-1)
+        return logits.tolist()
+
+    def __call__(self, batch: dict[str, Any]) -> dict[str, Any]:
+        raise NotImplementedError
+
+
 class CompressionClassifier(BaseClassifier):
     """A classifier that calculates LZ4 compression ratios for text documents.
 
@@ -225,6 +284,7 @@ class AutoClassifier(BaseClassifier):
         "fasttext": FasttextClassifier,
         "fineweb": FinewebEduClassifier,
         "compression": CompressionClassifier,
+        "bert": BERTQualityClassifier,
     }
 
     def __init__(self, model_name: str, attribute_name: str, model_type: str | None, *args, **kwargs):
