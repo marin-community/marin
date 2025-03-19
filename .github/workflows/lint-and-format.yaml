@@ -24,4 +24,4 @@ jobs:
       run: ruff check .
 
     - name: Run black
-      run: black --check .
+      run: black --check --diff .
