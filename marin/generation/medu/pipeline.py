@@ -74,6 +74,7 @@ class MEDUPipelineConfig:
     output_filetype_override: str = "jsonl.gz"
     resource_config: ResourceConfig = field(default_factory=lambda: TPU_V6E_8_STRICT_PACK)
     final_benchmark_description_prompt: str = ""
+    medu_benchmark_description_template: str = MEDU_BENCHMARK_DESCRIPTION_TEMPLATE
 
 
 @ray.remote(max_restarts=-1)  # NOTE(chris): We use Spot TPUs, so we need to be able to restart the pipeline if it fails.
@@ -86,6 +87,10 @@ class MEDUPipeline:
         tensor_parallel_size: The number of TPUs to use for the pipeline.
         engine_kwargs: The kwargs to pass to the vLLM engine.
         generation_kwargs: The kwargs to pass for vLLM sampling parameters.
+        final_benchmark_description_prompt: The final benchmark description prompt. This allows a user to pass in a
+                                            prompt directly to the pipeline instead of getting the LLM to generate one.
+        medu_benchmark_description_template: The template that prompts an LLM to generate a description of the skills
+                                             that the data should have.
     """
 
     def __init__(
@@ -96,11 +101,13 @@ class MEDUPipeline:
         engine_kwargs: dict[str, Any] | None = None,
         generation_kwargs: dict[str, Any] | None = None,
         final_benchmark_description_prompt: str = "",
+        medu_benchmark_description_template: str = MEDU_BENCHMARK_DESCRIPTION_TEMPLATE,
     ):
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         self.llm = vLLMProvider(model_name, engine_kwargs, generation_kwargs)
         self.generated_benchmark_descriptions = []
         self.final_benchmark_description_prompt = final_benchmark_description_prompt
+        self.medu_benchmark_description_template = medu_benchmark_description_template
         self.corpus_contents = corpus_contents
         self.tensor_parallel_size = tensor_parallel_size
 
@@ -143,7 +150,7 @@ class MEDUPipeline:
                             )
                         corpus += row[dev_set.prompt_column] + "\n\n"
 
-            prompt = MEDU_BENCHMARK_DESCRIPTION_TEMPLATE.format(corpus=corpus)
+            prompt = self.medu_benchmark_description_template.format(corpus=corpus)
             prompts.append(
                 self.tokenizer.apply_chat_template(
                     [{"role": "user", "content": prompt}],
