@@ -44,8 +44,8 @@ dclm_components_zoned = {
 #####
 
 # initially we were using the wrong rotary, just like tootsie 8b. Oh well.
-llama_13b_old_rotary = llama_13b.replace(rope=DefaultRotaryEmbeddingsConfig())
-llama_24b_old_rotary = llama_24b.replace(rope=DefaultRotaryEmbeddingsConfig())
+llama_13b_old_rotary = dataclasses.replace(llama_13b, rope=DefaultRotaryEmbeddingsConfig())
+llama_24b_old_rotary = dataclasses.replace(llama_24b, rope=DefaultRotaryEmbeddingsConfig())
 
 ## Initial 13B config for the first phase
 llama_13b_train_config = SimpleTrainConfig(

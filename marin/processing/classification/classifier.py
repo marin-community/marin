@@ -187,7 +187,7 @@ class FinewebEduClassifier(BERTClassifier):
         scores = self.predict(batch["text"])
 
         # Fineweb edu classifier is scored on educational value from 0 to 5, so we want to round to the nearest integer.
-        int_scores = [int(round(max(0, min(score, 5)))) for score in scores]
+        int_scores = [round(max(0, min(score, 5))) for score in scores]
         batch.update(
             {
                 "attributes": [

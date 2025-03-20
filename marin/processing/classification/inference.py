@@ -208,6 +208,7 @@ def run_inference(inference_config: InferenceConfig):
     try:
         ray.get(responses)
     except Exception as e:
+        print(f"Error processing: {e}")
         raise e
 
 
