@@ -134,7 +134,7 @@ def _mp_fn(
         train_dataset=train_dataset,
         eval_dataset=val_dataset,
         processing_class=tokenizer,
-        data_collator=BertDataCollator(tokenizer=tokenizer),
+        data_collator=BertDataCollator(tokenizer=tokenizer, max_length=bert_args.max_length),
     )
     trainer.train()
 
