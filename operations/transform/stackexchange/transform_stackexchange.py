@@ -13,7 +13,7 @@ from dataclasses import dataclass
 import draccus
 import fsspec
 import ray
-from tqdm import tqdm
+from tqdm_loggable.auto import tqdm
 
 from marin.core.runtime import cached_or_construct_output
 from marin.schemas.web.convert import ExtractionConfig

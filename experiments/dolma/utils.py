@@ -16,8 +16,8 @@ from marin.execution.executor import ExecutorStep
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
 
 
-def get_default_experiment_steps(
-    path_suffix: str,
+def dolma_pipeline_with_modified_dataset(
+    path_prefix: str,
     dataset: ExecutorStep,
     dolma_dataset: str,
     experiment_tag: list[str],
@@ -30,7 +30,7 @@ def get_default_experiment_steps(
     training.
 
     Args:
-        path_suffix: The suffix to add to the output paths.
+        path_prefix: The prefix/path to be used in the output paths.
         dataset: The custom dataset that will either replace or be added to the Dolma mixture.
                  This should be a preprocessed dataset ready for tokenization.
         dolma_dataset: The Dolma dataset to be substituted or added to the mixture.
@@ -43,31 +43,31 @@ def get_default_experiment_steps(
     tokenized_dolma_steps = tokenize_dolma_steps()
 
     tokenized_dataset = default_tokenize(
-        name=f"dolma-{path_suffix}",
+        name=path_prefix,
         dataset=dataset,
         tokenizer=llama3_tokenizer,
     )
 
     dolma_tokenization_steps = dict(
         tokenized_dolma_steps,
-        {f"dolma-{path_suffix}": tokenized_dataset},
+        {path_prefix: tokenized_dataset},
     )
 
     dolma_weights = dict(
         DOLMA_OLMO_MIXTURE_WEIGHTS,
-        {f"{path_suffix}": DOLMA_OLMO_MIXTURE_WEIGHTS[f"dolma/{dolma_dataset}"]},
+        {path_prefix: DOLMA_OLMO_MIXTURE_WEIGHTS[f"dolma/{dolma_dataset}"]},
     )
     if substitute_dolma_dataset:
         dolma_weights.pop(f"dolma/{dolma_dataset}")
 
-    arxiv_llama3_tokenized = lm_mixture_data_config(
+    llama3_tokenized_mixture = lm_mixture_data_config(
         components=dolma_tokenization_steps,
         weights=dolma_weights,
     )
 
     trained_1_4b_model = default_train(
-        name=f"dolma-{path_suffix}-1.4b",
-        tokenized=arxiv_llama3_tokenized,
+        name=f"{path_prefix}-1.4b",
+        tokenized=llama3_tokenized_mixture,
         model_config=llama_1_4b,
         train_config=llama_1_4b_train_config,
         tags=experiment_tag,
