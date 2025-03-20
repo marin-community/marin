@@ -34,7 +34,6 @@ class BertTrainingArguments:
     learning_rate: float = 2e-5
     dataloader_num_workers: int = 1
     dataloader_prefetch_factor: int = 1
-    tpu_num_cores: int = (1,)
     report_to: str = "wandb"
     logging_steps: float = 0.1
     eval_steps: float = 0.1
@@ -52,7 +51,6 @@ class BertTrainingArguments:
             learning_rate=self.learning_rate,
             dataloader_num_workers=self.dataloader_num_workers,
             dataloader_prefetch_factor=self.dataloader_prefetch_factor,
-            tpu_num_cores=self.tpu_num_cores,
             report_to=self.report_to,
             logging_steps=self.logging_steps,
             eval_steps=self.eval_steps,
@@ -155,7 +153,6 @@ def train_model(
     hf_model: str = "bert-base-uncased",
     num_epochs: int = 1,
     max_length: int = 128,
-    tpu_num_cores: int = 1,
     dataloader_num_workers: int = 8,
     dataloader_prefetch_factor: int = 4,
 ) -> None:
@@ -173,7 +170,6 @@ def train_model(
         hf_model (str): Pretrained BERT model to use (from Huggingface).
         num_epochs (int): Number of epochs to train for.
         max_length (int): Maximum sequence length for training.
-        tpu_num_cores (int): Number of TPUs to use for training.
         dataloader_num_workers (int): Number of workers for data loading.
         dataloader_prefetch_factor (int): Prefetch factor for data loading.
     Returns:
@@ -220,7 +216,6 @@ def train_model(
                 learning_rate=lr,
                 dataloader_num_workers=dataloader_num_workers,
                 dataloader_prefetch_factor=dataloader_prefetch_factor,
-                tpu_num_cores=tpu_num_cores,
                 report_to="wandb",
                 logging_steps=0.1,
                 eval_steps=0.1,
