@@ -97,8 +97,11 @@ def _mp_fn(
             max_length=bert_args.max_length,
         )
 
-    train_dataset = train_dataset.map(tokenize, batched=True, num_proc=8)
-    val_dataset = val_dataset.map(tokenize, batched=True, num_proc=8)
+    # Set keep_in_memory=True to avoid filling up the TPU /tmp
+    train_dataset = train_dataset.map(tokenize, batched=True, num_proc=8, keep_in_memory=True)
+    train_dataset = train_dataset.remove_columns(["text"])
+    val_dataset = val_dataset.map(tokenize, batched=True, num_proc=8, keep_in_memory=True)
+    val_dataset = val_dataset.remove_columns(["text"])
 
     model = BertForSequenceClassification.from_pretrained(hf_model, num_labels=train_dataset.num_labels)
 
