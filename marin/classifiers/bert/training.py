@@ -36,7 +36,7 @@ class BertTrainingArguments:
     num_train_epochs: int = 1
     learning_rate: float = 2e-5
     dataloader_num_workers: int = 1
-    dataloader_prefetch_factor: int = 1
+    dataloader_prefetch_factor: int | None = 1
     report_to: str = "wandb"
     logging_steps: float = 0.1
     eval_steps: float = 0.1
