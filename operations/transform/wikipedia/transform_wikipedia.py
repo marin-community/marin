@@ -106,7 +106,6 @@ def unwrap_eqn(html: str):
         latex = latex.replace(r"\[ ", "").replace(r" \]", "")  # Remove \[ \] display math delimiters
         latex = re.sub(r"\\!", "", latex)  # Remove \! spacing commands
 
-
         # Balance remaining curly braces
         open_count = latex.count("{")
         close_count = latex.count("}")
