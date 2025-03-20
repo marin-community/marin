@@ -20,6 +20,7 @@ from dataclasses import dataclass
 
 import draccus
 import fsspec
+import pandas as pd
 import ray
 from tqdm_loggable.auto import tqdm
 
@@ -75,9 +76,10 @@ def make_url_classification_dataset(
     # First pass: Count total lines
     total_lines = 0
     for shard_path in tqdm(shard_paths, desc="Counting lines in input records"):
-        with fsspec.open(shard_path, mode="rt", compression="infer", block_size=1 * 1024 * 1024 * 1024) as f:
-            for _ in f:
-                total_lines += 1
+        # Read no columns => minimal overhead, but we still get the row count
+        df = pd.read_parquet(shard_path, columns=[])
+        total_lines += len(df)
+
     logger.info(f"Total lines across all shards = {total_lines:,}")
     assert total_lines > 0
 
@@ -98,9 +100,9 @@ def make_url_classification_dataset(
     ):
         for shard_path in tqdm(shard_paths, desc="Converting shards to examples"):
             with fsspec.open(shard_path, mode="rt", compression="infer", block_size=1 * 1024 * 1024 * 1024) as f:
-                for line in f:
-                    record = json.loads(line)
-                    out = {"text": record["metadata"]["url"], "label": record["metadata"]["passes_all_filters"]}
+                df = pd.read_parquet(f)
+                for record_metadata in df["metadata"]:
+                    out = {"text": record_metadata["url"], "label": record_metadata["passes_all_filters"]}
 
                     # Probability that this line should go to val
                     # Ensures we end with exactly val_lines_target lines in val
