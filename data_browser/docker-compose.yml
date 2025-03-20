@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        - DEV=true
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./gcs-key.json:/app/gcs-key.json
+      - ./src:/app/src
+      - ./server.py:/app/server.py
+      - ../var:/app/var
+    environment:
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/gcs-key.json
+      - FLASK_APP=server.py
+    networks:
+      - data_browser_net
+
+networks:
+  data_browser_net:
+    driver: bridge

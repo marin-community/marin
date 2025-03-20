@@ -13,9 +13,12 @@ from experiments.metrics.github_related import (
     get_closed_issues_with_label,
 )
 from experiments.metrics.wandb_related import WandbMetricsConfig, calculate_wandb_metrics
+from infra.github_wandb_metrics import log_data_to_wandb
 
 
 def main(save_path: str) -> dict:
+
+    final_metrics = {}
 
     final_metrics = {
         "Workflow Times per workflow": get_average_duration_for_all_workflows(
@@ -40,8 +43,9 @@ def main(save_path: str) -> dict:
     final_metrics["Number of Ray cluster restart"] = len(events)
     final_metrics["Ray restart events"] = events
 
+    # get all runs; num_days=-1 means all runs
     experiment_metrics = calculate_wandb_metrics(
-        WandbMetricsConfig(num_days=7, entity="stanford-mercury", project="marin")
+        WandbMetricsConfig(num_days=None, entity="stanford-mercury", project="marin")
     )
     for key, value in experiment_metrics.items():
         final_metrics[key] = value
@@ -59,4 +63,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Get metrics.")
     parser.add_argument("--save_path", help="Save path for the metrics", default="gs://marin-us-central2/metrics")
     args = parser.parse_args()
-    print(main(args.save_path))
+    data = main(args.save_path)
+    print(data)
+    log_data_to_wandb(data)

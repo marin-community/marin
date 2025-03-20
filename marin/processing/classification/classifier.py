@@ -6,6 +6,7 @@ import urllib.parse
 from typing import Any, ClassVar
 
 import fsspec
+import lz4.frame
 
 
 class BaseClassifier:
@@ -39,12 +40,15 @@ class FasttextClassifier(BaseClassifier):
     _MODEL_NAME_TO_MODEL_FILENAME_DICT: ClassVar[dict[str, str]] = {
         "mlfoundations/fasttext-oh-eli5": "openhermes_reddit_eli5_vs_rw_v2_bigram_200k_train.bin",
         "allenai/dolma-1_7-fasttext-quality-filter": "model.bin",
+        "open-web-math/filtering-models": "math_score.bin",
+        "julien-c/fasttext-language-id": "lid.176.bin",
     }
 
-    def __init__(self, model_name: str, attribute_name: str, *args, **kwargs):
+    def __init__(self, model_name: str, attribute_name: str, k: int = 2, *args, **kwargs):
         self.model_name = model_name
         self.attribute_name = attribute_name
         self.model = self.load_model()
+        self.k = k
 
     def load_model(self):
         from fasttext.FastText import _FastText
@@ -124,8 +128,7 @@ class FasttextClassifier(BaseClassifier):
         return model
 
     def predict(self, documents: list[str]):
-        # TODO(chris): Add support for multi-class k > 2.
-        return self.model.predict(documents, k=2)
+        return self.model.predict(documents, k=self.k)
 
     def __call__(self, batch: dict[str, Any]):
         texts = []
@@ -177,7 +180,7 @@ class FinewebEduClassifier(BERTClassifier):
         scores = self.predict(batch["text"])
 
         # Fineweb edu classifier is scored on educational value from 0 to 5, so we want to round to the nearest integer.
-        int_scores = [int(round(max(0, min(score, 5)))) for score in scores]
+        int_scores = [round(max(0, min(score, 5))) for score in scores]
         batch.update(
             {
                 "attributes": [
@@ -190,10 +193,38 @@ class FinewebEduClassifier(BERTClassifier):
         return batch
 
 
+class CompressionClassifier(BaseClassifier):
+    """A classifier that calculates LZ4 compression ratios for text documents.
+
+    The compression ratio is calculated as (compressed_size / original_size).
+    Higher ratios indicate text that is harder to compress (potentially more random/noisy),
+    while lower ratios indicate text that compresses well (potentially more structured/repetitive).
+    """
+
+    def __init__(self, model_name: str, attribute_name: str, *args, **kwargs):
+        super().__init__(model_name, attribute_name)
+
+    def __call__(self, batch):
+        compression_ratios = []
+        for text in batch["text"]:
+            text_bytes = text.encode("utf-8")
+            # Handle empty text case
+            if len(text_bytes) == 0:
+                # Set a default ratio value for empty strings
+                ratio = 2.0
+            else:
+                compressed = lz4.frame.compress(text_bytes)
+                ratio = len(compressed) / len(text_bytes)
+
+            compression_ratios.append({self.attribute_name: ratio})
+        return {"attributes": compression_ratios}
+
+
 class AutoClassifier(BaseClassifier):
     _MODEL_NAME_TO_CLS_DICT: ClassVar[dict[str, BaseClassifier]] = {
         "fasttext": FasttextClassifier,
         "fineweb": FinewebEduClassifier,
+        "compression": CompressionClassifier,
     }
 
     def __init__(self, model_name: str, attribute_name: str, model_type: str | None, *args, **kwargs):
@@ -223,7 +254,9 @@ class AutoClassifier(BaseClassifier):
             key = model_type.lower()
 
         try:
-            return cls._MODEL_NAME_TO_CLS_DICT[key](model_name_or_path, attribute_name, model_type, *args, **kwargs)
+            return cls._MODEL_NAME_TO_CLS_DICT[key](
+                model_name_or_path, attribute_name, *args, model_type=model_type, **kwargs
+            )
         except KeyError as e:
             raise ValueError(
                 f"Model name {model_name_or_path} not supported. "
