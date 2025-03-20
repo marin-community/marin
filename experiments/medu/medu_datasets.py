@@ -1,5 +1,5 @@
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
-from operations.download.gcs.curate_medu_default_datasets import TransferConfig, transfer_files
+from operations.download.gcs.transfer import TransferConfig, transfer_files
 from operations.download.huggingface.download import DownloadConfig, download
 
 dclm_baseline = ExecutorStep(

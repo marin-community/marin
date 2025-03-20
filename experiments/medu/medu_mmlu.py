@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from experiments.medu.medu_datasets import medu_dclm_annotation_subset, medu_dclm_pretraining_subset
 from experiments.medu.medu_runner import MEDURunner, MEDURunnerConfig
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
-from marin.generation.medu import CorpusContent
+from marin.generation.medu.pipeline import CorpusContent
 from operations.download.huggingface.download import DownloadConfig
 from operations.download.huggingface.download_hf import download_hf
 from operations.raw2json.huggingface.qa.raw2json import DatasetConversionConfig, OutputFormatOptions, raw2json
