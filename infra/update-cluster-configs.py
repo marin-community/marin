@@ -9,18 +9,18 @@ this_path = os.path.dirname(os.path.abspath(__file__))
 cluster_template_path = os.path.join(this_path, "marin-cluster-template.yaml")
 vllm_template_path = os.path.join(this_path, "marin-vllm-template.yaml")
 
-# LAtest tahs ABh:  latest 9491ec2a 20250209
+# LAtest tahs ABh:  latest 4a47ffc0 20250305
 
 DOCKER_TAGS = {
-    "us-central2": "89b461b3",
-    "big-run": "6da1c9ed",
+    "us-central2": "4a47ffc0",
+    "big-run": "4a47ffc0",
     "us-west4": "89b461b3",
     "europe-west4": "89b461b3",
-    "us-east1": "b63a1e90",
-    "us-east5": "6da1c9ed",
+    "us-east1": "89b461b3",
+    "us-east5": "89b461b3",
     # NB: different naming convention because we have two zones in europe-west4
-    "europe-west4-a": "6da1c9ed",
-    "asia-northeast1": "6da1c9ed",
+    "europe-west4-a": "89b461b3",
+    "asia-northeast1": "89b461b3",
     "marin-us-east5-b-vllm": "296d2ef0",
 }
 
