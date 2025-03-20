@@ -21,10 +21,7 @@ from dataclasses import dataclass
 import draccus
 import fsspec
 import ray
-import torch
-import torch_xla.core.xla_model as xm
 from tqdm_loggable.auto import tqdm
-from transformers import BertForSequenceClassification
 
 from marin.classifiers.bert.training import BertTrainingArguments, _mp_fn
 from marin.classifiers.utils import shuffle
@@ -237,39 +234,6 @@ def train_model(
     logger.info(f"Training BERT for experiment {output_path} completed; total time = {elapsed_str}.")
     with fsspec.open(success_path, "w", compression="infer", block_size=1 * 1024 * 1024 * 1024) as f:
         json.dump({"training_elapsed_seconds": elapsed_seconds}, f)
-
-
-def evaluate_model(model: BertForSequenceClassification, data_loader, index: int | None = None) -> float:
-    model.eval()
-    local_correct = 0
-    local_total = 0
-
-    with torch.no_grad():
-        for batch in data_loader:
-            input_ids = batch["input_ids"]
-            attention_mask = batch["attention_mask"]
-            labels = batch["labels"].to(model.device)
-
-            outputs = model(input_ids=input_ids, attention_mask=attention_mask)
-            preds = torch.argmax(outputs.logits, dim=-1)
-            local_correct += (preds == labels).sum().item()
-            local_total += labels.size(0)
-
-    # Each process now has a local_correct/local_total from just its chunk
-    # Use mesh_reduce to sum across processes
-    global_correct = xm.mesh_reduce("correct_reduce", local_correct, sum)
-    global_total = xm.mesh_reduce("total_reduce", local_total, sum)
-
-    if global_total == 0:
-        global_accuracy = 0.0
-    else:
-        global_accuracy = global_correct / global_total
-
-    # Log only on one process
-    if index == 0:
-        logger.info(f"Validation Accuracy (global across all TPUs) = {global_accuracy:.4f}")
-
-    return global_accuracy
 
 
 @draccus.wrap()
