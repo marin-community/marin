@@ -56,12 +56,15 @@ def default_crawl(
     Returns:
         steps[list[ExecutorStep]]: List of steps in the crawl pipeline
     """
+
+    # Extracted HTML: gs://marin-us-central2/documents/open-web-math-fde8ef8/html/openwebmath_0.jsonl.gz
     extracted_html = ExecutorStep(
         name=f"crawl/{config.source_name}/html",
         fn=process_parquet,
         config=config,
     )
 
+    # Extracted outlinks: gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8/1000_links.jsonl.gz
     extracted_outlinks = ExecutorStep(
         name=f"crawl/{config.source_name}/outlinks/raw_{config.source_name}",
         fn=get_outlinks_from_html,
@@ -83,6 +86,7 @@ def default_crawl(
         ),
     )
 
+    # Outlinks deduplicated against 2013-2018 CC bloom filter: gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-cc-deduplicated/1000_links.jsonl.gz
     outlinks_deduplicated = ExecutorStep(
         name=f"crawl/{config.source_name}/outlinks/{config.source_name}-deduplicated",
         fn=deduplicate_outlinks_against_cc_driver,
@@ -94,6 +98,7 @@ def default_crawl(
         ),
     )
 
+    # Fetched outlinks: gs://marin-us-central2/scratch/nfliu/fetched_outlinks/fineweb-edu-10M/links.0_robots.json.gz
     links_fetched_parquet = ExecutorStep(
         name=f"crawl/{config.source_name}/fetched_outlinks/{config.source_name}",
         fn=process_shard_links,
@@ -105,6 +110,7 @@ def default_crawl(
         ),
     )
 
+    # Fetched outlinks in WARC format: gs://marin-us-central2/scratch/nfliu/fetched_outlinks/fineweb-edu-10M/links.0.warc.gz
     links_fetched_warc = ExecutorStep(
         name=f"crawl/{config.source_name}/fetched_outlinks/{config.source_name}-cc-deduplicated",
         fn=convert_shards_to_warc,
@@ -114,6 +120,7 @@ def default_crawl(
         ),
     )
 
+    # Yield outlinks: gs://marin-us-central2/scratch/nfliu/text/fineweb-edu-10M/links.0_extracted_text.parquet
     links_fetched_warc_yield = ExecutorStep(
         name=f"crawl/{config.source_name}",
         fn=yield_fn,
@@ -128,6 +135,7 @@ def default_crawl(
         override_output_path=f"crawl/{config.source_name}",
     )
 
+    # Passing paths: gs://marin-us-central2/scratch/nfliu/fineweb_edu_10M_passing_paths.txt
     links_minhash_deduplicated = ExecutorStep(
         name=f"crawl/{config.source_name}",
         fn=minhash_deduplicate_against_index_driver,
