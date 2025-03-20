@@ -13,10 +13,11 @@ import jmp
 from haliax.quantization import QuantizationConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.compat.hf_checkpoints import load_tokenizer
-from levanter.data.text import LMMixtureDatasetConfig
+from levanter.data.text import LMMixtureDatasetConfig, LMSupervisedDatasetConfig, SupervisedUrlSourceConfig
 from levanter.eval_harness import LmEvalHarnessConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig
+from levanter.models.rotary import Llama3RotaryEmbeddingsConfig
 from levanter.optim import AdamConfig
 from levanter.schedule import BatchSchedule
 from levanter.store.cache import CacheOptions
@@ -32,12 +33,14 @@ from experiments.evals.task_configs import (
 )
 from experiments.llama import compute_num_parameters, llama_8b
 from experiments.paloma import paloma_tokenized
+from experiments.simple_sft_config import SimpleSFTConfig
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.execution.executor import (
     ExecutorStep,
     InputName,
     get_executor_step,
+    output_path_of,
     this_output_path,
     unwrap_versioned_value,
     versioned,
@@ -50,7 +53,14 @@ from marin.processing.tokenize import (
     tokenize,
 )
 from marin.scaling_laws.scaling_laws import ScalingLawConfig, run_scaling_law_analysis
-from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
+from marin.training.training import (
+    TrainLmOnPodConfig,
+    TrainSFTMixturePodConfig,
+    TrainSFTOnPodConfig,
+    run_levanter_sft,
+    run_levanter_sft_mixture,
+    run_levanter_train_lm,
+)
 
 logger = logging.getLogger("ray")
 
@@ -272,6 +282,173 @@ def default_train(
             eval_harness=harness_config,
             initialize_from_checkpoint_path=train_config.initialize_from_checkpoint_path,
         ),
+        pip_dependency_groups=["tokenize_train"],
+    )
+
+
+def default_sft(
+    name: str,
+    tokenized: InputName | ExecutorStep | LMSupervisedDatasetConfig | dict[str, SupervisedUrlSourceConfig],
+    model_config: LlamaConfig,
+    sft_config: SimpleSFTConfig,
+    use_mixture: bool = False,
+    mixture_weights: dict[str, int] | None = None,
+    tags: Sequence[str] = (),
+) -> ExecutorStep:
+    """
+    Creates an ExecutorStep for supervised fine-tuning of a language model.
+
+    This function provides a unified interface for both single-dataset SFT and mixture-based
+    SFT with a simplified configuration approach.
+
+    Args:
+        name: The name of the training run, forms the basis of the output path.
+        tokenized: The tokenized data to train on:
+                  - For single dataset: an InputName, ExecutorStep, or LMSupervisedDatasetConfig
+                  - For mixture: a Dict[str, SupervisedUrlSourceConfig] mapping dataset names to configs
+        model_config: Levanter LlamaConfig for the model architecture to train.
+        sft_config: Configuration for the SFT training process.
+        use_mixture: Whether to use mixture-based SFT (multiple datasets). Default: False.
+        mixture_weights: Dict mapping datasets within mixture to weight to simple with if using Mixture
+        tags: Additional tags for WandB logging. Default: ().
+
+    Returns:
+        An ExecutorStep configured for supervised fine-tuning.
+
+    Note:
+        If use_mixture is True, tokenized should be a dictionary of SupervisedUrlSourceConfig objects.
+        If use_mixture is False, tokenized should be an InputName, ExecutorStep, or LMSupervisedDatasetConfig.
+    """
+    # Set up common configurations
+    tracker_config = WandbConfig(
+        project="marin",
+        tags=[*tags],
+    )
+
+    checkpointer_config = CheckpointerConfig(
+        keep=[dict(every=sft_config.steps_per_checkpoint)],
+    )
+
+    trainer_config = TrainerConfig(
+        tracker=tracker_config,
+        mp=jmp.get_policy("p=f32,c=bfloat16"),
+        train_batch_size=sft_config.train_batch_size,
+        num_train_steps=sft_config.num_train_steps,
+        steps_per_eval=sft_config.steps_per_eval,
+        checkpointer=checkpointer_config,
+        seed=sft_config.seed,
+    )
+
+    optimizer_config = AdamConfig(
+        learning_rate=sft_config.learning_rate,
+        weight_decay=sft_config.weight_decay,
+        warmup=sft_config.warmup,
+        cooldown=sft_config.cooldown,
+        min_lr_ratio=sft_config.min_lr_ratio,
+        lr_schedule=sft_config.lr_schedule,
+        max_grad_norm=sft_config.max_grad_norm,
+    )
+
+    # Check if we're dealing with a Llama model and need to update rotary embeddings
+    # hidden dimension and sequence length
+    if isinstance(model_config, LlamaConfig) and not isinstance(model_config.rope, Llama3RotaryEmbeddingsConfig):
+        # Determine if we should use Llama3 rotary embeddings
+        if "llama3" in sft_config.model_name_or_path.lower() or "llama-3" in sft_config.model_name_or_path.lower():
+            # Update model_config with Llama3 rotary embeddings
+            model_config = dataclasses.replace(
+                model_config,
+                seq_len=4096,
+                hidden_dim=4096,
+                intermediate_dim=14336,
+                num_kv_heads=8,
+                rope=Llama3RotaryEmbeddingsConfig(
+                    theta=500000,
+                    factor=8.0,
+                    low_freq_factor=1.0,
+                    high_freq_factor=4.0,
+                    original_max_position_embeddings=8192,
+                ),
+            )
+
+    # Create appropriate SFT config based on whether we're using mixture or not
+    if use_mixture:
+        if not isinstance(tokenized, dict):
+            raise ValueError("For mixture SFT, tokenized should be a Dict[str, SupervisedUrlSourceConfig]")
+
+        if mixture_weights is None:
+            raise ValueError("Mixture weights must be specified!")
+
+        # Configure the mixture-based SFT
+        config = TrainSFTMixturePodConfig(
+            output_path=this_output_path(),
+            tpu_type=sft_config.tpu_type,
+            trainer=trainer_config,
+            model=model_config,
+            optimizer=optimizer_config,
+            supervised_data=tokenized,
+            mixture_weights=mixture_weights,
+            mixture_block_size=sft_config.mixture_block_size,
+            tokenizer=sft_config.tokenizer,
+            model_name_or_path=sft_config.model_name_or_path,
+            initialize_from_hf=sft_config.initialize_from_hf,
+            max_seq_len=sft_config.max_seq_len,
+            hf_save_steps=sft_config.steps_per_hf_export,
+            messages_field="messages",
+            input_role=sft_config.input_role,
+            output_role=sft_config.output_role,
+            stop_strategy=sft_config.stop_strategy,
+            bypass_path_checks=sft_config.bypass_path_checks,
+            env={"JAX_PLATFORMS": "tpu"},
+        )
+        # Use the mixture training function
+        fn = run_levanter_sft_mixture
+
+    else:
+        # Handle the case of a single dataset
+        if isinstance(tokenized, InputName | ExecutorStep):
+            supervised_data = LMSupervisedDatasetConfig(
+                cache_dir=output_path_of(tokenized),
+                input_field=sft_config.input_role,
+                output_field=sft_config.output_role,
+            )
+            chat_train_urls = [output_path_of(tokenized, "**/*.jsonl.gz")]
+        elif isinstance(tokenized, LMSupervisedDatasetConfig):
+            supervised_data = tokenized
+            chat_train_urls = None
+        else:
+            raise ValueError(
+                "For non-mixture SFT, tokenized should be an InputName, ExecutorStep, or LMSupervisedDatasetConfig"
+            )
+
+        # Configure the single-dataset SFT
+        config = TrainSFTOnPodConfig(
+            output_path=this_output_path(),
+            tpu_type=sft_config.tpu_type,
+            trainer=trainer_config,
+            model=model_config,
+            optimizer=optimizer_config,
+            supervised_data=supervised_data,
+            chat_train_urls=chat_train_urls,
+            tokenizer=sft_config.tokenizer,
+            model_name_or_path=sft_config.model_name_or_path,
+            initialize_from_hf=sft_config.initialize_from_hf,
+            max_seq_len=sft_config.max_seq_len,
+            hf_save_steps=sft_config.steps_per_hf_export,
+            messages_field="messages",
+            input_role=sft_config.input_role,
+            output_role=sft_config.output_role,
+            bypass_path_checks=sft_config.bypass_path_checks,
+            env={"JAX_PLATFORMS": "tpu"},
+        )
+        # Use the single-dataset training function
+        fn = run_levanter_sft
+
+    # Create and return the ExecutorStep
+    return ExecutorStep(
+        name=f"checkpoints/{name}_seed{sft_config.seed}",
+        fn=fn,
+        config=config,
+        description=f"SFT {'mixture' if use_mixture else 'single dataset'} for {sft_config.num_train_steps} steps",
         pip_dependency_groups=["tokenize_train"],
     )
 

@@ -1,18 +1,20 @@
-from datetime import timedelta
+"""
+An experiment to run SFT on a high quality subset of instruction/reasoning datasets.
 
-import jmp
+The default below trains on all the datasets weighted by document count and sets
+the number of training steps to epoch three times. If you wish to fine-tune on a
+different number of datasets you will need to change the number of training steps
+accordingly.
+"""
+
 from instruction_datasets import get_instruction_dataset
-from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text import SupervisedUrlSourceConfig
-from levanter.models.llama import LlamaConfig
-from levanter.models.rotary import Llama3RotaryEmbeddingsConfig
-from levanter.optim import AdamConfig
-from levanter.tracker.wandb import WandbConfig
-from levanter.trainer import TrainerConfig
 
+from experiments.llama import llama_8b
+from experiments.simple_sft_config import SimpleSFTConfig
 from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path
 from marin.processing.tokenize.tokenize import TokenizeConfig, levanter_tokenize_sft
-from marin.training.training import TrainSFTMixturePodConfig, run_levanter_sft_mixture
+from marin.training.training import default_sft
 
 
 def create_tokenization_step(dataset_name: str) -> ExecutorStep:
@@ -22,7 +24,6 @@ def create_tokenization_step(dataset_name: str) -> ExecutorStep:
 
     # Get the last part of the path and clean it up
     short_name = dataset_name.split("/")[-1].lower().replace("-", "_")
-    print(f"short name is {short_name}", flush=True)
     return ExecutorStep(
         name=f"tokenized/{short_name}_llama3_instruct_tokenizer",
         fn=levanter_tokenize_sft,
@@ -51,23 +52,41 @@ DATASETS = [
     "facebook/natural_reasoning",
 ]
 
-NUM_TRAIN_STEPS = 19086  # From your YAML config
+NUM_TRAIN_STEPS = 19086  # 3 Epochs over all datasets above
 
 
-# Add training step
-def create_training_step(tokenization_steps: list[ExecutorStep], seed: int = 0) -> ExecutorStep:
+def create_sft_mixture_step(tokenization_steps: list[ExecutorStep], seed: int = 0) -> ExecutorStep:
+    """
+    Creates an ExecutorStep for training a Llama-3.1 model on a mixture of instruction datasets.
+
+    This function configures a supervised fine-tuning (SFT) training step that uses tokenized
+    datasets from previous tokenization steps. The mixture weights are set proportionally to
+    the number of documents in each dataset. The resulting model is an instruction-tuned
+    version of Llama-3.1-8B.
+
+    Args:
+        tokenization_steps: A list of ExecutorStep objects representing the tokenization steps
+                           for all datasets to be included in the training mixture.
+        seed: Random seed to use for training initialization. Defaults to 0.
+
+    Returns:
+        An ExecutorStep configured for training a Llama-3.1 model on the mixture of datasets.
+        The output path will be under "checkpoints/llama3.1_mixture_total_seed{seed}".
+    """
     # Create a mapping of cache dirs for each dataset from tokenization steps
     supervised_data = {}
+    # Each weight is set with the naive baseline of the number
+    # of documents per dataset
     mixture_weights = {
-        "tulu_3_sft_mixture": 0,  # 939343,
-        "openthoughts_114k_math": 0,  # 89120,
-        "verifiable_math_problems": 0,  # 777457,
-        "acecode_89k": 0,  # 87149,
-        "smoltalk": 0,  # 1043917,
-        "natural_reasoning": 0,  # 1145824,
+        "tulu_3_sft_mixture": 939343,
+        "openthoughts_114k_math": 89120,
+        "verifiable_math_problems": 777457,
+        "acecode_89k": 87149,
+        "smoltalk": 1043917,
+        "natural_reasoning": 1145824,
         "dolphin_r1_nonreasoning": 214318,
         "dolphin_r1_reasoning": 585418,
-        "bespoke_stratos_17k": 0,  # 16710,
+        "bespoke_stratos_17k": 16710,
     }
 
     for step in tokenization_steps:
@@ -80,69 +99,27 @@ def create_training_step(tokenization_steps: list[ExecutorStep], seed: int = 0) 
             output_field="assistant",
         )
 
-    return ExecutorStep(
-        name=f"checkpoints/llama3.1_mixture_total_seed{seed}",
-        fn=run_levanter_sft_mixture,  # Use the train function from sft_mixture.py
-        config=TrainSFTMixturePodConfig(
-            trainer=TrainerConfig(
-                seed=seed,
-                tracker=WandbConfig(project="marin", tags=["dolma", "olmo", "llama", "mixture"]),
-                mp=jmp.get_policy("p=f32,c=bfloat16"),
-                train_batch_size=128,
-                num_train_steps=3772,
-                steps_per_eval=1000,
-                tensor_parallel_axes=["mlp", "heads"],
-                fsdp_axis="embed",
-                batch_axis="batch",
-                checkpointer=CheckpointerConfig(
-                    save_interval=timedelta(minutes=30),
-                    keep=[dict(every=25000)],
-                ),
-            ),
-            model=LlamaConfig(
-                seq_len=4096,
-                hidden_dim=4096,
-                intermediate_dim=14336,
-                num_layers=32,
-                num_heads=32,
-                num_kv_heads=8,
-                use_flash_attention=True,
-                flash_attention_block_size=512,
-                use_bias=False,
-                use_layer_norm_weight=True,
-                initializer_range=0.02,
-                rope=Llama3RotaryEmbeddingsConfig(
-                    theta=500000,
-                    factor=8.0,
-                    low_freq_factor=1.0,
-                    high_freq_factor=4.0,
-                    original_max_position_embeddings=8192,
-                ),
-            ),
-            optimizer=AdamConfig(
-                learning_rate=5e-6,
-                weight_decay=0.0,
-                min_lr_ratio=0.0,
-                lr_schedule="linear",
-                warmup=0.03,
-            ),
-            # Mixture specific configuration
-            supervised_data=supervised_data,
-            mixture_weights=mixture_weights,
-            mixture_block_size=2048,
-            stop_strategy="restart",
-            # Model loading configuration
-            max_seq_len=4096,
-            tokenizer="meta-llama/Llama-3.1-8B-Instruct",
-            model_name_or_path="meta-llama/Llama-3.1-8B",
-            initialize_from_hf=True,
-            # HF checkpoint saving
-            hf_save_steps=1250,
-            # Chat format configuration
-            messages_field="messages",
-            input_role="user",
-            output_role="assistant",
-        ),
+    seed = 0
+    # Define an SFT config appropriate for mixture training.
+    mixture_sft_config = SimpleSFTConfig(
+        train_batch_size=128,
+        num_train_steps=NUM_TRAIN_STEPS,
+        learning_rate=5e-6,
+        tpu_type="v4-128",
+        tokenizer="meta-llama/Llama-3.1-8B-Instruct",
+        model_name_or_path="meta-llama/Llama-3.1-8B",
+        max_seq_len=4096,
+        seed=seed,
+    )
+
+    return default_sft(
+        name="checkpoints/llama3.1_mixture_total",
+        tokenized=supervised_data,
+        model_config=llama_8b,
+        sft_config=mixture_sft_config,
+        use_mixture=True,
+        mixture_weights=mixture_weights,
+        tags=["dolma", "llama", "mixture"],
     )
 
 
@@ -151,7 +128,7 @@ if __name__ == "__main__":
     tokenization_steps = [create_tokenization_step(dataset_name) for dataset_name in DATASETS]
 
     # Create training step that depends on tokenization
-    training_step = create_training_step(tokenization_steps)
+    training_step = create_sft_mixture_step(tokenization_steps)
 
     # Run all steps
     executor_main(steps=[*tokenization_steps, training_step])
