@@ -29,7 +29,6 @@ from marin.crawl.minhash.deduplicate_against_index import (
 )
 from marin.execution.executor import ExecutorStep, output_path_of, this_output_path
 
-
 # path to bloom filter for links. The year range corresponds to time period designations for CC
 BLOOM_FILTER_2013_2018 = (
     "gs://marin-us-central2/gcsfuse_mount/nfliu/deduplicate_outlinks/cc-urls-partitioned_2013_2018.bloom"
@@ -46,13 +45,11 @@ def default_crawl(
 ) -> list[ExecutorStep]:
     """
     Crawls over a given parquet to extract the outlinks and populate a new dataset based on them.
-    
     Args:
         config (HtmlExtractionConfig): Configuration for extracting HTML from Dataset Parquet files
         yield_fn (Callable): Function to apply processing to the crawled content
-        input_pattern (str, optional): Pattern to match input files for deduplicating outlinks. 
+        input_pattern (str, optional): Pattern to match input files for deduplicating outlinks.
                                       Defaults to "*_links.jsonl.gz".
-    
     Returns:
         steps[list[ExecutorStep]]: List of steps in the crawl pipeline
     """
