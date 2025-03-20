@@ -44,8 +44,8 @@ class TrainBertUrlClassifierConfig:
     num_epochs: int = 1
     seed: int = 0
     max_length: int = 512
-    dataloader_num_workers: int = 8
-    dataloader_prefetch_factor: int = 4
+    dataloader_num_workers: int = 0
+    dataloader_prefetch_factor: int | None = None
 
 
 @ray.remote(memory=8 * 1024 * 1024 * 1024)
@@ -141,7 +141,7 @@ def train_bert_url_classifier(
     num_epochs: int,
     max_length: int,
     dataloader_num_workers: int,
-    dataloader_prefetch_factor: int,
+    dataloader_prefetch_factor: int | None,
     seed: int = 0,
 ):
     # Hash this dataset configuration so we can skip dataset generation if it already exists.
@@ -189,8 +189,8 @@ def train_model(
     hf_model: str,
     num_epochs: int,
     max_length: int = 512,
-    dataloader_num_workers: int = 8,
-    dataloader_prefetch_factor: int = 4,
+    dataloader_num_workers: int = 0,
+    dataloader_prefetch_factor: int | None = None,
 ) -> None:
     logger.info(f"Training BERT model for experiment {output_path}")
     success_path = os.path.join(output_path, ".SUCCESS")
