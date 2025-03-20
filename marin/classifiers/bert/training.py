@@ -9,10 +9,13 @@ import os
 import tempfile
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any
 
 import ray
 import torch
 from transformers import BertForSequenceClassification, BertTokenizer, Trainer, TrainingArguments
+from transformers.tokenization_utils_base import PreTrainedTokenizerBase
+from transformers.utils import PaddingStrategy
 
 from marin.classifiers.bert.utils import BertDataset, format_example
 from marin.classifiers.utils import format_dataset, merge_dataset_shards, shuffle, split_dataset
@@ -57,6 +60,46 @@ class BertTrainingArguments:
         )
 
 
+@dataclass
+class BertDataCollator:
+    """
+    Data collator that will dynamically pad or truncate the inputs for BERT training.
+
+    Args:
+        tokenizer ([`PreTrainedTokenizer`] or [`PreTrainedTokenizerFast`]):
+            The tokenizer used for encoding the data.
+        padding (`bool`, `str` or [`~utils.PaddingStrategy`], *optional*, defaults to `True`):
+            Select a strategy to pad the returned sequences (according to the model's padding side and padding index)
+            among:
+
+            - `True` or `'longest'` (default): Pad to the longest sequence in the batch (or no padding if only a single
+              sequence is provided).
+            - `'max_length'`: Pad to a maximum length specified with the argument `max_length` or to the maximum
+              acceptable input length for the model if that argument is not provided.
+            - `False` or `'do_not_pad'`: No padding (i.e., can output a batch with sequences of different lengths).
+        max_length (`int`, *optional*):
+            Maximum length of the returned list and optionally padding length (see above).
+        return_tensors (`str`, *optional*, defaults to `"pt"`):
+            The type of Tensor to return. Allowable values are "np", "pt" and "tf".
+    """
+
+    tokenizer: PreTrainedTokenizerBase
+    padding: bool | str | PaddingStrategy = True
+    max_length: int | None = 128
+    return_tensors: str = "pt"
+
+    def __call__(self, items: list[dict[str, Any]]) -> dict[str, Any]:
+        batch = self.tokenizer(
+            [item["text"] for item in items],
+            truncation=True,
+            return_tensors=self.return_tensors,
+            padding=self.padding,
+            max_length=self.max_length,
+        )
+        batch["labels"] = torch.tensor([item["label"] for item in items], dtype=torch.long)
+        return batch
+
+
 def _mp_fn(
     index: int,
     hf_model: str,
@@ -83,18 +126,6 @@ def _mp_fn(
     train_dataset = BertDataset(train_path)
     val_dataset = BertDataset(val_path)
 
-    @torch.no_grad()
-    def collate_fn(items):
-        batch = tokenizer(
-            [item["text"] for item in items],
-            truncation=True,
-            return_tensors="pt",
-            padding=True,
-            max_length=bert_args.max_length,
-        )
-        batch["labels"] = torch.tensor([item["label"] for item in items], dtype=torch.long)
-        return batch
-
     model = BertForSequenceClassification.from_pretrained(hf_model, num_labels=train_dataset.num_labels)
 
     trainer = Trainer(
@@ -102,8 +133,8 @@ def _mp_fn(
         bert_args.get_hf_training_args(),
         train_dataset=train_dataset,
         eval_dataset=val_dataset,
-        tokenizer=tokenizer,
-        data_collator=collate_fn,
+        processing_class=tokenizer,
+        data_collator=BertDataCollator(tokenizer=tokenizer),
     )
     trainer.train()
 
