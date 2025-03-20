@@ -14,7 +14,7 @@ Reference Issue: https://github.com/stanford-crfm/marin/issues/648
 import logging
 
 from experiments.dolma.tokenize_dolma import tokenize_dolma_steps
-from experiments.dolma.utils import get_default_experiment_steps
+from experiments.dolma.utils import dolma_pipeline_with_modified_dataset
 from experiments.exp579_ar5iv_markdownify import (
     ar5iv_no_problem_resiliparse_no_references_no_links,
     ar5iv_no_problem_resiliparse_no_references_with_links,
@@ -36,8 +36,8 @@ tokenized_dolma_steps = tokenize_dolma_steps()
     arxiv_no_problem_resiliparse_no_references_no_links_tokenized,
     arxiv_no_problem_resiliparse_1_4b_no_references_no_links_model,
     arxiv_no_problem_resiliparse_1_4b_no_references_no_links_evals,
-) = get_default_experiment_steps(
-    path_suffix="arxiv-no-problem-resiliparse-no-references-no-links",
+) = dolma_pipeline_with_modified_dataset(
+    path_prefix="arxiv-no-problem-resiliparse-no-references-no-links",
     dataset=ar5iv_no_problem_resiliparse_no_references_no_links,
     dolma_dataset="arxiv",
     experiment_tag=EXPERIMENT_TAG,
@@ -48,8 +48,8 @@ tokenized_dolma_steps = tokenize_dolma_steps()
     arxiv_no_problem_resiliparse_no_references_with_links_tokenized,
     arxiv_no_problem_resiliparse_1_4b_no_references_with_links_model,
     arxiv_no_problem_resiliparse_1_4b_no_references_with_links_evals,
-) = get_default_experiment_steps(
-    path_suffix="arxiv-no-problem-resiliparse-no-references-with-links",
+) = dolma_pipeline_with_modified_dataset(
+    path_prefix="arxiv-no-problem-resiliparse-no-references-with-links",
     dataset=ar5iv_no_problem_resiliparse_no_references_with_links,
     dolma_dataset="arxiv",
     experiment_tag=EXPERIMENT_TAG,
@@ -60,8 +60,8 @@ tokenized_dolma_steps = tokenize_dolma_steps()
     arxiv_no_problem_resiliparse_with_references_no_links_tokenized,
     arxiv_no_problem_resiliparse_1_4b_with_references_no_links_model,
     arxiv_no_problem_resiliparse_1_4b_with_references_no_links_evals,
-) = get_default_experiment_steps(
-    path_suffix="arxiv-no-problem-resiliparse-with-references-no-links",
+) = dolma_pipeline_with_modified_dataset(
+    path_prefix="arxiv-no-problem-resiliparse-with-references-no-links",
     dataset=ar5iv_no_problem_resiliparse_with_references_no_links,
     dolma_dataset="arxiv",
     experiment_tag=EXPERIMENT_TAG,
@@ -72,8 +72,8 @@ tokenized_dolma_steps = tokenize_dolma_steps()
     arxiv_no_problem_resiliparse_with_references_with_links_tokenized,
     arxiv_no_problem_resiliparse_1_4b_with_references_with_links_model,
     arxiv_no_problem_resiliparse_1_4b_with_references_with_links_evals,
-) = get_default_experiment_steps(
-    path_suffix="arxiv-no-problem-resiliparse-with-references-with-links",
+) = dolma_pipeline_with_modified_dataset(
+    path_prefix="arxiv-no-problem-resiliparse-with-references-with-links",
     dataset=ar5iv_no_problem_resiliparse_with_references_with_links,
     dolma_dataset="arxiv",
     experiment_tag=EXPERIMENT_TAG,
