@@ -30,9 +30,11 @@ Current datasets:
 """
 
 import hashlib
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Sequence
 
+from experiments.defaults import default_tokenize
+from experiments.llama import llama3_tokenizer
 from marin.execution.executor import (
     ExecutorStep,
     executor_main,
@@ -42,6 +44,10 @@ from marin.execution.executor import (
 )
 from operations.download.huggingface.download import DownloadConfig
 from operations.download.huggingface.download_hf import download_hf
+from operations.transform.conversation.conversation_to_dolma import (
+    ConversationToDolmaConfig,
+    convert_conversation_to_dolma,
+)
 from operations.transform.conversation.transform_conversation import (
     TransformSFTDatasetConfig,
     transform_hf_dataset,
@@ -289,9 +295,7 @@ def transform_dataset_step(dataset_cfg: InstructionDatasetConfig, download_step:
     return transform_step
 
 
-def get_instruction_dataset(
-    hf_dataset_id: str, splits: Sequence[str] = ("train",)
-) -> ExecutorStep:
+def get_instruction_dataset(hf_dataset_id: str, splits: Sequence[str] = ("train",)) -> ExecutorStep:
     # Check that config exists
     assert hf_dataset_id in INSTRUCTION_DATASET_NAME_TO_CONFIG, f"Unknown instruction dataset: {hf_dataset_id}"
 
@@ -304,6 +308,20 @@ def get_instruction_dataset(
     download_step = download_dataset_step(config)
     transform_step = transform_dataset_step(config, download_step)
     return transform_step
+
+
+tulu_3_in_dolma = ExecutorStep(
+    name="dolma/tulu_3_in_dolma",
+    fn=convert_conversation_to_dolma,
+    config=ConversationToDolmaConfig(output_path_of(get_instruction_dataset("allenai/tulu-3-sft-mixture"))),
+)
+
+tulu3_flat_llama_tokenized = default_tokenize(
+    "tulu_sft", tulu_3_in_dolma, tokenizer=llama3_tokenizer, is_validation=True
+)
+"""
+"flat" here means that we interpolated all the chat messages into a single string per doc
+"""
 
 
 if __name__ == "__main__":
