@@ -46,7 +46,7 @@ class BertDataset(Dataset):
         self.texts = []
         self.labels = []
 
-        with fsspec.open(dataset_path, "rb", compression="infer") as f:
+        with fsspec.open(dataset_path, "rb", compression="infer", block_size=1 * 1024 * 1024 * 1024) as f:
             for line in f:
                 example = json.loads(line)
 

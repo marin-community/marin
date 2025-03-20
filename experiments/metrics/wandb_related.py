@@ -12,7 +12,9 @@ logger = logging.getLogger(__name__)
 class WandbMetricsConfig:
     entity: str
     project: str
-    num_days: int  # number of days before today to get metrics for
+
+    # restrict aggregation to this many days before today
+    num_days: int | None  # use None for specifying no time window (i.e, all runs are counted)
 
 
 def get_wandb_run_metrics(
@@ -30,7 +32,7 @@ def get_wandb_run_metrics(
     - dict: A dictionary containing relevant metrics for the run.
     """
     if metrics is None:
-        metrics = ["eval/paloma/c4_en/bpb", "throughput/total_gflops", "_runtime"]
+        metrics = ["eval/paloma/c4_en/bpb", "throughput/total_gflops", "_runtime", "parameter_count"]
 
     # Initialize the WandB API
     api = wandb.Api()
@@ -44,8 +46,22 @@ def get_wandb_run_metrics(
         for metric in metrics:
             # Retrieve the metric value for the run
             value = run.summary.get(metric, None)
-            if value is None:
-                logger.info(f"Metric '{metric}' not found for run {run_id}")
+
+            # if the metric is not found or is not a valid value, set it to None
+            # A metric being None means we skip that run in the aggregation
+            if value is not None:
+                if isinstance(value, str) and value.lower() == "nan":
+                    # happens when evals fail or haven't been run, typically for quickstart/test runs
+                    logger.info(f"Metric '{metric}' for run {run_id} is 'NaN'. Setting to None.")
+                    value = None
+                else:
+                    try:
+                        value = float(value)
+                    except (ValueError, TypeError):
+                        logger.info(f"Metric '{metric}' for run {run_id} is not a float: {value}. Setting to None.")
+                        value = None
+            else:
+                logger.info(f"Metric '{metric}' not found for run {run_id}.")
             metrics_dict[metric] = value
 
         logger.info("Run metrics: ", metrics_dict)
@@ -61,18 +77,15 @@ def get_wandb_run_metrics(
         return None
 
 
-def get_all_runs_over_period(num_days=7, entity="stanford-mercury", project="marin") -> list[dict[str, Any]] | None:
+def get_all_runs_over_period(
+    num_days: int | None = None, entity="stanford-mercury", project="marin"
+) -> list[dict[str, Any]] | None:
     """
     Retrieves all runs created within the past week (or given time window).
+    If num_days is None, it will retrieve all runs for the project.
     """
     # Initialize the WandB API
     api = wandb.Api()
-
-    # Define the time window (one week ago from now)
-    time_window = datetime.now(timezone.utc) - timedelta(days=num_days)
-
-    # Initialize the list of runs
-    runs_list = []
 
     try:
 
@@ -86,12 +99,20 @@ def get_all_runs_over_period(num_days=7, entity="stanford-mercury", project="mar
         # Fetch all runs for the project
         runs = api.runs(f"{entity}/{project}")
 
-        # Filter runs by creation date
-        runs_list = [run for run in runs if datetime.strptime(run.created_at, "%Y-%m-%dT%H:%M:%S%z") >= time_window]
+        logger.info(f"Found {len(runs)} runs in project {project}")
 
-        logger.info(f"Successfully retrieved {len(runs_list)} runs from the past {num_days} days")
+        # Filter runs by update date
+        if num_days is not None:
+            time_window = datetime.now(timezone.utc) - timedelta(days=num_days)
+            filtered_runs = [
+                run for run in runs if datetime.strptime(run.updated_at, "%Y-%m-%dT%H:%M:%S%z") >= time_window
+            ]
+            logger.info(f"Successfully retrieved {len(filtered_runs)} runs updated in the past {num_days} days")
+        else:
+            filtered_runs = runs
+            logger.info(f"Successfully retrieved {len(filtered_runs)} runs since the beginning of time")
 
-        return runs_list
+        return filtered_runs
 
     except wandb.errors.CommError as e:
         logger.error("Failed to retrieve run data:", e)
@@ -176,6 +197,9 @@ def calculate_wandb_metrics(config: WandbMetricsConfig) -> dict[str, Any]:
     - tuple: a metrics dict and the GCS path to the metrics file.
     """
 
+    logger.info("Calculating metrics for WandB runs...")
+    logger.info(f"Entity: {config.entity}, Project: {config.project}, Num days: {config.num_days}")
+
     # get all runs from past num_days
     runs = get_all_runs_over_period(num_days=config.num_days, entity=config.entity, project=config.project)
 
@@ -184,11 +208,6 @@ def calculate_wandb_metrics(config: WandbMetricsConfig) -> dict[str, Any]:
     for run in runs:
         run_id = run.id
         run_metrics[run_id] = get_wandb_run_metrics(run_id)
-
-        # get parameter count for the run and add to metrics
-        num_params = count_params_for_run(run_id)
-        if num_params:
-            run_metrics[run_id]["num_parameters"] = num_params
 
     # Define parameter scale thresholds (exclusive upper bounds)
     parameter_scales = {
@@ -206,7 +225,10 @@ def calculate_wandb_metrics(config: WandbMetricsConfig) -> dict[str, Any]:
     # best_bpb1b_run_id, best_bpb7b_run_id = None, None
     for run_id, metrics in run_metrics.items():
         if metrics["eval/paloma/c4_en/bpb"] is not None:
-            num_parameters = metrics["num_parameters"]
+            if not isinstance(metrics["eval/paloma/c4_en/bpb"], float):
+                logger.info(f"BPB for run {run_id} is a string: {metrics['eval/paloma/c4_en/bpb']}. Skipping.")
+                continue
+            num_parameters = float(metrics["parameter_count"])
             for scale_label, threshold in parameter_scales.items():
                 if num_parameters < threshold:
                     current_best_bpb = best_bpb_per_scale[scale_label]["bpb"]
@@ -215,6 +237,15 @@ def calculate_wandb_metrics(config: WandbMetricsConfig) -> dict[str, Any]:
                             "bpb": metrics["eval/paloma/c4_en/bpb"],
                             "run_id": run_id,
                         }
+
+    # calculate total gflops across all runs
+    total_gflops = sum(
+        [
+            metrics["throughput/total_gflops"]
+            for metrics in run_metrics.values()
+            if metrics["throughput/total_gflops"] is not None
+        ]
+    )
 
     metrics = {
         "num_runs": len(run_metrics),
@@ -225,13 +256,8 @@ def calculate_wandb_metrics(config: WandbMetricsConfig) -> dict[str, Any]:
             }
             for scale, data in best_bpb_per_scale.items()
         },
-        "total_gflops_across_runs": sum(
-            [
-                metrics["throughput/total_gflops"]
-                for metrics in run_metrics.values()
-                if metrics["throughput/total_gflops"] is not None
-            ]
-        ),
+        "total_gflops_across_runs": total_gflops,
+        "total_petaflops_across_runs": total_gflops / 1e6,
     }
 
     logger.info(metrics)
