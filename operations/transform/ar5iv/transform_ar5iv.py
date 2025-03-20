@@ -58,6 +58,12 @@ def clean_html(html: str, remove_reference_section: bool = True) -> str:
     artifacts (bibliography, footnotes, figure captions), and formatting that could easily be parsed by the resiliparse
     (equation tables, duplicate list numbering).
 
+
+    Most of the steps are standard boilerplate cleanups based on intuition from experiments with wikipedia.
+    For example, we remove the references section by default based on the performance of the model on wikipedia.
+    Transformations are applied in the order cleanup the content for better extraction.
+
+
     Args:
         html (str): The HTML content to clean.
         remove_reference_section (bool): Whether to remove the reference section.
