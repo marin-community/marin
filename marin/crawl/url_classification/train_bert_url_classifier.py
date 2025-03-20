@@ -1,4 +1,14 @@
 #!/usr/bin/env python3
+"""
+```
+python marin/run/ray_run.py \
+    --env_vars WANDB_API_KEY 'ca4e321fd237f65236ab95e92724934b47264b1c' \
+    --no_wait -- \
+    python marin/crawl/url_classification/train_bert_url_classifier.py \
+    --input_pattern 'gs://marin-us-central2/scratch/nfliu/text/open-web-math-fde8ef8-10M/links.*.parquet' \
+    --output_path gs://marin-us-central2/scratch/nfliu/url_classification_models/bert-base-uncased-open-web-math-fde8ef8-10M/
+```
+"""
 import hashlib
 import json
 import logging
@@ -18,7 +28,7 @@ from transformers import BertForSequenceClassification
 
 from marin.classifiers.bert.training import BertTrainingArguments, _mp_fn
 from marin.classifiers.utils import shuffle
-from marin.utils import fsspec_exists, fsspec_glob, remove_tpu_lockfile_on_exit
+from marin.utils import fsspec_cpdir, fsspec_exists, fsspec_glob, remove_tpu_lockfile_on_exit
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -29,7 +39,7 @@ class TrainBertUrlClassifierConfig:
     input_pattern: str
     output_path: str
     val_frac: float = 0.1
-    batch_size: int = 1
+    batch_size: int = 64
     lr: float = 2e-5
     hf_model: str = "bert-base-uncased"
     num_epochs: int = 1
@@ -218,8 +228,10 @@ def train_model(
         import torch_xla.distributed.xla_multiprocessing as xmp
 
         xmp.spawn(_mp_fn, args=(hf_model, train_dataset_path, val_dataset_path, local_model_output_path, bert_args))
-        train_end_time = time.time()
+        fsspec_cpdir(local_model_output_path, os.path.join(output_path, "model_output"))
+        fsspec_cpdir(local_trainer_output_path, os.path.join(output_path, "trainer_output"))
 
+    train_end_time = time.time()
     elapsed_seconds = train_end_time - train_start_time
     elapsed_str = time.strftime("%H:%M:%S", time.gmtime(elapsed_seconds))
     logger.info(f"Training BERT for experiment {output_path} completed; total time = {elapsed_str}.")
