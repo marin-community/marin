@@ -202,7 +202,7 @@ def default_train(
     else:
         per_device_eval_parallelism = train_config.per_device_eval_parallelism
 
-    schedule = BatchSchedule(train_config.train_batch_size)
+    schedule = BatchSchedule(unwrap_versioned_value(train_config.train_batch_size))
     total_examples = schedule.global_data_offset_by_step(train_config.num_train_steps)
 
     return ExecutorStep(
