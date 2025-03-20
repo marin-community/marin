@@ -4,7 +4,7 @@ Experiment to convert Arxiv HTML dumps to Markdown format.
 This experiment downloads and processes the Arxiv HTML dumps to extract clean markdown/text.
 We prepare the text/markdown for use as a training dataset for a language model, over 3 settings:
 
-* Readability which extracts simplifies HTML DOM tree and is then combined with markdownify
+* Readability which extracts simplified HTML DOM tree and is then combined with markdownify
   for markdown conversion. We generate four variants with combinations of references and links removed or kept.
 * The default Resiliparse configuration, which removes boilerplate but does not support markdownification. We generate
   four variants with combinations of references and links removed or kept.
