@@ -169,7 +169,13 @@ class MEDUPipeline:
 
     # Stage 2: Merge benchmark description prompts
     def merge_benchmark_description_prompts(self) -> str:
-        """Hierarchically merge the corpus content description prompts into a single prompt."""
+        """Hierarchically merge the corpus content description prompts into a single prompt.
+
+        The idea is there are many descriptions of the skills that the data should have based on the
+        corpus contents provided. We take each consecutive pair of descriptions and merge them into a
+        single description. We repeat this process until we have a single description.
+        Then, this final description is what we use to score other documents.
+        """
         logger.info(f"Starting benchmark description merging for {len(self.generated_benchmark_descriptions)} prompts")
         while len(self.generated_benchmark_descriptions) > 1:
             # Odd number of prompts, do a single merge to make the number even.
