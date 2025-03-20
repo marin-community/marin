@@ -6,12 +6,22 @@ import yaml
 
 this_path = os.path.dirname(os.path.abspath(__file__))
 
-template_path = os.path.join(this_path, "marin-cluster-template.yaml")
+cluster_template_path = os.path.join(this_path, "marin-cluster-template.yaml")
+vllm_template_path = os.path.join(this_path, "marin-vllm-template.yaml")
+
+# LAtest tahs ABh:  latest 4a47ffc0 20250305
 
 DOCKER_TAGS = {
-    "us-central2": "20250107",
-    "us-west4": "20241123",
-    "europe-west4": "20241128",
+    "us-central2": "4a47ffc0",
+    "big-run": "4a47ffc0",
+    "us-west4": "89b461b3",
+    "europe-west4": "89b461b3",
+    "us-east1": "89b461b3",
+    "us-east5": "89b461b3",
+    # NB: different naming convention because we have two zones in europe-west4
+    "europe-west4-a": "89b461b3",
+    "asia-northeast1": "89b461b3",
+    "marin-us-east5-b-vllm": "296d2ef0",
 }
 
 configs = {
@@ -22,6 +32,16 @@ configs = {
         "BUCKET": "marin-us-central2",
         "DOCKER_TAG": DOCKER_TAGS["us-central2"],
         "tpu_generation": "v4",
+        "min_workers": 4,
+    },
+    "marin-big-run": {
+        "NAME": "marin-big-run",
+        "REGION": "us-central2",
+        "ZONE": "us-central2-b",
+        "BUCKET": "marin-us-central2",
+        "DOCKER_TAG": DOCKER_TAGS["big-run"],
+        "tpu_generation": "v4",
+        "min_workers": 0,
     },
     "marin-eu-west4": {
         "NAME": "marin-eu-west4",
@@ -30,6 +50,7 @@ configs = {
         "BUCKET": "marin-eu-west4",
         "DOCKER_TAG": DOCKER_TAGS["europe-west4"],
         "tpu_generation": "v5e",
+        "min_workers": 0,
     },
     "marin-us-west4": {
         "NAME": "marin-us-west4",
@@ -38,6 +59,53 @@ configs = {
         "BUCKET": "marin-us-west4",
         "DOCKER_TAG": DOCKER_TAGS["us-west4"],
         "tpu_generation": "v5e",
+        "min_workers": 0,
+    },
+    "marin-us-east1": {
+        "NAME": "marin-us-east1-d",
+        "REGION": "us-east1",
+        "ZONE": "us-east1-d",
+        "BUCKET": "marin-us-east1",
+        "DOCKER_TAG": DOCKER_TAGS["us-east1"],
+        "tpu_generation": "v6e",
+        "min_workers": 0,
+    },
+    "marin-us-east5": {
+        "NAME": "marin-us-east5",
+        "REGION": "us-east5",
+        "ZONE": "us-east5-b",
+        "BUCKET": "marin-us-east5",
+        "DOCKER_TAG": DOCKER_TAGS["us-east5"],
+        "tpu_generation": "v6e",
+        "min_workers": 0,
+    },
+    "marin-eu-west4-a": {
+        "NAME": "marin-eu-west4-a",
+        "REGION": "europe-west4",
+        "ZONE": "europe-west4-a",
+        "BUCKET": "marin-eu-west4",
+        "DOCKER_TAG": DOCKER_TAGS["europe-west4-a"],
+        "tpu_generation": "v6e",
+        "min_workers": 0,
+    },
+    "marin-asia-northeast1": {
+        "NAME": "marin-asia-northeast1",
+        "REGION": "asia-northeast1",
+        "ZONE": "asia-northeast1-b",
+        "BUCKET": "marin-asia-northeast1",
+        "DOCKER_TAG": DOCKER_TAGS["asia-northeast1"],
+        "tpu_generation": "v6e",
+        "min_workers": 0,
+    },
+    "marin-us-east5-b-vllm": {
+        "NAME": "marin-us-east5-b-vllm",
+        "REGION": "us-east5",
+        "ZONE": "us-east5-b",
+        "BUCKET": "marin-us-east5",
+        "DOCKER_TAG": DOCKER_TAGS["marin-us-east5-b-vllm"],
+        "tpu_generation": "v6e-serve",
+        "min_workers": 2,
+        "VLLM": True,
     },
 }
 
@@ -53,14 +121,27 @@ generation_configs = {
         "runtime_version": "v2-alpha-tpuv5-lite",
         "base_worker": "4",
         "slices": [8, 16, 32, 64, 128, 256],
-        "num_tpus": 8,
+        "num_tpus": 4,
         "tpus_worker": 1,
+    },
+    "v6e": {
+        "runtime_version": "v2-alpha-tpuv6e",
+        "base_worker": "4",
+        "slices": [8, 16, 32, 64, 128, 256],
+        "num_tpus": 4,
+    },
+    "v6e-serve": {
+        "runtime_version": "v2-alpha-tpuv6e",
+        "base_worker": "8",
+        "slices": [],
+        "num_tpus": 8,
     },
 }
 
 
 def make_tpu_slice_config(generation, count) -> dict[str, dict]:
     slice_gen_name = "v5litepod" if generation == "v5e" else generation
+    slice_gen_name = "v6e" if generation == "v6e-serve" else slice_gen_name
     name = f"tpu_slice_{generation}_{count}"
     return {
         name: {
@@ -76,19 +157,24 @@ def make_tpu_slice_config(generation, count) -> dict[str, dict]:
     }
 
 
-def make_tpu_worker_config(generation, count):
+def get_template_path(config_name):
+    if configs[config_name].get("VLLM", False):
+        return vllm_template_path
+    return cluster_template_path
+
+
+def make_tpu_worker_config(generation, count, min_workers=4):
     _, config = next(iter(make_tpu_slice_config(generation, count).items()))
-    config["min_workers"] = 4
+    config["min_workers"] = min_workers
     return {"tpu_worker": config}
 
 
 if __name__ == "__main__":
-
-    with open(template_path) as f:
-        template = jinja2.Template(f.read())
-
     for config_name, config in configs.items():
         with open(os.path.join(this_path, f"{config_name}.yaml"), "w") as f:
+            with open(get_template_path(config_name)) as f_template:
+                template = jinja2.Template(f_template.read())
+
             yaml_string = template.render(**config)
 
             # pyyaml strips comments, which i'd like to keep
@@ -97,7 +183,7 @@ if __name__ == "__main__":
             # available_node_types:
             generation = config["tpu_generation"]
             generation_config = generation_configs[generation]
-            worker_config = make_tpu_worker_config(generation, generation_config["base_worker"])
+            worker_config = make_tpu_worker_config(generation, generation_config["base_worker"], config["min_workers"])
             base_string = yaml.dump(worker_config, default_flow_style=False, indent=2)
             base_string = "\n  " + base_string.replace("\n", "\n  ")
             yaml_string += base_string
