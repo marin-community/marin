@@ -87,10 +87,11 @@ def _mp_fn(
     train_dataset = load_dataset("json", data_files=train_path)
     val_dataset = load_dataset("json", data_files=val_path)
 
-    # Tokenize the dataset (padding is added by collator)
+    # Tokenize the dataset
     def tokenize(batch):
         return tokenizer(
             batch["text"],
+            padding=True,
             truncation=True,
             return_tensors="pt",
             max_length=bert_args.max_length,

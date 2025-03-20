@@ -176,6 +176,7 @@ def train_bert_url_classifier(
 
 @ray.remote(
     memory=128 * 1024 * 1024 * 1024,
+    num_cpus=8,
     resources={"TPU": 4, "TPU-v4-8-head": 1},
 )
 @remove_tpu_lockfile_on_exit
