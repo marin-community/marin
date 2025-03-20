@@ -111,12 +111,6 @@ class MEDUPipeline:
         self.corpus_contents = corpus_contents
         self.tensor_parallel_size = tensor_parallel_size
 
-    def _should_run_labeling_pipeline(self) -> bool:
-        """If the final benchmark description prompt is empty, we run the pipeline to generate it. If the user
-        passes in a prompt, we skip the pipeline and use the prompt directly.
-        """
-        return self.final_benchmark_description_prompt == ""
-
     def _get_final_medu_prompt(self, benchmark_description: str) -> str:
         return MEDU_DOCUMENT_LABELING_PROMPT.format(test_description=benchmark_description, example="{example}")
 
@@ -259,7 +253,8 @@ def _run_benchmark_labeling_pipeline(config: MEDUPipelineConfig):
         config.final_benchmark_description_prompt,
     )
 
-    if pipeline._should_run_labeling_pipeline():
+    # Run the pipeline to generate the final benchmark description prompt if the user did not pass in a prompt.
+    if config.final_benchmark_description_prompt == "":
         futures = []
         futures.append(pipeline.get_benchmark_description_prompt.remote())
         futures.append(pipeline.merge_benchmark_description_prompts.remote())
