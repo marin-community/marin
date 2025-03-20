@@ -15,10 +15,14 @@ We prepare the text/markdown for use as a training dataset for a language model,
 Reference Issue: https://github.com/stanford-crfm/marin/issues/579
 """
 
+import logging
+
 from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path, versioned
 from marin.schemas.web.convert import ExtractionConfig, HtmlToMarkdownConfig, ResiliparseConfig
 from operations.download.ar5iv.download import DownloadConfig, download
 from operations.transform.ar5iv.transform_ar5iv import Ar5ivExtractionConfig, process_ar5iv_dump
+
+logger = logging.getLogger("ray")
 
 # Selectors to remove from the DOM tree, these mostly contain reference sections, Authors,
 # and Title sections[Prepended Manually to avoid duplication].
@@ -74,8 +78,12 @@ def get_ar5iv_extraction_step(extraction_method: str, extraction_config: Extract
     for the given extraction method and configuration.
 
     Args:
-        extraction_method: The method to use for the extraction.
-        extraction_config: The configuration to use for the extraction.
+        extraction_method: The method to use for the extraction (e.g., "resiliparse", "trafilatura", etc.).
+                          This determines which HTML-to-text/markdown library will be used.
+        extraction_config: The configuration to use for the extraction. This is an object
+                           (like ResiliparseConfig or TrafilaturaConfig) that contains specific settings for
+                           the chosen extraction method, such as whether to preserve formatting, include links,
+                           or use custom variants of the extraction library.
 
     Returns:
         A tuple of ExecutorSteps for the markdownification of the ar5iv dataset.
@@ -100,6 +108,7 @@ def get_ar5iv_extraction_step(extraction_method: str, extraction_config: Extract
 
     warnings_step = ExecutorStep(
         name="documents/ar5iv/ar5iv-04-2024-warnings",
+        fn=process_ar5iv_dump,
         config=Ar5ivExtractionConfig(
             input_path=ar5iv_warnings_raw_202404,
             revision="042024",
@@ -113,6 +122,7 @@ def get_ar5iv_extraction_step(extraction_method: str, extraction_config: Extract
 
     errors_step = ExecutorStep(
         name="documents/ar5iv/ar5iv-04-2024-errors",
+        fn=process_ar5iv_dump,
         config=Ar5ivExtractionConfig(
             input_path=ar5iv_errors_raw_202404,
             revision="042024",
@@ -127,157 +137,93 @@ def get_ar5iv_extraction_step(extraction_method: str, extraction_config: Extract
     return (no_problem_step, warnings_step, errors_step)
 
 
-# Markdownification using readability without references and without links
-ar5iv_no_problem_readability_no_references_no_links = ExecutorStep(
-    name="documents/ar5iv/ar5iv-04-2024-no-problem-readability-no-references-no-links",
-    fn=process_ar5iv_dump,
-    config=Ar5ivExtractionConfig(
-        input_path=ar5iv_no_problem_raw_202404,
-        revision="042024",
-        output_path=this_output_path("readability-no-references-no-links"),
-        extract_method=versioned("readability"),
-        extract_config=HtmlToMarkdownConfig(
-            include_images=False,
-            include_links=False,
-        ),
-        remove_reference_section=versioned(True),
-    ),
-)
+def get_ar5iv_section_omission_steps(dataset: str):
+    """
+    Returns a tuple of ExecutorSteps for the markdownification of the ar5iv dataset with section omission.
+    This function creates multiple variants of extraction steps that differ in their handling of
+    references and links. It generates all four combinations: with/without references and with/without links.
+    Args:
+        dataset: The dataset split of the ar5iv dataset to use for the extraction
+                 (e.g., "no-problem", "warnings", "errors").
+    Returns:
+        A list of four ExecutorSteps for the markdownification of the ar5iv dataset, one for each extraction method
+        and combination of reference and link settings.
+    """
 
-# Markdownification using readability without references and with links
-ar5iv_no_problem_readability_no_references_with_links = ExecutorStep(
-    name="documents/ar5iv/ar5iv-04-2024-no-problem-readability-no-references-with-links",
-    fn=process_ar5iv_dump,
-    config=Ar5ivExtractionConfig(
-        input_path=ar5iv_no_problem_raw_202404,
-        revision="042024",
-        output_path=this_output_path("readability-no-references-with-links"),
-        extract_method=versioned("readability"),
-        extract_config=HtmlToMarkdownConfig(
-            include_images=False,
-            include_links=True,
-        ),
-        remove_reference_section=versioned(True),
-    ),
-)
+    input_path = None
+    match dataset:
+        case "no-problem":
+            input_path = ar5iv_no_problem_raw_202404
+        case "warnings":
+            input_path = ar5iv_warnings_raw_202404
+        case "errors":
+            input_path = ar5iv_errors_raw_202404
+        case _:
+            raise ValueError(f"Unknown dataset: {dataset}")
 
-# Markdownification using readability with references and without links
-ar5iv_no_problem_readability_with_references_no_links = ExecutorStep(
-    name="documents/ar5iv/ar5iv-04-2024-no-problem-readability-with-references-no-links",
-    fn=process_ar5iv_dump,
-    config=Ar5ivExtractionConfig(
-        input_path=ar5iv_no_problem_raw_202404,
-        revision="042024",
-        output_path=this_output_path("readability-with-references-no-links"),
-        extract_method=versioned("readability"),
-        extract_config=HtmlToMarkdownConfig(
-            include_images=False,
-            include_links=False,
-        ),
-        remove_reference_section=versioned(False),
-    ),
-)
+    steps = []
 
-# Markdownification using readability with references and with links
-ar5iv_no_problem_readability_with_references_with_links = ExecutorStep(
-    name="documents/ar5iv/ar5iv-04-2024-no-problem-readability-with-references-with-links",
-    fn=process_ar5iv_dump,
-    config=Ar5ivExtractionConfig(
-        input_path=ar5iv_no_problem_raw_202404,
-        revision="042024",
-        output_path=this_output_path("readability-with-references-with-links"),
-        extract_method=versioned("readability"),
-        extract_config=HtmlToMarkdownConfig(
-            include_images=False,
-            include_links=True,
-        ),
-        remove_reference_section=versioned(False),
-    ),
-)
+    # Generate all combinations of reference and link settings
+    for extraction_method in ["readability", "resiliparse"]:
+        for include_references in [False, True]:
+            for include_links in [False, True]:
+                if extraction_method == "readability":
+                    new_config = HtmlToMarkdownConfig(
+                        include_images=False,
+                        include_links=include_links,
+                    )
+                elif extraction_method == "resiliparse":
+                    new_config = ResiliparseConfig(
+                        preserve_formatting=True,
+                        main_content=True,
+                        links=versioned(include_links),
+                        prepend_title=True,
+                        skip_elements=ARXIV_BLACKLISTED_SELECTORS,
+                        use_custom_variant=False,
+                    )
 
-# Text extraction using Resiliparse without references and without links
-ar5iv_no_problem_resiliparse_no_references_no_links = ExecutorStep(
-    name="documents/ar5iv/ar5iv-04-2024-no-problem-resiliparse-no-references-no-links",
-    fn=process_ar5iv_dump,
-    config=Ar5ivExtractionConfig(
-        input_path=ar5iv_no_problem_raw_202404,
-        revision="042024",
-        output_path=this_output_path("resiliparse-no-references-no-links"),
-        extract_method=versioned("resiliparse"),
-        extract_config=ResiliparseConfig(
-            preserve_formatting=True,
-            main_content=True,
-            links=versioned(False),
-            prepend_title=True,
-            skip_elements=ARXIV_BLACKLISTED_SELECTORS,
-            use_custom_variant=False,
-        ),
-        remove_reference_section=versioned(True),
-    ),
-)
+                # Build the suffix for the output path based on whether references and links are included
+                suffix_parts = []
+                suffix_parts.append("with-references" if include_references else "no-references")
+                suffix_parts.append("with-links" if include_links else "no-links")
+                suffix = "-".join([extraction_method, *suffix_parts])
 
-# Text extraction using Resiliparse without references and with links
-ar5iv_no_problem_resiliparse_no_references_with_links = ExecutorStep(
-    name="documents/ar5iv/ar5iv-04-2024-no-problem-resiliparse-no-references-with-links",
-    fn=process_ar5iv_dump,
-    config=Ar5ivExtractionConfig(
-        input_path=ar5iv_no_problem_raw_202404,
-        revision="042024",
-        output_path=this_output_path("resiliparse-no-references-with-links"),
-        extract_method=versioned("resiliparse"),
-        extract_config=ResiliparseConfig(
-            preserve_formatting=True,
-            main_content=True,
-            links=versioned(True),
-            prepend_title=True,
-            skip_elements=ARXIV_BLACKLISTED_SELECTORS,
-            use_custom_variant=False,
-        ),
-        remove_reference_section=versioned(True),
-    ),
-)
+                # If using a custom variant of resiliparse, adjust the output path
+                if isinstance(new_config, ResiliparseConfig) and new_config.use_custom_variant:
+                    suffix = "-".join(["resiliparse-custom-fork", *suffix_parts])
 
-# Text extraction using Resiliparse with references and without links
-ar5iv_no_problem_resiliparse_with_references_no_links = ExecutorStep(
-    name="documents/ar5iv/ar5iv-04-2024-no-problem-resiliparse-with-references-no-links",
-    fn=process_ar5iv_dump,
-    config=Ar5ivExtractionConfig(
-        input_path=ar5iv_no_problem_raw_202404,
-        revision="042024",
-        output_path=this_output_path("resiliparse-with-references-no-links"),
-        extract_method=versioned("resiliparse"),
-        extract_config=ResiliparseConfig(
-            preserve_formatting=True,
-            main_content=True,
-            links=versioned(False),
-            prepend_title=True,
-            skip_elements=ARXIV_BLACKLISTED_SELECTORS,
-            use_custom_variant=False,
-        ),
-        remove_reference_section=versioned(False),
-    ),
-)
+                # Create the step for the "no-problem" dataset (main one)
+                step = ExecutorStep(
+                    name=f"documents/ar5iv/ar5iv-04-2024-no-problem-{suffix}",
+                    fn=process_ar5iv_dump,
+                    config=Ar5ivExtractionConfig(
+                        input_path=input_path,
+                        revision="042024",
+                        output_path=this_output_path(suffix),
+                        extract_method=versioned(extraction_method),
+                        extract_config=new_config,
+                        remove_reference_section=versioned(not include_references),
+                    ),
+                    pip_dependency_groups=["download_transform"],
+                )
 
-# Text extraction using Resiliparse with references and with links
-ar5iv_no_problem_resiliparse_with_references_with_links = ExecutorStep(
-    name="documents/ar5iv/ar5iv-04-2024-no-problem-resiliparse-with-references-with-links",
-    fn=process_ar5iv_dump,
-    config=Ar5ivExtractionConfig(
-        input_path=ar5iv_no_problem_raw_202404,
-        revision="042024",
-        output_path=this_output_path("resiliparse-with-references-with-links"),
-        extract_method=versioned("resiliparse"),
-        extract_config=ResiliparseConfig(
-            preserve_formatting=True,
-            main_content=True,
-            links=versioned(True),
-            prepend_title=True,
-            skip_elements=ARXIV_BLACKLISTED_SELECTORS,
-            use_custom_variant=False,
-        ),
-        remove_reference_section=versioned(False),
-    ),
-)
+                steps.append(step)
+
+    return steps
+
+
+# Markdownification using readability and resiliparse with section omission
+# toggled between with and without references and links for the no-problem dataset
+(
+    ar5iv_no_problem_readability_no_references_no_links,
+    ar5iv_no_problem_readability_no_references_with_links,
+    ar5iv_no_problem_readability_with_references_no_links,
+    ar5iv_no_problem_readability_with_references_with_links,
+    ar5iv_no_problem_resiliparse_no_references_no_links,
+    ar5iv_no_problem_resiliparse_no_references_with_links,
+    ar5iv_no_problem_resiliparse_with_references_no_links,
+    ar5iv_no_problem_resiliparse_with_references_with_links,
+) = get_ar5iv_section_omission_steps("no-problem")
 
 # Markdownification using Resiliparse custom fork without references and links
 (
