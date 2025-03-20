@@ -174,6 +174,7 @@ def run_inference(inference_config: InferenceConfig):
         ray.get(responses)
     except Exception as e:
         print(f"Error processing: {e}")
+        raise
 
 
 @draccus.wrap()
