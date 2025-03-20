@@ -8,21 +8,6 @@ to markdown using markdownify. We generate 3 variants that are:
 * Accepted Answer Only: Only the accepted answer is in the QA pair.
 * Isolated: Each question and answer is a separate document.
 
-The template for threaded format is:
-```
-Question:
-<question>
-Answer:
-> <votes>
-<answer_1>
-
-Answer 2:
-> <votes>
-<answer_2>
-
-Tags: <tags>
-```
-
 We then train 1.4B parameter models on these modified datasets to evaluate which preprocessing
 approach produces better training data for language models. Idea is to seen which configuration of
 social media content produces better training data for language models.

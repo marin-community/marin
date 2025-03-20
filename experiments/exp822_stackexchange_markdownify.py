@@ -1,3 +1,27 @@
+"""
+This experiment converts Stack Exchange HTML to markdown using Resiliparse's custom fork. We introduce
+a template for the markdownified Stack Exchange data in threaded format.
+
+The template for threaded format is:
+```
+Question:
+<question>
+Answer:
+> <votes>
+<answer_1>
+
+Answer 2:
+> <votes>
+<answer_2>
+
+Tags: <tags>
+```
+
+Reference Issue: https://github.com/stanford-crfm/marin/issues/822
+"""
+
+
+
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from marin.schemas.web.convert import HtmlToMarkdownConfig, ResiliparseConfig
 from operations.transform.stackexchange.transform_stackexchange import (
