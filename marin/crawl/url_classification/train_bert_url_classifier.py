@@ -99,7 +99,7 @@ def make_url_classification_dataset(
         fsspec.open(val_output_path, "w", compression="gzip", block_size=1 * 1024 * 1024 * 1024) as f_val,
     ):
         for shard_path in tqdm(shard_paths, desc="Converting shards to examples"):
-            with fsspec.open(shard_path, mode="rt", compression="infer", block_size=1 * 1024 * 1024 * 1024) as f:
+            with fsspec.open(shard_path, compression="infer", block_size=1 * 1024 * 1024 * 1024) as f:
                 df = pd.read_parquet(f)
                 for record_metadata in df["metadata"]:
                     out = {"text": record_metadata["url"], "label": record_metadata["passes_all_filters"]}
