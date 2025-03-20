@@ -85,7 +85,7 @@ def _mp_fn(
 
     tokenizer = BertTokenizer.from_pretrained(hf_model)
     train_dataset = load_dataset("json", data_files=train_path)
-    val_dataset = load_dataset("json", data_files=train_path)
+    val_dataset = load_dataset("json", data_files=val_path)
 
     # Tokenize the dataset (padding is added by collator)
     def tokenize(batch):
