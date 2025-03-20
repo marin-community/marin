@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """
-Subsample outlinks from a collection (uniform random, exact sampling). An
-input file is a JSONL file, where each record contains an Outlink. The output is
-sharded parquet file(s) (10K records each), where each record contains an
-Outlink.
+Subsample unique outlinks from a collection of possibly-duplicated outlinks.
+Sampling is exact uniform random. An input file is a JSONL file, where each
+record contains an Outlink. The output is sharded parquet file(s),
+where each record contains an Outlink.
 
 Sampling 10M OpenWebMath outlinks:
 
 ```
 python marin/run/ray_run.py \
     --no_wait -- \
-    python marin/crawl/sample_outlinks.py \
+    python marin/crawl/sample_from_nonunique_outlinks.py \
     --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8/*_links.jsonl.gz' \
     --num_to_sample 10000000 \
     --shard_size 100000 \
@@ -22,7 +22,7 @@ Sampling 10M OpenWebMath outlinks (deduplicated against CC):
 ```
 python marin/run/ray_run.py \
     --no_wait -- \
-    python marin/crawl/sample_outlinks.py \
+    python marin/crawl/sample_from_nonunique_outlinks.py \
     --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-cc-deduplicated/*_links.jsonl.gz' \
     --num_to_sample 10000000 \
     --shard_size 100000 \
@@ -34,7 +34,7 @@ Sampling 10M FineWeb-Edu outlinks:
 ```
 python marin/run/ray_run.py \
     --no_wait -- \
-    python marin/crawl/sample_outlinks.py \
+    python marin/crawl/sample_from_nonunique_outlinks.py \
     --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu/CC-MAIN*/*_links.jsonl.gz' \
     --num_to_sample 10000000 \
     --shard_size 100000 \
@@ -46,7 +46,7 @@ Sampling 10M FineWeb-Edu outlinks (deduplicated against CC):
 ```
 python marin/run/ray_run.py \
     --no_wait -- \
-    python marin/crawl/sample_outlinks.py \
+    python marin/crawl/sample_from_nonunique_outlinks.py \
     --input_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-cc-deduplicated/CC-MAIN*/*_links.jsonl.gz' \
     --num_to_sample 10000000 \
     --shard_size 100000 \
@@ -279,7 +279,7 @@ def sample_outlinks(input_pattern: str, num_to_sample: int, shard_size: int, out
 
     sharded_examples = shard_urls_by_domain(
         extracted_deduplicated_examples,
-        shard_count=int(math.ceil((num_to_sample - start_from) / shard_size)),
+        shard_count=math.ceil((num_to_sample - start_from) / shard_size),
         block_size=500,
     )
     # Write out extracted examples as sharded parquet
