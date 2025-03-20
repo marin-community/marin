@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 import ray
-from datasets import load_dataset
+from datasets import Dataset, load_dataset
 from transformers import (
     BertForSequenceClassification,
     BertTokenizer,
@@ -84,8 +84,9 @@ def _mp_fn(
     """
 
     tokenizer = BertTokenizer.from_pretrained(hf_model)
-    train_dataset = load_dataset("json", data_files=train_path)
-    val_dataset = load_dataset("json", data_files=val_path)
+    # Load the JSONL data and index into the DatasetDict to get a Dataset
+    train_dataset: Dataset = load_dataset("json", data_files={"train": train_path})["train"]
+    val_dataset: Dataset = load_dataset("json", data_files={"val": val_path})["val"]
 
     # Tokenize the dataset
     def tokenize(batch):
@@ -100,10 +101,15 @@ def _mp_fn(
     # Set keep_in_memory=True to avoid filling up the TPU /tmp
     train_dataset = train_dataset.map(tokenize, batched=True, num_proc=8, keep_in_memory=True)
     train_dataset = train_dataset.remove_columns(["text"])
+    train_dataset = train_dataset.class_encode_column("label")
+
     val_dataset = val_dataset.map(tokenize, batched=True, num_proc=8, keep_in_memory=True)
     val_dataset = val_dataset.remove_columns(["text"])
+    val_dataset = val_dataset.class_encode_column("label")
 
-    model = BertForSequenceClassification.from_pretrained(hf_model, num_labels=train_dataset.num_labels)
+    model = BertForSequenceClassification.from_pretrained(
+        hf_model, num_labels=train_dataset.features["label"].num_classes
+    )
 
     trainer = Trainer(
         model,
