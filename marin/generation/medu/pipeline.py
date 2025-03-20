@@ -57,6 +57,8 @@ class MEDUPipelineConfig:
         save_templated_prompt: Whether to save the templated prompt. Use to debug the prompt passed into the model.
         output_filetype_override: The filetype to write the output data. We default to jsonl.gz to match dolma format.
         resource_config: The type of TPU hardware to use for the pipeline.
+        final_benchmark_description_prompt: The final benchmark description prompt. This allows a user to pass in a
+                                            prompt directly to the pipeline instead of getting the LLM to generate one.
     """
 
     model_name: str
@@ -71,6 +73,7 @@ class MEDUPipelineConfig:
     save_templated_prompt: bool = False
     output_filetype_override: str = "jsonl.gz"
     resource_config: ResourceConfig = field(default_factory=lambda: TPU_V6E_8_STRICT_PACK)
+    final_benchmark_description_prompt: str = ""
 
 
 @ray.remote(max_restarts=-1)  # NOTE(chris): We use Spot TPUs, so we need to be able to restart the pipeline if it fails.
@@ -92,13 +95,20 @@ class MEDUPipeline:
         tensor_parallel_size: int = 1,
         engine_kwargs: dict[str, Any] | None = None,
         generation_kwargs: dict[str, Any] | None = None,
+        final_benchmark_description_prompt: str = "",
     ):
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         self.llm = vLLMProvider(model_name, engine_kwargs, generation_kwargs)
         self.generated_benchmark_descriptions = []
-        self.final_benchmark_description_prompt = ""
+        self.final_benchmark_description_prompt = final_benchmark_description_prompt
         self.corpus_contents = corpus_contents
         self.tensor_parallel_size = tensor_parallel_size
+
+    def _should_run_labeling_pipeline(self) -> bool:
+        """If the final benchmark description prompt is empty, we run the pipeline to generate it. If the user
+        passes in a prompt, we skip the pipeline and use the prompt directly.
+        """
+        return self.final_benchmark_description_prompt == ""
 
     def _get_final_medu_prompt(self, benchmark_description: str) -> str:
         return MEDU_DOCUMENT_LABELING_PROMPT.format(test_description=benchmark_description, example="{example}")
@@ -233,13 +243,14 @@ def _run_benchmark_labeling_pipeline(config: MEDUPipelineConfig):
         config.resource_config.num_tpu,
         config.engine_kwargs,
         config.generation_kwargs,
+        config.final_benchmark_description_prompt,
     )
 
-    futures = []
-    futures.append(pipeline.get_benchmark_description_prompt.remote())
-    futures.append(pipeline.merge_benchmark_description_prompts.remote())
-
-    ray.get(futures)
+    if pipeline._should_run_labeling_pipeline():
+        futures = []
+        futures.append(pipeline.get_benchmark_description_prompt.remote())
+        futures.append(pipeline.merge_benchmark_description_prompts.remote())
+        ray.get(futures)
 
     logger.info(f"Starting document labeling pipeline for {config.input_path}")
     final_benchmark_description_prompt = ray.get(pipeline._get_final_benchmark_description_prompt.remote())
