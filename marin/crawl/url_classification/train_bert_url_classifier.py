@@ -147,7 +147,7 @@ def train_bert_url_classifier(
     seed: int = 0,
 ):
     # Hash this dataset configuration so we can skip dataset generation if it already exists.
-    dataset_hash = hashlib.md5(f"{input_pattern}{val_frac}{seed}".encode())
+    dataset_hash: str = hashlib.md5(f"{input_pattern}{val_frac}{seed}".encode()).hexdigest()
     train_dataset_path = os.path.join(output_path, "data", f"train_.{dataset_hash}jsonl.gz")
     val_dataset_path = os.path.join(output_path, "data", f"val_{dataset_hash}.jsonl.gz")
     ray.get(
