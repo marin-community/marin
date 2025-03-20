@@ -44,7 +44,7 @@ class TrainBertUrlClassifierConfig:
     num_epochs: int = 1
     seed: int = 0
     max_length: int = 512
-    dataloader_num_workers: int = 0
+    dataloader_num_workers: int = 4
     dataloader_prefetch_factor: int | None = None
 
 
