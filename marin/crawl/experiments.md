@@ -754,7 +754,6 @@ python marin/run/ray_run.py \
     --crawl_input_directory gs://marin-us-central2/scratch/nfliu/fetched_outlinks/open-web-math-fde8ef8-unique-100M/ \
     --data_source open-web-math-fde8ef8-unique-100M \
     --text_output_directory gs://marin-us-central2/scratch/nfliu/text/open-web-math-fde8ef8-unique-100M/ \
-    --urls_and_scores_output_directory gs://marin-us-central2/scratch/nfliu/urls_and_scores/open-web-math-fde8ef8-unique-100M/ \
     --statistics_output_path gs://marin-us-central2/scratch/nfliu/fetched_outlinks/open-web-math-fde8ef8-unique-100M/yield_statistics.json.gz
 ```
 
