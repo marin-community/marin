@@ -24,11 +24,19 @@ def get_default_experiment_steps(
     substitute_dolma_dataset: bool = True,
 ) -> list[ExecutorStep]:
     """
-    Returns a list of ExecutorSteps for the default experiment.
+    Sets up a complete experiment pipeline for evaluating the impact of custom datasets on
+    language model performance. This experiment substitutes or adds specific components of the
+    Dolma dataset with custom processed data, then measures how these modifications affect model
+    training.
 
     Args:
         path_suffix: The suffix to add to the output paths.
-        dataset: The dataset to use for the experiment.
+        dataset: The custom dataset that will either replace or be added to the Dolma mixture.
+                 This should be a preprocessed dataset ready for tokenization.
+        dolma_dataset: The Dolma dataset to be substituted or added to the mixture.
+        substitute_dolma_dataset: Whether to substitute the Dolma dataset with the custom dataset or
+                                  add it to the mixture.
+        experiment_tag: The tag to add to the wandb experiment.
     Returns:
         A list of ExecutorSteps for the default experiment.
     """
