@@ -10,9 +10,10 @@ import ray
 from transformers import AutoTokenizer
 
 from experiments.evals.resource_configs import TPU_V6E_8_STRICT_PACK, ResourceConfig
-from marin.generation.dataset import DatasetOutputProcessorConfig, DatasetSampler, MeduDatasetOutputProcessor
+from marin.generation.dataset import DatasetOutputProcessorConfig, DatasetSampler
 from marin.generation.inference import TextGenerationInferenceConfig, run_inference
 from marin.generation.llm_generation import vLLMProvider
+from marin.generation.medu.dataset_processor import MeduDatasetOutputProcessor
 from marin.generation.ray_utils import scheduling_strategy_fn
 from marin.generation.templates import (
     MEDU_BENCHMARK_DESCRIPTION_MERGING_TEMPLATE,
@@ -40,8 +41,26 @@ class CorpusContent:
 
 @dataclass
 class MEDUPipelineConfig:
+    """Configuration for the MEDU pipeline.
+
+    Inputs:
+        model_name: The path to the model to use for the pipeline. It should be a path to a directory in the
+                    GCSFuse mount path. Check experiments/models.py for example models and how to download them.
+        corpus_contents: The list of corpus content to use for the pipeline.
+        input_path: The path to the input data.
+        output_path: The path to write the output data.
+        prompt_column: The column name of the prompt in the input data. In dolma, it is "text".
+        filetype: The filetype of the input data.
+        engine_kwargs: The kwargs to pass to the vLLM engine.
+        generation_kwargs: The kwargs to pass for vLLM sampling parameters.
+        num_instances: The number of instances to autoscale. It is a tuple of (min_workers, max_workers).
+        save_templated_prompt: Whether to save the templated prompt. Use to debug the prompt passed into the model.
+        output_filetype_override: The filetype to write the output data. We default to jsonl.gz to match dolma format.
+        resource_config: The type of TPU hardware to use for the pipeline.
+    """
+
     model_name: str
-    dev_sets: list[CorpusContent]
+    corpus_contents: list[CorpusContent]
     input_path: str
     output_path: str
     prompt_column: str = "text"
@@ -56,10 +75,20 @@ class MEDUPipelineConfig:
 
 @ray.remote(max_restarts=-1)  # NOTE(chris): We use Spot TPUs, so we need to be able to restart the pipeline if it fails.
 class MEDUPipeline:
+    """The pipeline that generates a benchmark description prompt given a list of corpus content.
+
+    Inputs:
+        model_name: The name of the model to use for the pipeline.
+        corpus_contents: The list of corpus content to use for the pipeline.
+        tensor_parallel_size: The number of TPUs to use for the pipeline.
+        engine_kwargs: The kwargs to pass to the vLLM engine.
+        generation_kwargs: The kwargs to pass for vLLM sampling parameters.
+    """
+
     def __init__(
         self,
         model_name: str,
-        dev_sets: list[CorpusContent],
+        corpus_contents: list[CorpusContent],
         tensor_parallel_size: int = 1,
         engine_kwargs: dict[str, Any] | None = None,
         generation_kwargs: dict[str, Any] | None = None,
@@ -68,7 +97,7 @@ class MEDUPipeline:
         self.llm = vLLMProvider(model_name, engine_kwargs, generation_kwargs)
         self.generated_benchmark_descriptions = []
         self.final_benchmark_description_prompt = ""
-        self.dev_sets = dev_sets
+        self.corpus_contents = corpus_contents
         self.tensor_parallel_size = tensor_parallel_size
 
     def _get_final_medu_prompt(self, benchmark_description: str) -> str:
@@ -83,10 +112,13 @@ class MEDUPipeline:
 
     # Stage 1: Get benchmark description prompt
     def get_benchmark_description_prompt(self) -> str:
-        logger.info(f"Starting benchmark description prompt generation for {len(self.dev_sets)} dev sets")
+        """Given the corpus content, generate a description of the corpus content and the type of data and skills
+        that the data should have.
+        """
+        logger.info(f"Starting benchmark description prompt generation for {len(self.corpus_contents)} dev sets")
         prompts = []
         corpus = ""
-        for dev_set in self.dev_sets:
+        for dev_set in self.corpus_contents:
             if dev_set.content_type == "str_list":
                 corpus = "\n\n".join(dev_set.content)
                 corpus += "\n\n"
@@ -120,6 +152,7 @@ class MEDUPipeline:
 
     # Stage 2: Merge benchmark description prompts
     def merge_benchmark_description_prompts(self) -> str:
+        """Hierarchically merge the corpus content description prompts into a single prompt."""
         logger.info(f"Starting benchmark description merging for {len(self.generated_benchmark_descriptions)} prompts")
         while len(self.generated_benchmark_descriptions) > 1:
             # Odd number of prompts, do a single merge to make the number even.
@@ -196,7 +229,7 @@ def _run_benchmark_labeling_pipeline(config: MEDUPipelineConfig):
     scheduling_strategy = scheduling_strategy_fn(config.resource_config.num_tpu, config.resource_config.strategy)
     pipeline = MEDUPipeline.options(scheduling_strategy=scheduling_strategy).remote(
         config.model_name,
-        config.dev_sets,
+        config.corpus_contents,
         config.resource_config.num_tpu,
         config.engine_kwargs,
         config.generation_kwargs,
