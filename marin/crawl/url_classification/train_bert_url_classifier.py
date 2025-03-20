@@ -7,8 +7,7 @@ python marin/run/ray_run.py \
     --no_wait -- \
     python marin/crawl/url_classification/train_bert_url_classifier.py \
     --input_pattern 'gs://marin-us-central2/scratch/nfliu/text/open-web-math-fde8ef8-10M/links.*.parquet' \
-    --output_path gs://marin-us-central2/scratch/nfliu/url_classification_models/bert-base-uncased-open-web-math-fde8ef8-10M/ \
-    --tpu_num_cores 4
+    --output_path gs://marin-us-central2/scratch/nfliu/url_classification_models/bert-base-uncased-open-web-math-fde8ef8-10M/
 ```
 """  # noqa: E501
 import hashlib
@@ -45,7 +44,6 @@ class TrainBertUrlClassifierConfig:
     num_epochs: int = 1
     seed: int = 0
     max_length: int = 512
-    tpu_num_cores: int = 1
     dataloader_num_workers: int = 8
     dataloader_prefetch_factor: int = 4
 
@@ -142,7 +140,6 @@ def train_bert_url_classifier(
     hf_model: str,
     num_epochs: int,
     max_length: int,
-    tpu_num_cores: int,
     dataloader_num_workers: int,
     dataloader_prefetch_factor: int,
     seed: int = 0,
@@ -171,7 +168,6 @@ def train_bert_url_classifier(
             hf_model=hf_model,
             num_epochs=num_epochs,
             max_length=max_length,
-            tpu_num_cores=tpu_num_cores,
             dataloader_num_workers=dataloader_num_workers,
             dataloader_prefetch_factor=dataloader_prefetch_factor,
         )
@@ -192,7 +188,6 @@ def train_model(
     hf_model: str,
     num_epochs: int,
     max_length: int = 512,
-    tpu_num_cores: int = 1,
     dataloader_num_workers: int = 8,
     dataloader_prefetch_factor: int = 4,
 ) -> None:
@@ -218,7 +213,6 @@ def train_model(
             learning_rate=lr,
             dataloader_num_workers=dataloader_num_workers,
             dataloader_prefetch_factor=dataloader_prefetch_factor,
-            tpu_num_cores=tpu_num_cores,
             report_to="wandb",
             logging_steps=0.1,
             eval_steps=0.1,
@@ -252,7 +246,6 @@ def train_bert_url_classifier_driver(cfg: TrainBertUrlClassifierConfig):
         num_epochs=cfg.num_epochs,
         seed=cfg.seed,
         max_length=cfg.max_length,
-        tpu_num_cores=cfg.tpu_num_cores,
         dataloader_num_workers=cfg.dataloader_num_workers,
         dataloader_prefetch_factor=cfg.dataloader_prefetch_factor,
     )
