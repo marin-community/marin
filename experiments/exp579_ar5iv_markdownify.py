@@ -70,7 +70,7 @@ ar5iv_errors_raw_202404 = output_path_of(ar5iv_errors_raw, "202404")
 
 def get_ar5iv_extraction_step(extraction_method: str, extraction_config: ExtractionConfig):
     """
-    Returns a tuple of ExecutorSteps for the markdownification of the ar5iv dataset(no-problem, warnings, errors)
+    Returns a tuple of ExecutorSteps for the markdownification of the ar5iv dataset (no-problem, warnings, errors)
     for the given extraction method and configuration.
 
     Args:
