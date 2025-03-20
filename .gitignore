@@ -183,6 +183,7 @@ cython_debug/
 
 # Secrets
 credentials.json
+marin/crawl/bigquery-gcs-key.json
 
 # Archive
 archive/
@@ -196,3 +197,5 @@ archive/
 
 # wandb logs
 wandb
+
+.aider*

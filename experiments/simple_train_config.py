@@ -21,6 +21,10 @@ class SimpleTrainConfig:
     max_grad_norm: float | None = None
     warmup: float | None = None
     decay: float | None = None
+    rewarmup: float | None = None
+    """
+    The rewarmup parameter is used to re-warmup the learning rate after a decay cycles
+    """
     lr_schedule: str | None = None
     min_lr_ratio: float | None = None
     cycle_length: int | list[int] | None = None
@@ -35,6 +39,8 @@ class SimpleTrainConfig:
     """how often to run task evaluations"""
     steps_per_hf_export: int | None = None
     """None means match steps_per_export, -1 disables"""
+    per_device_eval_parallelism: int | None = None
+    """Number of examples to evaluate in parallel on each device"""
 
     node_count: int = 1
 

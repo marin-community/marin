@@ -13,6 +13,7 @@ from experiments.metrics.github_related import (
     get_closed_issues_with_label,
 )
 from experiments.metrics.wandb_related import WandbMetricsConfig, calculate_wandb_metrics
+from infra.github_wandb_metrics import log_data_to_wandb
 
 
 def main(save_path: str) -> dict:
@@ -62,4 +63,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Get metrics.")
     parser.add_argument("--save_path", help="Save path for the metrics", default="gs://marin-us-central2/metrics")
     args = parser.parse_args()
-    print(main(args.save_path))
+    data = main(args.save_path)
+    print(data)
+    log_data_to_wandb(data)
