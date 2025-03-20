@@ -14,7 +14,7 @@ import draccus
 import fsspec
 import ray
 from bs4 import BeautifulSoup
-from tqdm import tqdm
+from tqdm_loggable.auto import tqdm
 
 from marin.core.runtime import cached_or_construct_output
 from marin.schemas.web.convert import ExtractionConfig
@@ -74,43 +74,46 @@ def clean_html(html: str, remove_reference_section: bool = True) -> str:
 
     html = BeautifulSoup(html, "html.parser")
 
-    # Converts Abstract to h2
+    # Transform the abstract section into an h2 heading to ensure proper structure
+    # This makes the abstract a section in the markdownified output
     transform_abstract(html)
 
-    # Removes authors
+    # Remove author information to reduce noise and remove PII from appearing
     remove_authors(html)
 
-    # Removes title page
+    # Remove the title page elements which typically contain redundant information
+    # that will be prepended elsewhere
     remove_title_page(html)
 
-    # Avoid parsing repeats listing style e.g. (1. 1.)
+    # Clean list items to avoid duplicate numbering patterns like (1. 1.)
+    # which can occur when LaTeX numbering is combined with HTML list markers
     clean_li(html)
 
-    # Removes references
+    # Remove bibliography sections to remove references
     remove_biblio(html)
 
-    # Removes footnotes
+    # Remove footnotes
     remove_footnotes(html)
 
-    # Removes biblinks since we are removing references
+    # Remove biblinks since we're removing the references section
     remove_biblinks(html)
 
-    # Converts ltx_listingline classes to newlines
+    # Convert code listing lines to proper newlines to preserve code formatting
     linelisting_to_newline(html)
 
-    # Transforms equations to be inline tags and not tables
+    # Transform equation tables into inline elements for better markdown conversion
     deconstruct_eqn(html)
 
-    # Extracts math alttext and converts to LaTeX
+    # Extract mathematical notation from alt text attributes and convert to LaTeX format
     html = unwrap_eqn(html)
 
-    # Removes ar5iv footer
+    # Remove the ar5iv footer which contains boilerplate text about the conversion process
     remove_ar5iv_footer(html)
 
-    # Removes before section since we only care about information after the first section
+    # Remove content before the first main section (typically metadata and preamble)
     remove_before_section(html)
 
-    # Removes figure captions
+    # Remove figure captions
     remove_figure_captions(html)
 
     if remove_reference_section:

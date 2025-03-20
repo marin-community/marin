@@ -1,7 +1,6 @@
 """
-This experiment evaluates the quality of arXiv data for model cooldown.
-
-It fine-tunes an 8B model on a mixture of:
+This experiment evaluates the quality of arXiv data for model cooldown using `default_quality_ablation`
+which fine-tunes an 8B model on a mixture of:
 - 70% DCLM baseline data
 - 15% arXiv dataset (markdownified using Resiliparse)
 - 15% Dolma/FLAN dataset

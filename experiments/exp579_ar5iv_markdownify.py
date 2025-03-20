@@ -72,7 +72,7 @@ ar5iv_warnings_raw_202404 = output_path_of(ar5iv_warnings_raw, "202404")
 ar5iv_errors_raw_202404 = output_path_of(ar5iv_errors_raw, "202404")
 
 
-def get_ar5iv_extraction_step(extraction_method: str, extraction_config: ExtractionConfig):
+def get_ar5iv_extraction_step(extraction_method: str, extraction_config: ExtractionConfig) -> dict[str, ExecutorStep]:
     """
     Returns a tuple of ExecutorSteps for the markdownification of the ar5iv dataset (no-problem, warnings, errors)
     for the given extraction method and configuration.
@@ -134,10 +134,14 @@ def get_ar5iv_extraction_step(extraction_method: str, extraction_config: Extract
         pip_dependency_groups=["download_transform"],
     )
 
-    return (no_problem_step, warnings_step, errors_step)
+    return {
+        "no-problem": no_problem_step,
+        "warnings": warnings_step,
+        "errors": errors_step,
+    }
 
 
-def get_ar5iv_section_omission_steps(dataset: str):
+def get_ar5iv_section_omission_steps(dataset: str) -> list[ExecutorStep]:
     """
     Returns a tuple of ExecutorSteps for the markdownification of the ar5iv dataset with section omission.
     This function creates multiple variants of extraction steps that differ in their handling of
@@ -146,7 +150,7 @@ def get_ar5iv_section_omission_steps(dataset: str):
         dataset: The dataset split of the ar5iv dataset to use for the extraction
                  (e.g., "no-problem", "warnings", "errors").
     Returns:
-        A list of four ExecutorSteps for the markdownification of the ar5iv dataset, one for each extraction method
+        A list of eight ExecutorSteps for the markdownification of the ar5iv dataset, one for each extraction method
         and combination of reference and link settings.
     """
 
@@ -226,11 +230,7 @@ def get_ar5iv_section_omission_steps(dataset: str):
 ) = get_ar5iv_section_omission_steps("no-problem")
 
 # Markdownification using Resiliparse custom fork without references and links
-(
-    ar5iv_no_problem_resiliparse_custom_fork,
-    ar5iv_warnings_resiliparse_custom_fork,
-    ar5iv_errors_resiliparse_custom_fork,
-) = get_ar5iv_extraction_step(
+ar5iv_extraction_steps = get_ar5iv_extraction_step(
     "resiliparse",
     ResiliparseConfig(
         preserve_formatting=True,
@@ -241,6 +241,10 @@ def get_ar5iv_section_omission_steps(dataset: str):
         use_custom_variant=True,
     ),
 )
+
+ar5iv_no_problem_resiliparse_custom_fork = ar5iv_extraction_steps["no-problem"]
+ar5iv_warnings_resiliparse_custom_fork = ar5iv_extraction_steps["warnings"]
+ar5iv_errors_resiliparse_custom_fork = ar5iv_extraction_steps["errors"]
 
 if __name__ == "__main__":
     # We decided to only run the custom fork of Resiliparse

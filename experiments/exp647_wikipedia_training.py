@@ -15,7 +15,7 @@ Reference Issue: https://github.com/stanford-crfm/marin/issues/647
 import logging
 
 from experiments.dolma.tokenize_dolma import tokenize_dolma_steps
-from experiments.dolma.utils import get_default_experiment_steps
+from experiments.dolma.utils import dolma_pipeline_with_modified_dataset
 from experiments.exp575_wikipedia_markdownify import wikipedia_readability, wikipedia_resiliparse_with_pf
 from marin.execution.executor import executor_main
 
@@ -27,11 +27,13 @@ EXPERIMENT_TAG = ["wiki_subbed_dolma"]
 tokenized_dolma_steps = tokenize_dolma_steps()
 
 # Conduct the experiment with readability
-wiki_readability_tokenized, wiki_readability_1_4b_model, wiki_readability_1_4b_evals = get_default_experiment_steps(
-    path_suffix="wiki-readability",
-    dataset=wikipedia_readability,
-    dolma_dataset="wiki",
-    experiment_tag=EXPERIMENT_TAG,
+wiki_readability_tokenized, wiki_readability_1_4b_model, wiki_readability_1_4b_evals = (
+    dolma_pipeline_with_modified_dataset(
+        path_prefix="wiki-readability",
+        dataset=wikipedia_readability,
+        dolma_dataset="wiki",
+        experiment_tag=EXPERIMENT_TAG,
+    )
 )
 
 # Conduct the experiment with preserving formatting
@@ -39,8 +41,8 @@ wiki_readability_tokenized, wiki_readability_1_4b_model, wiki_readability_1_4b_e
     wiki_resiliparse_with_preserve_formatting_tokenized,
     wiki_resiliparse_with_preserve_formatting_1_4b_model,
     wiki_resiliparse_with_preserve_formatting_1_4b_evals,
-) = get_default_experiment_steps(
-    path_suffix="wiki-resiliparse-with-preserving-formatting",
+) = dolma_pipeline_with_modified_dataset(
+    path_prefix="wiki-resiliparse-with-preserving-formatting",
     dataset=wikipedia_resiliparse_with_pf,
     dolma_dataset="wiki",
     experiment_tag=EXPERIMENT_TAG,

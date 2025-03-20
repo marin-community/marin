@@ -14,7 +14,7 @@ import draccus
 import fsspec
 import ray
 from bs4 import BeautifulSoup
-from tqdm import tqdm
+from tqdm_loggable.auto import tqdm
 
 from marin.core.runtime import cached_or_construct_output
 from marin.schemas.web.convert import ExtractionConfig
@@ -26,6 +26,22 @@ logger = logging.getLogger("ray")
 
 @dataclass
 class WikiExtractionConfig:
+    """
+    input_path: The path to the Wikipedia dump file or directory containing the dump files in JSONL format
+    output_path: The path where the processed text/markdown files will be saved
+    revision: The revision identifier of the Wikipedia dump (e.g., "20241201") for versioning and tracking
+    extract_method: The method to use for HTML extraction (e.g., "readability", "resiliparse", "trafilatura")
+    extract_config: Configuration object for the extraction method (e.g., ResiliparseConfig, HtmlToMarkdownConfig)
+    remove_reference_section: If True, removes reference sections from articles to reduce noise in the extracted text
+    max_files: Optional limit on the number of files to process, useful for testing or partial processing
+    digit_threshold: Percentage threshold for filtering out pages with excessive digits
+                     (e.g., 50 means pages with >50% digits are filtered out)
+    word_threshold: Percentage threshold for filtering out pages with insufficient words
+                    (e.g., 70 means pages with <70% words are filtered out)
+    special_char_threshold: Percentage threshold for filtering out pages with excessive special characters
+                            (e.g., 50 means pages with >50% special characters are filtered out)
+    """
+
     input_path: str
     output_path: str
     revision: str
@@ -40,7 +56,7 @@ class WikiExtractionConfig:
 
 def remove_and_append_infobox(html: str) -> str:
     """
-    Wraps the infobox in a new section with heading 'Notes' and appends it to the end of the article.
+    Wraps the infobox in a new section with heading 'InfoBox' and appends it to the end of the article.
     """
     soup = BeautifulSoup(html, "html.parser")
 

@@ -17,7 +17,7 @@ Reference Issue: https://github.com/stanford-crfm/marin/issues/818
 
 from experiments.defaults import default_train
 from experiments.dolma.tokenize_dolma import DOLMA_OLMO_MIXTURE_WEIGHTS, tokenize_dolma_steps
-from experiments.dolma.utils import get_default_experiment_steps
+from experiments.dolma.utils import dolma_pipeline_with_modified_dataset
 from experiments.evals.evals import default_eval
 from experiments.exp575_wikipedia_markdownify import wikipedia_resiliparse_custom_fork
 from experiments.exp579_ar5iv_markdownify import ar5iv_no_problem_resiliparse_custom_fork
@@ -47,8 +47,8 @@ no_mixture_dolma_evals = default_eval(step=no_mixture_dolma_model)
 
 # ARXIV ONLY MIXING FOR MARKDOWNIFIED DATASETS
 arxiv_markdownified_tokenized, arxiv_only_subbed_dolma_model, arxiv_only_subbed_dolma_evals = (
-    get_default_experiment_steps(
-        path_suffix="mixture-of-formats-1.4b-arxiv-only-subbed",
+    dolma_pipeline_with_modified_dataset(
+        path_prefix="mixture-of-formats-1.4b-arxiv-only-subbed",
         dataset=ar5iv_no_problem_resiliparse_custom_fork,
         dolma_dataset="arxiv",
         experiment_tag=[*EXPERIMENT_TAG, "arxiv-only-subbed"],
@@ -58,12 +58,14 @@ arxiv_markdownified_tokenized, arxiv_only_subbed_dolma_model, arxiv_only_subbed_
 
 
 # WIKI ONLY MIXING FOR MARKDOWNIFIED DATASETS
-wiki_markdownified_tokenized, wiki_only_subbed_dolma_model, wiki_only_subbed_dolma_evals = get_default_experiment_steps(
-    path_suffix="mixture-of-formats-1.4b-wiki-only-subbed",
-    dataset=wikipedia_resiliparse_custom_fork,
-    dolma_dataset="wiki",
-    experiment_tag=[*EXPERIMENT_TAG, "wiki-only-subbed"],
-    substitute_dolma_dataset=False,
+wiki_markdownified_tokenized, wiki_only_subbed_dolma_model, wiki_only_subbed_dolma_evals = (
+    dolma_pipeline_with_modified_dataset(
+        path_prefix="mixture-of-formats-1.4b-wiki-only-subbed",
+        dataset=wikipedia_resiliparse_custom_fork,
+        dolma_dataset="wiki",
+        experiment_tag=[*EXPERIMENT_TAG, "wiki-only-subbed"],
+        substitute_dolma_dataset=False,
+    )
 )
 
 # WIKI AND ARXIV MIXING FOR MARKDOWNIFIED DATASETS
