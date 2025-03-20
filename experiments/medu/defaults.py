@@ -13,12 +13,16 @@ from marin.classifiers.hf.train_classifier import HFTrainingConfig
 from marin.core.runtime import TaskConfig
 from marin.execution.executor import ExecutorStep, output_path_of, this_output_path
 from marin.generation.dataset import DatasetOutputProcessorConfig
-from marin.generation.medu import MEDUPipelineConfig, run_medu_dataset_sampling_pipeline, run_medu_labeling_pipeline
+from marin.generation.medu.pipeline import (
+    MEDUPipelineConfig,
+    run_medu_dataset_sampling_pipeline,
+    run_medu_labeling_pipeline,
+)
 from marin.processing.classification.config.inference_config import InferenceConfig, RuntimeConfig
 from marin.processing.classification.consolidate import ConsolidateConfig, FilterConfig, consolidate
 from marin.processing.classification.inference import run_inference
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
-from operations.download.gcs.model import DownloadFromGCSConfig, download_model_from_gcs
+from operations.download.gcs.transfer import TransferConfig, transfer_files
 
 model_name = "/opt/gcsfuse_mount/models/meta-llama--Llama-3-3-70B-Instruct"
 tokenizer = AutoTokenizer.from_pretrained(model_name)
@@ -50,7 +54,7 @@ def default_label(
         fn=run_medu_labeling_pipeline,
         config=MEDUPipelineConfig(
             model_name=model_name,
-            dev_sets=targeted_documents,
+            corpus_contents=targeted_documents,
             input_path=documents_to_be_labeled,
             output_path=this_output_path(),
             engine_kwargs={
@@ -115,10 +119,10 @@ def default_quality_filter_model(labeled_documents: ExecutorStep, experiment_nam
     # Download the model locally to GCSFuse mount path for inference
     medu_classifier = ExecutorStep(
         name=f"gcsfuse_mount/medu-models/{experiment_name}-classifier",
-        fn=download_model_from_gcs,
-        config=DownloadFromGCSConfig(
-            gcs_path=output_path_of(medu_classifier_remote),
-            destination_path=this_output_path(),
+        fn=transfer_files,
+        config=TransferConfig(
+            input_path=output_path_of(medu_classifier_remote),
+            output_path=this_output_path(),
         ),
         override_output_path=f"gcsfuse_mount/medu-models/{experiment_name}-classifier",
     )

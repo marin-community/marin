@@ -2,11 +2,9 @@ import abc
 import json
 import logging
 import random
-import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import ClassVar
 
 import fsspec
 import ray
@@ -18,6 +16,19 @@ logger = logging.getLogger("ray")
 
 @ray.remote
 def sample_file(input_file_path: str, output_file_path: str, label_weights: dict[int, float]):
+    """Given an input file with a "label" field and the percentage of weights for each
+    label from label_weights, sample the file to output a new file with the same format
+    but with the number of examples sampled from each label according to the weights.
+
+    Inputs:
+        input_file_path: The path to the input file.
+        output_file_path: The path to the output file.
+        label_weights: A dictionary mapping each label to the percentage of examples to sample from that label.
+
+    Outputs:
+        An output file written to output_file_path with the same format as the input file but with the number of examples
+        sampled from each label according to the weights.
+    """
     # Add exponential backoff retry logic
     max_retries = 5
     base_delay = 1
@@ -58,7 +69,6 @@ def sample_file(input_file_path: str, output_file_path: str, label_weights: dict
             time.sleep(delay)
 
 
-# Stage 4: Convert labeled documents into scores
 @ray.remote
 def convert_labeled_documents_to_scores(
     input_file_path: str, output_file_path: str, score_values: list[int], extract_score_fn: Callable[[str], int]
@@ -131,30 +141,6 @@ class DatasetOutputProcessor:
                 self.score_distribution[score] = self.score_distribution.get(score, 0) + count
 
         return self.score_distribution
-
-
-class MeduDatasetOutputProcessor(DatasetOutputProcessor):
-    SCORE_OPTIONS_DICT: ClassVar[dict[str, int]] = {
-        "Great": 5,
-        "Good": 4,
-        "Okay": 3,
-        "Poor": 2,
-        "Useless": 1,
-    }
-
-    def __init__(self, input_path: str, output_path: str):
-        super().__init__(input_path, output_path, list(MeduDatasetOutputProcessor.SCORE_OPTIONS_DICT.values()))
-
-    @staticmethod
-    def extract_score(text: str) -> int:
-
-        # Match "Final Score: " followed by one of the score options
-        match = re.search(r"Final Score:\s*(Great|Good|Okay|Poor|Useless)", text)
-        if match:
-            score_text = match.group(1)
-            return MeduDatasetOutputProcessor.SCORE_OPTIONS_DICT[score_text]
-
-        return -1
 
 
 class DatasetSampler:
