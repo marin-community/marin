@@ -57,14 +57,16 @@ logger = logging.getLogger("ray")
 
 def default_tokenize(
     name: str,
-    dataset: InputName | ExecutorStep,
+    dataset: InputName | ExecutorStep | str,
     tokenizer: str,
     options: CacheOptions | None = None,
     text_key: str = "text",
+    *,
+    is_validation: bool = False,
 ) -> ExecutorStep:
     config = TokenizeConfig(
-        train_paths=[dataset],
-        validation_paths=[],
+        train_paths=[dataset] if not is_validation else [],
+        validation_paths=[dataset] if is_validation else [],
         cache_path=this_output_path(),
         tokenizer=versioned(tokenizer),
         text_key=text_key,
@@ -254,6 +256,7 @@ def default_train(
                     train_config.max_grad_norm if train_config.max_grad_norm is not None else AdamConfig().max_grad_norm
                 ),
                 warmup=(train_config.warmup if train_config.warmup is not None else AdamConfig().warmup),
+                rewarmup=(train_config.rewarmup if train_config.rewarmup is not None else AdamConfig().rewarmup),
                 decay=(train_config.decay if train_config.decay is not None else AdamConfig().decay),
                 lr_schedule=(
                     train_config.lr_schedule if train_config.lr_schedule is not None else AdamConfig().lr_schedule
