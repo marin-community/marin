@@ -172,6 +172,10 @@ class InputName:
     def cd(self, name: str) -> "InputName":
         return InputName(self.step, name=os.path.join(self.name, name) if self.name else name)
 
+    def __truediv__(self, other: str) -> "InputName":
+        """Alias for `cd`. That looks more Pythonic."""
+        return InputName(self.step, name=os.path.join(self.name, other) if self.name else other)
+
 
 def get_executor_step(run: ExecutorStep | InputName) -> ExecutorStep:
     """
@@ -204,6 +208,10 @@ class OutputName:
 
 def this_output_path(name: str | None = None):
     return OutputName(name=name)
+
+
+# constant so we can use it in fields of dataclasses
+THIS_OUTPUT_PATH = OutputName(None)
 
 
 @dataclass(frozen=True)
