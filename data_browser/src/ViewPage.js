@@ -121,7 +121,7 @@ function ViewPage() {
     {renderFilters(filters, updateUrlParams)}
     {renderSort(sort, reverse, updateUrlParams)}
     {renderHighlights(highlights, showOnlyHighlights, updateUrlParams)}
-    {renderPaths({paths, updateUrlParams})}
+    {renderPaths({paths, payloads, updateUrlParams})}
     <hr />
     {renderPayloads({paths, payloads, offset, filters, sort, reverse, highlights, showOnlyHighlights, updateUrlParams})}
   </div>);
@@ -406,7 +406,7 @@ function renderPath(args) {
  * Show the list of `paths` whose contents we're viewing.
  */
 function renderPaths(args) {
-  const {paths, updateUrlParams} = args;
+  const {paths, payloads, updateUrlParams} = args;
 
   function appendNewPath() {
     const newPath = prompt("Enter new path", paths[paths.length - 1]);
@@ -422,11 +422,13 @@ function renderPaths(args) {
     Paths
     <ul>
       {paths.map((path, index) => {
-        const downloadUrl = path.replace("gs://", "https://storage.cloud.google.com/");
-        const downloadLink = (
+        const isDirectory = payloads[path]?.type === "directory"; // Check if the path is a directory
+        const downloadUrl = `/api/download?path=${encodeURIComponent(path)}`;
+        const downloadLink = isDirectory ? null : (
           <Button title="Download this link."
                   size="small"
-                  href={downloadUrl}>
+                  href={downloadUrl}
+                  download={path.split('/').pop()}>
             Download
           </Button>
         );

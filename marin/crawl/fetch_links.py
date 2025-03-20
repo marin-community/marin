@@ -100,6 +100,7 @@ import fsspec
 import pandas as pd
 import ray
 import requests
+import urllib3
 from tqdm_loggable.auto import tqdm
 
 from marin.utils import fsspec_cp, fsspec_exists, fsspec_glob
@@ -140,7 +141,7 @@ def fetch_url(
       or we get a 4xx or 5xx response)
     """
     try:
-        with session.get(url, timeout=timeout, stream=True) as r:
+        with session.get(url, timeout=timeout, stream=True, verify=False) as r:
             r.raise_for_status()
 
             # Create a mutable Response object that we'll patch with truncated content.
@@ -668,6 +669,8 @@ def load_already_fetched_urls(parquet_path: str):
         df = pd.read_parquet(parquet_path)
         if "url" in df.columns:
             return set(df["url"].dropna().unique().tolist())
+    else:
+        logger.info(f"Fetched URLs parquet path {parquet_path} does not already exist")
     return set()
 
 
@@ -702,6 +705,9 @@ def fetch_links(
     threads_per_shard (int): Number of threads to use for concurrent fetching.
     """
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+    # Disable SSL verification warnings.
+    urllib3.disable_warnings(category=urllib3.exceptions.InsecureRequestWarning)
+
     success_path = parquet_output_path + ".SUCCESS"
     if fsspec_exists(success_path):
         logger.info(f"Already processed and wrote parquet to {parquet_output_path}, skipping...")
