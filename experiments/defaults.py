@@ -17,7 +17,6 @@ from levanter.data.text import LMMixtureDatasetConfig, LMSupervisedDatasetConfig
 from levanter.eval_harness import LmEvalHarnessConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig
-from levanter.models.rotary import Llama3RotaryEmbeddingsConfig
 from levanter.optim import AdamConfig
 from levanter.schedule import BatchSchedule
 from levanter.store.cache import CacheOptions
@@ -348,27 +347,6 @@ def default_sft(
         lr_schedule=sft_config.lr_schedule,
         max_grad_norm=sft_config.max_grad_norm,
     )
-
-    # Check if we're dealing with a Llama model and need to update rotary embeddings
-    # hidden dimension and sequence length
-    if isinstance(model_config, LlamaConfig) and not isinstance(model_config.rope, Llama3RotaryEmbeddingsConfig):
-        # Determine if we should use Llama3 rotary embeddings
-        if "llama3" in sft_config.model_name_or_path.lower() or "llama-3" in sft_config.model_name_or_path.lower():
-            # Update model_config with Llama3 rotary embeddings
-            model_config = dataclasses.replace(
-                model_config,
-                seq_len=4096,
-                hidden_dim=4096,
-                intermediate_dim=14336,
-                num_kv_heads=8,
-                rope=Llama3RotaryEmbeddingsConfig(
-                    theta=500000,
-                    factor=8.0,
-                    low_freq_factor=1.0,
-                    high_freq_factor=4.0,
-                    original_max_position_embeddings=8192,
-                ),
-            )
 
     # Create appropriate SFT config based on whether we're using mixture or not
     if use_mixture:
