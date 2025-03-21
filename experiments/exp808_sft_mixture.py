@@ -10,11 +10,11 @@ accordingly.
 from instruction_datasets import get_instruction_dataset
 from levanter.data.text import SupervisedUrlSourceConfig
 
+from experiments.defaults import default_sft
 from experiments.llama import llama_8b
 from experiments.simple_sft_config import SimpleSFTConfig
 from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path
 from marin.processing.tokenize.tokenize import TokenizeConfig, levanter_tokenize_sft
-from marin.training.training import default_sft
 
 
 def create_tokenization_step(dataset_name: str) -> ExecutorStep:
@@ -113,7 +113,7 @@ def create_sft_mixture_step(tokenization_steps: list[ExecutorStep], seed: int = 
     )
 
     return default_sft(
-        name="checkpoints/llama3.1_mixture_total",
+        name="llama3.1_mixture_total",
         tokenized=supervised_data,
         model_config=llama_8b,
         sft_config=mixture_sft_config,
