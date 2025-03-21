@@ -83,7 +83,8 @@ tokenize_train = [
     "multiprocess==0.70.16",
     "levanter>=1.2.dev1207",
     "lm-eval@git+https://github.com/stanford-crfm/lm-evaluation-harness.git",
-    "jmp"
+    "jmp",
+    "tblib",
 ]
 
 data_browser = [

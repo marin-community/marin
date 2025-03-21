@@ -14,7 +14,6 @@ import os
 from dataclasses import dataclass, field
 
 from experiments.defaults import default_tokenize, default_train
-from experiments.exp102_classifier_ablations import ExperimentConfig as ClassifierExperimentConfig
 from experiments.llama import llama3_tokenizer, llama_1_4b, llama_1_4b_train_config
 from marin.core.runtime import TaskConfig
 from marin.execution.executor import (
@@ -37,7 +36,11 @@ logger = logging.getLogger("ray")
 class ExperimentConfig:
     experiment_name: str
     input_data_source_to_path: dict[str, str] = field(
-        default_factory=lambda: ClassifierExperimentConfig.input_data_source_to_path.default_factory()
+        default_factory=lambda: {
+            "fineweb_2024_18": (
+                "gs://marin-us-central2/documents/fineweb-small-resiliparse-preserve-formatting-e8c6ec/md/CC-MAIN-2024-18"
+            ),
+        }
     )
 
 
