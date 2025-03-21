@@ -28,40 +28,33 @@ openthoughts_llama_tokenize_step = ExecutorStep(
     description="Tokenize chat SFT data",
 )
 
+openthoughts_sft_config = SimpleSFTConfig(
+    train_batch_size=128,
+    num_train_steps=NUM_TRAIN_STEPS,
+    learning_rate=5e-6,
+    tpu_type="v4-128",
+    tokenizer=llama3_tokenizer,
+    model_name_or_path="meta-llama/Llama-3.1-8B",
+    max_seq_len=4096,
+    seed=1,
+    # Additional parameters from original config
+    weight_decay=0.0,
+    warmup=0.03,
+    cooldown=0.0,
+    min_lr_ratio=0.0,
+    lr_schedule="linear",
+    steps_per_hf_export=500,
+)
 
-def create_sft_step(tokenization_step: ExecutorStep, seed: int = 1) -> ExecutorStep:
-    """Creates an ExecutorStep for training a Llama-3.1 model on OpenThoughts dataset."""
-
-    sft_config = SimpleSFTConfig(
-        train_batch_size=128,
-        num_train_steps=NUM_TRAIN_STEPS,
-        learning_rate=5e-6,
-        tpu_type="v4-128",
-        tokenizer=llama3_tokenizer,
-        model_name_or_path="meta-llama/Llama-3.1-8B",
-        max_seq_len=4096,
-        seed=seed,
-        # Additional parameters from original config
-        weight_decay=0.0,
-        warmup=0.03,
-        cooldown=0.0,
-        min_lr_ratio=0.0,
-        lr_schedule="linear",
-        steps_per_hf_export=500,
-    )
-
-    return default_sft(
-        name="tulu3_sft_openthoughts",
-        tokenized=tokenization_step,
-        model_config=llama_8b,
-        sft_config=sft_config,
-        use_mixture=False,
-        tags=["openthoughts", "llama", "sft"],
-    )
-
+# Create the SFT training step using the pre-defined 8B model config
+sft_step = default_sft(
+    name="openthoughts_llama3_sft",
+    tokenized=openthoughts_llama_tokenize_step,
+    model_config=llama_8b,
+    sft_config=openthoughts_sft_config,
+    use_mixture=False,
+    tags=["openthoughts", "llama", "sft"],
+)
 
 if __name__ == "__main__":
-    # Create training step that depends on tokenization
-    training_step = create_sft_step(openthoughts_llama_tokenize_step)
-    # Run all steps
-    executor_main(steps=[openthoughts_llama_tokenize_step, training_step])
+    executor_main(steps=[openthoughts_llama_tokenize_step, sft_step])
