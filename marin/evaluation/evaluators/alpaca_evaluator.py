@@ -48,6 +48,7 @@ class AlpacaEvaluator(VllmTpuEvaluator):
                     # Mandatory argument for `vllm_local_completions` in AlpacaEval
                     # https://github.com/tatsu-lab/alpaca_eval/blob/main/src/alpaca_eval/decoders/vllm_local.py#L21
                     "max_new_tokens": None,  # Following the config above, set to None to go up to EOS or context length
+                    "temperature": 0.7,
                     "model_kwargs": {
                         "max_model_len": 4096,  # Cap at 4096 tokens
                         "dtype": "bfloat16",  # Explicitly use bfloat16 for TPU
