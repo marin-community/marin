@@ -31,13 +31,15 @@ COOLDOWN_END = PHASE_3_END + COOLDOWN_LEN
 
 tootsie_8b_soft_raccoon_train = dataclasses.replace(
     llama_8b_train_config_phase3,
+    tpu_type="v4-128",
+    node_count=4,
     learning_rate=1.7e-4,  # only does what we want b/c we're warmstarting from the ckpt below
     num_train_steps=COOLDOWN_END,
     min_lr_ratio=0.1,  # 1.7e-5
     decay=COOLDOWN_LEN,
     initialize_from_checkpoint_path=output_path_of(llama_8b_tootsie_phase3, "checkpoints/step-819924"),
-    tpu_type="v4-128",
-    node_count=2,
+    reset_data_loader_on_init=False,
+    per_device_eval_parallelism=16,
 )
 
 tulu_3_sft_data_as_validation = tulu3_flat_llama_tokenized
@@ -47,17 +49,19 @@ raccoon_mixture = add_validation_sets_to_mixture(
     {"tulu_sft": tulu_3_sft_data_as_validation},
 )
 
+# -3 because we had a little snafu in the original.
 tootsie_8b_soft_raccoon = dataclasses.replace(
     default_train(
-        name="llama-8b-tootsie-phase3",
+        name="tootsie-8b-soft-raccoon-3",
         tokenized=raccoon_mixture,
         model_config=llama_8b,
         train_config=tootsie_8b_soft_raccoon_train,
         use_default_validation=True,
         tags=["llama", "8b", "ema", "exp898", "tootsie"],
-        eval_harness_tasks=CORE_TASKS_PLUS_MMLU,
+        # HF is having trouble today so skipping this.
+        eval_harness_tasks=[],
     ),
-    override_output_path="checkpoints/tootsie-8b-soft-raccoon",
+    override_output_path="checkpoints/tootsie-8b-soft-raccoon-3",
 )
 
 if __name__ == "__main__":
