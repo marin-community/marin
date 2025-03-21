@@ -9,15 +9,18 @@ import os
 import tempfile
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
 
 import ray
-import torch
-from transformers import BertForSequenceClassification, BertTokenizer, Trainer, TrainingArguments
-from transformers.tokenization_utils_base import PreTrainedTokenizerBase
-from transformers.utils import PaddingStrategy
+from datasets import Dataset, load_dataset
+from transformers import (
+    BertForSequenceClassification,
+    BertTokenizer,
+    DataCollatorWithPadding,
+    Trainer,
+    TrainingArguments,
+)
 
-from marin.classifiers.bert.utils import BertDataset, format_example
+from marin.classifiers.bert.utils import format_example
 from marin.classifiers.utils import format_dataset, merge_dataset_shards, shuffle, split_dataset
 from marin.utils import fsspec_cpdir, fsspec_exists, fsspec_glob, fsspec_rm, remove_tpu_lockfile_on_exit
 
@@ -33,8 +36,7 @@ class BertTrainingArguments:
     num_train_epochs: int = 1
     learning_rate: float = 2e-5
     dataloader_num_workers: int = 1
-    dataloader_prefetch_factor: int = 1
-    tpu_num_cores: int = (1,)
+    dataloader_prefetch_factor: int | None = 1
     report_to: str = "wandb"
     logging_steps: float = 0.1
     eval_steps: float = 0.1
@@ -52,52 +54,11 @@ class BertTrainingArguments:
             learning_rate=self.learning_rate,
             dataloader_num_workers=self.dataloader_num_workers,
             dataloader_prefetch_factor=self.dataloader_prefetch_factor,
-            tpu_num_cores=self.tpu_num_cores,
             report_to=self.report_to,
             logging_steps=self.logging_steps,
             eval_steps=self.eval_steps,
             save_strategy=self.save_strategy,
         )
-
-
-@dataclass
-class BertDataCollator:
-    """
-    Data collator that will dynamically pad or truncate the inputs for BERT training.
-
-    Args:
-        tokenizer ([`PreTrainedTokenizer`] or [`PreTrainedTokenizerFast`]):
-            The tokenizer used for encoding the data.
-        padding (`bool`, `str` or [`~utils.PaddingStrategy`], *optional*, defaults to `True`):
-            Select a strategy to pad the returned sequences (according to the model's padding side and padding index)
-            among:
-
-            - `True` or `'longest'` (default): Pad to the longest sequence in the batch (or no padding if only a single
-              sequence is provided).
-            - `'max_length'`: Pad to a maximum length specified with the argument `max_length` or to the maximum
-              acceptable input length for the model if that argument is not provided.
-            - `False` or `'do_not_pad'`: No padding (i.e., can output a batch with sequences of different lengths).
-        max_length (`int`, *optional*):
-            Maximum length of the returned list and optionally padding length (see above).
-        return_tensors (`str`, *optional*, defaults to `"pt"`):
-            The type of Tensor to return. Allowable values are "np", "pt" and "tf".
-    """
-
-    tokenizer: PreTrainedTokenizerBase
-    padding: bool | str | PaddingStrategy = True
-    max_length: int | None = 128
-    return_tensors: str = "pt"
-
-    def __call__(self, items: list[dict[str, Any]]) -> dict[str, Any]:
-        batch = self.tokenizer(
-            [item["text"] for item in items],
-            truncation=True,
-            return_tensors=self.return_tensors,
-            padding=self.padding,
-            max_length=self.max_length,
-        )
-        batch["labels"] = torch.tensor([item["label"] for item in items], dtype=torch.long)
-        return batch
 
 
 def _mp_fn(
@@ -123,10 +84,32 @@ def _mp_fn(
     """
 
     tokenizer = BertTokenizer.from_pretrained(hf_model)
-    train_dataset = BertDataset(train_path)
-    val_dataset = BertDataset(val_path)
+    # Load the JSONL data and index into the DatasetDict to get a Dataset
+    train_dataset: Dataset = load_dataset("json", data_files={"train": train_path})["train"]
+    val_dataset: Dataset = load_dataset("json", data_files={"val": val_path})["val"]
 
-    model = BertForSequenceClassification.from_pretrained(hf_model, num_labels=train_dataset.num_labels)
+    # Tokenize the dataset
+    def tokenize(batch):
+        return tokenizer(
+            batch["text"],
+            padding=True,
+            truncation=True,
+            return_tensors="pt",
+            max_length=bert_args.max_length,
+        )
+
+    # Keep dataset in memory to avoid filling up TPU /tmp
+    train_dataset = train_dataset.map(tokenize, batched=True, num_proc=8, keep_in_memory=True)
+    train_dataset = train_dataset.remove_columns(["text"])
+    train_dataset = train_dataset.class_encode_column("label")
+
+    val_dataset = val_dataset.map(tokenize, batched=True, num_proc=8, keep_in_memory=True)
+    val_dataset = val_dataset.remove_columns(["text"])
+    val_dataset = val_dataset.class_encode_column("label")
+
+    model = BertForSequenceClassification.from_pretrained(
+        hf_model, num_labels=train_dataset.features["label"].num_classes
+    )
 
     trainer = Trainer(
         model,
@@ -134,7 +117,7 @@ def _mp_fn(
         train_dataset=train_dataset,
         eval_dataset=val_dataset,
         processing_class=tokenizer,
-        data_collator=BertDataCollator(tokenizer=tokenizer, max_length=bert_args.max_length),
+        data_collator=DataCollatorWithPadding(tokenizer=tokenizer),
     )
     trainer.train()
 
@@ -155,7 +138,6 @@ def train_model(
     hf_model: str = "bert-base-uncased",
     num_epochs: int = 1,
     max_length: int = 128,
-    tpu_num_cores: int = 1,
     dataloader_num_workers: int = 8,
     dataloader_prefetch_factor: int = 4,
 ) -> None:
@@ -173,7 +155,6 @@ def train_model(
         hf_model (str): Pretrained BERT model to use (from Huggingface).
         num_epochs (int): Number of epochs to train for.
         max_length (int): Maximum sequence length for training.
-        tpu_num_cores (int): Number of TPUs to use for training.
         dataloader_num_workers (int): Number of workers for data loading.
         dataloader_prefetch_factor (int): Prefetch factor for data loading.
     Returns:
@@ -220,7 +201,6 @@ def train_model(
                 learning_rate=lr,
                 dataloader_num_workers=dataloader_num_workers,
                 dataloader_prefetch_factor=dataloader_prefetch_factor,
-                tpu_num_cores=tpu_num_cores,
                 report_to="wandb",
                 logging_steps=0.1,
                 eval_steps=0.1,
