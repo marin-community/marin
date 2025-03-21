@@ -7,8 +7,7 @@ python marin/run/ray_run.py \
     --no_wait -- \
     python marin/crawl/url_classification/train_bert_url_classifier.py \
     --input_pattern 'gs://marin-us-central2/scratch/nfliu/text/open-web-math-fde8ef8-10M/links.*.parquet' \
-    --output_path gs://marin-us-central2/scratch/nfliu/url_classification_models/bert-base-uncased-open-web-math-fde8ef8-10M/ \
-    --dataloader_num_workers 4
+    --output_path gs://marin-us-central2/scratch/nfliu/url_classification_models/bert-base-uncased-open-web-math-fde8ef8-10M/
 ```
 """  # noqa: E501
 import hashlib
@@ -45,7 +44,7 @@ class TrainBertUrlClassifierConfig:
     num_epochs: int = 1
     seed: int = 0
     max_length: int = 512
-    dataloader_num_workers: int = 4
+    dataloader_num_workers: int = 0
     dataloader_prefetch_factor: int | None = None
 
 
