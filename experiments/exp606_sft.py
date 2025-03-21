@@ -46,7 +46,7 @@ tulu_sft_config = SimpleSFTConfig(
 
 # Create the SFT training step using the pre-defined 1.4B model config and its training config.
 sft_step = default_sft(
-    name="checkpoints/tulu3_llama3_sft",
+    name="tulu3_llama3_sft",
     tokenized=tulu3_llama_tokenize_step,
     model_config=llama_8b,
     sft_config=tulu_sft_config,
