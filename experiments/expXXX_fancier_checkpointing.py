@@ -1,11 +1,13 @@
 """
 Test different checkpointing strategies for the 1.4b models.
 """
+
 import dataclasses
 import logging
 import math
 
-from haliax.nn.scan import StackedCheckpointPolicy
+from haliax import ScanCheckpointPolicy
+
 from experiments.dclm.tokenize_dclm import dclm_mixture_config_llama3
 from experiments.defaults import default_train
 from experiments.llama import llama_1_4b
@@ -48,15 +50,18 @@ baseline_1b = default_train(
     eval_harness_tasks=[],
 )
 
-offload_policy = StackedCheckpointPolicy.from_bool_or_str("offload")
-full_policy = StackedCheckpointPolicy.from_bool_or_str("full")
+offload_policy = ScanCheckpointPolicy.from_bool_or_str("offload")
+full_policy = ScanCheckpointPolicy.from_bool_or_str("full")
+nested = ScanCheckpointPolicy(nested_remat=4)
 
 llama_offload = dataclasses.replace(llama_1_4b, gradient_checkpointing=offload_policy)
 
 llama_full = dataclasses.replace(llama_1_4b, gradient_checkpointing=full_policy)
 
+llama_nested = dataclasses.replace(llama_1_4b, gradient_checkpointing=nested)
+
 offload_1b = default_train(
-    name="fancy_ckpt-v4-1b-offload",
+    name="fancy_ckpt-2-v4-1b-offload",
     train_config=baseline_train_config,
     model_config=llama_offload,
     tokenized=dclm_mixture_config_llama3,
@@ -64,18 +69,27 @@ offload_1b = default_train(
     eval_harness_tasks=[],
 )
 
-# full_1b = default_train(
-#     name="fancy_ckpt-v4-1b-full",
-#     train_config=baseline_train_config,
-#     model_config=llama_full,
-#     tokenized=dclm_mixture_config_llama3,
-#     tags=("llama", "1.4b", "fancy_ckpt", "dclm"),
-#     eval_harness_tasks=[],
-# )
+full_1b = default_train(
+    name="fancy_ckpt-2-v4-1b-full",
+    train_config=baseline_train_config,
+    model_config=llama_full,
+    tokenized=dclm_mixture_config_llama3,
+    tags=("llama", "1.4b", "fancy_ckpt", "dclm"),
+    eval_harness_tasks=[],
+)
+
+nested_1b = default_train(
+    name="fancy_ckpt-2-v4-1b-nested",
+    train_config=baseline_train_config,
+    model_config=llama_nested,
+    tokenized=dclm_mixture_config_llama3,
+    tags=("llama", "1.4b", "fancy_ckpt", "dclm"),
+    eval_harness_tasks=[],
+)
 
 
 if __name__ == "__main__":
     executor_main(
-        steps=[baseline_1b, offload_1b], #, full_1b],
+        steps=[baseline_1b, offload_1b, full_1b, nested_1b],
         description=""" Test different checkpointing strategies for the 1.4b models.""",
     )
