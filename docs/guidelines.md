@@ -20,7 +20,7 @@ guidelines.
   * experiment: represents a machine learning experiment to test a hypothesis (see below)
 - Comments on issues should also have sufficient context and be substantive.
   Minor edits should be made directly to the issue description.
- 
+
 ## Issue description
 
 - The description of each issue should provide enough **context** for someone who
