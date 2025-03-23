@@ -34,6 +34,7 @@ class VizLmConfig:
 
     comparison_model_path: str | None = None
     comparison_is_hf: bool = False
+    checkpoint_is_hf: bool = False
 
 
 @ray.remote(memory=64 * 1024 * 1024 * 1024, resources={"TPU": 4, "TPU-v4-8-head": 1})
@@ -80,6 +81,7 @@ def visualize_lm_log_probs(config: VizLmConfig) -> None:
         num_docs=config.num_docs_per_dataset,
         path=config.output_path,
         data=config.datasets,
+        checkpoint_is_hf=config.checkpoint_is_hf,
         trainer=TrainerConfig(
             ray=RayConfig(auto_start_cluster=False), per_device_eval_parallelism=config.per_device_batch_size
         ),

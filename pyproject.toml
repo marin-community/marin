@@ -32,7 +32,7 @@ dependencies = [
     "jax[tpu]==0.5.1",
     "multiprocess==0.70.16",
     "levanter>=1.2.dev1207",
-    "haliax>=1.4.dev330",
+    "haliax>=1.4.dev341",
     "sentencepiece",
     "lz4",
 ]

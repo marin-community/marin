@@ -62,7 +62,7 @@ def paloma_tokenized(*, base_path="tokenized/", tokenizer: str = llama3_tokenize
                 train_paths=versioned([]),
                 validation_paths=[paloma.cd(f"{path_part}/val/val*.jsonl.gz")],
                 cache_path=this_output_path(),
-                tokenizer=tokenizer,
+                tokenizer=versioned(tokenizer),
             ),
         )
 
