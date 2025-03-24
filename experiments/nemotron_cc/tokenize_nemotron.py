@@ -31,13 +31,13 @@ NEMOTRON_DATASETS = {
 # Weights for each split based on their size in TiB/GiB
 # Converted GiB to TiB for consistency
 NEMOTRON_WEIGHTS = {
-    "hq_actual": 935.43 / 1024,  # 935.43 GiB
-    "hq_synth": 2.72,  # 2.72 TiB
-    "medium_high": 844.51 / 1024,  # 844.51 GiB
-    "medium": 3.38,  # 3.38 TiB
-    "medium_low": 1.54,  # 1.54 TiB
-    "low_actual": 718.06 / 1024,  # 718.06 GiB
-    "low_synth": 642.78 / 1024,  # 642.78 GiB
+    "nemotron_cc/hq_actual": 935.43 / 1024,  # 935.43 GiB
+    "nemotron_cc/hq_synth": 2.72,  # 2.72 TiB
+    "nemotron_cc/medium_high": 844.51 / 1024,  # 844.51 GiB
+    "nemotron_cc/medium": 3.38,  # 3.38 TiB
+    "nemotron_cc/medium_low": 1.54,  # 1.54 TiB
+    "nemotron_cc/low_actual": 718.06 / 1024,  # 718.06 GiB
+    "nemotron_cc/low_synth": 642.78 / 1024,  # 642.78 GiB
 }
 
 
@@ -58,6 +58,8 @@ def tokenize_nemotron_steps(*, base_path="tokenized/", tokenizer=llama3_tokenize
             ),
             pip_dependency_groups=["sentencepiece"],
         )
+
+    assert nemotron_steps.keys() == NEMOTRON_WEIGHTS.keys()
     return nemotron_steps
 
 

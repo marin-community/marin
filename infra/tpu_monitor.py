@@ -1,3 +1,4 @@
+import datetime
 import subprocess
 import sys
 import threading
@@ -30,31 +31,33 @@ LOCATIONS = [
     "us-central2-b",
     "us-east1-d",
     "us-east5-a",
+    "us-east5-b",
     "us-west4-a",
 ]
 
 LOCATION_TO_CLI_FILE = {
     "asia-northeast1-b": "/home/abhinavg/marin/infra/marin-asia-northeast1.yaml",
-    "europe-west4-a": "/home/abhinavg/marin/infra/marin-europe-west4-a.yaml",
-    "europe-west4-b": "/home/abhinavg/marin/infra/marin-europe-west4.yaml",
+    "europe-west4-a": "/home/abhinavg/marin/infra/marin-eu-west4-a.yaml",
+    "europe-west4-b": "/home/abhinavg/marin/infra/marin-eu-west4.yaml",
     "us-central2-b": "/home/abhinavg/marin/infra/marin-us-central2.yaml",
     "us-east1-d": "/home/abhinavg/marin/infra/marin-us-east1.yaml",
     "us-east5-a": "/home/abhinavg/marin/infra/marin-us-east5.yaml",
+    "us-east5-b": "/home/abhinavg/marin/infra/marin-us-east5-b-vllm.yaml",
     "us-west4-a": "/home/abhinavg/marin/infra/marin-us-west4.yaml",
 }
 
 
 def gather_incomplete_tpus(location):
     """Gather names of TPUs that do not have a power of 2 usage."""
-    incomplete_tpus = []
-    if location in LOCATION_TO_CLI_FILE:
+    incomplete_usage = []
+    if location in LOCATIONS:
         ray_usage = get_ray_tpu_usage(LOCATION_TO_CLI_FILE[location])
         if ray_usage:
-            for tpu_type, (_used, total) in ray_usage.items():
+            for tpu_type, (used, total) in ray_usage.items():
                 total = int(total)
                 if total & (total - 1) != 0:  # Bitwise check for power of 2
-                    incomplete_tpus.append(tpu_type)
-    return incomplete_tpus
+                    incomplete_usage.append((tpu_type, used, total))
+    return incomplete_usage
 
 
 def gather_tpu_info_from_vms(location, incomplete_tpus):
@@ -70,9 +73,12 @@ def gather_tpu_info_from_vms(location, incomplete_tpus):
     tpu_by_generation = Counter()
     vms_to_delete = []
     for node in nodes:
-        for incomplete_tpu in incomplete_tpus:
+        for incomplete_tpu, used, total in incomplete_tpus:
             if incomplete_tpu in node.name:
-                print(f"Node {node.name} does not have a power of 2 usage, deleting")
+                print(f"Node {node.name} of type {node.accelerator_type} does not have a power of 2 usage, deleting")
+                with open("incomplete_tpus.log", "a") as f:
+                    timestamp = datetime.datetime.now().isoformat()
+                    f.write(f"{timestamp},{node.name},{node.accelerator_type},{location},{used},{total}\n")
                 vms_to_delete.append(node.name)
                 continue
         if node.state in BAD_STATES:
@@ -246,8 +252,8 @@ def scrape_ray_tpu_usage():
                 if "/" in text and "tpu" in text:
                     try:
                         used, total = text.split("/")
-                        used = float(used.strip())
-                        total = float(total.split()[0].strip())
+                        used = int(used.strip())
+                        total = int(total.split()[0].strip())
                         tpu_usage[text.split()[-1]] = (used, total)
                     except ValueError:
                         continue
@@ -268,7 +274,9 @@ def get_ray_tpu_usage(cli_file):
 
     def run_ray_dashboard(config_path):
         try:
+            print(f"Starting Ray dashboard with config {config_path}")
             process = subprocess.Popen(["ray", "dashboard", config_path], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            time.sleep(10)
             print(f"Started Ray dashboard with config {config_path}")
             return process
         except FileNotFoundError:
@@ -283,7 +291,6 @@ def get_ray_tpu_usage(cli_file):
     dashboard_thread.daemon = True
     dashboard_thread.start()
 
-    time.sleep(3)
     tpu_usage = scrape_ray_tpu_usage()
 
     dashboard_process.terminate()
@@ -297,11 +304,7 @@ def gather_all_incomplete_tpus():
     incomplete_tpus = {location: gather_incomplete_tpus(location) for location in LOCATIONS}
 
     if any(incomplete_tpus.values()):
-        print("Found incomplete TPUs, waiting 15 minutes to check again...")
-        print("Initial incomplete TPUs:")
-        for location, tpus in incomplete_tpus.items():
-            if tpus:
-                print(f"{location}: {tpus}")
+        print(f"Found incomplete TPUs, waiting {MIN_WAIT_FOR_INCOMPLETE_TPUS} minutes to check again...")
 
         time.sleep(MIN_WAIT_FOR_INCOMPLETE_TPUS * 60)
 
@@ -309,12 +312,6 @@ def gather_all_incomplete_tpus():
         for location, tpus in incomplete_tpus.items():
             if tpus:
                 incomplete_tpus_after[location] = gather_incomplete_tpus(location)
-
-        print("\nAfter 15 minutes, still incomplete TPUs, removing:")
-        for location, tpus in incomplete_tpus_after.items():
-            still_incomplete = [tpu for tpu in tpus if tpu in incomplete_tpus[location]]
-            if still_incomplete:
-                print(f"{location}: {still_incomplete}")
 
         return incomplete_tpus_after
 
