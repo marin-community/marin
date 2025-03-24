@@ -113,7 +113,7 @@ in new issues that link to the original experiment issue.
 
 An experiment PR should contain a file
 `experiments/exp${GITHUB_ISSUE_NUMBER}.py` that contains the code for the
-experiment.  This file should take no arguments, and running this experiment
+experiment.  This file should take no arguments (aside from those the executor accepts), and running this experiment
 should launch all the relevant jobs for this experiment from start to finish.
 
 Experiments are defined using the [executor framework](executor.md),
