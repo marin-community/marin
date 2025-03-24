@@ -60,7 +60,7 @@ abide by the following guidelines:
 
 # Experiments
 
-Experiments are heart of the open development process.  An experiment represents
+Experiments are the heart of the open development process.  An experiment represents
 a set of changes to the model building process (e.g., architectures, learning
 schedule, data), and the sequence of experiments over time represents a complete
 record of the development process.
