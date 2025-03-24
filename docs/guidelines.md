@@ -23,9 +23,9 @@ guidelines.
 
 ## Issue description
 
-- The description of each issue should provide enough **context** for someone who
-  only generally knows about building language models (e.g., has taken an NLP
-  class) and has a rough idea of how Marin works.
+- The description of each issue should provide enough **context** for someone
+  who has experience building language models (not necessarily in Marin)
+  and has a rough idea of how Marin works.
 - **Link** to any relevant papers, GitHub issues, pointers to code, etc.
 - State clearly (i) what the **problem to be solved** is and (ii) what the
   **definition of done** is (when the issue can be closed).  Be as concrete as
@@ -38,7 +38,8 @@ abide by the following guidelines:
 
 - The PR description should link to the issue.
 - The PR should have a high-level bulleted list of the changes made.
-- The PR should have example output and metrics obtained from running the code.
+- The PR should have example output and metrics obtained from running the code
+  when appropriate (e.g., the change is substantial).
 - The PR author should go through the code and do a **self-review**, adding
   high-level comments that are not obvious from reading the code (e.g., this
   block of code that looks like it was deleted was actually moved to another
@@ -47,16 +48,18 @@ abide by the following guidelines:
 ## General code style
 
 - Every file should have a top-level docstring that describes the high-level
-  purpose and a rough sketch of the design.
-- Every function should have a meaningful docstring that documents the arguments
-  and return value.  Include high-level context that's not obvious from the
-  function and variable names (don't just paraphrase the code).  Give a concrete
-  example of an input and output if appropriate.
+  purpose and a rough sketch of the design.  For test files, the testing strategy
+  should be described if needed.
+- Every non-trivial function should have a meaningful docstring that documents
+  the arguments and return value.  Include high-level context that's not
+  obvious from the function and variable names (don't just paraphrase the
+  code).  Give a concrete example of an input and output if appropriate.
 - Use type hints for all variables, function arguments, and return values.
 - Use `logger.info` for logging instead of `print`.
 - Use `dataclass(frozen=True)` instead of untyped dictionaries.
 - Write simple unit tests for any tricky piece of code.
-- Break code into small, resuable pieces as opposed to having giant monolithic functions.
+- Break code into small pieces as opposed to having giant monolithic functions
+  when the pieces could be reusable.
 
 # Experiments
 
@@ -112,9 +115,10 @@ in new issues that link to the original experiment issue.
 ## Experiment PRs
 
 An experiment PR should contain a file
-`experiments/exp${GITHUB_ISSUE_NUMBER}.py` that contains the code for the
-experiment.  This file should take no arguments, and running this experiment
-should launch all the relevant jobs for this experiment from start to finish.
+`experiments/exp${GITHUB_ISSUE_NUMBER}_${DESCRIPTOR}.py` that contains the code
+for the experiment.  This file should take no arguments, and running this
+experiment should launch all the relevant jobs for this experiment from start
+to finish.
 
 Experiments are defined using the [executor framework](executor.md),
 which represents a DAG over steps.  Each step makes a call to a (Ray)
@@ -127,11 +131,13 @@ Notes:
   GitHub issue description, but should reference the code.
 - Name variables of type `ExecutorStep` based on what the `ExecutorStep`
   produces (e.g., `llama3_8b_model` as opposed to `llama_8b_model_step`).
-- Avoid using full paths (e.g., gs://marin-us-central2/...).
+- Try to avoid using full paths (e.g., gs://marin-us-central2/...).
   Instead, import the corresponding utility or experiment file that generated
   the path and reference the `ExecutorStep`.  This way, the dependency structure
   is made explicit.
 - After the full experiment runs, add `override_output_path` to any heavy steps
   that we don't want to accidentally run again (e.g., a large dataset or training
   a new model).
-- Use the default functions as much as possible (e.g., `default_train`, `default_eval`).
+- When possible, use the default functions (e.g., `default_train`,
+  `default_eval`) if the configuration details are orthogonal to the aspect
+  being varied in the experiment.
