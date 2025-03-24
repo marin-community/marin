@@ -63,7 +63,7 @@ abide by the following guidelines:
 
 # Experiments
 
-Experiments are heart of the open development process.  An experiment represents
+Experiments are the heart of the open development process.  An experiment represents
 a set of changes to the model building process (e.g., architectures, learning
 schedule, data), and the sequence of experiments over time represents a complete
 record of the development process.
@@ -116,9 +116,9 @@ in new issues that link to the original experiment issue.
 
 An experiment PR should contain a file
 `experiments/exp${GITHUB_ISSUE_NUMBER}_${DESCRIPTOR}.py` that contains the code
-for the experiment.  This file should take no arguments, and running this
-experiment should launch all the relevant jobs for this experiment from start
-to finish.
+for the experiment.  This file should take no arguments (aside from those the
+executor accepts), and running this experiment should launch all the relevant
+jobs for this experiment from start to finish.
 
 Experiments are defined using the [executor framework](executor.md),
 which represents a DAG over steps.  Each step makes a call to a (Ray)
