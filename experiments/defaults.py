@@ -244,7 +244,9 @@ def default_train(
                 quantization=QuantizationConfig(int8=train_config.int8) if train_config.int8 else None,
                 initialize_from=None if train_config.reset_data_loader_on_init else checkpoint_path_to_load_from,
             ),
-            initialize_from_checkpoint_path=checkpoint_path_to_load_from if train_config.reset_data_loader_on_init else None,
+            initialize_from_checkpoint_path=(
+                checkpoint_path_to_load_from if train_config.reset_data_loader_on_init else None
+            ),
             z_loss_weight=train_config.z_loss_weight,
             model=model_config,
             optimizer=AdamConfig(
