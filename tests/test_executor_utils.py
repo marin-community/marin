@@ -33,3 +33,8 @@ def test_ckpt_path_invalid_string_path():
 def test_ckpt_path_invalid_input_type():
     with pytest.raises(ValueError, match="Unknown type"):
         ckpt_path_to_step_name(12345)
+
+
+def test_ckpt_path_with_hf_path():
+    path = "meta-llama/Meta-Llama-3.1-8B"
+    assert ckpt_path_to_step_name(path) == "Meta-Llama-3.1-8B"
