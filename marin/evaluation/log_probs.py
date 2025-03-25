@@ -92,6 +92,7 @@ def evaluate_lm_log_probs(config: EvalLmConfig) -> None:
     """
 
     name = os.path.basename(config.output_path)
+    name = f"ppl-eval-{name}"
 
     if config.max_samples_per_dataset is None:
         max_eval_batches = None
@@ -104,7 +105,7 @@ def evaluate_lm_log_probs(config: EvalLmConfig) -> None:
         model=config.model,
         data=config.datasets,
         trainer=TrainerConfig(
-            tracker=WandbConfig(project="marin", tags=["eval_lm"], name=name),
+            tracker=WandbConfig(project="marin", tags=["eval_lm"], name=name, id=name[:64]),
             ray=RayConfig(auto_start_cluster=False),
             per_device_eval_parallelism=config.per_device_batch_size,
             max_eval_batches=max_eval_batches,
