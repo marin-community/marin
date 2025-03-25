@@ -141,12 +141,13 @@ tootsie_8b_softer_raccoon_reset_train = dataclasses.replace(
     # NB: starting from the one WITH weight decay
     tootsie_8b_softer_raccoon_train,
     #initialize_from_checkpoint_path=output_path_of(tootsie_8b_softer_raccoon_no_decay, "checkpoints/step-839992"),
-    allow_partial_checkpoint=True
+    allow_partial_checkpoint=True,
+    initialize_from_checkpoint_path=None,
 )
 
 tootsie_8b_softer_raccoon_reset_adamw = dataclasses.replace(
     default_train(
-        name="tootsie-8b-softer-raccoon-reset-adamw",
+        name="tootsie-8b-softer-raccoon-reset-adamw-2",
         tokenized=raccoon_mixture,
         model_config=llama_8b,
         train_config=tootsie_8b_softer_raccoon_reset_train,
@@ -155,7 +156,7 @@ tootsie_8b_softer_raccoon_reset_adamw = dataclasses.replace(
         # HF is having trouble today so skipping this.
         eval_harness_tasks=[],
     ),
-    override_output_path="checkpoints/tootsie-8b-softer-raccoon-reset-adamw",
+    override_output_path="checkpoints/tootsie-8b-softer-raccoon-reset-adamw-2",
 )
 
 
