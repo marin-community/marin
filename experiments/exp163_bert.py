@@ -7,12 +7,10 @@ See https://github.com/stanford-crfm/marin/issues/163 for more details.
 import os
 from dataclasses import dataclass, field
 
-from experiments.defaults import default_tokenize
 from experiments.exp274_mmlu_quality_classifier import (
     dclm_negative_examples_in_dolma_format,
     mmlu_eval_aux_in_dolma_format,
 )
-from experiments.llama import llama3_tokenizer
 from marin.classifiers.utils import DatasetConfig
 from marin.core.runtime import TaskConfig
 from marin.execution.executor import (
@@ -21,12 +19,6 @@ from marin.execution.executor import (
     output_path_of,
     this_output_path,
     versioned,
-)
-from marin.processing.classification.bert.train_bert import (
-    TrainBertClassifierConfig,
-)
-from marin.processing.classification.bert.train_bert import (
-    train as train_bert,
 )
 from marin.processing.classification.config.inference_config import RuntimeConfig
 from marin.processing.classification.consolidate import ConsolidateConfig, FilterConfig, consolidate
@@ -93,26 +85,26 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
     #     pip_dependency_groups=["fasttext"],
     # )
 
-    bert_classifier_train = ExecutorStep(
-        name=f"classifiers/{config.experiment_name}/bert",
-        fn=train_bert,
-        config=TrainBertClassifierConfig(
-            datasets=config.classifier_training_datasets,
-            output_path=this_output_path(),
-            val_frac=versioned(0.0),
-            seed=versioned(0),
-        ),
-        pip_dependency_groups=[
-            "--find-links https://storage.googleapis.com/libtpu-releases/index.html",
-            "--find-links https://storage.googleapis.com/libtpu-wheels/index.html",
-            "fasttext",
-            "datasets",
-            "filelock",
-            "torch",
-            "torch_xla[tpu]",
-            "accelerate",
-        ],
-    )
+    # bert_classifier_train = ExecutorStep(
+    #     name=f"classifiers/{config.experiment_name}/bert",
+    #     fn=train_bert,
+    #     config=TrainBertClassifierConfig(
+    #         datasets=config.classifier_training_datasets,
+    #         output_path=this_output_path(),
+    #         val_frac=versioned(0.0),
+    #         seed=versioned(0),
+    #     ),
+    #     pip_dependency_groups=[
+    #         "--find-links https://storage.googleapis.com/libtpu-releases/index.html",
+    #         "--find-links https://storage.googleapis.com/libtpu-wheels/index.html",
+    #         "fasttext",
+    #         "datasets",
+    #         "filelock",
+    #         "torch",
+    #         "torch_xla[tpu]",
+    #         "accelerate",
+    #     ],
+    # )
 
     for input_data_source, input_data_path in config.input_data_source_to_path.items():
         # Get the basename of the input directory
@@ -141,7 +133,8 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
             config=InferenceConfig(
                 input_path=input_data_path,
                 output_path=this_output_path(input_basename),
-                model_name=get_bert_model_path(bert_classifier_train),
+                model_name="gs://marin-us-central2/classifiers/exp163_compare_bert_fasttext_quickstart_debug_train/bert-55af48/model",
+                # get_bert_model_path(bert_classifier_train),
                 model_type="bert",
                 attribute_name=versioned(f"{config.experiment_name}-bert_classifier"),
                 runtime=RuntimeConfig(
@@ -193,7 +186,7 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
                         type=versioned("classify"),
                         attribute_path=output_path_of(bert_inference, input_basename),
                         name=versioned(f"{config.experiment_name}-bert_classifier"),
-                        label="score",
+                        label="hq",
                         threshold=versioned(None),
                         keep_fraction=versioned(config.keep_fraction),
                     ),
@@ -209,14 +202,16 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
         #     tokenizer=llama3_tokenizer,
         # )
 
-        bert_tokenize_step = default_tokenize(
-            name=f"quality_filtering/{config.experiment_name}/bert/{input_data_source}",
-            dataset=output_path_of(bert_consolidate_step),
-            tokenizer=llama3_tokenizer,
-        )
+        # bert_tokenize_step = default_tokenize(
+        #     name=f"quality_filtering/{config.experiment_name}/bert/{input_data_source}",
+        #     dataset=output_path_of(bert_consolidate_step),
+        #     tokenizer=llama3_tokenizer,
+        # )
 
         # steps.append(fasttext_tokenize_step)
-        steps.append(bert_tokenize_step)
+        steps.append(bert_inference)
+        steps.append(bert_consolidate_step)
+        # steps.append(bert_tokenize_step)
 
     return steps
 
@@ -238,7 +233,7 @@ def main():
     ]
 
     experiment_config = ExperimentConfig(
-        experiment_name="exp163_compare_bert_fasttext_quickstart_debug",
+        experiment_name="exp163_compare_bert_fasttext_quickstart_debug_train",
         classifier_training_datasets=classifier_training_datasets,
     )
     steps = create_steps(experiment_config)
