@@ -127,8 +127,40 @@ tootsie_8b_softer_raccoon_no_decay = dataclasses.replace(
     override_output_path="checkpoints/tootsie-8b-softer-raccoon-no-decay",
 )
 
+
+# That made no difference. We're going to try *resetting the AdamW optimizer state*
+# We don't have a mechanism for this yet in code. So we're going to manually delete it outside the framework
+# and tell Levanter to allow partial checkpoint loading.
+
+# Specifically we're going to delete the first and second moments of the optimizer state.
+# $CHKPT/opt_state/inner_state/1/mu/
+# $CHKPT/opt_state/inner_state/1/nu/
+
+
+tootsie_8b_softer_raccoon_reset_train = dataclasses.replace(
+    # NB: starting from the one WITH weight decay
+    tootsie_8b_softer_raccoon_train,
+    #initialize_from_checkpoint_path=output_path_of(tootsie_8b_softer_raccoon_no_decay, "checkpoints/step-839992"),
+    allow_partial_checkpoint=True
+)
+
+tootsie_8b_softer_raccoon_reset_adamw = dataclasses.replace(
+    default_train(
+        name="tootsie-8b-softer-raccoon-reset-adamw",
+        tokenized=raccoon_mixture,
+        model_config=llama_8b,
+        train_config=tootsie_8b_softer_raccoon_reset_train,
+        use_default_validation=True,
+        tags=["llama", "8b", "ema", "exp898", "tootsie"],
+        # HF is having trouble today so skipping this.
+        eval_harness_tasks=[],
+    ),
+    override_output_path="checkpoints/tootsie-8b-softer-raccoon-reset-adamw",
+)
+
+
 if __name__ == "__main__":
     executor_main(
-        [tootsie_8b_soft_raccoon, tootsie_8b_softer_raccoon_no_decay],
+        [tootsie_8b_soft_raccoon, tootsie_8b_softer_raccoon_reset_adamw],
         description="Train Tootsie 8b with cooldown from 1.7e-4 to 1.7e-5 over 125B tokens",
     )
