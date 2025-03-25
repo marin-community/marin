@@ -2,12 +2,12 @@
 """
 ```
 python marin/run/ray_run.py \
-    --pip_deps '--find-links https://storage.googleapis.com/libtpu-releases/index.html,--find-links https://storage.googleapis.com/libtpu-wheels/index.html,datasets,filelock,torch,torch_xla[tpu],accelerate' \
+    --pip_deps '--find-links https://storage.googleapis.com/libtpu-releases/index.html,--find-links https://storage.googleapis.com/libtpu-wheels/index.html,datasets,filelock,torch,torch_xla[tpu],accelerate,evaluate' \
     --env_vars WANDB_API_KEY 'ca4e321fd237f65236ab95e92724934b47264b1c' \
     --no_wait -- \
     python marin/crawl/url_classification/train_bert_url_classifier.py \
     --input_pattern 'gs://marin-us-central2/scratch/nfliu/text/open-web-math-fde8ef8-10M/links.*.parquet' \
-    --output_path gs://marin-us-central2/scratch/nfliu/url_classification_models/bert-base-uncased-open-web-math-fde8ef8-10M/
+    --output_path gs://marin-us-central2/scratch/nfliu/url_classification_models/bert-base-uncased-open-web-math-fde8ef8-10M-metrics/
 ```
 """  # noqa: E501
 import hashlib
@@ -20,11 +20,11 @@ import time
 from dataclasses import dataclass
 
 import draccus
+import evaluate
 import fsspec
 import numpy as np
 import pandas as pd
 import ray
-from datasets import load_metric
 from tqdm_loggable.auto import tqdm
 from transformers import EvalPrediction
 
@@ -35,10 +35,10 @@ from marin.utils import fsspec_cpdir, fsspec_exists, fsspec_glob, remove_tpu_loc
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-accuracy_metric = load_metric("accuracy")
-precision_metric = load_metric("precision")
-recall_metric = load_metric("recall")
-f1_metric = load_metric("f1")
+accuracy_metric = evaluate.load("accuracy")
+precision_metric = evaluate.load("precision")
+recall_metric = evaluate.load("recall")
+f1_metric = evaluate.load("f1")
 
 
 @dataclass(frozen=True)
