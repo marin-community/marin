@@ -34,11 +34,11 @@ all_steps = []
 for checkpoint in CHECKPOINTS:
     all_steps.append(
         default_lm_log_probs(checkpoint, llama_8b, eval_set_mixture, checkpoint_is_hf=False,
-                             max_samples_per_dataset=1024)
+                             max_samples_per_dataset=32)
     )
 
 all_steps.append(
-    default_lm_log_probs(LLAMA, llama_8b, eval_set_mixture, checkpoint_is_hf=True, max_samples_per_dataset=1024)
+    default_lm_log_probs(LLAMA, llama_8b, eval_set_mixture, checkpoint_is_hf=True, max_samples_per_dataset=32)
 )
 
 if __name__ == "__main__":

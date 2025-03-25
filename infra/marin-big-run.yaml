@@ -54,6 +54,8 @@ setup_commands:
   - gcloud secrets versions access latest --secret=OPENAI_API_KEY > $HOME/.cache/openai/token
   - echo 'export MARIN_PREFIX="gs://marin-us-central2"' >> $HOME/.bashrc
   - echo 'export BUCKET="marin-us-central2"' >> $HOME/.bashrc
+  # default is 30s which seems too short for our larger clusters
+  - echo 'export AUTOSCALER_HEARTBEAT_TIMEOUT_S=300' >> $HOME/.bashrc
   - gcsfuse --implicit-dirs --only-dir gcsfuse_mount $BUCKET /opt/gcsfuse_mount || true
 
 # Set Head Node == `ray_head_default`
