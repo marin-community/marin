@@ -5,15 +5,11 @@ The goal was to see if there were any structural differences in the log probabil
 
 """
 
-from experiments.defaults import default_tokenize, default_validation_sets
+from experiments.defaults import default_validation_sets
 from experiments.exp600_tootsie import llama3_tokenizer, llama_8b
-from experiments.instruction_datasets import get_instruction_dataset
+from experiments.instruction_datasets import tulu3_flat_llama_tokenized
 from marin.evaluation.visualize import VizLmConfig, mixture_for_visualization, visualize_lm_log_probs
-from marin.execution.executor import ExecutorStep, executor_main, output_path_of, versioned
-from operations.transform.conversation.conversation_to_dolma import (
-    ConversationToDolmaConfig,
-    convert_conversation_to_dolma,
-)
+from marin.execution.executor import ExecutorStep, executor_main, versioned
 
 # We compare the models in CHECKPOINTS to Meta's Llama 3.1 8B  base model.
 COMPARISON_MODEL = "meta-llama/Meta-Llama-3.1-8B"
@@ -21,14 +17,6 @@ COMPARISON_MODEL = "meta-llama/Meta-Llama-3.1-8B"
 CHECKPOINTS = [
     "gs://marin-us-central2/checkpoints/llama-8b-tootsie-phase3/checkpoints/step-819924/",
 ]
-
-tulu_3_dataset = get_instruction_dataset("allenai/tulu-3-sft-mixture")
-
-tulu_3_in_dolma = ExecutorStep(
-    name="dolma/tulu_3_in_dolma",
-    fn=convert_conversation_to_dolma,
-    config=ConversationToDolmaConfig(output_path_of(tulu_3_dataset)),
-)
 
 
 def _path_to_step_name(path: str) -> str:
@@ -46,7 +34,7 @@ eval_sets = default_validation_sets(tokenizer=versioned(llama3_tokenizer))
 eval_sets = {
     **eval_sets,
     # TODO: this should really be a step.
-    "tulu_sft": default_tokenize("tulu_sft", tulu_3_in_dolma, tokenizer=llama3_tokenizer, is_validation=True),
+    "tulu_sft": tulu3_flat_llama_tokenized,
 }
 eval_set_mixture = mixture_for_visualization(eval_sets)
 

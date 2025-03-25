@@ -93,7 +93,10 @@ def convert_page_with_resiliparse(
     if not config.use_custom_variant:
         content = extract_plain_text(html, **config.resiliparse_kwargs)
 
-        if title:
+        if title and config.prepend_title:
+            # remove html tags from title
+            title = re.sub(r"<[^>]*>", "", title).strip()
+
             content = f"{title}\n\n{content}"
 
     else:
@@ -102,7 +105,10 @@ def convert_page_with_resiliparse(
         # install the custom package.
         content = extract_content_from_dom(html, config.resiliparse_kwargs, config.markdownify_config)
 
-        if title:
+        if title and config.prepend_title:
+            # remove html tags from title
+            title = re.sub(r"<[^>]*>", "", title).strip()
+
             content = f"# {title}\n\n{content}"
 
     out = {"title": title, "content": content, "html": html}
