@@ -27,7 +27,7 @@ class EvalLmConfig:
     checkpoint_path: str
     model: LmConfig
     datasets: LMMixtureDatasetConfig
-    per_device_batch_size: int = 6
+    per_device_batch_size: int = 4
     output_path: str = dataclasses.field(default_factory=this_output_path)  # type: ignore
     checkpoint_is_hf: bool = False
     """Whether the checkpoint is in HF format."""
