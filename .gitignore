@@ -6,6 +6,10 @@ data/*
 output/*
 outputs/*
 
+# Snapshot diffs and outputs
+tests/snapshots/*/outputs/*
+tests/snapshots/*/diffs/*
+
 # This is mainly for Ray and using submodule
 */**/.git
 
@@ -183,6 +187,7 @@ cython_debug/
 
 # Secrets
 credentials.json
+marin/crawl/bigquery-gcs-key.json
 
 # Archive
 archive/
