@@ -24,6 +24,7 @@ from marin.utils import (
     fsspec_glob,
     fsspec_mkdirs,
     rebase_file_path,
+    remove_tpu_lockfile_on_exit,
 )
 
 logger = logging.getLogger("ray")
@@ -71,6 +72,7 @@ def write_dataset(dataset, output_filename: str):
 @cached_or_construct_output(success_suffix="SUCCESS")
 def process_file_with_quality_classifier(input_filename: str, output_filename: str, quality_classifier: BaseClassifier):
     print(f"[*] Processing {input_filename} to {output_filename}")
+
     dataset = read_dataset(input_filename)
 
     dataset = dataset.select_columns(["text", "id"])
@@ -80,7 +82,8 @@ def process_file_with_quality_classifier(input_filename: str, output_filename: s
     write_dataset(dataset, output_filename)
 
 
-@ray.remote
+@ray.remote(max_calls=1)
+@remove_tpu_lockfile_on_exit
 def process_file_ray(
     input_filename: str,
     output_filename: str,
@@ -94,7 +97,8 @@ def process_file_ray(
     process_file_with_quality_classifier(input_filename, output_filename, quality_classifier)
 
 
-@ray.remote
+@ray.remote(max_calls=1)
+@remove_tpu_lockfile_on_exit
 @cached_or_construct_output(success_suffix="SUCCESS")
 def _process_dir(
     input_path: str,
@@ -110,6 +114,7 @@ def _process_dir(
     efficient than process_file_ray because it avoids the overhead of spawning a new
     Ray task for each file and instead processes all files in a single task.
     """
+
     files = fsspec_glob(os.path.join(input_path, f"*.{filetype}"))
 
     if len(files) == 0:
@@ -141,8 +146,10 @@ def get_filepaths_and_process_filepath_func(inference_config: InferenceConfig):
     return filepaths, process_filepath_func
 
 
-@ray.remote
+@ray.remote(num_cpus=3)
+@remove_tpu_lockfile_on_exit
 def run_inference(inference_config: InferenceConfig):
+    print(f"Running inference for {inference_config.input_path} to {inference_config.output_path}")
     filepaths, process_filepath_func = get_filepaths_and_process_filepath_func(inference_config)
 
     input_path = inference_config.input_path
@@ -157,8 +164,8 @@ def run_inference(inference_config: InferenceConfig):
         fsspec_mkdirs(os.path.dirname(output_filepath))
 
         result_ref = process_filepath_func.options(
-            memory=inference_config.runtime.memory_limit_gb * 1024 * 1024 * 1024,
-            resources=inference_config.runtime.resources,
+            memory=10 * 1024 * 1024 * 1024,  # inference_config.runtime.memory_limit_gb * 1024 * 1024 * 1024,
+            resources={"TPU": 4, "TPU-v4-8-head": 1},  # inference_config.runtime.resources,
         ).remote(
             input_filepath,
             output_filepath,
