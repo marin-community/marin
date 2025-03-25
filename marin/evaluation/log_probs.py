@@ -27,7 +27,7 @@ class EvalLmConfig:
     checkpoint_path: str
     model: LmConfig
     datasets: LMMixtureDatasetConfig
-    per_device_batch_size: int = 32
+    per_device_batch_size: int = 8
     output_path: str = dataclasses.field(default_factory=this_output_path)  # type: ignore
     checkpoint_is_hf: bool = False
     """Whether the checkpoint is in HF format."""
@@ -35,13 +35,16 @@ class EvalLmConfig:
     log_entropy: bool = True
     """ Whether to log entropies of the model. """
 
+    max_samples_per_dataset: int | None = None
+
 
 def default_lm_log_probs(
     checkpoint: str | InputName,
     model: LmConfig,
     data: LMMixtureDatasetConfig,
     checkpoint_is_hf: bool,
-    per_device_batch_size: int = 32,
+    per_device_batch_size: int = 8,
+    max_samples_per_dataset: int | None = None,
 ) -> ExecutorStep:
     """
     Creates a step to evaluate log probabilities of a language model.
@@ -63,6 +66,7 @@ def default_lm_log_probs(
             log_entropy=True,
             checkpoint_is_hf=checkpoint_is_hf,
             per_device_batch_size=per_device_batch_size,
+            max_samples_per_dataset=max_samples_per_dataset,
         ),
     )
 
@@ -89,6 +93,11 @@ def evaluate_lm_log_probs(config: EvalLmConfig) -> None:
 
     name = os.path.basename(config.output_path)
 
+    if config.max_samples_per_dataset is None:
+        max_eval_batches = None
+    else:
+        max_eval_batches = config.max_samples_per_dataset // config.per_device_batch_size
+
     levanter_config = LevanterEvalLmConfig(
         checkpoint_path=config.checkpoint_path if not config.checkpoint_is_hf else None,
         hf_checkpoint=config.checkpoint_path if config.checkpoint_is_hf else None,
@@ -97,8 +106,10 @@ def evaluate_lm_log_probs(config: EvalLmConfig) -> None:
         trainer=TrainerConfig(
             tracker=WandbConfig(project="marin", tags=["eval_lm"], name=name),
             ray=RayConfig(auto_start_cluster=False),
-            per_device_eval_parallelism=config.per_device_batch_size
+            per_device_eval_parallelism=config.per_device_batch_size,
+            max_eval_batches=max_eval_batches,
         ),
         log_entropy=config.log_entropy,
+
     )
     ray.get(do_eval_lm.remote(levanter_config))
