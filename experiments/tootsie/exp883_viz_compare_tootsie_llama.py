@@ -5,11 +5,17 @@ The goal was to see if there were any structural differences in the log probabil
 
 """
 
-from experiments.defaults import default_validation_sets
-from experiments.instruction_datasets import tulu3_flat_llama_tokenized_as_validation
+from experiments.defaults import default_tokenize, default_validation_sets
+from experiments.instruction_datasets import tulu3_flat_llama_tokenized_as_validation, get_instruction_dataset
 from experiments.tootsie.exp600_tootsie import llama3_tokenizer, llama_8b
-from marin.evaluation.visualize import VizLmConfig, mixture_for_visualization, visualize_lm_log_probs
+from marin.processing.tokenize.data_configs import mixture_for_evaluation
+from marin.evaluation.visualize import VizLmConfig visualize_lm_log_probs
 from marin.execution.executor import ExecutorStep, executor_main, versioned
+from operations.transform.conversation.conversation_to_dolma import (
+    ConversationToDolmaConfig,
+    convert_conversation_to_dolma,
+)
+
 
 # We compare the models in CHECKPOINTS to Meta's Llama 3.1 8B  base model.
 COMPARISON_MODEL = "meta-llama/Meta-Llama-3.1-8B"
@@ -36,7 +42,7 @@ eval_sets = {
     # TODO: this should really be a step.
     "tulu_sft": tulu3_flat_llama_tokenized_as_validation,
 }
-eval_set_mixture = mixture_for_visualization(eval_sets)
+eval_set_mixture = mixture_for_evaluation(eval_sets)
 
 
 all_steps = []

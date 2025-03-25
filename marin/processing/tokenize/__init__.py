@@ -4,6 +4,7 @@ from .data_configs import (
     lm_data_config,
     lm_mixture_data_config,
     step_to_lm_mixture_component,
+    mixture_for_evaluation,
 )
 from .tokenize import (
     TokenizeConfig,
