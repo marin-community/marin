@@ -55,7 +55,7 @@ jobs:
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.NEW_GCP_JSON }}
-
+          
       - name: Install dependencies
         shell: bash -l {0}
         run: |
@@ -63,9 +63,14 @@ jobs:
           npm install -g pandiff
           python -m pip install --upgrade pip
           pip install uv==0.5.11 toml
-          pip install 'resiliparse_dom @ git+https://github.com/stanford-crfm/chatnoir-resiliparse@d9938b1578b3a2afbfbdfeb2bd2971a12183a839#egg=resiliparse_dom&subdirectory=resiliparse_dom'
           python scripts/install_all_pip_dep.py
-
+      
+      - name: Install Resiliparse DOM
+        shell: bash -l {0}
+        run: |
+          sudo apt-get update && apt-get install -y build-essential python3-dev zlib1g-dev liblz4-dev libuchardet-dev libre2-dev curl gnupg lsb-release
+          pip install 'resiliparse_dom @ git+https://github.com/stanford-crfm/chatnoir-resiliparse@d9938b1578b3a2afbfbdfeb2bd2971a12183a839#egg=resiliparse_dom&subdirectory=resiliparse_dom'
+          
       - name: Start Ray cluster locally
         shell: bash -l {0}
         run: |
