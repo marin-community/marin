@@ -27,7 +27,7 @@ class EvalLmConfig:
     checkpoint_path: str
     model: LmConfig
     datasets: LMMixtureDatasetConfig
-    per_device_batch_size: int = 8
+    per_device_batch_size: int = 6
     output_path: str = dataclasses.field(default_factory=this_output_path)  # type: ignore
     checkpoint_is_hf: bool = False
     """Whether the checkpoint is in HF format."""
@@ -43,7 +43,7 @@ def default_lm_log_probs(
     model: LmConfig,
     data: LMMixtureDatasetConfig,
     checkpoint_is_hf: bool,
-    per_device_batch_size: int = 8,
+    per_device_batch_size: int = 6,
     max_samples_per_dataset: int | None = None,
 ) -> ExecutorStep:
     """
