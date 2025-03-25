@@ -27,6 +27,7 @@ Current datasets:
 15. PrimeIntellect/verifiable-math-problems
 16. sherryy/tulu-3-sft-personas-instruction-following-expanded
 17. facebook/natural_reasoning
+18. nvidia/Llama-Nemotron-Post-Training-Dataset-v1-SFT
 """
 
 import hashlib
@@ -214,6 +215,25 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         splits=["train"],  # Default to train split
         adapter_name="GeneralReasoning/GeneralThought-195K-modelreasoning",
     ),
+    "nvidia/Llama-Nemotron-Post-Training-Dataset-v1-SFT": InstructionDatasetConfig(
+        hf_dataset_id="nvidia/Llama-Nemotron-Post-Training-Dataset-v1",
+        revision="ed905e6",
+        wait_for_completion=True,
+        filetype="jsonl",
+        splits=[],
+        subsets=["SFT"],
+        metadata_columns=["category", "license", "generator"],
+        adapter_name="nvidia/Llama-Nemotron-Post-Training-Dataset-v1-SFT",
+    ),
+    # "nvidia/Llama-Nemotron-Post-Training-Dataset-v1-RL": InstructionDatasetConfig(
+    #     hf_dataset_id="nvidia/Llama-Nemotron-Post-Training-Dataset-v1",
+    #     revision="ed905e6",
+    #     wait_for_completion=True,
+    #     filetype="jsonl",
+    #     splits=[],
+    #     subsets=["RL"],
+    #     adapter_name="nvidia/Llama-Nemotron-Post-Training-Dataset-v1-RL",
+    # ),
 }
 
 
