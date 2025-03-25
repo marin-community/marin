@@ -95,8 +95,40 @@ tootsie_8b_softer_raccoon = dataclasses.replace(
     override_output_path="checkpoints/tootsie-8b-softer-raccoon",
 )
 
+
+# We found that loss starts increasing when the LR is too low, so we're going to turn off weight decay and see if that
+# helps.
+
+tootsie_8b_softest_raccoon_train = dataclasses.replace(
+    llama_8b_train_config_phase3,
+    tpu_type="v4-128",
+    node_count=4,
+    learning_rate=1.7e-5,  # only does what we want b/c we're warmstarting from soft-raccoon
+    num_train_steps=COOLER_DOWN_END,
+    min_lr_ratio=1e-6 / 1.7e-5,  # 1e-6
+    decay=COOLER_DOWN_LEN,
+    initialize_from_checkpoint_path=output_path_of(tootsie_8b_soft_raccoon, "checkpoints/step-829992"),
+    reset_data_loader_on_init=False,
+    per_device_eval_parallelism=16,
+    weight_decay=0.0,
+)
+
+tootsie_8b_softest_raccoon = dataclasses.replace(
+    default_train(
+        name="tootsie-8b-softest-raccoon",
+        tokenized=raccoon_mixture,
+        model_config=llama_8b,
+        train_config=tootsie_8b_softest_raccoon_train,
+        use_default_validation=True,
+        tags=["llama", "8b", "ema", "exp898", "tootsie"],
+        # HF is having trouble today so skipping this.
+        eval_harness_tasks=[],
+    ),
+    override_output_path="checkpoints/tootsie-8b-softer-raccoon",
+)
+
 if __name__ == "__main__":
     executor_main(
-        [tootsie_8b_soft_raccoon, tootsie_8b_softer_raccoon],
+        [tootsie_8b_soft_raccoon, tootsie_8b_softer_raccoon, tootsie_8b_softest_raccoon_train],
         description="Train Tootsie 8b with cooldown from 1.7e-4 to 1.7e-5 over 125B tokens",
     )
