@@ -21,9 +21,12 @@ from dataclasses import dataclass
 
 import draccus
 import fsspec
+import numpy as np
 import pandas as pd
 import ray
+from datasets import load_metric
 from tqdm_loggable.auto import tqdm
+from transformers import EvalPrediction
 
 from marin.classifiers.bert.training import BertTrainingArguments, _mp_fn
 from marin.classifiers.utils import shuffle
@@ -31,6 +34,11 @@ from marin.utils import fsspec_cpdir, fsspec_exists, fsspec_glob, remove_tpu_loc
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
+
+accuracy_metric = load_metric("accuracy")
+precision_metric = load_metric("precision")
+recall_metric = load_metric("recall")
+f1_metric = load_metric("f1")
 
 
 @dataclass(frozen=True)
@@ -46,6 +54,29 @@ class TrainBertUrlClassifierConfig:
     max_length: int = 512
     dataloader_num_workers: int = 0
     dataloader_prefetch_factor: int | None = None
+
+
+def url_classifier_compute_eval_metrics(labels2id: dict, eval_predictions: EvalPrediction):
+    positive_label_id = labels2id[True]
+    labels = eval_predictions.label_ids
+    logits = eval_predictions.predictions.argmax(-1)
+    predictions = np.argmax(logits, axis=-1)
+    accuracy = accuracy_metric.compute(predictions=predictions, references=labels)
+    binary_precision = precision_metric.compute(
+        predictions=predictions, references=labels, pos_label=positive_label_id, average="binary"
+    )
+    binary_recall = recall_metric.compute(
+        predictions=predictions, references=labels, pos_label=positive_label_id, average="binary"
+    )
+    binary_f1 = f1_metric.compute(
+        predictions=predictions, references=labels, pos_label=positive_label_id, average="binary"
+    )
+    return {
+        "accuracy": accuracy,
+        "binary_precision": binary_precision,
+        "binary_recall": binary_recall,
+        "binary_f1": binary_f1,
+    }
 
 
 @ray.remote(memory=8 * 1024 * 1024 * 1024)

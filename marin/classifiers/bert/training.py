@@ -7,8 +7,10 @@ Train BERT models.
 import logging
 import os
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
+from functools import partial
 
 import ray
 from datasets import Dataset, load_dataset
@@ -16,6 +18,7 @@ from transformers import (
     BertForSequenceClassification,
     BertTokenizer,
     DataCollatorWithPadding,
+    EvalPrediction,
     Trainer,
     TrainingArguments,
 )
@@ -70,6 +73,7 @@ def _mp_fn(
     val_path: str,
     model_path: str,
     bert_args: BertTrainingArguments,
+    compute_eval_metrics: Callable[[dict, EvalPrediction], dict] | None = None,
 ):
     """
     Function to run on each TPU device for BERT classifier training.
@@ -81,6 +85,8 @@ def _mp_fn(
         val_path (str): Path to the validation dataset.
         model_path (str): Path to save the trained model.
         bert_args (BertTrainingArguments): Arguments for training the BERT model.
+        compute_eval_metrics (Callable[[EvalPrediction, dict], dict] | None): function to use to
+            compute evaluation metrics on model predictions.
     Returns:
         None: No return value.
     """
@@ -104,10 +110,13 @@ def _mp_fn(
     train_dataset = train_dataset.map(tokenize, batched=True, num_proc=8)
     train_dataset = train_dataset.remove_columns(["text"])
     train_dataset = train_dataset.class_encode_column("label")
+    class_label_feature = train_dataset.features["label"]
+    labels2id = {label: class_label_feature.str2int(label) for label in class_label_feature.names}
 
     val_dataset = val_dataset.map(tokenize, batched=True, num_proc=8)
     val_dataset = val_dataset.remove_columns(["text"])
-    val_dataset = val_dataset.class_encode_column("label")
+    # Make sure we use the same label mapping as training
+    val_dataset = val_dataset.cast_column("label", class_label_feature)
 
     model = BertForSequenceClassification.from_pretrained(
         hf_model, num_labels=train_dataset.features["label"].num_classes
@@ -120,6 +129,7 @@ def _mp_fn(
         eval_dataset=val_dataset,
         processing_class=tokenizer,
         data_collator=DataCollatorWithPadding(tokenizer=tokenizer),
+        compute_eval_metrics=partial(compute_eval_metrics, labels2id) if compute_eval_metrics else None,
     )
     trainer.train()
 
