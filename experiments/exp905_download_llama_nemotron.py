@@ -49,9 +49,7 @@ llama_8b_nemotron_sft_model = ExecutorStep(
         tokenizer=llama3_tokenizer,
         chat_train_urls=[output_path_of(nemotron_dataset, "**/*.jsonl")],
         supervised_data=LMSupervisedDatasetConfig(
-            cache_dir=output_path_of(nemotron_llama_tokenize_step), 
-            input_field="input", 
-            output_field="output"
+            cache_dir=output_path_of(nemotron_llama_tokenize_step), input_field="input", output_field="output"
         ),
         initialize_from_hf=False,
         model_name_or_path="meta-llama/Llama-3.1-8B",
@@ -69,7 +67,6 @@ llama_8b_nemotron_sft_model = ExecutorStep(
                 keep=[dict(every=25000)],
             ),
             initialize_from="gs://meta-llama/Llama-3.1-8B",
-
         ),
         model=LlamaConfig(
             seq_len=4096,
