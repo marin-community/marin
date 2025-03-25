@@ -40,6 +40,7 @@ class BertTrainingArguments:
     report_to: str = "wandb"
     logging_steps: float = 0.1
     eval_steps: float = 0.1
+    eval_strategy: str = "steps"
     save_strategy: str = "no"
 
     # Collation arguments
@@ -57,6 +58,7 @@ class BertTrainingArguments:
             report_to=self.report_to,
             logging_steps=self.logging_steps,
             eval_steps=self.eval_steps,
+            eval_strategy=self.eval_strategy,
             save_strategy=self.save_strategy,
         )
 
