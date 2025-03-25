@@ -310,8 +310,12 @@ def fetch_to_parquet(
         Continuously dequeues results and writes them to Parquet in chunks locally,
         then uploads the Parquet file to a remote gs:// path. This prevents
         accumulating too many results in memory and allows recovery from pre-emption.
+        The local parquet file is uploaded whenever the buffer
+        has >= parquet_chunk_size examples OR total size of examples' content in memory >= 2 GB.
         """
         buffer = []
+        # Track the total number of bytes in `buffer` for flush condition
+        buffer_size_bytes = 0
         num_written_records = len(already_fetched_urls)
 
         # Create a temporary directory for Parquet files
@@ -327,6 +331,7 @@ def fetch_to_parquet(
                 ):
                     shutil.copyfileobj(remote_file, local_file)
                 logger.info(f"Downloaded file at parquet output path {parquet_output_path} to {local_parquet_path}")
+
             while True:
                 item = results_queue.get()
                 if item is SENTINEL:
@@ -376,12 +381,16 @@ def fetch_to_parquet(
                     results_queue.task_done()
                     break
 
+                # Accumulate in buffer
                 buffer.append(item)
+                if "content" in item and isinstance(item["content"], bytes):
+                    buffer_size_bytes += len(item["content"])
                 results_queue.task_done()
 
-                # If buffer is large enough, flush to local Parquet and upload
-                if len(buffer) >= parquet_chunk_size:
-                    # Write robots data to output path
+                # Flush if the number of items or total buffer size in bytes is large enough
+                # (2 GB threshold)
+                if len(buffer) >= parquet_chunk_size or buffer_size_bytes >= 2 * 1024 * 1024 * 1024:
+                    # Write robots data
                     with netloc_to_robots_lock:
                         netloc_to_robots_output = deepcopy(netloc_to_robots)
                     with fsspec.open(
@@ -422,7 +431,9 @@ def fetch_to_parquet(
                         num_written_records += len(buffer)
                         logger.info(f"[shard {shard_id}] wrote {num_written_records} records so far")
 
+                    # Clear buffer and reset size count
                     buffer.clear()
+                    buffer_size_bytes = 0
 
             logger.info(f"Writer thread for shard {shard_id} finished.")
 
