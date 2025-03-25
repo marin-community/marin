@@ -5,11 +5,18 @@ Helpful functions for the executor
 """
 
 import logging
-from typing import Any
+import re
+from typing import Any, TYPE_CHECKING
 
 import ray
 import toml
 from deepdiff import DeepDiff
+
+if TYPE_CHECKING:
+    from marin.execution.executor import InputName
+else:
+    InputName = Any
+
 
 logger = logging.getLogger("ray")  # Initialize logger
 
@@ -57,3 +64,45 @@ def get_pip_dependencies(
         dependencies.extend(ray.get_runtime_context().runtime_env.get("pip", {}).get("packages", []))
 
     return dependencies
+
+
+def ckpt_path_to_step_name(path: str | InputName) -> str:
+    """
+    Converts a path pointing to a levanter checkpoint into a name we can use as an id for an analysis step or similar
+
+    For instance, if the path is "checkpoints/{run_name}/checkpoints/step-{train_step_number}",
+    we would get "run_name-train_step_number"
+
+    This method works with both strings and InputNames.
+
+    If an input name, it expect the InputName's name to be something like "checkpoints/step-{train_step_number}"
+    """
+    from marin.execution.executor import InputName
+
+    def _get_step(path: str) -> bool:
+        # make sure it looks like step-{train_step_number}
+        g = re.match(r"step-(\d+)/?$", path)
+        if g is None:
+            raise ValueError(f"Invalid path: {path}")
+
+        return g.group(1)
+
+
+    if isinstance(path, str):
+        # we want llama-8b-tootsie-phase2-730000
+        if path.endswith("/"):
+            path = path[:-1]
+
+        components = path.split("/")
+        name = components[-3].split("/")[-1]
+        step = _get_step(components[-1])
+    elif isinstance(path, InputName):
+        name = path.step.name
+        components = path.name.split("/")
+        if not components[-1]:
+            components = components[:-1]
+        step = _get_step(components[-1])
+    else:
+        raise ValueError(f"Unknown type for path: {path}")
+
+    return f"{name}-{step}"

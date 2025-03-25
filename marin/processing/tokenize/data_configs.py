@@ -207,3 +207,21 @@ def add_validation_sets_to_mixture(
         raise ValueError(f"Invalid train_weights type: {type(config.train_weights)}")
 
     return dataclasses.replace(config, configs=new_configs, train_weights=new_weights)
+
+
+def mixture_for_evaluation(inputs: dict[str, ExecutorStep]) -> LMMixtureDatasetConfig:
+    """
+    Creates a mixture of datasets purely for evaluation purposes. Used mostly for visualizing log probabilities.
+
+    Args:
+        inputs (dict[str, ExecutorStep]): The inputs to the mixture.
+
+    Returns:
+        LMMixtureDatasetConfig: The mixture of datasets.
+    """
+    return lm_mixture_data_config(
+        {name: step for name, step in inputs.items()},
+        {name: 0.0 for name in inputs},
+        shuffle=False,
+        missing_weights_are_validation=True,
+    )

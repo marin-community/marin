@@ -8,7 +8,8 @@ The goal was to see if there were any structural differences in the log probabil
 from experiments.defaults import default_tokenize, default_validation_sets
 from experiments.exp600_tootsie import llama3_tokenizer, llama_8b
 from experiments.instruction_datasets import get_instruction_dataset
-from marin.evaluation.visualize import VizLmConfig, mixture_for_visualization, visualize_lm_log_probs
+from marin.evaluation.visualize import VizLmConfig, visualize_lm_log_probs
+from marin.processing.tokenize.data_configs import mixture_for_evaluation
 from marin.execution.executor import ExecutorStep, executor_main, output_path_of, versioned
 from operations.transform.conversation.conversation_to_dolma import (
     ConversationToDolmaConfig,
@@ -48,7 +49,7 @@ eval_sets = {
     # TODO: this should really be a step.
     "tulu_sft": default_tokenize("tulu_sft", tulu_3_in_dolma, tokenizer=llama3_tokenizer, is_validation=True),
 }
-eval_set_mixture = mixture_for_visualization(eval_sets)
+eval_set_mixture = mixture_for_evaluation(eval_sets)
 
 
 all_steps = []
