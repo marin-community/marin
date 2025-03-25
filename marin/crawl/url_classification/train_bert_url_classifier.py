@@ -227,7 +227,13 @@ def train_model(
 
         xmp.spawn(_mp_fn, args=(hf_model, train_dataset_path, val_dataset_path, local_model_output_path, bert_args))
         fsspec_cpdir(local_model_output_path, os.path.join(output_path, "model_output"))
-        fsspec_cpdir(local_trainer_output_path, os.path.join(output_path, "trainer_output"))
+        try:
+            fsspec_cpdir(local_trainer_output_path, os.path.join(output_path, "trainer_output"))
+        except FileNotFoundError:
+            logger.info(
+                f"Local trainer output path {local_trainer_output_path} appears to be empty, "
+                f"skipping copy. Contents: {os.listdir(local_trainer_output_path)}"
+            )
 
     train_end_time = time.time()
     elapsed_seconds = train_end_time - train_start_time
