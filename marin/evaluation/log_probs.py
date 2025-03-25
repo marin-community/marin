@@ -27,7 +27,7 @@ class EvalLmConfig:
     checkpoint_path: str
     model: LmConfig
     datasets: LMMixtureDatasetConfig
-    per_device_batch_size: int = 4
+    per_device_batch_size: int = 32
     output_path: str = dataclasses.field(default_factory=this_output_path)  # type: ignore
     checkpoint_is_hf: bool = False
     """Whether the checkpoint is in HF format."""
@@ -40,7 +40,8 @@ def default_lm_log_probs(
     checkpoint: str | InputName,
     model: LmConfig,
     data: LMMixtureDatasetConfig,
-    checkpoint_is_hf: bool
+    checkpoint_is_hf: bool,
+    per_device_batch_size: int = 32,
 ) -> ExecutorStep:
     """
     Creates a step to evaluate log probabilities of a language model.
@@ -61,6 +62,7 @@ def default_lm_log_probs(
             datasets=data,
             log_entropy=True,
             checkpoint_is_hf=checkpoint_is_hf,
+            per_device_batch_size=per_device_batch_size,
         ),
     )
 
