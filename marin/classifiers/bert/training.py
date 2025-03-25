@@ -101,11 +101,11 @@ def _mp_fn(
         )
 
     # Keep dataset in memory to avoid filling up TPU /tmp
-    train_dataset = train_dataset.map(tokenize, batched=True, num_proc=8, keep_in_memory=True)
+    train_dataset = train_dataset.map(tokenize, batched=True, num_proc=8)
     train_dataset = train_dataset.remove_columns(["text"])
     train_dataset = train_dataset.class_encode_column("label")
 
-    val_dataset = val_dataset.map(tokenize, batched=True, num_proc=8, keep_in_memory=True)
+    val_dataset = val_dataset.map(tokenize, batched=True, num_proc=8)
     val_dataset = val_dataset.remove_columns(["text"])
     val_dataset = val_dataset.class_encode_column("label")
 
