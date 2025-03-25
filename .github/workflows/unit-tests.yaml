@@ -63,6 +63,7 @@ jobs:
           npm install -g pandiff
           python -m pip install --upgrade pip
           pip install uv==0.5.11 toml
+          pip install 'resiliparse_dom @ git+https://github.com/stanford-crfm/chatnoir-resiliparse@d9938b1578b3a2afbfbdfeb2bd2971a12183a839#egg=resiliparse_dom&subdirectory=resiliparse_dom'
           python scripts/install_all_pip_dep.py
 
       - name: Start Ray cluster locally
