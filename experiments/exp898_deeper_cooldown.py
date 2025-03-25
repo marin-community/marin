@@ -124,11 +124,11 @@ tootsie_8b_softest_raccoon = dataclasses.replace(
         # HF is having trouble today so skipping this.
         eval_harness_tasks=[],
     ),
-    override_output_path="checkpoints/tootsie-8b-softer-raccoon",
+    override_output_path="checkpoints/tootsie-8b-softest-raccoon",
 )
 
 if __name__ == "__main__":
     executor_main(
-        [tootsie_8b_soft_raccoon, tootsie_8b_softer_raccoon, tootsie_8b_softest_raccoon_train],
+        [tootsie_8b_soft_raccoon, tootsie_8b_softer_raccoon, tootsie_8b_softest_raccoon],
         description="Train Tootsie 8b with cooldown from 1.7e-4 to 1.7e-5 over 125B tokens",
     )
