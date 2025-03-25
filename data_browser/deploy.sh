@@ -20,7 +20,7 @@ if ! gcloud artifacts repositories describe marin-data-browser \
         --project=hai-gcp-models
 fi
 
-docker build -t marin-data-browser -f Dockerfile.prod .
+docker build --platform linux/amd64 -t marin-data-browser -f Dockerfile.prod .
 
 gcloud auth configure-docker us-central1-docker.pkg.dev
 
