@@ -68,7 +68,7 @@ jobs:
       - name: Install Resiliparse DOM
         shell: bash -l {0}
         run: |
-          sudo apt-get update && apt-get install -y build-essential python3-dev zlib1g-dev liblz4-dev libuchardet-dev libre2-dev curl gnupg lsb-release
+          sudo apt-get update && sudo apt-get install -y build-essential python3-dev zlib1g-dev liblz4-dev libuchardet-dev libre2-dev curl gnupg lsb-release
           pip install 'resiliparse_dom @ git+https://github.com/stanford-crfm/chatnoir-resiliparse@d9938b1578b3a2afbfbdfeb2bd2971a12183a839#egg=resiliparse_dom&subdirectory=resiliparse_dom'
           
       - name: Start Ray cluster locally
