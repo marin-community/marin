@@ -143,7 +143,7 @@ jobs:
           rm -rf re2*
           
           # Finally install resiliparse_dom
-          pip install 'resiliparse_dom @ git+https://github.com/stanford-crfm/chatnoir-resiliparse@d9938b1578b3a2afbfbdfeb2bd2971a12183a839#egg=resiliparse_dom&subdirectory=resiliparse_dom'
+          pip install 'resiliparse_dom @ git+https://github.com/stanford-crfm/chatnoir-resiliparse@18dd25b4640caf915d1443c320ba220b2694e058#egg=resiliparse_dom&subdirectory=resiliparse_dom'
       
       - name: Start Ray cluster locally
         shell: bash -l {0}
