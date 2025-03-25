@@ -83,7 +83,8 @@ jobs:
               -DLEXBOR_BUILD_STATIC=OFF \
               -DLEXBOR_OPTIMIZATION_LEVEL=-O3 \
               -B build
-          cmake --build build -j$(nproc) --target install
+          cmake --build build -j$(nproc)
+          sudo cmake --build build --target install
           cd ..
           rm -rf lexbor*
           sudo ldconfig
@@ -98,7 +99,8 @@ jobs:
               -DCMAKE_INSTALL_PREFIX=/usr \
               -DCMAKE_CXX_STANDARD=17 \
               -B build
-          cmake --build build -j$(nproc) --target install
+          cmake --build build -j$(nproc)
+          sudo cmake --build build --target install
           cd ..
           rm -rf uchardet*
           
@@ -115,7 +117,8 @@ jobs:
               -DBUILD_SHARED_LIBS=ON \
               -DRE2_BUILD_TESTING=OFF \
               -B build
-          cmake --build build -j$(nproc) --target install
+          cmake --build build -j$(nproc)
+          sudo cmake --build build --target install
           cd ..
           rm -rf re2*
           
