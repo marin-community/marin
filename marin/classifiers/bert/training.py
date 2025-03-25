@@ -40,6 +40,7 @@ class BertTrainingArguments:
     report_to: str = "wandb"
     logging_steps: float = 0.1
     eval_steps: float = 0.1
+    eval_strategy: str = "steps"
     save_strategy: str = "no"
 
     # Collation arguments
@@ -57,6 +58,7 @@ class BertTrainingArguments:
             report_to=self.report_to,
             logging_steps=self.logging_steps,
             eval_steps=self.eval_steps,
+            eval_strategy=self.eval_strategy,
             save_strategy=self.save_strategy,
         )
 
@@ -99,11 +101,11 @@ def _mp_fn(
         )
 
     # Keep dataset in memory to avoid filling up TPU /tmp
-    train_dataset = train_dataset.map(tokenize, batched=True, num_proc=8, keep_in_memory=True)
+    train_dataset = train_dataset.map(tokenize, batched=True, num_proc=8)
     train_dataset = train_dataset.remove_columns(["text"])
     train_dataset = train_dataset.class_encode_column("label")
 
-    val_dataset = val_dataset.map(tokenize, batched=True, num_proc=8, keep_in_memory=True)
+    val_dataset = val_dataset.map(tokenize, batched=True, num_proc=8)
     val_dataset = val_dataset.remove_columns(["text"])
     val_dataset = val_dataset.class_encode_column("label")
 
