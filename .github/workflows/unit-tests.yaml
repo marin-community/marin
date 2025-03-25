@@ -104,6 +104,23 @@ jobs:
           cd ..
           rm -rf uchardet*
           
+          # Install Abseil C++ library (required by re2)
+          curl -Lf https://github.com/abseil/abseil-cpp/releases/download/20240116.1/abseil-cpp-20240116.1.tar.gz > abseil.tar.gz
+          tar -xf abseil.tar.gz
+          cd abseil-cpp-*
+          mkdir build
+          cmake \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DCMAKE_INSTALL_PREFIX=/usr \
+              -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+              -DCMAKE_CXX_STANDARD=17 \
+              -DBUILD_SHARED_LIBS=OFF \
+              -B build
+          cmake --build build -j$(nproc)
+          sudo cmake --build build --target install
+          cd ..
+          rm -rf abseil*
+          
           # Install re2 from source
           curl -Lf https://github.com/google/re2/releases/download/2024-04-01/re2-2024-04-01.tar.gz > re2.tar.gz
           tar -xf re2.tar.gz
