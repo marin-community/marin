@@ -7,6 +7,7 @@ Train BERT models.
 import logging
 import os
 import tempfile
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
@@ -112,11 +113,25 @@ def _mp_fn(
     train_dataset = train_dataset.class_encode_column("label")
     class_label_feature = train_dataset.features["label"]
     labels2id = {label: class_label_feature.str2int(label) for label in class_label_feature.names}
+    logger.info(f"Labels to ID mapping: {labels2id}")
+
+    # Print training label distribution
+    train_label_counts = Counter(train_dataset["label"])
+    logger.info("Training Label Counts (label_id -> count):")
+    for label_id, count in sorted(train_label_counts.items()):
+        label_name = class_label_feature.int2str(label_id)
+        logger.info(f"  {label_id} ({label_name}): {count} ({count/len(train_dataset):.2%})")
 
     val_dataset = val_dataset.map(tokenize, batched=True, num_proc=8)
     val_dataset = val_dataset.remove_columns(["text"])
     # Make sure we use the same label mapping as training
     val_dataset = val_dataset.cast_column("label", class_label_feature)
+    # Print val label distribution
+    val_label_counts = Counter(val_dataset["label"])
+    logger.info("Validation Label Counts (label_id -> count):")
+    for label_id, count in sorted(val_label_counts.items()):
+        label_name = class_label_feature.int2str(label_id)
+        logger.info(f"  {label_id} ({label_name}): {count} ({count/len(val_dataset):.2%})")
 
     model = BertForSequenceClassification.from_pretrained(
         hf_model, num_labels=train_dataset.features["label"].num_classes
