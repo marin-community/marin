@@ -74,7 +74,7 @@ def _mp_fn(
     val_path: str,
     model_path: str,
     bert_args: BertTrainingArguments,
-    compute_eval_metrics: Callable[[dict, EvalPrediction], dict] | None = None,
+    compute_eval_metrics: Callable[[dict[str, int], EvalPrediction], dict] | None = None,
 ):
     """
     Function to run on each TPU device for BERT classifier training.
@@ -86,7 +86,7 @@ def _mp_fn(
         val_path (str): Path to the validation dataset.
         model_path (str): Path to save the trained model.
         bert_args (BertTrainingArguments): Arguments for training the BERT model.
-        compute_eval_metrics (Callable[[EvalPrediction, dict], dict] | None): function to use to
+        compute_eval_metrics (Callable[[dict[str, int], EvalPrediction], dict] | None): function to use to
             compute evaluation metrics on model predictions.
     Returns:
         None: No return value.
