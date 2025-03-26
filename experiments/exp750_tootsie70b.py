@@ -27,7 +27,7 @@ llama_70b_train_config_mk6 = SimpleTrainConfig(
     train_batch_size=[ScheduleStep(start=0, value=1024), ScheduleStep(start=96001, value=1536)],
     weight_decay=0.05,
     tpu_type="v6e-128",
-    node_count=8,
+    node_count=6,
     # LR doesn't support schedule yet
     # until 93_621, was 2e-4
     # learning_rate=2e-4,
