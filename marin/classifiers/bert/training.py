@@ -129,7 +129,7 @@ def _mp_fn(
         eval_dataset=val_dataset,
         processing_class=tokenizer,
         data_collator=DataCollatorWithPadding(tokenizer=tokenizer),
-        compute_eval_metrics=partial(compute_eval_metrics, labels2id) if compute_eval_metrics else None,
+        compute_metrics=partial(compute_eval_metrics, labels2id) if compute_eval_metrics else None,
     )
     trainer.train()
 
