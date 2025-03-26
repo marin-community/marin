@@ -21,15 +21,13 @@ from dataclasses import dataclass
 
 import draccus
 import fsspec
-import numpy as np
 import pandas as pd
 import ray
-from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
 from tqdm_loggable.auto import tqdm
-from transformers import EvalPrediction
 
 from marin.classifiers.bert.training import BertTrainingArguments, _mp_fn
 from marin.classifiers.utils import shuffle
+from marin.crawl.url_classification.metrics import url_classifier_compute_eval_metrics
 from marin.utils import fsspec_cpdir, fsspec_exists, fsspec_glob, remove_tpu_lockfile_on_exit
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -49,27 +47,6 @@ class TrainBertUrlClassifierConfig:
     max_length: int = 512
     dataloader_num_workers: int = 0
     dataloader_prefetch_factor: int | None = None
-
-
-def url_classifier_compute_eval_metrics(labels2id: dict, eval_predictions: EvalPrediction):
-    positive_label_id = labels2id[True]
-    labels = eval_predictions.label_ids
-    logits = eval_predictions.predictions.argmax(-1)
-    predictions = np.argmax(logits, axis=-1)
-    accuracy = accuracy_score(predictions=predictions, references=labels)
-    binary_precision = precision_score(
-        predictions=predictions, references=labels, pos_label=positive_label_id, average="binary"
-    )
-    binary_recall = recall_score(
-        predictions=predictions, references=labels, pos_label=positive_label_id, average="binary"
-    )
-    binary_f1 = f1_score(predictions=predictions, references=labels, pos_label=positive_label_id, average="binary")
-    return {
-        "accuracy": accuracy,
-        "binary_precision": binary_precision,
-        "binary_recall": binary_recall,
-        "binary_f1": binary_f1,
-    }
 
 
 @ray.remote(memory=32 * 1024 * 1024 * 1024)
