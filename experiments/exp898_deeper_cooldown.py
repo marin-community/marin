@@ -140,7 +140,7 @@ tootsie_8b_softer_raccoon_no_decay = dataclasses.replace(
 tootsie_8b_softer_raccoon_reset_train = dataclasses.replace(
     # NB: starting from the one WITH weight decay
     tootsie_8b_softer_raccoon_train,
-    #initialize_from_checkpoint_path=output_path_of(tootsie_8b_softer_raccoon_no_decay, "checkpoints/step-839992"),
+    # initialize_from_checkpoint_path=output_path_of(tootsie_8b_softer_raccoon_no_decay, "checkpoints/step-839992"),
     allow_partial_checkpoint=True,
     initialize_from_checkpoint_path=None,
 )
