@@ -43,7 +43,7 @@ def default_lm_log_probs(
     model: LmConfig,
     data: LMMixtureDatasetConfig,
     checkpoint_is_hf: bool,
-    per_device_batch_size: int = 6,
+    per_device_batch_size: int = 4,
     max_samples_per_dataset: int | None = None,
 ) -> ExecutorStep:
     """
