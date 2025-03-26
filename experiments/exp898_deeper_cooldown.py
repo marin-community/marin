@@ -19,7 +19,7 @@ from experiments.exp600_tootsie import (
     llama_8b_train_config_phase3,
     phase_3_data_mixture,
 )
-from experiments.instruction_datasets import tulu3_flat_llama_tokenized
+from experiments.instruction_datasets import tulu3_flat_llama_tokenized_as_validation
 from experiments.llama import llama_8b
 from marin.execution.executor import executor_main, output_path_of
 from marin.processing.tokenize import add_validation_sets_to_mixture
@@ -41,11 +41,9 @@ tootsie_8b_soft_raccoon_train = dataclasses.replace(
     per_device_eval_parallelism=16,
 )
 
-tulu_3_sft_data_as_validation = tulu3_flat_llama_tokenized
-
 raccoon_mixture = add_validation_sets_to_mixture(
     phase_3_data_mixture,
-    {"tulu_sft": tulu_3_sft_data_as_validation},
+    {"tulu_sft": tulu3_flat_llama_tokenized_as_validation},
 )
 
 # -3 because we had a little snafu in the original.

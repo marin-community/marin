@@ -7,7 +7,7 @@ The goal was to see if there were any structural differences in the log probabil
 
 from experiments.defaults import default_validation_sets
 from experiments.exp600_tootsie import llama3_tokenizer, llama_8b
-from experiments.instruction_datasets import tulu3_flat_llama_tokenized
+from experiments.instruction_datasets import tulu3_flat_llama_tokenized_as_validation
 from marin.evaluation.visualize import VizLmConfig, mixture_for_visualization, visualize_lm_log_probs
 from marin.execution.executor import ExecutorStep, executor_main, versioned
 
@@ -34,7 +34,7 @@ eval_sets = default_validation_sets(tokenizer=versioned(llama3_tokenizer))
 eval_sets = {
     **eval_sets,
     # TODO: this should really be a step.
-    "tulu_sft": tulu3_flat_llama_tokenized,
+    "tulu_sft": tulu3_flat_llama_tokenized_as_validation,
 }
 eval_set_mixture = mixture_for_visualization(eval_sets)
 
