@@ -2,7 +2,7 @@
 """
 ```
 python marin/run/ray_run.py \
-    --pip_deps '--find-links https://storage.googleapis.com/libtpu-releases/index.html,--find-links https://storage.googleapis.com/libtpu-wheels/index.html,datasets,filelock,torch,torch_xla[tpu],accelerate,evaluate,scikit-learn' \
+    --pip_deps '--find-links https://storage.googleapis.com/libtpu-releases/index.html,--find-links https://storage.googleapis.com/libtpu-wheels/index.html,datasets,filelock,torch,torch_xla[tpu],accelerate,scikit-learn' \
     --env_vars WANDB_API_KEY 'ca4e321fd237f65236ab95e92724934b47264b1c' \
     --no_wait -- \
     python marin/crawl/url_classification/train_bert_url_classifier.py \
@@ -20,11 +20,11 @@ import time
 from dataclasses import dataclass
 
 import draccus
-import evaluate
 import fsspec
 import numpy as np
 import pandas as pd
 import ray
+from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
 from tqdm_loggable.auto import tqdm
 from transformers import EvalPrediction
 
@@ -34,11 +34,6 @@ from marin.utils import fsspec_cpdir, fsspec_exists, fsspec_glob, remove_tpu_loc
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
-
-accuracy_metric = evaluate.load("accuracy")
-precision_metric = evaluate.load("precision")
-recall_metric = evaluate.load("recall")
-f1_metric = evaluate.load("f1")
 
 
 @dataclass(frozen=True)
@@ -61,16 +56,14 @@ def url_classifier_compute_eval_metrics(labels2id: dict, eval_predictions: EvalP
     labels = eval_predictions.label_ids
     logits = eval_predictions.predictions.argmax(-1)
     predictions = np.argmax(logits, axis=-1)
-    accuracy = accuracy_metric.compute(predictions=predictions, references=labels)
-    binary_precision = precision_metric.compute(
+    accuracy = accuracy_score(predictions=predictions, references=labels)
+    binary_precision = precision_score(
         predictions=predictions, references=labels, pos_label=positive_label_id, average="binary"
     )
-    binary_recall = recall_metric.compute(
+    binary_recall = recall_score(
         predictions=predictions, references=labels, pos_label=positive_label_id, average="binary"
     )
-    binary_f1 = f1_metric.compute(
-        predictions=predictions, references=labels, pos_label=positive_label_id, average="binary"
-    )
+    binary_f1 = f1_score(predictions=predictions, references=labels, pos_label=positive_label_id, average="binary")
     return {
         "accuracy": accuracy,
         "binary_precision": binary_precision,
