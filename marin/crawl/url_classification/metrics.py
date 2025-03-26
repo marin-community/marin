@@ -5,6 +5,14 @@ from transformers import EvalPrediction
 
 
 def url_classifier_compute_eval_metrics(labels2id: dict, eval_predictions: EvalPrediction):
+    """
+    Function for computing metrics when training BERT-based URL classifiers.
+
+    Unfortunately, this needs to be defined in a separate module, rather than
+    inline in the training script. Otherwise, Python's default pickling can't
+    find the function because it's in __main__ (rather than in a proper
+    importable module)
+    """
     positive_label_id = labels2id[True]
     labels = eval_predictions.label_ids
     logits = eval_predictions.predictions.argmax(-1)
