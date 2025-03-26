@@ -150,7 +150,8 @@ def download_directory_from_gcs(bucket_name: str, gcs_directory_path: str, local
     """
     # Make download dir
     if not os.path.exists(local_directory_path):
-        os.makedirs(local_directory_path)
+        os.makedirs(local_directory_path, exist_ok=True)
+        
     # Initialize the client
     storage_client = storage.Client()
 
@@ -160,7 +161,7 @@ def download_directory_from_gcs(bucket_name: str, gcs_directory_path: str, local
     # List all the blobs (files) with the specified prefix
     blobs = bucket.list_blobs(prefix=gcs_directory_path)
 
-    # Download each blob to the local directory
+    # Download each blob to the gcsfuse directory
     for blob in blobs:
         if "provenance.json" in blob.name:
             continue
@@ -169,31 +170,32 @@ def download_directory_from_gcs(bucket_name: str, gcs_directory_path: str, local
         relative_path = os.path.relpath(blob.name, gcs_directory_path)
         local_file_path = os.path.join(local_directory_path, relative_path)
 
-        # Create local directories if they do not exist
+        # Create directories if they do not exist
         os.makedirs(os.path.dirname(local_file_path), exist_ok=True)
 
-        # Download the blob to the local file path
+        # Download the blob to the gcsfuse path
         blob.download_to_filename(local_file_path)
-        logger.info(f"Downloaded gs://{blob.name} to local:{local_file_path}")
+        logger.info(f"Downloaded gs://{blob.name} to gcsfuse:{local_file_path}")
 
 
 def copy_dataset_from_gcp_to_local(input_gcp_path: os.PathLike) -> os.PathLike:
     """
-    Download the data from GCP onto local instance.
-
-    Note: function modified from marin/raw2json/huggingface/qa/raw2json.py
+    Download the data from GCP onto gcsfuse mount instead of local instance.
     """
-    # set up input path which can be GCP path, HF Hub path, or local path
-    # handle case of gs:// path which requires downloading resource from GCP to local for processing
     if input_gcp_path.startswith("gs://"):
         # parse gs://my-bucket/path/to/mmlu into "my-bucket", "path/to/mmlu", and "mmlu"
         parsed_url = urlparse(input_gcp_path)
         bucket = parsed_url.netloc
         gcp_path = parsed_url.path.lstrip("/")
         dir_name = os.path.basename(gcp_path)
-        # download the repo from GCP path into local directory which is basename of provided path (e.g. mmlu)
-        download_directory_from_gcs(bucket, gcp_path, dir_name)
-        input_path = dir_name
+        
+        # Use gcsfuse mount path instead of local directory
+        gcsfuse_base = "/opt/gcsfuse_mount/"
+        local_dir = os.path.join(gcsfuse_base, dir_name)
+        
+        # download the repo from GCP path into gcsfuse directory
+        download_directory_from_gcs(bucket, gcp_path, local_dir)
+        input_path = local_dir
     else:
         raise Exception("Input is not a GCP path")
 
