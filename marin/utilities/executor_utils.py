@@ -6,7 +6,7 @@ Helpful functions for the executor
 
 import logging
 import re
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import ray
 import toml
@@ -68,9 +68,8 @@ def get_pip_dependencies(
 
 def ckpt_path_to_step_name(path: str | InputName) -> str:
     """
-    Converts a path pointing to a levanter or huggingface checkpoint into a name we can use as an id for an analysis step or similar
-
-    For instance, if the path is "checkpoints/{run_name}/checkpoints/step-{train_step_number}",
+    Converts a path pointing to a levanter or huggingface checkpoint into a name we can use as an id for an analysis
+    step or similar. For instance, if the path is "checkpoints/{run_name}/checkpoints/step-{train_step_number}",
     we would get "run_name-train_step_number"
 
     If it's "meta-llama/Meta-Llama-3.1-8B" it should just be "Meta-Llama-3.1-8B"
@@ -89,10 +88,9 @@ def ckpt_path_to_step_name(path: str | InputName) -> str:
 
         return g.group(1)
 
-
     if isinstance(path, str):
         # see if it looks like an hf hub path: "org/model". If so, just return the last component
-        if re.match(f"^[^/]+/[^/]+$", path):  # exactly 1 slash
+        if re.match("^[^/]+/[^/]+$", path):  # exactly 1 slash
             return path.split("/")[-1]
 
         # we want llama-8b-tootsie-phase2-730000
@@ -104,6 +102,7 @@ def ckpt_path_to_step_name(path: str | InputName) -> str:
         step = _get_step(components[-1])
     elif isinstance(path, InputName):
         name = path.step.name
+        name = name.split("/")[-1]
         components = path.name.split("/")
         if not components[-1]:
             components = components[:-1]
