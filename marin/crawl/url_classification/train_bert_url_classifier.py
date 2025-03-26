@@ -256,7 +256,17 @@ def train_model(
 
         import torch_xla.distributed.xla_multiprocessing as xmp
 
-        xmp.spawn(_mp_fn, args=(hf_model, train_dataset_path, val_dataset_path, local_model_output_path, bert_args))
+        xmp.spawn(
+            _mp_fn,
+            args=(
+                hf_model,
+                train_dataset_path,
+                val_dataset_path,
+                local_model_output_path,
+                bert_args,
+                url_classifier_compute_eval_metrics,
+            ),
+        )
         fsspec_cpdir(local_model_output_path, os.path.join(output_path, "model_output"))
         try:
             fsspec_cpdir(local_trainer_output_path, os.path.join(output_path, "trainer_output"))
