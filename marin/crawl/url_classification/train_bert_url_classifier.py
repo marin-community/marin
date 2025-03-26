@@ -79,7 +79,7 @@ def url_classifier_compute_eval_metrics(labels2id: dict, eval_predictions: EvalP
     }
 
 
-@ray.remote(memory=8 * 1024 * 1024 * 1024)
+@ray.remote(memory=32 * 1024 * 1024 * 1024)
 def make_url_classification_dataset(
     input_pattern: str, train_output_path: str, val_output_path: str, val_frac: float, seed: int
 ):
