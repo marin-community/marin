@@ -37,6 +37,7 @@ class BertTrainingArguments:
     output_dir: str
     remove_unused_columns: bool = False
     per_device_train_batch_size: int = 1
+    per_device_eval_batch_size: int = 1
     num_train_epochs: int = 1
     learning_rate: float = 2e-5
     dataloader_num_workers: int = 1
@@ -55,6 +56,7 @@ class BertTrainingArguments:
             output_dir=self.output_dir,
             remove_unused_columns=self.remove_unused_columns,
             per_device_train_batch_size=self.per_device_train_batch_size,
+            per_device_eval_batch_size=self.per_device_eval_batch_size,
             num_train_epochs=self.num_train_epochs,
             learning_rate=self.learning_rate,
             dataloader_num_workers=self.dataloader_num_workers,
