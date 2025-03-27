@@ -1,46 +1,11 @@
 import os
 from dataclasses import dataclass
 
+from experiments.eval_datasets import mmlu_subject_eval
 from experiments.medu.medu_datasets import medu_dclm_annotation_subset, medu_dclm_pretraining_subset
 from experiments.medu.medu_runner import MEDURunner, MEDURunnerConfig
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
+from marin.execution.executor import executor_main
 from marin.generation.medu.pipeline import CorpusContent
-from operations.download.huggingface.download import DownloadConfig
-from operations.download.huggingface.download_hf import download_hf
-from operations.raw2json.huggingface.qa.raw2json import DatasetConversionConfig, OutputFormatOptions, raw2json
-
-mmlu_raw = ExecutorStep(
-    name="raw/cais/mmlu",
-    fn=download_hf,
-    config=DownloadConfig(
-        hf_dataset_id="cais/mmlu",
-        revision=versioned("c30699e"),
-        gcs_output_path=this_output_path(),
-        wait_for_completion=True,
-        hf_urls_glob=["**/*.parquet", "*.md"],
-    ),
-    override_output_path="raw/cais/mmluhf",
-)
-
-mmlu_subject_eval = ExecutorStep(
-    name="evaluation/mmlu-eval-subject",
-    fn=raw2json,
-    config=DatasetConversionConfig(
-        dataset_name="cais/mmlu",
-        subsets=["*"],
-        splits=["dev", "validation"],
-        input_path=mmlu_raw,
-        hf_path="cais/mmlu",
-        output_path=this_output_path(),
-        output_format=OutputFormatOptions("evaluation"),
-        prompt_key="question",
-        options_key="choices",
-        answer_idx_key="answer",
-        answer_labels=["A", "B", "C", "D"],
-        exclude_subsets=["all", "auxiliary_train"],
-    ),
-    override_output_path="evaluation/mmlu-eval-subject",
-)
 
 # Humanities
 humanities = [
