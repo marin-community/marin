@@ -6,6 +6,10 @@ data/*
 output/*
 outputs/*
 
+# Snapshot diffs and outputs
+tests/snapshots/*/outputs/*
+tests/snapshots/*/diffs/*
+
 # This is mainly for Ray and using submodule
 */**/.git
 

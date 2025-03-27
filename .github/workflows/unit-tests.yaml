@@ -55,7 +55,7 @@ jobs:
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.NEW_GCP_JSON }}
-
+          
       - name: Install dependencies
         shell: bash -l {0}
         run: |
@@ -64,7 +64,87 @@ jobs:
           python -m pip install --upgrade pip
           pip install uv==0.5.11 toml
           python scripts/install_all_pip_dep.py
+      
+      - name: Install Resiliparse DOM
+        shell: bash -l {0}
+        run: |
+          # Install basic build dependencies
+          sudo apt-get update && sudo apt-get install -y build-essential python3-dev zlib1g-dev liblz4-dev cmake curl
 
+          # Update the libstdc++ in conda environment to match system version
+          conda install -c conda-forge libstdcxx-ng -y
+
+          # Install lexbor v2.3.0 from source with the correct build options
+          curl -Lf https://github.com/lexbor/lexbor/archive/refs/tags/v2.3.0.tar.gz > lexbor.tar.gz
+          tar -xf lexbor.tar.gz
+          cd lexbor-*
+          mkdir build
+          cmake \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DCMAKE_INSTALL_PREFIX=/usr \
+              -DLEXBOR_BUILD_SHARED=ON \
+              -DLEXBOR_BUILD_STATIC=OFF \
+              -DLEXBOR_OPTIMIZATION_LEVEL=-O3 \
+              -B build
+          cmake --build build -j$(nproc)
+          sudo cmake --build build --target install
+          cd ..
+          rm -rf lexbor*
+          sudo ldconfig
+
+          # Install uchardet from source
+          curl -Lf https://gitlab.freedesktop.org/uchardet/uchardet/-/archive/v0.0.8/uchardet-v0.0.8.tar.gz > uchardet.tar.gz
+          tar -xf uchardet.tar.gz
+          cd uchardet-*
+          mkdir build
+          cmake \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DCMAKE_INSTALL_PREFIX=/usr \
+              -DCMAKE_CXX_STANDARD=17 \
+              -B build
+          cmake --build build -j$(nproc)
+          sudo cmake --build build --target install
+          cd ..
+          rm -rf uchardet*
+          
+          # Install Abseil C++ library (required by re2)
+          curl -Lf https://github.com/abseil/abseil-cpp/releases/download/20240116.1/abseil-cpp-20240116.1.tar.gz > abseil.tar.gz
+          tar -xf abseil.tar.gz
+          cd abseil-cpp-*
+          mkdir build
+          cmake \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DCMAKE_INSTALL_PREFIX=/usr \
+              -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+              -DCMAKE_CXX_STANDARD=17 \
+              -DBUILD_SHARED_LIBS=OFF \
+              -B build
+          cmake --build build -j$(nproc)
+          sudo cmake --build build --target install
+          cd ..
+          rm -rf abseil*
+          
+          # Install re2 from source
+          curl -Lf https://github.com/google/re2/releases/download/2024-04-01/re2-2024-04-01.tar.gz > re2.tar.gz
+          tar -xf re2.tar.gz
+          cd re2-*
+          mkdir build
+          cmake \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DCMAKE_INSTALL_PREFIX=/usr \
+              -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+              -DCMAKE_CXX_STANDARD=17 \
+              -DBUILD_SHARED_LIBS=ON \
+              -DRE2_BUILD_TESTING=OFF \
+              -B build
+          cmake --build build -j$(nproc)
+          sudo cmake --build build --target install
+          cd ..
+          rm -rf re2*
+          
+          # Finally install resiliparse_dom
+          pip install 'resiliparse_dom @ git+https://github.com/stanford-crfm/chatnoir-resiliparse@18dd25b4640caf915d1443c320ba220b2694e058#egg=resiliparse_dom&subdirectory=resiliparse_dom'
+      
       - name: Start Ray cluster locally
         shell: bash -l {0}
         run: |
