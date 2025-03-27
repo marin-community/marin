@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 import numpy as np
-from evaluate import load_metric
+from evaluate import load
 from transformers import EvalPrediction
 
 
@@ -17,14 +17,14 @@ def url_classifier_compute_eval_metrics(labels2id: dict[str, int], eval_predicti
     logits, labels = eval_predictions
     predictions = np.argmax(logits, axis=-1)
 
-    accuracy = load_metric("accuracy").compute(predictions=predictions, references=labels)
-    binary_precision = load_metric("precision").compute(
+    accuracy = load("accuracy").compute(predictions=predictions, references=labels)
+    binary_precision = load("precision").compute(
         predictions=predictions, references=labels, pos_label=positive_label_id, average="binary"
     )
-    binary_recall = load_metric("recall").compute(
+    binary_recall = load("recall").compute(
         predictions=predictions, references=labels, pos_label=positive_label_id, average="binary"
     )
-    binary_f1 = load_metric("f1").compute(
+    binary_f1 = load("f1").compute(
         predictions=predictions, references=labels, pos_label=positive_label_id, average="binary"
     )
     return {
