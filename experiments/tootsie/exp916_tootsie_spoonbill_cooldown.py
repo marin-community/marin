@@ -13,6 +13,11 @@ import dataclasses
 from experiments.dclm.tokenize_dclm import DCLM_MIXTURE_WEIGHTS
 from experiments.defaults import default_train
 from experiments.dolmino.tokenize_dolmino import get_dolmino_step
+from experiments.instruction_datasets import (
+    tulu3_flat_llama_tokenized_as_train,
+    tulu3_flat_llama_tokenized_as_validation,
+)
+from experiments.llama import llama_8b
 from experiments.tootsie.exp600_tootsie import (
     PHASE_3_END,
     PHASE_3_START,
@@ -21,11 +26,6 @@ from experiments.tootsie.exp600_tootsie import (
     llama_8b_train_config_phase3,
     phase_3_tokenized,
 )
-from experiments.instruction_datasets import (
-    tulu3_flat_llama_tokenized_as_train,
-    tulu3_flat_llama_tokenized_as_validation,
-)
-from experiments.llama import llama_8b
 from marin.execution.executor import executor_main, output_path_of
 from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
 

@@ -13,14 +13,14 @@ Starting from cooldown v1 (monumental-jellyfish ) we're going to just keep the s
 import dataclasses
 
 from experiments.defaults import default_train
+from experiments.instruction_datasets import tulu3_flat_llama_tokenized_as_validation
+from experiments.llama import llama_8b
 from experiments.tootsie.exp600_tootsie import (
     PHASE_3_END,
     llama_8b_tootsie_phase3,
     llama_8b_train_config_phase3,
     phase_3_data_mixture,
 )
-from experiments.instruction_datasets import tulu3_flat_llama_tokenized_as_validation
-from experiments.llama import llama_8b
 from marin.execution.executor import executor_main, output_path_of
 from marin.processing.tokenize import add_validation_sets_to_mixture
 

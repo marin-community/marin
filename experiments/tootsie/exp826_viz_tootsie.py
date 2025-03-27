@@ -14,8 +14,8 @@ The cooldown seems to function as a kind of sharpening/annealing
 """
 
 from experiments.defaults import default_validation_sets
-from experiments.tootsie.exp600_tootsie import llama3_tokenizer, llama_8b
 from experiments.llama import llama_8b_old_rotary
+from experiments.tootsie.exp600_tootsie import llama3_tokenizer, llama_8b
 from marin.evaluation.visualize import VizLmConfig, mixture_for_visualization, visualize_lm_log_probs
 from marin.execution.executor import ExecutorStep, executor_main, versioned
 
