@@ -20,8 +20,20 @@ from marin.execution.executor import (
     this_output_path,
     versioned,
 )
+from marin.processing.classification.bert.train_bert import (
+    TrainBertClassifierConfig,
+)
+from marin.processing.classification.bert.train_bert import (
+    train as train_bert,
+)
 from marin.processing.classification.config.inference_config import RuntimeConfig
 from marin.processing.classification.consolidate import ConsolidateConfig, FilterConfig, consolidate
+from marin.processing.classification.fasttext.train_fasttext import (
+    TrainFasttextClassifierConfig,
+)
+from marin.processing.classification.fasttext.train_fasttext import (
+    train as train_fasttext,
+)
 from marin.processing.classification.inference import InferenceConfig, run_inference
 
 
@@ -72,60 +84,60 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
 
     steps = []
 
-    # fasttext_classifier_train = ExecutorStep(
-    #     name=f"classifiers/{config.experiment_name}/fasttext",
-    #     fn=train_fasttext,
-    #     config=TrainFasttextClassifierConfig(
-    #         datasets=config.classifier_training_datasets,
-    #         output_path=this_output_path(),
-    #         fasttext_args={"lr": versioned(0.1), "thread": 4, "wordNgrams": 2},
-    #         val_frac=versioned(0.0),
-    #         seed=versioned(0),
-    #     ),
-    #     pip_dependency_groups=["fasttext"],
-    # )
+    fasttext_classifier_train = ExecutorStep(
+        name=f"classifiers/{config.experiment_name}/fasttext",
+        fn=train_fasttext,
+        config=TrainFasttextClassifierConfig(
+            datasets=config.classifier_training_datasets,
+            output_path=this_output_path(),
+            fasttext_args={"lr": versioned(0.1), "thread": 4, "wordNgrams": 2},
+            val_frac=versioned(0.1),
+            seed=versioned(0),
+        ),
+        pip_dependency_groups=["fasttext"],
+    )
 
-    # bert_classifier_train = ExecutorStep(
-    #     name=f"classifiers/{config.experiment_name}/bert",
-    #     fn=train_bert,
-    #     config=TrainBertClassifierConfig(
-    #         datasets=config.classifier_training_datasets,
-    #         output_path=this_output_path(),
-    #         val_frac=versioned(0.0),
-    #         seed=versioned(0),
-    #     ),
-    #     pip_dependency_groups=[
-    #         "--find-links https://storage.googleapis.com/libtpu-releases/index.html",
-    #         "--find-links https://storage.googleapis.com/libtpu-wheels/index.html",
-    #         "fasttext",
-    #         "datasets",
-    #         "filelock",
-    #         "torch",
-    #         "torch_xla[tpu]",
-    #         "accelerate",
-    #     ],
-    # )
+    bert_classifier_train = ExecutorStep(
+        name=f"classifiers/{config.experiment_name}/bert-debug",
+        fn=train_bert,
+        config=TrainBertClassifierConfig(
+            datasets=config.classifier_training_datasets,
+            output_path=this_output_path(),
+            val_frac=versioned(0.1),
+            seed=versioned(1),
+        ),
+        pip_dependency_groups=[
+            "--find-links https://storage.googleapis.com/libtpu-releases/index.html",
+            "--find-links https://storage.googleapis.com/libtpu-wheels/index.html",
+            "fasttext",
+            "datasets",
+            "filelock",
+            "torch",
+            "torch_xla[tpu]",
+            "accelerate",
+        ],
+    )
 
     for input_data_source, input_data_path in config.input_data_source_to_path.items():
         # Get the basename of the input directory
         input_basename = os.path.basename(os.path.normpath(input_data_path))
 
-        # fasttext_inference = ExecutorStep(
-        #     name=f"attributes/quality_filtering/{config.experiment_name}/fasttext/{input_data_source}",
-        #     fn=run_inference,
-        #     config=InferenceConfig(
-        #         input_path=input_data_path,
-        #         output_path=this_output_path(input_basename),
-        #         model_name=get_model_path(fasttext_classifier_train),
-        #         model_type="fasttext",
-        #         attribute_name=versioned(f"{config.experiment_name}-fasttext_classifier"),
-        #         runtime=RuntimeConfig(
-        #             memory_limit_gb=12,
-        #         ),
-        #         task=TaskConfig(max_in_flight=500),
-        #     ),
-        #     pip_dependency_groups=["fasttext", "datasets", "filelock"],
-        # )
+        fasttext_inference = ExecutorStep(
+            name=f"attributes/quality_filtering/{config.experiment_name}/fasttext/{input_data_source}",
+            fn=run_inference,
+            config=InferenceConfig(
+                input_path=input_data_path,
+                output_path=this_output_path(input_basename),
+                model_name=get_fasttext_model_path(fasttext_classifier_train),
+                model_type="fasttext",
+                attribute_name=versioned(f"{config.experiment_name}-fasttext_classifier"),
+                runtime=RuntimeConfig(
+                    memory_limit_gb=12,
+                ),
+                task=TaskConfig(max_in_flight=500),
+            ),
+            pip_dependency_groups=["fasttext", "datasets", "filelock"],
+        )
 
         bert_inference = ExecutorStep(
             name=f"attributes/quality_filtering/{config.experiment_name}/bert/{input_data_source}",
@@ -133,8 +145,7 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
             config=InferenceConfig(
                 input_path=input_data_path,
                 output_path=this_output_path(input_basename),
-                model_name="gs://marin-us-central2/classifiers/exp163_compare_bert_fasttext_quickstart_debug_train/bert-55af48/model",
-                # get_bert_model_path(bert_classifier_train),
+                model_name=get_bert_model_path(bert_classifier_train),
                 model_type="bert",
                 attribute_name=versioned(f"{config.experiment_name}-bert_classifier"),
                 runtime=RuntimeConfig(
@@ -154,26 +165,26 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
             ],
         )
 
-        # fasttext_consolidate_step = ExecutorStep(
-        #     name=f"documents/quality_filtering/{config.experiment_name}/fasttext/{input_data_source}",
-        #     fn=consolidate,
-        #     config=ConsolidateConfig(
-        #         input_path=input_data_path,
-        #         output_path=this_output_path(input_basename),
-        #         filters=[
-        #             FilterConfig(
-        #                 type=versioned("classify"),
-        #                 attribute_path=output_path_of(fasttext_inference, input_basename),
-        #                 name=versioned(f"{config.experiment_name}-fasttext_classifier"),
-        #                 label="__label__hq",
-        #                 threshold=versioned(None),
-        #                 keep_fraction=versioned(config.keep_fraction),
-        #             ),
-        #         ],
-        #         ray_memory_limit_gb=12,
-        #     ),
-        #     pip_dependency_groups=["ddsketch"],
-        # )
+        fasttext_consolidate_step = ExecutorStep(
+            name=f"documents/quality_filtering/{config.experiment_name}/fasttext/{input_data_source}",
+            fn=consolidate,
+            config=ConsolidateConfig(
+                input_path=input_data_path,
+                output_path=this_output_path(input_basename),
+                filters=[
+                    FilterConfig(
+                        type=versioned("classify"),
+                        attribute_path=output_path_of(fasttext_inference, input_basename),
+                        name=versioned(f"{config.experiment_name}-fasttext_classifier"),
+                        label="__label__hq",
+                        threshold=versioned(None),
+                        keep_fraction=versioned(config.keep_fraction),
+                    ),
+                ],
+                ray_memory_limit_gb=12,
+            ),
+            pip_dependency_groups=["ddsketch"],
+        )
 
         bert_consolidate_step = ExecutorStep(
             name=f"documents/quality_filtering/{config.experiment_name}/bert/{input_data_source}",
@@ -196,22 +207,8 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
             pip_dependency_groups=["ddsketch"],
         )
 
-        # fasttext_tokenize_step = default_tokenize(
-        #     name=f"quality_filtering/{config.experiment_name}/fasttext/{input_data_source}",
-        #     dataset=output_path_of(fasttext_consolidate_step),
-        #     tokenizer=llama3_tokenizer,
-        # )
-
-        # bert_tokenize_step = default_tokenize(
-        #     name=f"quality_filtering/{config.experiment_name}/bert/{input_data_source}",
-        #     dataset=output_path_of(bert_consolidate_step),
-        #     tokenizer=llama3_tokenizer,
-        # )
-
-        # steps.append(fasttext_tokenize_step)
-        steps.append(bert_inference)
+        steps.append(fasttext_consolidate_step)
         steps.append(bert_consolidate_step)
-        # steps.append(bert_tokenize_step)
 
     return steps
 
@@ -233,7 +230,7 @@ def main():
     ]
 
     experiment_config = ExperimentConfig(
-        experiment_name="exp163_compare_bert_fasttext_quickstart_debug_train",
+        experiment_name="exp163_compare_bert_fasttext_fineweb",
         classifier_training_datasets=classifier_training_datasets,
     )
     steps = create_steps(experiment_config)

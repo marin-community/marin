@@ -164,8 +164,8 @@ def run_inference(inference_config: InferenceConfig):
         fsspec_mkdirs(os.path.dirname(output_filepath))
 
         result_ref = process_filepath_func.options(
-            memory=10 * 1024 * 1024 * 1024,  # inference_config.runtime.memory_limit_gb * 1024 * 1024 * 1024,
-            resources={"TPU": 4, "TPU-v4-8-head": 1},  # inference_config.runtime.resources,
+            memory=inference_config.runtime.memory_limit_gb * 1024 * 1024 * 1024,
+            resources=inference_config.runtime.resources,
         ).remote(
             input_filepath,
             output_filepath,
