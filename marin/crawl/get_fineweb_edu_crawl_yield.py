@@ -18,7 +18,7 @@ Running on FineWeb-Edu-10M:
 
 ```
 python marin/run/ray_run.py \
-    --pip_deps '--find-links https://storage.googleapis.com/jax-releases/libtpu_releases.html,w3lib,trafilatura,jax[tpu],flax,transformers,requests,warcio[all],resiliparse,datatrove[processing] @ git+https://github.com/nelson-liu/datatrove@ray_executor_dedup_logging,spacy,cupy-cuda12x==13.3.0' \
+    --pip_deps '--find-links https://storage.googleapis.com/jax-releases/libtpu_releases.html,w3lib,trafilatura,jax[tpu],flax,transformers,requests,warcio[all],resiliparse,datatrove[processing] @ git+https://github.com/nelson-liu/datatrove@ray_executor_dedup_logging,spacy,cupy-cuda12x==13.3.0,fastparquet' \
     --no_wait -- \
     python marin/crawl/get_fineweb_edu_crawl_yield.py \
     --urls_input_directory gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-10M/ \
@@ -32,7 +32,7 @@ Running on FineWeb-Edu-10M (cc deduplicated):
 
 ```
 python marin/run/ray_run.py \
-    --pip_deps '--find-links https://storage.googleapis.com/jax-releases/libtpu_releases.html,w3lib,trafilatura,jax[tpu],flax,transformers,requests,warcio[all],resiliparse,datatrove[processing] @ git+https://github.com/nelson-liu/datatrove@ray_executor_dedup_logging,spacy,cupy-cuda12x==13.3.0' \
+    --pip_deps '--find-links https://storage.googleapis.com/jax-releases/libtpu_releases.html,w3lib,trafilatura,jax[tpu],flax,transformers,requests,warcio[all],resiliparse,datatrove[processing] @ git+https://github.com/nelson-liu/datatrove@ray_executor_dedup_logging,spacy,cupy-cuda12x==13.3.0,fastparquet' \
     --no_wait -- \
     python marin/crawl/get_fineweb_edu_crawl_yield.py \
     --urls_input_directory gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-10M-cc-deduplicated/ \
@@ -48,11 +48,13 @@ import math
 import os
 import pathlib
 import random
+import tempfile
 from copy import deepcopy
 from dataclasses import asdict, dataclass
 from typing import Any
 
 import draccus
+import fastparquet
 import fsspec
 import pandas as pd
 import pyarrow as pa
@@ -74,7 +76,7 @@ from trafilatura import extract
 from transformers import AutoTokenizer, FlaxAutoModelForSequenceClassification
 from warcio import ArchiveIterator
 
-from marin.utils import fsspec_exists, fsspec_glob
+from marin.utils import fsspec_cp, fsspec_exists, fsspec_glob
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -147,10 +149,9 @@ def extract_text_from_warc(
         )
 
     with fsspec.open(urls_path, block_size=1 * 1024 * 1024 * 1024) as f:
-        df = pd.read_parquet(f)
-    logger.info(f"Found {len(df)} examples in input file {urls_path}")
-    # Extract the URLs from the "link_target" column
-    urls = df["link_target"].tolist()
+        # Extract the URLs from the "link_target" column
+        urls = pd.read_parquet(f)["link_target"].tolist()
+    logger.info(f"Found {len(urls)} examples in input file {urls_path}")
     # Deduplicate the URLs
     urls = set(urls)
     logger.info(f"Found {len(urls)} deduplicated URLs in input file {urls_path}")
@@ -159,8 +160,12 @@ def extract_text_from_warc(
     fetched_urls = set()
     num_records_skipped = 0
     num_records_saved = 0
-    extracted_text_records = []
-    with fsspec.open(warc_path, "rb", compression="gzip", block_size=1 * 1024 * 1024 * 1024) as file_stream:
+    with (
+        fsspec.open(warc_path, "rb", compression="gzip", block_size=1 * 1024 * 1024 * 1024) as file_stream,
+        tempfile.TemporaryDirectory() as local_output_dir,
+    ):
+        # Write the output records to a local parquet, and then copy it to the remote output path
+        local_parquet_path = os.path.join(local_output_dir, os.path.basename(extracted_text_output_path))
         for record in tqdm(ArchiveIterator(file_stream)):
             if record.rec_type == "response":
                 record_url = record.rec_headers.get_header("WARC-Target-URI")
@@ -210,15 +215,31 @@ def extract_text_from_warc(
                         "file_path": warc_path,
                     },
                 )
-                extracted_text_records.append(asdict(out_dolma))
+                # Append the record to a local output parquet
+                output_record_df = pd.DataFrame.from_records([asdict(out_dolma)])
+                if not os.path.exists(local_parquet_path):
+                    fastparquet.write(local_parquet_path, output_record_df, compression="snappy")
+                else:
+                    fastparquet.write(local_parquet_path, output_record_df, append=True, compression="snappy")
                 num_records_saved += 1
-    # Count the number of URLs that weren't fetched
-    unfetched_urls = urls - fetched_urls
-    logger.info(f"Out of {len(urls)} URLs to fetch, {len(unfetched_urls)} were not successfully fetched")
-    # As a sanity check, count the number of fetched_urls that aren't in the original set. This should hopefully be 0.
-    logger.info(f"Out of {len(fetched_urls)} fetched_urls, {len(fetched_urls - urls)} were not in the input set of URLs")
-    # Write examples from this shard to parquet
-    write_examples_to_parquet(extracted_text_records, extracted_text_output_path)
+
+        # Count the number of URLs that weren't fetched
+        unfetched_urls = urls - fetched_urls
+        logger.info(f"Out of {len(urls)} URLs to fetch, {len(unfetched_urls)} were not successfully fetched")
+        # As a sanity check, count the number of fetched_urls that aren't in the original set.
+        # This should hopefully be 0.
+        logger.info(
+            f"Out of {len(fetched_urls)} fetched_urls, {len(fetched_urls - urls)} were not in the input set of URLs"
+        )
+        # Copy the local parquet path to the original desired output path
+        logger.info(
+            f"Copying local output parquet at {local_parquet_path} to desired output path {extracted_text_output_path}"
+        )
+        fsspec_cp(local_parquet_path, extracted_text_output_path)
+        logger.info(
+            f"Copied local output parquet at {local_parquet_path} to desired output path {extracted_text_output_path}"
+        )
+
     logger.info(f"Saved {num_records_saved} records from WARC, skipped {num_records_skipped} records")
     with fsspec.open(success_path, "w", block_size=1 * 1024 * 1024 * 1024) as fout:
         json.dump(
