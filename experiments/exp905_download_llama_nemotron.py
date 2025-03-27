@@ -16,7 +16,9 @@ from marin.processing.tokenize.tokenize import TokenizeConfig, levanter_tokenize
 from marin.training.training import TrainSFTOnPodConfig, run_levanter_sft
 
 # Get instruction dataset
-nemotron_dataset = get_instruction_dataset("nvidia/Llama-Nemotron-Post-Training-Dataset-v1-SFT", splits=[])  # all splits
+nemotron_dataset = get_instruction_dataset(
+    "nvidia/Llama-Nemotron-Post-Training-Dataset-v1-SFT",
+)  # all splits
 
 # # TODO: Calculate actual number of tokens for proper steps
 # NUM_TRAIN_TOKENS = 150849275  # This needs to be updated with actual token count

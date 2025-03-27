@@ -151,7 +151,7 @@ def download_directory_from_gcs(bucket_name: str, gcs_directory_path: str, local
     # Make download dir
     if not os.path.exists(local_directory_path):
         os.makedirs(local_directory_path, exist_ok=True)
-        
+
     # Initialize the client
     storage_client = storage.Client()
 
@@ -188,11 +188,11 @@ def copy_dataset_from_gcp_to_local(input_gcp_path: os.PathLike) -> os.PathLike:
         bucket = parsed_url.netloc
         gcp_path = parsed_url.path.lstrip("/")
         dir_name = os.path.basename(gcp_path)
-        
+
         # Use gcsfuse mount path instead of local directory
         gcsfuse_base = "/opt/gcsfuse_mount/"
         local_dir = os.path.join(gcsfuse_base, dir_name)
-        
+
         # download the repo from GCP path into gcsfuse directory
         download_directory_from_gcs(bucket, gcp_path, local_dir)
         input_path = local_dir
