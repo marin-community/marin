@@ -167,6 +167,12 @@ def extract_text_from_warc(
                 fetched_urls.add(record_url)
 
                 content = record.content_stream().read()
+
+                if len(content) > 10_000_000:
+                    # Skip very lengthy pages
+                    num_records_skipped += 1
+                    continue
+
                 html_decoded: str | None = decode_html(content)
                 if not html_decoded or not record_url:
                     num_records_skipped += 1
