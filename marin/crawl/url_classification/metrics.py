@@ -17,14 +17,10 @@ def url_classifier_compute_eval_metrics(labels2id: dict[str, int], eval_predicti
     labels = eval_predictions.label_ids
     logits = eval_predictions.predictions.argmax(-1)
     predictions = np.argmax(logits, axis=-1)
-    accuracy = accuracy_score(predictions=predictions, references=labels)
-    binary_precision = precision_score(
-        predictions=predictions, references=labels, pos_label=positive_label_id, average="binary"
-    )
-    binary_recall = recall_score(
-        predictions=predictions, references=labels, pos_label=positive_label_id, average="binary"
-    )
-    binary_f1 = f1_score(predictions=predictions, references=labels, pos_label=positive_label_id, average="binary")
+    accuracy = accuracy_score(y_pred=predictions, y_true=labels)
+    binary_precision = precision_score(y_pred=predictions, y_true=labels, pos_label=positive_label_id, average="binary")
+    binary_recall = recall_score(y_pred=predictions, y_true=labels, pos_label=positive_label_id, average="binary")
+    binary_f1 = f1_score(y_pred=predictions, y_true=labels, pos_label=positive_label_id, average="binary")
     return {
         "accuracy": accuracy,
         "binary_precision": binary_precision,
