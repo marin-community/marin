@@ -336,12 +336,18 @@ tulu_3_in_dolma = ExecutorStep(
     config=ConversationToDolmaConfig(output_path_of(get_instruction_dataset("allenai/tulu-3-sft-mixture"))),
 )
 
-tulu3_flat_llama_tokenized = default_tokenize(
+
+# levanter treats validation and  training as separate so we tokenize twice. Not ideal, but fine here.
+tulu3_flat_llama_tokenized_as_validation = default_tokenize(
     "tulu_sft", tulu_3_in_dolma, tokenizer=llama3_tokenizer, is_validation=True
 )
 """
 "flat" here means that we interpolated all the chat messages into a single string per doc
 """
+
+tulu3_flat_llama_tokenized_as_train = default_tokenize(
+    "tulu_sft", tulu_3_in_dolma, tokenizer=llama3_tokenizer, is_validation=False
+)
 
 
 if __name__ == "__main__":
