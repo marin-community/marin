@@ -13,7 +13,7 @@ import dataclasses
 from experiments.dclm.tokenize_dclm import DCLM_MIXTURE_WEIGHTS
 from experiments.defaults import default_train
 from experiments.dolmino.tokenize_dolmino import get_dolmino_step
-from experiments.exp600_tootsie import (
+from experiments.tootsie.exp600_tootsie import (
     PHASE_3_END,
     PHASE_3_START,
     cooldown_mixture_weights_v1,
