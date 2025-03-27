@@ -14,10 +14,10 @@ import dataclasses
 from levanter.schedule import ScheduleStep
 
 from experiments.defaults import default_train
-from experiments.tootsie.exp600_tootsie import dclm_mixture_config_llama3
-from experiments.tootsie.exp859_big_tootsies import dclm_mixture_config_llama3_zoned
 from experiments.llama import llama_70b
 from experiments.simple_train_config import SimpleTrainConfig
+from experiments.tootsie.exp600_tootsie import dclm_mixture_config_llama3
+from experiments.tootsie.exp859_big_tootsies import dclm_mixture_config_llama3_zoned
 from marin.execution.executor import executor_main
 
 llama_70b_train_config_mk6 = SimpleTrainConfig(
