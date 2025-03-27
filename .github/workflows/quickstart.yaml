@@ -57,4 +57,4 @@ jobs:
       - name: Run the quickstart script
         shell: bash -l {0}
         run: |
-          PYTHONPATH=. python experiments/quickstart.py
+         JAX_TRACEBACK_FILTERING=off PYTHONPATH=. python experiments/quickstart.py
