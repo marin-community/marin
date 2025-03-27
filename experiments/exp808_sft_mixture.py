@@ -62,7 +62,7 @@ DATASETS = [
 
 NUM_TRAIN_STEPS = 19086  # 3 Epochs over all datasets above
 
-# Create tokenization steps for all datasets
+# Create tokenization steps for multiple datasets
 tokenization_steps = [create_tokenization_step(dataset_name) for dataset_name in DATASETS]
 
 # Dataset weights set with the naive baseline of the number of documents per dataset
@@ -78,10 +78,9 @@ mixture_weights = {
     "bespoke_stratos_17k": 16710,
 }
 
-# Create a mapping of cache dirs for each dataset from tokenization steps
+# Create dataset configs with weights
 supervised_data = {}
 for step in tokenization_steps:
-    # Extract short name from step name
     short_name = step.name.split("/")[-1].replace("_llama3_instruct_tokenizer", "")
     supervised_data[short_name] = SupervisedUrlSourceConfig(
         cache_dir=output_path_of(step),
@@ -102,13 +101,12 @@ mixture_sft_config = SimpleSFTConfig(
     seed=0,
 )
 
-# Create the SFT training step
+# Configure mixture-based SFT training
 training_step = default_sft(
     name="llama3.1_mixture_total",
     tokenized=supervised_data,
     model_config=llama_8b,
     sft_config=mixture_sft_config,
-    use_mixture=True,
     mixture_weights=mixture_weights,
     tags=["dolma", "llama", "mixture"],
 )

@@ -290,7 +290,6 @@ def default_sft(
     tokenized: InputName | ExecutorStep | LMSupervisedDatasetConfig | dict[str, SupervisedUrlSourceConfig],
     model_config: LlamaConfig,
     sft_config: SimpleSFTConfig,
-    use_mixture: bool = False,
     mixture_weights: dict[str, int] | None = None,
     tags: Sequence[str] = (),
 ) -> ExecutorStep:
@@ -307,16 +306,12 @@ def default_sft(
                   - For mixture: a Dict[str, SupervisedUrlSourceConfig] mapping dataset names to configs
         model_config: Levanter LlamaConfig for the model architecture to train.
         sft_config: Configuration for the SFT training process.
-        use_mixture: Whether to use mixture-based SFT (multiple datasets). Default: False.
-        mixture_weights: Dict mapping datasets within mixture to weight to simple with if using Mixture
+        mixture_weights: Dict mapping datasets within mixture to weight to sample with. If provided,
+                       enables mixture-based training.
         tags: Additional tags for WandB logging. Default: ().
 
     Returns:
         An ExecutorStep configured for supervised fine-tuning.
-
-    Note:
-        If use_mixture is True, tokenized should be a dictionary of SupervisedUrlSourceConfig objects.
-        If use_mixture is False, tokenized should be an InputName, ExecutorStep, or LMSupervisedDatasetConfig.
     """
     # Set up common configurations
     tracker_config = WandbConfig(
@@ -348,13 +343,10 @@ def default_sft(
         max_grad_norm=sft_config.max_grad_norm,
     )
 
-    # Create appropriate SFT config based on whether we're using mixture or not
-    if use_mixture:
+    # Infer whether we're using mixture based on mixture_weights
+    if mixture_weights is not None:
         if not isinstance(tokenized, dict):
-            raise ValueError("For mixture SFT, tokenized should be a Dict[str, SupervisedUrlSourceConfig]")
-
-        if mixture_weights is None:
-            raise ValueError("Mixture weights must be specified!")
+            raise ValueError("If mixture_weights is given tokenized should be a Dict[str, SupervisedUrlSourceConfig]")
 
         # Configure the mixture-based SFT
         config = TrainSFTMixturePodConfig(
@@ -377,7 +369,6 @@ def default_sft(
             stop_strategy=sft_config.stop_strategy,
             bypass_path_checks=sft_config.bypass_path_checks,
         )
-        # Use the mixture training function
         fn = run_levanter_sft_mixture
 
     else:
@@ -416,7 +407,6 @@ def default_sft(
             output_role=sft_config.output_role,
             bypass_path_checks=sft_config.bypass_path_checks,
         )
-        # Use the single-dataset training function
         fn = run_levanter_sft
 
     # Create and return the ExecutorStep
@@ -424,7 +414,7 @@ def default_sft(
         name=f"checkpoints/{name}_seed{sft_config.seed}",
         fn=fn,
         config=config,
-        description=f"SFT {'mixture' if use_mixture else 'single dataset'} for {sft_config.num_train_steps} steps",
+        description=f"SFT {'mixture' if mixture_weights is not None else 'single'}",
         pip_dependency_groups=["tokenize_train"],
     )
 

@@ -52,7 +52,6 @@ sft_step = default_sft(
     tokenized=openthoughts_llama_tokenize_step,
     model_config=llama_8b,
     sft_config=openthoughts_sft_config,
-    use_mixture=False,
     tags=["openthoughts", "llama", "sft"],
 )
 
