@@ -17,7 +17,7 @@ NUM_TRAIN_TOKENS = 670426314
 # Link: https://huggingface.co/allenai/Llama-3.1-Tulu-3-8B
 NUM_TRAIN_STEPS = NUM_TRAIN_TOKENS // (128 * 4096) * 3  # 2 epochs
 
-# Add tokenization step
+# Create tokenization step for Tulu-3 dataset
 tulu3_llama_tokenize_step = ExecutorStep(
     name="tokenized/tulu_sft_v3_llama3_tokenizer",
     fn=levanter_tokenize_sft,
@@ -26,7 +26,6 @@ tulu3_llama_tokenize_step = ExecutorStep(
         validation_paths=[],
         cache_path=this_output_path(),
         tokenizer=llama3_tokenizer,
-        # fixed to OAI chat format
         input_field="user",
         output_field="assistant",
     ),
@@ -44,13 +43,9 @@ tulu_sft_config = SimpleSFTConfig(
     seed=1,
 )
 
-# Create the SFT training step using the pre-defined 1.4B model config and its training config.
+# Configure SFT training
 sft_step = default_sft(
-    name="tulu3_llama3_sft",
-    tokenized=tulu3_llama_tokenize_step,
-    model_config=llama_8b,
-    sft_config=tulu_sft_config,
-    use_mixture=False,
+    name="tulu3_llama3_sft", tokenized=tulu3_llama_tokenize_step, model_config=llama_8b, sft_config=tulu_sft_config
 )
 
 if __name__ == "__main__":
