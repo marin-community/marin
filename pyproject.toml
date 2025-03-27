@@ -33,7 +33,7 @@ dependencies = [
 #    "jax[tpu]==0.5.1",
     "multiprocess==0.70.16",
     "levanter>=1.2.dev1292",
-    "haliax>=1.4.dev330",
+    "haliax>=1.4.dev343",
     "sentencepiece",
     "lz4",
 ]
