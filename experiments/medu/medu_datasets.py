@@ -1,6 +1,6 @@
 from experiments.pretraining_datasets import dclm_baseline
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
-from operations.download.gcs.transfer import TransferConfig, transfer_files
+from operations.download.filesystem.transfer import TransferConfig, transfer_files
 
 # Serves as the default pretraining dataset used for MEDU experiments. We want roughly 400B tokens
 # that we can use for training because we know that the quality filter will filter about 10% of the top
@@ -21,7 +21,7 @@ medu_dclm_annotation_subset = ExecutorStep(
     config=TransferConfig(
         input_path=dclm_baseline_global_shard_1_local_shard_1,
         output_path=this_output_path(),
-        num_files=4,
+        num_random_files=4,
     ),
 )
 
