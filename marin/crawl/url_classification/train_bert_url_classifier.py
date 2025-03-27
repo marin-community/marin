@@ -2,7 +2,7 @@
 """
 ```
 python marin/run/ray_run.py \
-    --pip_deps '--find-links https://storage.googleapis.com/libtpu-releases/index.html,--find-links https://storage.googleapis.com/libtpu-wheels/index.html,datasets,filelock,torch,torch_xla[tpu],accelerate,scikit-learn,evaluate' \
+    --pip_deps '--find-links https://storage.googleapis.com/libtpu-releases/index.html,--find-links https://storage.googleapis.com/libtpu-wheels/index.html,datasets,filelock,torch,torch_xla[tpu],accelerate,scikit-learn' \
     --env_vars WANDB_API_KEY 'ca4e321fd237f65236ab95e92724934b47264b1c' \
     --no_wait -- \
     python marin/crawl/url_classification/train_bert_url_classifier.py \
