@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 import numpy as np
-from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
+from evaluate import load_metric
 from transformers import EvalPrediction
 
 
@@ -14,13 +14,19 @@ def url_classifier_compute_eval_metrics(labels2id: dict[str, int], eval_predicti
     importable module)
     """
     positive_label_id = labels2id["True"]
-    labels = eval_predictions.label_ids
-    logits = eval_predictions.predictions.argmax(-1)
+    logits, labels = eval_predictions
     predictions = np.argmax(logits, axis=-1)
-    accuracy = accuracy_score(y_pred=predictions, y_true=labels)
-    binary_precision = precision_score(y_pred=predictions, y_true=labels, pos_label=positive_label_id, average="binary")
-    binary_recall = recall_score(y_pred=predictions, y_true=labels, pos_label=positive_label_id, average="binary")
-    binary_f1 = f1_score(y_pred=predictions, y_true=labels, pos_label=positive_label_id, average="binary")
+
+    accuracy = load_metric("accuracy").compute(predictions=predictions, references=labels)
+    binary_precision = load_metric("precision").compute(
+        predictions=predictions, references=labels, pos_label=positive_label_id, average="binary"
+    )
+    binary_recall = load_metric("recall").compute(
+        predictions=predictions, references=labels, pos_label=positive_label_id, average="binary"
+    )
+    binary_f1 = load_metric("f1").compute(
+        predictions=predictions, references=labels, pos_label=positive_label_id, average="binary"
+    )
     return {
         "accuracy": accuracy,
         "binary_precision": binary_precision,

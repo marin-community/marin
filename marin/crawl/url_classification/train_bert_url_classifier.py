@@ -212,6 +212,7 @@ def train_model(
             output_dir=local_trainer_output_path,
             remove_unused_columns=False,
             per_device_train_batch_size=batch_size,
+            per_device_eval_batch_size=batch_size,
             num_train_epochs=num_epochs,
             learning_rate=lr,
             dataloader_num_workers=dataloader_num_workers,
