@@ -33,7 +33,7 @@ class LLMActor:
 
 
 @ray.remote(scheduling_strategy=scheduling_strategy_fn(tensor_parallel_size=8, strategy="STRICT_PACK"))
-def test_llm_func():
+def _test_llm_func():
     llm = LLM(
         model="/opt/gcsfuse_mount/models/meta-llama--Llama-3-3-70B-Instruct",
         tensor_parallel_size=8,
@@ -56,7 +56,7 @@ def test_llm_func():
 
 @pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip this test in CI, since we run it as a separate worflow.")
 def test_llm_inference():
-    generated_texts = ray.get(test_llm_func.remote())
+    generated_texts = ray.get(_test_llm_func.remote())
     assert len(generated_texts) == 1
 
     llm_actor = LLMActor.remote()

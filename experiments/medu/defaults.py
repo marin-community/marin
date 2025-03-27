@@ -22,7 +22,7 @@ from marin.processing.classification.config.inference_config import InferenceCon
 from marin.processing.classification.consolidate import ConsolidateConfig, FilterConfig, consolidate
 from marin.processing.classification.inference import run_inference
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
-from operations.download.gcs.transfer import TransferConfig, transfer_files
+from operations.download.filesystem.transfer import TransferConfig, transfer_files
 
 model_name = "/opt/gcsfuse_mount/models/meta-llama--Llama-3-3-70B-Instruct"
 tokenizer = AutoTokenizer.from_pretrained(model_name)
