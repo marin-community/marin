@@ -13,7 +13,7 @@ Starting from cooldown v1 (monumental-jellyfish ) we're going to just keep the s
 import dataclasses
 
 from experiments.defaults import default_train
-from experiments.exp600_tootsie import (
+from experiments.tootsie.exp600_tootsie import (
     PHASE_3_END,
     llama_8b_tootsie_phase3,
     llama_8b_train_config_phase3,
