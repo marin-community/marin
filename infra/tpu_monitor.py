@@ -6,14 +6,13 @@ import time
 from collections import Counter
 
 import ray
+import wandb
 from bs4 import BeautifulSoup
 from google.cloud import compute_v1, tpu_v2alpha1
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
-
-import wandb
 
 sys.path.append("../..")
 
