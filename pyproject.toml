@@ -28,8 +28,9 @@ dependencies = [
     "toml",
     "pandas", # Only needed by Fileprovider in inference.py
     "pyarrow", # # Only needed by Fileprovider in inference.py
+    "transformers>=4.49.0,<5.0",
     # We are keeping levanter deps for now. @TODO :: Remove them
-    "jax[tpu]==0.5.1",
+#    "jax[tpu]==0.5.1",
     "multiprocess==0.70.16",
     "levanter>=1.2.dev1207",
     "haliax>=1.4.dev330",
@@ -138,3 +139,6 @@ exclude = [
     "marin/",
     "scripts/"
 ]
+
+[tool.uv.sources]
+resiliparse-dom = { git = "https://github.com/stanford-crfm/chatnoir-resiliparse", subdirectory = "resiliparse_dom", rev = "da2ff85fe51310484cf9435565b2bdde2a23708b" }
