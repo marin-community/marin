@@ -124,7 +124,6 @@ def decode_html(html: bytes) -> str | None:
 
 @ray.remote(
     memory=16 * 1024 * 1024 * 1024,
-    num_cpus=1,
 )
 def extract_text(record_id: str, html_decoded: str) -> tuple[str, str | None]:
     try:
