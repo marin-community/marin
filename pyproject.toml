@@ -32,7 +32,7 @@ dependencies = [
     # We are keeping levanter deps for now. @TODO :: Remove them
 #    "jax[tpu]==0.5.1",
     "multiprocess==0.70.16",
-    "levanter>=1.2.dev1292",
+    "levanter>=1.2.dev1293",
     "haliax>=1.4.dev343",
     "sentencepiece",
     "lz4",
