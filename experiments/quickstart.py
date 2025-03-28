@@ -195,6 +195,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
                 "WANDB_API_KEY": None,
                 "WANDB_MODE": "disabled",
                 "JAX_PLATFORMS": "cpu",
+                "JAX_TRACEBACK_FILTERING": "off",
             },  # Running it locally and turning off wandb
             tpu_type=tpu_type,
             hf_save_steps=1,
