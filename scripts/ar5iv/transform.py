@@ -97,21 +97,21 @@ def unwrap_eqn(html: BeautifulSoup) -> BeautifulSoup:
     Returns BeautifulSoup object with the formatted equation.
     """
     math_elements = html.find_all("math")
-    
+
     for math_elem in math_elements:
         if not math_elem or "alttext" not in math_elem.attrs:
             continue
-            
+
         equation = math_elem["alttext"]
         is_display = math_elem.get("display") == "block"
-        
+
         if is_display:
             formatted_eq = BeautifulSoup(f"<p><br><br>$${equation}$$<br><br></p>", "html.parser")
         else:
             formatted_eq = BeautifulSoup(f"${equation}$", "html.parser")
-        
+
         math_elem.replace_with(formatted_eq)
-    
+
     return html
 
 
