@@ -14,10 +14,10 @@ import dataclasses
 from levanter.schedule import ScheduleStep
 
 from experiments.defaults import default_train
-from experiments.exp600_tootsie import dclm_mixture_config_llama3
-from experiments.exp859_big_tootsies import dclm_mixture_config_llama3_zoned
 from experiments.llama import llama_70b
 from experiments.simple_train_config import SimpleTrainConfig
+from experiments.tootsie.exp600_tootsie import dclm_mixture_config_llama3
+from experiments.tootsie.exp859_big_tootsies import dclm_mixture_config_llama3_zoned
 from marin.execution.executor import executor_main
 
 llama_70b_train_config_mk6 = SimpleTrainConfig(
@@ -27,7 +27,7 @@ llama_70b_train_config_mk6 = SimpleTrainConfig(
     train_batch_size=[ScheduleStep(start=0, value=1024), ScheduleStep(start=96001, value=1536)],
     weight_decay=0.05,
     tpu_type="v6e-128",
-    node_count=8,
+    node_count=6,
     # LR doesn't support schedule yet
     # until 93_621, was 2e-4
     # learning_rate=2e-4,
