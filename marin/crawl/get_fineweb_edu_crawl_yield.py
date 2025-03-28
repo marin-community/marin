@@ -123,6 +123,24 @@ def decode_html(html: bytes) -> str | None:
 
 
 @ray.remote(
+    memory=16 * 1024 * 1024 * 1024,
+    num_cpus=1,
+)
+def extract_text(record_id: str, html_decoded: str) -> tuple[str, str | None]:
+    try:
+        extracted_text = extract(
+            html_decoded,
+            favor_precision=True,
+            include_comments=False,
+            deduplicate=True,
+        )
+    except Exception:
+        logging.exception("Failed to extract text from decoded HTML")
+        extracted_text = None
+    return record_id, extracted_text
+
+
+@ray.remote(
     memory=64 * 1024 * 1024 * 1024,
     num_cpus=4,
 )
@@ -159,7 +177,9 @@ def extract_text_from_warc(
     fetched_urls = set()
     num_records_skipped = 0
     num_records_saved = 0
-    extracted_text_records = []
+
+    id_to_record = {}
+    text_extraction_refs = []
     with fsspec.open(warc_path, "rb", compression="gzip", block_size=1 * 1024 * 1024 * 1024) as file_stream:
         for record in tqdm(ArchiveIterator(file_stream)):
             if record.rec_type == "response":
@@ -179,39 +199,55 @@ def extract_text_from_warc(
                     continue
 
                 canonicalized_url = w3lib.url.canonicalize_url(record_url)
-                try:
-                    extracted_text = extract(
-                        html_decoded,
-                        favor_precision=True,
-                        include_comments=False,
-                        deduplicate=True,
-                    )
-                except Exception:
-                    logging.exception("Failed to extract text from decoded HTML")
-                    extracted_text = None
-
-                if not extracted_text:
-                    num_records_skipped += 1
-                    continue
-
                 record_id = record.rec_headers.get_header("WARC-Record-ID")
                 assert record_id
+
+                # Launch a text extraction job
+                text_extraction_refs.append(extract_text.remote(record_id, html_decoded))
+
                 record_date = record.rec_headers.get_header("WARC-Date")
                 assert record_date
-                out_dolma = DolmaFormattedFineWebEduRecord(
-                    id=record_id,
-                    source=data_source,
-                    format="text",
-                    text=extracted_text,
-                    metadata={
+                id_to_record[record_id] = {
+                    "id": record_id,
+                    "source": data_source,
+                    "format": "text",
+                    "metadata": {
                         "url": record_url,
                         "canonicalized_url": canonicalized_url,
                         "date": record_date,
                         "file_path": warc_path,
                     },
+                }
+
+    # Wait for the text extraction remote functions to finish
+    unfinished = text_extraction_refs
+    extracted_text_records = []
+    with tqdm(total=len(text_extraction_refs), desc="Matching records with extracted text") as pbar:
+        while unfinished:
+            # Returns the first ObjectRef that is ready.
+            finished, unfinished = ray.wait(unfinished, num_returns=1)
+            try:
+                (record_id, extracted_text) = ray.get(finished[0])
+            except Exception as e:
+                # If the extraction task fails, just skip it.
+                logger.exception(f"Failed to get extracted text: {e}")
+                extracted_text = None
+
+            if not extracted_text:
+                num_records_skipped += 1
+                pbar.update(1)
+                continue
+            extracted_text_records.append(
+                asdict(
+                    DolmaFormattedFineWebEduRecord(
+                        **id_to_record[record_id],
+                        text=extracted_text,
+                    )
                 )
-                extracted_text_records.append(asdict(out_dolma))
-                num_records_saved += 1
+            )
+            num_records_saved += 1
+            pbar.update(1)
+
     # Count the number of URLs that weren't fetched
     unfetched_urls = urls - fetched_urls
     logger.info(f"Out of {len(urls)} URLs to fetch, {len(unfetched_urls)} were not successfully fetched")
