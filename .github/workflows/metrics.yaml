@@ -32,7 +32,7 @@ jobs:
         with:
           auto-update-conda: true
           python-version: ${{ matrix.python-version }}
-          activate-environment: marin_unit_test_env
+          activate-environment: marin_metrics_env
           auto-activate-base: false
 
       - name: Set up Node.js ${{ matrix.node-version }}
@@ -46,7 +46,13 @@ jobs:
           path: |
             ~/.cache/pip
             ~/.cache/uv
-          key: ${{ runner.os }}-${{ matrix.python-version }}-unittest
+          key: ${{ runner.os }}-${{ matrix.python-version }}-metrics
+
+      - name: Install dependencies
+        shell: bash -l {0}
+        run: |
+          conda activate marin_metrics_env
+          pip install -e .[extras,metrics]
 
       - name: Set up Google Cloud SDK
         uses: google-github-actions/setup-gcloud@v1
@@ -57,10 +63,6 @@ jobs:
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.NEW_GCP_JSON }}
-
-      - name: Install dependencies
-        run: |
-          pip install -e .[extras,metrics]
 
       - name: Start Ray cluster locally
         shell: bash -l {0}
@@ -75,4 +77,5 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PYTHONPATH: .
         run: |
+          conda activate marin_metrics_env
           python experiments/metrics/exp446_metrics.py
