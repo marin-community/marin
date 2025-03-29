@@ -49,6 +49,10 @@ dev = [
     "types-six",
 ]
 
+metrics = [
+    "google-cloud-logging",
+]
+
 download_transform = [
     "chardet",
     "datasets>=2.18.0",

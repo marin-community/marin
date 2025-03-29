@@ -26,7 +26,7 @@ jobs:
         cache-dependency-path: 'pyproject.toml'
 
     - name: Install dependencies
-      run: pip install .[extras]
+      run: pip install .[extras,metrics]
 
     - name: Set up Google Cloud SDK
       uses: google-github-actions/setup-gcloud@v1
