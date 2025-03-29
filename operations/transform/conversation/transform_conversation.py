@@ -150,8 +150,7 @@ def download_directory_from_gcs(bucket_name: str, gcs_directory_path: str, local
     """
     # Make download dir
     if not os.path.exists(local_directory_path):
-        os.makedirs(local_directory_path, exist_ok=True)
-
+        os.makedirs(local_directory_path)
     # Initialize the client
     storage_client = storage.Client()
 
@@ -161,7 +160,7 @@ def download_directory_from_gcs(bucket_name: str, gcs_directory_path: str, local
     # List all the blobs (files) with the specified prefix
     blobs = bucket.list_blobs(prefix=gcs_directory_path)
 
-    # Download each blob to the gcsfuse directory
+    # Download each blob to the local directory
     for blob in blobs:
         if "provenance.json" in blob.name:
             continue
@@ -170,32 +169,31 @@ def download_directory_from_gcs(bucket_name: str, gcs_directory_path: str, local
         relative_path = os.path.relpath(blob.name, gcs_directory_path)
         local_file_path = os.path.join(local_directory_path, relative_path)
 
-        # Create directories if they do not exist
+        # Create local directories if they do not exist
         os.makedirs(os.path.dirname(local_file_path), exist_ok=True)
 
-        # Download the blob to the gcsfuse path
+        # Download the blob to the local file path
         blob.download_to_filename(local_file_path)
-        logger.info(f"Downloaded gs://{blob.name} to gcsfuse:{local_file_path}")
+        logger.info(f"Downloaded gs://{blob.name} to local:{local_file_path}")
 
 
 def copy_dataset_from_gcp_to_local(input_gcp_path: os.PathLike) -> os.PathLike:
     """
-    Download the data from GCP onto gcsfuse mount instead of local instance.
+    Download the data from GCP onto local instance.
+
+    Note: function modified from marin/raw2json/huggingface/qa/raw2json.py
     """
+    # set up input path which can be GCP path, HF Hub path, or local path
+    # handle case of gs:// path which requires downloading resource from GCP to local for processing
     if input_gcp_path.startswith("gs://"):
         # parse gs://my-bucket/path/to/mmlu into "my-bucket", "path/to/mmlu", and "mmlu"
         parsed_url = urlparse(input_gcp_path)
         bucket = parsed_url.netloc
         gcp_path = parsed_url.path.lstrip("/")
         dir_name = os.path.basename(gcp_path)
-
-        # Use gcsfuse mount path instead of local directory
-        gcsfuse_base = "/opt/gcsfuse_mount/"
-        local_dir = os.path.join(gcsfuse_base, dir_name)
-
-        # download the repo from GCP path into gcsfuse directory
-        download_directory_from_gcs(bucket, gcp_path, local_dir)
-        input_path = local_dir
+        # download the repo from GCP path into local directory which is basename of provided path (e.g. mmlu)
+        download_directory_from_gcs(bucket, gcp_path, dir_name)
+        input_path = dir_name
     else:
         raise Exception("Input is not a GCP path")
 
@@ -211,7 +209,7 @@ def get_shard_dir(dir_name: os.PathLike, subset_name: str | None, split: str) ->
     return os.path.join(dir_name, subset_name, split)
 
 
-@ray.remote
+@ray.remote(memory=20 * 1024 * 1024 * 1024)  # 20GB memory limit
 def transform_hf_dataset(cfg: TransformSFTDatasetConfig):
     """Shards the dataset; copies datafiles from GCP to instance, loads
     data using the `datasets` package, and write shards to target directory
@@ -252,21 +250,48 @@ def transform_hf_dataset(cfg: TransformSFTDatasetConfig):
 
         for split in splits:
             # a. Load dataset
-            dataset = datasets.load_dataset(path=local_data_dir, name=subset, split=split)
-            rows = [r for r in dataset]
-            del dataset  # saves memory
+            dataset = datasets.load_dataset(
+                path=local_data_dir,
+                name=subset,
+                split=split,
+                streaming=True  # Enable streaming to avoid loading entire dataset into memory
+            )
+            
             # b. Create GCP target directory
             subset_output_path = get_shard_dir(cfg.output_path, subset, split)
             output_path = create_shard_output_directory(subset_output_path)
-            # c. Write shards to GCP
-            for idx, shard in enumerate(range(0, len(rows), cfg.shard_size)):
-                shard_rows = rows[shard : min(shard + cfg.shard_size, len(rows))]
-                shard_filename = os.path.join(output_path, f"shard_{idx:05d}.jsonl.gz")
-                logger.info(f"Writing shard {idx} to {shard_filename}")
+            
+            # c. Process and write in batches
+            batch = []
+            shard_idx = 0
+            
+            for row in dataset:
+                batch.append(row)
+                
+                # When batch reaches shard size, process and write it
+                if len(batch) >= cfg.shard_size:
+                    shard_filename = os.path.join(output_path, f"shard_{shard_idx:05d}.jsonl.gz")
+                    logger.info(f"Writing shard {shard_idx} to {shard_filename}")
+                    
+                    with fsspec.open(shard_filename, "wt", compression="gzip") as f:
+                        transformed_batch = transform_rows(batch, cfg)
+                        for transformed_row in transformed_batch:
+                            f.write(f"{json.dumps(transformed_row)}\n")
+                    
+                    # Clear batch and increment shard index
+                    batch = []
+                    shard_idx += 1
+            
+            # Write any remaining rows in the final batch
+            if batch:
+                shard_filename = os.path.join(output_path, f"shard_{shard_idx:05d}.jsonl.gz")
+                logger.info(f"Writing final shard {shard_idx} to {shard_filename}")
+                
                 with fsspec.open(shard_filename, "wt", compression="gzip") as f:
-                    transformed_shard_rows = transform_rows(shard_rows, cfg)
-                    for row in transformed_shard_rows:
-                        f.write(f"{json.dumps(row)}\n")
+                    transformed_batch = transform_rows(batch, cfg)
+                    for transformed_row in transformed_batch:
+                        f.write(f"{json.dumps(transformed_row)}\n")
+            
             logging.log(logging.INFO, f"Wrote processed data to {output_path}")
     return cfg.output_path
 
