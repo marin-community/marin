@@ -21,6 +21,10 @@ class SimpleTrainConfig:
     max_grad_norm: float | None = None
     warmup: float | None = None
     decay: float | None = None
+    rewarmup: float | None = None
+    """
+    The rewarmup parameter is used to re-warmup the learning rate after a decay cycles
+    """
     lr_schedule: str | None = None
     stable_lr_schedule: str | None = None
     min_lr_ratio: float | None = None
@@ -46,7 +50,10 @@ class SimpleTrainConfig:
     node_count: int = 1
 
     initialize_from_checkpoint_path: str | None = None
-    """Path to a checkpoint to initialize from. If None, the model will be trained from scratch."""
+    """If set, the training will resume from the checkpoint at this path. Otherwise, training will start from scratch."""
+    reset_data_loader_on_init: bool = True
+    """Pairs with initialize_from_checkpoint_path. If True, initialize_from_checkpoint_path will reset the data loader
+    so that it starts from step 0. Otherwise, it will resume from the step in the checkpoint."""
 
     allow_partial_checkpoint: bool = False
     """

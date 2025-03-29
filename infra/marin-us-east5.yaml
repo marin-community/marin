@@ -133,7 +133,7 @@ available_node_types:
 
   tpu_slice_v6e_64:
     max_workers: 1024
-    min_workers: 0
+    min_workers: 16
     node_config:
       acceleratorType: v6e-64
       runtimeVersion: v2-alpha-tpuv6e
@@ -145,7 +145,7 @@ available_node_types:
 
   tpu_slice_v6e_128:
     max_workers: 1024
-    min_workers: 8
+    min_workers: 0
     node_config:
       acceleratorType: v6e-128
       runtimeVersion: v2-alpha-tpuv6e
