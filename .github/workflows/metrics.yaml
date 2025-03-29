@@ -39,9 +39,9 @@ jobs:
         credentials_json: ${{ secrets.NEW_GCP_JSON }}
         
     - name: Check gcloud authentication
-    run: |
-      gcloud auth list
-      gcloud projects get-iam-policy ${{ secrets.GCP_PROJECT_ID }} \
+      run: |
+        gcloud auth list
+        gcloud projects get-iam-policy ${{ secrets.GCP_PROJECT_ID }} \
           --flatten="bindings[].members" \
           --format='table(bindings.role)' \
           --filter="bindings.members:${{ secrets.GCP_SERVICE_ACCOUNT }}"
