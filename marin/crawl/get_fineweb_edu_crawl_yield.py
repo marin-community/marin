@@ -279,10 +279,11 @@ def get_shard_url_filter_results(input_path: str, output_directory: str) -> list
     fineweb URL filter on the examples.
     """
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-    success_path = os.path.join(output_directory, f"{os.path.basename(input_path)}.url_filter_results.json.gz")
+    output_path = os.path.join(output_directory, f"{os.path.basename(input_path)}.url_filter_results.json.gz")
+    success_path = output_path + ".SUCCESS"
     if fsspec_exists(success_path):
         logger.info(f"Found url filter success path at {success_path}, skipping")
-        with fsspec.open(success_path, compression="infer", block_size=1 * 1024 * 1024 * 1024) as f:
+        with fsspec.open(output_path, compression="infer", block_size=1 * 1024 * 1024 * 1024) as f:
             return json.load(f)
 
     logger.info("Applying the URL filter")
@@ -292,9 +293,17 @@ def get_shard_url_filter_results(input_path: str, output_directory: str) -> list
         url_filter.filter(document) for document in tqdm(documents_to_classify, desc="Applying the URL filter")
     ]
     logger.info("Applied the URL filter")
-    with fsspec.open(success_path, "w", compression="infer", block_size=1 * 1024 * 1024 * 1024) as fout:
+    assert len(examples_url_filter_results) == len(documents_to_classify)
+    with fsspec.open(output_path, "w", compression="infer", block_size=1 * 1024 * 1024 * 1024) as fout:
         json.dump(
             examples_url_filter_results,
+            fout,
+        )
+    with fsspec.open(success_path, "w", compression="infer", block_size=1 * 1024 * 1024 * 1024) as fout:
+        json.dump(
+            {
+                "input_path": input_path,
+            },
             fout,
         )
     return examples_url_filter_results
@@ -309,10 +318,11 @@ def get_shard_langid_filter_results(input_path: str, output_directory: str) -> l
     fineweb language ID filter on the examples.
     """
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-    success_path = os.path.join(output_directory, f"{os.path.basename(input_path)}.langid_filter_results.json.gz")
+    output_path = os.path.join(output_directory, f"{os.path.basename(input_path)}.langid_filter_results.json.gz")
+    success_path = output_path + ".SUCCESS"
     if fsspec_exists(success_path):
         logger.info(f"Found langid filter success path at {success_path}, skipping")
-        with fsspec.open(success_path, compression="infer", block_size=1 * 1024 * 1024 * 1024) as f:
+        with fsspec.open(output_path, compression="infer", block_size=1 * 1024 * 1024 * 1024) as f:
             return json.load(f)
 
     logger.info("Applying the LangID filter")
@@ -322,9 +332,18 @@ def get_shard_langid_filter_results(input_path: str, output_directory: str) -> l
         langid_filter.filter(document) for document in tqdm(documents_to_classify, desc="Applying the LangID filter")
     ]
     logger.info("Applied the LangID filter")
-    with fsspec.open(success_path, "w", compression="infer", block_size=1 * 1024 * 1024 * 1024) as fout:
+    assert len(examples_langid_filter_results) == len(documents_to_classify)
+
+    with fsspec.open(output_path, "w", compression="infer", block_size=1 * 1024 * 1024 * 1024) as fout:
         json.dump(
             examples_langid_filter_results,
+            fout,
+        )
+    with fsspec.open(success_path, "w", compression="infer", block_size=1 * 1024 * 1024 * 1024) as fout:
+        json.dump(
+            {
+                "input_path": input_path,
+            },
             fout,
         )
     return examples_langid_filter_results
@@ -339,12 +358,13 @@ def get_shard_gopher_repetition_filter_results(input_path: str, output_directory
     fineweb gopher repetition filter on the examples.
     """
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-    success_path = os.path.join(
+    output_path = os.path.join(
         output_directory, f"{os.path.basename(input_path)}.gopher_repetition_filter_results.json.gz"
     )
+    success_path = output_path + ".SUCCESS"
     if fsspec_exists(success_path):
         logger.info(f"Found gopher repetition filter success path at {success_path}, skipping")
-        with fsspec.open(success_path, compression="infer", block_size=1 * 1024 * 1024 * 1024) as f:
+        with fsspec.open(output_path, compression="infer", block_size=1 * 1024 * 1024 * 1024) as f:
             return json.load(f)
 
     logger.info("Applying the Gopher repetition filter")
@@ -354,10 +374,18 @@ def get_shard_gopher_repetition_filter_results(input_path: str, output_directory
         gopher_repetition_filter.filter(document)
         for document in tqdm(documents_to_classify, desc="Applying the Gopher repetition filter")
     ]
+    assert len(documents_to_classify) == len(examples_gopher_repetition_filter_results)
     logger.info("Applied the Gopher repetition filter")
-    with fsspec.open(success_path, "w", compression="infer", block_size=1 * 1024 * 1024 * 1024) as fout:
+    with fsspec.open(output_path, "w", compression="infer", block_size=1 * 1024 * 1024 * 1024) as fout:
         json.dump(
             examples_gopher_repetition_filter_results,
+            fout,
+        )
+    with fsspec.open(success_path, "w", compression="infer", block_size=1 * 1024 * 1024 * 1024) as fout:
+        json.dump(
+            {
+                "input_path": input_path,
+            },
             fout,
         )
     return examples_gopher_repetition_filter_results
@@ -372,12 +400,11 @@ def get_shard_gopher_quality_filter_results(input_path: str, output_directory: s
     fineweb gopher quality filter on the examples.
     """
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-    success_path = os.path.join(
-        output_directory, f"{os.path.basename(input_path)}.gopher_quality_filter_results.json.gz"
-    )
+    output_path = os.path.join(output_directory, f"{os.path.basename(input_path)}.gopher_quality_filter_results.json.gz")
+    success_path = output_path + ".SUCCESS"
     if fsspec_exists(success_path):
         logger.info(f"Found gopher quality filter success path at {success_path}, skipping")
-        with fsspec.open(success_path, compression="infer", block_size=1 * 1024 * 1024 * 1024) as f:
+        with fsspec.open(output_path, compression="infer", block_size=1 * 1024 * 1024 * 1024) as f:
             return json.load(f)
 
     logger.info("Applying the Gopher quality filter")
@@ -387,10 +414,19 @@ def get_shard_gopher_quality_filter_results(input_path: str, output_directory: s
         gopher_quality_filter.filter(document)
         for document in tqdm(documents_to_classify, desc="Applying the Gopher quality filter")
     ]
+    assert len(examples_gopher_quality_filter_results) == len(documents_to_classify)
+
     logger.info("Applied the Gopher quality filter")
-    with fsspec.open(success_path, "w", compression="infer", block_size=1 * 1024 * 1024 * 1024) as fout:
+    with fsspec.open(output_path, "w", compression="infer", block_size=1 * 1024 * 1024 * 1024) as fout:
         json.dump(
             examples_gopher_quality_filter_results,
+            fout,
+        )
+    with fsspec.open(success_path, "w", compression="infer", block_size=1 * 1024 * 1024 * 1024) as fout:
+        json.dump(
+            {
+                "input_path": input_path,
+            },
             fout,
         )
     return examples_gopher_quality_filter_results
@@ -405,10 +441,11 @@ def get_shard_c4_quality_filter_results(input_path: str, output_directory: str) 
     fineweb C4 quality filter on the examples.
     """
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-    success_path = os.path.join(output_directory, f"{os.path.basename(input_path)}.c4_quality_filter_results.json.gz")
+    output_path = os.path.join(output_directory, f"{os.path.basename(input_path)}.c4_quality_filter_results.json.gz")
+    success_path = output_path + ".SUCCESS"
     if fsspec_exists(success_path):
         logger.info(f"Found c4 quality filter success path at {success_path}, skipping")
-        with fsspec.open(success_path, compression="infer", block_size=1 * 1024 * 1024 * 1024) as f:
+        with fsspec.open(output_path, compression="infer", block_size=1 * 1024 * 1024 * 1024) as f:
             return json.load(f)
 
     logger.info("Applying the C4 quality filter")
@@ -418,10 +455,18 @@ def get_shard_c4_quality_filter_results(input_path: str, output_directory: str) 
         c4_quality_filter.filter(document)
         for document in tqdm(documents_to_classify, desc="Applying the C4 quality filter")
     ]
+    assert len(examples_c4_quality_filter_results) == len(documents_to_classify)
     logger.info("Applied the C4 quality filter")
-    with fsspec.open(success_path, "w", compression="infer", block_size=1 * 1024 * 1024 * 1024) as fout:
+    with fsspec.open(output_path, "w", compression="infer", block_size=1 * 1024 * 1024 * 1024) as fout:
         json.dump(
             examples_c4_quality_filter_results,
+            fout,
+        )
+    with fsspec.open(success_path, "w", compression="infer", block_size=1 * 1024 * 1024 * 1024) as fout:
+        json.dump(
+            {
+                "input_path": input_path,
+            },
             fout,
         )
     return examples_c4_quality_filter_results
@@ -457,10 +502,11 @@ def get_shard_quality_classifier_results(input_path: str, output_directory: str)
     fineweb quality classifier on the examples.
     """
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-    success_path = os.path.join(output_directory, f"{os.path.basename(input_path)}.quality_classifier_results.json.gz")
+    output_path = os.path.join(output_directory, f"{os.path.basename(input_path)}.quality_classifier_results.json.gz")
+    success_path = output_path + ".SUCCESS"
     if fsspec_exists(success_path):
         logger.info(f"Found quality classifier filter success path at {success_path}, skipping")
-        with fsspec.open(success_path, compression="infer", block_size=1 * 1024 * 1024 * 1024) as f:
+        with fsspec.open(output_path, compression="infer", block_size=1 * 1024 * 1024 * 1024) as f:
             return json.load(f)
 
     logger.info("Loading quality classifier...")
@@ -487,9 +533,16 @@ def get_shard_quality_classifier_results(input_path: str, output_directory: str)
 
     assert len(examples_scores) == len(examples_to_classify)
     logger.info(f"Ran quality classifier on {len(examples_to_classify)} examples")
-    with fsspec.open(success_path, "w", compression="infer", block_size=1 * 1024 * 1024 * 1024) as fout:
+    with fsspec.open(output_path, "w", compression="infer", block_size=1 * 1024 * 1024 * 1024) as fout:
         json.dump(
             examples_scores,
+            fout,
+        )
+    with fsspec.open(success_path, "w", compression="infer", block_size=1 * 1024 * 1024 * 1024) as fout:
+        json.dump(
+            {
+                "input_path": input_path,
+            },
             fout,
         )
     return examples_scores
