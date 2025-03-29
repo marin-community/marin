@@ -36,11 +36,11 @@ def main(save_path: str) -> dict:
         ),
     )
 
-    events = get_gcp_restart_events(
-        NumRestartConfig(time_since=((datetime.now() - timedelta(days=7)).isoformat("T") + "Z"))
-    )
-    final_metrics["Number of Ray cluster restart"] = len(events)
-    final_metrics["Ray restart events"] = events
+    # events = get_gcp_restart_events(
+    #     NumRestartConfig(time_since=((datetime.now() - timedelta(days=7)).isoformat("T") + "Z"))
+    # )
+    # final_metrics["Number of Ray cluster restart"] = len(events)
+    # final_metrics["Ray restart events"] = events
 
     # get all runs; num_days=-1 means all runs
     experiment_metrics = calculate_wandb_metrics(
