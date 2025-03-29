@@ -157,75 +157,76 @@ def judge_success(first_baseline, tags):
 if __name__ == '__main__':
     # Loop through each file in the list and read its content
     for file_path in file_list:
-        print(f'Going over: {file_path}')
-        name = file_path.split('/')[1].split('.txt')[0]
-        log_name = file_path
-        filename = f'optimizer_sweep/{name}.py'
-        parsed_data = parse_command_file(filename)
-        first_baseline = parsed_data['baseline_config']
-        sweep_grids = parsed_data['sweep_grids']
-        model_size = parsed_data['model_size']
-        target_chinchilla = parsed_data['target_chinchilla']
-        optimizer = parsed_data['optimizer_name']
-        target_data, data_size = calculate_data_tag(model_size, target_chinchilla)
-        tags = (model_size, data_size, optimizer)
-        with open(file_path, 'r') as f:
-            lines = f.readlines()
-            if len(lines) > 0:
-                line = lines[0]
-                if('Succeeded LOL' in line):
-                    min_num, min_config = judge_success(first_baseline, tags)
-                    if min_num > 0:
-                        print('Fake story!')            
-                        with open(log_name, 'w') as g:
-                            g.write('Fake LOL')
-                    else:
-                        print('Success!')
-                        with open(log_name, 'w') as g:
-                            g.write('Succeeded LOL')
-                    continue
-                if('Stupid Ray' in line):
-                    print('Stupid Ray')
-                    replace_random_suffix(file_path)
-        job_id = extract_job_id(log_name)
-        baseline_config = (extract_baseline_from_file(log_name))
-        if job_id:
-            print("Extracted Job ID:", job_id)
-            print("baseline_config:", baseline_config)
-        else:
-            print("No job ID found in the log file.")
-        if (baseline_config is None) or ((not check_baseline_run(baseline_config, tags)) and (baseline_config == first_baseline)):
-            print('Baseline Still Not Found/Finished')
-            print(f'Left: {num_left(baseline_config)}')
-        else:
-            current_best_config, approximate_best_config_list = grab_best_run(baseline_config.keys(), tags)
-            in_side = False
-            for approximate_best_config in approximate_best_config_list:
-                if approximate(approximate_best_config, baseline_config):
-                    in_side = True
-            if not in_side:
-                print("No longer a good choice")
-                if job_id:
-                    stop_command = f"ray job stop --address http://127.0.0.1:8265 {job_id}"
-                    print(f"Executing command: {stop_command}")
-                    subprocess.run(stop_command.split())
-            print(f'Left: {num_left(baseline_config)}')
-            min_num, min_config = judge_success(first_baseline, tags)
-            if min_num == 0:
+        try:
+            print(f'Going over: {file_path}')
+            name = file_path.split('/')[1].split('.txt')[0]
+            log_name = file_path
+            filename = f'optimizer_sweep/{name}.py'
+            parsed_data = parse_command_file(filename)
+            first_baseline = parsed_data['baseline_config']
+            sweep_grids = parsed_data['sweep_grids']
+            model_size = parsed_data['model_size']
+            target_chinchilla = parsed_data['target_chinchilla']
+            optimizer = parsed_data['optimizer_name']
+            target_data, data_size = calculate_data_tag(model_size, target_chinchilla)
+            tags = (model_size, data_size, optimizer)
+            with open(file_path, 'r') as f:
+                lines = f.readlines()
+                if len(lines) > 0:
+                    line = lines[0]
+                    if('Succeeded LOL' in line):
+                        min_num, min_config = judge_success(first_baseline, tags)
+                        if min_num > 0:
+                            print('Fake story!')            
+                            with open(log_name, 'w') as g:
+                                g.write('Fake LOL')
+                        else:
+                            print('Success!')
+                            with open(log_name, 'w') as g:
+                                g.write('Succeeded LOL')
+                        continue
+                    if('Stupid Ray' in line):
+                        print('Stupid Ray')
+                        replace_random_suffix(file_path)
+            job_id = extract_job_id(log_name)
+            baseline_config = (extract_baseline_from_file(log_name))
+            if job_id:
+                print("Extracted Job ID:", job_id)
+                print("baseline_config:", baseline_config)
+            else:
+                print("No job ID found in the log file.")
+            if (baseline_config is None) or ((not check_baseline_run(baseline_config, tags)) and (baseline_config == first_baseline)):
+                print('Baseline Still Not Found/Finished')
+                print(f'Left: {num_left(baseline_config)}')
+            else:
                 current_best_config, approximate_best_config_list = grab_best_run(baseline_config.keys(), tags)
                 in_side = False
                 for approximate_best_config in approximate_best_config_list:
                     if approximate(approximate_best_config, baseline_config):
                         in_side = True
-                print(f'Seems like we have succeeded!')
-                if job_id:
-                    stop_command = f"ray job stop --address http://127.0.0.1:8265 {job_id}"
-                    print(f"Executing command: {stop_command}")
-                    subprocess.run(stop_command.split())
-                    with open(log_name, 'w') as f:
-                        f.write('Succeeded LOL')
-
-
-
+                if not in_side:
+                    print("No longer a good choice")
+                    if job_id:
+                        stop_command = f"ray job stop --address http://127.0.0.1:8265 {job_id}"
+                        print(f"Executing command: {stop_command}")
+                        subprocess.run(stop_command.split())
+                print(f'Left: {num_left(baseline_config)}')
+                min_num, min_config = judge_success(first_baseline, tags)
+                if min_num == 0:
+                    current_best_config, approximate_best_config_list = grab_best_run(baseline_config.keys(), tags)
+                    in_side = False
+                    for approximate_best_config in approximate_best_config_list:
+                        if approximate(approximate_best_config, baseline_config):
+                            in_side = True
+                    print(f'Seems like we have succeeded!')
+                    if job_id:
+                        stop_command = f"ray job stop --address http://127.0.0.1:8265 {job_id}"
+                        print(f"Executing command: {stop_command}")
+                        subprocess.run(stop_command.split())
+                        with open(log_name, 'w') as f:
+                            f.write('Succeeded LOL')
+        except Exception as e:
+            print(f'Error handling {file_path}: {e}')
+            continue
 
 

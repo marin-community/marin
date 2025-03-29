@@ -2,7 +2,7 @@
 
 SESSION_NAME="marin"
 CONDA_ENV="marin"
-# if we don't specify a cluster assume us-central2
+# if we don't specify a cluster assume us-central2 or eu-west4
 CLUSTER=${1:-eu-west4}
 
 # Check if Session Exists

@@ -5,7 +5,7 @@ from optimizer_sweep.Muon.muon_config import MuonTrainConfig
 from optimizer_sweep.Scion.scion_config import ScionTrainConfig
 from optimizer_sweep.Soap.soap_config import SoapTrainConfig
 from optimizer_sweep.Sophia.sophia_config import SophiaTrainConfig
-
+from optimizer_sweep.AdamMini.adam_mini_config import AdamMiniTrainConfig
 map_tag_to_config = {
     'adamw': SimpleTrainConfig,
     'nadamw': SimpleTrainConfig,
@@ -16,6 +16,7 @@ map_tag_to_config = {
     'muon': MuonTrainConfig,
     'scion': ScionTrainConfig,
     'soap': SoapTrainConfig,
-    'soapb': SoapTrainConfig,
-    'sophia': SophiaTrainConfig
+    'soape': SoapTrainConfig,
+    'sophia': SophiaTrainConfig,
+    'mini': AdamMiniTrainConfig
 }

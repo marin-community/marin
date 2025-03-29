@@ -16,7 +16,7 @@ def template(model_size,
              optimizer,
              baseline_config,
              sweep_grids,
-             tpu_type = 'v4-128',
+             tpu_type = 'v5litepod-128',
              DEBUG_MODE=False,
              random_suffix=None,
              force_run=False):
@@ -42,6 +42,7 @@ def template(model_size,
         # For force run, just create a single train config from baseline
         target_steps, _ = create_configs(baseline_config, {}, target_data=target_data)  # Empty sweep grid
         train_configs = config_to_train_config([baseline_config], target_steps, config_class=config_class, tpu_type=tpu_type)
+        tags = ('debug',) + tags
     else:
         approximate_best_config_list = []
         if check_baseline_run(baseline_config, tags):
@@ -54,12 +55,16 @@ def template(model_size,
             print('Dont have a choice')
             train_configs = optimal_run_set(baseline_config)
         else:
-            approximate_train_configs_len = [len(optimal_run_set(approx_baseline_config)) for approx_baseline_config in approximate_best_config_list] 
-            for i in range(len(approximate_best_config_list)):
-                if(approximate_train_configs_len[i] == min(approximate_train_configs_len)):
-                    break
-            baseline_config = approximate_best_config_list[i]
             train_configs = optimal_run_set(baseline_config)
+            approximate_train_configs_len = [len(optimal_run_set(approx_baseline_config)) for approx_baseline_config in approximate_best_config_list] 
+            if (min(approximate_train_configs_len) <= len(train_configs) - 10):
+                for i in range(len(approximate_best_config_list)):
+                    if(approximate_train_configs_len[i] == min(approximate_train_configs_len)):
+                        break
+                baseline_config = approximate_best_config_list[i]
+                train_configs = optimal_run_set(baseline_config)
+            else:
+                print('All configs are nearly equally close to finish')
 
     print(f'Choose: {baseline_config}')
     print(f'Closest to finish: {len(train_configs)}')

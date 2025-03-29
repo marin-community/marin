@@ -2,7 +2,7 @@
 import glob
 import re
 import ast
-from optimizer_sweep.utils_simp import approximate, create_configs, check_baseline_run, grab_best_run
+from optimizer_sweep.utils_simp import approximate, create_configs, check_baseline_run, grab_best_run, calculate_data_tag
 import subprocess
 import random
 
@@ -156,10 +156,30 @@ def judge_success(first_baseline, tags):
 
 if __name__ == '__main__':
     # Loop through each file in the list and read its content
-    from optimizer_sweep.spin_up_more import rewrite
-    rewrite('soapb', '130m', 1, '130m', 2)
-    rewrite('soapb', '130m', 4, '130m', 4)
-    rewrite('soapb', '130m', 4, '130m', 8)
+    # from optimizer_sweep.spin_up_more import rewrite
+    # rewrite('soape', '130m', 1, '130m', 1)
+    # rewrite('soape', '130m', 2, '130m', 4)
+    # rewrite('soape', '130m', 4, '130m', 8)
+    # rewrite('soape', '130m', 8, '300m', 1)
+    # rewrite('soape', '300m', 1, '520m', 1)
+    # rewrite('cautious', '130m', 8, '300m', 1)
+    # rewrite('cautious', '300m', 1, '520m', 1)
+    # rewrite('kron', '130m', 1, '130m', 2)
+    # rewrite('kron', '130m', 2, '130m', 4)
+    # rewrite('kron', '130m', 4, '130m', 8)
+    # rewrite('kron', '130m', 8, '300m', 1)
+    # rewrite('kron', '300m', 1, '520m', 1)
+    # rewrite('scion', '130m', 1, '130m', 2)
+    # rewrite('scion', '130m', 2, '130m', 4)
+    # rewrite('scion', '130m', 4, '130m', 8)
+    # rewrite('scion', '130m', 8, '300m', 1)
+    # rewrite('scion', '300m', 1, '520m', 1)
+    # rewrite('nadamw', '130m', 1, '130m', 2)
+    # rewrite('nadamw', '130m', 2, '130m', 4)
+    # rewrite('nadamw', '130m', 4, '130m', 8)
+    # rewrite('nadamw', '130m', 8, '300m', 1)
+    # rewrite('nadamw', '300m', 1, '520m', 1)
+
     for file_path in file_list:
         print(f'Going over: {file_path}')
         name = file_path.split('/')[1].split('.txt')[0]
@@ -171,10 +191,7 @@ if __name__ == '__main__':
         model_size = parsed_data['model_size']
         target_chinchilla = parsed_data['target_chinchilla']
         optimizer = parsed_data['optimizer_name']
-        if model_size == '130m':
-            chinchilla = 20 * 32 * (4 * 512 * 512 + 3 * 512 * 2048)
-        target_data  = target_chinchilla * chinchilla
-        data_size = f"{target_data//1_000_000_000}B"
+        target_data, data_size = calculate_data_tag(model_size, target_chinchilla)
         tags = (model_size, data_size, optimizer)
         with open(file_path, 'r') as f:
             lines = f.readlines()

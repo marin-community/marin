@@ -1,4 +1,5 @@
 from levanter.models.llama import LlamaConfig
+from levanter.models.attention import AttentionBackend
 
 def calculate_param(config):
     return config.num_layers * (
@@ -13,6 +14,7 @@ def calculate_chinchilla(config):
 # ----- Model definitions -----
 
 # 1) ~130M params: embed_dim=512 => intermediate=2048 => 8 heads
+# use jax flash attention for better numerical stability
 llama_130m = LlamaConfig(
     seq_len=4096,
     hidden_dim=512,
@@ -20,6 +22,27 @@ llama_130m = LlamaConfig(
     num_heads=8,
     num_kv_heads=8,         # following the same ratio as the original code
     num_layers=32,
+    attn_backend=AttentionBackend.JAX_FLASH,
+)
+
+llama_130m_new = LlamaConfig(
+    seq_len=4096,
+    hidden_dim=512,
+    intermediate_dim=2048,
+    num_heads=8,
+    num_kv_heads=8,         # following the same ratio as the original code
+    num_layers=32,
+    upcast_attn=True,
+)
+
+llama_130m_old = LlamaConfig(
+    seq_len=4096,
+    hidden_dim=512,
+    intermediate_dim=2048,
+    num_heads=8,
+    num_kv_heads=8,         # following the same ratio as the original code
+    num_layers=32,
+    attn_backend=AttentionBackend.SPLASH
 )
 
 # 2) ~300M params: embed_dim=768 => intermediate=3072 => 12 heads
@@ -59,6 +82,8 @@ map_tag_to_model = {
     "300m": llama_300m,
     "520m": llama_520m,
     "1.2b": llama_1_2b,
+    "130m_new": llama_130m_new,
+    "130m_old": llama_130m_old,
 }
 
     

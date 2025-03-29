@@ -10,7 +10,7 @@ if __name__ == "__main__":
         "preconditioner_lr": [1e-1, 2e-1],
         "max_grad_norm": [0.0, 1.0, 2.0],
         "normalize_grads": [False, True],
-        "partition_grads_into_blocks": [False, True],
+        "partition_grads_into_blocks": [True],
         "block_size": [128, 256, 512],
         "preconditioner_update_probability": [0.05, 0.1],
         "update_prob_flat_start": [500, 1000, 2000],

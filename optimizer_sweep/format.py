@@ -8,6 +8,7 @@ from optimizer_sweep.Muon.format import muon_train_config
 from optimizer_sweep.Scion.format import scion_train_config
 from optimizer_sweep.Soap.format import soap_train_config
 from optimizer_sweep.Sophia.format import sophia_train_config
+from optimizer_sweep.AdamMini.format import adam_mini_train_config
 
 
 
@@ -25,6 +26,7 @@ map_tag_to_format = {
     'muon': muon_train_config,
     'scion': scion_train_config,
     'soap': soap_train_config,
-    'soapb': soap_train_config,
-    'sophia': sophia_train_config
+    'soape': soap_train_config,
+    'sophia': sophia_train_config,
+    'mini': adam_mini_train_config
 }

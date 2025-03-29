@@ -24,7 +24,7 @@ if __name__ == "__main__":
         'nesterov': False, 
         'train_batch_size': 128
     }
-    model_size = "130m"
+    model_size = "130m_old"
     target_chinchilla = 1 
-    my_suffix = None 
+    my_suffix = '_splash_v5' 
     template(model_size, target_chinchilla, 'adamw', baseline_config, sweep_grids,  random_suffix=my_suffix, force_run=True) 
