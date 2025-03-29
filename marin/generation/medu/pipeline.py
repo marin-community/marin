@@ -20,9 +20,10 @@ from marin.generation.templates import (
     MEDU_BENCHMARK_DESCRIPTION_TEMPLATE,
     MEDU_DOCUMENT_LABELING_PROMPT,
 )
-from marin.utils import fsspec_exists
 
 logger = logging.getLogger("ray")
+
+MEDU_BENCHMARK_DESCRIPTION_PROMPT_FILENAME = "final_benchmark_description_prompt.txt"
 
 
 @dataclass
@@ -57,8 +58,8 @@ class MEDUPipelineConfig:
         save_templated_prompt: Whether to save the templated prompt. Use to debug the prompt passed into the model.
         output_filetype_override: The filetype to write the output data. We default to jsonl.gz to match dolma format.
         resource_config: The type of TPU hardware to use for the pipeline.
-        final_benchmark_description_prompt: The final benchmark description prompt. This allows a user to pass in a
-                                            prompt directly to the pipeline instead of getting the LLM to generate one.
+        medu_benchmark_description_template: The template that prompts an LLM to generate a description of the skills
+                                             that the data should have.
     """
 
     model_name: str
@@ -73,7 +74,6 @@ class MEDUPipelineConfig:
     save_templated_prompt: bool = False
     output_filetype_override: str = "jsonl.gz"
     resource_config: ResourceConfig = field(default_factory=lambda: TPU_V6E_8_STRICT_PACK)
-    final_benchmark_description_prompt: str = ""
     medu_benchmark_description_template: str = MEDU_BENCHMARK_DESCRIPTION_TEMPLATE
 
 
@@ -100,13 +100,12 @@ class MEDUPipeline:
         tensor_parallel_size: int = 1,
         engine_kwargs: dict[str, Any] | None = None,
         generation_kwargs: dict[str, Any] | None = None,
-        final_benchmark_description_prompt: str = "",
         medu_benchmark_description_template: str = MEDU_BENCHMARK_DESCRIPTION_TEMPLATE,
     ):
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         self.llm = vLLMProvider(model_name, engine_kwargs, generation_kwargs)
         self.generated_benchmark_descriptions = []
-        self.final_benchmark_description_prompt = final_benchmark_description_prompt
+        self.final_benchmark_description_prompt = ""
         self.medu_benchmark_description_template = medu_benchmark_description_template
         self.corpus_contents = corpus_contents
         self.tensor_parallel_size = tensor_parallel_size
@@ -234,7 +233,7 @@ def _label_documents(config: MEDUPipelineConfig, final_benchmark_description_pro
 
 
 def _get_final_benchmark_description_prompt_output_path(output_path: str):
-    return os.path.join(output_path, "final_benchmark_description_prompt.txt")
+    return os.path.join(output_path, MEDU_BENCHMARK_DESCRIPTION_PROMPT_FILENAME)
 
 
 def _write_final_benchmark_description_prompt(final_benchmark_description_prompt: str, output_path: str):
@@ -242,7 +241,7 @@ def _write_final_benchmark_description_prompt(final_benchmark_description_prompt
         f.write(final_benchmark_description_prompt)
 
 
-def _run_benchmark_labeling_pipeline(config: MEDUPipelineConfig):
+def _run_benchmark_prompt_generation_pipeline(config: MEDUPipelineConfig):
     scheduling_strategy = scheduling_strategy_fn(config.resource_config.num_tpu, config.resource_config.strategy)
     pipeline = MEDUPipeline.options(scheduling_strategy=scheduling_strategy).remote(
         config.model_name,
@@ -250,42 +249,27 @@ def _run_benchmark_labeling_pipeline(config: MEDUPipelineConfig):
         config.resource_config.num_tpu,
         config.engine_kwargs,
         config.generation_kwargs,
-        config.final_benchmark_description_prompt,
+        config.medu_benchmark_description_template,
     )
 
-    # Run the pipeline to generate the final benchmark description prompt if the user did not pass in a prompt.
-    if config.final_benchmark_description_prompt == "":
-        futures = []
-        futures.append(pipeline.get_benchmark_description_prompt.remote())
-        futures.append(pipeline.merge_benchmark_description_prompts.remote())
-        ray.get(futures)
+    futures = []
+    futures.append(pipeline.get_benchmark_description_prompt.remote())
+    futures.append(pipeline.merge_benchmark_description_prompts.remote())
+    ray.get(futures)
 
     logger.info(f"Starting document labeling pipeline for {config.input_path}")
     final_benchmark_description_prompt = ray.get(pipeline._get_final_benchmark_description_prompt.remote())
-
-    _write_final_benchmark_description_prompt(final_benchmark_description_prompt, config.output_path)
-
     return final_benchmark_description_prompt
 
 
-def run_medu_labeling_pipeline(config: MEDUPipelineConfig):
-    """Runs the pipeline that labels documents given some targeted corpus content.
+def run_data_filter_prompt_generation_pipeline(config: MEDUPipelineConfig):
+    """Runs the pipeline that generates a data filter prompt given some targeted corpus content.
 
-    This pipeline is split into two stages:
-    1. Generate a benchmark description prompt given some targeted corpus content.
-    2. Label the documents given the benchmark description prompt.
+    The user can either pass in a final benchmark description prompt or let the pipeline generate one
+    given some targeted corpus content.
     """
-    if not fsspec_exists(_get_final_benchmark_description_prompt_output_path(config.output_path)):
-        final_benchmark_description_prompt = _run_benchmark_labeling_pipeline(config)
-    else:
-        with fsspec.open(
-            _get_final_benchmark_description_prompt_output_path(config.output_path), "r", compression="infer"
-        ) as f:
-            final_benchmark_description_prompt = str(f.read())
-
-    label_documents_future = _label_documents(config, final_benchmark_description_prompt)
-    ray.get(label_documents_future)
-    logger.info(f"Finished document labeling pipeline for {config.output_path}")
+    final_benchmark_description_prompt = _run_benchmark_prompt_generation_pipeline(config)
+    _write_final_benchmark_description_prompt(final_benchmark_description_prompt, config.output_path)
 
 
 def run_medu_dataset_sampling_pipeline(config: DatasetOutputProcessorConfig):

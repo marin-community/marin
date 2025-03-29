@@ -13,10 +13,13 @@ from marin.classifiers.hf.train_classifier import HFTrainingConfig
 from marin.core.runtime import TaskConfig
 from marin.execution.executor import ExecutorStep, output_path_of, this_output_path
 from marin.generation.dataset import DatasetOutputProcessorConfig
+from marin.generation.inference import TextGenerationInferenceConfig
+from marin.generation.inference import run_inference as run_generation_inference
 from marin.generation.medu.pipeline import (
+    MEDU_BENCHMARK_DESCRIPTION_PROMPT_FILENAME,
     MEDUPipelineConfig,
+    run_data_filter_prompt_generation_pipeline,
     run_medu_dataset_sampling_pipeline,
-    run_medu_labeling_pipeline,
 )
 from marin.processing.classification.config.inference_config import InferenceConfig, RuntimeConfig
 from marin.processing.classification.consolidate import ConsolidateConfig, FilterConfig, consolidate
@@ -24,8 +27,12 @@ from marin.processing.classification.inference import run_inference
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
 from operations.download.filesystem.transfer import TransferConfig, transfer_files
 
-model_name = "/opt/gcsfuse_mount/models/meta-llama--Llama-3-3-70B-Instruct"
-tokenizer = AutoTokenizer.from_pretrained(model_name)
+# Quality teacher model that is used to label the initial data pool that will then be used
+# to train the quality filter model.
+# TODO(chris): Make this a parameter and support other models. As of now, we make Llama-70B-Instruct the
+# default quality teacher model.
+quality_teacher_model = "/opt/gcsfuse_mount/models/meta-llama--Llama-3-3-70B-Instruct"
+tokenizer = AutoTokenizer.from_pretrained(quality_teacher_model)
 
 
 def default_label(
@@ -33,6 +40,7 @@ def default_label(
     targeted_documents: list[list[str] | str],
     experiment_name: str,
     resource_config: ResourceConfig,
+    user_data_filter_prompt: str = "",
 ):
     """Label a set of documents with an LLM given some targeted documents.
 
@@ -40,6 +48,7 @@ def default_label(
         documents_to_be_labeled: Input path to documents to be labeled.
         targeted_documents: A list of strings or filepaths of documents that is being targeted for labeling.
         experiment_name: The name of the experiment.
+        user_data_filter_prompt: The user's prompt for the annotator model.
 
     Outputs:
         An ExecutorStep that represents the labeled documents. Each document is .jsonl.gz file with
@@ -48,25 +57,60 @@ def default_label(
     if isinstance(documents_to_be_labeled, ExecutorStep):
         documents_to_be_labeled = output_path_of(documents_to_be_labeled)
 
+    assert (
+        user_data_filter_prompt == "" or targeted_documents == []
+    ), "Cannot provide both a data filter prompt and targeted documents"
+
+    default_engine_kwargs = {
+        "tensor_parallel_size": resource_config.num_tpu,
+        "enforce_eager": False,
+        "max_model_len": 8192,
+    }
+
+    default_generation_kwargs = {
+        "temperature": 0.1,
+        "max_tokens": 1024,
+        "stop_token_ids": [tokenizer.eos_token_id, tokenizer.convert_tokens_to_ids("<|eot_id|>")],
+    }
+
+    if user_data_filter_prompt == "":
+        data_filter_prompt = ExecutorStep(
+            name=f"documents/medu-prompts/{experiment_name}",
+            fn=run_data_filter_prompt_generation_pipeline,
+            config=MEDUPipelineConfig(
+                model_name=quality_teacher_model,
+                corpus_contents=targeted_documents,
+                input_path=documents_to_be_labeled,
+                output_path=this_output_path(),
+                engine_kwargs=default_engine_kwargs,
+                generation_kwargs=default_generation_kwargs,
+                filetype="jsonl.zst",
+                output_filetype_override="jsonl.gz",
+                resource_config=resource_config,
+            ),
+        )
+        data_filter_prompt = output_path_of(data_filter_prompt, MEDU_BENCHMARK_DESCRIPTION_PROMPT_FILENAME)
+        template_type = "file"
+    else:
+        data_filter_prompt = user_data_filter_prompt
+        template_type = "string"
+
     # NOTE(chris): Assuming we are filtering from a jsonl.zst file such as DCLM.
     return ExecutorStep(
         name=f"documents/medu-labels/{experiment_name}",
-        fn=run_medu_labeling_pipeline,
-        config=MEDUPipelineConfig(
-            model_name=model_name,
-            corpus_contents=targeted_documents,
+        fn=run_generation_inference,
+        config=TextGenerationInferenceConfig(
+            model_name=quality_teacher_model,
             input_path=documents_to_be_labeled,
             output_path=this_output_path(),
-            engine_kwargs={
-                "tensor_parallel_size": resource_config.num_tpu,
-                "enforce_eager": False,
-                "max_model_len": 8192,
-            },
-            generation_kwargs={
-                "temperature": 0.1,
-                "max_tokens": 1024,
-                "stop_token_ids": [tokenizer.eos_token_id, tokenizer.convert_tokens_to_ids("<|eot_id|>")],
-            },
+            engine_kwargs=default_engine_kwargs,
+            generation_kwargs=default_generation_kwargs,
+            template=data_filter_prompt,
+            template_type=template_type,
+            num_instances=(1, 128),
+            tensor_parallel_size=resource_config.num_tpu,
+            save_templated_prompt=False,
+            prompt_column="text",
             filetype="jsonl.zst",
             output_filetype_override="jsonl.gz",
             resource_config=resource_config,
@@ -227,7 +271,7 @@ def default_candidate_anneal(filtered_documents: ExecutorStep, tpu_type: str, ex
 
     quality_ablation_model = default_quality_ablation(
         candidate_tokenized=candidate_tokenized,
-        config=QualityAblationConfig(tpu_type=tpu_type),
+        config=QualityAblationConfig(tpu_type=tpu_type, mcq_weight=0.0, candidate_weight=0.30),
     )
 
     return quality_ablation_model
@@ -237,6 +281,11 @@ def default_control_experiment(
     tpu_type: str,
 ):
     """Anneals on a controled dataset of DCLM-baseline.
+
+    To analyze the quality of the filtered dataset, we need a control model that is
+    trained on 100% DCLM baseline to compare the performance of the filtered dataset.
+    When analyzing improvements in the model trained from `default_candidate_anneal`,
+    we see if there is an improvement relative to this control model.
 
     Inputs:
         tpu_type: The type of TPU to use for training.

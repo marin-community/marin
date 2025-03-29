@@ -31,6 +31,9 @@ class MEDURunnerConfig:
     # In other words, the data that we "care" about finding more of
     corpus_content_paths: list[str]
 
+    # Defines the user's prompt for the annotator model
+    user_data_filter_prompt: str = ""
+
     # Name of the pretraining data path to group the output by in a single directory
     pretraining_data_path_name: str = "medu-dclm-pretraining-subset"
 
@@ -51,6 +54,7 @@ class MEDURunner:
             self.config.corpus_content_paths,
             self.config.experiment_name,
             self.config.labeler_resource_config,
+            self.config.user_data_filter_prompt,
         )
         self.encoder_model = default_quality_filter_model(
             self.labeled_documents, self.config.experiment_name, self.config.labeler_resource_config
