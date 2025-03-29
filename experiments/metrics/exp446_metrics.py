@@ -5,14 +5,14 @@ from datetime import datetime, timedelta
 
 import fsspec
 
-from .gcp_related import NumRestartConfig, get_gcp_restart_events
-from .github_related import (
+from experiments.metrics.gcp_related import NumRestartConfig, get_gcp_restart_events
+from experiments.metrics.github_related import (
     GithubApiConfig,
     GithubIssueConfig,
     get_average_duration_for_all_workflows,
     get_closed_issues_with_label,
 )
-from .wandb_related import WandbMetricsConfig, calculate_wandb_metrics
+from experiments.metrics.wandb_related import WandbMetricsConfig, calculate_wandb_metrics
 
 
 def main(save_path: str) -> dict:

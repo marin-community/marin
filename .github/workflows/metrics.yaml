@@ -59,13 +59,8 @@ jobs:
           credentials_json: ${{ secrets.NEW_GCP_JSON }}
 
       - name: Install dependencies
-        shell: bash -l {0}
         run: |
-          conda install -c conda-forge pandoc
-          npm install -g pandiff
-          python -m pip install --upgrade pip
-          pip install uv==0.5.11 toml
-          python scripts/install_all_pip_dep.py
+          pip install -e .[extras,metrics]
 
       - name: Start Ray cluster locally
         shell: bash -l {0}
@@ -78,5 +73,6 @@ jobs:
           WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
           GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PYTHONPATH: .
         run: |
-          python experiments/metrics/exp446_metrics.py  
+          python experiments/metrics/exp446_metrics.py
