@@ -18,6 +18,7 @@ from marin.training.training import TrainSFTOnPodConfig, run_levanter_sft
 # Get instruction dataset
 nemotron_dataset = get_instruction_dataset(
     "nvidia/Llama-Nemotron-Post-Training-Dataset-v1-SFT",
+    splits=["math", "safety"],
 )  # all splits
 
 # # TODO: Calculate actual number of tokens for proper steps
