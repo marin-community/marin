@@ -24,9 +24,9 @@ jobs:
         pip install -r requirements.txt
 
     - name: Set up Google Cloud SDK
-        uses: google-github-actions/setup-gcloud@v1
-        with:
-          project_id: ${{ secrets.GCP_PROJECT_ID }}
+      uses: google-github-actions/setup-gcloud@v1
+      with:
+        project_id: ${{ secrets.GCP_PROJECT_ID }}
 
     - name: Authenticate to Google Cloud
       uses: google-github-actions/auth@v2
