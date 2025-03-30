@@ -5,7 +5,6 @@ from datetime import datetime, timedelta
 
 import fsspec
 
-from experiments.metrics.gcp_related import NumRestartConfig, get_gcp_restart_events
 from experiments.metrics.github_related import (
     GithubApiConfig,
     GithubIssueConfig,
@@ -13,6 +12,10 @@ from experiments.metrics.github_related import (
     get_closed_issues_with_label,
 )
 from experiments.metrics.wandb_related import WandbMetricsConfig, calculate_wandb_metrics
+
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def main(save_path: str) -> dict:
@@ -27,6 +30,8 @@ def main(save_path: str) -> dict:
         )
     }
 
+    logger.info("Workflow Times per workflow: %s", final_metrics["Workflow Times per workflow"])
+
     label = "experiments"
     final_metrics[f"Closed Issues with label {label}"] = get_closed_issues_with_label(
         GithubIssueConfig(
@@ -35,6 +40,8 @@ def main(save_path: str) -> dict:
             label=label,
         ),
     )
+    
+    logger.info("Closed Issues with label %s: %s", label, final_metrics[f"Closed Issues with label {label}"])
 
     # events = get_gcp_restart_events(
     #     NumRestartConfig(time_since=((datetime.now() - timedelta(days=7)).isoformat("T") + "Z"))
