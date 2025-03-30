@@ -25,8 +25,7 @@ class InferenceConfig:
     # Ray runtime config.
     runtime: RuntimeConfig = field(
         default_factory=lambda: RuntimeConfig(
-            memory_limit_gb=10,
-            resources={"TPU": 4, "TPU-v4-8-head": 1},
+            memory_limit_gb=0.1,
         )
     )
 
