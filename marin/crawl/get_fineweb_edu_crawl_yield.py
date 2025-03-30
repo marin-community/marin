@@ -123,6 +123,23 @@ def decode_html(html: bytes) -> str | None:
 
 
 @ray.remote(
+    memory=16 * 1024 * 1024 * 1024,
+)
+def extract_text(record_id: str, html_decoded: str) -> tuple[str, str | None]:
+    try:
+        extracted_text = extract(
+            html_decoded,
+            favor_precision=True,
+            include_comments=False,
+            deduplicate=True,
+        )
+    except Exception:
+        logging.exception("Failed to extract text from decoded HTML")
+        extracted_text = None
+    return record_id, extracted_text
+
+
+@ray.remote(
     memory=64 * 1024 * 1024 * 1024,
     num_cpus=4,
 )
@@ -159,7 +176,9 @@ def extract_text_from_warc(
     fetched_urls = set()
     num_records_skipped = 0
     num_records_saved = 0
-    extracted_text_records = []
+
+    id_to_record = {}
+    text_extraction_refs = []
     with fsspec.open(warc_path, "rb", compression="gzip", block_size=1 * 1024 * 1024 * 1024) as file_stream:
         for record in tqdm(ArchiveIterator(file_stream)):
             if record.rec_type == "response":
@@ -167,45 +186,67 @@ def extract_text_from_warc(
                 fetched_urls.add(record_url)
 
                 content = record.content_stream().read()
+
+                if len(content) > 10_000_000:
+                    # Skip very lengthy pages
+                    num_records_skipped += 1
+                    continue
+
                 html_decoded: str | None = decode_html(content)
                 if not html_decoded or not record_url:
                     num_records_skipped += 1
                     continue
 
                 canonicalized_url = w3lib.url.canonicalize_url(record_url)
-                try:
-                    extracted_text = extract(
-                        html_decoded,
-                        favor_precision=True,
-                        include_comments=False,
-                        deduplicate=True,
-                    )
-                except Exception:
-                    logging.exception("Failed to extract text from decoded HTML")
-                    extracted_text = None
-
-                if not extracted_text:
-                    num_records_skipped += 1
-                    continue
-
                 record_id = record.rec_headers.get_header("WARC-Record-ID")
                 assert record_id
+
+                # Launch a text extraction job
+                text_extraction_refs.append(extract_text.remote(record_id, html_decoded))
+
                 record_date = record.rec_headers.get_header("WARC-Date")
                 assert record_date
-                out_dolma = DolmaFormattedFineWebEduRecord(
-                    id=record_id,
-                    source=data_source,
-                    format="text",
-                    text=extracted_text,
-                    metadata={
+                id_to_record[record_id] = {
+                    "id": record_id,
+                    "source": data_source,
+                    "format": "text",
+                    "metadata": {
                         "url": record_url,
                         "canonicalized_url": canonicalized_url,
                         "date": record_date,
                         "file_path": warc_path,
                     },
+                }
+
+    # Wait for the text extraction remote functions to finish
+    unfinished = text_extraction_refs
+    extracted_text_records = []
+    with tqdm(total=len(text_extraction_refs), desc="Matching records with extracted text") as pbar:
+        while unfinished:
+            # Returns the first ObjectRef that is ready.
+            finished, unfinished = ray.wait(unfinished, num_returns=1)
+            try:
+                (record_id, extracted_text) = ray.get(finished[0])
+            except Exception as e:
+                # If the extraction task fails, just skip it.
+                logger.exception(f"Failed to get extracted text: {e}")
+                extracted_text = None
+
+            if not extracted_text:
+                num_records_skipped += 1
+                pbar.update(1)
+                continue
+            extracted_text_records.append(
+                asdict(
+                    DolmaFormattedFineWebEduRecord(
+                        **id_to_record[record_id],
+                        text=extracted_text,
+                    )
                 )
-                extracted_text_records.append(asdict(out_dolma))
-                num_records_saved += 1
+            )
+            num_records_saved += 1
+            pbar.update(1)
+
     # Count the number of URLs that weren't fetched
     unfetched_urls = urls - fetched_urls
     logger.info(f"Out of {len(urls)} URLs to fetch, {len(unfetched_urls)} were not successfully fetched")
@@ -238,10 +279,11 @@ def get_shard_url_filter_results(input_path: str, output_directory: str) -> list
     fineweb URL filter on the examples.
     """
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-    success_path = os.path.join(output_directory, f"{os.path.basename(input_path)}.url_filter_results.json.gz")
+    output_path = os.path.join(output_directory, f"{os.path.basename(input_path)}.url_filter_results.json.gz")
+    success_path = output_path + ".SUCCESS"
     if fsspec_exists(success_path):
         logger.info(f"Found url filter success path at {success_path}, skipping")
-        with fsspec.open(success_path, compression="infer", block_size=1 * 1024 * 1024 * 1024) as f:
+        with fsspec.open(output_path, compression="infer", block_size=1 * 1024 * 1024 * 1024) as f:
             return json.load(f)
 
     logger.info("Applying the URL filter")
@@ -251,9 +293,17 @@ def get_shard_url_filter_results(input_path: str, output_directory: str) -> list
         url_filter.filter(document) for document in tqdm(documents_to_classify, desc="Applying the URL filter")
     ]
     logger.info("Applied the URL filter")
-    with fsspec.open(success_path, "w", compression="infer", block_size=1 * 1024 * 1024 * 1024) as fout:
+    assert len(examples_url_filter_results) == len(documents_to_classify)
+    with fsspec.open(output_path, "w", compression="infer", block_size=1 * 1024 * 1024 * 1024) as fout:
         json.dump(
             examples_url_filter_results,
+            fout,
+        )
+    with fsspec.open(success_path, "w", compression="infer", block_size=1 * 1024 * 1024 * 1024) as fout:
+        json.dump(
+            {
+                "input_path": input_path,
+            },
             fout,
         )
     return examples_url_filter_results
@@ -268,10 +318,11 @@ def get_shard_langid_filter_results(input_path: str, output_directory: str) -> l
     fineweb language ID filter on the examples.
     """
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-    success_path = os.path.join(output_directory, f"{os.path.basename(input_path)}.langid_filter_results.json.gz")
+    output_path = os.path.join(output_directory, f"{os.path.basename(input_path)}.langid_filter_results.json.gz")
+    success_path = output_path + ".SUCCESS"
     if fsspec_exists(success_path):
         logger.info(f"Found langid filter success path at {success_path}, skipping")
-        with fsspec.open(success_path, compression="infer", block_size=1 * 1024 * 1024 * 1024) as f:
+        with fsspec.open(output_path, compression="infer", block_size=1 * 1024 * 1024 * 1024) as f:
             return json.load(f)
 
     logger.info("Applying the LangID filter")
@@ -281,9 +332,18 @@ def get_shard_langid_filter_results(input_path: str, output_directory: str) -> l
         langid_filter.filter(document) for document in tqdm(documents_to_classify, desc="Applying the LangID filter")
     ]
     logger.info("Applied the LangID filter")
-    with fsspec.open(success_path, "w", compression="infer", block_size=1 * 1024 * 1024 * 1024) as fout:
+    assert len(examples_langid_filter_results) == len(documents_to_classify)
+
+    with fsspec.open(output_path, "w", compression="infer", block_size=1 * 1024 * 1024 * 1024) as fout:
         json.dump(
             examples_langid_filter_results,
+            fout,
+        )
+    with fsspec.open(success_path, "w", compression="infer", block_size=1 * 1024 * 1024 * 1024) as fout:
+        json.dump(
+            {
+                "input_path": input_path,
+            },
             fout,
         )
     return examples_langid_filter_results
@@ -298,12 +358,13 @@ def get_shard_gopher_repetition_filter_results(input_path: str, output_directory
     fineweb gopher repetition filter on the examples.
     """
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-    success_path = os.path.join(
+    output_path = os.path.join(
         output_directory, f"{os.path.basename(input_path)}.gopher_repetition_filter_results.json.gz"
     )
+    success_path = output_path + ".SUCCESS"
     if fsspec_exists(success_path):
         logger.info(f"Found gopher repetition filter success path at {success_path}, skipping")
-        with fsspec.open(success_path, compression="infer", block_size=1 * 1024 * 1024 * 1024) as f:
+        with fsspec.open(output_path, compression="infer", block_size=1 * 1024 * 1024 * 1024) as f:
             return json.load(f)
 
     logger.info("Applying the Gopher repetition filter")
@@ -313,10 +374,18 @@ def get_shard_gopher_repetition_filter_results(input_path: str, output_directory
         gopher_repetition_filter.filter(document)
         for document in tqdm(documents_to_classify, desc="Applying the Gopher repetition filter")
     ]
+    assert len(documents_to_classify) == len(examples_gopher_repetition_filter_results)
     logger.info("Applied the Gopher repetition filter")
-    with fsspec.open(success_path, "w", compression="infer", block_size=1 * 1024 * 1024 * 1024) as fout:
+    with fsspec.open(output_path, "w", compression="infer", block_size=1 * 1024 * 1024 * 1024) as fout:
         json.dump(
             examples_gopher_repetition_filter_results,
+            fout,
+        )
+    with fsspec.open(success_path, "w", compression="infer", block_size=1 * 1024 * 1024 * 1024) as fout:
+        json.dump(
+            {
+                "input_path": input_path,
+            },
             fout,
         )
     return examples_gopher_repetition_filter_results
@@ -331,12 +400,11 @@ def get_shard_gopher_quality_filter_results(input_path: str, output_directory: s
     fineweb gopher quality filter on the examples.
     """
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-    success_path = os.path.join(
-        output_directory, f"{os.path.basename(input_path)}.gopher_quality_filter_results.json.gz"
-    )
+    output_path = os.path.join(output_directory, f"{os.path.basename(input_path)}.gopher_quality_filter_results.json.gz")
+    success_path = output_path + ".SUCCESS"
     if fsspec_exists(success_path):
         logger.info(f"Found gopher quality filter success path at {success_path}, skipping")
-        with fsspec.open(success_path, compression="infer", block_size=1 * 1024 * 1024 * 1024) as f:
+        with fsspec.open(output_path, compression="infer", block_size=1 * 1024 * 1024 * 1024) as f:
             return json.load(f)
 
     logger.info("Applying the Gopher quality filter")
@@ -346,10 +414,19 @@ def get_shard_gopher_quality_filter_results(input_path: str, output_directory: s
         gopher_quality_filter.filter(document)
         for document in tqdm(documents_to_classify, desc="Applying the Gopher quality filter")
     ]
+    assert len(examples_gopher_quality_filter_results) == len(documents_to_classify)
+
     logger.info("Applied the Gopher quality filter")
-    with fsspec.open(success_path, "w", compression="infer", block_size=1 * 1024 * 1024 * 1024) as fout:
+    with fsspec.open(output_path, "w", compression="infer", block_size=1 * 1024 * 1024 * 1024) as fout:
         json.dump(
             examples_gopher_quality_filter_results,
+            fout,
+        )
+    with fsspec.open(success_path, "w", compression="infer", block_size=1 * 1024 * 1024 * 1024) as fout:
+        json.dump(
+            {
+                "input_path": input_path,
+            },
             fout,
         )
     return examples_gopher_quality_filter_results
@@ -364,10 +441,11 @@ def get_shard_c4_quality_filter_results(input_path: str, output_directory: str) 
     fineweb C4 quality filter on the examples.
     """
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-    success_path = os.path.join(output_directory, f"{os.path.basename(input_path)}.c4_quality_filter_results.json.gz")
+    output_path = os.path.join(output_directory, f"{os.path.basename(input_path)}.c4_quality_filter_results.json.gz")
+    success_path = output_path + ".SUCCESS"
     if fsspec_exists(success_path):
         logger.info(f"Found c4 quality filter success path at {success_path}, skipping")
-        with fsspec.open(success_path, compression="infer", block_size=1 * 1024 * 1024 * 1024) as f:
+        with fsspec.open(output_path, compression="infer", block_size=1 * 1024 * 1024 * 1024) as f:
             return json.load(f)
 
     logger.info("Applying the C4 quality filter")
@@ -377,10 +455,18 @@ def get_shard_c4_quality_filter_results(input_path: str, output_directory: str) 
         c4_quality_filter.filter(document)
         for document in tqdm(documents_to_classify, desc="Applying the C4 quality filter")
     ]
+    assert len(examples_c4_quality_filter_results) == len(documents_to_classify)
     logger.info("Applied the C4 quality filter")
-    with fsspec.open(success_path, "w", compression="infer", block_size=1 * 1024 * 1024 * 1024) as fout:
+    with fsspec.open(output_path, "w", compression="infer", block_size=1 * 1024 * 1024 * 1024) as fout:
         json.dump(
             examples_c4_quality_filter_results,
+            fout,
+        )
+    with fsspec.open(success_path, "w", compression="infer", block_size=1 * 1024 * 1024 * 1024) as fout:
+        json.dump(
+            {
+                "input_path": input_path,
+            },
             fout,
         )
     return examples_c4_quality_filter_results
@@ -416,10 +502,11 @@ def get_shard_quality_classifier_results(input_path: str, output_directory: str)
     fineweb quality classifier on the examples.
     """
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-    success_path = os.path.join(output_directory, f"{os.path.basename(input_path)}.quality_classifier_results.json.gz")
+    output_path = os.path.join(output_directory, f"{os.path.basename(input_path)}.quality_classifier_results.json.gz")
+    success_path = output_path + ".SUCCESS"
     if fsspec_exists(success_path):
         logger.info(f"Found quality classifier filter success path at {success_path}, skipping")
-        with fsspec.open(success_path, compression="infer", block_size=1 * 1024 * 1024 * 1024) as f:
+        with fsspec.open(output_path, compression="infer", block_size=1 * 1024 * 1024 * 1024) as f:
             return json.load(f)
 
     logger.info("Loading quality classifier...")
@@ -446,9 +533,16 @@ def get_shard_quality_classifier_results(input_path: str, output_directory: str)
 
     assert len(examples_scores) == len(examples_to_classify)
     logger.info(f"Ran quality classifier on {len(examples_to_classify)} examples")
-    with fsspec.open(success_path, "w", compression="infer", block_size=1 * 1024 * 1024 * 1024) as fout:
+    with fsspec.open(output_path, "w", compression="infer", block_size=1 * 1024 * 1024 * 1024) as fout:
         json.dump(
             examples_scores,
+            fout,
+        )
+    with fsspec.open(success_path, "w", compression="infer", block_size=1 * 1024 * 1024 * 1024) as fout:
+        json.dump(
+            {
+                "input_path": input_path,
+            },
             fout,
         )
     return examples_scores
@@ -588,10 +682,11 @@ def get_shard_indices_to_process(urls_input_directory: str) -> list[int]:
 def main(cfg: GetCrawlYieldConfig):
     shard_indices_to_process = ray.get(get_shard_indices_to_process.remote(cfg.urls_input_directory))
     random.shuffle(shard_indices_to_process)
+    num_shards_to_process = len(shard_indices_to_process)
 
     # Extract the text from the WARC for each shard
-    unfinished = []
-    for shard_index in shard_indices_to_process:
+    def submit_shard_text_extraction_task(shard_index):
+        nonlocal num_shards_submitted
         urls_path = os.path.join(cfg.urls_input_directory, f"links.{shard_index}.parquet")
         warc_path = os.path.join(cfg.crawl_input_directory, f"links.{shard_index}.warc.gz")
         robots_path = os.path.join(cfg.crawl_input_directory, f"links.{shard_index}_robots.json.gz")
@@ -604,19 +699,41 @@ def main(cfg: GetCrawlYieldConfig):
                 urls_path, warc_path, robots_path, errors_path, cfg.data_source, extracted_text_output_path
             )
         )
+        num_shards_submitted += 1
+        if num_shards_submitted % 10 == 0:
+            logger.info(
+                f"Submitted {num_shards_submitted} / {num_shards_to_process} shards "
+                f"({num_shards_submitted / num_shards_to_process})"
+            )
+
+    num_shards_submitted = 0
+    MAX_CONCURRENT_TEXT_EXTRACTION_TASKS = 50
+    unfinished = []
+    shard_indices_for_text_extraction = deepcopy(shard_indices_to_process)
+
+    for _ in range(min(MAX_CONCURRENT_TEXT_EXTRACTION_TASKS, len(shard_indices_for_text_extraction))):
+        submit_shard_text_extraction_task(shard_indices_for_text_extraction.pop())
+
     # Wait for text extraction jobs to finish
     total_urls = 0
     total_urls_fetched = 0
-    while unfinished:
-        finished, unfinished = ray.wait(unfinished, num_returns=len(unfinished), timeout=5)
-        try:
-            results = ray.get(finished)
-            for shard_urls, shard_urls_fetched in results:
-                total_urls += shard_urls
-                total_urls_fetched += shard_urls_fetched
-        except Exception as e:
-            logger.exception(f"Error processing shard: {e}")
-            raise
+    with tqdm(total=num_shards_to_process, desc="Extracting text") as pbar:
+        while unfinished:
+            finished, unfinished = ray.wait(unfinished, num_returns=len(unfinished), timeout=5)
+            try:
+                results = ray.get(finished)
+                for shard_urls, shard_urls_fetched in results:
+                    total_urls += shard_urls
+                    total_urls_fetched += shard_urls_fetched
+                    pbar.update(1)
+            except Exception as e:
+                logger.exception(f"Error processing shard: {e}")
+                raise
+            # If we have more shard paths left to process and we haven't hit the max
+            # number of concurrent tasks, add tasks to the unfinished queue.
+            while shard_indices_for_text_extraction and len(unfinished) < MAX_CONCURRENT_TEXT_EXTRACTION_TASKS:
+                submit_shard_text_extraction_task(shard_indices_for_text_extraction.pop())
+
     logger.info(f"Total URLs: {total_urls}\n" f"Total URLs fetched: {total_urls_fetched}\n")
 
     # Run the quality classifier on the extracted text
