@@ -682,10 +682,11 @@ def get_shard_indices_to_process(urls_input_directory: str) -> list[int]:
 def main(cfg: GetCrawlYieldConfig):
     shard_indices_to_process = ray.get(get_shard_indices_to_process.remote(cfg.urls_input_directory))
     random.shuffle(shard_indices_to_process)
+    num_shards_to_process = len(shard_indices_to_process)
 
     # Extract the text from the WARC for each shard
-    unfinished = []
-    for shard_index in shard_indices_to_process:
+    def submit_shard_text_extraction_task(shard_index):
+        nonlocal num_shards_submitted
         urls_path = os.path.join(cfg.urls_input_directory, f"links.{shard_index}.parquet")
         warc_path = os.path.join(cfg.crawl_input_directory, f"links.{shard_index}.warc.gz")
         robots_path = os.path.join(cfg.crawl_input_directory, f"links.{shard_index}_robots.json.gz")
@@ -698,19 +699,41 @@ def main(cfg: GetCrawlYieldConfig):
                 urls_path, warc_path, robots_path, errors_path, cfg.data_source, extracted_text_output_path
             )
         )
+        num_shards_submitted += 1
+        if num_shards_submitted % 10 == 0:
+            logger.info(
+                f"Submitted {num_shards_submitted} / {num_shards_to_process} shards "
+                f"({num_shards_submitted / num_shards_to_process})"
+            )
+
+    num_shards_submitted = 0
+    MAX_CONCURRENT_TEXT_EXTRACTION_TASKS = 50
+    unfinished = []
+    shard_indices_for_text_extraction = deepcopy(shard_indices_to_process)
+
+    for _ in range(min(MAX_CONCURRENT_TEXT_EXTRACTION_TASKS, len(shard_indices_for_text_extraction))):
+        submit_shard_text_extraction_task(shard_indices_for_text_extraction.pop())
+
     # Wait for text extraction jobs to finish
     total_urls = 0
     total_urls_fetched = 0
-    while unfinished:
-        finished, unfinished = ray.wait(unfinished, num_returns=len(unfinished), timeout=5)
-        try:
-            results = ray.get(finished)
-            for shard_urls, shard_urls_fetched in results:
-                total_urls += shard_urls
-                total_urls_fetched += shard_urls_fetched
-        except Exception as e:
-            logger.exception(f"Error processing shard: {e}")
-            raise
+    with tqdm(total=num_shards_to_process, desc="Extracting text") as pbar:
+        while unfinished:
+            finished, unfinished = ray.wait(unfinished, num_returns=len(unfinished), timeout=5)
+            try:
+                results = ray.get(finished)
+                for shard_urls, shard_urls_fetched in results:
+                    total_urls += shard_urls
+                    total_urls_fetched += shard_urls_fetched
+                    pbar.update(1)
+            except Exception as e:
+                logger.exception(f"Error processing shard: {e}")
+                raise
+            # If we have more shard paths left to process and we haven't hit the max
+            # number of concurrent tasks, add tasks to the unfinished queue.
+            while shard_indices_for_text_extraction and len(unfinished) < MAX_CONCURRENT_TEXT_EXTRACTION_TASKS:
+                submit_shard_text_extraction_task(shard_indices_for_text_extraction.pop())
+
     logger.info(f"Total URLs: {total_urls}\n" f"Total URLs fetched: {total_urls_fetched}\n")
 
     # Run the quality classifier on the extracted text
