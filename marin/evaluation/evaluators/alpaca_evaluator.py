@@ -18,7 +18,8 @@ class AlpacaEvaluator(VllmTpuEvaluator):
     Source: https://github.com/tatsu-lab/alpaca_eval?tab=readme-ov-file#quick-start
     """
 
-    BASE_RESULTS_PATH: str = os.path.join(VllmTpuEvaluator.CACHE_PATH, "alpaca_results")
+    CACHE_PATH: str = "/tmp/alpaca-eval"
+    BASE_RESULTS_PATH: str = os.path.join(CACHE_PATH, "alpaca_results")
 
     # AlpacaEval has 805 examples: https://huggingface.co/datasets/tatsu-lab/alpaca_eval/raw/main/alpaca_eval.json
     # so if the number of instances is not specified, we will run on all of them.
@@ -27,11 +28,28 @@ class AlpacaEvaluator(VllmTpuEvaluator):
     _pip_packages: ClassVar[list[Dependency]] = [*VllmTpuEvaluator.DEFAULT_PIP_PACKAGES, Dependency(name="alpaca-eval")]
 
     @staticmethod
-    def write_model_config_file(model: ModelConfig, path: str) -> None:
+    def write_model_config_file(model: ModelConfig, path: str, generation_params: dict | None = None) -> None:
         """
         Write out the necessary model configuration files for AlpacaEval
+
+        Args:
+            model (ModelConfig): The model configuration
+            path (str): Path where to write the config file
+            generation_params (dict, optional): Dictionary of generation parameters. Defaults to None.
         """
         model_name_or_path: str = model.name if model.path is None else model.path
+
+        # Set default parameters if not provided
+        if generation_params is None:
+            generation_params = {}
+
+        # Default values for generation parameters
+        temp = generation_params.get("temperature", 0.7)
+        presence_penalty = generation_params.get("presence_penalty", 0.0)
+        frequency_penalty = generation_params.get("frequency_penalty", 0.0)
+        repetition_penalty = generation_params.get("repetition_penalty", 1.0)
+        top_p = generation_params.get("top_p", 1.0)
+        top_k = generation_params.get("top_k", -1)
 
         # On how to write the model configuration file, see
         # https://github.com/tatsu-lab/alpaca_eval/blob/main/src/alpaca_eval/main.py#L241
@@ -40,19 +58,26 @@ class AlpacaEvaluator(VllmTpuEvaluator):
                 # Could be any arbitrary prompt template but the Cohere one prompts
                 # with the just instruction without any prompt engineering: {instruction}
                 # https://github.com/tatsu-lab/alpaca_eval/blob/main/src/alpaca_eval/models_configs/cohere/prompt.txt
-                "prompt_template": "cohere/prompt.txt",
+                "prompt_template": "Mixtral-8x7B-Instruct-v0.1/togetherai_prompt.txt",
                 "fn_completions": "vllm_local_completions",
                 "completions_kwargs": {
                     "model_name": model_name_or_path,
                     # Mandatory argument for `vllm_local_completions` in AlpacaEval
                     # https://github.com/tatsu-lab/alpaca_eval/blob/main/src/alpaca_eval/decoders/vllm_local.py#L21
                     "max_new_tokens": None,  # Following the config above, set to None to go up to EOS or context length
+                    "temperature": temp,
+                    "top_p": top_p,
+                    "top_k": top_k,
+                    "presence_penalty": presence_penalty,
+                    "frequency_penalty": frequency_penalty,
+                    "repetition_penalty": repetition_penalty,
                     "model_kwargs": {
                         "max_model_len": 4096,  # Cap at 4096 tokens
                         "dtype": "bfloat16",  # Explicitly use bfloat16 for TPU
                         # "enforce_eager": True, # Uncomment if you want to enforce eager execution to save memory
                         "device": "tpu",
                     },
+                    "is_chatml_prompt": True,
                 },
             }
         }
@@ -76,6 +101,7 @@ class AlpacaEvaluator(VllmTpuEvaluator):
         evals: list[str],
         output_path: str,
         max_eval_instances: int | None = None,
+        generation_params: dict | None = None,
     ) -> None:
         """
         Runs AlpacaEval on the specified model.
@@ -85,6 +111,7 @@ class AlpacaEvaluator(VllmTpuEvaluator):
             evals (List[str]): Does nothing. We just run on the default eval set.
             output_path (str): The path to save the evaluation results.
             max_eval_instances (int | None): The maximum number of evaluation instances to run.
+            generation_params (dict, optional): Dictionary containing generation parameters. Defaults to None.
         """
         try:
             # Set the OPENAI_API_KEY environment variable for the auto evaluator
@@ -93,12 +120,13 @@ class AlpacaEvaluator(VllmTpuEvaluator):
             # Download the model from GCS or HuggingFace
             model_name_or_path: str = self.download_model(model)
 
-            model_config_path: str = os.path.join(VllmTpuEvaluator.CACHE_PATH, model_name_or_path, "model_config.yaml")
-            self.write_model_config_file(model, model_config_path)
+            model_config_path: str = os.path.join(AlpacaEvaluator.CACHE_PATH, model_name_or_path, "model_config.yaml")
+            self.write_model_config_file(model, model_config_path, generation_params)
 
             # Construct the command and run AlpacaEval
             max_eval_instances = max_eval_instances or self.DEFAULT_MAX_INSTANCES
-            results_path: str = os.path.join(self.BASE_RESULTS_PATH, model_name_or_path)
+            model_name = os.path.basename(model_name_or_path)
+            results_path: str = os.path.join(AlpacaEvaluator.BASE_RESULTS_PATH, model_name)
             run_bash_command(
                 [
                     "alpaca_eval",
@@ -119,4 +147,4 @@ class AlpacaEvaluator(VllmTpuEvaluator):
             raise RuntimeError("AlpacaEval failed. Please check the logs for more information.") from e
         finally:
             self.cleanup(model)
-            shutil.rmtree(self.BASE_RESULTS_PATH, ignore_errors=True)
+            shutil.rmtree(AlpacaEvaluator.BASE_RESULTS_PATH, ignore_errors=True)
