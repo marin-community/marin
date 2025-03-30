@@ -54,7 +54,7 @@ llama_8b_nemotron_sft_model = ExecutorStep(
         supervised_data=LMSupervisedDatasetConfig(
             cache_dir=output_path_of(nemotron_llama_tokenize_step), input_field="input", output_field="output"
         ),
-        initialize_from_hf=False,
+        initialize_from_hf=True,
         model_name_or_path="meta-llama/Llama-3.1-8B",
         max_seq_len=4096,
         trainer=TrainerConfig(
@@ -108,9 +108,4 @@ llama_8b_nemotron_sft_model = ExecutorStep(
 
 
 if __name__ == "__main__":
-    executor_main(
-        steps=[
-            nemotron_llama_tokenize_step,
-            # llama_8b_nemotron_sft_model
-        ]
-    )
+    executor_main(steps=[nemotron_llama_tokenize_step, llama_8b_nemotron_sft_model])

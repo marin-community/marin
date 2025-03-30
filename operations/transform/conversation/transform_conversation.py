@@ -254,44 +254,44 @@ def transform_hf_dataset(cfg: TransformSFTDatasetConfig):
                 path=local_data_dir,
                 name=subset,
                 split=split,
-                streaming=True  # Enable streaming to avoid loading entire dataset into memory
+                streaming=True,  # Enable streaming to avoid loading entire dataset into memory
             )
-            
+
             # b. Create GCP target directory
             subset_output_path = get_shard_dir(cfg.output_path, subset, split)
             output_path = create_shard_output_directory(subset_output_path)
-            
+
             # c. Process and write in batches
             batch = []
             shard_idx = 0
-            
+
             for row in dataset:
                 batch.append(row)
-                
+
                 # When batch reaches shard size, process and write it
                 if len(batch) >= cfg.shard_size:
                     shard_filename = os.path.join(output_path, f"shard_{shard_idx:05d}.jsonl.gz")
                     logger.info(f"Writing shard {shard_idx} to {shard_filename}")
-                    
+
                     with fsspec.open(shard_filename, "wt", compression="gzip") as f:
                         transformed_batch = transform_rows(batch, cfg)
                         for transformed_row in transformed_batch:
                             f.write(f"{json.dumps(transformed_row)}\n")
-                    
+
                     # Clear batch and increment shard index
                     batch = []
                     shard_idx += 1
-            
+
             # Write any remaining rows in the final batch
             if batch:
                 shard_filename = os.path.join(output_path, f"shard_{shard_idx:05d}.jsonl.gz")
                 logger.info(f"Writing final shard {shard_idx} to {shard_filename}")
-                
+
                 with fsspec.open(shard_filename, "wt", compression="gzip") as f:
                     transformed_batch = transform_rows(batch, cfg)
                     for transformed_row in transformed_batch:
                         f.write(f"{json.dumps(transformed_row)}\n")
-            
+
             logging.log(logging.INFO, f"Wrote processed data to {output_path}")
     return cfg.output_path
 
