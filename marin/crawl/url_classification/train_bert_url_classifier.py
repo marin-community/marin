@@ -219,7 +219,7 @@ def train_model(
             dataloader_prefetch_factor=dataloader_prefetch_factor,
             report_to="wandb",
             logging_steps=10,
-            eval_steps=0.1,
+            eval_steps=0.25,
             eval_strategy="steps",
             save_strategy="no",
             max_length=max_length,
