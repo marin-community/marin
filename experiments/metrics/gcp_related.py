@@ -7,7 +7,7 @@ logger = logging.getLogger("ray")
 
 @dataclass
 class GcpApiConfig:
-    project_id: str = "hai-gcp-models"
+    project_id: str = os.getenv("GCP_PROJECT_ID", "hai-gcp-models")
     time_since: str = (datetime.now() - timedelta(days=7)).isoformat("T") + "Z"  # Format in RFC3339
 
 

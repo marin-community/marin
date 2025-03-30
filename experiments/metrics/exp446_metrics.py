@@ -41,19 +41,24 @@ def main(save_path: str) -> dict:
             label=label,
         ),
     )
-    
+
     logger.info("Closed Issues with label %s: %s", label, final_metrics[f"Closed Issues with label {label}"])
 
-    # events = get_gcp_restart_events(
-    #     NumRestartConfig(time_since=((datetime.now() - timedelta(days=7)).isoformat("T") + "Z"))
-    # )
-    # final_metrics["Number of Ray cluster restart"] = len(events)
-    # final_metrics["Ray restart events"] = events
+    events = get_gcp_restart_events(
+        NumRestartConfig(time_since=((datetime.now() - timedelta(days=7)).isoformat("T") + "Z"))
+    )
+    final_metrics["Number of Ray cluster restarts"] = len(events)
+    final_metrics["Ray restart events"] = events
+
+    logger.info("Number of Ray cluster restarts: %s", final_metrics["Number of Ray cluster restarts"])
 
     # get all runs; num_days=-1 means all runs
     experiment_metrics = calculate_wandb_metrics(
         WandbMetricsConfig(num_days=None, entity="stanford-mercury", project="marin")
     )
+
+    logger.info("Experiment metrics: %s", experiment_metrics)
+
     for key, value in experiment_metrics.items():
         final_metrics[key] = value
     today = datetime.now().strftime("%Y%m%d")
