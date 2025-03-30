@@ -29,7 +29,7 @@ class MEDURunnerConfig:
 
     # Defines the corpus content that we will create annotator prompts for
     # In other words, the data that we "care" about finding more of
-    corpus_content_paths: list[str]
+    corpus_content_paths: list[str] = field(default_factory=list)
 
     # Defines the user's prompt for the annotator model
     user_data_filter_prompt: str = ""
