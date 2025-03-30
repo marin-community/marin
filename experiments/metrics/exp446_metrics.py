@@ -11,6 +11,7 @@ from experiments.metrics.github_related import (
     get_average_duration_for_all_workflows,
     get_closed_issues_with_label,
 )
+from experiments.metrics.gcp_updated import get_gcp_restart_events, NumRestartConfig
 from experiments.metrics.wandb_related import WandbMetricsConfig, calculate_wandb_metrics
 from infra.github_wandb_metrics import log_data_to_wandb
 
@@ -19,7 +20,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-def main(save_path: str) -> dict:
+def compute_metrics(save_path: str) -> dict:
 
     final_metrics = {}
 
@@ -75,6 +76,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Get metrics.")
     parser.add_argument("--save_path", help="Save path for the metrics", default="gs://marin-us-central2/metrics")
     args = parser.parse_args()
-    data = main(args.save_path)
+    data = compute_metrics(args.save_path)
     print(data)
     log_data_to_wandb(data)
