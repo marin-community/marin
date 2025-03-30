@@ -57,23 +57,13 @@ class ExperimentConfig:
     classifier_training_datasets: list[DatasetConfig]
     input_data_source_to_path: dict[str, str] = field(
         default_factory=lambda: {
-            # "fineweb_2024_18": "gs://marin-us-central2/documents/fineweb-small-resiliparse-preserve-formatting-v2-e72837/md/CC-MAIN-2024-18/",
-            "quickstart_test": "gs://marin-us-central2/documents/quick-start-tests/",
+            "fineweb_2024_18": (
+                "gs://marin-us-central2/documents/fineweb-small-resiliparse-preserve-formatting-v2-e72837/md/CC-MAIN-2024-18/"
+            ),
+            # "quickstart_test": "gs://marin-us-central2/documents/quick-start-tests/",
         }
     )
     keep_fraction: float = 0.2  # Keep 20% of the documents
-
-
-def get_fasttext_model_path(model_path: str | ExecutorStep):
-    if isinstance(model_path, ExecutorStep):
-        return output_path_of(model_path, "model.bin")
-    return versioned(model_path)
-
-
-def get_bert_model_path(model_path: str | ExecutorStep):
-    if isinstance(model_path, ExecutorStep):
-        return output_path_of(model_path, "model")
-    return versioned(model_path)
 
 
 def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
@@ -104,7 +94,7 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
             datasets=config.classifier_training_datasets,
             output_path=this_output_path(),
             val_frac=versioned(0.1),
-            seed=versioned(1),
+            seed=versioned(0),
         ),
         pip_dependency_groups=[
             "--find-links https://storage.googleapis.com/libtpu-releases/index.html",
@@ -128,7 +118,7 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
             config=InferenceConfig(
                 input_path=input_data_path,
                 output_path=this_output_path(input_basename),
-                model_name=get_fasttext_model_path(fasttext_classifier_train),
+                model_name=output_path_of(fasttext_classifier_train, "model.bin"),
                 model_type="fasttext",
                 attribute_name=versioned(f"{config.experiment_name}-fasttext_classifier"),
                 runtime=RuntimeConfig(
@@ -145,7 +135,7 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
             config=InferenceConfig(
                 input_path=input_data_path,
                 output_path=this_output_path(input_basename),
-                model_name=get_bert_model_path(bert_classifier_train),
+                model_name=output_path_of(bert_classifier_train, "model"),
                 model_type="bert",
                 attribute_name=versioned(f"{config.experiment_name}-bert_classifier"),
                 runtime=RuntimeConfig(
