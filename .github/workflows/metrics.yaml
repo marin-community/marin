@@ -2,13 +2,13 @@ name: Run Python Script Daily
 
 on:
   schedule:
-    # Runs daily at 3:00 AM UTC
+    # runs daily at 3:00 AM UTC
     - cron: '0 3 * * *'
   push:
     branches:
       - main
       - metrics
-  workflow_dispatch:  # Allows manual triggers
+  workflow_dispatch:  # allows manual triggers
 
 jobs:
   run-script:
@@ -21,7 +21,6 @@ jobs:
     strategy:
       matrix:
         python-version: ["3.10"]
-        node-version: ["20.10.0"]
 
     steps:
       - name: Checkout code
@@ -34,11 +33,6 @@ jobs:
           python-version: ${{ matrix.python-version }}
           activate-environment: marin_metrics_env
           auto-activate-base: false
-
-      - name: Set up Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@v3
-        with:
-          node-version: ${{ matrix.node-version }}
 
       - name: Cache pip dependencies
         uses: actions/cache@v3
@@ -63,11 +57,6 @@ jobs:
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.NEW_GCP_JSON }}
-
-      - name: Start Ray cluster locally
-        shell: bash -l {0}
-        run: |
-          ray start --head
         
       - name: Run Python script
         shell: bash -l {0}
