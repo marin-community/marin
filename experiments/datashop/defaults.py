@@ -3,7 +3,6 @@ import os
 from transformers import AutoTokenizer
 
 from experiments.anneal_config import AnnealConfig
-from experiments.cooldown_quality import QualityAblationConfig, default_quality_ablation
 from experiments.dclm.tokenize_dclm import dclm_components_llama3
 from experiments.defaults import default_anneal, default_tokenize
 from experiments.evals.resource_configs import ResourceConfig
@@ -11,20 +10,20 @@ from experiments.llama import llama3_tokenizer
 from marin.classifiers.hf.launch_ray_training import LaunchConfig, launch_training_with_ray
 from marin.classifiers.hf.train_classifier import HFTrainingConfig
 from marin.core.runtime import TaskConfig
-from marin.execution.executor import ExecutorStep, output_path_of, this_output_path
-from marin.generation.dataset import DatasetOutputProcessorConfig
-from marin.generation.inference import TextGenerationInferenceConfig
-from marin.generation.inference import run_inference as run_generation_inference
-from marin.generation.medu.pipeline import (
+from marin.datashop.pipeline import (
     MEDU_BENCHMARK_DESCRIPTION_PROMPT_FILENAME,
     MEDUPipelineConfig,
     run_data_filter_prompt_generation_pipeline,
     run_medu_dataset_sampling_pipeline,
 )
+from marin.execution.executor import ExecutorStep, output_path_of, this_output_path
+from marin.generation.dataset import DatasetOutputProcessorConfig
+from marin.generation.inference import TextGenerationInferenceConfig
+from marin.generation.inference import run_inference as run_generation_inference
 from marin.processing.classification.config.inference_config import InferenceConfig, RuntimeConfig
 from marin.processing.classification.consolidate import ConsolidateConfig, FilterConfig, consolidate
 from marin.processing.classification.inference import run_inference
-from marin.processing.tokenize.data_configs import lm_mixture_data_config
+from marin.processing.tokenize.data_configs import TokenizerStep, lm_mixture_data_config
 from operations.download.filesystem.transfer import TransferConfig, transfer_files
 
 # Quality teacher model that is used to label the initial data pool that will then be used
@@ -40,7 +39,7 @@ def default_label(
     targeted_documents: list[list[str] | str],
     experiment_name: str,
     resource_config: ResourceConfig,
-    user_data_filter_prompt: str = "",
+    data_filter_prompt: str | None = None,
 ):
     """Label a set of documents with an LLM given some targeted documents.
 
@@ -48,7 +47,7 @@ def default_label(
         documents_to_be_labeled: Input path to documents to be labeled.
         targeted_documents: A list of strings or filepaths of documents that is being targeted for labeling.
         experiment_name: The name of the experiment.
-        user_data_filter_prompt: The user's prompt for the annotator model.
+        data_filter_prompt: The user's prompt for the annotator model.
 
     Outputs:
         An ExecutorStep that represents the labeled documents. Each document is .jsonl.gz file with
@@ -57,9 +56,9 @@ def default_label(
     if isinstance(documents_to_be_labeled, ExecutorStep):
         documents_to_be_labeled = output_path_of(documents_to_be_labeled)
 
-    assert (
-        user_data_filter_prompt == "" or targeted_documents == []
-    ), "Cannot provide both a data filter prompt and targeted documents"
+    assert (data_filter_prompt is not None and targeted_documents == []) or (
+        data_filter_prompt is None and targeted_documents != []
+    ), "Must provide either a data filter prompt or targeted documents, but not both"
 
     default_engine_kwargs = {
         "tensor_parallel_size": resource_config.num_tpu,
@@ -74,9 +73,9 @@ def default_label(
     }
 
     # If the user does not provide a data filter prompt, we generate one using the MEDU pipeline.
-    if user_data_filter_prompt == "":
+    if data_filter_prompt is None:
         data_filter_prompt = ExecutorStep(
-            name=f"documents/medu-prompts/{experiment_name}",
+            name=f"documents/datashop-prompts/{experiment_name}",
             fn=run_data_filter_prompt_generation_pipeline,
             config=MEDUPipelineConfig(
                 model_name=quality_teacher_model,
@@ -93,12 +92,11 @@ def default_label(
         data_filter_prompt = output_path_of(data_filter_prompt, MEDU_BENCHMARK_DESCRIPTION_PROMPT_FILENAME)
         template_type = "file"
     else:
-        data_filter_prompt = user_data_filter_prompt
         template_type = "string"
 
     # NOTE(chris): Assuming we are filtering from a jsonl.zst file such as DCLM.
     return ExecutorStep(
-        name=f"documents/medu-labels/{experiment_name}",
+        name=f"documents/datashop-labels/{experiment_name}",
         fn=run_generation_inference,
         config=TextGenerationInferenceConfig(
             model_name=quality_teacher_model,
@@ -116,11 +114,11 @@ def default_label(
             output_filetype_override="jsonl.gz",
             resource_config=resource_config,
         ),
-        override_output_path=f"documents/medu-labels/{experiment_name}",
+        override_output_path=f"documents/datashop-labels/{experiment_name}",
     )
 
 
-def default_quality_filter_model(labeled_documents: ExecutorStep, experiment_name: str, resource_config: ResourceConfig):
+def default_train_quality_model(labeled_documents: ExecutorStep, experiment_name: str, resource_config: ResourceConfig):
     """Train a quality filter model based on the set of labeled documents.
 
     Inputs:
@@ -132,7 +130,7 @@ def default_quality_filter_model(labeled_documents: ExecutorStep, experiment_nam
         An ExecutorStep that represents the quality filter model.
     """
     dataset = ExecutorStep(
-        name=f"documents/medu-datasets/{experiment_name}",
+        name=f"documents/datashop-datasets/{experiment_name}",
         fn=run_medu_dataset_sampling_pipeline,
         config=DatasetOutputProcessorConfig(
             input_path=output_path_of(labeled_documents),
@@ -141,8 +139,8 @@ def default_quality_filter_model(labeled_documents: ExecutorStep, experiment_nam
     ).cd("sampled")
 
     max_length = 512
-    medu_classifier_remote = ExecutorStep(
-        name=f"classifiers/medu-bert/{experiment_name}",
+    datashop_classifier_remote = ExecutorStep(
+        name=f"classifiers/datashop-bert/{experiment_name}",
         fn=launch_training_with_ray,
         config=LaunchConfig(
             training_config=HFTrainingConfig(
@@ -155,24 +153,24 @@ def default_quality_filter_model(labeled_documents: ExecutorStep, experiment_nam
                 eval_steps=100,
                 save_steps=100,
                 logging_steps=10,
-                run_name=f"medu-classifier-{experiment_name}-max-length-{max_length}",
+                run_name=f"datashop-classifier-{experiment_name}-max-length-{max_length}",
                 tpu_num_cores=resource_config.num_tpu,
             ),
             resource_config=resource_config,
         ),
     )
     # Download the model locally to GCSFuse mount path for inference
-    medu_classifier = ExecutorStep(
-        name=f"gcsfuse_mount/medu-models/{experiment_name}-classifier",
+    datashop_classifier = ExecutorStep(
+        name=f"gcsfuse_mount/datashop-models/{experiment_name}-classifier",
         fn=transfer_files,
         config=TransferConfig(
-            input_path=output_path_of(medu_classifier_remote),
+            input_path=output_path_of(datashop_classifier_remote),
             output_path=this_output_path(),
         ),
-        override_output_path=f"gcsfuse_mount/medu-models/{experiment_name}-classifier",
+        override_output_path=f"gcsfuse_mount/datashop-models/{experiment_name}-classifier",
     )
 
-    return medu_classifier
+    return datashop_classifier
 
 
 def default_quality_filter_and_consolidate(
@@ -202,14 +200,14 @@ def default_quality_filter_and_consolidate(
         input_data_path = output_path_of(input_data_path)
 
     attributes = ExecutorStep(
-        name=f"attributes/quality_filtering/medu/{input_data_name}-{experiment_name}",
+        name=f"attributes/quality_filtering/datashop/{input_data_name}-{experiment_name}",
         fn=run_inference,
         config=InferenceConfig(
             input_path=input_data_path,
             output_path=this_output_path(),
             model_name=model_path,
             model_type="gte",
-            attribute_name=f"medu-{experiment_name}",
+            attribute_name=f"datashop-{experiment_name}",
             runtime=RuntimeConfig(
                 memory_limit_gb=12,
                 resources={"TPU": 1},
@@ -230,7 +228,7 @@ def default_quality_filter_and_consolidate(
     )
 
     filtered_documents = ExecutorStep(
-        name=f"documents/quality_filtering/medu/{input_data_name}-{experiment_name}",
+        name=f"documents/quality_filtering/datashop/{input_data_name}-{experiment_name}",
         fn=consolidate,
         config=ConsolidateConfig(
             input_path=input_data_path,
@@ -239,7 +237,7 @@ def default_quality_filter_and_consolidate(
                 FilterConfig(
                     type="classify",
                     attribute_path=output_path_of(attributes),
-                    name=f"medu-{experiment_name}",
+                    name=f"datashop-{experiment_name}",
                     label="score",
                     keep_fraction=0.10,
                 ),
@@ -253,57 +251,58 @@ def default_quality_filter_and_consolidate(
     return filtered_documents
 
 
-def default_candidate_anneal(filtered_documents: ExecutorStep, tpu_type: str, experiment_name: str):
-    """Evaluates the quality of a set of candidate documents
-
-    Inputs:
-        filtered_documents: An ExecutorStep that represents the filtered documents.
-        tpu_type: The type of TPU to use for training.
-        experiment_name: The name of the experiment.
-
-    Outputs:
-        An ExecutorStep that the final model after annealing.
-    """
-    candidate_tokenized = default_tokenize(
-        name=f"medu-candidate-{experiment_name}",
-        dataset=output_path_of(filtered_documents),
-        tokenizer=llama3_tokenizer,
-    )
-
-    quality_ablation_model = default_quality_ablation(
-        candidate_tokenized=candidate_tokenized,
-        config=QualityAblationConfig(tpu_type=tpu_type, mcq_weight=0.0, candidate_weight=0.30),
-    )
-
-    return quality_ablation_model
-
-
-def default_control_experiment(
-    tpu_type: str,
-):
-    """Anneals on a controled dataset of DCLM-baseline.
-
-    To analyze the quality of the filtered dataset, we need a control model that is
-    trained on 100% DCLM baseline to compare the performance of the filtered dataset.
-    When analyzing improvements in the model trained from `default_candidate_anneal`,
-    we see if there is an improvement relative to this control model.
-
-    Inputs:
-        tpu_type: The type of TPU to use for training.
-        experiment_name: The name of the experiment.
-
-    Outputs:
-        An ExecutorStep that represents the control model after annealing.
-    """
-    control_model = default_anneal(
-        name="medu-control",
-        anneal_config=AnnealConfig(
+def _get_anneal_config(candidate_tokenized: TokenizerStep | None, tpu_type: str, experiment_name: str):
+    if candidate_tokenized is None:
+        return AnnealConfig(
             dataset_config=lm_mixture_data_config(
-                components={"dclm": dclm_components_llama3["dclm_baseline"]},
-                weights={"dclm": 1.0},
+                components={"dclm": dclm_components_llama3["dclm_baseline"]}, weights={"dclm": 1.0}
             ),
             tpu_type=tpu_type,
-        ),
-    )
+        )
+    else:
+        return AnnealConfig(
+            dataset_config=lm_mixture_data_config(
+                components={"dclm": dclm_components_llama3["dclm_baseline"], "candidate": candidate_tokenized},
+                weights={"dclm": 0.70, "candidate": 0.30},
+            ),
+            tpu_type=tpu_type,
+        )
 
-    return control_model
+
+def default_candidate_anneal(documents: ExecutorStep | None, tpu_type: str, experiment_name: str):
+    """Evaluates the quality of a set of candidate documents
+
+    To analyze the quality of the filtered dataset, we need to train two models:
+    1. A control model that is trained on 100% DCLM-baseline.
+    2. A candidate model that is trained on the filtered dataset.
+
+    We then compare the performance of the candidate model to the control model to
+    see if there is an improvement. We specify whether we are training the control
+    model or the candidate model by passing in `documents` as None.
+
+    Inputs:
+        documents: An ExecutorStep that represents the documents to be annealed. If None, we
+                will simply train the control model (100% DCLM-baseline).
+        tpu_type: The type of TPU to use for training.
+        experiment_name: The name of the experiment.
+
+    Outputs:
+        An ExecutorStep that represents the final model after annealing.
+    """
+    if documents is not None:
+        candidate_tokenized = default_tokenize(
+            name=f"datashop-candidate-{experiment_name}",
+            dataset=output_path_of(documents),
+            tokenizer=llama3_tokenizer,
+        )
+        model_name = f"datashop-candidate-{experiment_name}"
+    else:
+        candidate_tokenized = None
+        model_name = "datashop-control"
+
+    anneal_config = _get_anneal_config(candidate_tokenized, tpu_type, experiment_name)
+
+    return default_anneal(
+        name=model_name,
+        anneal_config=anneal_config,
+    )
