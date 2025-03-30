@@ -4,8 +4,8 @@ from dataclasses import dataclass
 from experiments.datashop.datashop_datasets import medu_dclm_annotation_subset, medu_dclm_pretraining_subset
 from experiments.datashop.datashop_runner import DatashopRunner, DatashopRunnerConfig
 from experiments.eval_datasets import mmlu_subject_eval
+from marin.datashop.pipeline import CorpusContent
 from marin.execution.executor import executor_main
-from marin.generation.medu.pipeline import CorpusContent
 
 # Humanities
 humanities = [

@@ -10,15 +10,15 @@ import ray
 from transformers import AutoTokenizer
 
 from experiments.evals.resource_configs import TPU_V6E_8_STRICT_PACK, ResourceConfig
-from marin.generation.dataset import DatasetOutputProcessorConfig, DatasetSampler
-from marin.generation.llm_generation import vLLMProvider
-from marin.generation.medu.dataset_processor import MeduDatasetOutputProcessor
-from marin.generation.ray_utils import scheduling_strategy_fn
-from marin.generation.templates import (
+from marin.datashop.dataset_processor import MeduDatasetOutputProcessor
+from marin.datashop.templates import (
     MEDU_BENCHMARK_DESCRIPTION_MERGING_TEMPLATE,
     MEDU_BENCHMARK_DESCRIPTION_TEMPLATE,
     MEDU_DOCUMENT_LABELING_PROMPT,
 )
+from marin.generation.dataset import DatasetOutputProcessorConfig, DatasetSampler
+from marin.generation.llm_generation import vLLMProvider
+from marin.generation.ray_utils import scheduling_strategy_fn
 
 logger = logging.getLogger("ray")
 
