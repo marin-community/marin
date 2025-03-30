@@ -1,7 +1,7 @@
 import os
 from dataclasses import dataclass
 
-from experiments.datashop.datashop_datasets import medu_dclm_annotation_subset, medu_dclm_pretraining_subset
+from experiments.datashop.datashop_datasets import datashop_dclm_annotation_subset, datashop_dclm_pretraining_subset
 from experiments.datashop.datashop_runner import DatashopRunner, DatashopRunnerConfig
 from experiments.eval_datasets import mmlu_subject_eval
 from marin.datashop.pipeline import CorpusContent
@@ -93,8 +93,8 @@ class MeduMMLUConfig:
     subset_names: list[str]
     experiment_name: str
     annotator_model_name: str = "Llama-3.3-70B-Instruct"
-    pretraining_data_path: str = medu_dclm_pretraining_subset
-    annotator_data_path: str = medu_dclm_annotation_subset
+    pretraining_data_path: str = datashop_dclm_pretraining_subset
+    annotator_data_path: str = datashop_dclm_annotation_subset
 
 
 class MMLUMeduPipeline(DatashopRunner):

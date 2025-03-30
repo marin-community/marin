@@ -15,8 +15,8 @@ dclm_baseline_global_shard_1_local_shard_1 = dclm_baseline.cd(
     "huggingface.co/datasets/mlfoundations/dclm-baseline-1.0/resolve/a3b142c/global-shard_01_of_10/local-shard_0_of_10"
 )
 
-medu_dclm_annotation_subset = ExecutorStep(
-    name="documents/medu-datasets/medu-dclm-annotation-subset",
+datashop_dclm_annotation_subset = ExecutorStep(
+    name="documents/datashop-datasets/datashop-dclm-annotation-subset",
     fn=transfer_files,
     config=TransferConfig(
         input_path=dclm_baseline_global_shard_1_local_shard_1,
@@ -25,8 +25,8 @@ medu_dclm_annotation_subset = ExecutorStep(
     ),
 )
 
-medu_dclm_pretraining_subset = ExecutorStep(
-    name="documents/medu-datasets/medu-dclm-pretraining-subset",
+datashop_dclm_pretraining_subset = ExecutorStep(
+    name="documents/datashop-datasets/datashop-dclm-pretraining-subset",
     fn=transfer_files,
     config=TransferConfig(
         input_path=dclm_baseline_global_shard_2,
@@ -35,4 +35,4 @@ medu_dclm_pretraining_subset = ExecutorStep(
 )
 
 if __name__ == "__main__":
-    executor_main([medu_dclm_annotation_subset, medu_dclm_pretraining_subset])
+    executor_main([datashop_dclm_annotation_subset, datashop_dclm_pretraining_subset])
