@@ -867,7 +867,7 @@ python marin/run/ray_run.py \
 
 ```
 python marin/run/ray_run.py \
-    --pip_deps '--find-links https://storage.googleapis.com/jax-releases/libtpu_releases.html,w3lib,trafilatura,jax[tpu],flax,transformers,requests,warcio[all] @ git+https://github.com/nelson-liu/warcio@brotlicffi,resiliparse,datatrove[processing] @ git+https://github.com/nelson-liu/datatrove@ray_executor_dedup_logging,spacy,cupy-cuda12x==13.3.0' \
+    --pip_deps '--find-links https://storage.googleapis.com/jax-releases/libtpu_releases.html,w3lib,trafilatura,jax[tpu],flax,transformers,requests,kenlm @ git+https://github.com/FredHaa/kenlm@fix-build-with-cmake-4.0,warcio[all] @ git+https://github.com/nelson-liu/warcio@brotlicffi,resiliparse,datatrove[processing] @ git+https://github.com/nelson-liu/datatrove@ray_executor_dedup_logging,spacy,cupy-cuda12x==13.3.0' \
     --no_wait -- \
     python marin/crawl/get_fineweb_edu_crawl_yield.py \
     --urls_input_directory gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-unique-100M/ \
@@ -878,6 +878,9 @@ python marin/run/ray_run.py \
 ```
 
 ```
+Total URLs: 100,000,000
+Total URLs fetched: 48,297,344
+Total URLs passing: 2,298,264
 ```
 
 5. Count the number of tokens in the fetched pages that pass the filtering
@@ -894,6 +897,8 @@ python marin/run/ray_run.py \
 Results
 
 ```
+Total number of tokens: 2,859,004,053
+Total number of documents: 2,298,264
 ```
 
 6. Take the fetched pages that pass the filtering pipeline and run MinHash
@@ -931,4 +936,6 @@ python marin/run/ray_run.py \
 Results
 
 ```
+Total number of tokens: 460,598,909
+Total number of documents: 363,552
 ```
