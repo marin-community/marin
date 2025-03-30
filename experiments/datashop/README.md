@@ -70,4 +70,4 @@ The first three steps (1-3) are to create the dataset and steps (4-5) are to tra
 
 ### Sharp edges
 There are a few sharp edges to the current implementation:
-1. The vLLM cluster is separated from the training cluster. Please run the `run_eval_cluster_steps` function in the vLLM cluster to get the encoder model then run the `run_all_steps` function in the training cluster to do the anneal.
+1. The vLLM cluster is separated from the training cluster. This is because vLLM uses a different libtpu version than levanter (used for training). We will need to either use a different inference engine or have a better way to isolate the dependencies for each step (e.g. uv). Please run the `run_eval_cluster_steps` function in the vLLM cluster to get the encoder model then run the `run_all_steps` function in the training cluster to do the anneal.
