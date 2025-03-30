@@ -1,9 +1,9 @@
 import os
 from dataclasses import dataclass
 
+from experiments.datashop.datashop_datasets import medu_dclm_annotation_subset, medu_dclm_pretraining_subset
+from experiments.datashop.datashop_runner import DatashopRunner, DatashopRunnerConfig
 from experiments.eval_datasets import mmlu_subject_eval
-from experiments.medu.medu_datasets import medu_dclm_annotation_subset, medu_dclm_pretraining_subset
-from experiments.medu.medu_runner import MEDURunner, MEDURunnerConfig
 from marin.execution.executor import executor_main
 from marin.generation.medu.pipeline import CorpusContent
 
@@ -97,13 +97,13 @@ class MeduMMLUConfig:
     annotator_data_path: str = medu_dclm_annotation_subset
 
 
-class MMLUMeduPipeline(MEDURunner):
+class MMLUMeduPipeline(DatashopRunner):
     def __init__(self, config: MeduMMLUConfig):
 
         self.config = config
         self.corpus_contents = self._create_corpus_contents()
         super().__init__(
-            MEDURunnerConfig(
+            DatashopRunnerConfig(
                 experiment_name=self.config.experiment_name,
                 annotator_model_name=self.config.annotator_model_name,
                 pretraining_data_path=self.config.pretraining_data_path,

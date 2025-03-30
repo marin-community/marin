@@ -1,18 +1,18 @@
 from dataclasses import dataclass, field
 
-from experiments.evals.resource_configs import TPU_V6E_8_STRICT_PACK, ResourceConfig
-from experiments.medu.defaults import (
+from experiments.datashop.defaults import (
     default_candidate_anneal,
     default_control_experiment,
     default_label,
     default_quality_filter_and_consolidate,
     default_quality_filter_model,
 )
+from experiments.evals.resource_configs import TPU_V6E_8_STRICT_PACK, ResourceConfig
 from marin.execution.executor import executor_main
 
 
 @dataclass
-class MEDURunnerConfig:
+class DatashopRunnerConfig:
     # Defines the name of the experiment
     experiment_name: str
 
@@ -44,8 +44,8 @@ class MEDURunnerConfig:
     training_tpu_type: str = "v6e-128"
 
 
-class MEDURunner:
-    def __init__(self, config: MEDURunnerConfig):
+class DatashopRunner:
+    def __init__(self, config: DatashopRunnerConfig):
         self.config = config
 
         # TODO(chris): In a later PR, support other TPU types

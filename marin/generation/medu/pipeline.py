@@ -11,7 +11,6 @@ from transformers import AutoTokenizer
 
 from experiments.evals.resource_configs import TPU_V6E_8_STRICT_PACK, ResourceConfig
 from marin.generation.dataset import DatasetOutputProcessorConfig, DatasetSampler
-from marin.generation.inference import TextGenerationInferenceConfig, run_inference
 from marin.generation.llm_generation import vLLMProvider
 from marin.generation.medu.dataset_processor import MeduDatasetOutputProcessor
 from marin.generation.ray_utils import scheduling_strategy_fn
@@ -209,27 +208,6 @@ class MEDUPipeline:
         # We only have one description left
         self.final_benchmark_description_prompt = self._get_final_medu_prompt(self.generated_benchmark_descriptions[0])
         logger.info(f"Final benchmark description prompt: {self.final_benchmark_description_prompt}")
-
-
-# Stage 3: Label documents
-def _label_documents(config: MEDUPipelineConfig, final_benchmark_description_prompt: str) -> list[str]:
-    text_generation_config = TextGenerationInferenceConfig(
-        input_path=config.input_path,
-        output_path=config.output_path,
-        model_name=config.model_name,
-        engine_kwargs=config.engine_kwargs,
-        generation_kwargs=config.generation_kwargs,
-        template=final_benchmark_description_prompt,
-        num_instances=config.num_instances,
-        tensor_parallel_size=config.resource_config.num_tpu,
-        save_templated_prompt=config.save_templated_prompt,
-        prompt_column=config.prompt_column,
-        filetype=config.filetype,
-        output_filetype_override=config.output_filetype_override,
-        resource_config=config.resource_config,
-    )
-    inference_future = run_inference.remote(text_generation_config)
-    return inference_future
 
 
 def _get_final_benchmark_description_prompt_output_path(output_path: str):
