@@ -60,7 +60,6 @@ class ExperimentConfig:
             "fineweb_2024_18": (
                 "gs://marin-us-central2/documents/fineweb-small-resiliparse-preserve-formatting-v2-e72837/md/CC-MAIN-2024-18/"
             ),
-            # "quickstart_test": "gs://marin-us-central2/documents/quick-start-tests/",
         }
     )
     keep_fraction: float = 0.2  # Keep 20% of the documents
@@ -140,6 +139,7 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
                 attribute_name=versioned(f"{config.experiment_name}-bert_classifier"),
                 runtime=RuntimeConfig(
                     memory_limit_gb=12,
+                    resources={"TPU": 4, "TPU-v4-8-head": 1},
                 ),
                 task=TaskConfig(max_in_flight=500),
             ),
