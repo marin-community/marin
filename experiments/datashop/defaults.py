@@ -73,6 +73,7 @@ def default_label(
         "stop_token_ids": [tokenizer.eos_token_id, tokenizer.convert_tokens_to_ids("<|eot_id|>")],
     }
 
+    # If the user does not provide a data filter prompt, we generate one using the MEDU pipeline.
     if user_data_filter_prompt == "":
         data_filter_prompt = ExecutorStep(
             name=f"documents/medu-prompts/{experiment_name}",
