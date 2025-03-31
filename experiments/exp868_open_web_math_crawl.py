@@ -1,3 +1,9 @@
+"""
+This script crawls the open-web-math dataset, which executed the `default_crawl` step for the dataset.
+
+Link to issue: https://github.com/stanford-crfm/marin/issues/868
+"""
+
 import json
 
 from experiments.crawl.default import default_crawl

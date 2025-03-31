@@ -5,14 +5,14 @@ source from common crawl. The output is written as sharded JSONL files, where
 each record is a Dolma-format open-web-math example in HTML.
 
 ```
-python marin/crawl/open-web-math/convert_open_web_math_to_html.py \
+python marin/crawl/open_web_math/convert_open_web_math_to_html.py \
     --input_path gs://marin-us-central2/raw/open-web-math-fde8ef8/fde8ef8/huggingface.co/datasets/open-web-math/open-web-math/resolve/fde8ef8/data/ \
     --html_output_path gs://marin-us-central2/documents/open-web-math-fde8ef8/html/
 ```
 
 ```
 ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- \
-    python marin/crawl/open-web-math/convert_open_web_math_to_html.py \
+    python marin/crawl/open_web_math/convert_open_web_math_to_html.py \
     --input_path gs://marin-us-central2/raw/open-web-math-fde8ef8/fde8ef8/huggingface.co/datasets/open-web-math/open-web-math/resolve/fde8ef8/data/ \
     --html_output_path gs://marin-us-central2/documents/open-web-math-fde8ef8/html/
 ```

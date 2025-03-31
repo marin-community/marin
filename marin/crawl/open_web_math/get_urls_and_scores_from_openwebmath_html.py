@@ -9,7 +9,7 @@ Running on open-web-math:
 python marin/run/ray_run.py --no_wait \
     --pip_deps 'resiliparse,fasttext,lxml,py-asciimath,tabulate,w3lib' \
     -- \
-    python marin/crawl/open-web-math/get_urls_and_scores_from_openwebmath_html.py \
+    python marin/crawl/open_web_math/get_urls_and_scores_from_openwebmath_html.py \
     --html_input_path gs://marin-us-central2/documents/open-web-math-fde8ef8/html/ \
     --prefix openwebmath \
     --output_path gs://marin-us-central2/scratch/nfliu/urls_and_scores/open-web-math/

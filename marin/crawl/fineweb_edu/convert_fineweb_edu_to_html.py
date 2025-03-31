@@ -8,14 +8,14 @@ each record is a Dolma-format fineweb-edu example in HTML.
 To run on a single dump:
 
 ```
-python marin/crawl/fineweb-edu/convert_fineweb_edu_to_html.py \
+python marin/crawl/fineweb_edu/convert_fineweb_edu_to_html.py \
     --input_path gs://marin-us-central2/raw/fineweb-edu/CC-MAIN-2021-39/ \
     --html_output_path gs://marin-us-central2/documents/fineweb-edu/html/CC-MAIN-2021-39/
 ```
 
 ```
 ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- \
-    python marin/crawl/fineweb-edu/convert_fineweb_edu_to_html.py \
+    python marin/crawl/fineweb_edu/convert_fineweb_edu_to_html.py \
     --input_path gs://marin-us-central2/raw/fineweb-edu/CC-MAIN-2021-39/ \
     --html_output_path gs://marin-us-central2/documents/fineweb-edu/html/CC-MAIN-2021-39/
 ```
@@ -27,7 +27,7 @@ for fineweb_edu_dump_path in $(gcloud storage ls gs://marin-us-central2/raw/fine
     dump_name=$(basename -- ${fineweb_edu_dump_path})
 
     ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- \
-    python marin/crawl/fineweb-edu/convert_fineweb_edu_to_html.py \
+    python marin/crawl/fineweb_edu/convert_fineweb_edu_to_html.py \
     --input_path ${fineweb_edu_dump_path} \
     --html_output_path gs://marin-us-central2/documents/fineweb-edu/html/${dump_name}/
 done
