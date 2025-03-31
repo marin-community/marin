@@ -202,6 +202,9 @@ def train_model(
         return
 
     train_start_time = time.time()
+    gcs_checkpoint_path = os.path.join(output_path, "gcs_checkpoints")
+    gcs_model_output_path = os.path.join(output_path, "model_output")
+
     with tempfile.TemporaryDirectory() as tmp_dir:
         local_model_output_path = os.path.join(tmp_dir, "model_output")
         local_trainer_output_path = os.path.join(tmp_dir, "trainer_output")
@@ -221,7 +224,9 @@ def train_model(
             logging_steps=10,
             eval_steps=0.25,
             eval_strategy="steps",
-            save_strategy="no",
+            save_steps=0.25,
+            save_strategy="steps",
+            gcs_checkpoint_path=gcs_checkpoint_path,
             max_length=max_length,
         )
 
@@ -238,7 +243,7 @@ def train_model(
                 url_classifier_compute_eval_metrics,
             ),
         )
-        fsspec_cpdir(local_model_output_path, os.path.join(output_path, "model_output"))
+        fsspec_cpdir(local_model_output_path, gcs_model_output_path)
         try:
             fsspec_cpdir(local_trainer_output_path, os.path.join(output_path, "trainer_output"))
         except FileNotFoundError:

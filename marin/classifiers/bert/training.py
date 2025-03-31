@@ -6,6 +6,7 @@ Train BERT models.
 
 import logging
 import os
+import re
 import tempfile
 from collections import Counter
 from collections.abc import Callable
@@ -13,6 +14,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from functools import partial
 
+import fsspec
 import ray
 from datasets import Dataset, load_dataset
 from transformers import (
@@ -21,6 +23,7 @@ from transformers import (
     DataCollatorWithPadding,
     EvalPrediction,
     Trainer,
+    TrainerCallback,
     TrainingArguments,
 )
 
@@ -46,10 +49,18 @@ class BertTrainingArguments:
     logging_steps: float = 0.1
     eval_steps: float = 0.1
     eval_strategy: str = "steps"
-    save_strategy: str = "no"
 
     # Collation arguments
     max_length: int = 128
+
+    # Serialization arguments
+    save_strategy: str = "steps"
+    save_steps: float = 0.1
+    gcs_checkpoint_path: str | None = None
+    save_total_limit: int | None = 1
+    load_best_model_at_end: bool = True
+    metric_for_best_model: str = "eval_loss"
+    greater_is_better: bool = False
 
     def get_hf_training_args(self):
         return TrainingArguments(
@@ -66,6 +77,11 @@ class BertTrainingArguments:
             eval_steps=self.eval_steps,
             eval_strategy=self.eval_strategy,
             save_strategy=self.save_strategy,
+            save_steps=self.save_steps,
+            save_total_limit=self.save_total_limit,
+            load_best_model_at_end=self.load_best_model_at_end,
+            metric_for_best_model=self.metric_for_best_model,
+            greater_is_better=self.greater_is_better,
         )
 
 
@@ -138,6 +154,92 @@ def _mp_fn(
     model = BertForSequenceClassification.from_pretrained(
         hf_model, num_labels=train_dataset.features["label"].num_classes
     )
+    hf_training_args = bert_args.get_hf_training_args()
+
+    # Possibly download existing checkpoint from GCS
+    local_trainer_output_dir = hf_training_args.output_dir
+    resume_from_checkpoint = None
+
+    fs = fsspec.filesystem("gs")
+    if bert_args.gcs_checkpoint_path:
+        try:
+            # List possible checkpoint dirs in the GCS path
+            checkpoint_dirs = fs.glob(f"{bert_args.gcs_checkpoint_path}/checkpoint-*")
+            checkpoint_dirs = [p.rstrip("/") for p in checkpoint_dirs]
+            # ensure it ends with 'checkpoint-<step>'
+            checkpoint_dirs = [p for p in checkpoint_dirs if re.match(r".*checkpoint-\d+$", p)]
+            if checkpoint_dirs:
+                checkpoint_dirs.sort(key=lambda x: int(x.split("checkpoint-")[-1]))
+                latest_ckpt = checkpoint_dirs[-1]
+
+                # Sanity-check that 'pytorch_model.bin' (or another required file) is present
+                try:
+                    remote_files = fs.ls(latest_ckpt)
+                    remote_files_basenames = [os.path.basename(f) for f in remote_files]
+                    if "pytorch_model.bin" in remote_files_basenames:
+                        # Download it to local trainer_output/<checkpoint_name>
+                        ckpt_name = os.path.basename(latest_ckpt)
+                        local_ckpt_dir = os.path.join(local_trainer_output_dir, ckpt_name)
+                        logger.info(f"TPU worker {index} - found checkpoint {latest_ckpt}, downloading...")
+                        fs.get(latest_ckpt, local_ckpt_dir, recursive=True)
+                        resume_from_checkpoint = local_ckpt_dir
+                        logger.info(f"TPU worker {index} - will resume from local checkpoint {local_ckpt_dir}")
+                    else:
+                        logger.info(
+                            f"TPU worker {index} - latest checkpoint {latest_ckpt} is missing pytorch_model.bin?"
+                        )
+                except Exception as e:
+                    logger.warning(f"Error listing checkpoint dir {latest_ckpt}: {e}")
+            else:
+                logger.info(f"TPU worker {index} - no checkpoint-* directories found in {bert_args.gcs_checkpoint_path}")
+        except Exception as e:
+            logger.warning(f"TPU worker {index} - error scanning for checkpoints: {e}")
+
+    class GCSCheckpointCallback(TrainerCallback):
+        def on_save(self, args, state, control, **kwargs):
+            """
+            Called every time a checkpoint is saved locally.
+            We'll:
+              1. Upload the new checkpoint to GCS
+              2. Remove any older checkpoints on GCS that were rotated out locally
+            """
+            # Only upload from the primary process to avoid duplicates
+            if not args.should_save or not bert_args.gcs_checkpoint_path:
+                return
+
+            # 1. Upload the newly saved checkpoint directory to GCS
+            ckpt_dir_name = f"checkpoint-{state.global_step}" if state.global_step > 0 else "checkpoint-final"
+            local_ckpt_dir = os.path.join(args.output_dir, ckpt_dir_name)
+            remote_ckpt_dir = f"{self.gcs_output_dir}/{ckpt_dir_name}"
+
+            try:
+                logger.info(f"TPU worker {index} - Uploading new checkpoint {ckpt_dir_name} to {remote_ckpt_dir}")
+                fs.put(local_ckpt_dir, remote_ckpt_dir, recursive=True)
+            except Exception as ex:
+                logger.error(f"TPU worker {index} - Error uploading checkpoint {ckpt_dir_name} to GCS: {ex}")
+
+            # 2. Identify which checkpoints exist locally (after rotation)
+            local_ckpts = []
+            for entry in os.scandir(args.output_dir):
+                if entry.is_dir() and re.match(r"^checkpoint-\d+$", entry.name):
+                    local_ckpts.append(entry.name)
+
+            # 3. Compare with what's on remote and remove extraneous ones
+            #    (the Trainer only removes old checkpoints from the local output directory)
+            try:
+                remote_dirs = fs.glob(f"{self.gcs_output_dir}/checkpoint-*")
+                # example: ['gs://bucket/.../checkpoint-500', 'gs://bucket/.../checkpoint-1000', ...]
+                # Turn them into a set of subdirectory names
+                remote_ckpt_names = {os.path.basename(rd.rstrip("/")) for rd in remote_dirs}
+
+                # Any remote checkpoint not found in the local list is presumably rotated-out
+                to_remove = remote_ckpt_names - set(local_ckpts)
+                for ckpt_name in to_remove:
+                    rm_path = f"{self.gcs_output_dir}/{ckpt_name}"
+                    logger.info(f"TPU worker {index} - Removing old checkpoint on GCS: {rm_path} (rotated out locally).")
+                    fs.rm(rm_path, recursive=True)
+            except Exception as exc:
+                logger.error(f"TPU worker {index} - Error cleaning up old checkpoints on GCS: {exc}")
 
     trainer = Trainer(
         model,
@@ -146,9 +248,16 @@ def _mp_fn(
         eval_dataset=val_dataset,
         processing_class=tokenizer,
         data_collator=DataCollatorWithPadding(tokenizer=tokenizer),
+        callbacks=[GCSCheckpointCallback()],
         compute_metrics=partial(compute_eval_metrics, labels2id) if compute_eval_metrics else None,
     )
-    trainer.train()
+    # Start training, resuming if we found a checkpoint
+    if resume_from_checkpoint:
+        logger.info(f"TPU worker {index}: beginning training from checkpoint")
+        trainer.train(resume_from_checkpoint=resume_from_checkpoint)
+    else:
+        logger.info(f"TPU worker {index}: beginning training from scratch")
+        trainer.train()
 
     if index == 0:
         os.makedirs(model_path, exist_ok=True)
