@@ -224,11 +224,15 @@ def calculate_wandb_metrics(config: WandbMetricsConfig) -> dict[str, Any]:
     # best_bpb_1b, best_bpb_7b = None, None
     # best_bpb1b_run_id, best_bpb7b_run_id = None, None
     for run_id, metrics in run_metrics.items():
-        if metrics["eval/paloma/c4_en/bpb"] is not None:
+        if metrics["eval/paloma/c4_en/bpb"] is not None and metrics["parameter_count"] is not None:
             if not isinstance(metrics["eval/paloma/c4_en/bpb"], float):
                 logger.info(f"BPB for run {run_id} is a string: {metrics['eval/paloma/c4_en/bpb']}. Skipping.")
                 continue
-            num_parameters = float(metrics["parameter_count"])
+            try:
+                num_parameters = float(metrics["parameter_count"])
+            except (ValueError, TypeError):
+                logger.info(f"Invalid parameter count for run {run_id}: {metrics['parameter_count']}. Skipping.")
+                continue
             for scale_label, threshold in parameter_scales.items():
                 if num_parameters < threshold:
                     current_best_bpb = best_bpb_per_scale[scale_label]["bpb"]
