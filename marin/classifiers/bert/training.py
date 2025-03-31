@@ -15,6 +15,7 @@ from datetime import datetime
 from functools import partial
 
 import fsspec
+import fsspec.generic
 import ray
 from datasets import Dataset, load_dataset
 from transformers import (
@@ -197,11 +198,6 @@ def _mp_fn(
             logger.warning(f"TPU worker {index} - error scanning for checkpoints: {e}")
 
     class GCSCheckpointCallback(TrainerCallback):
-        def __init__(self):
-            super().__init__()
-            # Initialize the filesystem interface for GCS
-            self.fs = fsspec.filesystem("gs")
-
         def on_save(self, args, state, control, **kwargs):
             """
             Called every time a checkpoint is saved locally.
@@ -209,43 +205,16 @@ def _mp_fn(
               1. Upload the new checkpoint to GCS
               2. Remove any older checkpoints on GCS that were rotated out locally
             """
-            # Only upload from the primary process to avoid duplicates
-            if not args.should_save or not bert_args.gcs_checkpoint_path:
+            logger.info(f"TPU worker {index} - In on_save")
+            if not state.is_world_process_zero:
+                logger.info(f"TPU worker {index} - is not process 0, exiting")
                 return
 
-            # 1. Upload the newly saved checkpoint directory to GCS
-            ckpt_dir_name = f"checkpoint-{state.global_step}" if state.global_step > 0 else "checkpoint-final"
-            local_ckpt_dir = os.path.join(args.output_dir, ckpt_dir_name)
-            remote_ckpt_dir = f"{self.gcs_output_dir}/{ckpt_dir_name}"
-
             try:
-                logger.info(f"TPU worker {index} - Uploading new checkpoint {ckpt_dir_name} to {remote_ckpt_dir}")
-                self.fs.put(local_ckpt_dir, remote_ckpt_dir, recursive=True)
+                logger.info(f"TPU worker {index} - rsyncing {args.output_dir} to {self.gcs_output_dir}")
+                fsspec.generic.rsync(args.output_dir, self.gcs_output_dir, delete_missing=True)
             except Exception as ex:
-                logger.error(f"TPU worker {index} - Error uploading checkpoint {ckpt_dir_name} to GCS: {ex}")
-
-            # 2. Identify which checkpoints exist locally (after rotation)
-            local_ckpts = []
-            for entry in os.scandir(args.output_dir):
-                if entry.is_dir() and re.match(r"^checkpoint-\d+$", entry.name):
-                    local_ckpts.append(entry.name)
-
-            # 3. Compare with what's on remote and remove extraneous ones
-            #    (the Trainer only removes old checkpoints from the local output directory)
-            try:
-                remote_dirs = self.fs.glob(f"{self.gcs_output_dir}/checkpoint-*")
-                # example: ['gs://bucket/.../checkpoint-500', 'gs://bucket/.../checkpoint-1000', ...]
-                # Turn them into a set of subdirectory names
-                remote_ckpt_names = {os.path.basename(rd.rstrip("/")) for rd in remote_dirs}
-
-                # Any remote checkpoint not found in the local list is presumably rotated-out
-                to_remove = remote_ckpt_names - set(local_ckpts)
-                for ckpt_name in to_remove:
-                    rm_path = f"{self.gcs_output_dir}/{ckpt_name}"
-                    logger.info(f"TPU worker {index} - Removing old checkpoint on GCS: {rm_path} (rotated out locally).")
-                    self.fs.rm(rm_path, recursive=True)
-            except Exception as exc:
-                logger.error(f"TPU worker {index} - Error cleaning up old checkpoints on GCS: {exc}")
+                logger.error(f"TPU worker {index} - Error rsyncing {args.output_dir} to {self.gcs_output_dir}: {ex}")
 
     trainer = Trainer(
         model,
