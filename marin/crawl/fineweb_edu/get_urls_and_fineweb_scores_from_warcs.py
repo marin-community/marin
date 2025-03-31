@@ -8,7 +8,7 @@ FineWeb-Edu quality classifier.
 python marin/run/ray_run.py \
     --pip_deps '--find-links https://storage.googleapis.com/jax-releases/libtpu_releases.html,w3lib,trafilatura,jax[tpu],flax,transformers,requests,warcio,resiliparse' \
     --no_wait -- \
-    python marin/crawl/fineweb-edu/get_urls_and_fineweb_scores_from_warcs.py \
+    python marin/crawl/fineweb_edu/get_urls_and_fineweb_scores_from_warcs.py \
     --cc_dumps '["CC-MAIN-2022-05", "CC-MAIN-2022-21", "CC-MAIN-2022-27", "CC-MAIN-2022-33", "CC-MAIN-2022-40", "CC-MAIN-2022-49", "CC-MAIN-2023-06", "CC-MAIN-2023-14", "CC-MAIN-2023-23", "CC-MAIN-2023-40", "CC-MAIN-2023-50", "CC-MAIN-2024-10"]' \
     --num_warcs_to_sample 500 \
     --output_path gs://marin-us-central2/scratch/nfliu/urls_and_scores/fineweb-edu-cc/
