@@ -162,9 +162,10 @@ def _mp_fn(
 
     fs = fsspec.filesystem("gs")
     if bert_args.gcs_checkpoint_path:
+        checkpoint_glob_pattern = f"{bert_args.gcs_checkpoint_path.rstrip('/')}/checkpoint-*"
         try:
             # List possible checkpoint dirs in the GCS path
-            checkpoint_dirs = fs.glob(f"{bert_args.gcs_checkpoint_path}/checkpoint-*")
+            checkpoint_dirs = fs.glob(checkpoint_glob_pattern)
             checkpoint_dirs = [p.rstrip("/") for p in checkpoint_dirs]
             # ensure it ends with 'checkpoint-<step>'
             checkpoint_dirs = [p for p in checkpoint_dirs if re.match(r".*checkpoint-\d+$", p)]
@@ -191,7 +192,7 @@ def _mp_fn(
                 except Exception as e:
                     logger.warning(f"Error listing checkpoint dir {latest_ckpt}: {e}")
             else:
-                logger.info(f"TPU worker {index} - no checkpoint-* directories found in {bert_args.gcs_checkpoint_path}")
+                logger.info(f"TPU worker {index} - no directories match pattern {checkpoint_glob_pattern}")
         except Exception as e:
             logger.warning(f"TPU worker {index} - error scanning for checkpoints: {e}")
 
