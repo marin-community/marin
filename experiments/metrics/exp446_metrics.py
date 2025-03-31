@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 
 import fsspec
 
-from experiments.metrics.gcp_updated import NumRestartConfig, get_gcp_restart_events
+from experiments.metrics.gcp_related import NumRestartConfig, get_gcp_restart_events
 from experiments.metrics.github_related import (
     GithubApiConfig,
     GithubIssueConfig,
