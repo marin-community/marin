@@ -7,7 +7,7 @@ on:
   push:
     branches:
       - main
-  # allows manual triggers
+      - metrics
   workflow_dispatch: 
 
 jobs:
