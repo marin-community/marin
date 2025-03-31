@@ -8,7 +8,8 @@ on:
     branches:
       - main
       - metrics
-  workflow_dispatch:  # allows manual triggers
+  # allows manual triggers
+  workflow_dispatch: 
 
 jobs:
   run-script:
