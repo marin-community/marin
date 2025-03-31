@@ -229,6 +229,9 @@ def calculate_wandb_metrics(config: WandbMetricsConfig) -> dict[str, Any]:
         for scale in parameter_scales
     }
 
+    # Initialize final metrics dictionary
+    final_metrics = {}
+
     for run_id, metrics in run_metrics.items():
         if metrics["parameter_count"] is None:
             continue
@@ -300,6 +303,15 @@ def calculate_wandb_metrics(config: WandbMetricsConfig) -> dict[str, Any]:
                 scale: {
                     "run_id": data["bpb"]["run_id"],
                     "run_metrics": run_metrics[data["bpb"]["run_id"]] if data["bpb"]["run_id"] else None,
+                }
+                for scale, data in best_metrics_per_scale.items()
+            },
+            "best_macro_avg_acc": {
+                scale: {
+                    "run_id": data["macro_avg_acc"]["run_id"],
+                    "run_metrics": (
+                        run_metrics[data["macro_avg_acc"]["run_id"]] if data["macro_avg_acc"]["run_id"] else None
+                    ),
                 }
                 for scale, data in best_metrics_per_scale.items()
             },
