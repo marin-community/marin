@@ -1,13 +1,12 @@
-name: Run Python Script Daily
+name: Compute metrics
 
 on:
   schedule:
-    # runs daily at 3:00 AM UTC
-    - cron: '0 3 * * *'
+    # run weekly at 12 am Mon morning
+    - cron: '0 0 * * 1'
   push:
     branches:
       - main
-      - metrics
   # allows manual triggers
   workflow_dispatch: 
 
