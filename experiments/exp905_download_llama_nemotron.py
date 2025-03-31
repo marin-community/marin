@@ -108,4 +108,8 @@ llama_8b_nemotron_sft_model = ExecutorStep(
 
 
 if __name__ == "__main__":
-    executor_main(steps=[nemotron_llama_tokenize_step, llama_8b_nemotron_sft_model])
+    executor_main(
+        steps=[
+            # nemotron_llama_tokenize_step, llama_8b_nemotron_sft_model,
+        ]
+    )
