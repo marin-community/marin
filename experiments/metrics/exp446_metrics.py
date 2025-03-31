@@ -1,21 +1,20 @@
 import argparse
 import json
+import logging
 import os
 from datetime import datetime, timedelta
 
 import fsspec
 
+from experiments.metrics.gcp_updated import NumRestartConfig, get_gcp_restart_events
 from experiments.metrics.github_related import (
     GithubApiConfig,
     GithubIssueConfig,
     get_average_duration_for_all_workflows,
     get_closed_issues_with_label,
 )
-from experiments.metrics.gcp_updated import get_gcp_restart_events, NumRestartConfig
 from experiments.metrics.wandb_related import WandbMetricsConfig, calculate_wandb_metrics
 from infra.github_wandb_metrics import log_data_to_wandb
-
-import logging
 
 logger = logging.getLogger(__name__)
 

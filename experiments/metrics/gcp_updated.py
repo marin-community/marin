@@ -3,8 +3,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 # from google.api_core import exceptions
-#from google.cloud import bigquery
-#from google.cloud import billing as gcp_billing
+# from google.cloud import bigquery
+# from google.cloud import billing as gcp_billing
 
 logger = logging.getLogger("ray")
 
