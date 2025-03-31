@@ -28,7 +28,7 @@ class AdamMiniTrainConfig:
     z_loss_weight: float | None = None
     ema_beta: float | None = None
     """exponential moving average beta"""
-    
+    nesterov: bool | None = None
     id: str | None = None
     ckpt_path: str | None = None
     

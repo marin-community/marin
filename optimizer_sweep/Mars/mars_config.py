@@ -28,7 +28,6 @@ class MarsTrainConfig:
     cycle_length: int | list[int] | None = None
     z_loss_weight: float | None = None
     ema_beta: float | None = None
-    nesterov: bool | None = None
     """exponential moving average beta"""
     
     id: str | None = None
