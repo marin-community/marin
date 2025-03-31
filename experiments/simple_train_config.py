@@ -63,3 +63,8 @@ class SimpleTrainConfig:
 
     int8: bool = False
     """Int8 (quantized) training in Levanter."""
+
+    log_norms: int | None = None
+    """If not None, log the norms of gradients, opt states, params, updates by layer."""
+    log_histogram_too: bool = False
+    """ If log_norms is not None, log histograms too. This is much slower. """
