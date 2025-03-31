@@ -284,6 +284,9 @@ def default_train(
             data_seed=train_config.data_seed,
             eval_harness_steps=train_config.steps_per_task_eval or 10000,
             eval_harness=harness_config,
+            log_norms=train_config.log_norms,
+            log_hists=train_config.log_histogram_too,
+            split_scan_layers_for_log=True,
         ),
         pip_dependency_groups=["tokenize_train"],
     )

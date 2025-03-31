@@ -91,8 +91,28 @@ tootsie_8b_hypnotic_spoonbill = dataclasses.replace(
     override_output_path="checkpoints/tootsie-8b-hypnotic-spoonbill-2",
 )
 
+norm_tracking_spoonbill_train = dataclasses.replace(
+    tootsie_8b_hypnotic_spoonbill_train, log_norms=10, log_histogram_too=True
+)
+
+
+norm_tootsie_8b_hypnotic_spoonbill = dataclasses.replace(
+    default_train(
+        name="tootsie-8b-hypnotic-spoonbill-norms-2",
+        tokenized=spoonbill_mixture,
+        model_config=llama_8b,
+        train_config=norm_tracking_spoonbill_train,
+        use_default_validation=True,
+        tags=["llama", "8b", "ema", "exp916", "tootsie"],
+        # HF is having trouble today so skipping this.
+        eval_harness_tasks=[],
+    ),
+    override_output_path="checkpoints/tootsie-8b-hypnotic-spoonbill-norms-2",
+)
+
 
 if __name__ == "__main__":
     executor_main(
-        [tootsie_8b_hypnotic_spoonbill], description="Cooldown run for tootsie-8b model with some flan and tulu"
+        [tootsie_8b_hypnotic_spoonbill, norm_tootsie_8b_hypnotic_spoonbill],
+        description="Cooldown run for tootsie-8b model with some flan and tulu",
     )
