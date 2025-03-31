@@ -6,6 +6,9 @@ on:
   schedule:
     # run weekly at 12 am Mon morning
     - cron: '0 0 * * 1'
+  push:
+    branches:
+      - metrics
   workflow_dispatch: 
 
 jobs:

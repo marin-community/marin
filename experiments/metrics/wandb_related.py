@@ -251,7 +251,6 @@ def calculate_wandb_metrics(config: WandbMetricsConfig) -> dict[str, Any]:
                         current_best_bpb = best_metrics_per_scale[scale_label]["bpb"]["value"]
                         if current_best_bpb is None or bpb < current_best_bpb:
                             best_metrics_per_scale[scale_label]["bpb"] = {"value": bpb, "run_id": run_id}
-                        break
             except (ValueError, TypeError):
                 logger.info(f"Invalid BPB for run {run_id}: {metrics['eval/paloma/c4_en/bpb']}. Skipping BPB metric.")
 
@@ -269,7 +268,6 @@ def calculate_wandb_metrics(config: WandbMetricsConfig) -> dict[str, Any]:
                                 "value": macro_avg_acc,
                                 "run_id": run_id,
                             }
-                        break
             except (ValueError, TypeError):
                 logger.info(
                     f"Invalid macro_avg_acc for run {run_id}: {metrics['lm_eval/averages/macro_avg_acc']}. Skipping accuracy metric."
