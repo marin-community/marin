@@ -1,9 +1,16 @@
+"""
+This script crawls the fineweb-edu dataset, which executed the `default_crawl` step for each dump in the dataset.
+
+Link to issue: https://github.com/stanford-crfm/marin/issues/868
+"""
+
 import re
 
 from experiments.crawl.default import default_crawl
 from marin.crawl.common.schemas import HtmlExtractionConfig
 from marin.crawl.get_fineweb_edu_crawl_yield import filter_and_yield
 from marin.execution.executor import executor_main, this_output_path
+from marin.utils import fsspec_glob
 
 
 def url_modifier(url: str) -> str:
@@ -13,17 +20,22 @@ def url_modifier(url: str) -> str:
     return url
 
 
-fineweb_crawling_steps = default_crawl(
-    config=HtmlExtractionConfig(
-        input_path="gs://marin-us-central2/raw/open-web-math-fde8ef8/fde8ef8/huggingface.co/datasets/open-web-math/open-web-math/resolve/fde8ef8/data/",
-        output_path=this_output_path(),
-        source_name="open-web-math",
-        columns=["url", "file_path", "date"],
-        s3_url_modifier=url_modifier,
-    ),
-    yield_fn=filter_and_yield,
-    input_pattern="CC-MAIN-*/*_links.jsonl.gz",
-)
+fineweb_crawling_steps = []
+fineweb_dumps = fsspec_glob("gs://marin-us-central2/raw/fineweb-edu/*")
+
+for dump in fineweb_dumps:
+    step = default_crawl(
+        config=HtmlExtractionConfig(
+            input_path=dump,
+            output_path=this_output_path(),
+            source_name="open-web-math",
+            columns=["url", "file_path", "date"],
+            s3_url_modifier=url_modifier,
+        ),
+        yield_fn=filter_and_yield,
+        input_pattern="CC-MAIN-*/*_links.jsonl.gz",
+    )
+    fineweb_crawling_steps.append(step)
 
 if __name__ == "__main__":
     executor_main(
