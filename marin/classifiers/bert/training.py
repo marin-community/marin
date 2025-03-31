@@ -197,6 +197,11 @@ def _mp_fn(
             logger.warning(f"TPU worker {index} - error scanning for checkpoints: {e}")
 
     class GCSCheckpointCallback(TrainerCallback):
+        def __init__(self):
+            super().__init__()
+            # Initialize the filesystem interface for GCS
+            self.fs = fsspec.filesystem("gs")
+
         def on_save(self, args, state, control, **kwargs):
             """
             Called every time a checkpoint is saved locally.
@@ -215,7 +220,7 @@ def _mp_fn(
 
             try:
                 logger.info(f"TPU worker {index} - Uploading new checkpoint {ckpt_dir_name} to {remote_ckpt_dir}")
-                fs.put(local_ckpt_dir, remote_ckpt_dir, recursive=True)
+                self.fs.put(local_ckpt_dir, remote_ckpt_dir, recursive=True)
             except Exception as ex:
                 logger.error(f"TPU worker {index} - Error uploading checkpoint {ckpt_dir_name} to GCS: {ex}")
 
@@ -228,7 +233,7 @@ def _mp_fn(
             # 3. Compare with what's on remote and remove extraneous ones
             #    (the Trainer only removes old checkpoints from the local output directory)
             try:
-                remote_dirs = fs.glob(f"{self.gcs_output_dir}/checkpoint-*")
+                remote_dirs = self.fs.glob(f"{self.gcs_output_dir}/checkpoint-*")
                 # example: ['gs://bucket/.../checkpoint-500', 'gs://bucket/.../checkpoint-1000', ...]
                 # Turn them into a set of subdirectory names
                 remote_ckpt_names = {os.path.basename(rd.rstrip("/")) for rd in remote_dirs}
@@ -238,7 +243,7 @@ def _mp_fn(
                 for ckpt_name in to_remove:
                     rm_path = f"{self.gcs_output_dir}/{ckpt_name}"
                     logger.info(f"TPU worker {index} - Removing old checkpoint on GCS: {rm_path} (rotated out locally).")
-                    fs.rm(rm_path, recursive=True)
+                    self.fs.rm(rm_path, recursive=True)
             except Exception as exc:
                 logger.error(f"TPU worker {index} - Error cleaning up old checkpoints on GCS: {exc}")
 
