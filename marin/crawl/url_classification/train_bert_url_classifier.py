@@ -88,7 +88,7 @@ def make_url_classification_dataset(
     # First pass: Count total lines and build a set of all fetched URLs
     failing_fetched_urls = set()
     passing_fetched_urls = set()
-    for shard_path in tqdm(fetched_shard_paths, desc="Counting lines in fetched input records"):
+    for shard_path in tqdm(fetched_shard_paths, desc="Collecting URLs from fetched input records"):
         df = pd.read_parquet(shard_path)
         for record_metadata in df["metadata"]:
             if record_metadata["passes_all_filters"]:
@@ -97,7 +97,7 @@ def make_url_classification_dataset(
                 failing_fetched_urls.add(record_metadata["url"])
 
     unfetched_urls = set()
-    for shard_path in tqdm(url_shard_paths, desc="Counting lines in unfetched input records"):
+    for shard_path in tqdm(url_shard_paths, desc="Collecting URLs from unfetched input records"):
         # Read no columns => minimal overhead, but we still get the row count
         df = pd.read_parquet(shard_path)
         for link_target in df["link_target"]:
