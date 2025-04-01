@@ -10,6 +10,8 @@ that point the loss started to increase again. I still don't know why.
 
 import dataclasses
 
+from levanter.callbacks.watch import WatchConfig
+
 from experiments.dclm.tokenize_dclm import DCLM_MIXTURE_WEIGHTS
 from experiments.defaults import default_train
 from experiments.dolmino.tokenize_dolmino import get_dolmino_step
@@ -92,7 +94,12 @@ tootsie_8b_hypnotic_spoonbill = dataclasses.replace(
 )
 
 norm_tracking_spoonbill_train = dataclasses.replace(
-    tootsie_8b_hypnotic_spoonbill_train, log_norms=10, log_histogram_too=True
+    tootsie_8b_hypnotic_spoonbill_train,
+    watch=WatchConfig(
+        interval=10,
+        include_histograms=True,
+        watch_targets=["grads", "params", "opt_state", "updates"],
+    ),
 )
 
 
@@ -117,8 +124,12 @@ tootsie_8b_focused_spoonbill_train = dataclasses.replace(
     norm_tracking_spoonbill_train,
     # I saved this from spoonbill-norms-2 so it wouldn't get deleted
     initialize_from_checkpoint_path="gs://marin-us-central2/checkpoints/scratch-dlwh/spoonbill-norms/step-824524/",
-    # fp32 pushes the ram too high here
-    log_histogram_too=False,
+    watch=WatchConfig(
+        interval=10,
+        # fp32 pushes the ram too high here
+        include_histograms=False,
+        watch_targets=["grads", "params", "opt_state", "updates"],
+    ),
 )
 
 norm_tootsie_8b_focused_spoonbill_fp32_attention = dataclasses.replace(
@@ -140,8 +151,12 @@ tootsie_8b_focused_spoonbill_train_zloss = dataclasses.replace(
     norm_tracking_spoonbill_train,
     # I saved this from spoonbill-norms-2 so it wouldn't get deleted
     initialize_from_checkpoint_path="gs://marin-us-central2/checkpoints/scratch-dlwh/spoonbill-norms/step-824524/",
-    # fp32 pushes the ram too high here
-    log_histogram_too=False,
+    watch=WatchConfig(
+        interval=10,
+        # fp32 pushes the ram too high here
+        include_histograms=False,
+        watch_targets=["grads", "params", "opt_state", "updates"],
+    ),
     z_loss_weight=1e-4,  # same as olmo
     # let's try to get a good checkpoint before everything goes to hell
     steps_per_hf_export=5000,
