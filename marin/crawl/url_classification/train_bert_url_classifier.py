@@ -42,7 +42,7 @@ class TrainBertUrlClassifierConfig:
     batch_size: int = 64
     lr: float = 2e-5
     hf_model: str = "bert-base-uncased"
-    num_epochs: int = 1
+    num_epochs: int = 3
     seed: int = 0
     max_length: int = 512
     dataloader_num_workers: int = 0
