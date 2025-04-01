@@ -4,10 +4,12 @@ training.py
 Train BERT models.
 """
 
+import json
 import logging
 import os
 import re
 import tempfile
+import time
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -198,6 +200,16 @@ def _mp_fn(
             logger.warning(f"TPU worker {index} - error scanning for checkpoints: {e}")
 
     class GCSCheckpointCallback(TrainerCallback):
+        def __init__(
+            self,
+            gcs_output_dir: str,
+        ) -> None:
+            self.gcs_output_dir = gcs_output_dir
+            if index == 0:
+                logger.info(f"Creating output directory {gcs_output_dir}...")
+                with fsspec.open(os.path.join(gcs_output_dir, ".keep"), "w") as f:
+                    json.dump({"creation_time": time.time()}, f)
+
         def on_save(self, args, state, control, **kwargs):
             """
             Called every time a checkpoint is saved locally.
@@ -216,6 +228,13 @@ def _mp_fn(
             except Exception as ex:
                 logger.error(f"TPU worker {index} - Error rsyncing {args.output_dir} to {self.gcs_output_dir}: {ex}")
 
+    callbacks = []
+    if bert_args.gcs_checkpoint_path:
+        callbacks.append(
+            GCSCheckpointCallback(
+                bert_args.gcs_checkpoint_path,
+            )
+        )
     trainer = Trainer(
         model,
         bert_args.get_hf_training_args(),
@@ -223,7 +242,7 @@ def _mp_fn(
         eval_dataset=val_dataset,
         processing_class=tokenizer,
         data_collator=DataCollatorWithPadding(tokenizer=tokenizer),
-        callbacks=[GCSCheckpointCallback()],
+        callbacks=callbacks,
         compute_metrics=partial(compute_eval_metrics, labels2id) if compute_eval_metrics else None,
     )
     # Start training, resuming if we found a checkpoint
