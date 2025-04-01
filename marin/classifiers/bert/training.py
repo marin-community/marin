@@ -217,9 +217,7 @@ def _mp_fn(
               1. Upload the new checkpoint to GCS
               2. Remove any older checkpoints on GCS that were rotated out locally
             """
-            logger.info(f"TPU worker {index} - In on_save")
             if not state.is_world_process_zero:
-                logger.info(f"TPU worker {index} - is not process 0, exiting")
                 return
 
             try:
