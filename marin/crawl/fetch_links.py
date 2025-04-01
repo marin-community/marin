@@ -782,7 +782,7 @@ def get_shard_indices_to_process(urls_input_directory: str) -> list[int]:
 
 
 @draccus.wrap()
-def main(cfg: FetchLinksConfig):
+def process_shard_links(cfg: FetchLinksConfig):
     shard_indices_to_process = ray.get(get_shard_indices_to_process.remote(cfg.urls_input_directory))
     num_shards_to_process = len(shard_indices_to_process)
     random.shuffle(shard_indices_to_process)
@@ -829,4 +829,4 @@ def main(cfg: FetchLinksConfig):
 
 
 if __name__ == "__main__":
-    main()
+    process_shard_links()

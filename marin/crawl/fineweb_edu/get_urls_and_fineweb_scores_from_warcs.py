@@ -8,7 +8,7 @@ FineWeb-Edu quality classifier.
 python marin/run/ray_run.py \
     --pip_deps '--find-links https://storage.googleapis.com/jax-releases/libtpu_releases.html,w3lib,trafilatura,jax[tpu],flax,transformers,requests,warcio,resiliparse' \
     --no_wait -- \
-    python marin/crawl/fineweb-edu/get_urls_and_fineweb_scores_from_warcs.py \
+    python marin/crawl/fineweb_edu/get_urls_and_fineweb_scores_from_warcs.py \
     --cc_dumps '["CC-MAIN-2022-05", "CC-MAIN-2022-21", "CC-MAIN-2022-27", "CC-MAIN-2022-33", "CC-MAIN-2022-40", "CC-MAIN-2022-49", "CC-MAIN-2023-06", "CC-MAIN-2023-14", "CC-MAIN-2023-23", "CC-MAIN-2023-40", "CC-MAIN-2023-50", "CC-MAIN-2024-10"]' \
     --num_warcs_to_sample 500 \
     --output_path gs://marin-us-central2/scratch/nfliu/urls_and_scores/fineweb-edu-cc/
@@ -30,13 +30,13 @@ import ray
 import requests
 import trafilatura
 import w3lib.url
-from resiliparse.parse.encoding import bytes_to_str, detect_encoding
 from tqdm_loggable.auto import tqdm
 from trafilatura import extract
 from transformers import AutoTokenizer, FlaxAutoModelForSequenceClassification
 from warcio import ArchiveIterator
 
 from marin.core.runtime import cached_or_construct_output
+from marin.crawl.common.utils import decode_html
 from marin.utils import remove_tpu_lockfile_on_exit
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -62,24 +62,6 @@ class FineWebEduUrlWithScore:
     url: str
     canonicalized_url: str
     score: float
-
-
-def decode_html(html: bytes) -> str | None:
-    """
-    Given HTML (bytes), decode it into a string if possible. First try with
-    utf-8. If that doesn't work, try to detect the encoding.
-    """
-    try:
-        html = bytes_to_str(html, "utf-8")
-    except Exception:
-        encoding = detect_encoding(html)
-        if encoding is None or encoding == "utf-8":
-            return
-        try:
-            html = bytes_to_str(html, encoding)
-        except Exception:
-            return
-    return html
 
 
 def batched(iterable, n=1):
