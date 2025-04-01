@@ -26,13 +26,6 @@ from marin.processing.classification.inference import run_inference
 from marin.processing.tokenize.data_configs import TokenizerStep, lm_mixture_data_config
 from operations.download.filesystem.transfer import TransferConfig, transfer_files
 
-# Quality teacher model that is used to label the initial data pool that will then be used
-# to train the quality filter model.
-# TODO(chris): Make this a parameter and support other models. As of now, we make Llama-70B-Instruct the
-# default quality teacher model.
-quality_teacher_model = "/opt/gcsfuse_mount/models/meta-llama--Llama-3-3-70B-Instruct"
-tokenizer = AutoTokenizer.from_pretrained(quality_teacher_model)
-
 
 def default_label(
     documents_to_be_labeled: str | ExecutorStep,
@@ -59,6 +52,13 @@ def default_label(
     assert (data_filter_prompt is not None and targeted_documents == []) or (
         data_filter_prompt is None and targeted_documents != []
     ), "Must provide either a data filter prompt or targeted documents, but not both"
+
+    # Quality teacher model that is used to label the initial data pool that will then be used
+    # to train the quality filter model.
+    # TODO(chris): Make this a parameter and support other models. As of now, we make Llama-70B-Instruct the
+    # default quality teacher model.
+    quality_teacher_model = "/opt/gcsfuse_mount/models/meta-llama--Llama-3-3-70B-Instruct"
+    tokenizer = AutoTokenizer.from_pretrained(quality_teacher_model)
 
     default_engine_kwargs = {
         "tensor_parallel_size": resource_config.num_tpu,

@@ -54,7 +54,7 @@ class MMLUMeduPipeline(DatashopRunner):
         )
 ```
 
-The corpus_content_paths argument is quite flexible. You can pass in a list of strings that represent the corpus contents or a list of files that represent the corpus contents.
+The `corpus_content_paths` argument is quite flexible. You can pass in a list of strings that represent the corpus contents or a list of files that represent the corpus contents.
 
 ### Filtering the data pool via prompt
 In the DatashopRunnerConfig, pass in the `data_filter_prompt` argument with the prompt that you want to use to label the data pool. You must include the `{example}` placeholder for where you want the example to be inserted.
@@ -66,7 +66,7 @@ The first three steps (1-3) are to create the dataset and steps (4-5) are to tra
 2. Training a smaller encoder model (e.g. Alibaba/gte-large) on the labeled documents
 3. Filtering the pretraining data using the model trained in step (2)
 4. Annealing the pretrained model on the filtered pretraining data from step (3)
-5. Evaluating the performance of the annealed model to evaluate the quality of the filtered dataset. If the model is better than the control model, then we can conclude that the filtered dataset is of high quality. For example, if our filterd dataset targets mathematical reasoning data, then we would evaluate the annealed model on MATH and GSM8K to see if its accuracy is higher than the control model.
+5. Evaluating the performance of the annealed model to evaluate the quality of the filtered dataset. If the model is better than the control model, then we can conclude that the filtered dataset is of high quality. For example, if our filtered dataset targets mathematical reasoning data, then we would evaluate the annealed model on MATH and GSM8K to see if its accuracy is higher than the control model.
 
 ### Sharp edges
 There are a few sharp edges to the current implementation:
