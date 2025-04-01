@@ -7,7 +7,7 @@ python marin/run/ray_run.py \
     --no_wait -- \
     python marin/crawl/url_classification/train_bert_url_classifier.py \
     --input_pattern 'gs://marin-us-central2/scratch/nfliu/text/open-web-math-fde8ef8-10M/links.*.parquet' \
-    --output_path gs://marin-us-central2/scratch/nfliu/url_classification_models/bert-base-uncased-open-web-math-fde8ef8-10M/
+    --output_path gs://marin-us-central2/scratch/nfliu/url_classification_models/bert-base-uncased-open-web-math-fde8ef8-10M-num_epochs-3/
 ```
 """  # noqa: E501
 import hashlib
