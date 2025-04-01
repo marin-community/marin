@@ -1,45 +1,10 @@
-#!/usr/bin/env python3
-"""
-Convert fineweb-edu to HTML. Given the parquet shards from a dump of the raw
-fineweb-edu dataset, we take each example and fetch its corresponding HTML
-source from common crawl. The output is written as sharded JSONL files, where
-each record is a Dolma-format fineweb-edu example in HTML.
-
-To run on a single dump:
-
-```
-python marin/crawl/fineweb-edu/convert_fineweb_edu_to_html.py \
-    --input_path gs://marin-us-central2/raw/fineweb-edu/CC-MAIN-2021-39/ \
-    --html_output_path gs://marin-us-central2/documents/fineweb-edu/html/CC-MAIN-2021-39/
-```
-
-```
-ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- \
-    python marin/crawl/fineweb-edu/convert_fineweb_edu_to_html.py \
-    --input_path gs://marin-us-central2/raw/fineweb-edu/CC-MAIN-2021-39/ \
-    --html_output_path gs://marin-us-central2/documents/fineweb-edu/html/CC-MAIN-2021-39/
-```
-
-Launch jobs for all dumps:
-
-```
-for fineweb_edu_dump_path in $(gcloud storage ls gs://marin-us-central2/raw/fineweb-edu); do
-    dump_name=$(basename -- ${fineweb_edu_dump_path})
-
-    ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- \
-    python marin/crawl/fineweb-edu/convert_fineweb_edu_to_html.py \
-    --input_path ${fineweb_edu_dump_path} \
-    --html_output_path gs://marin-us-central2/documents/fineweb-edu/html/${dump_name}/
-done
-```
-
-"""
+import hashlib
 import json
 import logging
 import os
 import random
-import re
-from dataclasses import asdict, dataclass
+from collections.abc import Callable
+from dataclasses import asdict
 from datetime import datetime
 from typing import Any
 
@@ -47,54 +12,44 @@ import draccus
 import fsspec
 import pandas as pd
 import ray
-from resiliparse.parse.encoding import bytes_to_str, detect_encoding
 from warcio import ArchiveIterator
 
 from marin.core.runtime import cached_or_construct_output
+from marin.crawl.common.schemas import DolmaFormattedRecord, HtmlExtractionConfig
+from marin.crawl.common.utils import decode_html
 from marin.utils import fsspec_exists, fsspec_glob
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 
-def decode_html(html: bytes) -> str | None:
-    """
-    Given HTML (bytes), decode it into a string if possible. First try with
-    utf-8. If that doesn't work, try to detect the encoding.
-    """
-    try:
-        html = bytes_to_str(html, "utf-8")
-    except Exception:
-        encoding = detect_encoding(html)
-        if encoding is None or encoding == "utf-8":
-            return
-        try:
-            html = bytes_to_str(html, encoding)
-        except Exception:
-            return
-    return html
-
-
 @ray.remote(memory=4 * 1024 * 1024 * 1024)  # 4 GB
-@cached_or_construct_output(success_suffix="SUCCESS", verbose=False)
+@cached_or_construct_output(
+    success_suffix="SUCCESS", verbose=False
+)  # We use this decorator to make this function idempotent
 def process_one_shard(
     input_path: str,
     output_path: str,
+    source_name: str,
+    columns: list[str],
+    s3_url_modifier: Callable[[str], str] | None,
+    url_column: str,
+    file_path_column: str,
 ):
     """
-    Takes an parquet with FineWeb records as input and processes it to get the html content.
-    Download the WARC path in input_path and returns the content of the urls in the input_path.
+    Takes in the input file and processes it to get the html content.
+    Download the WARC path in input_path and returns the content of the urls in the input_path
 
     Args:
-    input_path (str): The input parquet shard to process.
-    output_path (str): Path to write gzipped JSONL with HTML for URLs in the input parquet shard.
+    input_path (str): The input parquet shard to process
+    output_path (str): Path to write gzipped JSONL with HTML for URLs in the input parquet shard
     """
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-    df = pd.read_parquet(input_path, columns=["url", "file_path", "id"])
+    df = pd.read_parquet(input_path, columns=columns)
 
-    urls = df["url"].tolist()
+    urls = df[url_column].tolist()
     # All frames will have same file_path, by design
-    s3_url = df["file_path"].iloc[0]
+    s3_url = df[file_path_column].iloc[0]
     index = df.index.tolist()
 
     # url_dict is url to index in df so that we can update that record
@@ -111,16 +66,13 @@ def process_one_shard(
         "s3",
         anon=False,
         default_block_size=100 * 2**20,
+        key=os.environ["AWS_ACCESS_KEY"],
+        secret=os.environ["AWS_SECRET_KEY"],
     )
-    s3_fs.retries = 100
+    s3_fs.retries = 10
 
-    # HACK: some of the fineweb-edu filepaths are invalid (seem to point to files on
-    # HF local disk), but they be easily re-written to the corresponding s3 WARCs.
-    pattern = r"^/fsx/guilherme/cc2023-50/r\d+/input/"
-    if re.match(pattern, s3_url):
-        logger.info(f"Found invalid s3 URL {s3_url}")
-        s3_url = re.sub(pattern, "s3://commoncrawl/crawl-data/CC-MAIN-2023-50/segments/", s3_url)
-        logger.info(f"Re-wrote s3 URL as {s3_url}")
+    if s3_url_modifier:
+        s3_url = s3_url_modifier(s3_url)
 
     with s3_fs.open(s3_url, mode="rb") as file_stream:
         for record in ArchiveIterator(file_stream):
@@ -139,7 +91,6 @@ def process_one_shard(
 
                     content = record.content_stream().read()
                     html_decoded: str | None = decode_html(content)
-
                     if html_decoded:
                         df.loc[url_idx_in_df, "html"] = html_decoded
                     else:
@@ -149,19 +100,20 @@ def process_one_shard(
 
     with fsspec.open(output_path, "wt", compression="gzip") as f:  # html output
         for _, row in df.iterrows():
-            out_fineweb_edu = row.to_dict()
+            out = row.to_dict()
             # If this example failed decoding, don't write it out
-            if not out_fineweb_edu["html"]:
+            if not out["html"]:
                 continue
-            out_dolma = DolmaFormattedFineWebEduRecord(
-                id=out_fineweb_edu["id"],
-                source="fineweb-edu",
+
+            if "id" not in out:
+                out["id"] = hashlib.md5("".join(str(out[i]) for i in columns).encode()).hexdigest()
+
+            out_dolma = DolmaFormattedRecord(
+                id=out["id"],
+                source=source_name,
                 format="html",
-                html=out_fineweb_edu["html"],
-                metadata={
-                    "url": out_fineweb_edu["url"],
-                    "file_path": out_fineweb_edu["file_path"],
-                },
+                html=out["html"],
+                metadata={key: str(out[key]) for key in out.keys() if key in columns},
             )
 
             print(json.dumps(asdict(out_dolma)), file=f)
@@ -175,23 +127,8 @@ def process_one_shard(
     )
 
 
-@dataclass(frozen=True)
-class DolmaFormattedFineWebEduRecord:
-    id: str
-    source: str
-    format: str
-    html: str
-    metadata: dict[str, Any]
-
-
-@dataclass(frozen=True)
-class ParquetFineWebEduConfig:
-    input_path: str
-    html_output_path: str
-
-
 @ray.remote(memory=1 * 1024 * 1024 * 1024)
-def write_group_to_parquet(output_file: str, group_df: pd.DataFrame, group_success_file: str):
+def write_group_to_parquet(output_file, group_df, group_success_file):
     # Check if the success file already exists
     if fsspec_exists(group_success_file):
         logger.info(f"Shard {output_file} already exists, skipping...")
@@ -210,28 +147,41 @@ def write_group_to_parquet(output_file: str, group_df: pd.DataFrame, group_succe
 
 
 @ray.remote(memory=32 * 1024 * 1024 * 1024)
-def group_fineweb_edu_by_warc(input_paths: list[str], output_path: str):
+def group_by_warc(
+    input_paths: list[str],
+    output_path: str,
+    columns: list[str],
+    warc_path_extractor: Callable[[dict[str, Any]], str] | None = None,
+    url_column: str = "url",
+    file_path_column: str = "file_path",
+):
     """
-    Given fineweb-edu files, group the examples by their source WARC.
+    Given parquet files, group the examples by their source WARC.
 
     Parameters:
-    input_paths (str): Path to the fineweb-edu parquet files.
-    output_path (str): Path to the output folder where we will write the fineweb-edu examples,
+    input_paths (str): Path to the parquet files
+    output_path (str): Path to the output folder where we will write the examples,
                        grouped by their source WARC.
+    columns (list[str]): Columns to read from the parquet files
+    warc_path_extractor (Callable[[dict[str, Any]], str] | None): Function to extract WARC path from metadata.
+                        If None, assumes metadata is a JSON string with warc_path field.
     """
     success_file_path = os.path.join(output_path, "_examples_groupby_warc_success")
     if fsspec_exists(success_file_path):
-        logger.info("Already grouped fineweb-edu input paths by WARC, skipping...")
+        logger.info("Already grouped by WARC, skipping...")
         return
 
     logger.info(f"Grouping examples at {input_paths} by their source WARC")
     datetime_start = datetime.utcnow()
 
-    df = pd.concat(
-        [pd.read_parquet(file, columns=["url", "file_path", "id"]) for file in input_paths], ignore_index=True
-    )
+    df = pd.concat([pd.read_parquet(file, columns=columns) for file in input_paths], ignore_index=True)
 
-    grouped = df.groupby("file_path")
+    if warc_path_extractor:
+        print("Extracting WARC path from metadata")
+        df[file_path_column] = df["metadata"].apply(warc_path_extractor)
+        columns.append(file_path_column)
+
+    grouped = df.groupby(file_path_column)
 
     remote_refs = []
 
@@ -280,13 +230,20 @@ def get_shards_to_process(shard_path: str):
 
 
 @draccus.wrap()
-def process_fineweb_edu(cfg: ParquetFineWebEduConfig):
+def process_parquet(cfg: HtmlExtractionConfig):
     files = fsspec_glob(os.path.join(cfg.input_path, "*.parquet"))
-    # Group fine-web-edu examples by their source WARC
-    groupby_ref = group_fineweb_edu_by_warc.remote(files, cfg.html_output_path)
+    if cfg.max_files:
+        files = files[: cfg.max_files]
+        print(f"Processing {len(files)} files")
+
+    # Group examples by their source WARC
+    groupby_ref = group_by_warc.remote(
+        files, cfg.output_path, cfg.columns, cfg.warc_path_extractor, cfg.url_column, cfg.file_path_column
+    )
     ray.get(groupby_ref)
 
-    shard_indices_to_process = ray.get(get_shards_to_process.remote(cfg.html_output_path))
+    shard_indices_to_process_ref = get_shards_to_process.remote(cfg.output_path)
+    shard_indices_to_process = ray.get(shard_indices_to_process_ref)
     num_shards_to_process = len(shard_indices_to_process)
 
     # Set a limit on the number of concurrent tasks so we don't overwhelm CC
@@ -298,14 +255,29 @@ def process_fineweb_edu(cfg: ParquetFineWebEduConfig):
     num_shards_submitted = 0
     unfinished = []
 
+    columns = cfg.columns
+    if cfg.warc_path_extractor:
+        columns.append(cfg.file_path_column)
+
     def submit_shard_task(shard_index):
         """Submit a shard processing task and log progress every 1000 shards."""
         nonlocal num_shards_submitted
-        # shard_path_to_process is of form gs://<html_output_path>/0_warc_examples.parquet
-        shard_path = os.path.join(cfg.html_output_path, f"{shard_index}_warc_examples.parquet")
-        # shard_output_path is of form gs://<html_output_path>/0.jsonl.gz
-        shard_output_path = shard_path.replace("_warc_examples.parquet", ".jsonl.gz")
-        unfinished.append(process_one_shard.remote(shard_path, shard_output_path))
+        # shard_path_to_process is of form gs://<output_path>/0_warc_examples.parquet
+        shard_path = os.path.join(cfg.output_path, f"{shard_index}_warc_examples.parquet")
+        # shard_output_path is of form gs://<output_path>/open-web-math_0.jsonl.gz
+        shard_output_path = os.path.join(cfg.output_path, f"{cfg.source_name}_{shard_index}.jsonl.gz")
+
+        unfinished.append(
+            process_one_shard.remote(
+                shard_path,
+                shard_output_path,
+                cfg.source_name,
+                columns,
+                cfg.s3_url_modifier,
+                cfg.url_column,
+                cfg.file_path_column,
+            )
+        )
         num_shards_submitted += 1
         if num_shards_submitted % 1000 == 0:
             logger.info(
@@ -328,7 +300,3 @@ def process_fineweb_edu(cfg: ParquetFineWebEduConfig):
         # number of concurrent tasks, add tasks to the unfinished queue.
         while shard_indices_to_process and len(unfinished) < MAX_CONCURRENT_TASKS:
             submit_shard_task(shard_indices_to_process.pop())
-
-
-if __name__ == "__main__":
-    process_fineweb_edu()
