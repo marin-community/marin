@@ -6,7 +6,8 @@ python marin/run/ray_run.py \
     --env_vars WANDB_API_KEY 'ca4e321fd237f65236ab95e92724934b47264b1c' \
     --no_wait -- \
     python marin/crawl/url_classification/train_bert_url_classifier.py \
-    --input_pattern 'gs://marin-us-central2/scratch/nfliu/text/open-web-math-fde8ef8-10M/links.*.parquet' \
+    --urls_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-10M/links.*.parquet' \
+    --fetched_urls_pattern 'gs://marin-us-central2/scratch/nfliu/text/open-web-math-fde8ef8-10M/links.*.parquet' \
     --output_path gs://marin-us-central2/scratch/nfliu/url_classification_models/bert-base-uncased-open-web-math-fde8ef8-10M-num_epochs-3/
 ```
 """  # noqa: E501
@@ -26,7 +27,6 @@ import ray
 from tqdm_loggable.auto import tqdm
 
 from marin.classifiers.bert.training import BertTrainingArguments, _mp_fn
-from marin.classifiers.utils import shuffle
 from marin.crawl.url_classification.metrics import url_classifier_compute_eval_metrics
 from marin.utils import fsspec_cpdir, fsspec_exists, fsspec_glob, remove_tpu_lockfile_on_exit
 
@@ -36,7 +36,8 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class TrainBertUrlClassifierConfig:
-    input_pattern: str
+    urls_pattern: str
+    fetched_urls_pattern: str
     output_path: str
     val_frac: float = 0.1
     batch_size: int = 64
@@ -51,7 +52,12 @@ class TrainBertUrlClassifierConfig:
 
 @ray.remote(memory=32 * 1024 * 1024 * 1024)
 def make_url_classification_dataset(
-    input_pattern: str, train_output_path: str, val_output_path: str, val_frac: float, seed: int
+    urls_pattern: str,
+    fetched_urls_pattern: str,
+    train_output_path: str,
+    val_output_path: str,
+    val_frac: float,
+    seed: int,
 ):
     """
     Writes a jsonl.gz file at train_output_path and val_output_path with the train and dev
@@ -69,60 +75,65 @@ def make_url_classification_dataset(
         return
 
     # Get the input shard paths
-    shard_paths: list[str] = list(fsspec_glob(input_pattern))
-    logger.info(f"Found {len(shard_paths)} shards to process")
-    shard_paths = sorted(shard_paths)
-    logger.info(f"Sorted {len(shard_paths)} shards")
+    fetched_shard_paths: list[str] = list(fsspec_glob(fetched_urls_pattern))
+    logger.info(f"Found {len(fetched_shard_paths)} shards to process")
+    fetched_shard_paths = sorted(fetched_shard_paths)
+    logger.info(f"Sorted {len(fetched_shard_paths)} shards")
 
-    # First pass: Count total lines
-    total_lines = 0
-    for shard_path in tqdm(shard_paths, desc="Counting lines in input records"):
+    url_shard_paths: list[str] = list(fsspec_glob(urls_pattern))
+    logger.info(f"Found {len(url_shard_paths)} shards to process")
+    url_shard_paths = sorted(url_shard_paths)
+    logger.info(f"Sorted {len(url_shard_paths)} shards")
+
+    # First pass: Count total lines and build a set of all fetched URLs
+    failing_fetched_urls = set()
+    passing_fetched_urls = set()
+    for shard_path in tqdm(fetched_shard_paths, desc="Counting lines in fetched input records"):
+        df = pd.read_parquet(shard_path)
+        for record_metadata in df["metadata"]:
+            if record_metadata["passes_all_filters"]:
+                passing_fetched_urls.add(record_metadata["url"])
+            else:
+                failing_fetched_urls.add(failing_fetched_urls)
+
+    unfetched_urls = set()
+    for shard_path in tqdm(url_shard_paths, desc="Counting lines in unfetched input records"):
         # Read no columns => minimal overhead, but we still get the row count
-        df = pd.read_parquet(shard_path, columns=[])
-        total_lines += len(df)
+        df = pd.read_parquet(shard_path)
+        for link_target in df["link_target"]:
+            if link_target not in failing_fetched_urls and link_target not in passing_fetched_urls:
+                unfetched_urls.add(link_target)
 
-    logger.info(f"Total lines across all shards = {total_lines:,}")
-    assert total_lines > 0
+    examples = []
+    for url in tqdm(failing_fetched_urls, desc="Converting failing fetched URLs to examples"):
+        examples.append({"text": url, "label": False})
+    for url in tqdm(passing_fetched_urls, desc="Converting passing fetched URLs to examples"):
+        examples.append({"text": url, "label": True})
+    for url in tqdm(unfetched_urls, desc="Converting unfetched URLs to examples"):
+        examples.append({"text": url, "label": False})
+    random.shuffle(examples)
+
+    total_examples = len(examples)
+    logger.info(f"Total URLs across all shards = {total_examples:,}")
+    assert total_examples > 0
 
     # Compute how many lines go to validation (integer)
-    val_lines_target = int(total_lines * val_frac)
-    logger.info(f"Target # of validation lines = {val_lines_target:,}")
+    num_val_lines = int(total_examples * val_frac)
+    logger.info(f"# of validation lines = {num_val_lines:,}")
 
-    # Second pass: Assign each line to train or val
-    lines_left = total_lines
-    val_left = val_lines_target
-
-    # Store the number of train/val examples written to sanity-check
     train_examples_written = 0
     val_examples_written = 0
-    with (
-        fsspec.open(train_output_path, "w", compression="gzip", block_size=1 * 1024 * 1024 * 1024) as f_train,
-        fsspec.open(val_output_path, "w", compression="gzip", block_size=1 * 1024 * 1024 * 1024) as f_val,
-    ):
-        for shard_path in tqdm(shard_paths, desc="Converting shards to examples"):
-            with fsspec.open(shard_path, compression="infer", block_size=1 * 1024 * 1024 * 1024) as f:
-                df = pd.read_parquet(f)
-                for record_metadata in df["metadata"]:
-                    out = {"text": record_metadata["url"], "label": record_metadata["passes_all_filters"]}
+    with fsspec.open(val_output_path, "w", compression="gzip", block_size=1 * 1024 * 1024 * 1024) as f_val:
+        for example in examples[:num_val_lines]:
+            f_val.write(json.dumps(example) + "\n")
+            val_examples_written += 1
+    with fsspec.open(train_output_path, "w", compression="gzip", block_size=1 * 1024 * 1024 * 1024) as f_train:
+        for example in examples[num_val_lines:]:
+            f_train.write(json.dumps(example) + "\n")
+            train_examples_written += 1
 
-                    # Probability that this line should go to val
-                    # Ensures we end with exactly val_lines_target lines in val
-                    if random.random() < (val_left / lines_left) if lines_left else 0:
-                        f_val.write(json.dumps(out) + "\n")
-                        val_left -= 1
-                        val_examples_written += 1
-                    else:
-                        f_train.write(json.dumps(out) + "\n")
-                        train_examples_written += 1
-
-                    lines_left -= 1
-
-    assert val_examples_written == val_lines_target
-    assert (train_examples_written + val_examples_written) == total_lines
-    logger.info("Shuffling training dataset")
-    shuffle(train_output_path, train_output_path, seed=seed)
-    logger.info("Shuffling validation dataset")
-    shuffle(val_output_path, val_output_path, seed=seed)
+    assert val_examples_written == num_val_lines
+    assert (train_examples_written + val_examples_written) == total_examples
 
     # Write success files
     with fsspec.open(train_success_path, "w", block_size=1 * 1024 * 1024 * 1024) as f:
@@ -133,7 +144,8 @@ def make_url_classification_dataset(
 
 
 def train_bert_url_classifier(
-    input_pattern: str,
+    urls_pattern: str,
+    fetched_urls_pattern: str,
     output_path: str,
     val_frac: float,
     batch_size: int,
@@ -146,12 +158,13 @@ def train_bert_url_classifier(
     seed: int = 0,
 ):
     # Hash this dataset configuration so we can skip dataset generation if it already exists.
-    dataset_hash: str = hashlib.md5(f"{input_pattern}{val_frac}{seed}".encode()).hexdigest()
+    dataset_hash: str = hashlib.md5(f"{fetched_urls_pattern}{val_frac}{seed}".encode()).hexdigest()
     train_dataset_path = os.path.join(output_path, "data", f"train_{dataset_hash}.jsonl.gz")
     val_dataset_path = os.path.join(output_path, "data", f"val_{dataset_hash}.jsonl.gz")
     ray.get(
         make_url_classification_dataset.remote(
-            input_pattern=input_pattern,
+            urls_pattern=urls_pattern,
+            fetched_urls_pattern=fetched_urls_pattern,
             train_output_path=train_dataset_path,
             val_output_path=val_dataset_path,
             val_frac=val_frac,
@@ -263,7 +276,8 @@ def train_model(
 @draccus.wrap()
 def train_bert_url_classifier_driver(cfg: TrainBertUrlClassifierConfig):
     train_bert_url_classifier(
-        input_pattern=cfg.input_pattern,
+        urls_pattern=cfg.urls_pattern,
+        fetched_urls_pattern=cfg.fetched_urls_pattern,
         output_path=cfg.output_path,
         val_frac=cfg.val_frac,
         batch_size=cfg.batch_size,
