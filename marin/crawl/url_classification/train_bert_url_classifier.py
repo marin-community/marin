@@ -8,7 +8,7 @@ python marin/run/ray_run.py \
     python marin/crawl/url_classification/train_bert_url_classifier.py \
     --urls_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-10M/links.*.parquet' \
     --fetched_urls_pattern 'gs://marin-us-central2/scratch/nfliu/text/open-web-math-fde8ef8-10M/links.*.parquet' \
-    --output_path gs://marin-us-central2/scratch/nfliu/url_classification_models/bert-base-uncased-open-web-math-fde8ef8-10M-num_epochs-3/
+    --output_path gs://marin-us-central2/scratch/nfliu/url_classification_models/bert-base-uncased-open-web-math-fde8ef8-10M/
 ```
 """  # noqa: E501
 import hashlib
@@ -76,14 +76,14 @@ def make_url_classification_dataset(
 
     # Get the input shard paths
     fetched_shard_paths: list[str] = list(fsspec_glob(fetched_urls_pattern))
-    logger.info(f"Found {len(fetched_shard_paths)} shards to process")
+    logger.info(f"Found {len(fetched_shard_paths)} fetched shards to process")
     fetched_shard_paths = sorted(fetched_shard_paths)
-    logger.info(f"Sorted {len(fetched_shard_paths)} shards")
+    logger.info(f"Sorted {len(fetched_shard_paths)} fetched shards")
 
     url_shard_paths: list[str] = list(fsspec_glob(urls_pattern))
-    logger.info(f"Found {len(url_shard_paths)} shards to process")
+    logger.info(f"Found {len(url_shard_paths)} URL shards to process")
     url_shard_paths = sorted(url_shard_paths)
-    logger.info(f"Sorted {len(url_shard_paths)} shards")
+    logger.info(f"Sorted {len(url_shard_paths)} URL shards")
 
     # First pass: Count total lines and build a set of all fetched URLs
     failing_fetched_urls = set()
@@ -94,7 +94,7 @@ def make_url_classification_dataset(
             if record_metadata["passes_all_filters"]:
                 passing_fetched_urls.add(record_metadata["url"])
             else:
-                failing_fetched_urls.add(failing_fetched_urls)
+                failing_fetched_urls.add(record_metadata["url"])
 
     unfetched_urls = set()
     for shard_path in tqdm(url_shard_paths, desc="Counting lines in unfetched input records"):
