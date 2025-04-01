@@ -32,7 +32,7 @@
 
 ```
 ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- \
-    python marin/crawl/open-web-math/convert_open_web_math_to_html.py \
+    python marin/crawl/open_web_math/convert_open_web_math_to_html.py \
     --input_path gs://marin-us-central2/raw/open-web-math-fde8ef8/fde8ef8/huggingface.co/datasets/open-web-math/open-web-math/resolve/fde8ef8/data/ \
     --html_output_path gs://marin-us-central2/documents/open-web-math-fde8ef8/html/
 ```
@@ -43,7 +43,7 @@ ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- \
 for fineweb_edu_dump_path in $(gcloud storage ls gs://marin-us-central2/raw/fineweb-edu); do
     dump_name=$(basename -- ${fineweb_edu_dump_path})
     ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- \
-    python marin/crawl/fineweb-edu/convert_fineweb_edu_to_html.py \
+    python marin/crawl/fineweb_edu/convert_fineweb_edu_to_html.py \
     --input_path ${fineweb_edu_dump_path} \
     --html_output_path gs://marin-us-central2/documents/fineweb-edu/html/${dump_name}/
 done
