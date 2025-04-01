@@ -26,7 +26,7 @@ import pandas as pd
 import ray
 from tqdm_loggable.auto import tqdm
 
-from marin.classifiers.bert.training import BertTrainingArguments, _mp_fn
+from marin.classifiers.bert.training import BertTrainingArguments, _mp_fn, tokenize_json_save_as_arrow
 from marin.crawl.url_classification.metrics import url_classifier_compute_eval_metrics
 from marin.utils import fsspec_cpdir, fsspec_exists, fsspec_glob, remove_tpu_lockfile_on_exit
 
@@ -161,6 +161,8 @@ def train_bert_url_classifier(
     dataset_hash: str = hashlib.md5(f"{fetched_urls_pattern}{val_frac}{seed}".encode()).hexdigest()
     train_dataset_path = os.path.join(output_path, "data", f"train_{dataset_hash}.jsonl.gz")
     val_dataset_path = os.path.join(output_path, "data", f"val_{dataset_hash}.jsonl.gz")
+    hf_format_dataset_path = os.path.join(output_path, "data", "train_val_hf")
+
     ray.get(
         make_url_classification_dataset.remote(
             urls_pattern=urls_pattern,
@@ -173,9 +175,18 @@ def train_bert_url_classifier(
     )
 
     ray.get(
+        tokenize_json_save_as_arrow.remote(
+            train_input_path=train_dataset_path,
+            val_input_path=val_dataset_path,
+            hf_model=hf_model,
+            max_length=max_length,
+            output_path=hf_format_dataset_path,
+        )
+    )
+
+    ray.get(
         train_model.remote(
-            train_dataset_path=train_dataset_path,
-            val_dataset_path=val_dataset_path,
+            dataset_path=hf_format_dataset_path,
             output_path=output_path,
             batch_size=batch_size,
             lr=lr,
@@ -196,8 +207,7 @@ def train_bert_url_classifier(
 )
 @remove_tpu_lockfile_on_exit
 def train_model(
-    train_dataset_path: str,
-    val_dataset_path: str,
+    dataset_path: str,
     output_path: str,
     batch_size: int,
     lr: float,
@@ -249,8 +259,7 @@ def train_model(
             _mp_fn,
             args=(
                 hf_model,
-                train_dataset_path,
-                val_dataset_path,
+                dataset_path,
                 local_model_output_path,
                 bert_args,
                 url_classifier_compute_eval_metrics,
