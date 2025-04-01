@@ -68,12 +68,12 @@ from datatrove.pipeline.filters import (
     LanguageFilter,
     URLFilter,
 )
-from resiliparse.parse.encoding import bytes_to_str, detect_encoding
 from tqdm_loggable.auto import tqdm
 from trafilatura import extract
 from transformers import AutoTokenizer, FlaxAutoModelForSequenceClassification
 from warcio import ArchiveIterator
 
+from marin.crawl.common.utils import decode_html
 from marin.utils import fsspec_exists, fsspec_glob
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -102,24 +102,6 @@ def batched(iterable, n=1):
     length = len(iterable)
     for ndx in range(0, length, n):
         yield iterable[ndx : min(ndx + n, length)]
-
-
-def decode_html(html: bytes) -> str | None:
-    """
-    Given HTML (bytes), decode it into a string if possible. First try with
-    utf-8. If that doesn't work, try to detect the encoding.
-    """
-    try:
-        html = bytes_to_str(html, "utf-8")
-    except Exception:
-        encoding = detect_encoding(html)
-        if encoding is None or encoding == "utf-8":
-            return
-        try:
-            html = bytes_to_str(html, encoding)
-        except Exception:
-            return
-    return html
 
 
 @ray.remote(
@@ -679,7 +661,7 @@ def get_shard_indices_to_process(urls_input_directory: str) -> list[int]:
 
 
 @draccus.wrap()
-def main(cfg: GetCrawlYieldConfig):
+def filter_and_yield(cfg: GetCrawlYieldConfig):
     shard_indices_to_process = ray.get(get_shard_indices_to_process.remote(cfg.urls_input_directory))
     random.shuffle(shard_indices_to_process)
     num_shards_to_process = len(shard_indices_to_process)
@@ -782,4 +764,4 @@ def main(cfg: GetCrawlYieldConfig):
 
 
 if __name__ == "__main__":
-    main()
+    filter_and_yield()
