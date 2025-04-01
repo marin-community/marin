@@ -19,7 +19,7 @@ from functools import partial
 import fsspec
 import fsspec.generic
 import ray
-from datasets import Dataset, load_dataset
+from datasets import DatasetDict, load_dataset, load_from_disk
 from transformers import (
     AutoModelForSequenceClassification,
     AutoTokenizer,
@@ -88,11 +88,53 @@ class BertTrainingArguments:
         )
 
 
+@ray.remote(
+    memory=64 * 1024 * 1024 * 1024,
+    resources={"TPU": 4, "TPU-v4-8-head": 1},
+)
+def tokenize_json_save_as_arrow(
+    train_input_path: str, val_input_path: str, hf_model: str, max_length: int, output_path: str
+):
+    success_path = output_path + ".SUCCESS"
+    if fsspec_exists(success_path):
+        with fsspec.open(success_path) as f:
+            success_data = json.load(f)
+            # Make sure that we're using the same tokenizer and train/val paths
+            assert success_data["hf_model"] == hf_model
+            assert success_data["train_input_path"] == train_input_path
+            assert success_data["val_input_path"] == val_input_path
+        logger.info(f"Success path {success_path} already exists, skipping...")
+        return
+    dataset_dict: DatasetDict = load_dataset("json", data_files={"train": train_input_path, "val": val_input_path})
+    dataset_dict = dataset_dict.class_encode_column("label")
+    class_label_feature = dataset_dict["train"].features["label"]
+    labels2id = {label: class_label_feature.str2int(label) for label in class_label_feature.names}
+    logger.info(f"Labels to ID mapping: {labels2id}")
+
+    # Tokenize the dataset
+    tokenizer = AutoTokenizer.from_pretrained(hf_model)
+
+    def tokenize(batch):
+        return tokenizer(
+            batch["text"],
+            padding=True,
+            truncation=True,
+            return_tensors="pt",
+            max_length=max_length,
+        )
+
+    dataset_dict = dataset_dict.map(tokenize, batched=True, num_proc=8, remove_columns=["text"])
+    logger.info(f"Writing dataset dict to output path {output_path}")
+    dataset_dict.save_to_disk(output_path)
+    logger.info(f"Wrote dataset dict to output path {output_path}")
+    with fsspec.open(success_path, "w") as fout:
+        json.dump({"hf_model": hf_model, "train_input_path": train_input_path, "val_input_path": val_input_path}, fout)
+
+
 def _mp_fn(
     index: int,
     hf_model: str,
-    train_path: str,
-    val_path: str,
+    dataset_path: str,
     model_path: str,
     bert_args: BertTrainingArguments,
     compute_eval_metrics: Callable[[dict[str, int], EvalPrediction], dict] | None = None,
@@ -103,8 +145,7 @@ def _mp_fn(
     Args:
         index (int): Index of the TPU device.
         hf_model (str): Pretrained BERT model to use (from Huggingface).
-        train_path (str): Path to the training dataset.
-        val_path (str): Path to the validation dataset.
+        dataset_path (str): Path to arrow dataset with training and validation splits
         model_path (str): Path to save the trained model.
         bert_args (BertTrainingArguments): Arguments for training the BERT model.
         compute_eval_metrics (Callable[[dict[str, int], EvalPrediction], dict] | None): function to use to
@@ -112,50 +153,29 @@ def _mp_fn(
     Returns:
         None: No return value.
     """
-
-    tokenizer = AutoTokenizer.from_pretrained(hf_model)
     # Load the JSONL data and index into the DatasetDict to get a Dataset
-    train_dataset: Dataset = load_dataset("json", data_files={"train": train_path})["train"]
-    val_dataset: Dataset = load_dataset("json", data_files={"val": val_path})["val"]
-
-    # Tokenize the dataset
-    def tokenize(batch):
-        return tokenizer(
-            batch["text"],
-            padding=True,
-            truncation=True,
-            return_tensors="pt",
-            max_length=bert_args.max_length,
-        )
-
-    # Keep dataset in memory to avoid filling up TPU /tmp
-    train_dataset = train_dataset.map(tokenize, batched=True, num_proc=8)
-    train_dataset = train_dataset.remove_columns(["text"])
-    train_dataset = train_dataset.class_encode_column("label")
-    class_label_feature = train_dataset.features["label"]
+    dataset: DatasetDict = load_from_disk(dataset_path)
+    class_label_feature = dataset["train"].features["label"]
     labels2id = {label: class_label_feature.str2int(label) for label in class_label_feature.names}
     logger.info(f"Labels to ID mapping: {labels2id}")
 
     # Print training label distribution
-    train_label_counts = Counter(train_dataset["label"])
+    train_label_counts = Counter(dataset["train"]["label"])
     logger.info("Training Label Counts (label_id -> count):")
     for label_id, count in sorted(train_label_counts.items()):
         label_name = class_label_feature.int2str(label_id)
-        logger.info(f"  {label_id} ({label_name}): {count} ({count/len(train_dataset):.2%})")
+        logger.info(f"  {label_id} ({label_name}): {count} ({count/len(dataset['train']):.2%})")
 
-    val_dataset = val_dataset.map(tokenize, batched=True, num_proc=8)
-    val_dataset = val_dataset.remove_columns(["text"])
-    # Make sure we use the same label mapping as training
-    val_dataset = val_dataset.cast_column("label", class_label_feature)
     # Print val label distribution
-    val_label_counts = Counter(val_dataset["label"])
+    val_label_counts = Counter(dataset["val"]["label"])
     logger.info("Validation Label Counts (label_id -> count):")
     for label_id, count in sorted(val_label_counts.items()):
         label_name = class_label_feature.int2str(label_id)
-        logger.info(f"  {label_id} ({label_name}): {count} ({count/len(val_dataset):.2%})")
+        logger.info(f"  {label_id} ({label_name}): {count} ({count/len(dataset['val']):.2%})")
 
+    tokenizer = AutoTokenizer.from_pretrained(hf_model)
     model = AutoModelForSequenceClassification.from_pretrained(
-        hf_model, num_labels=train_dataset.features["label"].num_classes
+        hf_model, num_labels=dataset["train"].features["label"].num_classes
     )
     hf_training_args = bert_args.get_hf_training_args()
 
@@ -236,8 +256,8 @@ def _mp_fn(
     trainer = Trainer(
         model,
         bert_args.get_hf_training_args(),
-        train_dataset=train_dataset,
-        eval_dataset=val_dataset,
+        train_dataset=dataset["train"],
+        eval_dataset=dataset["val"],
         processing_class=tokenizer,
         data_collator=DataCollatorWithPadding(tokenizer=tokenizer),
         callbacks=callbacks,
