@@ -21,8 +21,8 @@ import fsspec.generic
 import ray
 from datasets import Dataset, load_dataset
 from transformers import (
-    BertForSequenceClassification,
-    BertTokenizer,
+    AutoModelForSequenceClassification,
+    AutoTokenizer,
     DataCollatorWithPadding,
     EvalPrediction,
     Trainer,
@@ -113,7 +113,7 @@ def _mp_fn(
         None: No return value.
     """
 
-    tokenizer = BertTokenizer.from_pretrained(hf_model)
+    tokenizer = AutoTokenizer.from_pretrained(hf_model)
     # Load the JSONL data and index into the DatasetDict to get a Dataset
     train_dataset: Dataset = load_dataset("json", data_files={"train": train_path})["train"]
     val_dataset: Dataset = load_dataset("json", data_files={"val": val_path})["val"]
@@ -154,7 +154,7 @@ def _mp_fn(
         label_name = class_label_feature.int2str(label_id)
         logger.info(f"  {label_id} ({label_name}): {count} ({count/len(val_dataset):.2%})")
 
-    model = BertForSequenceClassification.from_pretrained(
+    model = AutoModelForSequenceClassification.from_pretrained.from_pretrained(
         hf_model, num_labels=train_dataset.features["label"].num_classes
     )
     hf_training_args = bert_args.get_hf_training_args()
@@ -257,6 +257,9 @@ def _mp_fn(
         os.makedirs(model_path, exist_ok=True)
         model.cpu().save_pretrained(model_path)
         tokenizer.save_pretrained(model_path)
+
+        with open(os.path.join(model_path, "label_index.json"), "w") as f:
+            json.dump(labels2id, f)
 
 
 def train_model(
