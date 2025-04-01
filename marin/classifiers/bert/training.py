@@ -154,7 +154,7 @@ def _mp_fn(
         label_name = class_label_feature.int2str(label_id)
         logger.info(f"  {label_id} ({label_name}): {count} ({count/len(val_dataset):.2%})")
 
-    model = AutoModelForSequenceClassification.from_pretrained.from_pretrained(
+    model = AutoModelForSequenceClassification.from_pretrained(
         hf_model, num_labels=train_dataset.features["label"].num_classes
     )
     hf_training_args = bert_args.get_hf_training_args()
