@@ -82,6 +82,7 @@ jobs:
           cmake \
               -DCMAKE_BUILD_TYPE=Release \
               -DCMAKE_INSTALL_PREFIX=/usr \
+              -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
               -DLEXBOR_BUILD_SHARED=ON \
               -DLEXBOR_BUILD_STATIC=OFF \
               -DLEXBOR_OPTIMIZATION_LEVEL=-O3 \
@@ -101,6 +102,7 @@ jobs:
               -DCMAKE_BUILD_TYPE=Release \
               -DCMAKE_INSTALL_PREFIX=/usr \
               -DCMAKE_CXX_STANDARD=17 \
+              -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
               -B build
           cmake --build build -j$(nproc)
           sudo cmake --build build --target install
@@ -118,6 +120,7 @@ jobs:
               -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
               -DCMAKE_CXX_STANDARD=17 \
               -DBUILD_SHARED_LIBS=OFF \
+              -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
               -B build
           cmake --build build -j$(nproc)
           sudo cmake --build build --target install
@@ -136,6 +139,7 @@ jobs:
               -DCMAKE_CXX_STANDARD=17 \
               -DBUILD_SHARED_LIBS=ON \
               -DRE2_BUILD_TESTING=OFF \
+              -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
               -B build
           cmake --build build -j$(nproc)
           sudo cmake --build build --target install
