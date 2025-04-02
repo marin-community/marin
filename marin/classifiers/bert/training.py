@@ -101,6 +101,7 @@ def tokenize_json_save_as_arrow(
             success_data = json.load(f)
             # Make sure that we're using the same tokenizer and train/val paths
             assert success_data["hf_model"] == hf_model
+            assert success_data["max_length"] == max_length
             assert success_data["train_input_path"] == train_input_path
             assert success_data["val_input_path"] == val_input_path
         logger.info(f"Success path {success_path} already exists, skipping...")
@@ -128,7 +129,15 @@ def tokenize_json_save_as_arrow(
     dataset_dict.save_to_disk(output_path)
     logger.info(f"Wrote dataset dict to output path {output_path}")
     with fsspec.open(success_path, "w") as fout:
-        json.dump({"hf_model": hf_model, "train_input_path": train_input_path, "val_input_path": val_input_path}, fout)
+        json.dump(
+            {
+                "hf_model": hf_model,
+                "max_length": max_length,
+                "train_input_path": train_input_path,
+                "val_input_path": val_input_path,
+            },
+            fout,
+        )
 
 
 def _mp_fn(
