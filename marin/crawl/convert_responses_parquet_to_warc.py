@@ -6,7 +6,7 @@ Running on FineWeb-Edu-10M:
 
 ```
 python marin/run/ray_run.py \
-    --pip_deps 'warcio[all]' \
+    --pip_deps 'warcio[all] @ git+https://github.com/nelson-liu/warcio@brotlicffi' \
     --no_wait -- \
     python marin/crawl/convert_responses_parquet_to_warc.py \
     --input_directory gs://marin-us-central2/scratch/nfliu/fetched_outlinks/fineweb-edu-10M/ \
@@ -17,7 +17,7 @@ Running on open-web-math-10M (cc deduplicated):
 
 ```
 python marin/run/ray_run.py \
-    --pip_deps 'warcio[all]' \
+    --pip_deps 'warcio[all] @ git+https://github.com/nelson-liu/warcio@brotlicffi' \
     --no_wait -- \
     python marin/crawl/convert_responses_parquet_to_warc.py \
     --input_directory gs://marin-us-central2/scratch/nfliu/fetched_outlinks/open-web-math-fde8ef8-10M-cc-deduplicated/ \
@@ -28,7 +28,7 @@ Running on fineweb-edu-10M (cc deduplicated):
 
 ```
 python marin/run/ray_run.py \
-    --pip_deps 'warcio[all]' \
+    --pip_deps 'warcio[all] @ git+https://github.com/nelson-liu/warcio@brotlicffi' \
     --no_wait -- \
     python marin/crawl/convert_responses_parquet_to_warc.py \
     --input_directory gs://marin-us-central2/scratch/nfliu/fetched_outlinks/fineweb-edu-10M-cc-deduplicated/ \
@@ -132,7 +132,7 @@ def get_shard_indices_to_process(urls_input_directory: str) -> list[int]:
 
 
 @draccus.wrap()
-def main(cfg: ConvertResponsesToWARCConfig):
+def convert_shards_to_warc(cfg: ConvertResponsesToWARCConfig):
     shard_indices_to_process = ray.get(get_shard_indices_to_process.remote(cfg.input_directory))
     num_shards_to_process = len(shard_indices_to_process)
     logger.info(f"Found {num_shards_to_process} shards to process")
@@ -147,4 +147,4 @@ def main(cfg: ConvertResponsesToWARCConfig):
 
 
 if __name__ == "__main__":
-    main()
+    convert_shards_to_warc()
