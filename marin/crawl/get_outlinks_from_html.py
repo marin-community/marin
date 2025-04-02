@@ -265,7 +265,10 @@ def get_shards_indices_to_process(shard_path: str, prefix: str):
 
 @draccus.wrap()
 def get_outlinks_from_html(cfg: OutlinksExtractionConfig):
+    logger.info(f"Getting outlinks from HTML for {cfg.prefix} at {cfg.html_input_path}")
     shard_indices = ray.get(get_shards_indices_to_process.remote(cfg.html_input_path, cfg.prefix))
+
+    logger.info(f"Processing {len(shard_indices)} shards")
 
     refs = []
     for i, html_shard_index in enumerate(shard_indices):
