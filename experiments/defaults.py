@@ -16,6 +16,7 @@ from levanter.compat.hf_checkpoints import load_tokenizer
 from levanter.data.text import LMMixtureDatasetConfig, LMSupervisedDatasetConfig, SupervisedUrlSourceConfig
 from levanter.eval_harness import LmEvalHarnessConfig
 from levanter.main import sft, sft_mixture
+from levanter.main.train_lm import TrainLmConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig
 from levanter.optim import AdamConfig
@@ -54,14 +55,14 @@ from marin.processing.tokenize import (
 )
 from marin.scaling_laws.scaling_laws import ScalingLawConfig, run_scaling_law_analysis
 from marin.training.training import (
-    PodConfig, TrainLmOnPodConfig,
+    PodConfig,
+    TrainLmOnPodConfig,
     TrainSFTMixturePodConfig,
     TrainSFTOnPodConfig,
     run_levanter_sft,
     run_levanter_sft_mixture,
     run_levanter_train_lm,
 )
-from levanter.main.train_lm import TrainLmConfig
 
 logger = logging.getLogger("ray")
 
@@ -217,7 +218,7 @@ def default_train(
     total_examples = schedule.global_data_offset_by_step(train_config.num_train_steps)
 
     checkpoint_path_to_load_from = train_config.initialize_from_checkpoint_path
-    
+
     # Create the inner config
     inner_config = TrainLmConfig(
         data=pretraining_data,
@@ -262,9 +263,7 @@ def default_train(
             warmup=(train_config.warmup if train_config.warmup is not None else AdamConfig().warmup),
             rewarmup=(train_config.rewarmup if train_config.rewarmup is not None else AdamConfig().rewarmup),
             decay=(train_config.decay if train_config.decay is not None else AdamConfig().decay),
-            lr_schedule=(
-                train_config.lr_schedule if train_config.lr_schedule is not None else AdamConfig().lr_schedule
-            ),
+            lr_schedule=(train_config.lr_schedule if train_config.lr_schedule is not None else AdamConfig().lr_schedule),
             cycle_length=train_config.cycle_length,  # can be int, list[int], or None
             min_lr_ratio=(
                 train_config.min_lr_ratio if train_config.min_lr_ratio is not None else AdamConfig().min_lr_ratio
@@ -275,20 +274,20 @@ def default_train(
         eval_harness_steps=train_config.steps_per_task_eval or 10000,
         eval_harness=harness_config,
     )
-    
+
     # Create the pod config
     pod_config = PodConfig(
         tpu_type=train_config.tpu_type,
         node_count=train_config.node_count,
     )
-    
+
     # Create the full config
     config = TrainLmOnPodConfig(
         config=inner_config,
         pod_config=pod_config,
         output_path=this_output_path(),
     )
-    
+
     return ExecutorStep(
         name=os.path.join("checkpoints", name),
         description=(
@@ -391,7 +390,7 @@ def default_sft(
             output_role=sft_config.output_role,
             stop_strategy=sft_config.stop_strategy,
         )
-        
+
         config = TrainSFTMixturePodConfig(
             config=inner_config,
             pod_config=pod_config,
@@ -433,12 +432,11 @@ def default_sft(
             input_role=sft_config.input_role,
             output_role=sft_config.output_role,
         )
-        
+
         config = TrainSFTOnPodConfig(
             config=inner_config,
             pod_config=pod_config,
             output_path=this_output_path(),
-            bypass_path_checks=sft_config.bypass_path_checks,
         )
         fn = run_levanter_sft
 
@@ -455,7 +453,7 @@ def default_sft(
 def default_anneal(name: str, anneal_config: AnnealConfig):
     imputed_checkpoint_steps = anneal_config.initialize_from_checkpoint_path.index("step-")
     imputed_checkpoint_step = int(
-        anneal_config.initialize_from_checkpoint_path[imputed_checkpoint_steps + len("step-"):]
+        anneal_config.initialize_from_checkpoint_path[imputed_checkpoint_steps + len("step-") :]
     )
 
     num_anneal_steps = anneal_config.num_anneal_training_tokens / (

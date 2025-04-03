@@ -19,10 +19,10 @@ from marin.utilities.gcs_utils import get_bucket_location, get_vm_region
 logger = logging.getLogger(__name__)
 
 
-
 @dataclass
 class PodConfig:
     """Common configuration for pod-based training."""
+
     tpu_type: str | None = None  # None means local
     node_count: int = 1
     """Number of TPU slices for training."""
@@ -33,6 +33,7 @@ class PodConfig:
 @dataclass
 class BaseTrainConfig:
     """Base class for all pod-based training configurations."""
+
     config: Any  # This will be overridden by subclasses
     pod_config: PodConfig = dataclasses.field(default_factory=PodConfig)
     output_path: str | None = None
@@ -46,27 +47,29 @@ class BaseTrainConfig:
     allow_out_of_region: tuple[str, ...] = ()
     """Tuple of JSON paths (e.g., 'data.cache_dir') that are allowed to be read from or written to different regions."""
 
-T = TypeVar('T', bound=BaseTrainConfig)
 
 @dataclass
 class TrainSFTOnPodConfig(BaseTrainConfig):
     """Configuration for SFT training on a pod."""
+
     config: sft.SFTConfig
-    bypass_path_checks: bool = False
 
 
 @dataclass
 class TrainSFTMixturePodConfig(BaseTrainConfig):
     """Configuration for SFT mixture training on a pod."""
+
     config: sft_mixture.SFTMixtureConfig
-    bypass_path_checks: bool = False
 
 
 @dataclass
 class TrainLmOnPodConfig(BaseTrainConfig):
     """Configuration for language model training on a pod."""
+
     config: train_lm.TrainLmConfig
 
+
+T = TypeVar("T", bound=TrainLmOnPodConfig | TrainSFTOnPodConfig | TrainSFTMixturePodConfig)
 
 DEFAULT_CHECKPOINTS_PATH = "checkpoints"
 DEFAULT_HF_CHECKPOINTS_PATH = "hf"
@@ -94,7 +97,11 @@ def _update_config_to_use_out_path(pod_config: T) -> T:
         ),
     )
 
-    config = replace(pod_config.config, trainer=trainer, hf_save_path=os.path.join(pod_config.output_path, DEFAULT_HF_CHECKPOINTS_PATH))
+    config = replace(
+        pod_config.config,
+        trainer=trainer,
+        hf_save_path=os.path.join(pod_config.output_path, DEFAULT_HF_CHECKPOINTS_PATH),
+    )
     return replace(pod_config, config=config)
 
 
@@ -150,9 +157,13 @@ def _enforce_run_id(config: T) -> T:
         logger.warning(f"Run ID not set. Using default: {run_id}")
 
     append_id_to_checkpoints = not config.impute_run_id_from_output_path
-    checkpointer_config = replace(config.config.trainer.checkpointer, append_run_id_to_base_path=append_id_to_checkpoints)
+    checkpointer_config = replace(
+        config.config.trainer.checkpointer, append_run_id_to_base_path=append_id_to_checkpoints
+    )
 
-    inner_config = replace(config.config, trainer=replace(config.config.trainer, id=run_id, checkpointer=checkpointer_config))
+    inner_config = replace(
+        config.config, trainer=replace(config.config.trainer, id=run_id, checkpointer=checkpointer_config)
+    )
     return replace(config, config=inner_config)
 
 
@@ -180,7 +191,7 @@ def run_levanter_sft(config: TrainSFTOnPodConfig):
     config = _enforce_run_id(config)
     logger.info(f"Using run ID: {config.config.trainer.id}")
 
-    if not config.bypass_path_checks and config.pod_config.tpu_type is not None:
+    if config.pod_config.tpu_type is not None:
         ray.get(ray.remote(_doublecheck_paths).options(num_cpus=0.1).remote(config, must_save_checkpoints=True))
 
     sft_config = config.config
@@ -254,7 +265,9 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
         logger.info(f"Using output path: {config.output_path}")
         config = _update_config_to_use_out_path(config)
 
-    env = _add_default_env_variables(config.pod_config.env, default_launch_config.env_for_accel(config.pod_config.tpu_type or ""))
+    env = _add_default_env_variables(
+        config.pod_config.env, default_launch_config.env_for_accel(config.pod_config.tpu_type or "")
+    )
     _check_for_wandb_key(env)
     env = _add_run_env_variables(env)
     pod_config = replace(config.pod_config, env=env)
@@ -292,7 +305,7 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
         return ray.get(train_lm_task.remote())
 
 
-def _doublecheck_paths(config: TrainSFTOnPodConfig | TrainSFTMixturePodConfig | TrainLmOnPodConfig, must_save_checkpoints: bool):
+def _doublecheck_paths(config: T, must_save_checkpoints: bool):
     """
     Double-check that we're not using local paths in some of the standard places that Levanter sets defaults.
     Also check that the paths are in the same region as the VM, to avoid performance issues and billing surprises.
@@ -300,12 +313,12 @@ def _doublecheck_paths(config: TrainSFTOnPodConfig | TrainSFTMixturePodConfig | 
     This function recursively examines all strings in the config to identify GCS paths and checks their regions.
     """
     # Determine if we're running locally or if path checks should be bypassed
-    if isinstance(config, (TrainSFTOnPodConfig, TrainSFTMixturePodConfig)):
-        local_ok = config.bypass_path_checks or config.pod_config.tpu_type is None
+    if isinstance(config, TrainSFTOnPodConfig | TrainSFTMixturePodConfig):
         allow_out_of_region = ()
     else:  # TrainLmOnPodConfig
-        local_ok = config.pod_config.tpu_type is None
         allow_out_of_region = config.allow_out_of_region
+
+    local_ok = config.pod_config.tpu_type is None
 
     try:
         region = get_vm_region()
@@ -331,7 +344,7 @@ def _doublecheck_paths(config: TrainSFTOnPodConfig | TrainSFTMixturePodConfig | 
 def _check_paths_recursively(obj, path_prefix, region, local_ok, allow_out_of_region, must_save_checkpoints):
     """
     Recursively check all strings in the config object that look like GCS paths.
-    
+
     Args:
         obj: The object to check (could be a dict, list, or other object)
         path_prefix: The prefix for the current path (e.g., "config.trainer")
@@ -351,19 +364,33 @@ def _check_paths_recursively(obj, path_prefix, region, local_ok, allow_out_of_re
     elif isinstance(obj, str) and obj.startswith("gs://"):
         # This is a GCS path, check if it's in the right region
         is_allowed_path = any(path_prefix.startswith(p) for p in allow_out_of_region)
-        
+
         # Special handling for checkpoint paths
         is_checkpoint_path = "checkpointer.base_path" in path_prefix or "hf_save_path" in path_prefix
-        
+
         # Determine if this path should be checked
         if not is_allowed_path:
             _check_path_in_region(
-                path_prefix, 
-                obj, 
-                none_ok=not is_checkpoint_path or not must_save_checkpoints, 
-                region=region, 
-                local_ok=local_ok
+                path_prefix,
+                obj,
+                none_ok=not is_checkpoint_path or not must_save_checkpoints,
+                region=region,
+                local_ok=local_ok,
             )
+    elif dataclasses.is_dataclass(obj):
+        for field in dataclasses.fields(obj):
+            new_prefix = f"{path_prefix}.{field.name}" if path_prefix else field.name
+            _check_paths_recursively(
+                getattr(obj, field.name),
+                new_prefix,
+                region,
+                local_ok,
+                allow_out_of_region,
+                must_save_checkpoints,
+            )
+    # allow primitives through, warn on other types
+    elif not isinstance(obj, (str, int, float, bool, type(None))):
+        logger.warning(f"Found unexpected type {type(obj)} at {path_prefix}. Skipping.")
 
 
 def _add_default_env_variables(env: dict, default_env: dict | None):
