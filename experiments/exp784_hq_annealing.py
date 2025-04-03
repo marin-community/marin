@@ -20,7 +20,7 @@ from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
 
 # Constants
-DOLMINO_DCLM = dclm_components_llama3["dclm_baseline"]
+DCLM_BASELINE = dclm_components_llama3["dclm_baseline"]
 ANNEAL_TOKENS = 50_000_000_000
 TPU_TYPE = "v5litepod-128"
 DCLM_WEIGHT = 0.7
@@ -53,8 +53,8 @@ TOTAL_HIGH_QUALITY_TOKENS = sum(HIGH_QUALITY_TOKEN_COUNTS.values())
 
 # Control model is 100% Dolmino DCLM dataset
 control_dataset_config = lm_mixture_data_config(
-    components={"dolmino_dclm": DOLMINO_DCLM},
-    weights={"dolmino_dclm": 1.0},
+    components={"dclm_baseline": DCLM_BASELINE},
+    weights={"dclm_baseline": 1.0},
 )
 
 control_anneal_config = AnnealConfig(
@@ -76,7 +76,7 @@ for hq_dataset in high_quality_datasets:
 
     # Experiment 1: 30% high-quality, 70% DCLM
     dataset_config = lm_mixture_data_config(
-        components={"dclm": DOLMINO_DCLM, "high_quality": hq_dataset},
+        components={"dclm": DCLM_BASELINE, "high_quality": hq_dataset},
         weights={"dclm": DCLM_WEIGHT, "high_quality": HIGH_QUALITY_WEIGHT},
     )
 
@@ -92,7 +92,7 @@ for hq_dataset in high_quality_datasets:
 
     # Experiment 2: 15% high-quality, 15% FLAN, 70% DCLM
     dataset_config_with_flan = lm_mixture_data_config(
-        components={"dclm": DOLMINO_DCLM, "high_quality": hq_dataset, "flan": dolma_tokenized["dolma/flan"]},
+        components={"dclm": DCLM_BASELINE, "high_quality": hq_dataset, "flan": dolma_tokenized["dolma/flan"]},
         weights={"dclm": DCLM_WEIGHT, "high_quality": FLAN_WEIGHT_15, "flan": FLAN_WEIGHT_15},
     )
 
@@ -118,7 +118,7 @@ mixture_weights_15pct_flan = {
 
 all_hq_datasets = {dataset: dolma_tokenized[dataset] for dataset in HIGH_QUALITY_TOKEN_COUNTS.keys()}
 all_hq_dataset_config = lm_mixture_data_config(
-    components={"dclm": DOLMINO_DCLM, "flan": dolma_tokenized["dolma/flan"], **all_hq_datasets},
+    components={"dclm": DCLM_BASELINE, "flan": dolma_tokenized["dolma/flan"], **all_hq_datasets},
     weights=mixture_weights_15pct_flan,
 )
 
@@ -143,7 +143,7 @@ mixture_weights_5pct_flan = {
 }
 
 all_hq_dataset_config_5pct = lm_mixture_data_config(
-    components={"dclm": DOLMINO_DCLM, "flan": dolma_tokenized["dolma/flan"], **all_hq_datasets},
+    components={"dclm": DCLM_BASELINE, "flan": dolma_tokenized["dolma/flan"], **all_hq_datasets},
     weights=mixture_weights_5pct_flan,
 )
 
