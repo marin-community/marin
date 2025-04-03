@@ -10,10 +10,11 @@ that point the loss started to increase again. I still don't know why.
 
 import dataclasses
 
+from experiments.exp606_sft import tulu3_llama_tokenize_step, tulu_sft_config
 from levanter.callbacks.watch import WatchConfig
 
 from experiments.dclm.tokenize_dclm import DCLM_MIXTURE_WEIGHTS
-from experiments.defaults import default_train
+from experiments.defaults import default_sft, default_train
 from experiments.dolmino.tokenize_dolmino import get_dolmino_step
 from experiments.instruction_datasets import (
     tulu3_flat_llama_tokenized_as_train,
@@ -176,6 +177,32 @@ norm_tootsie_8b_focused_spoonbill_zloss = dataclasses.replace(
     override_output_path="checkpoints/tootsie-8b-focused-spoonbill-zloss",
 )
 
+# do some sfts
+
+spoonbill_zloss_tulu3_sft_config = dataclasses.replace(
+    tulu_sft_config,
+    model_name_or_path=output_path_of(norm_tootsie_8b_focused_spoonbill_zloss, "hf/step-829999/"),
+)
+
+
+sft_tulu3_sft_spoonbill_zloss = default_sft(
+    name="sft/tulu3_llama3_sft_spoonbill_zloss",
+    tokenized=tulu3_llama_tokenize_step,
+    model_config=llama_8b_fp32_attn,
+    sft_config=spoonbill_zloss_tulu3_sft_config
+).with_output_path("checkpoints/sft/tulu3_llama3_sft_spoonbill_zloss")
+
+
+sft_tulu3_sft_deeper_spoonbill_zloss = default_sft(
+    name="sft/tulu3_llama3_sft_spoonbill_zloss",
+    tokenized=tulu3_llama_tokenize_step,
+    model_config=llama_8b_fp32_attn,
+    sft_config=
+        dataclasses.replace(spoonbill_zloss_tulu3_sft_config,
+                            model_name_or_path=output_path_of()
+).with_output_path("checkpoints/sft/tulu3_llama3_sft_spoonbill_zloss")
+
+
 if __name__ == "__main__":
     executor_main(
         [
@@ -183,6 +210,7 @@ if __name__ == "__main__":
             norm_tootsie_8b_hypnotic_spoonbill,
             norm_tootsie_8b_focused_spoonbill_fp32_attention,
             norm_tootsie_8b_focused_spoonbill_zloss,
+            sft_tulu3_sft_spoonbill_zloss,
         ],
         description="Cooldown run for tootsie-8b model with some flan and tulu",
     )
