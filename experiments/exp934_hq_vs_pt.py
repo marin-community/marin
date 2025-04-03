@@ -13,136 +13,153 @@ Tests four data mixes for cooldown:
 Metrics: Paloma Loss, Tulu3 Validation Loss, MMLU Accuracy
 """
 
-# Core imports for experiment functionality
-from experiments.cooldown_quality import default_quality_ablation, QualityAblationConfig
+from experiments.anneal_config import AnnealConfig
 from experiments.dclm.tokenize_dclm import DCLM_MIXTURE_WEIGHTS, dclm_components_llama3
+from experiments.defaults import default_anneal, default_tokenize
+from experiments.dolmino.tokenize_dolmino import dolmino_math_tokenized_llama3, tokenize_dolmino_steps
+from experiments.instruction_datasets import tulu3_flat_llama_tokenized_as_validation
 from experiments.nemotron_cc.tokenize_nemotron import NEMOTRON_WEIGHTS, tokenize_nemotron_steps
-from experiments.dolmino.tokenize_dolmino import tokenize_dolmino_steps, dolmino_math_tokenized_llama3
-from marin.execution.executor import executor_main, ExecutorStep, output_path_of
+from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
-from marin.processing.tokenize import TokenizeConfig, tokenize
-from experiments.llama import llama3_tokenizer
 
-# Existing tokenized datasets
-from experiments.exp846_arxiv_cooldown import markdownified_arxiv_tokenized
-from experiments.exp845_wikipedia_cooldown import wikipedia_cooldown_ablation
-from experiments.exp649_stack_exchange_training import tokenized_stackexchange
+# Direct data mix definitions - no functions, just variables
 
+# 1. Original mix: DCLM + StarCoder + ProofPile
+original_mix = lm_mixture_data_config(
+    components={**dclm_components_llama3, "tulu_sft": tulu3_flat_llama_tokenized_as_validation},
+    weights=DCLM_MIXTURE_WEIGHTS,
+)
 
-# Data mix definitions
-def get_original_mix():
-    """Original mix: DCLM + StarCoder + ProofPile"""
-    return lm_mixture_data_config(
-        components={**dclm_components_llama3, "tulu_sft": tulu3_flat_llama_tokenized_as_validation},
-        weights=DCLM_MIXTURE_WEIGHTS,
-    )
+# 2. Nemotron-only mix
+nemotron_steps = tokenize_nemotron_steps()
+nemotron_only_mix = lm_mixture_data_config(
+    components={**nemotron_steps, "tulu_sft": tulu3_flat_llama_tokenized_as_validation}, weights=NEMOTRON_WEIGHTS
+)
 
+# 3. Nemotron + Code + Dolmino mix
+nemotron_code_dolmino_components = {
+    **tokenize_nemotron_steps(),
+    "starcoderdata": dclm_components_llama3["starcoderdata"],
+    "proofpile_2": dclm_components_llama3["proofpile_2"],
+    "all_math": dolmino_math_tokenized_llama3,
+    "tulu_sft": tulu3_flat_llama_tokenized_as_validation,
+    **tokenize_dolmino_steps(),
+}
 
-def get_nemotron_only_mix():
-    """Nemotron-only mix"""
-    nemotron_steps = tokenize_nemotron_steps()
-    return lm_mixture_data_config(
-        components={**nemotron_steps, "tulu_sft": tulu3_flat_llama_tokenized_as_validation}, weights=NEMOTRON_WEIGHTS
-    )
+nemotron_code_dolmino_weights = {
+    **{k: v * 0.6 for k, v in NEMOTRON_WEIGHTS.items()},
+    "starcoderdata": 0.25,
+    "proofpile_2": 0.25,
+    "dolmino/flan": 0.017 * 10,
+    "dolmino/pes2o": 0.0581 * 10,
+    "dolmino/stackexchange": 0.0171 * 10,
+    "dolmino/wiki": 0.00365 * 10,
+    "all_math": 0.00422 * 10,
+}
 
+nemotron_code_dolmino_mix = lm_mixture_data_config(
+    components=nemotron_code_dolmino_components, weights=nemotron_code_dolmino_weights
+)
 
-def get_nemotron_code_dolmino_mix():
-    """Nemotron + Code + Dolmino mix"""
-    # Gather components
-    components = {
-        **tokenize_nemotron_steps(),
-        "starcoderdata": dclm_components_llama3["starcoderdata"],
-        "proofpile_2": dclm_components_llama3["proofpile_2"],
-        "all_math": dolmino_math_tokenized_llama3,
-        "tulu_sft": tulu3_flat_llama_tokenized_as_validation,
-        **tokenize_dolmino_steps(),
-    }
+# 4. Full mix with everything
+# Create the medu science QA dataset
+# MMLU Science QA tokenization
+medu_mmlu_science_qa_tokenized = default_tokenize(
+    name="medu-mmlu-science-qa",
+    dataset="gs://marin-us-east1/documents/medu-mmlu-science-llama8b-qa-whole-1a419d",
+    tokenizer="llama3_tokenizer",
+)
 
-    # Define weights
-    weights = {
-        **{k: v * 0.6 for k, v in NEMOTRON_WEIGHTS.items()},
-        "starcoderdata": 0.25,
-        "proofpile_2": 0.25,
-        "flan": 0.017 * 10,
-        "dolmino/pes2o": 0.0581 * 10,
-        "dolmino/stackexchange": 0.0171 * 10,
-        "dolmino/wiki": 0.00365 * 10,
-        "all_math": 0.00422 * 10,
-    }
+# Wikipedia tokenization
+md_wiki_tokenized = default_tokenize(
+    name="wikipedia",
+    dataset="gs://marin-us-central2/documents/wikipedia-resiliparse-custom-fork-2569de/20241201/",
+    tokenizer="llama3_tokenizer",
+)
 
-    return lm_mixture_data_config(components=components, weights=weights)
+# Arxiv tokenization
+md_arxiv_tokenized = default_tokenize(
+    name="arxiv-no-problem",
+    dataset="gs://marin-us-central2/documents/ar5iv/ar5iv-04-2024-no-problem-3971ff/resiliparse-custom-fork",
+    tokenizer="llama3_tokenizer",
+)
 
+# Stackexchange tokenization
+md_stackexchange_tokenized = default_tokenize(
+    name="stackexchange",
+    dataset="gs://marin-us-central2/documents/stackexchange-resiliparse-custom-fork-ab41ad",
+    tokenizer="llama3_tokenizer",
+)
 
-def get_full_mix():
-    """Full mix: Nemotron + Code + Dolmino + Additional Data"""
-    # Combine all components
-    medu_mmlu_science_qa_tokenized = default_tokenize(
-        name="medu-mmlu-science-qa",
-        dataset="gs://marin-us-east1/documents/medu-mmlu-science-llama8b-qa-whole-1a419d",
-        tokenizer=llama3_tokenizer,
-    )
-    
-    components = {
-        **tokenize_nemotron_steps(),
-        "starcoderdata": dclm_components_llama3["starcoderdata"],
-        "proofpile_2": dclm_components_llama3["proofpile_2"],
-        "all_math": dolmino_math_tokenized_llama3,
-        "arxiv_markdownified": markdownified_arxiv_tokenized,
-        "wikipedia_markdown": output_path_of(wikipedia_cooldown_ablation),
-        "stackexchange_custom": tokenized_stackexchange,
-        "medu_science_qa": medu_mmlu_science_qa_tokenized,
-        "tulu_sft": tulu3_flat_llama_tokenized_as_validation,
-        **tokenize_dolmino_steps(),
-    }
+full_mix_components = {
+    **tokenize_nemotron_steps(),
+    "starcoderdata": dclm_components_llama3["starcoderdata"],
+    "proofpile_2": dclm_components_llama3["proofpile_2"],
+    "all_math": dolmino_math_tokenized_llama3,
+    "arxiv_markdownified": md_arxiv_tokenized,
+    "wikipedia_markdown": md_wiki_tokenized,
+    "stackexchange_custom": md_stackexchange_tokenized,
+    "medu_science_qa": medu_mmlu_science_qa_tokenized,
+    "tulu_sft": tulu3_flat_llama_tokenized_as_validation,
+    **tokenize_dolmino_steps(),
+}
 
-    # Define weights
-    weights = {
-        **{k: v * 0.6 for k, v in NEMOTRON_WEIGHTS.items()},
-        "starcoderdata": 0.25,
-        "proofpile_2": 0.25,
-        "flan": 0.017 * 10,
-        "dolmino/pes2o": 0.0581 * 5,
-        "dolmino/stackexchange": 0.0171 * 5,
-        "dolmino/wiki": 0.00365 * 5,
-        "all_math": 0.00422 * 10,
-        "arxiv_markdownified": 0.0581 * 5,
-        "stackexchange_custom": 0.0171 * 5,
-        "wikipedia_markdown": 0.00365 * 5,
-        "medu_science_qa": 0.0012 * 5
-    }
+full_mix_weights = {
+    **{k: v * 0.6 for k, v in NEMOTRON_WEIGHTS.items()},
+    "starcoderdata": 0.25,
+    "proofpile_2": 0.25,
+    "dolmino/flan": 0.017 * 10,
+    "dolmino/pes2o": 0.0581 * 5,
+    "dolmino/stackexchange": 0.0171 * 5,
+    "dolmino/wiki": 0.00365 * 5,
+    "all_math": 0.00422 * 10,
+    "arxiv_markdownified": 0.0581 * 5,
+    "stackexchange_custom": 0.0171 * 5,
+    "wikipedia_markdown": 0.00365 * 5,
+    "medu_science_qa": 0.0012 * 5,
+}
 
-    return lm_mixture_data_config(components=components, weights=weights)
+full_mix = lm_mixture_data_config(components=full_mix_components, weights=full_mix_weights)
+
+# Dictionary of all mixes
+data_mixes = {
+    "original_pt_mix": original_mix,
+    "nemotron_pt_only": nemotron_only_mix,
+    "nemotron_code_dolmino": nemotron_code_dolmino_mix,
+    "nemotron_code_dolmino_misc": full_mix,
+}
+
+# Default parameters for annealing
+anneal_tokens = 50_000_000_000  # 50B tokens
+tpu_type = "v4-128"
 
 
 def run_cooldown_ablation():
-    """Run the cooldown data mix ablation experiment"""
-    # Define data mixes to test
-    data_mixes = {
-        "original_pt_mix": get_original_mix(),
-        "nemotron_pt_only": get_nemotron_only_mix(),
-        "nemotron_code_dolmino": get_nemotron_code_dolmino_mix(),
-        "nemotron_code_dolmino_misc": get_full_mix(),
-    }
-
-    # Configure experiment
-    config = QualityAblationConfig(
-        baseline_weight=0.0,
-        mcq_weight=0.0,
-        candidate_weight=1.0,  # 100% focus on data mix
-        tpu_type="v4-128",
-        model_name_prefix="pretrain_v_hq_ablation",
-    )
-
-    # Run ablation for each mix
-    results = {}
+    # Apply annealing to each mix
+    results = []
     for mix_name, data_mix in data_mixes.items():
-        # Run ablation
-        ablation_model = default_quality_ablation(candidate_tokenized=data_mix, config=config, mix_name=mix_name)
+        # Create AnnealConfig
+        anneal_config = AnnealConfig(
+            initialize_from_checkpoint_path="gs://marin-us-central2/checkpoints/llama-8b-tootsie-phase2/checkpoints/step-741907",
+            dataset_config=data_mix,
+            num_anneal_training_tokens=anneal_tokens,
+            tpu_type=tpu_type,
+        )
 
-        results[mix_name] = ablation_model
+        # Run annealing
+        model_name = f"pretrain_v_hq_ablation-{mix_name}"
+        results.append(
+            default_anneal(
+                name=model_name,
+                anneal_config=anneal_config,
+            )
+        )
 
     return results
 
 
 if __name__ == "__main__":
-    executor_main(run_cooldown_ablation)
+    executor_main(
+        steps=run_cooldown_ablation(),
+        description="Profiling Cooldowns on Pretraining data moving towards increasingly HQ Data",
+    )
