@@ -1,7 +1,15 @@
 """An experiment to evaluate the quality of individual splits of the Dolmino dataset.
 
 We cooldown a 8B model on a 30/70 mixture of some high quality Dolmino split and Dolmino DCLM.
-Link to issue: https://github.com/stanford-crfm/marin/issues/820
+Link to issue: https://github.com/stanford-crfm/marin/issues/784
+
+Evaluation Criteria:
+-------------------
+Success metrics tracked in the issue:
+- MMLU (overall performance)
+- Overall Paloma
+
+Both metrics are part of the default_run evaluation loop.
 """
 
 from experiments.anneal_config import AnnealConfig
