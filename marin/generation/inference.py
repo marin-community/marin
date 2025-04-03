@@ -1,6 +1,6 @@
 import os
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any
 
 import fsspec
 import ray
@@ -25,10 +25,10 @@ class TextGenerationInferenceConfig:
     generation_kwargs: dict[str, Any]
 
     # Prompting specific
-    template: str
+    template: str | None = None
+    template_path: str | None = None
     apply_chat_template: bool = True
     save_templated_prompt: bool = False
-    template_type: Literal["string", "file"] = "string"
 
     # Ray data specific
     num_instances: tuple[int, int] = (1, 4)
@@ -127,13 +127,15 @@ def run_inference(config: TextGenerationInferenceConfig):
     ray_data_read_kwargs = get_ray_data_read_kwargs(config)
     ds = ray.data.read_json(config.input_path, **ray_data_read_kwargs)
 
-    if config.template_type == "file":
-        with fsspec.open(config.template, "r", compression="infer") as f:
+    assert (config.template_path or config.template) and not (
+        config.template_path and config.template
+    ), "Must provide either a template or a template path, but not both"
+
+    if config.template_path:
+        with fsspec.open(config.template_path, "r", compression="infer") as f:
             template = str(f.read())
-    elif config.template_type == "string":
+    elif config.template:
         template = config.template
-    else:
-        raise ValueError(f"Invalid template type: {config.template_type}")
 
     ds = ds.map_batches(  # Apply batch inference for all input data.
         vLLMTextGeneration,
