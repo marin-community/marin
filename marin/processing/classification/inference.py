@@ -20,7 +20,6 @@ from marin.processing.classification.classifier import (
 )
 from marin.processing.classification.config.inference_config import InferenceConfig
 from marin.utils import (
-    fsspec_get_atomic_directories,
     fsspec_glob,
     fsspec_mkdirs,
     rebase_file_path,
@@ -50,6 +49,10 @@ def read_dataset(input_filename: str, columns: list[str] | None = None):
         df = pd.read_json(input_filename, compression="gzip", lines=True)
         dataset = datasets.Dataset.from_pandas(df)
         return dataset
+    elif input_filename.endswith(".jsonl.zst"):
+        df = pd.read_json(input_filename, compression="zstd", lines=True)
+        dataset = datasets.Dataset.from_pandas(df)
+        return dataset
     elif input_filename.endswith(".parquet"):
         df = pd.read_parquet(input_filename, columns=columns)
         dataset = datasets.Dataset.from_pandas(df)
@@ -62,10 +65,34 @@ def write_dataset(dataset, output_filename: str):
     """Writes a Huggingface Dataset to a file (remote or local)"""
     if output_filename.endswith(".jsonl.gz"):
         dataset.to_json(output_filename, compression="gzip")
+    elif output_filename.endswith(".jsonl.zst"):
+        df_pandas = dataset.to_pandas()
+        df_pandas.to_json(output_filename, orient="records", compression="zstd", lines=True)
+        # dataset.to_json(output_filename, to_json_kwargs={"compression": "zstd", "lines": True})
     elif output_filename.endswith(".parquet"):
         dataset.to_parquet(output_filename)
     else:
         raise ValueError(f"Unsupported filetype: {output_filename}")
+
+
+def get_input_dataset_column_names(input_filename: str) -> list[str]:
+    if "fineweb" in input_filename.lower():
+        return ["text", "id"]
+    elif "dclm" in input_filename.lower():
+        return ["text", "metadata"]
+    else:
+        logger.warning("We are assuming the input dataset has the following columns: text, id")
+        return ["text", "id"]
+
+
+def get_output_dataset_column_names(input_filename: str) -> list[str]:
+    if "fineweb" in input_filename.lower():
+        return ["id", "attributes"]
+    elif "dclm" in input_filename.lower():
+        return ["metadata", "attributes"]
+    else:
+        logger.warning("We are assuming the output dataset has the following columns: id, attributes")
+        return ["id", "attributes"]
 
 
 @cached_or_construct_output(success_suffix="SUCCESS")
@@ -73,9 +100,12 @@ def process_file_with_quality_classifier(input_filename: str, output_filename: s
     print(f"[*] Processing {input_filename} to {output_filename}")
     dataset = read_dataset(input_filename)
 
-    dataset = dataset.select_columns(["text", "id"])
+    # TODO(chris): Add support for more types of columns.
+    input_column_names = get_input_dataset_column_names(input_filename)
+    output_column_names = get_output_dataset_column_names(input_filename)
+    dataset = dataset.select_columns(input_column_names)
     dataset = dataset.map(lambda batch: quality_classifier(batch), batched=True, batch_size=512)
-    dataset = dataset.select_columns(["id", "attributes"])
+    dataset = dataset.select_columns(output_column_names)
 
     write_dataset(dataset, output_filename)
 
@@ -88,8 +118,11 @@ def process_file_ray(
     attribute_name: str,
     model_type: str | None,
     filetype: str,
+    classifier_kwargs: dict,
 ):
-    quality_classifier = AutoClassifier.from_model_path(model_name_or_path, attribute_name, model_type=model_type)
+    quality_classifier = AutoClassifier.from_model_path(
+        model_name_or_path, attribute_name, model_type, **classifier_kwargs
+    )
 
     process_file_with_quality_classifier(input_filename, output_filename, quality_classifier)
 
@@ -103,6 +136,7 @@ def _process_dir(
     attribute_name: str,
     model_type: str | None,
     filetype: str,
+    classifier_kwargs: dict,
 ):
     """Perform quality classification on a directory of files
 
@@ -116,7 +150,9 @@ def _process_dir(
         logger.error(f"No files found in {input_path} with pattern {filetype}!!! This is likely an error.")
         return
 
-    quality_classifier = AutoClassifier.from_model_path(model_name_or_path, attribute_name, model_type=model_type)
+    quality_classifier = AutoClassifier.from_model_path(
+        model_name_or_path, attribute_name, model_type, **classifier_kwargs
+    )
 
     for input_filename in files:
         output_filename = rebase_file_path(input_path, input_filename, output_path)
@@ -131,12 +167,10 @@ def get_process_filepath_func(subdirectories: list[str]):
 
 
 def get_filepaths_and_process_filepath_func(inference_config: InferenceConfig):
-    filepaths = fsspec_get_atomic_directories(inference_config.input_path)
-    process_filepath_func = get_process_filepath_func(filepaths)
-
-    # This is the case where the directory has no subdirectories. So, we are iterating through files and not directories
-    if len(filepaths) == 0:
-        filepaths = fsspec_glob(os.path.join(inference_config.input_path, f"**/*.{inference_config.filetype}"))
+    # NOTE(chris): Maximize parallelism by doing one task per file. If this is too high
+    # then we can use _process_dir to process multiple files in a single task.
+    process_filepath_func = process_file_ray
+    filepaths = fsspec_glob(os.path.join(inference_config.input_path, f"**/*.{inference_config.filetype}"))
 
     return filepaths, process_filepath_func
 
@@ -166,6 +200,7 @@ def run_inference(inference_config: InferenceConfig):
             inference_config.attribute_name,
             inference_config.model_type,
             inference_config.filetype,
+            inference_config.classifier_kwargs,
         )
 
         responses.append(result_ref)
@@ -174,7 +209,7 @@ def run_inference(inference_config: InferenceConfig):
         ray.get(responses)
     except Exception as e:
         print(f"Error processing: {e}")
-        raise
+        raise e
 
 
 @draccus.wrap()
