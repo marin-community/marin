@@ -10,18 +10,6 @@ python marin/run/ray_run.py \
     --fetched_urls_pattern 'gs://marin-us-central2/scratch/nfliu/text/open-web-math-fde8ef8-10M/links.*.parquet' \
     --output_path gs://marin-us-central2/scratch/nfliu/url_classification_models/bert-base-uncased-open-web-math-fde8ef8-10M/
 ```
-
-For multi-GPU training:
-
-```
-pip install datasets filelock torch accelerate scikit-learn
-export WANDB_API_KEY='ca4e321fd237f65236ab95e92724934b47264b1c'
-
-python marin/crawl/url_classification/train_bert_url_classifier.py \
-    --urls_pattern 'gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-10M/links.*.parquet' \
-    --fetched_urls_pattern 'gs://marin-us-central2/scratch/nfliu/text/open-web-math-fde8ef8-10M/links.*.parquet' \
-    --output_path gs://marin-us-central2/scratch/nfliu/url_classification_models/bert-base-uncased-open-web-math-fde8ef8-10M/
-```
 """  # noqa: E501
 import hashlib
 import json
@@ -217,14 +205,6 @@ def train_bert_url_classifier(
     resources={"TPU": 4, "TPU-v4-8-head": 1},
 )
 @remove_tpu_lockfile_on_exit
-def train_model_tpu(*args, **kwargs):
-    return train_model(*args, **kwargs, device="tpu")
-
-
-def train_model_gpu(*args, **kwargs):
-    return train_model(*args, **kwargs, device="gpu")
-
-
 def train_model(
     dataset_path: str,
     output_path: str,
@@ -235,7 +215,6 @@ def train_model(
     max_length: int = 512,
     dataloader_num_workers: int = 0,
     dataloader_prefetch_factor: int | None = None,
-    device: str = "tpu",
 ) -> None:
     logger.info(f"Training BERT model for experiment {output_path}")
     success_path = os.path.join(output_path, ".SUCCESS")
@@ -266,7 +245,6 @@ def train_model(
             report_to="wandb",
             logging_steps=10,
             eval_steps=0.1,
-            eval_accumulation_steps=None,
             eval_strategy="steps",
             save_steps=0.1,
             save_strategy="steps",
@@ -274,33 +252,18 @@ def train_model(
             max_length=max_length,
         )
 
-        if device == "tpu":
-            import torch_xla.distributed.xla_multiprocessing as xmp
+        import torch_xla.distributed.xla_multiprocessing as xmp
 
-            xmp.spawn(
-                _mp_fn,
-                args=(
-                    hf_model,
-                    dataset_path,
-                    local_model_output_path,
-                    bert_args,
-                    url_classifier_compute_eval_metrics,
-                ),
-            )
-        elif device == "gpu":
-            # When training on GPU, we set up only one Trainer instance.
-            index = 0
-            _mp_fn(
-                index,
+        xmp.spawn(
+            _mp_fn,
+            args=(
                 hf_model,
                 dataset_path,
                 local_model_output_path,
                 bert_args,
                 url_classifier_compute_eval_metrics,
-            )
-        else:
-            raise ValueError(f"Got invalid value for device: {device}")
-
+            ),
+        )
         fsspec_cpdir(local_model_output_path, gcs_model_output_path)
         try:
             fsspec_cpdir(local_trainer_output_path, os.path.join(output_path, "trainer_output"))
