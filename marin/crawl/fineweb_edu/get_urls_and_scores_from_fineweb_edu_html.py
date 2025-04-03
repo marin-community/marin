@@ -9,7 +9,7 @@ Running on FineWeb-Edu:
 for fineweb_edu_dump_html_path in $(gcloud storage ls gs://marin-us-central2/documents/fineweb-edu/html); do
     dump_name=$(basename -- ${fineweb_edu_dump_html_path})
     ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- \
-    python marin/crawl/fineweb-edu/get_urls_and_scores_from_fineweb_edu_html.py \
+    python marin/crawl/fineweb_edu/get_urls_and_scores_from_fineweb_edu_html.py \
     --html_input_path ${fineweb_edu_dump_html_path} \
     --prefix fineweb_edu \
     --output_path gs://marin-us-central2/scratch/nfliu/urls_and_scores/fineweb-edu/${dump_name}
