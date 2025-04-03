@@ -48,6 +48,7 @@ class TrainBertUrlClassifierConfig:
     max_length: int = 512
     dataloader_num_workers: int = 0
     dataloader_prefetch_factor: int | None = None
+    do_train: bool = True
 
 
 @ray.remote(memory=32 * 1024 * 1024 * 1024)
@@ -156,6 +157,7 @@ def train_bert_url_classifier(
     dataloader_num_workers: int,
     dataloader_prefetch_factor: int | None,
     seed: int = 0,
+    do_train: bool = True,
 ):
     # Hash this dataset configuration so we can skip dataset generation if it already exists.
     dataset_hash: str = hashlib.md5(f"{fetched_urls_pattern}{val_frac}{seed}".encode()).hexdigest()
@@ -184,19 +186,22 @@ def train_bert_url_classifier(
         )
     )
 
-    ray.get(
-        train_model.remote(
-            dataset_path=hf_format_dataset_path,
-            output_path=output_path,
-            batch_size=batch_size,
-            lr=lr,
-            hf_model=hf_model,
-            num_epochs=num_epochs,
-            max_length=max_length,
-            dataloader_num_workers=dataloader_num_workers,
-            dataloader_prefetch_factor=dataloader_prefetch_factor,
+    if do_train:
+        ray.get(
+            train_model.remote(
+                dataset_path=hf_format_dataset_path,
+                output_path=output_path,
+                batch_size=batch_size,
+                lr=lr,
+                hf_model=hf_model,
+                num_epochs=num_epochs,
+                max_length=max_length,
+                dataloader_num_workers=dataloader_num_workers,
+                dataloader_prefetch_factor=dataloader_prefetch_factor,
+            )
         )
-    )
+    else:
+        logger.info(f"do_train is {do_train}, skipping training...")
 
 
 @ray.remote(
@@ -296,6 +301,7 @@ def train_bert_url_classifier_driver(cfg: TrainBertUrlClassifierConfig):
         max_length=cfg.max_length,
         dataloader_num_workers=cfg.dataloader_num_workers,
         dataloader_prefetch_factor=cfg.dataloader_prefetch_factor,
+        do_train=cfg.do_train,
     )
 
 
