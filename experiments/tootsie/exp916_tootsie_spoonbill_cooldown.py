@@ -182,9 +182,7 @@ DEEPER_END = COOLDOWN_END + EXTRA_STEPS
 
 tootsie_8b_deeper_spoonbill_train = dataclasses.replace(
     norm_tracking_spoonbill_train,
-    initialize_from_checkpoint_path=output_path_of(
-        norm_tootsie_8b_focused_spoonbill_zloss, "checkpoints/step-step-829947"
-    ),
+    initialize_from_checkpoint_path=output_path_of(norm_tootsie_8b_focused_spoonbill_zloss, "checkpoints/step-829947"),
     watch=WatchConfig(
         interval=10,
         # fp32 pushes the ram too high here
@@ -204,16 +202,16 @@ tootsie_8b_deeper_spoonbill_train = dataclasses.replace(
 
 tootsie_8b_deeper_spoonbill = dataclasses.replace(
     default_train(
-        name="tootsie-8b-deeper-spoonbill",
+        name="tootsie-8b-deeper-spoonbill-2",
         tokenized=spoonbill_mixture,
         model_config=llama_8b_fp32_attn,
-        train_config=tootsie_8b_focused_spoonbill_train_zloss,
+        train_config=tootsie_8b_deeper_spoonbill_train,
         use_default_validation=True,
         tags=["llama", "8b", "ema", "exp916", "tootsie"],
         # HF is having trouble today so skipping this.
         eval_harness_tasks=[],
     ),
-    override_output_path="checkpoints/tootsie-8b-deeper-spoonbill",
+    override_output_path="checkpoints/tootsie-8b-deeper-spoonbill-2",
 )
 
 if __name__ == "__main__":
