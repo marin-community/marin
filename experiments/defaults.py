@@ -319,6 +319,9 @@ def default_sft(
         An ExecutorStep configured for supervised fine-tuning.
     """
     # Set up common configurations
+    if "sft" not in tags:
+        tags = [*tags, "sft"]
+
     tracker_config = WandbConfig(
         project="marin",
         tags=[*tags],
