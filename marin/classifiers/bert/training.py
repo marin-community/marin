@@ -52,6 +52,7 @@ class BertTrainingArguments:
     logging_steps: float = 0.1
     eval_steps: float = 0.1
     eval_strategy: str = "steps"
+    eval_accumulation_steps: int | None = 1
 
     # Collation arguments
     max_length: int = 128
@@ -85,6 +86,7 @@ class BertTrainingArguments:
             load_best_model_at_end=self.load_best_model_at_end,
             metric_for_best_model=self.metric_for_best_model,
             greater_is_better=self.greater_is_better,
+            eval_accumulation_steps=self.eval_accumulation_steps,
         )
 
 
