@@ -74,7 +74,7 @@ def default_label(
 
     # If the user does not provide a data filter prompt, we generate one using the MEDU pipeline.
     if data_filter_prompt is None:
-        data_filter_prompt = ExecutorStep(
+        data_filter_generated_prompt = ExecutorStep(
             name=f"documents/datashop-prompts/{experiment_name}",
             fn=run_data_filter_prompt_generation_pipeline,
             config=MEDUPipelineConfig(
@@ -89,10 +89,11 @@ def default_label(
                 resource_config=resource_config,
             ),
         )
-        data_filter_prompt = output_path_of(data_filter_prompt, MEDU_BENCHMARK_DESCRIPTION_PROMPT_FILENAME)
-        template_type = "file"
+        data_filter_prompt_path = output_path_of(
+            data_filter_generated_prompt, MEDU_BENCHMARK_DESCRIPTION_PROMPT_FILENAME
+        )
     else:
-        template_type = "string"
+        data_filter_prompt_path = None
 
     # NOTE(chris): Assuming we are filtering from a jsonl.zst file such as DCLM.
     return ExecutorStep(
@@ -105,7 +106,7 @@ def default_label(
             engine_kwargs=default_engine_kwargs,
             generation_kwargs=default_generation_kwargs,
             template=data_filter_prompt,
-            template_type=template_type,
+            template_path=data_filter_prompt_path,
             num_instances=(1, 128),
             tensor_parallel_size=resource_config.num_tpu,
             save_templated_prompt=False,
