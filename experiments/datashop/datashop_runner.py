@@ -1,3 +1,18 @@
+"""DatashopRunner is the entrypoint to running an experiment using the Datashop pipeline.
+
+Currently, the Datashop pipeline requires two different clusters depending on the step:
+1. Initially we need to use the vLLM cluster to annotate the data that is distilled into the encoder model.
+2. We then use the training cluster to filter the large pretraining data pool and train the final model.
+
+See experiments/exp923_medu_mmlu.py for an example.
+1. First connect to both vLLM cluster and training cluster. Let the RAY_ADDRESS of vLLM cluster be
+$RAY_ADDRESS_VLLM and the RAY_ADDRESS of the training cluster be $RAY_ADDRESS_TRAINING.
+2. Run `run_eval_cluster_steps()` to annotate the data that is distilled into the encoder model with marin ray_run
+and RAY_ADDRESS=$RAY_ADDRESS_VLLM.
+3. After step (2) finishes, run `run_all_steps()` to train the final model with marin ray_run
+and RAY_ADDRESS=$RAY_ADDRESS_TRAINING.
+"""
+
 from dataclasses import dataclass, field
 
 from experiments.datashop.defaults import (
@@ -15,9 +30,7 @@ class DatashopRunnerConfig:
     # Defines the name of the experiment
     experiment_name: str
 
-    # Defines the model that will be used to annotate the corpus content
-    # Default: Llama-3.3-70B-Instruct,
-    # TODO(chris): Support more models later
+    # Defines the model that will be used to annotate the corpus content (e.g. Llama-3.3-70B-Instruct)
     annotator_model_name: str
 
     # Defines the large-scale pretraining data that will be used to train the final model
