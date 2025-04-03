@@ -19,7 +19,7 @@ from marin.utilities.gcs_utils import get_bucket_location, get_vm_region
 logger = logging.getLogger(__name__)
 
 
-@dataclass
+@dataclass(frozen=True)
 class PodConfig:
     """Common configuration for pod-based training."""
 
