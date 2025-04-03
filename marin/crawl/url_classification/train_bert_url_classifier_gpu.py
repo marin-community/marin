@@ -1,18 +1,24 @@
 #!/usr/bin/env python3
 """
 ```
+pip install transformers wandb datasets filelock torch accelerate scikit-learn
 export WANDB_API_KEY='ca4e321fd237f65236ab95e92724934b47264b1c'
-pip install datasets filelock torch accelerate scikit-learn
 
-torchrun --standalone \
+mkdir -p /scr/biggest/nfliu/cache/hf_home/
+export HF_HOME=/scr/biggest/nfliu/cache/hf_home/
+torchrun \
+    --rdzv-backend=c10d \
+    --rdzv-endpoint=localhost:0 \
     --nnodes=1 \
-    --nproc-per-node=4 \
-    python marin/crawl/url_classification/train_bert_url_classifier_gpu.py \
+    --nproc-per-node=2 \
+    marin/crawl/url_classification/train_bert_url_classifier_gpu.py \
     --model_name_or_path "bert-base-uncased" \
     --dataset_path "./url_classification_datasets/bert-base-uncased-open-web-math-fde8ef8-10M/train_val_hf/" \
-    --output_dir ./url_classification_models/bert-base-uncased-open-web-math-fde8ef8-10M/ \
-    --per_device_train_batch_size 64 \
-    --per_device_eval_batch_size 64 \
+    --output_dir "./url_classification_models/bert-base-uncased-open-web-math-fde8ef8-10M/" \
+    --do_train \
+    --do_eval \
+    --per_device_train_batch_size 128 \
+    --per_device_eval_batch_size 128 \
     --num_train_epochs 3 \
     --learning_rate 2e-5 \
     --report_to "wandb" \
@@ -20,7 +26,11 @@ torchrun --standalone \
     --eval_steps 0.1 \
     --eval_strategy "steps" \
     --save_steps 0.1 \
-    --save_strategy "steps"
+    --save_strategy "steps" \
+    --save_total_limit 1 \
+    --load_best_model_at_end True \
+    --metric_for_best_model "eval_binary_f1" \
+    --greater_is_better True
 ```
 """
 import json
