@@ -23,7 +23,8 @@ logger = logging.getLogger(__name__)
 class PodConfig:
     """Common configuration for pod-based training."""
 
-    tpu_type: str | None = None  # None means local
+    tpu_type: str | None = None
+    """Type of TPU to use, e.g. v4-128. None means local."""
     node_count: int = 1
     """Number of TPU slices for training."""
     env: dict = dataclasses.field(default_factory=dict)
@@ -192,7 +193,10 @@ def run_levanter_sft(config: TrainSFTOnPodConfig):
     logger.info(f"Using run ID: {config.config.trainer.id}")
 
     if config.pod_config.tpu_type is not None:
-        ray.get(ray.remote(_doublecheck_paths).options(num_cpus=0.1).remote(config, must_save_checkpoints=True))
+        ray.get(ray.remote(_doublecheck_paths).options(num_cpus=0.1).remote(config))
+
+        if config.config.hf_save_path is None:
+            raise ValueError("hf_save_path must be set when running on a TPU")
 
     sft_config = config.config
 
@@ -282,11 +286,11 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
     if not config.allow_out_of_region and config.pod_config.tpu_type is not None:
         # run this on the Ray cluster to get the right region
         # doesn't need to be a TPU because ray insists that all VMs are in the same region
-        ray.get(
-            ray.remote(_doublecheck_paths)
-            .options(runtime_env=runtime_env, num_cpus=0.1)
-            .remote(config, must_save_checkpoints=True)
-        )
+        ray.get(ray.remote(_doublecheck_paths).options(runtime_env=runtime_env, num_cpus=0.1).remote(config))
+
+        # ensure that we're saving hf checkpoints
+        if config.config.hf_save_path is None:
+            raise ValueError("hf_save_path must be set when running on a TPU")
 
     train_config = config.config
 
@@ -305,7 +309,7 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
         return ray.get(train_lm_task.remote())
 
 
-def _doublecheck_paths(config: T, must_save_checkpoints: bool):
+def _doublecheck_paths(config: T):
     """
     Double-check that we're not using local paths in some of the standard places that Levanter sets defaults.
     Also check that the paths are in the same region as the VM, to avoid performance issues and billing surprises.
@@ -313,10 +317,7 @@ def _doublecheck_paths(config: T, must_save_checkpoints: bool):
     This function recursively examines all strings in the config to identify GCS paths and checks their regions.
     """
     # Determine if we're running locally or if path checks should be bypassed
-    if isinstance(config, TrainSFTOnPodConfig | TrainSFTMixturePodConfig):
-        allow_out_of_region = ()
-    else:  # TrainLmOnPodConfig
-        allow_out_of_region = config.allow_out_of_region
+    allow_out_of_region = config.allow_out_of_region
 
     local_ok = config.pod_config.tpu_type is None
 
@@ -333,15 +334,17 @@ def _doublecheck_paths(config: T, must_save_checkpoints: bool):
         # Check chat_train_urls
         if config.config.chat_train_urls:
             for url in config.config.chat_train_urls:
-                _check_path_in_region("chat_train_urls", url, none_ok=False, region=region, local_ok=local_ok)
+                if url is None:
+                    raise ValueError("chat_train_urls must be set.")
+                _check_path_in_region("chat_train_urls", url, region=region, local_ok=local_ok)
 
     # Recursively check all paths in the config
-    _check_paths_recursively(config.config, "", region, local_ok, allow_out_of_region, must_save_checkpoints)
+    _check_paths_recursively(config.config, "", region, local_ok, allow_out_of_region)
 
     return config
 
 
-def _check_paths_recursively(obj, path_prefix, region, local_ok, allow_out_of_region, must_save_checkpoints):
+def _check_paths_recursively(obj, path_prefix, region, local_ok, allow_out_of_region):
     """
     Recursively check all strings in the config object that look like GCS paths.
 
@@ -356,40 +359,36 @@ def _check_paths_recursively(obj, path_prefix, region, local_ok, allow_out_of_re
     if isinstance(obj, dict):
         for key, value in obj.items():
             new_prefix = f"{path_prefix}.{key}" if path_prefix else key
-            _check_paths_recursively(value, new_prefix, region, local_ok, allow_out_of_region, must_save_checkpoints)
-    elif isinstance(obj, list):
+            _check_paths_recursively(value, new_prefix, region, local_ok, allow_out_of_region)
+    elif isinstance(obj, list | tuple):
         for i, item in enumerate(obj):
             new_prefix = f"{path_prefix}[{i}]"
-            _check_paths_recursively(item, new_prefix, region, local_ok, allow_out_of_region, must_save_checkpoints)
+            _check_paths_recursively(item, new_prefix, region, local_ok, allow_out_of_region)
     elif isinstance(obj, str) and obj.startswith("gs://"):
         # This is a GCS path, check if it's in the right region
-        is_allowed_path = any(path_prefix.startswith(p) for p in allow_out_of_region)
-
-        # Special handling for checkpoint paths
-        is_checkpoint_path = "checkpointer.base_path" in path_prefix or "hf_save_path" in path_prefix
+        is_allow_listed_path = any(path_prefix.startswith(p) for p in allow_out_of_region)
 
         # Determine if this path should be checked
-        if not is_allowed_path:
+        if not is_allow_listed_path:
             _check_path_in_region(
                 path_prefix,
                 obj,
-                none_ok=not is_checkpoint_path or not must_save_checkpoints,
                 region=region,
                 local_ok=local_ok,
             )
     elif dataclasses.is_dataclass(obj):
         for field in dataclasses.fields(obj):
             new_prefix = f"{path_prefix}.{field.name}" if path_prefix else field.name
+            value = getattr(obj, field.name)
             _check_paths_recursively(
-                getattr(obj, field.name),
+                value,
                 new_prefix,
                 region,
                 local_ok,
                 allow_out_of_region,
-                must_save_checkpoints,
             )
     # allow primitives through, warn on other types
-    elif not isinstance(obj, (str, int, float, bool, type(None))):
+    elif not isinstance(obj, str | int | float | bool | type(None)):
         logger.warning(f"Found unexpected type {type(obj)} at {path_prefix}. Skipping.")
 
 
@@ -441,11 +440,7 @@ def _check_for_wandb_key(env):
                 )
 
 
-def _check_path_in_region(key, path, none_ok, region, local_ok):
-    if path is None:
-        if none_ok:
-            return
-        raise ValueError(f"{key} must be set")
+def _check_path_in_region(key, path, region, local_ok):
 
     if not path.startswith("gs://"):
         if local_ok:
