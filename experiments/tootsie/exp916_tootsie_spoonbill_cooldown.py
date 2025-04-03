@@ -176,6 +176,46 @@ norm_tootsie_8b_focused_spoonbill_zloss = dataclasses.replace(
     override_output_path="checkpoints/tootsie-8b-focused-spoonbill-zloss",
 )
 
+EXTRA_STEPS = 10000
+DEEPER_END = COOLDOWN_END + EXTRA_STEPS
+
+
+tootsie_8b_deeper_spoonbill_train = dataclasses.replace(
+    norm_tracking_spoonbill_train,
+    initialize_from_checkpoint_path=output_path_of(
+        norm_tootsie_8b_focused_spoonbill_zloss, "checkpoints/step-step-829947"
+    ),
+    watch=WatchConfig(
+        interval=10,
+        # fp32 pushes the ram too high here
+        include_histograms=False,
+        watch_targets=["grads", "params", "opt_state", "updates"],
+    ),
+    num_train_steps=DEEPER_END,
+    decay=EXTRA_STEPS,
+    z_loss_weight=1e-4,  # same as olmo
+    # let's try to get a good checkpoint before everything goes to hell
+    steps_per_hf_export=5000,
+    # set to final LR of focused spoonbill:
+    learning_rate=2.75e-5,
+    min_lr_ratio=2.75e-6 / 2.75e-5,  # 1e-6
+)
+
+
+tootsie_8b_deeper_spoonbill = dataclasses.replace(
+    default_train(
+        name="tootsie-8b-deeper-spoonbill",
+        tokenized=spoonbill_mixture,
+        model_config=llama_8b_fp32_attn,
+        train_config=tootsie_8b_focused_spoonbill_train_zloss,
+        use_default_validation=True,
+        tags=["llama", "8b", "ema", "exp916", "tootsie"],
+        # HF is having trouble today so skipping this.
+        eval_harness_tasks=[],
+    ),
+    override_output_path="checkpoints/tootsie-8b-deeper-spoonbill",
+)
+
 if __name__ == "__main__":
     executor_main(
         [
@@ -183,6 +223,7 @@ if __name__ == "__main__":
             norm_tootsie_8b_hypnotic_spoonbill,
             norm_tootsie_8b_focused_spoonbill_fp32_attention,
             norm_tootsie_8b_focused_spoonbill_zloss,
+            tootsie_8b_deeper_spoonbill,
         ],
         description="Cooldown run for tootsie-8b model with some flan and tulu",
     )
