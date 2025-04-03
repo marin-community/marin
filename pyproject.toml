@@ -30,7 +30,6 @@ dependencies = [
     "pyarrow", # # Only needed by Fileprovider in inference.py
     "transformers>=4.48.0,<5.0",
     # We are keeping levanter deps for now. @TODO :: Remove them
-#    "jax[tpu]==0.5.1",
     "multiprocess==0.70.16",
     "levanter>=1.2.dev1303",
     "haliax>=1.4.dev343",
@@ -85,6 +84,7 @@ tokenize_train = [
     "levanter>=1.2.dev1303",
     "lm-eval@git+https://github.com/stanford-crfm/lm-evaluation-harness.git",
     "tblib",
+    "sentencepiece",
     "tiktoken",
 ]
 
