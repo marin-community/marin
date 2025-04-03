@@ -50,7 +50,7 @@ class DatashopRunnerConfig:
     corpus_content_paths: list[str] = field(default_factory=list)
 
     # Name of the pretraining data path to group the output by in a single directory
-    pretraining_data_path_name: str = "medu-dclm-pretraining-subset"
+    pretraining_data_path_name: str = "datashop-dclm-pretraining-subset"
 
     # How to schedule the TPUs (what hardware to use and how to pack them) specifically for labeling
     labeler_resource_config: ResourceConfig = field(default_factory=lambda: TPU_V6E_8_STRICT_PACK)
