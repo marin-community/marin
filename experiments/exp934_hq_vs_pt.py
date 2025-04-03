@@ -18,6 +18,7 @@ from experiments.dclm.tokenize_dclm import DCLM_MIXTURE_WEIGHTS, dclm_components
 from experiments.defaults import default_anneal, default_tokenize
 from experiments.dolmino.tokenize_dolmino import dolmino_math_tokenized_llama3, tokenize_dolmino_steps
 from experiments.instruction_datasets import tulu3_flat_llama_tokenized_as_validation
+from experiments.llama import llama3_tokenizer
 from experiments.nemotron_cc.tokenize_nemotron import NEMOTRON_WEIGHTS, tokenize_nemotron_steps
 from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
@@ -67,28 +68,28 @@ nemotron_code_dolmino_mix = lm_mixture_data_config(
 medu_mmlu_science_qa_tokenized = default_tokenize(
     name="medu-mmlu-science-qa",
     dataset="gs://marin-us-east1/documents/medu-mmlu-science-llama8b-qa-whole-1a419d",
-    tokenizer="llama3_tokenizer",
+    tokenizer=llama3_tokenizer,
 )
 
 # Wikipedia tokenization
 md_wiki_tokenized = default_tokenize(
     name="wikipedia",
     dataset="gs://marin-us-central2/documents/wikipedia-resiliparse-custom-fork-2569de/20241201/",
-    tokenizer="llama3_tokenizer",
+    tokenizer=llama3_tokenizer,
 )
 
 # Arxiv tokenization
 md_arxiv_tokenized = default_tokenize(
     name="arxiv-no-problem",
     dataset="gs://marin-us-central2/documents/ar5iv/ar5iv-04-2024-no-problem-3971ff/resiliparse-custom-fork",
-    tokenizer="llama3_tokenizer",
+    tokenizer=llama3_tokenizer,
 )
 
 # Stackexchange tokenization
 md_stackexchange_tokenized = default_tokenize(
     name="stackexchange",
     dataset="gs://marin-us-central2/documents/stackexchange-resiliparse-custom-fork-ab41ad",
-    tokenizer="llama3_tokenizer",
+    tokenizer=llama3_tokenizer,
 )
 
 full_mix_components = {
