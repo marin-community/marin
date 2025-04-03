@@ -1,5 +1,7 @@
+import dataclasses
 from dataclasses import dataclass
 
+from levanter.callbacks.watch import WatchConfig
 from levanter.schedule import IntSchedule
 
 
@@ -63,3 +65,6 @@ class SimpleTrainConfig:
 
     int8: bool = False
     """Int8 (quantized) training in Levanter."""
+
+    watch: WatchConfig = dataclasses.field(default_factory=WatchConfig)
+    """Config for watching gradients, parameters, etc. Default is to log norms of gradients and parameters."""
