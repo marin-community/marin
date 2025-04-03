@@ -10,6 +10,8 @@ that point the loss started to increase again. I still don't know why.
 
 import dataclasses
 
+from levanter.callbacks.watch import WatchConfig
+
 from experiments.dclm.tokenize_dclm import DCLM_MIXTURE_WEIGHTS
 from experiments.defaults import default_train
 from experiments.dolmino.tokenize_dolmino import get_dolmino_step
@@ -91,8 +93,96 @@ tootsie_8b_hypnotic_spoonbill = dataclasses.replace(
     override_output_path="checkpoints/tootsie-8b-hypnotic-spoonbill-2",
 )
 
+norm_tracking_spoonbill_train = dataclasses.replace(
+    tootsie_8b_hypnotic_spoonbill_train,
+    watch=WatchConfig(
+        interval=10,
+        include_histograms=True,
+        watch_targets=["grads", "params", "opt_state", "updates"],
+    ),
+)
+
+
+norm_tootsie_8b_hypnotic_spoonbill = dataclasses.replace(
+    default_train(
+        name="tootsie-8b-hypnotic-spoonbill-norms-2",
+        tokenized=spoonbill_mixture,
+        model_config=llama_8b,
+        train_config=norm_tracking_spoonbill_train,
+        use_default_validation=True,
+        tags=["llama", "8b", "ema", "exp916", "tootsie"],
+        # HF is having trouble today so skipping this.
+        eval_harness_tasks=[],
+    ),
+    override_output_path="checkpoints/tootsie-8b-hypnotic-spoonbill-norms-2",
+)
+
+
+llama_8b_fp32_attn = dataclasses.replace(llama_8b, upcast_attn=True)
+
+tootsie_8b_focused_spoonbill_train = dataclasses.replace(
+    norm_tracking_spoonbill_train,
+    # I saved this from spoonbill-norms-2 so it wouldn't get deleted
+    initialize_from_checkpoint_path="gs://marin-us-central2/checkpoints/scratch-dlwh/spoonbill-norms/step-824524/",
+    watch=WatchConfig(
+        interval=10,
+        # fp32 pushes the ram too high here
+        include_histograms=False,
+        watch_targets=["grads", "params", "opt_state", "updates"],
+    ),
+)
+
+norm_tootsie_8b_focused_spoonbill_fp32_attention = dataclasses.replace(
+    default_train(
+        name="tootsie-8b-focused-spoonbill-fp32",
+        tokenized=spoonbill_mixture,
+        model_config=llama_8b_fp32_attn,
+        train_config=tootsie_8b_focused_spoonbill_train,
+        use_default_validation=True,
+        tags=["llama", "8b", "ema", "exp916", "tootsie"],
+        # HF is having trouble today so skipping this.
+        eval_harness_tasks=[],
+    ),
+    override_output_path="checkpoints/tootsie-8b-focused-spoonbill_fp32",
+)
+
+
+tootsie_8b_focused_spoonbill_train_zloss = dataclasses.replace(
+    norm_tracking_spoonbill_train,
+    # I saved this from spoonbill-norms-2 so it wouldn't get deleted
+    initialize_from_checkpoint_path="gs://marin-us-central2/checkpoints/scratch-dlwh/spoonbill-norms/step-824524/",
+    watch=WatchConfig(
+        interval=10,
+        # fp32 pushes the ram too high here
+        include_histograms=False,
+        watch_targets=["grads", "params", "opt_state", "updates"],
+    ),
+    z_loss_weight=1e-4,  # same as olmo
+    # let's try to get a good checkpoint before everything goes to hell
+    steps_per_hf_export=5000,
+)
+
+norm_tootsie_8b_focused_spoonbill_zloss = dataclasses.replace(
+    default_train(
+        name="tootsie-8b-focused-spoonbill-zloss",
+        tokenized=spoonbill_mixture,
+        model_config=llama_8b_fp32_attn,
+        train_config=tootsie_8b_focused_spoonbill_train_zloss,
+        use_default_validation=True,
+        tags=["llama", "8b", "ema", "exp916", "tootsie"],
+        # HF is having trouble today so skipping this.
+        eval_harness_tasks=[],
+    ),
+    override_output_path="checkpoints/tootsie-8b-focused-spoonbill-zloss",
+)
 
 if __name__ == "__main__":
     executor_main(
-        [tootsie_8b_hypnotic_spoonbill], description="Cooldown run for tootsie-8b model with some flan and tulu"
+        [
+            tootsie_8b_hypnotic_spoonbill,
+            norm_tootsie_8b_hypnotic_spoonbill,
+            norm_tootsie_8b_focused_spoonbill_fp32_attention,
+            norm_tootsie_8b_focused_spoonbill_zloss,
+        ],
+        description="Cooldown run for tootsie-8b model with some flan and tulu",
     )
