@@ -31,10 +31,10 @@ llama_1_4b_train_config_wsd_zloss = dataclasses.replace(
 
 
 dclm_mix_model = default_train(
-    name="dclm_mix-1.4b",
+    name="dclm_mix-cosine-1.4b",
     tokenized=dclm_mixture_config_llama3,
     model_config=llama_1_4b,
-    train_config=llama_1_4b_train_config_wsd,
+    train_config=llama_1_4b_train_config,
 )
 
 dclm_mix_model_wsd = default_train(
@@ -67,5 +67,5 @@ if __name__ == "__main__":
             dclm_mix_model_zloss,
             dclm_mix_model_wsd,
         ],
-        description="Train 1.4B models on nemotron-cc using WSD and zloss.",
+        description="Train 1.4B models on dclm using WSD and zloss.",
     )
