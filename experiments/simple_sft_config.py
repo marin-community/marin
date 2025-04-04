@@ -88,9 +88,6 @@ class SimpleSFTConfig:
     initialize_from_hf: bool = True
     """Whether to initialize from HuggingFace model."""
 
-    bypass_path_checks: bool = False
-    """Whether to bypass path checks."""
-
     node_count: int = 1
     """Number of TPU slices for training."""
 
