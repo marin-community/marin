@@ -86,7 +86,7 @@ class SimpleSFTConfig:
     """Random seed for training."""
 
     initialize_from_hf: bool = True
-    """Whether to initialize from HuggingFace model."""
+    """Whether to initialize from HuggingFace model. If false, we will load a levanter checkpoint."""
 
     bypass_path_checks: bool = False
     """Whether to bypass path checks."""
