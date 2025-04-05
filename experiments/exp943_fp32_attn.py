@@ -28,14 +28,10 @@ llama_8b_quick_train_config = dataclasses.replace(
     llama_8b_train_config,
     num_train_steps=1000,
     tpu_type="v4-128",
+    # 1024 doesn't fit on v4-128
+    train_batch_size=512,
 )
 
-# Create a quick baseline for the 8B config
-llama_8b_quick_baseline_config = dataclasses.replace(
-    llama_8b_train_config,
-    num_train_steps=1000,
-    tpu_type="v4-128",
-)
 
 dclm_mix_model = default_train(
     name="dclm_mix-1.4b-default",
@@ -62,7 +58,7 @@ dclm_mix_model_8b_quick_baseline = default_train(
     name="dclm_mix-8b-quick-baseline",
     tokenized=dclm_mixture_config_llama3,
     model_config=llama_8b,
-    train_config=llama_8b_quick_baseline_config,
+    train_config=llama_8b_quick_train_config,
 )
 
 if __name__ == "__main__":
