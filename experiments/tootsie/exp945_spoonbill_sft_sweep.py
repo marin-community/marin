@@ -26,7 +26,7 @@ for lr in LEARNING_RATES:
 
 # Create SFT experiments for each learning rate
 sft_experiments = []
-for lr, sft_config in zip(LEARNING_RATES, sft_configs, strict=False):
+for lr, sft_config in zip(LEARNING_RATES, sft_configs, strict=True):
     experiment = default_sft(
         name=f"sft/tulu3_sft_spoonbill_945_lr_{lr:.0e}",
         tokenized=tulu3_llama_tokenize_step,
