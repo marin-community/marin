@@ -368,7 +368,11 @@ def default_sft(
             mixture_weights=mixture_weights,
             mixture_block_size=sft_config.mixture_block_size,
             tokenizer=sft_config.tokenizer,
-            model_name_or_path=sft_config.model_name_or_path if sft_config.initialize_from_hf else model_config.hf_checkpoint_converter().reference_checkpoint,
+            model_name_or_path=(
+                sft_config.model_name_or_path
+                if sft_config.initialize_from_hf
+                else model_config.hf_checkpoint_converter().reference_checkpoint
+            ),
             initialize_from_hf=sft_config.initialize_from_hf,
             max_seq_len=sft_config.max_seq_len,
             hf_save_steps=sft_config.steps_per_hf_export,
