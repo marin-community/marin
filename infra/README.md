@@ -269,7 +269,7 @@ Ray only supports on demand and preemptible TPUs. For reserved nodes, we need to
 We have a modified version of the Levanter launch script that mostly automates this process. For example:
 
 ```bash
-python infra/manual_ray_worker_launch.py --head <IP of ray head> --cluster_yaml infra/marin-us-central2.yaml \
+python infra/manual_ray_worker_launch.py --cluster_yaml infra/marin-us-central2.yaml \
        --reserved --tpu_type v4-128
 ```
 
@@ -278,5 +278,3 @@ that. You can run it from your laptop.
 
 If you want to change that to, say, two v4-64s, you need to delete the TPU node (using the GCP console) and then run the
 command again with the new TPU type.
-
-To get the IP of the ray head, it's easiest (to me) to go to the GCP console and find the VM and gets its *internal* IP.
