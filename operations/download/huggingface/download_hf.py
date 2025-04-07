@@ -37,10 +37,16 @@ def stream_file_to_fsspec(cfg: DownloadConfig, hf_fs: HfFileSystem, file_path: s
     """Ray task to stream a file from HfFileSystem to another fsspec path."""
     target_fs, _ = fsspec.core.url_to_fs(cfg.gcs_output_path)
 
+    # Increase timeout for large files
+    timeout = 600  # Increase from default 10 seconds to 60 seconds
+
     try:
-        with hf_fs.open(file_path, "rb") as src_file:
+        # Use the timeout parameter when opening the file
+        with hf_fs.open(file_path, "rb", timeout=timeout) as src_file:
             with target_fs.open(fsspec_file_path, "wb") as dest_file:
-                while chunk := src_file.read(1024 * 1024):  # Read in 1MB chunks
+                # Increase chunk size for faster downloads
+                chunk_size = 8 * 1024 * 1024  # 8MB chunks instead of 1MB
+                while chunk := src_file.read(chunk_size):
                     dest_file.write(chunk)
         logging.info(f"Streamed {file_path} to fsspec path: {fsspec_file_path}")
     except Exception as e:
@@ -97,7 +103,7 @@ def download_hf(cfg: DownloadConfig) -> None:
     logger.info(f"Total number of files to process: {total_files}")
     pbar = tqdm_logging(total=total_files)
 
-    for ref in simple_backpressure(stream_file_to_fsspec, iter(task_generator), max_in_flight=32, fetch_local=True):
+    for ref in simple_backpressure(stream_file_to_fsspec, iter(task_generator), max_in_flight=16, fetch_local=True):
         try:
             ray.get(ref)
             pbar.update(1)
