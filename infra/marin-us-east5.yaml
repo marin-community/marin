@@ -9,6 +9,11 @@ cluster_name: marin-us-east5
 max_workers: 1024
 
 
+auth:
+  ssh_private_key:  ~/.ssh/marin_ray_cluster.pem
+  ssh_public_key:  ~/.ssh/marin_ray_cluster.pub
+  ssh_user: ray
+
 
 # Configure GCP
 provider:
@@ -16,6 +21,7 @@ provider:
   region: us-east5
   availability_zone: us-east5-b
   project_id: hai-gcp-models
+
 
 docker:
     image: "us-east5-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:89b461b3"
@@ -55,6 +61,7 @@ setup_commands:
   - echo 'export MARIN_PREFIX="gs://marin-us-east5"' >> $HOME/.bashrc
   - echo 'export BUCKET="marin-us-east5"' >> $HOME/.bashrc
   - gcsfuse --implicit-dirs --only-dir gcsfuse_mount $BUCKET /opt/gcsfuse_mount || true
+  - mkdir -p /home/ray/.ssh && gcloud compute project-info describe --format="value(commonInstanceMetadata.items[?key==\"ssh-keys\"].value)" > /home/ray/.ssh/authorized_keys && chmod 600 /home/ray/.ssh/authorized_keys
 
 # Set Head Node == `ray_head_default`
 head_node_type: head_default

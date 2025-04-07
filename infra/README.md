@@ -1,5 +1,5 @@
 # Autoscaling Cluster for Marin Data Processing
-In Marin, we use GCP TPUs (provided by TRC) to do all of work, including non-training tasks.
+In Marin, we use GCP TPUs (provided by TRC) to do all of our work, including non-training tasks.
 We have three clusters for Marin, each with a different TPU type:
 
 - `marin-us-central2` (default): v4's
