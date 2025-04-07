@@ -11,121 +11,102 @@ from levanter.data.text import LMMixtureDatasetConfig
 from levanter.models.lm_model import LmConfig
 
 from experiments.evals.task_configs import CORE_TASKS_PLUS_MMLU
-from experiments.llama import llama3_tokenizer_vocab_size
+from experiments.defaults import default_train
+from levanter.compat.hf_checkpoints import load_tokenizer
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import (
     ExecutorStep,
     InputName,
+    unwrap_versioned_value,
 )
 from marin.training.training import TrainLmOnPodConfig
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("ray")
 
 
 class ComputeBudget(Enum):
-    # TODO: these are rough guesses from looking at a few of our wandb runs and the compute budgets Meta used
-    # we could decide these based on analyzing FLOPs from models we've trained so far and setting thresholds
-    # based on that
-    TINY = 3e18
-    SMALL = 6e18  # ~150M params
-    MEDIUM = 3e19
-    # LARGE = 3e20
-
+    """Predefined compute budgets for speed run tracks, in FLOPs."""
+    TINY = 3e18    # Smallest track, ~3e18 FLOPs
+    SMALL = 6e18   # Small track, ~6e18 FLOPs
+    MEDIUM = 3e19  # Medium track, ~3e19 FLOPs
+    
 
 @dataclass
 class SpeedrunConfig:
-    """Configuration for a speedrun submission."""
+    """Configuration for a speed run submission, defining model, training, and compute constraints.
+    Attributes:
+        compute_budget: The chosen compute budget track (e.g., SMALL = 6e18 FLOPs).
+        model_config: The language model configuration (e.g., LLaMA architecture).
+        train_config: Training configuration with batch size, steps, learning rate, etc.
+        tokenized_dataset: Dataset to use (e.g., pre-tokenized input or mixture config).
+        vocab_size: Size of the tokenizer vocabulary (defaults to LLaMA 3's vocab size).
+        hyperparameter_scaling: Optional function to dynamically set hyperparameters based on model/budget.
+    """
 
     compute_budget: ComputeBudget
     model_config: LmConfig
     train_config: SimpleTrainConfig | TrainLmOnPodConfig
     tokenized_dataset: InputName | ExecutorStep | LMMixtureDatasetConfig
-    vocab_size: int = llama3_tokenizer_vocab_size
+    hyperparameter_scaling: Optional[Callable[[LmConfig, ComputeBudget], dict]] = None
+    vocab_size: int = load_tokenizer(unwrap_versioned_value(tokenized_dataset.tokenizer)).vocab_size
 
     def estimate_training_flops_using_levanter(self) -> float:
         """Estimate training FLOPs using Levanter's built-in calculation."""
         flops_per_token = self.model_config.flops_per_token(self.vocab_size)
         batch_size = self.train_config.train_batch_size
-        if callable(batch_size):
-            batch_size = batch_size(0)
         total_tokens = batch_size * self.model_config.seq_len * self.train_config.num_train_steps
-        return float(flops_per_token * total_tokens * 2)
+        return float(flops_per_token * total_tokens * 3)
 
-    def _estimate_training_flops(self) -> float:
-        """Estimates total training FLOPs based on model config and training setup.
-
-        Current implementation uses JAX's cost analysis to estimate FLOPs for a forward pass.
-        There's an alternative implementation using Levanter's built-in flops_per_token
-        in estimate_training_flops_using_levanter() which may be more accurate.
-
-        The current implementation:
-        1. Defines a simplified forward pass with key operations:
-           - Token embedding
-           - Self-attention (4 * b * s * d * d FLOPs)
-           - FFN (8 * b * s * d * d FLOPs)
-           - Final projection
-        2. Uses JAX's cost analysis to count FLOPs
-        3. Multiplies by 2 for backward pass, steps, and batch size
-
-        Note: This is a rough estimate and may need refinement.
-        """
-        from functools import partial
-
-        import jax
-        import jax.numpy as jnp
-
-        # Get model parameters
-        d_model = self.model_config.d_model
-        n_heads = self.model_config.n_heads
-        n_layers = self.model_config.n_layers
-        vocab_size = self.model_config.vocab_size
-        seq_len = self.model_config.max_sequence_length
-
-        # Define a simple forward pass function to analyze
-        @partial(jax.jit, static_argnums=(1,))
-        def forward_step(params, batch_size):
-            # Simplified forward pass operations
-            # 1. Token embedding: batch_size * seq_len * d_model
-            embed = jnp.ones((batch_size, seq_len, d_model))
-
-            # 2. For each layer:
-            for _ in range(n_layers):
-                # Self-attention: 4 * batch_size * seq_len * d_model * d_model
-                attn = jnp.einsum("bld,bmd->blm", embed, embed)
-                # FFN: 8 * batch_size * seq_len * d_model * d_model
-                ffn = jnp.einsum("bld,dd->bld", embed, jnp.ones((d_model, d_model)))
-
-            # 3. Final projection to vocab
-            logits = jnp.einsum("bld,vd->blv", embed, jnp.ones((vocab_size, d_model)))
-            return logits
-
-        # Get batch size and steps
+    def estimate_flops_via_6nd(self) -> float:
+        """Estimate training FLOPs using 6 times N times D, where N is the number of parameters, and D is the number of tokens."""
+        
+        num_params = compute_num_parameters(self.model_config, self.vocab_size)
         batch_size = self.train_config.train_batch_size
-        if callable(batch_size):  # Handle IntSchedule
-            batch_size = batch_size(0)  # Use initial batch size
-        num_steps = self.train_config.num_train_steps
+        total_tokens = batch_size * self.model_config.seq_len * self.train_config.num_train_steps
+        return 6 * num_params * total_tokens
 
-        # Analyze cost of a single forward pass
-        dummy_params = {}
-        cost = jax.jit(forward_step).lower(dummy_params, batch_size).cost_analysis()
-        flops_per_fwd = cost.get("flops", 0)
+    def adjust_to_exact_budget(self):
+        """
+        Adjust num_train_steps to ensure FLOPs exactly match the compute budget.
 
-        # Total FLOPs = FLOPs/fwd * 2 (for backward pass) * steps * batch_size
-        total_flops = flops_per_fwd * 2 * num_steps * batch_size
+        Modifies train_config.num_train_steps based on the budget, model FLOPs per token,
+        batch size, and sequence length.
+        """
+        flops_per_token = self.model_config.flops_per_token(self.vocab_size) * 3
+        target_flops = self.compute_budget.value
+        batch_size = self.train_config.train_batch_size
+        seq_len = self.train_config.seq_len
+        total_tokens = target_flops / flops_per_token
+        self.train_config.num_train_steps = int(total_tokens / (batch_size * seq_len))
+        actual_flops = self.estimate_training_flops_using_levanter()
+        logger.info(f"Adjusted to {self.train_config.num_train_steps} steps for {actual_flops:e} FLOPs "
+                    f"(target: {target_flops:e})")
 
-        return float(total_flops)
+    def apply_scaling(self):
+        """
+        Apply user-defined hyperparameter scaling if provided.
+
+        Updates train_config with values from hyperparameter_scaling function, if present.
+        """
+        if self.hyperparameter_scaling:
+            params = self.hyperparameter_scaling(self.model_config, self.compute_budget)
+            self.train_config.learning_rate = params.get("learning_rate", self.train_config.learning_rate)
+            self.train_config.train_batch_size = params.get("train_batch_size", self.train_config.train_batch_size)
+            self.train_config.weight_decay = params.get("weight_decay", self.train_config.weight_decay)
+            # Add more as needed (e.g., seq_len, warmup steps)
 
     def validate(self) -> tuple[bool, str | None]:
-        """Validates the configuration against compute budget constraints."""
-        estimated_flops = self.estimate_training_flops_using_levanter()
-        logger.info(f"Estimated FLOPs: {estimated_flops}")
-        if estimated_flops > self.compute_budget.value:
-            return False, f"Estimated FLOPs {estimated_flops:e} exceeds budget {self.compute_budget.value:e}"
-        return True, None
+        """Validates the configuration against compute budget constraints, and makes adjustments as needed."""
+        self.apply_scaling()
+        self.adjust_to_exact_budget()
+        levanter_flops_estimate = self.estimate_training_flops_using_levanter()
+        estimate_flops_6nd = self.estimate_flops_via_6nd()
+        logger.info(f"FLOPs estimate: {levanter_flops_estimate:e} vs. budget {self.compute_budget.value:e}")
+        logger.info(f"FLOPs estimate: {estimate_flops_6nd:e} vs. budget {self.compute_budget.value:e}")
+        return levanter_flops_estimate <= self.compute_budget.value, f"FLOPs {levanter_flops_estimate:e} vs. budget {self.compute_budget.value:e}"
 
 
 def get_compute_budgets():
-    """Returns available compute budget categories."""
     return {budget.name: budget.value for budget in ComputeBudget}
 
 
@@ -137,12 +118,12 @@ def default_speedrun(
     """Returns an ExecutorStep for a speedrun with the given configuration.
 
     Args:
-        name: Name for the training run
+        name: name of the training run. Will form the basis of the output path for the executor step.
         config: SpeedrunConfig containing model, training, and dataset configuration
         tags: Optional additional tags for tracking
 
     Returns:
-        ExecutorStep configured for the speedrun
+        training step configured for the speedrun
 
     Raises:
         ValueError: If the configuration is invalid
@@ -157,10 +138,7 @@ def default_speedrun(
     if tags:
         run_tags.extend(tags)
 
-    from experiments.defaults import default_train
-
     # Create training step
-    # Make a deep copy of the model config to ensure proper serialization
     model_config = dataclasses.replace(config.model_config)
 
     return default_train(
