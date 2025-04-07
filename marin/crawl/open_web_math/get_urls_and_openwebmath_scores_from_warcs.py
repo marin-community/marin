@@ -8,7 +8,7 @@ open-web-math quality classifier.
 python marin/run/ray_run.py \
     --pip_deps 'resiliparse,fasttext,lxml,py-asciimath,tabulate,w3lib,warcio' \
     --no_wait -- \
-    python marin/crawl/open-web-math/get_urls_and_openwebmath_scores_from_warcs.py \
+    python marin/crawl/open_web_math/get_urls_and_openwebmath_scores_from_warcs.py \
     --cc_dumps '["CC-MAIN-2022-05", "CC-MAIN-2022-21", "CC-MAIN-2022-27", "CC-MAIN-2022-33", "CC-MAIN-2022-40", "CC-MAIN-2022-49", "CC-MAIN-2023-06", "CC-MAIN-2023-14"]' \
     --num_warcs_to_sample 500 \
     --output_path gs://marin-us-central2/scratch/nfliu/urls_and_scores/open-web-math-cc/
@@ -29,11 +29,11 @@ import fsspec
 import ray
 import requests
 import w3lib.url
-from resiliparse.parse.encoding import bytes_to_str, detect_encoding
 from tqdm_loggable.auto import tqdm
 from warcio import ArchiveIterator
 
 from marin.core.runtime import cached_or_construct_output
+from marin.crawl.common.utils import decode_html
 from marin.processing.classification.classifier import FasttextClassifier
 from marin.processing.open_web_math.extract import extract_text
 from marin.processing.open_web_math.text_normalizer import normalize
@@ -56,24 +56,6 @@ class OpenWebMathUrlWithScore:
     canonicalized_url: str
     score: float
     found_math: bool
-
-
-def decode_html(html: bytes) -> str | None:
-    """
-    Given HTML (bytes), decode it into a string if possible. First try with
-    utf-8. If that doesn't work, try to detect the encoding.
-    """
-    try:
-        html = bytes_to_str(html, "utf-8")
-    except Exception:
-        encoding = detect_encoding(html)
-        if encoding is None or encoding == "utf-8":
-            return
-        try:
-            html = bytes_to_str(html, encoding)
-        except Exception:
-            return
-    return html
 
 
 def score_text(text, score_model):

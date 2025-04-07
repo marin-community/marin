@@ -7,7 +7,7 @@ to ensure that the distribution of scores is uniform.
 ```
 python marin/run/ray_run.py \
     --no_wait -- \
-    python marin/crawl/fineweb-edu/resample_fineweb_edu_urls_by_quality_score.py \
+    python marin/crawl/fineweb_edu/resample_fineweb_edu_urls_by_quality_score.py \
     --input_pattern 'gs://marin-us-central2/scratch/nfliu/urls_and_scores/fineweb-edu*/CC*/*_urls_and_quality_classifier_scores.jsonl.gz' \
     --cc_prefix 'gs://marin-us-central2/scratch/nfliu/urls_and_scores/fineweb-edu-cc/' \
     --train_output_path gs://marin-us-central2/scratch/nfliu/datasets/url_scoring/fineweb-edu/train.parquet \

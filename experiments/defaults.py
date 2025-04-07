@@ -15,6 +15,8 @@ from levanter.checkpoint import CheckpointerConfig
 from levanter.compat.hf_checkpoints import load_tokenizer
 from levanter.data.text import LMMixtureDatasetConfig, LMSupervisedDatasetConfig, SupervisedUrlSourceConfig
 from levanter.eval_harness import LmEvalHarnessConfig
+from levanter.main import sft, sft_mixture
+from levanter.main.train_lm import TrainLmConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig
 from levanter.optim import AdamConfig
@@ -53,6 +55,7 @@ from marin.processing.tokenize import (
 )
 from marin.scaling_laws.scaling_laws import ScalingLawConfig, run_scaling_law_analysis
 from marin.training.training import (
+    PodConfig,
     TrainLmOnPodConfig,
     TrainSFTMixturePodConfig,
     TrainSFTOnPodConfig,
@@ -88,6 +91,7 @@ def default_tokenize(
         description=f"Tokenize raw text using the {tokenizer} tokenizer.",
         fn=tokenize,
         config=config,
+        pip_dependency_groups=["tokenize_train"],
     )
 
 
@@ -118,7 +122,7 @@ def simulated_epoching_train(
         target_budget: Target token budget to simulate.
         tags: Any additional tags to add to the Wandb tracker.
         use_default_validation: Whether to use the default validation sets (currently Paloma).
-        eval_harness_tasks: List of evaluation harness tasks. Defaults to the CORE set of tasks. Use () or [] to disable.
+        eval_harness_tasks: List of evaluation harness tasks. Defaults to the CORE set of tasks. Use () or [] to disable
     """
     pretraining_data = _prepare_data_config(tokenized, use_default_validation)
 
@@ -161,7 +165,7 @@ def default_train(
         train_config: SimpleTrainConfig for the training run.
         tags: Any additional tags to add to the Wandb tracker.
         use_default_validation: Whether to use the default validation sets (currently Paloma).
-        eval_harness_tasks: List of evaluation harness tasks. Defaults to the CORE set of tasks. Use () or [] to disable.
+        eval_harness_tasks: List of evaluation harness tasks. Defaults to the CORE set of tasks. Use () or [] to disable
     """
 
     pretraining_data = _prepare_data_config(tokenized, use_default_validation)
@@ -356,6 +360,9 @@ def default_sft(
         An ExecutorStep configured for supervised fine-tuning.
     """
     # Set up common configurations
+    if "sft" not in tags:
+        tags = [*tags, "sft"]
+
     tracker_config = WandbConfig(
         project="marin",
         tags=[*tags],
@@ -385,15 +392,19 @@ def default_sft(
         max_grad_norm=sft_config.max_grad_norm,
     )
 
+    # Create the pod config
+    pod_config = PodConfig(
+        tpu_type=sft_config.tpu_type,
+        node_count=sft_config.node_count,
+    )
+
     # Infer whether we're using mixture based on mixture_weights
     if mixture_weights is not None:
         if not isinstance(tokenized, dict):
             raise ValueError("If mixture_weights is given tokenized should be a Dict[str, SupervisedUrlSourceConfig]")
 
         # Configure the mixture-based SFT
-        config = TrainSFTMixturePodConfig(
-            output_path=this_output_path(),
-            tpu_type=sft_config.tpu_type,
+        inner_config = sft_mixture.SFTMixtureConfig(
             trainer=trainer_config,
             model=model_config,
             optimizer=optimizer_config,
@@ -409,6 +420,12 @@ def default_sft(
             input_role=sft_config.input_role,
             output_role=sft_config.output_role,
             stop_strategy=sft_config.stop_strategy,
+        )
+
+        config = TrainSFTMixturePodConfig(
+            config=inner_config,
+            pod_config=pod_config,
+            output_path=this_output_path(),
             bypass_path_checks=sft_config.bypass_path_checks,
         )
         fn = run_levanter_sft_mixture
@@ -431,9 +448,7 @@ def default_sft(
             )
 
         # Configure the single-dataset SFT
-        config = TrainSFTOnPodConfig(
-            output_path=this_output_path(),
-            tpu_type=sft_config.tpu_type,
+        inner_config = sft.SFTConfig(
             trainer=trainer_config,
             model=model_config,
             optimizer=optimizer_config,
@@ -447,7 +462,12 @@ def default_sft(
             messages_field="messages",
             input_role=sft_config.input_role,
             output_role=sft_config.output_role,
-            bypass_path_checks=sft_config.bypass_path_checks,
+        )
+
+        config = TrainSFTOnPodConfig(
+            config=inner_config,
+            pod_config=pod_config,
+            output_path=this_output_path(),
         )
         fn = run_levanter_sft
 
@@ -555,7 +575,7 @@ def _get_tokenizer_for_train(tokenized: InputName | ExecutorStep | LMMixtureData
 def default_scaling_law_pred(
     ladder_runs: Sequence[ExecutorStep | InputName | str],
     pred_run: ExecutorStep | InputName | str | None = None,
-    task_losses: Sequence[str] = ("eval/paloma/c4_en/bpb"),
+    task_losses: Sequence[str] = ("eval/paloma/c4_en/bpb",),
     task_accuracies: Sequence[str] | Sequence[EvalTaskConfig] | None = None,
 ):
     """

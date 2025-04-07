@@ -4,6 +4,7 @@ import os
 import sys
 
 import draccus
+from levanter.main.train_lm import TrainLmConfig
 from levanter.models.gpt2 import Gpt2Config
 from levanter.trainer import TrainerConfig
 
@@ -25,7 +26,7 @@ from marin.processing.classification.fasttext.train_fasttext import (
 from marin.processing.classification.inference import InferenceConfig, run_inference
 from marin.processing.tokenize import TokenizeConfig, lm_data_config, tokenize
 from marin.schemas.web.convert import HtmlToMarkdownConfig
-from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
+from marin.training.training import PodConfig, TrainLmOnPodConfig, run_levanter_train_lm
 from marin.utilities.ray_utils import is_local_ray_cluster
 from marin.utils import is_in_ci
 from scripts.hello_world_fw.process import FineWebConfig, transform
@@ -181,31 +182,44 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
     # ############################################################
     # Training
     if not is_in_ci() and not is_local_ray_cluster():
-        tpu_type = "v4-8"
+        pod_config = PodConfig(
+            tpu_type="v4-8",
+            env={
+                "WANDB_API_KEY": None,
+                "WANDB_MODE": "disabled",
+                "JAX_TRACEBACK_FILTERING": "off",
+            },
+        )
     else:
-        tpu_type = None
+        pod_config = PodConfig(
+            tpu_type=None,
+            env={
+                "WANDB_API_KEY": None,
+                "WANDB_MODE": "disabled",
+                "JAX_PLATFORMS": "cpu",
+                "JAX_TRACEBACK_FILTERING": "off",
+            },
+        )
 
     train_step = ExecutorStep(
         name=os.path.join(prefix, "train"),
         fn=run_levanter_train_lm,
         config=TrainLmOnPodConfig(
             output_path=this_output_path(),
-            data=lm_data_config(tokenize_step),
-            env={
-                "WANDB_API_KEY": None,
-                "WANDB_MODE": "disabled",
-                "JAX_PLATFORMS": "cpu",
-                "JAX_TRACEBACK_FILTERING": "off",
-            },  # Running it locally and turning off wandb
-            tpu_type=tpu_type,
-            hf_save_steps=1,
-            model=Gpt2Config(
-                num_layers=2,
-                num_heads=2,
-                seq_len=64,
-                hidden_dim=32,
+            pod_config=pod_config,
+            config=TrainLmConfig(
+                data=lm_data_config(tokenize_step),
+                hf_save_steps=1,
+                model=Gpt2Config(
+                    num_layers=2,
+                    num_heads=2,
+                    seq_len=64,
+                    hidden_dim=32,
+                ),
+                trainer=TrainerConfig(
+                    train_batch_size=8, num_train_steps=2, max_eval_batches=1, require_accelerator=False
+                ),
             ),
-            trainer=TrainerConfig(train_batch_size=8, num_train_steps=2, max_eval_batches=1, require_accelerator=False),
         ),
     )
 

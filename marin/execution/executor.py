@@ -161,6 +161,10 @@ class ExecutorStep(Generic[ConfigT]):
         """Hash based on the ID (every object is different)."""
         return hash(id(self))
 
+    def with_output_path(self, output_path: str) -> "ExecutorStep":
+        """Return a copy of the step with the given output_path."""
+        return replace(self, override_output_path=output_path)
+
 
 @dataclass(frozen=True)
 class InputName:
@@ -955,8 +959,9 @@ class ExecutorMainConfig:
 @draccus.wrap()
 def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], description: str | None = None):
     """Main entry point for experiments (to standardize)"""
-    if not ray.is_initialized():
-        ray.init(namespace="marin")  # We need to init ray here to make sure we have the correct namespace for actors
+    ray.init(
+        namespace="marin", ignore_reinit_error=True
+    )  # We need to init ray here to make sure we have the correct namespace for actors
     # (status_actor in particular)
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")

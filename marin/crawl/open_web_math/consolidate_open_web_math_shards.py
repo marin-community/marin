@@ -7,7 +7,7 @@ Running:
 
 ```
 ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- \
-    python marin/crawl/open-web-math/consolidate_open_web_math_shards.py \
+    python marin/crawl/open_web_math/consolidate_open_web_math_shards.py \
     --input_path gs://marin-us-central2/documents/open-web-math-fde8ef8/html/ \
     --prefix openwebmath
 ```
@@ -22,7 +22,7 @@ Running on FineWeb-Edu:
 for fineweb_edu_dump_html_path in $(gcloud storage ls gs://marin-us-central2/documents/fineweb-edu/html); do
     dump_name=$(basename -- ${fineweb_edu_dump_html_path})
     ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- \
-    python marin/crawl/open-web-math/consolidate_open_web_math_shards.py \
+    python marin/crawl/open_web_math/consolidate_open_web_math_shards.py \
     --input_path ${fineweb_edu_dump_html_path} \
     --prefix fineweb_edu
 done
