@@ -15,7 +15,7 @@ if __name__ == "__main__":
         "preconditioner_update_probability": [0.05, 0.1],
         "update_prob_flat_start": [500, 1000, 2000],
         "warmup": [1000, 2000, 4000],
-        'train_batch_size': [128, 256, 512, 1024]
+        'train_batch_size': [128, 256, 512]
     }
 
     baseline_config = {

@@ -6,4 +6,4 @@ if __name__ == '__main__':
     model_size = '520m'
     target_chinchilla = 1
     my_suffix = 're'
-    template(model_size, target_chinchilla, 'soape', baseline_config, sweep_grids, random_suffix=my_suffix, tpu_type='v5litepod-128')
+    template(model_size, target_chinchilla, 'soape', baseline_config, sweep_grids, random_suffix=my_suffix, tpu_type='v5litepod-256')

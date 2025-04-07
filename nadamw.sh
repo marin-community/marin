@@ -3,13 +3,13 @@
 export RAY_RUNTIME_ENV_TEMPORARY_REFERENCE_EXPIRATION_S=1200
 
 optimizers=(nadamw)
-chinchillas=(1)
+chinchillas=(16)
 
 # Loop over each optimizer in the list
 for opt in "${optimizers[@]}"; do
     for chinchilla in "${chinchillas[@]}"; do
         # Define the experiment name using the current optimizer
-        name="exp725_${opt}sweep_520M_${chinchilla}"
+        name="exp725_${opt}sweep_130M_${chinchilla}"
         # Loop 10 times for the current optimizer
         for i in {1..30}; do
             # Start the ray_run process and capture its PID.
