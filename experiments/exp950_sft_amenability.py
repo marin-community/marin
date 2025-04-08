@@ -23,7 +23,7 @@ Author: Will Held
 import dataclasses
 
 from experiments.dclm.tokenize_dclm import dclm_mixture_config_llama3
-from experiments.defaults import default_train
+from experiments.defaults import default_sft, default_train
 from experiments.exp606_sft import tulu_sft_config
 from experiments.llama import llama_1_4b, llama_1_4b_train_config
 from marin.execution.executor import executor_main, output_path_of
@@ -70,18 +70,41 @@ dclm_mix_model_cos_low = default_train(
     train_config=llama_1_4b_cos_olmo_lr_train_config,
 )
 
-sft_model_wsd = dataclasses.replace(
+sft_model_wsd_config = dataclasses.replace(
     tulu_sft_config,
     model_name_or_path=output_path_of(dclm_mix_model_wsd, "hf/238417/"),
 )
-sft_model_cos_high = dataclasses.replace(
+sft_model_cos_high_config = dataclasses.replace(
     tulu_sft_config,
     model_name_or_path=output_path_of(dclm_mix_model_cos_high, "hf/238417/"),
 )
-sft_model_cos_low = dataclasses.replace(
+sft_model_cos_low_config = dataclasses.replace(
     tulu_sft_config,
     model_name_or_path=output_path_of(dclm_mix_model_cos_low, "hf/238417/"),
 )
+sft_model_wsd = default_sft(
+    name="sft/tulu_sft_wsd_linear_lr",
+    tokenized=dclm_mixture_config_llama3,  # Using the same tokenization as pre-training
+    model_config=llama_1_4b,
+    sft_config=sft_model_wsd_config,
+    tags=["llama", "1.4b", "exp934", "linear_lr", "sft", "z_loss"],
+).with_output_path("checkpoints/sft/tulu_sft_wsd_linear_lr")
+
+sft_model_cos_high = default_sft(
+    name="sft/tulu_sft_cos_high_lr",
+    tokenized=dclm_mixture_config_llama3,
+    model_config=llama_1_4b,
+    sft_config=sft_model_cos_high_config,
+    tags=["llama", "1.4b", "exp934", "cosine_lr", "high_lr", "sft", "z_loss"],
+).with_output_path("checkpoints/sft/tulu_sft_cos_high_lr")
+
+sft_model_cos_low = default_sft(
+    name="sft/tulu_sft_cos_low_lr",
+    tokenized=dclm_mixture_config_llama3,
+    model_config=llama_1_4b,
+    sft_config=sft_model_cos_low_config,
+    tags=["llama", "1.4b", "exp934", "cosine_lr", "low_lr", "sft", "z_loss"],
+).with_output_path("checkpoints/sft/tulu_sft_cos_low_lr")
 
 if __name__ == "__main__":
     executor_main(
