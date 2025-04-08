@@ -22,20 +22,17 @@ from experiments.llama import llama3_tokenizer
 from experiments.nemotron_cc.tokenize_nemotron import NEMOTRON_WEIGHTS, tokenize_nemotron_steps
 from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
-
-# Direct data mix definitions - no functions, just variables
+from marin.processing.tokenize import add_validation_sets_to_mixture
 
 # 1. Original mix: DCLM + StarCoder + ProofPile
 original_mix = lm_mixture_data_config(
-    components={**dclm_components_llama3, "tulu_sft": tulu3_flat_llama_tokenized_as_validation},
+    components={**dclm_components_llama3},
     weights=DCLM_MIXTURE_WEIGHTS,
 )
 
 # 2. Nemotron-only mix
 nemotron_steps = tokenize_nemotron_steps()
-nemotron_only_mix = lm_mixture_data_config(
-    components={**nemotron_steps, "tulu_sft": tulu3_flat_llama_tokenized_as_validation}, weights=NEMOTRON_WEIGHTS
-)
+nemotron_only_mix = lm_mixture_data_config(components={**nemotron_steps}, weights=NEMOTRON_WEIGHTS)
 
 # 3. Nemotron + Code + Dolmino mix
 nemotron_code_dolmino_components = {
@@ -43,7 +40,6 @@ nemotron_code_dolmino_components = {
     "starcoderdata": dclm_components_llama3["starcoderdata"],
     "proofpile_2": dclm_components_llama3["proofpile_2"],
     "all_math": dolmino_math_tokenized_llama3,
-    "tulu_sft": tulu3_flat_llama_tokenized_as_validation,
     **tokenize_dolmino_steps(),
 }
 
@@ -101,7 +97,6 @@ full_mix_components = {
     "wikipedia_markdown": md_wiki_tokenized,
     "stackexchange_custom": md_stackexchange_tokenized,
     "medu_science_qa": medu_mmlu_science_qa_tokenized,
-    "tulu_sft": tulu3_flat_llama_tokenized_as_validation,
     **tokenize_dolmino_steps(),
 }
 
@@ -142,9 +137,12 @@ def run_cooldown_ablation():
         # Create AnnealConfig
         anneal_config = AnnealConfig(
             initialize_from_checkpoint_path="gs://marin-us-central2/checkpoints/llama-8b-tootsie-phase2/checkpoints/step-741907",
-            dataset_config=data_mix,
+            dataset_config=add_validation_sets_to_mixture(
+                data_mix, {"tulu_sft": tulu3_flat_llama_tokenized_as_validation}
+            ),
             num_anneal_training_tokens=anneal_tokens,
             tpu_type=tpu_type,
+            node_count=4,
         )
 
         # Run annealing
