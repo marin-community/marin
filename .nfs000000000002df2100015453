@@ -2,7 +2,7 @@
 
 export RAY_RUNTIME_ENV_TEMPORARY_REFERENCE_EXPIRATION_S=1200
 
-optimizers=(nadamw)
+optimizers=(cautious)
 chinchillas=(1)
 
 # Loop over each optimizer in the list
@@ -29,4 +29,3 @@ for opt in "${optimizers[@]}"; do
         done
     done
 done
-
