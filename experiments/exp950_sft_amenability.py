@@ -24,7 +24,7 @@ import dataclasses
 
 from experiments.dclm.tokenize_dclm import dclm_mixture_config_llama3
 from experiments.defaults import default_sft, default_train
-from experiments.exp606_sft import tulu_sft_config
+from experiments.exp606_sft import tulu3_llama_tokenize_step, tulu_sft_config
 from experiments.llama import llama_1_4b, llama_1_4b_train_config
 from marin.execution.executor import executor_main, output_path_of
 
@@ -84,7 +84,7 @@ sft_model_cos_low_config = dataclasses.replace(
 )
 sft_model_wsd = default_sft(
     name="sft/tulu_sft_wsd_linear_lr",
-    tokenized=dclm_mixture_config_llama3,  # Using the same tokenization as pre-training
+    tokenized=tulu3_llama_tokenize_step,
     model_config=llama_1_4b,
     sft_config=sft_model_wsd_config,
     tags=["llama", "1.4b", "exp934", "linear_lr", "sft", "z_loss"],
@@ -92,7 +92,7 @@ sft_model_wsd = default_sft(
 
 sft_model_cos_high = default_sft(
     name="sft/tulu_sft_cos_high_lr",
-    tokenized=dclm_mixture_config_llama3,
+    tokenized=tulu3_llama_tokenize_step,
     model_config=llama_1_4b,
     sft_config=sft_model_cos_high_config,
     tags=["llama", "1.4b", "exp934", "cosine_lr", "high_lr", "sft", "z_loss"],
@@ -100,7 +100,7 @@ sft_model_cos_high = default_sft(
 
 sft_model_cos_low = default_sft(
     name="sft/tulu_sft_cos_low_lr",
-    tokenized=dclm_mixture_config_llama3,
+    tokenized=tulu3_llama_tokenize_step,
     model_config=llama_1_4b,
     sft_config=sft_model_cos_low_config,
     tags=["llama", "1.4b", "exp934", "cosine_lr", "low_lr", "sft", "z_loss"],
