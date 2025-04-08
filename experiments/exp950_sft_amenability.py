@@ -1,5 +1,23 @@
 """
-Experiment 934: See if we should make zloss be default on
+Experiment 950: Learning Rate Schedule and Z-Loss Comparison for 1.4B Llama Models
+
+This experiment evaluates the impact of different learning rate schedules and configurations
+on 1.4B parameter Llama models trained on a DCLM mixture followed by supervised fine-tuning.
+
+The experiment compares:
+- Linear vs. cosine learning rate schedules
+- Higher (1e-3) vs. lower (3e-4) learning rates
+- The effect of z_loss with weight 1e-4
+
+Three pre-training configurations are tested:
+1. Linear schedule with high learning rate (1e-3) and z_loss
+2. Cosine schedule with high learning rate (1e-3) and z_loss
+3. Cosine schedule with lower learning rate (3e-4) and z_loss
+
+Each resulting model is then fine-tuned using supervised fine-tuning (SFT)
+with the Tulu SFT configuration.
+
+Author: Will Held
 """
 
 import dataclasses
