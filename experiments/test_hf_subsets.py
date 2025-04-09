@@ -1,5 +1,4 @@
-from instruction_datasets import get_instruction_dataset
-
+from experiments.instruction_datasets import get_instruction_dataset
 from experiments.llama import llama3_tokenizer
 from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path
 from marin.processing.tokenize.tokenize import TokenizeConfig, levanter_tokenize_sft

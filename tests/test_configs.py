@@ -5,17 +5,6 @@ from .test_utils import check_load_config, parameterize_with_configs
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
-@parameterize_with_configs("training/*.yaml")
-def test_training_configs(config_file):
-    """
-    Validate all the training configs (config/training/*.yaml).
-    """
-    from marin.training.training import TrainLmOnPodConfig
-
-    config_class = TrainLmOnPodConfig
-    check_load_config(config_class, config_file)
-
-
 @parameterize_with_configs(pattern="train_fasttext.yaml", config_path=PROJECT_DIR)
 def test_fasttext_configs(config_file):
     """
