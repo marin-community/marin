@@ -193,9 +193,13 @@ bring up the cluster and finally spin the reserved workers back up
 To add manual workers from our reserved quota to cluster:
 1. If rebooting, first go to **[Queued Resources](https://console.cloud.google.com/compute/tpus?authuser=1&project=hai-gcp-models&tab=queuedResources&invt=AbuT6A)** and delete any existing queued resources for the zone you want to add workers for.
 2. Go to **[VM instances](https://console.cloud.google.com/compute/instances?authuser=1&invt=AbuT6A&project=hai-gcp-models)** and find the head node for the zone you want (e.g., `us-central2-b`) and get its internal IP.
-3. Run the following command to launch a manual worker:
+3. Run the following command to launch a manual worker, **Double check whether we have reserved quota!**:
 ```bash
 python infra/manual_ray_worker_launch.py --cluster_yaml infra/marin-us-central2.yaml --reserved --tpu_type v4-128 --head $IP --zone us-central2-b
+```
+If all our quota is preemptible then run
+```bash
+python infra/manual_ray_worker_launch.py --cluster_yaml infra/marin-us-central2.yaml --preemptible --tpu_type v4-128 --head $IP --zone us-central2-b
 ```
 4. Repeat step 3 as needed to launch additional manual workers.
 
