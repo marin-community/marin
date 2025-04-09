@@ -26,3 +26,21 @@ class MeduDatasetOutputProcessor(DatasetOutputProcessor):
             return MeduDatasetOutputProcessor.SCORE_OPTIONS_DICT[score_text]
 
         return -1
+
+
+class FinemathDatasetOutputProcessor(DatasetOutputProcessor):
+    SCORE_OPTIONS_DICT: ClassVar[dict[str, int]] = {str(i): i for i in range(6)}
+
+    def __init__(self, input_path: str, output_path: str):
+        super().__init__(input_path, output_path, list(FinemathDatasetOutputProcessor.SCORE_OPTIONS_DICT.values()))
+
+    @staticmethod
+    def extract_score(text: str) -> int:
+
+        # Match "Final score: " followed by a number from 0 to 5
+        match = re.search(r"Final score:\s*([0-5])", text, re.IGNORECASE)
+        if match:
+            score_text = match.group(1)
+            return FinemathDatasetOutputProcessor.SCORE_OPTIONS_DICT[score_text]
+
+        return -1
