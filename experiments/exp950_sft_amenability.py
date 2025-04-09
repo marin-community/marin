@@ -1,5 +1,10 @@
 """
-Experiment 950: Learning Rate Schedule and Z-Loss Comparison for 1.4B Llama Models
+Experiment 950: Learning Rate Schedule Comparison for 1.4B Llama Models
+Link: https://github.com/stanford-crfm/marin/issues/950
+
+We have observed that Tootsie seems to be harder to SFT than OLMo, despite getting better
+scores on MMLU and similar scores on Paloma. One hypothesis is that the higher LR used
+or the use of WSD-S makes the model more difficult to finetune. We want to test that!
 
 This experiment evaluates the impact of different learning rate schedules and configurations
 on 1.4B parameter Llama models trained on a DCLM mixture followed by supervised fine-tuning.
@@ -40,15 +45,6 @@ llama_1_4b_wsd_high_lr_train_config = dataclasses.replace(
 )
 
 
-llama_1_4b_cos_high_lr_train_config = dataclasses.replace(
-    llama_1_4b_wsd_high_lr_train_config,
-    lr_schedule="cosine",
-)
-
-
-llama_1_4b_cos_olmo_lr_train_config = dataclasses.replace(llama_1_4b_cos_high_lr_train_config, learning_rate=3e-4)
-
-
 dclm_mix_model_wsd = default_train(
     name="lr_tests_wsd",
     tokenized=dclm_mixture_config_llama3,
@@ -60,33 +56,28 @@ dclm_mix_model_cos_high = default_train(
     name="lr_tests_cos_high",
     tokenized=dclm_mixture_config_llama3,
     model_config=llama_1_4b,
-    train_config=llama_1_4b_cos_high_lr_train_config,
+    train_config=dataclasses.replace(
+        llama_1_4b_wsd_high_lr_train_config,
+        lr_schedule="cosine",
+    ),
 )
 
 dclm_mix_model_cos_low = default_train(
     name="lr_tests_cos_low",
     tokenized=dclm_mixture_config_llama3,
     model_config=llama_1_4b,
-    train_config=llama_1_4b_cos_olmo_lr_train_config,
+    train_config=dataclasses.replace(llama_1_4b_cos_high_lr_train_config, learning_rate=3e-4),
 )
 
-sft_model_wsd_config = dataclasses.replace(
-    tulu_sft_config,
-    model_name_or_path=output_path_of(dclm_mix_model_wsd, "hf/238417/"),
-)
-sft_model_cos_high_config = dataclasses.replace(
-    tulu_sft_config,
-    model_name_or_path=output_path_of(dclm_mix_model_cos_high, "hf/238417/"),
-)
-sft_model_cos_low_config = dataclasses.replace(
-    tulu_sft_config,
-    model_name_or_path=output_path_of(dclm_mix_model_cos_low, "hf/238417/"),
-)
+
 sft_model_wsd = default_sft(
     name="sft/tulu_sft_wsd_linear_lr",
     tokenized=tulu3_llama_tokenize_step,
     model_config=llama_1_4b,
-    sft_config=sft_model_wsd_config,
+    sft_config=dataclasses.replace(
+        tulu_sft_config,
+        model_name_or_path=output_path_of(dclm_mix_model_wsd, "hf/238417/"),
+    ),
     tags=["llama", "1.4b", "exp934", "linear_lr", "sft", "z_loss"],
 ).with_output_path("checkpoints/sft/tulu_sft_wsd_linear_lr")
 
@@ -94,7 +85,10 @@ sft_model_cos_high = default_sft(
     name="sft/tulu_sft_cos_high_lr",
     tokenized=tulu3_llama_tokenize_step,
     model_config=llama_1_4b,
-    sft_config=sft_model_cos_high_config,
+    sft_config=dataclasses.replace(
+        tulu_sft_config,
+        model_name_or_path=output_path_of(dclm_mix_model_cos_high, "hf/238417/"),
+    ),
     tags=["llama", "1.4b", "exp934", "cosine_lr", "high_lr", "sft", "z_loss"],
 ).with_output_path("checkpoints/sft/tulu_sft_cos_high_lr")
 
@@ -102,7 +96,10 @@ sft_model_cos_low = default_sft(
     name="sft/tulu_sft_cos_low_lr",
     tokenized=tulu3_llama_tokenize_step,
     model_config=llama_1_4b,
-    sft_config=sft_model_cos_low_config,
+    sft_config=dataclasses.replace(
+        tulu_sft_config,
+        model_name_or_path=output_path_of(dclm_mix_model_cos_low, "hf/238417/"),
+    ),
     tags=["llama", "1.4b", "exp934", "cosine_lr", "low_lr", "sft", "z_loss"],
 ).with_output_path("checkpoints/sft/tulu_sft_cos_low_lr")
 
