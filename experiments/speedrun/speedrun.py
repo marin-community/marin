@@ -87,9 +87,7 @@ class SpeedrunConfig:
 
         # estimate model FLOPs as 6*N*D, and calculate estimated compute using this and (a reasonable estimate of) MFU
         model_flops = self.estimate_flops_via_6nd()
-        effective_flops_per_sec = self.hardware_config.num_devices * self.hardware_config.device_flops * mfu_estimate
-        estimated_time = model_flops / effective_flops_per_sec
-        estimated_compute = estimated_time * self.hardware_config.num_devices * self.hardware_config.device_flops
+        estimated_compute = model_flops / mfu_estimate
 
         # check if estimated compute is within user's requested budget
         is_valid = estimated_compute <= self.compute_budget.value

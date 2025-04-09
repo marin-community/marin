@@ -22,12 +22,14 @@ speedrun_config = SpeedrunConfig(
     tokenized_dataset=dclm_mixture_config_llama3,
     hardware_config=HardwareConfig(
         device_type="v4-128",
-        num_devices=128,
+        num_devices=64,
         device_flops=275e12,  # one v4 chip is capable of 275 TFLOPs of peak compute: https://cloud.google.com/tpu/docs/v4 
     ),
 )
 
-print(speedrun_config.validate())
+# can choose to validate configuration before training
+is_valid, error = speedrun_config.validate()
+logger.info(f"Speedrun validation: {is_valid}, {error}")
 
 if __name__ == "__main__":
     executor_main(steps=default_speedrun("150M_llama_dclm_mix_Apr9", speedrun_config))
