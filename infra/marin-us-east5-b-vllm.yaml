@@ -8,12 +8,10 @@ cluster_name: marin-us-east5-b-vllm
 # Maximum Workers (excluding Head Node)
 max_workers: 1024
 
-
 auth:
   ssh_private_key:  ~/.ssh/marin_ray_cluster.pem
   ssh_public_key:  ~/.ssh/marin_ray_cluster.pub
   ssh_user: ray
-
 
 # Configure GCP
 provider:
