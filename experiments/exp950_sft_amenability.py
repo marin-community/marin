@@ -66,7 +66,11 @@ dclm_mix_model_cos_low = default_train(
     name="lr_tests_cos_low",
     tokenized=dclm_mixture_config_llama3,
     model_config=llama_1_4b,
-    train_config=dataclasses.replace(llama_1_4b_cos_high_lr_train_config, learning_rate=3e-4),
+    train_config=dataclasses.replace(
+        llama_1_4b_wsd_high_lr_train_config,
+        learning_rate=3e-4,
+        lr_schedule="cosine",
+    ),
 )
 
 
