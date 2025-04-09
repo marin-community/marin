@@ -197,7 +197,7 @@ To add manual workers from our reserved quota to cluster:
 ```bash
 python infra/manual_ray_worker_launch.py --cluster_yaml infra/marin-us-central2.yaml --reserved --tpu_type v4-128 --head $IP --zone us-central2-b
 ```
-If all our quota is preemptible then run
+If all our quota is preemptible and you need a manual worker for some reason (unlikely except for vllm clusters) then run
 ```bash
 python infra/manual_ray_worker_launch.py --cluster_yaml infra/marin-us-central2.yaml --preemptible --tpu_type v4-128 --head $IP --zone us-central2-b
 ```
@@ -256,6 +256,9 @@ Note that some clusters have an extra letter at the end so you'll need to change
 ```bash
 export CLUSTER=us-east5-b
 gcloud alpha compute tpus tpu-vm list --project=hai-gcp-models --zone $CLUSTER | grep "ray-marin-us-east5-worker" | awk '{print $1}' | xargs -I {} gcloud alpha compute tpus tpu-vm delete {} --zone $CLUSTER --project hai-gcp-models --quiet
+
+# after that's finished then run
+python infra/manual_ray_worker_launch.py --cluster_yaml infra/marin-us-east5-b-vllm.yaml --preemptible --tpu_type v6e-8 --head $IP --zone us-east5-b
 ```
 Where:
 - `$CLUSTER` is the cluster name (e.g., `us-central2`, `us-west4`, or `eu-west4`)
