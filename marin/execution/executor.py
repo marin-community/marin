@@ -161,6 +161,10 @@ class ExecutorStep(Generic[ConfigT]):
         """Hash based on the ID (every object is different)."""
         return hash(id(self))
 
+    def with_output_path(self, output_path: str) -> "ExecutorStep":
+        """Return a copy of the step with the given output_path."""
+        return replace(self, override_output_path=output_path)
+
 
 @dataclass(frozen=True)
 class InputName:
