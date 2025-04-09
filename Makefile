@@ -73,3 +73,17 @@ cluster_docker_ghcr_push: cluster_docker_build
 # Meta-target that builds and then pushes the Docker images
 cluster_docker: cluster_docker_build cluster_docker_push
 	@echo "Docker image build and push complete."
+
+
+
+# stuff for setting up locally
+
+# get secret ssh key from gcp secrets
+get_secret_key:
+	gcloud secrets versions access latest --secret=RAY_CLUSTER_PRIVATE_KEY > ~/.ssh/marin_ray_cluster.pem && \
+	chmod 600 ~/.ssh/marin_ray_cluster.pem
+	gcloud secrets versions access latest --secret=RAY_CLUSTER_PUBLIC_KEY > ~/.ssh/marin_ray_cluster.pub
+
+
+dev_setup: get_secret_key
+	echo "Dev setup complete."
