@@ -6,12 +6,20 @@
 
 import argparse
 import json
+import logging
 import subprocess
 import tempfile
 
 import levanter.infra.cli_helpers as cli
 import yaml
 from levanter.infra.tpus import run_command, setup_vm_docker, start_tpu_vm_queued_resources, tpu_ssh
+
+# Set up logging
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+handler = logging.StreamHandler()
+handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
+logger.addHandler(handler)
 
 TPU_TYPE_TO_VM_IMAGE = {
     "v5litepod": "v2-alpha-tpuv5-lite",
@@ -92,7 +100,7 @@ def main():
     head = args.head
     if head is None:
         head = get_head_node_ip(cluster_name, region, zone)
-        print(f"Found head node IP for cluster {cluster_name}: {head}")
+        logger.info(f"Found head node IP for cluster {cluster_name}: {head}")
 
     if zone is None:
         zone = cli.gcloud_config()["zone"]
@@ -110,6 +118,7 @@ def main():
     entry_command = f"ray start --address={head}:6379 --block"
     # TODO: would be friendlier to also sniff out the head and docker image from the cluster yaml
 
+    logger.info(f"Creating TPU with name: {tpu_name}")
     start_tpu_vm_queued_resources(
         tpu_name=tpu_name,
         tpu_type=tpu_type,
@@ -127,7 +136,7 @@ def main():
     tpu_ssh(tpu_name, zone, 1, f"docker rm -f {container_name} || true")
 
     # first we want to make a new entrypoint that starts ray and runs the setup commands
-    print(f"Running on tpu_name... {tpu_name}")
+    logger.info(f"Running on tpu_name... {tpu_name}")
     with tempfile.NamedTemporaryFile("w", prefix="entry", suffix=".sh") as f:
         f.write("#!/bin/bash\n")
         for command in setup_commands:
@@ -167,7 +176,7 @@ def main():
             "/tmp/entry.sh",
         ]
 
-        print(docker_command)
+        logger.info(docker_command)
 
         tpu_ssh(tpu_name, zone, 1, *docker_command)
 
