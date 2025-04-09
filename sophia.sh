@@ -2,8 +2,8 @@
 
 export RAY_RUNTIME_ENV_TEMPORARY_REFERENCE_EXPIRATION_S=1200
 
-optimizers=(mini)
-chinchillas=(8)
+optimizers=(sophia)
+chinchillas=(1 2 4 8)
 
 # Loop over each optimizer in the list
 for opt in "${optimizers[@]}"; do

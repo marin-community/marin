@@ -14,6 +14,7 @@ from levanter.checkpoint import CheckpointerConfig
 from levanter.compat.hf_checkpoints import load_tokenizer
 from levanter.data.text import LMMixtureDatasetConfig
 from levanter.eval_harness import LmEvalHarnessConfig
+from levanter.main.train_lm import TrainLmConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig
 from levanter.optim import MuonConfig
@@ -41,7 +42,7 @@ from marin.processing.tokenize import (
     lm_data_config,
     tokenize,
 )
-from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
+from marin.training.training import PodConfig, TrainLmOnPodConfig, run_levanter_train_lm
 
 logger = logging.getLogger("ray")
 
@@ -189,6 +190,122 @@ def muon_train(
     schedule = BatchSchedule(train_config.train_batch_size)
     total_examples = schedule.global_data_offset_by_step(train_config.num_train_steps)
 
+    # Create the inner config
+    inner_config = TrainLmConfig(
+        data=pretraining_data,
+        trainer=TrainerConfig(
+            tracker=WandbConfig(
+                entity='stanford-mercury',
+                project="optimizer-scaling",
+                tags=[name, *tags],
+            ),
+            mp=jmp.get_policy("p=f32,c=bfloat16"),
+            train_batch_size=train_config.train_batch_size,
+            num_train_steps=train_config.num_train_steps,
+            steps_per_eval=train_config.steps_per_eval if train_config.steps_per_eval is not None else 1000,
+            checkpointer=CheckpointerConfig(
+                save_interval=timedelta(minutes=10),
+                keep=[dict(every=steps_per_export)],
+            ),
+            model_averaging=model_averaging,
+            replica_dcn_axis_size=-1,
+            allow_partial_checkpoint=train_config.allow_partial_checkpoint,
+        ),
+        z_loss_weight=train_config.z_loss_weight,
+        model=model_config,
+        optimizer=MuonConfig(
+            learning_rate=train_config.learning_rate,
+            weight_decay=(
+                train_config.weight_decay
+                if train_config.weight_decay is not None
+                else MuonConfig().weight_decay
+            ),
+            momentum=(
+                train_config.momentum
+                if train_config.momentum is not None
+                else MuonConfig().momentum
+            ),
+            beta1=(
+                train_config.beta1
+                if train_config.beta1 is not None
+                else MuonConfig().beta1
+            ),
+            beta2=(
+                train_config.beta2
+                if train_config.beta2 is not None
+                else MuonConfig().beta2
+            ),
+            epsilon=(
+                train_config.epsilon
+                if train_config.epsilon is not None
+                else MuonConfig().epsilon
+            ),
+            nesterov=(
+                train_config.nesterov
+                if train_config.nesterov is not None
+                else MuonConfig().nesterov
+            ),
+            max_grad_norm=(
+                train_config.max_grad_norm
+                if train_config.max_grad_norm is not None
+                else MuonConfig().max_grad_norm
+            ),
+            muon_epsilon=(
+                train_config.muon_epsilon
+                if train_config.muon_epsilon is not None
+                else MuonConfig().muon_epsilon
+            ),
+            muon_to_adam_lr=(
+                train_config.muon_to_adam_lr
+                if train_config.muon_to_adam_lr is not None
+                else MuonConfig().muon_to_adam_lr
+            ),
+            warmup=(
+                train_config.warmup
+                if train_config.warmup is not None
+                else MuonConfig().warmup
+            ),
+            decay=(
+                train_config.decay
+                if train_config.decay is not None
+                else MuonConfig().decay
+            ),
+            lr_schedule=(
+                train_config.lr_schedule
+                if train_config.lr_schedule is not None
+                else MuonConfig().lr_schedule
+            ),
+            stable_lr_schedule=(
+                train_config.stable_lr_schedule
+                if train_config.stable_lr_schedule is not None
+                else MuonConfig().stable_lr_schedule
+            ),
+            cycle_length=train_config.cycle_length,  # can be int, list[int], or None
+            min_lr_ratio=(
+                train_config.min_lr_ratio
+                if train_config.min_lr_ratio is not None
+                else MuonConfig().min_lr_ratio
+            ),
+        ),
+        hf_save_steps=steps_per_export_hf,
+        data_seed=train_config.data_seed,
+        eval_harness_steps=train_config.steps_per_task_eval or 10000,
+        eval_harness=harness_config,
+    )
+
+    # Create the pod config
+    pod_config = PodConfig(
+        tpu_type=train_config.tpu_type,
+        node_count=train_config.node_count,
+    )
+
+    # Create the full config
+    config = TrainLmOnPodConfig(
+        config=inner_config,
+        pod_config=pod_config,
+        output_path=this_output_path(),
+    )
+
     return ExecutorStep(
         name=os.path.join("checkpoints", name),
         description=(
@@ -199,112 +316,7 @@ def muon_train(
             f"= {total_examples * model_config.seq_len:,} tokens."
         ),
         fn=run_levanter_train_lm,
-        config=TrainLmOnPodConfig(
-            output_path=this_output_path(),
-            tpu_type=train_config.tpu_type,
-            node_count=train_config.node_count,
-            allow_out_of_region_reads=train_config.allow_out_of_region_reads,
-            allow_out_of_region_writes=train_config.allow_out_of_region_writes,
-            data=pretraining_data,
-            trainer=TrainerConfig(
-                tracker=WandbConfig(
-                    entity='stanford-mercury',
-                    project="optimizer-scaling",
-                    tags=[name, *tags],
-                ),
-                mp=jmp.get_policy("p=f32,c=bfloat16"),
-                train_batch_size=train_config.train_batch_size,
-                num_train_steps=train_config.num_train_steps,
-                steps_per_eval=train_config.steps_per_eval if train_config.steps_per_eval is not None else 1000,
-                checkpointer=CheckpointerConfig(
-                    save_interval=timedelta(minutes=10),
-                    keep=[dict(every=steps_per_export)],
-                ),
-                model_averaging=model_averaging,
-                replica_dcn_axis_size=-1,
-                allow_partial_checkpoint=train_config.allow_partial_checkpoint,
-            ),
-            z_loss_weight=train_config.z_loss_weight,
-            model=model_config,
-            optimizer=MuonConfig(
-                learning_rate=train_config.learning_rate,
-                weight_decay=(
-                    train_config.weight_decay
-                    if train_config.weight_decay is not None
-                    else MuonConfig().weight_decay
-                ),
-                momentum=(
-                    train_config.momentum
-                    if train_config.momentum is not None
-                    else MuonConfig().momentum
-                ),
-                beta1=(
-                    train_config.beta1
-                    if train_config.beta1 is not None
-                    else MuonConfig().beta1
-                ),
-                beta2=(
-                    train_config.beta2
-                    if train_config.beta2 is not None
-                    else MuonConfig().beta2
-                ),
-                epsilon=(
-                    train_config.epsilon
-                    if train_config.epsilon is not None
-                    else MuonConfig().epsilon
-                ),
-                nesterov=(
-                    train_config.nesterov
-                    if train_config.nesterov is not None
-                    else MuonConfig().nesterov
-                ),
-                max_grad_norm=(
-                    train_config.max_grad_norm
-                    if train_config.max_grad_norm is not None
-                    else MuonConfig().max_grad_norm
-                ),
-                muon_epsilon=(
-                    train_config.muon_epsilon
-                    if train_config.muon_epsilon is not None
-                    else MuonConfig().muon_epsilon                    
-                ),
-                muon_to_adam_lr=(
-                    train_config.muon_to_adam_lr
-                    if train_config.muon_to_adam_lr is not None
-                    else MuonConfig().muon_to_adam_lr
-                ),
-                warmup=(
-                    train_config.warmup
-                    if train_config.warmup is not None
-                    else MuonConfig().warmup
-                ),
-                decay=(
-                    train_config.decay
-                    if train_config.decay is not None
-                    else MuonConfig().decay
-                ),
-                lr_schedule=(
-                    train_config.lr_schedule
-                    if train_config.lr_schedule is not None
-                    else MuonConfig().lr_schedule
-                ),
-                stable_lr_schedule=(
-                    train_config.stable_lr_schedule
-                    if train_config.stable_lr_schedule is not None
-                    else MuonConfig().stable_lr_schedule
-                ),
-                cycle_length=train_config.cycle_length,  # can be int, list[int], or None
-                min_lr_ratio=(
-                    train_config.min_lr_ratio
-                    if train_config.min_lr_ratio is not None
-                    else MuonConfig().min_lr_ratio
-                ),
-            ),
-            hf_save_steps=steps_per_export_hf,
-            data_seed=train_config.data_seed,
-            eval_harness_steps=train_config.steps_per_task_eval or 10000,
-            eval_harness=harness_config,
-        ),
+        config=config,
         pip_dependency_groups=["tokenize_train"],
     )
 
