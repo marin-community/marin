@@ -8,10 +8,12 @@ cluster_name: marin-us-central2
 # Maximum Workers (excluding Head Node)
 max_workers: 1024
 
+
 auth:
-  ssh_private_key: ~/.ssh/ray-autoscaler_gcp_us-central2_hai-gcp-models_ubuntu_0.pem
-  ssh_public_key: ~/.ssh/ray-autoscaler_gcp_us-central2_hai-gcp-models_ubuntu_0.pub
+  ssh_private_key:  ~/.ssh/marin_ray_cluster.pem
+  ssh_public_key:  ~/.ssh/marin_ray_cluster.pub
   ssh_user: ray
+
 
 # Configure GCP
 provider:
@@ -19,6 +21,7 @@ provider:
   region: us-central2
   availability_zone: us-central2-b
   project_id: hai-gcp-models
+
 
 docker:
     image: "us-central2-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:4a47ffc0"
@@ -59,6 +62,7 @@ setup_commands:
   - echo 'export BUCKET="marin-us-central2"' >> $HOME/.bashrc
   - gcsfuse --implicit-dirs --only-dir gcsfuse_mount $BUCKET /opt/gcsfuse_mount || true
   - mkdir -p /home/ray/.ssh && gcloud compute project-info describe --format="value(commonInstanceMetadata.items[?key==\"ssh-keys\"].value)" > /home/ray/.ssh/authorized_keys && chmod 600 /home/ray/.ssh/authorized_keys
+  - gcloud secrets versions access latest --secret=RAY_CLUSTER_PUBLIC_KEY > ~/.ssh/marin_ray_cluster.pub
 
 # Set Head Node == `ray_head_default`
 head_node_type: head_default
