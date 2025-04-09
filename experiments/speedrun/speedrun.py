@@ -8,15 +8,12 @@ in experiments/speedrun/sample_run.py
 import dataclasses
 import json
 import logging
-import os
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Optional
 
 import fsspec
-
 import wandb
 from levanter.compat.hf_checkpoints import load_tokenizer
 from levanter.data.text import LMMixtureDatasetConfig
@@ -31,9 +28,10 @@ from marin.training.training import TrainLmOnPodConfig
 
 logger = logging.getLogger("ray")
 
+
 @dataclass
 class HardwareConfig:
-    device_type: str # a string describing the device e.g. "v4-128", or "h100"
+    device_type: str  # a string describing the device e.g. "v4-128", or "h100"
     num_devices: int
     device_flops: float  # Peak FLOPs/s per device
 
@@ -52,7 +50,7 @@ class SpeedrunConfig:
     train_config: SimpleTrainConfig | TrainLmOnPodConfig
     tokenized_dataset: InputName | ExecutorStep | LMMixtureDatasetConfig
     hardware_config: HardwareConfig
-    hyperparameter_scaling: Optional[Callable[[LmConfig, ComputeBudget], dict]] = None
+    hyperparameter_scaling: Callable[[LmConfig, ComputeBudget], dict] | None = None
 
     @property
     def vocab_size(self) -> int:
@@ -134,10 +132,16 @@ def speedrun_analysis(config: SpeedrunAnalysisConfig):
     six_nd_flops = config.speedrun_config.estimate_flops_via_6nd()
     num_params = compute_num_parameters(config.speedrun_config.model_config, config.speedrun_config.vocab_size)
     total_tokens = (
-        config.speedrun_config.train_config.train_batch_size * config.speedrun_config.model_config.seq_len * config.speedrun_config.train_config.num_train_steps
+        config.speedrun_config.train_config.train_batch_size
+        * config.speedrun_config.model_config.seq_len
+        * config.speedrun_config.train_config.num_train_steps
     )
     total_time = sum(step_times)
-    total_hardware_flops = total_time * config.speedrun_config.hardware_config.num_devices * config.speedrun_config.hardware_config.device_flops
+    total_hardware_flops = (
+        total_time
+        * config.speedrun_config.hardware_config.num_devices
+        * config.speedrun_config.hardware_config.device_flops
+    )
 
     stats = {
         "compute_budget": {
@@ -159,7 +163,7 @@ def speedrun_analysis(config: SpeedrunAnalysisConfig):
         "actual_stats": {
             "training_time": total_time,
             "compute": total_hardware_flops,
-        },  
+        },
     }
 
     logger.info(f"Speedrun stats: {stats}")
@@ -172,7 +176,9 @@ def speedrun_analysis(config: SpeedrunAnalysisConfig):
     if not stats["compute_budget"]["within_budget_6nd"]:
         logger.warning(f"6ND FLOPs exceeded: {six_nd_flops:.2e} > {config.speedrun_config.compute_budget.value:.2e}")
     if not stats["compute_budget"]["within_budget_hardware"]:
-        logger.warning(f"Hardware FLOPs exceeded: {total_hardware_flops:.2e} > {config.speedrun_config.compute_budget.value:.2e}")
+        logger.warning(
+            f"Hardware FLOPs exceeded: {total_hardware_flops:.2e} > {config.speedrun_config.compute_budget.value:.2e}"
+        )
 
 
 def default_speedrun(

@@ -1,6 +1,7 @@
 """
 Sample speedrun with a 150M LLaMA model.
 """
+
 from experiments.dclm.tokenize_dclm import dclm_mixture_config_llama3
 from experiments.llama import llama_150m
 from experiments.simple_train_config import SimpleTrainConfig
@@ -23,7 +24,7 @@ speedrun_config = SpeedrunConfig(
     hardware_config=HardwareConfig(
         device_type="v4-128",
         num_devices=64,
-        device_flops=275e12,  # one v4 chip is capable of 275 TFLOPs of peak compute: https://cloud.google.com/tpu/docs/v4 
+        device_flops=275e12,  # one v4 chip is capable of 275 TFLOPs of peak compute: https://cloud.google.com/tpu/docs/v4
     ),
 )
 
