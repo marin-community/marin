@@ -53,23 +53,18 @@ dclm_mix_model_wsd = default_train(
 )
 
 dclm_mix_model_cos_high = default_train(
-    name="lr_tests_cos_high",
+    name="lr_tests_cosin_high",
     tokenized=dclm_mixture_config_llama3,
     model_config=llama_1_4b,
-    train_config=dataclasses.replace(
-        llama_1_4b_wsd_high_lr_train_config,
-        lr_schedule="cosine",
-    ),
+    train_config=dataclasses.replace(llama_1_4b_wsd_high_lr_train_config, lr_schedule="cosine", decay=None),
 )
 
 dclm_mix_model_cos_low = default_train(
-    name="lr_tests_cos_low",
+    name="lr_tests_cosin_low",
     tokenized=dclm_mixture_config_llama3,
     model_config=llama_1_4b,
     train_config=dataclasses.replace(
-        llama_1_4b_wsd_high_lr_train_config,
-        learning_rate=3e-4,
-        lr_schedule="cosine",
+        llama_1_4b_wsd_high_lr_train_config, learning_rate=3e-4, lr_schedule="cosine", decay=None
     ),
 )
 
