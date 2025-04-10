@@ -2,14 +2,14 @@
 
 export RAY_RUNTIME_ENV_TEMPORARY_REFERENCE_EXPIRATION_S=1200
 
-optimizers=(scion lion)
-chinchillas=(1)
+optimizers=(scion)
+model_sizes=(300M 520M)
 
 # Loop over each optimizer in the list
 for opt in "${optimizers[@]}"; do
-    for chinchilla in "${chinchillas[@]}"; do
+    for model_size in "${model_sizes[@]}"; do
         # Define the experiment name using the current optimizer
-        name="exp725_${opt}sweep_300M_${chinchilla}"
+        name="exp725_${opt}sweep_${model_size}_1"
         # Loop 10 times for the current optimizer
         for i in {1..30}; do
             # Start the ray_run process and capture its PID.

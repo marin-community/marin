@@ -27,7 +27,7 @@ then
   tmux send-keys -t $SESSION_NAME:0.1 "conda activate ${CONDA_ENV}" C-m C-l
 
   # Launch Ray Dashboard (Right Pane)
-  tmux send-keys -t $SESSION_NAME:0.1 "ray dashboard infra/marin-${CLUSTER}.yaml" C-m
+  tmux send-keys -t $SESSION_NAME:0.1 "ray dashboard infra/marin-${CLUSTER}.yaml --no-config-cache" C-m
 
   # Set Active (Left Pane)
   tmux select-pane -t $SESSION_NAME:0.0

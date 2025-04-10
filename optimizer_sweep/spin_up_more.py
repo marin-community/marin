@@ -92,11 +92,11 @@ if __name__ == '__main__':
     # rewrite('kron', '130m', 4, '130m', 4)
     # for data_and_model in [('130m', 1), ('130m', 2), ('130m', 4), ('300m', 1), ('520m', 1)]:
     #     rewrite('adamw', data_and_model[0], data_and_model[1], data_and_model[0], data_and_model[1], 'mini')
-    rewrite('mini', '130m', 4, '130m', 8)
-    rewrite('muon', '130m', 8, '130m', 16)
-    rewrite('nadamw', '130m', 8, '130m', 16)
-    rewrite('soape', '130m', 8, '130m', 16)
-    rewrite('sophia', '130m', 1, '130m', 2)
-    rewrite("sophia", "130m", 8, '300m', 1)
-    rewrite("sophia", "130m", 8, '520m', 1)
+    # rewrite('mini', '130m', 4, '130m', 8)
+    # rewrite('muon', '130m', 8, '130m', 16)
+    rewrite('adamw', '130m', 8, '130m', 16)
+    # rewrite('soape', '130m', 8, '130m', 16)
+    # rewrite('sophia', '130m', 1, '130m', 2)
+    # rewrite("sophia", "130m", 8, '300m', 1)
+    # rewrite("sophia", "130m", 8, '520m', 1)
     

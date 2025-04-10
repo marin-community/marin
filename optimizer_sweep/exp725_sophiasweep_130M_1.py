@@ -27,7 +27,7 @@ if __name__ == "__main__":
     }
     model_size = "130m"
     target_chinchilla = 1 
-    my_suffix = 'g'
-    template(model_size, target_chinchilla, 'sophia', baseline_config, sweep_grids, tpu_type = 'v5litepod-256',  random_suffix=my_suffix) 
+    my_suffix = 'u'
+    template(model_size, target_chinchilla, 'sophia', baseline_config, sweep_grids,  random_suffix=my_suffix) 
 
 

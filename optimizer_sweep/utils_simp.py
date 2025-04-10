@@ -14,7 +14,7 @@ def convert_run_to_config(run, keys):
     return {key: run.config['optimizer'][key] if (key != 'train_batch_size') else run.config['trainer'][key] for key in keys}
 
 
-def grab_best_run(keys, tags):
+def grab_best_run(keys, tags, return_loss = False):
     filters = {"tags": {"$all": tags}}
     runs = api.runs(f"{username}/{project}", filters=filters)
     min_loss = 10000
@@ -40,9 +40,15 @@ def grab_best_run(keys, tags):
         approximate_best_list = []
         for run in approximate_min_runs:
             approximate_best_list.append(convert_run_to_config(run, keys))
-        return best_config, approximate_best_list
+        if return_loss:
+            return best_config, approximate_best_list, min_loss
+        else:
+            return best_config, approximate_best_list
     else: 
-        return None, None
+        if return_loss:
+            return None, None, None
+        else:
+            return None, None
     
 
 def bad_number(x):

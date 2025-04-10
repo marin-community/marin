@@ -1,0 +1,1092 @@
+{
+  "8584c0c3ce169627c3483025198bf116": {
+    "min_num": 0,
+    "min_loss": 3.536329746246338,
+    "best_config": {
+      "learning_rate": 0.016,
+      "weight_decay": 0.1,
+      "min_lr_ratio": 0,
+      "warmup": 2000,
+      "beta1": 0.9,
+      "beta2": 0.95,
+      "gamma": 0.025,
+      "epsilon": 9.999999999999999e-26,
+      "max_grad_norm": 1,
+      "train_batch_size": 128
+    }
+  },
+  "16b07510b04efeecd2fe390052a18d46": {
+    "min_num": 0,
+    "min_loss": 3.394932270050049,
+    "best_config": {
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "min_lr_ratio": 0,
+      "warmup": 2000,
+      "beta1": 0.95,
+      "beta2": 0.98,
+      "gamma": 0.025,
+      "epsilon": 1e-25,
+      "max_grad_norm": 1,
+      "train_batch_size": 128
+    }
+  },
+  "da8ae933ebfbb9160d78b71eaaa3945f": {
+    "min_num": 0,
+    "min_loss": 3.320751428604126,
+    "best_config": {
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "min_lr_ratio": 0,
+      "warmup": 2000,
+      "beta1": 0.9,
+      "beta2": 0.98,
+      "gamma": 0.025,
+      "epsilon": 9.999999999999999e-26,
+      "max_grad_norm": 1,
+      "train_batch_size": 128
+    }
+  },
+  "3f61381830d5cc80039893bde782d33b": {
+    "min_num": 0,
+    "min_loss": 3.2465016841888428,
+    "best_config": {
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "min_lr_ratio": 0,
+      "warmup": 2000,
+      "beta1": 0.98,
+      "beta2": 0.99,
+      "gamma": 0.025,
+      "epsilon": 9.999999999999999e-26,
+      "max_grad_norm": 1,
+      "train_batch_size": 128
+    }
+  },
+  "1d97a598027874eeec9b1ad20897a48d": {
+    "min_num": 0,
+    "min_loss": 3.246682643890381,
+    "best_config": {
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "min_lr_ratio": 0,
+      "warmup": 1000,
+      "beta1": 0.98,
+      "beta2": 0.98,
+      "gamma": 0.05,
+      "epsilon": 1e-25,
+      "max_grad_norm": 1,
+      "train_batch_size": 128
+    }
+  },
+  "9d9859a43440f56b236bcbf46e3750b5": {
+    "min_num": 0,
+    "min_loss": 3.098572254180908,
+    "best_config": {
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "min_lr_ratio": 0,
+      "warmup": 2000,
+      "beta1": 0.95,
+      "beta2": 0.95,
+      "gamma": 0.025,
+      "epsilon": 1e-25,
+      "max_grad_norm": 1,
+      "train_batch_size": 256
+    }
+  },
+  "d93dfd4ff14d3f581498483ba84142f8": {
+    "min_num": 0,
+    "min_loss": 3.4626309871673584,
+    "best_config": {
+      "learning_rate": 0.016,
+      "weight_decay": 0.1,
+      "min_lr_ratio": 0,
+      "warmup": 0,
+      "momentum": 0.95,
+      "beta1": 0.8,
+      "beta2": 0.98,
+      "epsilon": 1e-15,
+      "muon_epsilon": 1e-05,
+      "max_grad_norm": 1,
+      "lr_schedule": "linear",
+      "muon_to_adam_lr": 0.2,
+      "decay": 0.8,
+      "train_batch_size": 128
+    }
+  },
+  "31615b51eedb367f359ebe6c46192f25": {
+    "min_num": 0,
+    "min_loss": 3.369025468826294,
+    "best_config": {
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "min_lr_ratio": 0,
+      "warmup": 0,
+      "momentum": 0.98,
+      "beta1": 0.8,
+      "beta2": 0.98,
+      "epsilon": 1e-15,
+      "muon_epsilon": 1e-05,
+      "max_grad_norm": 1,
+      "lr_schedule": "linear",
+      "muon_to_adam_lr": 0.3,
+      "decay": 0.8,
+      "train_batch_size": 128
+    }
+  },
+  "64ecbc77513ff475b4999e5dae277599": {
+    "min_num": 0,
+    "min_loss": 3.2946722507476807,
+    "best_config": {
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "min_lr_ratio": 0,
+      "warmup": 0,
+      "momentum": 0.95,
+      "beta1": 0.8,
+      "beta2": 0.98,
+      "epsilon": 1e-15,
+      "muon_epsilon": 1e-05,
+      "max_grad_norm": 1,
+      "lr_schedule": "linear",
+      "muon_to_adam_lr": 0.3,
+      "decay": 0.8,
+      "train_batch_size": 128
+    }
+  },
+  "72c248f1ade33d02de4695743bf30d96": {
+    "min_num": 0,
+    "min_loss": 3.238452911376953,
+    "best_config": {
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "min_lr_ratio": 0,
+      "warmup": 0,
+      "momentum": 0.98,
+      "beta1": 0.8,
+      "beta2": 0.98,
+      "epsilon": 1e-15,
+      "muon_epsilon": 1e-05,
+      "max_grad_norm": 1,
+      "lr_schedule": "linear",
+      "muon_to_adam_lr": 0.3,
+      "decay": 1,
+      "train_batch_size": 128
+    }
+  },
+  "97d3ad778d7d745c623208ef0bf96177": {
+    "min_num": 0,
+    "min_loss": 3.2237305641174316,
+    "best_config": {
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "min_lr_ratio": 0,
+      "warmup": 0,
+      "momentum": 0.98,
+      "beta1": 0.8,
+      "beta2": 0.98,
+      "epsilon": 1e-15,
+      "muon_epsilon": 1e-05,
+      "max_grad_norm": 1,
+      "lr_schedule": "linear",
+      "muon_to_adam_lr": 0.3,
+      "decay": 0.8,
+      "train_batch_size": 128
+    }
+  },
+  "2860488b73488b81b56284292206109e": {
+    "min_num": 0,
+    "min_loss": 3.070978879928589,
+    "best_config": {
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "min_lr_ratio": 0,
+      "warmup": 0,
+      "momentum": 0.98,
+      "beta1": 0.8,
+      "beta2": 0.98,
+      "epsilon": 1e-25,
+      "muon_epsilon": 1e-05,
+      "max_grad_norm": 1,
+      "lr_schedule": "linear",
+      "muon_to_adam_lr": 0.3,
+      "decay": 1,
+      "train_batch_size": 128
+    }
+  },
+  "d7545ef5a004512ec7dec9d4fa755393": {
+    "min_num": 0,
+    "min_loss": 3.549180746078491,
+    "best_config": {
+      "learning_rate": 0.002,
+      "weight_decay": 0.7,
+      "min_lr_ratio": 0,
+      "warmup": 2000,
+      "beta1": 0.9,
+      "beta2": 0.95,
+      "max_grad_norm": 1,
+      "train_batch_size": 128
+    }
+  },
+  "0abbd1f3ee0d7bb3ba54676d921cd69e": {
+    "min_num": 0,
+    "min_loss": 3.4087886810302734,
+    "best_config": {
+      "learning_rate": 0.001,
+      "weight_decay": 0.7,
+      "min_lr_ratio": 0,
+      "warmup": 2000,
+      "beta1": 0.9,
+      "beta2": 0.98,
+      "max_grad_norm": 1,
+      "train_batch_size": 128
+    }
+  },
+  "b2e81fa73bc9c79967bd50dd44b7d0b5": {
+    "min_num": 0,
+    "min_loss": 3.3292596340179443,
+    "best_config": {
+      "learning_rate": 0.001,
+      "weight_decay": 0.7,
+      "min_lr_ratio": 0,
+      "warmup": 2000,
+      "beta1": 0.9,
+      "beta2": 0.95,
+      "max_grad_norm": 1,
+      "train_batch_size": 128
+    }
+  },
+  "eef6f9a4588cb25f11218488c0aaac94": {
+    "min_num": 3,
+    "min_loss": 3.2508106231689453,
+    "best_config": {
+      "learning_rate": 0.001,
+      "weight_decay": 0.7,
+      "min_lr_ratio": 0,
+      "warmup": 2000,
+      "beta1": 0.9,
+      "beta2": 0.98,
+      "max_grad_norm": 1,
+      "train_batch_size": 128
+    }
+  },
+  "d0aae7e3df121cde946d08d9bd88919a": {
+    "min_num": 0,
+    "min_loss": 3.2675621509552,
+    "best_config": {
+      "learning_rate": 0.001,
+      "weight_decay": 0.6,
+      "min_lr_ratio": 0,
+      "warmup": 2000,
+      "beta1": 0.9,
+      "beta2": 0.95,
+      "max_grad_norm": 1,
+      "train_batch_size": 128
+    }
+  },
+  "506b8dc0a68a76c6015df0ff075f630e": {
+    "min_num": 0,
+    "min_loss": 3.1076302528381348,
+    "best_config": {
+      "learning_rate": 0.001,
+      "weight_decay": 0.7,
+      "min_lr_ratio": 0,
+      "warmup": 2000,
+      "beta1": 0.9,
+      "beta2": 0.95,
+      "max_grad_norm": 1,
+      "train_batch_size": 128
+    }
+  },
+  "1370aa94ddc9f2704143fd88ea91b138": {
+    "min_num": 0,
+    "min_loss": 3.5311388969421387,
+    "best_config": {
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "min_lr_ratio": 0,
+      "warmup": 2000,
+      "beta1": 0.95,
+      "beta2": 0.98,
+      "epsilon": 1e-25,
+      "max_grad_norm": 1,
+      "nesterov": true,
+      "train_batch_size": 128
+    }
+  },
+  "616f2b2388ad0fbe746a8cc0db3aa2dc": {
+    "min_num": 0,
+    "min_loss": 3.393378496170044,
+    "best_config": {
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "min_lr_ratio": 0,
+      "warmup": 2000,
+      "beta1": 0.95,
+      "beta2": 0.98,
+      "epsilon": 1e-10,
+      "max_grad_norm": 1,
+      "nesterov": true,
+      "train_batch_size": 128
+    }
+  },
+  "106b338621f21296a85fb6299736aeb1": {
+    "min_num": 0,
+    "min_loss": 3.319291353225708,
+    "best_config": {
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "min_lr_ratio": 0,
+      "warmup": 2000,
+      "beta1": 0.95,
+      "beta2": 0.98,
+      "epsilon": 1e-10,
+      "max_grad_norm": 1,
+      "nesterov": true,
+      "train_batch_size": 128
+    }
+  },
+  "e13b93051115ce94c7431c32cd5f86c8": {
+    "min_num": 0,
+    "min_loss": 3.2486026287078857,
+    "best_config": {
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "min_lr_ratio": 0,
+      "warmup": 2000,
+      "beta1": 0.95,
+      "beta2": 0.98,
+      "epsilon": 1e-10,
+      "max_grad_norm": 1,
+      "nesterov": true,
+      "train_batch_size": 128
+    }
+  },
+  "fb329e7a5a4109f805fa724242d3cf71": {
+    "min_num": 0,
+    "min_loss": 3.247661828994751,
+    "best_config": {
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "min_lr_ratio": 0,
+      "warmup": 2000,
+      "beta1": 0.95,
+      "beta2": 0.98,
+      "epsilon": 1e-10,
+      "max_grad_norm": 1,
+      "nesterov": true,
+      "train_batch_size": 128
+    }
+  },
+  "7aba7ae1b1231301b751256fc546a413": {
+    "min_num": 0,
+    "min_loss": 3.0993051528930664,
+    "best_config": {
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "min_lr_ratio": 0,
+      "warmup": 4000,
+      "beta1": 0.95,
+      "beta2": 0.98,
+      "epsilon": 1e-10,
+      "max_grad_norm": 1,
+      "nesterov": true,
+      "train_batch_size": 128
+    }
+  },
+  "3ccbe4c1be079a4113d9e79256941806": {
+    "min_num": 0,
+    "min_loss": 3.4907355308532715,
+    "best_config": {
+      "learning_rate": 0.002,
+      "weight_decay": 0.7,
+      "beta1": 0.95,
+      "preconditioner_lr": 0.2,
+      "preconditioner_init_scale": 1,
+      "max_grad_norm": 1,
+      "normalize_grads": true,
+      "partition_grads_into_blocks": true,
+      "block_size": 256,
+      "preconditioner_update_probability": 0.05,
+      "update_prob_flat_start": 2000,
+      "warmup": 1000,
+      "min_lr_ratio": 0,
+      "train_batch_size": 128
+    }
+  },
+  "a82a99d2cbb4a9bfde736639eb7a2525": {
+    "min_num": 1,
+    "min_loss": 3.388023376464844,
+    "best_config": {
+      "learning_rate": 0.002,
+      "weight_decay": 0.5,
+      "beta1": 0.95,
+      "preconditioner_lr": 0.2,
+      "preconditioner_init_scale": 1,
+      "max_grad_norm": 1,
+      "normalize_grads": true,
+      "partition_grads_into_blocks": true,
+      "block_size": 256,
+      "preconditioner_update_probability": 0.05,
+      "update_prob_flat_start": 2000,
+      "warmup": 1000,
+      "min_lr_ratio": 0,
+      "train_batch_size": 128
+    }
+  },
+  "14e6cec1efca895594f2db9852ae2b42": {
+    "min_num": 1,
+    "min_loss": 3.3028366565704346,
+    "best_config": {
+      "learning_rate": 0.001,
+      "weight_decay": 0.5,
+      "beta1": 0.95,
+      "preconditioner_lr": 0.2,
+      "preconditioner_init_scale": 1,
+      "max_grad_norm": 1,
+      "normalize_grads": true,
+      "partition_grads_into_blocks": true,
+      "block_size": 256,
+      "preconditioner_update_probability": 0.05,
+      "update_prob_flat_start": 2000,
+      "warmup": 1000,
+      "min_lr_ratio": 0,
+      "train_batch_size": 128
+    }
+  },
+  "4f754350f18d961f234a937b6970fa49": {
+    "min_num": 1,
+    "min_loss": 3.238511800765991,
+    "best_config": {
+      "learning_rate": 0.001,
+      "weight_decay": 0.5,
+      "beta1": 0.95,
+      "preconditioner_lr": 0.2,
+      "preconditioner_init_scale": 1,
+      "max_grad_norm": 1,
+      "normalize_grads": true,
+      "partition_grads_into_blocks": true,
+      "block_size": 256,
+      "preconditioner_update_probability": 0.1,
+      "update_prob_flat_start": 2000,
+      "warmup": 1000,
+      "min_lr_ratio": 0,
+      "train_batch_size": 128
+    }
+  },
+  "e011e5d130b9e6b0f999828966da2c58": {
+    "min_num": 1,
+    "min_loss": 3.2414581775665283,
+    "best_config": {
+      "learning_rate": 0.001,
+      "weight_decay": 0.5,
+      "beta1": 0.95,
+      "preconditioner_lr": 0.2,
+      "preconditioner_init_scale": 1,
+      "max_grad_norm": 1,
+      "normalize_grads": true,
+      "partition_grads_into_blocks": true,
+      "block_size": 256,
+      "preconditioner_update_probability": 0.1,
+      "update_prob_flat_start": 2000,
+      "warmup": 1000,
+      "min_lr_ratio": 0,
+      "train_batch_size": 128
+    }
+  },
+  "f87e9468f20f6cf559559fd096e59822": {
+    "min_num": 2,
+    "min_loss": 3.0836100578308105,
+    "best_config": {
+      "learning_rate": 0.001,
+      "weight_decay": 0.5,
+      "beta1": 0.95,
+      "preconditioner_lr": 0.2,
+      "preconditioner_init_scale": 1,
+      "max_grad_norm": 1,
+      "normalize_grads": true,
+      "partition_grads_into_blocks": true,
+      "block_size": 256,
+      "preconditioner_update_probability": 0.1,
+      "update_prob_flat_start": 2000,
+      "warmup": 1000,
+      "min_lr_ratio": 0,
+      "train_batch_size": 128
+    }
+  },
+  "f64ccda45f15388e62773ae27d7c218a": {
+    "min_num": 0,
+    "min_loss": 3.4737958908081055,
+    "best_config": {
+      "learning_rate": 0.016,
+      "weight_decay": 0.1,
+      "min_lr_ratio": 0,
+      "warmup": 0,
+      "momentum": 0.95,
+      "beta1": 0.95,
+      "scion_epsilon": 1e-15,
+      "max_grad_norm": 1,
+      "lr_schedule": "linear",
+      "scion_to_signum_lr": 0.2,
+      "decay": 0.8,
+      "train_batch_size": 128
+    }
+  },
+  "51be97c4ef38b7c75ac577cc48a13a4b": {
+    "min_num": 0,
+    "min_loss": 3.377504587173462,
+    "best_config": {
+      "learning_rate": 0.016,
+      "weight_decay": 0.1,
+      "min_lr_ratio": 0,
+      "warmup": 0,
+      "momentum": 0.9,
+      "beta1": 0.95,
+      "scion_epsilon": 1e-15,
+      "max_grad_norm": 1,
+      "lr_schedule": "linear",
+      "scion_to_signum_lr": 0.2,
+      "decay": 1,
+      "train_batch_size": 128
+    }
+  },
+  "00cc81cdc3dd943775328be24c592716": {
+    "min_num": 0,
+    "min_loss": 3.3015458583831787,
+    "best_config": {
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "min_lr_ratio": 0,
+      "warmup": 0,
+      "momentum": 0.9,
+      "beta1": 0.98,
+      "scion_epsilon": 1e-15,
+      "max_grad_norm": 2,
+      "lr_schedule": "linear",
+      "scion_to_signum_lr": 0.2,
+      "decay": 1,
+      "train_batch_size": 128
+    }
+  },
+  "7a79ac385f75f910ed375f0b57ad45a4": {
+    "min_num": 2,
+    "min_loss": 3.245243549346924,
+    "best_config": {
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "min_lr_ratio": 0,
+      "warmup": 0,
+      "momentum": 0.9,
+      "beta1": 0.98,
+      "scion_epsilon": 1e-05,
+      "max_grad_norm": 2,
+      "lr_schedule": "linear",
+      "scion_to_signum_lr": 0.2,
+      "decay": 1,
+      "train_batch_size": 128
+    }
+  },
+  "085f88bc1421b90ad46330918d742281": {
+    "min_num": 7,
+    "min_loss": 3.231102705001831,
+    "best_config": {
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "min_lr_ratio": 0,
+      "warmup": 0,
+      "momentum": 0.9,
+      "beta1": 0.98,
+      "scion_epsilon": 1e-05,
+      "max_grad_norm": 2,
+      "lr_schedule": "linear",
+      "scion_to_signum_lr": 0.1,
+      "decay": 0.8,
+      "train_batch_size": 128
+    }
+  },
+  "c6254b16dc5e5d0a803406e9f60d9cae": {
+    "min_num": 0,
+    "min_loss": 3.532454490661621,
+    "best_config": {
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "min_lr_ratio": 0,
+      "warmup": 2000,
+      "beta1": 0.95,
+      "beta2": 0.98,
+      "epsilon": 1e-15,
+      "max_grad_norm": 1,
+      "train_batch_size": 128
+    }
+  },
+  "4b87305d18ebc0b33911221f9f48fc1b": {
+    "min_num": 0,
+    "min_loss": 3.4009084701538086,
+    "best_config": {
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "min_lr_ratio": 0,
+      "warmup": 2000,
+      "beta1": 0.98,
+      "beta2": 0.98,
+      "epsilon": 1e-15,
+      "max_grad_norm": 2,
+      "train_batch_size": 128
+    }
+  },
+  "dc361308ed7428681dfeb696336ccce8": {
+    "min_num": 0,
+    "min_loss": 3.3320846557617188,
+    "best_config": {
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "min_lr_ratio": 0,
+      "warmup": 2000,
+      "beta1": 0.95,
+      "beta2": 0.98,
+      "epsilon": 1e-15,
+      "max_grad_norm": 2,
+      "train_batch_size": 128
+    }
+  },
+  "14594036a464351bd673cd4b707955db": {
+    "min_num": 0,
+    "min_loss": 3.2501556873321533,
+    "best_config": {
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "min_lr_ratio": 0,
+      "warmup": 2000,
+      "beta1": 0.98,
+      "beta2": 0.98,
+      "epsilon": 1e-15,
+      "max_grad_norm": 2,
+      "train_batch_size": 256
+    }
+  },
+  "da12a58097d6260acc0415c5f845538e": {
+    "min_num": 1,
+    "min_loss": 3.2586865425109863,
+    "best_config": {
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "min_lr_ratio": 0,
+      "warmup": 2000,
+      "beta1": 0.98,
+      "beta2": 0.98,
+      "epsilon": 9.999999999999999e-26,
+      "max_grad_norm": 2,
+      "train_batch_size": 128
+    }
+  },
+  "e5e5eeb4b5e3600606dcbc19112aa3a5": {
+    "min_num": 0,
+    "min_loss": 3.100316047668457,
+    "best_config": {
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "min_lr_ratio": 0,
+      "warmup": 2000,
+      "beta1": 0.98,
+      "beta2": 0.98,
+      "epsilon": 9.999999999999999e-26,
+      "max_grad_norm": 1,
+      "train_batch_size": 256
+    }
+  },
+  "d8e29feccb65d62c703e85f090c23019": {
+    "min_num": 0,
+    "min_loss": 3.4821648597717285,
+    "best_config": {
+      "learning_rate": 0.016,
+      "weight_decay": 0.1,
+      "min_lr_ratio": 0,
+      "warmup": 1000,
+      "beta1": 0.95,
+      "beta2": 0.98,
+      "shampoo_beta": 0.95,
+      "precondition_frequency": 1,
+      "partition_grads_into_blocks": true,
+      "block_size": 256,
+      "epsilon": 1e-15,
+      "max_grad_norm": 1,
+      "train_batch_size": 128
+    }
+  },
+  "df426cbd55f1d6f5d2c4b6869804d10e": {
+    "min_num": 1,
+    "min_loss": 3.374239921569824,
+    "best_config": {
+      "learning_rate": 0.016,
+      "weight_decay": 0.1,
+      "min_lr_ratio": 0,
+      "warmup": 500,
+      "beta1": 0.95,
+      "beta2": 0.99,
+      "shampoo_beta": 0.98,
+      "precondition_frequency": 1,
+      "partition_grads_into_blocks": false,
+      "block_size": 256,
+      "epsilon": 1e-15,
+      "max_grad_norm": 1,
+      "train_batch_size": 128
+    }
+  },
+  "76600ae88f038de08366001a7513e5e7": {
+    "min_num": 0,
+    "min_loss": 3.294482469558716,
+    "best_config": {
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "min_lr_ratio": 0,
+      "warmup": 500,
+      "beta1": 0.95,
+      "beta2": 0.99,
+      "shampoo_beta": 0.98,
+      "precondition_frequency": 1,
+      "partition_grads_into_blocks": false,
+      "block_size": 256,
+      "epsilon": 1e-15,
+      "max_grad_norm": 1,
+      "train_batch_size": 128
+    }
+  },
+  "e06defb5f0d6d32fecee8ded38fd1a44": {
+    "min_num": 0,
+    "min_loss": 3.2374308109283447,
+    "best_config": {
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "min_lr_ratio": 0,
+      "warmup": 500,
+      "beta1": 0.95,
+      "beta2": 0.99,
+      "shampoo_beta": 0.95,
+      "precondition_frequency": 1,
+      "partition_grads_into_blocks": false,
+      "block_size": 256,
+      "epsilon": 1e-15,
+      "max_grad_norm": 1,
+      "train_batch_size": 256
+    }
+  },
+  "29c547e9940634fd475e071377ca1231": {
+    "min_num": 1,
+    "min_loss": 5.4366679191589355,
+    "best_config": {
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "min_lr_ratio": 0,
+      "warmup": 500,
+      "beta1": 0.95,
+      "beta2": 0.99,
+      "shampoo_beta": 0.95,
+      "precondition_frequency": 1,
+      "partition_grads_into_blocks": true,
+      "block_size": 256,
+      "epsilon": 1e-15,
+      "max_grad_norm": 1,
+      "train_batch_size": 128
+    }
+  },
+  "0c70a15a5d80c855e92d9c7a91e51c93": {
+    "min_num": 6,
+    "min_loss": 3.5440285205841064,
+    "best_config": {
+      "learning_rate": 0.004,
+      "weight_decay": 0,
+      "min_lr_ratio": 0,
+      "warmup": 4000,
+      "beta1": 0.95,
+      "beta2": 0.9,
+      "gamma": 0.0125,
+      "epsilon": 1e-07,
+      "max_grad_norm": 1,
+      "train_batch_size": 128
+    }
+  },
+  "81802267e3d1e1ce765eff5e587c776e": {
+    "min_num": 0,
+    "min_loss": 3.2379932403564453,
+    "best_config": {
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "min_lr_ratio": 0,
+      "warmup": 1000,
+      "beta1": 0.95,
+      "beta2": 0.99,
+      "shampoo_beta": 0.98,
+      "precondition_frequency": 10,
+      "partition_grads_into_blocks": true,
+      "block_size": 512,
+      "epsilon": 1e-15,
+      "max_grad_norm": 1,
+      "train_batch_size": 256
+    }
+  },
+  "746d01bd5fc9dc6e341bbf011f267bac": {
+    "min_num": 0,
+    "min_loss": 3.230889797210694,
+    "best_config": {
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "min_lr_ratio": 0,
+      "warmup": 1000,
+      "beta1": 0.95,
+      "beta2": 0.99,
+      "shampoo_beta": 0.9,
+      "precondition_frequency": 10,
+      "partition_grads_into_blocks": true,
+      "block_size": 512,
+      "epsilon": 1e-10,
+      "max_grad_norm": 1,
+      "train_batch_size": 128
+    }
+  },
+  "a77b332704c7ebfc1bfe9508b08b99d3": {
+    "min_num": 11,
+    "min_loss": 3.0788798332214355,
+    "best_config": {
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "min_lr_ratio": 0,
+      "warmup": 1000,
+      "beta1": 0.95,
+      "beta2": 0.99,
+      "shampoo_beta": 0.9,
+      "precondition_frequency": 10,
+      "partition_grads_into_blocks": true,
+      "block_size": 512,
+      "epsilon": 1e-10,
+      "max_grad_norm": 1,
+      "train_batch_size": 128
+    }
+  },
+  "5e085d269f1ad30cd7d3551732d35984": {
+    "min_num": 0,
+    "min_loss": 3.5291428565979004,
+    "best_config": {
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "min_lr_ratio": 0,
+      "warmup": 2000,
+      "beta1": 0.9,
+      "beta2": 0.98,
+      "epsilon": 1e-20,
+      "max_grad_norm": 1,
+      "nesterov": false,
+      "train_batch_size": 128
+    }
+  },
+  "1f36f0cfa3a51585236d5e8bf407a075": {
+    "min_num": 0,
+    "min_loss": 3.4077868461608887,
+    "best_config": {
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "min_lr_ratio": 0,
+      "warmup": 2000,
+      "beta1": 0.9,
+      "beta2": 0.98,
+      "epsilon": 1e-20,
+      "max_grad_norm": 1,
+      "nesterov": false,
+      "train_batch_size": 128
+    }
+  },
+  "d91892de0eab8435b8ade337726402cf": {
+    "min_num": 0,
+    "min_loss": 3.3216564655303955,
+    "best_config": {
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "min_lr_ratio": 0,
+      "warmup": 2000,
+      "beta1": 0.9,
+      "beta2": 0.98,
+      "epsilon": 1e-20,
+      "max_grad_norm": 1,
+      "nesterov": false,
+      "train_batch_size": 128
+    }
+  },
+  "437cdccfeb53f0dbde7dc5c69a3df8e4": {
+    "min_num": 0,
+    "min_loss": 3.260563611984253,
+    "best_config": {
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "min_lr_ratio": 0,
+      "warmup": 1000,
+      "beta1": 0.9,
+      "beta2": 0.98,
+      "epsilon": 1e-20,
+      "max_grad_norm": 1,
+      "nesterov": false,
+      "train_batch_size": 256
+    }
+  },
+  "39701d9a3b5ddcdf46cb4c3f782aa02b": {
+    "min_num": 0,
+    "min_loss": 3.262937307357788,
+    "best_config": {
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "min_lr_ratio": 0,
+      "warmup": 2000,
+      "beta1": 0.9,
+      "beta2": 0.98,
+      "epsilon": 1e-10,
+      "max_grad_norm": 1,
+      "nesterov": false,
+      "train_batch_size": 128
+    }
+  },
+  "4b40952a030a4559a5efd1a09e430276": {
+    "min_num": 0,
+    "min_loss": 3.109556198120117,
+    "best_config": {
+      "learning_rate": 0.004,
+      "weight_decay": 0.2,
+      "min_lr_ratio": 0,
+      "warmup": 1000,
+      "beta1": 0.9,
+      "beta2": 0.98,
+      "epsilon": 1e-10,
+      "max_grad_norm": 1,
+      "nesterov": false,
+      "train_batch_size": 256
+    }
+  },
+  "ec8853ffe84df1b63cecbfa845d19f5d": {
+    "min_num": 20,
+    "min_loss": 3.200423002243042,
+    "best_config": {
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "min_lr_ratio": 0,
+      "warmup": 2000,
+      "beta1": 0.95,
+      "beta2": 0.98,
+      "epsilon": 1e-10,
+      "max_grad_norm": 1,
+      "nesterov": true,
+      "train_batch_size": 256
+    }
+  },
+  "bb5b5e4260e0c3f69608ebc08827eb80": {
+    "min_num": 22,
+    "min_loss": 3.1911556720733643,
+    "best_config": {
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "min_lr_ratio": 0,
+      "warmup": 1000,
+      "beta1": 0.95,
+      "beta2": 0.99,
+      "shampoo_beta": 0.98,
+      "precondition_frequency": 10,
+      "partition_grads_into_blocks": true,
+      "block_size": 512,
+      "epsilon": 1e-10,
+      "max_grad_norm": 1,
+      "train_batch_size": 256
+    }
+  },
+  "236f491ef4f9fe2c7934ca7ac51873d0": {
+    "min_num": 32,
+    "min_loss": 3.2022271156311035,
+    "best_config": {
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "min_lr_ratio": 0,
+      "warmup": 0,
+      "momentum": 0.98,
+      "beta1": 0.8,
+      "beta2": 0.98,
+      "epsilon": 9.999999999999999e-26,
+      "muon_epsilon": 1e-05,
+      "max_grad_norm": 1,
+      "lr_schedule": "linear",
+      "muon_to_adam_lr": 0.3,
+      "decay": 1,
+      "train_batch_size": 128
+    }
+  },
+  "8e6e4ba8229aaa9a7646ef6534ef4c71": {
+    "min_num": 0,
+    "min_loss": 3.542064666748047,
+    "best_config": {
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "min_lr_ratio": 0,
+      "warmup": 2000,
+      "beta1": 0.9,
+      "beta2": 0.98,
+      "epsilon": 1e-15,
+      "max_grad_norm": 1,
+      "train_batch_size": 128
+    }
+  },
+  "5de0db80ddac704e347486a5471c5916": {
+    "min_num": 0,
+    "min_loss": 3.414708137512207,
+    "best_config": {
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "min_lr_ratio": 0,
+      "warmup": 2000,
+      "beta1": 0.9,
+      "beta2": 0.98,
+      "epsilon": 1e-20,
+      "max_grad_norm": 2,
+      "train_batch_size": 128
+    }
+  },
+  "43e31ce06db31b82df4c0bef966f8f8f": {
+    "min_num": 0,
+    "min_loss": 3.32792329788208,
+    "best_config": {
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "min_lr_ratio": 0,
+      "warmup": 2000,
+      "beta1": 0.9,
+      "beta2": 0.98,
+      "epsilon": 1e-10,
+      "max_grad_norm": 1,
+      "train_batch_size": 128
+    }
+  },
+  "3d35eb4b354fd98a60d1267c0fadb5c5": {
+    "min_num": 0,
+    "min_loss": 3.2635786533355713,
+    "best_config": {
+      "learning_rate": 0.008,
+      "weight_decay": 0.1,
+      "min_lr_ratio": 0,
+      "warmup": 2000,
+      "beta1": 0.9,
+      "beta2": 0.98,
+      "epsilon": 1e-10,
+      "max_grad_norm": 1,
+      "train_batch_size": 128
+    }
+  },
+  "b0f94094d8a056f459b08d03f5e1f400": {
+    "min_num": 7,
+    "min_loss": 3.272055149078369,
+    "best_config": {
+      "learning_rate": 0.004,
+      "weight_decay": 0.2,
+      "min_lr_ratio": 0,
+      "warmup": 2000,
+      "beta1": 0.9,
+      "beta2": 0.98,
+      "epsilon": 9.999999999999999e-26,
+      "max_grad_norm": 2,
+      "train_batch_size": 128
+    }
+  }
+}
