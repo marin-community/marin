@@ -102,3 +102,11 @@ class SimpleSFTConfig:
 
     allow_out_of_region_writes: bool = False
     """This makes less sense than reading across regions, but for completeness."""
+
+    z_loss_weight: float = 0.0
+
+    reinit_tokens: list[str] | bool = False
+    """
+    if set, will reinitialize the embeddings for the given tokens. If True, will reinitialize the default tokens
+    for llama3's tokenizer
+    """
