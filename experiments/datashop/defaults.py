@@ -3,17 +3,18 @@ from dataclasses import replace
 
 from experiments.anneal_config import AnnealConfig
 from experiments.datashop.default_configs import (
-    default_dataset_output_processor_config,
-    default_inference_config,
-    default_medu_config,
-    default_quality_filter_train_config,
-    default_text_generation_config,
+    default_dataset_output_processor_config_kwargs,
+    default_inference_config_kwargs,
+    default_medu_config_kwargs,
+    default_quality_filter_train_config_kwargs,
+    default_text_generation_config_kwargs,
 )
 from experiments.dclm.tokenize_dclm import dclm_components_llama3
 from experiments.defaults import default_anneal, default_tokenize
 from experiments.evals.resource_configs import ResourceConfig
 from experiments.llama import llama3_tokenizer
 from marin.classifiers.hf.launch_ray_training import LaunchConfig, launch_training_with_ray
+from marin.datashop.base_processor import DatasetOutputProcessorConfig
 from marin.datashop.pipeline import (
     MEDU_BENCHMARK_DESCRIPTION_PROMPT_FILENAME,
     MEDUPipelineConfig,
@@ -21,7 +22,6 @@ from marin.datashop.pipeline import (
     run_medu_dataset_sampling_pipeline,
 )
 from marin.execution.executor import ExecutorStep, output_path_of, this_output_path
-from marin.generation.dataset import DatasetOutputProcessorConfig
 from marin.generation.inference import TextGenerationInferenceConfig
 from marin.generation.inference import run_inference as run_generation_inference
 from marin.processing.classification.config.inference_config import InferenceConfig
@@ -37,8 +37,8 @@ def default_label(
     experiment_name: str,
     resource_config: ResourceConfig,
     data_filter_prompt: str | None = None,
-    medu_pipeline_config: MEDUPipelineConfig | None = None,
-    text_generation_inference_config: TextGenerationInferenceConfig | None = None,
+    medu_pipeline_config_kwargs: dict | None = None,
+    text_generation_inference_config: dict | None = None,
 ):
     """Label a set of documents with an LLM given some targeted documents.
 
@@ -65,14 +65,18 @@ def default_label(
     # default quality teacher model.
     # If the user does not provide a data filter prompt, we generate one using the MEDU pipeline.
     if data_filter_prompt is None:
-        if medu_pipeline_config is None:
-            medu_pipeline_config = default_medu_config
+        if medu_pipeline_config_kwargs is None:
+            medu_pipeline_config_kwargs = default_medu_config_kwargs
+        else:
+            # Merge default kwargs with passed-in kwargs, with passed-in values taking precedence
+            medu_pipeline_config_kwargs = {**default_medu_config_kwargs, **medu_pipeline_config_kwargs}
 
-        medu_pipeline_config = replace(
-            medu_pipeline_config,
+        medu_pipeline_config = MEDUPipelineConfig(
             corpus_contents=targeted_documents,
             input_path=documents_to_be_labeled,
+            output_path=this_output_path(),
             resource_config=resource_config,
+            **medu_pipeline_config_kwargs,
         )
 
         data_filter_generated_prompt = ExecutorStep(
@@ -88,15 +92,21 @@ def default_label(
 
     # NOTE(chris): Assuming we are filtering from a jsonl.zst file such as DCLM.
     if text_generation_inference_config is None:
-        text_generation_inference_config = default_text_generation_config
+        text_generation_inference_config_kwargs = default_text_generation_config_kwargs
+    else:
+        text_generation_inference_config_kwargs = {
+            **default_text_generation_config_kwargs,
+            **text_generation_inference_config_kwargs,
+        }
 
-    text_generation_inference_config = replace(
-        text_generation_inference_config,
+    text_generation_inference_config = TextGenerationInferenceConfig(
         input_path=documents_to_be_labeled,
+        output_path=this_output_path(),
         template=data_filter_prompt,
         template_path=data_filter_prompt_path,
         tensor_parallel_size=resource_config.num_tpu,
         resource_config=resource_config,
+        **text_generation_inference_config_kwargs,
     )
 
     return ExecutorStep(
@@ -111,8 +121,8 @@ def default_train_quality_model(
     labeled_documents: ExecutorStep,
     experiment_name: str,
     resource_config: ResourceConfig,
-    dataset_processor_config: DatasetOutputProcessorConfig | None = None,
-    quality_train_config: LaunchConfig | None = None,
+    dataset_processor_config_kwargs: dict | None = None,
+    quality_train_config_kwargs: dict | None = None,
 ):
     """Train a quality filter model based on the set of labeled documents.
 
@@ -124,26 +134,38 @@ def default_train_quality_model(
     Outputs:
         An ExecutorStep that represents the quality filter model.
     """
-    if dataset_processor_config is None:
-        dataset_processor_config = default_dataset_output_processor_config
+    if dataset_processor_config_kwargs is None:
+        dataset_processor_config_kwargs = default_dataset_output_processor_config_kwargs
+    else:
+        dataset_processor_config_kwargs = {
+            **default_dataset_output_processor_config_kwargs,
+            **dataset_processor_config_kwargs,
+        }
 
-    dataset_processor_config = replace(
-        dataset_processor_config,
-        input_path=output_path_of(labeled_documents),
+    dataset_output_processor_config = DatasetOutputProcessorConfig(
+        input_path=output_path_of(labeled_documents), output_path=this_output_path(), **dataset_processor_config_kwargs
     )
 
     dataset = ExecutorStep(
         name=f"documents/datashop-datasets/{experiment_name}",
         fn=run_medu_dataset_sampling_pipeline,
-        config=dataset_processor_config,
+        config=dataset_output_processor_config,
     ).cd("sampled")
 
-    if quality_train_config is None:
-        quality_train_config = replace(default_quality_filter_train_config, resource_config=resource_config)
+    if quality_train_config_kwargs is None:
+        quality_train_config_kwargs = default_quality_filter_train_config_kwargs
+    else:
+        quality_train_config_kwargs = {**default_quality_filter_train_config_kwargs, **quality_train_config_kwargs}
 
-    quality_train_config.training_config.train_dataset = dataset
-    quality_train_config.training_config.tpu_num_cores = resource_config.num_tpu
-    quality_train_config.training_config.run_name = f"datashop-classifier-{experiment_name}"
+    training_config = quality_train_config_kwargs["training_config"]
+    training_config = replace(
+        training_config,
+        train_dataset=dataset,
+        tpu_num_cores=resource_config.num_tpu,
+        run_name=f"datashop-classifier-{experiment_name}",
+    )
+
+    quality_train_config = LaunchConfig(training_config=training_config, resource_config=resource_config)
 
     datashop_classifier_remote = ExecutorStep(
         name=f"classifiers/datashop-bert/{experiment_name}", fn=launch_training_with_ray, config=quality_train_config
@@ -169,7 +191,7 @@ def default_quality_filter_and_consolidate(
     experiment_name: str,
     keep_fraction: int = 0.10,
     filetype: str = "jsonl.zst",
-    inference_config: InferenceConfig | None = None,
+    inference_config_kwargs: dict | None = None,
 ):
     """Runs quality filtering and consolidation on an input dataset given the quality filter model.
 
@@ -194,11 +216,17 @@ def default_quality_filter_and_consolidate(
     if isinstance(input_data_path, ExecutorStep):
         input_data_path = output_path_of(input_data_path)
 
-    if inference_config is None:
-        inference_config = default_inference_config
+    if inference_config_kwargs is None:
+        inference_config_kwargs = default_inference_config_kwargs
+    else:
+        inference_config_kwargs = {**default_inference_config_kwargs, **inference_config_kwargs}
 
-    inference_config = replace(
-        inference_config, input_path=input_data_path, model_name=model_path, attribute_name=f"datashop-{experiment_name}"
+    inference_config = InferenceConfig(
+        input_path=input_data_path,
+        output_path=this_output_path(),
+        model_name=model_path,
+        attribute_name=f"datashop-{experiment_name}",
+        **inference_config_kwargs,
     )
 
     attributes = ExecutorStep(

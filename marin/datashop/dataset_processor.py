@@ -1,7 +1,7 @@
 import re
 from typing import ClassVar
 
-from marin.generation.dataset import DatasetOutputProcessor
+from marin.datashop.base_processor import DatasetOutputProcessor
 
 
 class MeduDatasetOutputProcessor(DatasetOutputProcessor):
