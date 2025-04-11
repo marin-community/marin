@@ -1,10 +1,12 @@
 #!/usr/bin/python
 # This script manually spins up a TPU slice and connects it to the provided Ray cluster head node.
-# Usage: python infra/manual_ray_worker_launch.py --cluster_yaml <cluster_yaml> --head <head-node-ip>\
+# Usage: python infra/manual_ray_worker_launch.py --cluster_yaml <cluster_yaml> [--head <head-node-ip>]\
 #          --tpu_type <tpu_type> [--project <project> --zone <zone> --tpu_name <tpu_name> --version <version>]\
 #          [--reserved | --preemptible | --best_effort]
 
 import argparse
+import json
+import subprocess
 import tempfile
 
 import levanter.infra.cli_helpers as cli
@@ -18,12 +20,46 @@ TPU_TYPE_TO_VM_IMAGE = {
 }
 
 
+def get_head_node_ip(cluster_name, region, zone):
+    """Get the internal IP of the head node by querying GCP instances with Ray cluster labels."""
+    try:
+        # Query GCP instances with the appropriate Ray cluster labels
+        cmd = [
+            "gcloud",
+            "compute",
+            "instances",
+            "list",
+            f"--filter=labels.ray-node-type=head AND labels.ray-cluster-name={cluster_name}",
+            "--format=json",
+            f"--zones={zone}",  # Use the exact zone from the cluster config
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        result.check_returncode()
+
+        instances = json.loads(result.stdout)
+        if not instances:
+            raise RuntimeError(f"No head node found for cluster {cluster_name} in zone {zone}")
+
+        # Get the internal IP of the first matching instance
+        return instances[0]["networkInterfaces"][0]["networkIP"]
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(f"Failed to query GCP instances: {e.stderr}") from e
+    except Exception as e:
+        raise RuntimeError(f"Failed to get head node IP: {e!s}") from e
+
+
 def main():
     parser = argparse.ArgumentParser()
     config = cli.load_config()
 
     cli.add_arg(parser, config, ["--cluster_yaml"], required=True)
-    cli.add_arg(parser, config, ["--head"], required=True, help="address of head node")
+    cli.add_arg(
+        parser,
+        config,
+        ["--head"],
+        required=False,
+        help="address of head node. If not provided, will automatically find the head node of the specified cluster",
+    )
     cli.add_capacity_type_args(parser, config)
     cli.add_arg(parser, config, ["--project"], default=cli.gcloud_config()["project"])
     cli.add_arg(parser, config, ["--tpu_name"], required=False, default=None)
@@ -35,6 +71,14 @@ def main():
 
     args = parser.parse_args()
 
+    # Load cluster config once and reuse it
+    with open(args.cluster_yaml, "r") as f:
+        cluster_config = yaml.safe_load(f)
+
+    cluster_name = cluster_config["cluster_name"]
+    region = cluster_config["provider"]["region"]
+    zone = cluster_config["provider"]["availability_zone"]
+
     capacity_type = args.capacity_type
 
     tpu_type = args.tpu_type
@@ -44,9 +88,11 @@ def main():
         tpu_name = f"ray-worker-manual-{cli.default_run_id()}"
     tpu_gen = tpu_type.split("-")[0]
     version = args.version or TPU_TYPE_TO_VM_IMAGE.get(tpu_gen, "tpu-ubuntu2204-base")
-    zone = args.zone
 
     head = args.head
+    if head is None:
+        head = get_head_node_ip(cluster_name, region, zone)
+        print(f"Found head node IP for cluster {cluster_name}: {head}")
 
     if zone is None:
         zone = cli.gcloud_config()["zone"]
@@ -54,15 +100,12 @@ def main():
     if zone is None:
         raise ValueError("Zone must be specified or set in gcloud config.")
 
-    with open(args.cluster_yaml, "r") as f:
-        cluster_yaml = yaml.safe_load(f)
+    image_id = cluster_config["docker"]["image"]
+    container_name = cluster_config["docker"].get("container_name", "ray")
+    worker_run_options = cluster_config["docker"].get("worker_run_options", ["-v", "/tmp:/tmp"])
 
-    image_id = cluster_yaml["docker"]["image"]
-    container_name = cluster_yaml["docker"].get("container_name", "ray")
-    worker_run_options = cluster_yaml["docker"].get("worker_run_options", ["-v", "/tmp:/tmp"])
-
-    initialization_commands = cluster_yaml.get("initialization_commands", [])
-    setup_commands = cluster_yaml.get("setup_commands", [])
+    initialization_commands = cluster_config.get("initialization_commands", [])
+    setup_commands = cluster_config.get("setup_commands", [])
 
     entry_command = f"ray start --address={head}:6379 --block"
     # TODO: would be friendlier to also sniff out the head and docker image from the cluster yaml
