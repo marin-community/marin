@@ -1,5 +1,6 @@
 from experiments.datashop.datashop_datasets import datashop_dclm_annotation_subset, datashop_dclm_pretraining_subset
 from experiments.datashop.datashop_runner import DatashopRunner, DatashopRunnerConfig
+from experiments.datashop.default_configs import default_dataset_output_processor_config
 
 FINEMATH_DATA_FILTER_PROMPT = """
 Evaluate the following text extract for its potential usefulness for studying mathematics up to high school and early undergraduate levels. Use the following 5-point scoring system described below. Points are accumulated based on the satisfaction of
@@ -24,6 +25,9 @@ After examining the extract:
 - Conclude with the score using the format: Final score: <total points>.
 """  # noqa: E501, RUF001
 
+default_dataset_output_processor_config = default_dataset_output_processor_config
+default_dataset_output_processor_config.processor_type = "final-score0-5"
+
 datashop_runner = DatashopRunner(
     DatashopRunnerConfig(
         experiment_name="finemath-replication",
@@ -31,8 +35,9 @@ datashop_runner = DatashopRunner(
         pretraining_data_path=datashop_dclm_pretraining_subset,
         annotator_data_path=datashop_dclm_annotation_subset,
         data_filter_prompt=FINEMATH_DATA_FILTER_PROMPT,
+        dataset_output_processor_config=default_dataset_output_processor_config,
     )
 )
 
 if __name__ == "__main__":
-    datashop_runner.run_eval_cluster_steps()
+    datashop_runner.run_all_steps()
