@@ -22,12 +22,7 @@ from experiments.datashop.defaults import (
     default_train_quality_model,
 )
 from experiments.evals.resource_configs import TPU_V6E_8_STRICT_PACK, ResourceConfig
-from marin.classifiers.hf.launch_ray_training import LaunchConfig
-from marin.datashop.pipeline import MEDUPipelineConfig
 from marin.execution.executor import executor_main
-from marin.generation.dataset import DatasetOutputProcessorConfig
-from marin.generation.inference import TextGenerationInferenceConfig
-from marin.processing.classification.config.inference_config import InferenceConfig
 
 
 @dataclass
@@ -64,19 +59,19 @@ class DatashopRunnerConfig:
     training_tpu_type: str = "v6e-128"
 
     # Config for MEDU Pipeline that generates the prompt from benchmark automatically
-    medu_pipeline_config: MEDUPipelineConfig | None = None
+    medu_pipeline_config_kwargs: dict | None = None
 
     # Config for dataset output processor to use
-    dataset_output_processor_config: DatasetOutputProcessorConfig | None = None
+    dataset_output_processor_config_kwargs: dict | None = None
 
     # Config for the quality filter model training
-    quality_train_config: LaunchConfig | None = None
+    quality_train_config_kwargs: dict | None = None
 
     # Config for generating text
-    text_generation_inference_config: TextGenerationInferenceConfig | None = None
+    text_generation_inference_config_kwargs: dict | None = None
 
     # Config for quality filter model inference
-    inference_config: InferenceConfig | None = None
+    inference_config_kwargs: dict | None = None
 
 
 class DatashopRunner:
@@ -90,22 +85,22 @@ class DatashopRunner:
             self.config.experiment_name,
             self.config.labeler_resource_config,
             self.config.data_filter_prompt,
-            self.config.medu_pipeline_config,
-            self.config.text_generation_inference_config,
+            self.config.medu_pipeline_config_kwargs,
+            self.config.text_generation_inference_config_kwargs,
         )
         self.encoder_model = default_train_quality_model(
             self.labeled_documents,
             self.config.experiment_name,
             self.config.labeler_resource_config,
-            self.config.dataset_output_processor_config,
-            self.config.quality_train_config,
+            self.config.dataset_output_processor_config_kwargs,
+            self.config.quality_train_config_kwargs,
         )
         self.filtered_documents = default_quality_filter_and_consolidate(
             self.encoder_model,
             self.config.pretraining_data_path,
             self.config.pretraining_data_path_name,
             self.config.experiment_name,
-            self.config.inference_config,
+            self.config.inference_config_kwargs,
         )
         self.control_model = default_candidate_anneal(
             None,
