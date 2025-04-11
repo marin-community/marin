@@ -1,15 +1,19 @@
 import os
-
-from transformers import AutoTokenizer
+from dataclasses import replace
 
 from experiments.anneal_config import AnnealConfig
+from experiments.datashop.default_configs import (
+    default_dataset_output_processor_config,
+    default_inference_config,
+    default_medu_config,
+    default_quality_filter_train_config,
+    default_text_generation_config,
+)
 from experiments.dclm.tokenize_dclm import dclm_components_llama3
 from experiments.defaults import default_anneal, default_tokenize
 from experiments.evals.resource_configs import ResourceConfig
 from experiments.llama import llama3_tokenizer
 from marin.classifiers.hf.launch_ray_training import LaunchConfig, launch_training_with_ray
-from marin.classifiers.hf.train_classifier import HFTrainingConfig
-from marin.core.runtime import TaskConfig
 from marin.datashop.pipeline import (
     MEDU_BENCHMARK_DESCRIPTION_PROMPT_FILENAME,
     MEDUPipelineConfig,
@@ -20,7 +24,7 @@ from marin.execution.executor import ExecutorStep, output_path_of, this_output_p
 from marin.generation.dataset import DatasetOutputProcessorConfig
 from marin.generation.inference import TextGenerationInferenceConfig
 from marin.generation.inference import run_inference as run_generation_inference
-from marin.processing.classification.config.inference_config import InferenceConfig, RuntimeConfig
+from marin.processing.classification.config.inference_config import InferenceConfig
 from marin.processing.classification.consolidate import ConsolidateConfig, FilterConfig, consolidate
 from marin.processing.classification.inference import run_inference
 from marin.processing.tokenize.data_configs import TokenizerStep, lm_mixture_data_config
@@ -33,6 +37,8 @@ def default_label(
     experiment_name: str,
     resource_config: ResourceConfig,
     data_filter_prompt: str | None = None,
+    medu_pipeline_config: MEDUPipelineConfig | None = None,
+    text_generation_inference_config: TextGenerationInferenceConfig | None = None,
 ):
     """Label a set of documents with an LLM given some targeted documents.
 
@@ -57,37 +63,22 @@ def default_label(
     # to train the quality filter model.
     # TODO(chris): Make this a parameter and support other models. As of now, we make Llama-70B-Instruct the
     # default quality teacher model.
-    quality_teacher_model = "/opt/gcsfuse_mount/models/meta-llama--Llama-3-3-70B-Instruct"
-    tokenizer = AutoTokenizer.from_pretrained(quality_teacher_model)
-
-    default_engine_kwargs = {
-        "tensor_parallel_size": resource_config.num_tpu,
-        "enforce_eager": False,
-        "max_model_len": 8192,
-    }
-
-    default_generation_kwargs = {
-        "temperature": 0.1,
-        "max_tokens": 1024,
-        "stop_token_ids": [tokenizer.eos_token_id, tokenizer.convert_tokens_to_ids("<|eot_id|>")],
-    }
-
     # If the user does not provide a data filter prompt, we generate one using the MEDU pipeline.
     if data_filter_prompt is None:
+        if medu_pipeline_config is None:
+            medu_pipeline_config = default_medu_config
+
+        medu_pipeline_config = replace(
+            medu_pipeline_config,
+            corpus_contents=targeted_documents,
+            input_path=documents_to_be_labeled,
+            resource_config=resource_config,
+        )
+
         data_filter_generated_prompt = ExecutorStep(
             name=f"documents/datashop-prompts/{experiment_name}",
             fn=run_data_filter_prompt_generation_pipeline,
-            config=MEDUPipelineConfig(
-                model_name=quality_teacher_model,
-                corpus_contents=targeted_documents,
-                input_path=documents_to_be_labeled,
-                output_path=this_output_path(),
-                engine_kwargs=default_engine_kwargs,
-                generation_kwargs=default_generation_kwargs,
-                filetype="jsonl.zst",
-                output_filetype_override="jsonl.gz",
-                resource_config=resource_config,
-            ),
+            config=medu_pipeline_config,
         )
         data_filter_prompt_path = output_path_of(
             data_filter_generated_prompt, MEDU_BENCHMARK_DESCRIPTION_PROMPT_FILENAME
@@ -96,30 +87,33 @@ def default_label(
         data_filter_prompt_path = None
 
     # NOTE(chris): Assuming we are filtering from a jsonl.zst file such as DCLM.
+    if text_generation_inference_config is None:
+        text_generation_inference_config = default_text_generation_config
+
+    text_generation_inference_config = replace(
+        text_generation_inference_config,
+        input_path=documents_to_be_labeled,
+        template=data_filter_prompt,
+        template_path=data_filter_prompt_path,
+        tensor_parallel_size=resource_config.num_tpu,
+        resource_config=resource_config,
+    )
+
     return ExecutorStep(
         name=f"documents/datashop-labels/{experiment_name}",
         fn=run_generation_inference,
-        config=TextGenerationInferenceConfig(
-            model_name=quality_teacher_model,
-            input_path=documents_to_be_labeled,
-            output_path=this_output_path(),
-            engine_kwargs=default_engine_kwargs,
-            generation_kwargs=default_generation_kwargs,
-            template=data_filter_prompt,
-            template_path=data_filter_prompt_path,
-            num_instances=(1, 128),
-            tensor_parallel_size=resource_config.num_tpu,
-            save_templated_prompt=False,
-            prompt_column="text",
-            filetype="jsonl.zst",
-            output_filetype_override="jsonl.gz",
-            resource_config=resource_config,
-        ),
+        config=text_generation_inference_config,
         override_output_path=f"documents/datashop-labels/{experiment_name}",
     )
 
 
-def default_train_quality_model(labeled_documents: ExecutorStep, experiment_name: str, resource_config: ResourceConfig):
+def default_train_quality_model(
+    labeled_documents: ExecutorStep,
+    experiment_name: str,
+    resource_config: ResourceConfig,
+    dataset_processor_config: DatasetOutputProcessorConfig | None = None,
+    quality_train_config: LaunchConfig | None = None,
+):
     """Train a quality filter model based on the set of labeled documents.
 
     Inputs:
@@ -130,35 +124,29 @@ def default_train_quality_model(labeled_documents: ExecutorStep, experiment_name
     Outputs:
         An ExecutorStep that represents the quality filter model.
     """
+    if dataset_processor_config is None:
+        dataset_processor_config = default_dataset_output_processor_config
+
+    dataset_processor_config = replace(
+        dataset_processor_config,
+        input_path=output_path_of(labeled_documents),
+    )
+
     dataset = ExecutorStep(
         name=f"documents/datashop-datasets/{experiment_name}",
         fn=run_medu_dataset_sampling_pipeline,
-        config=DatasetOutputProcessorConfig(
-            input_path=output_path_of(labeled_documents),
-            output_path=this_output_path(),
-        ),
+        config=dataset_processor_config,
     ).cd("sampled")
 
-    max_length = 512
+    if quality_train_config is None:
+        quality_train_config = replace(default_quality_filter_train_config, resource_config=resource_config)
+
+    quality_train_config.training_config.train_dataset = dataset
+    quality_train_config.training_config.tpu_num_cores = resource_config.num_tpu
+    quality_train_config.training_config.run_name = f"datashop-classifier-{experiment_name}"
+
     datashop_classifier_remote = ExecutorStep(
-        name=f"classifiers/datashop-bert/{experiment_name}",
-        fn=launch_training_with_ray,
-        config=LaunchConfig(
-            training_config=HFTrainingConfig(
-                train_dataset=dataset,
-                output_dir=this_output_path(),
-                num_labels=1,
-                target_column="label",
-                max_length=max_length,
-                train_size=0.9,
-                eval_steps=100,
-                save_steps=100,
-                logging_steps=10,
-                run_name=f"datashop-classifier-{experiment_name}-max-length-{max_length}",
-                tpu_num_cores=resource_config.num_tpu,
-            ),
-            resource_config=resource_config,
-        ),
+        name=f"classifiers/datashop-bert/{experiment_name}", fn=launch_training_with_ray, config=quality_train_config
     )
     # Download the model locally to GCSFuse mount path for inference
     datashop_classifier = ExecutorStep(
@@ -175,7 +163,13 @@ def default_train_quality_model(labeled_documents: ExecutorStep, experiment_name
 
 
 def default_quality_filter_and_consolidate(
-    encoder_model: ExecutorStep | str, input_data_path: str | ExecutorStep, input_data_name: str, experiment_name: str
+    encoder_model: ExecutorStep | str,
+    input_data_path: str | ExecutorStep,
+    input_data_name: str,
+    experiment_name: str,
+    keep_fraction: int = 0.10,
+    filetype: str = "jsonl.zst",
+    inference_config: InferenceConfig | None = None,
 ):
     """Runs quality filtering and consolidation on an input dataset given the quality filter model.
 
@@ -200,23 +194,17 @@ def default_quality_filter_and_consolidate(
     if isinstance(input_data_path, ExecutorStep):
         input_data_path = output_path_of(input_data_path)
 
+    if inference_config is None:
+        inference_config = default_inference_config
+
+    inference_config = replace(
+        inference_config, input_path=input_data_path, model_name=model_path, attribute_name=f"datashop-{experiment_name}"
+    )
+
     attributes = ExecutorStep(
         name=f"attributes/quality_filtering/datashop/{input_data_name}-{experiment_name}",
         fn=run_inference,
-        config=InferenceConfig(
-            input_path=input_data_path,
-            output_path=this_output_path(),
-            model_name=model_path,
-            model_type="gte",
-            attribute_name=f"datashop-{experiment_name}",
-            runtime=RuntimeConfig(
-                memory_limit_gb=12,
-                resources={"TPU": 1},
-            ),
-            task=TaskConfig(max_in_flight=500),
-            filetype="jsonl.zst",
-            classifier_kwargs={"max_length": 512},
-        ),
+        config=inference_config,
         pip_dependency_groups=[
             "--find-links https://storage.googleapis.com/libtpu-releases/index.html",
             "--find-links https://storage.googleapis.com/libtpu-wheels/index.html",
@@ -240,11 +228,11 @@ def default_quality_filter_and_consolidate(
                     attribute_path=output_path_of(attributes),
                     name=f"datashop-{experiment_name}",
                     label="score",
-                    keep_fraction=0.10,
+                    keep_fraction=keep_fraction,
                 ),
             ],
             ray_memory_limit_gb=12,
-            filetype="jsonl.zst",
+            filetype=filetype,
         ),
         pip_dependency_groups=["ddsketch"],
     )
