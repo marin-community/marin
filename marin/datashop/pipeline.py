@@ -10,7 +10,7 @@ import ray
 from transformers import AutoTokenizer
 
 from experiments.evals.resource_configs import TPU_V6E_8_STRICT_PACK, ResourceConfig
-from marin.datashop.dataset_processor import MeduDatasetOutputProcessor
+from marin.datashop.dataset_processor import DatasetOutputProcessor
 from marin.datashop.templates import (
     MEDU_BENCHMARK_DESCRIPTION_MERGING_TEMPLATE,
     MEDU_BENCHMARK_DESCRIPTION_TEMPLATE,
@@ -261,7 +261,8 @@ def run_medu_dataset_sampling_pipeline(config: DatasetOutputProcessorConfig):
     logger.info(f"Starting MEDU dataset sampling pipeline for {config.input_path}")
 
     convert_output_path = os.path.join(config.output_path, "converted")
-    processor = MeduDatasetOutputProcessor(config.input_path, convert_output_path)
+    # processor = FinemathDatasetOutputProcessor(config.input_path, convert_output_path)
+    processor = DatasetOutputProcessor.from_files(config.input_path, convert_output_path, config.processor_type)
     dataset_score_distribution = processor.convert_dataset()
     logger.info(f"Dataset score distribution: {dataset_score_distribution}")
     if -1 in dataset_score_distribution:

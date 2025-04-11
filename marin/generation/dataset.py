@@ -5,11 +5,13 @@ import random
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import ClassVar
 
 import fsspec
 import ray
 
 from marin.core.runtime import TaskConfig, map_files_in_directory
+from marin.datashop.dataset_processor import FinalScoreZeroToFiveDatasetOutputProcessor, MeduDatasetOutputProcessor
 
 logger = logging.getLogger("ray")
 
@@ -111,6 +113,7 @@ def convert_labeled_documents_to_scores(
 class DatasetOutputProcessorConfig:
     input_path: str
     output_path: str
+    processor_type: str
 
 
 class DatasetOutputProcessor:
@@ -127,11 +130,20 @@ class DatasetOutputProcessor:
         score_values: The list of score values (the possible values that the score can take on).
     """
 
-    def __init__(self, input_path: str, output_path: str, score_values: list[int]):
+    _PROCESSOR_TYPE_TO_CLS: ClassVar[dict] = {
+        "medu": MeduDatasetOutputProcessor,
+        "final-score0-5": FinalScoreZeroToFiveDatasetOutputProcessor,
+    }
+
+    def __init__(self, input_path: str, output_path: str, processor_type: str, score_values: list[int]):
         self.input_path = input_path
         self.output_path = output_path
         self.score_values = score_values
         self.score_distribution = {v: 0 for v in score_values}
+
+    @classmethod
+    def from_processor_type(cls, input_path, output_path, processor_type):
+        return DatasetOutputProcessor._PROCESSOR_TYPE_TO_CLS[processor_type](input_path, output_path)
 
     @abc.abstractmethod
     def extract_score(text: str) -> int:
