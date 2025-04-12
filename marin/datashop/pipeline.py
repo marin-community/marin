@@ -261,7 +261,7 @@ def run_medu_dataset_sampling_pipeline(config: DatasetOutputProcessorConfig):
     logger.info(f"Starting MEDU dataset sampling pipeline for {config.input_path}")
 
     convert_output_path = os.path.join(config.output_path, "converted")
-    processor = DatasetOutputProcessor.from_files(config.input_path, convert_output_path, config.processor_type)
+    processor = DatasetOutputProcessor.from_processor_type(config.input_path, convert_output_path, config.processor_type)
     dataset_score_distribution = processor.convert_dataset()
     logger.info(f"Dataset score distribution: {dataset_score_distribution}")
     if -1 in dataset_score_distribution:
