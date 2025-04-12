@@ -116,7 +116,7 @@ def simulated_epoching_train(
 
     Args:
         name:  The name of the training run. Will form the basis of the output path for the executor step.
-        tokenized:  The tokenized data to train on. This can be an InputName, ExecutorStep, or LMMixtureDatasetConfig.
+        tokenized:  The tokenized data to train on. This can be an InputName, or LMMixtureDatasetConfig.
         model_config: Levanter LmConfig for the model to train.
         train_config: SimpleTrainConfig for the training run.
         target_budget: Target token budget to simulate.
@@ -160,7 +160,7 @@ def default_train(
 
     Args:
         name:  The name of the training run. Will form the basis of the output path for the executor step.
-        tokenized:  The tokenized data to train on. This can be an InputName, ExecutorStep, or LMMixtureDatasetConfig.
+        tokenized:  The tokenized data to train on. This can be an InputName, or LMMixtureDatasetConfig.
         model_config: Levanter LmConfig for the model to train.
         train_config: SimpleTrainConfig for the training run.
         tags: Any additional tags to add to the Wandb tracker.
@@ -321,7 +321,7 @@ def default_sft(
     Args:
         name: The name of the training run, forms the basis of the output path.
         tokenized: The tokenized data to train on:
-                  - For single dataset: an InputName, ExecutorStep, or LMSupervisedDatasetConfig
+                  - For single dataset: an InputName, or LMSupervisedDatasetConfig
                   - For mixture: a Dict[str, SupervisedUrlSourceConfig] mapping dataset names to configs
         model_config: Levanter LlamaConfig for the model architecture to train.
         sft_config: Configuration for the SFT training process.
@@ -421,9 +421,7 @@ def default_sft(
             supervised_data = tokenized
             chat_train_urls = None
         else:
-            raise ValueError(
-                "For non-mixture SFT, tokenized should be an InputName, ExecutorStep, or LMSupervisedDatasetConfig"
-            )
+            raise ValueError("For non-mixture SFT, tokenized should be an InputName or LMSupervisedDatasetConfig")
 
         # Configure the single-dataset SFT
         inner_config = sft.SFTConfig(
