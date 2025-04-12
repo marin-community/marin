@@ -30,7 +30,7 @@ default_medu_config_kwargs = {
 default_text_generation_config_kwargs = {
     "model_name": quality_teacher_model,
     "engine_kwargs": default_engine_kwargs,
-    "generation_kwargs": default_engine_kwargs,
+    "generation_kwargs": default_generation_kwargs,
     "num_instances": (1, 128),
     "save_templated_prompt": False,
     "prompt_column": "text",
