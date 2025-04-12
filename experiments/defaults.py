@@ -219,6 +219,76 @@ def default_train(
     total_examples = schedule.global_data_offset_by_step(train_config.num_train_steps)
 
     checkpoint_path_to_load_from = train_config.initialize_from_checkpoint_path
+
+    # Create the inner config
+    inner_config = TrainLmConfig(
+        data=pretraining_data,
+        trainer=TrainerConfig(
+            tracker=WandbConfig(
+                project="marin",
+                tags=[*tags],
+            ),
+            mp=jmp.get_policy("p=f32,c=bfloat16"),
+            train_batch_size=train_config.train_batch_size,
+            num_train_steps=train_config.num_train_steps,
+            steps_per_eval=train_config.steps_per_eval if train_config.steps_per_eval is not None else 1000,
+            checkpointer=CheckpointerConfig(
+                save_interval=timedelta(minutes=30),
+                keep=[dict(every=steps_per_export)],
+            ),
+            model_averaging=model_averaging,
+            replica_dcn_axis_size=-1,
+            allow_partial_checkpoint=train_config.allow_partial_checkpoint,
+            per_device_eval_parallelism=per_device_eval_parallelism,
+            allow_nondivisible_batch_size=True,
+            quantization=QuantizationConfig(int8=train_config.int8) if train_config.int8 else None,
+            initialize_from=None if train_config.reset_data_loader_on_init else checkpoint_path_to_load_from,
+            watch=train_config.watch,
+        ),
+        initialize_from_checkpoint_path=(
+            checkpoint_path_to_load_from if train_config.reset_data_loader_on_init else None
+        ),
+        z_loss_weight=train_config.z_loss_weight,
+        model=model_config,
+        optimizer=AdamConfig(
+            learning_rate=train_config.learning_rate,
+            weight_decay=(
+                train_config.weight_decay if train_config.weight_decay is not None else AdamConfig().weight_decay
+            ),
+            beta1=(train_config.beta1 if train_config.beta1 is not None else AdamConfig().beta1),
+            beta2=(train_config.beta2 if train_config.beta2 is not None else AdamConfig().beta2),
+            epsilon=(train_config.epsilon if train_config.epsilon is not None else AdamConfig().epsilon),
+            max_grad_norm=(
+                train_config.max_grad_norm if train_config.max_grad_norm is not None else AdamConfig().max_grad_norm
+            ),
+            warmup=(train_config.warmup if train_config.warmup is not None else AdamConfig().warmup),
+            rewarmup=(train_config.rewarmup if train_config.rewarmup is not None else AdamConfig().rewarmup),
+            decay=(train_config.decay if train_config.decay is not None else AdamConfig().decay),
+            lr_schedule=(train_config.lr_schedule if train_config.lr_schedule is not None else AdamConfig().lr_schedule),
+            cycle_length=train_config.cycle_length,  # can be int, list[int], or None
+            min_lr_ratio=(
+                train_config.min_lr_ratio if train_config.min_lr_ratio is not None else AdamConfig().min_lr_ratio
+            ),
+        ),
+        hf_save_steps=steps_per_export_hf,
+        data_seed=train_config.data_seed,
+        eval_harness_steps=train_config.steps_per_task_eval or 10000,
+        eval_harness=harness_config,
+    )
+
+    # Create the pod config
+    pod_config = PodConfig(
+        tpu_type=train_config.tpu_type,
+        node_count=train_config.node_count,
+    )
+
+    # Create the full config
+    config = TrainLmOnPodConfig(
+        config=inner_config,
+        pod_config=pod_config,
+        output_path=this_output_path(),
+    )
+
     return ExecutorStep(
         name=os.path.join("checkpoints", name),
         description=(
@@ -229,104 +299,7 @@ def default_train(
             f"= {total_examples * model_config.seq_len:,} tokens."
         ),
         fn=run_levanter_train_lm,
-        config=TrainLmOnPodConfig(
-            output_path=this_output_path(),
-            tpu_type=train_config.tpu_type,
-            node_count=train_config.node_count,
-            allow_out_of_region_reads=train_config.allow_out_of_region_reads,
-            allow_out_of_region_writes=train_config.allow_out_of_region_writes,
-            data=pretraining_data,
-            trainer=TrainerConfig(
-                tracker=WandbConfig(
-                    entity='stanford-mercury',
-                    project="optimizer-scaling",
-                    tags=[name, *tags],
-                ),
-                mp=jmp.get_policy("p=f32,c=bfloat16"),
-                train_batch_size=train_config.train_batch_size,
-                num_train_steps=train_config.num_train_steps,
-                steps_per_eval=train_config.steps_per_eval if train_config.steps_per_eval is not None else 1000,
-                checkpointer=CheckpointerConfig(
-                    save_interval=timedelta(minutes=30),
-                    keep=[dict(every=steps_per_export)],
-                ),
-                model_averaging=model_averaging,
-                replica_dcn_axis_size=-1,
-                allow_partial_checkpoint=train_config.allow_partial_checkpoint,
-                per_device_eval_parallelism=per_device_eval_parallelism,
-                allow_nondivisible_batch_size=True,
-                quantization=QuantizationConfig(int8=train_config.int8) if train_config.int8 else None,
-                initialize_from=None if train_config.reset_data_loader_on_init else checkpoint_path_to_load_from,
-            ),
-            initialize_from_checkpoint_path=(
-                checkpoint_path_to_load_from if train_config.reset_data_loader_on_init else None
-            ),
-            z_loss_weight=train_config.z_loss_weight,
-            model=model_config,
-            optimizer=AdamConfig(
-                learning_rate=train_config.learning_rate,
-                weight_decay=(
-                    train_config.weight_decay
-                    if train_config.weight_decay is not None
-                    else AdamConfig().weight_decay
-                ),
-                beta1=(
-                    train_config.beta1
-                    if train_config.beta1 is not None
-                    else AdamConfig().beta1
-                ),
-                beta2=(
-                    train_config.beta2
-                    if train_config.beta2 is not None
-                    else AdamConfig().beta2
-                ),
-                epsilon=(
-                    train_config.epsilon
-                    if train_config.epsilon is not None
-                    else AdamConfig().epsilon
-                ),
-                max_grad_norm=(
-                    train_config.max_grad_norm
-                    if train_config.max_grad_norm is not None
-                    else AdamConfig().max_grad_norm
-                ),
-                warmup=(
-                    train_config.warmup
-                    if train_config.warmup is not None
-                    else AdamConfig().warmup
-                ),
-                decay=(
-                    train_config.decay
-                    if train_config.decay is not None
-                    else AdamConfig().decay
-                ),
-                lr_schedule=(
-                    train_config.lr_schedule
-                    if train_config.lr_schedule is not None
-                    else AdamConfig().lr_schedule
-                ),
-                stable_lr_schedule=(
-                    train_config.stable_lr_schedule
-                    if train_config.stable_lr_schedule is not None
-                    else AdamConfig().stable_lr_schedule
-                ),
-                nesterov=(
-                    train_config.nesterov
-                    if train_config.nesterov is not None
-                    else AdamConfig().nesterov
-                ),
-                cycle_length=train_config.cycle_length,  # can be int, list[int], or None
-                min_lr_ratio=(
-                    train_config.min_lr_ratio
-                    if train_config.min_lr_ratio is not None
-                    else AdamConfig().min_lr_ratio
-                ),
-            ),
-            hf_save_steps=steps_per_export_hf,
-            data_seed=train_config.data_seed,
-            eval_harness_steps=train_config.steps_per_task_eval or 10000,
-            eval_harness=harness_config,
-        ),
+        config=config,
         pip_dependency_groups=["tokenize_train"],
     )
 

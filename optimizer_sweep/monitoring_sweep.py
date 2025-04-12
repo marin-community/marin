@@ -92,6 +92,7 @@ def process_optimizer(optimizer, model_and_data_size, sweep_configs, position):
         optimizer_results[(model_size, data_size)]["min_num"] = min_num_left
         optimizer_results[(model_size, data_size)]["min_loss"] = min_loss
         optimizer_results[(model_size, data_size)]["best_config"] = best_config
+        optimizer_results[(model_size, data_size)]["approximate_best_config_list"] = approximate_best_config_list
         # Save to cache
         cache[cache_key] = optimizer_results[(model_size, data_size)]
         save_cache(cache)
@@ -121,11 +122,7 @@ key_of_optimizer['sophia'] = ['learning_rate', 'weight_decay', 'min_lr_ratio', '
 key_of_optimizer['soape'] = key_of_optimizer['soap']
 key_of_optimizer['soapb'] = key_of_optimizer['soap']
 key_of_optimizer['adamw'] = ['learning_rate', 'weight_decay', 'min_lr_ratio', 'warmup', 'beta1', 'beta2', 'epsilon', 'max_grad_norm', 'nesterov', 'train_batch_size']
-
-
-key_of_optimizer = {}
 key_of_optimizer['mini'] = ['learning_rate', 'weight_decay', 'min_lr_ratio', 'warmup', 'beta1', 'beta2', 'epsilon', 'max_grad_norm', 'train_batch_size']
-key_of_optimizer['scion'] = ['learning_rate', 'weight_decay', 'min_lr_ratio', 'warmup', 'momentum', 'beta1', 'scion_epsilon', 'max_grad_norm', 'lr_schedule', 'scion_to_signum_lr', 'decay', 'train_batch_size']
 
 def process_with_index(idx, process_funcs, optimizer_keys):
     """Helper function to avoid using lambda"""
