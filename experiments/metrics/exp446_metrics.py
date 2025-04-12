@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 import fsspec
 
 from experiments.metrics.gcp_related import NumRestartConfig, get_gcp_restart_events
+from experiments.metrics.gcp_spending import GcpSpendingConfig, get_gcp_spending_metrics
 from experiments.metrics.github_related import (
     GithubApiConfig,
     GithubIssueConfig,
@@ -51,6 +52,14 @@ def compute_metrics(save_path: str) -> dict:
     final_metrics["Ray restart events"] = events
 
     logger.info("Number of Ray cluster restarts: %s", final_metrics["Number of Ray cluster restarts"])
+
+    # Get GCP spending metrics
+    gcp_spending = get_gcp_spending_metrics(
+        GcpSpendingConfig(project_id=os.getenv("GCP_PROJECT_ID", "hai-gcp-models"))
+    )
+    final_metrics["GCP Spending"] = gcp_spending
+    
+    logger.info("GCP total cost: $%0.2f", gcp_spending["total_cost"])
 
     # get all runs; num_days=-1 means all runs
     experiment_metrics = calculate_wandb_metrics(

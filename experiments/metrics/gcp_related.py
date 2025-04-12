@@ -14,7 +14,7 @@ class GcpApiConfig:
 
 @dataclass
 class NumRestartConfig(GcpApiConfig):
-    instance_substr: str = "ray-marin-us-central2-head"
+    instance_substr: str = "ray-marin"  # Track all Ray clusters across regions
 
 
 def get_gcp_restart_events(config: NumRestartConfig) -> list[dict]:
@@ -36,6 +36,9 @@ def get_gcp_restart_events(config: NumRestartConfig) -> list[dict]:
     """
     # Run the query to get logs matching the filter
     entries = client.list_entries(filter_=log_filter, order_by=gcp_logging.DESCENDING)
+
+    print(f"Found {entries.total_count} entries matching filter: {log_filter}")
+    print(f"First entry: {entries[0]}")
 
     # Process and return the relevant log entries
     events = {}
