@@ -30,4 +30,4 @@ datashop_runner = DatashopRunner(
 )
 
 if __name__ == "__main__":
-    datashop_runner.run_eval_cluster_steps()
+    datashop_runner.run_all_steps()
