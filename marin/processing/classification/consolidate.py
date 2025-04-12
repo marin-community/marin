@@ -53,6 +53,9 @@ class FilterConfig:
     keep_fraction: float | None = None
     """Keep documents where the score is in the top percentile. Calculates the threshold from the entire dataset."""
 
+    upper_threshold: float | None = None
+    """Keep documents where the value is below this."""
+
 
 @dataclass(frozen=True)
 class ConsolidateConfig:
@@ -76,7 +79,11 @@ class ConsolidateConfig:
     """The memory limit for the task in GB."""
 
 
-CORPUS_TYPE_TO_ID_COLUMN = {"dolma": "id", "dclm": "metadata/WARC-Record-ID"}
+# Dictionary-based navigation guide for extracting IDs from different corpus types
+CORPUS_TYPE_TO_ID_GUIDE = {
+    "dolma": {"key": "id"},  # Direct key access
+    "dclm": {"key": "metadata", "nested": {"key": "WARC-Record-ID"}},  # Nested dictionary access
+}
 
 
 def remove_spans(text: str, spans: list[list[int]]) -> str:
@@ -111,18 +118,32 @@ def apply_filter_remove_spans(
 
 def apply_filter_classify(input_data: dict, doc_filter: FilterConfig, id_to_attributes: dict[str, Any]) -> bool:
     attributes = id_to_attributes[input_data["id"]]
-    # Check attribute >= threshold?
-    filter_attribute = attributes[doc_filter.name]
 
-    if doc_filter.label is None:
-        return filter_attribute >= doc_filter.threshold
+    # Get value from attributes
+    attribute_value = attributes[doc_filter.name]
 
-    score = filter_attribute[doc_filter.label]
+    # Handle nested attributes structure if a label is specified
+    if doc_filter.label is not None:
+        if isinstance(attribute_value, dict) and doc_filter.label in attribute_value:
+            value = attribute_value[doc_filter.label]
+        else:
+            logger.warning(
+                f"Label {doc_filter.label} not found in attribute {doc_filter.name} for document {input_data['id']}"
+            )
+            return False
+    else:
+        # If no label specified, use the attribute value directly
+        # This handles cases like compression_ratio where the value is a scalar
+        value = attribute_value
 
-    if score >= doc_filter.threshold:
-        return True
+    # Check both lower and upper bounds if specified
+    if doc_filter.threshold is not None and value < doc_filter.threshold:
+        return False
 
-    return False
+    if doc_filter.upper_threshold is not None and value > doc_filter.upper_threshold:
+        return False
+
+    return True
 
 
 def get_corpus_type(filename: str) -> str:
@@ -133,33 +154,51 @@ def get_corpus_type(filename: str) -> str:
 
 
 def get_id_column_name(corpus_type: str) -> str:
-    if corpus_type == "dclm":
-        return CORPUS_TYPE_TO_ID_COLUMN[corpus_type].split("/")[0]
-    else:  # Assume it's in dolma format
-        return "id"
+    """Get the top-level key that contains the ID (or the ID itself for flat structures)."""
+    return CORPUS_TYPE_TO_ID_GUIDE[corpus_type]["key"]
 
 
-def get_nested_id_object(row: dict, corpus_type: str) -> str:
-    """The guide gives a path to the actual id value. We need this traversal when the id value is nested.
-    For example, the id value for the DCLM dataset is nested within the "metadata" column.
+def get_nested_id_object(row: dict, corpus_type: str) -> dict:
+    """
+    Extract the ID from a row using a dictionary-based navigation guide.
 
+    The guide specifies how to traverse the nested dictionary structure to find the ID.
+    For example, for DCLM dataset, the ID is nested within the "metadata" column under "WARC-Record-ID":
     {"metadata": {"WARC-Record-ID": "1234567890"}}
 
-    Our guide would be "metadata/WARC-Record-ID". The id_value that gets passed into this function
-    would be {"WARC-Record-ID": "1234567890"}. So, when we create the guide, it will have two elemnts
-    in the list: ["metadata", "WARC-Record-ID"]. We start traversing from the second element
-    and grab the value of "WARC-Record-ID" from the id_value.
+    Our guide for this would be:
+    {"key": "metadata", "nested": {"key": "WARC-Record-ID"}}
+
+    Args:
+        row: The row containing the document data
+        corpus_type: The type of corpus (e.g., "dclm", "dolma")
+
+    Returns:
+        The row with the "id" field set to the extracted ID
     """
-    id_column_guide = CORPUS_TYPE_TO_ID_COLUMN[corpus_type].split("/")
+    guide = CORPUS_TYPE_TO_ID_GUIDE[corpus_type]
 
-    if len(id_column_guide) == 1:
-        return row[id_column_guide[0]]
+    # Start with the top-level key
+    current_value = row[guide["key"]]
 
-    final_id_value = row[id_column_guide[0]]
-    for column_name in id_column_guide[1:]:
-        final_id_value = final_id_value[column_name]
+    # If there's no nested structure, we're done
+    if "nested" not in guide:
+        row["id"] = current_value
+        return row
 
-    row["id"] = final_id_value
+    # Navigate through nested keys
+    current_guide = guide["nested"]
+    while True:
+        current_value = current_value[current_guide["key"]]
+
+        # If there are no more nested levels, we've reached the ID
+        if "nested" not in current_guide:
+            break
+
+        # Move to the next level in the guide
+        current_guide = current_guide["nested"]
+
+    row["id"] = current_value
     return row
 
 

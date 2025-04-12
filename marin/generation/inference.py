@@ -1,13 +1,15 @@
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
+import fsspec
 import ray
 from ray.data import DataContext
 from ray.data.datasource import FilenameProvider
 
+from experiments.evals.resource_configs import TPU_V6E_8_STRICT_PACK, ResourceConfig
 from marin.generation.pipeline import vLLMTextGeneration
-from marin.generation.ray_utils import get_scheduling_strategy_fn
+from marin.generation.ray_utils import get_ray_remote_args_scheduling_strategy_fn
 from marin.utils import fsspec_glob
 
 
@@ -23,7 +25,8 @@ class TextGenerationInferenceConfig:
     generation_kwargs: dict[str, Any]
 
     # Prompting specific
-    template: str
+    template: str | None = None
+    template_path: str | None = None
     apply_chat_template: bool = True
     save_templated_prompt: bool = False
 
@@ -31,7 +34,7 @@ class TextGenerationInferenceConfig:
     num_instances: tuple[int, int] = (1, 4)
     batch_size: int = 32
     tensor_parallel_size: int = 1
-    preserve_order: bool = True
+    preserve_order: bool = False
     one_to_one_input_output_mapping: bool = False
 
     # File specific
@@ -39,6 +42,9 @@ class TextGenerationInferenceConfig:
     # If none, then we use the same filetype as the input if possible, if not then we use json.
     output_filetype_override: str | None = None
     prompt_column: str = "text"
+
+    # Hardware specific
+    resource_config: ResourceConfig = field(default_factory=lambda: TPU_V6E_8_STRICT_PACK)
 
 
 class OneToOneFilenameProvider(FilenameProvider):
@@ -78,9 +84,13 @@ def set_ray_data_config(config: TextGenerationInferenceConfig):
 
 def ray_resources_kwarg(config: TextGenerationInferenceConfig):
     if config.tensor_parallel_size == 1:
-        return {"resources": {"TPU": 1, "TPU-v6e-8-head": 1}}
+        return {"resources": {"TPU": 1, f"{config.resource_config.tpu_type}-head": 1}}
     else:
-        return {"ray_remote_args_fn": get_scheduling_strategy_fn(config.tensor_parallel_size)}
+        return {
+            "ray_remote_args_fn": get_ray_remote_args_scheduling_strategy_fn(
+                config.resource_config.num_tpu, config.resource_config.strategy
+            )
+        }
 
 
 def get_ray_data_read_kwargs(config: TextGenerationInferenceConfig):
@@ -117,6 +127,16 @@ def run_inference(config: TextGenerationInferenceConfig):
     ray_data_read_kwargs = get_ray_data_read_kwargs(config)
     ds = ray.data.read_json(config.input_path, **ray_data_read_kwargs)
 
+    assert (config.template_path or config.template) and not (
+        config.template_path and config.template
+    ), "Must provide either a template or a template path, but not both"
+
+    if config.template_path:
+        with fsspec.open(config.template_path, "r", compression="infer") as f:
+            template = str(f.read())
+    elif config.template:
+        template = config.template
+
     ds = ds.map_batches(  # Apply batch inference for all input data.
         vLLMTextGeneration,
         # Set the concurrency to the number of LLM instances.
@@ -127,7 +147,7 @@ def run_inference(config: TextGenerationInferenceConfig):
             "model_name": config.model_name,
             "engine_kwargs": config.engine_kwargs,
             "generation_kwargs": config.generation_kwargs,
-            "template": config.template,
+            "template": template,
             "prompt_column": config.prompt_column,
             "save_templated_prompt": config.save_templated_prompt,
             "apply_chat_template": config.apply_chat_template,

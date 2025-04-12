@@ -94,7 +94,6 @@ async def submit_and_track_job(entrypoint: str, dependencies: list, env_vars: di
         "env_vars": env_vars,
         "config": {"setup_timeout_seconds": 1800},
     }
-    print(dependencies)
 
     if len(dependencies) == 0:
         del runtime_dict["pip"]
@@ -109,6 +108,7 @@ async def submit_and_track_job(entrypoint: str, dependencies: list, env_vars: di
     # Submit the job with runtime environment and entrypoint
     submission_id = client.submit_job(entrypoint=entrypoint, runtime_env=runtime_dict)
     logger.info(f"Job submitted with ID: {submission_id}")
+    logger.info(f"Job URL: http://localhost:8265/#/jobs/{submission_id}")
 
     if no_wait:
         return

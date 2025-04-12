@@ -161,6 +161,10 @@ class ExecutorStep(Generic[ConfigT]):
         """Hash based on the ID (every object is different)."""
         return hash(id(self))
 
+    def with_output_path(self, output_path: str) -> "ExecutorStep":
+        """Return a copy of the step with the given output_path."""
+        return replace(self, override_output_path=output_path)
+
 
 @dataclass(frozen=True)
 class InputName:
@@ -171,6 +175,10 @@ class InputName:
 
     def cd(self, name: str) -> "InputName":
         return InputName(self.step, name=os.path.join(self.name, name) if self.name else name)
+
+    def __truediv__(self, other: str) -> "InputName":
+        """Alias for `cd`. That looks more Pythonic."""
+        return InputName(self.step, name=os.path.join(self.name, other) if self.name else other)
 
 
 def get_executor_step(run: ExecutorStep | InputName) -> ExecutorStep:
@@ -204,6 +212,10 @@ class OutputName:
 
 def this_output_path(name: str | None = None):
     return OutputName(name=name)
+
+
+# constant so we can use it in fields of dataclasses
+THIS_OUTPUT_PATH = OutputName(None)
 
 
 @dataclass(frozen=True)
@@ -503,9 +515,15 @@ class Executor:
             visited.add(step)
             in_stack.add(step)
 
-            for dep in self.dependencies[step]:
-                dfs(dep)
-            to_run.append(step)
+            info = self.step_infos[self.steps.index(step)]
+
+            # only run if the step hasn't already been run
+            if get_status(info.output_path, None, {}) not in [STATUS_SUCCESS]:
+                for dep in self.dependencies[step]:
+                    dfs(dep)
+                to_run.append(step)
+            else:
+                logger.info(f"Skipping {step.name}'s dependencies as it has already been run")
             in_stack.remove(step)
 
         for step in steps:
@@ -663,14 +681,6 @@ class Executor:
         with fsspec.open(self.executor_info_path, "w") as f:
             print(json.dumps(asdict(self.executor_info), indent=2, cls=CustomJsonEncoder), file=f)
 
-    def read_statuses(self):
-        """Read the statuses of all the steps."""
-
-        output_paths_list = list(self.output_paths.values())
-
-        status_values = ray.get(self.status_actor.get_statuses.remote(output_paths_list))
-        self.statuses = {key: status for key, status in zip(self.output_paths.keys(), status_values, strict=False)}
-
     def run_step(self, step: ExecutorStep, dry_run: bool, force_run_failed: bool) -> None:
         """
         Return a Ray object reference to the result of running the `step`.
@@ -693,7 +703,7 @@ class Executor:
         for i, dep in enumerate(self.dependencies[step]):
             logger.info(f"  {dependency_index_str(i)} = {self.output_paths[dep]}")
 
-        dependencies = [self.refs[dep] for dep in self.dependencies[step]]
+        dependencies = [self.refs[dep] for dep in self.dependencies[step] if dep in self.refs]
         name = f"execute_after_dependencies({get_fn_name(step.fn, short=True)})::{step.name})"
 
         if step.pip_dependency_groups is not None:
@@ -706,9 +716,7 @@ class Executor:
             self.refs[step] = execute_after_dependencies.options(
                 name=name,
                 runtime_env=RuntimeEnv(
-                    # pip=pip_dependencies,
-                    # TODO(chris): Fix this monkeypatch hack thing
-                    pip="experiments/scalingfilter/requirements.txt",
+                    pip=pip_dependencies,
                 ),
             ).remote(step.fn, step_name, config, dependencies, output_path, self.status_actor, force_run_failed)
         else:
@@ -947,7 +955,9 @@ class ExecutorMainConfig:
 @draccus.wrap()
 def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], description: str | None = None):
     """Main entry point for experiments (to standardize)"""
-    ray.init(namespace="marin")  # We need to init ray here to make sure we have the correct namespace for actors
+    ray.init(
+        namespace="marin", ignore_reinit_error=True
+    )  # We need to init ray here to make sure we have the correct namespace for actors
     # (status_actor in particular)
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")

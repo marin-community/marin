@@ -9,19 +9,22 @@ this_path = os.path.dirname(os.path.abspath(__file__))
 cluster_template_path = os.path.join(this_path, "marin-cluster-template.yaml")
 vllm_template_path = os.path.join(this_path, "marin-vllm-template.yaml")
 
-# LAtest tahs ABh:  latest 9491ec2a 20250209
+# LAtest tahs ABh:  latest 4a47ffc0 20250305
 
 DOCKER_TAGS = {
-    "us-central2": "89b461b3",
-    "big-run": "6da1c9ed",
+    "us-central2": "4a47ffc0",
+    "big-run": "4a47ffc0",
     "us-west4": "89b461b3",
     "europe-west4": "89b461b3",
-    "us-east1": "b63a1e90",
-    "us-east5": "6da1c9ed",
+    "us-east1": "89b461b3",
+    "us-east5": "89b461b3",
     # NB: different naming convention because we have two zones in europe-west4
-    "europe-west4-a": "6da1c9ed",
-    "asia-northeast1": "6da1c9ed",
+    "europe-west4-a": "89b461b3",
+    "asia-northeast1": "89b461b3",
     "marin-us-east5-b-vllm": "296d2ef0",
+    "marin-us-east1-d-vllm": "e43b1c0b",
+    "europe-west4-vllm": "7fab502e",
+    "marin-us-central2-vllm": "7a75233e",
 }
 
 configs = {
@@ -107,6 +110,36 @@ configs = {
         "min_workers": 2,
         "VLLM": True,
     },
+    "marin-eu-west4-vllm": {
+        "NAME": "marin-eu-west4-vllm",
+        "REGION": "europe-west4",
+        "ZONE": "europe-west4-b",
+        "BUCKET": "marin-eu-west4",
+        "DOCKER_TAG": DOCKER_TAGS["europe-west4-vllm"],
+        "tpu_generation": "v5e",
+        "min_workers": 2,
+        "VLLM": True,
+    },
+    "marin-us-central2-vllm": {
+        "NAME": "marin-us-central2-vllm",
+        "REGION": "us-central2",
+        "ZONE": "us-central2-b",
+        "BUCKET": "marin-us-central2",
+        "DOCKER_TAG": DOCKER_TAGS["marin-us-central2-vllm"],
+        "tpu_generation": "v4-serve",
+        "min_workers": 1,
+        "VLLM": True,
+    },
+    "marin-us-east1-d-vllm": {
+        "NAME": "marin-us-east1-d-vllm",
+        "REGION": "us-east1",
+        "ZONE": "us-east1-d",
+        "BUCKET": "marin-us-east1",
+        "DOCKER_TAG": DOCKER_TAGS["marin-us-east1-d-vllm"],
+        "tpu_generation": "v6e-serve",
+        "min_workers": 2,
+        "VLLM": True,
+    },
 }
 
 generation_configs = {
@@ -136,12 +169,20 @@ generation_configs = {
         "slices": [],
         "num_tpus": 8,
     },
+    "v4-serve": {
+        "runtime_version": "tpu-ubuntu2204-base",
+        "base_worker": "16",
+        "slices": [],
+        "num_tpus": 4,
+    },
 }
 
 
 def make_tpu_slice_config(generation, count) -> dict[str, dict]:
     slice_gen_name = "v5litepod" if generation == "v5e" else generation
-    slice_gen_name = "v6e" if generation == "v6e-serve" else slice_gen_name
+
+    if "serve" in generation:
+        slice_gen_name = generation.replace("-serve", "")
     name = f"tpu_slice_{generation}_{count}"
     return {
         name: {

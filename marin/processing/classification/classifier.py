@@ -11,9 +11,10 @@ import torch
 try:
     import torch_xla.core.xla_model as xm
 except ImportError:
-    pass
+    xm = None
 
 import fsspec
+import lz4.frame
 
 
 class BaseClassifier:
@@ -186,7 +187,7 @@ class FinewebEduClassifier(BERTClassifier):
         scores = self.predict(batch["text"])
 
         # Fineweb edu classifier is scored on educational value from 0 to 5, so we want to round to the nearest integer.
-        int_scores = [int(round(max(0, min(score, 5)))) for score in scores]
+        int_scores = [round(max(0, min(score, 5))) for score in scores]
         batch.update(
             {
                 "attributes": [
@@ -200,16 +201,16 @@ class FinewebEduClassifier(BERTClassifier):
 
 
 class GTEClassifier(FinewebEduClassifier):
+    """Classifier that uses the Alibaba-NLP/gte-base-en-v1.5 model to classify documents"""
+
     def __init__(self, model_name: str, attribute_name: str, max_length: int, *args, **kwargs):
         from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
         device = xm.xla_device()
-        # torch._dynamo.config.cache_size_limit = 128
 
         self.model = AutoModelForSequenceClassification.from_pretrained(
             model_name, trust_remote_code=True, output_hidden_states=False
         ).to(device)
-        # self.model = torch.compile(self.model, backend="openxla", fullgraph=True, dynamic=False)
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         self.attribute_name = attribute_name
         self.max_length = max_length
@@ -324,12 +325,40 @@ class PerplexityClassifier(BaseClassifier):
         return batch
 
 
+class CompressionClassifier(BaseClassifier):
+    """A classifier that calculates LZ4 compression ratios for text documents.
+
+    The compression ratio is calculated as (compressed_size / original_size).
+    Higher ratios indicate text that is harder to compress (potentially more random/noisy),
+    while lower ratios indicate text that compresses well (potentially more structured/repetitive).
+    """
+
+    def __init__(self, model_name: str, attribute_name: str, *args, **kwargs):
+        super().__init__(model_name, attribute_name)
+
+    def __call__(self, batch):
+        compression_ratios = []
+        for text in batch["text"]:
+            text_bytes = text.encode("utf-8")
+            # Handle empty text case
+            if len(text_bytes) == 0:
+                # Set a default ratio value for empty strings
+                ratio = 2.0
+            else:
+                compressed = lz4.frame.compress(text_bytes)
+                ratio = len(compressed) / len(text_bytes)
+
+            compression_ratios.append({self.attribute_name: ratio})
+        return {"attributes": compression_ratios}
+
+
 class AutoClassifier(BaseClassifier):
     _MODEL_NAME_TO_CLS_DICT: ClassVar[dict[str, BaseClassifier]] = {
         "fasttext": FasttextClassifier,
         "fineweb": FinewebEduClassifier,
         "gte": GTEClassifier,
         "perplexity": PerplexityClassifier,
+        "compression": CompressionClassifier,
     }
 
     def __init__(self, model_name: str, attribute_name: str, model_type: str | None, *args, **kwargs):
