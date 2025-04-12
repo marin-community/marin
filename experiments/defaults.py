@@ -353,6 +353,7 @@ def default_sft(
         steps_per_eval=sft_config.steps_per_eval,
         checkpointer=checkpointer_config,
         seed=sft_config.seed,
+        initialize_from=sft_config.model_name_or_path if not sft_config.initialize_from_hf else None,
     )
 
     optimizer_config = AdamConfig(
@@ -385,7 +386,11 @@ def default_sft(
             mixture_weights=mixture_weights,
             mixture_block_size=sft_config.mixture_block_size,
             tokenizer=sft_config.tokenizer,
-            model_name_or_path=sft_config.model_name_or_path,
+            model_name_or_path=(
+                sft_config.model_name_or_path
+                if sft_config.initialize_from_hf
+                else model_config.hf_checkpoint_converter().reference_checkpoint
+            ),
             initialize_from_hf=sft_config.initialize_from_hf,
             max_seq_len=sft_config.max_seq_len,
             hf_save_steps=sft_config.steps_per_hf_export,
@@ -428,13 +433,14 @@ def default_sft(
             supervised_data=supervised_data,
             chat_train_urls=chat_train_urls,
             tokenizer=sft_config.tokenizer,
-            model_name_or_path=sft_config.model_name_or_path,
+            model_name_or_path=sft_config.model_name_or_path if sft_config.initialize_from_hf else None,
             initialize_from_hf=sft_config.initialize_from_hf,
             max_seq_len=sft_config.max_seq_len,
             hf_save_steps=sft_config.steps_per_hf_export,
             messages_field="messages",
             input_role=sft_config.input_role,
             output_role=sft_config.output_role,
+            reinit_tokens=sft_config.reinit_tokens,
         )
 
         config = TrainSFTOnPodConfig(
