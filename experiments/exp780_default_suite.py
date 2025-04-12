@@ -10,7 +10,7 @@ from defaults import default_scaling_law_pred
 
 from experiments.evals.task_configs import CORE_TASKS
 from experiments.tootsie.exp600_tootsie import dclm_mixture_config_llama3
-from marin.execution.executor import executor_main
+from marin.execution.executor import executor_main, output_path_of
 from marin.scaling_laws.create_ladder_suite import scaling_law_suite
 
 default_suite = scaling_law_suite(
@@ -21,7 +21,7 @@ default_suite = scaling_law_suite(
 
 
 default_suite_scaling_laws_pred = default_scaling_law_pred(
-    ladder_runs=default_suite,
+    ladder_runs=[output_path_of(step) for step in default_suite],
     # TODO: corresponds to llama_8b_tootsie in exp600_tootsie.py; used wandb ID for now out of caution
     # to avoid accidentally re-running the 8B model
     pred_run="llama-8b-tootsie-0.001-19ad63",
@@ -38,8 +38,8 @@ default_suite_scaling_laws_pred = default_scaling_law_pred(
 if __name__ == "__main__":
     executor_main(
         steps=[
-            *default_suite,
-            # default_suite_scaling_laws_pred,
+            # *default_suite,
+            default_suite_scaling_laws_pred,
         ],
         description="suite + predictions for scaling laws on DCLM-Baseline+StarCoder+ProofPile mix",
     )
