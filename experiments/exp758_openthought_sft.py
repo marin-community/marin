@@ -48,7 +48,7 @@ openthoughts_sft_config = SimpleSFTConfig(
 # Create the SFT training step using the pre-defined 8B model config
 sft_step = default_sft(
     name="openthoughts_llama3_sft",
-    tokenized=openthoughts_llama_tokenize_step,
+    tokenized=output_path_of(openthoughts_llama_tokenize_step),
     model_config=llama_8b,
     sft_config=openthoughts_sft_config,
     tags=["openthoughts", "llama", "sft"],

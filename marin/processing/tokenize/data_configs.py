@@ -37,6 +37,9 @@ def lm_data_config(
         validation_sets: A sequence of validation sets to use
         shuffle: Whether to shuffle the data. If int, uses era shuffling.
     """
+    if isinstance(training_set, InputName):
+        training_set = training_set.step
+
     tokenizer = training_set.config.tokenizer
 
     if validation_sets is not None:

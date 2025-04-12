@@ -7,7 +7,7 @@ from experiments.defaults import default_train
 from experiments.exp72_baselines import fineweb_edu_tokenized
 from experiments.llama import llama_1_4b
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.execution.executor import executor_main
+from marin.execution.executor import executor_main, output_path_of
 
 llama_1_4b_wsds_train_config = SimpleTrainConfig(
     tpu_type="v4-128",
@@ -25,7 +25,7 @@ llama_1_4b_wsds_train_config = SimpleTrainConfig(
 
 fineweb_edu_model = default_train(
     name="fineweb-edu-1.4b-wsds",
-    tokenized=fineweb_edu_tokenized,
+    tokenized=output_path_of(fineweb_edu_tokenized),
     model_config=llama_1_4b,
     train_config=llama_1_4b_wsds_train_config,
 )

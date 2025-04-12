@@ -21,7 +21,7 @@ from experiments.defaults import default_tokenize, default_train
 from experiments.evals.evals import default_eval
 from experiments.exp822_stackexchange_markdownify import stackexchange_text_resiliparse_custom_fork
 from experiments.llama import llama3_tokenizer, llama_1_4b, llama_1_4b_train_config
-from marin.execution.executor import executor_main
+from marin.execution.executor import executor_main, output_path_of
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("ray")
@@ -51,7 +51,7 @@ def get_stack_exchange_training_steps(
 
     tokenized_stackexchange_1_4b_model = default_train(
         name=f"{name}-1.4b",
-        tokenized=tokenized_stackexchange,
+        tokenized=output_path_of(tokenized_stackexchange),
         model_config=llama_1_4b,
         train_config=llama_1_4b_train_config,
     )
