@@ -5,12 +5,10 @@ from marin.execution.executor import ExecutorMainConfig, executor_main
 executor_main_config = ExecutorMainConfig(force_run_failed=True)
 steps = [
     evaluate_alpaca_eval(
-        model_name="hypnotic_spoonbill_tulu_lr4e-4_6k",
-        model_path="gs://marin-us-central2/checkpoints/hypnotic_spoonbill_tulu_lr4e-4/hf/seed_0/57nwafni/step-5999/",
+        model_name="debug_double_check_best_main",
+        model_path="gs://marin-us-central2/checkpoints/hypnotic_spoonbill_tulu_lr1e-4/hf/seed_0/u5uhwdcn/step-4500/",
         resource_config=SINGLE_TPU_V6E_8,
         temperature=0.7,
-        frequency_penalty=2.0,
-        repetition_penalty=2.0,
     ),
 ]
 
