@@ -14,7 +14,7 @@ from experiments.defaults import default_anneal, default_tokenize
 from experiments.evals.resource_configs import ResourceConfig
 from experiments.llama import llama3_tokenizer
 from marin.classifiers.hf.launch_ray_training import LaunchConfig, launch_training_with_ray
-from marin.datashop.base_processor import DatasetOutputProcessorConfig
+from marin.datashop.dataset_processor import DatasetOutputProcessorConfig
 from marin.datashop.pipeline import (
     MEDU_BENCHMARK_DESCRIPTION_PROMPT_FILENAME,
     MEDUPipelineConfig,
