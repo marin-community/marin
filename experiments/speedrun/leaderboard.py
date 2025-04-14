@@ -28,29 +28,19 @@ class LeaderboardEntry:
 
 class Leaderboard:
     def __init__(self, base_path: str):
-        """
-        Initialize leaderboard with path containing run directories.
-        
-        Args:
-            base_path: Storage path like 'gs://bucket/path/to/runs' or '/path/to/runs'
-        """
         self.base_path = base_path.rstrip('/')
         scheme = base_path.split('://', 1)[0] if '://' in base_path else 'file'
         self.fs = fsspec.filesystem(scheme)
         
     def _find_analysis_files(self) -> List[str]:
-        """Find all speedrun analysis JSON files in storage."""
         pattern = f"{self.base_path}/**/speedrun_analysis.json"
         return self.fs.glob(pattern)
     
     def _load_analysis_file(self, path: str) -> dict:
-        """Load a single analysis file from storage."""
         with self.fs.open(path, 'r') as f:
             return json.load(f)
             
     def _create_entry_from_analysis(self, analysis: dict, storage_path: str) -> LeaderboardEntry:
-        """Create a leaderboard entry from analysis data."""
-        # Extract run name from storage path
         run_name = Path(storage_path).parent.name
         
         budget_flops = analysis['compute_budget']['flops_budget_for_track']
@@ -92,7 +82,6 @@ class Leaderboard:
         )
     
     def get_entries(self) -> List[LeaderboardEntry]:
-        """Load and return all leaderboard entries from storage."""
         entries = []
         analysis_files = self._find_analysis_files()
         
@@ -107,11 +96,9 @@ class Leaderboard:
         return entries
     
     def get_entries_by_track(self, track: str) -> List[LeaderboardEntry]:
-        """Get entries filtered by compute budget track."""
         return [e for e in self.get_entries() if e.compute_budget_track == track]
     
     def format_leaderboard(self, track: Optional[str] = None) -> str:
-        """Format the leaderboard as a markdown table."""
         entries = self.get_entries_by_track(track) if track else self.get_entries()
         
         if not entries:
@@ -120,7 +107,7 @@ class Leaderboard:
         # Sort by FLOPs used (lower is better)
         entries.sort(key=lambda x: x.final_flops_used, reverse=True)
         
-        header = "| Rank | Run Name | Budget Track | Model Size | Training Time (min) | FLOPs Used | LM Eval Acc | C4 BPB |\n"
+        header = "| Rank | Run Name | Budget Track | Model Size | Training Time (min) | FLOPs Used | LM Eval Acc | C4-EN BPB |\n"
         separator = "|------|----------|--------------|------------|-------------------|-------------|------------|---------|\n"
         
         rows = []
@@ -137,6 +124,8 @@ def serve_leaderboard(storage_path: str, port: int = 8000):
     """
     Serve the leaderboard UI reading from storage.
     Creates a temporary JSON file for the web UI to read.
+    NOTE: this can eventually be the JSON file that users upload their run info to, 
+    but for now this is auto-populated by us.
     """
     from pathlib import Path
     import http.server
@@ -153,7 +142,7 @@ def serve_leaderboard(storage_path: str, port: int = 8000):
     
     # Write current entries to JSON file for UI
     entries = leaderboard.get_entries()
-    with open(data_dir / "leaderboard.json", 'w') as f:
+    with open(data_dir / "runs.json", 'w') as f:
         json.dump([{
             "run_name": e.run_name,
             "compute_budget_track": e.compute_budget_track,

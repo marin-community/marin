@@ -229,7 +229,7 @@ def default_speedrun(
     run_tags = ["speedrun", f"budget_{config.compute_budget.name}"] + (tags or [])
     train_step = default_train(
         name=f"speedrun/{name}",
-        tokenized=config.tokenized_dataset,
+        tokenized=config.tokenized_dataset, #TODO (Nikil): need to fix dataset for model track, and also have a fixed seed so everyone sees the same tokens
         model_config=dataclasses.replace(config.model_config),
         train_config=config.train_config,
         tags=run_tags,
