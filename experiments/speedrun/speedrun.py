@@ -19,15 +19,17 @@ from levanter.compat.hf_checkpoints import load_tokenizer
 from levanter.data.text import LMMixtureDatasetConfig
 from levanter.models.lm_model import LmConfig
 
-from experiments.defaults import default_train
+from experiments.defaults import default_train, _get_tokenizer_for_train
 from experiments.evals.task_configs import CORE_TASKS_PLUS_MMLU
-from experiments.llama import compute_num_parameters
+from experiments.llama import compute_num_parameters, llama3_tokenizer_vocab_size
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import ExecutorStep, InputName, output_path_of, unwrap_versioned_value
 from marin.training.training import TrainLmOnPodConfig
 
 logger = logging.getLogger("ray")
 
+
+### Configuration classes ###
 
 @dataclass
 class HardwareConfig:
@@ -48,13 +50,18 @@ class SpeedrunConfig:
     compute_budget: ComputeBudget
     model_config: LmConfig
     train_config: SimpleTrainConfig | TrainLmOnPodConfig
-    tokenized_dataset: InputName | ExecutorStep | LMMixtureDatasetConfig
+    tokenized_dataset: InputName | LMMixtureDatasetConfig
     hardware_config: HardwareConfig
     hyperparameter_scaling: Callable[[LmConfig, ComputeBudget], dict] | None = None
+    mfu_estimate: float = 0.5
 
     @property
     def vocab_size(self) -> int:
-        return load_tokenizer(unwrap_versioned_value(self.tokenized_dataset.tokenizer)).vocab_size
+
+        # TODO (Nikil): this doesn't interact well with different types (InputName, LMMixtureDatasetConfig, ExecutorStep)
+        # Need to change this to automatically figure out vocab size
+        # return load_tokenizer(unwrap_versioned_value(self.tokenized_dataset.tokenizer)).vocab_size
+        return llama3_tokenizer_vocab_size
 
     def estimate_training_flops_using_levanter(self) -> float:
         flops_per_token = self.model_config.flops_per_token(self.vocab_size)
@@ -81,11 +88,11 @@ class SpeedrunConfig:
             params = self.hyperparameter_scaling(self.model_config, self.compute_budget)
             self.train_config.__dict__.update({k: params.get(k, v) for k, v in self.train_config.__dict__.items()})
 
-    def validate(self, mfu_estimate: float = 0.5) -> tuple[bool, str]:
+    def validate(self) -> tuple[bool, str]:
 
         # estimate model FLOPs as 6*N*D, and calculate estimated compute using this and (a reasonable estimate of) MFU
         model_flops = self.estimate_flops_via_6nd()
-        estimated_compute = model_flops / mfu_estimate
+        estimated_compute = model_flops / self.mfu_estimate
 
         # check if estimated compute is within user's requested budget
         is_valid = estimated_compute <= self.compute_budget.value
@@ -98,6 +105,8 @@ class SpeedrunAnalysisConfig:
     speedrun_config: SpeedrunConfig
     output_path: str
 
+
+### Utils and analysis functions ###
 
 def get_wandb_run_id_from_step(step: ExecutorStep) -> str:
     if isinstance(step, str):
@@ -114,6 +123,18 @@ def get_step_times_from_wandb(run_id: str, entity: str = "stanford-mercury", pro
     except Exception as e:
         logger.error(f"Failed to fetch step times: {e}")
         return []
+
+def get_wandb_metrics(run_id: str, entity: str = "stanford-mercury", project: str = "marin") -> dict:
+    try:
+        run = wandb.Api().run(f"{entity}/{project}/{run_id}")
+        summary = run.summary
+        return {
+            "lm_eval/averages/macro_avg_acc": summary.get("lm_eval/averages/macro_avg_acc"),
+            "eval/paloma/c4_en/bpb": summary.get("eval/paloma/c4_en/bpb")
+        }
+    except Exception as e:
+        logger.error(f"Failed to fetch wandb metrics: {e}")
+        return {"lm_eval/averages/macro_avg_acc": None, "eval/paloma/c4_en/bpb": None}
 
 
 def get_compute_budgets():
@@ -143,14 +164,16 @@ def speedrun_analysis(config: SpeedrunAnalysisConfig):
         * config.speedrun_config.hardware_config.device_flops
     )
 
+    # Get wandb metrics
+    run_id = get_wandb_run_id_from_step(config.speedrun_train_step)
+    wandb_metrics = get_wandb_metrics(run_id)
+
     stats = {
         "compute_budget": {
             "track": config.speedrun_config.compute_budget.name,
-            "budget_flops": config.speedrun_config.compute_budget.value,
-            "flops_6nd": six_nd_flops,
-            "flops_hardware": total_hardware_flops,
+            "flops_budget_for_track": config.speedrun_config.compute_budget.value,
+            "flops_6nd": f"{six_nd_flops:.2e}",
             "within_budget_6nd": six_nd_flops <= config.speedrun_config.compute_budget.value,
-            "within_budget_hardware": total_hardware_flops <= config.speedrun_config.compute_budget.value,
         },
         "run_related_info": {
             "num_parameters": num_params,
@@ -161,8 +184,11 @@ def speedrun_analysis(config: SpeedrunAnalysisConfig):
             "hardware_config": dataclasses.asdict(config.speedrun_config.hardware_config),
         },
         "actual_stats": {
-            "training_time": total_time,
-            "compute": total_hardware_flops,
+            "training_time_in_minutes": total_time,
+            "final_flops_estimate": f"{total_hardware_flops:.2e}",
+            "within_budget_hardware": total_hardware_flops <= config.speedrun_config.compute_budget.value,
+            "lm_eval/averages/macro_avg_acc": wandb_metrics["lm_eval/averages/macro_avg_acc"],
+            "eval/paloma/c4_en/bpb": wandb_metrics["eval/paloma/c4_en/bpb"],
         },
     }
 
@@ -173,13 +199,8 @@ def speedrun_analysis(config: SpeedrunAnalysisConfig):
         json.dump(stats, f, indent=2, sort_keys=True)
     logger.info(f"Speedrun stats written to {config.output_path}")
 
-    if not stats["compute_budget"]["within_budget_6nd"]:
-        logger.warning(f"6ND FLOPs exceeded: {six_nd_flops:.2e} > {config.speedrun_config.compute_budget.value:.2e}")
-    if not stats["compute_budget"]["within_budget_hardware"]:
-        logger.warning(
-            f"Hardware FLOPs exceeded: {total_hardware_flops:.2e} > {config.speedrun_config.compute_budget.value:.2e}"
-        )
 
+### Default speedrun function ###
 
 def default_speedrun(
     name: str,
@@ -216,7 +237,7 @@ def default_speedrun(
     )
 
     analysis_step = ExecutorStep(
-        name=f"speedrun/{name}_sppedrun_analysis",
+        name=f"{name}_speedrun_analysis",
         description=f"compute and store metrics and stats for the speedrun {name}.",
         fn=speedrun_analysis,
         config=SpeedrunAnalysisConfig(
