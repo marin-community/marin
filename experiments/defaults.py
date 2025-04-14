@@ -440,6 +440,7 @@ def default_sft(
             messages_field="messages",
             input_role=sft_config.input_role,
             output_role=sft_config.output_role,
+            reinit_tokens=sft_config.reinit_tokens,
         )
 
         config = TrainSFTOnPodConfig(
