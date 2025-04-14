@@ -60,15 +60,16 @@ def upload_to_gcs(local_path: str, gcs_path: str) -> None:
 def run_bash_command(command: list[str], check: bool = True, verbose: bool = True) -> None:
     """Runs a bash command."""
     command_str: str = " ".join(command)
-    #TODO: logger doesn't print with ray, need to use print
+    # TODO: logger doesn't print with ray, need to use print
     print(f"Running command: {command_str}", flush=True)
     start_time: float = time.time()
 
     try:
         if verbose:
             import jax
+
             print(f"JAX version: {jax.__version__}", flush=True)
-            print(f"verbose is True!", flush=True)
+            print("verbose is True!", flush=True)
             # Use Popen for real-time output streaming when verbose is True
             process = subprocess.Popen(
                 command,
@@ -78,26 +79,26 @@ def run_bash_command(command: list[str], check: bool = True, verbose: bool = Tru
                 bufsize=1,
                 universal_newlines=True,
             )
-            
+
             # Stream output in real-time
             while True:
                 stdout_line = process.stdout.readline() if process.stdout else ""
                 stderr_line = process.stderr.readline() if process.stderr else ""
-                
+
                 if stdout_line:
                     print(f"STDOUT: {stdout_line.rstrip()}", flush=True)
                 if stderr_line:
                     print(f"STDERR: {stderr_line.rstrip()}", flush=True)
-                    
+
                 # Break if process has finished and no more output
                 if process.poll() is not None and not stdout_line and not stderr_line:
                     break
-            
+
             # Get return code and handle errors
             return_code = process.poll()
             elapsed_time_seconds: float = time.time() - start_time
             print(f"COMPLETED: {command_str} ({elapsed_time_seconds}s)", flush=True)
-            
+
             if check and return_code != 0:
                 raise subprocess.CalledProcessError(return_code, command)
         else:

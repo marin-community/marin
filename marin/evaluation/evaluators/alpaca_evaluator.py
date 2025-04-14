@@ -122,7 +122,7 @@ class AlpacaEvaluator(VllmTpuEvaluator):
             self.write_model_config_file(model, model_config_path, engine_kwargs)
 
             # Construct the command and run AlpacaEval
-            max_eval_instances = 20  # max_eval_instances or self.DEFAULT_MAX_INSTANCES
+            max_eval_instances = max_eval_instances or self.DEFAULT_MAX_INSTANCES
             model_name = os.path.basename(model_name_or_path)
             results_path: str = os.path.join(AlpacaEvaluator.BASE_RESULTS_PATH, model_name)
             run_bash_command(
