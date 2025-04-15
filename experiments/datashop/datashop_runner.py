@@ -73,6 +73,12 @@ class DatashopRunnerConfig:
     # Config for quality filter model inference
     inference_config_kwargs: dict | None = None
 
+    # Config for filter config to allow for changing things like score threshold
+    filter_config_kwargs: dict | None = None
+
+    # Config for consolidate to allow for changing things like filetype or ray memory usage
+    consolidate_config_kwargs: dict | None = None
+
 
 class DatashopRunner:
     def __init__(self, config: DatashopRunnerConfig):
@@ -100,7 +106,9 @@ class DatashopRunner:
             self.config.pretraining_data_path,
             self.config.pretraining_data_path_name,
             self.config.experiment_name,
+            self.config.filter_config_kwargs,
             self.config.inference_config_kwargs,
+            self.config.consolidate_config_kwargs,
         )
         self.control_model = default_candidate_anneal(
             None,
