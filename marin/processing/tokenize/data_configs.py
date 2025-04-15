@@ -222,6 +222,10 @@ def _are_tokenizers_equivalent(tokenizer1: str, tokenizer2: str) -> bool:
         if vocab2[token] != id1:
             return False
 
+    if hasattr(t1, "chat_template") and hasattr(t2, "chat_template"):
+        if t1.chat_template != t2.chat_template:
+            return False
+
     return True
 
 

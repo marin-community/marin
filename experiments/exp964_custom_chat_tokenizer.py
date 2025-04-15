@@ -83,12 +83,10 @@ def main():
 
     # print the assistant tokens
     ids = np.array(out["input_ids"])
-    assert np.sum(out["assistant_masks"]) == len(marin("I'm doing well, thanks!")["input_ids"]) + len(
-        marin("Great!")["input_ids"]
+    assert np.sum(out["assistant_masks"]) == (
+        len(marin("I'm doing well, thanks!")["input_ids"]) + len(marin("Great!")["input_ids"])
     )
-    # print(ids)
-    # print(ids[np.array(out["assistant_masks"]).astype(bool)])
-    # print(marin.decode(ids[np.array(out["assistant_masks"]).astype(bool)]))
+
     assert (
         marin.decode(ids[np.array(out["assistant_masks"]).astype(bool)])
         == "I'm doing well, thanks!<|eot_id|>Great!<|eot_id|>"
