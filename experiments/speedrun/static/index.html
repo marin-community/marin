@@ -92,7 +92,7 @@
         // Fetch and display leaderboard data
         async function fetchLeaderboard() {
             try {
-                const response = await fetch('data/leaderboard.json');
+                const response = await fetch('data/runs.json');
                 const data = await response.json();
                 return data;
             } catch (error) {

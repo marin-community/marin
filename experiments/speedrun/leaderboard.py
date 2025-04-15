@@ -162,11 +162,24 @@ def serve_leaderboard(storage_path: str, port: int = 8000):
     
     # Start server
     Handler = http.server.SimpleHTTPRequestHandler
+    # Allow port reuse
+    socketserver.TCPServer.allow_reuse_address = True
+    
     with socketserver.TCPServer(("", port), Handler) as httpd:
         print(f"Serving leaderboard at http://localhost:{port}")
         print(f"Reading runs from: {storage_path}")
         print("Press Ctrl+C to stop")
         try:
+            print(f"Serving leaderboard at http://localhost:{port}")
+            print(f"Reading runs from: {storage_path}")
+            print("Press Ctrl+C to stop")
             httpd.serve_forever()
         except KeyboardInterrupt:
             print("\nShutting down server...")
+        except OSError as e:
+            if e.errno == 48:  # Address already in use
+                print(f"\nError: Port {port} is already in use. Try a different port with --port <number>")
+            else:
+                raise e
+        finally:
+            httpd.server_close()
