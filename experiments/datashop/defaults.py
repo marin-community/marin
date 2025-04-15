@@ -3,6 +3,8 @@ from dataclasses import replace
 
 from experiments.anneal_config import AnnealConfig
 from experiments.datashop.default_configs import (
+    default_consolidate_config_kwargs,
+    default_consolidate_filter_config_kwargs,
     default_dataset_output_processor_config_kwargs,
     default_inference_config_kwargs,
     default_medu_config_kwargs,
@@ -189,9 +191,9 @@ def default_quality_filter_and_consolidate(
     input_data_path: str | ExecutorStep,
     input_data_name: str,
     experiment_name: str,
-    keep_fraction: int = 0.10,
-    filetype: str = "jsonl.zst",
     inference_config_kwargs: dict | None = None,
+    filter_config_kwargs: dict | None = None,
+    consolidate_config_kwargs: dict | None = None,
 ):
     """Runs quality filtering and consolidation on an input dataset given the quality filter model.
 
@@ -244,6 +246,16 @@ def default_quality_filter_and_consolidate(
         ],
     )
 
+    if filter_config_kwargs is None:
+        filter_config_kwargs = default_consolidate_filter_config_kwargs
+    else:
+        filter_config_kwargs = {**default_consolidate_filter_config_kwargs, **filter_config_kwargs}
+
+    if consolidate_config_kwargs is None:
+        consolidate_config_kwargs = default_consolidate_config_kwargs
+    else:
+        consolidate_config_kwargs = {**default_consolidate_config_kwargs, **consolidate_config_kwargs}
+
     filtered_documents = ExecutorStep(
         name=f"documents/quality_filtering/datashop/{input_data_name}-{experiment_name}",
         fn=consolidate,
@@ -252,15 +264,12 @@ def default_quality_filter_and_consolidate(
             output_path=this_output_path(),
             filters=[
                 FilterConfig(
-                    type="classify",
                     attribute_path=output_path_of(attributes),
                     name=f"datashop-{experiment_name}",
-                    label="score",
-                    keep_fraction=keep_fraction,
+                    **filter_config_kwargs,
                 ),
             ],
-            ray_memory_limit_gb=12,
-            filetype=filetype,
+            **consolidate_config_kwargs,
         ),
         pip_dependency_groups=["ddsketch"],
     )
