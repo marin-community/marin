@@ -45,6 +45,8 @@ class HFTrainingConfig:
     logging_steps: int = field(default=50, metadata={"help": "Number of logging steps"})
     per_device_train_batch_size: int = field(default=128, metadata={"help": "Batch size per device"})
     run_name: str = field(default="", metadata={"help": "Name of the run"})
+    min_label: int = field(default=0, metadata={"help": "Minimum label value"})
+    max_label: int = field(default=5, metadata={"help": "Maximum label value"})
 
 
 class DataCollator:
@@ -73,35 +75,38 @@ class DataCollator:
         return batch
 
 
-def compute_metrics(eval_pred):
-    # NOTE(chris): lazy import because main training cluster may not have these dependencies
-    import evaluate
-    from sklearn.metrics import classification_report, confusion_matrix
+def create_compute_metrics_fn(min_label: int, max_label: int):
+    def compute_metrics(eval_pred):
+        # NOTE(chris): lazy import because main training cluster may not have these dependencies
+        import evaluate
+        from sklearn.metrics import classification_report, confusion_matrix
 
-    precision_metric = evaluate.load("precision")
-    recall_metric = evaluate.load("recall")
-    f1_metric = evaluate.load("f1")
-    accuracy_metric = evaluate.load("accuracy")
+        precision_metric = evaluate.load("precision")
+        recall_metric = evaluate.load("recall")
+        f1_metric = evaluate.load("f1")
+        accuracy_metric = evaluate.load("accuracy")
 
-    logits, labels = eval_pred
-    preds = np.round(logits.squeeze()).clip(0, 5).astype(int)
-    labels = np.round(labels.squeeze()).astype(int)
-    precision = precision_metric.compute(predictions=preds, references=labels, average="macro")["precision"]
-    recall = recall_metric.compute(predictions=preds, references=labels, average="macro")["recall"]
-    f1 = f1_metric.compute(predictions=preds, references=labels, average="macro")["f1"]
-    accuracy = accuracy_metric.compute(predictions=preds, references=labels)["accuracy"]
+        logits, labels = eval_pred
+        preds = np.round(logits.squeeze()).clip(min_label, max_label).astype(int)
+        labels = np.round(labels.squeeze()).astype(int)
+        precision = precision_metric.compute(predictions=preds, references=labels, average="macro")["precision"]
+        recall = recall_metric.compute(predictions=preds, references=labels, average="macro")["recall"]
+        f1 = f1_metric.compute(predictions=preds, references=labels, average="macro")["f1"]
+        accuracy = accuracy_metric.compute(predictions=preds, references=labels)["accuracy"]
 
-    report = classification_report(labels, preds)
-    cm = confusion_matrix(labels, preds)
-    print("Validation Report:\n" + report)
-    print("Confusion Matrix:\n" + str(cm))
+        report = classification_report(labels, preds)
+        cm = confusion_matrix(labels, preds)
+        print("Validation Report:\n" + report)
+        print("Confusion Matrix:\n" + str(cm))
 
-    return {
-        "precision": precision,
-        "recall": recall,
-        "f1_macro": f1,
-        "accuracy": accuracy,
-    }
+        return {
+            "precision": precision,
+            "recall": recall,
+            "f1_macro": f1,
+            "accuracy": accuracy,
+        }
+
+    return compute_metrics
 
 
 def load_dataset(input_path: str, split: str):
@@ -158,7 +163,7 @@ def train_classifier(rank: int, hf_script_args: HFTrainingConfig, train_dataset,
         eval_dataset=eval_dataset,
         tokenizer=tokenizer,
         data_collator=DataCollator(args, tokenizer),
-        compute_metrics=compute_metrics,
+        compute_metrics=create_compute_metrics_fn(hf_script_args.min_label, hf_script_args.max_label),
     )
     trainer.train()
 
