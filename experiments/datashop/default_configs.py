@@ -65,3 +65,14 @@ default_inference_config_kwargs = {
     "filetype": "jsonl.zst",
     "classifier_kwargs": {"max_length": 512},
 }
+
+default_consolidate_filter_config_kwargs = {
+    "type": "classify",
+    "label": "score",
+    "keep_fraction": 0.10,
+}
+
+default_consolidate_config_kwargs = {
+    "filetype": "jsonl.zst",
+    "ray_memory_limit_gb": 12,
+}
