@@ -1,0 +1,54 @@
+[
+  {
+    "run_name": "150M_llama_dclm_baseline-7b3186",
+    "compute_budget_track": "SMALL",
+    "model_size": 153884672,
+    "total_training_time": 47.85406683801921,
+    "final_flops_used": 8.42e+17,
+    "submission_timestamp": "2025-04-13T08:09:26.012212+00:00",
+    "submitted_by": "unknown",
+    "storage_path": "marin-us-central2/checkpoints/speedrun/150M_llama_dclm_baseline-7b3186/speedrun_analysis.json",
+    "wandb_run_id": null,
+    "lm_eval_macro_avg_acc": 0.2539941160632012,
+    "eval_paloma_c4_en_bpb": 1.1830110549926758
+  },
+  {
+    "run_name": "50M_llama_fineweb_edu-cde96c",
+    "compute_budget_track": "SMALL",
+    "model_size": 50873856,
+    "total_training_time": 30.979554645855387,
+    "final_flops_used": 5.45e+17,
+    "submission_timestamp": "2025-04-14T11:12:42.456359+00:00",
+    "submitted_by": "unknown",
+    "storage_path": "marin-us-central2/checkpoints/speedrun/50M_llama_fineweb_edu-cde96c/speedrun_analysis.json",
+    "wandb_run_id": null,
+    "lm_eval_macro_avg_acc": 0.24742055434773189,
+    "eval_paloma_c4_en_bpb": 1.3861894607543943
+  },
+  {
+    "run_name": "75M_llama_dclm_baseline-b7a5f5",
+    "compute_budget_track": "SMALL",
+    "model_size": 73273344,
+    "total_training_time": 41.77247943403199,
+    "final_flops_used": 7.35e+17,
+    "submission_timestamp": "2025-04-13T08:19:49.708810+00:00",
+    "submitted_by": "unknown",
+    "storage_path": "marin-us-central2/checkpoints/speedrun/75M_llama_dclm_baseline-b7a5f5/speedrun_analysis.json",
+    "wandb_run_id": null,
+    "lm_eval_macro_avg_acc": 0.254406573777408,
+    "eval_paloma_c4_en_bpb": 1.2888225317001345
+  },
+  {
+    "run_name": "75M_llama_fineweb_edu-ca427c",
+    "compute_budget_track": "SMALL",
+    "model_size": 73273344,
+    "total_training_time": 34.27030117702816,
+    "final_flops_used": 6.03e+17,
+    "submission_timestamp": "2025-04-14T11:11:04.645030+00:00",
+    "submitted_by": "unknown",
+    "storage_path": "marin-us-central2/checkpoints/speedrun/75M_llama_fineweb_edu-ca427c/speedrun_analysis.json",
+    "wandb_run_id": null,
+    "lm_eval_macro_avg_acc": 0.2515045075844395,
+    "eval_paloma_c4_en_bpb": 1.309715986251831
+  }
+]
