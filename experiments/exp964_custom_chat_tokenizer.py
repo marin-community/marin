@@ -3,6 +3,7 @@ Saves a modified version of the llama3 tokenizer with a simple Olmo2-inspired ch
 """
 
 import os
+from urllib.error import HTTPError
 
 import numpy as np
 from huggingface_hub.errors import GatedRepoError
@@ -35,7 +36,7 @@ MARIN_TEMPLATE = """
 def main():
     try:
         marin = AutoTokenizer.from_pretrained(llama3_tokenizer)
-    except GatedRepoError as e:
+    except (GatedRepoError, HTTPError) as e:
         print("You need to request access to the llama3 tokenizer")
         if os.getenv("CI", False) in ["true", "1"]:
             print("Skipping test in CI")
