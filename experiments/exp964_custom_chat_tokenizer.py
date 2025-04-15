@@ -36,7 +36,7 @@ MARIN_TEMPLATE = """
 def main():
     try:
         marin = AutoTokenizer.from_pretrained(llama3_tokenizer)
-    except (GatedRepoError, HTTPError) as e:
+    except (OSError, GatedRepoError, HTTPError) as e:
         print("You need to request access to the llama3 tokenizer")
         if os.getenv("CI", False) in ["true", "1"]:
             print("Skipping test in CI")
