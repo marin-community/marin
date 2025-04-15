@@ -9,11 +9,8 @@ from marin.execution.executor import (
     output_path_of,
     this_output_path,
 )
-from marin.execution.executor import ExecutorStep, this_output_path
-from operations.download.huggingface.download import DownloadConfig, download
-from operations.download.huggingface.download_gated_manual import download_and_upload_to_store
-from operations.download.huggingface.download_hf import download_hf
 from marin.processing.tokenize import lm_mixture_data_config
+from operations.download.huggingface.download import DownloadConfig, download
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("ray")
@@ -27,7 +24,7 @@ class ExperimentConfig:
 def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
     """Create a simplified experiment using FineWeb for 8B model training."""
     steps = []
-    
+
     # Download FineWeb dataset
     fineweb_download = ExecutorStep(
         name="raw/fineweb-compel",
@@ -37,7 +34,7 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
             revision="cd85054",
             gcs_output_path=this_output_path(),
             wait_for_completion=True,
-        )
+        ),
     )
     steps.append(fineweb_download)
 
@@ -59,22 +56,19 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
         pip_dependency_groups=["lz4", "datasets", "filelock"],
     )
     steps.append(compression_step)
-    
+
     # Tokenize the dataset directly (skip compression filtering)
     tokenize_step = default_tokenize(
         name=f"{config.experiment_name}/fineweb",
         dataset=output_path_of(fineweb_download),
         tokenizer=llama3_tokenizer,
     )
-    
+
     steps.append(tokenize_step)
-    
+
     # Create data config for training
-    data_config = lm_mixture_data_config(
-        components={"fineweb": tokenize_step}, 
-        weights={"fineweb": 1.0}
-    )
-    
+    data_config = lm_mixture_data_config(components={"fineweb": tokenize_step}, weights={"fineweb": 1.0})
+
     # Train the model
     train_step = default_train(
         name=config.experiment_name,
@@ -83,7 +77,7 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
         train_config=llama_8b_train_config,
     )
     steps.append(train_step)
-    
+
     return steps
 
 
