@@ -4,6 +4,7 @@ Saves a modified version of the llama3 tokenizer with a simple Olmo2-inspired ch
 
 import os
 
+import numpy as np
 from transformers import AutoTokenizer
 
 from experiments.llama import llama3_instruct_tokenizer, llama3_tokenizer
@@ -12,15 +13,21 @@ from experiments.llama import llama3_instruct_tokenizer, llama3_tokenizer
 marin_tokenizer = "stanford-crfm/marin-tokenizer"
 
 # to be clear this is the Olmo 2 template except we use llama3's special tokens
+# we also add the {% generation -%} tag stuff that makes the assistant_mask work
 MARIN_TEMPLATE = """
 {{ bos_token }}
-{% for message in messages -%}
+{%- for message in messages -%}
+{%- if message['role'] == 'assistant' -%}
+    <|start_header_id|>{{ message['role'] }}<|end_header_id|>
+{% generation %}{{- message['content'] | trim }}<|eot_id|>{% endgeneration %}\n
+{% else %}
 <|start_header_id|>{{ message['role'] }}<|end_header_id|>
 {{ message['content'] | trim }}<|eot_id|>
-{%- endfor %}
-{% if add_generation_prompt -%}
-<|start_header_id|>assistant<|end_header_id|>
 {% endif %}
+{%- endfor -%}
+{%- if add_generation_prompt -%}
+<|start_header_id|>assistant<|end_header_id|>
+{%- endif -%}
 """.strip()
 
 
@@ -44,6 +51,7 @@ def main():
         {"role": "user", "content": "Hello, how are you?"},
         {"role": "assistant", "content": "I'm doing well, thanks!"},
         {"role": "user", "content": "That's good to hear!"},
+        {"role": "assistant", "content": "Great!"},
     ]
     print("======")
     print("olmo2")
@@ -59,10 +67,23 @@ def main():
     assert marin.tokenize("Hello, how are you?") == llama3.tokenize("Hello, how are you?")
 
     # make sure we use the special tokens in chat template
-    out = marin.apply_chat_template(convo, tokenize=True, return_dict=True)
+    out = marin.apply_chat_template(convo, tokenize=True, return_dict=True, return_assistant_tokens_mask=True)
     assert all(
         token in out["input_ids"]
         for token in marin.convert_tokens_to_ids(["<|start_header_id|>", "<|end_header_id|>", "<|eot_id|>"])
+    )
+
+    # print the assistant tokens
+    ids = np.array(out["input_ids"])
+    assert np.sum(out["assistant_masks"]) == len(marin("I'm doing well, thanks!")["input_ids"]) + len(
+        marin("Great!")["input_ids"]
+    )
+    # print(ids)
+    # print(ids[np.array(out["assistant_masks"]).astype(bool)])
+    # print(marin.decode(ids[np.array(out["assistant_masks"]).astype(bool)]))
+    assert (
+        marin.decode(ids[np.array(out["assistant_masks"]).astype(bool)])
+        == "I'm doing well, thanks!<|eot_id|>Great!<|eot_id|>"
     )
 
     # upload marin to hf hub
