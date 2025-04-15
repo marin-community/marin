@@ -8,6 +8,9 @@ from transformers import AutoTokenizer
 
 from experiments.llama import llama3_instruct_tokenizer, llama3_tokenizer
 
+# name for the hf hub. cf llama3_tokenizer
+marin_tokenizer = "stanford-crfm/marin-tokenizer"
+
 # to be clear this is the Olmo 2 template except we use llama3's special tokens
 MARIN_TEMPLATE = """
 {{ bos_token }}
@@ -63,7 +66,7 @@ def main():
     )
 
     # upload marin to hf hub
-    marin.push_to_hub("stanford-crfm/marin-tokenizer")
+    marin.push_to_hub(marin_tokenizer)
 
 
 if __name__ == "__main__":
