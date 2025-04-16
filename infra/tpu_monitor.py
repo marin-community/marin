@@ -6,13 +6,14 @@ import time
 from collections import Counter
 
 import ray
-import wandb
 from bs4 import BeautifulSoup
 from google.cloud import compute_v1, tpu_v2alpha1
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
+
+import wandb
 
 sys.path.append("../..")
 
@@ -33,6 +34,7 @@ LOCATIONS = [
     "us-east5-a",
     "us-east5-b",
     "us-west4-a",
+    "big-run",
 ]
 
 LOCATION_TO_CLI_FILE = {
@@ -42,8 +44,10 @@ LOCATION_TO_CLI_FILE = {
     "us-central2-b": "/home/abhinavg/marin/infra/marin-us-central2.yaml",
     "us-east1-d": "/home/abhinavg/marin/infra/marin-us-east1.yaml",
     "us-east5-a": "/home/abhinavg/marin/infra/marin-us-east5.yaml",
-    "us-east5-b": "/home/abhinavg/marin/infra/marin-us-east5-b-vllm.yaml",
+    # Commenting out vllm will we put ssh keys in the config
+    # "us-east5-b": "/home/abhinavg/marin/infra/marin-us-east5-b-vllm.yaml",
     "us-west4-a": "/home/abhinavg/marin/infra/marin-us-west4.yaml",
+    "big-run": "/home/abhinavg/marin/infra/marin-big-run.yaml",
 }
 
 
@@ -63,6 +67,8 @@ def gather_incomplete_tpus(location):
 def gather_tpu_info_from_vms(location, incomplete_tpus):
     """Gather TPU information from the TPU API and log metrics."""
     tpu_client = tpu_v2alpha1.TpuClient()
+    if location == "big-run":
+        location = "us-central2-b"
     parent = f"projects/{PROJECT_NAME}/locations/{location}"
     nodes = tpu_client.list_nodes(parent=parent)
 
