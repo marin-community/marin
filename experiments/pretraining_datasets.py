@@ -150,3 +150,16 @@ nemotron_cc = ExecutorStep(
     ),
     pip_dependency_groups=["download_transform"],
 )
+
+megamath = ExecutorStep(
+    name="raw/megamath",
+    fn=download_hf,
+    config=DownloadConfig(
+        hf_dataset_id="LLM360/MegaMath",
+        revision="3cbc646",
+        gcs_output_path=this_output_path(),
+        wait_for_completion=True,
+    ),
+    pip_dependency_groups=["download_transform"],
+)
+    
