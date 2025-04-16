@@ -3,9 +3,11 @@ import subprocess
 import sys
 import threading
 import time
-from collections import Counter
+from collections import Counter, defaultdict
+from pathlib import Path
 
 import ray
+import yaml as pyyaml
 from bs4 import BeautifulSoup
 from google.cloud import compute_v1, tpu_v2alpha1
 from selenium import webdriver
@@ -25,42 +27,49 @@ BAD_STATES = [tpu_v2alpha1.Node.State.PREEMPTED, tpu_v2alpha1.Node.State.TERMINA
 GOOD_STATES = [tpu_v2alpha1.Node.State.READY]
 MIN_WAIT_FOR_INCOMPLETE_TPUS = 15
 
-LOCATIONS = [
-    "asia-northeast1-b",
-    "europe-west4-a",
-    "europe-west4-b",
-    "us-central2-b",
-    "us-east1-d",
-    "us-east5-a",
-    "us-east5-b",
-    "us-west4-a",
-    "big-run",
+CONFIG_DIR = Path(__file__).parent
+
+YAML_FILES = [
+    "marin-asia-northeast1.yaml",
+    "marin-eu-west4-a.yaml",
+    "marin-eu-west4.yaml",
+    "marin-us-central2.yaml",
+    "marin-us-east1.yaml",
+    "marin-us-east5.yaml",
+    # 'marin-us-east5-b-vllm.yaml',
+    "marin-us-west4.yaml",
+    "marin-big-run.yaml",
 ]
 
-LOCATION_TO_CLI_FILE = {
-    "asia-northeast1-b": "/home/abhinavg/marin/infra/marin-asia-northeast1.yaml",
-    "europe-west4-a": "/home/abhinavg/marin/infra/marin-eu-west4-a.yaml",
-    "europe-west4-b": "/home/abhinavg/marin/infra/marin-eu-west4.yaml",
-    "us-central2-b": "/home/abhinavg/marin/infra/marin-us-central2.yaml",
-    "us-east1-d": "/home/abhinavg/marin/infra/marin-us-east1.yaml",
-    "us-east5-a": "/home/abhinavg/marin/infra/marin-us-east5.yaml",
-    # Commenting out vllm will we put ssh keys in the config
-    # "us-east5-b": "/home/abhinavg/marin/infra/marin-us-east5-b-vllm.yaml",
-    "us-west4-a": "/home/abhinavg/marin/infra/marin-us-west4.yaml",
-    "big-run": "/home/abhinavg/marin/infra/marin-big-run.yaml",
-}
+if not YAML_FILES:
+    YAML_FILES = [f.resolve() for f in CONFIG_DIR.glob("*.yaml")]
+else:
+    YAML_FILES = [(CONFIG_DIR / f).resolve() for f in YAML_FILES]
+
+LOCATION_TO_CLI_FILE = defaultdict(list)
+for f in YAML_FILES:
+    try:
+        config_data = pyyaml.safe_load(f.read_text())
+        region = config_data.get("provider", {}).get("region")
+        if region:
+            LOCATION_TO_CLI_FILE[region].append(str(f))
+    except Exception as e:
+        print(f"Failed to parse {f.name}: {e}")
+
+LOCATIONS = list(LOCATION_TO_CLI_FILE.keys())
 
 
 def gather_incomplete_tpus(location):
     """Gather names of TPUs that do not have a power of 2 usage."""
     incomplete_usage = []
     if location in LOCATIONS:
-        ray_usage = get_ray_tpu_usage(LOCATION_TO_CLI_FILE[location])
-        if ray_usage:
-            for tpu_type, (used, total) in ray_usage.items():
-                total = int(total)
-                if total & (total - 1) != 0:  # Bitwise check for power of 2
-                    incomplete_usage.append((tpu_type, used, total))
+        for cli_file in LOCATION_TO_CLI_FILE[location]:
+            ray_usage = get_ray_tpu_usage(cli_file)
+            if ray_usage:
+                for tpu_type, (used, total) in ray_usage.items():
+                    total = int(total)
+                    if total & (total - 1) != 0:  # Bitwise check for power of 2
+                        incomplete_usage.append((tpu_type, used, total))
     return incomplete_usage
 
 
