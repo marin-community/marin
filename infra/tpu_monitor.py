@@ -50,7 +50,7 @@ LOCATION_TO_CLI_FILE = defaultdict(list)
 for f in YAML_FILES:
     try:
         config_data = pyyaml.safe_load(f.read_text())
-        region = config_data.get("provider", {}).get("region")
+        region = config_data.get("provider", {}).get("availability_zone")
         if region:
             LOCATION_TO_CLI_FILE[region].append(str(f))
     except Exception as e:
