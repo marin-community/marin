@@ -1,4 +1,4 @@
-FROM vllm/vllm-tpu:e92694b6fe264a85371317295bca6643508034ef
+FROM vllm/vllm-tpu:70e7ed841d1ab498b51e842a43157432cb752a97
 
 # Setup gcsfuse
 RUN apt-get update && apt-get install lsb-release rsync docker.io -y

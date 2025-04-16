@@ -36,6 +36,7 @@ dependencies = [
     "sentencepiece",
     "lz4",
     "jax==0.4.35",
+    "pytest",
 ]
 
 [project.optional-dependencies]
