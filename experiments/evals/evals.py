@@ -109,6 +109,7 @@ def evaluate_alpaca_eval(
     model_name: str,
     model_path: str,
     resource_config: ResourceConfig,
+    max_eval_instances: float = 805,
     temperature: float = 0.7,
     presence_penalty: float = 0.0,
     frequency_penalty: float = 0.0,
@@ -149,6 +150,7 @@ def evaluate_alpaca_eval(
             model_name=model_name,
             model_path=model_path,
             evaluation_path=this_output_path(),
+            max_eval_instances=max_eval_instances,
             resource_config=resource_config,
             engine_kwargs={
                 "temperature": temperature,
