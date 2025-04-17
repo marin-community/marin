@@ -15,21 +15,21 @@ from enum import Enum
 
 import fsspec
 import wandb
-from levanter.compat.hf_checkpoints import load_tokenizer
 from levanter.data.text import LMMixtureDatasetConfig
 from levanter.models.lm_model import LmConfig
 
-from experiments.defaults import default_train, _get_tokenizer_for_train
+from experiments.defaults import default_train
 from experiments.evals.task_configs import CORE_TASKS_PLUS_MMLU
 from experiments.llama import compute_num_parameters, llama3_tokenizer_vocab_size
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.execution.executor import ExecutorStep, InputName, output_path_of, unwrap_versioned_value
+from marin.execution.executor import ExecutorStep, InputName, output_path_of
 from marin.training.training import TrainLmOnPodConfig
 
 logger = logging.getLogger("ray")
 
 
 ### Configuration classes ###
+
 
 @dataclass
 class HardwareConfig:
@@ -108,6 +108,7 @@ class SpeedrunAnalysisConfig:
 
 ### Utils and analysis functions ###
 
+
 def get_wandb_run_id_from_step(step: ExecutorStep) -> str:
     if isinstance(step, str):
         return step
@@ -124,13 +125,14 @@ def get_step_times_from_wandb(run_id: str, entity: str = "stanford-mercury", pro
         logger.error(f"Failed to fetch step times: {e}")
         return []
 
+
 def get_wandb_metrics(run_id: str, entity: str = "stanford-mercury", project: str = "marin") -> dict:
     try:
         run = wandb.Api().run(f"{entity}/{project}/{run_id}")
         summary = run.summary
         return {
             "lm_eval/averages/macro_avg_acc": summary.get("lm_eval/averages/macro_avg_acc"),
-            "eval/paloma/c4_en/bpb": summary.get("eval/paloma/c4_en/bpb")
+            "eval/paloma/c4_en/bpb": summary.get("eval/paloma/c4_en/bpb"),
         }
     except Exception as e:
         logger.error(f"Failed to fetch wandb metrics: {e}")
@@ -202,6 +204,7 @@ def speedrun_analysis(config: SpeedrunAnalysisConfig):
 
 ### Default speedrun function ###
 
+
 def default_speedrun(
     name: str,
     config: SpeedrunConfig,
@@ -229,7 +232,7 @@ def default_speedrun(
     run_tags = ["speedrun", f"budget_{config.compute_budget.name}"] + (tags or [])
     train_step = default_train(
         name=f"speedrun/{name}",
-        tokenized=config.tokenized_dataset, #TODO (Nikil): need to fix dataset for model track, and also have a fixed seed so everyone sees the same tokens
+        tokenized=config.tokenized_dataset,  # TODO (Nikil): need to fix dataset for model track, and also have a fixed seed so everyone sees the same tokens
         model_config=dataclasses.replace(config.model_config),
         train_config=config.train_config,
         tags=run_tags,

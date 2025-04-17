@@ -1,0 +1,36 @@
+name: Update Speedrun Leaderboard
+
+on:
+  workflow_dispatch:
+    inputs:
+      storage-path:
+        description: 'Storage path for run directories (e.g., gs://marin-us-central2/checkpoints/speedrun or ./local/path)'
+        required: true
+        default: 'gs://marin-us-central2/checkpoints/speedrun'
+
+jobs:
+  update-leaderboard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install project dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install .
+
+      - name: Authenticate to Google Cloud (if using GCS)
+        if: startsWith(inputs.storage-path, 'gs://')
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: '${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}'
+
+      - name: Run update_leaderboard.py
+        run: |
+          python experiments/speedrun/update_leaderboard.py --storage-path "${{ github.event.inputs.storage-path }}" --print-only

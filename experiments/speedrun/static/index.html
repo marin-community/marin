@@ -102,8 +102,8 @@
         }
 
         function formatModelSize(size) {
-            return size < 1e9 ? 
-                `${(size / 1e6).toFixed(1)}M` : 
+            return size < 1e9 ?
+                `${(size / 1e6).toFixed(1)}M` :
                 `${(size / 1e9).toFixed(1)}B`;
         }
 
@@ -117,29 +117,29 @@
 
         function updateStats(entries) {
             document.getElementById('total-runs').textContent = entries.length;
-            
+
             if (entries.length > 0) {
                 const bestFlops = Math.max(...entries.map(e => e.final_flops_used));
                 document.getElementById('best-flops').textContent = formatFlops(bestFlops);
-                
+
                 const avgTime = entries.reduce((acc, e) => acc + e.total_training_time, 0) / entries.length;
                 document.getElementById('avg-time').textContent = `${avgTime.toFixed(1)}m`;
             }
         }
 
         function updateLeaderboard(entries, track = 'all') {
-            const filteredEntries = track === 'all' ? 
-                entries : 
+            const filteredEntries = track === 'all' ?
+                entries :
                 entries.filter(e => e.compute_budget_track === track);
-            
+
             // Sort by FLOPs used
             filteredEntries.sort((a, b) => b.final_flops_used - a.final_flops_used);
-            
+
             updateStats(filteredEntries);
-            
+
             const tbody = document.getElementById('leaderboard-body');
             tbody.innerHTML = '';
-            
+
             filteredEntries.forEach((entry, index) => {
                 const row = document.createElement('tr');
                 row.className = index % 2 === 0 ? 'bg-white' : 'bg-gray-50';
@@ -170,7 +170,7 @@
                     btn.classList.remove('active', 'bg-marin-blue', 'text-white');
                 });
                 button.classList.add('active', 'bg-marin-blue', 'text-white');
-                
+
                 // Update leaderboard
                 const data = await fetchLeaderboard();
                 updateLeaderboard(data, button.dataset.track);

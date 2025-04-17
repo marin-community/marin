@@ -2,13 +2,14 @@
 Sample speedrun with an 75M LLaMA model.
 """
 
+import logging
+
 from experiments.dclm.tokenize_dclm import dclm_components_llama3
 from experiments.llama import llama_75m
 from experiments.simple_train_config import SimpleTrainConfig
 from experiments.speedrun.speedrun import ComputeBudget, HardwareConfig, SpeedrunConfig, default_speedrun
-from marin.execution.executor import executor_main, output_path_of
+from marin.execution.executor import executor_main
 
-import logging
 logger = logging.getLogger("ray")
 
 speedrun_config = SpeedrunConfig(

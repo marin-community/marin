@@ -64,3 +64,7 @@ The leaderboard will be viewable at http://localhost:8000
 - **LM Eval Accuracy**: Overall accuracy on language model evaluation benchmarks
 - **C4-EN BPB (Bits per Byte)**: Compression performance on the C4 dataset (TODO: decide a concrete metric between these)
 - **FLOPs Used**: Total compute used during training
+
+### To-Dos:
+- Make README clearer for adding new models, speedrun JSON structure
+- Add fineweb-edu validation score
