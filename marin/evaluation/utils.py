@@ -66,10 +66,6 @@ def run_bash_command(command: list[str], check: bool = True, verbose: bool = Tru
 
     try:
         if verbose:
-            import jax
-
-            print(f"JAX version: {jax.__version__}", flush=True)
-            print("verbose is True!", flush=True)
             # Use Popen for real-time output streaming when verbose is True
             process = subprocess.Popen(
                 command,
