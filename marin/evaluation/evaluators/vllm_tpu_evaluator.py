@@ -11,6 +11,7 @@ from experiments.evals.resource_configs import ResourceConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Dependency, Evaluator, ModelConfig
 from marin.evaluation.utils import kill_process_on_port
+from marin.generation.ray_utils import scheduling_strategy_fn
 from marin.utils import remove_tpu_lockfile_on_exit
 
 
@@ -146,7 +147,7 @@ class VllmTpuEvaluator(Evaluator, ABC):
         """
 
         @ray.remote(
-            scheduling_strategy=self.scheduling_strategy_fn(resource_config.num_tpu, resource_config.tpu_type),
+            scheduling_strategy=scheduling_strategy_fn(resource_config.num_tpu, resource_config.strategy),
             runtime_env=self.get_runtime_env(),
         )
         @remove_tpu_lockfile_on_exit
