@@ -35,7 +35,7 @@ def count_tokens_in_file(filename: str, tokenizer_name: str) -> int:
         raise RuntimeError(f"Failed to load tokenizer {tokenizer_name} after {NUM_DOWNLOAD_RETRIES} retries")
 
     total_tokens = 0
-    with fsspec.open(filename, "rt", compression="gzip") as f:
+    with fsspec.open(filename, "rt", compression="infer") as f:
         for line in f:
             data = json.loads(line)
             if "text" in data:
@@ -49,11 +49,11 @@ def process_file(input_filename: str, tokenizer_name: str):
     return file_tokens
 
 
-def count_total_tokens(input_path: str, tokenizer_name: str) -> int:
+def count_total_tokens(input_path: str, tokenizer_name: str, filetype: str) -> int:
 
     responses = []
     tokens = 0
-    input_paths = fsspec_glob(os.path.join(input_path, "**/*.jsonl.gz"))
+    input_paths = fsspec_glob(os.path.join(input_path, f"**/*.{filetype}"))
     for input_path in input_paths:
         while len(responses) >= MAX_TASKS_IN_FLIGHT:
             ready_refs, responses = ray.wait(responses, num_returns=1)
@@ -76,10 +76,11 @@ def main():
     parser.add_argument(
         "--tokenizer_name", type=str, default="meta-llama/Llama-3.1-8B-Instruct", help="Name of the tokenizer to use"
     )
+    parser.add_argument("--filetype", type=str, default="jsonl.gz", help="Filetype of the input files")
 
     args = parser.parse_args()
 
-    total_tokens = count_total_tokens(args.input_path, args.tokenizer_name)
+    total_tokens = count_total_tokens(args.input_path, args.tokenizer_name, args.filetype)
     print(f"Total tokens in 'text' fields: {total_tokens}")
 
 
