@@ -1,7 +1,6 @@
 from datetime import timedelta
 
 import jmp
-from instruction_datasets import get_instruction_dataset
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text import LMSupervisedDatasetConfig
 from levanter.models.llama import LlamaConfig
@@ -9,6 +8,7 @@ from levanter.optim import AdamConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 
+from experiments.instruction_datasets import get_instruction_dataset
 from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path
 from marin.processing.tokenize.tokenize import TokenizeConfig, levanter_tokenize_sft
 from marin.training.training import TrainSFTOnPodConfig, run_levanter_sft
