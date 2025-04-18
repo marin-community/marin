@@ -21,8 +21,8 @@ from experiments.instruction_datasets import tulu3_flat_llama_tokenized_as_valid
 from experiments.llama import llama3_tokenizer
 from experiments.nemotron_cc.tokenize_nemotron import NEMOTRON_WEIGHTS, tokenize_nemotron_steps
 from marin.execution.executor import executor_main
-from marin.processing.tokenize.data_configs import lm_mixture_data_config
 from marin.processing.tokenize import add_validation_sets_to_mixture
+from marin.processing.tokenize.data_configs import lm_mixture_data_config
 
 # 1. Original mix: DCLM + StarCoder + ProofPile
 original_mix = lm_mixture_data_config(
@@ -128,6 +128,8 @@ data_mixes = {
 # Default parameters for annealing
 anneal_tokens = 50_000_000_000  # 50B tokens
 tpu_type = "v4-128"
+node_count = 4
+checkpoint = "gs://marin-us-central2/checkpoints/llama-8b-tootsie-adept-phoenix/checkpoints/step-1240000"
 
 
 def run_cooldown_ablation():
@@ -136,17 +138,18 @@ def run_cooldown_ablation():
     for mix_name, data_mix in data_mixes.items():
         # Create AnnealConfig
         anneal_config = AnnealConfig(
-            initialize_from_checkpoint_path="gs://marin-us-central2/checkpoints/llama-8b-tootsie-phase2/checkpoints/step-741907",
+            initialize_from_checkpoint_path=checkpoint,
             dataset_config=add_validation_sets_to_mixture(
                 data_mix, {"tulu_sft": tulu3_flat_llama_tokenized_as_validation}
             ),
             num_anneal_training_tokens=anneal_tokens,
             tpu_type=tpu_type,
-            node_count=4,
+            node_count=node_count,
+            train_batch_size=2048,
         )
 
         # Run annealing
-        model_name = f"pretrain_v_hq_ablation-{mix_name}"
+        model_name = f"pretrain_v_hq_ablation-phx1.24M-{mix_name}"
         results.append(
             default_anneal(
                 name=model_name,
