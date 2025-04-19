@@ -15,6 +15,8 @@ from levanter.checkpoint import CheckpointerConfig
 from levanter.compat.hf_checkpoints import load_tokenizer
 from levanter.data.text import LMMixtureDatasetConfig, LMSupervisedDatasetConfig, SupervisedUrlSourceConfig
 from levanter.eval_harness import LmEvalHarnessConfig
+from levanter.main import sft, sft_mixture
+from levanter.main.train_lm import TrainLmConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig
 from levanter.optim import AdamConfig
@@ -53,6 +55,7 @@ from marin.processing.tokenize import (
 )
 from marin.scaling_laws.scaling_laws import ScalingLawConfig, run_scaling_law_analysis
 from marin.training.training import (
+    PodConfig,
     TrainLmOnPodConfig,
     TrainSFTMixturePodConfig,
     TrainSFTOnPodConfig,
@@ -88,6 +91,7 @@ def default_tokenize(
         description=f"Tokenize raw text using the {tokenizer} tokenizer.",
         fn=tokenize,
         config=config,
+        pip_dependency_groups=["tokenize_train"],
     )
 
 
@@ -118,7 +122,7 @@ def simulated_epoching_train(
         target_budget: Target token budget to simulate.
         tags: Any additional tags to add to the Wandb tracker.
         use_default_validation: Whether to use the default validation sets (currently Paloma).
-        eval_harness_tasks: List of evaluation harness tasks. Defaults to the CORE set of tasks. Use () or [] to disable.
+        eval_harness_tasks: List of evaluation harness tasks. Defaults to the CORE set of tasks. Use () or [] to disable
     """
     pretraining_data = _prepare_data_config(tokenized, use_default_validation)
 
@@ -161,7 +165,7 @@ def default_train(
         train_config: SimpleTrainConfig for the training run.
         tags: Any additional tags to add to the Wandb tracker.
         use_default_validation: Whether to use the default validation sets (currently Paloma).
-        eval_harness_tasks: List of evaluation harness tasks. Defaults to the CORE set of tasks. Use () or [] to disable.
+        eval_harness_tasks: List of evaluation harness tasks. Defaults to the CORE set of tasks. Use () or [] to disable
     """
 
     pretraining_data = _prepare_data_config(tokenized, use_default_validation)
@@ -215,6 +219,76 @@ def default_train(
     total_examples = schedule.global_data_offset_by_step(train_config.num_train_steps)
 
     checkpoint_path_to_load_from = train_config.initialize_from_checkpoint_path
+
+    # Create the inner config
+    inner_config = TrainLmConfig(
+        data=pretraining_data,
+        trainer=TrainerConfig(
+            tracker=WandbConfig(
+                project="marin",
+                tags=[*tags],
+            ),
+            mp=jmp.get_policy("p=f32,c=bfloat16"),
+            train_batch_size=train_config.train_batch_size,
+            num_train_steps=train_config.num_train_steps,
+            steps_per_eval=train_config.steps_per_eval if train_config.steps_per_eval is not None else 1000,
+            checkpointer=CheckpointerConfig(
+                save_interval=timedelta(minutes=30),
+                keep=[dict(every=steps_per_export)],
+            ),
+            model_averaging=model_averaging,
+            replica_dcn_axis_size=-1,
+            allow_partial_checkpoint=train_config.allow_partial_checkpoint,
+            per_device_eval_parallelism=per_device_eval_parallelism,
+            allow_nondivisible_batch_size=True,
+            quantization=QuantizationConfig(int8=train_config.int8) if train_config.int8 else None,
+            initialize_from=None if train_config.reset_data_loader_on_init else checkpoint_path_to_load_from,
+            watch=train_config.watch,
+        ),
+        initialize_from_checkpoint_path=(
+            checkpoint_path_to_load_from if train_config.reset_data_loader_on_init else None
+        ),
+        z_loss_weight=train_config.z_loss_weight,
+        model=model_config,
+        optimizer=AdamConfig(
+            learning_rate=train_config.learning_rate,
+            weight_decay=(
+                train_config.weight_decay if train_config.weight_decay is not None else AdamConfig().weight_decay
+            ),
+            beta1=(train_config.beta1 if train_config.beta1 is not None else AdamConfig().beta1),
+            beta2=(train_config.beta2 if train_config.beta2 is not None else AdamConfig().beta2),
+            epsilon=(train_config.epsilon if train_config.epsilon is not None else AdamConfig().epsilon),
+            max_grad_norm=(
+                train_config.max_grad_norm if train_config.max_grad_norm is not None else AdamConfig().max_grad_norm
+            ),
+            warmup=(train_config.warmup if train_config.warmup is not None else AdamConfig().warmup),
+            rewarmup=(train_config.rewarmup if train_config.rewarmup is not None else AdamConfig().rewarmup),
+            decay=(train_config.decay if train_config.decay is not None else AdamConfig().decay),
+            lr_schedule=(train_config.lr_schedule if train_config.lr_schedule is not None else AdamConfig().lr_schedule),
+            cycle_length=train_config.cycle_length,  # can be int, list[int], or None
+            min_lr_ratio=(
+                train_config.min_lr_ratio if train_config.min_lr_ratio is not None else AdamConfig().min_lr_ratio
+            ),
+        ),
+        hf_save_steps=steps_per_export_hf,
+        data_seed=train_config.data_seed,
+        eval_harness_steps=train_config.steps_per_task_eval or 10000,
+        eval_harness=harness_config,
+    )
+
+    # Create the pod config
+    pod_config = PodConfig(
+        tpu_type=train_config.tpu_type,
+        node_count=train_config.node_count,
+    )
+
+    # Create the full config
+    config = TrainLmOnPodConfig(
+        config=inner_config,
+        pod_config=pod_config,
+        output_path=this_output_path(),
+    )
+
     return ExecutorStep(
         name=os.path.join("checkpoints", name),
         description=(
@@ -225,67 +299,7 @@ def default_train(
             f"= {total_examples * model_config.seq_len:,} tokens."
         ),
         fn=run_levanter_train_lm,
-        config=TrainLmOnPodConfig(
-            output_path=this_output_path(),
-            tpu_type=train_config.tpu_type,
-            node_count=train_config.node_count,
-            allow_out_of_region_reads=train_config.allow_out_of_region_reads,
-            allow_out_of_region_writes=train_config.allow_out_of_region_writes,
-            data=pretraining_data,
-            trainer=TrainerConfig(
-                tracker=WandbConfig(
-                    project="marin",
-                    tags=[*tags],
-                ),
-                mp=jmp.get_policy("p=f32,c=bfloat16"),
-                train_batch_size=train_config.train_batch_size,
-                num_train_steps=train_config.num_train_steps,
-                steps_per_eval=train_config.steps_per_eval if train_config.steps_per_eval is not None else 1000,
-                checkpointer=CheckpointerConfig(
-                    save_interval=timedelta(minutes=30),
-                    keep=[dict(every=steps_per_export)],
-                ),
-                model_averaging=model_averaging,
-                replica_dcn_axis_size=-1,
-                allow_partial_checkpoint=train_config.allow_partial_checkpoint,
-                per_device_eval_parallelism=per_device_eval_parallelism,
-                allow_nondivisible_batch_size=True,
-                quantization=QuantizationConfig(int8=train_config.int8) if train_config.int8 else None,
-                initialize_from=None if train_config.reset_data_loader_on_init else checkpoint_path_to_load_from,
-                watch=train_config.watch,
-            ),
-            initialize_from_checkpoint_path=(
-                checkpoint_path_to_load_from if train_config.reset_data_loader_on_init else None
-            ),
-            z_loss_weight=train_config.z_loss_weight,
-            model=model_config,
-            optimizer=AdamConfig(
-                learning_rate=train_config.learning_rate,
-                weight_decay=(
-                    train_config.weight_decay if train_config.weight_decay is not None else AdamConfig().weight_decay
-                ),
-                beta1=(train_config.beta1 if train_config.beta1 is not None else AdamConfig().beta1),
-                beta2=(train_config.beta2 if train_config.beta2 is not None else AdamConfig().beta2),
-                epsilon=(train_config.epsilon if train_config.epsilon is not None else AdamConfig().epsilon),
-                max_grad_norm=(
-                    train_config.max_grad_norm if train_config.max_grad_norm is not None else AdamConfig().max_grad_norm
-                ),
-                warmup=(train_config.warmup if train_config.warmup is not None else AdamConfig().warmup),
-                rewarmup=(train_config.rewarmup if train_config.rewarmup is not None else AdamConfig().rewarmup),
-                decay=(train_config.decay if train_config.decay is not None else AdamConfig().decay),
-                lr_schedule=(
-                    train_config.lr_schedule if train_config.lr_schedule is not None else AdamConfig().lr_schedule
-                ),
-                cycle_length=train_config.cycle_length,  # can be int, list[int], or None
-                min_lr_ratio=(
-                    train_config.min_lr_ratio if train_config.min_lr_ratio is not None else AdamConfig().min_lr_ratio
-                ),
-            ),
-            hf_save_steps=steps_per_export_hf,
-            data_seed=train_config.data_seed,
-            eval_harness_steps=train_config.steps_per_task_eval or 10000,
-            eval_harness=harness_config,
-        ),
+        config=config,
         pip_dependency_groups=["tokenize_train"],
     )
 
@@ -320,7 +334,7 @@ def default_sft(
     """
     # Set up common configurations
     if "sft" not in tags:
-        tags = list(tags) + ["sft"]
+        tags = [*tags, "sft"]
 
     tracker_config = WandbConfig(
         project="marin",
@@ -339,6 +353,7 @@ def default_sft(
         steps_per_eval=sft_config.steps_per_eval,
         checkpointer=checkpointer_config,
         seed=sft_config.seed,
+        initialize_from=sft_config.model_name_or_path if not sft_config.initialize_from_hf else None,
     )
 
     optimizer_config = AdamConfig(
@@ -351,15 +366,19 @@ def default_sft(
         max_grad_norm=sft_config.max_grad_norm,
     )
 
+    # Create the pod config
+    pod_config = PodConfig(
+        tpu_type=sft_config.tpu_type,
+        node_count=sft_config.node_count,
+    )
+
     # Infer whether we're using mixture based on mixture_weights
     if mixture_weights is not None:
         if not isinstance(tokenized, dict):
             raise ValueError("If mixture_weights is given tokenized should be a Dict[str, SupervisedUrlSourceConfig]")
 
         # Configure the mixture-based SFT
-        config = TrainSFTMixturePodConfig(
-            output_path=this_output_path(),
-            tpu_type=sft_config.tpu_type,
+        inner_config = sft_mixture.SFTMixtureConfig(
             trainer=trainer_config,
             model=model_config,
             optimizer=optimizer_config,
@@ -367,7 +386,11 @@ def default_sft(
             mixture_weights=mixture_weights,
             mixture_block_size=sft_config.mixture_block_size,
             tokenizer=sft_config.tokenizer,
-            model_name_or_path=sft_config.model_name_or_path,
+            model_name_or_path=(
+                sft_config.model_name_or_path
+                if sft_config.initialize_from_hf
+                else model_config.hf_checkpoint_converter().reference_checkpoint
+            ),
             initialize_from_hf=sft_config.initialize_from_hf,
             max_seq_len=sft_config.max_seq_len,
             hf_save_steps=sft_config.steps_per_hf_export,
@@ -375,6 +398,12 @@ def default_sft(
             input_role=sft_config.input_role,
             output_role=sft_config.output_role,
             stop_strategy=sft_config.stop_strategy,
+        )
+
+        config = TrainSFTMixturePodConfig(
+            config=inner_config,
+            pod_config=pod_config,
+            output_path=this_output_path(),
             bypass_path_checks=sft_config.bypass_path_checks,
         )
         fn = run_levanter_sft_mixture
@@ -397,23 +426,27 @@ def default_sft(
             )
 
         # Configure the single-dataset SFT
-        config = TrainSFTOnPodConfig(
-            output_path=this_output_path(),
-            tpu_type=sft_config.tpu_type,
+        inner_config = sft.SFTConfig(
             trainer=trainer_config,
             model=model_config,
             optimizer=optimizer_config,
             supervised_data=supervised_data,
             chat_train_urls=chat_train_urls,
             tokenizer=sft_config.tokenizer,
-            model_name_or_path=sft_config.model_name_or_path,
+            model_name_or_path=sft_config.model_name_or_path if sft_config.initialize_from_hf else None,
             initialize_from_hf=sft_config.initialize_from_hf,
             max_seq_len=sft_config.max_seq_len,
             hf_save_steps=sft_config.steps_per_hf_export,
             messages_field="messages",
             input_role=sft_config.input_role,
             output_role=sft_config.output_role,
-            bypass_path_checks=sft_config.bypass_path_checks,
+            reinit_tokens=sft_config.reinit_tokens,
+        )
+
+        config = TrainSFTOnPodConfig(
+            config=inner_config,
+            pod_config=pod_config,
+            output_path=this_output_path(),
         )
         fn = run_levanter_sft
 
@@ -521,7 +554,7 @@ def _get_tokenizer_for_train(tokenized: InputName | ExecutorStep | LMMixtureData
 def default_scaling_law_pred(
     ladder_runs: Sequence[ExecutorStep | InputName | str],
     pred_run: ExecutorStep | InputName | str | None = None,
-    task_losses: Sequence[str] = ("eval/paloma/c4_en/bpb"),
+    task_losses: Sequence[str] = ("eval/paloma/c4_en/bpb",),
     task_accuracies: Sequence[str] | Sequence[EvalTaskConfig] | None = None,
 ):
     """

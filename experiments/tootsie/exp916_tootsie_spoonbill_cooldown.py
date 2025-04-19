@@ -10,12 +10,12 @@ that point the loss started to increase again. I still don't know why.
 
 import dataclasses
 
-from experiments.exp606_sft import tulu3_llama_tokenize_step, tulu_sft_config
 from levanter.callbacks.watch import WatchConfig
 
 from experiments.dclm.tokenize_dclm import DCLM_MIXTURE_WEIGHTS
 from experiments.defaults import default_sft, default_train
 from experiments.dolmino.tokenize_dolmino import get_dolmino_step
+from experiments.exp606_sft import tulu3_llama_tokenize_step, tulu_sft_config
 from experiments.instruction_datasets import (
     tulu3_flat_llama_tokenized_as_train,
     tulu3_flat_llama_tokenized_as_validation,
@@ -177,6 +177,44 @@ norm_tootsie_8b_focused_spoonbill_zloss = dataclasses.replace(
     override_output_path="checkpoints/tootsie-8b-focused-spoonbill-zloss",
 )
 
+EXTRA_STEPS = 10000
+DEEPER_END = COOLDOWN_END + EXTRA_STEPS
+
+
+tootsie_8b_deeper_spoonbill_train = dataclasses.replace(
+    norm_tracking_spoonbill_train,
+    initialize_from_checkpoint_path=output_path_of(norm_tootsie_8b_focused_spoonbill_zloss, "checkpoints/step-829947"),
+    watch=WatchConfig(
+        interval=10,
+        # fp32 pushes the ram too high here
+        include_histograms=False,
+        watch_targets=["grads", "params", "opt_state", "updates"],
+    ),
+    num_train_steps=DEEPER_END,
+    decay=EXTRA_STEPS,
+    z_loss_weight=1e-4,  # same as olmo
+    # let's try to get a good checkpoint before everything goes to hell
+    steps_per_hf_export=5000,
+    # set to final LR of focused spoonbill:
+    learning_rate=2.75e-5,
+    min_lr_ratio=2.75e-6 / 2.75e-5,  # 1e-6
+)
+
+
+tootsie_8b_deeper_spoonbill = dataclasses.replace(
+    default_train(
+        name="tootsie-8b-deeper-spoonbill-2",
+        tokenized=spoonbill_mixture,
+        model_config=llama_8b_fp32_attn,
+        train_config=tootsie_8b_deeper_spoonbill_train,
+        use_default_validation=True,
+        tags=["llama", "8b", "ema", "exp916", "tootsie"],
+        # HF is having trouble today so skipping this.
+        eval_harness_tasks=[],
+    ),
+    override_output_path="checkpoints/tootsie-8b-deeper-spoonbill-2",
+)
+
 # do some sfts
 
 spoonbill_zloss_tulu3_sft_config = dataclasses.replace(
@@ -185,22 +223,25 @@ spoonbill_zloss_tulu3_sft_config = dataclasses.replace(
 )
 
 
-sft_tulu3_sft_spoonbill_zloss = default_sft(
-    name="sft/tulu3_llama3_sft_spoonbill_zloss",
+sft_tulu3_spoonbill_zloss = default_sft(
+    name="sft/tulu3_tootsie_sft_spoonbill_zloss",
     tokenized=tulu3_llama_tokenize_step,
     model_config=llama_8b_fp32_attn,
-    sft_config=spoonbill_zloss_tulu3_sft_config
-).with_output_path("checkpoints/sft/tulu3_llama3_sft_spoonbill_zloss")
+    sft_config=spoonbill_zloss_tulu3_sft_config,
+    tags=["llama", "8b", "exp916", "tootsie", "sft", "spoonbill"],
+).with_output_path("checkpoints/sft/tulu3_tootsie_sft_spoonbill_zloss")
 
 
-sft_tulu3_sft_deeper_spoonbill_zloss = default_sft(
-    name="sft/tulu3_llama3_sft_spoonbill_zloss",
+sft_tulu3_deeper_spoonbill = default_sft(
+    name="sft/tulu3_tootsie_deeper_spoonbill",
     tokenized=tulu3_llama_tokenize_step,
     model_config=llama_8b_fp32_attn,
-    sft_config=
-        dataclasses.replace(spoonbill_zloss_tulu3_sft_config,
-                            model_name_or_path=output_path_of()
-).with_output_path("checkpoints/sft/tulu3_llama3_sft_spoonbill_zloss")
+    sft_config=dataclasses.replace(
+        spoonbill_zloss_tulu3_sft_config,
+        model_name_or_path=output_path_of(tootsie_8b_deeper_spoonbill, "hf/step-839999/"),
+    ),
+    tags=["llama", "8b", "exp916", "tootsie", "sft", "spoonbill"],
+).with_output_path("checkpoints/sft/tulu3_tootsie_sft_deeper_spoonbill_zloss")
 
 
 if __name__ == "__main__":
@@ -210,7 +251,9 @@ if __name__ == "__main__":
             norm_tootsie_8b_hypnotic_spoonbill,
             norm_tootsie_8b_focused_spoonbill_fp32_attention,
             norm_tootsie_8b_focused_spoonbill_zloss,
-            sft_tulu3_sft_spoonbill_zloss,
+            tootsie_8b_deeper_spoonbill,
+            sft_tulu3_spoonbill_zloss,
+            sft_tulu3_deeper_spoonbill,
         ],
         description="Cooldown run for tootsie-8b model with some flan and tulu",
     )
