@@ -25,8 +25,6 @@ tulu3_llama_tokenize_step = ExecutorStep(
         validation_paths=[],
         cache_path=this_output_path(),
         tokenizer=llama3_instruct_tokenizer,
-        input_field="user",
-        output_field="assistant",
     ),
     description="Tokenize chat SFT data",
 )

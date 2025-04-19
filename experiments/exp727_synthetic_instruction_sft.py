@@ -2,7 +2,7 @@ from datetime import timedelta
 
 import jmp
 from levanter.checkpoint import CheckpointerConfig
-from levanter.data.text import LMSupervisedDatasetConfig
+from levanter.data.text import SupervisedUrlSourceConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.rotary import Llama3RotaryEmbeddingsConfig
 from levanter.optim import AdamConfig
@@ -46,7 +46,7 @@ tulu3_sft_8b_synthetic_instruction_model = ExecutorStep(
         tpu_type="v4-64",
         tokenizer=llama3_tokenizer,
         chat_train_urls=[output_path_of(synthetic_instruction_dataset, "**/*.jsonl.gz")],
-        supervised_data=LMSupervisedDatasetConfig(
+        supervised_data=SupervisedUrlSourceConfig(
             cache_dir=output_path_of(synthetic_instruction_llama_tokenize_step),
             input_field="user",
             output_field="assistant",
