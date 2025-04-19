@@ -28,8 +28,7 @@ MARIN_TEMPLATE = """
 {% endif %}
 {%- endfor -%}
 {%- if add_generation_prompt -%}
-<|start_header_id|>assistant<|end_header_id|>
-{%- endif -%}
+<|start_header_id|>assistant<|end_header_id|>\n{% endif -%}
 """.strip()
 
 
@@ -64,13 +63,14 @@ def main():
     ]
     print("======")
     print("olmo2")
-    print(olmo2.apply_chat_template(convo, tokenize=False))
+    print(olmo2.apply_chat_template(convo, tokenize=False, add_generation_prompt=True))
     print("=======")
     print("llama3_instruct")
-    print(llama3_instruct.apply_chat_template(convo, tokenize=False))
+    print(llama3_instruct.apply_chat_template(convo, tokenize=False, add_generation_prompt=True))
     print("======")
     print("marin")
-    print(marin.apply_chat_template(convo, tokenize=False))
+    print(marin.apply_chat_template(convo, tokenize=False, add_generation_prompt=True))
+    print("======")
 
     # ensure it didn't mess up normal tokenization
     assert marin.tokenize("Hello, how are you?") == llama3.tokenize("Hello, how are you?")
@@ -93,8 +93,14 @@ def main():
         == "I'm doing well, thanks!<|eot_id|>Great!<|eot_id|>"
     )
 
+    # ensure that when we use add_generation_prompt, we add the final newline (and other bits)
+    assert marin.apply_chat_template(convo, tokenize=False, add_generation_prompt=True).endswith(
+        "<|start_header_id|>assistant<|end_header_id|>\n"
+    )
+
     # upload marin to hf hub
     marin.push_to_hub(marin_tokenizer)
+    print("Pushed")
 
 
 if __name__ == "__main__":
