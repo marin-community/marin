@@ -955,7 +955,9 @@ class ExecutorMainConfig:
 @draccus.wrap()
 def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], description: str | None = None):
     """Main entry point for experiments (to standardize)"""
-    ray.init(namespace="marin")  # We need to init ray here to make sure we have the correct namespace for actors
+    ray.init(
+        namespace="marin", ignore_reinit_error=True
+    )  # We need to init ray here to make sure we have the correct namespace for actors
     # (status_actor in particular)
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
