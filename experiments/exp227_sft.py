@@ -2,7 +2,7 @@ from datetime import timedelta
 
 import jmp
 from levanter.checkpoint import CheckpointerConfig
-from levanter.data.text import LMSupervisedDatasetConfig
+from levanter.data.text import ChatLmDatasetFormat, SupervisedUrlSourceConfig
 from levanter.models.llama import LlamaConfig
 from levanter.optim import AdamConfig
 from levanter.tracker.wandb import WandbConfig
@@ -30,9 +30,7 @@ tokenize_step = ExecutorStep(
         validation_paths=[],
         cache_path=this_output_path(),
         tokenizer="EleutherAI/gpt-neox-20b",
-        # fixed to OAI chat format
-        input_field="user",
-        output_field="assistant",  # Or whatever tokenizer you're using
+        format=ChatLmDatasetFormat(),
     ),
     description="Tokenize chat SFT data",
 )
@@ -46,7 +44,7 @@ train_step = ExecutorStep(
         tpu_type="v4-128",
         tokenizer="EleutherAI/gpt-neox-20b",
         chat_train_urls=[output_path_of(instruction_dataset, "**/*.jsonl.gz")],
-        supervised_data=LMSupervisedDatasetConfig(
+        supervised_data=SupervisedUrlSourceConfig(
             cache_dir=output_path_of(tokenize_step), input_field="user", output_field="assistant"
         ),
         # Modify the nested trainer config by creating a new one

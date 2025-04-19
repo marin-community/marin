@@ -23,21 +23,20 @@ from collections.abc import Sequence
 import draccus
 import fsspec
 import humanfriendly
-import levanter
 import ray
 import transformers
-from levanter.data.sharded_datasource import ShardedDataSource, TextUrlDataSource
-from levanter.data.text import (
-    BatchTokenizer,
-    ChatUrlDataSourceConfig,
-    LMDatasetSourceConfig,
-    LMSupervisedDatasetConfig,
-    mk_chat_sft_dataset,
-    mk_supervised_dataset,
-)
-from levanter.store.cache import CacheOptions
 from ray.runtime_env import RuntimeEnv
 
+import levanter
+from levanter.data.sharded_datasource import ShardedDataSource, TextUrlDataSource
+from levanter.data.text import (
+    ChatUrlDataSourceConfig,
+    LMDatasetSourceConfig,
+    LmDatasetFormatBase, TextLmDatasetFormat,
+)
+from levanter.data.text import mk_chat_sft_dataset, \
+    preprocessor_for_format
+from levanter.store.cache import CacheOptions
 from marin.execution.executor import InputName
 from marin.utils import fsspec_glob, fsspec_isdir, fsspec_size
 
@@ -52,19 +51,11 @@ class TokenizeConfig:
     tokenizer: str  # tokenizer name. Should be the same as you intend to use in the tokenizer spec for the training run
     tags: list[str] = dataclasses.field(default_factory=list)  # tags to be added to config
     cache_options: CacheOptions | None = None
-    input_field: str = ""
-    output_field: str = ""
-    text_key: str = "text"
-
-    def train_source(self) -> ShardedDataSource | None:
-        if len(self.train_paths) == 0:
-            return None
-        return _create_source(self.train_paths, self.text_key)
-
-    def validation_source(self) -> ShardedDataSource | None:
-        if len(self.validation_paths) == 0:
-            return None
-        return _create_source(self.validation_paths, self.text_key)
+    format: LmDatasetFormatBase = TextLmDatasetFormat()
+    """
+    The format of the dataset. This is used to determine how to tokenize the data.
+    See Levanter's documentation for more details.
+    """
 
     def as_lm_dataset_source_config(
         self, actual_output_path: str | InputName, *, include_raw_paths=True
@@ -73,6 +64,9 @@ class TokenizeConfig:
         For use in Levanter training runs with mixtures of datasets.
 
         Args:
+            actual_output_path: The actual output path to use for the cache. Since we often pass in an InputName,
+                we need to resolve it to a string.
+
             include_raw_paths: if false, don't include paths to raw data in Levanter's config. This means we'll be able
                 to run training without the original training data, but hte provenance won't be recorded in wandb.
 
@@ -82,6 +76,7 @@ class TokenizeConfig:
             train_urls=self.train_paths if include_raw_paths else [],
             validation_urls=self.validation_paths if include_raw_paths else [],
             cache_dir=actual_output_path,
+            format=self.format,
         )
 
     def __post_init__(self):
@@ -99,14 +94,16 @@ class TokenizeConfig:
 
 
 def tokenize(config: TokenizeConfig):
-    train_source = config.train_source()
-    validation_source = config.validation_source()
+    source_config = config.as_lm_dataset_source_config(config.cache_path)
+
+    train_source = source_config.get_shard_source("train")
+    validation_source = source_config.get_shard_source("validation")
 
     if train_source is None and validation_source is None:
         raise ValueError("No input files specified. Nothing to do.")
 
     tokenizer = transformers.AutoTokenizer.from_pretrained(config.tokenizer)
-    batch_tokenizer = BatchTokenizer(tokenizer, enforce_eos=True)
+    batch_tokenizer = preprocessor_for_format(config.format, tokenizer)
 
     if train_source is not None:
         options = config.cache_options
@@ -125,8 +122,6 @@ def tokenize(config: TokenizeConfig):
         )
     else:
         train_ledger = None
-
-    validation_source = config.validation_source()
 
     if validation_source is not None:
         options = config.cache_options
@@ -225,34 +220,13 @@ def levanter_tokenize_sft(config: TokenizeConfig):
     logger.info(f"Finished caching SFT dataset to {config.cache_path}")
 
 
-@ray.remote(runtime_env=RuntimeEnv(env_vars={"JAX_PLATFORMS": "cpu"}))
-def levanter_tokenize_supervised(config: TokenizeConfig):
-    supervised_config = LMSupervisedDatasetConfig(
-        validation_urls=config.validation_paths,
-        cache_dir=config.cache_path,
-        input_field=config.input_field,
-        output_field=config.output_field,
-    )
-    logging.basicConfig(level=logging.INFO)
-
-    logger.info(f"Caching {config.validation_paths} to {config.cache_path}.")
-
-    tokenizer = transformers.AutoTokenizer.from_pretrained(config.tokenizer)
-
-    import haliax
-
-    # this axis doesn't actually matter for just building the cache
-    mk_supervised_dataset(supervised_config, "validation", tokenizer, haliax.Axis("position", 2048))
-    logger.info(f"Finished caching supervised dataset to {config.cache_path}.")
-
-
 def _levanter_build_cache(source, batch_tokenizer, output_path, options: CacheOptions):
     from levanter.data.metrics_monitor import LoggerMetricsMonitor
     from levanter.store.cache import build_or_load_cache
 
     cache = build_or_load_cache(
         cache_dir=output_path,
-        input_shards=source,
+        source=source,
         processor=batch_tokenizer,
         await_finished=False,
         monitors=[LoggerMetricsMonitor("ray")],
@@ -284,7 +258,6 @@ def _get_files_by_extensions(input_paths: list[str], extensions: list[str]) -> l
     """
     Get a list of all filepaths with the specified extension from the input paths.
     """
-    print(input_paths)
     output_paths = []
     for path in input_paths:
         assert path != "/"
@@ -311,7 +284,7 @@ def _get_filepaths_to_tokenize(input_paths: list[str]) -> list[str]:
 
 
 def _is_probably_path(path: str) -> bool:
-    """see if looks like a real path or not, in which case it might be an hf dataset"""
+    """see if it looks like a real path or not, in which case it might be an hf dataset"""
 
     protocol, _ = fsspec.core.split_protocol(path)
 

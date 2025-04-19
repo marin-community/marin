@@ -13,7 +13,7 @@ import jmp
 from haliax.quantization import QuantizationConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.compat.hf_checkpoints import load_tokenizer
-from levanter.data.text import LMMixtureDatasetConfig, LMSupervisedDatasetConfig, SupervisedUrlSourceConfig
+from levanter.data.text import LMMixtureDatasetConfig, SupervisedUrlSourceConfig
 from levanter.eval_harness import LmEvalHarnessConfig
 from levanter.main import sft, sft_mixture
 from levanter.main.train_lm import TrainLmConfig
@@ -306,7 +306,7 @@ def default_train(
 
 def default_sft(
     name: str,
-    tokenized: InputName | ExecutorStep | LMSupervisedDatasetConfig | dict[str, SupervisedUrlSourceConfig],
+    tokenized: InputName | ExecutorStep | dict[str, SupervisedUrlSourceConfig],
     model_config: LlamaConfig,
     sft_config: SimpleSFTConfig,
     mixture_weights: dict[str, int] | None = None,
@@ -321,7 +321,7 @@ def default_sft(
     Args:
         name: The name of the training run, forms the basis of the output path.
         tokenized: The tokenized data to train on:
-                  - For single dataset: an InputName, ExecutorStep, or LMSupervisedDatasetConfig
+                  - For single dataset: an InputName, ExecutorStep, or SupervisedUrlSourceConfig
                   - For mixture: a Dict[str, SupervisedUrlSourceConfig] mapping dataset names to configs
         model_config: Levanter LlamaConfig for the model architecture to train.
         sft_config: Configuration for the SFT training process.
@@ -411,18 +411,18 @@ def default_sft(
     else:
         # Handle the case of a single dataset
         if isinstance(tokenized, InputName | ExecutorStep):
-            supervised_data = LMSupervisedDatasetConfig(
+            supervised_data = SupervisedUrlSourceConfig(
                 cache_dir=output_path_of(tokenized),
                 input_field=sft_config.input_role,
                 output_field=sft_config.output_role,
             )
             chat_train_urls = [output_path_of(tokenized, "**/*.jsonl.gz")]
-        elif isinstance(tokenized, LMSupervisedDatasetConfig):
+        elif isinstance(tokenized, SupervisedUrlSourceConfig):
             supervised_data = tokenized
             chat_train_urls = None
         else:
             raise ValueError(
-                "For non-mixture SFT, tokenized should be an InputName, ExecutorStep, or LMSupervisedDatasetConfig"
+                "For non-mixture SFT, tokenized should be an InputName, ExecutorStep, or SupervisedUrlSourceConfig"
             )
 
         # Configure the single-dataset SFT
