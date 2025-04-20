@@ -50,20 +50,20 @@ jobs:
       - name: Check Docker Installation
         run: |
           gcloud compute tpus tpu-vm ssh ${{ env.TPU_NAME }} --zone=${{ env.TPU_ZONE }} --project=${{ env.GCP_PROJECT_ID }} \
-            --command="docker --version" |
-      | \
-          (echo "Docker not found, attempting installation..." && \
-          gcloud compute tpus tpu-vm ssh ${{ env.TPU_NAME }} --zone=${{ env.TPU_ZONE }} --project=${{ env.GCP_PROJECT_ID }} \
-            --command="sudo apt-get update -y && \
-                        sudo apt-get install -y apt-transport-https ca-certificates curl gnupg2 software-properties-common && \
-                        curl -fsSL https://download.docker.com/linux/debian/gpg | sudo apt-key add - && \
-                        sudo add-apt-repository 'deb [arch=amd64] https://download.docker.com/linux/debian $(lsb_release -cs) stable' -y && \
-                        sudo apt-get update -y && \
-                        sudo apt-get install -y docker-ce docker-ce-cli containerd.io && \
-                        sudo systemctl start docker && \
-                        sudo systemctl enable docker && \
-                        sudo usermod -aG docker $USER && \
-                        docker --version") 
+            --command="docker --version" || (
+              echo "Docker not found, attempting installation..." && \
+              gcloud compute tpus tpu-vm ssh ${{ env.TPU_NAME }} --zone=${{ env.TPU_ZONE }} --project=${{ env.GCP_PROJECT_ID }} \
+                --command="sudo apt-get update -y && \
+                          sudo apt-get install -y apt-transport-https ca-certificates curl gnupg2 software-properties-common && \
+                          curl -fsSL https://download.docker.com/linux/debian/gpg | sudo apt-key add - && \
+                          sudo add-apt-repository 'deb [arch=amd64] https://download.docker.com/linux/debian $(lsb_release -cs) stable' -y && \
+                          sudo apt-get update -y && \
+                          sudo apt-get install -y docker-ce docker-ce-cli containerd.io && \
+                          sudo systemctl start docker && \
+                          sudo systemctl enable docker && \
+                          sudo usermod -aG docker $USER && \
+                          docker --version"
+            )
       - name: Configure Docker for Artifact Registry
         run: |
           gcloud compute tpus tpu-vm ssh ${{ env.TPU_NAME }} --zone=${{ env.TPU_ZONE }} --project=${{ env.GCP_PROJECT_ID }} \
