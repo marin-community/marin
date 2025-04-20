@@ -40,7 +40,7 @@ jobs:
             --zone=us-east5-b \
             --accelerator-type=v6e-8 \
             --version=v2-alpha-tpuv6e \
-            --project=${{ steps.auth.outputs.project_id }}) \
+            --project=${{ secrets.GCP_PROJECT_ID }} \
             --preemptible |
       | \
           # Fallback to on-demand if Spot creation fails (e.g., due to capacity)
@@ -49,7 +49,7 @@ jobs:
             --zone=us-east5-b \
             --accelerator-type=v6e-8 \
             --version=v2-alpha-tpuv6e \
-            --project=${{ steps.auth.outputs.project_id }})
+            --project=${{ secrets.GCP_PROJECT_ID }})
 
           # Wait for the VM to initialize (adjust time as needed)
           echo "Waiting for TPU VM to become ready..."
