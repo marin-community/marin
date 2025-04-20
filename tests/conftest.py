@@ -1,4 +1,3 @@
-import hashlib
 import time
 
 import pytest
@@ -13,10 +12,8 @@ model_config = ModelConfig(
 
 
 @pytest.fixture
-def unique_hash():
-    timestamp = str(time.time_ns()).encode()
+def current_date_time():
+    # Get the current local time and format as MM-DD-YYYY-HH-MM-SS
+    formatted_time = time.strftime("%m-%d-%Y-%H-%M-%S", time.localtime())
 
-    # Hash it using SHA256 (or any other algo)
-    digest = hashlib.sha256(timestamp).hexdigest()
-
-    return digest
+    return formatted_time

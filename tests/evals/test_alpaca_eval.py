@@ -1,4 +1,4 @@
-import ray
+"""Test whether alpaca eval works."""
 
 from experiments.evals.resource_configs import SINGLE_TPU_V6E_8
 from marin.evaluation.evaluation_config import EvaluationConfig
@@ -14,12 +14,12 @@ TOP_P = 1.0
 TOP_K = -1
 
 
-def test_alpaca_eval(unique_hash):
+def test_alpaca_eval(current_date_time):
     config = EvaluationConfig(
         evaluator="alpaca",
         model_name=model_config.name,
         model_path=model_config.path,
-        evaluation_path=f"gs://marin-us-east5/evaluation/alpaca_eval/{model_config.name}-{unique_hash}",
+        evaluation_path=f"gs://marin-us-east5/evaluation/alpaca_eval/{model_config.name}-{current_date_time}",
         resource_config=SINGLE_TPU_V6E_8,
         max_eval_instances=5,
         engine_kwargs={
@@ -32,4 +32,4 @@ def test_alpaca_eval(unique_hash):
             **model_config.engine_kwargs,
         },
     )
-    ray.get(evaluate(config=config))
+    evaluate(config=config)

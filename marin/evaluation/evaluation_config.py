@@ -73,3 +73,8 @@ class EvaluationConfig:
     """
     Additional keyword arguments to pass to the Ray resources.
     """
+
+    generation_params: dict | None = None
+    """
+    Additional keyword arguments passed to the vLLM sampling params engine
+    """

@@ -1,3 +1,5 @@
+"""Test whether vLLM can generate simple completions"""
+
 import os
 
 import pytest
@@ -11,7 +13,7 @@ except ImportError:
 from tests.conftest import model_config
 
 
-@ray.remote(resources={"TPU": 1})
+@ray.remote(resources={"TPU-v6e-8-head": 1})
 def _test_llm_func(model_config):
     model_path = model_config.ensure_downloaded("/tmp/test-llama-eval")
 
