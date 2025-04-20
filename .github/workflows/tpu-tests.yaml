@@ -31,7 +31,7 @@ jobs:
         id: create_tpu
         run: |
           # Generate a unique name for this CI run
-          TPU_NAME="my-ci-tpu-${{ github.run_id }}"
+          TPU_NAME="ci-run-${{ github.run_id }}"
           echo "TPU_NAME=${TPU_NAME}" >> $GITHUB_ENV
           echo "Creating TPU VM: ${TPU_NAME}"
 
@@ -41,13 +41,7 @@ jobs:
             --accelerator-type=v6e-8 \
             --version=v2-alpha-tpuv6e \
             --project=${{ secrets.GCP_PROJECT_ID }} \
-            --preemptible | \
-          (echo "Spot VM creation failed, attempting on-demand..." && \
-          gcloud compute tpus tpu-vm create ${TPU_NAME} \
-            --zone=us-east5-b \
-            --accelerator-type=v6e-8 \
-            --version=v2-alpha-tpuv6e \
-            --project=${{ secrets.GCP_PROJECT_ID }})
+            --preemptible
 
           # Wait for the VM to initialize (adjust time as needed)
           echo "Waiting for TPU VM to become ready..."
