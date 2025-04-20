@@ -5,7 +5,7 @@ from typing import ClassVar
 
 from marin.evaluation.evaluators.evaluator import Dependency, ModelConfig
 from marin.evaluation.evaluators.vllm_tpu_evaluator import VllmTpuEvaluator
-from marin.evaluation.utils import is_remote_path, run_bash_command, upload_to_gcs, write_yaml
+from marin.evaluation.utils import is_remote_path, upload_to_gcs, write_yaml
 
 
 class AlpacaEvaluator(VllmTpuEvaluator):
@@ -81,6 +81,7 @@ class AlpacaEvaluator(VllmTpuEvaluator):
             }
         }
         write_yaml(content, path)
+        return content
 
     @staticmethod
     def set_openai_api_key() -> None:
@@ -100,7 +101,6 @@ class AlpacaEvaluator(VllmTpuEvaluator):
         evals: list[str],
         output_path: str,
         max_eval_instances: int | None = None,
-        engine_kwargs: dict | None = None,
     ) -> None:
         """
         Runs AlpacaEval on the specified model.
@@ -119,22 +119,19 @@ class AlpacaEvaluator(VllmTpuEvaluator):
             model_name_or_path: str = self.download_model(model)
 
             model_config_path: str = os.path.join(AlpacaEvaluator.CACHE_PATH, model_name_or_path, "model_config.yaml")
-            self.write_model_config_file(model, model_config_path, engine_kwargs)
+            model_config_content = self.write_model_config_file(model, model_config_path, model.generation_params)
 
             # Construct the command and run AlpacaEval
             max_eval_instances = max_eval_instances or self.DEFAULT_MAX_INSTANCES
             model_name = os.path.basename(model_name_or_path)
             results_path: str = os.path.join(AlpacaEvaluator.BASE_RESULTS_PATH, model_name)
-            run_bash_command(
-                [
-                    "alpaca_eval",
-                    "evaluate_from_model",
-                    model_config_path,
-                    "--max_instances",
-                    str(max_eval_instances),
-                    "--output_path",
-                    results_path,
-                ]
+
+            from alpaca_eval import evaluate_from_model
+
+            evaluate_from_model(
+                model_configs=model_config_content,
+                output_path=results_path,
+                max_instances=max_eval_instances,
             )
 
             # Upload the results to GCS

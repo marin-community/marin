@@ -5,9 +5,8 @@ import sys
 import ray
 
 
-@ray.remote(resources={"TPU": 1})
-def test_collect_env():
-    url = "https://raw.githubusercontent.com/vllm-project/vllm/main/collect_env.py"
+def run_collect_env():
+    url = "https://raw.githubusercontent.com/vllm-project/vllm/main/vllm/collect_env.py"
     filename = "collect_env.py"
     # Download the file using wget
     try:
@@ -28,6 +27,11 @@ def test_collect_env():
         # Clean up the downloaded file
         if os.path.exists(filename):
             os.remove(filename)
+
+
+@ray.remote(resources={"TPU": 1})
+def test_collect_env():
+    run_collect_env()
 
 
 if __name__ == "__main__":

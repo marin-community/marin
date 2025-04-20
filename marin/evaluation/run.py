@@ -78,7 +78,9 @@ def _impute_model_config(config):
     else:
         model_name = config.model_name
 
-    return ModelConfig(name=model_name, path=model_path, engine_kwargs=config.engine_kwargs)
+    return ModelConfig(
+        name=model_name, path=model_path, engine_kwargs=config.engine_kwargs, generation_params=config.generation_params
+    )
 
 
 @draccus.wrap()
