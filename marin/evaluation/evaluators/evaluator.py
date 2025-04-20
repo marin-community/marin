@@ -38,6 +38,11 @@ class ModelConfig:
     Additional keyword arguments to pass to the vLLM engine.
     """
 
+    generation_params: dict | None = None
+    """
+    Additional keyword arguments passed to the SamplingParams for the vLLM engine
+    """
+
     def ensure_downloaded(self, local_path: str | None = None) -> str | None:
         """
         Ensures that the model checkpoint is downloaded to `local_path` if necessary.
