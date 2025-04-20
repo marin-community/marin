@@ -4,7 +4,10 @@ cluster_name: {{NAME}}
 # Maximum Workers (excluding Head Node)
 max_workers: 1024
 
-
+auth:
+  ssh_private_key:  ~/.ssh/marin_ray_cluster.pem
+  ssh_public_key:  ~/.ssh/marin_ray_cluster.pub
+  ssh_user: ray
 
 # Configure GCP
 provider:
@@ -53,6 +56,9 @@ setup_commands:
   - echo 'export MARIN_PREFIX="gs://{{BUCKET}}"' >> $HOME/.bashrc
   - echo 'export BUCKET="{{BUCKET}}"' >> $HOME/.bashrc
   - gcsfuse --implicit-dirs --only-dir gcsfuse_mount $BUCKET /opt/gcsfuse_mount || true
+  - mkdir -p ~/.ssh && /root/gcloud/google-cloud-sdk/bin/gcloud compute project-info describe --format="value(commonInstanceMetadata.items[?key==\"ssh-keys\"].value)" > ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys
+  # Using /home/ray/.ssh/ since auth.ssh_user is set to 'ray' and we need to ensure the key is in the correct user's home directory else we get an error
+  - /root/gcloud/google-cloud-sdk/bin/gcloud secrets versions access latest --secret=RAY_CLUSTER_PUBLIC_KEY > ~/.ssh/marin_ray_cluster.pub
 
 # Set Head Node == `ray_head_default`
 head_node_type: head_default
