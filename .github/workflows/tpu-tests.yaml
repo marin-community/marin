@@ -50,10 +50,10 @@ jobs:
       - name: Check Docker Installation
         run: |
           gcloud config set project ${{ secrets.GCP_PROJECT_ID }}
-          gcloud compute tpus tpu-vm ssh ${{ env.TPU_NAME }} --zone=${{ env.TPU_ZONE }} --project=${{ env.GCP_PROJECT_ID }} \
+          gcloud compute tpus tpu-vm ssh ${{ env.TPU_NAME }} --zone=${{ env.TPU_ZONE }} --project=${{ secrets.GCP_PROJECT_ID }} \
             --command="docker --version" || (
               echo "Docker not found, attempting installation..." && \
-              gcloud compute tpus tpu-vm ssh ${{ env.TPU_NAME }} --zone=${{ env.TPU_ZONE }} --project=${{ env.GCP_PROJECT_ID }} \
+              gcloud compute tpus tpu-vm ssh ${{ env.TPU_NAME }} --zone=${{ env.TPU_ZONE }} --project=${{ secrets.GCP_PROJECT_ID }} \
                 --command="sudo apt-get update -y && \
                           sudo apt-get install -y apt-transport-https ca-certificates curl gnupg2 software-properties-common && \
                           curl -fsSL https://download.docker.com/linux/debian/gpg | sudo apt-key add - && \
@@ -67,7 +67,7 @@ jobs:
             )
       - name: Configure Docker for Artifact Registry
         run: |
-          gcloud compute tpus tpu-vm ssh ${{ env.TPU_NAME }} --zone=${{ env.TPU_ZONE }} --project=${{ env.GCP_PROJECT_ID }} \
+          gcloud compute tpus tpu-vm ssh ${{ env.TPU_NAME }} --zone=${{ env.TPU_ZONE }} --project=${{ secrets.GCP_PROJECT_ID }} \
             --command="sudo gcloud auth configure-docker us-east5-docker.pkg.dev --quiet"
       # - name: Create VM
       #   run: |
