@@ -41,9 +41,7 @@ jobs:
             --accelerator-type=v6e-8 \
             --version=v2-alpha-tpuv6e \
             --project=${{ secrets.GCP_PROJECT_ID }} \
-            --preemptible |
-      | \
-          # Fallback to on-demand if Spot creation fails (e.g., due to capacity)
+            --preemptible | \
           (echo "Spot VM creation failed, attempting on-demand..." && \
           gcloud compute tpus tpu-vm create ${TPU_NAME} \
             --zone=us-east5-b \
