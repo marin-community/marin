@@ -34,6 +34,6 @@ def _test_llm_func(model_config):
     return generated_texts
 
 
-@pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip this test in CI, since we run it as a separate worflow.")
+@pytest.mark.skipif(os.getenv("TPU_CI") == "false", reason="Skip this test if not running with a TPU in CI.")
 def test_local_llm_inference():
     ray.get(_test_llm_func.remote(model_config))
