@@ -49,7 +49,7 @@ jobs:
 
       - name: Check Docker Installation
         run: |
-          gcloud config set project ${{ env.GCP_PROJECT_ID }}
+          gcloud config set project ${{ secrets.GCP_PROJECT_ID }}
           gcloud compute tpus tpu-vm ssh ${{ env.TPU_NAME }} --zone=${{ env.TPU_ZONE }} --project=${{ env.GCP_PROJECT_ID }} \
             --command="docker --version" || (
               echo "Docker not found, attempting installation..." && \
