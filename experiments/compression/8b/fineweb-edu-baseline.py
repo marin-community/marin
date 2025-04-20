@@ -1,12 +1,7 @@
-"""Filter training data based on LZ4 compression ratios.
-
-Filter documents based on their LZ4 compression ratios (compressed_size/original_size),
-keeping only those with ratios between 0.6 and 0.9.
+"""Train llama8b on subset of fineweb_edu 
 
 Dataset: fineweb_edu
-Model: llama_1_4b
-
-Pipeline: compression ratio calculation -> filtering -> tokenization -> training
+Model: llama_8b
 """
 
 import logging

@@ -4,7 +4,7 @@ Filter documents based on their LZ4 compression ratios (compressed_size/original
 keeping only those with ratios between 0.6 and 0.9.
 
 Dataset: fineweb_edu
-Model: llama_1_4b
+Model: llama_8b
 
 Pipeline: compression ratio calculation -> filtering -> tokenization -> training
 """
@@ -31,16 +31,25 @@ from marin.processing.tokenize import lm_mixture_data_config
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("ray")
 
-
 @dataclass
 class ExperimentConfig:
     experiment_name: str
     input_data_source_to_path: dict[str, str] = field(
         default_factory=lambda: {
-            "fineweb-edu-elyas": "gs://marin-us-central2/raw/fineweb-edu/CC-MAIN-2024-10/",
+            "fineweb-edu-2024-10": "gs://marin-us-central2/raw/fineweb-edu/CC-MAIN-2024-10/",
+            "fineweb-edu-2023-50": "gs://marin-us-central2/raw/fineweb-edu/CC-MAIN-2023-50/",
+            "fineweb-edu-2023-40": "gs://marin-us-central2/raw/fineweb-edu/CC-MAIN-2023-40/",
+            "fineweb-edu-2023-23": "gs://marin-us-central2/raw/fineweb-edu/CC-MAIN-2023-23/",
+            "fineweb-edu-2023-14": "gs://marin-us-central2/raw/fineweb-edu/CC-MAIN-2023-14/",
+            "fineweb-edu-2023-06": "gs://marin-us-central2/raw/fineweb-edu/CC-MAIN-2023-06/",
+            "fineweb-edu-2022-49": "gs://marin-us-central2/raw/fineweb-edu/CC-MAIN-2022-49/",
+            "fineweb-edu-2022-40": "gs://marin-us-central2/raw/fineweb-edu/CC-MAIN-2022-40/",
+            "fineweb-edu-2022-33": "gs://marin-us-central2/raw/fineweb-edu/CC-MAIN-2022-33/",
+            "fineweb-edu-2022-27": "gs://marin-us-central2/raw/fineweb-edu/CC-MAIN-2022-27/",
+            "fineweb-edu-2022-21": "gs://marin-us-central2/raw/fineweb-edu/CC-MAIN-2022-21/",
+            "fineweb-edu-2022-05": "gs://marin-us-central2/raw/fineweb-edu/CC-MAIN-2022-05/",
         }
     )
-
 
 def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
     """Create the steps for a single experiment with compression ratio filtering."""

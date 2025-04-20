@@ -1,12 +1,9 @@
-"""Filter training data based on LZ4 compression ratios.
+"""Baseline training run for Compel paper (no filtering)
 
-Filter documents based on their LZ4 compression ratios (compressed_size/original_size),
-keeping only those with ratios between 0.65 and 0.8.
+
 
 Dataset: fineweb
 Model: llama_8b
-
-Pipeline: compression ratio calculation -> filtering -> tokenization -> training
 """
 
 import logging
