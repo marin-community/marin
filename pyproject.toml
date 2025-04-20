@@ -28,11 +28,11 @@ dependencies = [
     "toml",
     "pandas", # Only needed by Fileprovider in inference.py
     "pyarrow", # # Only needed by Fileprovider in inference.py
+    "transformers>=4.48.0,<5.0",
     # We are keeping levanter deps for now. @TODO :: Remove them
-    "jax[tpu]==0.5.1",
     "multiprocess==0.70.16",
-    "levanter>=1.2.dev1207",
-    "haliax>=1.4.dev341",
+    "levanter>=1.2.dev1313",
+    "haliax>=1.4.dev343",
     "sentencepiece",
     "lz4",
 ]
@@ -81,10 +81,11 @@ quality_dedup_consolidate = [
 tokenize_train = [
     "jax[tpu]==0.5.1",
     "multiprocess==0.70.16",
-    "levanter>=1.2.dev1207",
+    "levanter>=1.2.dev1312",
     "lm-eval@git+https://github.com/stanford-crfm/lm-evaluation-harness.git",
-    "jmp",
     "tblib",
+    "sentencepiece",
+    "tiktoken",
 ]
 
 data_browser = [
@@ -92,7 +93,7 @@ data_browser = [
 ]
 
 eval = [
-    "levanter>=1.2.dev1207",
+    "levanter>=1.2.dev1312",
     "lm-eval@git+https://github.com/stanford-crfm/lm-evaluation-harness.git",
 ]
 
@@ -138,3 +139,6 @@ exclude = [
     "marin/",
     "scripts/"
 ]
+
+[tool.uv.sources]
+resiliparse-dom = { git = "https://github.com/stanford-crfm/chatnoir-resiliparse", subdirectory = "resiliparse_dom", rev = "da2ff85fe51310484cf9435565b2bdde2a23708b" }

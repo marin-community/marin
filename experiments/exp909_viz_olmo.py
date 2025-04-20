@@ -7,10 +7,11 @@ at various checkpoints to observe how the model's predictions change during trai
 Uses Hugging Face models instead of Levanter for visualization.
 """
 
+from levanter.models.olmo import Olmo2Config
+
 from experiments.defaults import default_validation_sets
 from marin.evaluation.visualize import VizLmConfig, mixture_for_visualization, visualize_lm_log_probs
-from marin.execution.executor import ExecutorStep, executor_main, versioned, this_output_path
-from levanter.models.olmo import Olmo2Config
+from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
 
 # Hardcoded path to the base OLMo 2 model
@@ -24,12 +25,14 @@ CHECKPOINTS = [
     "gs://marin-us-central2/checkpoints/olmo2_sft/hf/seed_0/nsxwiwl7/step-2999/",
 ]
 
+
 def path_to_step_name(path):
     # Format: olmo2-sft-step-XXXX
     components = path.split("/")
     step_component = components[-2] if path.endswith("/") else components[-1]
     step = step_component.split("-")[1]  # Extract the number after "step-"
     return f"analysis/viz/olmo2-sft-step-{step}"
+
 
 # Add back the OLMo 2 config
 # Create the OLMo 2 config based on the values in olmo2_sft.yaml
@@ -54,30 +57,32 @@ olmo2_config = Olmo2Config(
 # Use a string for the tokenizer instead of a function
 TOKENIZER_ID = "allenai/OLMo-2-1124-7B-SFT"
 
+
 # Add Tulu to the standard validation datasets
 def get_evaluation_datasets(tokenizer=TOKENIZER_ID):
     # Get the default validation sets
     datasets = default_validation_sets(tokenizer=tokenizer)
-    
+
     # Add the Tulu dataset as a new component
     tulu_path = "gs://marin-us-central2/dolma/tulu_3_in_dolma-c0c290/train/*.jsonl.gz"
-    
+
     # Create a tokenize step for Tulu
     tulu_tokenize_step = ExecutorStep(
         name="tokenized/tulu3_dolma",
         fn=tokenize,
         config=TokenizeConfig(
             train_paths=versioned([]),  # Empty list for train paths since we're only using validation
-            validation_paths=[tulu_path], 
-            cache_path=this_output_path(),  
-            tokenizer=versioned(tokenizer), 
+            validation_paths=[tulu_path],
+            cache_path=this_output_path(),
+            tokenizer=versioned(tokenizer),
         ),
     )
-    
+
     # Add the tokenize step to our steps
     datasets["tulu3_dolma"] = tulu_tokenize_step
-    
+
     return datasets
+
 
 # Get evaluation datasets with Tulu included
 eval_sets = get_evaluation_datasets(tokenizer=TOKENIZER_ID)
@@ -125,4 +130,4 @@ if __name__ == "__main__":
     executor_main(
         all_steps,
         description="Visualize log probabilities of OLMo 2 SFT at various stages of training using HuggingFace models",
-    ) 
+    )

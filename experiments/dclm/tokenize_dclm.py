@@ -27,17 +27,19 @@ dclm_components_llama3 = {
             name="dclm_baseline",
             dataset=dclm_baseline,
             tokenizer=llama3_tokenizer,
-        ),
-        # make consistent with path in eu (they differ b/c of the cd)
-        override_output_path="tokenized/dclm_baseline-0206f1/",
+        ).with_output_path("tokenized/dclm_baseline-0206f1/"),
     ),
-    "starcoderdata": default_tokenize(
-        name="starcoderdata", dataset=starcoderdata, tokenizer=llama3_tokenizer, text_key="content"
+    "starcoderdata": (
+        default_tokenize(
+            name="starcoderdata", dataset=starcoderdata, tokenizer=llama3_tokenizer, text_key="content"
+        ).with_output_path("tokenized/starcoderdata-12f018/")
     ),
-    "proofpile_2": default_tokenize(
-        name="proofpile_2",
-        dataset=proofpile_2,
-        tokenizer=llama3_tokenizer,
+    "proofpile_2": (
+        default_tokenize(
+            name="proofpile_2",
+            dataset=proofpile_2,
+            tokenizer=llama3_tokenizer,
+        ).with_output_path("tokenized/proofpile_2-4a35c7/")
     ),
 }
 dclm_mixture_config_llama3 = lm_mixture_data_config(components=dclm_components_llama3, weights=DCLM_MIXTURE_WEIGHTS)
