@@ -27,12 +27,40 @@ jobs:
         run: |
           gcloud config set project ${{ secrets.GCP_PROJECT_ID }}
 
-      - name: Create VM
+      - name: Create TPU VM
+        id: create_tpu
         run: |
-          export TPU_NAME=ci-run-${{ github.run_id }}
-          eval "$(ssh-agent -s)"
-          TRUE_SHA=${{ github.event.pull_request.head.sha }}
-          bash infra/spin-up-vm.sh $TPU_NAME -z ${TPU_ZONE} -t v6e-8 --preemptible
+          # Generate a unique name for this CI run
+          TPU_NAME="my-ci-tpu-${{ github.run_id }}"
+          echo "TPU_NAME=${TPU_NAME}" >> $GITHUB_ENV
+          echo "Creating TPU VM: ${TPU_NAME}"
+
+          # Attempt to create a Spot TPU VM for cost savings
+          gcloud compute tpus tpu-vm create ${TPU_NAME} \
+            --zone=us-east5-b \
+            --accelerator-type=v6e-8 \
+            --version="v2-alpha-tpuv6e" \
+            --project=${{ steps.auth.outputs.project_id }}) \
+            --preemptible |
+      | \
+          # Fallback to on-demand if Spot creation fails (e.g., due to capacity)
+          (echo "Spot VM creation failed, attempting on-demand..." && \
+          gcloud compute tpus tpu-vm create ${TPU_NAME} \
+            --zone=us-east5-b \
+            --accelerator-type=v6e-8 \
+            --version="v2-alpha-tpuv6e" \
+            --project=${{ steps.auth.outputs.project_id }})
+
+          # Wait for the VM to initialize (adjust time as needed)
+          echo "Waiting for TPU VM to become ready..."
+          sleep 90
+
+      # - name: Create VM
+      #   run: |
+      #     export TPU_NAME=ci-run-${{ github.run_id }}
+      #     eval "$(ssh-agent -s)"
+      #     TRUE_SHA=${{ github.event.pull_request.head.sha }}
+      #     bash infra/spin-up-vm.sh $TPU_NAME -z ${TPU_ZONE} -t v6e-8 --preemptible
 #          infra/babysit-tpu-vm.sh $TPU_NAME -z ${{ TPU_ZONE }} -t v4-8 --preemptible -s infra/helpers/setup-tpu-vm-tests.sh -b ${{ github.sha }} --retries 1 -- \
 #            PYTHONPATH=$PYTHONPATH:levanter/tests bash levanter/infra/run.sh pytest levanter/tests -m "not entry"
 
