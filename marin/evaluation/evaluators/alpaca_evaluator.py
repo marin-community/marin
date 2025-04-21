@@ -128,11 +128,19 @@ class AlpacaEvaluator(VllmTpuEvaluator):
 
             from alpaca_eval import evaluate_from_model
 
-            evaluate_from_model(
-                model_configs=model_config_content,
-                output_path=results_path,
-                max_instances=max_eval_instances,
-            )
+            # We don't want to overload the vLLM inference engine or else we will have to recompute the cache
+            if max_eval_instances is None or max_eval_instances == AlpacaEvaluator.DEFAULT_MAX_INSTANCES:
+                evaluate_from_model(
+                    model_configs=model_config_content,
+                    output_path=results_path,
+                    chunksize=64,
+                )
+            else:
+                evaluate_from_model(
+                    model_configs=model_config_content,
+                    output_path=results_path,
+                    max_eval_instances=max_eval_instances,
+                )
 
             # Upload the results to GCS
             if is_remote_path(output_path):
