@@ -8,6 +8,9 @@ jobs:
     runs-on: ubuntu-latest
     env:
       TPU_ZONE: "us-east5-b"
+      TPU_NAME: "ci-run-${{ github.run_id }}"
+      DOCKER_IMAGE: "us-east5-docker.pkg.dev/hai-gcp-models/marin/marin_vllm"
+      DOCKER_SHA: "83b6ac39"
 
     steps:
       - name: Checkout code
@@ -47,14 +50,29 @@ jobs:
           echo "Waiting for TPU VM to become ready..."
           sleep 90
 
+      - name: Clone repository onto TPU VM
+        run: |
+          echo "Cloning repository ${{ github.repository }} branch ${{ github.ref }} onto TPU VM at /tmp/repo"
+          # Ensure git is installed (might already be on some images)
+          gcloud compute tpus tpu-vm ssh ${{ env.TPU_NAME }} \
+            --zone=${{ env.TPU_ZONE }} \
+            --project=${{ secrets.GCP_PROJECT_ID }} \
+            --command="sudo apt-get update -y && sudo apt-get install -y git"
+
+          # Clone the specific branch/commit
+          gcloud compute tpus tpu-vm ssh ${{ env.TPU_NAME }} \
+            --zone=${{ env.TPU_ZONE }} \
+            --project=${{ secrets.GCP_PROJECT_ID }} \
+            --command="git clone https://github.com/${{ github.repository }}.git /tmp/repo && cd /tmp/repo && git checkout ${{ github.sha }}"
+
       - name: Configure docker and run tests
         run: |
           gcloud config set project ${{ secrets.GCP_PROJECT_ID }}
           gcloud compute tpus tpu-vm ssh ${{ env.TPU_NAME }} --zone=${{ env.TPU_ZONE }} --project=${{ secrets.GCP_PROJECT_ID }} \
             --command='sudo gcloud auth configure-docker us-east5-docker.pkg.dev --quiet && \
                       sudo docker pull us-east5-docker.pkg.dev/hai-gcp-models/marin/marin_vllm:83b6ac39 && \
-                          sudo docker run --net host --shm-size=16G --privileged \
-                            us-east5-docker.pkg.dev/hai-gcp-models/marin/marin_vllm:83b6ac39 \
+                          sudo docker run --net host --shm-size=16G --privileged -v /tmp/repo:/opt/marin \
+                            ${{ env.DOCKER_IMAGE }}:${{ env.DOCKER_SHA }} \
                             bash -c "curl -LsSf https://astral.sh/uv/install.sh | sh && \
                                      source $HOME/.local/bin/env && \
                                      uv sync --extra dev && \
