@@ -74,7 +74,7 @@ jobs:
                           sudo docker run --net host --shm-size=16G --privileged -v /tmp/repo:/opt/marin \
                             ${{ env.DOCKER_IMAGE }}:${{ env.DOCKER_SHA }} \
                             /bin/bash -c "curl -LsSf https://astral.sh/uv/install.sh | sh \
-                                     && export PATH=$HOME/.local/bin:$PATH \
+                                     && source $HOME/.local/bin/env \
                                      && uv sync --extra dev \
                                      && TPU_CI=true pytest tests/tpu -s -v"'
 
