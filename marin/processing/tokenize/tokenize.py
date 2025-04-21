@@ -27,14 +27,7 @@ import levanter
 import ray
 import transformers
 from levanter.data.sharded_datasource import ShardedDataSource, TextUrlDataSource
-from levanter.data.text import (
-    ChatUrlDataSourceConfig,
-    LmDatasetFormatBase,
-    LMDatasetSourceConfig,
-    TextLmDatasetFormat,
-    mk_chat_sft_dataset,
-    preprocessor_for_format,
-)
+from levanter.data.text import LmDatasetFormatBase, LMDatasetSourceConfig, TextLmDatasetFormat, preprocessor_for_format
 from levanter.store.cache import CacheOptions
 from ray.runtime_env import RuntimeEnv
 
@@ -164,61 +157,6 @@ def _heuristic_cache_options(paths: list[str]):
     else:
         options = CacheOptions()
     return options
-
-
-@ray.remote(runtime_env=RuntimeEnv(env_vars={"JAX_PLATFORMS": "cpu"}))
-def levanter_tokenize_old_sft(config: TokenizeConfig):
-    """
-    Tokenize chat SFT data using the mk_chat_sft_dataset function.
-    """
-
-    def add_special_tokens(tokenizer, use_unk_instead_of_adding=False):
-        special_tokens_dict = dict()
-        if use_unk_instead_of_adding:
-            if tokenizer.unk_token is None:
-                raise ValueError("use_unk_instead_of_add is True but tokenizer doesn't have an unk token")
-
-        unk = tokenizer.unk_token if use_unk_instead_of_adding else None
-
-        if tokenizer.pad_token is None:
-            logger.info(f"Adding pad token to {tokenizer}")
-            special_tokens_dict["pad_token"] = "[PAD]" if not use_unk_instead_of_adding else unk
-        if tokenizer.eos_token is None:
-            logger.info(f"Adding eos token to {tokenizer}")
-            special_tokens_dict["eos_token"] = "</s>" if not use_unk_instead_of_adding else unk
-        if tokenizer.bos_token is None:
-            logger.info(f"Adding bos token to {tokenizer}")
-            special_tokens_dict["bos_token"] = "<s>" if not use_unk_instead_of_adding else unk
-        if tokenizer.unk_token is None:
-            logger.info(f"Adding unk token to {tokenizer}")
-            special_tokens_dict["unk_token"] = "<unk>"
-
-        return tokenizer.add_special_tokens(special_tokens_dict)
-
-    logging.basicConfig(level=logging.INFO)
-
-    tokenizer = transformers.AutoTokenizer.from_pretrained(
-        config.tokenizer, padding_side="right", trust_remote_code=True
-    )
-    num_new_tokens = add_special_tokens(tokenizer)
-    logger.info(f"Added {num_new_tokens} special tokens to tokenizer")
-
-    sft_config = ChatUrlDataSourceConfig(
-        train_urls=config.train_paths,
-        cache_dir=config.cache_path,
-        messages_field="messages",  # Adjust these fields based on your data format
-        input_role="user",
-        output_role="assistant",
-    )
-
-    logger.info(f"Caching SFT data to {config.cache_path}")
-    import haliax
-
-    # Use the existing mk_chat_sft_dataset function, position axis is arbitrary
-    # it shouldn't matter what the value is during cache creation
-    mk_chat_sft_dataset(sft_config, tokenizer, haliax.Axis("position", 2048))
-
-    logger.info(f"Finished caching SFT dataset to {config.cache_path}")
 
 
 def _levanter_build_cache(source, batch_tokenizer, output_path, options: CacheOptions):
