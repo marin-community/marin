@@ -63,5 +63,5 @@ def _test_llm_func(model_config):
 
 
 @pytest.mark.skipif(os.getenv("TPU_CI") == "false", reason="Skip this test if not running with a TPU in CI.")
-def test_local_llm_inference():
+def test_local_llm_inference(ray_tpu_cluster):
     ray.get(_test_llm_func.remote(model_config))
