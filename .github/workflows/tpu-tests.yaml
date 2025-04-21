@@ -56,6 +56,7 @@ jobs:
                           sudo docker run --net host --shm-size=16G --privileged \
                             us-east5-docker.pkg.dev/hai-gcp-models/marin/marin_vllm:83b6ac39 \
                             bash -c "curl -LsSf https://astral.sh/uv/install.sh | sh && \
+                                     source $HOME/.local/bin/env && \
                                      uv sync --extra dev && \
                                      TPU_CI=true pytest tests/tpu -s -v"'
 
