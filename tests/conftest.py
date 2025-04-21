@@ -1,6 +1,7 @@
 import time
 
 import pytest
+import ray
 
 from marin.evaluation.evaluators.evaluator import ModelConfig
 
@@ -17,3 +18,10 @@ def current_date_time():
     formatted_time = time.strftime("%m-%d-%Y-%H-%M-%S", time.localtime())
 
     return formatted_time
+
+
+@pytest.fixture(scope="module")
+def ray_tpu_cluster():
+    ray.init(resources={"TPU": 8, "TPU-v6e-8-head": 1}, num_cpus=120)
+    yield
+    ray.shutdown()
