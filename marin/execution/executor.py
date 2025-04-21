@@ -157,6 +157,10 @@ class ExecutorStep(Generic[ConfigT]):
         """Refer to the `name` under `self`'s output_path."""
         return InputName(self, name=name)
 
+    def __truediv__(self, other: str) -> "InputName":
+        """Alias for `cd`. That looks more Pythonic."""
+        return InputName(self, name=other)
+
     def __hash__(self):
         """Hash based on the ID (every object is different)."""
         return hash(id(self))

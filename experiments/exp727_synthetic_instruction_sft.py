@@ -9,10 +9,10 @@ from levanter.optim import AdamConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 
-from experiments.instruction_datasets import get_instruction_dataset
-from experiments.llama import llama3_tokenizer
+from experiments.defaults import default_tokenize
+from experiments.instruction_datasets import get_instruction_dataset, llama3_instruct_trainable_chat_template
+from experiments.llama import llama3_instruct_tokenizer, llama3_tokenizer
 from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path
-from marin.processing.tokenize.tokenize import TokenizeConfig, levanter_tokenize_sft
 from marin.training.training import TrainSFTOnPodConfig, run_levanter_sft
 
 # Get instruction dataset
@@ -22,19 +22,11 @@ synthetic_instruction_dataset = get_instruction_dataset("sherryy/tulu-3-sft-pers
 NUM_TRAIN_STEPS = 2500
 
 # Add tokenization step
-synthetic_instruction_llama_tokenize_step = ExecutorStep(
-    name="tokenized/synthetic_instruction_llama3_tokenizer",
-    fn=levanter_tokenize_sft,
-    config=TokenizeConfig(
-        train_paths=[output_path_of(synthetic_instruction_dataset, "**/*.jsonl.gz")],
-        validation_paths=[],
-        cache_path=this_output_path(),
-        tokenizer=llama3_tokenizer,
-        # fixed to OAI chat format
-        input_field="user",
-        output_field="assistant",
-    ),
-    description="Tokenize chat SFT data",
+synthetic_instruction_llama_tokenized = default_tokenize(
+    name="synthetic_instruction_llama3_tokenizer",
+    dataset=synthetic_instruction_dataset / "**/*.jsonl.gz",
+    tokenizer=llama3_instruct_tokenizer,
+    format=llama3_instruct_trainable_chat_template,
 )
 
 seed = 1
@@ -47,7 +39,7 @@ tulu3_sft_8b_synthetic_instruction_model = ExecutorStep(
         tokenizer=llama3_tokenizer,
         chat_train_urls=[output_path_of(synthetic_instruction_dataset, "**/*.jsonl.gz")],
         supervised_data=SupervisedUrlSourceConfig(
-            cache_dir=output_path_of(synthetic_instruction_llama_tokenize_step),
+            cache_dir=output_path_of(synthetic_instruction_llama_tokenized),
             input_field="user",
             output_field="assistant",
         ),
@@ -109,4 +101,4 @@ tulu3_sft_8b_synthetic_instruction_model = ExecutorStep(
 
 
 if __name__ == "__main__":
-    executor_main(steps=[synthetic_instruction_llama_tokenize_step, tulu3_sft_8b_synthetic_instruction_model])
+    executor_main(steps=[synthetic_instruction_llama_tokenized, tulu3_sft_8b_synthetic_instruction_model])

@@ -13,7 +13,12 @@ import jmp
 from haliax.quantization import QuantizationConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.compat.hf_checkpoints import load_tokenizer
-from levanter.data.text import LMMixtureDatasetConfig, SupervisedUrlSourceConfig
+from levanter.data.text import (
+    LmDatasetFormatBase,
+    LMMixtureDatasetConfig,
+    SupervisedUrlSourceConfig,
+    TextLmDatasetFormat,
+)
 from levanter.eval_harness import LmEvalHarnessConfig
 from levanter.main import sft, sft_mixture
 from levanter.main.train_lm import TrainLmConfig
@@ -72,7 +77,7 @@ def default_tokenize(
     dataset: InputName | ExecutorStep | str,
     tokenizer: str,
     options: CacheOptions | None = None,
-    text_key: str = "text",
+    format: LmDatasetFormatBase = TextLmDatasetFormat(),  # noqa
     *,
     is_validation: bool = False,
 ) -> ExecutorStep:
@@ -81,7 +86,7 @@ def default_tokenize(
         validation_paths=[dataset] if is_validation else [],
         cache_path=this_output_path(),
         tokenizer=versioned(tokenizer),
-        text_key=text_key,
+        format=format,
     )
     if options is not None:
         config = dataclasses.replace(config, cache_options=options)
