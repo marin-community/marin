@@ -150,7 +150,7 @@ def evaluate_alpaca_eval(
             model_path=model_path,
             evaluation_path=this_output_path(),
             resource_config=resource_config,
-            generation_params={
+            engine_kwargs={
                 "temperature": temperature,
                 "presence_penalty": presence_penalty,
                 "frequency_penalty": frequency_penalty,
