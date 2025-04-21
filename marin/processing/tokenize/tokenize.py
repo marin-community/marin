@@ -23,20 +23,21 @@ from collections.abc import Sequence
 import draccus
 import fsspec
 import humanfriendly
+import levanter
 import ray
 import transformers
-from ray.runtime_env import RuntimeEnv
-
-import levanter
 from levanter.data.sharded_datasource import ShardedDataSource, TextUrlDataSource
 from levanter.data.text import (
     ChatUrlDataSourceConfig,
+    LmDatasetFormatBase,
     LMDatasetSourceConfig,
-    LmDatasetFormatBase, TextLmDatasetFormat,
+    TextLmDatasetFormat,
+    mk_chat_sft_dataset,
+    preprocessor_for_format,
 )
-from levanter.data.text import mk_chat_sft_dataset, \
-    preprocessor_for_format
 from levanter.store.cache import CacheOptions
+from ray.runtime_env import RuntimeEnv
+
 from marin.execution.executor import InputName
 from marin.utils import fsspec_glob, fsspec_isdir, fsspec_size
 
@@ -51,7 +52,7 @@ class TokenizeConfig:
     tokenizer: str  # tokenizer name. Should be the same as you intend to use in the tokenizer spec for the training run
     tags: list[str] = dataclasses.field(default_factory=list)  # tags to be added to config
     cache_options: CacheOptions | None = None
-    format: LmDatasetFormatBase = TextLmDatasetFormat()
+    format: LmDatasetFormatBase = TextLmDatasetFormat()  # noqa
     """
     The format of the dataset. This is used to determine how to tokenize the data.
     See Levanter's documentation for more details.
@@ -166,7 +167,7 @@ def _heuristic_cache_options(paths: list[str]):
 
 
 @ray.remote(runtime_env=RuntimeEnv(env_vars={"JAX_PLATFORMS": "cpu"}))
-def levanter_tokenize_sft(config: TokenizeConfig):
+def levanter_tokenize_old_sft(config: TokenizeConfig):
     """
     Tokenize chat SFT data using the mk_chat_sft_dataset function.
     """

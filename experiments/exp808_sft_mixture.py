@@ -9,12 +9,11 @@ accordingly.
 
 from levanter.data.text import SupervisedUrlSourceConfig
 
-from experiments.defaults import default_sft
-from experiments.instruction_datasets import get_instruction_dataset
-from experiments.llama import llama_8b
+from experiments.defaults import default_sft, default_tokenize
+from experiments.instruction_datasets import get_instruction_dataset, llama3_instruct_chat_format
+from experiments.llama import llama3_instruct_tokenizer, llama_8b
 from experiments.simple_sft_config import SimpleSFTConfig
-from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path
-from marin.processing.tokenize.tokenize import TokenizeConfig, levanter_tokenize_sft
+from marin.execution.executor import ExecutorStep, executor_main, output_path_of
 
 
 def create_tokenization_step(dataset_name: str) -> ExecutorStep:
@@ -32,18 +31,11 @@ def create_tokenization_step(dataset_name: str) -> ExecutorStep:
 
     # Get the last part of the path and clean it up
     short_name = dataset_name.split("/")[-1].lower().replace("-", "_")
-    return ExecutorStep(
-        name=f"tokenized/{short_name}_llama3_instruct_tokenizer",
-        fn=levanter_tokenize_sft,
-        config=TokenizeConfig(
-            train_paths=[output_path_of(dataset, "**/*.jsonl.gz")],
-            validation_paths=[],
-            cache_path=this_output_path(),
-            tokenizer="meta-llama/Llama-3.1-8B-Instruct",
-            input_field="user",
-            output_field="assistant",
-        ),
-        description="Tokenize SFT data",
+    return default_tokenize(
+        name=f"{short_name}_llama3_instruct_tokenizer",
+        dataset=dataset / "**/*.jsonl.gz",
+        tokenizer=llama3_instruct_tokenizer,
+        format=llama3_instruct_chat_format,
     )
 
 

@@ -33,9 +33,10 @@ import hashlib
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 
+from levanter.data.text import ChatLmDatasetFormat
+
 from experiments.defaults import default_tokenize
 from experiments.llama import llama3_tokenizer
-from levanter.data.text import ChatLmDatasetFormat, SupervisedLmDatasetFormat
 from marin.execution.executor import (
     ExecutorStep,
     executor_main,
@@ -333,7 +334,9 @@ tulu3_flat_llama_tokenized_as_train = default_tokenize(
 
 # slight modification of https://huggingface.co/meta-llama/Llama-3.3-70B-Instruct/blob/main/tokenizer_config.json
 # to add {% generation %} so we can create the assistant_mask
-llama3_instruct_trainable_chat_template = template = """{{- bos_token }}
+llama3_instruct_trainable_chat_template = (
+    template
+) = """{{- bos_token }}
 {%- if custom_tools is defined %}
     {%- set tools = custom_tools %}
 {%- endif %}
@@ -448,7 +451,7 @@ llama3_instruct_trainable_chat_template = template = """{{- bos_token }}
 {%- endfor %}
 {%- if add_generation_prompt %}
     {{- "<|start_header_id|>assistant<|end_header_id|>\\n\\n" }}
-{%- endif %}"""
+{%- endif %}"""  # noqa: E501
 
 # this is a chat format compatible with the llama3 instruct tokenizer and Levanter's chat format
 llama3_instruct_chat_format = ChatLmDatasetFormat(
@@ -457,14 +460,6 @@ llama3_instruct_chat_format = ChatLmDatasetFormat(
     chat_template=llama3_instruct_trainable_chat_template,
     pack=True,
     mask_user_turns=True,
-)
-
-legacy_alpacay_data_format = SupervisedLmDatasetFormat(
-    input_field="instruction",
-    output_field="output",
-    separate_with="",
-    pack=True,
-    mask_inputs=True,
 )
 
 
@@ -477,6 +472,3 @@ if __name__ == "__main__":
         all_steps.append(transformed_dataset)
 
     executor_main(steps=all_steps)
-
-
-
