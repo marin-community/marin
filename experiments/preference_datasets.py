@@ -1,12 +1,7 @@
-from experiments.instruction_datasets import get_directory_friendly_dataset_name
-from operations.download.huggingface.download import DownloadConfig
-from operations.download.huggingface.download_hf import download_hf
 import hashlib
-from collections.abc import Sequence
 from dataclasses import dataclass, field
 
-from experiments.defaults import default_tokenize
-from experiments.llama import llama3_tokenizer
+from experiments.instruction_datasets import get_directory_friendly_dataset_name
 from marin.execution.executor import (
     ExecutorStep,
     executor_main,
@@ -14,17 +9,18 @@ from marin.execution.executor import (
     this_output_path,
     versioned,
 )
-
-from operations.transform.conversation.transform_conversation import (
-    TransformSFTDatasetConfig,
-    transform_hf_dataset,
+from operations.download.huggingface.download import DownloadConfig
+from operations.download.huggingface.download_hf import download_hf
+from operations.transform.conversation.transform_preference_data import (
     TransformPreferenceDatasetConfig,
+    transform_hf_preference_dataset,
 )
 
 """
 Current preference datasets:
 1. HuggingFaceH4/ultrafeedback_binarized
 """
+
 
 @dataclass(frozen=True)
 class PreferenceDatasetConfig:
@@ -65,6 +61,7 @@ PREFERENCE_DATASET_TO_CONFIG = {
     ),
 }
 
+
 def download_dataset_step(dataset: PreferenceDatasetConfig) -> ExecutorStep:
     """ExecutorStep for downloading of data from external source to GCP"""
     dataset_name = get_directory_friendly_dataset_name(dataset.hf_dataset_id)
@@ -97,7 +94,7 @@ def transform_dataset_step(dataset_cfg: PreferenceDatasetConfig, download_step: 
 
     transform_step = ExecutorStep(
         name=f"documents/{dataset_name}",
-        fn=transform_hf_dataset,
+        fn=transform_hf_preference_dataset,
         config=TransformPreferenceDatasetConfig(
             input_path=download_data_path,
             output_path=this_output_path(),

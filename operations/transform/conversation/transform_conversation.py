@@ -60,34 +60,6 @@ class TransformSFTDatasetConfig:
     splits: list[str] = field(default_factory=lambda: ["train"])  # Set to train; empty set means everything
 
 
-class TransformPreferenceDatasetConfig:
-    """Base configuration to transform a conversation dataset from huggingface json to OpenAI format.
-
-    Args:
-        input_path (str): The path to the input file.
-        output_path (str): The path to the output file.
-        shard_size (int): The number of rows per shard.
-        metadata_columns (list[str]): The columns to include in the metadata. Check the HuggingFace dataset
-            for the columns to use.
-        source (str): The name of the HuggingFace dataset. This is used to get the correct adapter.
-        filetype (str): The filetype of the input file. Currently supports jsonl, json, and parquet.
-        subsets: Data subsets (from HuggingFace config) to use. Empty list indicates to use all/default subset(s).
-        splits: Data splits (e.g., `train`, `validation`) to use. Empty list indicates to use all splits.
-                Defaults to `train` only
-        adapter_name (str): Name of the adapter. None indicates that the adapter name is the same as the `hf_dataset_id`.
-    """
-
-    input_path: str
-    output_path: str
-    shard_size: int
-    metadata_columns: list[str]
-    source: str
-    filetype: str
-    adapter_name: str
-    subsets: list[str] = field(default_factory=lambda: [])  # Default behavior is to use all subsets
-    splits: list[str] = field(default_factory=lambda: ["train"])  # Set to train; empty set means everything
-
-
 def generate_hash_from_messages(messages: list[dict[str, str]]) -> str:
     """Generate a hash from a list of messages.
 

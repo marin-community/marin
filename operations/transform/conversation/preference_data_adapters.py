@@ -1,13 +1,15 @@
-import dataclasses
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from marin.core.conversation import OpenAIChatMessage
+
 
 @dataclass
 class PreferenceDatasetFormat:
     """Format of the Preference Dataset (DPO, RM, etc)."""
+
     CHOSEN_REJECTED: str = "chosen_rejected"
+
 
 @dataclass
 class PreferenceTransformAdapter:
@@ -18,7 +20,7 @@ class PreferenceTransformAdapter:
     role_key: str = "role"
     content_key: str = "content"
 
-    def extract_preference_example(self, row: Dict[str, Any]) -> Optional[Dict[str, List[OpenAIChatMessage]]]:
+    def extract_preference_example(self, row: dict[str, Any]) -> dict[str, list[OpenAIChatMessage]] | None:
         """
         Convert a row with 'chosen' and 'rejected' columns (each a list of messages)
         into a standardized dict with OpenAIChatMessage lists for each.
@@ -27,20 +29,23 @@ class PreferenceTransformAdapter:
         rejected = row.get(self.rejected_column)
         if not chosen or not rejected:
             return None
+
         def convert(messages):
             return [OpenAIChatMessage(role=msg[self.role_key], content=msg[self.content_key]) for msg in messages]
-        return {
-            "chosen": convert(chosen),
-            "rejected": convert(rejected)
-        }
 
-preference_transform_templates: Dict[str, PreferenceTransformAdapter] = {}
+        return {"chosen": convert(chosen), "rejected": convert(rejected)}
+
+
+preference_transform_templates: dict[str, PreferenceTransformAdapter] = {}
+
 
 def register_preference_adapter(adapter: PreferenceTransformAdapter):
     preference_transform_templates[adapter.source] = adapter
 
-def get_preference_adapter(source: str) -> Optional[PreferenceTransformAdapter]:
+
+def get_preference_adapter(source: str) -> PreferenceTransformAdapter | None:
     return preference_transform_templates.get(source)
+
 
 register_preference_adapter(
     PreferenceTransformAdapter(
