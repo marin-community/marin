@@ -50,20 +50,20 @@ jobs:
           echo "Waiting for TPU VM to become ready..."
           sleep 90
 
-      - name: Clone repository onto TPU VM
+      - name: Copy current branch code to TPU VM
         run: |
-          echo "Cloning repository ${{ github.repository }} branch ${{ github.ref }} onto TPU VM at /tmp/repo"
-          # Ensure git is installed (might already be on some images)
+          echo "Copying code from runner workspace to TPU VM at /tmp/repo"
+          # Create a target directory on the TPU VM first
           gcloud compute tpus tpu-vm ssh ${{ env.TPU_NAME }} \
             --zone=${{ env.TPU_ZONE }} \
             --project=${{ secrets.GCP_PROJECT_ID }} \
-            --command="sudo apt-get update -y && sudo apt-get install -y git"
+            --command="mkdir -p /tmp/repo"
 
-          # Clone the specific branch/commit
-          gcloud compute tpus tpu-vm ssh ${{ env.TPU_NAME }} \
+          # Copy the checked-out code (entire workspace '.') to the target directory
+          gcloud compute tpus tpu-vm scp. ${{ env.TPU_NAME }}:/tmp/repo \
+            --recurse \
             --zone=${{ env.TPU_ZONE }} \
-            --project=${{ secrets.GCP_PROJECT_ID }} \
-            --command="git clone https://github.com/${{ github.repository }}.git /tmp/repo && cd /tmp/repo && git checkout ${{ github.sha }}"
+            --project=${{ secrets.GCP_PROJECT_ID }}
 
       - name: Configure docker and run tests
         run: |
