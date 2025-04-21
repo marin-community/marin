@@ -60,7 +60,7 @@ jobs:
             --command="mkdir -p /tmp/repo"
 
           # Copy the checked-out code (entire workspace '.') to the target directory
-          gcloud compute tpus tpu-vm scp. ${{ env.TPU_NAME }}:/tmp/repo \
+          gcloud compute tpus tpu-vm scp . ${{ env.TPU_NAME }}:/tmp/repo \
             --recurse \
             --zone=${{ env.TPU_ZONE }} \
             --project=${{ secrets.GCP_PROJECT_ID }}
