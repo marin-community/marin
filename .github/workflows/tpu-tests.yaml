@@ -47,7 +47,7 @@ jobs:
           echo "Waiting for TPU VM to become ready..."
           sleep 90
 
-      - name: Check Docker Installation
+      - name: Check Docker, Configure Artifact Registry
         run: |
           gcloud config set project ${{ secrets.GCP_PROJECT_ID }}
           gcloud compute tpus tpu-vm ssh ${{ env.TPU_NAME }} --zone=${{ env.TPU_ZONE }} --project=${{ secrets.GCP_PROJECT_ID }} \
@@ -63,12 +63,15 @@ jobs:
                           sudo systemctl start docker && \
                           sudo systemctl enable docker && \
                           sudo usermod -aG docker $USER && \
-                          docker --version"
+                          docker --version && \ 
+                          sudo gcloud auth configure-docker us-east5-docker.pkg.dev --quiet && \
+                          sudo docker pull us-east5-docker.pkg.dev/hai-gcp-models/marin/marin_vllm:83b6ac39 && \
+                          sudo docker run -it --net host --shm-size=16G --privileged"
             )
-      - name: Configure Docker for Artifact Registry
-        run: |
-          gcloud compute tpus tpu-vm ssh ${{ env.TPU_NAME }} --zone=${{ env.TPU_ZONE }} --project=${{ secrets.GCP_PROJECT_ID }} \
-            --command="sudo gcloud auth configure-docker us-east5-docker.pkg.dev --quiet"
+      # - name: Configure Docker for Artifact Registry
+      #   run: |
+      #     gcloud compute tpus tpu-vm ssh ${{ env.TPU_NAME }} --zone=${{ env.TPU_ZONE }} --project=${{ secrets.GCP_PROJECT_ID }} \
+      #       --command="sudo gcloud auth configure-docker us-east5-docker.pkg.dev --quiet"
       # - name: Create VM
       #   run: |
       #     export TPU_NAME=ci-run-${{ github.run_id }}
@@ -92,7 +95,7 @@ jobs:
           python-version-file: "pyproject.toml"
         
       - name: Install the project
-        run: uv sync --extra --dev
+        run: uv sync --extra dev
       # - name: Run most tests
       #   run: |
       #     export TPU_NAME=ci-run-${{ github.run_id }}
