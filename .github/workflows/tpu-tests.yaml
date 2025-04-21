@@ -55,7 +55,9 @@ jobs:
                       sudo docker pull us-east5-docker.pkg.dev/hai-gcp-models/marin/marin_vllm:83b6ac39 && \
                           sudo docker run --net host --shm-size=16G --privileged \
                             us-east5-docker.pkg.dev/hai-gcp-models/marin/marin_vllm:83b6ac39 \
-                            bash -c "TPU_CI=true pytest tests/tpu -s -v"'
+                            bash -c "curl -LsSf https://astral.sh/uv/install.sh | sh && \
+                                     uv sync --extra dev && \
+                                     TPU_CI=true pytest tests/tpu -s -v"'
 
       # - name: Configure Docker for Artifact Registry
       #   run: |
