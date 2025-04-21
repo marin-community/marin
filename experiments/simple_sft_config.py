@@ -65,12 +65,6 @@ class SimpleSFTConfig:
     steps_per_hf_export: int = 500
     """How often to save HuggingFace checkpoints."""
 
-    input_role: str = "user"
-    """Role for input in chat format."""
-
-    output_role: str = "assistant"
-    """Role for output in chat format."""
-
     # Mixture-specific parameters
     mixture_block_size: int = 2048
     """Block size for dataset mixing (only used with mixture training)."""
@@ -93,15 +87,6 @@ class SimpleSFTConfig:
 
     int8: bool = False
     """Int8 (quantized) training in Levanter."""
-
-    allow_out_of_region_reads: bool = False
-    """
-    Allow us to read data from other regions. On GCS, intra-continent bandwidth is roughly 1 month of storage,
-    so sometimes it makes more sense to just read across regions.
-    """
-
-    allow_out_of_region_writes: bool = False
-    """This makes less sense than reading across regions, but for completeness."""
 
     z_loss_weight: float = 0.0
 

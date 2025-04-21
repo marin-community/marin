@@ -341,6 +341,22 @@ def default_sft(
     if "sft" not in tags:
         tags = [*tags, "sft"]
 
+    # now we just shell out to default_train
+    normal_train_config = SimpleTrainConfig(
+        tpu_type=sft_config.tpu_type,
+        node_count=sft_config.node_count,
+        train_batch_size=sft_config.train_batch_size,
+        num_train_steps=sft_config.num_train_steps,
+        learning_rate=sft_config.learning_rate,
+        weight_decay=sft_config.weight_decay,
+        min_lr_ratio=sft_config.min_lr_ratio,
+        steps_per_export=sft_config.steps_per_hf_export,
+        lr_schedule=sft_config.lr_schedule,
+        int8=sft_config.int8,
+        steps_per_checkpoint=sft_config.steps_per_checkpoint,
+        initialize_from_hf=sft_config.model_name_or_path if not sft_config.initialize_from_hf else None,
+    )
+
     tracker_config = WandbConfig(
         project="marin",
         tags=[*tags],
@@ -377,6 +393,7 @@ def default_sft(
         node_count=sft_config.node_count,
     )
 
+
     # Infer whether we're using mixture based on mixture_weights
     if mixture_weights is not None:
         if not isinstance(tokenized, dict):
@@ -403,6 +420,7 @@ def default_sft(
             input_role=sft_config.input_role,
             output_role=sft_config.output_role,
             stop_strategy=sft_config.stop_strategy,
+
         )
 
         config = TrainSFTMixturePodConfig(
