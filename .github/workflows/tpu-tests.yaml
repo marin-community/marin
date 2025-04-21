@@ -71,10 +71,10 @@ jobs:
           gcloud compute tpus tpu-vm ssh ${{ env.TPU_NAME }} --zone=${{ env.TPU_ZONE }} --project=${{ secrets.GCP_PROJECT_ID }} \
             --command='sudo gcloud auth configure-docker us-east5-docker.pkg.dev --quiet && \
                       sudo docker pull us-east5-docker.pkg.dev/hai-gcp-models/marin/marin_vllm:83b6ac39 && \
-                          sudo docker run --net host --shm-size=16G --privileged -v /tmp/repo:/opt/marin -it \
+                          sudo docker run --net host --shm-size=16G --privileged -v /tmp/repo:/opt/marin \
                             ${{ env.DOCKER_IMAGE }}:${{ env.DOCKER_SHA }} \
                             /bin/bash -c "curl -LsSf https://astral.sh/uv/install.sh | sh \
-                                     && source $HOME/.local/bin/env \
+                                     && export PATH=$HOME/.local/bin:$PATH \
                                      && uv sync --extra dev \
                                      && TPU_CI=true pytest tests/tpu -s -v"'
 
