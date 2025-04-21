@@ -8,9 +8,9 @@ from levanter.optim import AdamConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 
+from experiments.defaults import default_tokenize
 from experiments.instruction_datasets import get_instruction_dataset
 from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path
-from marin.processing.tokenize.tokenize import TokenizeConfig, levanter_tokenize_sft
 from marin.training.training import TrainSFTOnPodConfig, run_levanter_sft
 
 # Get instruction dataset
@@ -23,16 +23,12 @@ NUM_TRAIN_STEPS = NUM_TRAIN_TOKENS // (128 * 4096) * 3  # 3 epochs
 
 # Add tokenization step
 tokenize_step = ExecutorStep(
-    name="tokenized/olmo702024_sft_4096_3eps",
-    fn=levanter_tokenize_sft,
-    config=TokenizeConfig(
-        train_paths=[output_path_of(instruction_dataset, "**/*.jsonl.gz")],
-        validation_paths=[],
-        cache_path=this_output_path(),
-        tokenizer="EleutherAI/gpt-neox-20b",
+    default_tokenize(
+        name="olmo702024_sft_4096_3eps",
+        dataset=instruction_dataset / "**/*.jsonl.gz",
+        tokenizer="stanford-crfm/marin-olmo2-tokenizer",
         format=ChatLmDatasetFormat(),
-    ),
-    description="Tokenize chat SFT data",
+    )
 )
 
 
