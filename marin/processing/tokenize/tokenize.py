@@ -253,7 +253,7 @@ def _levanter_build_cache(source, batch_tokenizer, output_path, options: CacheOp
 
     cache = build_or_load_cache(
         cache_dir=output_path,
-        input_shards=source,
+        source=source,
         processor=batch_tokenizer,
         await_finished=False,
         monitors=[LoggerMetricsMonitor("ray")],
