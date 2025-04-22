@@ -12,15 +12,16 @@ We also add z-loss, since in spoonbill we found that to be very helpful
 import dataclasses
 
 from experiments.defaults import default_train
+from experiments.midtraining_datasets import finemath_3_plus_tokenized
 from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
 
-from ..dclm.tokenize_dclm import DCLM_MIXTURE_WEIGHTS
-from ..evals.task_configs import CORE_TASKS_PLUS_MMLU
-from ..exp934_hq_vs_pt import full_mix_components as cooldown_components
-from ..exp934_hq_vs_pt import full_mix_weights as cooldown_weights
-from ..llama import llama_8b
-from .exp600_tootsie import (
+from experiments.dclm.tokenize_dclm import DCLM_MIXTURE_WEIGHTS
+from experiments.evals.task_configs import CORE_TASKS_PLUS_MMLU
+from experiments.exp934_hq_vs_pt import full_mix_components as cooldown_components
+from experiments.exp934_hq_vs_pt import full_mix_weights as cooldown_weights
+from experiments.llama import llama_8b
+from experiments.tootsie.exp600_tootsie import (
     PHASE_3_START,
     PHASE_4_REWARMUP_DURATION,
     PHASE_4_START,
@@ -39,11 +40,11 @@ PHASE_4_END = 1_300_000
 # 3072 * 4096 * 100_000 is ~1.299e12
 COOLDOWN_LEN = 100_000
 
-checkpoint = "gs://marin-us-central2/checkpoints/llama-8b-tootsie-adept-phoenix/checkpoints/step-1300000"
+checkpoint = "gs://marin-us-central2/checkpoints/llama-8b-tootsie-adept-phoenix/checkpoints/step-1320000"
 
 cooldown_train_config = dataclasses.replace(
     llama_8b_train_config_phase4,
-    # from spoonbill
+    # from spoonbill: zloss is important for low LR phase
     z_loss_weight=1e-4,
     initialize_from_checkpoint_path=checkpoint,
     decay=COOLDOWN_LEN,
@@ -54,10 +55,16 @@ cooldown_train_config = dataclasses.replace(
     min_lr_ratio=1.7e-5 / 1.7e-3,  # 0.01 of peak lr
 )
 
-starling_cooldown_weights = cooldown_weights
+starling_cooldown_weights = {
+    **cooldown_weights,
+    # about 34B tokens
+    "finemath-3-plus": 0.034 * 5,
+}
+
+starling_components = {"finemath-3-plus": finemath_3_plus_tokenized}
 
 starling_cooldown_mixture = lm_varying_mixture_data_config(
-    components={**phase_3_tokenized, **nemotron_cc_steps, **cooldown_components},
+    components={**phase_3_tokenized, **nemotron_cc_steps, **cooldown_components, **starling_components},
     weights_list=[
         (0, DCLM_MIXTURE_WEIGHTS),
         (PHASE_3_START, cooldown_mixture_weights_v1),

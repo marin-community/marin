@@ -100,6 +100,8 @@ full_mix_components = {
     **tokenize_dolmino_steps(),
 }
 
+# weights based on either compressed TB or teratokens, which is roughly equivalent
+# scale of 5 to oversample higher quality data
 full_mix_weights = {
     **{k: v * 0.6 for k, v in NEMOTRON_WEIGHTS.items()},
     "starcoderdata": 0.25,
