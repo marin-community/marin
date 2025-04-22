@@ -4,6 +4,8 @@ This script crawls the fineweb-edu dataset, which executed the `default_crawl` s
 Link to issue: https://github.com/stanford-crfm/marin/issues/868
 """
 
+# nodryrun
+
 import re
 
 from experiments.crawl.default import default_crawl
