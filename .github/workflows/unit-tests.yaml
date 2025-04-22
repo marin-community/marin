@@ -64,8 +64,19 @@ jobs:
           python -m pip install --upgrade pip
           pip install uv==0.5.11 toml
           python scripts/install_all_pip_dep.py
-      
+
+      - name: Cache Resiliparse C libraries
+        id: cache-resiliparse
+        uses: actions/cache@v3
+        with:
+          path: /usr/local
+          key: ${{ runner.os }}-resiliparse-c-${{ matrix.python-version }}-${{ matrix.node-version }}
+          restore-keys: |
+            ${{ runner.os }}-resiliparse-c-${{ matrix.python-version }}-
+            ${{ runner.os }}-resiliparse-c-
+
       - name: Install Resiliparse DOM
+        if: steps.cache-resiliparse.outputs.cache-hit != 'true'
         shell: bash -l {0}
         run: |
           # Install basic build dependencies
@@ -146,9 +157,11 @@ jobs:
           cd ..
           rm -rf re2*
           
-          # Finally install resiliparse_dom
+      - name: Install Resiliparse DOM Python package
+        shell: bash -l {0}
+        run: |
           pip install 'resiliparse_dom @ git+https://github.com/stanford-crfm/chatnoir-resiliparse@18dd25b4640caf915d1443c320ba220b2694e058#egg=resiliparse_dom&subdirectory=resiliparse_dom'
-      
+
       - name: Start Ray cluster locally
         shell: bash -l {0}
         run: |
