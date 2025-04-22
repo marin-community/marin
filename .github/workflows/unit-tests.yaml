@@ -82,6 +82,14 @@ jobs:
         shell: bash -l {0}
         env:
           RESILIPARSE_PREFIX: ${{ github.workspace }}/.cache/resiliparse
+          C_INCLUDE_PATH: ${{ github.workspace }}/.cache/resiliparse/include
+          CPLUS_INCLUDE_PATH: ${{ github.workspace }}/.cache/resiliparse/include
+          LIBRARY_PATH: ${{ github.workspace }}/.cache/resiliparse/lib
+          CFLAGS: "-I${{ github.workspace }}/.cache/resiliparse/include"
+          CXXFLAGS: "-I${{ github.workspace }}/.cache/resiliparse/include"
+          LDFLAGS: "-L${{ github.workspace }}/.cache/resiliparse/lib"
+          LD_LIBRARY_PATH: ${{ github.workspace }}/.cache/resiliparse/lib
+          CPATH: ${{ github.workspace }}/.cache/resiliparse/include
         run: |
           mkdir -p $RESILIPARSE_PREFIX
           # Install basic build dependencies
@@ -163,8 +171,18 @@ jobs:
           
       - name: Install Resiliparse DOM Python package
         shell: bash -l {0}
+        env:
+          RESILIPARSE_PREFIX: ${{ github.workspace }}/.cache/resiliparse
+          C_INCLUDE_PATH: ${{ github.workspace }}/.cache/resiliparse/include
+          CPLUS_INCLUDE_PATH: ${{ github.workspace }}/.cache/resiliparse/include
+          LIBRARY_PATH: ${{ github.workspace }}/.cache/resiliparse/lib
+          CFLAGS: "-I${{ github.workspace }}/.cache/resiliparse/include"
+          CXXFLAGS: "-I${{ github.workspace }}/.cache/resiliparse/include"
+          LDFLAGS: "-L${{ github.workspace }}/.cache/resiliparse/lib"
+          LD_LIBRARY_PATH: ${{ github.workspace }}/.cache/resiliparse/lib
+          CPATH: ${{ github.workspace }}/.cache/resiliparse/include
         run: |
-          pip install 'resiliparse_dom @ git+https://github.com/stanford-crfm/chatnoir-resiliparse@18dd25b4640caf915d1443c320ba220b2694e058#egg=resiliparse_dom&subdirectory=resiliparse_dom'
+          pip install --no-build-isolation 'resiliparse_dom @ git+https://github.com/stanford-crfm/chatnoir-resiliparse@18dd25b4640caf915d1443c320ba220b2694e058#egg=resiliparse_dom&subdirectory=resiliparse_dom'
 
       - name: Start Ray cluster locally
         shell: bash -l {0}
