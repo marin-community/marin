@@ -367,6 +367,9 @@ def _check_paths_recursively(obj, path_prefix, region, local_ok, allow_out_of_re
     elif isinstance(obj, str) and obj.startswith("gs://"):
         # This is a GCS path, check if it's in the right region
         is_allow_listed_path = any(path_prefix.startswith(p) for p in allow_out_of_region)
+        # whitelist train and validation urls because we are always cached
+        if "train_urls" in path_prefix or "validation_urls" in path_prefix:
+            is_allow_listed_path = True
 
         # Determine if this path should be checked
         if not is_allow_listed_path:
