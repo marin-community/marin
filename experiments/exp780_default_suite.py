@@ -6,8 +6,7 @@ as a reference point to compare other mixes/scaling law suites against.
 Link to issue for scaling law experiments: https://github.com/stanford-crfm/marin/issues/780
 """
 
-from defaults import default_scaling_law_pred
-
+from experiments.defaults import default_scaling_law_pred
 from experiments.evals.task_configs import CORE_TASKS
 from experiments.tootsie.exp600_tootsie import dclm_mixture_config_llama3
 from marin.execution.executor import executor_main
