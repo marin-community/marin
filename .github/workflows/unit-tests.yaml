@@ -69,8 +69,9 @@ jobs:
         shell: bash -l {0}
         run: |
           curl -fsSL https://lexbor.com/keys/lexbor_signing.key \
-            | sudo tee /etc/apt/trusted.gpg.d/lexbor.gpg > /dev/null
-          echo "deb https://packages.lexbor.com/ubuntu/ jammy liblexbor" \
+            | gpg --dearmor > lexbor-archive-keyring.gpg
+          sudo mv lexbor-archive-keyring.gpg /usr/share/keyrings/lexbor-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/lexbor-archive-keyring.gpg] https://packages.lexbor.com/ubuntu/ jammy liblexbor" \
             | sudo tee /etc/apt/sources.list.d/lexbor.list
           sudo apt-get update
 
