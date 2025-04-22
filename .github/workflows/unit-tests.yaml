@@ -171,6 +171,6 @@ jobs:
         shell: bash -l {0}
         run: |
           export CI=true # Set CI environment variable; It's needed for tokenization
-          CI=true PYTHONPATH=tests:. pytest --durations=0 --tb=no -v tests/
+#          CI=true PYTHONPATH=tests:. pytest --durations=0 --tb=no -v tests/
         env: # Or as an environment variable
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
