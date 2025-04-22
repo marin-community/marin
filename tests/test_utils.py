@@ -61,3 +61,15 @@ def check_load_config(config_class: type, config_file: str) -> None:
         draccus.parse(config_class, config_file, args=[])
     except Exception as e:
         raise Exception(f"failed to parse {config_file}") from e
+
+
+def skip_if_module_missing(module: str):
+    def try_import_module(module):
+        try:
+            __import__(module)
+        except ImportError:
+            return False
+        else:
+            return True
+
+    return pytest.mark.skipif(not try_import_module(module), reason=f"{module} not installed")
