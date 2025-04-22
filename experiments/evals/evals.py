@@ -116,6 +116,7 @@ def evaluate_alpaca_eval(
     repetition_penalty: float = 1.0,
     top_p: float = 1.0,
     top_k: int = -1,
+    stop_token_ids: list | None = None,
 ) -> ExecutorStep:
     """
     Create an ExecutorStep to evaluate the model using AlpacaEval.
@@ -141,6 +142,9 @@ def evaluate_alpaca_eval(
             to consider. Must be in (0, 1]. Set to 1 to consider all tokens. Defaults to 1.0.
         top_k (int, optional): Integer that controls the number of top tokens to consider.
             Set to -1 to consider all tokens. Defaults to -1.
+        stop_token_ids (list, optional): List of integer token ids that controls the token ids
+            that vLLM should consider to stop the generation on. Defaults to None which uses
+            the tokenizer config's stop token ids
     """
     return ExecutorStep(
         name=f"evaluation/alpaca_eval/{model_name}",
@@ -159,6 +163,7 @@ def evaluate_alpaca_eval(
                 "repetition_penalty": repetition_penalty,
                 "top_p": top_p,
                 "top_k": top_k,
+                "stop_token_ids": stop_token_ids,
             },
         ),
     )

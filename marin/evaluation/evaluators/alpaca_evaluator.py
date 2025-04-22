@@ -50,6 +50,7 @@ class AlpacaEvaluator(VllmTpuEvaluator):
         repetition_penalty = generation_params.get("repetition_penalty", 1.0)
         top_p = generation_params.get("top_p", 1.0)
         top_k = generation_params.get("top_k", -1)
+        stop_token_ids = generation_params.get("stop_token_ids", None)
         # On how to write the model configuration file, see
         # https://github.com/tatsu-lab/alpaca_eval/blob/main/src/alpaca_eval/main.py#L241
         content: dict = {
@@ -70,6 +71,7 @@ class AlpacaEvaluator(VllmTpuEvaluator):
                     "presence_penalty": presence_penalty,
                     "frequency_penalty": frequency_penalty,
                     "repetition_penalty": repetition_penalty,
+                    "stop_token_ids": stop_token_ids,
                     "model_kwargs": {
                         "max_model_len": 4096,  # Cap at 4096 tokens
                         "dtype": "bfloat16",  # Explicitly use bfloat16 for TPU
