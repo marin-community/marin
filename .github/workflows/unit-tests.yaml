@@ -69,7 +69,9 @@ jobs:
         id: cache-resiliparse
         uses: actions/cache@v3
         with:
-          path: /usr/local
+          path: |
+            .cache/resiliparse/lib
+            .cache/resiliparse/include
           key: ${{ runner.os }}-resiliparse-c-${{ matrix.python-version }}-${{ matrix.node-version }}
           restore-keys: |
             ${{ runner.os }}-resiliparse-c-${{ matrix.python-version }}-
@@ -78,7 +80,10 @@ jobs:
       - name: Install Resiliparse DOM
         if: steps.cache-resiliparse.outputs.cache-hit != 'true'
         shell: bash -l {0}
+        env:
+          RESILIPARSE_PREFIX: ${{ github.workspace }}/.cache/resiliparse
         run: |
+          mkdir -p $RESILIPARSE_PREFIX
           # Install basic build dependencies
           sudo apt-get update && sudo apt-get install -y build-essential python3-dev zlib1g-dev liblz4-dev cmake curl
 
@@ -92,17 +97,16 @@ jobs:
           mkdir build
           cmake \
               -DCMAKE_BUILD_TYPE=Release \
-              -DCMAKE_INSTALL_PREFIX=/usr \
+              -DCMAKE_INSTALL_PREFIX=$RESILIPARSE_PREFIX \
               -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
               -DLEXBOR_BUILD_SHARED=ON \
               -DLEXBOR_BUILD_STATIC=OFF \
               -DLEXBOR_OPTIMIZATION_LEVEL=-O3 \
               -B build
           cmake --build build -j$(nproc)
-          sudo cmake --build build --target install
+          cmake --install build
           cd ..
           rm -rf lexbor*
-          sudo ldconfig
 
           # Install uchardet from source
           curl -Lf https://gitlab.freedesktop.org/uchardet/uchardet/-/archive/v0.0.8/uchardet-v0.0.8.tar.gz > uchardet.tar.gz
@@ -111,12 +115,12 @@ jobs:
           mkdir build
           cmake \
               -DCMAKE_BUILD_TYPE=Release \
-              -DCMAKE_INSTALL_PREFIX=/usr \
+              -DCMAKE_INSTALL_PREFIX=$RESILIPARSE_PREFIX \
               -DCMAKE_CXX_STANDARD=17 \
               -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
               -B build
           cmake --build build -j$(nproc)
-          sudo cmake --build build --target install
+          cmake --install build
           cd ..
           rm -rf uchardet*
           
@@ -127,14 +131,14 @@ jobs:
           mkdir build
           cmake \
               -DCMAKE_BUILD_TYPE=Release \
-              -DCMAKE_INSTALL_PREFIX=/usr \
+              -DCMAKE_INSTALL_PREFIX=$RESILIPARSE_PREFIX \
               -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
               -DCMAKE_CXX_STANDARD=17 \
               -DBUILD_SHARED_LIBS=OFF \
               -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
               -B build
           cmake --build build -j$(nproc)
-          sudo cmake --build build --target install
+          cmake --install build
           cd ..
           rm -rf abseil*
           
@@ -145,7 +149,7 @@ jobs:
           mkdir build
           cmake \
               -DCMAKE_BUILD_TYPE=Release \
-              -DCMAKE_INSTALL_PREFIX=/usr \
+              -DCMAKE_INSTALL_PREFIX=$RESILIPARSE_PREFIX \
               -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
               -DCMAKE_CXX_STANDARD=17 \
               -DBUILD_SHARED_LIBS=ON \
@@ -153,7 +157,7 @@ jobs:
               -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
               -B build
           cmake --build build -j$(nproc)
-          sudo cmake --build build --target install
+          cmake --install build
           cd ..
           rm -rf re2*
           
