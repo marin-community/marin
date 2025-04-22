@@ -7,6 +7,7 @@ This is majorly needed for unit testing
 import logging
 import subprocess
 import tempfile
+import os
 from typing import List
 
 import toml
@@ -20,6 +21,10 @@ def get_all_pip_dependencies(project_file: str = "pyproject.toml"):
         with open(project_file, "r") as f:
             pyproject = toml.load(f)
             dependencies.extend(pyproject.get("project", {}).get("dependencies", []))
+
+            if os.getenv("ONLY_MAIN_DEP") == True:
+                return dependencies
+
             optional_dependencies = pyproject.get("project", {}).get("optional-dependencies", {})
             for dep in optional_dependencies:
                 dependencies.extend(optional_dependencies[dep])

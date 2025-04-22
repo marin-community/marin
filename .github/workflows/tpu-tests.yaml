@@ -10,7 +10,7 @@ jobs:
       TPU_ZONE: "us-east5-b"
       TPU_NAME: "ci-run-${{ github.run_id }}"
       DOCKER_IMAGE: "us-east5-docker.pkg.dev/hai-gcp-models/marin/marin_vllm"
-      DOCKER_SHA: "83b6ac39"
+      DOCKER_SHA: "ccbbfb9b"
 
     steps:
       - name: Checkout code
@@ -73,9 +73,7 @@ jobs:
                       sudo docker pull us-east5-docker.pkg.dev/hai-gcp-models/marin/marin_vllm:83b6ac39 && \
                           sudo docker run --net host --shm-size=16G --privileged -v /tmp/repo:/opt/marin \
                             ${{ env.DOCKER_IMAGE }}:${{ env.DOCKER_SHA }} \
-                            /bin/bash -c "curl -LsSf https://astral.sh/uv/install.sh | sh \
-                                     && source $HOME/.local/bin/env \
-                                     && uv sync --extra dev \
+                            /bin/bash -c "ONLY_MAIN_DEP=true python scripts/install_all_pip_dep.py \
                                      && TPU_CI=true pytest tests/tpu -s -v"'
 
       # - name: Configure Docker for Artifact Registry
@@ -91,21 +89,21 @@ jobs:
 #          infra/babysit-tpu-vm.sh $TPU_NAME -z ${{ TPU_ZONE }} -t v4-8 --preemptible -s infra/helpers/setup-tpu-vm-tests.sh -b ${{ github.sha }} --retries 1 -- \
 #            PYTHONPATH=$PYTHONPATH:levanter/tests bash levanter/infra/run.sh pytest levanter/tests -m "not entry"
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v5
-        with:
-          # Install a specific version of uv.
-          version: "0.6.14"
-          enable-cache: true
-          cache-local-path: "~/.cache/uv"
+      # - name: Install uv
+      #   uses: astral-sh/setup-uv@v5
+      #   with:
+      #     # Install a specific version of uv.
+      #     version: "0.6.14"
+      #     enable-cache: true
+      #     cache-local-path: "~/.cache/uv"
 
-      - name: "Set up Python"
-        uses: actions/setup-python@v5
-        with:
-          python-version-file: "pyproject.toml"
+      # - name: "Set up Python"
+      #   uses: actions/setup-python@v5
+      #   with:
+      #     python-version-file: "pyproject.toml"
         
-      - name: Install the project
-        run: uv sync --extra dev
+      # - name: Install the project
+      #   run: uv sync --extra dev
       # - name: Run most tests
       #   run: |
       #     export TPU_NAME=ci-run-${{ github.run_id }}
