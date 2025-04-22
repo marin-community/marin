@@ -50,13 +50,14 @@ def dolma_pipeline_with_modified_dataset(
 
     dolma_tokenization_steps = dict(
         tokenized_dolma_steps,
-        {path_prefix: tokenized_dataset},
+        **{path_prefix: tokenized_dataset},
     )
 
     dolma_weights = dict(
         DOLMA_OLMO_MIXTURE_WEIGHTS,
-        {path_prefix: DOLMA_OLMO_MIXTURE_WEIGHTS[f"dolma/{dolma_dataset}"]},
+        **{path_prefix: DOLMA_OLMO_MIXTURE_WEIGHTS[f"dolma/{dolma_dataset}"]},
     )
+
     if substitute_dolma_dataset:
         dolma_weights.pop(f"dolma/{dolma_dataset}")
 

@@ -42,8 +42,6 @@ llama_70b_train_config_mk6 = SimpleTrainConfig(
     warmup=1000,  # initial warmup
     cycle_length=None,
     allow_partial_checkpoint=True,
-    allow_out_of_region_reads=True,
-    allow_out_of_region_writes=False,
     steps_per_eval=1000,
     steps_per_task_eval=10000,
 )
@@ -59,8 +57,6 @@ llama_70b_train_config_1536 = dataclasses.replace(
     lr_schedule="linear",
     cycle_length=None,
     allow_partial_checkpoint=True,
-    allow_out_of_region_reads=True,
-    allow_out_of_region_writes=False,
 )
 
 
