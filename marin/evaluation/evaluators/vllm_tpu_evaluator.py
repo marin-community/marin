@@ -147,8 +147,13 @@ class VllmTpuEvaluator(Evaluator, ABC):
         Launches the evaluation run with Ray.
         """
 
+        if resource_config is None:
+            fn = None
+        else:
+            fn = scheduling_strategy_fn(resource_config.num_tpu, resource_config.strategy)
+
         @ray.remote(
-            scheduling_strategy=scheduling_strategy_fn(resource_config.num_tpu, resource_config.strategy),
+            scheduling_strategy=fn,
             runtime_env=self.get_runtime_env(),
         )
         @remove_tpu_lockfile_on_exit
