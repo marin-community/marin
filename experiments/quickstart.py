@@ -171,7 +171,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
 
     tokenize_step = default_tokenize(
         name=os.path.join(prefix, "tokenized"),
-        dataset=output_path_of(consolidate_step),
+        dataset=output_path_of(consolidate_step) / "**/*.jsonl.gz",
         tokenizer=tokenizer,
     )
 
