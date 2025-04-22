@@ -66,7 +66,6 @@ class TokenizeConfig:
     def validation_source(self) -> ShardedDataSource | None:
         if len(self.validation_paths) == 0:
             return None
-        # return _create_source(self.validation_paths, self.text_key)
         return self.as_lm_dataset_source_config(self.cache_path).get_shard_source("validation")
 
     def as_lm_dataset_source_config(
@@ -82,8 +81,8 @@ class TokenizeConfig:
         """
         return UrlDatasetSourceConfig(
             tags=self.tags,
-            train_urls=self.train_paths if include_raw_paths else [],
-            validation_urls=self.validation_paths if include_raw_paths else [],
+            train_urls=_get_filepaths_to_tokenize(self.train_paths) if include_raw_paths else [],
+            validation_urls=_get_filepaths_to_tokenize(self.validation_paths) if include_raw_paths else [],
             cache_dir=actual_output_path,
         )
 
