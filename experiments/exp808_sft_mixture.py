@@ -96,11 +96,11 @@ mixture_config = lm_mixture_data_config(
 
 # Configure mixture-based SFT training
 training_step = default_sft(
-    name="llama3.1_mixture_total",
+    name="llama3.1_mixture_total-redux",
     tokenized=mixture_config,
     model_config=llama_8b,
     sft_config=mixture_sft_config,
-    tags=["dolma", "llama", "mixture"],
+    tags=["llama", "mixture"],
 )
 
 

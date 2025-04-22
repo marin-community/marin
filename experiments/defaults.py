@@ -347,7 +347,7 @@ def default_sft(
         lr_schedule=sft_config.lr_schedule,
         int8=sft_config.int8,
         steps_per_hf_export=sft_config.steps_per_hf_export,
-        initialize_from_hf=sft_config.model_name_or_path if not sft_config.initialize_from_hf else None,
+        initialize_from_hf=sft_config.model_name_or_path,
     )
 
     if sft_config.reinit_tokens:
