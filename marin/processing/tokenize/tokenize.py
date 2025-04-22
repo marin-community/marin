@@ -81,8 +81,8 @@ class TokenizeConfig:
         """
         return UrlDatasetSourceConfig(
             tags=self.tags,
-            train_urls=_get_filepaths_to_tokenize(self.train_paths) if include_raw_paths else [],
-            validation_urls=_get_filepaths_to_tokenize(self.validation_paths) if include_raw_paths else [],
+            train_urls=self.train_paths if include_raw_paths else [],
+            validation_urls=self.validation_paths if include_raw_paths else [],
             cache_dir=actual_output_path,
         )
 
@@ -266,7 +266,6 @@ def _levanter_build_cache(source, batch_tokenizer, output_path, options: CacheOp
 def _create_source(input_paths: str | list[str]) -> ShardedDataSource:
     if isinstance(input_paths, str) and not _is_probably_path(input_paths):
         source = levanter.data.datasource_from_hf(input_paths, split="train")
-        source = source.map(lambda d: d["text"])
     else:
         if isinstance(input_paths, str):
             input_paths = [input_paths]
