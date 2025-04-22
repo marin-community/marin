@@ -62,7 +62,7 @@ class ExperimentConfig:
             ),
         }
     )
-    keep_fraction: float = 0.2  # Keep 20% of the documents
+    keep_fractions: list[float] = field(default_factory=lambda: [0.01, 0.05, 0.1, 0.2])
 
 
 def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
@@ -155,50 +155,55 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
             ],
         )
 
-        fasttext_consolidate_step = ExecutorStep(
-            name=f"documents/quality_filtering/{config.experiment_name}/fasttext/{input_data_source}",
-            fn=consolidate,
-            config=ConsolidateConfig(
-                input_path=input_data_path,
-                output_path=this_output_path(input_basename),
-                filters=[
-                    FilterConfig(
-                        type=versioned("classify"),
-                        attribute_path=output_path_of(fasttext_inference, input_basename),
-                        name=versioned(f"{config.experiment_name}-fasttext_classifier"),
-                        label="__label__hq",
-                        threshold=versioned(None),
-                        keep_fraction=versioned(config.keep_fraction),
-                    ),
-                ],
-                ray_memory_limit_gb=12,
-            ),
-            pip_dependency_groups=["ddsketch"],
-        )
+        fasttext_consolidate_steps, bert_consolidate_steps = [], []
+        for keep_fraction in config.keep_fractions:
+            fasttext_consolidate_step = ExecutorStep(
+                name=f"documents/quality_filtering/{config.experiment_name}/fasttext/{input_data_source}",
+                fn=consolidate,
+                config=ConsolidateConfig(
+                    input_path=input_data_path,
+                    output_path=this_output_path(input_basename),
+                    filters=[
+                        FilterConfig(
+                            type=versioned("classify"),
+                            attribute_path=output_path_of(fasttext_inference, input_basename),
+                            name=versioned(f"{config.experiment_name}-fasttext_classifier"),
+                            label="__label__hq",
+                            threshold=versioned(None),
+                            keep_fraction=versioned(keep_fraction),
+                        ),
+                    ],
+                    ray_memory_limit_gb=12,
+                ),
+                pip_dependency_groups=["ddsketch"],
+            )
 
-        bert_consolidate_step = ExecutorStep(
-            name=f"documents/quality_filtering/{config.experiment_name}/bert/{input_data_source}",
-            fn=consolidate,
-            config=ConsolidateConfig(
-                input_path=input_data_path,
-                output_path=this_output_path(input_basename),
-                filters=[
-                    FilterConfig(
-                        type=versioned("classify"),
-                        attribute_path=output_path_of(bert_inference, input_basename),
-                        name=versioned(f"{config.experiment_name}-bert_classifier"),
-                        label="hq",
-                        threshold=versioned(None),
-                        keep_fraction=versioned(config.keep_fraction),
-                    ),
-                ],
-                ray_memory_limit_gb=12,
-            ),
-            pip_dependency_groups=["ddsketch"],
-        )
+            bert_consolidate_step = ExecutorStep(
+                name=f"documents/quality_filtering/{config.experiment_name}/bert/{input_data_source}",
+                fn=consolidate,
+                config=ConsolidateConfig(
+                    input_path=input_data_path,
+                    output_path=this_output_path(input_basename),
+                    filters=[
+                        FilterConfig(
+                            type=versioned("classify"),
+                            attribute_path=output_path_of(bert_inference, input_basename),
+                            name=versioned(f"{config.experiment_name}-bert_classifier"),
+                            label="hq",
+                            threshold=versioned(None),
+                            keep_fraction=versioned(keep_fraction),
+                        ),
+                    ],
+                    ray_memory_limit_gb=12,
+                ),
+                pip_dependency_groups=["ddsketch"],
+            )
 
-        steps.append(fasttext_consolidate_step)
-        steps.append(bert_consolidate_step)
+            fasttext_consolidate_steps.append(fasttext_consolidate_step)
+            bert_consolidate_steps.append(bert_consolidate_step)
+
+        steps.extend(fasttext_consolidate_steps)
+        steps.extend(bert_consolidate_steps)
 
     return steps
 
