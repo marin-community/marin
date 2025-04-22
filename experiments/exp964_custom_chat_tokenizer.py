@@ -32,6 +32,27 @@ MARIN_TEMPLATE = """
 """.strip()
 
 
+# Olmo 2 template modified so we can use with with levanter
+MARIN_OLMO2_TEMPLATE = """
+{{ bos_token }}
+{%- for message in messages -%}
+  {%- if message['role'] == 'system' -%}
+<|system|>\n{{ message['content'] | trim }}\n
+  {%- elif message['role'] == 'user' -%}
+<|user|>\n{{ message['content'] | trim }}\n
+  {%- elif message['role'] == 'assistant' -%}
+    {%- if not loop.last -%}
+<|assistant|>\n{% generation %}{{ message['content'] | trim }}{{ eos_token }}{% endgeneration %}\n
+    {%- else -%}
+<|assistant|>\n{% generation %}{{ message['content'] | trim }}{{ eos_token }}{% endgeneration %}
+    {%- endif -%}
+  {%- endif -%}
+{%- endfor -%}
+{%- if add_generation_prompt -%}
+<|assistant|>\n
+{%- endif -%}""".strip()
+
+
 def main():
     try:
         marin = AutoTokenizer.from_pretrained(llama3_tokenizer)
@@ -54,6 +75,15 @@ def main():
     llama3_instruct = AutoTokenizer.from_pretrained(llama3_instruct_tokenizer)
     llama3 = AutoTokenizer.from_pretrained(llama3_tokenizer)
 
+    # now do the olmo2 template
+    marin_olmo2_tokenizer = "stanford-crfm/marin-olmo2-tokenizer"
+    marin_olmo2 = AutoTokenizer.from_pretrained("allenai/OLMo-2-1124-7B-SFT")
+    marin_olmo2.chat_template = MARIN_OLMO2_TEMPLATE
+    marin_olmo2.save_pretrained(os.path.join(os.getcwd(), "marin_olmo2_tokenizer"))
+
+    marin_olmo2 = AutoTokenizer.from_pretrained(os.path.join(os.getcwd(), "marin_olmo2_tokenizer"))
+    assert marin_olmo2.chat_template == MARIN_OLMO2_TEMPLATE
+
     # try it out a bit
     convo = [
         {"role": "user", "content": "Hello, how are you?"},
@@ -70,6 +100,9 @@ def main():
     print("======")
     print("marin")
     print(marin.apply_chat_template(convo, tokenize=False, add_generation_prompt=True))
+    print("======")
+    print("marin_olmo2")
+    print(marin_olmo2.apply_chat_template(convo, tokenize=False, add_generation_prompt=True))
     print("======")
 
     # ensure it didn't mess up normal tokenization
@@ -100,7 +133,11 @@ def main():
 
     # upload marin to hf hub
     marin.push_to_hub(marin_tokenizer)
-    print("Pushed")
+    print("Pushed Marin Tokenizer")
+
+    # upload marin_olmo2 to hf hub
+    marin_olmo2.push_to_hub(marin_olmo2_tokenizer)
+    print("Pushed Marin Olmo2 Tokenizer")
 
 
 if __name__ == "__main__":
