@@ -80,12 +80,13 @@ tokenized_dolma_steps = tokenize_dolma_steps()
 )
 
 if __name__ == "__main__":
-    tokenization_steps = (
-        list(tokenized_dolma_steps.values())
-        + list(arxiv_no_problem_resiliparse_no_references_no_links_tokenized.values())
-        + list(arxiv_no_problem_resiliparse_no_references_with_links_tokenized.values())
-        + list(arxiv_no_problem_resiliparse_with_references_with_links_tokenized.values())
-    )
+    tokenization_steps = [
+        *list(tokenized_dolma_steps.values()),
+        arxiv_no_problem_resiliparse_no_references_no_links_tokenized,
+        arxiv_no_problem_resiliparse_no_references_with_links_tokenized,
+        arxiv_no_problem_resiliparse_with_references_no_links_tokenized,
+        arxiv_no_problem_resiliparse_with_references_with_links_tokenized,
+    ]
 
     executor_main(
         steps=[
