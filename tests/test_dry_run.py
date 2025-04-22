@@ -2,7 +2,6 @@ import logging
 import runpy
 import sys
 import tempfile
-import time
 from pathlib import Path
 
 import pytest
@@ -29,8 +28,6 @@ def test_run_dry_runs(config_file, monkeypatch):
     """Test the dry runs of experiment scripts"""
     script = config_file
     # first get this script path
-    print(f"Running dry run for {script}")
-    start = time.time()  # Start time for performance measurement
     # Check if the script contains the skip marker
     with open(script, "r") as file:
         content = file.read()
@@ -51,18 +48,4 @@ def test_run_dry_runs(config_file, monkeypatch):
             # Some scripts may call `sys.exit()`, so we catch it to treat `exit(0)` as success
             assert e.code == 0, f"Dry run failed with exit code {e.code} for {script}"
         except Exception as e:
-            # pytest.fail(f"Dry run exception in {script}: {e}")
-            # raise Failed(f"Dry run exception in {script}: {e}") from e
             raise e
-        finally:
-            print(f"Execution time for {script}: {time.time() - start:.2f} seconds")
-
-        # result = subprocess.run(
-        #     ["python", script, "--dry_run", "True", "--executor_info_base_path", temp_dir, "--prefix", temp_dir],
-        #     # capture_output=True,
-        #     text=True,
-        #     cwd=str(marin_root),
-        # )
-
-    # logger.info(f"Execution time for {script}: {time.time() - start} seconds")
-    print(f"Execution time for {script}: {time.time() - start} seconds")
