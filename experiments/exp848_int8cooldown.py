@@ -29,8 +29,8 @@ control_anneal_config = AnnealConfig(
 control_model = default_anneal(name="llama-8b-anneal-bf16-control", anneal_config=control_anneal_config)
 
 # Keep everything fixed except for int8 training.
-int8_trainer = dataclasses.replace(control_model.config.trainer, quantization=QuantizationConfig(int8=True))
-int8_config = dataclasses.replace(control_model.config, trainer=int8_trainer)
+int8_trainer = dataclasses.replace(control_model.config.config.trainer, quantization=QuantizationConfig(int8=True))
+int8_config = dataclasses.replace(control_model.config.config, trainer=int8_trainer)
 int8_model = dataclasses.replace(control_model, config=int8_config, name="llama-8b-anneal-int8")
 
 

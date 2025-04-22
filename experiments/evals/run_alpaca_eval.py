@@ -1,3 +1,4 @@
+# nodryrun
 from experiments.evals.evals import evaluate_alpaca_eval
 from experiments.evals.resource_configs import SINGLE_TPU_V6E_8
 from marin.execution.executor import ExecutorMainConfig, executor_main
