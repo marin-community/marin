@@ -159,3 +159,5 @@ jobs:
         run: |
           export CI=true # Set CI environment variable; It's needed for tokenization
           CI=true PYTHONPATH=tests:. pytest --durations=0 -s --tb=no -v tests/
+        env: # Or as an environment variable
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
