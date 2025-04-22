@@ -31,7 +31,7 @@ dependencies = [
     "transformers>=4.48.0,<5.0",
     # We are keeping levanter deps for now. @TODO :: Remove them
     "multiprocess==0.70.16",
-    "levanter>=1.2.dev1303",
+    "levanter>=1.2.dev1313",
     "haliax>=1.4.dev343",
     "sentencepiece",
     "lz4",
@@ -81,7 +81,7 @@ quality_dedup_consolidate = [
 tokenize_train = [
     "jax[tpu]==0.5.1",
     "multiprocess==0.70.16",
-    "levanter>=1.2.dev1303",
+    "levanter>=1.2.dev1312",
     "lm-eval@git+https://github.com/stanford-crfm/lm-evaluation-harness.git",
     "tblib",
     "sentencepiece",
@@ -93,7 +93,7 @@ data_browser = [
 ]
 
 eval = [
-    "levanter>=1.2.dev1303",
+    "levanter>=1.2.dev1312",
     "lm-eval@git+https://github.com/stanford-crfm/lm-evaluation-harness.git",
 ]
 
