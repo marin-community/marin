@@ -6,8 +6,6 @@ https://huggingface.co/datasets/allenai/paloma
 
 import os.path
 
-from experiments.defaults import default_tokenize
-
 # cyclic dependency
 # from experiments.llama import llama3_tokenizer
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
@@ -55,6 +53,9 @@ def paloma_tokenized(*, base_path="tokenized/", tokenizer: str = llama3_tokenize
     """
     Returns a dictionary of steps to tokenize the Paloma eval sets. Keys are the subset names (with `paloma/` prefix)
     """
+    # avoid cyclic dependency
+    from experiments.defaults import default_tokenize
+
     paloma_steps: dict[str, ExecutorStep[TokenizeConfig]] = {}
     for dataset, path_part in PALOMA_DATASETS_TO_DIR.items():
         paloma_steps[os.path.join("paloma", dataset)] = default_tokenize(

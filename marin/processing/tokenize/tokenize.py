@@ -27,7 +27,13 @@ import levanter
 import ray
 import transformers
 from levanter.data.sharded_datasource import ShardedDataSource, TextUrlDataSource
-from levanter.data.text import LmDatasetFormatBase, LMDatasetSourceConfig, TextLmDatasetFormat, preprocessor_for_format
+from levanter.data.text import (
+    LmDatasetFormatBase,
+    LMDatasetSourceConfig,
+    TextLmDatasetFormat,
+    UrlDatasetSourceConfig,
+    preprocessor_for_format,
+)
 from levanter.store.cache import CacheOptions
 from ray.runtime_env import RuntimeEnv
 
@@ -65,7 +71,7 @@ class TokenizeConfig:
                 to run training without the original training data, but hte provenance won't be recorded in wandb.
 
         """
-        return LMDatasetSourceConfig(
+        return UrlDatasetSourceConfig(
             tags=self.tags,
             train_urls=self.train_paths if include_raw_paths else [],
             validation_urls=self.validation_paths if include_raw_paths else [],

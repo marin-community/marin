@@ -13,14 +13,8 @@ import jmp
 from haliax.quantization import QuantizationConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.compat.hf_checkpoints import load_tokenizer
-from levanter.data.text import (
-    LmDatasetFormatBase,
-    LMMixtureDatasetConfig,
-    SupervisedUrlSourceConfig,
-    TextLmDatasetFormat,
-)
+from levanter.data.text import LmDatasetFormatBase, LMMixtureDatasetConfig, TextLmDatasetFormat
 from levanter.eval_harness import LmEvalHarnessConfig
-from levanter.main import sft, sft_mixture
 from levanter.main.train_lm import TrainLmConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig
@@ -46,7 +40,6 @@ from marin.execution.executor import (
     ExecutorStep,
     InputName,
     get_executor_step,
-    output_path_of,
     this_output_path,
     unwrap_versioned_value,
     versioned,
@@ -62,10 +55,6 @@ from marin.scaling_laws.scaling_laws import ScalingLawConfig, run_scaling_law_an
 from marin.training.training import (
     PodConfig,
     TrainLmOnPodConfig,
-    TrainSFTMixturePodConfig,
-    TrainSFTOnPodConfig,
-    run_levanter_sft,
-    run_levanter_sft_mixture,
     run_levanter_train_lm,
 )
 
@@ -224,6 +213,10 @@ def default_train(
     total_examples = schedule.global_data_offset_by_step(train_config.num_train_steps)
 
     checkpoint_path_to_load_from = train_config.initialize_from_checkpoint_path
+    hf_checkpoint_path_to_load_from = train_config.initialize_from_hf
+
+    if hf_checkpoint_path_to_load_from is not None and checkpoint_path_to_load_from is not None:
+        raise ValueError("Cannot specify both initialize_from_checkpoint_path and initialize_from_hf")
 
     # Create the inner config
     inner_config = TrainLmConfig(
@@ -253,6 +246,7 @@ def default_train(
         initialize_from_checkpoint_path=(
             checkpoint_path_to_load_from if train_config.reset_data_loader_on_init else None
         ),
+        initialize_from_hf=hf_checkpoint_path_to_load_from or False,
         z_loss_weight=train_config.z_loss_weight,
         model=model_config,
         optimizer=AdamConfig(
@@ -311,10 +305,9 @@ def default_train(
 
 def default_sft(
     name: str,
-    tokenized: InputName | ExecutorStep | dict[str, SupervisedUrlSourceConfig],
+    tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig,
     model_config: LlamaConfig,
     sft_config: SimpleSFTConfig,
-    mixture_weights: dict[str, int] | None = None,
     tags: Sequence[str] = (),
 ) -> ExecutorStep:
     """
@@ -350,136 +343,25 @@ def default_sft(
         learning_rate=sft_config.learning_rate,
         weight_decay=sft_config.weight_decay,
         min_lr_ratio=sft_config.min_lr_ratio,
-        steps_per_export=sft_config.steps_per_hf_export,
+        steps_per_export=sft_config.steps_per_checkpoint,
         lr_schedule=sft_config.lr_schedule,
         int8=sft_config.int8,
-        steps_per_checkpoint=sft_config.steps_per_checkpoint,
+        steps_per_hf_export=sft_config.steps_per_hf_export,
         initialize_from_hf=sft_config.model_name_or_path if not sft_config.initialize_from_hf else None,
     )
 
-    tracker_config = WandbConfig(
-        project="marin",
-        tags=[*tags],
-    )
-
-    checkpointer_config = CheckpointerConfig(
-        keep=[dict(every=sft_config.steps_per_checkpoint)],
-    )
-
-    trainer_config = TrainerConfig(
-        tracker=tracker_config,
-        mp=jmp.get_policy("p=f32,c=bfloat16"),
-        train_batch_size=sft_config.train_batch_size,
-        num_train_steps=sft_config.num_train_steps,
-        steps_per_eval=sft_config.steps_per_eval,
-        checkpointer=checkpointer_config,
-        seed=sft_config.seed,
-        initialize_from=sft_config.model_name_or_path if not sft_config.initialize_from_hf else None,
-    )
-
-    optimizer_config = AdamConfig(
-        learning_rate=sft_config.learning_rate,
-        weight_decay=sft_config.weight_decay,
-        warmup=sft_config.warmup,
-        cooldown=sft_config.cooldown,
-        min_lr_ratio=sft_config.min_lr_ratio,
-        lr_schedule=sft_config.lr_schedule,
-        max_grad_norm=sft_config.max_grad_norm,
-    )
-
-    # Create the pod config
-    pod_config = PodConfig(
-        tpu_type=sft_config.tpu_type,
-        node_count=sft_config.node_count,
-    )
-
-
-    # Infer whether we're using mixture based on mixture_weights
-    if mixture_weights is not None:
-        if not isinstance(tokenized, dict):
-            raise ValueError("If mixture_weights is given tokenized should be a Dict[str, SupervisedUrlSourceConfig]")
-
-        # Configure the mixture-based SFT
-        inner_config = sft_mixture.SFTMixtureConfig(
-            trainer=trainer_config,
-            model=model_config,
-            optimizer=optimizer_config,
-            supervised_data=tokenized,
-            mixture_weights=mixture_weights,
-            mixture_block_size=sft_config.mixture_block_size,
-            tokenizer=sft_config.tokenizer,
-            model_name_or_path=(
-                sft_config.model_name_or_path
-                if sft_config.initialize_from_hf
-                else model_config.hf_checkpoint_converter().reference_checkpoint
-            ),
-            initialize_from_hf=sft_config.initialize_from_hf,
-            max_seq_len=sft_config.max_seq_len,
-            hf_save_steps=sft_config.steps_per_hf_export,
-            messages_field="messages",
-            input_role=sft_config.input_role,
-            output_role=sft_config.output_role,
-            stop_strategy=sft_config.stop_strategy,
-
-        )
-
-        config = TrainSFTMixturePodConfig(
-            config=inner_config,
-            pod_config=pod_config,
-            output_path=this_output_path(),
-            bypass_path_checks=sft_config.bypass_path_checks,
-        )
-        fn = run_levanter_sft_mixture
-
-    else:
-        # Handle the case of a single dataset
-        if isinstance(tokenized, InputName | ExecutorStep):
-            supervised_data = SupervisedUrlSourceConfig(
-                cache_dir=output_path_of(tokenized),
-                input_field=sft_config.input_role,
-                output_field=sft_config.output_role,
-            )
-            chat_train_urls = [output_path_of(tokenized, "**/*.jsonl.gz")]
-        elif isinstance(tokenized, SupervisedUrlSourceConfig):
-            supervised_data = tokenized
-            chat_train_urls = None
-        else:
-            raise ValueError(
-                "For non-mixture SFT, tokenized should be an InputName, ExecutorStep, or SupervisedUrlSourceConfig"
-            )
-
-        # Configure the single-dataset SFT
-        inner_config = sft.SFTConfig(
-            trainer=trainer_config,
-            model=model_config,
-            optimizer=optimizer_config,
-            supervised_data=supervised_data,
-            chat_train_urls=chat_train_urls,
-            tokenizer=sft_config.tokenizer,
-            model_name_or_path=sft_config.model_name_or_path if sft_config.initialize_from_hf else None,
-            initialize_from_hf=sft_config.initialize_from_hf,
-            max_seq_len=sft_config.max_seq_len,
-            hf_save_steps=sft_config.steps_per_hf_export,
-            messages_field="messages",
-            input_role=sft_config.input_role,
-            output_role=sft_config.output_role,
-            reinit_tokens=sft_config.reinit_tokens,
-        )
-
-        config = TrainSFTOnPodConfig(
-            config=inner_config,
-            pod_config=pod_config,
-            output_path=this_output_path(),
-        )
-        fn = run_levanter_sft
+    if sft_config.reinit_tokens:
+        raise NotImplementedError("reinit_tokens is not supported by default_train")
 
     # Create and return the ExecutorStep
-    return ExecutorStep(
-        name=f"checkpoints/{name}_seed{sft_config.seed}",
-        fn=fn,
-        config=config,
-        description=f"SFT {'mixture' if mixture_weights is not None else 'single'}",
-        pip_dependency_groups=["tokenize_train"],
+    return default_train(
+        name=name,
+        tokenized=tokenized,
+        model_config=model_config,
+        train_config=normal_train_config,
+        tags=tags,
+        eval_harness_tasks=[],
+        use_default_validation=False,
     )
 
 
