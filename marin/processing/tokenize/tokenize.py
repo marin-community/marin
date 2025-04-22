@@ -32,6 +32,7 @@ from levanter.data.text import (
     ChatUrlDataSourceConfig,
     LMDatasetSourceConfig,
     LMSupervisedDatasetConfig,
+    UrlDatasetSourceConfig,
     mk_chat_sft_dataset,
     mk_supervised_dataset,
 )
@@ -77,7 +78,7 @@ class TokenizeConfig:
                 to run training without the original training data, but hte provenance won't be recorded in wandb.
 
         """
-        return LMDatasetSourceConfig(
+        return UrlDatasetSourceConfig(
             tags=self.tags,
             train_urls=self.train_paths if include_raw_paths else [],
             validation_urls=self.validation_paths if include_raw_paths else [],
