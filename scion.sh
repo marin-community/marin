@@ -3,7 +3,7 @@
 export RAY_RUNTIME_ENV_TEMPORARY_REFERENCE_EXPIRATION_S=1200
 
 optimizers=(scion)
-model_sizes=(300M 520M)
+model_sizes=(520M)
 
 # Loop over each optimizer in the list
 for opt in "${optimizers[@]}"; do

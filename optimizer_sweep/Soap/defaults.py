@@ -226,7 +226,7 @@ def soap_train(
         data=pretraining_data,
         trainer=TrainerConfig(
             tracker=WandbConfig(
-                project="marin",
+                ,
                 tags=[*tags],
             ),
             mp=jmp.get_policy("p=f32,c=bfloat16"),
@@ -338,7 +338,6 @@ def default_sft(
         tags = [*tags, "sft"]
 
     tracker_config = WandbConfig(
-        project="marin",
         tags=[*tags],
     )
 

@@ -11,7 +11,7 @@ if __name__ == "__main__":
         'beta2': [0.9, 0.95, 0.98, 0.99],
         'shampoo_beta': [0.9, 0.95, 0.98, 0.99],
         'precondition_frequency': [1, 5, 10],
-        'partition_grads_into_blocks': [False, True],
+        'partition_grads_into_blocks': [True],
         'block_size': [128, 256, 512],
         'epsilon': [1e-20, 1e-15, 1e-10],
         'train_batch_size': [128, 256, 512, 1024]

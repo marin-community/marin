@@ -5,5 +5,5 @@ if __name__ == '__main__':
     baseline_config = {'learning_rate': 0.004, 'weight_decay': 0.2, 'min_lr_ratio': 0, 'warmup': 4000, 'beta1': 0.95, 'beta2': 0.99, 'gamma': 0.0125, 'epsilon': 1e-12, 'max_grad_norm': 1, 'train_batch_size': 128}
     model_size = '130m'
     target_chinchilla = 4
-    my_suffix = None
+    my_suffix = 'm'
     template(model_size, target_chinchilla, 'sophia', baseline_config, sweep_grids, random_suffix=my_suffix)

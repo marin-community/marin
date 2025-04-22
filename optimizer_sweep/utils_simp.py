@@ -5,7 +5,6 @@ api = wandb.Api()
 # Define your details
 username = "stanford-mercury"
 project = "optimizer-scaling"
-thshold = 3e-3
 # Retrieve the run directly using its full path
 def convert_run_to_config(run, keys):
     if 'optimizer' not in run.config or 'trainer' not in run.config:
@@ -14,7 +13,7 @@ def convert_run_to_config(run, keys):
     return {key: run.config['optimizer'][key] if (key != 'train_batch_size') else run.config['trainer'][key] for key in keys}
 
 
-def grab_best_run(keys, tags, return_loss = False):
+def grab_best_run(keys, tags, return_loss = False, thshold = 3e-3):
     filters = {"tags": {"$all": tags}}
     runs = api.runs(f"{username}/{project}", filters=filters)
     min_loss = 10000
@@ -91,7 +90,7 @@ def approximate(baseline, config):
             if(abs(baseline[key] - config[key]) > 1e-25):
                 return False
     return True
-def check_baseline_run(baseline, tags, strict = True):    
+def check_baseline_run(baseline, tags, strict = True, return_loss = False):    
     filters = {"tags": {"$all": tags}}
     runs = api.runs(f"{username}/{project}", filters=filters)
     for run in runs:
@@ -99,8 +98,14 @@ def check_baseline_run(baseline, tags, strict = True):
         if approximate(baseline, config) and  (bad_number(run.summary.get('eval/paloma/c4_en/loss', 0.0)) or actually_finish(run, strict = strict) or bad_run(run)):
             # diverge before finish
             # or have some crazyness: finished eval multiple time
-            return True
-    return False
+            if return_loss:
+                return True, run.summary.get('eval/paloma/c4_en/loss', 0.0)
+            else:
+                return True
+    if return_loss:
+        return False, None
+    else:
+        return False
 
 
 def create_configs(baseline_config, sweep_grids, target_data = 5120000):
@@ -137,3 +142,4 @@ def calculate_data_tag(tag, target_chinchilla):
     target_data = target_chinchilla * chinchilla
     data_size = f"{target_data // 1_000_000_000}B"
     return target_data, data_size
+

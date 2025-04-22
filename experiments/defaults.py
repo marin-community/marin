@@ -225,7 +225,8 @@ def default_train(
         data=pretraining_data,
         trainer=TrainerConfig(
             tracker=WandbConfig(
-                project="marin",
+                project="optimizer-scaling",
+                entity="stanford-mercury",
                 tags=[*tags],
             ),
             mp=jmp.get_policy("p=f32,c=bfloat16"),
@@ -269,6 +270,7 @@ def default_train(
             min_lr_ratio=(
                 train_config.min_lr_ratio if train_config.min_lr_ratio is not None else AdamConfig().min_lr_ratio
             ),
+            nesterov=(train_config.nesterov if train_config.nesterov is not None else AdamConfig().nesterov),
         ),
         hf_save_steps=steps_per_export_hf,
         data_seed=train_config.data_seed,
@@ -337,7 +339,7 @@ def default_sft(
         tags = [*tags, "sft"]
 
     tracker_config = WandbConfig(
-        project="marin",
+        project="optimizer-scaling",
         tags=[*tags],
     )
 

@@ -58,18 +58,21 @@ def process_optimizer(optimizer, model_and_data_size, sweep_configs, position):
         cache_key = get_cache_key(optimizer, model_size, data_size, target_chinchilla)
         # if cache_key in cache:
         #     optimizer_results[(model_size, data_size)] = cache[cache_key]
-        #     continue
+        #     if type(optimizer_results[(model_size, data_size)]["min_num"]) is int and optimizer_results[(model_size, data_size)]["min_num"] <= 2:
+        #         continue
+
         
         # Get sweep configuration from saved configs
         optimizer_configs = sweep_configs.get(optimizer.lower(), {})
         model_configs = optimizer_configs.get(model_size, {})
+
+        # print(optimizer_configs)
         
         if not optimizer_configs or not model_configs:
             optimizer_results[(model_size, data_size)]["min_num"] = "Missing Grids"
             continue
         
-        current_best_config, approximate_best_config_list, min_loss = grab_best_run(keys, tags, return_loss = True)
-        
+        current_best_config, approximate_best_config_list, min_loss = grab_best_run(keys, tags, return_loss = True, thshold = 5e-3)
         if approximate_best_config_list is None or not approximate_best_config_list:
             optimizer_results[(model_size, data_size)]["min_num"] = "Missing Runs"
             continue
@@ -122,7 +125,18 @@ key_of_optimizer['sophia'] = ['learning_rate', 'weight_decay', 'min_lr_ratio', '
 key_of_optimizer['soape'] = key_of_optimizer['soap']
 key_of_optimizer['soapb'] = key_of_optimizer['soap']
 key_of_optimizer['adamw'] = ['learning_rate', 'weight_decay', 'min_lr_ratio', 'warmup', 'beta1', 'beta2', 'epsilon', 'max_grad_norm', 'nesterov', 'train_batch_size']
-key_of_optimizer['mini'] = ['learning_rate', 'weight_decay', 'min_lr_ratio', 'warmup', 'beta1', 'beta2', 'epsilon', 'max_grad_norm', 'train_batch_size']
+
+key_of_optimizer = {}
+# key_of_optimizer['mini'] = ['learning_rate', 'weight_decay', 'min_lr_ratio', 'warmup', 'beta1', 'beta2', 'epsilon', 'max_grad_norm', 'train_batch_size']
+key_of_optimizer['sophia'] = ['learning_rate', 'weight_decay', 'min_lr_ratio', 'warmup', 'beta1', 'beta2', 'gamma', 'epsilon', 'max_grad_norm', 'train_batch_size']
+
+
+optimizers =  list(key_of_optimizer.keys())
+
+new_key_of_optimizer = {}
+for optimizer in optimizers:
+    new_key_of_optimizer[optimizer] = key_of_optimizer[optimizer]
+key_of_optimizer = new_key_of_optimizer
 
 def process_with_index(idx, process_funcs, optimizer_keys):
     """Helper function to avoid using lambda"""
@@ -135,6 +149,7 @@ if __name__ == '__main__':
     
     model_and_data_size = [('130m', '2B', 1), ('130m', '5B', 2), ('130m', '10B', 4), 
                           ('130m', '21B', 8), ('300m', '6B', 1), ('520m', '10B', 1)]
+    model_and_data_size = [ ('130m', '10B', 4), ('130m', '21B', 8),  ('520m', '10B', 1)]
     # model_and_data_size = [('130m', '42B', 16)]
     
     monitoring_results = {}
