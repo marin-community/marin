@@ -58,3 +58,5 @@ jobs:
         shell: bash -l {0}
         run: |
          JAX_TRACEBACK_FILTERING=off PYTHONPATH=. python experiments/quickstart.py
+        env: # Or as an environment variable
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
