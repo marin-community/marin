@@ -112,6 +112,18 @@ llama_24b = LlamaConfig(
 )
 
 
+# same as olmo 32b
+llama_32b = LlamaConfig(
+    seq_len=4096,
+    hidden_dim=5120,
+    intermediate_dim=27648,
+    num_heads=40,
+    num_kv_heads=8,
+    num_layers=64,
+    rope=Llama3RotaryEmbeddingsConfig(),
+)
+
+
 llama_56b = LlamaConfig(
     seq_len=4096,
     hidden_dim=8192,
