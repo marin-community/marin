@@ -1,4 +1,5 @@
-FROM vllm/vllm-tpu:9dbf7a2dc1448d6657adfb2daba36be270dcebcd
+# vllm/vllm-tpu:9dbf7a2dc1448d6657adfb2daba36be270dcebcd - 0.7.4 has some issues
+FROM vllm/vllm-tpu:e92694b6fe264a85371317295bca6643508034ef
 
 # Setup gcsfuse
 RUN apt-get update && apt-get install lsb-release rsync docker.io -y
@@ -17,7 +18,7 @@ RUN curl -sSL https://sdk.cloud.google.com > /tmp/gcl && \
 
 # Install core dependencies
 RUN pip install --upgrade pip && \
-pip install --no-cache-dir draccus==0.10 ray==2.44.1 google-api-python-client~=2.0 gcsfs google-cloud-storage google-cloud-storage-transfer s3fs regex requests braceexpand deepdiff tqdm tqdm-loggable levanter==1.2.dev1190 haliax==1.4.dev327,
+pip install --no-cache-dir draccus==0.11.5 ray==2.44.1 google-api-python-client~=2.0 gcsfs google-cloud-storage google-cloud-storage-transfer s3fs regex requests braceexpand deepdiff tqdm tqdm-loggable levanter==1.2.dev1190 haliax==1.4.dev327,
 
 # NOTE(chris): We fix the lm-evaluation-harness commit hash for now since the newest main is broken because of
 # the new eval_logger change they made
