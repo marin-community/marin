@@ -231,7 +231,7 @@ def default_train(
             num_train_steps=train_config.num_train_steps,
             steps_per_eval=train_config.steps_per_eval if train_config.steps_per_eval is not None else 1000,
             checkpointer=CheckpointerConfig(
-                save_interval=timedelta(minutes=30),
+                save_interval=timedelta(minutes=10),
                 keep=[dict(every=steps_per_export)],
             ),
             model_averaging=model_averaging,
@@ -348,6 +348,7 @@ def default_sft(
         int8=sft_config.int8,
         steps_per_hf_export=sft_config.steps_per_hf_export,
         initialize_from_hf=sft_config.model_name_or_path,
+        initialize_from_checkpoint_path=sft_config.initialize_from_checkpoint_path,
     )
 
     if sft_config.reinit_tokens:
@@ -408,9 +409,14 @@ def default_anneal(name: str, anneal_config: AnnealConfig):
     )
 
 
+@lru_cache
+def _cached_load_tokenizer(tokenizer_name: str):
+    return load_tokenizer(tokenizer_name)
+
+
 def _get_vocab_size(pretraining_data):
     tokenizer = unwrap_versioned_value(pretraining_data.tokenizer)
-    vocab_size = load_tokenizer(tokenizer).vocab_size
+    vocab_size = _cached_load_tokenizer(tokenizer).vocab_size
     return vocab_size
 
 
