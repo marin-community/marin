@@ -118,8 +118,6 @@ llama_13b_train_config_ema = SimpleTrainConfig(
     ema_beta=0.995,
     lr_schedule="linear",
     cycle_length=None,
-    allow_out_of_region_reads=True,
-    allow_out_of_region_writes=False,
     allow_partial_checkpoint=True,
 )
 
@@ -136,8 +134,6 @@ llama_22b_train_config_ema = SimpleTrainConfig(
     ema_beta=0.995,
     lr_schedule="linear",
     cycle_length=None,
-    allow_out_of_region_reads=True,
-    allow_out_of_region_writes=False,
     allow_partial_checkpoint=True,
     steps_per_eval=1000,
     steps_per_task_eval=10000,
@@ -204,8 +200,6 @@ llama_56b_train_config_mk2 = dataclasses.replace(
     lr_schedule="linear",
     cycle_length=None,
     allow_partial_checkpoint=True,
-    allow_out_of_region_reads=True,
-    allow_out_of_region_writes=False,
 )
 
 
