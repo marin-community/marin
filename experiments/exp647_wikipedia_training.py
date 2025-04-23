@@ -49,11 +49,12 @@ wiki_readability_tokenized, wiki_readability_1_4b_model, wiki_readability_1_4b_e
 )
 
 if __name__ == "__main__":
-    tokenization_step = (
-        list(tokenized_dolma_steps.values())
-        + list(wiki_readability_tokenized.values())
-        + list(wiki_resiliparse_with_preserve_formatting_tokenized.values())
-    )
+
+    tokenization_step = [
+        *list(tokenized_dolma_steps.values()),
+        wiki_readability_tokenized,
+        wiki_resiliparse_with_preserve_formatting_tokenized,
+    ]
 
     executor_main(
         steps=[
