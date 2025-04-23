@@ -14,13 +14,13 @@ Also buried in here is a 56B model that I thought was a 70B model. Always double
 
 import dataclasses
 
-from experiments.nemotron_cc.tokenize_nemotron import NEMOTRON_WEIGHTS, tokenize_nemotron_steps
 from levanter.models.rotary import DefaultRotaryEmbeddingsConfig
 from levanter.schedule import ScheduleStep
 
 from experiments.dclm.tokenize_dclm import DCLM_MIXTURE_WEIGHTS, dclm_components_llama3, dclm_mixture_config_llama3
 from experiments.defaults import default_train
 from experiments.llama import llama_13b, llama_24b, llama_32b, llama_56b
+from experiments.nemotron_cc.tokenize_nemotron import NEMOTRON_WEIGHTS, tokenize_nemotron_steps
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import executor_main
 from marin.processing.tokenize import lm_mixture_data_config
@@ -191,12 +191,13 @@ nemotron_steps = tokenize_nemotron_steps()
 proofpile_2 = dclm_components_llama3["proofpile_2"]
 starcoderdata = dclm_components_llama3["starcoderdata"]
 nemotron_mix = lm_mixture_data_config(
-    components={**nemotron_steps, "starcoderdata": starcoderdata, "proofpile_2": proofpile_2}, weights=
-    {
+    components={**nemotron_steps, "starcoderdata": starcoderdata, "proofpile_2": proofpile_2},
+    weights={
         **NEMOTRON_WEIGHTS,
         "starcoderdata": 0.25,
         "proofpile_2": 0.055,
-    })
+    },
+)
 
 llama_32b_tootsie = default_train(
     name="llama-32b-tootsie",
