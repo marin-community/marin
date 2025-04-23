@@ -35,6 +35,7 @@ dependencies = [
     "haliax>=1.4.dev343",
     "sentencepiece",
     "lz4",
+    "wandb<=0.19.9"
 ]
 
 [project.optional-dependencies]
