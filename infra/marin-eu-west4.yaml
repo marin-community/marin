@@ -165,7 +165,7 @@ available_node_types:
 
   tpu_slice_v5e_256:
     max_workers: 1024
-    min_workers: 0
+    min_workers: 4
     node_config:
       acceleratorType: v5litepod-256
       runtimeVersion: v2-alpha-tpuv5-lite
