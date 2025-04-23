@@ -39,7 +39,7 @@ from levanter.data.text import (
 from levanter.store.cache import CacheOptions
 from ray.runtime_env import RuntimeEnv
 
-from marin.execution.executor import InputName
+from marin.execution.executor import ExecutorStep, InputName, VersionedValue
 from marin.utils import fsspec_glob, fsspec_isdir, fsspec_size
 
 logger = logging.getLogger(__name__)
@@ -285,11 +285,10 @@ def _get_files_by_extensions(input_paths: list[str], extensions: list[str]) -> l
     """
     Get a list of all filepaths with the specified extension from the input paths.
     """
-    print(input_paths)
     output_paths = []
     for path in input_paths:
         assert path != "/"
-        if fsspec_isdir(path) or path.endswith("/"):
+        if path.endswith("/") or fsspec_isdir(path):
             logger.info(f"Getting all {extensions} files in {path}")
             for ex in extensions:
                 output_paths.extend(fsspec_glob(os.path.join(path, f"**/*.{ex}")))
@@ -304,8 +303,13 @@ def _get_filepaths_to_tokenize(input_paths: list[str]) -> list[str]:
     Get all file paths to tokenize from the input paths.
     Handles jsonl.{gz,zst,zstd}, and parquet.
     """
+    if isinstance(input_paths, VersionedValue):
+        input_paths = input_paths.value
+
     if len(input_paths) == 0:
         return []
+    elif any(isinstance(x, InputName | ExecutorStep) for x in input_paths):
+        return input_paths
 
     # we're only going to have one or the other, but might as well return both
     return _get_files_by_extensions(input_paths, ["jsonl.{gz,zst,zstd}", "parquet"])
