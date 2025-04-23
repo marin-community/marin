@@ -31,7 +31,10 @@ class SimpleSFTConfig:
     """Tokenizer to use for training."""
 
     model_name_or_path: str | None = None
-    """Path to the pretrained model."""
+    """Path to the pretrained HF model checkpoint to initialize from"""
+
+    initialize_from_checkpoint_path: str | None = None
+    """Path to a levanter checkpoint to initialize from."""
 
     max_seq_len: int = 4096
     """Maximum sequence length for training."""
