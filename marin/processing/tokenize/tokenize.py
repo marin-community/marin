@@ -93,8 +93,24 @@ class TokenizeConfig:
             assert "/" not in self.validation_paths, "don't use the entire fs for validation paths!"
 
 
+def _expand_directories(config: UrlDatasetSourceConfig) -> UrlDatasetSourceConfig:
+    """
+    Expand directories in the config to globs.
+    """
+
+    train_paths = _get_filepaths_to_tokenize(config.train_urls)
+    validation_paths = _get_filepaths_to_tokenize(config.validation_urls)
+
+    return dataclasses.replace(config, train_urls=train_paths, validation_urls=validation_paths)
+
+
 def tokenize(config: TokenizeConfig):
     source_config = config.as_lm_dataset_source_config(config.cache_path)
+
+    # TODO: Levanter doesn't automatically expand directories to globs, but by convention we do in Marin
+    # we should backport this to Levanter
+
+    source_config = _expand_directories(source_config)
 
     train_source = source_config.get_shard_source("train")
     validation_source = source_config.get_shard_source("validation")
