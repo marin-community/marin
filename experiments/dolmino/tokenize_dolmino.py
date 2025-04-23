@@ -9,11 +9,12 @@ import os.path
 from levanter.store.cache import CacheOptions
 
 from experiments.llama import llama3_tokenizer
+from experiments.pretraining_datasets import dolmino
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
 from marin.processing.tokenize.data_configs import TokenizerStep
 
-BASE_DIR_DOLMINO = "gs://marin-us-central2/raw/dolmino-mix-1124-157960/bb54cab/data"
+BASE_DIR_DOLMINO = dolmino.cd("data")
 
 # The following dataset splits define file patterns for each split.
 # The glob pattern to capture all files with the extension under the folder.
@@ -54,8 +55,8 @@ def tokenize_dolmino_steps(*, base_path="tokenized/", tokenizer=llama3_tokenizer
 
 def _get_dolmino_split_paths(split):
     patterns = DOLMINO_DATASETS[split]
-    dolmino_split_input_base_path = os.path.join(BASE_DIR_DOLMINO, split)
-    dolmino_split_paths = [f"{dolmino_split_input_base_path}/{pattern}" for pattern in patterns]
+    dolmino_split_input_base_path = BASE_DIR_DOLMINO / split
+    dolmino_split_paths = [dolmino_split_input_base_path / pattern for pattern in patterns]
     return dolmino_split_paths
 
 
