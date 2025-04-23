@@ -76,6 +76,9 @@ class SpeedrunConfig:
         return 6.0 * N * D
 
     def adjust_to_exact_budget(self):
+
+        # TODO (Nikil): at the moment, we have this function but don't apply it- need to figure out user flow for 
+        # adjusting to exact budget
         flops_per_token = self.model_config.flops_per_token(self.vocab_size) * 6
         total_tokens = self.compute_budget.value / flops_per_token
         self.train_config.num_train_steps = int(
@@ -133,12 +136,13 @@ def get_wandb_metrics(run_id: str, entity: str = "stanford-mercury", project: st
         run = wandb.Api().run(f"{entity}/{project}/{run_id}")
         summary = run.summary
         return {
-            "lm_eval/averages/macro_avg_acc": summary.get("lm_eval/averages/macro_avg_acc"),
-            "eval/paloma/c4_en/bpb": summary.get("eval/paloma/c4_en/bpb"),
+            "lm_eval/averages/macro_avg_acc": summary.get("lm_eval/averages/macro_avg_acc", None),
+            "eval/paloma/c4_en/bpb": summary.get("eval/paloma/c4_en/bpb", None),
+            "eval/fineweb-edu/loss": summary.get("eval/fineweb-edu/loss", None),
         }
     except Exception as e:
         logger.error(f"Failed to fetch wandb metrics: {e}")
-        return {"lm_eval/averages/macro_avg_acc": None, "eval/paloma/c4_en/bpb": None}
+        return {"lm_eval/averages/macro_avg_acc": None, "eval/paloma/c4_en/bpb": None, "eval/fineweb-edu/loss": None}
 
 
 def get_compute_budgets():
@@ -257,4 +261,4 @@ def default_speedrun(
         ),
     )
 
-    return [train_step, analysis_step]
+    return [analysis_step]

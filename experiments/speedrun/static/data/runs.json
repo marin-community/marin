@@ -10,7 +10,8 @@
     "storage_path": "marin-us-central2/checkpoints/speedrun/150M_llama_dclm_baseline-7b3186/speedrun_analysis.json",
     "wandb_run_id": null,
     "lm_eval_macro_avg_acc": 0.2539941160632012,
-    "eval_paloma_c4_en_bpb": 1.1830110549926758
+    "eval_paloma_c4_en_bpb": 1.1830110549926758,
+    "eval_fineweb_edu_loss": null
   },
   {
     "run_name": "50M_llama_fineweb_edu-cde96c",
@@ -23,7 +24,8 @@
     "storage_path": "marin-us-central2/checkpoints/speedrun/50M_llama_fineweb_edu-cde96c/speedrun_analysis.json",
     "wandb_run_id": null,
     "lm_eval_macro_avg_acc": 0.24742055434773189,
-    "eval_paloma_c4_en_bpb": 1.3861894607543943
+    "eval_paloma_c4_en_bpb": 1.3861894607543943,
+    "eval_fineweb_edu_loss": null
   },
   {
     "run_name": "75M_llama_dclm_baseline-b7a5f5",
@@ -36,7 +38,8 @@
     "storage_path": "marin-us-central2/checkpoints/speedrun/75M_llama_dclm_baseline-b7a5f5/speedrun_analysis.json",
     "wandb_run_id": null,
     "lm_eval_macro_avg_acc": 0.254406573777408,
-    "eval_paloma_c4_en_bpb": 1.2888225317001345
+    "eval_paloma_c4_en_bpb": 1.2888225317001345,
+    "eval_fineweb_edu_loss": null
   },
   {
     "run_name": "75M_llama_fineweb_edu-ca427c",
@@ -49,6 +52,7 @@
     "storage_path": "marin-us-central2/checkpoints/speedrun/75M_llama_fineweb_edu-ca427c/speedrun_analysis.json",
     "wandb_run_id": null,
     "lm_eval_macro_avg_acc": 0.2515045075844395,
-    "eval_paloma_c4_en_bpb": 1.309715986251831
+    "eval_paloma_c4_en_bpb": 1.309715986251831,
+    "eval_fineweb_edu_loss": null
   }
 ]

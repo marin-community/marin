@@ -26,6 +26,7 @@ class LeaderboardEntry:
     wandb_run_id: str | None = None
     lm_eval_macro_avg_acc: float | None = None
     eval_paloma_c4_en_bpb: float | None = None
+    eval_fineweb_edu_loss: float | None = None
 
 
 class Leaderboard:
@@ -82,6 +83,7 @@ class Leaderboard:
             wandb_run_id=None,
             lm_eval_macro_avg_acc=float(lm_eval_macro_avg_acc) if lm_eval_macro_avg_acc is not None else None,
             eval_paloma_c4_en_bpb=float(eval_paloma_c4_en_bpb) if eval_paloma_c4_en_bpb is not None else None,
+            eval_fineweb_edu_loss=float(analysis["actual_stats"].get("eval/fineweb-edu/loss")) if analysis["actual_stats"].get("eval/fineweb-edu/loss") is not None else None,
         )
 
     def get_entries(self) -> list[LeaderboardEntry]:
@@ -110,17 +112,18 @@ class Leaderboard:
         # Sort by FLOPs used (lower is better)
         entries.sort(key=lambda x: x.final_flops_used, reverse=True)
 
-        header = "| Rank | Run Name | Budget Track | Model Size | Training Time (min) | FLOPs Used | LM Eval Acc | C4-EN BPB |\n"
+        header = "| Rank | Run Name | Budget Track | Model Size | Training Time (min) | FLOPs Used | LM Eval Acc | C4-EN BPB | Fineweb-Edu Loss |\n"
         separator = (
-            "|------|----------|--------------|------------|-------------------|-------------|------------|---------|\n"
+            "|------|----------|--------------|------------|-------------------|-------------|------------|---------|----------------|\n"
         )
 
         rows = []
         for i, entry in enumerate(entries, 1):
             model_size_str = f"{entry.model_size/1e6:.1f}M" if entry.model_size < 1e9 else f"{entry.model_size/1e9:.1f}B"
             eval_acc = f"{entry.lm_eval_macro_avg_acc:.3f}" if entry.lm_eval_macro_avg_acc is not None else "N/A"
-            c4_bpb = f"{entry.paloma_c4_en_bpb:.3f}" if entry.paloma_c4_en_bpb is not None else "N/A"
-            row = f"| {i} | {entry.run_name} | {entry.compute_budget_track} | {model_size_str} | {entry.total_training_time:.1f} | {entry.final_flops_used:.2e} | {eval_acc} | {c4_bpb} |"
+            c4_bpb = f"{entry.eval_paloma_c4_en_bpb:.3f}" if entry.eval_paloma_c4_en_bpb is not None else "N/A"
+            fineweb_loss = f"{entry.eval_fineweb_edu_loss:.3f}" if entry.eval_fineweb_edu_loss is not None else "N/A"
+            row = f"| {i} | {entry.run_name} | {entry.compute_budget_track} | {model_size_str} | {entry.total_training_time:.1f} | {entry.final_flops_used:.2e} | {eval_acc} | {c4_bpb} | {fineweb_loss} |"
             rows.append(row)
 
         return header + separator + "\n".join(rows)
@@ -163,6 +166,7 @@ def serve_leaderboard(storage_path: str, port: int = 8000):
                     "wandb_run_id": e.wandb_run_id,
                     "lm_eval_macro_avg_acc": e.lm_eval_macro_avg_acc,
                     "eval_paloma_c4_en_bpb": e.eval_paloma_c4_en_bpb,
+                    "eval_fineweb_edu_loss": e.eval_fineweb_edu_loss,
                 }
                 for e in entries
             ],

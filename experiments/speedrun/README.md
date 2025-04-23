@@ -1,6 +1,6 @@
 # Marin Speedrun
 
-TODO (Nikil): README is currently a work in progress- refine as we make changes.
+TODO (Nikil): README is currently a work in progress- will be refined as we make changes.
 
 ## Overview and Motivation
 
@@ -9,6 +9,8 @@ Marin Speedrun is a community-driven model training contest and framework that c
 ## Tracks
 
 The speedrun is divided into three tracks based on compute budget: **TINY**, **SMALL**, and **MEDIUM**.Each track has a specific FLOPs budget that your training run must stay within to qualify. We fix the dataset to the first <TBD> and you can experiment with any model architecture and training approach you'd like, as long as it stays within the corresponding compute budget.
+
+The dataset used is the FineWeb-Edu dataset. 
 
 ## Setup and Usage
 
@@ -64,7 +66,4 @@ The leaderboard will be viewable at http://localhost:8000
 - **LM Eval Accuracy**: Overall accuracy on language model evaluation benchmarks
 - **C4-EN BPB (Bits per Byte)**: Compression performance on the C4 dataset (TODO: decide a concrete metric between these)
 - **FLOPs Used**: Total compute used during training
-
-### To-Dos:
-- Make README clearer for adding new models, speedrun JSON structure
-- Add fineweb-edu validation score
+- **Fineweb-Edu Validation Loss**: Validation loss on the Fineweb-Edu dataset
