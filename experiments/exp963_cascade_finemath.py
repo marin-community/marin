@@ -1,7 +1,9 @@
 from experiments.datashop.datashop_datasets import datashop_dclm_annotation_subset, datashop_dclm_pretraining_subset
 from experiments.datashop.datashop_runner import DatashopRunner, DatashopRunnerConfig
 from experiments.datashop.default_configs import default_quality_filter_train_config_kwargs
-from marin.execution.executor import executor_main
+from experiments.exp939_finemath import FINEMATH_DATA_FILTER_PROMPT
+from marin.classifiers.utils import CreateDatasetConfig, create_dataset
+from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path
 
 FINEMATH_3_POINT_DATA_FILTER_PROMPT = """
 Evaluate the following text extract for its potential usefulness for studying mathematics up to high school and early undergraduate levels. Use the following 3-point scoring system described below. Points are accumulated based on the satisfaction of
@@ -36,10 +38,36 @@ datashop_runner = DatashopRunner(
     )
 )
 
+new_annotation_data_pool = ExecutorStep(
+    name="documents/finemath-cascade-3-point-filter/dclm-baseline",
+    fn=create_dataset,
+    config=CreateDatasetConfig(
+        input_doc_path=output_path_of(datashop_runner.filtered_documents),
+        output_dataset_path=this_output_path(),
+        # The label function actually doesn't matter for this step.
+        label_func=lambda doc, attrs: -1,
+        max_sample_size=1_000_000,
+        filetype="jsonl.zst",
+        merge_dataset_shards=False,
+    ),
+)
+
+datashop_runner_phase_2 = DatashopRunner(
+    DatashopRunnerConfig(
+        experiment_name="finemath-cascade-phase-2",
+        annotator_model_name="Llama-3.3-70B-Instruct",
+        pretraining_data_path=datashop_runner.filtered_documents,
+        annotator_data_path=new_annotation_data_pool,
+        data_filter_prompt=FINEMATH_DATA_FILTER_PROMPT,
+        dataset_output_processor_config_kwargs={"processor_type": "finalscore0-5"},
+    )
+)
+
+
 # TODO(chris): After obtaining the 3-point filtering model,
 # 1. Filter the pretraining data pool to 3+ examples.
 # 2. Annotate with 5 point scale.
 # 3. Filter rest of the documents.
 
 if __name__ == "__main__":
-    executor_main([datashop_runner.filtered_documents])
+    executor_main([datashop_runner_phase_2.encoder_model])
