@@ -22,7 +22,7 @@ DOCKER_TAGS = {
     "europe-west4-a": "89b461b3",
     "asia-northeast1": "89b461b3",
     "marin-us-east5-b-vllm": "83b6ac39",
-    "marin-us-east1-d-vllm": "e43b1c0b",
+    "marin-us-east1-d-vllm": "55a94a47",
     "europe-west4-vllm": "7fab502e",
     "marin-us-central2-vllm": "7a75233e",
 }
