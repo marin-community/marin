@@ -141,19 +141,29 @@ class VllmTpuEvaluator(Evaluator, ABC):
         output_path: str,
         max_eval_instances: int | None = None,
         resource_config: ResourceConfig | None = None,
+        engine_kwargs: dict | None = None,
     ) -> None:
         """
         Launches the evaluation run with Ray.
         """
 
+        if resource_config is None:
+            fn = None
+        else:
+            fn = scheduling_strategy_fn(resource_config.num_tpu, resource_config.strategy)
+
         @ray.remote(
-            scheduling_strategy=scheduling_strategy_fn(resource_config.num_tpu, resource_config.strategy),
+            scheduling_strategy=fn,
             runtime_env=self.get_runtime_env(),
         )
         @remove_tpu_lockfile_on_exit
         def launch(
-            model: ModelConfig, evals: list[EvalTaskConfig], output_path: str, max_eval_instances: int | None = None
+            model: ModelConfig,
+            evals: list[EvalTaskConfig],
+            output_path: str,
+            max_eval_instances: int | None = None,
+            engine_kwargs: dict | None = None,
         ) -> None:
-            self.evaluate(model, evals, output_path, max_eval_instances)
+            self.evaluate(model, evals, output_path, max_eval_instances, engine_kwargs)
 
-        ray.get(launch.remote(model, evals, output_path, max_eval_instances))
+        ray.get(launch.remote(model, evals, output_path, max_eval_instances, engine_kwargs))

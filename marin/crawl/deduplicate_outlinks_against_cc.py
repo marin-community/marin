@@ -116,6 +116,7 @@ def deduplicate_shard(
     shard_path_batch: str,
     shard_output_path_batch: str,
 ) -> list[tuple[int, int]]:
+
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     assert len(shard_path_batch) == len(shard_output_path_batch)
     logger.info(f"shard paths: {shard_path_batch}")
