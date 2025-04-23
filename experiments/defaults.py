@@ -233,7 +233,7 @@ def default_train(
             num_train_steps=train_config.num_train_steps,
             steps_per_eval=train_config.steps_per_eval if train_config.steps_per_eval is not None else 1000,
             checkpointer=CheckpointerConfig(
-                save_interval=timedelta(minutes=30),
+                save_interval=timedelta(minutes=10),
                 keep=[dict(every=steps_per_export)],
             ),
             model_averaging=model_averaging,
@@ -353,6 +353,7 @@ def default_sft(
         steps_per_eval=sft_config.steps_per_eval,
         checkpointer=checkpointer_config,
         seed=sft_config.seed,
+        initialize_from=sft_config.model_name_or_path if not sft_config.initialize_from_hf else None,
     )
 
     optimizer_config = AdamConfig(
@@ -385,7 +386,11 @@ def default_sft(
             mixture_weights=mixture_weights,
             mixture_block_size=sft_config.mixture_block_size,
             tokenizer=sft_config.tokenizer,
-            model_name_or_path=sft_config.model_name_or_path,
+            model_name_or_path=(
+                sft_config.model_name_or_path
+                if sft_config.initialize_from_hf
+                else model_config.hf_checkpoint_converter().reference_checkpoint
+            ),
             initialize_from_hf=sft_config.initialize_from_hf,
             max_seq_len=sft_config.max_seq_len,
             hf_save_steps=sft_config.steps_per_hf_export,
@@ -399,7 +404,6 @@ def default_sft(
             config=inner_config,
             pod_config=pod_config,
             output_path=this_output_path(),
-            bypass_path_checks=sft_config.bypass_path_checks,
         )
         fn = run_levanter_sft_mixture
 
@@ -428,13 +432,14 @@ def default_sft(
             supervised_data=supervised_data,
             chat_train_urls=chat_train_urls,
             tokenizer=sft_config.tokenizer,
-            model_name_or_path=sft_config.model_name_or_path,
+            model_name_or_path=sft_config.model_name_or_path if sft_config.initialize_from_hf else None,
             initialize_from_hf=sft_config.initialize_from_hf,
             max_seq_len=sft_config.max_seq_len,
             hf_save_steps=sft_config.steps_per_hf_export,
             messages_field="messages",
             input_role=sft_config.input_role,
             output_role=sft_config.output_role,
+            reinit_tokens=sft_config.reinit_tokens,
         )
 
         config = TrainSFTOnPodConfig(
@@ -497,9 +502,14 @@ def default_anneal(name: str, anneal_config: AnnealConfig):
     )
 
 
+@lru_cache
+def _cached_load_tokenizer(tokenizer_name: str):
+    return load_tokenizer(tokenizer_name)
+
+
 def _get_vocab_size(pretraining_data):
     tokenizer = unwrap_versioned_value(pretraining_data.tokenizer)
-    vocab_size = load_tokenizer(tokenizer).vocab_size
+    vocab_size = _cached_load_tokenizer(tokenizer).vocab_size
     return vocab_size
 
 
