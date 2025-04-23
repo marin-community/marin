@@ -70,11 +70,11 @@ class TrainLmOnPodConfig(BaseTrainConfig):
     config: train_lm.TrainLmConfig
 
 
-# @dataclass
-# class TrainDPOOnPodConfig(BaseTrainConfig):
-#     """Configuration for DPO training on a pod."""
+@dataclass
+class TrainDPOOnPodConfig(BaseTrainConfig):
+    """Configuration for DPO training on a pod."""
 
-#     config: dpo.TrainDPOConfig
+    config: dpo.TrainDPOConfig
 
 
 T = TypeVar("T", bound=TrainLmOnPodConfig | TrainSFTOnPodConfig | TrainSFTMixturePodConfig)
@@ -175,45 +175,45 @@ def _enforce_run_id(config: T) -> T:
     return replace(config, config=inner_config)
 
 
-# @ray.remote(num_cpus=0.1)
-# def run_levanter_dpo(config: TrainDPOOnPodConfig):
-#     """
-#     Run Levanter DPO on a Ray cluster.
-#     """
+@ray.remote(num_cpus=0.1)
+def run_levanter_dpo(config: TrainDPOOnPodConfig):
+    """
+    Run Levanter DPO on a Ray cluster.
+    """
 
-#     default_launch_config = levanter.infra.cli_helpers.load_config()
+    default_launch_config = levanter.infra.cli_helpers.load_config()
 
-#     if config.output_path is not None:
-#         logger.info(f"Using output path: {config.output_path}")
-#         config = _update_config_to_use_out_path(config)
+    if config.output_path is not None:
+        logger.info(f"Using output path: {config.output_path}")
+        config = _update_config_to_use_out_path(config)
 
-#     default_env = default_launch_config.env_for_accel(config.pod_config.tpu_type or "")
-#     env = _add_default_env_variables(config.pod_config.env, default_env)
-#     _check_for_wandb_key(env)
-#     env = _add_run_env_variables(env)
-#     pod_config = replace(config.pod_config, env=env)
-#     config = replace(config, pod_config=pod_config)
+    default_env = default_launch_config.env_for_accel(config.pod_config.tpu_type or "")
+    env = _add_default_env_variables(config.pod_config.env, default_env)
+    _check_for_wandb_key(env)
+    env = _add_run_env_variables(env)
+    pod_config = replace(config.pod_config, env=env)
+    config = replace(config, pod_config=pod_config)
 
-#     config = _suppress_ray_config(config)
-#     config = _enforce_run_id(config)
-#     logger.info(f"Using run ID: {config.config.trainer.id}")
+    config = _suppress_ray_config(config)
+    config = _enforce_run_id(config)
+    logger.info(f"Using run ID: {config.config.trainer.id}")
 
-#     if config.pod_config.tpu_type is not None:
-#         ray.get(ray.remote(_doublecheck_paths).options(num_cpus=0.1).remote(config))
+    if config.pod_config.tpu_type is not None:
+        ray.get(ray.remote(_doublecheck_paths).options(num_cpus=0.1).remote(config))
 
-#         if config.config.hf_save_path is None:
-#             raise ValueError("hf_save_path must be set when running on a TPU")
+        if config.config.hf_save_path is None:
+            raise ValueError("hf_save_path must be set when running on a TPU")
 
-#     dpo_config = config.config
+    dpo_config = config.config
 
-#     @ray.remote
-#     def dpo_task():
-#         dpo.train(dpo_config)
+    @ray.remote
+    def dpo_task():
+        dpo.train(dpo_config)
 
-#     if config.pod_config.tpu_type is not None:
-#         return run_on_pod_resumable(dpo_task, config.pod_config.tpu_type, max_retries_failure=10)
-#     else:
-#         return ray.get(dpo_task.remote())
+    if config.pod_config.tpu_type is not None:
+        return run_on_pod_resumable(dpo_task, config.pod_config.tpu_type, max_retries_failure=10)
+    else:
+        return ray.get(dpo_task.remote())
 
 
 @ray.remote(num_cpus=0.1)
