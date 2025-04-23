@@ -39,7 +39,7 @@ from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.execution.executor import (
     ExecutorStep,
     InputName,
-    get_executor_step,
+    ensure_versioned, get_executor_step,
     this_output_path,
     unwrap_versioned_value,
     versioned,
@@ -74,7 +74,7 @@ def default_tokenize(
         train_paths=[dataset] if not is_validation else [],
         validation_paths=[dataset] if is_validation else [],
         cache_path=this_output_path(),
-        tokenizer=versioned(tokenizer),
+        tokenizer=ensure_versioned(tokenizer),
         format=format,
     )
     if options is not None:
