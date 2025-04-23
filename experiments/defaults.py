@@ -233,7 +233,7 @@ def default_train(
             num_train_steps=train_config.num_train_steps,
             steps_per_eval=train_config.steps_per_eval if train_config.steps_per_eval is not None else 1000,
             checkpointer=CheckpointerConfig(
-                save_interval=timedelta(minutes=30),
+                save_interval=timedelta(minutes=10),
                 keep=[dict(every=steps_per_export)],
             ),
             model_averaging=model_averaging,
@@ -404,7 +404,6 @@ def default_sft(
             config=inner_config,
             pod_config=pod_config,
             output_path=this_output_path(),
-            bypass_path_checks=sft_config.bypass_path_checks,
         )
         fn = run_levanter_sft_mixture
 
@@ -503,9 +502,14 @@ def default_anneal(name: str, anneal_config: AnnealConfig):
     )
 
 
+@lru_cache
+def _cached_load_tokenizer(tokenizer_name: str):
+    return load_tokenizer(tokenizer_name)
+
+
 def _get_vocab_size(pretraining_data):
     tokenizer = unwrap_versioned_value(pretraining_data.tokenizer)
-    vocab_size = load_tokenizer(tokenizer).vocab_size
+    vocab_size = _cached_load_tokenizer(tokenizer).vocab_size
     return vocab_size
 
 
