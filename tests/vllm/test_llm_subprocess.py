@@ -3,7 +3,6 @@ such as lm_eval_harness which use vllm in a subprocess to generate
 completions.
 """
 
-import os
 import subprocess
 
 import pytest
@@ -62,6 +61,6 @@ def _test_llm_func(model_config):
     model_config.destroy()
 
 
-@pytest.mark.skipif(os.getenv("TPU_CI") != "true", reason="Skip this test if not running with a TPU in CI.")
+@pytest.mark.skip(reason="Takes too long and doesn't provide enough value (we don't call vllm in a subprocess anymore)")
 def test_local_llm_inference(ray_tpu_cluster):
     ray.get(_test_llm_func.remote(model_config))
