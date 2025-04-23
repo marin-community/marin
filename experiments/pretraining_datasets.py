@@ -129,7 +129,7 @@ starcoderdata = ExecutorStep(
         wait_for_completion=True,
     ),
     override_output_path="raw/starcoderdata-720c8c",
-).cd("9fc30b5")
+)
 
 dolmino = ExecutorStep(
     name="raw/dolmino-mix-1124",
