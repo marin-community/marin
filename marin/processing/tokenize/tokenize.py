@@ -39,7 +39,7 @@ from levanter.data.text import (
 from levanter.store.cache import CacheOptions
 from ray.runtime_env import RuntimeEnv
 
-from marin.execution.executor import InputName
+from marin.execution.executor import ExecutorStep, InputName, VersionedValue
 from marin.utils import fsspec_glob, fsspec_isdir, fsspec_size
 
 logger = logging.getLogger(__name__)
@@ -81,8 +81,8 @@ class TokenizeConfig:
         """
         return UrlDatasetSourceConfig(
             tags=self.tags,
-            train_urls=self.train_paths if include_raw_paths else [],
-            validation_urls=self.validation_paths if include_raw_paths else [],
+            train_urls=_get_filepaths_to_tokenize(self.train_paths) if include_raw_paths else [],
+            validation_urls=_get_filepaths_to_tokenize(self.validation_paths) if include_raw_paths else [],
             cache_dir=actual_output_path,
         )
 
@@ -304,8 +304,13 @@ def _get_filepaths_to_tokenize(input_paths: list[str]) -> list[str]:
     Get all file paths to tokenize from the input paths.
     Handles jsonl.{gz,zst,zstd}, and parquet.
     """
+    if isinstance(input_paths, VersionedValue):
+        input_paths = input_paths.value
+
     if len(input_paths) == 0:
         return []
+    elif any(isinstance(x, InputName | ExecutorStep) for x in input_paths):
+        return input_paths
 
     # we're only going to have one or the other, but might as well return both
     return _get_files_by_extensions(input_paths, ["jsonl.{gz,zst,zstd}", "parquet"])

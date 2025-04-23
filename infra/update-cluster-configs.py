@@ -47,7 +47,7 @@ configs = {
         "tpu_generation": "v5p",
         "min_workers": 1,
         "worker_targets": {
-            "v5p-128": 8,
+            "v5p-128": 32,
         },
     },
     "marin-big-run": {
