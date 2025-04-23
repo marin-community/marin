@@ -18,6 +18,8 @@ import wandb
 from levanter.data.text import LMMixtureDatasetConfig
 from levanter.models.lm_model import LmConfig
 
+from experiments.exp72_baselines import fineweb_edu_tokenized
+
 from experiments.defaults import default_train
 from experiments.evals.task_configs import CORE_TASKS_PLUS_MMLU
 from experiments.llama import compute_num_parameters, llama3_tokenizer_vocab_size
@@ -39,7 +41,7 @@ class HardwareConfig:
 
 
 class ComputeBudget(Enum):
-    # in FLOPs
+    # target compute budget in FLOPs that the user opts to stay within
     TINY = 3e18
     SMALL = 6e18
     MEDIUM = 3e19
@@ -50,8 +52,8 @@ class SpeedrunConfig:
     compute_budget: ComputeBudget
     model_config: LmConfig
     train_config: SimpleTrainConfig | TrainLmOnPodConfig
-    tokenized_dataset: InputName | LMMixtureDatasetConfig
     hardware_config: HardwareConfig
+    tokenized_dataset: InputName | LMMixtureDatasetConfig = fineweb_edu_tokenized
     hyperparameter_scaling: Callable[[LmConfig, ComputeBudget], dict] | None = None
     mfu_estimate: float = 0.5
 
@@ -191,6 +193,7 @@ def speedrun_analysis(config: SpeedrunAnalysisConfig):
             "within_budget_hardware": total_hardware_flops <= config.speedrun_config.compute_budget.value,
             "lm_eval/averages/macro_avg_acc": wandb_metrics["lm_eval/averages/macro_avg_acc"],
             "eval/paloma/c4_en/bpb": wandb_metrics["eval/paloma/c4_en/bpb"],
+            "eval/fineweb-edu/loss": wandb_metrics["eval/fineweb-edu/loss"],
         },
     }
 
@@ -230,11 +233,15 @@ def default_speedrun(
         raise ValueError(f"Invalid speedrun configuration: {error}")
 
     run_tags = ["speedrun", f"budget_{config.compute_budget.name}"] + (tags or [])
+
+    # TODO (Nikil): need to have a better mechanism to enforce/validate fixed dataset and seed
+    # instead of just overriding the configs
+    train_config = dataclasses.replace(config.train_config, data_seed=42)
     train_step = default_train(
         name=f"speedrun/{name}",
-        tokenized=config.tokenized_dataset,  # TODO (Nikil): need to fix dataset for model track, and also have a fixed seed so everyone sees the same tokens
+        tokenized=config.tokenized_dataset,
         model_config=dataclasses.replace(config.model_config),
-        train_config=config.train_config,
+        train_config=train_config,
         tags=run_tags,
         eval_harness_tasks=CORE_TASKS_PLUS_MMLU,
     )
