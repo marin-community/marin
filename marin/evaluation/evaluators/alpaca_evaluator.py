@@ -73,7 +73,8 @@ class AlpacaEvaluator(VllmTpuEvaluator):
                     "repetition_penalty": repetition_penalty,
                     "stop_token_ids": stop_token_ids,
                     "model_kwargs": {
-                        "max_model_len": 4096,  # Cap at 4096 tokens
+                        "max_model_len": model.engine_kwargs.get("max_model_len", 4096),  # Cap at 4096 tokens
+                        "enforce_eager": model.engine_kwargs.get("enforce_eager", False),
                         "dtype": "bfloat16",  # Explicitly use bfloat16 for TPU
                         # "enforce_eager": True, # Uncomment if you want to enforce eager execution to save memory
                         "device": "tpu",
@@ -141,7 +142,7 @@ class AlpacaEvaluator(VllmTpuEvaluator):
                 evaluate_from_model(
                     model_configs=model_config_content,
                     output_path=results_path,
-                    max_eval_instances=max_eval_instances,
+                    max_instances=max_eval_instances,
                 )
 
             # Upload the results to GCS
