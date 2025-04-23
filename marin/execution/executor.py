@@ -235,6 +235,7 @@ def versioned(value: T_co) -> VersionedValue[T_co]:
         raise ValueError("Can't nest VersionedValue")
     return VersionedValue(value)
 
+
 def ensure_versioned(value: VersionedValue[T_co] | T_co) -> VersionedValue[T_co]:
     """
     Ensure that the value is wrapped in a VersionedValue. If it is already wrapped, return it as is.

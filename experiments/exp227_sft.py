@@ -1,20 +1,10 @@
-from datetime import timedelta
-
-import jmp
-
-from experiments.llama import llama_8b
-from experiments.simple_sft_config import SimpleSFTConfig
-from levanter.checkpoint import CheckpointerConfig
-from levanter.data.text import ChatLmDatasetFormat, SupervisedUrlSourceConfig
-from levanter.models.llama import LlamaConfig
-from levanter.optim import AdamConfig
-from levanter.tracker.wandb import WandbConfig
-from levanter.trainer import TrainerConfig
+from levanter.data.text import ChatLmDatasetFormat
 
 from experiments.defaults import default_sft, default_tokenize
 from experiments.instruction_datasets import get_instruction_dataset
-from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path
-from marin.training.training import PodConfig, TrainSFTOnPodConfig, run_levanter_sft
+from experiments.llama import llama_8b
+from experiments.simple_sft_config import SimpleSFTConfig
+from marin.execution.executor import ExecutorStep, executor_main
 
 # Get instruction dataset
 instruction_dataset = get_instruction_dataset("allenai/tulu-v2-sft-mixture-olmo-4096")
@@ -55,7 +45,7 @@ train_step = default_sft(
         min_lr_ratio=0.0,
         steps_per_hf_export=500,
         max_grad_norm=None,
-    )
+    ),
 )
 
 
