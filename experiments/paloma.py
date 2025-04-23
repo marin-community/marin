@@ -9,7 +9,7 @@ import os.path
 # cyclic dependency
 # from experiments.llama import llama3_tokenizer
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
-from marin.processing.tokenize import TokenizeConfig, tokenize
+from marin.processing.tokenize import TokenizeConfig
 from marin.processing.tokenize.data_configs import TokenizerStep
 from operations.download import HfDownloadConfig, download_hf_gated_manual
 
@@ -53,17 +53,16 @@ def paloma_tokenized(*, base_path="tokenized/", tokenizer: str = llama3_tokenize
     """
     Returns a dictionary of steps to tokenize the Paloma eval sets. Keys are the subset names (with `paloma/` prefix)
     """
+    # avoid cyclic dependency
+    from experiments.defaults import default_tokenize
+
     paloma_steps: dict[str, ExecutorStep[TokenizeConfig]] = {}
     for dataset, path_part in PALOMA_DATASETS_TO_DIR.items():
-        paloma_steps[os.path.join("paloma", dataset)] = ExecutorStep(
-            name=os.path.join(base_path, "paloma", dataset),
-            fn=tokenize,
-            config=TokenizeConfig(
-                train_paths=versioned([]),
-                validation_paths=[paloma.cd(f"{path_part}/val/val*.jsonl.gz")],
-                cache_path=this_output_path(),
-                tokenizer=tokenizer,
-            ),
+        paloma_steps[os.path.join("paloma", dataset)] = default_tokenize(
+            name=os.path.join("paloma", dataset),
+            dataset=paloma.cd(f"{path_part}/val/val*.jsonl.gz"),
+            tokenizer=tokenizer,
+            is_validation=True,
         )
 
     return paloma_steps
