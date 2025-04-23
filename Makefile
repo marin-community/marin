@@ -24,7 +24,7 @@ autoformat:
 	black .
 
 # Define regions and tags for the Docker images
-CLUSTER_REPOS = us-central2 europe-west4 us-west4 asia-northeast1 us-east5 us-east1
+CLUSTER_REPOS = us-central2 us-central1 europe-west4 us-west4 asia-northeast1 us-east5 us-east1
 TAG_VERSIONS = latest $(shell git rev-parse --short HEAD) $(shell date -u +"%Y%m%d")
 
 # If VLLM is defined, use different Dockerfile and image name
