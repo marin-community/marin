@@ -81,8 +81,8 @@ class TokenizeConfig:
         """
         return UrlDatasetSourceConfig(
             tags=self.tags,
-            train_urls=_get_filepaths_to_tokenize(self.train_paths) if include_raw_paths else [],
-            validation_urls=_get_filepaths_to_tokenize(self.validation_paths) if include_raw_paths else [],
+            train_urls=self.train_paths if include_raw_paths else [],
+            validation_urls=self.validation_paths if include_raw_paths else [],
             cache_dir=actual_output_path,
         )
 
@@ -285,11 +285,10 @@ def _get_files_by_extensions(input_paths: list[str], extensions: list[str]) -> l
     """
     Get a list of all filepaths with the specified extension from the input paths.
     """
-    print(input_paths)
     output_paths = []
     for path in input_paths:
         assert path != "/"
-        if fsspec_isdir(path) or path.endswith("/"):
+        if path.endswith("/") or fsspec_isdir(path):
             logger.info(f"Getting all {extensions} files in {path}")
             for ex in extensions:
                 output_paths.extend(fsspec_glob(os.path.join(path, f"**/*.{ex}")))
