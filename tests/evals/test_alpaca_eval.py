@@ -1,9 +1,5 @@
 """Test whether alpaca eval works."""
 
-import os
-
-import pytest
-
 from experiments.evals.resource_configs import SINGLE_TPU_V6E_8
 from marin.evaluation.evaluation_config import EvaluationConfig
 from marin.evaluation.run import evaluate
@@ -18,15 +14,15 @@ TOP_P = 1.0
 TOP_K = -1
 
 
-@pytest.mark.skipif(os.getenv("TPU_CI") != "true", reason="Skip this test if not running with a TPU in CI.")
-def test_alpaca_eval(current_date_time, ray_tpu_cluster):
+# @pytest.mark.skipif(os.getenv("TPU_CI") != "true", reason="Skip this test if not running with a TPU in CI.")
+def test_alpaca_eval(current_date_time):
     config = EvaluationConfig(
         evaluator="alpaca",
         model_name=model_config.name,
         model_path=model_config.path,
         evaluation_path=f"gs://marin-us-east5/evaluation/alpaca_eval/{model_config.name}-{current_date_time}",
         resource_config=SINGLE_TPU_V6E_8,
-        max_eval_instances=1,
+        max_eval_instances=5,
         engine_kwargs={
             "temperature": TEMPERATURE,
             "presence_penalty": PRESENCE_PENALTY,
