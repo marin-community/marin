@@ -69,9 +69,8 @@ jobs:
         run: |
           gcloud config set project ${{ secrets.GCP_PROJECT_ID }}
           gcloud compute tpus tpu-vm ssh ${{ env.TPU_NAME }} --zone=${{ env.TPU_ZONE }} --project=${{ secrets.GCP_PROJECT_ID }} \
-            --command='sudo gcloud auth configure-docker us-east5-docker.pkg.dev --quiet && \
-                      sudo docker pull us-east5-docker.pkg.dev/hai-gcp-models/marin/marin_vllm:83b6ac39 && \
-                          sudo docker run --net host --shm-size=16G --privileged -v /tmp/repo:/opt/marin \
+            --command='sudo gcloud auth configure-docker us-east5-docker.pkg.dev --quiet \
+                          && sudo docker run --net host --shm-size=16G --privileged -v /tmp/repo:/opt/marin \
                             ${{ env.DOCKER_IMAGE }}:${{ env.DOCKER_SHA }} \
                             /bin/bash -c "export TPU_CI=true \
                                      && export WANDB_API_KEY=${{ secrets.WANDB_API_KEY }} \
