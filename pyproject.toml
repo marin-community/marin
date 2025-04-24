@@ -27,7 +27,6 @@ dependencies = [
     "toml",
     "pandas", # Only needed by Fileprovider in inference.py
     "pyarrow", # # Only needed by Fileprovider in inference.py
-    "transformers>=4.48.0,<5.0",
     # We are keeping levanter deps for now. @TODO :: Remove them
     "multiprocess==0.70.16",
     "sentencepiece",
