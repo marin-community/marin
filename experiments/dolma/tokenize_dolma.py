@@ -57,21 +57,21 @@ DOLMA_DATASETS = {
 
 # NB: we changed how hashes were computed for this corpus and we'd like to avoid recomputing them
 DOLMA_LLAMA3_OVERRIDES = {
-    "dolma/c4": "tokenized/dolma/c4-e0e5ec",
-    "dolma/cc": "tokenized/dolma/cc-74b017",
-    "dolma/cc-news": "tokenized/dolma/cc-news-625d3e",
-    "dolma/falcon": "tokenized/dolma/falcon-da8fd0",
-    "dolma/flan": "tokenized/dolma/flan-a99cb2",
-    "dolma/gutenberg": "tokenized/dolma/gutenberg-f9eb99",
-    "dolma/reddit": "tokenized/dolma/reddit-62a64a",
-    "dolma/starcoder": "tokenized/dolma/starcoder-8b6089",
-    "dolma/algebraic-stack": "tokenized/dolma/algebraic-stack-cc00cf",
-    "dolma/arxiv": "tokenized/dolma/arxiv-07a51f",
-    "dolma/megawika": "tokenized/dolma/megawika-34abf2",
-    "dolma/open-web-math": "tokenized/dolma/open-web-math-79823d",
-    "dolma/pes2o": "tokenized/dolma/pes2o-538363",
-    "dolma/stackexchange": "tokenized/dolma/stackexchange-adfc49",
-    "dolma/wiki": "tokenized/dolma/wiki-212315",
+    "c4": "tokenized/dolma/c4-e0e5ec",
+    "cc": "tokenized/dolma/cc-74b017",
+    "cc-news": "tokenized/dolma/cc-news-625d3e",
+    "falcon": "tokenized/dolma/falcon-da8fd0",
+    "flan": "tokenized/dolma/flan-a99cb2",
+    "gutenberg": "tokenized/dolma/gutenberg-f9eb99",
+    "reddit": "tokenized/dolma/reddit-62a64a",
+    "starcoder": "tokenized/dolma/starcoder-8b6089",
+    "algebraic-stack": "tokenized/dolma/algebraic-stack-cc00cf",
+    "arxiv": "tokenized/dolma/arxiv-07a51f",
+    "megawika": "tokenized/dolma/megawika-34abf2",
+    "open-web-math": "tokenized/dolma/open-web-math-79823d",
+    "pes2o": "tokenized/dolma/pes2o-538363",
+    "stackexchange": "tokenized/dolma/stackexchange-adfc49",
+    "wiki": "tokenized/dolma/wiki-212315",
 }
 
 

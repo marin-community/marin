@@ -36,18 +36,18 @@ DOLMINO_DATASETS = {
 
 # NB: we changed how hashes were computed for this corpus and we'd like to avoid recomputing them
 DOLMINO_LLAMA3_OVERRIDES = {
-    "dolmino/dclm": "tokenized/dolmino/dclm-6c18eb",
-    "dolmino/flan": "tokenized/dolmino/flan-d71ec1",
-    "dolmino/math/codesearchnet-owmfilter": "tokenized/dolmino/math/codesearchnet-owmfilter-fd2640",
-    "dolmino/math/dolmino_math_synth": "tokenized/dolmino/math/dolmino_math_synth-11f876",
-    "dolmino/math/gsm8k": "tokenized/dolmino/math/gsm8k-902e8b",
-    "dolmino/math/mathcoder2-synthmath": "tokenized/dolmino/math/mathcoder2-synthmath-bc8dd2",
-    "dolmino/math/metamath-owmfilter": "tokenized/dolmino/math/metamath-owmfilter-fafa84",
-    "dolmino/math/tinyGSM-MIND": "tokenized/dolmino/math/tinyGSM-MIND-6c3016",
-    "dolmino/math/tulu_math": "tokenized/dolmino/math/tulu_math-414a4d",
-    "dolmino/pes2o": "tokenized/dolmino/pes2o-d22243",
-    "dolmino/stackexchange": "tokenized/dolmino/stackexchange-271a84",
-    "dolmino/wiki": "tokenized/dolmino/wiki-c31b74",
+    "dclm": "tokenized/dolmino/dclm-6c18eb",
+    "flan": "tokenized/dolmino/flan-d71ec1",
+    "math/codesearchnet-owmfilter": "tokenized/dolmino/math/codesearchnet-owmfilter-fd2640",
+    "math/dolmino_math_synth": "tokenized/dolmino/math/dolmino_math_synth-11f876",
+    "math/gsm8k": "tokenized/dolmino/math/gsm8k-902e8b",
+    "math/mathcoder2-synthmath": "tokenized/dolmino/math/mathcoder2-synthmath-bc8dd2",
+    "math/metamath-owmfilter": "tokenized/dolmino/math/metamath-owmfilter-fafa84",
+    "math/tinyGSM-MIND": "tokenized/dolmino/math/tinyGSM-MIND-6c3016",
+    "math/tulu_math": "tokenized/dolmino/math/tulu_math-414a4d",
+    "pes2o": "tokenized/dolmino/pes2o-d22243",
+    "stackexchange": "tokenized/dolmino/stackexchange-271a84",
+    "wiki": "tokenized/dolmino/wiki-c31b74",
     "dolmino_dclm": "tokenized/dolmino/dclm-6c18eb",
 }
 
