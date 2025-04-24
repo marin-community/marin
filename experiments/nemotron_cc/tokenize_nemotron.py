@@ -42,13 +42,13 @@ NEMOTRON_WEIGHTS = {
 
 # NB: we changed how hashes were computed for this corpus and we'd like to avoid recomputing them
 NEMOTRON_LLAMA3_OVERIDES = {
-    "nemotron_cc/hq_actual": "tokenized/nemotron_cc/hq_actual-5af4cc",
-    "nemotron_cc/hq_synth": "tokenized/nemotron_cc/hq_synth-3525e2",
-    "nemotron_cc/low_actual": "tokenized/nemotron_cc/low_actual-cb3f2c",
-    "nemotron_cc/low_synth": "tokenized/nemotron_cc/low_synth-3c57b3",
-    "nemotron_cc/medium": "tokenized/nemotron_cc/medium-d86506",
-    "nemotron_cc/medium_high": "tokenized/nemotron_cc/medium_high-d21701",
-    "nemotron_cc/medium_low": "tokenized/nemotron_cc/medium_low-0fdb07",
+    "hq_actual": "tokenized/nemotron_cc/hq_actual-5af4cc",
+    "hq_synth": "tokenized/nemotron_cc/hq_synth-3525e2",
+    "low_actual": "tokenized/nemotron_cc/low_actual-cb3f2c",
+    "low_synth": "tokenized/nemotron_cc/low_synth-3c57b3",
+    "medium": "tokenized/nemotron_cc/medium-d86506",
+    "medium_high": "tokenized/nemotron_cc/medium_high-d21701",
+    "medium_low": "tokenized/nemotron_cc/medium_low-0fdb07",
 }
 
 
