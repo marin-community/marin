@@ -34,12 +34,30 @@ DOLMINO_DATASETS = {
 }
 
 
+# NB: we changed how hashes were computed for this corpus and we'd like to avoid recomputing them
+DOLMINO_LLAMA3_OVERRIDES = {
+    "dolmino/dclm": "tokenized/dolmino/dclm-6c18eb",
+    "dolmino/flan": "tokenized/dolmino/flan-d71ec1",
+    "dolmino/math/codesearchnet-owmfilter": "tokenized/dolmino/math/codesearchnet-owmfilter-fd2640",
+    "dolmino/math/dolmino_math_synth": "tokenized/dolmino/math/dolmino_math_synth-11f876",
+    "dolmino/math/gsm8k": "tokenized/dolmino/math/gsm8k-902e8b",
+    "dolmino/math/mathcoder2-synthmath": "tokenized/dolmino/math/mathcoder2-synthmath-bc8dd2",
+    "dolmino/math/metamath-owmfilter": "tokenized/dolmino/math/metamath-owmfilter-fafa84",
+    "dolmino/math/tinyGSM-MIND": "tokenized/dolmino/math/tinyGSM-MIND-6c3016",
+    "dolmino/math/tulu_math": "tokenized/dolmino/math/tulu_math-414a4d",
+    "dolmino/pes2o": "tokenized/dolmino/pes2o-d22243",
+    "dolmino/stackexchange": "tokenized/dolmino/stackexchange-271a84",
+    "dolmino/wiki": "tokenized/dolmino/wiki-c31b74",
+    "dolmino_dclm": "tokenized/dolmino/dclm-6c18eb",
+}
+
+
 def tokenize_dolmino_steps(*, base_path="tokenized/", tokenizer=llama3_tokenizer) -> dict[str, TokenizerStep]:
     dolmino_steps: dict[str, ExecutorStep[TokenizeConfig]] = {}
     for split in DOLMINO_DATASETS:
         dolmino_split_output_path = os.path.join(base_path, "dolmino", split)
         dolmino_split_paths = _get_dolmino_split_paths(split)
-        dolmino_steps[os.path.join("dolmino", split)] = ExecutorStep(
+        step = ExecutorStep(
             name=dolmino_split_output_path,
             fn=tokenize,
             config=TokenizeConfig(
@@ -50,6 +68,11 @@ def tokenize_dolmino_steps(*, base_path="tokenized/", tokenizer=llama3_tokenizer
             ),
             pip_dependency_groups=["sentencepiece"],
         )
+
+        if tokenizer == llama3_tokenizer and split in DOLMINO_LLAMA3_OVERRIDES:
+            step = step.with_output_path(DOLMINO_LLAMA3_OVERRIDES[split])
+        dolmino_steps[os.path.join("dolmino", split)] = step
+
     return dolmino_steps
 
 
@@ -75,10 +98,10 @@ dolmino_math_tokenized_llama3 = ExecutorStep(
         cache_options=CacheOptions(num_shard_groups=32),
     ),
     pip_dependency_groups=["sentencepiece"],
-)
+).with_output_path("tokenized/dolmino/all_math-9d507c")
 
 
-def get_dolmino_step(split: str) -> ExecutorStep[TokenizeConfig]:
+def get_dolmino_step_llama3(split: str) -> ExecutorStep[TokenizeConfig]:
     assert (
         split in DOLMINO_DATASETS
     ), f"Split {split} not found in {DOLMINO_DATASETS}, \
