@@ -4,7 +4,7 @@ from experiments.defaults import default_sft, default_tokenize
 from experiments.instruction_datasets import get_instruction_dataset
 from experiments.llama import llama_8b
 from experiments.simple_sft_config import SimpleSFTConfig
-from marin.execution.executor import ExecutorStep, executor_main
+from marin.execution.executor import executor_main
 
 # Get instruction dataset
 instruction_dataset = get_instruction_dataset("allenai/tulu-v2-sft-mixture-olmo-4096")
@@ -15,13 +15,11 @@ NUM_TRAIN_TOKENS = 150849275
 NUM_TRAIN_STEPS = NUM_TRAIN_TOKENS // (128 * 4096) * 3  # 3 epochs
 
 # Add tokenization step
-tokenize_step = ExecutorStep(
-    default_tokenize(
-        name="olmo702024_sft_4096_3eps",
-        dataset=instruction_dataset / "**/*.jsonl.gz",
-        tokenizer="stanford-crfm/marin-olmo2-tokenizer",
-        format=ChatLmDatasetFormat(),
-    )
+tokenize_step = default_tokenize(
+    name="olmo702024_sft_4096_3eps",
+    dataset=instruction_dataset / "**/*.jsonl.gz",
+    tokenizer="stanford-crfm/marin-olmo2-tokenizer",
+    format=ChatLmDatasetFormat(),
 )
 
 
