@@ -1,0 +1,62 @@
+site_name: Marin Documentation
+site_description: Documentation for the Marin project
+theme:
+  name: material
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - search.highlight
+    - search.share
+    - search.suggest
+    - content.code.annotation
+    - content.code.copy
+
+
+nav:
+  - Home: index.md
+  - Tutorials:
+    - Getting Started: tutorials/getting-started.md
+    - Basic Usage: tutorials/basic-usage.md
+  - How-to Guides:
+    - Installation: how-to-guides/installation.md
+    - Configuration: how-to-guides/configuration.md
+    - Common Tasks: how-to-guides/common-tasks.md
+    - Building Docs: how-to-guides/building-docs.md
+  - Technical Reference:
+    - API Reference: reference/api.md
+    - Architecture: reference/architecture.md
+    - Configuration Options: reference/configuration.md
+  - Explanation:
+    - Concepts: explanation/concepts.md
+    - Design Decisions: explanation/design-decisions.md
+    - Best Practices: explanation/best-practices.md
+    - Experiments: explanation/experiments.md
+    - Executor: reference/executor.md
+
+markdown_extensions:
+  - pymdownx.highlight
+  - pymdownx.superfences
+  - pymdownx.inlinehilite
+  - pymdownx.tabbed
+  - pymdownx.arithmatex
+  - pymdownx.emoji
+  - pymdownx.tasklist
+  - pymdownx.highlight:
+     anchor_linenums: true
+  - admonition
+  - footnotes
+  - toc:
+      permalink: true
+
+plugins:
+  - search
+  - mkdocstrings:
+      default_handler: python
+      handlers:
+        python:
+          selection:
+            docstring_style: google
+          rendering:
+            show_source: true
+            show_root_heading: true
