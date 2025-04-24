@@ -122,7 +122,7 @@ class AlpacaEvaluator(VllmTpuEvaluator):
             model_name_or_path: str = self.download_model(model)
 
             model_config_path: str = os.path.join(AlpacaEvaluator.CACHE_PATH, model_name_or_path, "model_config.yaml")
-            model_config_content = self.write_model_config_file(model, model_config_path, model.generation_params)
+            model_config_content = self.write_model_config_file(model, model_config_path)
 
             # Construct the command and run AlpacaEval
             max_eval_instances = max_eval_instances or self.DEFAULT_MAX_INSTANCES
