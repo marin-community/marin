@@ -1,5 +1,6 @@
 from experiments.defaults import default_tokenize
-from experiments.instruction_datasets import get_instruction_dataset, llama3_instruct_chat_format
+from experiments.exp964_custom_chat_tokenizer import llama3_instruct_chat_format
+from experiments.instruction_datasets import get_instruction_dataset
 from experiments.llama import llama3_tokenizer
 from marin.execution.executor import executor_main
 
