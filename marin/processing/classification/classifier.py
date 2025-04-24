@@ -7,9 +7,15 @@ import time
 import urllib.parse
 from typing import Any, ClassVar
 
+import torch
+
+try:
+    import torch_xla.core.xla_model as xm
+except ImportError:
+    xm = None
+
 import fsspec
 import lz4.frame
-import torch
 
 try:
     import torch_xla.core.xla_model as xm
@@ -248,6 +254,32 @@ class BERTQualityClassifier(BaseClassifier):
         return res
 
 
+class GTEClassifier(FinewebEduClassifier):
+    """Classifier that uses the Alibaba-NLP/gte-base-en-v1.5 model to classify documents"""
+
+    def __init__(self, model_name: str, attribute_name: str, max_length: int, *args, **kwargs):
+        from transformers import AutoModelForSequenceClassification, AutoTokenizer
+
+        device = xm.xla_device()
+
+        self.model = AutoModelForSequenceClassification.from_pretrained(
+            model_name, trust_remote_code=True, output_hidden_states=False
+        ).to(device)
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        self.attribute_name = attribute_name
+        self.max_length = max_length
+
+    @torch.no_grad()
+    def predict(self, documents: list[str]) -> list[float]:
+        inputs = self.tokenizer(
+            documents, return_tensors="pt", padding=True, truncation=True, max_length=self.max_length
+        ).to(self.model.device)
+        outputs = self.model(**inputs)
+        xm.mark_step()
+        logits = outputs.logits.squeeze(-1)
+        return logits.tolist()
+
+
 class CompressionClassifier(BaseClassifier):
     """A classifier that calculates LZ4 compression ratios for text documents.
 
@@ -279,6 +311,7 @@ class AutoClassifier(BaseClassifier):
     _MODEL_NAME_TO_CLS_DICT: ClassVar[dict[str, BaseClassifier]] = {
         "fasttext": FasttextClassifier,
         "fineweb": FinewebEduClassifier,
+        "gte": GTEClassifier,
         "compression": CompressionClassifier,
         "bert": BERTQualityClassifier,
     }
@@ -310,9 +343,7 @@ class AutoClassifier(BaseClassifier):
             key = model_type.lower()
 
         try:
-            return cls._MODEL_NAME_TO_CLS_DICT[key](
-                model_name_or_path, attribute_name, *args, model_type=model_type, **kwargs
-            )
+            return cls._MODEL_NAME_TO_CLS_DICT[key](model_name_or_path, attribute_name, *args, **kwargs)
         except KeyError as e:
             raise ValueError(
                 f"Model name {model_name_or_path} not supported. "

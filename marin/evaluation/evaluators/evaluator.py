@@ -65,17 +65,6 @@ class Evaluator(ABC):
     _pip_packages: ClassVar[list[Dependency]]
     _py_modules: ClassVar[list[Dependency]]
 
-    def scheduling_strategy_fn(self, tensor_parallel_size: int, tpu_type: str):
-        import ray
-        from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
-
-        # One bundle per tensor parallel worker
-        pg = ray.util.placement_group(
-            [{"TPU": 1, "CPU": 1}] * tensor_parallel_size + [{f"{tpu_type}-head": 1}],
-            strategy="STRICT_PACK",  # STRICT_PACK means same node
-        )
-        return PlacementGroupSchedulingStrategy(pg, placement_group_capture_child_tasks=True)
-
     @abstractmethod
     def launch_evaluate_with_ray(
         self,

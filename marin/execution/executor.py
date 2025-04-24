@@ -80,6 +80,7 @@ import urllib.parse
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, fields, is_dataclass, replace
 from datetime import datetime
+from functools import cached_property
 from typing import Any, Generic, TypeVar
 from urllib.parse import urlparse
 
@@ -160,6 +161,10 @@ class ExecutorStep(Generic[ConfigT]):
     def __hash__(self):
         """Hash based on the ID (every object is different)."""
         return hash(id(self))
+
+    def with_output_path(self, output_path: str) -> "ExecutorStep":
+        """Return a copy of the step with the given output_path."""
+        return replace(self, override_output_path=output_path)
 
 
 @dataclass(frozen=True)
@@ -624,9 +629,10 @@ class Executor:
             )
 
         # Compute info for the entire execution
+        path = get_caller_path()
         self.executor_info = ExecutorInfo(
             git_commit=get_git_commit(),
-            caller_path=get_caller_path(),
+            caller_path=path,
             created_date=datetime.now().isoformat(),
             user=get_user(),
             ray_job_id=ray.get_runtime_context().get_job_id(),
@@ -716,7 +722,13 @@ class Executor:
                 ),
             ).remote(step.fn, step_name, config, dependencies, output_path, self.status_actor, force_run_failed)
         else:
-            self.refs[step] = ray.put(None)  # Necessary as we call ray.get on all the deps in execute_after_dependencies
+            # Necessary as we call ray.get on all the deps in execute_after_dependencies
+            self.refs[step] = self._dry_run_result
+
+    # caching saves ~10% off some tests
+    @cached_property
+    def _dry_run_result(self):
+        return ray.put(None)
 
 
 def asdict_without_description(obj: dataclass) -> dict[str, Any]:
@@ -951,10 +963,16 @@ class ExecutorMainConfig:
 @draccus.wrap()
 def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], description: str | None = None):
     """Main entry point for experiments (to standardize)"""
-    ray.init(namespace="marin")  # We need to init ray here to make sure we have the correct namespace for actors
-    # (status_actor in particular)
-
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
+    time_in = time.time()
+    ray.init(
+        namespace="marin", ignore_reinit_error=True
+    )  # We need to init ray here to make sure we have the correct namespace for actors
+    # (status_actor in particular)
+    time_out = time.time()
+    logger.info(f"Ray init took {time_out - time_in:.2f}s")
+    time_in = time.time()
 
     prefix = config.prefix
     if prefix is None:
@@ -982,6 +1000,8 @@ def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], descrip
     )
 
     executor.run(steps=steps, dry_run=config.dry_run, run_only=config.run_only, force_run_failed=config.force_run_failed)
+    time_out = time.time()
+    logger.info(f"Executor run took {time_out - time_in:.2f}s")
 
 
 def _is_relative_path(url_or_path):
