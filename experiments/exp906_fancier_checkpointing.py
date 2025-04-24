@@ -52,7 +52,7 @@ baseline_1b = default_train(
 
 offload_policy = ScanCheckpointPolicy.from_bool_or_str("offload")
 full_policy = ScanCheckpointPolicy.from_bool_or_str("full")
-nested = ScanCheckpointPolicy(nested_remat=4)
+nested = ScanCheckpointPolicy(nested=4)
 
 llama_offload = dataclasses.replace(llama_1_4b, gradient_checkpointing=offload_policy)
 
