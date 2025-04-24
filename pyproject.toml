@@ -19,7 +19,6 @@ dependencies = [
     "s3fs",
     "regex",
     "requests",
-    "numpy",
     "torch",
     "braceexpand",
     "deepdiff",
