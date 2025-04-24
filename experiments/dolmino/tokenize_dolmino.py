@@ -61,7 +61,7 @@ def tokenize_dolmino_steps(*, base_path="tokenized/", tokenizer=llama3_tokenizer
             name=dolmino_split_output_path,
             fn=tokenize,
             config=TokenizeConfig(
-                train_paths=versioned(dolmino_split_paths),
+                train_paths=dolmino_split_paths,
                 validation_paths=versioned([]),
                 cache_path=this_output_path(),
                 tokenizer=versioned(tokenizer),
