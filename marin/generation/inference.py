@@ -120,7 +120,7 @@ def get_ray_data_write_kwargs(config: TextGenerationInferenceConfig):
     return ray_data_write_kwargs
 
 
-@ray.remote
+@ray.remote(max_calls=1)
 def run_inference(config: TextGenerationInferenceConfig):
     set_ray_data_config(config)
 
