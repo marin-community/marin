@@ -77,7 +77,7 @@ md_wiki_tokenized = default_tokenize(
 # Arxiv tokenization
 md_arxiv_tokenized = default_tokenize(
     name="arxiv-no-problem",
-    dataset="documents/ar5iv/ar5iv-04-2024-no-problem-3971ff/resiliparse-custom-fork",
+    dataset=InputName.hardcoded("documents/ar5iv/ar5iv-04-2024-no-problem-3971ff/resiliparse-custom-fork"),
     tokenizer=llama3_tokenizer,
 ).with_output_path("tokenized/arxiv-no-problem-a3e054")
 
