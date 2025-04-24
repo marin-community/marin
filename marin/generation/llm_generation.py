@@ -4,9 +4,15 @@ Wrapper around vLLM generation.
 User -> Preset Prompt, Engine Kwargs, File -> Generate Text
 """
 
+import logging
 from typing import Any, ClassVar
 
-from vllm import LLM, SamplingParams
+logger = logging.getLogger(__name__)
+
+try:
+    from vllm import LLM, SamplingParams
+except ImportError:
+    logger.warning("vLLM is not installed, so we will not be able to generate text.")
 
 
 class BaseLLMProvider:

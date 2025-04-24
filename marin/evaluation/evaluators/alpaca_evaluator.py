@@ -50,7 +50,6 @@ class AlpacaEvaluator(VllmTpuEvaluator):
         repetition_penalty = generation_params.get("repetition_penalty", 1.0)
         top_p = generation_params.get("top_p", 1.0)
         top_k = generation_params.get("top_k", -1)
-
         # On how to write the model configuration file, see
         # https://github.com/tatsu-lab/alpaca_eval/blob/main/src/alpaca_eval/main.py#L241
         content: dict = {
@@ -101,7 +100,7 @@ class AlpacaEvaluator(VllmTpuEvaluator):
         evals: list[str],
         output_path: str,
         max_eval_instances: int | None = None,
-        generation_params: dict | None = None,
+        engine_kwargs: dict | None = None,
     ) -> None:
         """
         Runs AlpacaEval on the specified model.
@@ -111,7 +110,6 @@ class AlpacaEvaluator(VllmTpuEvaluator):
             evals (List[str]): Does nothing. We just run on the default eval set.
             output_path (str): The path to save the evaluation results.
             max_eval_instances (int | None): The maximum number of evaluation instances to run.
-            generation_params (dict, optional): Dictionary containing generation parameters. Defaults to None.
         """
         try:
             # Set the OPENAI_API_KEY environment variable for the auto evaluator
@@ -121,7 +119,7 @@ class AlpacaEvaluator(VllmTpuEvaluator):
             model_name_or_path: str = self.download_model(model)
 
             model_config_path: str = os.path.join(AlpacaEvaluator.CACHE_PATH, model_name_or_path, "model_config.yaml")
-            self.write_model_config_file(model, model_config_path, generation_params)
+            self.write_model_config_file(model, model_config_path, engine_kwargs)
 
             # Construct the command and run AlpacaEval
             max_eval_instances = max_eval_instances or self.DEFAULT_MAX_INSTANCES

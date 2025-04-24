@@ -26,19 +26,20 @@ import humanfriendly
 import levanter
 import ray
 import transformers
-from levanter.data.sharded_datasource import ShardedDataSource, TextUrlDataSource
+from levanter.data.sharded_datasource import ShardedDataSource, UrlDataSource
 from levanter.data.text import (
     BatchTokenizer,
     ChatUrlDataSourceConfig,
     LMDatasetSourceConfig,
     LMSupervisedDatasetConfig,
+    UrlDatasetSourceConfig,
     mk_chat_sft_dataset,
     mk_supervised_dataset,
 )
 from levanter.store.cache import CacheOptions
 from ray.runtime_env import RuntimeEnv
 
-from marin.execution.executor import InputName
+from marin.execution.executor import ExecutorStep, InputName, VersionedValue
 from marin.utils import fsspec_glob, fsspec_isdir, fsspec_size
 
 logger = logging.getLogger(__name__)
@@ -59,15 +60,16 @@ class TokenizeConfig:
     def train_source(self) -> ShardedDataSource | None:
         if len(self.train_paths) == 0:
             return None
-        return _create_source(self.train_paths, self.text_key)
+        # return _create_source(self.train_paths, self.text_key)
+        return self.as_lm_dataset_source_config(self.cache_path).get_shard_source("train")
 
     def validation_source(self) -> ShardedDataSource | None:
         if len(self.validation_paths) == 0:
             return None
-        return _create_source(self.validation_paths, self.text_key)
+        return self.as_lm_dataset_source_config(self.cache_path).get_shard_source("validation")
 
     def as_lm_dataset_source_config(
-        self, actual_output_path: str | InputName, *, include_raw_paths=True
+        self, actual_output_path: str | InputName | None, *, include_raw_paths=True
     ) -> LMDatasetSourceConfig:
         """
         For use in Levanter training runs with mixtures of datasets.
@@ -77,7 +79,7 @@ class TokenizeConfig:
                 to run training without the original training data, but hte provenance won't be recorded in wandb.
 
         """
-        return LMDatasetSourceConfig(
+        return UrlDatasetSourceConfig(
             tags=self.tags,
             train_urls=self.train_paths if include_raw_paths else [],
             validation_urls=self.validation_paths if include_raw_paths else [],
@@ -252,7 +254,7 @@ def _levanter_build_cache(source, batch_tokenizer, output_path, options: CacheOp
 
     cache = build_or_load_cache(
         cache_dir=output_path,
-        input_shards=source,
+        source=source,
         processor=batch_tokenizer,
         await_finished=False,
         monitors=[LoggerMetricsMonitor("ray")],
@@ -261,10 +263,9 @@ def _levanter_build_cache(source, batch_tokenizer, output_path, options: CacheOp
     cache.await_finished()
 
 
-def _create_source(input_paths: str | list[str], text_key) -> ShardedDataSource:
+def _create_source(input_paths: str | list[str]) -> ShardedDataSource:
     if isinstance(input_paths, str) and not _is_probably_path(input_paths):
         source = levanter.data.datasource_from_hf(input_paths, split="train")
-        source = source.map(lambda d: d["text"])
     else:
         if isinstance(input_paths, str):
             input_paths = [input_paths]
@@ -275,7 +276,7 @@ def _create_source(input_paths: str | list[str], text_key) -> ShardedDataSource:
             raise ValueError(f"No valid jsonl/parquet files found to tokenize in {input_paths}")
 
         logger.info(f"Found {len(filepaths_to_tokenize)} files to tokenize.")
-        source = TextUrlDataSource(filepaths_to_tokenize, text_key=text_key)
+        source = UrlDataSource(filepaths_to_tokenize)
 
     return source
 
@@ -284,11 +285,10 @@ def _get_files_by_extensions(input_paths: list[str], extensions: list[str]) -> l
     """
     Get a list of all filepaths with the specified extension from the input paths.
     """
-    print(input_paths)
     output_paths = []
     for path in input_paths:
         assert path != "/"
-        if fsspec_isdir(path) or path.endswith("/"):
+        if path.endswith("/") or fsspec_isdir(path):
             logger.info(f"Getting all {extensions} files in {path}")
             for ex in extensions:
                 output_paths.extend(fsspec_glob(os.path.join(path, f"**/*.{ex}")))
@@ -303,8 +303,13 @@ def _get_filepaths_to_tokenize(input_paths: list[str]) -> list[str]:
     Get all file paths to tokenize from the input paths.
     Handles jsonl.{gz,zst,zstd}, and parquet.
     """
+    if isinstance(input_paths, VersionedValue):
+        input_paths = input_paths.value
+
     if len(input_paths) == 0:
         return []
+    elif any(isinstance(x, InputName | ExecutorStep) for x in input_paths):
+        return input_paths
 
     # we're only going to have one or the other, but might as well return both
     return _get_files_by_extensions(input_paths, ["jsonl.{gz,zst,zstd}", "parquet"])
