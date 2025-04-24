@@ -109,6 +109,7 @@ def evaluate_alpaca_eval(
     model_name: str,
     model_path: str,
     resource_config: ResourceConfig,
+    engine_kwargs: dict | None = None,
     max_eval_instances: int | None = None,
     temperature: float = 0.7,
     presence_penalty: float = 0.0,
@@ -156,6 +157,7 @@ def evaluate_alpaca_eval(
             evaluation_path=this_output_path(),
             max_eval_instances=max_eval_instances,
             resource_config=resource_config,
+            engine_kwargs=engine_kwargs,
             generation_params={
                 "temperature": temperature,
                 "presence_penalty": presence_penalty,
@@ -272,6 +274,12 @@ def default_key_evals(
     if model_name is None:
         model_name = name
 
+    stop_token_ids = []
+    if "llama3" in model_name:
+        stop_token_ids.append(128009)
+    elif "olmo" in model_name:
+        stop_token_ids.append(100257)
+
     return [
         evaluate_lm_evaluation_harness(
             model_name,
@@ -288,5 +296,11 @@ def default_key_evals(
             resource_config,
             max_eval_instances=max_eval_instances,
         ),
-        evaluate_alpaca_eval(model_name, model_step_path, resource_config),
+        evaluate_alpaca_eval(
+            model_name,
+            model_step_path,
+            resource_config,
+            engine_kwargs,
+            stop_token_ids=stop_token_ids,
+        ),
     ]

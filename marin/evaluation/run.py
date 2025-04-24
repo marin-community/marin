@@ -77,9 +77,19 @@ def _impute_model_config(config):
         model_name = f"{model_name}-{step_part}"
     else:
         model_name = config.model_name
+    generation_params = {}
+    engine_kwargs = {}
+    if config.generation_params is None:
+        logger.warning(f"No generation params provided for {model_name}, using default params")
+    else:
+        generation_params = config.generation_params
+    if config.engine_kwargs is None:
+        logger.warning(f"No engine kwargs provided for {model_name}, using default params")
+    else:
+        engine_kwargs = config.engine_kwargs
 
     return ModelConfig(
-        name=model_name, path=model_path, engine_kwargs=config.engine_kwargs, generation_params=config.generation_params
+        name=model_name, path=model_path, engine_kwargs=engine_kwargs, generation_params=generation_params
     )
 
 
