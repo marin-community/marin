@@ -363,3 +363,12 @@ register_adapter(
         response_column="model_reasoning",
     )
 )
+
+register_adapter(
+    TransformAdapter(
+        source="nvidia/Llama-Nemotron-Post-Training-Dataset-v1-SFT",
+        dataset_format=InputDatasetFormat.INSTRUCTION_RESPONSE,
+        instruction_column="input",
+        response_column="output",
+    )
+)

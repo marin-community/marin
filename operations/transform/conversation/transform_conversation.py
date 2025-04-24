@@ -209,7 +209,7 @@ def get_shard_dir(dir_name: os.PathLike, subset_name: str | None, split: str) ->
     return os.path.join(dir_name, subset_name, split)
 
 
-@ray.remote
+@ray.remote(memory=20 * 1024 * 1024 * 1024)  # 20GB memory limit
 def transform_hf_dataset(cfg: TransformSFTDatasetConfig):
     """Shards the dataset; copies datafiles from GCP to instance, loads
     data using the `datasets` package, and write shards to target directory
@@ -250,21 +250,48 @@ def transform_hf_dataset(cfg: TransformSFTDatasetConfig):
 
         for split in splits:
             # a. Load dataset
-            dataset = datasets.load_dataset(path=local_data_dir, name=subset, split=split)
-            rows = [r for r in dataset]
-            del dataset  # saves memory
+            dataset = datasets.load_dataset(
+                path=local_data_dir,
+                name=subset,
+                split=split,
+                streaming=True,  # Enable streaming to avoid loading entire dataset into memory
+            )
+
             # b. Create GCP target directory
             subset_output_path = get_shard_dir(cfg.output_path, subset, split)
             output_path = create_shard_output_directory(subset_output_path)
-            # c. Write shards to GCP
-            for idx, shard in enumerate(range(0, len(rows), cfg.shard_size)):
-                shard_rows = rows[shard : min(shard + cfg.shard_size, len(rows))]
-                shard_filename = os.path.join(output_path, f"shard_{idx:05d}.jsonl.gz")
-                logger.info(f"Writing shard {idx} to {shard_filename}")
+
+            # c. Process and write in batches
+            batch = []
+            shard_idx = 0
+
+            for row in dataset:
+                batch.append(row)
+
+                # When batch reaches shard size, process and write it
+                if len(batch) >= cfg.shard_size:
+                    shard_filename = os.path.join(output_path, f"shard_{shard_idx:05d}.jsonl.gz")
+                    logger.info(f"Writing shard {shard_idx} to {shard_filename}")
+
+                    with fsspec.open(shard_filename, "wt", compression="gzip") as f:
+                        transformed_batch = transform_rows(batch, cfg)
+                        for transformed_row in transformed_batch:
+                            f.write(f"{json.dumps(transformed_row)}\n")
+
+                    # Clear batch and increment shard index
+                    batch = []
+                    shard_idx += 1
+
+            # Write any remaining rows in the final batch
+            if batch:
+                shard_filename = os.path.join(output_path, f"shard_{shard_idx:05d}.jsonl.gz")
+                logger.info(f"Writing final shard {shard_idx} to {shard_filename}")
+
                 with fsspec.open(shard_filename, "wt", compression="gzip") as f:
-                    transformed_shard_rows = transform_rows(shard_rows, cfg)
-                    for row in transformed_shard_rows:
-                        f.write(f"{json.dumps(row)}\n")
+                    transformed_batch = transform_rows(batch, cfg)
+                    for transformed_row in transformed_batch:
+                        f.write(f"{json.dumps(transformed_row)}\n")
+
             logging.log(logging.INFO, f"Wrote processed data to {output_path}")
     return cfg.output_path
 
