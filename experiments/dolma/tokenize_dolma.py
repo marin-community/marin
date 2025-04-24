@@ -82,7 +82,7 @@ def tokenize_dolma_steps(*, base_path="tokenized/", tokenizer=llama3_tokenizer) 
             name=os.path.join(base_path, "dolma", dataset),
             fn=tokenize,
             config=TokenizeConfig(
-                train_paths=versioned([BASE_DIR_DOLMA / file for file in files]),
+                train_paths=[BASE_DIR_DOLMA / file for file in files],
                 validation_paths=versioned([]),
                 cache_path=this_output_path(),
                 tokenizer=versioned(tokenizer),
