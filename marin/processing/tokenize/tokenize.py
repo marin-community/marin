@@ -106,6 +106,7 @@ def _expand_directories(config: UrlDatasetSourceConfig) -> UrlDatasetSourceConfi
 
 def tokenize(config: TokenizeConfig):
     source_config = config.as_lm_dataset_source_config(config.cache_path)
+    print(source_config)
 
     # TODO: Levanter doesn't automatically expand directories to globs, but by convention we do in Marin
     # we should backport this to Levanter
