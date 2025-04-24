@@ -183,6 +183,8 @@ def extract_model_name_and_path(step: ExecutorStep | InputName | str) -> tuple[s
         name = step.name
     elif isinstance(step, InputName):
         model_step_path = output_path_of(step.step)
+        if step.step is None:
+            raise ValueError(f"Hardcoded path {step.name} is not part of the pipeline")
         name = step.step.name
     elif isinstance(step, str):
         model_step_path = step
@@ -209,7 +211,7 @@ def evaluate_levanter_lm_evaluation_harness(
         config=EvaluationConfig(
             evaluator="levanter_lm_evaluation_harness",
             model_name=None,  # imputed automatically
-            model_path=versioned(model_path),  # type: ignore
+            model_path=model_path,  # type: ignore
             evaluation_path=this_output_path(),
             evals=versioned(evals),
             discover_latest_checkpoint=True,

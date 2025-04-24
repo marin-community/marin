@@ -175,7 +175,7 @@ class ExecutorStep(Generic[ConfigT]):
 class InputName:
     """To be interpreted as a previous `step`'s output_path joined with `name`."""
 
-    step: ExecutorStep
+    step: ExecutorStep | None
     name: str | None
 
     def cd(self, name: str) -> "InputName":
@@ -183,7 +183,15 @@ class InputName:
 
     def __truediv__(self, other: str) -> "InputName":
         """Alias for `cd`. That looks more Pythonic."""
-        return InputName(self.step, name=os.path.join(self.name, other) if self.name else other)
+        return self.cd(other)
+
+    @staticmethod
+    def hardcoded(path: str) -> "InputName":
+        """
+        Sometimes we want to specify a path that is not part of the pipeline but is still relative to the prefix.
+        Try to use this sparingly.
+        """
+        return InputName(None, name=path)
 
 
 def get_executor_step(run: ExecutorStep | InputName) -> ExecutorStep:
@@ -199,7 +207,10 @@ def get_executor_step(run: ExecutorStep | InputName) -> ExecutorStep:
     if isinstance(run, ExecutorStep):
         return run
     elif isinstance(run, InputName):
-        return run.step
+        step = run.step
+        if step is None:
+            raise ValueError(f"Hardcoded path {run.name} is not part of the pipeline")
+        return step
     else:
         raise ValueError(f"Unexpected type {type(run)} for run: {run}")
 
@@ -233,6 +244,10 @@ class VersionedValue(Generic[T_co]):
 def versioned(value: T_co) -> VersionedValue[T_co]:
     if isinstance(value, VersionedValue):
         raise ValueError("Can't nest VersionedValue")
+    elif isinstance(value, InputName):
+        # TODO: We have also run into Versioned([InputName(...), ...])
+        raise ValueError("Can't version an InputName")
+
     return VersionedValue(value)
 
 
@@ -337,13 +352,15 @@ def collect_dependencies_and_version(obj: Any, dependencies: list[ExecutorStep],
             obj = output_path_of(obj, None)
 
         if isinstance(obj, VersionedValue):
-            # Just extract the value
             version[prefix] = obj.value
         elif isinstance(obj, InputName):
             # Put string i for the i-th dependency
             index = len(dependencies)
-            dependencies.append(obj.step)
-            version[prefix] = dependency_index_str(index) + ("/" + obj.name if obj.name else "")
+            if obj.step is not None:
+                dependencies.append(obj.step)
+                version[prefix] = dependency_index_str(index) + ("/" + obj.name if obj.name else "")
+            else:
+                version[prefix] = obj.name
         elif is_dataclass(obj):
             # Recurse through dataclasses
             for field in fields(obj):
@@ -363,7 +380,9 @@ def collect_dependencies_and_version(obj: Any, dependencies: list[ExecutorStep],
     recurse(obj, "")
 
 
-def instantiate_config(config: dataclass, output_path: str, output_paths: dict[ExecutorStep, str]) -> dataclass:
+def instantiate_config(
+    config: dataclass, output_path: str, output_paths: dict[ExecutorStep, str], prefix: str
+) -> dataclass:
     """
     Return a "real" config where all the special values (e.g., `InputName`,
     `OutputName`, and `VersionedValue`) have been replaced with
@@ -383,7 +402,10 @@ def instantiate_config(config: dataclass, output_path: str, output_paths: dict[E
             obj = output_path_of(obj)
 
         if isinstance(obj, InputName):
-            return join_path(output_paths[obj.step], obj.name)
+            if obj.step is None:
+                return _make_prefix_absolute_path(prefix, obj.name)
+            else:
+                return join_path(output_paths[obj.step], obj.name)
         elif isinstance(obj, OutputName):
             return join_path(output_path, obj.name)
         elif isinstance(obj, VersionedValue):
@@ -469,7 +491,8 @@ class Executor:
         for step in steps:
             if isinstance(step, InputName):  # Interpret InputName as the underlying step
                 step = step.step
-            self.compute_version(step)
+            if step is not None:
+                self.compute_version(step)
 
         self.get_infos()
         logger.info(f"### Reading {len(self.steps)} statuses ###")
@@ -548,14 +571,6 @@ class Executor:
 
         return to_run
 
-    def compute_hashed_version_str(self, step: ExecutorStep) -> str:
-        version = {
-            "name": step.name,
-            "config": self.versions[step]["config"],
-            "dependencies": [self.versions[dep] for dep in self.dependencies[step]],
-        }
-        return json.dumps(version, sort_keys=True, cls=CustomJsonEncoder)
-
     def compute_version(self, step: ExecutorStep):
         if step in self.versions:
             return
@@ -586,8 +601,7 @@ class Executor:
         # Override output path if specified
         override_path = step.override_output_path
         if override_path is not None:
-            if _is_relative_path(override_path):
-                override_path = os.path.join(self.prefix, override_path)
+            override_path = _make_prefix_absolute_path(self.prefix, override_path)
 
             if output_path != override_path:
                 logger.warning(
@@ -608,10 +622,12 @@ class Executor:
             logger.warning(
                 f"Multiple `ExecutorStep`s (named {step.name}) have the same version; try to instantiate only once."
             )
+
         self.configs[step] = instantiate_config(
             config=step.config,
             output_path=output_path,
             output_paths=self.output_paths,
+            prefix=self.prefix,
         )
         self.dependencies[step] = list(map(self.canonicalize, dependencies))
         self.versions[step] = version
@@ -1024,3 +1040,9 @@ def _is_relative_path(url_or_path):
 
     # otherwise if it starts with a slash, it's not a relative path
     return not url_or_path.startswith("/")
+
+
+def _make_prefix_absolute_path(prefix, override_path):
+    if _is_relative_path(override_path):
+        override_path = os.path.join(prefix, override_path)
+    return override_path

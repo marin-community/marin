@@ -334,6 +334,17 @@ def default_sft(
     if "sft" not in tags:
         tags = [*tags, "sft"]
 
+    initialize_from_hf = sft_config.initialize_from_hf
+
+    if initialize_from_hf is None:
+        initialize_from_hf = (
+            sft_config.model_name_or_path is not None and sft_config.initialize_from_checkpoint_path is None
+        )
+    elif initialize_from_hf is True and sft_config.model_name_or_path is None:
+        raise ValueError("initialize_from_hf is True but model_name_or_path is not set")
+    elif initialize_from_hf is False and sft_config.initialize_from_checkpoint_path is None:
+        raise ValueError("initialize_from_hf is False but initialize_from_checkpoint_path is not set")
+
     # now we just shell out to default_train
     normal_train_config = SimpleTrainConfig(
         tpu_type=sft_config.tpu_type,
@@ -347,7 +358,7 @@ def default_sft(
         lr_schedule=sft_config.lr_schedule,
         int8=sft_config.int8,
         steps_per_hf_export=sft_config.steps_per_hf_export,
-        initialize_from_hf=sft_config.model_name_or_path,
+        initialize_from_hf=sft_config.model_name_or_path if initialize_from_hf else None,
         initialize_from_checkpoint_path=sft_config.initialize_from_checkpoint_path,
     )
 
@@ -436,7 +447,7 @@ def _prepare_data_config(
     if use_default_validation:
         validation_sets = default_validation_sets(tokenizer=tokenizer)
     else:
-        validation_sets = []
+        validation_sets = {}
 
     if isinstance(tokenized, InputName | ExecutorStep):
         pretraining_data = lm_data_config(training_set=tokenized, validation_sets=validation_sets)
