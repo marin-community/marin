@@ -1,5 +1,6 @@
 from experiments.defaults import default_sft, default_tokenize
-from experiments.instruction_datasets import get_instruction_dataset, llama3_instruct_trainable_chat_template
+from experiments.exp964_custom_chat_tokenizer import llama3_instruct_trainable_chat_template
+from experiments.instruction_datasets import get_instruction_dataset
 from experiments.llama import llama3_instruct_tokenizer, llama3_tokenizer, llama_8b
 from experiments.simple_sft_config import SimpleSFTConfig
 from marin.execution.executor import executor_main

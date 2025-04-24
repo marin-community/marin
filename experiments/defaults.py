@@ -352,14 +352,20 @@ def default_sft(
         train_batch_size=sft_config.train_batch_size,
         num_train_steps=sft_config.num_train_steps,
         learning_rate=sft_config.learning_rate,
+        lr_schedule=sft_config.lr_schedule,
+        decay=sft_config.cooldown,
         weight_decay=sft_config.weight_decay,
         min_lr_ratio=sft_config.min_lr_ratio,
+        max_grad_norm=sft_config.max_grad_norm,
+        warmup=sft_config.warmup,
+        steps_per_eval=sft_config.steps_per_eval,
         steps_per_export=sft_config.steps_per_checkpoint,
-        lr_schedule=sft_config.lr_schedule,
         int8=sft_config.int8,
         steps_per_hf_export=sft_config.steps_per_hf_export,
         initialize_from_hf=sft_config.model_name_or_path if initialize_from_hf else None,
         initialize_from_checkpoint_path=sft_config.initialize_from_checkpoint_path,
+        data_seed=sft_config.seed,
+        z_loss_weight=sft_config.z_loss_weight,
     )
 
     if sft_config.reinit_tokens:
