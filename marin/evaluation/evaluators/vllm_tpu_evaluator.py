@@ -148,6 +148,7 @@ class VllmTpuEvaluator(Evaluator, ABC):
         @ray.remote(
             scheduling_strategy=self._get_scheduling_strategy(resource_config),
             runtime_env=self.get_runtime_env(),
+            max_calls=1,
         )
         @remove_tpu_lockfile_on_exit
         def launch(
