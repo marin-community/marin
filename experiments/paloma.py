@@ -37,16 +37,20 @@ PALOMA_DATASETS_TO_DIR = {
     "wikitext_103": "wikitext_103",
 }
 
-paloma = ExecutorStep(
-    name="raw/paloma",
-    fn=download_hf_gated_manual,
-    config=HfDownloadConfig(
-        hf_dataset_id=versioned("allenai/paloma"),
-        revision=versioned("65cd6fc"),
-        gcs_output_path=this_output_path(),
-        wait_for_completion=True,
-    ),
-).cd("65cd6fc")
+paloma = (
+    ExecutorStep(
+        name="raw/paloma",
+        fn=download_hf_gated_manual,
+        config=HfDownloadConfig(
+            hf_dataset_id=versioned("allenai/paloma"),
+            revision=versioned("65cd6fc"),
+            gcs_output_path=this_output_path(),
+            wait_for_completion=True,
+        ),
+    )
+    .with_output_path("raw/paloma-fc6827")
+    .cd("65cd6fc")
+)
 
 
 def paloma_tokenized(*, base_path="tokenized/", tokenizer: str = llama3_tokenizer) -> dict[str, TokenizerStep]:

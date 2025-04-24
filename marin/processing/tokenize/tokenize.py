@@ -128,7 +128,11 @@ def tokenize(config: TokenizeConfig):
 
         train_ledger = (
             ray.remote(_levanter_build_cache)
-            .options(name=f"tokenize::{config.cache_path}", runtime_env=RuntimeEnv(env_vars={"JAX_PLATFORMS": "cpu"}))
+            .options(
+                name=f"tokenize::{config.cache_path}",
+                runtime_env=RuntimeEnv(env_vars={"JAX_PLATFORMS": "cpu"}),
+                max_retries=50,
+            )
             .remote(
                 train_source,
                 batch_tokenizer,
@@ -146,7 +150,11 @@ def tokenize(config: TokenizeConfig):
 
         validation_ledger = (
             ray.remote(_levanter_build_cache)
-            .options(name=f"tokenize::{config.cache_path}", runtime_env=RuntimeEnv(env_vars={"JAX_PLATFORMS": "cpu"}))
+            .options(
+                name=f"tokenize::{config.cache_path}",
+                runtime_env=RuntimeEnv(env_vars={"JAX_PLATFORMS": "cpu"}),
+                max_retries=50,
+            )
             .remote(
                 validation_source,
                 batch_tokenizer,

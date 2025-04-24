@@ -40,13 +40,24 @@ NEMOTRON_WEIGHTS = {
     "nemotron_cc/low_synth": 642.78 / 1024,  # 642.78 GiB
 }
 
+# NB: we changed how hashes were computed for this corpus and we'd like to avoid recomputing them
+NEMOTRON_LLAMA3_OVERIDES = {
+    "hq_actual": "tokenized/nemotron_cc/hq_actual-5af4cc",
+    "hq_synth": "tokenized/nemotron_cc/hq_synth-3525e2",
+    "low_actual": "tokenized/nemotron_cc/low_actual-cb3f2c",
+    "low_synth": "tokenized/nemotron_cc/low_synth-3c57b3",
+    "medium": "tokenized/nemotron_cc/medium-d86506",
+    "medium_high": "tokenized/nemotron_cc/medium_high-d21701",
+    "medium_low": "tokenized/nemotron_cc/medium_low-0fdb07",
+}
+
 
 def tokenize_nemotron_steps(*, base_path="tokenized/", tokenizer=llama3_tokenizer) -> dict[str, TokenizerStep]:
     nemotron_steps: dict[str, ExecutorStep[TokenizeConfig]] = {}
     for split in NEMOTRON_DATASETS:
         nemotron_split_output_path = os.path.join(base_path, "nemotron_cc", split)
         nemotron_split_paths = _get_nemotron_split_paths(split)
-        nemotron_steps[os.path.join("nemotron_cc", split)] = ExecutorStep(
+        step = ExecutorStep(
             name=nemotron_split_output_path,
             fn=tokenize,
             config=TokenizeConfig(
@@ -58,6 +69,11 @@ def tokenize_nemotron_steps(*, base_path="tokenized/", tokenizer=llama3_tokenize
             ),
             pip_dependency_groups=["sentencepiece"],
         )
+
+        if tokenizer == llama3_tokenizer and split in NEMOTRON_LLAMA3_OVERIDES:
+            step = step.with_output_path(NEMOTRON_LLAMA3_OVERIDES[split])
+
+        nemotron_steps[os.path.join("nemotron_cc", split)] = step
 
     assert nemotron_steps.keys() == NEMOTRON_WEIGHTS.keys()
     return nemotron_steps
