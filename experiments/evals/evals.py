@@ -211,7 +211,7 @@ def evaluate_levanter_lm_evaluation_harness(
         config=EvaluationConfig(
             evaluator="levanter_lm_evaluation_harness",
             model_name=None,  # imputed automatically
-            model_path=versioned(model_path),  # type: ignore
+            model_path=model_path,  # type: ignore
             evaluation_path=this_output_path(),
             evals=versioned(evals),
             discover_latest_checkpoint=True,

@@ -244,6 +244,10 @@ class VersionedValue(Generic[T_co]):
 def versioned(value: T_co) -> VersionedValue[T_co]:
     if isinstance(value, VersionedValue):
         raise ValueError("Can't nest VersionedValue")
+    elif isinstance(value, InputName):
+        # TODO: We have also run into Versioned([InputName(...), ...])
+        raise ValueError("Can't version an InputName")
+
     return VersionedValue(value)
 
 
@@ -373,7 +377,7 @@ def collect_dependencies_and_version(obj: Any, dependencies: list[ExecutorStep],
                     raise ValueError(f"dict keys must be strs, but got {i} (type: {type(i)})")
                 recurse(x, new_prefix + i)
 
-    return recurse(obj, "")
+    recurse(obj, "")
 
 
 def instantiate_config(
@@ -405,7 +409,7 @@ def instantiate_config(
         elif isinstance(obj, OutputName):
             return join_path(output_path, obj.name)
         elif isinstance(obj, VersionedValue):
-            return recurse(obj.value)
+            return obj.value
         elif is_dataclass(obj):
             # Recurse through dataclasses
             result = {}
@@ -618,6 +622,7 @@ class Executor:
             logger.warning(
                 f"Multiple `ExecutorStep`s (named {step.name}) have the same version; try to instantiate only once."
             )
+
         self.configs[step] = instantiate_config(
             config=step.config,
             output_path=output_path,
