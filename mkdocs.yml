@@ -9,6 +9,9 @@ theme:
     - search.highlight
     - search.share
     - search.suggest
+    - content.code.annotation
+    - content.code.copy
+
 
 nav:
   - Home: index.md
@@ -39,6 +42,8 @@ markdown_extensions:
   - pymdownx.arithmatex
   - pymdownx.emoji
   - pymdownx.tasklist
+  - pymdownx.highlight:
+     anchor_linenums: true
   - admonition
   - footnotes
   - toc:
