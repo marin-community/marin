@@ -31,8 +31,7 @@ dependencies = [
     # We are keeping levanter deps for now. @TODO :: Remove them
     "multiprocess==0.70.16",
     "sentencepiece",
-    "lz4",
-    "wandb<=0.19.9"
+    "lz4"
 ]
 
 [project.optional-dependencies]
