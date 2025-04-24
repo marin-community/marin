@@ -28,7 +28,7 @@ class AlpacaEvaluator(VllmTpuEvaluator):
     _pip_packages: ClassVar[list[Dependency]] = [*VllmTpuEvaluator.DEFAULT_PIP_PACKAGES, Dependency(name="alpaca-eval")]
 
     @staticmethod
-    def write_model_config_file(model: ModelConfig, path: str, generation_params: dict | None = None) -> None:
+    def write_model_config_file(model: ModelConfig, path: str) -> None:
         """
         Write out the necessary model configuration files for AlpacaEval
 
@@ -38,7 +38,7 @@ class AlpacaEvaluator(VllmTpuEvaluator):
             generation_params (dict, optional): Dictionary of generation parameters. Defaults to None.
         """
         model_name_or_path: str = model.name if model.path is None else model.path
-
+        generation_params = model.generation_params
         # Set default parameters if not provided
         if generation_params is None:
             generation_params = {}
