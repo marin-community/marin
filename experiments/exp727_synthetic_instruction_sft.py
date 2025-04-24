@@ -103,6 +103,7 @@ tulu3_sft_8b_synthetic_instruction_model = default_sft(
         model_name_or_path="meta-llama/Llama-3.1-8B",
         max_seq_len=4096,
         seed=seed,
+        initialize_from_hf=False,
         initialize_from_checkpoint_path="gs://marin-us-central2/checkpoints/llama3.1_8b_tulu_3-12305c/checkpoints/step-9980/",
     ),
     tags=["llama", "8b", "synthetic_instruction", "exp727"],
