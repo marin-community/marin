@@ -348,10 +348,7 @@ def collect_dependencies_and_version(obj: Any, dependencies: list[ExecutorStep],
             obj = output_path_of(obj, None)
 
         if isinstance(obj, VersionedValue):
-            # Just extract the value and recurse
-            # NB we sometimes use VersionedValue to wrap e.g. a list that is sometimes literals and sometimes InputName
-            # and so we need to recurse
-            version[prefix] = recurse(obj.value, new_prefix)
+            version[prefix] = obj.value
         elif isinstance(obj, InputName):
             # Put string i for the i-th dependency
             index = len(dependencies)
@@ -376,7 +373,7 @@ def collect_dependencies_and_version(obj: Any, dependencies: list[ExecutorStep],
                     raise ValueError(f"dict keys must be strs, but got {i} (type: {type(i)})")
                 recurse(x, new_prefix + i)
 
-    recurse(obj, "")
+    return recurse(obj, "")
 
 
 def instantiate_config(
@@ -570,14 +567,6 @@ class Executor:
 
         return to_run
 
-    def compute_hashed_version_str(self, step: ExecutorStep) -> str:
-        version = {
-            "name": step.name,
-            "config": self.versions[step]["config"],
-            "dependencies": [self.versions[dep] for dep in self.dependencies[step]],
-        }
-        return json.dumps(version, sort_keys=True, cls=CustomJsonEncoder)
-
     def compute_version(self, step: ExecutorStep):
         if step in self.versions:
             return
@@ -602,9 +591,7 @@ class Executor:
 
         # Compute output path
         version_str = json.dumps(version, sort_keys=True, cls=CustomJsonEncoder)
-        print(version_str)
         hashed_version = hashlib.md5(version_str.encode()).hexdigest()[:6]
-        print(hashed_version)
         output_path = os.path.join(self.prefix, step.name + "-" + hashed_version)
 
         # Override output path if specified
