@@ -46,7 +46,14 @@ class VllmTpuEvaluator(Evaluator, ABC):
         model_name_or_path: str = VllmTpuEvaluator.download_model(model)
 
         # From https://docs.vllm.ai/en/v0.4.0/models/engine_args.html
-        command: str = f"vllm serve {model_name_or_path} --trust-remote-code --host {host} --port {port} --device tpu"
+        command: str = (
+            f"vllm serve {model_name_or_path} "
+            f"--trust-remote-code "
+            f"--host {host} "
+            f"--port {port} "
+            f"--device tpu "
+            f"--distributed-executor-backend ray"
+        )
         process = subprocess.Popen(command, shell=True)
 
         # Check that the server has started by sending heartbeat checks
