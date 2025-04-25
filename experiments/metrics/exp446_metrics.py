@@ -25,14 +25,14 @@ def compute_metrics(save_path: str) -> dict:
     final_metrics = {}
 
     final_metrics = {
-        "Workflow Times per workflow": get_average_duration_for_all_workflows(
+        "Workflow Times": get_average_duration_for_all_workflows(
             GithubApiConfig(
                 github_token=os.getenv("GITHUB_TOKEN"), time_since=(datetime.now() - timedelta(days=7)).isoformat()
             )
         )
     }
 
-    logger.info("Workflow Times per workflow: %s", final_metrics["Workflow Times per workflow"])
+    logger.info("Workflow Times: %s", final_metrics["Workflow Times"])
 
     label = "experiments"
     final_metrics[f"Closed Issues with label {label}"] = get_closed_issues_with_label(
@@ -54,11 +54,9 @@ def compute_metrics(save_path: str) -> dict:
     logger.info("Number of Ray cluster restarts: %s", final_metrics["Number of Ray cluster restarts"])
 
     # Get GCP spending metrics
-    gcp_spending = get_gcp_spending_metrics(
-        GcpSpendingConfig(project_id=os.getenv("GCP_PROJECT_ID", "hai-gcp-models"))
-    )
+    gcp_spending = get_gcp_spending_metrics(GcpSpendingConfig(project_id=os.getenv("GCP_PROJECT_ID", "hai-gcp-models")))
     final_metrics["GCP Spending"] = gcp_spending
-    
+
     logger.info("GCP total cost: $%0.2f", gcp_spending["total_cost"])
 
     # get all runs; num_days=-1 means all runs
