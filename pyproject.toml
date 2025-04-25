@@ -53,6 +53,10 @@ dev = [
     "types-six",
 ]
 
+metrics = [
+    "google-cloud-logging",
+]
+
 docs = [
     "mkdocs>=1.5.0",
     "mkdocs-material>=9.5.0",
