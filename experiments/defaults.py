@@ -69,7 +69,7 @@ logger = logging.getLogger("ray")
 
 def default_tokenize(
     name: str,
-    dataset: InputName | ExecutorStep | str,
+    dataset: InputName | str,
     tokenizer: str,
     options: CacheOptions | None = None,
     text_key: str = "text",
@@ -102,7 +102,7 @@ def default_validation_sets(tokenizer: str, base_path: str = "tokenized/") -> di
 
 def simulated_epoching_train(
     name: str,
-    tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig,
+    tokenized: InputName | LMMixtureDatasetConfig,
     model_config: LmConfig,
     train_config: SimpleTrainConfig,
     target_budget: int,
@@ -116,7 +116,7 @@ def simulated_epoching_train(
 
     Args:
         name:  The name of the training run. Will form the basis of the output path for the executor step.
-        tokenized:  The tokenized data to train on. This can be an InputName, ExecutorStep, or LMMixtureDatasetConfig.
+        tokenized:  The tokenized data to train on. This can be an InputName, or LMMixtureDatasetConfig.
         model_config: Levanter LmConfig for the model to train.
         train_config: SimpleTrainConfig for the training run.
         target_budget: Target token budget to simulate.
@@ -148,7 +148,7 @@ def simulated_epoching_train(
 
 def default_train(
     name: str,
-    tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig,
+    tokenized: InputName | LMMixtureDatasetConfig,
     model_config: LmConfig,
     train_config: SimpleTrainConfig,
     tags: Sequence[str] = (),
@@ -160,7 +160,7 @@ def default_train(
 
     Args:
         name:  The name of the training run. Will form the basis of the output path for the executor step.
-        tokenized:  The tokenized data to train on. This can be an InputName, ExecutorStep, or LMMixtureDatasetConfig.
+        tokenized:  The tokenized data to train on. This can be an InputName, or LMMixtureDatasetConfig.
         model_config: Levanter LmConfig for the model to train.
         train_config: SimpleTrainConfig for the training run.
         tags: Any additional tags to add to the Wandb tracker.
@@ -306,7 +306,7 @@ def default_train(
 
 def default_sft(
     name: str,
-    tokenized: InputName | ExecutorStep | LMSupervisedDatasetConfig | dict[str, SupervisedUrlSourceConfig],
+    tokenized: InputName | LMSupervisedDatasetConfig | dict[str, SupervisedUrlSourceConfig],
     model_config: LlamaConfig,
     sft_config: SimpleSFTConfig,
     mixture_weights: dict[str, int] | None = None,
@@ -321,7 +321,7 @@ def default_sft(
     Args:
         name: The name of the training run, forms the basis of the output path.
         tokenized: The tokenized data to train on:
-                  - For single dataset: an InputName, ExecutorStep, or LMSupervisedDatasetConfig
+                  - For single dataset: an InputName, or LMSupervisedDatasetConfig
                   - For mixture: a Dict[str, SupervisedUrlSourceConfig] mapping dataset names to configs
         model_config: Levanter LlamaConfig for the model architecture to train.
         sft_config: Configuration for the SFT training process.
@@ -409,7 +409,7 @@ def default_sft(
 
     else:
         # Handle the case of a single dataset
-        if isinstance(tokenized, InputName | ExecutorStep):
+        if isinstance(tokenized, InputName):
             supervised_data = LMSupervisedDatasetConfig(
                 cache_dir=output_path_of(tokenized),
                 input_field=sft_config.input_role,
@@ -420,9 +420,7 @@ def default_sft(
             supervised_data = tokenized
             chat_train_urls = None
         else:
-            raise ValueError(
-                "For non-mixture SFT, tokenized should be an InputName, ExecutorStep, or LMSupervisedDatasetConfig"
-            )
+            raise ValueError("For non-mixture SFT, tokenized should be an InputName or LMSupervisedDatasetConfig")
 
         # Configure the single-dataset SFT
         inner_config = sft.SFTConfig(
@@ -514,7 +512,7 @@ def _get_vocab_size(pretraining_data):
 
 
 def _prepare_data_config(
-    tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig,
+    tokenized: InputName | LMMixtureDatasetConfig,
     use_default_validation: bool,
 ) -> LMMixtureDatasetConfig:
     """
@@ -531,7 +529,7 @@ def _prepare_data_config(
     else:
         validation_sets = []
 
-    if isinstance(tokenized, InputName | ExecutorStep):
+    if isinstance(tokenized, InputName):
         pretraining_data = lm_data_config(training_set=tokenized, validation_sets=validation_sets)
     else:
         # TODO: would be better to expose hooks in levanter instead of relying on mixtures
@@ -541,11 +539,9 @@ def _prepare_data_config(
     return pretraining_data
 
 
-def _get_tokenizer_for_train(tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig) -> str:
+def _get_tokenizer_for_train(tokenized: InputName | LMMixtureDatasetConfig) -> str:
     match tokenized:
         case LMMixtureDatasetConfig(tokenizer=tokenizer):
-            pass
-        case ExecutorStep(config=TokenizeConfig(tokenizer=tokenizer)):
             pass
         case InputName(step=ExecutorStep(config=TokenizeConfig(tokenizer=tokenizer))):
             pass
@@ -556,8 +552,8 @@ def _get_tokenizer_for_train(tokenized: InputName | ExecutorStep | LMMixtureData
 
 
 def default_scaling_law_pred(
-    ladder_runs: Sequence[ExecutorStep | InputName | str],
-    pred_run: ExecutorStep | InputName | str | None = None,
+    ladder_runs: Sequence[InputName | str],
+    pred_run: InputName | str | None = None,
     task_losses: Sequence[str] = ("eval/paloma/c4_en/bpb",),
     task_accuracies: Sequence[str] | Sequence[EvalTaskConfig] | None = None,
 ):

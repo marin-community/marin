@@ -42,7 +42,7 @@ DEFAULT_SWEEP_TRAIN_CONFIG = SimpleTrainConfig(
 
 def scaling_law_suite(
     sweep_name: str,
-    tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig,
+    tokenized: InputName | LMMixtureDatasetConfig,
     widths: Sequence[int] = (512, 768, 1024, 1536, 2048),
     base_model_config: LlamaConfig = llama_1_4b,
     tags: Sequence[str] = (),

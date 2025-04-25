@@ -49,7 +49,7 @@ fineweb_trafilatura_tokenized = default_tokenize(
 
 fineweb_trafilatura_1_4b_model = default_train(
     name="fineweb-small-1.4b-trafilatura",
-    tokenized=fineweb_trafilatura_tokenized,
+    tokenized=output_path_of(fineweb_trafilatura_tokenized),
     model_config=llama_1_4b,
     train_config=llama_1_4b_train_config,
 )
@@ -82,7 +82,7 @@ fineweb_trafilatura_favor_precision_tokenized = default_tokenize(
 
 fineweb_trafilatura_favor_precision_1_4b_model = default_train(
     name="fineweb-small-1.4b-trafilatura-favor-precision",
-    tokenized=fineweb_trafilatura_favor_precision_tokenized,
+    tokenized=output_path_of(fineweb_trafilatura_favor_precision_tokenized),
     model_config=llama_1_4b,
     train_config=llama_1_4b_train_config,
 )
@@ -114,7 +114,7 @@ fineweb_resiliparse_tokenized = default_tokenize(
 
 fineweb_resiliparse_1_4b_model = default_train(
     name="fineweb-small-1.4b-resiliparse",
-    tokenized=fineweb_resiliparse_tokenized,
+    tokenized=output_path_of(fineweb_resiliparse_tokenized),
     model_config=llama_1_4b,
     train_config=llama_1_4b_train_config,
 )
@@ -147,7 +147,7 @@ fineweb_resiliparse_preserve_formatting_tokenized = default_tokenize(
 
 fineweb_resiliparse_preserve_formatting_1_4b_model = default_train(
     name="fineweb-small-1.4b-resiliparse-preserve-formatting",
-    tokenized=fineweb_resiliparse_preserve_formatting_tokenized,
+    tokenized=output_path_of(fineweb_resiliparse_preserve_formatting_tokenized),
     model_config=llama_1_4b,
     train_config=llama_1_4b_train_config,
 )
@@ -178,7 +178,7 @@ fineweb_readability_tokenized = default_tokenize(
 
 fineweb_readability_1_4b_model = default_train(
     name="fineweb-small-1.4b-readability",
-    tokenized=fineweb_readability_tokenized,
+    tokenized=output_path_of(fineweb_readability_tokenized),
     model_config=llama_1_4b,
     train_config=llama_1_4b_train_config,
 )

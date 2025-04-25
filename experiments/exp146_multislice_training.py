@@ -7,7 +7,7 @@ from experiments.defaults import default_train
 from experiments.exp72_baselines import slimpajama_tokenized
 from experiments.llama import llama_1_4b
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.execution.executor import executor_main
+from marin.execution.executor import executor_main, output_path_of
 
 llama_1_4b_multislice_train_config = SimpleTrainConfig(
     tpu_type="v4-128",
@@ -20,7 +20,7 @@ llama_1_4b_multislice_train_config = SimpleTrainConfig(
 
 slimpajama_model = default_train(
     name="cathy-pjama-12",
-    tokenized=slimpajama_tokenized,
+    tokenized=output_path_of(slimpajama_tokenized),
     model_config=llama_1_4b,
     train_config=llama_1_4b_multislice_train_config,
 )
