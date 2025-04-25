@@ -18,22 +18,22 @@ llama_1_4b_fineweb_edu_llama3_model = default_train(
     train_config=llama_1_4b_train_config,
 )
 
-finweb_edu_llama2_tokenized = default_tokenize(
+fineweb_edu_llama2_tokenized = default_tokenize(
     name="fineweb-edu", dataset=fineweb_edu, tokenizer="meta-llama/Llama-2-7b-hf"
 )
-llama_1_4b_finweb_edu_llama2_model = default_train(
+llama_1_4b_fineweb_edu_llama2_model = default_train(
     name="llama2-tokenizer",
-    tokenized=finweb_edu_llama2_tokenized,
+    tokenized=fineweb_edu_llama2_tokenized,
     model_config=llama_1_4b,
     train_config=llama_1_4b_train_config,
 )
 
-finweb_edu_neox_tokenized = default_tokenize(
+fineweb_edu_neox_tokenized = default_tokenize(
     name="fineweb-edu", dataset=fineweb_edu, tokenizer="EleutherAI/gpt-neox-20b"
 )
-llama_1_4b_finweb_edu_neox_model = default_train(
+llama_1_4b_fineweb_edu_neox_model = default_train(
     name="neox-tokenizer",
-    tokenized=finweb_edu_neox_tokenized,
+    tokenized=fineweb_edu_neox_tokenized,
     model_config=llama_1_4b,
     train_config=llama_1_4b_train_config,
 )
@@ -45,8 +45,8 @@ if __name__ == "__main__":
     executor_main(
         steps=[
             llama_1_4b_fineweb_edu_llama3_model,
-            llama_1_4b_finweb_edu_llama2_model,
-            llama_1_4b_finweb_edu_neox_model,
+            llama_1_4b_fineweb_edu_llama2_model,
+            llama_1_4b_fineweb_edu_neox_model,
         ],
         description="Train 1.4B models on Fineweb Edu with three different tokenizers (llama3, llama3, neox).",
     )
