@@ -30,15 +30,6 @@ llama_75m = LlamaConfig(
     num_layers=8,
 )
 
-# llama_100m = LlamaConfig(
-#     seq_len=1024,
-#     hidden_dim=384,
-#     intermediate_dim=1344,
-#     num_heads=6,
-#     num_kv_heads=6,
-#     num_layers=6,
-# )
-
 llama_150m = LlamaConfig(
     seq_len=1024,
     hidden_dim=512,

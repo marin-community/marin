@@ -217,15 +217,15 @@ def default_speedrun(
     config: SpeedrunConfig,
     tags: list[str] | None = None,
 ) -> Sequence[ExecutorStep]:
-    """Returns an ExecutorStep for a speedrun with the given configuration.
-
+    """
     Args:
         name: name of the training run. Will form the basis of the output path for the executor step.
         config: SpeedrunConfig containing model, training, and dataset configuration
         tags: Optional additional tags for tracking
 
     Returns:
-        training step configured for the speedrun
+        training step configured for the speedrun, and an analysis step that 
+        computes and stores metrics/metadata for the speedrun.
 
     Raises:
         ValueError: If the configuration is invalid
@@ -261,4 +261,4 @@ def default_speedrun(
         ),
     )
 
-    return [analysis_step]
+    return [train_step, analysis_step]
