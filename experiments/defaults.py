@@ -319,8 +319,8 @@ def default_sft(
     Args:
         name: The name of the training run, forms the basis of the output path.
         tokenized: The tokenized data to train on:
-                  - For single dataset: an InputName, ExecutorStep, or SupervisedUrlSourceConfig
-                  - For mixture: a Dict[str, SupervisedUrlSourceConfig] mapping dataset names to configs
+                  - For single dataset: an InputName or ExecutorStep for a tokenized dataset.
+                  - For mixture: a LMMixtureDatasetConfig with multiple datasets.
         model_config: Levanter LlamaConfig for the model architecture to train.
         sft_config: Configuration for the SFT training process.
         mixture_weights: Dict mapping datasets within mixture to weight to sample with. If provided,
