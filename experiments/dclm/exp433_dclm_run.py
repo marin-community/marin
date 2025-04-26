@@ -1,3 +1,5 @@
+from levanter.data.text import TextLmDatasetFormat
+
 from experiments.dclm.tokenize_dclm import DCLM_BASELINE_ONLY_MIXTURE, DCLM_MIXTURE_WEIGHTS
 from experiments.defaults import SimpleTrainConfig, default_tokenize, default_train
 from experiments.evals.evals import default_eval
@@ -25,7 +27,10 @@ dclm_baseline_neox_tokenized = default_tokenize(
 )
 
 starcoderdata_neox_tokenized = default_tokenize(
-    name="starcoderdata", dataset=starcoderdata, tokenizer=gpt_neox_tokenizer, text_key="content"
+    name="starcoderdata",
+    dataset=starcoderdata,
+    tokenizer=gpt_neox_tokenizer,
+    format=TextLmDatasetFormat(text_key="content"),
 )
 
 proofpile_2_neox_tokenized = default_tokenize(

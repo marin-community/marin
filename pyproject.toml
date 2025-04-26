@@ -53,6 +53,21 @@ dev = [
     "types-six",
 ]
 
+metrics = [
+    "google-cloud-logging",
+]
+
+docs = [
+    "mkdocs>=1.5.0",
+    "mkdocs-material>=9.5.0",
+    "mkdocstrings>=0.24.0",
+    "mkdocstrings-python>=1.7.0",
+    "pymdown-extensions>=10.0.0",
+    "mkdocs-git-revision-date-localized-plugin>=1.2.0",
+    "mkdocs-git-authors-plugin>=0.9.0",
+    "mkdocs-minify-plugin>=0.7.0",
+]
+
 download_transform = [
     "chardet",
     "datasets>=2.18.0",
@@ -80,7 +95,7 @@ quality_dedup_consolidate = [
     "transformers",
 ]
 tokenize_train = [
-    "jax[tpu]==0.5.1",
+#    "jax[tpu]==0.5.1",
     "multiprocess==0.70.16",
     "levanter>=1.2.dev1312",
     "lm-eval@git+https://github.com/stanford-crfm/lm-evaluation-harness.git",
