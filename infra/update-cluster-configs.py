@@ -262,7 +262,6 @@ if __name__ == "__main__":
 
             for tpu_type in generation_config["slices"]:
                 target_worker_count = config.get("worker_targets", {}).get(f"{generation}-{tpu_type}", 0)
-                print(config.get("worker_targets", {}), f"{generation}-{tpu_type}", target_worker_count)
                 base_string = yaml.dump(
                     make_tpu_slice_config(generation, tpu_type, target_worker_count), default_flow_style=False, indent=2
                 )

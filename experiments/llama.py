@@ -11,6 +11,7 @@ llama3_tokenizer = "meta-llama/Meta-Llama-3.1-8B"
 llama3_tokenizer_vocab_size = 128_256
 llama3_instruct_tokenizer = "meta-llama/Meta-Llama-3.1-8B-Instruct"
 
+
 llama_150m = LlamaConfig(
     seq_len=1024,
     hidden_dim=512,
