@@ -14,7 +14,7 @@ from levanter.callbacks.watch import WatchConfig
 
 from experiments.dclm.tokenize_dclm import DCLM_MIXTURE_WEIGHTS
 from experiments.defaults import default_sft, default_train
-from experiments.dolmino.tokenize_dolmino import get_dolmino_step
+from experiments.dolmino.tokenize_dolmino import get_dolmino_step_llama3
 from experiments.exp606_sft import tulu3_llama_tokenize_step, tulu_sft_config
 from experiments.instruction_datasets import (
     tulu3_flat_llama_tokenized_as_train,
@@ -51,7 +51,7 @@ tootsie_8b_hypnotic_spoonbill_train = dataclasses.replace(
     allow_partial_checkpoint=False,
 )
 
-flan = get_dolmino_step("flan")
+flan = get_dolmino_step_llama3("flan")
 
 
 def _normalize_weights(weights, scale=1.0):

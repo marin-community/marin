@@ -28,13 +28,11 @@ import ray
 import transformers
 from levanter.data.sharded_datasource import ShardedDataSource, UrlDataSource
 from levanter.data.text import (
-    BatchTokenizer,
-    ChatUrlDataSourceConfig,
+    LmDatasetFormatBase,
     LMDatasetSourceConfig,
-    LMSupervisedDatasetConfig,
+    TextLmDatasetFormat,
     UrlDatasetSourceConfig,
-    mk_chat_sft_dataset,
-    mk_supervised_dataset,
+    preprocessor_for_format,
 )
 from levanter.store.cache import CacheOptions
 from ray.runtime_env import RuntimeEnv
@@ -53,20 +51,11 @@ class TokenizeConfig:
     tokenizer: str  # tokenizer name. Should be the same as you intend to use in the tokenizer spec for the training run
     tags: list[str] = dataclasses.field(default_factory=list)  # tags to be added to config
     cache_options: CacheOptions | None = None
-    input_field: str = ""
-    output_field: str = ""
-    text_key: str = "text"
-
-    def train_source(self) -> ShardedDataSource | None:
-        if len(self.train_paths) == 0:
-            return None
-        # return _create_source(self.train_paths, self.text_key)
-        return self.as_lm_dataset_source_config(self.cache_path).get_shard_source("train")
-
-    def validation_source(self) -> ShardedDataSource | None:
-        if len(self.validation_paths) == 0:
-            return None
-        return self.as_lm_dataset_source_config(self.cache_path).get_shard_source("validation")
+    format: LmDatasetFormatBase = TextLmDatasetFormat()  # noqa
+    """
+    The format of the dataset. This is used to determine how to tokenize the data.
+    See Levanter's documentation for more details.
+    """
 
     def as_lm_dataset_source_config(
         self, actual_output_path: str | InputName | None, *, include_raw_paths=True
@@ -75,6 +64,9 @@ class TokenizeConfig:
         For use in Levanter training runs with mixtures of datasets.
 
         Args:
+            actual_output_path: The actual output path to use for the cache. Since we often pass in an InputName,
+                we need to resolve it to a string.
+
             include_raw_paths: if false, don't include paths to raw data in Levanter's config. This means we'll be able
                 to run training without the original training data, but hte provenance won't be recorded in wandb.
 
@@ -84,6 +76,7 @@ class TokenizeConfig:
             train_urls=self.train_paths if include_raw_paths else [],
             validation_urls=self.validation_paths if include_raw_paths else [],
             cache_dir=actual_output_path,
+            format=self.format,
         )
 
     def __post_init__(self):
@@ -100,15 +93,33 @@ class TokenizeConfig:
             assert "/" not in self.validation_paths, "don't use the entire fs for validation paths!"
 
 
+def _expand_directories(config: UrlDatasetSourceConfig) -> UrlDatasetSourceConfig:
+    """
+    Expand directories in the config to globs.
+    """
+
+    train_paths = _get_filepaths_to_tokenize(config.train_urls)
+    validation_paths = _get_filepaths_to_tokenize(config.validation_urls)
+
+    return dataclasses.replace(config, train_urls=train_paths, validation_urls=validation_paths)
+
+
 def tokenize(config: TokenizeConfig):
-    train_source = config.train_source()
-    validation_source = config.validation_source()
+    source_config = config.as_lm_dataset_source_config(config.cache_path)
+
+    # TODO: Levanter doesn't automatically expand directories to globs, but by convention we do in Marin
+    # we should backport this to Levanter
+
+    source_config = _expand_directories(source_config)
+
+    train_source = source_config.get_shard_source("train")
+    validation_source = source_config.get_shard_source("validation")
 
     if train_source is None and validation_source is None:
         raise ValueError("No input files specified. Nothing to do.")
 
     tokenizer = transformers.AutoTokenizer.from_pretrained(config.tokenizer)
-    batch_tokenizer = BatchTokenizer(tokenizer, enforce_eos=True)
+    batch_tokenizer = preprocessor_for_format(config.format, tokenizer)
 
     if train_source is not None:
         options = config.cache_options
@@ -117,7 +128,11 @@ def tokenize(config: TokenizeConfig):
 
         train_ledger = (
             ray.remote(_levanter_build_cache)
-            .options(name=f"tokenize::{config.cache_path}", runtime_env=RuntimeEnv(env_vars={"JAX_PLATFORMS": "cpu"}))
+            .options(
+                name=f"tokenize::{config.cache_path}",
+                runtime_env=RuntimeEnv(env_vars={"JAX_PLATFORMS": "cpu"}),
+                max_retries=50,
+            )
             .remote(
                 train_source,
                 batch_tokenizer,
@@ -128,8 +143,6 @@ def tokenize(config: TokenizeConfig):
     else:
         train_ledger = None
 
-    validation_source = config.validation_source()
-
     if validation_source is not None:
         options = config.cache_options
         if options is None:
@@ -137,7 +150,11 @@ def tokenize(config: TokenizeConfig):
 
         validation_ledger = (
             ray.remote(_levanter_build_cache)
-            .options(name=f"tokenize::{config.cache_path}", runtime_env=RuntimeEnv(env_vars={"JAX_PLATFORMS": "cpu"}))
+            .options(
+                name=f"tokenize::{config.cache_path}",
+                runtime_env=RuntimeEnv(env_vars={"JAX_PLATFORMS": "cpu"}),
+                max_retries=50,
+            )
             .remote(
                 validation_source,
                 batch_tokenizer,
@@ -170,82 +187,6 @@ def _heuristic_cache_options(paths: list[str]):
     else:
         options = CacheOptions()
     return options
-
-
-@ray.remote(runtime_env=RuntimeEnv(env_vars={"JAX_PLATFORMS": "cpu"}))
-def levanter_tokenize_sft(config: TokenizeConfig):
-    """
-    Tokenize chat SFT data using the mk_chat_sft_dataset function.
-    """
-
-    def add_special_tokens(tokenizer, use_unk_instead_of_adding=False):
-        special_tokens_dict = dict()
-        if use_unk_instead_of_adding:
-            if tokenizer.unk_token is None:
-                raise ValueError("use_unk_instead_of_add is True but tokenizer doesn't have an unk token")
-
-        unk = tokenizer.unk_token if use_unk_instead_of_adding else None
-
-        if tokenizer.pad_token is None:
-            logger.info(f"Adding pad token to {tokenizer}")
-            special_tokens_dict["pad_token"] = "[PAD]" if not use_unk_instead_of_adding else unk
-        if tokenizer.eos_token is None:
-            logger.info(f"Adding eos token to {tokenizer}")
-            special_tokens_dict["eos_token"] = "</s>" if not use_unk_instead_of_adding else unk
-        if tokenizer.bos_token is None:
-            logger.info(f"Adding bos token to {tokenizer}")
-            special_tokens_dict["bos_token"] = "<s>" if not use_unk_instead_of_adding else unk
-        if tokenizer.unk_token is None:
-            logger.info(f"Adding unk token to {tokenizer}")
-            special_tokens_dict["unk_token"] = "<unk>"
-
-        return tokenizer.add_special_tokens(special_tokens_dict)
-
-    logging.basicConfig(level=logging.INFO)
-
-    tokenizer = transformers.AutoTokenizer.from_pretrained(
-        config.tokenizer, padding_side="right", trust_remote_code=True
-    )
-    num_new_tokens = add_special_tokens(tokenizer)
-    logger.info(f"Added {num_new_tokens} special tokens to tokenizer")
-
-    sft_config = ChatUrlDataSourceConfig(
-        train_urls=config.train_paths,
-        cache_dir=config.cache_path,
-        messages_field="messages",  # Adjust these fields based on your data format
-        input_role="user",
-        output_role="assistant",
-    )
-
-    logger.info(f"Caching SFT data to {config.cache_path}")
-    import haliax
-
-    # Use the existing mk_chat_sft_dataset function, position axis is arbitrary
-    # it shouldn't matter what the value is during cache creation
-    mk_chat_sft_dataset(sft_config, tokenizer, haliax.Axis("position", 2048))
-
-    logger.info(f"Finished caching SFT dataset to {config.cache_path}")
-
-
-@ray.remote(runtime_env=RuntimeEnv(env_vars={"JAX_PLATFORMS": "cpu"}))
-def levanter_tokenize_supervised(config: TokenizeConfig):
-    supervised_config = LMSupervisedDatasetConfig(
-        validation_urls=config.validation_paths,
-        cache_dir=config.cache_path,
-        input_field=config.input_field,
-        output_field=config.output_field,
-    )
-    logging.basicConfig(level=logging.INFO)
-
-    logger.info(f"Caching {config.validation_paths} to {config.cache_path}.")
-
-    tokenizer = transformers.AutoTokenizer.from_pretrained(config.tokenizer)
-
-    import haliax
-
-    # this axis doesn't actually matter for just building the cache
-    mk_supervised_dataset(supervised_config, "validation", tokenizer, haliax.Axis("position", 2048))
-    logger.info(f"Finished caching supervised dataset to {config.cache_path}.")
 
 
 def _levanter_build_cache(source, batch_tokenizer, output_path, options: CacheOptions):
@@ -316,7 +257,7 @@ def _get_filepaths_to_tokenize(input_paths: list[str]) -> list[str]:
 
 
 def _is_probably_path(path: str) -> bool:
-    """see if looks like a real path or not, in which case it might be an hf dataset"""
+    """see if it looks like a real path or not, in which case it might be an hf dataset"""
 
     protocol, _ = fsspec.core.split_protocol(path)
 

@@ -173,7 +173,7 @@ llama_22b_tootsie_ema_warmstart = dataclasses.replace(
 llama_32b_train_config = SimpleTrainConfig(
     tpu_type="v5p-128",
     node_count=8,
-    train_batch_size=[ScheduleStep(start=0, value=4096)],
+    train_batch_size=[ScheduleStep(start=0, value=8192)],
     num_train_steps=1_000_000,
     weight_decay=0.05,
     learning_rate=4.2e-4,
@@ -200,13 +200,13 @@ nemotron_mix = lm_mixture_data_config(
 )
 
 llama_32b_tootsie = default_train(
-    name="llama-32b-tootsie",
+    name="llama-32b-tootsie-2",
     tokenized=nemotron_mix,
     model_config=llama_32b,
     train_config=llama_32b_train_config,
     tags=["llama", "32b", "ema", "exp859", "tootsie"],
     eval_harness_tasks=[],
-).with_output_path("checkpoints/llama-32b-tootsie")
+).with_output_path("checkpoints/llama-32b-tootsie-2")
 
 #####
 # sigh... 56B. you can ignore this.

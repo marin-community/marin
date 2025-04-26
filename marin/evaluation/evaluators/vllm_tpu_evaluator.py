@@ -11,7 +11,6 @@ from experiments.evals.resource_configs import ResourceConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Dependency, Evaluator, ModelConfig
 from marin.evaluation.utils import kill_process_on_port
-from marin.generation.ray_utils import scheduling_strategy_fn
 from marin.utils import remove_tpu_lockfile_on_exit
 
 
@@ -47,7 +46,14 @@ class VllmTpuEvaluator(Evaluator, ABC):
         model_name_or_path: str = VllmTpuEvaluator.download_model(model)
 
         # From https://docs.vllm.ai/en/v0.4.0/models/engine_args.html
-        command: str = f"vllm serve {model_name_or_path} --trust-remote-code --host {host} --port {port} --device tpu"
+        command: str = (
+            f"vllm serve {model_name_or_path} "
+            f"--trust-remote-code "
+            f"--host {host} "
+            f"--port {port} "
+            f"--device tpu "
+            f"--distributed-executor-backend ray"
+        )
         process = subprocess.Popen(command, shell=True)
 
         # Check that the server has started by sending heartbeat checks
@@ -141,20 +147,15 @@ class VllmTpuEvaluator(Evaluator, ABC):
         output_path: str,
         max_eval_instances: int | None = None,
         resource_config: ResourceConfig | None = None,
-        engine_kwargs: dict | None = None,
     ) -> None:
         """
         Launches the evaluation run with Ray.
         """
 
-        if resource_config is None:
-            fn = None
-        else:
-            fn = scheduling_strategy_fn(resource_config.num_tpu, resource_config.strategy)
-
         @ray.remote(
-            scheduling_strategy=fn,
+            scheduling_strategy=self._get_scheduling_strategy(resource_config),
             runtime_env=self.get_runtime_env(),
+            max_calls=1,
         )
         @remove_tpu_lockfile_on_exit
         def launch(
@@ -162,8 +163,7 @@ class VllmTpuEvaluator(Evaluator, ABC):
             evals: list[EvalTaskConfig],
             output_path: str,
             max_eval_instances: int | None = None,
-            engine_kwargs: dict | None = None,
         ) -> None:
-            self.evaluate(model, evals, output_path, max_eval_instances, engine_kwargs)
+            self.evaluate(model, evals, output_path, max_eval_instances)
 
-        ray.get(launch.remote(model, evals, output_path, max_eval_instances, engine_kwargs))
+        ray.get(launch.remote(model, evals, output_path, max_eval_instances))

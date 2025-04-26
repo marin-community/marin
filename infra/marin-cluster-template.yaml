@@ -56,6 +56,9 @@ setup_commands:
   - gcloud secrets versions access latest --secret=OPENAI_API_KEY > $HOME/.cache/openai/token
   - echo 'export MARIN_PREFIX="gs://{{BUCKET}}"' >> $HOME/.bashrc
   - echo 'export BUCKET="{{BUCKET}}"' >> $HOME/.bashrc
+  # cf https://github.com/ray-project/ray/blob/0bc6ec86ffd0fc0d4e43fb339ffe0ac03ee5531b/python/ray/autoscaler/_private/constants.py#L66
+  # this is set to 30s by default, which is much too short for our use case
+  - echo 'export AUTOSCALER_HEARTBEAT_TIMEOUT_S=600' >> $HOME/.bashrc
   - gcsfuse --implicit-dirs --only-dir gcsfuse_mount $BUCKET /opt/gcsfuse_mount || true
   - mkdir -p /home/ray/.ssh && gcloud compute project-info describe --format="value(commonInstanceMetadata.items[?key==\"ssh-keys\"].value)" > /home/ray/.ssh/authorized_keys && chmod 600 /home/ray/.ssh/authorized_keys
   - gcloud secrets versions access latest --secret=RAY_CLUSTER_PUBLIC_KEY > ~/.ssh/marin_ray_cluster.pub
