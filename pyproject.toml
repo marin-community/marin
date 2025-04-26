@@ -19,6 +19,7 @@ dependencies = [
     "s3fs",
     "regex",
     "requests",
+    "numpy",
     "torch",
     "braceexpand",
     "deepdiff",
@@ -29,9 +30,11 @@ dependencies = [
     "pyarrow", # # Only needed by Fileprovider in inference.py
     # We are keeping levanter deps for now. @TODO :: Remove them
     "multiprocess==0.70.16",
+    "levanter>=1.2.dev1313",
+    "haliax>=1.4.dev343",
     "sentencepiece",
     "lz4",
-    "wandb<=0.19.9",
+    "wandb<=0.19.9"
 ]
 
 [project.optional-dependencies]
