@@ -22,6 +22,6 @@ def current_date_time():
 
 @pytest.fixture(scope="module")
 def ray_tpu_cluster():
-    ray.init(resources={"TPU": 8, "TPU-v6e-8-head": 1}, num_cpus=120)
+    ray.init(resources={"TPU": 8, "TPU-v6e-8-head": 1}, num_cpus=120, ignore_reinit_error=True)
     yield
     ray.shutdown()

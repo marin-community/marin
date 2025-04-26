@@ -30,7 +30,8 @@ dependencies = [
     # We are keeping levanter deps for now. @TODO :: Remove them
     "multiprocess==0.70.16",
     "sentencepiece",
-    "lz4"
+    "lz4",
+    "pytest",
 ]
 
 [project.optional-dependencies]
