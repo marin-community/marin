@@ -31,7 +31,7 @@ dependencies = [
     "multiprocess==0.70.16",
     "sentencepiece",
     "lz4",
-    "pytest",
+    "wandb<=0.19.9",
 ]
 
 [project.optional-dependencies]
