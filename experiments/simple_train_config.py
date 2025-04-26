@@ -48,6 +48,8 @@ class SimpleTrainConfig:
 
     initialize_from_checkpoint_path: str | None = None
     """If set, the training will resume from the checkpoint at this path. Otherwise, training will start from scratch."""
+    initialize_from_hf: str | None = None
+    """If set, the training will start from the hf model at this path. Otherwise, training will start from scratch."""
     reset_data_loader_on_init: bool = True
     """Pairs with initialize_from_checkpoint_path. If True, initialize_from_checkpoint_path will reset the data loader
     so that it starts from step 0. Otherwise, it will resume from the step in the checkpoint."""
