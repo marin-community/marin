@@ -1,5 +1,6 @@
 # vllm/vllm-tpu:9dbf7a2dc1448d6657adfb2daba36be270dcebcd - 0.7.4 has some issues
-FROM vllm/vllm-tpu:e92694b6fe264a85371317295bca6643508034ef
+# FROM vllm/vllm-tpu:e92694b6fe264a85371317295bca6643508034ef
+FROM vllm/vllm-tpu:nightly
 
 # Setup gcsfuse
 RUN apt-get update && apt-get install lsb-release rsync docker.io -y
