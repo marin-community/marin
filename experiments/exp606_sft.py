@@ -1,9 +1,9 @@
-from experiments.defaults import default_sft
+from experiments.defaults import default_sft, default_tokenize
+from experiments.exp964_custom_chat_tokenizer import llama3_instruct_chat_format
 from experiments.instruction_datasets import get_instruction_dataset
 from experiments.llama import llama3_instruct_tokenizer, llama_8b
 from experiments.simple_sft_config import SimpleSFTConfig
-from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path
-from marin.processing.tokenize.tokenize import TokenizeConfig, levanter_tokenize_sft
+from marin.execution.executor import executor_main
 
 # Get instruction dataset
 tulu_3_dataset = get_instruction_dataset("allenai/tulu-3-sft-mixture")
@@ -17,18 +17,11 @@ NUM_TRAIN_TOKENS = 670426314
 NUM_TRAIN_STEPS = NUM_TRAIN_TOKENS // (128 * 4096) * 3  # 2 epochs
 
 # Create tokenization step for Tulu-3 dataset
-tulu3_llama_tokenize_step = ExecutorStep(
-    name="tokenized/tulu_sft_v3_llama3_instruct_tokenizer",
-    fn=levanter_tokenize_sft,
-    config=TokenizeConfig(
-        train_paths=[output_path_of(tulu_3_dataset, "**/*.jsonl.gz")],
-        validation_paths=[],
-        cache_path=this_output_path(),
-        tokenizer=llama3_instruct_tokenizer,
-        input_field="user",
-        output_field="assistant",
-    ),
-    description="Tokenize chat SFT data",
+tulu3_llama_tokenize_step = default_tokenize(
+    name="tulu_sft_v3_llama3_instruct_tokenizer",
+    dataset=tulu_3_dataset / "**/*.jsonl.gz",
+    tokenizer=llama3_instruct_tokenizer,
+    format=llama3_instruct_chat_format,
 )
 
 tulu_sft_config = SimpleSFTConfig(
