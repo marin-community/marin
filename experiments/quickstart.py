@@ -8,6 +8,7 @@ from levanter.main.train_lm import TrainLmConfig
 from levanter.models.gpt2 import Gpt2Config
 from levanter.trainer import TrainerConfig
 
+from experiments.defaults import default_tokenize
 from marin.classifiers.utils import DatasetConfig
 from marin.execution.executor import (
     ExecutorMainConfig,
@@ -24,7 +25,7 @@ from marin.processing.classification.fasttext.train_fasttext import (
     train,
 )
 from marin.processing.classification.inference import InferenceConfig, run_inference
-from marin.processing.tokenize import TokenizeConfig, lm_data_config, tokenize
+from marin.processing.tokenize import lm_data_config
 from marin.schemas.web.convert import HtmlToMarkdownConfig
 from marin.training.training import PodConfig, TrainLmOnPodConfig, run_levanter_train_lm
 from marin.utilities.ray_utils import is_local_ray_cluster
@@ -168,15 +169,10 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
     # Tokenize
     tokenizer = "gpt2"
 
-    tokenize_step = ExecutorStep(
+    tokenize_step = default_tokenize(
         name=os.path.join(prefix, "tokenized"),
-        fn=tokenize,
-        config=TokenizeConfig(
-            train_paths=[output_path_of(consolidate_step) / "**/*.jsonl.gz"],
-            validation_paths=[],
-            cache_path=this_output_path(),
-            tokenizer=versioned(tokenizer),
-        ),
+        dataset=output_path_of(consolidate_step) / "**/*.jsonl.gz",
+        tokenizer=tokenizer,
     )
 
     # ############################################################
