@@ -20,7 +20,7 @@ from experiments.dolmino.tokenize_dolmino import dolmino_math_tokenized_llama3, 
 from experiments.instruction_datasets import tulu3_flat_llama_tokenized_as_validation
 from experiments.llama import llama3_tokenizer
 from experiments.nemotron_cc.tokenize_nemotron import NEMOTRON_WEIGHTS, tokenize_nemotron_steps
-from marin.execution.executor import executor_main
+from marin.execution.executor import InputName, executor_main
 from marin.processing.tokenize import add_validation_sets_to_mixture
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
 
@@ -65,28 +65,28 @@ medu_mmlu_science_qa_tokenized = default_tokenize(
     name="medu-mmlu-science-qa",
     dataset="gs://marin-us-east1/documents/medu-mmlu-science-llama8b-qa-whole-1a419d",
     tokenizer=llama3_tokenizer,
-)
+).with_output_path("tokenized/medu-mmlu-science-qa-c64fda")
 
 # Wikipedia tokenization
 md_wiki_tokenized = default_tokenize(
     name="wikipedia",
-    dataset="gs://marin-us-central2/documents/wikipedia-resiliparse-custom-fork-2569de/20241201/",
+    dataset=InputName.hardcoded("documents/wikipedia-resiliparse-custom-fork-2569de/20241201/"),
     tokenizer=llama3_tokenizer,
-)
+).with_output_path("tokenized/wikipedia-6980f2")
 
 # Arxiv tokenization
 md_arxiv_tokenized = default_tokenize(
     name="arxiv-no-problem",
-    dataset="gs://marin-us-central2/documents/ar5iv/ar5iv-04-2024-no-problem-3971ff/resiliparse-custom-fork",
+    dataset=InputName.hardcoded("documents/ar5iv/ar5iv-04-2024-no-problem-3971ff/resiliparse-custom-fork"),
     tokenizer=llama3_tokenizer,
-)
+).with_output_path("tokenized/arxiv-no-problem-a3e054")
 
 # Stackexchange tokenization
 md_stackexchange_tokenized = default_tokenize(
     name="stackexchange",
     dataset="gs://marin-us-central2/documents/stackexchange-resiliparse-custom-fork-ab41ad",
     tokenizer=llama3_tokenizer,
-)
+).with_output_path("tokenized/stackexchange-621b94")
 
 full_mix_components = {
     **tokenize_nemotron_steps(),
@@ -100,6 +100,8 @@ full_mix_components = {
     **tokenize_dolmino_steps(),
 }
 
+# weights based on either compressed TB or teratokens, which is roughly equivalent
+# scale of 5 to oversample higher quality data
 full_mix_weights = {
     **{k: v * 0.6 for k, v in NEMOTRON_WEIGHTS.items()},
     "starcoderdata": 0.25,
