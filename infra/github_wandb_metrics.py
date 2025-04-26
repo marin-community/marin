@@ -29,11 +29,11 @@ def log_weekly_data(data, week_id, project_name, id_, table_key="Ray Restart Eve
     wandb.log(
         {
             "Week ID": week_id,
-            "Workflow Times - Lint and Format Check": data["Workflow Times per workflow"]["Lint and Format Check"],
-            "Workflow Times - Quickstart": data["Workflow Times per workflow"]["Quickstart"],
-            "Workflow Times - Run unit tests": data["Workflow Times per workflow"]["Run unit tests"],
+            "Workflow Times (minutes) - Lint and Format Check": data["Workflow Times"]["Lint and Format Check"],
+            "Workflow Times (minutes) - Quickstart": data["Workflow Times"]["Quickstart"],
+            "Workflow Times (minutes) - Run unit tests": data["Workflow Times"]["Run unit tests"],
             "Closed Issues with Experiments Label": data["Closed Issues with label experiments"],
-            "Ray Restarts": data["Number of Ray cluster restart"],
+            "Ray Restarts": data["Number of Ray cluster restarts"],
             "Total Runs": data["num_runs"],
             "Total GFLOPS Across Runs": data["total_gflops_across_runs"],
             "Total Petaflops Across Runs": data["total_petaflops_across_runs"],
