@@ -30,37 +30,6 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
         "HF_ALLOW_CODE_EVAL": "1",
     }
 
-    def _build_args(
-        task_name: str, num_fewshot: int, pretrained_args: str, output_path: str, max_eval_instances: int | None
-    ):
-        from lm_eval import parse_eval_args, setup_parser
-
-        parser = setup_parser()
-
-        args_list = [
-            "--model",
-            "vllm",
-            "--tasks",
-            task_name,
-            "--model_args",
-            pretrained_args,
-            "--num_fewshot",
-            str(num_fewshot),
-            "--batch_size",
-            "auto",
-            "--trust_remote_code",
-            "--output_path",
-            output_path,
-            "--confirm_run_unsafe_code",
-        ]
-
-        if max_eval_instances is not None:
-            args_list.extend(["--limit", str(max_eval_instances)])
-
-        args = parse_eval_args(parser.parse_args(args_list))
-
-        return args
-
     def evaluate(
         self,
         model: ModelConfig,
