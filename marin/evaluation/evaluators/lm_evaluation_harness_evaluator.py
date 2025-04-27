@@ -7,7 +7,7 @@ from typing import ClassVar
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Dependency, ModelConfig
 from marin.evaluation.evaluators.vllm_tpu_evaluator import VllmTpuEvaluator
-from marin.evaluation.utils import is_remote_path, run_bash_command, upload_to_gcs
+from marin.evaluation.utils import is_remote_path, upload_to_gcs
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +59,10 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
                 for key, value in model.engine_kwargs.items():
                     pretrained_args += f",{key}={value}"
 
+            from lm_eval.evaluator import simple_evaluate
+            from lm_eval.loggers import EvaluationTracker, WandbLogger
+            from lm_eval.utils import simple_parse_args_string
+
             for eval_task in evals:
 
                 result_filepath = os.path.join(self.RESULTS_PATH, f"{eval_task.name}_{eval_task.num_fewshot}shot")
@@ -67,33 +71,39 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
                 output_dir = os.path.dirname(result_filepath)
                 os.makedirs(output_dir, exist_ok=True)
 
-                command = [
-                    "lm_eval",
-                    "--model",
-                    "vllm",
-                    "--tasks",
-                    eval_task.name,
-                    "--num_fewshot",
-                    str(eval_task.num_fewshot),
-                    "--model_args",
-                    pretrained_args,
-                    "--batch_size",
-                    "auto",
-                    "--trust_remote_code",
-                    "--output_path",
-                    result_filepath,
-                ]
+                evaluation_tracker_args = simple_parse_args_string(f",output_path={result_filepath}")
+                evaluation_tracker = EvaluationTracker(**evaluation_tracker_args)
 
-                # Human eval tests code from the model which requires permission to run
-                if eval_task.name == "humaneval":
-                    command.append("--confirm_run_unsafe_code")
+                wandb_args_dict = simple_parse_args_string(f"project=marin,job_type=eval,name={model.name}")
+                wandb_config_args_dict = simple_parse_args_string("")
+                wandb_logger = WandbLogger(**wandb_args_dict, **wandb_config_args_dict)
 
-                if max_eval_instances is not None:
-                    # According lm-eval-harness, --limit should only be used for testing purposes
-                    command.extend(["--limit", str(max_eval_instances)])
+                results = simple_evaluate(
+                    model="vllm",
+                    tasks=[eval_task.name],
+                    num_fewshot=eval_task.num_fewshot,
+                    model_args=pretrained_args,
+                    batch_size="auto",
+                    confirm_run_unsafe_code=True,
+                    limit=max_eval_instances if max_eval_instances is not None else None,
+                    evaluation_tracker=evaluation_tracker,
+                    log_samples=True,
+                )
+                if results is not None:
+                    samples = results.pop("samples")
+                    evaluation_tracker.save_results_aggregated(results=results, samples=samples)
 
-                # run the command and check if the results file exists
-                run_bash_command(command, check=True)
+                    try:
+                        wandb_logger.post_init(results)
+                        wandb_logger.log_eval_result()
+                        wandb_logger.log_eval_samples(samples)
+                        wandb_logger.run.finish()
+                    except Exception as e:
+                        print(f"Logging to Weights and Biases failed due to {e}")
+
+                    for task_name in results["configs"].keys():
+                        evaluation_tracker.save_results_samples(task_name=task_name, samples=samples[task_name])
+
                 assert os.path.exists(result_filepath), f"Results file {result_filepath} does not exist."
 
         except Exception as e:

@@ -1,0 +1,133 @@
+name: CI with GCP TPU
+
+on: pull_request
+
+jobs:
+  tpu-tests:
+    if: (github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    env:
+      TPU_ZONE: "us-east5-b"
+      TPU_NAME: "ci-run-${{ github.run_id }}"
+      DOCKER_IMAGE: "us-east5-docker.pkg.dev/hai-gcp-models/marin/marin_vllm"
+      DOCKER_SHA: "676c7fb7"
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Set up Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v1
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.NEW_GCP_JSON }}
+
+      - name: Configure Google Cloud
+        run: |
+          gcloud config set project ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Create TPU VM
+        id: create_tpu
+        run: |
+          # Generate a unique name for this CI run
+          TPU_NAME="ci-run-${{ github.run_id }}"
+          echo "TPU_NAME=${TPU_NAME}" >> $GITHUB_ENV
+          echo "Creating TPU VM: ${TPU_NAME}"
+
+          # Attempt to create a Spot TPU VM for cost savings
+          gcloud compute tpus tpu-vm create ${TPU_NAME} \
+            --zone=us-east5-b \
+            --accelerator-type=v6e-8 \
+            --version=v2-alpha-tpuv6e \
+            --project=${{ secrets.GCP_PROJECT_ID }} \
+            --preemptible
+
+          # Wait for the VM to initialize (adjust time as needed)
+          echo "Waiting for TPU VM to become ready..."
+          sleep 90
+
+      - name: Copy current branch code to TPU VM
+        run: |
+          echo "Copying code from runner workspace to TPU VM at /tmp/repo"
+          # Create a target directory on the TPU VM first
+          gcloud compute tpus tpu-vm ssh ${{ env.TPU_NAME }} \
+            --zone=${{ env.TPU_ZONE }} \
+            --project=${{ secrets.GCP_PROJECT_ID }} \
+            --command="mkdir -p /tmp/repo"
+
+          # Copy the checked-out code (entire workspace '.') to the target directory
+          gcloud compute tpus tpu-vm scp . ${{ env.TPU_NAME }}:/tmp/repo \
+            --recurse \
+            --zone=${{ env.TPU_ZONE }} \
+            --project=${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Configure docker and run tests
+        run: |
+          gcloud config set project ${{ secrets.GCP_PROJECT_ID }}
+          gcloud compute tpus tpu-vm ssh ${{ env.TPU_NAME }} --zone=${{ env.TPU_ZONE }} --project=${{ secrets.GCP_PROJECT_ID }} \
+            --command='sudo gcloud auth configure-docker us-east5-docker.pkg.dev --quiet \
+                          && sudo docker run --net host --shm-size=16G --privileged -v /tmp/repo:/opt/marin \
+                            ${{ env.DOCKER_IMAGE }}:${{ env.DOCKER_SHA }} \
+                            /bin/bash -c "export TPU_CI=true \
+                                     && export WANDB_API_KEY=${{ secrets.WANDB_API_KEY }} \
+                                     && export WANDB_ENTITY=stanford-mercury \
+                                     && export OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }} \
+                                     && export VLLM_USE_V1=1 \
+                                     && python scripts/install_all_pip_dep.py \
+                                     && pip list \
+                                     && echo TPU_TEST \
+                                     && pytest tests/tpu -s -v \
+                                     && echo VLLM_TEST \
+                                     && pytest tests/vllm -s -v \
+                                     && echo EVALS_TEST \
+                                     && pytest tests/evals -s -v"'
+
+      # - name: Configure Docker for Artifact Registry
+      #   run: |
+      #     gcloud compute tpus tpu-vm ssh ${{ env.TPU_NAME }} --zone=${{ env.TPU_ZONE }} --project=${{ secrets.GCP_PROJECT_ID }} \
+      #       --command="sudo gcloud auth configure-docker us-east5-docker.pkg.dev --quiet"
+      # - name: Create VM
+      #   run: |
+      #     export TPU_NAME=ci-run-${{ github.run_id }}
+      #     eval "$(ssh-agent -s)"
+      #     TRUE_SHA=${{ github.event.pull_request.head.sha }}
+      #     bash infra/spin-up-vm.sh $TPU_NAME -z ${TPU_ZONE} -t v6e-8 --preemptible
+#          infra/babysit-tpu-vm.sh $TPU_NAME -z ${{ TPU_ZONE }} -t v4-8 --preemptible -s infra/helpers/setup-tpu-vm-tests.sh -b ${{ github.sha }} --retries 1 -- \
+#            PYTHONPATH=$PYTHONPATH:levanter/tests bash levanter/infra/run.sh pytest levanter/tests -m "not entry"
+
+      # - name: Install uv
+      #   uses: astral-sh/setup-uv@v5
+      #   with:
+      #     # Install a specific version of uv.
+      #     version: "0.6.14"
+      #     enable-cache: true
+      #     cache-local-path: "~/.cache/uv"
+
+      # - name: "Set up Python"
+      #   uses: actions/setup-python@v5
+      #   with:
+      #     python-version-file: "pyproject.toml"
+        
+      # - name: Install the project
+      #   run: uv sync --extra dev
+      # - name: Run most tests
+      #   run: |
+      #     export TPU_NAME=ci-run-${{ github.run_id }}
+      #     gcloud compute tpus tpu-vm ssh $TPU_NAME --zone ${TPU_ZONE} --command "JAX_TRACEBACK_FILTERING=off PYTHONPATH=$PYTHONPATH:levanter/tests CI=1 bash levanter/infra/run.sh pytest levanter/tests -m 'not entry and not ray'"
+# Something's wrong with these
+#
+#      - name: Run forked tests
+#        run: |
+#          export TPU_NAME=ci-run-${{ github.run_id }}
+#          gcloud compute tpus tpu-vm ssh $TPU_NAME --zone ${TPU_ZONE} --command "PYTHONPATH=$PYTHONPATH:levanter/tests bash levanter/infra/run.sh pytest --forked levanter/tests -m 'entry'"
+#
+      - name: Cleanup
+        if: ${{ always() }}
+        run: |
+          export TPU_NAME=ci-run-${{ github.run_id }}
+          echo gcloud compute tpus tpu-vm delete $TPU_NAME --zone ${TPU_ZONE} --quiet
+          gcloud compute tpus tpu-vm delete $TPU_NAME --zone ${TPU_ZONE} --quiet
