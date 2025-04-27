@@ -10,7 +10,7 @@ from ray.data.datasource import FilenameProvider
 from experiments.evals.resource_configs import TPU_V6E_8_STRICT_PACK, ResourceConfig
 from marin.generation.pipeline import vLLMTextGeneration
 from marin.generation.ray_utils import get_ray_remote_args_scheduling_strategy_fn
-from marin.utils import fsspec_glob
+from marin.utils import fsspec_glob, remove_tpu_lockfile_on_exit
 
 
 @dataclass
@@ -120,7 +120,8 @@ def get_ray_data_write_kwargs(config: TextGenerationInferenceConfig):
     return ray_data_write_kwargs
 
 
-@ray.remote
+@ray.remote(max_calls=1)
+@remove_tpu_lockfile_on_exit
 def run_inference(config: TextGenerationInferenceConfig):
     set_ray_data_config(config)
 
