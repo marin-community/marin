@@ -1,6 +1,16 @@
+"""
+Muon optimizer definition and example speedrun in a single file.
+"""
+
 from dataclasses import dataclass
 from levanter.optim import OptimizerConfig
 import optax
+import logging
+
+from experiments.llama import llama_75m
+from experiments.simple_train_config import SimpleTrainConfig
+from experiments.speedrun.speedrun import ComputeBudget, HardwareConfig, SpeedrunConfig, default_speedrun
+from marin.execution.executor import executor_main
 
 @OptimizerConfig.register_subclass("muon")
 @dataclass
@@ -43,5 +53,35 @@ class MuonConfig(OptimizerConfig):
                 adam_weight_decay=self.adam_weight_decay,
             ))
             return optax.chain(*components)
-            
         return optax.inject_hyperparams(_optimizer)(learning_rate=self.lr_scheduler(num_train_steps))
+
+
+# --------------------- Example Speedrun Using Muon ------------------------
+
+logger = logging.getLogger("ray")
+
+speedrun_config = SpeedrunConfig(
+    compute_budget=ComputeBudget.SMALL,
+    model_config=llama_75m,
+    train_config=SimpleTrainConfig(
+        tpu_type="v4-128",
+        train_batch_size=512,
+        num_train_steps=6000,
+        learning_rate=3e-3,
+        weight_decay=0.1,
+        steps_per_eval=2000,
+        steps_per_task_eval=2000,
+        optimizer_config=MuonConfig(learning_rate=3e-3, weight_decay=0.1),
+    ),
+    hardware_config=HardwareConfig(
+        device_type="v4-128",
+        num_devices=64,
+        device_flops=275e12,
+    ),
+)
+
+is_valid, error = speedrun_config.validate()
+logger.info(f"Speedrun validation: {is_valid}, {error}")
+
+if __name__ == "__main__":
+    executor_main(steps=default_speedrun("75M_llama_muon", speedrun_config))

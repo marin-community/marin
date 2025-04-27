@@ -1,7 +1,9 @@
 import dataclasses
 from dataclasses import dataclass
+from typing import Optional
 
 from levanter.callbacks.watch import WatchConfig
+from levanter.optim import OptimizerConfig
 from levanter.schedule import IntSchedule
 
 
@@ -59,6 +61,9 @@ class SimpleTrainConfig:
 
     int8: bool = False
     """Int8 (quantized) training in Levanter."""
+
+    optimizer_config: OptimizerConfig | None = None
+    """Optimizer configuration to use. If not set, Adam will be used."""
 
     watch: WatchConfig = dataclasses.field(default_factory=WatchConfig)
     """Config for watching gradients, parameters, etc. Default is to log norms of gradients and parameters."""
