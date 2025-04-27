@@ -30,6 +30,8 @@ def lm_data_config(
     training_set: TokenizerStep | InputName,
     validation_sets: dict[str, TokenizerStep] | None = None,
     shuffle: bool | int = True,
+    max_batches_dict: dict[str, int] | None = None,
+    num_validation_batches_dict: dict[str, int] | None = None,
 ) -> LMMixtureDatasetConfig:
     """
     Creates a dataset config suitable for Levanter's TrainLMConfig from a single training set
@@ -56,6 +58,8 @@ def lm_data_config(
         {train_set_name: 1.0},
         shuffle=shuffle,
         missing_weights_are_validation=True,
+        max_batches_dict=max_batches_dict,
+        num_validation_batches_dict=num_validation_batches_dict,
     )
 
 
@@ -66,6 +70,8 @@ def lm_mixture_data_config(
     shuffle: bool | int = True,
     missing_weights_are_validation: bool = True,
     include_raw_paths: bool = True,
+    max_batches_dict: dict[str, int] | None = None,
+    num_validation_batches_dict: dict[str, int] | None = None,
 ) -> LMMixtureDatasetConfig:
     """
     Creates a training config from a mixture of datasources.
@@ -89,7 +95,13 @@ def lm_mixture_data_config(
     tokenizer = _verify_tokenizers_same(components)
 
     return LMMixtureDatasetConfig(
-        configs=configs, train_weights=weights, tokenizer=tokenizer, cache_dir=None, shuffle=shuffle
+        configs=configs,
+        train_weights=weights,
+        tokenizer=tokenizer,
+        cache_dir=None,
+        shuffle=shuffle,
+        max_batches_dict=max_batches_dict,
+        num_validation_batches_dict=num_validation_batches_dict,
     )
 
 
@@ -101,6 +113,8 @@ def lm_varying_mixture_data_config(
     missing_weights_are_validation: bool = True,
     include_raw_paths: bool = True,
     mixture_block_size: int | None = None,
+    max_batches_dict: dict[str, int] | None = None,
+    num_validation_batches_dict: dict[str, int] | None = None,
 ) -> LMMixtureDatasetConfig:
     """
     Creates a training config from a mixture of datasources with varying weights.
@@ -146,6 +160,8 @@ def lm_varying_mixture_data_config(
         cache_dir=None,
         shuffle=shuffle,
         mixture_block_size=mixture_block_size or 2048,
+        max_batches_dict=max_batches_dict,
+        num_validation_batches_dict=num_validation_batches_dict,
     )
 
 
