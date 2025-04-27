@@ -15,8 +15,11 @@ default_engine_kwargs = {
 
 default_generation_kwargs = {
     "temperature": 0.1,
-    "max_tokens": 1024,
+    "max_tokens": 256,
     "stop_token_ids": [tokenizer.eos_token_id, tokenizer.convert_tokens_to_ids("<|eot_id|>")],
+    "truncate_prompt_tokens": (
+        default_engine_kwargs["max_model_len"] - 256
+    ),  # Number of prompt tokens = max model length - max new tokens
 }
 
 default_medu_config_kwargs = {
