@@ -40,6 +40,8 @@ def lm_data_config(
         training_set: The training set to use
         validation_sets: A sequence of validation sets to use
         shuffle: Whether to shuffle the data. If int, uses era shuffling.
+        max_batches_dict: Maximum number of batches to use for the training set per dataset.
+        num_validation_batches_dict: Number of validation batches to take from the training set per dataset.
     """
     tokenizer = training_set.config.tokenizer
 
@@ -82,6 +84,8 @@ def lm_mixture_data_config(
         shuffle: shuffling policy. int means era shuffling (~shuffle buffer).
         missing_weights_are_validation: whether to pad out missing weights with 0's, indicating validation-only sets
         include_raw_paths: whether to include raw paths in the dataset config. This is mostly for logging purposes.
+        max_batches_dict: Maximum number of batches to use for the training set per dataset.
+        num_validation_batches_dict: Number of validation batches to take from the training set per dataset.
     """
     configs = {
         name: step_to_lm_mixture_component(step, include_raw_paths=include_raw_paths)
@@ -127,6 +131,10 @@ def lm_varying_mixture_data_config(
             Note that start_seq_index should be the index of the sequence (not batch) where the transition should occur.
         shuffle: shuffling policy. int means era shuffling (~shuffle buffer).
         missing_weights_are_validation: whether to pad out missing weights with 0's, indicating validation-only sets
+        include_raw_paths: whether to include raw paths in the dataset config. This is mostly for logging purposes.
+        mixture_block_size: The block size to use for the mixture.
+        max_batches_dict: Maximum number of batches to use for the training set per dataset.
+        num_validation_batches_dict: Number of validation batches to take from the training set per dataset.
 
     Returns:
         LMMixtureDatasetConfig configured with the varying weights
