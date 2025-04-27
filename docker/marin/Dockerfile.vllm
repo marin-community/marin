@@ -37,5 +37,6 @@ git checkout $LM_EVAL_EVAL_COMMIT_HASH && pip install --no-cache-dir -e ".[ifeva
 ENV LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/lib/x86_64-linux-gnu/
 ENV LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/home/ray/anaconda3/lib
 ENV PATH=$PATH:/root/gcloud/google-cloud-sdk/bin
+ENV VLLM_USE_V1=1
 
 WORKDIR /opt/marin
