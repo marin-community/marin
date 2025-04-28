@@ -280,7 +280,12 @@ def get_scores(attribute_filename: str, attribute_name: str, label: str) -> np.n
     scores = np.array([])
     attributes = read_attributes_as_dict(attribute_filename)
     for _, attr in attributes.items():
-        scores = np.append(scores, attr[attribute_name][label])
+        attribute = attr[attribute_name]
+        if label is None:
+            score = attribute
+        else:
+            score = attribute[label]
+        scores = np.append(scores, score)
     return scores
 
 

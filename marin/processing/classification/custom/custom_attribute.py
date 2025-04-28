@@ -37,6 +37,7 @@ class CustomAttributeConfig:
     input_doc_path: str
     output_attr_path: str
     label_func: Callable[[Document, list[Attribute]], dict]
+    filetype: str = "jsonl.gz"
     input_attr_paths: list[str] | None = None
 
 
@@ -44,6 +45,7 @@ def create_custom_attribute(cfg: CustomAttributeConfig):
     label_documents(
         input_doc_path=cfg.input_doc_path,
         output_attr_path=cfg.output_attr_path,
+        filetype=cfg.filetype,
         label_func=cfg.label_func,
         input_attr_paths=cfg.input_attr_paths,
     )
