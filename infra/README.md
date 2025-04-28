@@ -254,7 +254,7 @@ gcloud alpha compute tpus tpu-vm list --project=hai-gcp-models --zone $CLUSTER |
 ```
 Note that some clusters have an extra letter at the end so you'll need to change the work template i.e.
 ```bash
-export CLUSTER=us-east5-b
+export CLUSTER=us-east5-b-vllm
 gcloud alpha compute tpus tpu-vm list --project=hai-gcp-models --zone $CLUSTER | grep "ray-marin-us-east5-worker" | awk '{print $1}' | xargs -I {} gcloud alpha compute tpus tpu-vm delete {} --zone $CLUSTER --project hai-gcp-models --quiet
 
 # after that's finished then run
