@@ -21,7 +21,7 @@ from levanter.models.lm_model import LmConfig
 from experiments.exp72_baselines import fineweb_edu_tokenized
 
 from experiments.defaults import default_train
-from experiments.evals.task_configs import CORE_TASKS_PLUS_MMLU
+from experiments.evals.task_configs import CORE_TASKS_PLUS_MMLU, MMLU_TASKS
 from experiments.llama import compute_num_parameters, llama3_tokenizer_vocab_size
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import ExecutorStep, InputName, output_path_of
@@ -247,7 +247,7 @@ def default_speedrun(
         model_config=dataclasses.replace(config.model_config),
         train_config=train_config,
         tags=run_tags,
-        eval_harness_tasks=CORE_TASKS_PLUS_MMLU,
+        eval_harness_tasks=None,
     )
 
     analysis_step = ExecutorStep(
