@@ -44,7 +44,8 @@ new_annotation_data_pool = ExecutorStep(
     config=CreateDatasetConfig(
         input_doc_path=output_path_of(datashop_runner.filtered_documents),
         output_dataset_path=this_output_path(),
-        # The label function actually doesn't matter for this step.
+        # The label function actually doesn't matter for this step since we just want to
+        # sample documents.
         label_func=lambda doc, attrs: -1,
         max_sample_size=1_000_000,
         filetype="jsonl.zst",
@@ -52,6 +53,9 @@ new_annotation_data_pool = ExecutorStep(
     ),
 )
 
+phase_2_quality_filter_config_kwargs = default_quality_filter_train_config_kwargs.copy()
+phase_2_quality_filter_config_kwargs["training_config"].learning_rate = 1e-4
+phase_2_quality_filter_config_kwargs["training_config"].max_label = 5
 datashop_runner_phase_2 = DatashopRunner(
     DatashopRunnerConfig(
         experiment_name="finemath-cascade-phase-2",
@@ -60,6 +64,7 @@ datashop_runner_phase_2 = DatashopRunner(
         annotator_data_path=new_annotation_data_pool,
         data_filter_prompt=FINEMATH_DATA_FILTER_PROMPT,
         dataset_output_processor_config_kwargs={"processor_type": "finalscore0-5"},
+        quality_train_config_kwargs=phase_2_quality_filter_config_kwargs,
     )
 )
 
