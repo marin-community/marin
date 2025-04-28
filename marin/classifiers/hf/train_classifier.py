@@ -47,6 +47,9 @@ class HFTrainingConfig:
     run_name: str = field(default="", metadata={"help": "Name of the run"})
     min_label: int = field(default=0, metadata={"help": "Minimum label value"})
     max_label: int = field(default=5, metadata={"help": "Maximum label value"})
+    lr_scheduler_type: str = field(default="cosine")
+    warmup_ratio: float = field(default=0.10)
+    learning_rate: float = field(default=5e-5)
 
 
 class DataCollator:
@@ -94,6 +97,18 @@ def create_compute_metrics_fn(min_label: int, max_label: int):
         f1 = f1_metric.compute(predictions=preds, references=labels, average="macro")["f1"]
         accuracy = accuracy_metric.compute(predictions=preds, references=labels)["accuracy"]
 
+        # Metrics for classifying labels >= 3
+        # Binary: 1 if label >= 3, else 0
+        labels_3_plus = (labels >= 3).astype(int)
+        preds_3_plus = (preds >= 3).astype(int)
+        precision_3_plus = precision_metric.compute(
+            predictions=preds_3_plus, references=labels_3_plus, average="binary"
+        )["precision"]
+        recall_3_plus = recall_metric.compute(predictions=preds_3_plus, references=labels_3_plus, average="binary")[
+            "recall"
+        ]
+        accuracy_3_plus = accuracy_metric.compute(predictions=preds_3_plus, references=labels_3_plus)["accuracy"]
+
         report = classification_report(labels, preds)
         cm = confusion_matrix(labels, preds)
         print("Validation Report:\n" + report)
@@ -104,6 +119,9 @@ def create_compute_metrics_fn(min_label: int, max_label: int):
             "recall": recall,
             "f1_macro": f1,
             "accuracy": accuracy,
+            "precision_3_plus": precision_3_plus,
+            "recall_3_plus": recall_3_plus,
+            "accuracy_3_plus": accuracy_3_plus,
         }
 
     return compute_metrics
@@ -148,6 +166,9 @@ def train_classifier(rank: int, hf_script_args: HFTrainingConfig, train_dataset,
         metric_for_best_model="f1_macro",
         greater_is_better=True,
         run_name=hf_script_args.run_name,
+        lr_scheduler_type=hf_script_args.lr_scheduler_type,
+        warmup_ratio=hf_script_args.warmup_ratio,
+        learning_rate=hf_script_args.learning_rate,
     )
 
     set_seed(args.seed)

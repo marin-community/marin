@@ -1,4 +1,5 @@
 import os
+import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -61,9 +62,10 @@ class OneToOneFilenameProvider(FilenameProvider):
 class OverwriteOutputFiletypeFilenameProvider(FilenameProvider):
     def __init__(self, file_format: str):
         self.file_format = file_format
+        self.dataset_id = str(uuid.uuid4())
 
     def get_filename_for_block(self, block, task_index, block_index):
-        return f"{task_index:06}_{block_index:06}" f".{self.file_format}"
+        return f"{self.dataset_id}_{task_index:06}_{block_index:06}" f".{self.file_format}"
 
 
 def set_ray_data_config(config: TextGenerationInferenceConfig):
