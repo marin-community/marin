@@ -21,7 +21,7 @@ provider:
   project_id: hai-gcp-models
 
 docker:
-    image: "us-east1-docker.pkg.dev/hai-gcp-models/marin/marin_vllm:9bbae9bf"
+    image: "us-east1-docker.pkg.dev/hai-gcp-models/marin/marin_vllm:6e804a10"
     container_name: "ray_docker"
     pull_before_run: true
     worker_run_options:
