@@ -183,7 +183,7 @@ def get_filepaths_and_process_filepath_func(inference_config: InferenceConfig):
 @ray.remote(num_cpus=3)
 @remove_tpu_lockfile_on_exit
 def run_inference(inference_config: InferenceConfig):
-    print(f"Running inference for {inference_config.input_path} to {inference_config.output_path}")
+    logger.info(f"Running inference for {inference_config.input_path} to {inference_config.output_path}")
     filepaths, process_filepath_func = get_filepaths_and_process_filepath_func(inference_config)
 
     input_path = inference_config.input_path
