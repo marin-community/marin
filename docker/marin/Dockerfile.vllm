@@ -31,6 +31,8 @@ cd lm-evaluation-harness && \
 git fetch origin $LM_EVAL_EVAL_COMMIT_HASH && \
 git checkout $LM_EVAL_EVAL_COMMIT_HASH && pip install --no-cache-dir -e ".[ifeval, math]"
 
+# RUN pip install --no-cache-dir https://github.com/huggingface/accelerate/archive/refs/heads/main.zip
+
 # Add /usr/lib/x86_64-linux-gnu/ to LD_LIBRARY_PATH so that bash prefers the systems
 # libtinfo.so over the conda-provided version. Using the conda-provided libtinfo.so
 # outputs a noisy warning because it doesn't include version information.
