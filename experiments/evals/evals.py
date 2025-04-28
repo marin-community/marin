@@ -109,12 +109,15 @@ def evaluate_alpaca_eval(
     model_name: str,
     model_path: str,
     resource_config: ResourceConfig,
+    engine_kwargs: dict | None = None,
+    max_eval_instances: int | None = None,
     temperature: float = 0.7,
     presence_penalty: float = 0.0,
     frequency_penalty: float = 0.0,
     repetition_penalty: float = 1.0,
     top_p: float = 1.0,
     top_k: int = -1,
+    stop_token_ids: list | None = None,
 ) -> ExecutorStep:
     """
     Create an ExecutorStep to evaluate the model using AlpacaEval.
@@ -140,6 +143,9 @@ def evaluate_alpaca_eval(
             to consider. Must be in (0, 1]. Set to 1 to consider all tokens. Defaults to 1.0.
         top_k (int, optional): Integer that controls the number of top tokens to consider.
             Set to -1 to consider all tokens. Defaults to -1.
+        stop_token_ids (list, optional): List of integer token ids that controls the token ids
+            that vLLM should consider to stop the generation on. Defaults to None which uses
+            the tokenizer config's stop token ids
     """
     return ExecutorStep(
         name=f"evaluation/alpaca_eval/{model_name}",
@@ -149,14 +155,17 @@ def evaluate_alpaca_eval(
             model_name=model_name,
             model_path=model_path,
             evaluation_path=this_output_path(),
+            max_eval_instances=max_eval_instances,
             resource_config=resource_config,
-            engine_kwargs={
+            engine_kwargs=engine_kwargs,
+            generation_params={
                 "temperature": temperature,
                 "presence_penalty": presence_penalty,
                 "frequency_penalty": frequency_penalty,
                 "repetition_penalty": repetition_penalty,
                 "top_p": top_p,
                 "top_k": top_k,
+                "stop_token_ids": stop_token_ids,
             },
         ),
     )
@@ -267,6 +276,12 @@ def default_key_evals(
     if model_name is None:
         model_name = name
 
+    stop_token_ids = []
+    if "llama3" in model_name:
+        stop_token_ids.append(128009)
+    elif "olmo" in model_name:
+        stop_token_ids.append(100257)
+
     return [
         evaluate_lm_evaluation_harness(
             model_name,
@@ -283,5 +298,11 @@ def default_key_evals(
             resource_config,
             max_eval_instances=max_eval_instances,
         ),
-        evaluate_alpaca_eval(model_name, model_step_path, resource_config),
+        evaluate_alpaca_eval(
+            model_name,
+            model_step_path,
+            resource_config,
+            engine_kwargs,
+            stop_token_ids=stop_token_ids,
+        ),
     ]
