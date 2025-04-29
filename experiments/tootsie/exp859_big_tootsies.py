@@ -24,6 +24,7 @@ from experiments.nemotron_cc.tokenize_nemotron import NEMOTRON_WEIGHTS, tokenize
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import executor_main
 from marin.processing.tokenize import lm_mixture_data_config
+from marin.training.training import TpuPodConfig
 
 # data
 
@@ -50,8 +51,7 @@ llama_24b_old_rotary = dataclasses.replace(llama_24b, rope=DefaultRotaryEmbeddin
 
 ## Initial 13B config for the first phase
 llama_13b_train_config = SimpleTrainConfig(
-    tpu_type="v6e-64",
-    node_count=4,
+    hardware_config=TpuPodConfig(tpu_type="v6e-64", node_count=4),
     train_batch_size=1024,
     num_train_steps=1_000_000,  # using wsd-s so this doesn't really matter
     learning_rate=3e-4,
@@ -68,8 +68,7 @@ llama_13b_train_config = SimpleTrainConfig(
 
 ## Initial "22B" config for the first phase
 llama_22b_train_config = SimpleTrainConfig(
-    tpu_type="v6e-256",
-    node_count=2,
+    hardware_config=TpuPodConfig(tpu_type="v6e-256", node_count=2),
     train_batch_size=1024,
     num_train_steps=1_000_000,  # using wsd-s so this doesn't really matter
     learning_rate=3e-4,
@@ -109,8 +108,7 @@ llama_22b_tootsie_phase1 = default_train(
 #####
 
 llama_13b_train_config_ema = SimpleTrainConfig(
-    tpu_type="v6e-64",
-    node_count=7,
+    hardware_config=TpuPodConfig(tpu_type="v6e-64", node_count=7),
     train_batch_size=[ScheduleStep(start=0, value=1024), ScheduleStep(start=280_000, value=3072)],
     num_train_steps=1_000_000,
     weight_decay=0.05,
@@ -124,8 +122,7 @@ llama_13b_train_config_ema = SimpleTrainConfig(
 
 # 22b warmstart, switching to EMA
 llama_22b_train_config_ema = SimpleTrainConfig(
-    tpu_type="v6e-128",
-    node_count=4,
+    hardware_config=TpuPodConfig(tpu_type="v6e-128", node_count=4),
     # train_batch_size=1024,
     train_batch_size=[ScheduleStep(start=0, value=1024), ScheduleStep(start=200_000, value=3072)],
     num_train_steps=1_000_000,
@@ -171,8 +168,7 @@ llama_22b_tootsie_ema_warmstart = dataclasses.replace(
 ## 32b experiments
 
 llama_32b_train_config = SimpleTrainConfig(
-    tpu_type="v5p-128",
-    node_count=8,
+    hardware_config=TpuPodConfig(tpu_type="v5p-128", node_count=8),
     train_batch_size=[ScheduleStep(start=0, value=8192)],
     num_train_steps=1_000_000,
     weight_decay=0.05,
@@ -212,8 +208,7 @@ llama_32b_tootsie = default_train(
 # sigh... 56B. you can ignore this.
 #####
 llama_56b_train_config = SimpleTrainConfig(
-    tpu_type="v6e-256",
-    node_count=2,
+    hardware_config=TpuPodConfig(tpu_type="v6e-256", node_count=2),
     train_batch_size=1024,
     num_train_steps=1_000_000,  # using wsd-s so this doesn't really matter
     learning_rate=3e-5,
@@ -233,8 +228,7 @@ llama_56b_train_config = SimpleTrainConfig(
 llama_56b_train_config_mk2 = dataclasses.replace(
     llama_56b_train_config,
     train_batch_size=1024,
-    tpu_type="v4-2048",
-    node_count=1,
+    hardware_config=TpuPodConfig(tpu_type="v4-2048", node_count=1),
     learning_rate=2e-4,
     decay=0.4,
     ema_beta=0.995,
