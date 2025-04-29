@@ -6,7 +6,7 @@ from levanter.models.llama import LlamaConfig
 from levanter.models.rotary import Llama3RotaryEmbeddingsConfig
 
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.training.training import TpuPodConfig
+from marin.resources import TpuPodConfig
 
 llama3_tokenizer = "meta-llama/Meta-Llama-3.1-8B"
 llama3_tokenizer_vocab_size = 128_256
@@ -148,7 +148,7 @@ llama_70b = LlamaConfig(
 
 
 llama_150m_train_config = SimpleTrainConfig(
-    hardware_config=TpuPodConfig(tpu_type="v4-32"),
+    resources=TpuPodConfig(tpu_type="v4-32"),
     train_batch_size=512,
     num_train_steps=20000,  # 1024 * 1024 * 20000 = 20B tokens
     learning_rate=3e-3,
@@ -157,7 +157,7 @@ llama_150m_train_config = SimpleTrainConfig(
 # (18B is way overtrained, but...)
 
 llama_300m_train_config = SimpleTrainConfig(
-    hardware_config=TpuPodConfig(tpu_type="v4-64"),
+    resources=TpuPodConfig(tpu_type="v4-64"),
     train_batch_size=1024,
     num_train_steps=18000,  # 1024 * 1024 * 18000 = 18B tokens
     learning_rate=3e-3,
@@ -166,7 +166,7 @@ llama_300m_train_config = SimpleTrainConfig(
 # (18B is way overtrained, but...)
 
 llama_1_4b_train_config = SimpleTrainConfig(
-    hardware_config=TpuPodConfig(tpu_type="v4-128"),
+    resources=TpuPodConfig(tpu_type="v4-128"),
     train_batch_size=1024,
     num_train_steps=10000,  # 4096 * 1024 * 10000 = 42B tokens
     learning_rate=3e-4,
@@ -174,7 +174,7 @@ llama_1_4b_train_config = SimpleTrainConfig(
 )
 
 llama_8b_train_config = SimpleTrainConfig(
-    hardware_config=TpuPodConfig(tpu_type="v4-128", node_count=4),
+    resources=TpuPodConfig(tpu_type="v4-128", node_count=4),
     train_batch_size=1024,
     num_train_steps=40000,  # 4096 * 1024 * 40000 = 167B tokens
     # these hypers from Table 12 in https://arxiv.org/html/2406.11794v1#A6

@@ -13,7 +13,7 @@ from experiments.defaults import default_train
 from experiments.llama import llama_1_4b
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import executor_main, versioned
-from marin.training.training import TpuPodConfig
+from marin.resources import TpuPodConfig
 
 logger = logging.getLogger("ray")
 
@@ -34,7 +34,7 @@ def step_target(token_target, batch_size, seq_len):
 num_train_steps = step_target(TOKEN_TARGETS, BATCH_SIZE, SEQ_LEN)
 
 baseline_train_config = SimpleTrainConfig(
-    hardware_config=TpuPodConfig(tpu_type=versioned(TPU_TYPE)),
+    resources=TpuPodConfig(tpu_type=versioned(TPU_TYPE)),
     train_batch_size=versioned(BATCH_SIZE),
     num_train_steps=num_train_steps,
     learning_rate=BEST_LR,

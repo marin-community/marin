@@ -2,7 +2,7 @@ from dataclasses import dataclass
 
 from levanter.schedule import IntSchedule
 
-from marin.training.training import HardwareConfig
+from marin.resources import ResourceConfig
 
 
 @dataclass(frozen=True)
@@ -13,7 +13,7 @@ class SimpleSFTConfig:
     """
 
     # Hardware configuration
-    hardware_config: HardwareConfig
+    resources: ResourceConfig
 
     # Core training parameters
     train_batch_size: int | IntSchedule = 128

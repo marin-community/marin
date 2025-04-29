@@ -15,7 +15,7 @@ from experiments.exp72_baselines import fineweb_edu_tokenized
 from experiments.llama import llama_150m, llama_300m
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import ExecutorStep, executor_main, versioned
-from marin.training.training import TpuPodConfig
+from marin.resources import TpuPodConfig
 
 # TODO: might be nice to do use wandb sweeps, but not today.
 # TODO: redo with mup
@@ -64,7 +64,7 @@ for combo in all_combos(
 
     train_configs_150m.append(
         SimpleTrainConfig(
-            hardware_config=TpuPodConfig(tpu_type=versioned(combo["tpu_type"])),
+            resources=TpuPodConfig(tpu_type=versioned(combo["tpu_type"])),
             train_batch_size=combo["batch_size"],
             num_train_steps=num_train_steps,
             learning_rate=combo["lr"],
@@ -88,7 +88,7 @@ for combo in all_combos(
 
     train_configs_300m.append(
         SimpleTrainConfig(
-            hardware_config=TpuPodConfig(tpu_type=versioned(combo["tpu_type"])),
+            resources=TpuPodConfig(tpu_type=versioned(combo["tpu_type"])),
             train_batch_size=combo["batch_size"],
             num_train_steps=num_train_steps,
             learning_rate=combo["lr"],

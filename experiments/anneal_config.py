@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 
 from marin.processing.tokenize.data_configs import LMMixtureDatasetConfig
-from marin.training.training import HardwareConfig, TpuPodConfig
+from marin.resources import ResourceConfig, TpuPodConfig
 
 
 @dataclass(frozen=True)
@@ -27,7 +27,7 @@ class AnnealConfig:
     num_anneal_training_tokens: int = 50_000_000_000  # 50B tokens
 
     # Hardware related
-    hardware_config: HardwareConfig = TpuPodConfig(tpu_type="v4-128", node_count=2)  # noqa: RUF009
+    resources: ResourceConfig = TpuPodConfig(tpu_type="v4-128", node_count=2)  # noqa: RUF009
 
     # Checkpoint related
     steps_per_export: int = 10000
@@ -35,13 +35,13 @@ class AnnealConfig:
     @property
     def tpu_type(self) -> str | None:
         """For backward compatibility."""
-        if isinstance(self.hardware_config, TpuPodConfig):
-            return self.hardware_config.tpu_type
+        if isinstance(self.resources, TpuPodConfig):
+            return self.resources.tpu_type
         return None
 
     @property
     def node_count(self) -> int:
         """For backward compatibility."""
-        if isinstance(self.hardware_config, TpuPodConfig):
-            return self.hardware_config.node_count
+        if isinstance(self.resources, TpuPodConfig):
+            return self.resources.node_count
         return 1
