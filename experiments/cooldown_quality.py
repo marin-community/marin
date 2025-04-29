@@ -17,7 +17,7 @@ from experiments.defaults import default_anneal
 from experiments.dolma.tokenize_dolma import tokenize_dolma_steps
 from marin.execution.executor import ExecutorStep
 from marin.processing.tokenize.data_configs import TokenizerStep, lm_mixture_data_config
-from marin.training.training import TpuPodConfig
+from marin.resources import TpuPodConfig
 
 
 @dataclass(frozen=True)
@@ -33,7 +33,7 @@ class QualityAblationConfig:
 
     # Training parameters
     num_anneal_tokens: int = 50_000_000_000
-    hardware_config: TpuPodConfig = TpuPodConfig(tpu_type="v5litepod-128")  # noqa: RUF009
+    resources: TpuPodConfig = TpuPodConfig(tpu_type="v5litepod-128")  # noqa: RUF009
 
     # Naming
     model_name_prefix: str = "8b-quality-eval"
@@ -58,7 +58,7 @@ class QualityAblationConfig:
         return AnnealConfig(
             dataset_config=self.get_dataset_config(candidate_tokenized),
             num_anneal_training_tokens=self.num_anneal_tokens,
-            hardware_config=self.hardware_config,
+            resources=self.resources,
         )
 
     def get_model_name(self, candidate_tokenized: TokenizerStep) -> str:

@@ -26,8 +26,9 @@ from marin.processing.classification.fasttext.train_fasttext import (
 )
 from marin.processing.classification.inference import InferenceConfig, run_inference
 from marin.processing.tokenize import lm_data_config
+from marin.resources import CpuOnlyConfig, TpuPodConfig
 from marin.schemas.web.convert import HtmlToMarkdownConfig
-from marin.training.training import LocalRunConfig, TpuPodConfig, TrainLmOnPodConfig, run_levanter_train_lm
+from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 from marin.utilities.ray_utils import is_local_ray_cluster
 from marin.utils import is_in_ci
 from scripts.hello_world_fw.process import FineWebConfig, transform
@@ -178,22 +179,21 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
     # ############################################################
     # Training
     if not is_in_ci() and not is_local_ray_cluster():
-        pod_config = TpuPodConfig(
-            tpu_type="v4-8",
-            env={
-                "WANDB_API_KEY": None,
+        pod_config = TpuPodConfig(tpu_type="v4-8").with_env_vars(
+            {
+                "WANDB_API_KEY": "",
                 "WANDB_MODE": "disabled",
                 "JAX_TRACEBACK_FILTERING": "off",
-            },
+            }
         )
     else:
-        pod_config = LocalRunConfig(
-            env={
-                "WANDB_API_KEY": None,
+        pod_config = CpuOnlyConfig().with_env_vars(
+            {
+                "WANDB_API_KEY": "",
                 "WANDB_MODE": "disabled",
                 "JAX_PLATFORMS": "cpu",
                 "JAX_TRACEBACK_FILTERING": "off",
-            },
+            }
         )
 
     train_step = ExecutorStep(
@@ -201,8 +201,8 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
         fn=run_levanter_train_lm,
         config=TrainLmOnPodConfig(
             output_path=this_output_path(),
-            hardware_config=pod_config,
-            config=TrainLmConfig(
+            resources=pod_config,
+            train_config=TrainLmConfig(
                 data=lm_data_config(tokenize_step),
                 hf_save_steps=1,
                 model=Gpt2Config(

@@ -7,8 +7,8 @@ from levanter.distributed import RayConfig
 from levanter.main import train_lm
 from levanter.trainer import TrainerConfig
 
+from marin.resources import TpuPodConfig
 from marin.training.training import (
-    TpuPodConfig,
     TrainLmOnPodConfig,
     _doublecheck_paths,
 )
@@ -60,11 +60,11 @@ def test_lm_config_with_local_paths(trainer_config, tpu_type):
 
         # Create a config with local paths
         config = TrainLmOnPodConfig(
-            config=train_lm.TrainLmConfig(
+            train_config=train_lm.TrainLmConfig(
                 data=MockDataConfig(cache_dir="local/path"),
                 trainer=trainer_config,
             ),
-            hardware_config=TpuPodConfig(tpu_type=tpu_type),
+            resources=TpuPodConfig(tpu_type=tpu_type),
         )
 
         # This should not raise an exception
@@ -84,11 +84,11 @@ def test_lm_config_with_gcs_paths_same_region(trainer_config):
 
         # Create a config with GCS paths in the same region
         config = TrainLmOnPodConfig(
-            config=train_lm.TrainLmConfig(
+            train_config=train_lm.TrainLmConfig(
                 data=MockDataConfig(cache_dir="gs://bucket/path"),
                 trainer=trainer_config,
             ),
-            hardware_config=TpuPodConfig(tpu_type="v3-8"),  # TPU mode
+            resources=TpuPodConfig(tpu_type="v3-8"),  # TPU mode
         )
 
         # This should not raise an exception
@@ -108,11 +108,11 @@ def test_lm_config_with_gcs_paths_different_region(trainer_config):
 
         # Create a config with GCS paths in a different region
         config = TrainLmOnPodConfig(
-            config=train_lm.TrainLmConfig(
+            train_config=train_lm.TrainLmConfig(
                 data=MockDataConfig(cache_dir="gs://bucket/path"),
                 trainer=trainer_config,
             ),
-            hardware_config=TpuPodConfig(tpu_type="v3-8"),  # TPU mode
+            resources=TpuPodConfig(tpu_type="v3-8"),  # TPU mode
         )
 
         # This should raise an exception
@@ -135,11 +135,11 @@ def test_lm_config_with_allowed_out_of_region_paths(trainer_config):
 
         # Create a config with GCS paths in a different region but allowed
         config = TrainLmOnPodConfig(
-            config=train_lm.TrainLmConfig(
+            train_config=train_lm.TrainLmConfig(
                 data=MockDataConfig(cache_dir="gs://bucket/path"),
                 trainer=trainer_config,
             ),
-            hardware_config=TpuPodConfig(tpu_type="v3-8"),  # TPU mode
+            resources=TpuPodConfig(tpu_type="v3-8"),  # TPU mode
             allow_out_of_region=("data.cache_dir",),
         )
 
@@ -164,11 +164,11 @@ def test_recursive_path_checking(trainer_config):
         )
 
         config = TrainLmOnPodConfig(
-            config=train_lm.TrainLmConfig(
+            train_config=train_lm.TrainLmConfig(
                 data=nested_data,
                 trainer=trainer_config,
             ),
-            hardware_config=TpuPodConfig(tpu_type="v3-8"),  # TPU mode
+            resources=TpuPodConfig(tpu_type="v3-8"),  # TPU mode
         )
 
         # This should raise an exception
@@ -191,11 +191,11 @@ def test_dataclass_recursive_checking(trainer_config):
 
         # Create a config with a dataclass containing a GCS path
         config = TrainLmOnPodConfig(
-            config=train_lm.TrainLmConfig(
+            train_config=train_lm.TrainLmConfig(
                 data=MockDataConfig(cache_dir=MockNestedConfig(path="gs://bucket/path")),  # type: ignore
                 trainer=trainer_config,
             ),
-            hardware_config=TpuPodConfig(tpu_type="v3-8"),  # TPU mode
+            resources=TpuPodConfig(tpu_type="v3-8"),  # TPU mode
         )
 
         # This should raise an exception
