@@ -1,7 +1,9 @@
 """
 Update and serve the Marin speedrun leaderboard.
 
-This script manages the Marin speedrun leaderboard by collecting run results from a specified storage location (local directory or Google Cloud Storage bucket), generating formatted leaderboard outputs, and optionally serving them via a web UI.
+This script manages the Marin speedrun leaderboard by collecting run results from a specified storage location
+(local directory or Google Cloud Storage bucket), generating formatted leaderboard outputs, and optionally
+serving them via a web UI.
 
 Main functionalities:
 - Aggregates and formats leaderboard results from experiment run directories.
@@ -9,7 +11,8 @@ Main functionalities:
 - Can launch a web server to display the leaderboard UI for interactive viewing.
 
 Arguments:
-    --storage-path (str, required): Path to the directory or GCS bucket containing run results. Example: 'gs://bucket/path/to/runs' or '/path/to/runs'.
+    --storage-path (str, required): Path to the directory or GCS bucket containing run results.
+        Example: 'gs://bucket/path/to/runs' or '/path/to/runs'.
     --port (int, optional): Port to serve the leaderboard UI on (default: 8000).
     --print-only (flag): If set, only prints the leaderboard to the console and does not start the server.
 
@@ -17,7 +20,9 @@ Usage examples:
     python update_leaderboard.py --storage-path gs://my-bucket/speedrun/runs
     python update_leaderboard.py --storage-path ./runs --print-only
 
-This script relies on the `Leaderboard` and `serve_leaderboard` utilities from the `leaderboard` module for core logic and serving. It is intended to be run as a standalone script for updating and visualizing speedrun results.
+This script relies on the `Leaderboard` and `serve_leaderboard` utilities from the `leaderboard` module
+for core logic and serving. It is intended to be run as a standalone script for updating and visualizing
+speedrun results.
 """
 
 import argparse

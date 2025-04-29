@@ -18,10 +18,9 @@ import wandb
 from levanter.data.text import LMMixtureDatasetConfig
 from levanter.models.lm_model import LmConfig
 
-from experiments.exp72_baselines import fineweb_edu_tokenized
-
 from experiments.defaults import default_train
-from experiments.evals.task_configs import CORE_TASKS_PLUS_MMLU, MMLU_TASKS
+from experiments.evals.task_configs import CORE_TASKS_PLUS_MMLU
+from experiments.exp72_baselines import fineweb_edu_tokenized
 from experiments.llama import compute_num_parameters, llama3_tokenizer_vocab_size
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import ExecutorStep, InputName, output_path_of
@@ -65,10 +64,11 @@ class SpeedrunConfig:
         # return load_tokenizer(unwrap_versioned_value(self.tokenized_dataset.tokenizer)).vocab_size
         return llama3_tokenizer_vocab_size
 
-    def estimate_training_flops_using_levanter(self) -> float:
-        flops_per_token = self.model_config.flops_per_token(self.vocab_size)
-        total_tokens = self.train_config.train_batch_size * self.model_config.seq_len * self.train_config.num_train_steps
-        return flops_per_token * 6  # 6ND standard: forward + backward
+    # def estimate_training_flops_using_levanter(self) -> float:
+    #     flops_per_token = self.model_config.flops_per_token(self.vocab_size)
+    #     total_tokens = self.train_config.train_batch_size * self.model_config.seq_len *
+    #                       self.train_config.num_train_steps
+    #     return flops_per_token * 6  # 6ND standard: forward + backward
 
     def estimate_flops_via_6nd(self) -> float:
         N = compute_num_parameters(self.model_config, self.vocab_size)
@@ -77,7 +77,7 @@ class SpeedrunConfig:
 
     def adjust_to_exact_budget(self):
 
-        # TODO (Nikil): at the moment, we have this function but don't apply it- need to figure out user flow for 
+        # TODO (Nikil): at the moment, we have this function but don't apply it- need to figure out user flow for
         # adjusting to exact budget
         flops_per_token = self.model_config.flops_per_token(self.vocab_size) * 6
         total_tokens = self.compute_budget.value / flops_per_token
@@ -85,7 +85,8 @@ class SpeedrunConfig:
             total_tokens / (self.train_config.train_batch_size * self.model_config.seq_len)
         )
         logger.info(
-            f"Adjusted to {self.train_config.num_train_steps} steps for {self.estimate_training_flops_using_levanter():.2e} FLOPs"
+            f"""Adjusted to {self.train_config.num_train_steps} steps for
+            {self.estimate_flops_via_6nd():.2e} FLOPs"""
         )
 
     def apply_scaling(self):
@@ -224,7 +225,7 @@ def default_speedrun(
         tags: Optional additional tags for tracking
 
     Returns:
-        training step configured for the speedrun, and an analysis step that 
+        training step configured for the speedrun, and an analysis step that
         computes and stores metrics/metadata for the speedrun.
 
     Raises:
@@ -247,7 +248,7 @@ def default_speedrun(
         model_config=dataclasses.replace(config.model_config),
         train_config=train_config,
         tags=run_tags,
-        eval_harness_tasks=None,
+        eval_harness_tasks=CORE_TASKS_PLUS_MMLU,
     )
 
     analysis_step = ExecutorStep(

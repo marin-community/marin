@@ -22,7 +22,7 @@ speedrun_config = SpeedrunConfig(
         learning_rate=3e-3,
         weight_decay=0.1,
         steps_per_eval=1500,
-        #steps_per_task_eval=1500,
+        # steps_per_task_eval=1500,
     ),
     tokenized_dataset=fineweb_edu_tokenized,
     hardware_config=HardwareConfig(

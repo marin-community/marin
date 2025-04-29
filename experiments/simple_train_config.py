@@ -1,6 +1,5 @@
 import dataclasses
 from dataclasses import dataclass
-from typing import Optional
 
 from levanter.callbacks.watch import WatchConfig
 from levanter.optim import OptimizerConfig

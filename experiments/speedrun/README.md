@@ -10,7 +10,7 @@ Marin Speedrun is a community-driven model training contest and framework that c
 
 The speedrun is divided into three tracks based on compute budget: **TINY**, **SMALL**, and **MEDIUM**.Each track has a specific FLOPs budget that your training run must stay within to qualify. We fix the dataset to the first <TBD> and you can experiment with any model architecture and training approach you'd like, as long as it stays within the corresponding compute budget.
 
-The dataset used is the FineWeb-Edu dataset. 
+The dataset used is the FineWeb-Edu dataset.
 
 ## Setup and Usage
 

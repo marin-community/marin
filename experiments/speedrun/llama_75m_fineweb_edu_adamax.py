@@ -2,16 +2,17 @@
 Muon optimizer definition and example speedrun in a single file.
 """
 
-from dataclasses import dataclass
-from levanter.optim import OptimizerConfig
-import optax
 import logging
+from dataclasses import dataclass
+
+import optax
+from levanter.optim import OptimizerConfig
 
 from experiments.llama import llama_75m
 from experiments.simple_train_config import SimpleTrainConfig
 from experiments.speedrun.speedrun import ComputeBudget, HardwareConfig, SpeedrunConfig, default_speedrun
 from marin.execution.executor import executor_main
-from typing import Optional
+
 
 @OptimizerConfig.register_subclass("adamax")
 @dataclass
@@ -19,21 +20,24 @@ class AdamaxConfig(OptimizerConfig):
     beta1: float = 0.9
     beta2: float = 0.95
     epsilon: float = 1e-8
-    max_grad_norm: Optional[float] = 1.0
+    max_grad_norm: float | None = 1.0
 
     def build(self, num_train_steps):
         print(f"Building optimizer: {self.__class__.__name__}")
+
         def _optimizer(learning_rate):
             components = []
 
             if self.max_grad_norm:
                 components.append(optax.clip_by_global_norm(self.max_grad_norm))
 
-            components.append(optax.scale_by_adamax(
-                b1=self.beta1,
-                b2=self.beta2,
-                eps=self.epsilon,
-            ))
+            components.append(
+                optax.scale_by_adamax(
+                    b1=self.beta1,
+                    b2=self.beta2,
+                    eps=self.epsilon,
+                )
+            )
 
             if self.weight_decay > 0:
                 components.append(optax.add_decayed_weights(self.weight_decay, self.build_weight_decay_mask()))
@@ -44,6 +48,7 @@ class AdamaxConfig(OptimizerConfig):
             return optimizer
 
         return optax.inject_hyperparams(_optimizer)(learning_rate=self.lr_scheduler(num_train_steps))
+
 
 # --------------------- Example Speedrun Using Adamax ------------------------
 
