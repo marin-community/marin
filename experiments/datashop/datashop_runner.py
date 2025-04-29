@@ -106,8 +106,8 @@ class DatashopRunner:
             self.config.pretraining_data_path,
             self.config.pretraining_data_path_name,
             self.config.experiment_name,
-            self.config.filter_config_kwargs,
             self.config.inference_config_kwargs,
+            self.config.filter_config_kwargs,
             self.config.consolidate_config_kwargs,
         )
         self.control_model = default_candidate_anneal(

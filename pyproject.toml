@@ -91,7 +91,7 @@ quality_dedup_consolidate = [
     "transformers",
 ]
 tokenize_train = [
-#    "jax[tpu]==0.5.1",
+    "jax[tpu]==0.5.1",
     "multiprocess==0.70.16",
     "levanter>=1.2.dev1313",
     "haliax>=1.4.dev343",
