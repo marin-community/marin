@@ -1,3 +1,5 @@
+"""Test whether vLLM can generate simple completions"""
+
 import os
 
 import pytest
@@ -8,38 +10,14 @@ try:
 except ImportError:
     pytest.skip("vLLM is not installed", allow_module_level=True)
 
-from marin.generation.ray_utils import scheduling_strategy_fn
+from tests.conftest import model_config
 
 
-@ray.remote(scheduling_strategy=scheduling_strategy_fn(tensor_parallel_size=8, strategy="STRICT_PACK"))
-class LLMActor:
-    def __init__(self):
-        self.llm = LLM(
-            # model="/opt/gcsfuse_mount/models/meta-llama--Llama-3-1-8B-Instruct",
-            model="meta-llama/Llama-3.3-70B-Instruct",
-            tensor_parallel_size=8,
-            max_model_len=8192,
-            enforce_eager=True,
-        )
+@ray.remote(resources={"TPU-v6e-8-head": 1})
+def _test_llm_func(model_config):
+    model_path = model_config.ensure_downloaded("/tmp/test-llama-eval")
 
-    def generate(self, prompt: str):
-        sampling_params = SamplingParams(
-            max_tokens=100,
-            temperature=0.7,
-        )
-
-        generated_texts = self.llm.generate(prompt, sampling_params=sampling_params)
-        return generated_texts
-
-
-@ray.remote(scheduling_strategy=scheduling_strategy_fn(tensor_parallel_size=8, strategy="STRICT_PACK"))
-def _test_llm_func():
-    llm = LLM(
-        model="/opt/gcsfuse_mount/models/meta-llama--Llama-3-3-70B-Instruct",
-        tensor_parallel_size=8,
-        max_model_len=8192,
-        enforce_eager=True,
-    )
+    llm = LLM(model=model_path, **model_config.engine_kwargs)
 
     sampling_params = SamplingParams(
         max_tokens=100,
@@ -51,14 +29,11 @@ def _test_llm_func():
         sampling_params=sampling_params,
     )
 
+    model_config.destroy()
+
     return generated_texts
 
 
-@pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip this test in CI, since we run it as a separate worflow.")
-def test_llm_inference():
-    generated_texts = ray.get(_test_llm_func.remote())
-    assert len(generated_texts) == 1
-
-    llm_actor = LLMActor.remote()
-    generated_texts = ray.get(llm_actor.generate.remote("Hello, how are you?"))
-    assert len(generated_texts) == 1
+@pytest.mark.skipif(os.getenv("TPU_CI") != "true", reason="Skip this test if not running with a TPU in CI.")
+def test_local_llm_inference(ray_tpu_cluster):
+    ray.get(_test_llm_func.remote(model_config))
