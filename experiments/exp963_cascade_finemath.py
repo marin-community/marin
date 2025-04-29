@@ -1,6 +1,9 @@
 from experiments.datashop.datashop_datasets import datashop_dclm_annotation_subset, datashop_dclm_pretraining_subset
 from experiments.datashop.datashop_runner import DatashopRunner, DatashopRunnerConfig
-from experiments.datashop.default_configs import default_quality_filter_train_config_kwargs
+from experiments.datashop.default_configs import (
+    default_consolidate_filter_config_kwargs,
+    default_quality_filter_train_config_kwargs,
+)
 from experiments.exp939_finemath import FINEMATH_DATA_FILTER_PROMPT
 from marin.classifiers.utils import CreateDatasetConfig, create_dataset
 from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path
@@ -56,6 +59,8 @@ new_annotation_data_pool = ExecutorStep(
 phase_2_quality_filter_config_kwargs = default_quality_filter_train_config_kwargs.copy()
 phase_2_quality_filter_config_kwargs["training_config"].learning_rate = 1e-4
 phase_2_quality_filter_config_kwargs["training_config"].max_label = 5
+consolidate_filter_kwargs = default_consolidate_filter_config_kwargs.copy()
+consolidate_filter_kwargs["keep_fraction"] = 0.25
 datashop_runner_phase_2 = DatashopRunner(
     DatashopRunnerConfig(
         experiment_name="finemath-cascade-phase-2",
@@ -65,6 +70,7 @@ datashop_runner_phase_2 = DatashopRunner(
         data_filter_prompt=FINEMATH_DATA_FILTER_PROMPT,
         dataset_output_processor_config_kwargs={"processor_type": "finalscore0-5"},
         quality_train_config_kwargs=phase_2_quality_filter_config_kwargs,
+        filter_config_kwargs=consolidate_filter_kwargs,
     )
 )
 
@@ -75,4 +81,4 @@ datashop_runner_phase_2 = DatashopRunner(
 # 3. Filter rest of the documents.
 
 if __name__ == "__main__":
-    executor_main([datashop_runner_phase_2.encoder_model])
+    executor_main([datashop_runner_phase_2.quality_ablation_model])
