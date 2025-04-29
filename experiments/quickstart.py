@@ -27,7 +27,7 @@ from marin.processing.classification.fasttext.train_fasttext import (
 from marin.processing.classification.inference import InferenceConfig, run_inference
 from marin.processing.tokenize import lm_data_config
 from marin.schemas.web.convert import HtmlToMarkdownConfig
-from marin.training.training import LocalRunConfig, PodConfig, TrainLmOnPodConfig, run_levanter_train_lm
+from marin.training.training import LocalRunConfig, TpuPodConfig, TrainLmOnPodConfig, run_levanter_train_lm
 from marin.utilities.ray_utils import is_local_ray_cluster
 from marin.utils import is_in_ci
 from scripts.hello_world_fw.process import FineWebConfig, transform
@@ -178,7 +178,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
     # ############################################################
     # Training
     if not is_in_ci() and not is_local_ray_cluster():
-        pod_config = PodConfig(
+        pod_config = TpuPodConfig(
             tpu_type="v4-8",
             env={
                 "WANDB_API_KEY": None,

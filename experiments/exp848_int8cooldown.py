@@ -13,6 +13,7 @@ from experiments.dclm.tokenize_dclm import dclm_components_llama3
 from experiments.defaults import default_anneal
 from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
+from marin.training.training import TpuPodConfig
 
 dclm = dclm_components_llama3["dclm_baseline"]
 
@@ -23,7 +24,9 @@ control_dataset_config = lm_mixture_data_config(
     weights={"dclm": 1.0},
 )
 control_anneal_config = AnnealConfig(
-    dataset_config=control_dataset_config, num_anneal_training_tokens=NUM_ANNEAL_TOKENS, tpu_type="v5litepod-128"
+    dataset_config=control_dataset_config,
+    num_anneal_training_tokens=NUM_ANNEAL_TOKENS,
+    hardware_config=TpuPodConfig(tpu_type="v5litepod-128"),
 )
 
 control_model = default_anneal(name="llama-8b-anneal-bf16-control", anneal_config=control_anneal_config)

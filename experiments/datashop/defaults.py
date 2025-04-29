@@ -24,6 +24,7 @@ from marin.processing.classification.config.inference_config import InferenceCon
 from marin.processing.classification.consolidate import ConsolidateConfig, FilterConfig, consolidate
 from marin.processing.classification.inference import run_inference
 from marin.processing.tokenize.data_configs import TokenizerStep, lm_mixture_data_config
+from marin.training.training import TpuPodConfig
 from operations.download.filesystem.transfer import TransferConfig, transfer_files
 
 
@@ -258,7 +259,7 @@ def _get_anneal_config(candidate_tokenized: TokenizerStep | None, tpu_type: str,
             dataset_config=lm_mixture_data_config(
                 components={"dclm": dclm_components_llama3["dclm_baseline"]}, weights={"dclm": 1.0}
             ),
-            tpu_type=tpu_type,
+            hardware_config=TpuPodConfig(tpu_type=tpu_type),
         )
     else:
         return AnnealConfig(
@@ -266,7 +267,7 @@ def _get_anneal_config(candidate_tokenized: TokenizerStep | None, tpu_type: str,
                 components={"dclm": dclm_components_llama3["dclm_baseline"], "candidate": candidate_tokenized},
                 weights={"dclm": 0.70, "candidate": 0.30},
             ),
-            tpu_type=tpu_type,
+            hardware_config=TpuPodConfig(tpu_type=tpu_type),
         )
 
 
