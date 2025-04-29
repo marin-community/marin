@@ -4,13 +4,12 @@ from unittest.mock import patch
 import pytest
 from levanter.checkpoint import CheckpointerConfig
 from levanter.distributed import RayConfig
-from levanter.main import sft, train_lm
+from levanter.main import train_lm
 from levanter.trainer import TrainerConfig
 
 from marin.training.training import (
     PodConfig,
     TrainLmOnPodConfig,
-    TrainSFTOnPodConfig,
     _doublecheck_paths,
 )
 
@@ -146,33 +145,6 @@ def test_lm_config_with_allowed_out_of_region_paths(trainer_config):
 
         # This should not raise an exception
         _doublecheck_paths(config)
-
-
-def test_sft_config_with_chat_train_urls(trainer_config):
-    """Test that chat_train_urls are checked for SFT configs."""
-    with (
-        patch("marin.training.training.get_vm_region") as mock_get_vm_region,
-        patch("marin.training.training.get_bucket_location") as mock_get_bucket_location,
-    ):
-
-        # Set up mocks
-        mock_get_vm_region.return_value = "us-central1"
-        mock_get_bucket_location.return_value = "us-east1"
-
-        # Create a config with chat_train_urls in a different region
-        config = TrainSFTOnPodConfig(
-            config=sft.SFTConfig(
-                chat_train_urls=["gs://bucket/path"],
-                trainer=trainer_config,
-            ),
-            pod_config=PodConfig(tpu_type="v3-8"),  # TPU mode
-        )
-
-        # This should raise an exception
-        with pytest.raises(ValueError) as excinfo:
-            _doublecheck_paths(config)
-
-        assert "not in the same region" in str(excinfo.value)
 
 
 def test_recursive_path_checking(trainer_config):
