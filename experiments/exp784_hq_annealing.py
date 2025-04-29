@@ -18,7 +18,7 @@ from experiments.defaults import default_anneal
 from experiments.dolma.tokenize_dolma import tokenize_dolma_steps
 from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
-from marin.training.training import TpuPodConfig
+from marin.resources import TpuPodConfig
 
 # Constants
 DCLM_BASELINE = dclm_components_llama3["dclm_baseline"]
@@ -61,7 +61,7 @@ control_dataset_config = lm_mixture_data_config(
 control_anneal_config = AnnealConfig(
     dataset_config=control_dataset_config,
     num_anneal_training_tokens=ANNEAL_TOKENS,
-    hardware_config=TpuPodConfig(tpu_type=TPU_TYPE),
+    resources=TpuPodConfig(tpu_type=TPU_TYPE),
 )
 
 control_model = default_anneal(name=f"{BASE_MODEL_NAME}-control-eu-long", anneal_config=control_anneal_config)
@@ -86,7 +86,7 @@ for hq_dataset in high_quality_datasets:
     anneal_config = AnnealConfig(
         dataset_config=dataset_config,
         num_anneal_training_tokens=ANNEAL_TOKENS,
-        hardware_config=TpuPodConfig(tpu_type=TPU_TYPE),
+        resources=TpuPodConfig(tpu_type=TPU_TYPE),
     )
 
     model = default_anneal(
@@ -104,7 +104,7 @@ for hq_dataset in high_quality_datasets:
     anneal_config_with_flan = AnnealConfig(
         dataset_config=dataset_config_with_flan,
         num_anneal_training_tokens=ANNEAL_TOKENS,
-        hardware_config=TpuPodConfig(tpu_type=TPU_TYPE),
+        resources=TpuPodConfig(tpu_type=TPU_TYPE),
     )
 
     model_with_flan = default_anneal(
@@ -132,7 +132,7 @@ all_hq_dataset_config = lm_mixture_data_config(
 all_hq_anneal_config = AnnealConfig(
     dataset_config=all_hq_dataset_config,
     num_anneal_training_tokens=ANNEAL_TOKENS,
-    hardware_config=TpuPodConfig(tpu_type=TPU_TYPE),
+    resources=TpuPodConfig(tpu_type=TPU_TYPE),
 )
 
 all_hq_model = default_anneal(
@@ -159,7 +159,7 @@ all_hq_dataset_config_5pct = lm_mixture_data_config(
 all_hq_anneal_config_5pct = AnnealConfig(
     dataset_config=all_hq_dataset_config_5pct,
     num_anneal_training_tokens=ANNEAL_TOKENS,
-    hardware_config=TpuPodConfig(tpu_type=TPU_TYPE),
+    resources=TpuPodConfig(tpu_type=TPU_TYPE),
 )
 
 all_hq_model_5pct = default_anneal(

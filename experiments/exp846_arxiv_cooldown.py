@@ -13,7 +13,7 @@ from experiments.defaults import default_tokenize
 from experiments.exp579_ar5iv_markdownify import ar5iv_no_problem_resiliparse_custom_fork
 from experiments.llama import llama3_tokenizer
 from marin.execution.executor import executor_main
-from marin.training.training import TpuPodConfig
+from marin.resources import TpuPodConfig
 
 # Tokenize the arXiv dataset
 markdownified_arxiv_tokenized = default_tokenize(
@@ -25,7 +25,7 @@ markdownified_arxiv_tokenized = default_tokenize(
 # Conduct the cooldown experiment over v4-128 TPU else the v5litepod-128
 # TPU is used which is not available in us-central2
 cooldown_config = QualityAblationConfig(
-    hardware_config=TpuPodConfig(tpu_type="v4-128"),
+    resources=TpuPodConfig(tpu_type="v4-128"),
 )
 
 # Conduct the cooldown experiment

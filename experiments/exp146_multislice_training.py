@@ -8,10 +8,10 @@ from experiments.exp72_baselines import slimpajama_tokenized
 from experiments.llama import llama_1_4b
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import executor_main
-from marin.training.training import TpuPodConfig
+from marin.resources import TpuPodConfig
 
 llama_1_4b_multislice_train_config = SimpleTrainConfig(
-    hardware_config=TpuPodConfig(tpu_type="v4-128", node_count=2),
+    resources=TpuPodConfig(tpu_type="v4-128", node_count=2),
     train_batch_size=1024,
     num_train_steps=10000,  # 4096 * 1024 * 10000 = 42B tokens
     learning_rate=3e-4,

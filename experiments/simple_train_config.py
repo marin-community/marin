@@ -4,12 +4,12 @@ from dataclasses import dataclass
 from levanter.callbacks.watch import WatchConfig
 from levanter.schedule import IntSchedule
 
-from marin.training.training import HardwareConfig, TpuPodConfig
+from marin.resources import ResourceConfig, TpuPodConfig
 
 
 @dataclass(frozen=True)
 class SimpleTrainConfig:
-    hardware_config: HardwareConfig
+    resources: ResourceConfig
     train_batch_size: int | IntSchedule
     """
     The batch size for training. If an IntSchedule is provided, the batch size will be
@@ -68,13 +68,13 @@ class SimpleTrainConfig:
     @property
     def tpu_type(self) -> str | None:
         """For backward compatibility."""
-        if isinstance(self.hardware_config, TpuPodConfig):
-            return self.hardware_config.tpu_type
+        if isinstance(self.resources, TpuPodConfig):
+            return self.resources.tpu_type
         return None
 
     @property
     def node_count(self) -> int:
         """For backward compatibility."""
-        if isinstance(self.hardware_config, TpuPodConfig):
-            return self.hardware_config.node_count
+        if isinstance(self.resources, TpuPodConfig):
+            return self.resources.node_count
         return 1

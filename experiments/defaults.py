@@ -275,12 +275,12 @@ def default_train(
     )
 
     # Create the pod config
-    pod_config = train_config.hardware_config
+    pod_config = train_config.resources
 
     # Create the full config
     config = TrainLmOnPodConfig(
-        config=inner_config,
-        hardware_config=pod_config,
+        train_config=inner_config,
+        resources=pod_config,
         output_path=this_output_path(),
     )
 
@@ -343,7 +343,7 @@ def default_sft(
 
     # now we just shell out to default_train
     normal_train_config = SimpleTrainConfig(
-        hardware_config=sft_config.hardware_config,
+        resources=sft_config.resources,
         train_batch_size=sft_config.train_batch_size,
         num_train_steps=sft_config.num_train_steps,
         learning_rate=sft_config.learning_rate,
@@ -400,7 +400,7 @@ def default_anneal(name: str, anneal_config: AnnealConfig):
     learning_rate = num_train_steps * (anneal_config.learning_rate / num_anneal_steps)
 
     anneal_stage_train_config = SimpleTrainConfig(
-        hardware_config=anneal_config.hardware_config,
+        resources=anneal_config.resources,
         train_batch_size=anneal_config.train_batch_size,
         num_train_steps=num_train_steps,
         learning_rate=learning_rate,

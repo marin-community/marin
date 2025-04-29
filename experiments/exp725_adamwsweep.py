@@ -12,7 +12,7 @@ from experiments.dclm.tokenize_dclm import dclm_mixture_config_llama3_wrong
 from experiments.defaults import default_train
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import ExecutorStep, executor_main, unwrap_versioned_value, versioned
-from marin.training.training import TpuPodConfig
+from marin.resources import TpuPodConfig
 
 logger = logging.getLogger("ray")
 
@@ -166,7 +166,7 @@ for model_scale in ["100m", "500m"]:
 
         train_configs.append(
             SimpleTrainConfig(
-                hardware_config=TpuPodConfig(versioned(TPU_TYPE)),
+                resources=TpuPodConfig(versioned(TPU_TYPE)),
                 train_batch_size=BATCH_SIZE,
                 steps_per_eval=1000,
                 num_train_steps=step,
@@ -180,7 +180,7 @@ for model_scale in ["100m", "500m"]:
                     new_config[key] = value
                     train_configs.append(
                         SimpleTrainConfig(
-                            hardware_config=TpuPodConfig(tpu_type=versioned(TPU_TYPE)),
+                            resources=TpuPodConfig(tpu_type=versioned(TPU_TYPE)),
                             train_batch_size=BATCH_SIZE,
                             steps_per_eval=1000,
                             num_train_steps=step,

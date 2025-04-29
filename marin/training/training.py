@@ -3,7 +3,6 @@ import logging
 import os
 from copy import deepcopy
 from dataclasses import dataclass, replace
-from typing import Literal, Protocol
 
 import draccus
 import levanter.infra.cli_helpers
@@ -15,95 +14,18 @@ from levanter.main.train_lm import TrainLmConfig
 from mergedeep import mergedeep
 from ray.runtime_env import RuntimeEnv
 
+from marin.resources import CpuOnlyConfig, ResourceConfig, TpuPodConfig
 from marin.utilities.gcs_utils import get_bucket_location, get_vm_region
 
 logger = logging.getLogger(__name__)
-
-
-class HardwareConfig(Protocol):
-    env: dict
-    """
-    Environment variables to set for training.
-    """
-
-    def accelerator_descriptor(self) -> str | None:
-        """Returns the accelerator type descriptor for this hardware configuration."""
-        return None
-
-    def as_resource_kwargs(self) -> dict:
-        """Returns the resource bundle for this hardware configuration."""
-        return {}
-
-
-@dataclass(frozen=True)
-class LocalRunConfig(HardwareConfig):
-    """Configuration for local training without specialized hardware."""
-
-    env: dict = dataclasses.field(default_factory=dict)
-    """Environment variables to set for training."""
-
-    resources: dict = dataclasses.field(default_factory=dict)
-    """
-    Additional resources to request for this task.
-    """
-
-    def accelerator_descriptor(self) -> str | None:
-        return None
-
-    def as_resource_kwargs(self) -> dict:
-        return self.resources
-
-
-@dataclass(frozen=True)
-class GpuConfig(HardwareConfig):
-    """Configuration for GPU-based training."""
-
-    env: dict = dataclasses.field(default_factory=dict)
-    """Environment variables to set for training."""
-
-    gpu_count: int = 1
-    """Number of GPUs to use for training."""
-
-    accelerator_type: (
-        Literal["V100", "P100", "T4", "P4", "K80", "A10G", "L4", "L40S", "A100", "H100", "H200", "A100-40G", "A100-80G"]
-        | None
-    ) = None
-    """Type of GPU accelerator to use. If None, will use any available GPU.
-    See https://docs.ray.io/en/latest/ray-core/scheduling/accelerators.html"""
-
-    def accelerator_descriptor(self) -> str | None:
-        return self.accelerator_type
-
-    # NB that Ray doesn't like resources={"GPU": 1} so we have to do this
-    def as_resource_kwargs(self) -> dict:
-        out = {"num_gpus": self.gpu_count}
-        if self.accelerator_type is not None:
-            out["accelerator_type"] = self.accelerator_type
-        return out
-
-
-@dataclass(frozen=True)
-class TpuPodConfig(HardwareConfig):
-    """Common configuration for pod-based training."""
-
-    tpu_type: str
-    """Type of TPU to use, e.g. v4-128."""
-    node_count: int = 1
-    """Number of TPU slices for training."""
-
-    env: dict = dataclasses.field(default_factory=dict)
-    """Environment variables to set for training."""
-
-    def accelerator_descriptor(self) -> str | None:
-        return self.tpu_type
 
 
 @dataclass(frozen=True)
 class TrainLmOnPodConfig:
     """Configuration for language model training on a pod."""
 
-    config: train_lm.TrainLmConfig
-    hardware_config: HardwareConfig
+    train_config: train_lm.TrainLmConfig
+    resources: ResourceConfig
     output_path: str | None = None
     """Base output directory to be used for training, mainly for use with executor framework."""
     impute_run_id_from_output_path: bool = True
@@ -135,15 +57,15 @@ def _update_config_to_use_out_path(pod_config: TrainLmOnPodConfig) -> TrainLmOnP
         return pod_config
 
     trainer = replace(
-        pod_config.config.trainer,
+        pod_config.train_config.trainer,
         checkpointer=replace(
-            pod_config.config.trainer.checkpointer,
+            pod_config.train_config.trainer.checkpointer,
             base_path=os.path.join(pod_config.output_path, DEFAULT_CHECKPOINTS_PATH),
         ),
     )
 
     config = replace(
-        pod_config.config,
+        pod_config.train_config,
         trainer=trainer,
         hf_save_path=os.path.join(pod_config.output_path, DEFAULT_HF_CHECKPOINTS_PATH),
     )
@@ -179,14 +101,14 @@ def _enforce_run_id(config: TrainLmOnPodConfig) -> TrainLmOnPodConfig:
 
     Look for:
         * config.trainer.id
-        * config.env.RUN_ID
+        * environment variable RUN_ID in the config
         * environment variable RUN_ID
         * default to a random UID
     """
-    run_id = config.config.trainer.id
+    run_id = config.train_config.trainer.id
 
     if run_id is None:
-        run_id = config.hardware_config.env.get("RUN_ID", os.environ.get("RUN_ID"))
+        run_id = config.resources.runtime_env.get("env_vars", {}).get("RUN_ID", os.environ.get("RUN_ID"))
 
     if run_id is None and config.impute_run_id_from_output_path and config.output_path is not None:
         path = config.output_path
@@ -200,11 +122,11 @@ def _enforce_run_id(config: TrainLmOnPodConfig) -> TrainLmOnPodConfig:
 
     append_id_to_checkpoints = not config.impute_run_id_from_output_path
     checkpointer_config = replace(
-        config.config.trainer.checkpointer, append_run_id_to_base_path=append_id_to_checkpoints
+        config.train_config.trainer.checkpointer, append_run_id_to_base_path=append_id_to_checkpoints
     )
 
     inner_config = replace(
-        config.config, trainer=replace(config.config.trainer, id=run_id, checkpointer=checkpointer_config)
+        config.train_config, trainer=replace(config.train_config.trainer, id=run_id, checkpointer=checkpointer_config)
     )
     return replace(config, config=inner_config)
 
@@ -234,39 +156,38 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
         config = _update_config_to_use_out_path(config)
 
     env = _add_default_env_variables(
-        config.hardware_config.env,
-        default_launch_config.env_for_accel(config.hardware_config.accelerator_descriptor() or ""),
+        config.resources.runtime_env.get("env_vars", {}),
+        default_launch_config.env_for_accel(config.resources.accelerator_descriptor() or ""),
     )
     _check_for_wandb_key(env)
     env = _add_run_env_variables(env)
-    hw_config = config.hardware_config
+    hw_config = dataclasses.replace(
+        config.resources, runtime_env=RuntimeEnv(**config.resources.runtime_env, env_vars=env)
+    )
 
     config = _enforce_run_id(config)
-    logger.info(f"Using run ID: {config.config.trainer.id}")
+    logger.info(f"Using run ID: {config.train_config.trainer.id}")
 
-    train_config = config.config
+    train_config = config.train_config
     train_config = _suppress_ray_config(train_config)
 
-    runtime_env = RuntimeEnv(env_vars=env)
-
-    if not config.allow_out_of_region and not isinstance(hw_config, LocalRunConfig):
+    if not config.allow_out_of_region and not isinstance(hw_config, CpuOnlyConfig):
         # run this on the Ray cluster to get the right region
         # doesn't need to be a TPU because ray insists that all VMs are in the same region
-        ray.get(ray.remote(_doublecheck_paths).options(runtime_env=runtime_env, num_cpus=0.1).remote(config))
+        ray.get(ray.remote(_doublecheck_paths).options(runtime_env=hw_config.runtime_env, num_cpus=0.1).remote(config))
 
-    @ray.remote(**config.hardware_config.as_resource_kwargs(), runtime_env=runtime_env)
+    @ray.remote(**hw_config.as_remote_kwargs())
     def train_lm_task():
         train_lm.main(train_config)
 
+    # TODO: abstract this?
     if isinstance(hw_config, TpuPodConfig):
         if hw_config.node_count == 1:
-            return run_on_pod_resumable(
-                train_lm_task, config.hardware_config.accelerator_descriptor(), max_retries_failure=10
-            )
+            return run_on_pod_resumable(train_lm_task, config.resources.accelerator_descriptor(), max_retries_failure=10)
         else:
             return run_on_pod_multislice_resumable(
                 train_lm_task,
-                config.hardware_config.accelerator_descriptor(),
+                config.resources.accelerator_descriptor(),
                 hw_config.node_count,
                 max_retries_failure=10,
             )
@@ -284,7 +205,7 @@ def _doublecheck_paths(config: TrainLmOnPodConfig):
     # Determine if we're running locally or if path checks should be bypassed
     allow_out_of_region = config.allow_out_of_region
 
-    local_ok = not isinstance(config.hardware_config, TpuPodConfig)
+    local_ok = not isinstance(config.resources, TpuPodConfig)
 
     try:
         region = get_vm_region()
@@ -295,7 +216,7 @@ def _doublecheck_paths(config: TrainLmOnPodConfig):
         raise ValueError("Could not determine the region of the VM. This is required for path checks.") from e
 
     # Recursively check all paths in the config
-    _check_paths_recursively(config.config, "", region, local_ok, allow_out_of_region)
+    _check_paths_recursively(config.train_config, "", region, local_ok, allow_out_of_region)
 
     return config
 
@@ -368,6 +289,7 @@ def _add_run_env_variables(env: dict):
     - GIT_COMMIT
     - HF_DATASETS_TRUST_REMOTE_CODE
     """
+    env = deepcopy(env)
 
     if "GIT_COMMIT" not in env:
         try:
