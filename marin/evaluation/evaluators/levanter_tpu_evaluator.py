@@ -87,8 +87,9 @@ class LevanterTpuEvaluator(Evaluator, ABC):
         """
 
         @ray.remote(
-            scheduling_strategy=self.scheduling_strategy_fn(resource_config.num_tpu, resource_config.strategy),
+            scheduling_strategy=self._get_scheduling_strategy(resource_config),
             runtime_env=self.get_runtime_env(),
+            max_calls=1,
         )
         @remove_tpu_lockfile_on_exit
         def launch(

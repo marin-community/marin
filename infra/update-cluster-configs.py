@@ -13,6 +13,7 @@ vllm_template_path = os.path.join(this_path, "marin-vllm-template.yaml")
 
 DOCKER_TAGS = {
     "us-central2": "4a47ffc0",
+    "us-central1": "4a47ffc0",
     "big-run": "4a47ffc0",
     "us-west4": "89b461b3",
     "europe-west4": "89b461b3",
@@ -21,10 +22,10 @@ DOCKER_TAGS = {
     # NB: different naming convention because we have two zones in europe-west4
     "europe-west4-a": "89b461b3",
     "asia-northeast1": "89b461b3",
-    "marin-us-east5-b-vllm": "296d2ef0",
-    "marin-us-east1-d-vllm": "e36a91dd",
+    "marin-us-east5-b-vllm": "6e804a10",
+    "marin-us-east1-d-vllm": "6e804a10",
     "europe-west4-vllm": "7fab502e",
-    "marin-us-central2-vllm": "7a75233e",
+    "marin-us-central2-vllm": "6e804a10",
 }
 
 configs = {
@@ -36,6 +37,18 @@ configs = {
         "DOCKER_TAG": DOCKER_TAGS["us-central2"],
         "tpu_generation": "v4",
         "min_workers": 4,
+    },
+    "marin-us-central1": {
+        "NAME": "marin-us-central1",
+        "REGION": "us-central1",
+        "ZONE": "us-central1-a",
+        "BUCKET": "marin-us-central1",
+        "DOCKER_TAG": DOCKER_TAGS["us-central1"],
+        "tpu_generation": "v5p",
+        "min_workers": 1,
+        "worker_targets": {
+            "v5p-128": 32,
+        },
     },
     "marin-big-run": {
         "NAME": "marin-big-run",
@@ -54,6 +67,9 @@ configs = {
         "DOCKER_TAG": DOCKER_TAGS["europe-west4"],
         "tpu_generation": "v5e",
         "min_workers": 0,
+        "worker_targets": {
+            "v5e-256": 4,
+        },
     },
     "marin-us-west4": {
         "NAME": "marin-us-west4",
@@ -72,6 +88,9 @@ configs = {
         "DOCKER_TAG": DOCKER_TAGS["us-east1"],
         "tpu_generation": "v6e",
         "min_workers": 0,
+        "worker_targets": {
+            "v6e-128": 8,
+        },
     },
     "marin-us-east5": {
         "NAME": "marin-us-east5",
@@ -81,6 +100,9 @@ configs = {
         "DOCKER_TAG": DOCKER_TAGS["us-east5"],
         "tpu_generation": "v6e",
         "min_workers": 0,
+        "worker_targets": {
+            "v6e-128": 8,
+        },
     },
     "marin-eu-west4-a": {
         "NAME": "marin-eu-west4-a",
@@ -90,6 +112,9 @@ configs = {
         "DOCKER_TAG": DOCKER_TAGS["europe-west4-a"],
         "tpu_generation": "v6e",
         "min_workers": 0,
+        "worker_targets": {
+            "v6e-128": 8,
+        },
     },
     "marin-asia-northeast1": {
         "NAME": "marin-asia-northeast1",
@@ -157,6 +182,13 @@ generation_configs = {
         "num_tpus": 4,
         "tpus_worker": 1,
     },
+    "v5p": {
+        "runtime_version": "v2-alpha-tpuv5",
+        "base_worker": "8",
+        "slices": [8, 16, 32, 64, 128, 256],
+        "num_tpus": 8,
+        "tpus_worker": 8,
+    },
     "v6e": {
         "runtime_version": "v2-alpha-tpuv6e",
         "base_worker": "4",
@@ -178,7 +210,7 @@ generation_configs = {
 }
 
 
-def make_tpu_slice_config(generation, count) -> dict[str, dict]:
+def make_tpu_slice_config(generation, count, target_count) -> dict[str, dict]:
     slice_gen_name = "v5litepod" if generation == "v5e" else generation
 
     if "serve" in generation:
@@ -186,7 +218,7 @@ def make_tpu_slice_config(generation, count) -> dict[str, dict]:
     name = f"tpu_slice_{generation}_{count}"
     return {
         name: {
-            "min_workers": 0,
+            "min_workers": target_count,
             "max_workers": 1024,
             "resources": {"CPU": 120, "TPU": generation_configs[generation]["num_tpus"]},
             "node_config": {
@@ -205,8 +237,7 @@ def get_template_path(config_name):
 
 
 def make_tpu_worker_config(generation, count, min_workers=4):
-    _, config = next(iter(make_tpu_slice_config(generation, count).items()))
-    config["min_workers"] = min_workers
+    _, config = next(iter(make_tpu_slice_config(generation, count, min_workers).items()))
     return {"tpu_worker": config}
 
 
@@ -230,7 +261,10 @@ if __name__ == "__main__":
             yaml_string += base_string
 
             for tpu_type in generation_config["slices"]:
-                base_string = yaml.dump(make_tpu_slice_config(generation, tpu_type), default_flow_style=False, indent=2)
+                target_worker_count = config.get("worker_targets", {}).get(f"{generation}-{tpu_type}", 0)
+                base_string = yaml.dump(
+                    make_tpu_slice_config(generation, tpu_type, target_worker_count), default_flow_style=False, indent=2
+                )
                 base_string = "\n  " + base_string.replace("\n", "\n  ")
                 yaml_string += base_string
 

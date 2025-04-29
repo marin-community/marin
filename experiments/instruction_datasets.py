@@ -320,14 +320,14 @@ tulu_3_in_dolma = ExecutorStep(
 # levanter treats validation and  training as separate so we tokenize twice. Not ideal, but fine here.
 tulu3_flat_llama_tokenized_as_validation = default_tokenize(
     "tulu_sft", tulu_3_in_dolma, tokenizer=llama3_tokenizer, is_validation=True
-)
+).with_output_path("tokenized/tulu_sft-1bb7d4")
 """
 "flat" here means that we interpolated all the chat messages into a single string per doc
 """
 
 tulu3_flat_llama_tokenized_as_train = default_tokenize(
     "tulu_sft", tulu_3_in_dolma, tokenizer=llama3_tokenizer, is_validation=False
-)
+).with_output_path("tokenized/tulu_sft-349fb7/")
 
 
 if __name__ == "__main__":
