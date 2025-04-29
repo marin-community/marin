@@ -171,12 +171,14 @@ llama_22b_tootsie_ema_warmstart = dataclasses.replace(
 ## 32b experiments
 
 llama_32b_train_config = SimpleTrainConfig(
-    tpu_type="v5p-128",
+    tpu_type="v5p-512",
     node_count=8,
     train_batch_size=[ScheduleStep(start=0, value=8192)],
     num_train_steps=1_000_000,
     weight_decay=0.05,
-    learning_rate=4.2e-4,
+    # width is a little smaller than the 24B and we're using a much larger batch size
+    # 4.2e-4 * sqrt(8192/3072) ≈ 7e-4
+    learning_rate=7e-4,
     decay=0.4,
     ema_beta=0.995,
     lr_schedule="linear",

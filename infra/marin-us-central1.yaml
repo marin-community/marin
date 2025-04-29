@@ -104,7 +104,7 @@ available_node_types:
         preemptible: true
     resources:
       CPU: 120
-      TPU: 8
+      TPU: 4
 
   tpu_slice_v5p_8:
     max_workers: 1024
@@ -116,7 +116,7 @@ available_node_types:
         preemptible: true
     resources:
       CPU: 120
-      TPU: 8
+      TPU: 4
 
   tpu_slice_v5p_16:
     max_workers: 1024
@@ -128,7 +128,7 @@ available_node_types:
         preemptible: true
     resources:
       CPU: 120
-      TPU: 8
+      TPU: 4
 
   tpu_slice_v5p_32:
     max_workers: 1024
@@ -140,7 +140,7 @@ available_node_types:
         preemptible: true
     resources:
       CPU: 120
-      TPU: 8
+      TPU: 4
 
   tpu_slice_v5p_64:
     max_workers: 1024
@@ -152,11 +152,11 @@ available_node_types:
         preemptible: true
     resources:
       CPU: 120
-      TPU: 8
+      TPU: 4
 
   tpu_slice_v5p_128:
     max_workers: 1024
-    min_workers: 32
+    min_workers: 0
     node_config:
       acceleratorType: v5p-128
       runtimeVersion: v2-alpha-tpuv5
@@ -164,7 +164,7 @@ available_node_types:
         preemptible: true
     resources:
       CPU: 120
-      TPU: 8
+      TPU: 4
 
   tpu_slice_v5p_256:
     max_workers: 1024
@@ -176,4 +176,28 @@ available_node_types:
         preemptible: true
     resources:
       CPU: 120
-      TPU: 8
+      TPU: 4
+
+  tpu_slice_v5p_512:
+    max_workers: 1024
+    min_workers: 1
+    node_config:
+      acceleratorType: v5p-512
+      runtimeVersion: v2-alpha-tpuv5
+      schedulingConfig:
+        preemptible: true
+    resources:
+      CPU: 120
+      TPU: 4
+
+  tpu_slice_v5p_1024:
+    max_workers: 1024
+    min_workers: 0
+    node_config:
+      acceleratorType: v5p-1024
+      runtimeVersion: v2-alpha-tpuv5
+      schedulingConfig:
+        preemptible: true
+    resources:
+      CPU: 120
+      TPU: 4
