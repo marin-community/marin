@@ -284,7 +284,7 @@ def default_train(
     # Create the full config
     config = TrainLmOnPodConfig(
         config=inner_config,
-        pod_config=pod_config,
+        hardware_config=pod_config,
         output_path=this_output_path(),
     )
 

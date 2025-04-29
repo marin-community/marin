@@ -1,8 +1,10 @@
 import dataclasses
 import logging
 import os
+from abc import ABC, abstractmethod
 from copy import deepcopy
 from dataclasses import dataclass, replace
+from typing import Literal
 
 import draccus
 import levanter.infra.cli_helpers
@@ -19,15 +21,54 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
-class PodConfig:
+class HardwareConfig(ABC):
+    """Base class for hardware configurations."""
+    env: dict = dataclasses.field(default_factory=dict)
+    """Environment variables to set for training."""
+
+    @abstractmethod
+    def accelerator_descriptor(self) -> str | None:
+        """Returns the accelerator type descriptor for this hardware configuration."""
+        pass
+
+
+@dataclass(frozen=True)
+class RunLocalConfig(HardwareConfig):
+    """Configuration for local training without specialized hardware."""
+
+    def accelerator_descriptor(self) -> str | None:
+        return None
+
+
+@dataclass(frozen=True)
+class GpuConfig(HardwareConfig):
+    """Configuration for GPU-based training."""
+
+    gpu_count: int = 1
+    """Number of GPUs to use for training."""
+
+    accelerator_type: Literal[
+        "V100", "P100", "T4", "P4", "K80", "A10G", "L4", "L40S",
+        "A100", "H100", "H200", "A100-40G", "A100-80G"
+    ] | None = None
+    """Type of GPU accelerator to use. If None, will use any available GPU. 
+    See https://docs.ray.io/en/latest/ray-core/scheduling/accelerators.html"""
+
+    def accelerator_descriptor(self) -> str | None:
+        return self.accelerator_type
+
+
+@dataclass(frozen=True)
+class PodConfig(HardwareConfig):
     """Common configuration for pod-based training."""
 
-    tpu_type: str | None = None
-    """Type of TPU to use, e.g. v4-128. None means local."""
+    tpu_type: str
+    """Type of TPU to use, e.g. v4-128."""
     node_count: int = 1
     """Number of TPU slices for training."""
-    env: dict = dataclasses.field(default_factory=dict)
-    """Environment variables to set in the training pod."""
+
+    def accelerator_descriptor(self) -> str | None:
+        return self.tpu_type
 
 
 @dataclass
@@ -35,7 +76,7 @@ class TrainLmOnPodConfig:
     """Configuration for language model training on a pod."""
 
     config: train_lm.TrainLmConfig
-    pod_config: PodConfig = dataclasses.field(default_factory=PodConfig)
+    hardware_config: HardwareConfig
     output_path: str | None = None
     """Base output directory to be used for training, mainly for use with executor framework."""
     impute_run_id_from_output_path: bool = True
@@ -121,7 +162,7 @@ def _enforce_run_id(config: TrainLmOnPodConfig) -> TrainLmOnPodConfig:
     run_id = config.config.trainer.id
 
     if run_id is None:
-        run_id = config.pod_config.env.get("RUN_ID", os.environ.get("RUN_ID"))
+        run_id = config.hardware_config.env.get("RUN_ID", os.environ.get("RUN_ID"))
 
     if run_id is None and config.impute_run_id_from_output_path and config.output_path is not None:
         path = config.output_path
@@ -169,20 +210,20 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
         config = _update_config_to_use_out_path(config)
 
     env = _add_default_env_variables(
-        config.pod_config.env, default_launch_config.env_for_accel(config.pod_config.tpu_type or "")
+        config.hardware_config.env, default_launch_config.env_for_accel(config.hardware_config.accelerator_descriptor() or "")
     )
     _check_for_wandb_key(env)
     env = _add_run_env_variables(env)
-    pod_config = replace(config.pod_config, env=env)
-    config = replace(config, pod_config=pod_config)
+    pod_config = replace(config.hardware_config, env=env)
+    config = replace(config, hardware_config=pod_config)
 
     config = _suppress_ray_config(config)
     config = _enforce_run_id(config)
     logger.info(f"Using run ID: {config.config.trainer.id}")
 
-    runtime_env = RuntimeEnv(env_vars=config.pod_config.env)
+    runtime_env = RuntimeEnv(env_vars=config.hardware_config.env)
 
-    if not config.allow_out_of_region and config.pod_config.tpu_type is not None:
+    if not config.allow_out_of_region and isinstance(config.hardware_config, PodConfig):
         # run this on the Ray cluster to get the right region
         # doesn't need to be a TPU because ray insists that all VMs are in the same region
         ray.get(ray.remote(_doublecheck_paths).options(runtime_env=runtime_env, num_cpus=0.1).remote(config))
@@ -197,12 +238,12 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
     def train_lm_task():
         train_lm.main(train_config)
 
-    if config.pod_config.tpu_type is not None:
-        if config.pod_config.node_count == 1:
-            return run_on_pod_resumable(train_lm_task, config.pod_config.tpu_type, max_retries_failure=10)
+    if isinstance(config.hardware_config, PodConfig):
+        if config.hardware_config.node_count == 1:
+            return run_on_pod_resumable(train_lm_task, config.hardware_config.accelerator_descriptor(), max_retries_failure=10)
         else:
             return run_on_pod_multislice_resumable(
-                train_lm_task, config.pod_config.tpu_type, config.pod_config.node_count, max_retries_failure=10
+                train_lm_task, config.hardware_config.accelerator_descriptor(), config.hardware_config.node_count, max_retries_failure=10
             )
     else:
         return ray.get(train_lm_task.remote())
@@ -218,7 +259,7 @@ def _doublecheck_paths(config: TrainLmOnPodConfig):
     # Determine if we're running locally or if path checks should be bypassed
     allow_out_of_region = config.allow_out_of_region
 
-    local_ok = config.pod_config.tpu_type is None
+    local_ok = not isinstance(config.hardware_config, PodConfig)
 
     try:
         region = get_vm_region()
