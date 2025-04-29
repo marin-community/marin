@@ -14,6 +14,7 @@ from experiments.evals.task_configs import CORE_TASKS_PLUS_MMLU
 from experiments.llama import llama_1_4b
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import ExecutorStep, InputName
+from marin.training.training import TpuPodConfig
 
 DEFAULT_MODEL_CONFIG = LlamaConfig(
     seq_len=4096,
@@ -25,8 +26,7 @@ DEFAULT_MODEL_CONFIG = LlamaConfig(
 )
 
 WS_EMA_DEFAULT_TRAIN_CONFIG = SimpleTrainConfig(
-    tpu_type="v4-128",
-    node_count=1,
+    hardware_config=TpuPodConfig(tpu_type="v4-128", node_count=1),
     train_batch_size=1024,
     learning_rate=1e-3,  # placeholder, this will be replaced in the scaling law suite
     weight_decay=0.1,

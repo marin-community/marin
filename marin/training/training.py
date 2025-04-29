@@ -1,7 +1,6 @@
 import dataclasses
 import logging
 import os
-from abc import ABC, abstractmethod
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from typing import Literal, Protocol
@@ -12,6 +11,7 @@ import ray
 from google.api_core.exceptions import Forbidden as GcpForbiddenException
 from levanter.infra.ray_tpu import run_on_pod_multislice_resumable, run_on_pod_resumable
 from levanter.main import train_lm
+from levanter.main.train_lm import TrainLmConfig
 from mergedeep import mergedeep
 from ray.runtime_env import RuntimeEnv
 
@@ -20,18 +20,15 @@ from marin.utilities.gcs_utils import get_bucket_location, get_vm_region
 logger = logging.getLogger(__name__)
 
 
-class HardwareConfigProtocol(Protocol):
+class HardwareConfig(Protocol):
     env: dict
+    """
+    Environment variables to set for training.
+    """
 
-
-@dataclass(frozen=True)
-class HardwareConfig(HardwareConfigProtocol, ABC):
-    """Base class for hardware configurations."""
-
-    @abstractmethod
     def accelerator_descriptor(self) -> str | None:
         """Returns the accelerator type descriptor for this hardware configuration."""
-        pass
+        return None
 
     def as_resource_kwargs(self) -> dict:
         """Returns the resource bundle for this hardware configuration."""
@@ -45,8 +42,16 @@ class LocalRunConfig(HardwareConfig):
     env: dict = dataclasses.field(default_factory=dict)
     """Environment variables to set for training."""
 
+    resources: dict = dataclasses.field(default_factory=dict)
+    """
+    Additional resources to request for this task.
+    """
+
     def accelerator_descriptor(self) -> str | None:
         return None
+
+    def as_resource_kwargs(self) -> dict:
+        return self.resources
 
 
 @dataclass(frozen=True)
@@ -78,10 +83,10 @@ class GpuConfig(HardwareConfig):
 
 
 @dataclass(frozen=True)
-class PodConfig(HardwareConfig):
+class TpuPodConfig(HardwareConfig):
     """Common configuration for pod-based training."""
 
-    tpu_type: str = dataclasses.field()
+    tpu_type: str
     """Type of TPU to use, e.g. v4-128."""
     node_count: int = 1
     """Number of TPU slices for training."""
@@ -93,7 +98,7 @@ class PodConfig(HardwareConfig):
         return self.tpu_type
 
 
-@dataclass
+@dataclass(frozen=True)
 class TrainLmOnPodConfig:
     """Configuration for language model training on a pod."""
 
@@ -145,28 +150,25 @@ def _update_config_to_use_out_path(pod_config: TrainLmOnPodConfig) -> TrainLmOnP
     return replace(pod_config, config=config)
 
 
-def _suppress_ray_config(config: TrainLmOnPodConfig) -> TrainLmOnPodConfig:
+def _suppress_ray_config(config: TrainLmConfig) -> TrainLmConfig:
     """
     Levanter wants to auto-start the Ray cluster, but we're already in a Ray cluster. Disable that.
     """
-    # my other kingdom for lenses
-    if config.config.trainer.ray.auto_start_cluster:
+    if config.trainer.ray.auto_start_cluster:
         logger.info("Ray cluster is set to auto-start, but that's not what we want for Marin. Disabling.")
-        inner_config = replace(
-            config.config,
+        return replace(
+            config,
             trainer=replace(
-                config.config.trainer,
-                ray=replace(config.config.trainer.ray, auto_start_cluster=False, start_workers=False),
+                config.trainer,
+                ray=replace(config.trainer.ray, auto_start_cluster=False, start_workers=False),
             ),
         )
-        return replace(config, config=inner_config)
-    elif config.config.trainer.ray.start_workers:
+    elif config.trainer.ray.start_workers:
         logger.info("Ray cluster is set to start workers, but that's not what we want for Marin. Disabling.")
-        inner_config = replace(
-            config.config,
-            trainer=replace(config.config.trainer, ray=replace(config.config.trainer.ray, start_workers=False)),
+        return replace(
+            config,
+            trainer=replace(config.trainer, ray=replace(config.trainer.ray, start_workers=False)),
         )
-        return replace(config, config=inner_config)
     return config
 
 
@@ -237,32 +239,27 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
     )
     _check_for_wandb_key(env)
     env = _add_run_env_variables(env)
-    pod_config = replace(config.hardware_config, env=env)
-    config = replace(config, hardware_config=pod_config)
+    hw_config = config.hardware_config
 
-    config = _suppress_ray_config(config)
     config = _enforce_run_id(config)
     logger.info(f"Using run ID: {config.config.trainer.id}")
 
-    runtime_env = RuntimeEnv(env_vars=config.hardware_config.env)
+    train_config = config.config
+    train_config = _suppress_ray_config(train_config)
 
-    if not config.allow_out_of_region and not isinstance(config.hardware_config, LocalRunConfig):
+    runtime_env = RuntimeEnv(env_vars=env)
+
+    if not config.allow_out_of_region and not isinstance(hw_config, LocalRunConfig):
         # run this on the Ray cluster to get the right region
         # doesn't need to be a TPU because ray insists that all VMs are in the same region
         ray.get(ray.remote(_doublecheck_paths).options(runtime_env=runtime_env, num_cpus=0.1).remote(config))
-
-        # ensure that we're saving hf checkpoints
-        if config.config.hf_save_path is None:
-            raise ValueError("hf_save_path must be set when running on a TPU")
-
-    train_config = config.config
 
     @ray.remote(**config.hardware_config.as_resource_kwargs(), runtime_env=runtime_env)
     def train_lm_task():
         train_lm.main(train_config)
 
-    if isinstance(config.hardware_config, PodConfig):
-        if config.hardware_config.node_count == 1:
+    if isinstance(hw_config, TpuPodConfig):
+        if hw_config.node_count == 1:
             return run_on_pod_resumable(
                 train_lm_task, config.hardware_config.accelerator_descriptor(), max_retries_failure=10
             )
@@ -270,7 +267,7 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
             return run_on_pod_multislice_resumable(
                 train_lm_task,
                 config.hardware_config.accelerator_descriptor(),
-                config.hardware_config.node_count,
+                hw_config.node_count,
                 max_retries_failure=10,
             )
     else:
@@ -287,7 +284,7 @@ def _doublecheck_paths(config: TrainLmOnPodConfig):
     # Determine if we're running locally or if path checks should be bypassed
     allow_out_of_region = config.allow_out_of_region
 
-    local_ok = not isinstance(config.hardware_config, PodConfig)
+    local_ok = not isinstance(config.hardware_config, TpuPodConfig)
 
     try:
         region = get_vm_region()

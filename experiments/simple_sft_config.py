@@ -2,6 +2,8 @@ from dataclasses import dataclass
 
 from levanter.schedule import IntSchedule
 
+from marin.training.training import HardwareConfig
+
 
 @dataclass(frozen=True)
 class SimpleSFTConfig:
@@ -9,6 +11,9 @@ class SimpleSFTConfig:
     A simplified configuration for Supervised Fine-Tuning (SFT) that works for both
     single dataset and mixture training approaches.
     """
+
+    # Hardware configuration
+    hardware_config: HardwareConfig
 
     # Core training parameters
     train_batch_size: int | IntSchedule = 128
@@ -21,10 +26,6 @@ class SimpleSFTConfig:
 
     learning_rate: float = 5e-6
     """Learning rate for the optimizer."""
-
-    # Hardware configuration
-    tpu_type: str | None = None
-    """Type of TPU to use for training. None for local training."""
 
     # Model configuration
     tokenizer: str | None = None
