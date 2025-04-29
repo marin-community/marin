@@ -181,6 +181,11 @@ def default_train_quality_model(
             output_path=this_output_path(),
         ),
         override_output_path=f"gcsfuse_mount/datashop-models/{experiment_name}-classifier",
+        pip_dependency_groups=[
+            # NOTE(Chris): USE MAIN for now since newest accelerate 1.6.0 still uses
+            # xrt_world_size which has since been deprecated after Pytorch XLA 2.7.0
+            "https://github.com/huggingface/accelerate/archive/refs/heads/main.zip"
+        ],
     )
 
     return datashop_classifier
