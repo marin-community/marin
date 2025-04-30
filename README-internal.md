@@ -1,6 +1,6 @@
 # Marin (internal)
 
-This documentation is for internal developers.
+This is documentation is for internal developers.
 
 ## Setup
 
