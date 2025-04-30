@@ -6,7 +6,7 @@ Running on FineWeb-Edu-10M:
 
 ```
 python marin/run/ray_run.py \
-    --pip_deps 'warcio' \
+    --pip_deps 'warcio[all] @ git+https://github.com/nelson-liu/warcio@brotlicffi' \
     --no_wait -- \
     python marin/crawl/convert_responses_parquet_to_warc.py \
     --input_directory gs://marin-us-central2/scratch/nfliu/fetched_outlinks/fineweb-edu-10M/ \
@@ -17,7 +17,7 @@ Running on open-web-math-10M (cc deduplicated):
 
 ```
 python marin/run/ray_run.py \
-    --pip_deps 'warcio' \
+    --pip_deps 'warcio[all] @ git+https://github.com/nelson-liu/warcio@brotlicffi' \
     --no_wait -- \
     python marin/crawl/convert_responses_parquet_to_warc.py \
     --input_directory gs://marin-us-central2/scratch/nfliu/fetched_outlinks/open-web-math-fde8ef8-10M-cc-deduplicated/ \
@@ -28,13 +28,12 @@ Running on fineweb-edu-10M (cc deduplicated):
 
 ```
 python marin/run/ray_run.py \
-    --pip_deps 'warcio' \
+    --pip_deps 'warcio[all] @ git+https://github.com/nelson-liu/warcio@brotlicffi' \
     --no_wait -- \
     python marin/crawl/convert_responses_parquet_to_warc.py \
     --input_directory gs://marin-us-central2/scratch/nfliu/fetched_outlinks/fineweb-edu-10M-cc-deduplicated/ \
     --output_path gs://marin-us-central2/scratch/nfliu/fetched_outlinks/fineweb-edu-10M-cc-deduplicated/
 ```
-
 
 After converting to WARC, you may want to delete the parquets with fetched responses
 to conserve GCS space.
@@ -46,7 +45,7 @@ import os
 import pathlib
 import random
 from dataclasses import dataclass
-from http.client import responses
+from http import HTTPStatus
 
 import draccus
 import fsspec
@@ -69,8 +68,16 @@ class ConvertResponsesToWARCConfig:
     output_path: str
 
 
-@cached_or_construct_output(success_suffix="SUCCESS")
+def get_reason_phrase(status_code: int) -> str:
+    try:
+        return HTTPStatus(status_code).phrase
+    except ValueError:
+        logger.info(f"Found unknown status code {status_code}")
+        return "Unknown Status Code"
+
+
 @ray.remote(memory=128 * 1024 * 1024 * 1024, num_cpus=16)
+@cached_or_construct_output(success_suffix="SUCCESS")
 def convert_parquet_to_warc(input_path: str, output_path: str):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     with fsspec.open(input_path) as f:
@@ -80,13 +87,8 @@ def convert_parquet_to_warc(input_path: str, output_path: str):
     warc_buffer = io.BytesIO()
     writer = WARCWriter(warc_buffer, gzip=True)
 
-    # Manually add response code 999
-    responses[999] = "Request denied"
     for record in tqdm(records, desc="Converting responses to WARC"):
-        status_reason = record.get("reason", responses.get(record["status_code"]))
-        if not status_reason:
-            logger.info(f"Failed to get status reason for code {record['status_code']}, url: {record['url']}")
-            status_reason = ""
+        status_reason = record.get("reason", get_reason_phrase(record["status_code"]))
         status_line = f"{record['status_code']} {status_reason}"
         http_headers = [("Status", status_line)]
         for h, v in json.loads(record["headers"]).items():
@@ -130,7 +132,7 @@ def get_shard_indices_to_process(urls_input_directory: str) -> list[int]:
 
 
 @draccus.wrap()
-def main(cfg: ConvertResponsesToWARCConfig):
+def convert_shards_to_warc(cfg: ConvertResponsesToWARCConfig):
     shard_indices_to_process = ray.get(get_shard_indices_to_process.remote(cfg.input_directory))
     num_shards_to_process = len(shard_indices_to_process)
     logger.info(f"Found {num_shards_to_process} shards to process")
@@ -145,4 +147,4 @@ def main(cfg: ConvertResponsesToWARCConfig):
 
 
 if __name__ == "__main__":
-    main()
+    convert_shards_to_warc()

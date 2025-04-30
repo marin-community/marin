@@ -7,6 +7,7 @@ from typing import ClassVar
 from experiments.evals.resource_configs import ResourceConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.utils import download_from_gcs, is_remote_path
+from marin.generation.ray_utils import scheduling_strategy_fn
 
 
 @dataclass(frozen=True)
@@ -38,6 +39,11 @@ class ModelConfig:
     Additional keyword arguments to pass to the vLLM engine.
     """
 
+    generation_params: dict | None = None
+    """
+    Additional keyword arguments passed to the SamplingParams for the vLLM engine
+    """
+
     def ensure_downloaded(self, local_path: str | None = None) -> str | None:
         """
         Ensures that the model checkpoint is downloaded to `local_path` if necessary.
@@ -65,16 +71,13 @@ class Evaluator(ABC):
     _pip_packages: ClassVar[list[Dependency]]
     _py_modules: ClassVar[list[Dependency]]
 
-    def scheduling_strategy_fn(self, tensor_parallel_size: int, tpu_type: str):
-        import ray
-        from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
+    def _get_scheduling_strategy(self, resource_config: ResourceConfig | None):
+        if resource_config is None:
+            fn = None
+        else:
+            fn = scheduling_strategy_fn(resource_config.num_tpu, resource_config.strategy)
 
-        # One bundle per tensor parallel worker
-        pg = ray.util.placement_group(
-            [{"TPU": 1, "CPU": 1}] * tensor_parallel_size + [{f"{tpu_type}-head": 1}],
-            strategy="STRICT_PACK",  # STRICT_PACK means same node
-        )
-        return PlacementGroupSchedulingStrategy(pg, placement_group_capture_child_tasks=True)
+        return fn
 
     @abstractmethod
     def launch_evaluate_with_ray(
