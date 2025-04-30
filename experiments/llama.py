@@ -11,6 +11,33 @@ llama3_tokenizer = "meta-llama/Meta-Llama-3.1-8B"
 llama3_tokenizer_vocab_size = 128_256
 llama3_instruct_tokenizer = "meta-llama/Meta-Llama-3.1-8B-Instruct"
 
+llama_30m = LlamaConfig(
+    seq_len=1024,
+    hidden_dim=128,
+    intermediate_dim=448,
+    num_heads=2,
+    num_kv_heads=2,
+    num_layers=4,
+)
+
+llama_50m = LlamaConfig(
+    seq_len=1024,
+    hidden_dim=192,
+    intermediate_dim=448,
+    num_heads=2,
+    num_kv_heads=2,
+    num_layers=4,
+)
+
+
+llama_75m = LlamaConfig(
+    seq_len=1024,
+    hidden_dim=256,
+    intermediate_dim=896,
+    num_heads=4,
+    num_kv_heads=4,
+    num_layers=8,
+)
 
 llama_150m = LlamaConfig(
     seq_len=1024,
@@ -205,7 +232,7 @@ def compute_num_parameters(config: LlamaConfig, vocab_size: int) -> int:
 
 
 # For scaling laws
-scaling_llamas = [llama_150m, llama_300m, llama_600m, llama_1_4b, llama_1_9b, llama_3_5b, llama_8b]
+scaling_llamas = [llama_30m, llama_50m, llama_150m, llama_300m, llama_600m, llama_1_4b, llama_1_9b, llama_3_5b, llama_8b]
 
 
 if __name__ == "__main__":
