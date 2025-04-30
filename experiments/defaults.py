@@ -23,6 +23,7 @@ from levanter.schedule import BatchSchedule
 from levanter.store.cache import CacheOptions
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
+from levanter.utils import fsspec_utils
 
 from experiments.anneal_config import AnnealConfig
 from experiments.evals.task_configs import (
@@ -51,6 +52,7 @@ from marin.processing.tokenize import (
     lm_data_config,
     tokenize,
 )
+from marin.processing.tokenize.tokenize import HfTokenizeConfig
 from marin.scaling_laws.scaling_laws import ScalingLawConfig, run_scaling_law_analysis
 from marin.training.training import (
     TrainLmOnPodConfig,
@@ -69,13 +71,24 @@ def default_tokenize(
     *,
     is_validation: bool = False,
 ) -> ExecutorStep:
-    config = TokenizeConfig(
-        train_paths=[dataset] if not is_validation else [],
-        validation_paths=[dataset] if is_validation else [],
-        cache_path=this_output_path(),
-        tokenizer=ensure_versioned(tokenizer),
-        format=format,
-    )
+
+    # sniff out if it's a HuggingFace dataset
+    if isinstance(dataset, str) and "/" in dataset and not fsspec_utils.exists(dataset):
+        config = HfTokenizeConfig(
+            id=dataset,
+            cache_path=this_output_path(),
+            tokenizer=ensure_versioned(tokenizer),
+            format=format,
+        )
+    else:
+        config = TokenizeConfig(
+            train_paths=[dataset] if not is_validation else [],
+            validation_paths=[dataset] if is_validation else [],
+            cache_path=this_output_path(),
+            tokenizer=ensure_versioned(tokenizer),
+            format=format,
+        )
+
     if options is not None:
         config = dataclasses.replace(config, cache_options=options)
 
