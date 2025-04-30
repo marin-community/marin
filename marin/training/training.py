@@ -12,7 +12,6 @@ from levanter.infra.ray_tpu import run_on_pod_multislice_resumable, run_on_pod_r
 from levanter.main import train_lm
 from levanter.main.train_lm import TrainLmConfig
 from mergedeep import mergedeep
-from ray.runtime_env import RuntimeEnv
 
 from marin.resources import CpuOnlyConfig, ResourceConfig, TpuPodConfig
 from marin.utilities.gcs_utils import get_bucket_location, get_vm_region
@@ -161,9 +160,7 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
     )
     _check_for_wandb_key(env)
     env = _add_run_env_variables(env)
-    hw_config = dataclasses.replace(
-        config.resources, runtime_env=RuntimeEnv(**config.resources.runtime_env, env_vars=env)
-    )
+    hw_config = config.resources.with_env_vars(env)
 
     config = _enforce_run_id(config)
     logger.info(f"Using run ID: {config.train_config.trainer.id}")
