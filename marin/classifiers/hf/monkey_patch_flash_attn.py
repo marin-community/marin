@@ -16,9 +16,10 @@ def eager_attention_forward(
     output_attentions: bool | None = False,
     **_kwargs,
 ) -> tuple[torch.Tensor, torch.Tensor] | tuple[torch.Tensor]:
+    # [batch_size, seq_len, 3, num_heads, head_dim] -> [batch_size, 3, num_heads, seq_len, head_dim]
+    # chunk into query, key, value
     query, key, value = qkv.transpose(3, 1).unbind(dim=2)
 
-    # position_ids = torch.arange(0, query.shape[2], device=query.device)
     cos, sin = module.rotary_emb(qkv, position_ids=position_ids)
     # query, key, value: [batch_size, heads, seq_len, head_dim]
     query, key = apply_rotary_pos_emb(query, key, cos, sin)
@@ -50,6 +51,8 @@ def forward(
     qkv = self.Wqkv(hidden_states)
 
     bs = hidden_states.shape[0]
+
+    # [batch_size, seq_len, 3, num_heads, head_dim]
     qkv = qkv.view(bs, -1, 3, self.num_heads, self.head_dim)
 
     attn_outputs = eager_attention_forward(
