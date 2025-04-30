@@ -2,6 +2,7 @@ import dataclasses
 from dataclasses import dataclass
 
 from levanter.callbacks.watch import WatchConfig
+from levanter.optim import OptimizerConfig
 from levanter.schedule import IntSchedule
 
 
@@ -48,6 +49,8 @@ class SimpleTrainConfig:
 
     initialize_from_checkpoint_path: str | None = None
     """If set, the training will resume from the checkpoint at this path. Otherwise, training will start from scratch."""
+    initialize_from_hf: str | None = None
+    """If set, the training will start from the hf model at this path. Otherwise, training will start from scratch."""
     reset_data_loader_on_init: bool = True
     """Pairs with initialize_from_checkpoint_path. If True, initialize_from_checkpoint_path will reset the data loader
     so that it starts from step 0. Otherwise, it will resume from the step in the checkpoint."""
@@ -59,6 +62,9 @@ class SimpleTrainConfig:
 
     int8: bool = False
     """Int8 (quantized) training in Levanter."""
+
+    optimizer_config: OptimizerConfig | None = None
+    """Optimizer configuration to use. If not set, Adam will be used."""
 
     watch: WatchConfig = dataclasses.field(default_factory=WatchConfig)
     """Config for watching gradients, parameters, etc. Default is to log norms of gradients and parameters."""

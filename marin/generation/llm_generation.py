@@ -5,6 +5,7 @@ User -> Preset Prompt, Engine Kwargs, File -> Generate Text
 """
 
 import logging
+from abc import ABC, abstractmethod
 from typing import Any, ClassVar
 
 logger = logging.getLogger(__name__)
@@ -15,10 +16,12 @@ except ImportError:
     logger.warning("vLLM is not installed, so we will not be able to generate text.")
 
 
-class BaseLLMProvider:
+class BaseLLMProvider(ABC):
+    @abstractmethod
     def __init__(self, model_name: str):
         pass
 
+    @abstractmethod
     def generate(self, prompts: list[str]) -> list[str]:
         """The input is a list of prompts and the output is a list of generated text."""
         raise NotImplementedError

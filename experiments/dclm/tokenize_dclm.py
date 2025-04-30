@@ -1,5 +1,7 @@
 import dataclasses
 
+from levanter.data.text import TextLmDatasetFormat
+
 from experiments.defaults import default_tokenize
 from experiments.llama import llama3_tokenizer
 from experiments.pretraining_datasets import dclm_baseline, dclm_baseline_wrong, proofpile_2, starcoderdata
@@ -31,7 +33,10 @@ dclm_components_llama3 = {
     ),
     "starcoderdata": (
         default_tokenize(
-            name="starcoderdata", dataset=starcoderdata, tokenizer=llama3_tokenizer, text_key="content"
+            name="starcoderdata",
+            dataset=starcoderdata,
+            tokenizer=llama3_tokenizer,
+            format=TextLmDatasetFormat(text_key="content"),
         ).with_output_path("tokenized/starcoderdata-12f018/")
     ),
     "proofpile_2": (
@@ -58,7 +63,10 @@ dclm_components_llama3_wrong = {
         override_output_path="gs://marin-us-central2/tokenized/dclm_baseline-0206f1_WRONG_20250211/",
     ),
     "starcoderdata": default_tokenize(
-        name="starcoderdata", dataset=starcoderdata, tokenizer=llama3_tokenizer, text_key="content"
+        name="starcoderdata",
+        dataset=starcoderdata,
+        tokenizer=llama3_tokenizer,
+        format=TextLmDatasetFormat(text_key="content"),
     ),
     "proofpile_2": default_tokenize(
         name="proofpile_2",
