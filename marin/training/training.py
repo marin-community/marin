@@ -69,7 +69,7 @@ def _update_config_to_use_out_path(pod_config: TrainLmOnPodConfig) -> TrainLmOnP
         trainer=trainer,
         hf_save_path=os.path.join(pod_config.output_path, DEFAULT_HF_CHECKPOINTS_PATH),
     )
-    return replace(pod_config, config=config)
+    return replace(pod_config, train_config=config)
 
 
 def _suppress_ray_config(config: TrainLmConfig) -> TrainLmConfig:
