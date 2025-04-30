@@ -1,10 +1,20 @@
 name: CI with GCP TPU
 
-on: pull_request
+on:
+  pull_request:
+    types: [labeled]        # run on any label-add
+  push:
+    paths:
+      - 'marin/evaluation/**'
+      - 'marin/generation/**'
+      - 'pyproject.toml'
 
 jobs:
   tpu-tests:
-    if: (github.event.pull_request.head.repo.full_name == github.repository)
+    if: |
+      github.event_name == 'push'
+      ||
+      (github.event_name == 'pull_request' && github.event.label.name == 'tpu')
     runs-on: ubuntu-latest
     env:
       TPU_ZONE: "us-east5-b"
@@ -76,6 +86,8 @@ jobs:
                                      && export WANDB_API_KEY=${{ secrets.WANDB_API_KEY }} \
                                      && export WANDB_ENTITY=stanford-mercury \
                                      && export OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }} \
+                                     && export HF_TOKEN=${{ secrets.HF_TOKEN }} \
+                                     && export TF_CPP_MIN_LOG_LEVEL=1 \
                                      && python scripts/install_all_pip_dep.py \
                                      && pip list \
                                      && echo TPU_TEST \
