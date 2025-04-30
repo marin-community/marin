@@ -128,7 +128,7 @@ def _enforce_run_id(config: TrainLmOnPodConfig) -> TrainLmOnPodConfig:
     inner_config = replace(
         config.train_config, trainer=replace(config.train_config.trainer, id=run_id, checkpointer=checkpointer_config)
     )
-    return replace(config, config=inner_config)
+    return replace(config, train_config=inner_config)
 
 
 @ray.remote(num_cpus=0.1)
