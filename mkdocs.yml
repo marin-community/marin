@@ -18,6 +18,7 @@ nav:
   - Tutorials:
     - Getting Started: tutorials/getting-started.md
     - Basic Usage: tutorials/basic-usage.md
+    - Local GPU: how-to-guides/local-gpu.md
   - How-to Guides:
     - Installation: how-to-guides/installation.md
     - Configuration: how-to-guides/configuration.md
