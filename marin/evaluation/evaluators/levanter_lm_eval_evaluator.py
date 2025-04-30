@@ -25,6 +25,8 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
     _pip_packages: ClassVar[list[Dependency]] = [
         *LevanterTpuEvaluator.DEFAULT_PIP_PACKAGES,
         Dependency(name="jax[tpu]==0.5.1"),
+        Dependency(name="haliax==1.4.dev343"),
+        Dependency(name="levanter==1.2.dev1313"),
     ]
 
     def evaluate(
@@ -47,11 +49,6 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
         # Run the harness with the model and the specified evals
 
         try:
-            import subprocess
-
-            logger.info("Running 'pip list' to show installed packages:")
-            result = subprocess.run(["pip", "list"], capture_output=True, text=True, check=True)
-            print(result.stdout)
             # Download the model from GCS or HuggingFace
             model_name_or_path: str = self.download_model(model)
 
