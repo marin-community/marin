@@ -16,6 +16,7 @@ from tqdm import tqdm
 
 from marin.schemas.web.convert import ExtractionConfig
 from marin.web.convert import convert_page
+from operations.download.dclm_hq.download_dclm_hq_html import find_html_in_cc
 from operations.download.huggingface.stream_remove_columns import hf_fs
 
 logger = logging.getLogger("ray")

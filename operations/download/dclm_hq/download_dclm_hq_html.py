@@ -16,7 +16,7 @@ from marin.core.runtime import cached_or_construct_output
 from marin.utils import fsspec_glob
 
 CC_IDX_HOST_URL = "http://34.72.201.218:8080"
-logger = logging.getLogger('ray')
+logger = logging.getLogger("ray")
 
 
 @dataclass
@@ -28,12 +28,10 @@ class DCLMHQDownloadConfig:
 def fetch_warc_from_cc(s3_warc_path: str, length: int, offset: int) -> str:
     """
     Fetch a WARC record from Common Crawl S3 bucket using byte range requests.
-    
     Args:
         s3_warc_path: Path to WARC file in S3 bucket
         length: Length of the record in bytes
         offset: Byte offset of the record in the WARC file
-        
     Returns:
         The WARC record content as a string
     """
@@ -43,8 +41,7 @@ def fetch_warc_from_cc(s3_warc_path: str, length: int, offset: int) -> str:
 
     # Make range request to CommonCrawl
     response = requests.get(
-        f'https://data.commoncrawl.org/{s3_warc_path}',
-        headers={'Range': f'bytes={offset}-{offset + length - 1}'}
+        f"https://data.commoncrawl.org/{s3_warc_path}", headers={"Range": f"bytes={offset}-{offset + length - 1}"}
     )
     response.raise_for_status()
 
@@ -59,9 +56,7 @@ def find_html_in_cc(split_id: str, target_uri: str) -> str | None:
     """
     Find HTML code for the given record ID and target URI in the Common Crawl dataset.
     """
-    resp = requests.get(
-        f"{CC_IDX_HOST_URL}/{split_id}-index?url={target_uri}&output=json"
-    )
+    resp = requests.get(f"{CC_IDX_HOST_URL}/{split_id}-index?url={target_uri}&output=json")
 
     resp.raise_for_status()
 
@@ -96,12 +91,12 @@ def process_file(
             fsspec.open(input_file_path, compression="zstd") as source,
             fsspec.open(output_file_path, "wt", compression="gzip") as output,
         ):
-            text_wrapper = io.TextIOWrapper(source, encoding='utf-8')
+            text_wrapper = io.TextIOWrapper(source, encoding="utf-8")
 
             for line in tqdm(text_wrapper, desc="Processing lines"):
                 row = json.loads(line.strip())
 
-                match = re.search(r'isPartOf:\s*(CC-MAIN-\d{4}-\d{2})', row["metadata"]["warcinfo"])
+                match = re.search(r"isPartOf:\s*(CC-MAIN-\d{4}-\d{2})", row["metadata"]["warcinfo"])
                 is_part_of = match.group(1)
 
                 try:

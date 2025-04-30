@@ -19,7 +19,7 @@ def save_html(json_data, input_path):
         with open(os.path.join(input_path, input_file), "r") as f:
             json_data = json.load(f)
 
-        match = re.search(r'isPartOf:\s*(CC-MAIN-\d{4}-\d{2})', json_data["metadata"]["warcinfo"])
+        match = re.search(r"isPartOf:\s*(CC-MAIN-\d{4}-\d{2})", json_data["metadata"]["warcinfo"])
         is_part_of = match.group(1)
 
         html = find_html_in_cc(is_part_of, json_data["metadata"]["WARC-Target-URI"])
@@ -58,7 +58,7 @@ if __name__ == "__main__":
                     include_links=False,
                 ),
             )
-            expected = convert_page(html, extract_method = extract_method, config = extract_config)["content"]
+            expected = convert_page(html, extract_method=extract_method, config=extract_config)["content"]
 
             with open(os.path.join(expected_path, input_file.replace("html", "md")), "w") as f:
                 print(expected, file=f)
