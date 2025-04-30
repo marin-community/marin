@@ -1,7 +1,7 @@
 """
-wikipedia/transform_wikipedia.py
+operations/transform/dolmino/transform_dclm_hq.py
 
-Performs HTML->Text/MD conversion using the specified tools over a wiki dump save in DOLMA format.
+Performs HTML->Text/MD conversion using the specified tools over a DCLM HQ dump save in DOLMA format.
 """
 
 import json
