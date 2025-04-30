@@ -17,7 +17,6 @@ import fsspec
 import wandb
 from levanter.data.text import LMMixtureDatasetConfig
 from levanter.models.lm_model import LmConfig
-from levanter.schedule import IntSchedule
 
 from experiments.defaults import default_train
 from experiments.evals.task_configs import CORE_TASKS_PLUS_MMLU
@@ -75,7 +74,7 @@ class SpeedrunConfig:
         N = compute_num_parameters(self.model_config, self.vocab_size)
 
         # TODO (Nikil): make this a helper and handle edge-cases
-        if isinstance(self.train_config.train_batch_size, IntSchedule):
+        if isinstance(self.train_config.train_batch_size, list) and len(self.train_config.train_batch_size) > 0:
             from levanter.schedule import BatchSchedule
 
             batch_schedule = BatchSchedule(self.train_config.train_batch_size)
