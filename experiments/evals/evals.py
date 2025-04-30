@@ -6,7 +6,7 @@ import logging
 
 from experiments.evals.engine_configs import DEFAULT_VLLM_ENGINE_KWARGS
 from experiments.evals.resource_configs import SINGLE_TPU_V4_8, ResourceConfig
-from experiments.evals.task_configs import CORE_TASKS, KEY_GENERATION_TASKS, KEY_MULTIPLE_CHOICE_TASKS
+from experiments.evals.task_configs import CORE_TASKS, KEY_GENERATION_TASKS
 from marin.evaluation.evaluation_config import EvalTaskConfig, EvaluationConfig
 from marin.evaluation.run import evaluate
 from marin.execution.executor import (
@@ -291,18 +291,18 @@ def default_key_evals(
             engine_kwargs=engine_kwargs,
             resource_config=resource_config,
         ),
-        evaluate_levanter_lm_evaluation_harness(
-            model_name,
-            model_step_path,
-            KEY_MULTIPLE_CHOICE_TASKS,
-            resource_config,
-            max_eval_instances=max_eval_instances,
-        ),
-        evaluate_alpaca_eval(
-            model_name,
-            model_step_path,
-            resource_config,
-            engine_kwargs,
-            stop_token_ids=stop_token_ids,
-        ),
+        # evaluate_levanter_lm_evaluation_harness(
+        #     model_name,
+        #     model_step_path,
+        #     KEY_MULTIPLE_CHOICE_TASKS,
+        #     resource_config,
+        #     max_eval_instances=max_eval_instances,
+        # ),
+        # evaluate_alpaca_eval(
+        #     model_name,
+        #     model_step_path,
+        #     resource_config,
+        #     engine_kwargs,
+        #     stop_token_ids=stop_token_ids,
+        # ),
     ]
