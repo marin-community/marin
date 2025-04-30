@@ -2,8 +2,7 @@ name: CI with GCP TPU
 
 on:
   pull_request:
-    types: [labeled]        # run on any label-add
-  push:
+    types: [opened, synchronize, reopened, labeled]
     paths:
       - 'marin/evaluation/**'
       - 'marin/generation/**'
@@ -11,15 +10,13 @@ on:
 
 jobs:
   tpu-tests:
-    if: |
-      github.event_name == 'push'
-      ||
-      (github.event_name == 'pull_request' && github.event.label.name == 'tpu')
+    if: github.event_name == 'pull_request' && 
+        (github.event.label.name == 'tpu' || github.event.action != 'labeled')
     runs-on: ubuntu-latest
     env:
       TPU_ZONE: "us-east5-b"
       TPU_NAME: "ci-run-${{ github.run_id }}"
-      DOCKER_IMAGE: "us-east5x-docker.pkg.dev/hai-gcp-models/marin/marin_vllm"
+      DOCKER_IMAGE: "us-east5-docker.pkg.dev/hai-gcp-models/marin/marin_vllm"
       DOCKER_SHA: "6e804a10"
 
     steps:
