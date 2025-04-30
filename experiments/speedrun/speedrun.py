@@ -17,6 +17,7 @@ import fsspec
 import wandb
 from levanter.data.text import LMMixtureDatasetConfig
 from levanter.models.lm_model import LmConfig
+from levanter.schedule import IntSchedule
 
 from experiments.defaults import default_train
 from experiments.evals.task_configs import CORE_TASKS_PLUS_MMLU
@@ -72,15 +73,30 @@ class SpeedrunConfig:
 
     def estimate_flops_via_6nd(self) -> float:
         N = compute_num_parameters(self.model_config, self.vocab_size)
-        D = self.train_config.train_batch_size * self.model_config.seq_len * self.train_config.num_train_steps
-        return 6.0 * N * D
+
+        # TODO (Nikil): make this a helper and handle edge-cases
+        if isinstance(self.train_config.train_batch_size, IntSchedule):
+            from levanter.schedule import BatchSchedule
+
+            batch_schedule = BatchSchedule(self.train_config.train_batch_size)
+            total_tokens = (
+                batch_schedule.global_data_offset_by_step(self.train_config.num_train_steps) * self.model_config.seq_len
+            )
+        else:
+            # integer batch size
+            total_tokens = (
+                self.train_config.train_batch_size * self.model_config.seq_len * self.train_config.num_train_steps
+            )
+
+        return 6.0 * N * total_tokens
 
     def adjust_to_exact_budget(self):
-
         # TODO (Nikil): at the moment, we have this function but don't apply it- need to figure out user flow for
         # adjusting to exact budget
         flops_per_token = self.model_config.flops_per_token(self.vocab_size) * 6
         total_tokens = self.compute_budget.value / flops_per_token
+
+        # TODO (Nikil): handle batch schedules
         self.train_config.num_train_steps = int(
             total_tokens / (self.train_config.train_batch_size * self.model_config.seq_len)
         )
@@ -92,7 +108,9 @@ class SpeedrunConfig:
     def apply_scaling(self):
         if self.hyperparameter_scaling:
             params = self.hyperparameter_scaling(self.model_config, self.compute_budget)
-            self.train_config.__dict__.update({k: params.get(k, v) for k, v in self.train_config.__dict__.items()})
+            self.train_config = dataclasses.replace(
+                self.train_config, **{k: params.get(k, v) for k, v in self.train_config.__dict__.items()}
+            )
 
     def validate(self) -> tuple[bool, str]:
 
@@ -191,6 +209,7 @@ def speedrun_analysis(config: SpeedrunAnalysisConfig):
             "train_config": dataclasses.asdict(config.speedrun_config.train_config),
             "tokenized_dataset": str(config.speedrun_config.tokenized_dataset),
             "hardware_config": dataclasses.asdict(config.speedrun_config.hardware_config),
+            "wandb_run_id": run_id,
         },
         "actual_stats": {
             "training_time_in_minutes": total_time,
@@ -219,6 +238,11 @@ def default_speedrun(
     tags: list[str] | None = None,
 ) -> Sequence[ExecutorStep]:
     """
+
+    Speedrun is a mechanism for submitting a PoC run for a new model/optimizer configuration. It consists of both a
+    training step and an analysis step that computes and stores metrics/metadata for the speedrun. See `sample_run.py`
+    for an example.
+
     Args:
         name: name of the training run. Will form the basis of the output path for the executor step.
         config: SpeedrunConfig containing model, training, and dataset configuration
@@ -245,7 +269,7 @@ def default_speedrun(
     train_step = default_train(
         name=f"speedrun/{name}",
         tokenized=config.tokenized_dataset,
-        model_config=dataclasses.replace(config.model_config),
+        model_config=config.model_config,
         train_config=train_config,
         tags=run_tags,
         eval_harness_tasks=CORE_TASKS_PLUS_MMLU,

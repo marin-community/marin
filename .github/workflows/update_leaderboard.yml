@@ -1,13 +1,16 @@
 name: Update Speedrun Leaderboard
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       storage-path:
         description: 'Storage path for run directories (e.g., gs://marin-us-central2/checkpoints/speedrun or ./local/path)'
         required: true
         default: 'gs://marin-us-central2/checkpoints/speedrun'
-
+  
 jobs:
   update-leaderboard:
     runs-on: ubuntu-latest

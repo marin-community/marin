@@ -14,7 +14,6 @@ from experiments.speedrun.speedrun import ComputeBudget, HardwareConfig, Speedru
 from marin.execution.executor import executor_main
 
 
-@OptimizerConfig.register_subclass("adamax")
 @dataclass
 class AdamaxConfig(OptimizerConfig):
     beta1: float = 0.9
@@ -24,6 +23,13 @@ class AdamaxConfig(OptimizerConfig):
 
     def build(self, num_train_steps):
         print(f"Building optimizer: {self.__class__.__name__}")
+
+        # Try to register the class if it's not already registered
+        try:
+            OptimizerConfig.register_subclass("adamax")(AdamaxConfig)
+        except ValueError:
+            # ignore gracefully and use the already registered class
+            pass
 
         def _optimizer(learning_rate):
             components = []

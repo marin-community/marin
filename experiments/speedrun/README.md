@@ -4,18 +4,16 @@ TODO (Nikil): README is currently a work in progress- will be refined as we make
 
 ## Overview and Motivation
 
-Marin Speedrun is a community-driven model training contest and framework that challenges participants to train language models under specific compute budgets. Inspired by NanoGPT's speedrun, the goal is to achieve the best possible model performance while staying within the allocated compute budget for each track.
+Marin Speedrun is a community-driven model training contest and framework that challenges participants to train language models under specific compute budgets. Inspired by [NanoGPT speedrun](https://github.com/KellerJordan/modded-nanogpt), the goal is to achieve the best possible model performance while staying within the allocated compute budget for each track.
 
 ## Tracks
 
-The speedrun is divided into three tracks based on compute budget: **TINY**, **SMALL**, and **MEDIUM**.Each track has a specific FLOPs budget that your training run must stay within to qualify. We fix the dataset to the first <TBD> and you can experiment with any model architecture and training approach you'd like, as long as it stays within the corresponding compute budget.
-
-The dataset used is the FineWeb-Edu dataset.
+The speedrun is divided into three tracks based on compute budget: **TINY**, **SMALL**, and **MEDIUM**.Each track has a specific FLOPs budget that your training run must stay within to qualify. We fix the dataset to the [FineWeb-Edu dataset](https://huggingface.co/datasets/HuggingFaceFW/fineweb-edu) and you can experiment with any model architecture and training approach you'd like, as long as it stays within the corresponding compute budget.
 
 ## Setup and Usage
 
 ### Prerequisites
-Follow the steps in [Marin's README](../../README.md) to set up your development environment. You will need to use Weights and Biases to track your runs, as we use it to track eval scores and relevant metrics.
+Follow the steps in [Marin's README](../../README.md) to set up your development environment. You will need to use Weights and Biases to track your runs, as we use it to track eval scores and relevant metrics. TODO (Nikil): add a guide or link for setting up levanter's `.levanter.yaml`.
 
 ### Running a Speedrun
 Create a configuration for your run and use `default_speedrun` to train your model. This will train the model and generate an analysis file containing metrics and metadata.
@@ -51,7 +49,7 @@ The leaderboard will be viewable at http://localhost:8000
    - Title: `[Speedrun] Your Run Name - Track (e.g., TINY)`
    - Description:
      - Brief explanation of your approach
-     - Key metrics (LM Eval Acc, C4-EN BPB)
+     - Key metrics (C4-EN BPB, FineWeb-Edu Validation Loss)
      - Discussion of your approach
 
 6. The CI workflow will then:
@@ -63,7 +61,6 @@ The leaderboard will be viewable at http://localhost:8000
 
 ## Evaluation Metrics
 
-- **LM Eval Accuracy**: Overall accuracy on language model evaluation benchmarks
 - **C4-EN BPB (Bits per Byte)**: Compression performance on the C4 dataset (TODO: decide a concrete metric between these)
 - **FLOPs Used**: Total compute used during training
 - **Fineweb-Edu Validation Loss**: Validation loss on the Fineweb-Edu dataset

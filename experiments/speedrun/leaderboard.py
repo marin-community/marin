@@ -5,7 +5,6 @@ Leaderboard system for Marin speedruns.
 import json
 import logging
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 
 import fsspec
@@ -19,7 +18,6 @@ class LeaderboardEntry:
     compute_budget_track: str
     model_size: int
     total_training_time: float
-    submission_timestamp: str
     final_flops_used: float
     submitted_by: str
     storage_path: str  # Path to the analysis file
@@ -27,6 +25,21 @@ class LeaderboardEntry:
     lm_eval_macro_avg_acc: float | None = None
     eval_paloma_c4_en_bpb: float | None = None
     eval_fineweb_edu_loss: float | None = None
+
+    def to_json(self) -> dict:
+        return {
+            "run_name": self.run_name,
+            "compute_budget_track": self.compute_budget_track,
+            "model_size": self.model_size,
+            "total_training_time": self.total_training_time,
+            "final_flops_used": self.final_flops_used,
+            "submitted_by": self.submitted_by,
+            "storage_path": self.storage_path,
+            "wandb_run_id": self.wandb_run_id,
+            "lm_eval_macro_avg_acc": self.lm_eval_macro_avg_acc,
+            "eval_paloma_c4_en_bpb": self.eval_paloma_c4_en_bpb,
+            "eval_fineweb_edu_loss": self.eval_fineweb_edu_loss,
+        }
 
 
 class Leaderboard:
@@ -76,11 +89,10 @@ class Leaderboard:
             compute_budget_track=analysis["compute_budget"]["track"],
             model_size=analysis["run_related_info"]["num_parameters"],
             total_training_time=training_time,
-            submission_timestamp=analysis.get("speedrun_analysis_timestamp", datetime.now().isoformat()),
             final_flops_used=actual_flops,
             submitted_by=analysis["run_related_info"].get("submitted_by", "unknown"),
             storage_path=storage_path,
-            wandb_run_id=None,
+            wandb_run_id=analysis["run_related_info"].get("wandb_run_id", None),
             lm_eval_macro_avg_acc=float(lm_eval_macro_avg_acc) if lm_eval_macro_avg_acc is not None else None,
             eval_paloma_c4_en_bpb=float(eval_paloma_c4_en_bpb) if eval_paloma_c4_en_bpb is not None else None,
             eval_fineweb_edu_loss=(
@@ -161,23 +173,7 @@ def serve_leaderboard(storage_path: str, port: int = 8000):
     entries = leaderboard.get_entries()
     with open(data_dir / "runs.json", "w") as f:
         json.dump(
-            [
-                {
-                    "run_name": e.run_name,
-                    "compute_budget_track": e.compute_budget_track,
-                    "model_size": e.model_size,
-                    "total_training_time": e.total_training_time,
-                    "final_flops_used": e.final_flops_used,
-                    "submission_timestamp": e.submission_timestamp,
-                    "submitted_by": e.submitted_by,
-                    "storage_path": e.storage_path,
-                    "wandb_run_id": e.wandb_run_id,
-                    "lm_eval_macro_avg_acc": e.lm_eval_macro_avg_acc,
-                    "eval_paloma_c4_en_bpb": e.eval_paloma_c4_en_bpb,
-                    "eval_fineweb_edu_loss": e.eval_fineweb_edu_loss,
-                }
-                for e in entries
-            ],
+            [e.to_json() for e in entries],
             f,
             indent=2,
         )
