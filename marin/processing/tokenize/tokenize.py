@@ -153,9 +153,10 @@ def _expand_directories(config: UrlDatasetSourceConfig) -> UrlDatasetSourceConfi
 def tokenize(config: TokenizeConfigBase):
     source_config = config.as_lm_dataset_source_config(config.cache_path)
 
-    # TODO: Levanter doesn't automatically expand directories to globs, but by convention we do in Marin
-    # we should backport this to Levanter
-    source_config = _expand_directories(source_config)
+    if isinstance(config, TokenizeConfig):
+        # TODO: Levanter doesn't automatically expand directories to globs, but by convention we do in Marin
+        # we should backport this to Levanter
+        source_config = _expand_directories(source_config)
 
     train_source = source_config.get_shard_source("train")
     validation_source = source_config.get_shard_source("validation")
