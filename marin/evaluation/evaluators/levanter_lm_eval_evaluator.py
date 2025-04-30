@@ -24,6 +24,7 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
 
     _pip_packages: ClassVar[list[Dependency]] = [
         *LevanterTpuEvaluator.DEFAULT_PIP_PACKAGES,
+        Dependency(name="jax[tpu]==0.5.1"),
     ]
 
     def evaluate(
