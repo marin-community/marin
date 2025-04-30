@@ -21,12 +21,14 @@ from marin.crawl.deduplicate_outlinks_against_cc import (
     deduplicate_outlinks_against_cc_driver,
 )
 from marin.crawl.fetch_links import FetchLinksConfig, process_shard_links
-from marin.crawl.get_fineweb_edu_crawl_yield import GetCrawlYieldConfig
+from marin.crawl.get_finemath_crawl_yield import GetCrawlYieldConfig
 from marin.crawl.get_outlinks_from_html import OutlinksExtractionConfig, get_outlinks_from_html
 from marin.crawl.minhash.deduplicate_against_index import (
     MinhashDeduplicateAgainstIndexConfig,
     minhash_deduplicate_against_index_driver,
 )
+from marin.crawl.sample_from_unique_outlinks import OutlinksSamplingConfig, sample_outlinks
+from marin.crawl.deduplicate_outlinks import DeduplicateOutlinksConfig, deduplicate_and_shuffle_with_bq_driver
 from marin.execution.executor import ExecutorStep, output_path_of, this_output_path
 
 # path to bloom filter for links. The year range corresponds to time period designations for CC
@@ -42,6 +44,7 @@ def default_crawl(
     config: HtmlExtractionConfig,
     yield_fn: Callable,
     input_pattern: str = "*_links.jsonl.gz",
+    deduplicate_from_cc: bool = False,
 ) -> list[ExecutorStep]:
     """
     Crawls over a given parquet to extract the outlinks and populate a new dataset based on them.
@@ -68,30 +71,52 @@ def default_crawl(
         config=OutlinksExtractionConfig(
             html_input_path=output_path_of(extracted_html),
             outlinks_output_path=this_output_path(),
-            prefix=config.source_name,
+            prefix=config.source_name.split("/")[-1],
         ),
     )
 
-    outlinks_deduplicated_2013_2018 = ExecutorStep(
-        name=f"crawl/{config.source_name}/outlinks/{config.source_name}-deduplicated-2013-2018",
-        fn=deduplicate_outlinks_against_cc_driver,
-        config=DeduplicateOutlinksAgainstCCConfig(
-            input_pattern=output_path_of(extracted_outlinks, input_pattern),
-            bloom_filter_path=BLOOM_FILTER_2013_2018,
-            output_path=this_output_path(),
-            shards_per_batch=100,
-        ),
-    )
+    if deduplicate_from_cc:
+        outlinks_cc_deduplicated_2013_2018 = ExecutorStep(
+            name=f"crawl/{config.source_name}/outlinks/{config.source_name}-cc-deduplicated-2013-2018",
+            fn=deduplicate_outlinks_against_cc_driver,
+            config=DeduplicateOutlinksAgainstCCConfig(
+                input_pattern=output_path_of(extracted_outlinks, input_pattern),
+                bloom_filter_path=BLOOM_FILTER_2013_2018,
+                output_path=this_output_path(),
+                shards_per_batch=100,
+            ),
+        )
 
-    # Outlinks deduplicated against 2013-2018 CC bloom filter: gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-cc-deduplicated/1000_links.jsonl.gz
+        # Outlinks deduplicated against 2013-2018 CC bloom filter: gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-cc-deduplicated/1000_links.jsonl.gz
+        outlinks_cc_deduplicated_2019_2024 = ExecutorStep(
+            name=f"crawl/{config.source_name}/outlinks/{config.source_name}-cc-deduplicated-2019-2024",
+            fn=deduplicate_outlinks_against_cc_driver,
+            config=DeduplicateOutlinksAgainstCCConfig(
+                input_pattern=output_path_of(outlinks_cc_deduplicated_2013_2018, input_pattern),
+                bloom_filter_path=BLOOM_FILTER_2019_2024,
+                output_path=this_output_path(),
+                shards_per_batch=100,
+            ),
+        )
+
     outlinks_deduplicated = ExecutorStep(
         name=f"crawl/{config.source_name}/outlinks/{config.source_name}-deduplicated",
-        fn=deduplicate_outlinks_against_cc_driver,
-        config=DeduplicateOutlinksAgainstCCConfig(
-            input_pattern=output_path_of(outlinks_deduplicated_2013_2018, input_pattern),
-            bloom_filter_path=BLOOM_FILTER_2019_2024,
-            output_path=this_output_path(),
-            shards_per_batch=100,
+        fn=deduplicate_and_shuffle_with_bq_driver,
+        config=DeduplicateOutlinksConfig(
+            gcs_input_pattern=output_path_of(extracted_outlinks, input_pattern) if not deduplicate_from_cc else output_path_of(outlinks_cc_deduplicated_2013_2018, input_pattern),
+            gcs_output_prefix=this_output_path("links"),
+            bq_table_id=f"{config.source_name.split('/')[-1]}",
+        ),
+    )
+
+    sampled_outlinks = ExecutorStep(
+        name=f"crawl/{config.source_name}/outlinks/{config.source_name}-unique",
+        fn=sample_outlinks,
+        config=OutlinksSamplingConfig(
+            input_pattern=output_path_of(outlinks_deduplicated, input_pattern),
+            num_to_sample=10000000,
+            shard_size=10000,
+            output_prefix=this_output_path("links"),
         ),
     )
 
@@ -100,7 +125,7 @@ def default_crawl(
         name=f"crawl/{config.source_name}/fetched_outlinks/{config.source_name}",
         fn=process_shard_links,
         config=FetchLinksConfig(
-            urls_input_directory=output_path_of(outlinks_deduplicated),
+            urls_input_directory=output_path_of(sampled_outlinks),
             output_path=this_output_path(),
             threads_per_shard=160,
             max_concurrent_shards=40,
@@ -109,7 +134,7 @@ def default_crawl(
 
     # Fetched outlinks in WARC format: gs://marin-us-central2/scratch/nfliu/fetched_outlinks/fineweb-edu-10M/links.0.warc.gz
     links_fetched_warc = ExecutorStep(
-        name=f"crawl/{config.source_name}/fetched_outlinks/{config.source_name}-cc-deduplicated",
+        name=f"crawl/{config.source_name}/fetched_outlinks/{config.source_name}-warc",
         fn=convert_shards_to_warc,
         config=ConvertResponsesToWARCConfig(
             input_directory=output_path_of(links_fetched_parquet),
@@ -122,12 +147,11 @@ def default_crawl(
         name=f"crawl/{config.source_name}",
         fn=yield_fn,
         config=GetCrawlYieldConfig(
-            urls_input_directory=output_path_of(outlinks_deduplicated),
+            urls_input_directory=output_path_of(sampled_outlinks),
             crawl_input_directory=output_path_of(links_fetched_warc),
-            data_source=config.source_name,
-            text_output_directory=this_output_path(f"text/{config.source_name}-cc-deduplicated"),
+            data_source=config.source_name.split("/")[-1],
+            text_output_directory=this_output_path(f"text/{config.source_name}"),
             statistics_output_path=output_path_of(links_fetched_warc, "yield_statistics.json.gz"),
-            urls_and_scores_output_directory=this_output_path(f"urls_and_scores/{config.source_name}-cc-deduplicated"),
         ),
         override_output_path=f"crawl/{config.source_name}",
     )
@@ -140,10 +164,10 @@ def default_crawl(
             index_path=this_output_path(f"{config.source_name}_minhash_index/index"),
             input_patterns=[
                 output_path_of(
-                    links_fetched_warc_yield, f"{config.source_name}-cc-deduplicated/*_text_and_scores.passing.parquet"
+                    links_fetched_warc_yield, f"{config.source_name}/*_text_and_scores.passing.parquet"
                 )
             ],
-            parquets_paths_file=this_output_path(f"{config.source_name}-cc-deduplicated-passing_paths.txt"),
+            parquets_paths_file=this_output_path(f"{config.source_name}-passing_paths.txt"),
             minhash_base_path=this_output_path(
                 f"minhash/{config.source_name}_cc_deduplicated_passing_minhash_against_{config.source_name}"
             ),
@@ -154,13 +178,21 @@ def default_crawl(
         override_output_path=f"crawl/{config.source_name}",
     )
 
-    return [
+    steps = [
         extracted_html,
         extracted_outlinks,
-        outlinks_deduplicated_2013_2018,
         outlinks_deduplicated,
+        sampled_outlinks,
         links_fetched_parquet,
         links_fetched_warc,
         links_fetched_warc_yield,
-        links_minhash_deduplicated,
+        # links_minhash_deduplicated,
     ]
+
+    if deduplicate_from_cc:
+        steps.extend([
+            outlinks_cc_deduplicated_2013_2018,
+            outlinks_cc_deduplicated_2019_2024,
+        ])
+
+    return steps
