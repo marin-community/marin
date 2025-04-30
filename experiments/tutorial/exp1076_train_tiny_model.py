@@ -9,49 +9,18 @@ from levanter.models.llama import LlamaConfig
 from experiments.defaults import default_tokenize, default_train
 from experiments.llama import llama3_tokenizer
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.execution.executor import ExecutorStep, executor_main
+from marin.execution.executor import executor_main
 from marin.resources import GpuConfig
-from operations.download.huggingface.download_hf import DownloadConfig, download_hf
 
-# TODO: skip downloading
-# TODO: add default_download
-
-###
-## Step 1: Download the dataset
-###
-
-# Note that experiment files just build a computation graph of the steps needed
-# So wikitext below is a placeholder for the actual dataset
-
-wikitext = ExecutorStep(
-    name="raw/dlwh/wikitext_2_detokenized",
-    fn=download_hf,
-    config=DownloadConfig(
-        hf_dataset_id="dlwh/wikitext_2_detokenized",
-        # In Marin, we strive for full reproducibility, so we pin the revision
-        revision="87a6c77d244175cbc883de2afae02f7d894e0ac5",
-    ),
-)
-
-###
-## Step 2: Tokenize the dataset
-###
-
-# Steps can depend on other steps: wikitext_tokenized depends on wikitext
-
+wikitext_hf_reference = "dlwh/wikitext_2_detokenized"
 wikitext_tokenized = default_tokenize(
-    name="tokenized/dlwh/wikitext_2_detokenized",
-    dataset=wikitext,
+    name=f"tokenized/${wikitext_hf_reference}",
+    dataset=wikitext_hf_reference,
     tokenizer=llama3_tokenizer,
 )
 
 
-###
-## Step 3: Train the model
-###
-
 # This is a tiny model. It will be very bad but it will train quickly
-
 llama_nano_config = LlamaConfig(
     seq_len=512,
     hidden_dim=32,
@@ -72,9 +41,9 @@ nano_train_config = SimpleTrainConfig(
     weight_decay=0.1,
 )
 
-
 nano_wikitext_model = default_train(
     name="llama-nano-wikitext",
+    # Steps can depend on other steps: wikitext_tokenized depends on wikitext
     tokenized=wikitext_tokenized,
     model_config=llama_nano_config,
     train_config=nano_train_config,
@@ -87,7 +56,6 @@ nano_wikitext_model = default_train(
 if __name__ == "__main__":
     executor_main(
         steps=[
-            wikitext,
             wikitext_tokenized,
             nano_wikitext_model,
         ]
