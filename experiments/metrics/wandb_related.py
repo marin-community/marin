@@ -32,7 +32,13 @@ def get_wandb_run_metrics(
     - dict: A dictionary containing relevant metrics for the run.
     """
     if metrics is None:
-        metrics = ["eval/paloma/c4_en/bpb", "throughput/total_gflops", "_runtime", "parameter_count"]
+        metrics = [
+            "eval/paloma/c4_en/bpb",
+            "lm_eval/averages/macro_avg_acc",
+            "throughput/total_gflops",
+            "_runtime",
+            "parameter_count",
+        ]
 
     # Initialize the WandB API
     api = wandb.Api()
@@ -217,26 +223,67 @@ def calculate_wandb_metrics(config: WandbMetricsConfig) -> dict[str, Any]:
         "<23B": 23_000_000_000,  # for 22B scale models or smaller
     }
 
-    # track best BPB for each scale
-    best_bpb_per_scale = {scale: {"bpb": None, "run_id": None} for scale in parameter_scales}
+    # track best metrics for each scale
+    best_metrics_per_scale = {
+        scale: {"bpb": {"value": None, "run_id": None}, "macro_avg_acc": {"value": None, "run_id": None}}
+        for scale in parameter_scales
+    }
 
-    # get the model with best bpb eval for each group in 1b parameter scale
-    # best_bpb_1b, best_bpb_7b = None, None
-    # best_bpb1b_run_id, best_bpb7b_run_id = None, None
+    # Initialize final metrics dictionary
+    final_metrics = {}
+
     for run_id, metrics in run_metrics.items():
-        if metrics["eval/paloma/c4_en/bpb"] is not None:
-            if not isinstance(metrics["eval/paloma/c4_en/bpb"], float):
-                logger.info(f"BPB for run {run_id} is a string: {metrics['eval/paloma/c4_en/bpb']}. Skipping.")
-                continue
+        if metrics["parameter_count"] is None:
+            continue
+
+        try:
             num_parameters = float(metrics["parameter_count"])
-            for scale_label, threshold in parameter_scales.items():
-                if num_parameters < threshold:
-                    current_best_bpb = best_bpb_per_scale[scale_label]["bpb"]
-                    if current_best_bpb is None or metrics["eval/paloma/c4_en/bpb"] < current_best_bpb:
-                        best_bpb_per_scale[scale_label] = {
-                            "bpb": metrics["eval/paloma/c4_en/bpb"],
-                            "run_id": run_id,
-                        }
+        except (ValueError, TypeError):
+            logger.info(f"Invalid parameter count for run {run_id}: {metrics['parameter_count']}. Skipping.")
+            continue
+
+        # Check BPB metric
+        if metrics["eval/paloma/c4_en/bpb"] is not None:
+            try:
+                bpb = float(metrics["eval/paloma/c4_en/bpb"])
+                for scale_label, threshold in parameter_scales.items():
+                    if num_parameters < threshold:
+                        current_best_bpb = best_metrics_per_scale[scale_label]["bpb"]["value"]
+                        if current_best_bpb is None or bpb < current_best_bpb:
+                            best_metrics_per_scale[scale_label]["bpb"] = {"value": bpb, "run_id": run_id}
+            except (ValueError, TypeError):
+                logger.info(f"Invalid BPB for run {run_id}: {metrics['eval/paloma/c4_en/bpb']}. Skipping BPB metric.")
+
+        # Check macro_avg_acc metric
+        if metrics.get("lm_eval/averages/macro_avg_acc") is not None:
+            try:
+                macro_avg_acc = float(metrics["lm_eval/averages/macro_avg_acc"])
+                for scale_label, threshold in parameter_scales.items():
+                    if num_parameters < threshold:
+                        current_best_acc = best_metrics_per_scale[scale_label]["macro_avg_acc"]["value"]
+                        if (
+                            current_best_acc is None or macro_avg_acc > current_best_acc
+                        ):  # Note: higher is better for accuracy
+                            best_metrics_per_scale[scale_label]["macro_avg_acc"] = {
+                                "value": macro_avg_acc,
+                                "run_id": run_id,
+                            }
+            except (ValueError, TypeError):
+                logger.info(
+                    f"""Invalid macro_avg_acc for run {run_id}:
+                    {metrics['lm_eval/averages/macro_avg_acc']}. Skipping accuracy metric."""
+                )
+    # Add best metrics to final metrics
+    for scale, data in best_metrics_per_scale.items():
+        # Add BPB metrics
+        if data["bpb"]["value"] is not None:
+            final_metrics[f"Best BPB for {scale}"] = data["bpb"]["value"]
+            final_metrics[f"Best BPB Run ID for {scale}"] = data["bpb"]["run_id"]
+
+        # Add macro_avg_acc metrics
+        if data["macro_avg_acc"]["value"] is not None:
+            final_metrics[f"Best Macro Avg Acc for {scale}"] = data["macro_avg_acc"]["value"]
+            final_metrics[f"Best Macro Avg Acc Run ID for {scale}"] = data["macro_avg_acc"]["run_id"]
 
     # calculate total gflops across all runs
     total_gflops = sum(
@@ -247,21 +294,33 @@ def calculate_wandb_metrics(config: WandbMetricsConfig) -> dict[str, Any]:
         ]
     )
 
-    metrics = {
-        "num_runs": len(run_metrics),
-        "best_c4_en_bpb": {
-            scale: {
-                "run_id": data["run_id"],
-                "run_metrics": run_metrics[data["run_id"]] if data["run_id"] else None,
-            }
-            for scale, data in best_bpb_per_scale.items()
-        },
-        "total_gflops_across_runs": total_gflops,
-        "total_petaflops_across_runs": total_gflops / 1e6,
-    }
+    # Add additional metrics
+    final_metrics.update(
+        {
+            "num_runs": len(run_metrics),
+            "best_c4_en_bpb": {
+                scale: {
+                    "run_id": data["bpb"]["run_id"],
+                    "run_metrics": run_metrics[data["bpb"]["run_id"]] if data["bpb"]["run_id"] else None,
+                }
+                for scale, data in best_metrics_per_scale.items()
+            },
+            "best_macro_avg_acc": {
+                scale: {
+                    "run_id": data["macro_avg_acc"]["run_id"],
+                    "run_metrics": (
+                        run_metrics[data["macro_avg_acc"]["run_id"]] if data["macro_avg_acc"]["run_id"] else None
+                    ),
+                }
+                for scale, data in best_metrics_per_scale.items()
+            },
+            "total_gflops_across_runs": total_gflops,
+            "total_petaflops_across_runs": total_gflops / 1e6,
+        }
+    )
 
-    logger.info(metrics)
-    return metrics
+    logger.info(final_metrics)
+    return final_metrics
 
 
 if __name__ == "__main__":

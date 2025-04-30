@@ -1,0 +1,32 @@
+{
+    "id": "thread-14",
+    "text": "# Crossfire, Unify VTX settings are being overwritten\n\nI have a crossfire nano hooked up properly to a unify pro32 HV. Everything works as expected and perfectly except when I use the Crossfire Lite OSD to change the VTX settings. \n\nWhen I change the VTX settings, such as channel, I can see the signal switching in the goggles (goes from perfect image to static) and I can even change the channel in the goggles to the new channel being blasted from the VTX and I can see the video. But about 5-10 seconds later, the VTX settings automatically change back to the initial settings. In the example above, the channel reverts back to the initial channel and I can change my goggles back to that channel to see it again. \n\nI've tried hooking up to the TBS agent to switch the channels and that works as well, but again, it reverts back in 5-10 seconds. \n\nHere's a video to show what's going on: <https://photos.app.goo.gl/p6Dt7A11EWjBS3Vz9>\n\n## Answer\n\nThe crossfire OSD has a \u201cmy VTX\u201d setting on the transmitter settings pane: I had \u201cXF TX LITE \\> MY VTX \\> ACTIVE\u201d set to \u201cYes\u201d and the channels it would flip back to were set there. It seems the \u201cMY VTX\u201d section overrides whatever the unify is trying to do. Once I set that to \u201cNo\u201d the changes I made stuck.",
+    "source": "stackexchange",
+    "added": "2024-08-14T11:00:38.017945+00:00",
+    "created": "2020-04-14T19:51:22.343",
+    "metadata": {
+        "id": "14",
+        "subdomain": "drones",
+        "url": "https://drones.stackexchange.com/questions/14",
+        "title": "Crossfire, Unify VTX settings are being overwritten",
+        "question": "<p>I have a crossfire nano hooked up properly to a unify pro32 HV.  Everything works as expected and perfectly except when I use the Crossfire Lite OSD to change the VTX settings.  </p>\n\n<p>When I change the VTX settings, such as channel, I can see the signal switching in the goggles (goes from perfect image to static) and I can even change the channel in the goggles to the new channel being blasted from the VTX and I can see the video.  But about 5-10 seconds later, the VTX settings automatically change back to the initial settings.  In the example above, the channel reverts back to the initial channel and I can change my goggles back to that channel to see it again.  </p>\n\n<p>I've tried hooking up to the TBS agent to switch the channels and that works as well, but again, it reverts back in 5-10 seconds.  </p>\n\n<p>Here's a video to show what's going on: <a href=\"https://photos.app.goo.gl/p6Dt7A11EWjBS3Vz9\" rel=\"nofollow noreferrer\">https://photos.app.goo.gl/p6Dt7A11EWjBS3Vz9</a></p>\n",
+        "tags": [
+            "crossfire",
+            "team-blacksheep",
+            "crossfire-lite",
+            "unify-pro32-hv",
+            "crossfire-nano"
+        ],
+        "creation_time_utc": "2020-04-14T19:51:22.343",
+        "votes": 8,
+        "accepted_answer_id": null,
+        "answers": [
+            {
+                "id": "15",
+                "body": "<p>The crossfire OSD has a \u201cmy VTX\u201d setting on the transmitter settings pane: I had \u201cXF TX LITE > MY VTX > ACTIVE\u201d set to \u201cYes\u201d and the channels it would flip back to were set there. It seems the \u201cMY VTX\u201d section overrides whatever the unify is trying to do. Once I set that to \u201cNo\u201d the changes I made stuck.</p>\n",
+                "creation_time_utc": "2020-04-14T19:51:22.343",
+                "votes": 6
+            }
+        ]
+    }
+}
