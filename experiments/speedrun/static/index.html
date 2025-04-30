@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+<!-- <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -197,5 +197,250 @@
             color: white;
         }
     </style>
+</body>
+</html> -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Marin Speedrun - Pareto Frontier Leaderboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/plotly.js@2.27.0/dist/plotly.min.js"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'marin-blue': '#1a73e8',
+                        'marin-dark': '#1e293b',
+                        'marin-accent': '#34d399',
+                    },
+                    animation: {
+                        'fade-in': 'fadeIn 0.5s ease-out',
+                        'scale-hover': 'scaleHover 0.2s ease-in-out',
+                    },
+                    keyframes: {
+                        fadeIn: {
+                            '0%': { opacity: '0', transform: 'translateY(10px)' },
+                            '100%': { opacity: '1', transform: 'translateY(0)' },
+                        },
+                        scaleHover: {
+                            '0%': { transform: 'scale(1)' },
+                            '100%': { transform: 'scale(1.1)' },
+                        },
+                    },
+                },
+            },
+        }
+    </script>
+    <style>
+        body {
+            background: linear-gradient(to bottom, #f3f4f6, #e5e7eb);
+        }
+        .tooltip {
+            position: absolute;
+            background: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            pointer-events: none;
+            z-index: 1000;
+        }
+        .animate-row {
+            animation: fade-in 0.5s ease-out;
+        }
+        .plot-container {
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            border-radius: 8px;
+            background: white;
+            padding: 16px;
+        }
+    </style>
+</head>
+<body class="min-h-screen">
+    <div class="min-h-screen">
+        <!-- Header -->
+        <header class="bg-marin-dark text-white shadow-lg">
+            <div class="container mx-auto px-4 py-6">
+                <h1 class="text-3xl font-bold">Marin Speedrun - Pareto Frontier</h1>
+                <p class="mt-2 text-gray-300">Explore the best trade-offs in model training efficiency</p>
+            </div>
+        </header>
+
+        <!-- Main content -->
+        <main class="container mx-auto px-4 py-8">
+            <!-- Pareto Frontier Plot -->
+            <div class="mb-8 plot-container">
+                <h2 class="text-2xl font-semibold text-marin-dark mb-4">Pareto Frontier: FLOPs vs. Validation Loss</h2>
+                <div id="pareto-plot" class="w-full h-[400px]"></div>
+                <p class="text-sm text-gray-500 mt-2">Hover over points to see run details. Click to filter the table below.</p>
+            </div>
+
+            <!-- Stats cards -->
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+                <div class="bg-white rounded-lg shadow p-6 animate-row">
+                    <h3 class="text-gray-500 text-sm font-medium">Total Runs</h3>
+                    <p class="text-3xl font-bold text-marin-dark mt-2" id="total-runs">-</p>
+                </div>
+                <div class="bg-white rounded-lg shadow p-6 animate-row">
+                    <h3 class="text-gray-500 text-sm font-medium">Lowest FLOPs on Frontier</h3>
+                    <p class="text-3xl font-bold text-marin-dark mt-2" id="lowest-flops">-</p>
+                </div>
+                <div class="bg-white rounded-lg shadow p-6 animate-row">
+                    <h3 class="text-gray-500 text-sm font-medium">Best Validation Loss</h3>
+                    <p class="text-3xl font-bold text-marin-dark mt-2" id="best-loss">-</p>
+                </div>
+            </div>
+
+            <!-- Leaderboard table -->
+            <div class="bg-white rounded-lg shadow overflow-hidden">
+                <table class="min-w-full divide-y divide-gray-200">
+                    <thead class="bg-gray-50">
+                        <tr>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Rank</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Run Name</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Model Size</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Training Time</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Total FLOPs Used</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">FineWeb-Edu Loss</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">C4-EN BPB</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Submitted By</th>
+                        </tr>
+                    </thead>
+                    <tbody class="bg-white divide-y divide-gray-200" id="leaderboard-body"></tbody>
+                </table>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        async function fetchLeaderboard() {
+            try {
+                const response = await fetch('data/runs.json');
+                const data = await response.json();
+                return data.filter(run => run.final_flops_used && run.eval_fineweb_edu_loss);
+            } catch (error) {
+                console.error('Error fetching leaderboard:', error);
+                return [];
+            }
+        }
+
+        function formatModelSize(size) {
+            return size < 1e9 ? `${(size / 1e6).toFixed(1)}M` : `${(size / 1e9).toFixed(1)}B`;
+        }
+
+        function formatFlops(flops) {
+            return flops.toExponential(2).replace('e+', 'E');
+        }
+
+        function formatMetric(value) {
+            return value === null ? 'N/A' : value.toFixed(3);
+        }
+
+        function isParetoFrontier(run, runs) {
+            return !runs.some(other =>
+                other !== run &&
+                other.final_flops_used <= run.final_flops_used &&
+                other.eval_fineweb_edu_loss <= run.eval_fineweb_edu_loss &&
+                (other.final_flops_used < run.final_flops_used || other.eval_fineweb_edu_loss < run.eval_fineweb_edu_loss)
+            );
+        }
+
+        function updateStats(entries) {
+            const paretoEntries = entries.filter(run => isParetoFrontier(run, entries));
+            document.getElementById('total-runs').textContent = entries.length;
+            document.getElementById('lowest-flops').textContent = paretoEntries.length
+                ? formatFlops(Math.min(...paretoEntries.map(e => e.final_flops_used)))
+                : '-';
+            document.getElementById('best-loss').textContent = paretoEntries.length
+                ? formatMetric(Math.min(...paretoEntries.map(e => e.eval_fineweb_edu_loss)))
+                : '-';
+        }
+
+        function updateLeaderboard(entries, filterRunName = null) {
+            const tbody = document.getElementById('leaderboard-body');
+            tbody.innerHTML = '';
+            let filteredEntries = filterRunName
+                ? entries.filter(e => e.run_name === filterRunName)
+                : entries;
+
+            filteredEntries.sort((a, b) => a.final_flops_used - b.final_flops_used);
+
+            filteredEntries.forEach((entry, index) => {
+                const isPareto = isParetoFrontier(entry, entries);
+                const row = document.createElement('tr');
+                row.className = `animate-row ${index % 2 === 0 ? 'bg-white' : 'bg-gray-50'} ${isPareto ? 'font-semibold' : ''}`;
+                row.innerHTML = `
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">${index + 1}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm">
+                        <a href="https://github.com/stanford-crfm/marin/tree/main/experiments/speedrun/${entry.run_name}"
+                           target="_blank"
+                           class="text-blue-600 hover:text-blue-800 transition-colors">
+                            ${entry.run_name}
+                        </a>
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${formatModelSize(entry.model_size)}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${entry.total_training_time.toFixed(1)}m</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${formatFlops(entry.final_flops_used)}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${formatMetric(entry.eval_fineweb_edu_loss)}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${formatMetric(entry.eval_paloma_c4_en_bpb)}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${entry.submitted_by}</td>
+                `;
+                tbody.appendChild(row);
+            });
+        }
+
+        function createParetoPlot(entries) {
+            const paretoEntries = entries.filter(run => isParetoFrontier(run, entries));
+            const allTrace = {
+                x: entries.map(e => e.final_flops_used),
+                y: entries.map(e => e.eval_fineweb_edu_loss),
+                text: entries.map(e => e.run_name),
+                mode: 'markers',
+                type: 'scatter',
+                name: 'All Runs',
+                marker: { size: 10, color: '#6b7280', opacity: 0.5 },
+                hovertemplate: '<b>%{text}</b><br>FLOPs: %{x:.2e}<br>Loss: %{y:.3f}<extra></extra>',
+            };
+            const paretoTrace = {
+                x: paretoEntries.map(e => e.final_flops_used),
+                y: paretoEntries.map(e => e.eval_fineweb_edu_loss),
+                text: paretoEntries.map(e => e.run_name),
+                mode: 'markers+lines',
+                type: 'scatter',
+                name: 'Pareto Frontier',
+                marker: { size: 12, color: '#1a73e8', symbol: 'star' },
+                line: { color: '#1a73e8', width: 2 },
+                hovertemplate: '<b>%{text}</b><br>FLOPs: %{x:.2e}<br>Loss: %{y:.3f}<extra></extra>',
+            };
+            const layout = {
+                xaxis: { title: 'Total FLOPs Used', type: 'log', gridcolor: '#e5e7eb' },
+                yaxis: { title: 'FineWeb-Edu Validation Loss', gridcolor: '#e5e7eb' },
+                showlegend: true,
+                hovermode: 'closest',
+                plot_bgcolor: 'white',
+                paper_bgcolor: 'white',
+                margin: { t: 20, b: 50, l: 50, r: 20 },
+                font: { family: 'Inter, sans-serif', color: '#1e293b' },
+            };
+            Plotly.newPlot('pareto-plot', [allTrace, paretoTrace], layout, { responsive: true });
+
+            document.getElementById('pareto-plot').on('plotly_click', data => {
+                const runName = data.points[0].text;
+                updateLeaderboard(entries, runName);
+            });
+        }
+
+        document.addEventListener('DOMContentLoaded', async () => {
+            const entries = await fetchLeaderboard();
+            if (entries.length) {
+                updateStats(entries);
+                updateLeaderboard(entries);
+                createParetoPlot(entries);
+            }
+        });
+    </script>
 </body>
 </html>
