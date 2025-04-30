@@ -18,10 +18,13 @@ gcloud config list
 
 # [Verification] Should not throw a permission error
 gcloud storage ls gs://marin-us-central2
+
+# Ensure you have the cluster ssh key
+make dev_setup
 ```
 
 If you don't have permissions for `hai-gcp-models` or you run into permissions
-issues, contact David Hall or Sidd Karamcheti for help!
+issues, contact David Hall for help!
 
 ## Ray Cluster + Job Submission
 
