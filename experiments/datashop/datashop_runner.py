@@ -13,6 +13,8 @@ and RAY_ADDRESS=$RAY_ADDRESS_VLLM.
 and RAY_ADDRESS=$RAY_ADDRESS_TRAINING.
 """
 
+# nodryrun
+
 from dataclasses import dataclass, field
 
 from experiments.datashop.defaults import (
@@ -50,13 +52,34 @@ class DatashopRunnerConfig:
     corpus_content_paths: list[str] = field(default_factory=list)
 
     # Name of the pretraining data path to group the output by in a single directory
-    pretraining_data_path_name: str = "medu-dclm-pretraining-subset"
+    pretraining_data_path_name: str = "datashop-dclm-pretraining-subset"
 
     # How to schedule the TPUs (what hardware to use and how to pack them) specifically for labeling
     labeler_resource_config: ResourceConfig = field(default_factory=lambda: TPU_V6E_8_STRICT_PACK)
 
     # What hardware to use for training the final model
     training_tpu_type: str = "v6e-128"
+
+    # Config for MEDU Pipeline that generates the prompt from benchmark automatically
+    medu_pipeline_config_kwargs: dict | None = None
+
+    # Config for dataset output processor to use
+    dataset_output_processor_config_kwargs: dict | None = None
+
+    # Config for the quality filter model training
+    quality_train_config_kwargs: dict | None = None
+
+    # Config for generating text
+    text_generation_inference_config_kwargs: dict | None = None
+
+    # Config for quality filter model inference
+    inference_config_kwargs: dict | None = None
+
+    # Config for filter config to allow for changing things like score threshold
+    filter_config_kwargs: dict | None = None
+
+    # Config for consolidate to allow for changing things like filetype or ray memory usage
+    consolidate_config_kwargs: dict | None = None
 
 
 class DatashopRunner:
@@ -70,15 +93,24 @@ class DatashopRunner:
             self.config.experiment_name,
             self.config.labeler_resource_config,
             self.config.data_filter_prompt,
+            self.config.medu_pipeline_config_kwargs,
+            self.config.text_generation_inference_config_kwargs,
         )
         self.encoder_model = default_train_quality_model(
-            self.labeled_documents, self.config.experiment_name, self.config.labeler_resource_config
+            self.labeled_documents,
+            self.config.experiment_name,
+            self.config.labeler_resource_config,
+            self.config.dataset_output_processor_config_kwargs,
+            self.config.quality_train_config_kwargs,
         )
         self.filtered_documents = default_quality_filter_and_consolidate(
             self.encoder_model,
             self.config.pretraining_data_path,
             self.config.pretraining_data_path_name,
             self.config.experiment_name,
+            self.config.inference_config_kwargs,
+            self.config.filter_config_kwargs,
+            self.config.consolidate_config_kwargs,
         )
         self.control_model = default_candidate_anneal(
             None,
