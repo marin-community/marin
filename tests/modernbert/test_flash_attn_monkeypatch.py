@@ -6,7 +6,12 @@ import types
 import pytest
 import ray
 import torch
-import torch_xla.core.xla_model as xm
+
+try:
+    import torch_xla.core.xla_model as xm
+except ImportError:
+    pytest.skip("torch_xla is not installed", allow_module_level=True)
+
 from transformers import AutoTokenizer, ModernBertForSequenceClassification
 
 from marin.classifiers.hf.monkey_patch_flash_attn import forward
