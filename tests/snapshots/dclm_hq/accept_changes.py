@@ -8,9 +8,6 @@ from marin.schemas.web.convert import HtmlToMarkdownConfig, ResiliparseConfig
 from marin.web.convert import convert_page
 from operations.transform.dolmino.transform_dclm_hq import find_html_in_cc
 
-AWS_ACCESS_KEY_ID = "AKIAUBKFCGE7DRRAFQFG"
-AWS_SECRET_ACCESS_KEY = "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"
-
 
 def save_html(json_data, input_path):
     input_files = os.listdir(input_path)
