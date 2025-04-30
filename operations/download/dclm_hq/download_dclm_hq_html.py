@@ -27,7 +27,8 @@ class DCLMHQDownloadConfig:
 
 def fetch_warc_from_cc(s3_warc_path: str, length: int, offset: int) -> str:
     """
-    Fetch a WARC record from Common Crawl S3 bucket using byte range requests.
+    Fetch a WARC record from Common Crawl S3 bucket using byte range requests we get
+    from the CC index via `find_html_in_cc`.
     Args:
         s3_warc_path: Path to WARC file in S3 bucket
         length: Length of the record in bytes
@@ -54,7 +55,14 @@ def fetch_warc_from_cc(s3_warc_path: str, length: int, offset: int) -> str:
 
 def find_html_in_cc(split_id: str, target_uri: str) -> str | None:
     """
-    Find HTML code for the given record ID and target URI in the Common Crawl dataset.
+    We host our own index of the Common Crawl over GCP which we use in this function.
+    For each call we recieve a list of chunks that contain the HTML content for the given target URI.
+    We then fetch each chunk and concatenate them together to form the complete HTML content.
+    Args:
+        split_id: The split ID of the Common Crawl
+        target_uri: The target URI to find the HTML content for
+    Returns:
+        The HTML content as a string
     """
     resp = requests.get(f"{CC_IDX_HOST_URL}/{split_id}-index?url={target_uri}&output=json")
 
