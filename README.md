@@ -22,29 +22,20 @@ Note that for now, all this specific code resides in this repository.
 ## Setup
 
 To install Marin, create a new virtual environment (or `conda` environment)
-with the appropriate Python version (3.10), and then run the following:
+with the appropriate Python version (3.11), and then run the following:
 
 ```bash
 git clone https://github.com/stanford-crfm/marin
 cd marin
-pip install -e ".[extras]"
+pip install -e .[dev]
 ```
 
 This will install all the core dependencies and build `marin` as a Python
-package. Installing the `[extras]` requirements will additionally install test,
+package. Installing the `[dev]` requirements will additionally install test,
 linting, and debugging dependencies (e.g., `pytest`).
 
 ## Tests
 
-The first time you run tests locally, you will need install `pandiff` to
-run the snapshot tests. This is a one-time install that can be done using the
-following commands:
-
-```bash
-brew install node  # For macOS
-conda install -c conda-forge pandoc
-npm install -g pandiff
-```
 
 To run the tests, first run `export RAY_ADDRESS=` to run Ray in local mode.
 
@@ -53,6 +44,18 @@ To run the tests, first run `export RAY_ADDRESS=` to run Ray in local mode.
    pre-commit run --all-files
    ```
 2. To run the tests, run `PYTHONPATH=tests:. pytest tests --durations=0 -n 4 --tb=no -v`
+
+### Pandiff
+
+If you're working on html-to-text conversion, you will likely want to install
+`pandiff` to run the snapshot tests. This is a one-time install that can be done
+using the following commands:
+
+```bash
+brew install node  # For macOS
+conda install -c conda-forge pandoc
+npm install -g pandiff
+```
 
 ## Hello world example
 
@@ -76,6 +79,8 @@ This command should create the following assets:
 
 Note that if you run the same command again, it will detect that both steps
 have been already run and return automatically.
+o
+
 
 ## Data browser
 
