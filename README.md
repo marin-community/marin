@@ -79,7 +79,6 @@ This command should create the following assets:
 
 Note that if you run the same command again, it will detect that both steps
 have been already run and return automatically.
-o
 
 
 ## Data browser
