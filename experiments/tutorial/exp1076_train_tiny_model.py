@@ -14,7 +14,7 @@ from marin.resources import GpuConfig
 
 wikitext_hf_reference = "dlwh/wikitext_2_detokenized"
 wikitext_tokenized = default_tokenize(
-    name=f"tokenized/${wikitext_hf_reference}",
+    name=f"tokenized/{wikitext_hf_reference}",
     dataset=wikitext_hf_reference,
     tokenizer=llama3_tokenizer,
 )
@@ -50,6 +50,7 @@ nano_wikitext_model = default_train(
     tags=["llama", "nano", "wikitext", "tutorial"],
     # no point in running evals on such a tiny model
     eval_harness_tasks=[],
+    use_default_validation=False,
 )
 
 
