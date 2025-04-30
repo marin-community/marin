@@ -76,6 +76,8 @@ jobs:
                                      && export WANDB_API_KEY=${{ secrets.WANDB_API_KEY }} \
                                      && export WANDB_ENTITY=stanford-mercury \
                                      && export OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }} \
+                                     && export HF_TOKEN=${{ secrets.HF_TOKEN }} \
+                                     && export TF_CPP_MIN_LOG_LEVEL=1 \
                                      && python scripts/install_all_pip_dep.py \
                                      && pip list \
                                      && echo TPU_TEST \
