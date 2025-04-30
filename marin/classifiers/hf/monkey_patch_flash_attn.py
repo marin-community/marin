@@ -29,7 +29,6 @@ def eager_attention_forward(
     if local_attention != (-1, -1):
         attention_mask = sliding_window_mask
 
-    # upcast attention to fp32
     attn_output = flash_attention(query, key, value, False, None, None, scale, ab=attention_mask)
     attn_output = attn_output.transpose(1, 2).contiguous()
     attn_output = attn_output.view(bs, -1, dim)
