@@ -478,6 +478,8 @@ def _get_tokenizer_for_train(tokenized: InputName | ExecutorStep | LMMixtureData
             pass
         case ExecutorStep(config=TokenizeConfig(tokenizer=tokenizer)):
             pass
+        case ExecutorStep(config=HfTokenizeConfig(tokenizer=tokenizer)):
+            pass
         case InputName(step=ExecutorStep(config=TokenizeConfig(tokenizer=tokenizer))):
             pass
         case _:
