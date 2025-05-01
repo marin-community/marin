@@ -27,32 +27,28 @@ with the appropriate Python version (3.10), and then run the following:
 ```bash
 git clone https://github.com/stanford-crfm/marin
 cd marin
-pip install -e ".[extras]"
 ```
 
-This will install all the core dependencies and build `marin` as a Python
-package. Installing the `[extras]` requirements will additionally install test,
+To run the tests you need to install Node:
+```bash
+# For macOS
+brew install node
+# For Linux (not tested)
+sudo apt-get update
+sudo apt-get install -y nodejs npm
+# For Windows (not tested)
+choco install nodejs
+```
+
+Then you can install all the core dependencies and build `marin` as a Python
+package with `make init`.
+Installing the `[dev]` requirements will additionally install test,
 linting, and debugging dependencies (e.g., `pytest`).
 
-## Tests
+## Linting & Tests
 
-The first time you run tests locally, you will need install `pandiff` to
-run the snapshot tests. This is a one-time install that can be done using the
-following commands:
-
-```bash
-brew install node  # For macOS
-conda install -c conda-forge pandoc
-npm install -g pandiff
-```
-
-To run the tests, first run `export RAY_ADDRESS=` to run Ray in local mode.
-
-1. We have linters set up to ensure code quality. You can run them with:
-   ```bash
-   pre-commit run --all-files
-   ```
-2. To run the tests, run `PYTHONPATH=tests:. pytest tests --durations=0 -n 4 --tb=no -v`
+1. We have linters set up to ensure code quality. You can run them with `make lint`
+2. To run the tests, run `make test`
 
 ## Hello world example
 
