@@ -39,8 +39,7 @@ lint:
 	pre-commit run --all-files
 
 test:
-	export RAY_ADDRESS=
-	PYTHONPATH=tests:. pytest tests --durations=0 -n 4 --tb=no -v
+	RAY_ADDRESS= PYTHONPATH=tests:. pytest tests --durations=0 -n 4 --tb=no -v
 
 # Define regions and tags for the Docker images
 CLUSTER_REPOS = us-central2 us-central1 europe-west4 us-west4 asia-northeast1 us-east5 us-east1
