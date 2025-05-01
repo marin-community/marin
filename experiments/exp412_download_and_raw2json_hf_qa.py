@@ -1,5 +1,6 @@
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
-from operations.download.huggingface.download import DownloadConfig, download
+from experiments.defaults import default_download
+from marin.execution.executor import ExecutorStep, executor_main, this_output_path
+from operations.download.huggingface.download import download
 from operations.raw2json.huggingface.qa.raw2json import DatasetConversionConfig, OutputFormatOptions, raw2json
 
 """
@@ -8,17 +9,14 @@ Downloads the following datasets
 """
 ############################################################
 # download mmlu dataset
-mmlu_download_step = ExecutorStep(
+mmlu_download_step = default_download(
     name="raw/cais/mmlu",
-    fn=download,
-    config=DownloadConfig(
-        hf_dataset_id="cais/mmlu",
-        revision=versioned("c30699e"),
-        gcs_output_path=this_output_path(),
-        wait_for_completion=True,
-    ),
-    override_output_path="raw/cais/mmlu",
-).cd("c30699e/huggingface.co/datasets/cais/mmlu/resolve/c30699e")
+    hf_dataset_id="cais/mmlu",
+    revision=versioned("c30699e"),
+    output_path="raw/cais/mmlu",
+    download_fn=download,
+    cd="c30699e/huggingface.co/datasets/cais/mmlu/resolve/c30699e",
+)
 
 """
 Converts raw to JSON for:
