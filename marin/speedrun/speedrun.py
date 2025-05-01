@@ -271,7 +271,7 @@ def default_speedrun(
         model_config=config.model_config,
         train_config=train_config,
         tags=run_tags,
-        eval_harness_tasks=CORE_TASKS_PLUS_MMLU,
+        eval_harness_tasks=None#CORE_TASKS_PLUS_MMLU,
     )
 
     analysis_step = ExecutorStep(

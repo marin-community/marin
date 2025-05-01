@@ -43,7 +43,7 @@ The leaderboard will be viewable at http://localhost:8000
 
 3. Add your run files to `experiments/speedrun/<your_run_name.py>`, containing the training script. Feel free to add docstrings describing your approach to the file.
 
-4. Train your model on your compute resources (both GPUs and TPUs are supported), and add the `speedrun_analysis.json` file that's generated to [`data/runs.json`](data/runs.json).
+4. Train your model on your compute resources (both GPUs and TPUs are supported), and add the `speedrun_analysis.json` file that's generated to [`experiments/speedrun/<speedrun_analysis.json>`](data/runs.json).
 
 5. Create a pull request with:
    - Title: `[Speedrun] Your Run Name - Track (e.g., TINY)`
