@@ -70,6 +70,7 @@ def default_download(
     output_path: str | None = None,
     download_fn: Callable[[DownloadConfig], None] | None = None,
     cd: str | None = None,
+    **kwargs,
 ) -> ExecutorStep:
     """
     Download a HuggingFace dataset and upload it to a specified path with default configuration.
@@ -86,6 +87,7 @@ def default_download(
             If not specified, download_hf will be used.
         cd: Optional override for the cd parameter.
             Since download_fn adds a revision subdirectory, cd is generally required to get the exact path.
+        **kwargs: Additional keyword arguments that are passed to the download config.
 
     The final output data will reside in 'output_path/{cd}',
     where output_path is either explicitly specified or determined by the executor based on name.
@@ -101,6 +103,7 @@ def default_download(
             revision=revision,
             gcs_output_path=this_output_path(),
             wait_for_completion=True,
+            **kwargs,
         ),
         override_output_path=output_path,
     )
