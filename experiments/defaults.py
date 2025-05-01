@@ -5,7 +5,7 @@ This file represents the best practices for each stage of the pipeline.
 import dataclasses
 import logging
 import os
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import timedelta
 from functools import lru_cache
 
@@ -51,16 +51,17 @@ from marin.processing.tokenize import (
     lm_data_config,
     tokenize,
 )
-
-from operations.download.huggingface.download_hf import download_hf
 from marin.scaling_laws.scaling_laws import ScalingLawConfig, run_scaling_law_analysis
 from marin.training.training import (
     PodConfig,
     TrainLmOnPodConfig,
     run_levanter_train_lm,
 )
+from operations.download.huggingface.download import DownloadConfig
+from operations.download.huggingface.download_hf import download_hf
 
 logger = logging.getLogger("ray")
+
 
 def default_download(
     name: str,
@@ -71,17 +72,23 @@ def default_download(
     cd: str | None = None,
 ) -> ExecutorStep:
     """
-    Download a HuggingFace dataset and upload it to a specified fsspec path with default configuration.
+    Download a HuggingFace dataset and upload it to a specified path with default configuration.
 
     Args:
-        name: The name of the Download step. It forms the basis of the output path unless output_path is explicitly specified.
+        name: The name of the Download step. It forms the basis of the output path
+                unless output_path is explicitly specified.
         hf_dataset_id: The HuggingFace dataset ID to download. As `$ORG/$DATASET` on HF Hub
-        revision: The revision of the dataset to download. Short Commit Hash from HF Dataset Repo (7 characters)
-        output_path: Optional override for the output path. If not specified, the output path will be detemined by the executor based on name.
-        download_fn: Optional override for the download function. If not specified, download_hf will be used.
-        cd: Optional override for the cd parameter. Since download_fn adds a revision subdirectory, cd is generally required to get the exact path.
+        revision: The revision of the dataset to download.
+                    Short Commit Hash from HF Dataset Repo (7 characters)
+        output_path: Optional override for the output path.
+                    If not specified, the output path will be detemined by the executor based on name.
+        download_fn: Optional override for the download function.
+                    If not specified, download_hf will be used.
+        cd: Optional override for the cd parameter.
+                    Since download_fn adds a revision subdirectory, cd is generally required to get the exact path.
 
-    The final output data will reside in 'output_path/{cd}', where output_path is either explicitly specified or determined by the executor based on name.
+    The final output data will reside in 'output_path/{cd}',
+    where output_path is either explicitly specified or determined by the executor based on name.
     """
 
     if download_fn is None:
