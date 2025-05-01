@@ -122,7 +122,7 @@ class SpeedrunConfig:
 
 
 @dataclass
-class SpeedrunAnalysisConfig:
+class SpeedrunResultsConfig:
     speedrun_train_step: ExecutorStep
     speedrun_config: SpeedrunConfig
     output_path: str
@@ -166,7 +166,7 @@ def get_compute_budgets():
     return {budget.name: budget.value for budget in ComputeBudget}
 
 
-def speedrun_analysis(config: SpeedrunAnalysisConfig):
+def speedrun_results(config: SpeedrunResultsConfig):
     """Compute and store metrics and stats for the speedrun."""
 
     run_id = get_wandb_run_id_from_step(config.speedrun_train_step)
@@ -276,13 +276,13 @@ def default_speedrun(
     )
 
     analysis_step = ExecutorStep(
-        name=f"{name}_speedrun_analysis",
+        name=f"{name}_speedrun_results",
         description=f"compute and store metrics and stats for the speedrun {name}.",
-        fn=speedrun_analysis,
-        config=SpeedrunAnalysisConfig(
+        fn=speedrun_results,
+        config=SpeedrunResultsConfig(
             speedrun_train_step=train_step,
             speedrun_config=config,
-            output_path=output_path_of(train_step, "speedrun_analysis.json"),
+            output_path=output_path_of(train_step, "speedrun_results.json"),
         ),
     )
 

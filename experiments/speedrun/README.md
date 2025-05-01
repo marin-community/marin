@@ -43,7 +43,7 @@ The leaderboard will be viewable at http://localhost:8000
 
 3. Create a directory for your run at `experiments/speedrun/<your_run_name>/` and add your training script as `<your_run_name>.py`. Feel free to add docstrings describing your approach to the file.
 
-4. Train your model on your compute resources (both GPUs and TPUs are supported), and add the `speedrun_analysis.json` file that's generated to [`experiments/speedrun/<your_run_name>/speedrun_analysis.json`](data/runs.json).
+4. Train your model on your compute resources (both GPUs and TPUs are supported), and add the `speedrun_results.json` file that's generated to [`experiments/speedrun/<your_run_name>/speedrun_results.json`](data/runs.json).
 
 5. Create a pull request with:
    - Title: `[Speedrun] Your Run Name - Track (e.g., TINY)`
@@ -53,7 +53,7 @@ The leaderboard will be viewable at http://localhost:8000
      - Discussion of your approach
 
 6. The CI workflow will then:
-   - Validate your analysis file
+   - Validate your results file
    - Verify compute budget compliance
    - Update the leaderboard
 

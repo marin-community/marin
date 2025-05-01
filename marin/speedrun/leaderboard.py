@@ -48,11 +48,11 @@ class Leaderboard:
         scheme = base_path.split("://", 1)[0] if "://" in base_path else "file"
         self.fs = fsspec.filesystem(scheme)
 
-    def _find_analysis_files(self) -> list[str]:
-        pattern = f"{self.base_path}/**/speedrun_analysis.json"
+    def _find_results_files(self) -> list[str]:
+        pattern = f"{self.base_path}/**/speedrun_results.json"
         return self.fs.glob(pattern)
 
-    def _load_analysis_file(self, path: str) -> dict:
+    def _load_results_file(self, path: str) -> dict:
         with self.fs.open(path, "r") as f:
             data = json.load(f)
             # Handle both old and new format
@@ -110,17 +110,17 @@ class Leaderboard:
 
     def get_entries(self) -> list[LeaderboardEntry]:
         entries = []
-        analysis_files = self._find_analysis_files()
+        results_files = self._find_results_files()
 
-        for file_path in analysis_files:
+        for file_path in results_files:
             try:
-                analysis_data = self._load_analysis_file(file_path)
+                results_data = self._load_results_file(file_path)
                 # Process each run in the runs list
-                for i, run_analysis in enumerate(analysis_data["runs"]):
+                for i, run_results in enumerate(results_data["runs"]):
                     # For multiple runs in the same file, we need to create unique paths
                     # to differentiate between them in the leaderboard
                     run_path = f"{file_path}#{i}" if i > 0 else file_path
-                    entry = self._create_entry_from_analysis(run_analysis, run_path)
+                    entry = self._create_entry_from_results(run_results, run_path)
                     entries.append(entry)
             except Exception as e:
                 logger.warning(f"Failed to process {file_path}: {e}")
