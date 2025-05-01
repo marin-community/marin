@@ -4,9 +4,10 @@ Sample speedrun with an 75M LLaMA model.
 
 import logging
 
+from experiments.exp72_baselines import fineweb_edu_tokenized
 from experiments.llama import llama_75m
 from experiments.simple_train_config import SimpleTrainConfig
-from experiments.speedrun.speedrun import ComputeBudget, HardwareConfig, SpeedrunConfig, default_speedrun
+from marin.speedrun.speedrun import ComputeBudget, HardwareConfig, SpeedrunConfig, default_speedrun
 from marin.execution.executor import executor_main
 
 logger = logging.getLogger("ray")
@@ -21,9 +22,9 @@ speedrun_config = SpeedrunConfig(
         learning_rate=3e-3,
         weight_decay=0.1,
         steps_per_eval=1000,
-        #steps_per_task_eval=1000,
-        z_loss_weight=1e-4,
+        steps_per_task_eval=1000,
     ),
+    tokenized_dataset=fineweb_edu_tokenized,
     hardware_config=HardwareConfig(
         device_type="v4-128",
         num_devices=64,
@@ -36,4 +37,4 @@ is_valid, error = speedrun_config.validate()
 logger.info(f"Speedrun validation: {is_valid}, {error}")
 
 if __name__ == "__main__":
-    executor_main(steps=default_speedrun("75M_llama_fineweb_edu_z_loss", speedrun_config))
+    executor_main(steps=default_speedrun("75M_llama_fineweb_edu", speedrun_config))

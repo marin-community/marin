@@ -54,7 +54,13 @@ class Leaderboard:
 
     def _load_analysis_file(self, path: str) -> dict:
         with self.fs.open(path, "r") as f:
-            return json.load(f)
+            data = json.load(f)
+            # Handle both old and new format
+            if "runs" in data:
+                return data
+            else:
+                # Convert old format to new format
+                return {"runs": [data]}
 
     def _create_entry_from_analysis(self, analysis: dict, storage_path: str) -> LeaderboardEntry:
         run_name = Path(storage_path).parent.name
@@ -108,9 +114,14 @@ class Leaderboard:
 
         for file_path in analysis_files:
             try:
-                analysis = self._load_analysis_file(file_path)
-                entry = self._create_entry_from_analysis(analysis, file_path)
-                entries.append(entry)
+                analysis_data = self._load_analysis_file(file_path)
+                # Process each run in the runs list
+                for i, run_analysis in enumerate(analysis_data["runs"]):
+                    # For multiple runs in the same file, we need to create unique paths
+                    # to differentiate between them in the leaderboard
+                    run_path = f"{file_path}#{i}" if i > 0 else file_path
+                    entry = self._create_entry_from_analysis(run_analysis, run_path)
+                    entries.append(entry)
             except Exception as e:
                 logger.warning(f"Failed to process {file_path}: {e}")
 

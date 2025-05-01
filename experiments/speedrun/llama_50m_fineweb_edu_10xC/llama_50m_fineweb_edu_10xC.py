@@ -7,7 +7,7 @@ import logging
 from experiments.exp72_baselines import fineweb_edu_tokenized
 from experiments.llama import llama_50m
 from experiments.simple_train_config import SimpleTrainConfig
-from experiments.speedrun.speedrun import ComputeBudget, HardwareConfig, SpeedrunConfig, default_speedrun
+from marin.speedrun.speedrun import ComputeBudget, HardwareConfig, SpeedrunConfig, default_speedrun
 from marin.execution.executor import executor_main
 
 logger = logging.getLogger("ray")

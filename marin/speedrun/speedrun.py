@@ -10,7 +10,6 @@ import json
 import logging
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from enum import Enum
 
 import fsspec
@@ -194,7 +193,7 @@ def speedrun_analysis(config: SpeedrunAnalysisConfig):
     run_id = get_wandb_run_id_from_step(config.speedrun_train_step)
     wandb_metrics = get_wandb_metrics(run_id)
 
-    stats = {
+    run_stats = {
         "compute_budget": {
             "track": config.speedrun_config.compute_budget.name,
             "flops_budget_for_track": config.speedrun_config.compute_budget.value,
@@ -220,11 +219,13 @@ def speedrun_analysis(config: SpeedrunAnalysisConfig):
         },
     }
 
-    logger.info(f"Speedrun stats: {stats}")
-
-    stats["speedrun_analysis_timestamp"] = datetime.now(timezone.utc).isoformat()
+    logger.info(f"Speedrun stats: {run_stats}")
+    
+    # Create a new file with the 'runs' list structure
+    output_data = {"runs": [run_stats]}
+    
     with fsspec.open(config.output_path, "w") as f:
-        json.dump(stats, f, indent=2, sort_keys=True)
+        json.dump(output_data, f, indent=2, sort_keys=True)
     logger.info(f"Speedrun stats written to {config.output_path}")
 
 

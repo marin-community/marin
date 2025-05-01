@@ -18,16 +18,16 @@ Follow the steps in [Marin's README](../../README.md) to set up your development
 ### Running a Speedrun
 Create a configuration for your run and use `default_speedrun` to train your model. This will train the model and generate an analysis file containing metrics and metadata.
 
-An example is provided in [sample_run.py](experiments/speedrun/sample_run.py).
+An example is provided in [sample_run/sample_run.py](sample_run/sample_run.py).
 
 ### Viewing the Leaderboard
 
 ```bash
 # Start the leaderboard server
-python experiments/speedrun/update_leaderboard.py --storage-path <path-to-run-directory>
+python -m marin.speedrun.update_leaderboard --storage-path <path-to-run-directory>
 
 # [Example for GCS storage]:
-python experiments/speedrun/update_leaderboard.py --storage-path gs://marin-us-central2/checkpoints/speedrun
+python -m marin.speedrun.update_leaderboard --storage-path gs://marin-us-central2/checkpoints/speedrun
 ```
 
 The leaderboard will be viewable at http://localhost:8000
@@ -41,9 +41,9 @@ The leaderboard will be viewable at http://localhost:8000
    git checkout -b speedrun/your-run-name
    ```
 
-3. Add your run files to `experiments/speedrun/<your_run_name.py>`, containing the training script. Feel free to add docstrings describing your approach to the file.
+3. Create a directory for your run at `experiments/speedrun/<your_run_name>/` and add your training script as `<your_run_name>.py`. Feel free to add docstrings describing your approach to the file.
 
-4. Train your model on your compute resources (both GPUs and TPUs are supported), and add the `speedrun_analysis.json` file that's generated to [`experiments/speedrun/<speedrun_analysis.json>`](data/runs.json).
+4. Train your model on your compute resources (both GPUs and TPUs are supported), and add the `speedrun_analysis.json` file that's generated to [`experiments/speedrun/<your_run_name>/speedrun_analysis.json`](data/runs.json).
 
 5. Create a pull request with:
    - Title: `[Speedrun] Your Run Name - Track (e.g., TINY)`

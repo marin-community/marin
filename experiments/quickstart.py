@@ -109,7 +109,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
             model_type="fasttext",
             attribute_name="quickstart-fasttext-quality-hq",
         ),
-        pip_dependency_groups=["quality_dedup_consolidate"],
+        pip_dependency_groups=["fasttext"],
     )
 
     inference_lq_step = ExecutorStep(
@@ -122,20 +122,20 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
             model_type="fasttext",
             attribute_name="quickstart-fasttext-quality-lq",
         ),
-        pip_dependency_groups=["quality_dedup_consolidate"],
+        pip_dependency_groups=["fasttext"],
     )
 
     ############################################################
     # Deduplicate
 
     dedupe_step = ExecutorStep(
-        name=os.path.join(prefix, "dedupe"),
+        name=os.path.join(prefix, "dedupe-hq-v3"),
         fn=dedupe,
         config=DedupeConfig(
             input_path=output_path_of(transform_hq_data_step),
             output_path=this_output_path(),
         ),
-        pip_dependency_groups=["quality_dedup_consolidate"],
+        #pip_dependency_groups=["dolma"],
     )
 
     ############################################################
@@ -226,13 +226,13 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
     return [
         transform_hq_data_step,
         transform_lq_data_step,
-        train_quality_step,
-        inference_hq_step,
-        inference_lq_step,
+        #train_quality_step,
+        # inference_hq_step,
+        # inference_lq_step,
         dedupe_step,
-        consolidate_step,
-        tokenize_step,
-        train_step,
+        # consolidate_step,
+        # tokenize_step,
+        # train_step,
         # evaluate_step,
     ]
 
