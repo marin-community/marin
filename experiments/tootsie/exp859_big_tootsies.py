@@ -172,17 +172,12 @@ llama_22b_tootsie_ema_warmstart = dataclasses.replace(
 
 llama_32b_train_config = SimpleTrainConfig(
     tpu_type="v5p-512",
-    node_count=12,
-    # we transitioned to 12x from 8x, so we use a smaller batch size to avoid padding
-    # going to 38M tokens (from 33M) felt excessive so this is down to 25.5M
-    train_batch_size=[ScheduleStep(start=0, value=8192), ScheduleStep(start=16500, value=6144)],
+    node_count=4,
+    train_batch_size=[ScheduleStep(start=0, value=8192)],
     num_train_steps=1_000_000,
     weight_decay=0.05,
     # width is a little smaller than the 24B and we're using a much larger batch size
     # 4.2e-4 * sqrt(8192/3072) ≈ 7e-4
-    # when we scaled up to 12x (with the lower batch size) we still kept it at 7e-4 since:
-    # (1) things were stable
-    # (2) the eval loss was suspiciously low.
     learning_rate=7e-4,
     decay=0.4,
     ema_beta=0.995,
@@ -236,7 +231,7 @@ llama_56b_train_config = SimpleTrainConfig(
 )
 
 
-# All of all of these are 56B models but were intended to be 70b. Sigh.
+# All of these are 56B models but were intended to be 70b. Sigh.
 llama_56b_train_config_mk2 = dataclasses.replace(
     llama_56b_train_config,
     train_batch_size=1024,
