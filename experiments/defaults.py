@@ -51,6 +51,8 @@ from marin.processing.tokenize import (
     lm_data_config,
     tokenize,
 )
+
+from operations.download.huggingface.download_hf import download_hf
 from marin.scaling_laws.scaling_laws import ScalingLawConfig, run_scaling_law_analysis
 from marin.training.training import (
     PodConfig,
@@ -59,6 +61,44 @@ from marin.training.training import (
 )
 
 logger = logging.getLogger("ray")
+
+def default_download(
+    name: str,
+    hf_dataset_id: str,
+    revision: str,
+    output_path: str | None = None,
+    download_fn: Callable[[DownloadConfig], None] | None = None,
+    cd: str | None = None,
+) -> ExecutorStep:
+    """
+    Download a HuggingFace dataset and upload it to a specified fsspec path with default configuration.
+
+    Args:
+        name: The name of the Download step. It forms the basis of the output path unless output_path is explicitly specified.
+        hf_dataset_id: The HuggingFace dataset ID to download. As `$ORG/$DATASET` on HF Hub
+        revision: The revision of the dataset to download. Short Commit Hash from HF Dataset Repo (7 characters)
+        output_path: Optional override for the output path. If not specified, the output path will be detemined by the executor based on name.
+        download_fn: Optional override for the download function. If not specified, download_hf will be used.
+        cd: Optional override for the cd parameter. Since download_fn adds a revision subdirectory, cd is generally required to get the exact path.
+
+    The final output data will reside in 'output_path/{cd}', where output_path is either explicitly specified or determined by the executor based on name.
+    """
+
+    if download_fn is None:
+        download_fn = download_hf
+    step = ExecutorStep(
+        name=name,
+        fn=download_fn,
+        config=DownloadConfig(
+            hf_dataset_id=hf_dataset_id,
+            revision=revision,
+            gcs_output_path=this_output_path(),
+            wait_for_completion=True,
+        ),
+        override_output_path=output_path,
+    )
+
+    return step.cd(cd) if cd is not None else step
 
 
 def default_tokenize(
