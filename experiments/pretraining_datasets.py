@@ -1,6 +1,6 @@
 from experiments.defaults import default_download
 from marin.execution.executor import ExecutorStep, this_output_path
-from operations.download.huggingface.download import DownloadConfig, download
+from operations.download.huggingface.download import download
 from operations.download.huggingface.download_gated_manual import download_and_upload_to_store
 from operations.download.nemotron_cc.download_nemotron_cc import NemotronIngressConfig, download_nemotron_cc
 
@@ -47,33 +47,24 @@ dolma = default_download(
     download_fn=download,
 )
 
-
-dclm_baseline_wrong = ExecutorStep(
+dclm_baseline_wrong = default_download(
     name="raw/dclm-baseline-1.0",
-    fn=download,
-    config=DownloadConfig(
-        hf_dataset_id="mlfoundations/dclm-baseline-1.0",
-        revision="a3b142c",
-        gcs_output_path=this_output_path(),
-        wait_for_completion=True,
-        timeout=24 * 60 * 60,
-    ),
-    override_output_path="raw/dclm_WRONG_20250211/",
+    hf_dataset_id="mlfoundations/dclm-baseline-1.0",
+    revision="a3b142c",
+    output_path="raw/dclm_WRONG_20250211/",
+    download_fn=download,
+    timeout=24 * 60 * 60,
 )
 
-
-dclm_baseline = ExecutorStep(
+dclm_baseline = default_download(
     name="raw/dclm-baseline-1.0",
-    fn=download,
-    config=DownloadConfig(
-        hf_dataset_id="mlfoundations/dclm-baseline-1.0",
-        revision="a3b142c",
-        gcs_output_path=this_output_path(),
-        wait_for_completion=True,
-        timeout=24 * 60 * 60,
-    ),
-    override_output_path="raw/dclm",
-).cd("a3b142c")
+    hf_dataset_id="mlfoundations/dclm-baseline-1.0",
+    revision="a3b142c",
+    output_path="raw/dclm",
+    download_fn=download,
+    cd="a3b142c",
+    timeout=24 * 60 * 60,
+)
 
 the_stack_dedup = default_download(
     name="raw/the-stack-dedup",
