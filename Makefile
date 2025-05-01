@@ -9,6 +9,18 @@ help:
 	@echo "    Run code style and linting (black, ruff) *without* changing files!"
 	@echo "make autoformat"
 	@echo "    Run code styling (black, ruff) and update in place - committing with pre-commit also does this."
+	@echo "make lint"
+	@echo "    Run linter including changing files"
+	@echo "make test"
+	@echo "    Run all tests"
+	@echo "make init"
+	@echo "    Init the repo for development"
+
+init:
+	conda install -c conda-forge pandoc
+	npm install -g pandiff
+	pre-commit install
+	pip install -e ".[dev]"
 
 clean:
 	find . -name "*.pyc" | xargs rm -f && \
@@ -22,6 +34,13 @@ check:
 autoformat:
 	ruff check --fix --show-fixes .
 	black .
+
+lint:
+	pre-commit run --all-files
+
+test:
+	export RAY_ADDRESS=
+	PYTHONPATH=tests:. pytest tests --durations=0 -n 4 --tb=no -v
 
 # Define regions and tags for the Docker images
 CLUSTER_REPOS = us-central2 us-central1 europe-west4 us-west4 asia-northeast1 us-east5 us-east1
