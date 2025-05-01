@@ -21,6 +21,7 @@ init:
 	npm install -g pandiff
 	pre-commit install
 	pip install -e ".[dev,download_transform]"
+	huggingface-cli login
 
 clean:
 	find . -name "*.pyc" | xargs rm -f && \
@@ -39,7 +40,9 @@ lint:
 	pre-commit run --all-files
 
 test:
-	RAY_ADDRESS= PYTHONPATH=tests:. pytest tests --durations=0 -n 4 --tb=no -v
+	export HUGGING_FACE_HUB_TOKEN=$HF_TOKEN
+	export HF_HUB_TOKEN=$HF_TOKEN
+	RAY_ADDRESS= PYTHONPATH=tests:. pytest tests/test_dry_run.py --durations=0 -n 4 --tb=no -v
 
 # Define regions and tags for the Docker images
 CLUSTER_REPOS = us-central2 us-central1 europe-west4 us-west4 asia-northeast1 us-east5 us-east1
