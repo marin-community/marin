@@ -20,7 +20,7 @@ init:
 	conda install -c conda-forge pandoc
 	npm install -g pandiff
 	pre-commit install
-	pip install -e ".[dev]"
+	pip install -e ".[dev,download_transform]"
 
 clean:
 	find . -name "*.pyc" | xargs rm -f && \
