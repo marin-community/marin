@@ -67,8 +67,8 @@ python experiments/hello_world.py --prefix var
 This command should create the following assets:
 
 1. `var/experiments/hello_world-7063e5.json`: stores a record of all the steps in this experiment.
-1. `var/hello_world/data-d50b06`: the output of step 1 (generate some numbers, stored in `numbers.json`).
-1. `var/hello_world/stats-b5daf3`: the output of step 2 (compute some statistics, stored in `stats.json`).
+2. `var/hello_world/data-d50b06`: the output of step 1 (generate some numbers, stored in `numbers.json`).
+3. `var/hello_world/stats-b5daf3`: the output of step 2 (compute some statistics, stored in `stats.json`).
 
 Note that if you run the same command again, it will detect that both steps
 have been already run and return automatically.
