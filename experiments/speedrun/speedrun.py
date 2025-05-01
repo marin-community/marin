@@ -14,10 +14,10 @@ from datetime import datetime, timezone
 from enum import Enum
 
 import fsspec
-import wandb
 from levanter.data.text import LMMixtureDatasetConfig
 from levanter.models.lm_model import LmConfig
 
+import wandb
 from experiments.defaults import default_train
 from experiments.evals.task_configs import CORE_TASKS_PLUS_MMLU
 from experiments.exp72_baselines import fineweb_edu_tokenized
