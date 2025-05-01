@@ -28,7 +28,7 @@ dependencies = [
     "toml",
     "pandas", # Only needed by Fileprovider in inference.py
     "pyarrow", # # Only needed by Fileprovider in inference.py
-    # We are keeping levanter deps for now. @TODO :: Remove them
+    # We have levanter deps for now. @TODO :: Remove them
     "multiprocess==0.70.16",
     "levanter>=1.2.dev1313",
     "haliax>=1.4.dev343",
