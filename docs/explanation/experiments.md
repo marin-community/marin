@@ -12,8 +12,7 @@ filtering schemes.  Regardless, an experiment consists of a sequence of steps.
 
 To promote the reproducibility of experiments,
 we record all experiments in the [experiments](https://github.com/stanford-crfm/marin/tree/main/experiments) directory.
-Each file in that directory (e.g., [exp72_baselines.py](https://github.com/stanford-crfm/marin/blob/main/experiments/exp72_baselines.py)) corresponds to one experiment,
-where the naming convention contains the GitHub issue number.
+Each file in that directory (e.g., [exp72_baselines.py](https://github.com/stanford-crfm/marin/blob/main/experiments/exp72_baselines.py)) corresponds to one experiment, where the naming convention contains the GitHub issue number.
 
 Running each experiment produces an experiment JSON file (see the
 [executor documentation](../reference/executor.md)), which can be visualized specially
