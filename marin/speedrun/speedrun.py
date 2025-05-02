@@ -30,7 +30,6 @@ logger = logging.getLogger("ray")
 
 ### Configuration classes ###
 
-
 @dataclass
 class HardwareConfig:
     device_type: str  # a string describing the device e.g. "v4-128", or "h100"
