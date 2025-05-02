@@ -29,6 +29,7 @@ import argparse
 
 from leaderboard import Leaderboard, serve_leaderboard
 
+
 def main():
     parser = argparse.ArgumentParser(description="Update and serve Marin speedrun leaderboard")
     parser.add_argument(

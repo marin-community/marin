@@ -6,8 +6,8 @@ import logging
 
 from experiments.llama import llama_300m
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.speedrun.speedrun import HardwareConfig, SpeedrunConfig, default_speedrun
 from marin.execution.executor import executor_main
+from marin.speedrun.speedrun import HardwareConfig, SpeedrunConfig, default_speedrun
 
 logger = logging.getLogger("ray")
 

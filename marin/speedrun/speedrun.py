@@ -8,9 +8,8 @@ in experiments/speedrun/sample_run.py
 import dataclasses
 import json
 import logging
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
-from enum import Enum
 
 import fsspec
 import wandb
@@ -18,7 +17,6 @@ from levanter.data.text import LMMixtureDatasetConfig
 from levanter.models.lm_model import LmConfig
 
 from experiments.defaults import default_train
-from experiments.evals.task_configs import CORE_TASKS_PLUS_MMLU
 from experiments.exp72_baselines import fineweb_edu_tokenized
 from experiments.llama import compute_num_parameters, llama3_tokenizer_vocab_size
 from experiments.simple_train_config import SimpleTrainConfig
@@ -29,6 +27,7 @@ logger = logging.getLogger("ray")
 
 
 ### Configuration classes ###
+
 
 @dataclass
 class HardwareConfig:
@@ -79,7 +78,6 @@ class SpeedrunConfig:
             )
 
         return 6.0 * N * total_tokens
-
 
     def validate(self) -> tuple[bool, str]:
 
@@ -176,14 +174,15 @@ def speedrun_results(config: SpeedrunResultsConfig):
     }
 
     logger.info(f"Speedrun stats: {run_stats}")
-    
-    output_data = {"runs": [run_stats]}    
+
+    output_data = {"runs": [run_stats]}
     with fsspec.open(config.output_path, "w") as f:
         json.dump(output_data, f, indent=2, sort_keys=True)
     logger.info(f"Speedrun stats written to {config.output_path}")
 
 
 ### Default speedrun function ###
+
 
 def default_speedrun(
     name: str,

@@ -10,8 +10,8 @@ from levanter.optim import OptimizerConfig
 
 from experiments.llama import llama_75m
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.speedrun.speedrun import HardwareConfig, SpeedrunConfig, default_speedrun
 from marin.execution.executor import executor_main
+from marin.speedrun.speedrun import HardwareConfig, SpeedrunConfig, default_speedrun
 
 
 @dataclass

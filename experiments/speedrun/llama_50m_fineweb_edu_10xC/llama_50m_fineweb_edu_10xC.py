@@ -6,8 +6,8 @@ import logging
 
 from experiments.llama import llama_50m
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.speedrun.speedrun import HardwareConfig, SpeedrunConfig, default_speedrun
 from marin.execution.executor import executor_main
+from marin.speedrun.speedrun import HardwareConfig, SpeedrunConfig, default_speedrun
 
 logger = logging.getLogger("ray")
 
@@ -30,4 +30,6 @@ speedrun_config = SpeedrunConfig(
 
 if __name__ == "__main__":
     override_output_path = "checkpoints/speedrun/50M_llama_fineweb_edu_10xC-5f74d4"
-    executor_main(steps=default_speedrun("50M_llama_fineweb_edu_10xC", speedrun_config, override_output_path=override_output_path))
+    executor_main(
+        steps=default_speedrun("50M_llama_fineweb_edu_10xC", speedrun_config, override_output_path=override_output_path)
+    )
