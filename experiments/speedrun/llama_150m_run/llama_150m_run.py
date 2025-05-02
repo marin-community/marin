@@ -31,7 +31,4 @@ speedrun_config = SpeedrunConfig(
 )
 
 if __name__ == "__main__":
-    override_output_path = "checkpoints/speedrun/150M_llama_dclm_baseline-7b3186"
-    executor_main(
-        steps=default_speedrun("150M_llama_dclm_baseline", speedrun_config, override_output_path=override_output_path)
-    )
+    executor_main(steps=default_speedrun("150M_llama_dclm_baseline", speedrun_config))

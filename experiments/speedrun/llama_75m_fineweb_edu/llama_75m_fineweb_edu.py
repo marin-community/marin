@@ -31,7 +31,4 @@ speedrun_config = SpeedrunConfig(
 )
 
 if __name__ == "__main__":
-    override_output_path = "checkpoints/speedrun/75M_llama_fineweb_edu-ca427c"
-    executor_main(
-        steps=default_speedrun("75M_llama_fineweb_edu", speedrun_config, override_output_path=override_output_path)
-    )
+    executor_main(steps=default_speedrun("75M_llama_fineweb_edu", speedrun_config))

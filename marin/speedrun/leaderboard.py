@@ -39,10 +39,12 @@ class LeaderboardEntry:
 
 
 class Leaderboard:
-    def __init__(self, base_path: str, result_files: list[str] = None):
-        # Ensure base_path is a string
-        base_path = str(base_path)
-        self.base_path = base_path.rstrip("/")
+    def __init__(self, base_path: str, result_files: list[str] | None = None):
+        """
+        base_path: path to the directory containing speedrun_results.json files
+        result_files: list of paths to speedrun_results.json files
+        """
+        self.base_path = str(base_path).rstrip("/")
         scheme = base_path.split("://", 1)[0] if "://" in base_path else "file"
         self.fs = fsspec.filesystem(scheme)
         self.result_files = result_files
@@ -87,7 +89,7 @@ class Leaderboard:
 
         # Get eval metrics
         eval_paloma_c4_en_bpb = results["run_stats"].get("eval/paloma/c4_en/bpb")
-        
+
         # Get tokenized dataset
         tokenized_dataset = results["run_related_info"].get("tokenized_dataset")
 
@@ -114,7 +116,7 @@ class Leaderboard:
                 results_data = self._load_results_file(file_path)
                 print(f"Loaded results data with keys: {list(results_data.keys())}")
                 print(f"Number of runs in file: {len(results_data.get('runs', []))}")
-                
+
                 # Process each run in the runs list
                 for i, run_results in enumerate(results_data["runs"]):
                     # For multiple runs in the same file, we need to create unique paths
@@ -124,6 +126,7 @@ class Leaderboard:
             except Exception as e:
                 logger.warning(f"Failed to process {file_path}: {e}")
                 import traceback
+
                 traceback.print_exc()
 
         print(f"Total entries found: {len(entries)}")
@@ -174,14 +177,14 @@ def serve_leaderboard(leaderboard: Leaderboard, port: int = 8000):
     # Write current entries to JSON file for UI
     entries = leaderboard.get_entries()
     print(f"Writing {len(entries)} entries to runs.json")
-    
+
     # Convert entries to JSON
     entries_json = [e.to_json() for e in entries]
-    
+
     # Write to file
     with open(data_dir / "runs.json", "w") as f:
         json.dump(entries_json, f, indent=2)
-        
+
     print(f"Wrote {len(entries_json)} entries to {data_dir / 'runs.json'}")
 
     # Change to the static directory
