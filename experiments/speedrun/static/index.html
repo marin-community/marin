@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Marin Speedrun - Leaderboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'marin-blue': '#1a73e8',
+                        'marin-dark': '#1e293b'
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="bg-gray-50">
+    <div class="min-h-screen">
+        <!-- Header -->
+        <header class="bg-marin-dark text-white shadow-lg">
+            <div class="container mx-auto px-4 py-6">
+                <h1 class="text-3xl font-bold">Marin Speedrun- Leaderboard</h1>
+                <p class="mt-2 text-gray-300">Community-driven model training leaderboard</p>
+            </div>
+        </header>
+
+        <!-- Main content -->
+        <main class="container mx-auto px-4 py-8">
+            <!-- Track selector -->
+            <div class="mb-8">
+                <div class="inline-flex rounded-lg border border-gray-200 bg-white p-1">
+                    <button class="track-btn px-4 py-2 rounded-md text-sm font-medium active" data-track="all">
+                        All Tracks
+                    </button>
+                    <button class="track-btn px-4 py-2 rounded-md text-sm font-medium" data-track="TINY">
+                        Tiny
+                    </button>
+                    <button class="track-btn px-4 py-2 rounded-md text-sm font-medium" data-track="SMALL">
+                        Small
+                    </button>
+                    <button class="track-btn px-4 py-2 rounded-md text-sm font-medium" data-track="MEDIUM">
+                        Medium
+                    </button>
+                </div>
+            </div>
+
+            <!-- Stats cards -->
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+                <div class="bg-white rounded-lg shadow p-6">
+                    <h3 class="text-gray-500 text-sm font-medium">Total Runs</h3>
+                    <p class="text-3xl font-bold text-marin-dark mt-2" id="total-runs">-</p>
+                </div>
+                <div class="bg-white rounded-lg shadow p-6">
+                    <h3 class="text-gray-500 text-sm font-medium">Best FLOPs Used</h3>
+                    <p class="text-3xl font-bold text-marin-dark mt-2" id="best-flops">-</p>
+                </div>
+                <div class="bg-white rounded-lg shadow p-6">
+                    <h3 class="text-gray-500 text-sm font-medium">Average Training Time</h3>
+                    <p class="text-3xl font-bold text-marin-dark mt-2" id="avg-time">-</p>
+                </div>
+            </div>
+
+            <!-- Leaderboard table -->
+            <div class="bg-white rounded-lg shadow overflow-hidden">
+                <table class="min-w-full divide-y divide-gray-200">
+                    <thead class="bg-gray-50">
+                        <tr>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Rank</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Run Name</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Track</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Model Size</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Training Time</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Total FLOPs Used</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">AVG Acc</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">C4-EN BPB</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Submitted By</th>
+                        </tr>
+                    </thead>
+                    <tbody class="bg-white divide-y divide-gray-200" id="leaderboard-body">
+                        <!-- Rows will be populated by JavaScript -->
+                    </tbody>
+                </table>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        // Fetch and display leaderboard data
+        async function fetchLeaderboard() {
+            try {
+                const response = await fetch('data/runs.json');
+                const data = await response.json();
+                return data;
+            } catch (error) {
+                console.error('Error fetching leaderboard:', error);
+                return [];
+            }
+        }
+
+        function formatModelSize(size) {
+            return size < 1e9 ?
+                `${(size / 1e6).toFixed(1)}M` :
+                `${(size / 1e9).toFixed(1)}B`;
+        }
+
+        function formatFlops(flops) {
+            return flops.toExponential(2).replace('e+', 'E');
+        }
+
+        function formatMetric(value) {
+            return value === null ? 'N/A' : value.toFixed(3);
+        }
+
+        function updateStats(entries) {
+            document.getElementById('total-runs').textContent = entries.length;
+
+            if (entries.length > 0) {
+                const bestFlops = Math.max(...entries.map(e => e.final_flops_used));
+                document.getElementById('best-flops').textContent = formatFlops(bestFlops);
+
+                const avgTime = entries.reduce((acc, e) => acc + e.total_training_time, 0) / entries.length;
+                document.getElementById('avg-time').textContent = `${avgTime.toFixed(1)}m`;
+            }
+        }
+
+        function updateLeaderboard(entries, track = 'all') {
+            const filteredEntries = track === 'all' ?
+                entries :
+                entries.filter(e => e.compute_budget_track === track);
+
+            // Sort by FLOPs used
+            filteredEntries.sort((a, b) => b.final_flops_used - a.final_flops_used);
+
+            updateStats(filteredEntries);
+
+            const tbody = document.getElementById('leaderboard-body');
+            tbody.innerHTML = '';
+
+            filteredEntries.forEach((entry, index) => {
+                const row = document.createElement('tr');
+                row.className = index % 2 === 0 ? 'bg-white' : 'bg-gray-50';
+                row.innerHTML = `
+                    <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${index + 1}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-blue-600 hover:text-blue-800 cursor-pointer">
+                        <a href="https://github.com/stanford-crfm/marin/tree/main/experiments/speedrun/${entry.run_name}" target="_blank">
+                            ${entry.run_name}
+                        </a>
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${entry.compute_budget_track}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${formatModelSize(entry.model_size)}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${entry.total_training_time.toFixed(1)}m</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${formatFlops(entry.final_flops_used)}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${formatMetric(entry.lm_eval_macro_avg_acc)}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${formatMetric(entry.eval_paloma_c4_en_bpb)}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${formatMetric(entry.eval_fineweb_edu_loss)}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${entry.submitted_by}</td>
+                `;
+                tbody.appendChild(row);
+            });
+        }
+
+        // Track selector functionality
+        document.querySelectorAll('.track-btn').forEach(button => {
+            button.addEventListener('click', async () => {
+                // Update active state
+                document.querySelectorAll('.track-btn').forEach(btn => {
+                    btn.classList.remove('active', 'bg-marin-blue', 'text-white');
+                });
+                button.classList.add('active', 'bg-marin-blue', 'text-white');
+
+                // Update leaderboard
+                const data = await fetchLeaderboard();
+                updateLeaderboard(data, button.dataset.track);
+            });
+        });
+
+        // Initial load
+        document.addEventListener('DOMContentLoaded', async () => {
+            const data = await fetchLeaderboard();
+            updateLeaderboard(data);
+        });
+    </script>
+
+    <style>
+        .track-btn {
+            transition: all 0.2s;
+        }
+        .track-btn:hover {
+            background-color: #e5e7eb;
+        }
+        .track-btn.active {
+            background-color: #1a73e8;
+            color: white;
+        }
+    </style>
+</body>
+</html>
