@@ -24,6 +24,9 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
 
     _pip_packages: ClassVar[list[Dependency]] = [
         *LevanterTpuEvaluator.DEFAULT_PIP_PACKAGES,
+        Dependency(name="jax[tpu]==0.5.1"),
+        Dependency(name="haliax==1.4.dev343"),
+        Dependency(name="levanter==1.2.dev1313"),
     ]
 
     def evaluate(
@@ -46,15 +49,16 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
         # Run the harness with the model and the specified evals
 
         try:
-
             # Download the model from GCS or HuggingFace
             model_name_or_path: str = self.download_model(model)
 
             logger.info(f"Running eval harness on model: {model_name_or_path}")
 
+            # NOTE(chris): Before, the batch size was 16, but this is too large for the 8B model.
+            # In the future, we should make this user-configurable.
             trainer_config = TrainerConfig(
                 mp=jmp.get_policy("p=f32,c=bfloat16"),
-                per_device_eval_parallelism=16,
+                per_device_eval_parallelism=8,
                 ray=RayConfig(auto_start_cluster=False),
             )
 
@@ -64,6 +68,11 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
             tasks = convert_to_levanter_task_config(evals)
 
             model_path = os.path.join(LevanterTpuEvaluator.CACHE_PATH, model.path)
+
+            logger.info(f"Model path: {model_path}")
+            logger.info(f"Levanter Cache Path: {LevanterTpuEvaluator.CACHE_PATH}")
+            logger.info(f"Model name: {model.name}")
+            logger.info(f"model_name_or_path: {model_name_or_path}")
 
             eval_config = eval_harness.EvalHarnessMainConfig(
                 eval_harness=eval_harness.LmEvalHarnessConfig(

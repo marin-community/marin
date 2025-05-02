@@ -108,6 +108,7 @@ async def submit_and_track_job(entrypoint: str, dependencies: list, env_vars: di
     # Submit the job with runtime environment and entrypoint
     submission_id = client.submit_job(entrypoint=entrypoint, runtime_env=runtime_dict)
     logger.info(f"Job submitted with ID: {submission_id}")
+    logger.info(f"Job URL: http://localhost:8265/#/jobs/{submission_id}")
 
     if no_wait:
         return
@@ -182,11 +183,11 @@ def main():
     env_vars["PYTHONPATH"] = generate_pythonpath() + ":" + env_vars.get("PYTHONPATH", "")
 
     # Convert pyproject.toml to requirements.txt before submission
-    # pyproject_toml = "pyproject.toml"
+    pyproject_toml = "pyproject.toml"
     # If we are using the latest docker image then we can skip getting core dependencies from pyproject.toml
     # As they are already installed inside the cluster
     dependencies = []
-    # dependencies += get_dependencies_from_toml(pyproject_toml)
+    dependencies += get_dependencies_from_toml(pyproject_toml)
     dependencies += PIP_DEPS
     dependencies += args.pip_deps if args.pip_deps else []
 

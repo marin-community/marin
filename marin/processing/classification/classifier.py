@@ -1,11 +1,26 @@
 import atexit
 import hashlib
+import json
 import os
+import tempfile
 import time
 import urllib.parse
 from typing import Any, ClassVar
 
+import torch
+
+try:
+    import torch_xla.core.xla_model as xm
+except ImportError:
+    xm = None
+
 import fsspec
+import lz4.frame
+
+try:
+    import torch_xla.core.xla_model as xm
+except ImportError:
+    xm = None
 
 
 class BaseClassifier:
@@ -40,12 +55,14 @@ class FasttextClassifier(BaseClassifier):
         "mlfoundations/fasttext-oh-eli5": "openhermes_reddit_eli5_vs_rw_v2_bigram_200k_train.bin",
         "allenai/dolma-1_7-fasttext-quality-filter": "model.bin",
         "open-web-math/filtering-models": "math_score.bin",
+        "julien-c/fasttext-language-id": "lid.176.bin",
     }
 
-    def __init__(self, model_name: str, attribute_name: str, *args, **kwargs):
+    def __init__(self, model_name: str, attribute_name: str, k: int = 2, *args, **kwargs):
         self.model_name = model_name
         self.attribute_name = attribute_name
         self.model = self.load_model()
+        self.k = k
 
     def load_model(self):
         from fasttext.FastText import _FastText
@@ -125,8 +142,7 @@ class FasttextClassifier(BaseClassifier):
         return model
 
     def predict(self, documents: list[str]):
-        # TODO(chris): Add support for multi-class k > 2.
-        return self.model.predict(documents, k=2)
+        return self.model.predict(documents, k=self.k)
 
     def __call__(self, batch: dict[str, Any]):
         texts = []
@@ -178,7 +194,7 @@ class FinewebEduClassifier(BERTClassifier):
         scores = self.predict(batch["text"])
 
         # Fineweb edu classifier is scored on educational value from 0 to 5, so we want to round to the nearest integer.
-        int_scores = [int(round(max(0, min(score, 5)))) for score in scores]
+        int_scores = [round(max(0, min(score, 5))) for score in scores]
         batch.update(
             {
                 "attributes": [
@@ -191,10 +207,113 @@ class FinewebEduClassifier(BERTClassifier):
         return batch
 
 
+class BERTQualityClassifier(BaseClassifier):
+    def __init__(self, model_name: str, attribute_name: str, *args, **kwargs):
+        print(f"Loading model from {model_name}")
+        from transformers import AutoModelForSequenceClassification, AutoTokenizer
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            fs, fs_path = fsspec.core.url_to_fs(model_name)
+            fs.get(fs_path + "/*", tmp_dir)
+
+            device = xm.xla_device()
+            self.model = AutoModelForSequenceClassification.from_pretrained(tmp_dir).to(device)
+            self.tokenizer = AutoTokenizer.from_pretrained(tmp_dir)
+            with fsspec.open(os.path.join(tmp_dir, "label_index.json"), "r") as f:
+                label_idx = json.load(f)
+                self.labels = [k for k, v in sorted(label_idx.items(), key=lambda item: item[1])]
+
+        self.attribute_name = attribute_name
+
+    @torch.no_grad()
+    def predict(self, documents: list[str]) -> list[float]:
+        inputs = self.tokenizer(
+            documents,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+        ).to(self.model.device)
+        outputs = self.model(**inputs)
+        probs = torch.nn.functional.softmax(outputs.logits, dim=-1)
+        xm.mark_step()
+        probs = probs.squeeze(-1)
+        return probs.tolist()
+
+    @torch.no_grad()
+    def __call__(self, batch: dict[str, Any]) -> dict[str, Any]:
+        probs = self.predict(batch["text"])
+
+        attributes = []
+        for i in range(len(list(batch["text"]))):
+            quality_dict = dict(zip(self.labels, probs[i], strict=False))
+            attributes.append({self.attribute_name: quality_dict})
+
+        res = {"id": batch["id"], "attributes": attributes}
+        batch.update({"attributes": attributes})
+
+        return res
+
+
+class GTEClassifier(FinewebEduClassifier):
+    """Classifier that uses the Alibaba-NLP/gte-base-en-v1.5 model to classify documents"""
+
+    def __init__(self, model_name: str, attribute_name: str, max_length: int, *args, **kwargs):
+        from transformers import AutoModelForSequenceClassification, AutoTokenizer
+
+        device = xm.xla_device()
+
+        self.model = AutoModelForSequenceClassification.from_pretrained(
+            model_name, trust_remote_code=True, output_hidden_states=False
+        ).to(device)
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        self.attribute_name = attribute_name
+        self.max_length = max_length
+
+    @torch.no_grad()
+    def predict(self, documents: list[str]) -> list[float]:
+        inputs = self.tokenizer(
+            documents, return_tensors="pt", padding=True, truncation=True, max_length=self.max_length
+        ).to(self.model.device)
+        outputs = self.model(**inputs)
+        xm.mark_step()
+        logits = outputs.logits.squeeze(-1)
+        return logits.tolist()
+
+
+class CompressionClassifier(BaseClassifier):
+    """A classifier that calculates LZ4 compression ratios for text documents.
+
+    The compression ratio is calculated as (compressed_size / original_size).
+    Higher ratios indicate text that is harder to compress (potentially more random/noisy),
+    while lower ratios indicate text that compresses well (potentially more structured/repetitive).
+    """
+
+    def __init__(self, model_name: str, attribute_name: str, *args, **kwargs):
+        super().__init__(model_name, attribute_name)
+
+    def __call__(self, batch):
+        compression_ratios = []
+        for text in batch["text"]:
+            text_bytes = text.encode("utf-8")
+            # Handle empty text case
+            if len(text_bytes) == 0:
+                # Set a default ratio value for empty strings
+                ratio = 2.0
+            else:
+                compressed = lz4.frame.compress(text_bytes)
+                ratio = len(compressed) / len(text_bytes)
+
+            compression_ratios.append({self.attribute_name: ratio})
+        return {"attributes": compression_ratios}
+
+
 class AutoClassifier(BaseClassifier):
     _MODEL_NAME_TO_CLS_DICT: ClassVar[dict[str, BaseClassifier]] = {
         "fasttext": FasttextClassifier,
         "fineweb": FinewebEduClassifier,
+        "gte": GTEClassifier,
+        "compression": CompressionClassifier,
+        "bert": BERTQualityClassifier,
     }
 
     def __init__(self, model_name: str, attribute_name: str, model_type: str | None, *args, **kwargs):
@@ -224,7 +343,7 @@ class AutoClassifier(BaseClassifier):
             key = model_type.lower()
 
         try:
-            return cls._MODEL_NAME_TO_CLS_DICT[key](model_name_or_path, attribute_name, model_type, *args, **kwargs)
+            return cls._MODEL_NAME_TO_CLS_DICT[key](model_name_or_path, attribute_name, *args, **kwargs)
         except KeyError as e:
             raise ValueError(
                 f"Model name {model_name_or_path} not supported. "

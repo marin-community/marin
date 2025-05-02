@@ -34,6 +34,7 @@ def evaluate(config: EvaluationConfig) -> None:
             evals=config.evals,
             output_path=config.evaluation_path,
             max_eval_instances=config.max_eval_instances,
+            resource_config=config.resource_config,
         )
     else:
         evaluator.evaluate(
@@ -54,7 +55,6 @@ def _impute_model_config(config):
         if config.model_path is None:
             raise ValueError("model_name or model_path must be provided")
 
-        model_path = config.model_path
         if config.discover_latest_checkpoint:
             model_path = discover_hf_checkpoints(model_path)[-1]
 
@@ -77,8 +77,20 @@ def _impute_model_config(config):
         model_name = f"{model_name}-{step_part}"
     else:
         model_name = config.model_name
+    generation_params = {}
+    engine_kwargs = {}
+    if config.generation_params is None:
+        logger.warning(f"No generation params provided for {model_name}, using default params")
+    else:
+        generation_params = config.generation_params
+    if config.engine_kwargs is None:
+        logger.warning(f"No engine kwargs provided for {model_name}, using default params")
+    else:
+        engine_kwargs = config.engine_kwargs
 
-    return ModelConfig(name=model_name, path=model_path)
+    return ModelConfig(
+        name=model_name, path=model_path, engine_kwargs=engine_kwargs, generation_params=generation_params
+    )
 
 
 @draccus.wrap()

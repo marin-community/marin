@@ -1,7 +1,9 @@
 import dataclasses
 import logging
 import os
+from functools import lru_cache
 
+import transformers
 from levanter.data.text import LMDatasetSourceConfig, LMMixtureDatasetConfig
 
 from marin.execution.executor import ExecutorStep, InputName, output_path_of
@@ -12,12 +14,16 @@ TokenizerStep = ExecutorStep[TokenizeConfig]
 logger = logging.getLogger(__name__)
 
 
-def step_to_lm_mixture_component(step: TokenizerStep, include_raw_paths: bool) -> LMDatasetSourceConfig:
+def step_to_lm_mixture_component(step: TokenizerStep | TokenizeConfig, include_raw_paths: bool) -> LMDatasetSourceConfig:
     """
     Converts a tokenizer step to a Levanter dataset source config. This is useful for creating
     data mixture configs.
     """
-    return step.config.as_lm_dataset_source_config(output_path_of(step), include_raw_paths=include_raw_paths)
+
+    if isinstance(step, TokenizeConfig):
+        return step.as_lm_dataset_source_config(step.cache_path, include_raw_paths=include_raw_paths)
+    else:
+        return step.config.as_lm_dataset_source_config(output_path_of(step), include_raw_paths=include_raw_paths)
 
 
 def lm_data_config(
@@ -54,7 +60,7 @@ def lm_data_config(
 
 
 def lm_mixture_data_config(
-    components: dict[str, TokenizerStep],
+    components: dict[str, TokenizerStep | TokenizeConfig],
     weights: dict[str, float],
     *,
     shuffle: bool | int = True,
@@ -80,14 +86,7 @@ def lm_mixture_data_config(
         missing_keys = {k: 0.0 for k in components if k not in weights}
         weights = {**weights, **missing_keys}
 
-    first_name, first_step = next(iter(components.items()))
-    tokenizer = first_step.config.tokenizer
-    for name, step in components.items():
-        if step.config.tokenizer != tokenizer:
-            raise ValueError(
-                "All components must have the same tokenizer, but got:"
-                f" {step.config.tokenizer} ({name}) vs {tokenizer} ({name})"
-            )
+    tokenizer = _verify_tokenizers_same(components)
 
     return LMMixtureDatasetConfig(
         configs=configs, train_weights=weights, tokenizer=tokenizer, cache_dir=None, shuffle=shuffle
@@ -100,6 +99,8 @@ def lm_varying_mixture_data_config(
     *,
     shuffle: bool | int = True,
     missing_weights_are_validation: bool = True,
+    include_raw_paths: bool = True,
+    mixture_block_size: int | None = None,
 ) -> LMMixtureDatasetConfig:
     """
     Creates a training config from a mixture of datasources with varying weights.
@@ -116,7 +117,10 @@ def lm_varying_mixture_data_config(
     Returns:
         LMMixtureDatasetConfig configured with the varying weights
     """
-    configs = {name: step_to_lm_mixture_component(step) for name, step in components.items()}
+    configs = {
+        name: step_to_lm_mixture_component(step, include_raw_paths=include_raw_paths)
+        for name, step in components.items()
+    }
 
     # Validate and normalize weights
     if not weights_list:
@@ -133,15 +137,7 @@ def lm_varying_mixture_data_config(
             padded_weights_list.append((step_idx, {**weights, **missing_keys}))
         weights_list = padded_weights_list
 
-    # Validate tokenizer consistency
-    first_name, first_step = next(iter(components.items()))
-    tokenizer = first_step.config.tokenizer
-    for name, step in components.items():
-        if step.config.tokenizer != tokenizer:
-            raise ValueError(
-                "All components must have the same tokenizer, but got:"
-                f" {step.config.tokenizer} ({name}) vs {tokenizer} ({first_name})"
-            )
+    tokenizer = _verify_tokenizers_same(components)
 
     return LMMixtureDatasetConfig(
         configs=configs,
@@ -149,6 +145,7 @@ def lm_varying_mixture_data_config(
         tokenizer=tokenizer,
         cache_dir=None,
         shuffle=shuffle,
+        mixture_block_size=mixture_block_size or 2048,
     )
 
 
@@ -197,3 +194,55 @@ def add_validation_sets_to_mixture(
         raise ValueError(f"Invalid train_weights type: {type(config.train_weights)}")
 
     return dataclasses.replace(config, configs=new_configs, train_weights=new_weights)
+
+
+@lru_cache(maxsize=32)
+def _load_tokenizer(tokenizer_name: str) -> transformers.PreTrainedTokenizer:
+    """Load and cache a tokenizer by name"""
+    return transformers.AutoTokenizer.from_pretrained(tokenizer_name)
+
+
+def _are_tokenizers_equivalent(tokenizer1: str, tokenizer2: str) -> bool:
+    """Compare two tokenizers by loading them and comparing their vocabularies and token IDs"""
+    t1 = _load_tokenizer(tokenizer1)
+    t2 = _load_tokenizer(tokenizer2)
+
+    # Compare vocab sizes
+    if len(t1.get_vocab()) != len(t2.get_vocab()):
+        return False
+
+    # Compare vocab contents and IDs
+    vocab1 = t1.get_vocab()
+    vocab2 = t2.get_vocab()
+
+    # Check that all tokens exist in both vocabs with the same IDs
+    for token, id1 in vocab1.items():
+        if token not in vocab2:
+            return False
+        if vocab2[token] != id1:
+            return False
+
+    if getattr(t1, "chat_template", None) is not None and getattr(t2, "chat_template", None) is not None:
+        if t1.chat_template != t2.chat_template:
+            return False
+
+    return True
+
+
+def _verify_tokenizers_same(components: dict[str, TokenizerStep]):
+    first_name, first_step = next(iter(components.items()))
+    tokenizer = first_step.config.tokenizer
+    for name, step in components.items():
+        if step.config.tokenizer != tokenizer:
+            # If string comparison fails, try comparing loaded tokenizers
+            if not _are_tokenizers_equivalent(step.config.tokenizer, tokenizer):
+                raise ValueError(
+                    "All components must have the same tokenizer, but got:"
+                    f" {step.config.tokenizer} ({name}) vs {tokenizer} ({name})"
+                )
+            else:
+                logger.warning(
+                    f"Tokenizers ({name}) and {tokenizer} ({name}) have equivalent vocabularies but are not the same"
+                    f"tokenizer. This may cause issues with training."
+                )
+    return tokenizer

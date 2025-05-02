@@ -80,11 +80,13 @@ import urllib.parse
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, fields, is_dataclass, replace
 from datetime import datetime
+from functools import cached_property
 from typing import Any, Generic, TypeVar
 from urllib.parse import urlparse
 
 import draccus
 import fsspec
+import levanter.utils.fsspec_utils as fsspec_utils
 import ray
 import ray.remote_function
 from ray.runtime_env import RuntimeEnv
@@ -157,20 +159,61 @@ class ExecutorStep(Generic[ConfigT]):
         """Refer to the `name` under `self`'s output_path."""
         return InputName(self, name=name)
 
+    def __truediv__(self, other: str) -> "InputName":
+        """Alias for `cd`. That looks more Pythonic."""
+        return InputName(self, name=other)
+
     def __hash__(self):
         """Hash based on the ID (every object is different)."""
         return hash(id(self))
+
+    def with_output_path(self, output_path: str) -> "ExecutorStep":
+        """Return a copy of the step with the given output_path."""
+        return replace(self, override_output_path=output_path)
 
 
 @dataclass(frozen=True)
 class InputName:
     """To be interpreted as a previous `step`'s output_path joined with `name`."""
 
-    step: ExecutorStep
+    step: ExecutorStep | None
     name: str | None
 
     def cd(self, name: str) -> "InputName":
         return InputName(self.step, name=os.path.join(self.name, name) if self.name else name)
+
+    def __truediv__(self, other: str) -> "InputName":
+        """Alias for `cd`. That looks more Pythonic."""
+        return self.cd(other)
+
+    @staticmethod
+    def hardcoded(path: str) -> "InputName":
+        """
+        Sometimes we want to specify a path that is not part of the pipeline but is still relative to the prefix.
+        Try to use this sparingly.
+        """
+        return InputName(None, name=path)
+
+
+def get_executor_step(run: ExecutorStep | InputName) -> ExecutorStep:
+    """
+    Helper function to extract the ExecutorStep from an InputName or ExecutorStep.
+
+    Args:
+        run (ExecutorStep | InputName): The input to extract the step from.
+
+    Returns:
+        ExecutorStep: The extracted step.
+    """
+    if isinstance(run, ExecutorStep):
+        return run
+    elif isinstance(run, InputName):
+        step = run.step
+        if step is None:
+            raise ValueError(f"Hardcoded path {run.name} is not part of the pipeline")
+        return step
+    else:
+        raise ValueError(f"Unexpected type {type(run)} for run: {run}")
 
 
 def output_path_of(step: ExecutorStep, name: str | None = None) -> InputName:
@@ -188,6 +231,10 @@ def this_output_path(name: str | None = None):
     return OutputName(name=name)
 
 
+# constant so we can use it in fields of dataclasses
+THIS_OUTPUT_PATH = OutputName(None)
+
+
 @dataclass(frozen=True)
 class VersionedValue(Generic[T_co]):
     """Wraps a value, to signal that this value (part of a config) should be part of the version."""
@@ -198,7 +245,18 @@ class VersionedValue(Generic[T_co]):
 def versioned(value: T_co) -> VersionedValue[T_co]:
     if isinstance(value, VersionedValue):
         raise ValueError("Can't nest VersionedValue")
+    elif isinstance(value, InputName):
+        # TODO: We have also run into Versioned([InputName(...), ...])
+        raise ValueError("Can't version an InputName")
+
     return VersionedValue(value)
+
+
+def ensure_versioned(value: VersionedValue[T_co] | T_co) -> VersionedValue[T_co]:
+    """
+    Ensure that the value is wrapped in a VersionedValue. If it is already wrapped, return it as is.
+    """
+    return value if isinstance(value, VersionedValue) else VersionedValue(value)
 
 
 def unwrap_versioned_value(value: VersionedValue[T_co] | T_co) -> T_co:
@@ -295,13 +353,15 @@ def collect_dependencies_and_version(obj: Any, dependencies: list[ExecutorStep],
             obj = output_path_of(obj, None)
 
         if isinstance(obj, VersionedValue):
-            # Just extract the value
             version[prefix] = obj.value
         elif isinstance(obj, InputName):
             # Put string i for the i-th dependency
             index = len(dependencies)
-            dependencies.append(obj.step)
-            version[prefix] = dependency_index_str(index) + ("/" + obj.name if obj.name else "")
+            if obj.step is not None:
+                dependencies.append(obj.step)
+                version[prefix] = dependency_index_str(index) + ("/" + obj.name if obj.name else "")
+            else:
+                version[prefix] = obj.name
         elif is_dataclass(obj):
             # Recurse through dataclasses
             for field in fields(obj):
@@ -321,7 +381,9 @@ def collect_dependencies_and_version(obj: Any, dependencies: list[ExecutorStep],
     recurse(obj, "")
 
 
-def instantiate_config(config: dataclass, output_path: str, output_paths: dict[ExecutorStep, str]) -> dataclass:
+def instantiate_config(
+    config: dataclass, output_path: str, output_paths: dict[ExecutorStep, str], prefix: str
+) -> dataclass:
     """
     Return a "real" config where all the special values (e.g., `InputName`,
     `OutputName`, and `VersionedValue`) have been replaced with
@@ -341,7 +403,10 @@ def instantiate_config(config: dataclass, output_path: str, output_paths: dict[E
             obj = output_path_of(obj)
 
         if isinstance(obj, InputName):
-            return join_path(output_paths[obj.step], obj.name)
+            if obj.step is None:
+                return _make_prefix_absolute_path(prefix, obj.name)
+            else:
+                return join_path(output_paths[obj.step], obj.name)
         elif isinstance(obj, OutputName):
             return join_path(output_path, obj.name)
         elif isinstance(obj, VersionedValue):
@@ -427,7 +492,8 @@ class Executor:
         for step in steps:
             if isinstance(step, InputName):  # Interpret InputName as the underlying step
                 step = step.step
-            self.compute_version(step)
+            if step is not None:
+                self.compute_version(step)
 
         self.get_infos()
         logger.info(f"### Reading {len(self.steps)} statuses ###")
@@ -485,9 +551,15 @@ class Executor:
             visited.add(step)
             in_stack.add(step)
 
-            for dep in self.dependencies[step]:
-                dfs(dep)
-            to_run.append(step)
+            info = self.step_infos[self.steps.index(step)]
+
+            # only run if the step hasn't already been run
+            if get_status(info.output_path, None, {}) not in [STATUS_SUCCESS]:
+                for dep in self.dependencies[step]:
+                    dfs(dep)
+                to_run.append(step)
+            else:
+                logger.info(f"Skipping {step.name}'s dependencies as it has already been run")
             in_stack.remove(step)
 
         for step in steps:
@@ -499,14 +571,6 @@ class Executor:
             logger.warning(f"Regexes {unused_regexes} did not match any steps")
 
         return to_run
-
-    def compute_hashed_version_str(self, step: ExecutorStep) -> str:
-        version = {
-            "name": step.name,
-            "config": self.versions[step]["config"],
-            "dependencies": [self.versions[dep] for dep in self.dependencies[step]],
-        }
-        return json.dumps(version, sort_keys=True, cls=CustomJsonEncoder)
 
     def compute_version(self, step: ExecutorStep):
         if step in self.versions:
@@ -538,8 +602,7 @@ class Executor:
         # Override output path if specified
         override_path = step.override_output_path
         if override_path is not None:
-            if _is_relative_path(override_path):
-                override_path = os.path.join(self.prefix, override_path)
+            override_path = _make_prefix_absolute_path(self.prefix, override_path)
 
             if output_path != override_path:
                 logger.warning(
@@ -560,10 +623,12 @@ class Executor:
             logger.warning(
                 f"Multiple `ExecutorStep`s (named {step.name}) have the same version; try to instantiate only once."
             )
+
         self.configs[step] = instantiate_config(
             config=step.config,
             output_path=output_path,
             output_paths=self.output_paths,
+            prefix=self.prefix,
         )
         self.dependencies[step] = list(map(self.canonicalize, dependencies))
         self.versions[step] = version
@@ -592,9 +657,10 @@ class Executor:
             )
 
         # Compute info for the entire execution
+        path = get_caller_path()
         self.executor_info = ExecutorInfo(
             git_commit=get_git_commit(),
-            caller_path=get_caller_path(),
+            caller_path=path,
             created_date=datetime.now().isoformat(),
             user=get_user(),
             ray_job_id=ray.get_runtime_context().get_job_id(),
@@ -638,20 +704,14 @@ class Executor:
         # Write out info for each step
         for step, info in zip(self.steps, self.step_infos, strict=True):
             info_path = get_info_path(self.output_paths[step])
+            fsspec_utils.mkdirs(os.path.dirname(info_path))
             with fsspec.open(info_path, "w") as f:
                 print(json.dumps(asdict(info), indent=2, cls=CustomJsonEncoder), file=f)
 
         # Write out info for the entire execution
+        fsspec_utils.mkdirs(os.path.dirname(self.executor_info_path))
         with fsspec.open(self.executor_info_path, "w") as f:
             print(json.dumps(asdict(self.executor_info), indent=2, cls=CustomJsonEncoder), file=f)
-
-    def read_statuses(self):
-        """Read the statuses of all the steps."""
-
-        output_paths_list = list(self.output_paths.values())
-
-        status_values = ray.get(self.status_actor.get_statuses.remote(output_paths_list))
-        self.statuses = {key: status for key, status in zip(self.output_paths.keys(), status_values, strict=False)}
 
     def run_step(self, step: ExecutorStep, dry_run: bool, force_run_failed: bool) -> None:
         """
@@ -675,7 +735,7 @@ class Executor:
         for i, dep in enumerate(self.dependencies[step]):
             logger.info(f"  {dependency_index_str(i)} = {self.output_paths[dep]}")
 
-        dependencies = [self.refs[dep] for dep in self.dependencies[step]]
+        dependencies = [self.refs[dep] for dep in self.dependencies[step] if dep in self.refs]
         name = f"execute_after_dependencies({get_fn_name(step.fn, short=True)})::{step.name})"
 
         if step.pip_dependency_groups is not None:
@@ -692,7 +752,13 @@ class Executor:
                 ),
             ).remote(step.fn, step_name, config, dependencies, output_path, self.status_actor, force_run_failed)
         else:
-            self.refs[step] = ray.put(None)  # Necessary as we call ray.get on all the deps in execute_after_dependencies
+            # Necessary as we call ray.get on all the deps in execute_after_dependencies
+            self.refs[step] = self._dry_run_result
+
+    # caching saves ~10% off some tests
+    @cached_property
+    def _dry_run_result(self):
+        return ray.put(None)
 
 
 def asdict_without_description(obj: dataclass) -> dict[str, Any]:
@@ -927,10 +993,16 @@ class ExecutorMainConfig:
 @draccus.wrap()
 def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], description: str | None = None):
     """Main entry point for experiments (to standardize)"""
-    ray.init(namespace="marin")  # We need to init ray here to make sure we have the correct namespace for actors
-    # (status_actor in particular)
-
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
+    time_in = time.time()
+    ray.init(
+        namespace="marin", ignore_reinit_error=True
+    )  # We need to init ray here to make sure we have the correct namespace for actors
+    # (status_actor in particular)
+    time_out = time.time()
+    logger.info(f"Ray init took {time_out - time_in:.2f}s")
+    time_in = time.time()
 
     prefix = config.prefix
     if prefix is None:
@@ -958,6 +1030,8 @@ def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], descrip
     )
 
     executor.run(steps=steps, dry_run=config.dry_run, run_only=config.run_only, force_run_failed=config.force_run_failed)
+    time_out = time.time()
+    logger.info(f"Executor run took {time_out - time_in:.2f}s")
 
 
 def _is_relative_path(url_or_path):
@@ -969,3 +1043,9 @@ def _is_relative_path(url_or_path):
 
     # otherwise if it starts with a slash, it's not a relative path
     return not url_or_path.startswith("/")
+
+
+def _make_prefix_absolute_path(prefix, override_path):
+    if _is_relative_path(override_path):
+        override_path = os.path.join(prefix, override_path)
+    return override_path

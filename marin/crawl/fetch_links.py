@@ -25,7 +25,7 @@ The high-level design of this fetcher is heavily inspired by the Apache Nutch cr
 After fetching to parquet, use `convert_responses_parquet_to_warc.py` to convert the parquet
 responses to WARC.
 
-Running on FineWeb-Edu:
+Running on FineWeb-Edu-10M:
 
 ```
 python marin/run/ray_run.py \
@@ -38,7 +38,21 @@ python marin/run/ray_run.py \
     --max_concurrent_shards 40
 ```
 
-Running on OpenWebMath:
+Running on FineWeb-Edu-10M-cc-deduplicated:
+
+```
+python marin/run/ray_run.py \
+    --pip_deps 'fastparquet' \
+    --no_wait -- \
+    python marin/crawl/fetch_links.py \
+    --urls_input_directory gs://marin-us-central2/scratch/nfliu/outlinks/fineweb-edu-10M-cc-deduplicated/ \
+    --output_path gs://marin-us-central2/scratch/nfliu/fetched_outlinks/fineweb-edu-10M-cc-deduplicated/ \
+    --threads_per_shard 160 \
+    --max_concurrent_shards 40
+```
+
+
+Running on OpenWebMath-10M:
 
 ```
 python marin/run/ray_run.py \
@@ -50,6 +64,19 @@ python marin/run/ray_run.py \
     --threads_per_shard 160 \
     --max_concurrent_shards 40
 ```
+
+Running on OpenWebMath-10M-cc-deduplicated:
+
+```
+python marin/run/ray_run.py \
+    --pip_deps 'fastparquet' \
+    --no_wait -- \
+    python marin/crawl/fetch_links.py \
+    --urls_input_directory gs://marin-us-central2/scratch/nfliu/outlinks/open-web-math-fde8ef8-10M-cc-deduplicated/ \
+    --output_path gs://marin-us-central2/scratch/nfliu/fetched_outlinks/open-web-math-fde8ef8-10M-cc-deduplicated/ \
+    --threads_per_shard 160 \
+    --max_concurrent_shards 40
+```
 """
 import io
 import json
@@ -58,6 +85,7 @@ import os
 import pathlib
 import queue
 import random
+import shutil
 import tempfile
 import threading
 import time
@@ -72,6 +100,7 @@ import fsspec
 import pandas as pd
 import ray
 import requests
+import urllib3
 from tqdm_loggable.auto import tqdm
 
 from marin.utils import fsspec_cp, fsspec_exists, fsspec_glob
@@ -112,7 +141,7 @@ def fetch_url(
       or we get a 4xx or 5xx response)
     """
     try:
-        with session.get(url, timeout=timeout, stream=True) as r:
+        with session.get(url, timeout=timeout, stream=True, verify=False) as r:
             r.raise_for_status()
 
             # Create a mutable Response object that we'll patch with truncated content.
@@ -281,13 +310,28 @@ def fetch_to_parquet(
         Continuously dequeues results and writes them to Parquet in chunks locally,
         then uploads the Parquet file to a remote gs:// path. This prevents
         accumulating too many results in memory and allows recovery from pre-emption.
+        The local parquet file is uploaded whenever the buffer
+        has >= parquet_chunk_size examples OR total size of examples' content in memory >= 2 GB.
         """
         buffer = []
+        # Track the total number of bytes in `buffer` for flush condition
+        buffer_size_bytes = 0
         num_written_records = len(already_fetched_urls)
 
         # Create a temporary directory for Parquet files
         with tempfile.TemporaryDirectory() as temp_dir:
             local_parquet_path = os.path.join(temp_dir, f"{shard_id}_temp_output.parquet")
+            # Check if a partially-written parquet already exists on gcloud. If so, download it.
+            if fsspec_exists(parquet_output_path):
+                logger.info(f"Parquet output path {parquet_output_path} already exists, downloading it locally")
+                # Open parquet_output_path with fsspec and write its contents to local_parquet_path
+                with (
+                    fsspec.open(parquet_output_path, "rb", block_size=1 * 1024 * 1024 * 1024) as remote_file,
+                    open(local_parquet_path, "wb") as local_file,
+                ):
+                    shutil.copyfileobj(remote_file, local_file)
+                logger.info(f"Downloaded file at parquet output path {parquet_output_path} to {local_parquet_path}")
+
             while True:
                 item = results_queue.get()
                 if item is SENTINEL:
@@ -296,7 +340,9 @@ def fetch_to_parquet(
                         # Write robots data to output path
                         with netloc_to_robots_lock:
                             netloc_to_robots_output = deepcopy(netloc_to_robots)
-                        with fsspec.open(robots_output_path, "w", compression="infer") as fout:
+                        with fsspec.open(
+                            robots_output_path, "w", compression="infer", block_size=1 * 1024 * 1024 * 1024
+                        ) as fout:
                             json.dump(netloc_to_robots_output, fout)
 
                         # Write errors to output path
@@ -304,7 +350,9 @@ def fetch_to_parquet(
                             url_to_fetch_errors_output = deepcopy(url_to_fetch_errors)
                         with netloc_to_robots_fetch_error_lock:
                             netloc_to_robots_fetch_error_output = deepcopy(netloc_to_robots_fetch_error)
-                        with fsspec.open(errors_output_path, "w", compression="infer") as fout:
+                        with fsspec.open(
+                            errors_output_path, "w", compression="infer", block_size=1 * 1024 * 1024 * 1024
+                        ) as fout:
                             json.dump(
                                 {
                                     "url_to_fetch_errors": url_to_fetch_errors_output,
@@ -333,15 +381,21 @@ def fetch_to_parquet(
                     results_queue.task_done()
                     break
 
+                # Accumulate in buffer
                 buffer.append(item)
+                if "content" in item and isinstance(item["content"], bytes):
+                    buffer_size_bytes += len(item["content"])
                 results_queue.task_done()
 
-                # If buffer is large enough, flush to local Parquet and upload
-                if len(buffer) >= parquet_chunk_size:
-                    # Write robots data to output path
+                # Flush if the number of items or total buffer size in bytes is large enough
+                # (2 GB threshold)
+                if len(buffer) >= parquet_chunk_size or buffer_size_bytes >= 2 * 1024 * 1024 * 1024:
+                    # Write robots data
                     with netloc_to_robots_lock:
                         netloc_to_robots_output = deepcopy(netloc_to_robots)
-                    with fsspec.open(robots_output_path, "w", compression="infer") as fout:
+                    with fsspec.open(
+                        robots_output_path, "w", compression="infer", block_size=1 * 1024 * 1024 * 1024
+                    ) as fout:
                         json.dump(netloc_to_robots_output, fout)
 
                     # Write errors to output path
@@ -349,7 +403,9 @@ def fetch_to_parquet(
                         url_to_fetch_errors_output = deepcopy(url_to_fetch_errors)
                     with netloc_to_robots_fetch_error_lock:
                         netloc_to_robots_fetch_error_output = deepcopy(netloc_to_robots_fetch_error)
-                    with fsspec.open(errors_output_path, "w", compression="infer") as fout:
+                    with fsspec.open(
+                        errors_output_path, "w", compression="infer", block_size=1 * 1024 * 1024 * 1024
+                    ) as fout:
                         json.dump(
                             {
                                 "url_to_fetch_errors": url_to_fetch_errors_output,
@@ -375,7 +431,9 @@ def fetch_to_parquet(
                         num_written_records += len(buffer)
                         logger.info(f"[shard {shard_id}] wrote {num_written_records} records so far")
 
+                    # Clear buffer and reset size count
                     buffer.clear()
+                    buffer_size_bytes = 0
 
             logger.info(f"Writer thread for shard {shard_id} finished.")
 
@@ -389,7 +447,7 @@ def fetch_to_parquet(
     for url in urls_to_fetch:
         work_queue.put((url, retries_per_url, False))
 
-    pbar = tqdm(total=len(urls), desc=f"Fetching shard {shard_id}")
+    pbar = tqdm(total=len(urls_to_fetch), desc=f"Fetching shard {shard_id}")
     pbar_lock = threading.Lock()
 
     # Worker function
@@ -622,13 +680,15 @@ def load_already_fetched_urls(parquet_path: str):
         df = pd.read_parquet(parquet_path)
         if "url" in df.columns:
             return set(df["url"].dropna().unique().tolist())
+    else:
+        logger.info(f"Fetched URLs parquet path {parquet_path} does not already exist")
     return set()
 
 
 def load_json_if_exists(json_path: str):
     """Load a JSON file if it exists, else return an empty dict."""
     if fsspec_exists(json_path):
-        with fsspec.open(json_path, compression="infer") as fin:
+        with fsspec.open(json_path, compression="infer", block_size=1 * 1024 * 1024 * 1024) as fin:
             return json.load(fin)
     return {}
 
@@ -656,12 +716,15 @@ def fetch_links(
     threads_per_shard (int): Number of threads to use for concurrent fetching.
     """
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+    # Disable SSL verification warnings.
+    urllib3.disable_warnings(category=urllib3.exceptions.InsecureRequestWarning)
+
     success_path = parquet_output_path + ".SUCCESS"
     if fsspec_exists(success_path):
         logger.info(f"Already processed and wrote parquet to {parquet_output_path}, skipping...")
         return
 
-    with fsspec.open(urls_path) as f:
+    with fsspec.open(urls_path, block_size=1 * 1024 * 1024 * 1024) as f:
         df = pd.read_parquet(f)
     logger.info(f"Found {len(df)} examples in input file {urls_path}")
 
@@ -677,7 +740,7 @@ def fetch_links(
     fetch_to_parquet(urls, shard_id, parquet_output_path, robots_output_path, errors_output_path, threads_per_shard)
 
     # Create success file
-    with fsspec.open(success_path, "w") as fout:
+    with fsspec.open(success_path, "w", block_size=1 * 1024 * 1024 * 1024) as fout:
         json.dump(
             {
                 "urls_path": urls_path,
@@ -719,7 +782,7 @@ def get_shard_indices_to_process(urls_input_directory: str) -> list[int]:
 
 
 @draccus.wrap()
-def main(cfg: FetchLinksConfig):
+def process_shard_links(cfg: FetchLinksConfig):
     shard_indices_to_process = ray.get(get_shard_indices_to_process.remote(cfg.urls_input_directory))
     num_shards_to_process = len(shard_indices_to_process)
     random.shuffle(shard_indices_to_process)
@@ -766,4 +829,4 @@ def main(cfg: FetchLinksConfig):
 
 
 if __name__ == "__main__":
-    main()
+    process_shard_links()
