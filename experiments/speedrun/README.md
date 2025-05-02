@@ -18,7 +18,7 @@ Follow the steps in [Marin's README](../../README.md) to set up your development
 ### Running a Speedrun
 Create a configuration for your run and use `default_speedrun` to train your model. This will train the model and generate an analysis file containing metrics and metadata.
 
-An example is provided in [sample_run/sample_run.py](sample_run/sample_run.py).
+An example is provided in [llama_75m_fineweb_edu/llama_75m_fineweb_edu.py](llama_75m_fineweb_edu/llama_75m_fineweb_edu.py).
 
 ### Viewing the Leaderboard
 
@@ -36,7 +36,7 @@ The leaderboard will be viewable at http://localhost:8000
 
 1. Create a directory for your run at `experiments/speedrun/<your_run_name>/` and add your training script as `<your_run_name>.py`.
 
-2. Train your model (both GPUs and TPUs are supported), and add the `speedrun_results.json` file that's generated to [`experiments/speedrun/<your_run_name>/speedrun_results.json`]. Example results file: [sample_run/speedrun_results.json](sample_run/speedrun_results.json).
+2. Train your model (both GPUs and TPUs are supported), and add the `speedrun_results.json` file that's generated to [`experiments/speedrun/<your_run_name>/speedrun_results.json`]. Examples of how to define a run and how the results file looks are available in [llama_75m_fineweb_edu/llama_75m_fineweb_edu.py](llama_75m_fineweb_edu/llama_75m_fineweb_edu.py) and [llama_75m_fineweb_edu/speedrun_results.json](llama_75m_fineweb_edu/speedrun_results.json) respectively.
 
 3. Create a pull request with a brief explanation of your approach.
 
