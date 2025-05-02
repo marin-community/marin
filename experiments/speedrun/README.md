@@ -34,33 +34,17 @@ The leaderboard will be viewable at http://localhost:8000
 
 ## Submitting Your Run
 
-1. Fork the Marin repository
+1. Create a directory for your run at `experiments/speedrun/<your_run_name>/` and add your training script as `<your_run_name>.py`.
 
-2. Create a new branch for your run:
-   ```bash
-   git checkout -b speedrun/your-run-name
-   ```
+2. Train your model (both GPUs and TPUs are supported), and add the `speedrun_results.json` file that's generated to [`experiments/speedrun/<your_run_name>/speedrun_results.json`]. Example results file: [sample_run/speedrun_results.json](sample_run/speedrun_results.json).
 
-3. Create a directory for your run at `experiments/speedrun/<your_run_name>/` and add your training script as `<your_run_name>.py`. Feel free to add docstrings describing your approach to the file.
+3. Create a pull request with a brief explanation of your approach.
 
-4. Train your model on your compute resources (both GPUs and TPUs are supported), and add the `speedrun_results.json` file that's generated to [`experiments/speedrun/<your_run_name>/speedrun_results.json`](data/runs.json).
+4. We will then review it manually and merge it if it satisfies the requirements.
 
-5. Create a pull request with:
-   - Title: `[Speedrun] Your Run Name - Track (e.g., TINY)`
-   - Description:
-     - Brief explanation of your approach
-     - Key metrics (C4-EN BPB, FineWeb-Edu Validation Loss)
-     - Discussion of your approach
-
-6. The CI workflow will then:
-   - Validate your results file
-   - Verify compute budget compliance
-   - Update the leaderboard
-
-7. Once merged, your run will appear on the public leaderboard at https://crfm.stanford.edu/marin/speedrun/
+5. Once merged, your run will appear on the public leaderboard at https://crfm.stanford.edu/marin/speedrun/
 
 ## Evaluation Metrics
 
 - **C4-EN BPB (Bits per Byte)**: Compression performance on the C4 dataset (TODO: decide a concrete metric between these)
-- **FLOPs Used**: Total compute used during training
-- **Fineweb-Edu Validation Loss**: Validation loss on the Fineweb-Edu dataset
+- **FLOPs Used**: Estimate of total compute used during training

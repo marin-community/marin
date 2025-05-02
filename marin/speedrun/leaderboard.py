@@ -15,21 +15,18 @@ logger = logging.getLogger(__name__)
 @dataclass
 class LeaderboardEntry:
     run_name: str
-    compute_budget_track: str
     model_size: int
     total_training_time: float
     final_flops_used: float
     submitted_by: str
-    storage_path: str  # Path to the analysis file
+    storage_path: str  # Path to the results file
     wandb_run_id: str | None = None
     lm_eval_macro_avg_acc: float | None = None
     eval_paloma_c4_en_bpb: float | None = None
-    eval_fineweb_edu_loss: float | None = None
 
     def to_json(self) -> dict:
         return {
             "run_name": self.run_name,
-            "compute_budget_track": self.compute_budget_track,
             "model_size": self.model_size,
             "total_training_time": self.total_training_time,
             "final_flops_used": self.final_flops_used,
@@ -38,7 +35,6 @@ class LeaderboardEntry:
             "wandb_run_id": self.wandb_run_id,
             "lm_eval_macro_avg_acc": self.lm_eval_macro_avg_acc,
             "eval_paloma_c4_en_bpb": self.eval_paloma_c4_en_bpb,
-            "eval_fineweb_edu_loss": self.eval_fineweb_edu_loss,
         }
 
 
@@ -62,11 +58,10 @@ class Leaderboard:
                 # Convert old format to new format
                 return {"runs": [data]}
 
-    def _create_entry_from_analysis(self, analysis: dict, storage_path: str) -> LeaderboardEntry:
+    def _create_entry_from_results(self, results: dict, storage_path: str) -> LeaderboardEntry:
         run_name = Path(storage_path).parent.name
 
-        budget_flops = analysis["compute_budget"]["flops_budget_for_track"]
-        actual_compute = analysis["actual_stats"]["final_flops_estimate"]
+        actual_compute = results["run_stats"]["final_flops_estimate"]
 
         # Convert to float and scientific notation
         if isinstance(actual_compute, str):
@@ -77,35 +72,28 @@ class Leaderboard:
         else:
             actual_flops = float(actual_compute)
 
-        # Ensure both are in same format (scientific notation)
-        budget_flops = float(f"{budget_flops:.2e}".replace("e", "E"))
+        # Ensure in scientific notation
         actual_flops = float(f"{actual_flops:.2e}".replace("e", "E"))
 
         # Get training time (handle both field names)
-        training_time = analysis["actual_stats"].get(
-            "training_time_in_minutes", analysis["actual_stats"].get("training_time", 0.0)
+        training_time = results["run_stats"].get(
+            "training_time_in_minutes", results["run_stats"].get("training_time", 0.0)
         )
 
         # Get eval metrics
-        lm_eval_macro_avg_acc = analysis["actual_stats"].get("lm_eval/averages/macro_avg_acc")
-        eval_paloma_c4_en_bpb = analysis["actual_stats"].get("eval/paloma/c4_en/bpb")
+        lm_eval_macro_avg_acc = results["run_stats"].get("lm_eval/averages/macro_avg_acc")
+        eval_paloma_c4_en_bpb = results["run_stats"].get("eval/paloma/c4_en/bpb")
 
         return LeaderboardEntry(
             run_name=run_name,
-            compute_budget_track=analysis["compute_budget"]["track"],
-            model_size=analysis["run_related_info"]["num_parameters"],
+            model_size=results["run_related_info"]["num_parameters"],
             total_training_time=training_time,
             final_flops_used=actual_flops,
-            submitted_by=analysis["run_related_info"].get("submitted_by", "unknown"),
+            submitted_by=results["run_related_info"].get("submitted_by", "unknown"),
             storage_path=storage_path,
-            wandb_run_id=analysis["run_related_info"].get("wandb_run_id", None),
+            wandb_run_id=results["run_related_info"].get("wandb_run_id", None),
             lm_eval_macro_avg_acc=float(lm_eval_macro_avg_acc) if lm_eval_macro_avg_acc is not None else None,
             eval_paloma_c4_en_bpb=float(eval_paloma_c4_en_bpb) if eval_paloma_c4_en_bpb is not None else None,
-            eval_fineweb_edu_loss=(
-                float(analysis["actual_stats"].get("eval/fineweb-edu/loss"))
-                if analysis["actual_stats"].get("eval/fineweb-edu/loss") is not None
-                else None
-            ),
         )
 
     def get_entries(self) -> list[LeaderboardEntry]:
@@ -127,11 +115,10 @@ class Leaderboard:
 
         return entries
 
-    def get_entries_by_track(self, track: str) -> list[LeaderboardEntry]:
-        return [e for e in self.get_entries() if e.compute_budget_track == track]
+    # No filtering by categories needed
 
-    def format_leaderboard(self, track: str | None = None) -> str:
-        entries = self.get_entries_by_track(track) if track else self.get_entries()
+    def format_leaderboard(self) -> str:
+        entries = self.get_entries()
 
         if not entries:
             return "No entries found."
@@ -139,21 +126,20 @@ class Leaderboard:
         # Sort by FLOPs used (lower is better)
         entries.sort(key=lambda x: x.final_flops_used, reverse=True)
 
-        header = "| Rank | Run Name | Budget Track | Model Size | Training Time (min) | FLOPs Used |\n"
-        header += "| LM Eval Acc | C4-EN BPB | Fineweb-Edu Loss |\n"
-        separator = "|------|----------|--------------|------------|-------------------|-------------|\n"
-        separator += "|------------|---------|----------------|\n"
+        header = "| Rank | Run Name | Model Size | Training Time (min) | FLOPs Used |"
+        header += "| LM Eval Acc | C4-EN BPB |"
+        separator = "|------|----------|------------|-------------------|-------------|"
+        separator += "|------------|---------|"
 
         rows = []
         for i, entry in enumerate(entries, 1):
             model_size_str = f"{entry.model_size/1e6:.1f}M" if entry.model_size < 1e9 else f"{entry.model_size/1e9:.1f}B"
             eval_acc = f"{entry.lm_eval_macro_avg_acc:.3f}" if entry.lm_eval_macro_avg_acc is not None else "N/A"
             c4_bpb = f"{entry.eval_paloma_c4_en_bpb:.3f}" if entry.eval_paloma_c4_en_bpb is not None else "N/A"
-            fineweb_loss = f"{entry.eval_fineweb_edu_loss:.3f}" if entry.eval_fineweb_edu_loss is not None else "N/A"
             row = (
-                f"| {i} | {entry.run_name} | {entry.compute_budget_track} | {model_size_str} | "
+                f"| {i} | {entry.run_name} | {model_size_str} | "
                 f"{entry.total_training_time:.1f} | {entry.final_flops_used:.2e} | {eval_acc} | "
-                f"{c4_bpb} | {fineweb_loss} |"
+                f"{c4_bpb} |"
             )
             rows.append(row)
 

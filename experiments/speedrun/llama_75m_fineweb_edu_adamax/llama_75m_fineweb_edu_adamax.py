@@ -10,7 +10,7 @@ from levanter.optim import OptimizerConfig
 
 from experiments.llama import llama_75m
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.speedrun.speedrun import ComputeBudget, HardwareConfig, SpeedrunConfig, default_speedrun
+from marin.speedrun.speedrun import HardwareConfig, SpeedrunConfig, default_speedrun
 from marin.execution.executor import executor_main
 
 
@@ -24,11 +24,11 @@ class AdamaxConfig(OptimizerConfig):
     def build(self, num_train_steps):
         print(f"Building optimizer: {self.__class__.__name__}")
 
-        # Try to register the class if it's not already registered
+        # try to register the class if it's not already registered
         try:
             OptimizerConfig.register_subclass("adamax")(AdamaxConfig)
         except ValueError:
-            # ignore gracefully and use the already registered class
+            # ignore and use the already registered class
             pass
 
         def _optimizer(learning_rate):
@@ -56,12 +56,11 @@ class AdamaxConfig(OptimizerConfig):
         return optax.inject_hyperparams(_optimizer)(learning_rate=self.lr_scheduler(num_train_steps))
 
 
-# --------------------- Example Speedrun Using Adamax ------------------------
+# --------------------- speedrun Using Adamax ------------------------
 
 logger = logging.getLogger("ray")
 
 speedrun_config = SpeedrunConfig(
-    compute_budget=ComputeBudget.SMALL,
     model_config=llama_75m,
     train_config=SimpleTrainConfig(
         tpu_type="v4-128",
@@ -80,8 +79,6 @@ speedrun_config = SpeedrunConfig(
     ),
 )
 
-is_valid, error = speedrun_config.validate()
-logger.info(f"Speedrun validation: {is_valid}, {error}")
-
 if __name__ == "__main__":
-    executor_main(steps=default_speedrun("75M_llama_adamax", speedrun_config))
+    override_output_path = "checkpoints/speedrun/75M_llama_adamax-380097"
+    executor_main(steps=default_speedrun("75M_llama_adamax", speedrun_config, override_output_path=override_output_path))

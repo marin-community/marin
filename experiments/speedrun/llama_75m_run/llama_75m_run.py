@@ -7,13 +7,12 @@ import logging
 from experiments.dclm.tokenize_dclm import dclm_components_llama3
 from experiments.llama import llama_75m
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.speedrun.speedrun import ComputeBudget, HardwareConfig, SpeedrunConfig, default_speedrun
+from marin.speedrun.speedrun import HardwareConfig, SpeedrunConfig, default_speedrun
 from marin.execution.executor import executor_main
 
 logger = logging.getLogger("ray")
 
 speedrun_config = SpeedrunConfig(
-    compute_budget=ComputeBudget.SMALL,
     model_config=llama_75m,
     train_config=SimpleTrainConfig(
         tpu_type="v4-128",
@@ -28,13 +27,10 @@ speedrun_config = SpeedrunConfig(
     hardware_config=HardwareConfig(
         device_type="v4-128",
         num_devices=64,
-        device_flops=275e12,  # one v4 chip is capable of 275 TFLOPs of peak compute: https://cloud.google.com/tpu/docs/v4
+        device_flops=275e12,
     ),
 )
 
-# can choose to validate configuration before training
-is_valid, error = speedrun_config.validate()
-logger.info(f"Speedrun validation: {is_valid}, {error}")
-
 if __name__ == "__main__":
-    executor_main(steps=default_speedrun("75M_llama_dclm_baseline", speedrun_config))
+    override_output_path = "checkpoints/speedrun/75M_llama_dclm_baseline-b7a5f5"
+    executor_main(steps=default_speedrun("75M_llama_dclm_baseline", speedrun_config, override_output_path=override_output_path))

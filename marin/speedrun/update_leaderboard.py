@@ -46,17 +46,8 @@ def main():
     leaderboard = Leaderboard(args.storage_path)
 
     if args.print_only:
-        print("\nFull Leaderboard:")
+        print("\nSpeedrun Leaderboard:")
         print(leaderboard.format_leaderboard())
-
-        print("\nTINY Track:")
-        print(leaderboard.format_leaderboard("TINY"))
-
-        print("\nSMALL Track:")
-        print(leaderboard.format_leaderboard("SMALL"))
-
-        print("\nMEDIUM Track:")
-        print(leaderboard.format_leaderboard("MEDIUM"))
     else:
         # start the web server
         serve_leaderboard(args.storage_path, args.port)

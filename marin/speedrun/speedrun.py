@@ -38,22 +38,15 @@ class HardwareConfig:
     device_flops: float  # Peak FLOPs/s per device
 
 
-class ComputeBudget(Enum):
-    # target compute budget in FLOPs that the user opts to stay within
-    TINY = 3e18
-    SMALL = 6e18
-    MEDIUM = 3e19
-
-
 @dataclass
 class SpeedrunConfig:
-    compute_budget: ComputeBudget
     model_config: LmConfig
     train_config: SimpleTrainConfig | TrainLmOnPodConfig
     hardware_config: HardwareConfig
-    tokenized_dataset: InputName | LMMixtureDatasetConfig = fineweb_edu_tokenized
-    hyperparameter_scaling: Callable[[LmConfig, ComputeBudget], dict] | None = None
     mfu_estimate: float = 0.5
+
+    # by default, this is fineweb_edu_tokenized
+    tokenized_dataset: InputName | LMMixtureDatasetConfig = fineweb_edu_tokenized
 
     @property
     def vocab_size(self) -> int:
@@ -88,27 +81,6 @@ class SpeedrunConfig:
 
         return 6.0 * N * total_tokens
 
-    def adjust_to_exact_budget(self):
-        # TODO (Nikil): at the moment, we have this function but don't apply it- need to figure out user flow for
-        # adjusting to exact budget
-        flops_per_token = self.model_config.flops_per_token(self.vocab_size) * 6
-        total_tokens = self.compute_budget.value / flops_per_token
-
-        # TODO (Nikil): handle batch schedules
-        self.train_config.num_train_steps = int(
-            total_tokens / (self.train_config.train_batch_size * self.model_config.seq_len)
-        )
-        logger.info(
-            f"""Adjusted to {self.train_config.num_train_steps} steps for
-            {self.estimate_flops_via_6nd():.2e} FLOPs"""
-        )
-
-    def apply_scaling(self):
-        if self.hyperparameter_scaling:
-            params = self.hyperparameter_scaling(self.model_config, self.compute_budget)
-            self.train_config = dataclasses.replace(
-                self.train_config, **{k: params.get(k, v) for k, v in self.train_config.__dict__.items()}
-            )
 
     def validate(self) -> tuple[bool, str]:
 
@@ -116,9 +88,8 @@ class SpeedrunConfig:
         model_flops = self.estimate_flops_via_6nd()
         estimated_compute = model_flops / self.mfu_estimate
 
-        # check if estimated compute is within user's requested budget
-        is_valid = estimated_compute <= self.compute_budget.value
-        return is_valid, f"Estimated {estimated_compute:.2e} FLOPs vs. budget {self.compute_budget.value:.2e}"
+        logger.info(f"Estimated {estimated_compute:.2e} FLOPs")
+        return estimated_compute
 
 
 @dataclass
@@ -153,17 +124,11 @@ def get_wandb_metrics(run_id: str, entity: str = "stanford-mercury", project: st
         run = wandb.Api().run(f"{entity}/{project}/{run_id}")
         summary = run.summary
         return {
-            "lm_eval/averages/macro_avg_acc": summary.get("lm_eval/averages/macro_avg_acc", None),
             "eval/paloma/c4_en/bpb": summary.get("eval/paloma/c4_en/bpb", None),
-            "eval/fineweb-edu/loss": summary.get("eval/fineweb-edu/loss", None),
         }
     except Exception as e:
         logger.error(f"Failed to fetch wandb metrics: {e}")
-        return {"lm_eval/averages/macro_avg_acc": None, "eval/paloma/c4_en/bpb": None, "eval/fineweb-edu/loss": None}
-
-
-def get_compute_budgets():
-    return {budget.name: budget.value for budget in ComputeBudget}
+        return {"eval/paloma/c4_en/bpb": None}
 
 
 def speedrun_results(config: SpeedrunResultsConfig):
@@ -189,17 +154,11 @@ def speedrun_results(config: SpeedrunResultsConfig):
         * config.speedrun_config.hardware_config.device_flops
     )
 
-    # Get wandb metrics
+    # get wandb metrics
     run_id = get_wandb_run_id_from_step(config.speedrun_train_step)
     wandb_metrics = get_wandb_metrics(run_id)
 
     run_stats = {
-        "compute_budget": {
-            "track": config.speedrun_config.compute_budget.name,
-            "flops_budget_for_track": config.speedrun_config.compute_budget.value,
-            "flops_6nd": f"{six_nd_flops:.2e}",
-            "within_budget_6nd": six_nd_flops <= config.speedrun_config.compute_budget.value,
-        },
         "run_related_info": {
             "num_parameters": num_params,
             "total_tokens": total_tokens,
@@ -209,21 +168,17 @@ def speedrun_results(config: SpeedrunResultsConfig):
             "hardware_config": dataclasses.asdict(config.speedrun_config.hardware_config),
             "wandb_run_id": run_id,
         },
-        "actual_stats": {
+        "run_stats": {
+            "pre_run_flops_estimate": f"{six_nd_flops:.2e}",
             "training_time_in_minutes": total_time,
             "final_flops_estimate": f"{total_hardware_flops:.2e}",
-            "within_budget_hardware": total_hardware_flops <= config.speedrun_config.compute_budget.value,
-            "lm_eval/averages/macro_avg_acc": wandb_metrics["lm_eval/averages/macro_avg_acc"],
             "eval/paloma/c4_en/bpb": wandb_metrics["eval/paloma/c4_en/bpb"],
-            "eval/fineweb-edu/loss": wandb_metrics["eval/fineweb-edu/loss"],
         },
     }
 
     logger.info(f"Speedrun stats: {run_stats}")
     
-    # Create a new file with the 'runs' list structure
-    output_data = {"runs": [run_stats]}
-    
+    output_data = {"runs": [run_stats]}    
     with fsspec.open(config.output_path, "w") as f:
         json.dump(output_data, f, indent=2, sort_keys=True)
     logger.info(f"Speedrun stats written to {config.output_path}")
@@ -231,17 +186,16 @@ def speedrun_results(config: SpeedrunResultsConfig):
 
 ### Default speedrun function ###
 
-
 def default_speedrun(
     name: str,
     config: SpeedrunConfig,
     tags: list[str] | None = None,
+    override_output_path: str | None = None,
 ) -> Sequence[ExecutorStep]:
     """
-
     Speedrun is a mechanism for submitting a PoC run for a new model/optimizer configuration. It consists of both a
-    training step and an analysis step that computes and stores metrics/metadata for the speedrun. See `sample_run.py`
-    for an example.
+    training step and a step that computes and stores metrics/metadata for the speedrun. See `experiments/speedrun/`
+    for examples.
 
     Args:
         name: name of the training run. Will form the basis of the output path for the executor step.
@@ -249,22 +203,18 @@ def default_speedrun(
         tags: Optional additional tags for tracking
 
     Returns:
-        training step configured for the speedrun, and an analysis step that
-        computes and stores metrics/metadata for the speedrun.
+        training step configured for the speedrun, and a step that computes and stores metrics/metadata
+        for the speedrun.
 
     Raises:
         ValueError: If the configuration is invalid
     """
-    # Validate configuration
-    is_valid, error = config.validate()
-    logger.info(f"Speedrun validation: {is_valid}, {error}")
-    if not is_valid:
-        raise ValueError(f"Invalid speedrun configuration: {error}")
 
-    run_tags = ["speedrun", f"budget_{config.compute_budget.name}"] + (tags or [])
+    logger.info(f"Running speedrun {name} with config {config}")
+    logger.info(f"Estimated FLOPs: {config.validate()}")
 
-    # TODO (Nikil): need to have a better mechanism to enforce/validate fixed dataset and seed
-    # instead of just overriding the configs
+    run_tags = ["speedrun"] + (tags or [])
+
     train_config = dataclasses.replace(config.train_config, data_seed=42)
     train_step = default_train(
         name=f"speedrun/{name}",
@@ -272,11 +222,12 @@ def default_speedrun(
         model_config=config.model_config,
         train_config=train_config,
         tags=run_tags,
-        eval_harness_tasks=None#CORE_TASKS_PLUS_MMLU,
+        eval_harness_tasks=None,
+        override_output_path=override_output_path,
     )
 
-    analysis_step = ExecutorStep(
-        name=f"{name}_speedrun_results",
+    results_step = ExecutorStep(
+        name=f"speedrun/{name}_speedrun_results",
         description=f"compute and store metrics and stats for the speedrun {name}.",
         fn=speedrun_results,
         config=SpeedrunResultsConfig(
@@ -286,4 +237,4 @@ def default_speedrun(
         ),
     )
 
-    return [train_step, analysis_step]
+    return [train_step, results_step]

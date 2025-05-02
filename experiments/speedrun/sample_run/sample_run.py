@@ -7,13 +7,12 @@ import logging
 from experiments.dclm.tokenize_dclm import dclm_mixture_config_llama3
 from experiments.llama import llama_150m
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.speedrun.speedrun import ComputeBudget, HardwareConfig, SpeedrunConfig, default_speedrun
+from marin.speedrun.speedrun import HardwareConfig, SpeedrunConfig, default_speedrun
 from marin.execution.executor import executor_main
 
 logger = logging.getLogger("ray")
 
 speedrun_config = SpeedrunConfig(
-    compute_budget=ComputeBudget.SMALL,
     model_config=llama_150m,
     train_config=SimpleTrainConfig(
         tpu_type="v4-128",

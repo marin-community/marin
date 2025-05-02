@@ -13,7 +13,6 @@ from marin.execution.executor import executor_main
 logger = logging.getLogger("ray")
 
 speedrun_config = SpeedrunConfig(
-    compute_budget=ComputeBudget.MEDIUM,
     model_config=llama_50m,
     train_config=SimpleTrainConfig(
         tpu_type="v4-128",
