@@ -13,7 +13,7 @@ Example usage:
 
 from experiments.dclm.tokenize_dclm import dclm_mixture_config_llama3
 from experiments.defaults import SimpleTrainConfig, default_train
-from experiments.llama import LlamaConfig
+from levanter.models.llama import LlamaConfig
 from marin.execution.executor import executor_main
 
 # Define the LlamaConfig for a 1.4B parameter model
@@ -39,8 +39,8 @@ NUM_TRAIN_TOKENS = int(28.8e9)  # 28.8 billion tokens
 # This determines how many optimization steps will occur during training to reach the desired number of tokens
 NUM_TRAIN_STEPS = NUM_TRAIN_TOKENS // (BATCH_SIZE * SEQ_LEN)  # 256 is the batch size, 2048 is the sequence length
 
-# Define training configuration with hyperparameters from DCLM Paper
-# [Reference: DCLM paper, Appendix - Training Methodology]
+# Define training configuration with hyperparameters
+# https://github.com/mlfoundations/dclm/blob/main/training/configs/1b_1x_fast.json
 training_config = SimpleTrainConfig(
     tpu_type="v4-128",  # Hardware configuration: 128 v4 TPU cores
     train_batch_size=BATCH_SIZE,  # Number of sequences processed per step
