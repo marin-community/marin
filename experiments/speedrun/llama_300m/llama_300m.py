@@ -7,6 +7,7 @@ import logging
 from experiments.llama import llama_300m
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import executor_main
+from marin.resources import TpuPodConfig
 from marin.speedrun.speedrun import HardwareConfig, SpeedrunConfig, default_speedrun
 
 logger = logging.getLogger("ray")
@@ -14,7 +15,7 @@ logger = logging.getLogger("ray")
 speedrun_config = SpeedrunConfig(
     model_config=llama_300m,
     train_config=SimpleTrainConfig(
-        tpu_type="v4-256",
+        TpuPodConfig(tpu_type="v4-256"),
         train_batch_size=1024,
         num_train_steps=3000,
         learning_rate=3e-3,
