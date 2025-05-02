@@ -11,9 +11,10 @@ Example usage:
   python marin/run/ray_run.py --env_vars WANDB_API_KEY YOUR_WANDB_API_KEY -- python experiments/howto/dclm_1b1x.py
 """
 
+from levanter.models.llama import LlamaConfig
+
 from experiments.dclm.tokenize_dclm import dclm_mixture_config_llama3
 from experiments.defaults import SimpleTrainConfig, default_train
-from levanter.models.llama import LlamaConfig
 from marin.execution.executor import executor_main
 
 # Define the LlamaConfig for a 1.4B parameter model

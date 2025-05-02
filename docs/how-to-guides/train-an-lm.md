@@ -1,5 +1,15 @@
 # How to Train a Language Model
 
+## Prerequisites
+
+Before following the language model training guide, make sure to familiarize yourself with:
+
+- **Environment Setup**: [README.md § Setup](https://github.com/stanford-crfm/marin/blob/main/README.md#setup)
+- **Core Concepts**: [docs/explanation/concepts.md](https://github.com/stanford-crfm/marin/blob/main/docs/explanation/concepts.md)
+- **Executor Framework**: [docs/explanation/executor.md](https://github.com/stanford-crfm/marin/blob/main/docs/explanation/executor.md)
+- **Experiment System**: [docs/explanation/experiments.md](https://github.com/stanford-crfm/marin/blob/main/docs/explanation/experiments.md)
+- **Language Model Pipeline**: [docs/lm/overview.md](https://github.com/stanford-crfm/marin/blob/main/docs/lm/overview.md)
+
 This guide explains how to train a language model using Marin.
 
 ## Required Imports
