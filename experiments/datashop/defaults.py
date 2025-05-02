@@ -49,6 +49,10 @@ def default_label(
         targeted_documents: A list of strings or filepaths of documents that is being targeted for labeling.
         experiment_name: The name of the experiment.
         data_filter_prompt: The user's prompt for the annotator model.
+        medu_pipeline_config_kwargs: Keyword arguments for the MEDU pipeline which is used to generate
+            a data filter prompt given some existing data.
+        text_generation_inference_config: Keyword arguments for the text generation inference which is
+            used to label the documents based on their quality.
 
     Outputs:
         An ExecutorStep that represents the labeled documents. Each document is .jsonl.gz file with
@@ -132,6 +136,10 @@ def default_train_quality_model(
         labeled_documents: An ExecutorStep that represents the labeled documents.
         experiment_name: The name of the experiment.
         resource_config: The resource config to use for training the quality filter model.
+        dataset_processor_config_kwargs: Keyword arguments for the dataset processor which is used to
+            process the labeled documents into a dataset of "text" and "label" columns.
+        quality_train_config_kwargs: Keyword arguments for the quality filter training config - matches
+            the huggingface trainer config.
 
     Outputs:
         An ExecutorStep that represents the quality filter model.
@@ -207,6 +215,12 @@ def default_quality_filter_and_consolidate(
         input_data_path: The path to the input data, usually a large pretraining corpus to filter.
         input_data_name: The name of the input data used for storage purposes.
         experiment_name: The name of the experiment.
+        inference_config_kwargs: Keyword arguments for the inference config which uses the encoder
+            model to score documents based on their quality.
+        filter_config_kwargs: Keyword arguments for the filter config which is used to filter the
+            documents based on their quality.
+        consolidate_config_kwargs: Keyword arguments for the consolidate config which is used to
+            consolidate the filtered documents.
 
     Outputs:
         An ExecutorStep that represents the filtered documents.
