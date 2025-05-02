@@ -23,6 +23,7 @@ from experiments.nemotron_cc.tokenize_nemotron import NEMOTRON_WEIGHTS, tokenize
 from marin.execution.executor import InputName, executor_main
 from marin.processing.tokenize import add_validation_sets_to_mixture
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
+from marin.resources import TpuPodConfig
 
 # 1. Original mix: DCLM + StarCoder + ProofPile
 original_mix = lm_mixture_data_config(
@@ -145,8 +146,7 @@ def run_cooldown_ablation():
                 data_mix, {"tulu_sft": tulu3_flat_llama_tokenized_as_validation}
             ),
             num_anneal_training_tokens=anneal_tokens,
-            tpu_type=tpu_type,
-            node_count=node_count,
+            resources=TpuPodConfig(tpu_type=tpu_type, node_count=node_count),
             train_batch_size=2048,
         )
 
