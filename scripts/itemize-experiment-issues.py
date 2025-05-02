@@ -51,7 +51,11 @@ def get_existing_reports():
         content = f.read()
 
     # Extract report URLs using regex
-    report_urls = set(re.findall(r"https://(?:crfm\.stanford\.edu/marin/data_browser/|wandb\.ai/[^)]+)", content))
+    report_urls = set(
+        re.findall(
+            r"https://(?:crfm\.stanford\.edu/marin/data_browser/|wandb\.ai/[^)]+|api\.wandb\.ai/links/[^)]+)", content
+        )
+    )
     return report_urls
 
 
@@ -71,7 +75,7 @@ def get_github_issues():
 
         # Find all experiment URLs
         urls = {
-            "wandb": re.findall(r"https://wandb\.ai/[^\s)]+", description),
+            "wandb": re.findall(r"https://(?:wandb\.ai/[^\s)]+|api\.wandb\.ai/links/[^\s)]+)", description),
             "data_browser": re.findall(r"https://crfm\.stanford\.edu/marin/data_browser/[^\s)]+", description),
         }
 
@@ -87,6 +91,9 @@ def get_github_issues():
 def update_reports_md(new_reports):
     """Update experiments.md with new reports in the Uncategorized section."""
     reports_path = Path("website/experiments.md")
+
+    # print absolute path of reports_path
+    print(reports_path.absolute())
 
     # Create directory if it doesn't exist
     reports_path.parent.mkdir(parents=True, exist_ok=True)
@@ -117,6 +124,8 @@ def update_reports_md(new_reports):
         for url in report["urls"]["wandb"]:
             if "/runs/" in url:
                 link_text = get_run_name(url)
+            elif "api.wandb.ai/links" in url:
+                link_text = "WandB Report"
             else:
                 link_text = "WandB Report"
             new_content += f"    - [{link_text}]({url})\n"
