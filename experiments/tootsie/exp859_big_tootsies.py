@@ -172,8 +172,9 @@ llama_22b_tootsie_ema_warmstart = dataclasses.replace(
 
 llama_32b_train_config = SimpleTrainConfig(
     tpu_type="v5p-512",
-    node_count=4,
-    train_batch_size=[ScheduleStep(start=0, value=8192)],
+    node_count=3,
+    # decreasing so we don't have padding at slice count 3
+    train_batch_size=[ScheduleStep(start=0, value=8192), ScheduleStep(start=18500, value=7680)],
     num_train_steps=1_000_000,
     weight_decay=0.05,
     # width is a little smaller than the 24B and we're using a much larger batch size
