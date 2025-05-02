@@ -27,15 +27,18 @@ def get_vm_region():
     """Get the current VM's region using the Google Cloud Metadata API."""
     metadata_url = "http://metadata.google.internal/computeMetadata/v1/instance/zone"
     headers = {"Metadata-Flavor": "Google"}
-    response = requests.get(metadata_url, headers=headers)
-    if response.status_code == 200:
-        # The response contains the full zone (e.g., projects/<project-id>/zones/<zone>)
-        zone = response.text.split("/")[-1]
-        # Remove the last part to get the region (e.g., us-central1-a -> us-central1)
-        region = "-".join(zone.split("-")[:-1])
-        return region
-    else:
-        raise Exception(f"Failed to get VM region: {response.text}")
+    try:
+        response = requests.get(metadata_url, headers=headers)
+        if response.status_code == 200:
+            # The response contains the full zone (e.g., projects/<project-id>/zones/<zone>)
+            zone = response.text.split("/")[-1]
+            # Remove the last part to get the region (e.g., us-central1-a -> us-central1)
+            region = "-".join(zone.split("-")[:-1])
+            return region
+        else:
+            raise ValueError(f"Failed to get VM region: {response.text}")
+    except requests.exceptions.ConnectionError as e:
+        raise ValueError("Failed to connect to Google Cloud Metadata API") from e
 
 
 def get_bucket_location(bucket_name_or_path):

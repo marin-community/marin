@@ -86,6 +86,7 @@ from urllib.parse import urlparse
 
 import draccus
 import fsspec
+import levanter.utils.fsspec_utils as fsspec_utils
 import ray
 import ray.remote_function
 from ray.runtime_env import RuntimeEnv
@@ -703,10 +704,12 @@ class Executor:
         # Write out info for each step
         for step, info in zip(self.steps, self.step_infos, strict=True):
             info_path = get_info_path(self.output_paths[step])
+            fsspec_utils.mkdirs(os.path.dirname(info_path))
             with fsspec.open(info_path, "w") as f:
                 print(json.dumps(asdict(info), indent=2, cls=CustomJsonEncoder), file=f)
 
         # Write out info for the entire execution
+        fsspec_utils.mkdirs(os.path.dirname(self.executor_info_path))
         with fsspec.open(self.executor_info_path, "w") as f:
             print(json.dumps(asdict(self.executor_info), indent=2, cls=CustomJsonEncoder), file=f)
 
