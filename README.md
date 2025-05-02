@@ -6,12 +6,12 @@
 Marin is a modular, open-source framework for the research and development of
 foundation models.  A key property of Marin is reproducibility: All the steps
 raw data to the final model are recorded for posterity (not just the final
-model).  Moreover, all [experiments](docs/experiments.md) (whether successful
+model).  Moreover, all [experiments](docs/explanation/experiments.md) (whether successful
 or not) are also recorded, so the entire research process (not just the
 development of the final model) is transparent.
 
-The core part of Marin is minimal, consisting of basically an [executor
-framework](docs/executor.md), which manages the execution of a set of
+The core part of Marin is minimal, consisting of basically an
+[executor framework](docs/explanation/executor.md), which manages the execution of a set of
 arbitrary steps.
 
 Marin's primary use case is to build a language model like Llama 3,
@@ -98,7 +98,8 @@ See the [data browser README](data_browser/README.md) for more details.
 ## What's next?
 
 To learn more about the core infrastructure:
-- [Executor framework](docs/executor.md): how to manage Python libraries, run big parallel jobs using Ray, how versioning works, etc.
-- [Experiments](docs/experiments.md): how we use the executor framework to run machine learning experiments.
+- [Concepts](docs/explanation/concepts.md): key concepts and principles that underpin the Marin project.
+- [Executor framework](docs/explanation/executor.md): how to manage Python libraries, run big parallel jobs using Ray, how versioning works, etc.
+- [Experiments](docs/explanation/experiments.md): how we use the executor framework to run machine learning experiments.
 
 Or you can jump directly to learn about our [language modeling efforts](docs/lm/overview.md).

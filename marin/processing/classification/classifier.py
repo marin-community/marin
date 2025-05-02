@@ -1,6 +1,8 @@
 import atexit
 import hashlib
+import json
 import os
+import tempfile
 import time
 import urllib.parse
 from typing import Any, ClassVar
@@ -14,6 +16,11 @@ except ImportError:
 
 import fsspec
 import lz4.frame
+
+try:
+    import torch_xla.core.xla_model as xm
+except ImportError:
+    xm = None
 
 
 class BaseClassifier:
@@ -201,6 +208,53 @@ class FinewebEduClassifier(BERTClassifier):
         return batch
 
 
+class BERTQualityClassifier(BaseClassifier):
+    def __init__(self, model_name: str, attribute_name: str, *args, **kwargs):
+        print(f"Loading model from {model_name}")
+        from transformers import AutoModelForSequenceClassification, AutoTokenizer
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            fs, fs_path = fsspec.core.url_to_fs(model_name)
+            fs.get(fs_path + "/*", tmp_dir)
+
+            device = xm.xla_device()
+            self.model = AutoModelForSequenceClassification.from_pretrained(tmp_dir).to(device)
+            self.tokenizer = AutoTokenizer.from_pretrained(tmp_dir)
+            with fsspec.open(os.path.join(tmp_dir, "label_index.json"), "r") as f:
+                label_idx = json.load(f)
+                self.labels = [k for k, v in sorted(label_idx.items(), key=lambda item: item[1])]
+
+        self.attribute_name = attribute_name
+
+    @torch.no_grad()
+    def predict(self, documents: list[str]) -> list[float]:
+        inputs = self.tokenizer(
+            documents,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+        ).to(self.model.device)
+        outputs = self.model(**inputs)
+        probs = torch.nn.functional.softmax(outputs.logits, dim=-1)
+        xm.mark_step()
+        probs = probs.squeeze(-1)
+        return probs.tolist()
+
+    @torch.no_grad()
+    def __call__(self, batch: dict[str, Any]) -> dict[str, Any]:
+        probs = self.predict(batch["text"])
+
+        attributes = []
+        for i in range(len(list(batch["text"]))):
+            quality_dict = dict(zip(self.labels, probs[i], strict=False))
+            attributes.append({self.attribute_name: quality_dict})
+
+        res = {"id": batch["id"], "attributes": attributes}
+        batch.update({"attributes": attributes})
+
+        return res
+
+
 class GTEClassifier(FinewebEduClassifier):
     """Classifier that uses the Alibaba-NLP/gte-base-en-v1.5 model to classify documents"""
 
@@ -261,6 +315,7 @@ class AutoClassifier(BaseClassifier):
         "fineweb": FinewebEduClassifier,
         "gte": GTEClassifier,
         "compression": CompressionClassifier,
+        "bert": BERTQualityClassifier,
     }
 
     def __init__(self, model_name: str, attribute_name: str, model_type: str | None, *args, **kwargs):

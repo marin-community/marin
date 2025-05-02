@@ -3,14 +3,13 @@ import logging
 import os
 from copy import deepcopy
 from dataclasses import dataclass, replace
-from typing import Any, TypeVar
 
 import draccus
 import levanter.infra.cli_helpers
 import ray
 from google.api_core.exceptions import Forbidden as GcpForbiddenException
 from levanter.infra.ray_tpu import run_on_pod_multislice_resumable, run_on_pod_resumable
-from levanter.main import sft, sft_mixture, train_lm
+from levanter.main import train_lm
 from mergedeep import mergedeep
 from ray.runtime_env import RuntimeEnv
 
@@ -32,10 +31,10 @@ class PodConfig:
 
 
 @dataclass
-class BaseTrainConfig:
-    """Base class for all pod-based training configurations."""
+class TrainLmOnPodConfig:
+    """Configuration for language model training on a pod."""
 
-    config: Any  # This will be overridden by subclasses
+    config: train_lm.TrainLmConfig
     pod_config: PodConfig = dataclasses.field(default_factory=PodConfig)
     output_path: str | None = None
     """Base output directory to be used for training, mainly for use with executor framework."""
@@ -49,34 +48,11 @@ class BaseTrainConfig:
     """Tuple of JSON paths (e.g., 'data.cache_dir') that are allowed to be read from or written to different regions."""
 
 
-@dataclass
-class TrainSFTOnPodConfig(BaseTrainConfig):
-    """Configuration for SFT training on a pod."""
-
-    config: sft.SFTConfig
-
-
-@dataclass
-class TrainSFTMixturePodConfig(BaseTrainConfig):
-    """Configuration for SFT mixture training on a pod."""
-
-    config: sft_mixture.SFTMixtureConfig
-
-
-@dataclass
-class TrainLmOnPodConfig(BaseTrainConfig):
-    """Configuration for language model training on a pod."""
-
-    config: train_lm.TrainLmConfig
-
-
-T = TypeVar("T", bound=TrainLmOnPodConfig | TrainSFTOnPodConfig | TrainSFTMixturePodConfig)
-
 DEFAULT_CHECKPOINTS_PATH = "checkpoints"
 DEFAULT_HF_CHECKPOINTS_PATH = "hf"
 
 
-def _update_config_to_use_out_path(pod_config: T) -> T:
+def _update_config_to_use_out_path(pod_config: TrainLmOnPodConfig) -> TrainLmOnPodConfig:
     """
     Update the config to use the out_path as the base output directory for training.
 
@@ -106,7 +82,7 @@ def _update_config_to_use_out_path(pod_config: T) -> T:
     return replace(pod_config, config=config)
 
 
-def _suppress_ray_config(config: T) -> T:
+def _suppress_ray_config(config: TrainLmOnPodConfig) -> TrainLmOnPodConfig:
     """
     Levanter wants to auto-start the Ray cluster, but we're already in a Ray cluster. Disable that.
     """
@@ -131,7 +107,7 @@ def _suppress_ray_config(config: T) -> T:
     return config
 
 
-def _enforce_run_id(config: T) -> T:
+def _enforce_run_id(config: TrainLmOnPodConfig) -> TrainLmOnPodConfig:
     """
     Levanter will auto-generate a run ID if it's not set. We want to enforce that it's set, so that it resumes
     properly after preemption.
@@ -166,83 +142,6 @@ def _enforce_run_id(config: T) -> T:
         config.config, trainer=replace(config.config.trainer, id=run_id, checkpointer=checkpointer_config)
     )
     return replace(config, config=inner_config)
-
-
-@ray.remote(num_cpus=0.1)
-def run_levanter_sft(config: TrainSFTOnPodConfig):
-    """
-    Run the Levanter SFT training function on a Ray cluster.
-
-    Similar to run_levanter_train_lm but for SFT training.
-    """
-    default_launch_config = levanter.infra.cli_helpers.load_config()
-
-    if config.output_path is not None:
-        logger.info(f"Using output path: {config.output_path}")
-        config = _update_config_to_use_out_path(config)
-
-    default_env = default_launch_config.env_for_accel(config.pod_config.tpu_type or "")
-    env = _add_default_env_variables(config.pod_config.env, default_env)
-    _check_for_wandb_key(env)
-    env = _add_run_env_variables(env)
-    pod_config = replace(config.pod_config, env=env)
-    config = replace(config, pod_config=pod_config)
-
-    config = _suppress_ray_config(config)
-    config = _enforce_run_id(config)
-    logger.info(f"Using run ID: {config.config.trainer.id}")
-
-    if config.pod_config.tpu_type is not None:
-        ray.get(ray.remote(_doublecheck_paths).options(num_cpus=0.1).remote(config))
-
-        if config.config.hf_save_path is None:
-            raise ValueError("hf_save_path must be set when running on a TPU")
-
-    sft_config = config.config
-
-    @ray.remote
-    def sft_task():
-        sft.train(sft_config)
-
-    if config.pod_config.tpu_type is not None:
-        return run_on_pod_resumable(sft_task, config.pod_config.tpu_type, max_retries_failure=10)
-    else:
-        return ray.get(sft_task.remote())
-
-
-@ray.remote(num_cpus=0.1)
-def run_levanter_sft_mixture(config: TrainSFTMixturePodConfig):
-    """
-    Run the Levanter SFT mixture training function on a Ray cluster.
-    Similar to run_levanter_sft but for mixture training.
-    """
-    default_launch_config = levanter.infra.cli_helpers.load_config()
-
-    if config.output_path is not None:
-        logger.info(f"Using output path: {config.output_path}")
-        config = _update_config_to_use_out_path(config)
-
-    default_env = default_launch_config.env_for_accel(config.pod_config.tpu_type or "")
-    env = _add_default_env_variables(config.pod_config.env, default_env)
-    _check_for_wandb_key(env)
-    env = _add_run_env_variables(env)
-    pod_config = replace(config.pod_config, env=env)
-    config = replace(config, pod_config=pod_config)
-
-    config = _suppress_ray_config(config)
-    config = _enforce_run_id(config)
-    logger.info(f"Using run ID: {config.config.trainer.id}")
-
-    sft_mixture_config = config.config
-
-    @ray.remote
-    def sft_mixture_task():
-        sft_mixture.train(sft_mixture_config)
-
-    if config.pod_config.tpu_type is not None:
-        return run_on_pod_resumable(sft_mixture_task, config.pod_config.tpu_type, max_retries_failure=10)
-    else:
-        return ray.get(sft_mixture_task.remote())
 
 
 @ray.remote(num_cpus=0.1)
@@ -309,7 +208,7 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
         return ray.get(train_lm_task.remote())
 
 
-def _doublecheck_paths(config: T):
+def _doublecheck_paths(config: TrainLmOnPodConfig):
     """
     Double-check that we're not using local paths in some of the standard places that Levanter sets defaults.
     Also check that the paths are in the same region as the VM, to avoid performance issues and billing surprises.
@@ -328,15 +227,6 @@ def _doublecheck_paths(config: T):
             logger.warning("Could not determine the region of the VM. This is fine if you're running locally.")
             return
         raise ValueError("Could not determine the region of the VM. This is required for path checks.") from e
-
-    # Special handling for critical paths that must be checked
-    if isinstance(config, TrainSFTOnPodConfig):
-        # Check chat_train_urls
-        if config.config.chat_train_urls:
-            for url in config.config.chat_train_urls:
-                if url is None:
-                    raise ValueError("chat_train_urls must be set.")
-                _check_path_in_region("chat_train_urls", url, region=region, local_ok=local_ok)
 
     # Recursively check all paths in the config
     _check_paths_recursively(config.config, "", region, local_ok, allow_out_of_region)

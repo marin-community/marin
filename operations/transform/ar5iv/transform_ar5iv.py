@@ -20,7 +20,7 @@ from marin.core.runtime import cached_or_construct_output
 from marin.schemas.web.convert import ExtractionConfig
 from marin.utils import fsspec_glob
 from marin.web.convert import convert_page
-from scripts.ar5iv.transform import (
+from operations.transform.ar5iv.transform import (
     clean_li,
     deconstruct_eqn,
     linelisting_to_newline,
