@@ -8,8 +8,8 @@ from experiments.exp72_baselines import fineweb_edu_tokenized
 from experiments.llama import llama_50m
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import executor_main
-from marin.speedrun.speedrun import HardwareConfig, SpeedrunConfig, default_speedrun
 from marin.resources import TpuPodConfig
+from marin.speedrun.speedrun import HardwareConfig, SpeedrunConfig, default_speedrun
 
 logger = logging.getLogger("ray")
 

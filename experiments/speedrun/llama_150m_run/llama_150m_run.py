@@ -8,8 +8,8 @@ from experiments.dclm.tokenize_dclm import dclm_components_llama3
 from experiments.llama import llama_150m
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import executor_main
-from marin.speedrun.speedrun import HardwareConfig, SpeedrunConfig, default_speedrun
 from marin.resources import TpuPodConfig
+from marin.speedrun.speedrun import HardwareConfig, SpeedrunConfig, default_speedrun
 
 logger = logging.getLogger("ray")
 
