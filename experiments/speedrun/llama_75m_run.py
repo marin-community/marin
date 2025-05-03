@@ -9,6 +9,7 @@ from experiments.llama import llama_75m
 from experiments.simple_train_config import SimpleTrainConfig
 from experiments.speedrun.speedrun import ComputeBudget, HardwareConfig, SpeedrunConfig, default_speedrun
 from marin.execution.executor import executor_main
+from marin.resources import TpuPodConfig
 
 logger = logging.getLogger("ray")
 
@@ -16,7 +17,7 @@ speedrun_config = SpeedrunConfig(
     compute_budget=ComputeBudget.SMALL,
     model_config=llama_75m,
     train_config=SimpleTrainConfig(
-        tpu_type="v4-128",
+        TpuPodConfig(tpu_type="v4-128"),
         train_batch_size=512,
         num_train_steps=3000,
         learning_rate=3e-3,

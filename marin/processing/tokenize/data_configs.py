@@ -229,7 +229,7 @@ def _are_tokenizers_equivalent(tokenizer1: str, tokenizer2: str) -> bool:
     return True
 
 
-def _verify_tokenizers_same(components):
+def _verify_tokenizers_same(components: dict[str, TokenizerStep]):
     first_name, first_step = next(iter(components.items()))
     tokenizer = first_step.config.tokenizer
     for name, step in components.items():

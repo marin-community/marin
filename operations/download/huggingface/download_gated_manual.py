@@ -33,6 +33,7 @@ def ensure_fsspec_path_writable(output_path: str) -> None:
     """Check if the fsspec path is writable by trying to create and delete a temporary file."""
     fs, path = fsspec.core.url_to_fs(output_path)
     try:
+        fs.mkdirs(output_path, exist_ok=True)
         test_path = os.path.join(output_path, "test_write_access")
         with fs.open(test_path, "w") as f:
             f.write("test")
