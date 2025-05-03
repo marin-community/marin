@@ -2,9 +2,10 @@
 This scripts performs a simple html to md conversion using marin. Gien an input directory with some jsonl.gz files
 containing html content, it will convert them to markdown and save them in a new directory.
 """
+
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import draccus
 import fsspec
@@ -14,6 +15,7 @@ from marin.core.runtime import cached_or_construct_output, map_files_in_director
 from marin.schemas.web.convert import ExtractionConfig, HtmlToMarkdownConfig
 
 logger = logging.getLogger("ray")
+
 
 @ray.remote(memory=1 * 1024 * 1024 * 1024, num_cpus=1)  # 1 GB
 @cached_or_construct_output(success_suffix="SUCCESS")  # We use this decorator to make this function idempotent
@@ -30,7 +32,7 @@ def html_to_md(input_file_path: str, output_file_path: str, extract_method: str,
             data = json.loads(line)
             num_lines += 1
 
-            id = data["id"]
+            data_id = data["id"]
             html = data["text"]
             source = data["source"]
 
@@ -40,17 +42,17 @@ def html_to_md(input_file_path: str, output_file_path: str, extract_method: str,
 
             # Convert page can throw exception based on the html content (e.g. invalid html, Empty page)
             try:
-                logger.debug(f"Converting line {num_lines}: {id} {url}")
+                logger.debug(f"Converting line {num_lines}: {data_id} {url}")
                 md = convert_page(html, url, extract_method, config)["content"]
                 error = None
             except Exception as e:
                 # Failed to convert
-                logger.exception(f"{e} in processing {id = }, {url = }, {input_file_path = }")
+                logger.exception(f"{e} in processing {data_id = }, {url = }, {input_file_path = }")
                 md = None
                 error = e
 
             record = {
-                "id": id,
+                "id": data_id,
                 "source": source,
                 "format": "md",
                 "metadata": {key: value for key, value in fw_metadata.items()},
@@ -59,6 +61,7 @@ def html_to_md(input_file_path: str, output_file_path: str, extract_method: str,
                 record["text"] = md
             if error:
                 record["error"] = str(error)
+            print(json.dumps(record), file=output)
 
     return True
 
@@ -67,8 +70,10 @@ def html_to_md(input_file_path: str, output_file_path: str, extract_method: str,
 class SimpleHtmlToMdConfig:
     input_path: str  # Input directory containing jsonl.gz files
     output_path: str  # Output directory containing md files
-    extract_method: str = "readability"  # Extract method to use. Defaults to readability. Other options are traflatura and resiliparse.
-    config: ExtractionConfig = HtmlToMarkdownConfig.default_config()  # Configuration for the extraction method.
+    extract_method: str = "readability"
+    # Extract method to use. Defaults to readability. Other options are traflatura and resiliparse.
+    config: ExtractionConfig = field(default_factory=HtmlToMarkdownConfig.default_config())
+    # Configuration for the extraction method.
 
 
 @ray.remote
