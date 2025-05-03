@@ -11,6 +11,7 @@ from experiments.llama import llama_1_4b, llama_1_4b_train_config
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
+from marin.resources import TpuPodConfig
 
 EXPERIMENT_TAG = ["442_dolma"]
 
@@ -49,12 +50,12 @@ olmoish_1b_config = LlamaConfig(
 )
 
 olmoish_1b_train_config = SimpleTrainConfig(
+    resources=TpuPodConfig(tpu_type="v5litepod-256", node_count=1),
     learning_rate=4e-4,
     warmup=2000,
     weight_decay=0.1,
     train_batch_size=2048,
     num_train_steps=500000,  # 2048 * 2048 * 500000 = 2.1T tokens
-    tpu_type="v5litepod-256",
 )
 
 olmoish_1b = default_train(
