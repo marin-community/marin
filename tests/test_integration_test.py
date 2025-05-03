@@ -14,14 +14,14 @@ def ray_start():
 
 
 @pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip this test in CI, since we run it as a separate worflow.")
-def test_quickstart_run():
+def test_integration_test_run():
     MARIN_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
     """Test the dry runs of experiment scripts"""
-    # Emulate running experiments/quickstart.py on the cmdline
-    with tempfile.TemporaryDirectory(prefix="executor-quickstart") as temp_dir:
+    # Emulate running tests/integration_test.py on the cmdline
+    with tempfile.TemporaryDirectory(prefix="executor-integration-test") as temp_dir:
         result = subprocess.run(
-            ["python", os.path.join(MARIN_ROOT, "experiments/quickstart.py"), "--prefix", temp_dir],
+            ["python", os.path.join(MARIN_ROOT, "tests/integration_test.py"), "--prefix", temp_dir],
             capture_output=False,
             text=True,
         )
-    assert result.returncode == 0, f"Quickstart run failed: {result.stderr}"
+    assert result.returncode == 0, f"Integration test run failed: {result.stderr}"
