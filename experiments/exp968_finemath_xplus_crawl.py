@@ -13,30 +13,19 @@ from marin.execution.executor import executor_main, this_output_path
 def url_modifier(url: str) -> str:
     return f"s3://commoncrawl/{url}"
 
-
-finemath_crawling_steps = []
-finemath_dumps = [
-    "gs://marin-us-central2/raw/finemath-7090a5/finemath-3plus",
-]
-
-
-for dump in finemath_dumps:
-    source_name = dump.split("/")[-1]
-
-    step = default_crawl(
-        config=HtmlExtractionConfig(
-            input_path=dump,
-            output_path=this_output_path(),
-            source_name=f"finemath-crawl/{source_name}",
-            columns=["url", "fetch_time", "content_mime_type", "warc_filename", "warc_record_offset", "warc_record_length", "text", "token_count", "char_count"],
-            url_column="url",
-            file_path_column="warc_filename",
-            s3_url_modifier=url_modifier,
-        ),
-        yield_fn=filter_and_yield,
-        input_pattern="*.jsonl.gz",
-    )
-    finemath_crawling_steps.extend(step)
+finemath_crawling_steps = default_crawl(
+    config=HtmlExtractionConfig(
+        input_path="gs://marin-us-central2/raw/finemath-7090a5/finemath-3plus",
+        output_path=this_output_path(),
+        source_name="finemath-3plus",
+        columns=["url", "fetch_time", "content_mime_type", "warc_filename", "warc_record_offset", "warc_record_length", "text", "token_count", "char_count"],
+        url_column="url",
+        file_path_column="warc_filename",
+        s3_url_modifier=url_modifier,
+    ),
+    yield_fn=filter_and_yield,
+    input_pattern="*.jsonl.gz",
+)
 
 
 if __name__ == "__main__":

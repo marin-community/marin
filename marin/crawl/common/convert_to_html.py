@@ -23,7 +23,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 
-@ray.remote(memory=4 * 1024 * 1024 * 1024)  # 4 GB
+@ray.remote(memory=4 * 1024 * 1024 * 1024, max_retries=5)  # 4 GB
 @cached_or_construct_output(
     success_suffix="SUCCESS", verbose=False
 )  # We use this decorator to make this function idempotent
@@ -248,7 +248,7 @@ def process_parquet(cfg: HtmlExtractionConfig):
     num_shards_to_process = len(shard_indices_to_process)
 
     # Set a limit on the number of concurrent tasks so we don't overwhelm CC
-    MAX_CONCURRENT_TASKS = 1000
+    MAX_CONCURRENT_TASKS = 750
 
     # Shuffle to encourage different workers to hit different AWS prefixes,
     # so we don't run into per-prefix rate limits.
