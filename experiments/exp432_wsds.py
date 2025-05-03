@@ -8,10 +8,10 @@ from experiments.exp72_baselines import fineweb_edu_tokenized
 from experiments.llama import llama_1_4b
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import executor_main
+from marin.resources import TpuPodConfig
 
 llama_1_4b_wsds_train_config = SimpleTrainConfig(
-    tpu_type="v4-128",
-    node_count=2,
+    resources=TpuPodConfig(tpu_type="v4-128", node_count=2),
     train_batch_size=1024,
     learning_rate=3e-4,
     weight_decay=0.1,

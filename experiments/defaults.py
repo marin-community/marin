@@ -23,6 +23,7 @@ from levanter.schedule import BatchSchedule
 from levanter.store.cache import CacheOptions
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
+from levanter.utils import fsspec_utils
 
 from experiments.anneal_config import AnnealConfig
 from experiments.evals.task_configs import (
@@ -51,9 +52,9 @@ from marin.processing.tokenize import (
     lm_data_config,
     tokenize,
 )
+from marin.processing.tokenize.tokenize import HfTokenizeConfig
 from marin.scaling_laws.scaling_laws import ScalingLawConfig, run_scaling_law_analysis
 from marin.training.training import (
-    PodConfig,
     TrainLmOnPodConfig,
     run_levanter_train_lm,
 )
@@ -70,13 +71,24 @@ def default_tokenize(
     *,
     is_validation: bool = False,
 ) -> ExecutorStep:
-    config = TokenizeConfig(
-        train_paths=[dataset] if not is_validation else [],
-        validation_paths=[dataset] if is_validation else [],
-        cache_path=this_output_path(),
-        tokenizer=ensure_versioned(tokenizer),
-        format=format,
-    )
+
+    # sniff out if it's a HuggingFace dataset
+    if isinstance(dataset, str) and "/" in dataset and not fsspec_utils.exists(dataset):
+        config = HfTokenizeConfig(
+            id=dataset,
+            cache_path=this_output_path(),
+            tokenizer=ensure_versioned(tokenizer),
+            format=format,
+        )
+    else:
+        config = TokenizeConfig(
+            train_paths=[dataset] if not is_validation else [],
+            validation_paths=[dataset] if is_validation else [],
+            cache_path=this_output_path(),
+            tokenizer=ensure_versioned(tokenizer),
+            format=format,
+        )
+
     if options is not None:
         config = dataclasses.replace(config, cache_options=options)
 
@@ -282,15 +294,12 @@ def default_train(
     )
 
     # Create the pod config
-    pod_config = PodConfig(
-        tpu_type=train_config.tpu_type,
-        node_count=train_config.node_count,
-    )
+    pod_config = train_config.resources
 
     # Create the full config
     config = TrainLmOnPodConfig(
-        config=inner_config,
-        pod_config=pod_config,
+        train_config=inner_config,
+        resources=pod_config,
         output_path=this_output_path(),
     )
 
@@ -353,8 +362,7 @@ def default_sft(
 
     # now we just shell out to default_train
     normal_train_config = SimpleTrainConfig(
-        tpu_type=sft_config.tpu_type,
-        node_count=sft_config.node_count,
+        resources=sft_config.resources,
         train_batch_size=sft_config.train_batch_size,
         num_train_steps=sft_config.num_train_steps,
         learning_rate=sft_config.learning_rate,
@@ -411,8 +419,7 @@ def default_anneal(name: str, anneal_config: AnnealConfig):
     learning_rate = num_train_steps * (anneal_config.learning_rate / num_anneal_steps)
 
     anneal_stage_train_config = SimpleTrainConfig(
-        tpu_type=anneal_config.tpu_type,
-        node_count=anneal_config.node_count,
+        resources=anneal_config.resources,
         train_batch_size=anneal_config.train_batch_size,
         num_train_steps=num_train_steps,
         learning_rate=learning_rate,
@@ -476,6 +483,8 @@ def _get_tokenizer_for_train(tokenized: InputName | ExecutorStep | LMMixtureData
         case LMMixtureDatasetConfig(tokenizer=tokenizer):
             pass
         case ExecutorStep(config=TokenizeConfig(tokenizer=tokenizer)):
+            pass
+        case ExecutorStep(config=HfTokenizeConfig(tokenizer=tokenizer)):
             pass
         case InputName(step=ExecutorStep(config=TokenizeConfig(tokenizer=tokenizer))):
             pass
