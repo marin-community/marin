@@ -4,11 +4,13 @@ TODO (Nikil): README is currently a work in progress- will be refined as we make
 
 ## Overview and Motivation
 
-Marin Speedrun is a community-driven model training contest and framework that challenges participants to train language models under specific compute budgets. Inspired by [NanoGPT speedrun](https://github.com/KellerJordan/modded-nanogpt), the goal is to achieve the best possible model performance while staying within the allocated compute budget for each track.
+Marin Speedrun is a community-driven model training contest and framework where participants can train language models and submit them to Marin. Inspired by [NanoGPT speedrun](https://github.com/KellerJordan/modded-nanogpt), the goal is to further the mission of collaborative model development. We also maintain a leaderboard that tracks different models submitted along with the Pareto frontier of performance vs FLOPs.
 
 ## Tracks
 
-The speedrun is divided into three tracks based on compute budget: **TINY**, **SMALL**, and **MEDIUM**.Each track has a specific FLOPs budget that your training run must stay within to qualify. We fix the dataset to the [FineWeb-Edu dataset](https://huggingface.co/datasets/HuggingFaceFW/fineweb-edu) and you can experiment with any model architecture and training approach you'd like, as long as it stays within the corresponding compute budget.
+**FineWeb-Edu track:** We fix the dataset to the [FineWeb-Edu dataset](https://huggingface.co/datasets/HuggingFaceFW/fineweb-edu) by default and you can experiment with any model architecture and training approach (optimizers, learning rate schedules, or hyperparameters) you'd like.
+**Varying datasets**: Varying the dataset will put the run in a different track on the leaderboard, but other than that we encourage you to try experimenting with datasets.
+
 
 ## Setup and Usage
 
