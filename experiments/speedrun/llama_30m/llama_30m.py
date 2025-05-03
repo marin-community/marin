@@ -6,14 +6,13 @@ import logging
 
 from experiments.llama import llama_30m
 from experiments.simple_train_config import SimpleTrainConfig
-from experiments.speedrun.speedrun import ComputeBudget, HardwareConfig, SpeedrunConfig, default_speedrun
 from marin.execution.executor import executor_main
 from marin.resources import TpuPodConfig
+from marin.speedrun.speedrun import HardwareConfig, SpeedrunConfig, default_speedrun
 
 logger = logging.getLogger("ray")
 
 speedrun_config = SpeedrunConfig(
-    compute_budget=ComputeBudget.TINY,
     model_config=llama_30m,
     train_config=SimpleTrainConfig(
         TpuPodConfig(tpu_type="v4-128"),
@@ -27,13 +26,9 @@ speedrun_config = SpeedrunConfig(
     hardware_config=HardwareConfig(
         device_type="v4-128",
         num_devices=64,
-        device_flops=275e12,  # one v4 chip is capable of 275 TFLOPs of peak compute: https://cloud.google.com/tpu/docs/v4
+        device_flops=275e12,
     ),
 )
-
-# can choose to validate configuration before training
-is_valid, error = speedrun_config.validate()
-logger.info(f"Speedrun validation: {is_valid}, {error}")
 
 if __name__ == "__main__":
     executor_main(steps=default_speedrun("30M_llama_fineweb", speedrun_config))
