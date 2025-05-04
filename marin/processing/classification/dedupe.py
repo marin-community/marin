@@ -34,7 +34,7 @@ class NGramConfig:
     """
 
     ngram_length: int = 8
-    stride: int | None = None  # None means stride=0
+    stride: int = 0
     overlap_threshold: float = 0.7
 
 
@@ -266,7 +266,7 @@ def delete_jsonl_files(dir_path):
     return files_deleted
 
 
-@ray.remote
+@ray.remote(num_cpus=4)
 def dolma_dedup(
     input_path,
     output_path,
