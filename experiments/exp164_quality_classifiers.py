@@ -91,6 +91,9 @@ dclm_eli5_100k_oh_100k_rw_200k = ExecutorStep(
     ),
 )
 
+# deprecated due to backwards incompatibility
+teknium_oh_200k_rw_200k = None
+
 
 def get_classifier_with_different_seed(classifier_step: ExecutorStep, seed: int):
     new_classifier_step = dataclasses.replace(
