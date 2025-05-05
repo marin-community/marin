@@ -28,6 +28,15 @@ from marin.processing.classification.consolidate import ConsolidateConfig, Filte
 from marin.processing.classification.custom.custom_attribute import CustomAttributeConfig, create_custom_attribute
 from marin.processing.classification.inference import InferenceConfig, run_inference
 
+# mapping of data source names to their GCS paths
+INPUT_DATA_SOURCE_TO_PATH: dict[str, str] = field(
+    default_factory=lambda: {
+        "fineweb_2024_18": (
+            "gs://marin-us-central2/documents/fineweb-small-resiliparse-preserve-formatting-v2-e72837/md/CC-MAIN-2024-18/"
+        ),
+    }
+)
+
 
 @dataclass
 class ExperimentConfig:
@@ -42,19 +51,11 @@ class ExperimentConfig:
     Args:
         experiment_name: Identifier for this experiment
         quality_classifier_model_paths: List of paths to quality classifier models to ensemble
-        input_data_source_to_path: Mapping of data source names to their GCS paths
         keep_fraction: Fraction of highest-quality documents to keep after filtering
     """
 
     experiment_name: str
     quality_classifier_model_paths: list[str | ExecutorStep]
-    input_data_source_to_path: dict[str, str] = field(
-        default_factory=lambda: {
-            "fineweb_2024_18": (
-                "gs://marin-us-central2/documents/fineweb-small-resiliparse-preserve-formatting-v2-e72837/md/CC-MAIN-2024-18/"
-            ),
-        }
-    )
     keep_fraction: float = 0.1  # Keep 20% of the documents
     cooldown_config: QualityAblationConfig = field(default_factory=lambda: QualityAblationConfig(tpu_type="v4-128"))
 
@@ -72,11 +73,11 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
     """
 
     steps = []
-    for input_data_source, input_data_path in config.input_data_source_to_path.items():
-        # Get the basename of the input directory
+    for input_data_source, input_data_path in INPUT_DATA_SOURCE_TO_PATH.items():
         input_basename = os.path.basename(os.path.normpath(input_data_path))
         inference_steps = []
         for classifier_id, quality_classifier_model_path in enumerate(config.quality_classifier_model_paths):
+            # run inference with each quality classifier
             inference_step = ExecutorStep(
                 name=f"attributes/quality_filtering/{config.experiment_name}/{input_data_source}",
                 fn=run_inference,
@@ -143,11 +144,10 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
             tokenizer=llama3_tokenizer,
         )
 
-        steps.append(inference_step)
+        cooldown_step = default_quality_ablation(tokenize_step, config.cooldown_config)
+
         steps.append(consolidate_step)
         steps.append(tokenize_step)
-
-        cooldown_step = default_quality_ablation(tokenize_step, config.cooldown_config)
         steps.append(cooldown_step)
 
     return steps
