@@ -2,15 +2,12 @@
 
 ## Prerequisites
 
-Before following the language model training guide, make sure to familiarize yourself with:
+Before following the language model training guide, make sure to follow the general environment setup procedure described in the README:
 
 - **Environment Setup**: [README.md § Setup](https://github.com/stanford-crfm/marin/blob/main/README.md#setup)
-- **Core Concepts**: [docs/explanation/concepts.md](https://github.com/stanford-crfm/marin/blob/main/docs/explanation/concepts.md)
-- **Executor Framework**: [docs/explanation/executor.md](https://github.com/stanford-crfm/marin/blob/main/docs/explanation/executor.md)
-- **Experiment System**: [docs/explanation/experiments.md](https://github.com/stanford-crfm/marin/blob/main/docs/explanation/experiments.md)
-- **Language Model Pipeline**: [docs/lm/overview.md](https://github.com/stanford-crfm/marin/blob/main/docs/lm/overview.md)
+- **GPU Enviroment Setup**: [Setting up a Local GPU Environment](https://github.com/stanford-crfm/marin/blob/main/docs/how-to-guides/local-gpu.md)
 
-This guide explains how to train a language model using Marin.
+This guide explains how to train a language model using Marin, with our examples reproducing the DCLM 7B/1x and 1B/1x baselines.
 
 ## Required Imports
 
@@ -34,7 +31,7 @@ import logging
 ```
 
 - `dclm_mixture_config_llama3`: A predefined dataset configuration for the DCLM mixture, this can be replaced with any tokenized dataset in Marin of the `lm_mixture_data_config` type (e.g. [Dolma](../../experiments/dolma/exp442_dolma.py) or [Nemotron](../../experiments/exp934_hq_vs_pt.py))
-- `SimpleTrainConfig`: A dataclass for organizing training hyperparameters
+- [`SimpleTrainConfig`][experiments.simple_train_config.SimpleTrainConfig]
 - `default_train`: A utility function that creates a training pipeline
 - `LlamaConfig`: A dataclass that defines the model architecture from [Levanter](https://github.com/stanford-crfm/levanter)
 - `executor_main`: The main entry point for the Marin executor framework
@@ -49,11 +46,11 @@ model_config = LlamaConfig(
     hidden_dim=2048,        # Dimension of hidden representations
     intermediate_dim=8192,  # Dimension of feedforward layers
     num_heads=16,           # Number of attention heads
-    num_kv_heads=16,        # Number of key/value heads
     num_layers=24,          # Number of transformer layers
-    use_flash_attention=True, # Efficient attention implementation
 )
 ```
+
+You can also use pre-defined model configurations from `experiments.llama` for common model sizes.
 
 ## Defining Training Parameters
 
@@ -67,7 +64,7 @@ SEQ_LEN = 2048
 NUM_TRAIN_STEPS = NUM_TRAIN_TOKENS // (BATCH_SIZE * SEQ_LEN)
 
 training_config = SimpleTrainConfig(
-    accelerator_type="v4-128",  # Hardware configuration
+    resources=TpuPodConfig(tpu_type="v4-128"),  # Hardware configuration: 128 v4 TPU cores, can be swapped for GpuConfig
     train_batch_size=BATCH_SIZE,  # Sequences processed per step
     num_train_steps=NUM_TRAIN_STEPS,  # Total optimization steps
     learning_rate=3e-3,     # Initial learning rate
@@ -90,6 +87,7 @@ model = default_train(
     model_config=model_config,  # Model architecture
     train_config=training_config,  # Training hyperparameters
     tags=["YOUR_TAGS"],  # Tags for experiment tracking
+    eval_interval=5000,  # How often to run evaluations
 )
 
 # Set up the experiment execution
@@ -123,7 +121,7 @@ Following Marin's guidelines, name your experiment script `experiments/exp{GITHU
 
 Monitor your training progress through:
 
-- **Experiment tracking tools**: If using Weights & Biases, you'll see real-time metrics and visualizations logged to the "Marin" project under your default W&B organization. The run will be named based on the name you provided, plus a version hash to keep track of the state of Marin upstream of your configuration.
+- **Experiment tracking tools**: If using Weights & Biases, you'll see real-time metrics and visualizations logged to the "Marin" project under your default W&B organization. The run will be named based on the name you provided.
 
 ## Example Implementations
 
