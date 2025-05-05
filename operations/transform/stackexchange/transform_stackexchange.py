@@ -1,157 +1,162 @@
 """
-transform_stackexchange.py
+stackexchange/transform_stackexchange.py
 
-Script for converting raw StackExchange dumps (.7z files from `https://archive.org/download/stackexchange`) to sequences
-of (question, answer) pairs formatted in Markdown. We only keep the accepted answer for simplicity, rather than the
-highest voted answer (or all answers).
-
-StackExchange dumps typically are encoded as a single 7z-compressed file of XML entries, with top-level entries
-for fields such as "Posts", "Comments", or "Users". We only process the Posts field!
-
-Note that StackOverflow is in a slightly different format than the other StackExchange dumps, consisting of "expanded"
-files that flatten out the top-level XML fields (e.g., `stackoverflow.com-Badges.7z`,`stackoverflow.com-Comments.7z`);
-again, we only use the "Posts" data.
-
-Run with:
-    - [Ray] ray job submit --address=http://127.0.0.1:8265 --working_dir . --no-wait -- \
-            python operations/transform/transform_stackexchange.py \
-            --input_path "gs://marin-us-central2/raw/stackexchange/v2024-04-02" \
-            --output_path "gs://marin-us-central2/documents/stackexchange/v2024-04-02/md-complete" \
-            --markdown_format "complete"
+Performs HTML->Text/MD conversion using the specified tools over a stackexchange dump save in DOLMA format.
 """
 
 import json
 import logging
-import os.path
-import re
+import os
+import random
 from dataclasses import dataclass
-from datetime import datetime, timezone
 
 import draccus
 import fsspec
-import py7zr
 import ray
+from tqdm_loggable.auto import tqdm
 
 from marin.core.runtime import cached_or_construct_output
-from marin.domains.stackexchange.utils import (
-    StackExchangeMarkdownFormat,
-    extract_stackexchange_threads,
-    markdownify_thread,
-)
+from marin.schemas.web.convert import ExtractionConfig
 from marin.utils import fsspec_glob
+from marin.web.convert import convert_page
 
-# Initialize Logger
-logger = logging.getLogger(__name__)
-
-
-# === MEMORY OVERRIDES (Subdomains w/ Higher Resource Requirements) ===
-RAY_MEMORY_OVERRIDES = {
-    "askubuntu": 16 * 1024 * 1024 * 1024,
-    "serverfault": 16 * 1024 * 1024 * 1024,
-    "superuser": 16 * 1024 * 1024 * 1024,
-    "es.stackoverflow": 16 * 1024 * 1024 * 1024,
-    "pt.stackoverflow": 16 * 1024 * 1024 * 1024,
-    "ru.stackoverflow": 16 * 1024 * 1024 * 1024,
-    "math": 64 * 1024 * 1024 * 1024,
-    "stackoverflow": 64 * 1024 * 1024 * 1024,
-}
-
-
-@ray.remote(memory=4 * 1024 * 1024 * 1024, num_cpus=1)  # 4 GB of RAM, 1 CPU by Default
-@cached_or_construct_output(success_suffix="SUCCESS")  # Make idempotent / setup ledger for easy resumption
-def post_to_md(
-    input_file_path: str,
-    output_file_path: str,
-    subdomain: str,
-    markdown_format: StackExchangeMarkdownFormat,
-    min_vote_threshold: int = -1_000_000_000,
-    max_answer_threshold: int = 1_000_000_000,
-) -> bool:
-    with (
-        fsspec.open(input_file_path, "rb") as f,
-        fsspec.open(output_file_path, "wt", compression="gzip") as output_jsonl_gz,
-    ):
-        # Extract `Posts.xml` content from .7z archive
-        with py7zr.SevenZipFile(f, mode="r") as archive:
-            posts_content = archive.read(targets=["Posts.xml"])["Posts.xml"]
-
-        # Extract Questions/Answers from each Post =>> Convert to Markdown =>> Write to `jsonl.gz`
-        for thread_data in extract_stackexchange_threads(
-            subdomain, posts_content, min_vote_threshold=min_vote_threshold, max_answer_threshold=max_answer_threshold
-        ):
-            for doc_id, markdown in markdownify_thread(thread_data, markdown_format=markdown_format):
-                doc = dict(
-                    id=doc_id,
-                    text=markdown,
-                    source="stackexchange",
-                    added=datetime.now(timezone.utc).isoformat(),
-                    created=thread_data["creation_time_utc"],
-                    metadata=thread_data,
-                )
-
-                # Write Document as JSON
-                output_jsonl_gz.write(f"{json.dumps(doc)}\n")
-
-    return True
-
-
-# === Main ===
+logger = logging.getLogger("ray")
 
 
 @dataclass
-class TransformStackExchangeConfig:
-    # fmt: off
-    input_path: str = (                                      # GCS Path with StackExchange dumps per subdomain (.7z)
-        "gs://marin-us-central2/raw/stackexchange/v2024-04-02"
-    )
-    output_path: str = (                                     # GCS Path to write Dolma-formatted markdown files
-        "gs://marin-us-central2/documents/stackexchange/v2024-04-02/md-complete"
-    )
+class StackExchangeExtractionConfig:
+    input_path: str
+    output_path: str
+    extract_method: str
+    extract_config: ExtractionConfig
+    max_files: int | None = None
+    shuffle_answers_template: bool = True
+    seed: int | None = None
 
-    # StackExchange Parameters
-    markdown_format: StackExchangeMarkdownFormat = (        # Format specifier for "linearizing" StackExchange threads
-        StackExchangeMarkdownFormat.COMPLETE
-    )
 
-    min_vote_threshold: int = -1_000_000_000                # Minimum number of votes for keeping questions/answers
-    max_answer_threshold: int = 1_000_000_000               # Maximum number of high-voted answers to keep per thread
+def prepare_md_template(
+    title: str,
+    question: str,
+    answers: list[dict],
+    tags: list[str],
+    extract_method: str,
+    extract_config: ExtractionConfig,
+    prepend_vote_count: bool = True,
+) -> str:
+    """
+    Prepares a markdown template for a stackexchange question and answer.
+    """
 
-    # fmt: on
+    md_question = convert_page(question, extract_method=extract_method, config=extract_config)["content"]
+    template = f"# Question\nTitle: {title}\n{md_question}"
+
+    for answer in answers:
+        md_answer = convert_page(answer["body"], extract_method=extract_method, config=extract_config)["content"]
+        if prepend_vote_count:
+            template += f"\n\n# Answer\n{md_answer}\n> {answer['votes']} votes"
+        else:
+            template += f"\n\n# Answer\n> {answer['votes']} votes\n{md_answer}"
+
+    if len(tags) > 0:
+        template += f"\n\n---\nTags: {', '.join(tags)}\n---"
+
+    return template
+
+
+@ray.remote(memory=2 * 1024 * 1024 * 1024)
+@cached_or_construct_output(success_suffix="SUCCESS")
+def process_file(
+    input_file_path: str,
+    output_file_path: str,
+    extract_method: str,
+    extract_config: ExtractionConfig,
+    shuffle_answers_template: bool = True,
+    seed: int | None = None,
+) -> None:
+    logger.info(f"Starting processing of file {input_file_path}")
+    logger.info(f"Source: {input_file_path}")
+    logger.info(f"Destination: {output_file_path}")
+    try:
+        with (
+            fsspec.open(input_file_path, compression="gzip") as source,
+            fsspec.open(output_file_path, "wt", compression="gzip") as output,
+        ):
+            for line in tqdm(source, desc="Processing lines"):
+                row = json.loads(line)
+
+                try:
+                    if seed is not None:
+                        random.seed(seed + hash(row["id"]))
+                    prepend_vote_count = random.random() < 0.5 if shuffle_answers_template else False
+
+                    title = row["metadata"]["title"] if "title" in row["metadata"] else row["title"]
+                    question = row["metadata"]["question"] if "question" in row["metadata"] else row["question"]
+                    answers = row["metadata"]["answers"]
+                    tags = row["metadata"]["tags"] if "tags" in row["metadata"] else row["tags"]
+                    url = row["metadata"]["url"] if "url" in row["metadata"] else row["url"]
+
+                    content = prepare_md_template(
+                        title,
+                        question,
+                        answers,
+                        tags,
+                        extract_method,
+                        extract_config,
+                        prepend_vote_count,
+                    )
+
+                    out_dict = {
+                        "id": row["id"],
+                        "url": url,
+                        "title": title,
+                        "date_created": row["created"],
+                        "text": content,
+                    }
+
+                    if content is None:
+                        continue
+
+                    print(json.dumps(out_dict), file=output)  # Without this line, the JSON file will be corrupted
+                except Exception as e:
+                    logger.exception(f"Error processing line: {e}")
+                    raise e
+
+        logger.info("\nProcessing completed successfully!")
+        logger.info(f"File available at: {output_file_path}")
+
+    except Exception as e:
+        logger.error(f"Error during processing: {e}")
+        raise
 
 
 @draccus.wrap()
-def transform_stackexchange(cfg: TransformStackExchangeConfig) -> None:
-    logger.info(f"Transforming StackExchange XML (.7z) Dumps to Markdown (Format = `{cfg.markdown_format.value}`)")
+def process_stackexchange_dump(cfg: StackExchangeExtractionConfig) -> None:
+    logger.info(f"Starting processing of StackExchange dump in {cfg.input_path}")
 
-    # === This is basically a rewrite of `map_files_in_directory` so we can have finer-grained control ===
+    files = fsspec_glob(f"{cfg.input_path}/*.jsonl.gz")
 
-    # Handle StackOverflow's unique format -- purge the -Badges/-Comments/-<Whatever> files!
-    files = [f for f in fsspec_glob(os.path.join(cfg.input_path, "*.7z")) if "stackoverflow.com-" not in f]
-    files.append(os.path.join(cfg.input_path, "stackoverflow.com-Posts.7z"))
+    # only keep file of the form <id>.json.gz and not <language>.<id>.json.gz
+    files = [file for file in files if len(os.path.basename(file).split(".")) == 3]
+    logger.info(f"Found {len(files)} files to process")
 
-    # Invoke Ray Functions --> track job references
-    responses: list[ray.ObjectRef] = []
-    for input_file in files:
-        subdomain = re.match(r"(.+?)\.(stackexchange|net|com)", os.path.basename(input_file)).group(1)
-        output_file = os.path.join(cfg.output_path, f"{subdomain}.jsonl.gz")
+    result_refs = []
+    MAX_CONCURRENT_WORKERS = 50
 
-        # Handle RAM Overrides
-        if subdomain in RAY_MEMORY_OVERRIDES:
-            responses.append(
-                post_to_md.options(memory=RAY_MEMORY_OVERRIDES[subdomain]).remote(
-                    input_file, output_file, subdomain, markdown_format=cfg.markdown_format
-                )
-            )
-        else:
-            responses.append(post_to_md.remote(input_file, output_file, subdomain, markdown_format=cfg.markdown_format))
+    if cfg.max_files:
+        files = files[: cfg.max_files]
 
-    # Wait on Success
+    for file in files:
+        if len(result_refs) > MAX_CONCURRENT_WORKERS:
+            ready_refs, result_refs = ray.wait(result_refs, num_returns=1)
+            try:
+                ray.get(ready_refs)
+            except Exception as e:
+                logger.exception(f"Error processing the group: {e}")
+                continue
+
+        output_file_path = os.path.join(cfg.output_path, file.split("/")[-1])
+        result_refs.append(process_file.remote(file, output_file_path, cfg.extract_method, cfg.extract_config, cfg.seed))
     try:
-        ray.get(responses)
+        ray.get(result_refs)
     except Exception as e:
-        print(f"Error Processing: {e}")
-
-
-if __name__ == "__main__":
-    # Launch StackExchange Transform Jobs (one per subdomain)
-    transform_stackexchange()
+        logger.exception(f"Error processing the group: {e}")
