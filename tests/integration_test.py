@@ -31,7 +31,7 @@ from marin.schemas.web.convert import HtmlToMarkdownConfig
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 from marin.utilities.ray_utils import is_local_ray_cluster
 from marin.utils import is_in_ci
-from scripts.hello_world_fw.process import FineWebConfig, transform
+from operations.transform.simple_html_to_md.process import SimpleHtmlToMdConfig, transform
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -44,7 +44,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
     transform_hq_data_step = ExecutorStep(
         name=os.path.join(prefix, "hq-transformed"),
         fn=transform,
-        config=FineWebConfig(
+        config=SimpleHtmlToMdConfig(
             input_path=os.path.join(synth_data, "pos"),
             output_path=this_output_path(),
             extract_method=versioned("readability"),
@@ -56,7 +56,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
     transform_lq_data_step = ExecutorStep(
         name=os.path.join(prefix, "lq-transformed"),
         fn=transform,
-        config=FineWebConfig(
+        config=SimpleHtmlToMdConfig(
             input_path=os.path.join(synth_data, "neg"),
             output_path=this_output_path(),
             extract_method=versioned("readability"),
