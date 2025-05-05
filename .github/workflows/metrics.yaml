@@ -1,0 +1,70 @@
+name: Compute metrics
+
+on:
+  schedule:
+    # run weekly at 12 am Mon morning
+    - cron: '0 0 * * 1'
+  workflow_dispatch: 
+
+jobs:
+  run-script:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+      cancel-in-progress: true
+
+    strategy:
+      matrix:
+        python-version: ["3.10"]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Conda
+        uses: conda-incubator/setup-miniconda@v2
+        with:
+          auto-update-conda: true
+          python-version: ${{ matrix.python-version }}
+          activate-environment: marin_metrics_env
+          auto-activate-base: false
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cache/pip
+            ~/.cache/uv
+          key: ${{ runner.os }}-${{ matrix.python-version }}-metrics
+
+      - name: Install dependencies
+        shell: bash -l {0}
+        run: |
+          conda activate marin_metrics_env
+          pip install -e .[extras,metrics]
+          
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_LOGGING_KEY }}
+        
+      
+      - name: Set up Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v1
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Configure Google Cloud
+        run: gcloud config set project ${{ secrets.GCP_PROJECT_ID }}
+        
+      - name: Run Python script
+        shell: bash -l {0}
+        env:
+          WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
+          GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PYTHONPATH: .
+        run: |
+          conda activate marin_metrics_env
+          python experiments/metrics/exp446_metrics.py

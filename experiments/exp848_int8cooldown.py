@@ -13,6 +13,7 @@ from experiments.dclm.tokenize_dclm import dclm_components_llama3
 from experiments.defaults import default_anneal
 from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
+from marin.resources import TpuPodConfig
 
 dclm = dclm_components_llama3["dclm_baseline"]
 
@@ -23,14 +24,16 @@ control_dataset_config = lm_mixture_data_config(
     weights={"dclm": 1.0},
 )
 control_anneal_config = AnnealConfig(
-    dataset_config=control_dataset_config, num_anneal_training_tokens=NUM_ANNEAL_TOKENS, tpu_type="v5litepod-128"
+    dataset_config=control_dataset_config,
+    num_anneal_training_tokens=NUM_ANNEAL_TOKENS,
+    resources=TpuPodConfig(tpu_type="v5litepod-128"),
 )
 
 control_model = default_anneal(name="llama-8b-anneal-bf16-control", anneal_config=control_anneal_config)
 
 # Keep everything fixed except for int8 training.
-int8_trainer = dataclasses.replace(control_model.config.trainer, quantization=QuantizationConfig(int8=True))
-int8_config = dataclasses.replace(control_model.config, trainer=int8_trainer)
+int8_trainer = dataclasses.replace(control_model.config.train_config.trainer, quantization=QuantizationConfig(int8=True))
+int8_config = dataclasses.replace(control_model.config.train_config, trainer=int8_trainer)
 int8_model = dataclasses.replace(control_model, config=int8_config, name="llama-8b-anneal-int8")
 
 

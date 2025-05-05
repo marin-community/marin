@@ -10,23 +10,31 @@ How to retrieve an instruction dataset:
 1. Use the function `get_instruction_dataset` with the HF repo id.
 
 Current datasets:
-1. meta-math/MetaMathQA
-2. allenai/tulu-v2-sft-mixture
-3. openbmb/UltraInteract_sft
-4. teknium/OpenHermes-2.5
-5. allenai/tulu-v2-sft-mixture-olmo-4096
-6. allenai/tulu-3-sft-mixture
-7. TIGER-Lab/AceCode-89K
-8. cognitivecomputations/dolphin-r1
-9. open-r1/OpenThoughts-114k-math
-10. bespokelabs/Bespoke-Stratos-17k
-11. HuggingFaceTB/smoltalk
-12. PrimeIntellect/verifiable-math-problems
+1. GeneralReasoning/GeneralThought-195K-modelanswer
+2. GeneralReasoning/GeneralThought-195K-modelreasoning
+3. meta-math/MetaMathQA
+4. allenai/tulu-v2-sft-mixture
+5. openbmb/UltraInteract_sft
+6. teknium/OpenHermes-2.5
+7. allenai/tulu-v2-sft-mixture-olmo-4096
+8. allenai/tulu-3-sft-mixture
+9. TIGER-Lab/AceCode-89K
+10. cognitivecomputations/dolphin-r1-nonreasoning
+11. cognitivecomputations/dolphin-r1-reasoning
+12. open-r1/OpenThoughts-114k-math
+13. bespokelabs/Bespoke-Stratos-17k
+14. HuggingFaceTB/smoltalk
+15. PrimeIntellect/verifiable-math-problems
+16. sherryy/tulu-3-sft-personas-instruction-following-expanded
+17. facebook/natural_reasoning
 """
 
 import hashlib
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
+from experiments.defaults import default_tokenize
+from experiments.llama import llama3_tokenizer
 from marin.execution.executor import (
     ExecutorStep,
     executor_main,
@@ -36,9 +44,12 @@ from marin.execution.executor import (
 )
 from operations.download.huggingface.download import DownloadConfig
 from operations.download.huggingface.download_hf import download_hf
+from operations.transform.conversation.conversation_to_dolma import (
+    ConversationToDolmaConfig,
+    convert_conversation_to_dolma,
+)
 from operations.transform.conversation.transform_conversation import (
     TransformSFTDatasetConfig,
-    transform_dataset,
     transform_hf_dataset,
 )
 
@@ -179,11 +190,29 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
     ),
     "facebook/natural_reasoning": InstructionDatasetConfig(
         hf_dataset_id="facebook/natural_reasoning",
-        revision="main",  # You might want to pin this to a specific commit hash later
+        revision="99eea5d",
         wait_for_completion=True,
         metadata_columns=["reference_answer"],  # Including reference_answer as metadata
         filetype="jsonl",  # The dataset appears to be in parquet format
         splits=["train"],  # Default to train split
+    ),
+    "GeneralReasoning/GeneralThought-195K-modelanswer": InstructionDatasetConfig(
+        hf_dataset_id="GeneralReasoning/GeneralThought-195K",
+        revision="64f7cb8",
+        wait_for_completion=True,
+        metadata_columns=["question_id", "question_url", "reference_answer", "model_name", "question_source", "task"],
+        filetype="jsonl",  # The dataset appears to be in parquet format
+        splits=["train"],  # Default to train split
+        adapter_name="GeneralReasoning/GeneralThought-195K-modelanswer",
+    ),
+    "GeneralReasoning/GeneralThought-195K-modelreasoning": InstructionDatasetConfig(
+        hf_dataset_id="GeneralReasoning/GeneralThought-195K",
+        revision="64f7cb8",
+        wait_for_completion=True,
+        metadata_columns=["question_id", "question_url", "reference_answer", "model_name", "question_source", "task"],
+        filetype="jsonl",  # The dataset appears to be in parquet format
+        splits=["train"],  # Default to train split
+        adapter_name="GeneralReasoning/GeneralThought-195K-modelreasoning",
     ),
 }
 
@@ -236,16 +265,9 @@ def transform_dataset_step(dataset_cfg: InstructionDatasetConfig, download_step:
     ]
     ===========================================================================
     """
-    dataset_name = get_directory_friendly_dataset_name(dataset_cfg.hf_dataset_id)
+    adapter_name = dataset_cfg.adapter_name if dataset_cfg.adapter_name is not None else dataset_cfg.hf_dataset_id
+    dataset_name = get_directory_friendly_dataset_name(adapter_name)
     download_data_path = output_path_of(download_step)
-
-    # Transform the dataset
-    if dataset_cfg.legacy:
-        # Uses the Marin function
-        transform_fn = transform_dataset
-    else:
-        # Uses the new tranform function that calls `datasets` package
-        transform_fn = transform_hf_dataset
 
     config_str = f"{dataset_name}-\
         {dataset_cfg.revision}\
@@ -253,10 +275,9 @@ def transform_dataset_step(dataset_cfg: InstructionDatasetConfig, download_step:
         -{sorted(dataset_cfg.splits)}"
     hashed_config_str = hashlib.md5(config_str.encode()).hexdigest()[:6]
 
-    adapter_name = dataset_cfg.adapter_name if dataset_cfg.adapter_name is not None else dataset_cfg.hf_dataset_id
     transform_step = ExecutorStep(
         name=f"documents/{dataset_name}",
-        fn=transform_fn,
+        fn=transform_hf_dataset,
         config=TransformSFTDatasetConfig(
             input_path=download_data_path,
             output_path=this_output_path(),
@@ -274,9 +295,7 @@ def transform_dataset_step(dataset_cfg: InstructionDatasetConfig, download_step:
     return transform_step
 
 
-def get_instruction_dataset(
-    hf_dataset_id: str, splits: list[str] = field(default_factory=lambda: ["train"])
-) -> ExecutorStep:
+def get_instruction_dataset(hf_dataset_id: str, splits: Sequence[str] = ("train",)) -> ExecutorStep:
     # Check that config exists
     assert hf_dataset_id in INSTRUCTION_DATASET_NAME_TO_CONFIG, f"Unknown instruction dataset: {hf_dataset_id}"
 
@@ -289,6 +308,26 @@ def get_instruction_dataset(
     download_step = download_dataset_step(config)
     transform_step = transform_dataset_step(config, download_step)
     return transform_step
+
+
+tulu_3_in_dolma = ExecutorStep(
+    name="dolma/tulu_3_in_dolma",
+    fn=convert_conversation_to_dolma,
+    config=ConversationToDolmaConfig(output_path_of(get_instruction_dataset("allenai/tulu-3-sft-mixture"))),
+)
+
+
+# levanter treats validation and  training as separate so we tokenize twice. Not ideal, but fine here.
+tulu3_flat_llama_tokenized_as_validation = default_tokenize(
+    "tulu_sft", tulu_3_in_dolma, tokenizer=llama3_tokenizer, is_validation=True
+).with_output_path("tokenized/tulu_sft-1bb7d4")
+"""
+"flat" here means that we interpolated all the chat messages into a single string per doc
+"""
+
+tulu3_flat_llama_tokenized_as_train = default_tokenize(
+    "tulu_sft", tulu_3_in_dolma, tokenizer=llama3_tokenizer, is_validation=False
+).with_output_path("tokenized/tulu_sft-349fb7/")
 
 
 if __name__ == "__main__":

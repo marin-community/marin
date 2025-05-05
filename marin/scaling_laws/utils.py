@@ -238,7 +238,7 @@ def pull_metrics_from_wandb(
         run_data = {"run": run.name}
 
         # Get model configuration
-        model_dict = run.config.get("model", {})
+        model_dict = run.train_config.get("model", {})
 
         run_data["hidden_dim"] = model_dict.get("hidden_dim", 0)
 
@@ -361,14 +361,14 @@ def get_default_projection_points(count_embedding_params: bool = False) -> list[
     Args:
         count_embedding_params: Whether to include embedding parameters in parameter count
     """
-    from experiments.llama import llama_1_4b, llama_8b, llama_13b, llama_22b, llama_70b
+    from experiments.llama import llama_1_4b, llama_8b, llama_13b, llama_24b, llama_70b
 
     # Base model configs
     model_configs = [
         llama_1_4b,
         llama_8b,
         llama_13b,
-        llama_22b,
+        llama_24b,
         llama_70b,
     ]
 
