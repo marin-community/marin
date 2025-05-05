@@ -5,10 +5,12 @@ from levanter.callbacks.watch import WatchConfig
 from levanter.optim import OptimizerConfig
 from levanter.schedule import IntSchedule
 
+from marin.resources import ResourceConfig, TpuPodConfig
+
 
 @dataclass(frozen=True)
 class SimpleTrainConfig:
-    tpu_type: str
+    resources: ResourceConfig
     train_batch_size: int | IntSchedule
     """
     The batch size for training. If an IntSchedule is provided, the batch size will be
@@ -45,8 +47,6 @@ class SimpleTrainConfig:
     per_device_eval_parallelism: int | None = None
     """Number of examples to evaluate in parallel on each device"""
 
-    node_count: int = 1
-
     initialize_from_checkpoint_path: str | None = None
     """If set, the training will resume from the checkpoint at this path. Otherwise, training will start from scratch."""
     initialize_from_hf: str | None = None
@@ -68,3 +68,17 @@ class SimpleTrainConfig:
 
     watch: WatchConfig = dataclasses.field(default_factory=WatchConfig)
     """Config for watching gradients, parameters, etc. Default is to log norms of gradients and parameters."""
+
+    @property
+    def tpu_type(self) -> str | None:
+        """For backward compatibility."""
+        if isinstance(self.resources, TpuPodConfig):
+            return self.resources.tpu_type
+        return None
+
+    @property
+    def node_count(self) -> int:
+        """For backward compatibility."""
+        if isinstance(self.resources, TpuPodConfig):
+            return self.resources.node_count
+        return 1

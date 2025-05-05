@@ -6,12 +6,12 @@
 Marin is a modular, open-source framework for the research and development of
 foundation models.  A key property of Marin is reproducibility: All the steps
 raw data to the final model are recorded for posterity (not just the final
-model).  Moreover, all [experiments](docs/experiments.md) (whether successful
+model).  Moreover, all [experiments](docs/explanation/experiments.md) (whether successful
 or not) are also recorded, so the entire research process (not just the
 development of the final model) is transparent.
 
-The core part of Marin is minimal, consisting of basically an [executor
-framework](docs/executor.md), which manages the execution of a set of
+The core part of Marin is minimal, consisting of basically an
+[executor framework](docs/explanation/executor.md), which manages the execution of a set of
 arbitrary steps.
 
 Marin's primary use case is to build a language model like Llama 3,
@@ -22,29 +22,20 @@ Note that for now, all this specific code resides in this repository.
 ## Setup
 
 To install Marin, create a new virtual environment (or `conda` environment)
-with the appropriate Python version (3.10), and then run the following:
+with the appropriate Python version (3.11), and then run the following:
 
 ```bash
 git clone https://github.com/stanford-crfm/marin
 cd marin
-pip install -e ".[extras]"
+pip install -e .[dev]
 ```
 
 This will install all the core dependencies and build `marin` as a Python
-package. Installing the `[extras]` requirements will additionally install test,
+package. Installing the `[dev]` requirements will additionally install test,
 linting, and debugging dependencies (e.g., `pytest`).
 
 ## Tests
 
-The first time you run tests locally, you will need install `pandiff` to
-run the snapshot tests. This is a one-time install that can be done using the
-following commands:
-
-```bash
-brew install node  # For macOS
-conda install -c conda-forge pandoc
-npm install -g pandiff
-```
 
 To run the tests, first run `export RAY_ADDRESS=` to run Ray in local mode.
 
@@ -53,6 +44,18 @@ To run the tests, first run `export RAY_ADDRESS=` to run Ray in local mode.
    pre-commit run --all-files
    ```
 2. To run the tests, run `PYTHONPATH=tests:. pytest tests --durations=0 -n 4 --tb=no -v`
+
+### Pandiff
+
+If you're working on html-to-text conversion, you will likely want to install
+`pandiff` to run the snapshot tests. This is a one-time install that can be done
+using the following commands:
+
+```bash
+brew install node  # For macOS
+conda install -c conda-forge pandoc
+npm install -g pandiff
+```
 
 ## Hello world example
 
@@ -77,6 +80,7 @@ This command should create the following assets:
 Note that if you run the same command again, it will detect that both steps
 have been already run and return automatically.
 
+
 ## Data browser
 
 Marin comes with a [data browser](data_browser/README.md) that makes it easy to
@@ -98,7 +102,8 @@ See the [data browser README](data_browser/README.md) for more details.
 ## What's next?
 
 To learn more about the core infrastructure:
-- [Executor framework](docs/executor.md): how to manage Python libraries, run big parallel jobs using Ray, how versioning works, etc.
-- [Experiments](docs/experiments.md): how we use the executor framework to run machine learning experiments.
+- [Concepts](docs/explanation/concepts.md): key concepts and principles that underpin the Marin project.
+- [Executor framework](docs/explanation/executor.md): how to manage Python libraries, run big parallel jobs using Ray, how versioning works, etc.
+- [Experiments](docs/explanation/experiments.md): how we use the executor framework to run machine learning experiments.
 
 Or you can jump directly to learn about our [language modeling efforts](docs/lm/overview.md).

@@ -2,5 +2,4 @@
 
 DEFAULT_VLLM_ENGINE_KWARGS = {
     "max_model_len": 4096,
-    "distributed_executor_backend": "ray",
 }
