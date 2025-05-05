@@ -57,7 +57,7 @@ class ExperimentConfig:
     experiment_name: str
     quality_classifier_model_paths: list[str | ExecutorStep]
     keep_fraction: float = 0.1  # Keep 20% of the documents
-    cooldown_config: QualityAblationConfig = field(default_factory=lambda: QualityAblationConfig(tpu_type="v4-128"))
+    cooldown_config: QualityAblationConfig = field(default_factory=lambda: QualityAblationConfig())
 
 
 def get_model_path(model_path: str | ExecutorStep):
