@@ -14,6 +14,7 @@ import fsspec
 import ray
 from tqdm import tqdm
 
+from marin.core.runtime import cached_or_construct_output
 from marin.schemas.web.convert import ExtractionConfig
 from marin.web.convert import convert_page
 from operations.download.dclm_hq.download_dclm_hq_html import find_html_in_cc
@@ -35,14 +36,13 @@ class DCLMHQExtractionConfig:
 
 
 @ray.remote(memory=2 * 1024 * 1024 * 1024)
+@cached_or_construct_output(success_suffix="SUCCESS")
 def process_file(
     input_file_path: str,
-    output_path: str,
+    output_file_path: str,
     extract_method: str,
     extract_config: ExtractionConfig,
 ) -> None:
-    output_file_path = os.path.join(output_path, input_file_path.split("/")[-1].replace(".ndjson", ".jsonl.gz"))
-
     logger.info(f"Starting processing of file {input_file_path}")
     logger.info(f"Source: {input_file_path}")
     logger.info(f"Destination: {output_file_path}")
@@ -79,7 +79,7 @@ def process_file(
                     continue
 
         logger.info("\nProcessing completed successfully!")
-        logger.info(f"File available at: {output_path}")
+        logger.info(f"File available at: {output_file_path}")
 
     except Exception as e:
         logger.error(f"Error during processing: {e}")

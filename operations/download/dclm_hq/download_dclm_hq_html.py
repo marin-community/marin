@@ -104,7 +104,21 @@ def process_file(
             for line in tqdm(text_wrapper, desc="Processing lines"):
                 row = json.loads(line.strip())
 
+                # We need to extract the split from where the record was for querying the index
+                # The only place we have this information is in the warcinfo key in DCLM HQ
+                # The format is:
+                # warc-type: WARC/1.1
+                # ...
+                # isPartOf: CC-MAIN-2024-01
+                # This however is a string and not a key-value pair, so we need to extract
+                # the split from it via regex pattern `isPartOf:\s*(CC-MAIN-\d{4}-\d{2})`.
+                # This pattern groups the value of the key `isPartOf` that is of the form
+                # `CC-MAIN-xxxx-xx` where `xxxx` is a year and `xx` is a month.
                 match = re.search(r"isPartOf:\s*(CC-MAIN-\d{4}-\d{2})", row["metadata"]["warcinfo"])
+                if match is None:
+                    logger.error(f"No split found for record ID: {row['metadata']['WARC-Record-ID']}")
+                    continue
+
                 is_part_of = match.group(1)
 
                 try:
