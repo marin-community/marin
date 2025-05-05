@@ -29,13 +29,11 @@ from marin.processing.classification.custom.custom_attribute import CustomAttrib
 from marin.processing.classification.inference import InferenceConfig, run_inference
 
 # mapping of data source names to their GCS paths
-INPUT_DATA_SOURCE_TO_PATH: dict[str, str] = field(
-    default_factory=lambda: {
-        "fineweb_2024_18": (
-            "gs://marin-us-central2/documents/fineweb-small-resiliparse-preserve-formatting-v2-e72837/md/CC-MAIN-2024-18/"
-        ),
-    }
-)
+INPUT_DATA_SOURCE_TO_PATH: dict[str, str] = {
+    "fineweb_2024_18": (
+        "gs://marin-us-central2/documents/fineweb-small-resiliparse-preserve-formatting-v2-e72837/md/CC-MAIN-2024-18/"
+    ),
+}
 
 
 @dataclass
