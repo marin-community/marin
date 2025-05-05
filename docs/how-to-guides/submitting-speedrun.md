@@ -1,19 +1,30 @@
 # Submitting a Speedrun to the Leaderboard
 
-This guide will walk you through the process of creating and submitting your own speedrun entry to the Marin Speedrun leaderboard.
+
+Marin Speedrun is a community-driven model training framework and contest that promotes collaborative language model development. By focusing on small-scale prototyping, it allows researchers to iterate quickly, test new ideas efficiently, and contribute to a shared leaderboard. This guide will walk you through the process of creating and submitting your own speedrun entry to the Marin Speedrun leaderboard.
 
 ## Overview
 
-Marin Speedrun is a community-driven model training contest and framework where participants can train language models and submit them to Marin. The goal is to further the mission of collaborative model development through a leaderboard that tracks different models and their performance.
+Training large language models (LLMs) is compute-intensive, expensive, and time-consuming. Marin Speedrun offers a lightweight alternative: experiment with smaller-scale models and training recipes to validate ideas before scaling up. With speedrun, the goal is to make it easier to prototype ideas via smaller, focused experiments, and compare them to other models' performance and efficiency.
 
-The development of an LLM involves several factors, such as the model architecture, scale, number of tokens and hyperparameters. While it would be ideal to train an test LLMs at a larger scale, this is quite expensive and requires lots of compute and time.
+## Framework
 
-An alternative approach is to experiment with different recipes at smaller scale, and use the findings to extrapolate to a larger scale. The goal here is to enable such prototyping and experimentation of ideas to try out new ideas at a managaeable scale before scaling models up.
+We use the [FineWeb-Edu dataset](https://huggingface.co/datasets/HuggingFaceFW/fineweb-edu) by default. You can experiment with any model architecture, optimizers, learning rate schedules, or hyperparameters.
+[TODO (Nikil): The tokenized, shuffled dataset is also available on HF [link] to make speedrun more accessible]. We track the following key metrics:
 
-## Tracks
+- **C4-EN BPB (Bits per Byte)**: Bits-per-byte on the `c4-en` (English portion of the C4) dataset; lower values are better.
+- **FLOPs Used**: Floating point operations used in training the model.
 
-We maintain two tracks:
-- **FineWeb-Edu track**: Uses the [FineWeb-Edu dataset](https://huggingface.co/datasets/HuggingFaceFW/fineweb-edu) by default. You can experiment with any model architecture, optimizers, learning rate schedules, or hyperparameters.
+
+While tracking performance on `c4-en` helps us understand model performance/capability, we opt to track a Pareto frontier to highlight trade-offs between model performance and scale. The Pareto frontier represents the set of models that are not outperformed in both metrics by any other submission. In other words, a model is Pareto-optimal if no other model achieves better BPB and uses fewer FLOPs.
+
+This approach encourages creative and efficient experimentation. For example:
+
+- A large model with very low BPB but needing a lot of compute to train may be Pareto-optimal.
+- A smaller or more efficient model with worse BPB but dramatically lower compute may also make the frontier.
+
+The Pareto frontier should provide a clearer picture of what's achievable with different model scales and approaches, both in terms of model performance on evals, and the compute it requires.
+
 
 ## Prerequisites
 
@@ -76,7 +87,7 @@ We maintain two tracks:
     ```
 
     `MARIN_PREFIX` tells Marin where to put artifacts generated during the execution of any steps. For examples, training checkpoints usually will be written to `${MARIN_PREFIX}/checkpoints/`. You can set this to
-    either a directory on your machine, or an fsspec-recognizable path eg. a GCS bucket.
+    an fsspec-recognizable path eg. a GCS bucket, or a directory on your machine.
 
     A more detailed description of these can be found in [docs/<TODO>](../../docs/<TODO>).
 
@@ -92,7 +103,7 @@ We maintain two tracks:
    cp ${MARIN_PREFIX}/speedrun_results.json experiments/speedrun/llama_75m_fineweb_edu/
    ```
 
-2. Create a pull request with:
+2. Create a pull request including:
    - Your run directory (training script and results file)
    - A brief explanation of your approach (model architecture, training strategy, optimizations)
 
@@ -100,7 +111,3 @@ We maintain two tracks:
 
 
 ## Evaluation and metrics
-
-We track the following key metrics:
-- **C4-EN BPB (Bits per Byte)**: Compression performance on the C4 dataset
-- **FLOPs Used**: Total compute used during training
