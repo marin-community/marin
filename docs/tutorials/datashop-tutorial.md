@@ -1,0 +1,77 @@
+# A tutorial to using Datashop
+
+This tutorial will walk through a basic example of using Datashop to filter a data pool for desired documents given a prompt.
+
+## Prerequisites
+
+Before you begin, you will need to use the vLLM docker image to run the workload since we use vLLM to run fast model inference to annotate each document given a rubric prompt.
+
+```bash
+# This command creates the vLLM docker image.
+VLLM=1 make cluster_docker
+```
+
+Then, edit the DOCKER_TAGS in infra/update-cluster-configs.py file with the correct image commit id that was created in the previous step.
+
+```bash
+# Then run this command to update the cluster configs.
+python infra/update-cluster-configs.py
+```
+
+Lastly, spin up the vLLM cluster with the following command.
+```bash
+ray up infra/marin-{region}-vllm.yaml
+```
+
+## Running a data filtering prompt
+A common workload in data filtering is to use a rubric prompt that describes the desired documents and then filter a data pool for documents that match the rubric. This often requires multiple steps: 1. a large language model will first annotate a pool of documents to create a supervised training set 2. this training set is used to train a smaller model (e.g. BERT, Fasttext) 3. the smaller model is used to filter the data pool.
+
+To run the datashop filtering process, there are five main attributes to know:
+1. annotator model name: this is the model used to annotate the large data pool to create the supervised training set. We default to using Llama-3.3-70B-Instruct which is used commonly for this task (e.g. FineWebEdu, FineMath).
+2. pretraining data path: this is the path to the large data pool that you would like to filter. We provide some defaults such as the first shard of the DCLM-Baseline pretraining dataset.
+3. annotator data path: this is the path to a small set of documents that will be used for creating the supervised training set. We provide a default which is some randomly sampled documents from the pretraining data pool roughly totaling 500K documents.
+4. data filter prompt: This is the prompt that will be used to annotate the data pool.
+5. dataset output processor config kwargs: These are keyword arguments passed into the dataset output processor, which can be helpful with processor initialization such as defining custom ways of parsing the final score from the LLM's generated text.
+
+
+We now run through an example of how to run a datashop filtering prompt such as FineMath. See the full tutorial in `experiments/exp939_finemath.py`.
+
+First, create a prompt that you would like to execute. For example, we can use the FineMath prompt (truncated for brevity):
+```python
+FINEMATH_DATA_FILTER_PROMPT = """
+Evaluate the following text extract for its potential usefulness for studying mathematics up to high school and early undergraduate levels. Use the following 5-point scoring system described below. Points are accumulated based on the satisfaction of
+each criterion:
+
+...
+```
+
+We then import the pretraining and annotator data path from the datashop datasets module. If you want to use your own dataset, feel free to use that instead.
+```python
+from experiments.datashop.datashop_datasets import datashop_dclm_annotation_subset, datashop_dclm_pretraining_subset
+```
+
+We then initialize the datashop runner with the appropriate parameters. Note that we use the llama-3.3-70b-instruct model as the annotator and we pass in a `processor_type` kwarg to the dataset output processor to signify that our outputs are a score between 0 and 5. If you have a different output format, you may need to write your custom processor in `marin/datashop/dataset_processor.py` and pass in the `processor_type` kwarg to that dataset output processor.
+```python
+from experiments.datashop.datashop_runner import DatashopRunner, DatashopRunnerConfig
+
+datashop_runner = DatashopRunner(
+    DatashopRunnerConfig(
+        experiment_name="finemath-replication",
+        annotator_model_name="Llama-3.3-70B-Instruct",
+        pretraining_data_path=datashop_dclm_pretraining_subset,
+        annotator_data_path=datashop_dclm_annotation_subset,
+        data_filter_prompt=FINEMATH_DATA_FILTER_PROMPT,
+        dataset_output_processor_config_kwargs={"processor_type": "finalscore0-5"},
+    )
+)
+```
+
+We then run the datashop steps in the vLLM cluster to obtain the encoder model.
+```python
+datashop_runner.run_eval_cluster_steps()
+```
+
+Lastly, we run the datashop steps in the training cluster, which will filter data using the encoder model and then train a model on the filtered data.
+```python
+datashop_runner.run_all_steps()
+```
