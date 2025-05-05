@@ -129,18 +129,22 @@ starcoderdata = ExecutorStep(
         wait_for_completion=True,
     ),
     override_output_path="raw/starcoderdata-720c8c",
-).cd("9fc30b5")
+)
 
-dolmino = ExecutorStep(
-    name="raw/dolmino-mix-1124",
-    fn=download_hf,
-    config=DownloadConfig(
-        hf_dataset_id="allenai/dolmino-mix-1124",
-        revision="bb54cab",
-        gcs_output_path=this_output_path(),
-        wait_for_completion=True,
-    ),
-).cd("bb54cab")
+dolmino = (
+    ExecutorStep(
+        name="raw/dolmino-mix-1124",
+        fn=download_hf,
+        config=DownloadConfig(
+            hf_dataset_id="allenai/dolmino-mix-1124",
+            revision="bb54cab",
+            gcs_output_path=this_output_path(),
+            wait_for_completion=True,
+        ),
+    )
+    .with_output_path("raw/dolmino-mix-1124-157960")
+    .cd("bb54cab")
+)
 
 nemotron_cc = ExecutorStep(
     name="raw/nemotro-cc",

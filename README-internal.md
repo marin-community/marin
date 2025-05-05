@@ -1,4 +1,5 @@
 # Marin (internal)
+# THIS DOCUMENTATION SEEMS OUTDATED (please update @Abhi)
 
 This documentation is for internal developers.
 
@@ -18,10 +19,13 @@ gcloud config list
 
 # [Verification] Should not throw a permission error
 gcloud storage ls gs://marin-us-central2
+
+# Ensure you have the cluster ssh key
+make dev_setup
 ```
 
 If you don't have permissions for `hai-gcp-models` or you run into permissions
-issues, contact David Hall or Sidd Karamcheti for help!
+issues, contact David Hall for help!
 
 ## Ray Cluster + Job Submission
 
@@ -51,7 +55,7 @@ this terminal open!
 To submit jobs, we use the
 [Jobs API](https://docs.ray.io/en/latest/cluster/running-applications/job-submission/quickstart.html#submitting-a-job).
 This requires that your Python script is formatted in a certain way, calling some boilerplate Ray functions prior to
-launching tasks -- see [`tests/test_quickstart.py`](./tests/test_quickstart.py) for a minimal example. To launch:
+launching tasks -- see [`tests/test_integration_test.py`](./tests/test_integration_test.py) for a minimal example. To launch:
 
 ``3`
 # [Terminal 2] Submit a Ray Job (specified via a Python script)
