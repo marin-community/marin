@@ -3,6 +3,8 @@
 This tutorial will walk through a basic example of using Datashop to filter a data pool for desired documents given a prompt and training a model on the filtered data.
 
 ## Prerequisites
+TPUs are currently required to run this process for model inference. GPUs are not supported yet.
+
 
 We use vLLM to run fast model inference to annotate each document given a rubric prompt. To install the docker image with vLLM and publish it to Google Cloud Artifact Registry, run the following commands:
 
@@ -18,7 +20,7 @@ Then, edit the DOCKER_TAGS in infra/update-cluster-configs.py file with the corr
 python infra/update-cluster-configs.py
 ```
 
-Lastly, spin up the vLLM cluster with the following command. Currently, the vLLM cluster is meant to be run with TPUs only. GPU support is not yet available.
+Lastly, spin up the vLLM cluster with the following command.
 ```bash
 ray up infra/marin-{region}-vllm.yaml
 ```
