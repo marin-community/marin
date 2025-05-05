@@ -1,10 +1,10 @@
 # A tutorial to using Datashop
 
-This tutorial will walk through a basic example of using Datashop to filter a data pool for desired documents given a prompt.
+This tutorial will walk through a basic example of using Datashop to filter a data pool for desired documents given a prompt and training a model on the filtered data.
 
 ## Prerequisites
 
-Before you begin, you will need to use the vLLM docker image to run the workload since we use vLLM to run fast model inference to annotate each document given a rubric prompt.
+We use vLLM to run fast model inference to annotate each document given a rubric prompt. To install the docker image with vLLM and publish it to Google Cloud Artifact Registry, run the following commands:
 
 ```bash
 # This command creates the vLLM docker image.
@@ -18,31 +18,44 @@ Then, edit the DOCKER_TAGS in infra/update-cluster-configs.py file with the corr
 python infra/update-cluster-configs.py
 ```
 
-Lastly, spin up the vLLM cluster with the following command.
+Lastly, spin up the vLLM cluster with the following command. Currently, the vLLM cluster is meant to be run with TPUs only. GPU support is not yet available.
 ```bash
 ray up infra/marin-{region}-vllm.yaml
 ```
 
 ## Running a data filtering prompt
-A common workload in data filtering is to use a rubric prompt that describes the desired documents and then filter a data pool for documents that match the rubric. This often requires multiple steps: 1. a large language model will first annotate a pool of documents to create a supervised training set 2. this training set is used to train a smaller model (e.g. BERT, Fasttext) 3. the smaller model is used to filter the data pool.
+A common workload in data filtering is to use a rubric prompt that describes the desired documents and then filter a data pool for documents that match the rubric. This often requires multiple steps:
+1. a large language model will first annotate a pool of documents to create a supervised training set
+2. this training set is used to train a smaller model (e.g. BERT, Fasttext)
+3. the smaller model is used to filter the data pool.
 
 To run the datashop filtering process, there are five main attributes to know:
-1. annotator model name: this is the model used to annotate the large data pool to create the supervised training set. We default to using Llama-3.3-70B-Instruct which is used commonly for this task (e.g. FineWebEdu, FineMath).
-2. pretraining data path: this is the path to the large data pool that you would like to filter. We provide some defaults such as the first shard of the DCLM-Baseline pretraining dataset.
-3. annotator data path: this is the path to a small set of documents that will be used for creating the supervised training set. We provide a default which is some randomly sampled documents from the pretraining data pool roughly totaling 500K documents.
-4. data filter prompt: This is the prompt that will be used to annotate the data pool.
-5. dataset output processor config kwargs: These are keyword arguments passed into the dataset output processor, which can be helpful with processor initialization such as defining custom ways of parsing the final score from the LLM's generated text.
+1. `annotator_model_name`: this is the model used to annotate the large data pool to create the supervised training set. We default to using Llama-3.3-70B-Instruct which is used commonly for this task (e.g. FineWebEdu, FineMath).
+2. `pretraining_data_path`: this is the path to the large data pool that you would like to filter. We provide some defaults such as the first shard of the DCLM-Baseline pretraining dataset.
+3. `annotator_data_path`: this is the path to a small set of documents that will be used for creating the supervised training set. We provide a default which is some randomly sampled documents from the pretraining data pool roughly totaling 500K documents.
+4. `data_filter_prompt`: This is the prompt that will be used to annotate the documents from the annotator data path to develop the supervised training set.
+5. `dataset_output_processor_config_kwargs`: These are keyword arguments passed into the dataset output processor, which can be helpful with processor initialization such as defining custom ways of parsing the final score from the LLM's generated text.
 
 
-We now run through an example of how to run a datashop filtering prompt such as FineMath. See the full tutorial in `experiments/exp939_finemath.py`.
+We now run through an example of how to run a datashop filtering prompt such as FineMath. We use this prompt the language model to assess whether a document satisfies useful mathematics data. See the full tutorial in `experiments/exp939_finemath.py`.
 
-First, create a prompt that you would like to execute. For example, we can use the FineMath prompt (truncated for brevity):
+First, create a prompt that you would like to execute. For example, we can use the FineMath prompt (truncated for brevity, see the full prompt in `experiments/exp939_finemath.py`):
 ```python
 FINEMATH_DATA_FILTER_PROMPT = """
 Evaluate the following text extract for its potential usefulness for studying mathematics up to high school and early undergraduate levels. Use the following 5-point scoring system described below. Points are accumulated based on the satisfaction of
 each criterion:
 
 ...
+
+- Give a fifth point if the extract is outstanding in its educational value for teaching and studying mathematics in middle school
+and high school. It should include very detailed and easy to follow explanations.
+Question-answer formats (e.g., from educational websites or forums) are acceptable if they meet the criteria.
+The text extract:
+{example}
+After examining the extract:
+- Briefly justify your total score, up to 100 words.
+- Conclude with the score using the format: Final score: <total points>.
+"""
 ```
 
 We then import the pretraining and annotator data path from the datashop datasets module. If you want to use your own dataset, feel free to use that instead.
