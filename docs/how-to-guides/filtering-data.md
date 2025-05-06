@@ -1,31 +1,7 @@
 # Filtering Data
 
 This guide will walk you through how to apply a custom filter to a dataset, so that you can then
-train models on the filtered data (e.g., to participate in the speedrun dataset track).
-
-## Prerequisites
-
-- Python 3.11 or higher
-- pip (Python package manager)
-- Git
-
-## Installation Steps
-
-1. Clone the Marin repository:
-   ```bash
-   git clone https://github.com/stanford-crfm/marin.git
-   cd marin
-   ```
-2. Create a virtual environment (optional but recommended):
-   ```bash
-   python -m venv venv
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
-   ```
-   or with conda:
-   ```bash
-   conda create --name marin python=3.10 pip
-   conda activate marin
-   ```
+train models on the filtered data.
 
 ## An Example of an Attribute Filter
 
