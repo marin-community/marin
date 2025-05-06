@@ -17,6 +17,7 @@ import dataclasses
 from levanter.models.rotary import DefaultRotaryEmbeddingsConfig
 from levanter.schedule import ScheduleStep
 
+import haliax
 from experiments.dclm.tokenize_dclm import DCLM_MIXTURE_WEIGHTS, dclm_components_llama3, dclm_mixture_config_llama3
 from experiments.defaults import default_train
 from experiments.llama import llama_13b, llama_24b, llama_32b, llama_56b
@@ -170,11 +171,17 @@ llama_22b_tootsie_ema_warmstart = dataclasses.replace(
 
 ## 32b experiments
 
+llama_32b_remat = dataclasses.replace(
+    llama_32b,
+    gradient_checkpointing=haliax.ScanCheckpointPolicy(save_carries="offload")
+)
+
 llama_32b_train_config = SimpleTrainConfig(
-    tpu_type="v5p-512",
-    node_count=2,
+    tpu_type="v4-2048",
+    node_count=1,
     # decreasing so we don't have padding at slice count 3
-    train_batch_size=[ScheduleStep(start=0, value=8192), ScheduleStep(start=18500, value=7680)],
+    # but we moved to v4 once we lost the v5 compute so we moved back to 8192 again
+    train_batch_size=[ScheduleStep(start=0, value=8192), ScheduleStep(start=18500, value=7680), ScheduleStep(start=21010, value=8192)],
     num_train_steps=1_000_000,
     weight_decay=0.05,
     # width is a little smaller than the 24B and we're using a much larger batch size
@@ -184,7 +191,6 @@ llama_32b_train_config = SimpleTrainConfig(
     ema_beta=0.995,
     lr_schedule="linear",
     cycle_length=None,
-    allow_partial_checkpoint=True,
     steps_per_eval=1000,
     steps_per_task_eval=10000,
     z_loss_weight=1e-4,
@@ -205,7 +211,7 @@ nemotron_mix = lm_mixture_data_config(
 llama_32b_tootsie = default_train(
     name="llama-32b-tootsie-2",
     tokenized=nemotron_mix,
-    model_config=llama_32b,
+    model_config=llama_32b_remat,
     train_config=llama_32b_train_config,
     tags=["llama", "32b", "ema", "exp859", "tootsie"],
     eval_harness_tasks=[],
