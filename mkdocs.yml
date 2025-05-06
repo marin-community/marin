@@ -11,7 +11,12 @@ theme:
     - search.suggest
     - content.code.annotation
     - content.code.copy
+  custom_dir: docs/overrides
 
+
+# Include extra JS to setup Read the Docs addons integrations
+extra_javascript:
+  - javascripts/readthedocs.js
 
 nav:
   - Home: index.md
@@ -56,8 +61,7 @@ plugins:
       default_handler: python
       handlers:
         python:
-          selection:
+          options:
             docstring_style: google
-          rendering:
             show_source: true
             show_root_heading: true
