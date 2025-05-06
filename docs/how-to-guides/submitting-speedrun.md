@@ -36,7 +36,7 @@ The Pareto frontier should provide a clearer picture of what's achievable with d
 ## Prerequisites
 
 The rest of this guide assumes you have already:
-1. Cloned the codebase and set up the environment for Marin by following the instructions in [the setup instructions](../../README.md). If you are using a local GPU, follow [local-gpu](../../docs/how-to-guides/local-gpu.md) for setup instructions.
+1. Cloned the codebase and set up the environment for Marin by following the instructions in [the setup instructions](../../README.md). If you are using a local GPU, follow [local-gpu.md](../../docs/how-to-guides/local-gpu.md) for setup instructions.
 2. Set up [Weights and Biases](https://wandb.ai) for tracking your runs. You can sign up for a free account [here](https://wandb.ai). You will need a W&B API key to track metrics and submit your run.
 
 ## Creating Your Speedrun
@@ -127,7 +127,7 @@ The rest of this guide assumes you have already:
    - Your run directory (training script and results file)
    - A brief explanation of your approach (model architecture, training strategy, optimizations)
 
-3. Once reviewed and merged, the leaderboard gets updated, and your run will appear on the public leaderboard at https://crfm.stanford.edu/marin/speedrun/.
-3. Once reviewed and merged, the leaderboard gets updated, and your run will appear on the public leaderboard at https://crfm.stanford.edu/marin/speedrun/!
+3. Once reviewed and merged, the leaderboard gets updated, and your run will appear on the public leaderboard at https://marin.community/speedrun/.
+
 
 TODO (Nikil): add some details about what happens afterwards (pic of leaderboard, scaling up to larger models, etc.)
