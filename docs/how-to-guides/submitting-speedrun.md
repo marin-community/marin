@@ -1,4 +1,4 @@
-# Submitting a Speedrun to the Leaderboard
+# Submitting to the Speedrun Leaderboard
 
 
 Marin Speedrun is a community-driven model training framework and contest that promotes collaborative language model development. By focusing on small-scale prototyping, it allows researchers to iterate quickly, test new ideas efficiently, and contribute to a shared leaderboard.
