@@ -8,19 +8,19 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 
 import fsspec
+import humanfriendly
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
 class LeaderboardEntry:
-    run_name: str
-    model_size: int
-    total_training_time: float
-    total_training_flops: float
-    submitted_by: str
-    storage_path: str  # Path to the results file
-    tokenized_dataset: str | None = None
+    run_name: str # name that appears on the leaderboard
+    model_size: int # number of parameters; for MoEs, total number of trainable params
+    total_training_time: float # sum of times for training steps, in minutes
+    total_training_flops: float # estimate of total FLOPs used for training
+    submitted_by: str # who submitted the run
+    results_filepath: str  # path to the results JSON file
     wandb_run_id: str | None = None
     eval_paloma_c4_en_bpb: float | None = None
 
@@ -52,12 +52,12 @@ class Leaderboard:
                 # Convert old format to new format
                 return {"runs": [data]}
 
-    def _create_entry_from_results(self, results: dict, storage_path: str) -> LeaderboardEntry:
-        run_name = Path(storage_path).parent.name
+    def _create_entry_from_results(self, results: dict, results_filepath: str) -> LeaderboardEntry:
+        run_name = Path(results_filepath).parent.name
 
         actual_compute = results["run_stats"]["final_flops_estimate"]
 
-        # Convert to float and scientific notation
+        # Convert to float
         if isinstance(actual_compute, str):
             if "e" in actual_compute.lower():
                 actual_flops = float(actual_compute.replace("e", "E"))
@@ -65,9 +65,10 @@ class Leaderboard:
                 actual_flops = float(actual_compute)
         else:
             actual_flops = float(actual_compute)
-
-        # Ensure in scientific notation
-        actual_flops = float(f"{actual_flops:.2e}".replace("e", "E"))
+            
+        # Log the human-friendly version for debugging
+        flops_str = humanfriendly.format_number(actual_flops)
+        print(f"FLOPS for {run_name}: {flops_str}")
 
         # Get training time (handle both field names)
         training_time = results["run_stats"].get(
@@ -77,17 +78,13 @@ class Leaderboard:
         # Get eval metrics
         eval_paloma_c4_en_bpb = results["run_stats"].get("eval/paloma/c4_en/bpb")
 
-        # Get tokenized dataset
-        tokenized_dataset = results["run_related_info"].get("tokenized_dataset")
-
         return LeaderboardEntry(
             run_name=run_name,
             model_size=results["run_related_info"]["num_parameters"],
             total_training_time=training_time,
             total_training_flops=actual_flops,
             submitted_by=results["run_related_info"].get("submitted_by", "unknown"),
-            storage_path=storage_path,
-            tokenized_dataset=tokenized_dataset,
+            results_filepath=results_filepath,
             wandb_run_id=results["run_related_info"].get("wandb_run_id", None),
             eval_paloma_c4_en_bpb=float(eval_paloma_c4_en_bpb) if eval_paloma_c4_en_bpb is not None else None,
         )
@@ -128,18 +125,20 @@ class Leaderboard:
             return "No entries found."
 
         # Sort by FLOPs used (lower is better)
-        entries.sort(key=lambda x: x.final_flops_used, reverse=True)
+        entries.sort(key=lambda x: x.total_training_flops, reverse=True)
 
-        header = "| Rank | Run Name | Model Size | Training Time (min) | FLOPs Used | C4-EN BPB |"
+        header = "| Rank | Run Name | Model Size | Training Time | FLOPs Used | C4-EN BPB |"
         separator = "|------|----------|------------|-------------------|-------------|---------|"
 
         rows = []
         for i, entry in enumerate(entries, 1):
-            model_size_str = f"{entry.model_size/1e6:.1f}M" if entry.model_size < 1e9 else f"{entry.model_size/1e9:.1f}B"
+            model_size_str = humanfriendly.format_size(entry.model_size, binary=False).replace("bytes", "params")
+            training_time = humanfriendly.format_timespan(entry.total_training_time)
+            flops_str = humanfriendly.format_number(entry.total_training_flops)
             c4_bpb = f"{entry.eval_paloma_c4_en_bpb:.3f}" if entry.eval_paloma_c4_en_bpb is not None else "N/A"
             row = (
                 f"| {i} | {entry.run_name} | {model_size_str} | "
-                f"{entry.total_training_time:.1f} | {entry.final_flops_used:.2e} | {c4_bpb} |"
+                f"{training_time} | {flops_str} | {c4_bpb} |"
             )
             rows.append(row)
 
@@ -183,9 +182,6 @@ def serve_leaderboard(leaderboard: Leaderboard, port: int = 8000):
     socketserver.TCPServer.allow_reuse_address = True
 
     with socketserver.TCPServer(("", port), Handler) as httpd:
-        print(f"Serving leaderboard at http://localhost:{port}")
-        print(f"Reading runs from: {leaderboard.base_path}")
-        print("Press Ctrl+C to stop")
         try:
             print(f"Serving leaderboard at http://localhost:{port}")
             print(f"Reading runs from: {leaderboard.base_path}")
