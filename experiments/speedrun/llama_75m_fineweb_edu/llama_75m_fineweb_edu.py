@@ -27,7 +27,7 @@ speedrun_config = SpeedrunConfig(
     hardware_config=HardwareConfig(
         device_type="v4-128",
         num_devices=64,
-        device_flops=275e12,
+        device_flops=275e12, # from https://cloud.google.com/tpu/docs/v4
     ),
 )
 

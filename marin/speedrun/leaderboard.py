@@ -4,7 +4,7 @@ Leaderboard system for Marin speedruns.
 
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from pathlib import Path
 
 import fsspec
@@ -12,30 +12,17 @@ import fsspec
 logger = logging.getLogger(__name__)
 
 
-@dataclass
+@dataclass(frozen=True)
 class LeaderboardEntry:
     run_name: str
     model_size: int
     total_training_time: float
-    final_flops_used: float
+    total_training_flops: float
     submitted_by: str
     storage_path: str  # Path to the results file
     tokenized_dataset: str | None = None
     wandb_run_id: str | None = None
     eval_paloma_c4_en_bpb: float | None = None
-
-    def to_json(self) -> dict:
-        return {
-            "run_name": self.run_name,
-            "model_size": self.model_size,
-            "total_training_time": self.total_training_time,
-            "final_flops_used": self.final_flops_used,
-            "submitted_by": self.submitted_by,
-            "storage_path": self.storage_path,
-            "tokenized_dataset": self.tokenized_dataset,
-            "wandb_run_id": self.wandb_run_id,
-            "eval_paloma_c4_en_bpb": self.eval_paloma_c4_en_bpb,
-        }
 
 
 class Leaderboard:
@@ -97,7 +84,7 @@ class Leaderboard:
             run_name=run_name,
             model_size=results["run_related_info"]["num_parameters"],
             total_training_time=training_time,
-            final_flops_used=actual_flops,
+            total_training_flops=actual_flops,
             submitted_by=results["run_related_info"].get("submitted_by", "unknown"),
             storage_path=storage_path,
             tokenized_dataset=tokenized_dataset,
@@ -179,7 +166,7 @@ def serve_leaderboard(leaderboard: Leaderboard, port: int = 8000):
     print(f"Writing {len(entries)} entries to runs.json")
 
     # Convert entries to JSON
-    entries_json = [e.to_json() for e in entries]
+    entries_json = [asdict(e) for e in entries]
 
     # Write to file
     with open(data_dir / "runs.json", "w") as f:
