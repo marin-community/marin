@@ -30,14 +30,14 @@ This approach encourages creative and efficient experimentation. For example:
 - A large model with very low BPB but needing a lot of compute to train may be Pareto-optimal.
 - A smaller or more efficient model with worse BPB but dramatically lower compute may also make the frontier.
 
-The Pareto frontier should provide a clearer picture of what's achievable with different model scales and approaches, both in terms of model performance on evals, and the compute it requires.
+The Pareto frontier should provide a clearer picture of what's achievable with different model scales and approaches, both in terms of model performance/capability, and the amount of compute it requires.
 
 
 ## Prerequisites
 
-1. Follow the setup instructions in [Marin's main README](../../README.md)
-2. Set up Weights and Biases (W&B) for tracking your runs
-3. Ensure you have access to the required hardware (GPUs or TPUs)
+The rest of this guide assumes you have already:
+1. Cloned the codebase and set up the environment for Marin by following the instructions in [the setup instructions](../../README.md). If you are using a local GPU, follow [local-gpu](../../docs/how-to-guides/local-gpu.md) for setup instructions.
+2. Set up [Weights and Biases](https://wandb.ai) for tracking your runs. You can sign up for a free account [here](https://wandb.ai). You will need a W&B API key to track metrics and submit your run.
 
 ## Creating Your Speedrun
 
@@ -128,3 +128,6 @@ The Pareto frontier should provide a clearer picture of what's achievable with d
    - A brief explanation of your approach (model architecture, training strategy, optimizations)
 
 3. Once reviewed and merged, the leaderboard gets updated, and your run will appear on the public leaderboard at https://crfm.stanford.edu/marin/speedrun/.
+3. Once reviewed and merged, the leaderboard gets updated, and your run will appear on the public leaderboard at https://crfm.stanford.edu/marin/speedrun/!
+
+TODO (Nikil): add some details about what happens afterwards (pic of leaderboard, scaling up to larger models, etc.)

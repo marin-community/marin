@@ -23,12 +23,12 @@ We leverage various tools:
 
 Where possible, we use the same data formats as [Dolma](https://github.com/allenai/dolma). Where not possible, we try to use "natural" extensions that stick to the spirit of the format.
 
-The [quickstart eperiment](experiments/quickstart.py) provides a mini-version of
-all the steps.  To run the quickstart (which should finish in less than 10
+The [Integration test](tests/integration_test.py) provides a mini-version of
+all the steps.  To run the integration test (which should finish in less than 10
 minutes, and doesn't require a GPU/TPU), run:
 
 ```bash
-python experiments/quickstart.py --prefix var
+JAX_TRACEBACK_FILTERING=off PYTHONPATH=. python tests/integration_test.py --prefix var
 ```
 
 ### Snapshot tests
