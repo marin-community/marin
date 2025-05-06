@@ -78,16 +78,52 @@ def copy_files_in(input_path, local_base_dir):
     # Ensure input_path doesn't end with a slash
     input_path = input_path.rstrip("/")
 
-    # Get all .jsonl.gz files in the input directory
-    glob_path = f"{input_path}/**/*.jsonl.gz"
-    print(f"glob_path: {glob_path}")
-    input_files = fsspec_glob(glob_path)
-
-    print(f"printing first five input files: {input_files[:5]}")
+    # Get all .jsonl.gz, .jsonl.zst, .jsonl.gs, .json.gz, and .json.zst files in the input directory
+    jsonl_gz_pattern = f"{input_path}/**/*.jsonl.gz"
+    jsonl_zst_pattern = f"{input_path}/**/*.jsonl.zst"
+    jsonl_gs_pattern = f"{input_path}/**/*.jsonl.gs"
+    json_gz_pattern = f"{input_path}/**/*.json.gz"
+    json_zst_pattern = f"{input_path}/**/*.json.zst"
+    # First attempt recursive glob patterns
+    input_files = (
+        fsspec_glob(jsonl_gz_pattern)
+        + fsspec_glob(jsonl_zst_pattern)
+        + fsspec_glob(jsonl_gs_pattern)
+        + fsspec_glob(json_gz_pattern)
+        + fsspec_glob(json_zst_pattern)
+    )
+    fallback = False
+    # Fallback to shallow glob if none found
+    if not input_files:
+        fallback = True
+        shallow_patterns = [
+            f"{input_path}/*.jsonl.gz",
+            f"{input_path}/*.jsonl.zst",
+            f"{input_path}/*.jsonl.gs",
+            f"{input_path}/*.json.gz",
+            f"{input_path}/*.json.zst",
+        ]
+        input_files = []
+        for pattern in shallow_patterns:
+            input_files.extend(fsspec_glob(pattern))
+    # Log the result
+    if fallback:
+        print(f"Found {len(input_files)} input files in {input_path} (shallow), first five: {input_files[:5]}")
+    else:
+        print(f"Found {len(input_files)} input files in {input_path}, first five: {input_files[:5]}")
 
     for input_file in tqdm(input_files, desc="Copying files"):
         # Extract the relative path from the input file
         relative_path = os.path.relpath(input_file, input_path)
+        # Normalize extension: convert .jsonl.zst or .jsonl.gs to .jsonl.gz for local documents
+        if relative_path.endswith(".jsonl.zst"):
+            relative_path = relative_path[: -len(".jsonl.zst")] + ".jsonl.gz"
+        elif relative_path.endswith(".jsonl.gs"):  # Handle .jsonl.gs
+            relative_path = relative_path[: -len(".jsonl.gs")] + ".jsonl.gz"
+        elif relative_path.endswith(".json.zst"):
+            relative_path = relative_path[: -len(".json.zst")] + ".jsonl.gz"
+        elif relative_path.endswith(".json.gz"):
+            relative_path = relative_path[: -len(".json.gz")] + ".jsonl.gz"
 
         # Construct the output path, ensuring it's under the 'documents' directory
         output_file = os.path.join(local_base_dir, "documents", relative_path)
@@ -98,6 +134,7 @@ def copy_files_in(input_path, local_base_dir):
 
         # Copy the file using fsspec
         with fsspec.open(input_file, "rb", compression="infer") as f_remote:
+            # always compress local documents as gzip for downstream dedupe
             with fsspec.open(output_file, "wb", compression="gzip") as f_local:
                 f_local.write(f_remote.read())
 
@@ -200,9 +237,13 @@ def copy_files_out(local_base_dir, output_path, attribute_name):
 
     local_attribute_dir = os.path.join(local_base_dir, "attributes", attribute_name)
 
-    # Get all .jsonl.gz files in the local attribute directory
+    # Get all .jsonl.gz files in the local attribute directory (recursive)
     glob_path = f"{local_attribute_dir}/**/*.jsonl.gz"
     local_files = fsspec_glob(glob_path)
+    # Fallback to shallow glob if no files found
+    if not local_files:
+        shallow_glob = f"{local_attribute_dir}/*.jsonl.gz"
+        local_files = fsspec_glob(shallow_glob)
 
     files_uploaded = 0
     for local_file in tqdm(local_files, desc="Uploading files"):

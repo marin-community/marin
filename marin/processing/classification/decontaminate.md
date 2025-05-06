@@ -111,7 +111,7 @@ Each input document produces one or more attribute JSONL files (one per input sh
 ```
 
 - `start_char` / `end_char`: character offsets delimiting the **entire paragraph** you flagged.
-- `score`: 
+- `score`:
   - For n-gram paragraphs, the `matched_fraction` (e.g. 0.78).
   - For short-paragraph fallback or exact-match mode, always `1.0`.
 
@@ -133,7 +133,7 @@ Each input document produces one or more attribute JSONL files (one per input sh
 
 ## 6. Post-Processing & Metrics
 
-Dolma itself does **not** emit a single "X% contamination" number.  However, you can compute: 
+Dolma itself does **not** emit a single "X% contamination" number.  However, you can compute:
 
 1. For each document:
    - Sum up `end_char - start_char` for all spans → total flagged chars.
@@ -168,4 +168,62 @@ This assumes you've already built `decontaminated_bloom_filter.bin` by running d
 
 ## 8. Further Reading
 - Upstream docs: https://github.com/allenai/dolma/blob/main/docs/deduplication.md
-- Dolma CLI reference: `dolma dedupe --help` 
+- Dolma CLI reference: `dolma dedupe --help`
+
+## 9. Document-Mode Decontamination
+
+By default, the Marin wrapper runs Dolma dedupe in **paragraph mode** (via `--dedupe.paragraphs.attribute_name`) so that individual paragraphs (or n-grams) are tested in the two-phase decontamination workflow. If you switch to **document mode**:
+
+```bash
+--dedupe.documents.attribute_name <attribute_name>
+```
+
+Dolma will treat each JSONL record as a single key (typically extracted via a JSONPath on a document field) and perform decontamination on the full document string. In this mode:
+
+- **No n-gram matching**: n-gram flags (`--dedupe.paragraphs.by_ngram.*`) do _not_ apply—each document is hashed once and only exact-string membership is tested.
+- **Output**: one span per document is emitted when a match is found, e.g. `[0, full_text_length, 1.0]` to mark the entire record.
+
+### Decontamination Phases in Document Mode
+
+1. **Phase 1 – Build filter**: with `--no-bloom_filter.read_only`, every document key from the decontamination set is inserted into the Bloom filter.
+2. **Phase 2 – Test target**: with `--bloom_filter.read_only`, each target document key is tested; if present, the whole document is flagged.
+
+This mode is ideal when you want to drop or tag entire documents that overlap with your protected set, rather than just paragraphs.
+
+## 10. Train/Test Overlap Considerations
+
+When you run the decontaminate pipeline in **paragraph mode** to measure overlap between a development (or training) shard and a held-out test set, here's what happens:
+
+1. **Phase 1** (build filter):
+   - The script stages each paragraph (or its n-grams) from the dev shard, and with `--no-bloom_filter.read_only` each key is **inserted** into the Bloom filter.
+
+2. **Phase 2** (test target):
+   - The test documents are staged, and with `--bloom_filter.read_only` each paragraph is split into n-grams (or fallback to the full string if the paragraph is too short).
+   - Dolma tests each n-gram key; it counts how many n-grams hit the filter, computes `matched_ngrams / total_ngrams`, and if that fraction ≥ `--dedupe.paragraphs.by_ngram.overlap_threshold`, the paragraph is flagged.
+
+**Small-paragraphs caveat**
+
+- Very short test questions produce few or even just one n-gram window, triggering the _fallback_ to a full-string membership test.
+- A single hash test can more easily collide (false positive), especially if the text is very short or highly repetitive.
+
+You can mitigate this by:
+- Raising the n-gram `overlap_threshold` or increasing `stride` so you require stronger evidence.
+- Turning on `--dedupe.paragraphs.by_ngram.skip_short_paragraphs` to skip fragments shorter than `ngram_length + stride` entirely.
+- Increasing `--dedupe.min_length` or `--dedupe.min_words` so tiny snippets are excluded from the test phase.
+
+### Document Mode Alternative
+
+If instead you switch to **document mode** with
+```bash
+--dedupe.documents.attribute_name <attr>
+```
+
+- **No n-grams** are generated. Dolma treats each entire JSONL record (e.g. the full `text` field) as a single key.
+- In Phase 1, you would insert each full document string into the filter; in Phase 2, you test each test record's full string under read-only mode.
+
+**Substring handling**
+
+- A test sample that is only a substring of a larger dev document will **not** match—because it does not equal the complete string that was inserted.
+- Document mode thus eliminates the risk of short-text false positives, but it also cannot detect partial overlap; only exact, entire-document duplicates will be flagged.
+
+Use paragraph-mode (with tuned threshold, stride, or short-paragraph skipping) when you care about partial/textual overlap. Use document-mode when you only want to drop or tag entire records that exactly reappear in your protected set.

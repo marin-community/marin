@@ -73,5 +73,3 @@ ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- \
   --false_positive_rate 0.001
 ```
 ```
-
-
