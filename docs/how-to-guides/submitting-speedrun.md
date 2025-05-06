@@ -39,7 +39,7 @@ The rest of this guide assumes you have already:
 1. Cloned the codebase and set up the environment for Marin by following the instructions in [the setup instructions](../../README.md). If you are using a local GPU, follow [local-gpu.md](../../docs/how-to-guides/local-gpu.md) for setup instructions.
 2. Set up [Weights and Biases](https://wandb.ai) for tracking your runs. You can sign up for a free account [here](https://wandb.ai). You will need a W&B API key to track metrics and submit your run.
 
-## Creating Your Speedrun
+## Creating Your Speedrun Submission
 
 1. Create a new directory for your run, and create a file for your speedrun code:
    ```bash
