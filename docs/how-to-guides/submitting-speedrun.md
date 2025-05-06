@@ -1,9 +1,16 @@
 # Submitting a Speedrun to the Leaderboard
 
 
-Marin Speedrun is a community-driven model training framework and contest that promotes collaborative language model development. By focusing on small-scale prototyping, it allows researchers to iterate quickly, test new ideas efficiently, and contribute to a shared leaderboard. This guide will walk you through the process of creating and submitting your own speedrun entry to the Marin Speedrun leaderboard.
+Marin Speedrun is a community-driven model training framework and contest that promotes collaborative language model development. By focusing on small-scale prototyping, it allows researchers to iterate quickly, test new ideas efficiently, and contribute to a shared leaderboard.
 
-## Overview
+Submitting a speedrun consists of the following steps:
+- defining a configuration for training a model
+- training it on your hardware; both GPUs and TPUs are supported
+- submitting the configuration and the generated results file to Marin via a pull request, and having it appear on the leaderboard!
+
+This guide will walk you through the process of creating and submitting your own speedrun to the Marin Speedrun leaderboard. For an example, see [llama_75m_fineweb_edu.py](marin/experiments/speedrun/llama_75m_fineweb_edu.py)- we will also use this as a reference as we go through this guide.
+
+## Motivation for Marin Speedrun
 
 Training large language models (LLMs) is compute-intensive, expensive, and time-consuming. Marin Speedrun offers a lightweight alternative: experiment with smaller-scale models and training recipes to validate ideas before scaling up. With speedrun, the goal is to make it easier to prototype ideas via smaller, focused experiments, and compare them to other models' performance and efficiency.
 
@@ -34,16 +41,29 @@ The Pareto frontier should provide a clearer picture of what's achievable with d
 
 ## Creating Your Speedrun
 
-1. Create a new directory for your run:
+1. Create a new directory for your run, and create a file for your speedrun code:
    ```bash
    mkdir -p experiments/speedrun/<your_run_name>
+   cd experiments/speedrun/<your_speedrun_filename>.py
+   touch <yourscript_name>.py
    ```
+
+   In the reference example we're using, this would look like:
+
+    ```
+    mkdir -p experiments/speedrun/llama_75m_fineweb_edu/
+    cd experiments/speedrun/llama_75m_fineweb_edu/
+    touch llama_75m_fineweb_edu.py
+    ```
+
+   The folder and `.py` file names can be different, but should be descriptive of the configuration you use eg. something like `llama_75m_fineweb_edu`. Note that in principle, you could organize your directory experiments/speedrun/<your_run_name> however you like (multiple python files, etc) if you'd like to; in this guide, we'll go with one file to keep things simple.
+
 
 2. Create your training script in this directory; here's a reference speedrun file `llama_75m_fineweb_edu.py`:
 
    ```python
-   """
-    Sample speedrun with an 75M LLaMA model.
+    """
+    Sample speedrun with a 75M model that uses the Llama architecture.
     """
 
     import logging
@@ -108,6 +128,3 @@ The Pareto frontier should provide a clearer picture of what's achievable with d
    - A brief explanation of your approach (model architecture, training strategy, optimizations)
 
 3. Once reviewed and merged, the leaderboard gets updated, and your run will appear on the public leaderboard at https://crfm.stanford.edu/marin/speedrun/.
-
-
-## Evaluation and metrics
