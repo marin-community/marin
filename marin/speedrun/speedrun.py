@@ -102,16 +102,11 @@ def get_wandb_run_info_from_step(step: ExecutorStep) -> tuple[str, str, str]:
     wandb_entity = "stanford-mercury"
     wandb_project = "marin"
 
-    if isinstance(step, str):
-        return wandb_entity, wandb_project, step
-    elif hasattr(step, "config") and hasattr(step.config, "trainer") and hasattr(step.config.trainer, "tracker"):
-        wandb_entity = step.config.trainer.tracker.entity
-        if wandb_entity is None:
-            wandb_entity = "stanford-mercury"
-        wandb_project = step.config.trainer.tracker.project
-        if wandb_project is None:
-            wandb_project = "marin"
-        return wandb_entity, wandb_project, step.config.trainer.id
+    if step.config and step.config.train_config and step.config.train_config.trainer and step.config.train_config.trainer.tracker:
+        logger.info(f"Found wandb run info in step: {step}")
+        wandb_entity = step.config.train_config.trainer.tracker.entity or "stanford-mercury"
+        wandb_project = step.config.train_config.trainer.tracker.project or "marin"
+        return wandb_entity, wandb_project, step.config.train_config.trainer.id
     
     return wandb_entity, wandb_project, None
 
@@ -156,12 +151,13 @@ def speedrun_results(config: SpeedrunResultsConfig):
     wandb_metrics = {
         "eval/paloma/c4_en/bpb": run.summary.get("eval/paloma/c4_en/bpb", None),
     }
-    full_wandb_url = f"https://wandb.ai/{wandb_entity}/{wandb_project}/runs/{run_id}"
 
     # Get timestamps in UTC
     create_time = datetime.datetime.fromisoformat(run.createdAt.replace('Z', '+00:00'))  # Convert ISO string to datetime
     runtime_seconds = run.summary["_runtime"]
     end_time = create_time + datetime.timedelta(seconds=runtime_seconds)
+
+    full_wandb_url = f"https://wandb.ai/{wandb_entity}/{wandb_project}/runs/{run_id}"
 
     run_stats = {
         "run_related_info": {
@@ -171,8 +167,8 @@ def speedrun_results(config: SpeedrunResultsConfig):
             "train_config": dataclasses.asdict(config.speedrun_config.train_config),
             "tokenized_dataset": str(config.speedrun_config.tokenized_dataset),
             "hardware_config": dataclasses.asdict(config.speedrun_config.hardware_config),
-            "wandb_link": full_wandb_url,
             "run_completion_timestamp": end_time.strftime("%Y-%m-%d %H:%M:%S UTC"),
+            "wandb_run_link": full_wandb_url,
         },
         "run_stats": {
             "pre_run_flops_estimate": six_nd_flops,
