@@ -32,6 +32,8 @@ Before you begin, ensure you have the following installed:
 
 ## Next Steps
 
+- If you're on GPU, see [local-gpu.md](local-gpu.md) for a GPU-specific walkthrough for getting started.
+
 - Run [your first experiment](first-experiment.md) TODO
 - Run [Hello World](../tutorials/hello-world.md)
 - Learn about [Basic Usage](basic-usage.md) TODO
