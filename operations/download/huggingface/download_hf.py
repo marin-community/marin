@@ -43,6 +43,7 @@ def stream_file_to_fsspec(cfg: DownloadConfig, hf_fs: HfFileSystem, file_path: s
     try:
         # Use the timeout parameter when opening the file
         with hf_fs.open(file_path, "rb", timeout=timeout) as src_file:
+            target_fs.mkdirs(os.path.dirname(fsspec_file_path), exist_ok=True)
             with target_fs.open(fsspec_file_path, "wb") as dest_file:
                 # Increase chunk size for faster downloads
                 chunk_size = 8 * 1024 * 1024  # 8MB chunks instead of 1MB
