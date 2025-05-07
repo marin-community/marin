@@ -1,5 +1,16 @@
 # Marin
 
+<a href="https://github.com/stanford-crfm/marin/actions?query=branch%3Amain++">
+    <img alt="Build Status" src="https://img.shields.io/github/actions/workflow/status/stanford-crfm/marin/run_tests.yaml?branch=main">
+</a>
+<a href="https://marin.readthedocs.io/en/latest/?badge=latest">
+    <img alt="Documentation" src="https://readthedocs.org/projects/marin/badge/?version=latest">
+</a>
+<a href="">
+<img alt="License" src="https://img.shields.io/github/license/stanford-crfm/marin?color=blue" />
+</a>
+
+
 > "*I am not afraid of storms, for I am learning how to sail my ship."*<br/>
 > – Louisa May Alcott
 
@@ -12,93 +23,121 @@ development of the final model) is transparent.
 
 The core part of Marin is minimal, consisting of basically an
 [executor framework](docs/explanation/executor.md), which manages the execution of a set of
-arbitrary steps.
+arbitrary steps. Marin als has a [data browser](data_browser/) that makes it easy to
+view datasets (in various formats) and experiments produced by the executor.
 
 Marin's primary use case is to build a language model like Qwen 3,
 which involves data curation, transformation, filtering, tokenization,
 training, and evaluation (see [overview](docs/lm/overview.md)).
 Note that for now, all this specific code resides in this repository.
 
-## Setup
+## Documentation
 
-To install Marin, create a new virtual environment (or `conda` environment)
-with the appropriate Python version (3.11), and then run the following:
+The documentation for Marin is available on [ReadTheDocs](https://marin.readthedocs.io/en/latest/) or in the [`docs/`](docs/) folder.
+TODO XXX temporarily here: https://marin-mkdocs.readthedocs.io/en/latest/
+
+To learn more about Marin and how it works, you can:
+
+- Read about our [language modeling efforts](docs/lm/overview.md)
+- Follow a [Hello World tutorial](docs/tutorials/hello-world.md) to get a feel for how Marin works.
+- Train a [tiny language model](docs/how-to-guides/train-an-lm.md) using Marin.
+- Read about Marin's key concepts and principles in [Concepts](docs/explanation/concepts.md)
+- Learn about the [Executor framework](docs/explanation/executor.md): how to manage Python libraries, run big parallel jobs using Ray, how versioning works, etc.
+- Read about [Experiments](docs/explanation/experiments.md): how we use the executor framework to run machine learning experiments.
+
+## Getting Started
+
+Full documentation on setup is available on [ReadTheDocs](https://marin.readthedocs.io/en/latest/tutorials/getting-started/)
+TODO XXX temporarily here: https://marin-mkdocs.readthedocs.io/en/latest/tutorials/getting-started/
+
+### Installation
 
 ```bash
 git clone https://github.com/stanford-crfm/marin
 cd marin
 ```
 
-To run the tests you need to install Node:
-```bash
-# For macOS
-brew install node
-# For Linux (not tested)
-sudo apt-get update
-sudo apt-get install -y nodejs npm
-# For Windows (not tested)
-choco install nodejs
-```
-
-Then you can install all the core dependencies and build `marin` as a Python
-package with `make init`.
-Installing the `[dev]` requirements will additionally install test,
-linting, and debugging dependencies (e.g., `pytest`).
-
-## Linting & Tests
-
-1. We have linters set up to ensure code quality. You can run them with `make lint`
-2. To run the tests, run `make test`
-
-## Hello world example
-
-Let's run your first [hello world experiment](experiments/hello_world.py),
-which has two steps:
-
-1. Generate some numbers.
-2. Compute some statistics of the numbers.
-
-To run this example (and output), simply type:
+Create a new virtual environment (or `conda` environment)
+with the appropriate Python version (3.11) and run `pip install`. For example, with `virtualenv`:
 
 ```bash
-python experiments/hello_world.py --prefix var
+python3 -m pip install virtualenv
+python3 -m virtualenv -p python3.11 marin-venv
+source marin-venv/bin/activate
+pip install -e .
 ```
 
-This command should create the following assets:
+To contribute to Marin, please see the [Contributing Guide](CONTRIBUTING.md).
 
-1. `var/experiments/hello_world-7063e5.json`: stores a record of all the steps in this experiment.
-2. `var/hello_world/data-d50b06`: the output of step 1 (generate some numbers, stored in `numbers.json`).
-3. `var/hello_world/stats-b5daf3`: the output of step 2 (compute some statistics, stored in `stats.json`).
+## Example
 
-Note that if you run the same command again, it will detect that both steps
-have been already run and return automatically.
+Marin experiments are defined as a set of steps that can depend on each other and are executed in a topological order,
+almost like a Makefile.
 
-## Data browser
+As a brief example of how you can use Marin, here is an complete script for training a tiny model on [TinyStories](https://huggingface.co/datasets/roneneldan/TinyStories).
+You can check out the [full script](experiments/tutorial/exp1191_train_tiny_model_cpu.py) for more details.
 
-Marin comes with a [data browser](data_browser/README.md) that makes it easy to
-view datasets (in various formats) and experiments produced by the executor.
-After installing the necessary dependencies, run:
 
-```bash
-cd data_browser
-python server.py --config conf/local.conf
+```python
+from experiments.defaults import default_tokenize, default_train
+from experiments.simple_train_config import SimpleTrainConfig
+
+from experiments.llama import llama_nano, llama3_tokenizer
+from marin.execution.executor import executor_main
+from marin.resources import CpuOnlyConfig
+
+nano_train_config = SimpleTrainConfig(
+    # Here we define the hardware resources we need.
+    resources=CpuOnlyConfig(num_cpus=1),
+    train_batch_size=32,
+    num_train_steps=100,
+    # set hyperparameters
+    learning_rate=6e-4,
+    weight_decay=0.1,
+)
+
+tinystories_hf_reference = "roneneldan/TinyStories"
+tinystories_tokenized = default_tokenize(
+    name=f"tokenized/{tinystories_hf_reference}",
+    dataset=tinystories_hf_reference,
+    tokenizer=llama3_tokenizer,
+)
+
+nano_tinystories_model = default_train(
+    name="llama-nano-tinystories",
+    # Steps can depend on other steps: tinystories_tokenized depends on tinystories
+    tokenized=tinystories_tokenized,
+    model_config=llama_nano,
+    train_config=nano_train_config,
+    # wandb tags
+    tags=["llama", "nano", "tinystories", "tutorial"],
+    # We can run many [eval_harness](https://github.com/EleutherAI/lm-evaluation-harness) tasks in the loop
+    # during training, but there's no point in running evals on such a tiny model
+    eval_harness_tasks=[],
+    use_default_validation=False,
+)
+
+if __name__ == "__main__":
+    executor_main(
+        steps=[
+            tinystories_tokenized,
+            nano_tinystories_model,
+        ]
+    )
 ```
 
-Once the server is started, go to
-[http://localhost:5000](http://localhost:5000) and navigate around to the
-experiment JSON file to get a nicer view of the experiment (the URL is also
-printed out when you run the experiment).
+Here, we 
 
-See the [data browser README](data_browser/README.md) for more details.
+With slight modifications, you can extend this to train a [larger model on a larger dataset](docs/how-to-guides/train-an-lm.md),
+a [mixture of datasets](docs/how-to-guides/train-an-lm.md#mixture-of-sources), even scaling to very large TPU pods (or multislice TPU, and, soon, multi-node GPUs!).
 
-## What's next?
 
-To learn more about the core infrastructure:
-- [Concepts](docs/explanation/concepts.md): key concepts and principles that underpin the Marin project.
-- [Executor framework](docs/explanation/executor.md): how to manage Python libraries, run big parallel jobs using Ray, how versioning works, etc.
-- [Experiments](docs/explanation/experiments.md): how we use the executor framework to run machine learning experiments.
+## Get Involved
 
-Or you can jump directly to learn about our [language modeling efforts](docs/lm/overview.md).
+We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for more information.
 
-For getting started and installation please see our [documentation](docs/index.md) or visit our [readthedocs](https://marin.readthedocs.io/en/latest/)
+- We also have a list of [good first issues](https://github.com/stanford-crfm/marin/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
+- You can find us on [Discord](https://discord.gg/J9CTk7pqcM).
+
+
 
