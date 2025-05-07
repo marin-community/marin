@@ -14,7 +14,7 @@ The core part of Marin is minimal, consisting of basically an
 [executor framework](docs/explanation/executor.md), which manages the execution of a set of
 arbitrary steps.
 
-Marin's primary use case is to build a language model like Llama 3,
+Marin's primary use case is to build a language model like Qwen 3,
 which involves data curation, transformation, filtering, tokenization,
 training, and evaluation (see [overview](docs/lm/overview.md)).
 Note that for now, all this specific code resides in this repository.
@@ -22,7 +22,7 @@ Note that for now, all this specific code resides in this repository.
 ## Setup
 
 To install Marin, create a new virtual environment (or `conda` environment)
-with the appropriate Python version (3.10), and then run the following:
+with the appropriate Python version (3.11), and then run the following:
 
 ```bash
 git clone https://github.com/stanford-crfm/marin
