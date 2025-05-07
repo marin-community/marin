@@ -8,8 +8,6 @@ import os
 import socketserver
 from pathlib import Path
 
-from marin.speedrun.create_leaderboard import get_entries
-
 
 def serve_static(port: int = 8000):
     """Serve the static leaderboard files."""

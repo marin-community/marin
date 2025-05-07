@@ -7,7 +7,6 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import fsspec
-import humanfriendly
 
 
 @dataclass(frozen=True)
@@ -98,7 +97,7 @@ def main():
 
     output_path = Path(__file__).parent / args.output
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    
+
     with open(output_path, "w") as f:
         json.dump(entries_json, f, indent=2)
     print(f"Wrote {len(entries)} entries to {output_path}")

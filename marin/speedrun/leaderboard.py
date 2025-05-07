@@ -2,9 +2,10 @@
 Leaderboard data formatting utilities.
 """
 
-from dataclasses import dataclass
-import humanfriendly
 import datetime
+from dataclasses import dataclass
+
+import humanfriendly
 
 
 @dataclass(frozen=True)
@@ -41,8 +42,7 @@ def format_leaderboard(entries: list[LeaderboardEntry]) -> str:
         c4_bpb = f"{entry.eval_paloma_c4_en_bpb:.3f}" if entry.eval_paloma_c4_en_bpb is not None else "N/A"
         timestamp = entry.run_timestamp.strftime("%Y-%m-%d %H:%M UTC")
         row = (
-            f"| {i} | {entry.run_name} | {timestamp} | {model_size_str} | "
-            f"{training_time} | {flops_str} | {c4_bpb} |"
+            f"| {i} | {entry.run_name} | {timestamp} | {model_size_str} | " f"{training_time} | {flops_str} | {c4_bpb} |"
         )
         rows.append(row)
 

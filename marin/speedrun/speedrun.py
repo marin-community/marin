@@ -4,13 +4,13 @@ Default functions, configurations and utilities for Marin speedruns to use.
 default_speedrun() is the function a user should call to run a speedrun; example is
 in experiments/speedrun/sample_run.py
 """
-import os
+
 import dataclasses
+import datetime
 import json
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
-import datetime
 
 import fsspec
 import wandb
@@ -28,6 +28,7 @@ logger = logging.getLogger("ray")
 
 
 ### Configuration classes ###
+
 
 @dataclass
 class HardwareConfig:
@@ -85,7 +86,9 @@ class SpeedrunConfig:
 
 @dataclass
 class SpeedrunResultsConfig:
-    speedrun_train_step: ExecutorStep
+    wandb_run_id: str
+    wandb_entity: str
+    wandb_project: str
     speedrun_config: SpeedrunConfig
     output_path: str
 
@@ -102,13 +105,19 @@ def get_wandb_run_info_from_step(step: ExecutorStep) -> tuple[str, str, str]:
     wandb_entity = "stanford-mercury"
     wandb_project = "marin"
 
-    if step.config and step.config.train_config and step.config.train_config.trainer and step.config.train_config.trainer.tracker:
+    if (
+        step.config
+        and step.config.train_config
+        and step.config.train_config.trainer
+        and step.config.train_config.trainer.tracker
+    ):
         logger.info(f"Found wandb run info in step: {step}")
         wandb_entity = step.config.train_config.trainer.tracker.entity or "stanford-mercury"
         wandb_project = step.config.train_config.trainer.tracker.project or "marin"
         return wandb_entity, wandb_project, step.config.train_config.trainer.id
-    
+
     return wandb_entity, wandb_project, None
+
 
 def get_step_times_from_wandb(run_id: str, entity: str = "stanford-mercury", project: str = "marin") -> list[float]:
     try:
@@ -119,15 +128,12 @@ def get_step_times_from_wandb(run_id: str, entity: str = "stanford-mercury", pro
         return []
 
 
-
 def speedrun_results(config: SpeedrunResultsConfig):
     """Compute and store metrics and stats for the speedrun."""
 
-    wandb_entity, wandb_project, run_id = get_wandb_run_info_from_step(config.speedrun_train_step)
-
-    assert run_id is not None, "Run ID not found while creating speedrun results file"
-
-    step_times = get_step_times_from_wandb(run_id, wandb_entity, wandb_project)
+    step_times = get_step_times_from_wandb(
+        run_id=config.wandb_run_id, entity=config.wandb_entity, project=config.wandb_project
+    )
     if not step_times:
         logger.error("No step times available; analysis aborted.")
         return
@@ -147,17 +153,17 @@ def speedrun_results(config: SpeedrunResultsConfig):
     )
 
     # get wandb run and metrics
-    run = wandb.Api().run(f"{wandb_entity}/{wandb_project}/{run_id}")
+    run = wandb.Api().run(f"{config.wandb_entity}/{config.wandb_project}/{config.wandb_run_id}")
     wandb_metrics = {
         "eval/paloma/c4_en/bpb": run.summary.get("eval/paloma/c4_en/bpb", None),
     }
 
     # Get timestamps in UTC
-    create_time = datetime.datetime.fromisoformat(run.createdAt.replace('Z', '+00:00'))  # Convert ISO string to datetime
+    create_time = datetime.datetime.fromisoformat(run.createdAt.replace("Z", "+00:00"))  # Convert ISO string to datetime
     runtime_seconds = run.summary["_runtime"]
     end_time = create_time + datetime.timedelta(seconds=runtime_seconds)
 
-    full_wandb_url = f"https://wandb.ai/{wandb_entity}/{wandb_project}/runs/{run_id}"
+    full_wandb_url = f"https://wandb.ai/{config.wandb_entity}/{config.wandb_project}/runs/{config.wandb_run_id}"
 
     run_stats = {
         "run_related_info": {
@@ -174,8 +180,11 @@ def speedrun_results(config: SpeedrunResultsConfig):
             "pre_run_flops_estimate": six_nd_flops,
             "training_time_in_minutes": total_time,
             "total_training_flops": total_training_flops,
-            "eval/paloma/c4_en/bpb": float(wandb_metrics.get("eval/paloma/c4_en/bpb")) 
-                        if wandb_metrics.get("eval/paloma/c4_en/bpb") is not None else None,
+            "eval/paloma/c4_en/bpb": (
+                float(wandb_metrics.get("eval/paloma/c4_en/bpb"))
+                if wandb_metrics.get("eval/paloma/c4_en/bpb") is not None
+                else None
+            ),
         },
     }
 
@@ -230,12 +239,35 @@ def default_speedrun(
         override_output_path=override_output_path,
     )
 
+    # Extract wandb info from train step
+    wandb_entity = "stanford-mercury"
+    wandb_project = "marin"
+    wandb_run_id = None  # None by default
+
+    if (
+        train_step.config
+        and train_step.config.train_config
+        and train_step.config.train_config.trainer
+        and train_step.config.train_config.trainer.tracker
+    ):
+
+        wandb_entity = train_step.config.train_config.trainer.tracker.entity or wandb_entity
+        wandb_project = train_step.config.train_config.trainer.tracker.project or wandb_project
+
+        # (Nikil) this is a hack (the ExecutorStep isn't populated when using an override path, so can't get configs when we do an override or if it is None for some reason,
+        # but after some investigation found that in those cases we can fall back to the fact that we set the wandb run ID as the last part of the path anyway, so can use that)
+        wandb_run_id = train_step.config.train_config.trainer.id or train_step.override_output_path.split("/")[-1]
+
+    assert wandb_run_id is not None, "Could not extract wandb run ID from train step"
+
     results_step = ExecutorStep(
         name=f"speedrun/{name}-speedrun_results",
         description=f"compute and store metrics and stats for the speedrun {name}.",
         fn=speedrun_results,
         config=SpeedrunResultsConfig(
-            speedrun_train_step=train_step,
+            wandb_run_id=wandb_run_id,
+            wandb_entity=wandb_entity,
+            wandb_project=wandb_project,
             speedrun_config=config,
             output_path=output_path_of(train_step, "speedrun_results.json"),
         ),
