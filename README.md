@@ -126,10 +126,12 @@ if __name__ == "__main__":
     )
 ```
 
-Here, we 
+Here, we create two [steps](docs/explanation/executor.md#steps), one for tokenizing the dataset and one for training the model.
+The training step depends on the tokenized dataset step, so it will be executed after the tokenization step is completed.
 
 With slight modifications, you can extend this to train a [larger model on a larger dataset](docs/how-to-guides/train-an-lm.md),
-a [mixture of datasets](docs/how-to-guides/train-an-lm.md#mixture-of-sources), even scaling to very large TPU pods (or multislice TPU, and, soon, multi-node GPUs!).
+a [mixture of datasets](docs/how-to-guides/train-an-lm.md#mixture-of-sources), even scaling to very large TPU pods
+(or multislice TPU, and, soon, multi-node GPUs!).
 
 
 ## Get Involved
@@ -138,6 +140,3 @@ We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for more
 
 - We also have a list of [good first issues](https://github.com/stanford-crfm/marin/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
 - You can find us on [Discord](https://discord.gg/J9CTk7pqcM).
-
-
-
