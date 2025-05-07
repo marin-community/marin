@@ -18,7 +18,7 @@ jobs:
       TPU_ZONE: "us-east5-b"
       TPU_NAME: "ci-run-${{ github.run_id }}"
       DOCKER_IMAGE: "us-east5-docker.pkg.dev/hai-gcp-models/marin/marin_vllm"
-      DOCKER_SHA: "6e804a10"
+      DOCKER_SHA: "6965cbb1"
 
     steps:
       - name: Checkout code
@@ -85,7 +85,6 @@ jobs:
                                      && export WANDB_ENTITY=stanford-mercury \
                                      && export OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }} \
                                      && export HF_TOKEN=${{ secrets.HF_TOKEN }} \
-                                     && export TF_CPP_MIN_LOG_LEVEL=1 \
                                      && python scripts/install_all_pip_dep.py \
                                      && pip list \
                                      && echo TPU_TEST \
@@ -93,7 +92,9 @@ jobs:
                                      && echo VLLM_TEST \
                                      && pytest tests/vllm -s -v \
                                      && echo EVALS_TEST \
-                                     && pytest tests/evals -s -v"'
+                                     && pytest tests/evals -s -v \ 
+                                     && echo RAY_DATA_TEST \ 
+                                     && pytest tests/ray-data -s -v"'
 
       # - name: Configure Docker for Artifact Registry
       #   run: |
