@@ -1,5 +1,5 @@
 """
-Sample speedrun with an 30M LLaMA model.
+Speedrun code for a 30M parameter model based on the LLaMA architecture.
 """
 
 import logging
@@ -26,7 +26,7 @@ speedrun_config = SpeedrunConfig(
     hardware_config=HardwareConfig(
         device_type="v4-128",
         num_devices=64,
-        device_flops=275e12, # from https://cloud.google.com/tpu/docs/v4
+        device_flops=275e12,  # from https://cloud.google.com/tpu/docs/v4
     ),
 )
 

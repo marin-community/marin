@@ -1,5 +1,6 @@
 """
-Sample speedrun with an 50M LLaMA model.
+Speedrun code for a 50M parameter model based on the LLaMA architecture.
+It is trained for 10 times the Chinchilla-optimal number of tokens.
 """
 
 import logging

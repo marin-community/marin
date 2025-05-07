@@ -1,5 +1,6 @@
 """
-Sample speedrun with an 75M LLaMA model.
+Speedrun code for a 75M parameter model based on the LLaMA architecture.
+The run also experiments with setting z_loss_weight to 1e-4.
 """
 
 import logging
@@ -26,7 +27,7 @@ speedrun_config = SpeedrunConfig(
     hardware_config=HardwareConfig(
         device_type="v4-128",
         num_devices=64,
-        device_flops=275e12, # from https://cloud.google.com/tpu/docs/v4
+        device_flops=275e12,  # from https://cloud.google.com/tpu/docs/v4
     ),
 )
 

@@ -1,5 +1,6 @@
 """
-Sample speedrun with a 150M LLaMA model.
+Speedrun code for a 150M parameter model based on the LLaMA architecture.
+It is trained on the DCLM baseline dataset.
 """
 
 import logging

@@ -2,12 +2,12 @@
 """Script to generate static leaderboard data."""
 
 import argparse
+import datetime
 import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import fsspec
-import datetime
 
 
 @dataclass(frozen=True)

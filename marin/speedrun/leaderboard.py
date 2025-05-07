@@ -23,7 +23,8 @@ class LeaderboardEntry:
 
 def format_leaderboard(entries: list[LeaderboardEntry]) -> str:
     """
-    This is for formatting the leaderboard in a markdown table; not really needed but keeping for testing and sanity checks.
+    This formats the leaderboard in a table that can be printed; not really needed but
+    keeping for testing/sanity checks.
     """
     if not entries:
         return "No entries found."
@@ -46,4 +47,4 @@ def format_leaderboard(entries: list[LeaderboardEntry]) -> str:
         )
         rows.append(row)
 
-    return "\n".join([header, separator] + rows)
+    return "\n".join([header, separator, *rows])

@@ -1,10 +1,10 @@
 """
-Sample speedrun with an 50M LLaMA model.
+Speedrun code for a 50M parameter model based on the LLaMA architecture. The model is trained on the Fineweb-Edu dataset
+(the default dataset for speedruns).
 """
 
 import logging
 
-from experiments.exp72_baselines import fineweb_edu_tokenized
 from experiments.llama import llama_50m
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import executor_main
@@ -24,11 +24,10 @@ speedrun_config = SpeedrunConfig(
         steps_per_eval=1500,
         steps_per_task_eval=1500,
     ),
-    tokenized_dataset=fineweb_edu_tokenized,
     hardware_config=HardwareConfig(
         device_type="v4-128",
         num_devices=64,
-        device_flops=275e12, # from https://cloud.google.com/tpu/docs/v4
+        device_flops=275e12,  # from https://cloud.google.com/tpu/docs/v4
     ),
 )
 

@@ -254,8 +254,9 @@ def default_speedrun(
         wandb_entity = train_step.config.train_config.trainer.tracker.entity or wandb_entity
         wandb_project = train_step.config.train_config.trainer.tracker.project or wandb_project
 
-        # (Nikil) this is a hack (the ExecutorStep isn't populated when using an override path, so can't get configs when we do an override or if it is None for some reason,
-        # but after some investigation found that in those cases we can fall back to the fact that we set the wandb run ID as the last part of the path anyway, so can use that)
+        # (Nikil) this is a hack (the ExecutorStep isn't populated when using an override path, so can't get configs when
+        # we do an override or if it is None for some reason, but after some investigation found that in those cases we
+        # can fall back to the fact that we set the wandb run ID as the last part of the path anyway, so can use that)
         wandb_run_id = train_step.config.train_config.trainer.id or train_step.override_output_path.split("/")[-1]
 
     assert wandb_run_id is not None, "Could not extract wandb run ID from train step"

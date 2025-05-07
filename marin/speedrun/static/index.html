@@ -213,12 +213,12 @@
                             {
                                 label: 'Runs',
                                 data: chartData,
-                                backgroundColor: validEntries.map(entry => 
-                                    selectedRuns.size > 0 && !selectedRuns.has(entry.run_name) ? 
+                                backgroundColor: validEntries.map(entry =>
+                                    selectedRuns.size > 0 && !selectedRuns.has(entry.run_name) ?
                                         'rgba(200, 200, 200, 0.3)' : 'rgba(75, 192, 192, 0.6)'
                                 ),
-                                borderColor: validEntries.map(entry => 
-                                    selectedRuns.size > 0 && !selectedRuns.has(entry.run_name) ? 
+                                borderColor: validEntries.map(entry =>
+                                    selectedRuns.size > 0 && !selectedRuns.has(entry.run_name) ?
                                         'rgba(200, 200, 200, 0.3)' : 'rgba(75, 192, 192, 1)'
                                 ),
                                 pointRadius: 6,
