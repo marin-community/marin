@@ -56,10 +56,13 @@ This page includes only experiments that have at least one run or report.
     - [GitHub Issue #935](https://github.com/stanford-crfm/marin/issues/935) [![#935](https://img.shields.io/github/issues/detail/title/stanford-crfm/marin/935)](https://github.com/stanford-crfm/marin/issues/935)
     - [WandB Report](https://wandb.ai/stanford-mercury/marin/reports/ZLoss-vs-Not-1-4B--VmlldzoxMjEzMzA1NA)
     - Conclusion: z-loss seems not harmful. We'll use it.
-- Figuring out learning rate schedule!
-    - [GitHub Issue #764](https://github.com/stanford-crfm/marin/issues/764) [![#764](https://img.shields.io/github/issues/detail/title/stanford-crfm/marin/764)](https://github.com/stanford-crfm/marin/issues/764)
-    - [WandB Report](https://wandb.ai/stanford-mercury/marin-optimizer/reports/Deciding-the-optimal-lr-schedule-which-is-cosine---VmlldzoxMTIxNDk5NA)
     - Conclusion: Cosine is best. High LR is important. WSD isn't terrible.
+- Mixture of Experts
+  - [GitHub Issue #929](https://github.com/stanford-crfm/marin/issues/929) [![#929](https://img.shields.io/github/issues/detail/title/stanford-crfm/marin/929)](https://github.com/stanford-crfm/marin/issues/929)
+  - [WandB Report](https://api.wandb.ai/links/stanford-mercury/0lspgzn3)
+- Hybrid Norm and Input Embedding Norm
+  - [GitHub Issue #961](https://github.com/stanford-crfm/marin/issues/961) [![#961](https://img.shields.io/github/issues/detail/title/stanford-crfm/marin/961)](https://github.com/stanford-crfm/marin/issues/961)
+  - [WandB Report](https://wandb.ai/stanford-mercury/hybrid-norm/reports/Hybrid-Norm--VmlldzoxMjY2MDgxMA)
 
 ## Training and Performance
 
@@ -71,6 +74,9 @@ This page includes only experiments that have at least one run or report.
   - [GitHub Issue #621](https://github.com/stanford-crfm/marin/issues/621) [![#621](https://img.shields.io/github/issues/detail/title/stanford-crfm/marin/621)](https://github.com/stanford-crfm/marin/issues/621)
   - [WandB Report](https://api.wandb.ai/links/stanford-mercury/h723u2ws)
   - Conclusion: not worth it compared to our heuristic version.
+- Figuring out learning rate schedule!
+  - [GitHub Issue #764](https://github.com/stanford-crfm/marin/issues/764) [![#764](https://img.shields.io/github/issues/detail/title/stanford-crfm/marin/764)](https://github.com/stanford-crfm/marin/issues/764)
+  - [WandB Report](https://wandb.ai/stanford-mercury/marin-optimizer/reports/Deciding-the-optimal-lr-schedule-which-is-cosine---VmlldzoxMTIxNDk5NA)
 - Try out different remat strategies to get the 70b working on fewer slices
     - [GitHub Issue #906](https://github.com/stanford-crfm/marin/issues/906) [![#906](https://img.shields.io/github/issues/detail/title/stanford-crfm/marin/906)](https://github.com/stanford-crfm/marin/issues/906)
     - [WandB Report](https://wandb.ai/stanford-mercury/marin/reports/Remat-Strategies--VmlldzoxMTkxNzk3Ng)
