@@ -7,7 +7,7 @@ if __name__ == "__main__":
             TwoStageConfig(
                 rare_data_name=rare_data_name,
                 common_data_name="c4",
-                rare_fraction=0.01,
+                rare_fraction=rare_fraction,
                 replay_ratio=replay_ratio,
                 rare_stage2_allocation=rare_stage2_allocation,
                 num_train_steps=1000,
@@ -27,9 +27,10 @@ if __name__ == "__main__":
             ("linear", 0.1),
             ("linear", 0.2),
         ]
+        for rare_fraction in [0.01]
         for replay_ratio in [0.99, 0.95, 0.9, 0.6, 0.0]
-        for rare_stage2_allocation in [0.05]
-        for rare_data_name in ["finemath", "starcoder", "flan"]
+        for rare_stage2_allocation in [1.0, 0.5, 0.25, 0.1, 0.05]
+        for rare_data_name in ["finemath", "starcoder", "flan", "spj"]
     ]
 
     executor_main(

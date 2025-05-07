@@ -18,16 +18,17 @@ if __name__ == "__main__":
                 lr=lr,
                 lr_cooldown_duration=lr_cooldown_duration,
                 wandb_project_name="suhas-two-stage",
-                wandb_additional_tags=["fine-tuning", f"{pretraining_config.rare_data_name}-c4-fine-tuning"],
+                wandb_additional_tags=["fine-tuning-5-6", f"{pretraining_config.rare_data_name}-c4-fine-tuning"],
                 model_name="150m4k",
                 initialize_from_hf=output_path_of(two_stage_train_step(pretraining_config)).cd(f"hf/step-{NUM_PRETRAINING_STEPS-1}"),
+                nametag="-0" if pretraining_config.rare_fraction == 0.0 else "-1",
             )
         )
         for lr_schedule, lr_cooldown_duration in [
             ("cosine", 1.0),
         ]
-        for lr in [3e-3, 1e-3, 3e-4]
-        for num_train_steps in [20, 50, 100, 200, 1000]
+        for lr in [1e-3]
+        for num_train_steps in [10, 20, 50, 100, 200, 1000]
         for pretraining_config in pretraining_configs
     ]
 

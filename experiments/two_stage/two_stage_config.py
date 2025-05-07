@@ -81,6 +81,8 @@ class TwoStageConfig:
 
         if self.steps_per_eval is None:
             self.steps_per_eval = self.num_train_steps // 20
+        
+        self.steps_per_eval = min(self.steps_per_eval, self.num_train_steps)
 
         if self.eval_harness_steps is None and self.eval_harness_tasks is not None:
             self.eval_harness_steps = self.num_train_steps // 4
@@ -129,7 +131,7 @@ class TwoStageConfig:
             assert self.stage2_duration is not None and self.replay_ratio is not None
             self.rare_stage2_allocation = self.stage2_duration / (self.rare_fraction_epoched * (1 - self.replay_ratio))
         
-        assert np.isclose(self.stage2_duration, self.rare_fraction_epoched * self.rare_stage2_allocation / (1 - self.replay_ratio)), f"Parameters are inconsistent: stage2_duration = {self.stage2_duration}, rare_fraction_epoched = {self.rare_fraction_epoched}, rare_stage2_allocation = {self.rare_stage2_allocation}, replay_ratio = {self.replay_ratio}. However, {self.stage2_duration} != {self.rare_fraction_epoched} * {self.rare_stage2_allocation} / (1 - {self.replay_ratio}) = {self.rare_fraction_epoched * self.rare_stage2_allocation / (1 - self.replay_ratio)}"
+        assert np.isclose(self.stage2_duration * (1 - self.replay_ratio), self.rare_fraction_epoched * self.rare_stage2_allocation), f"Parameters are inconsistent: stage2_duration = {self.stage2_duration}, rare_fraction_epoched = {self.rare_fraction_epoched}, rare_stage2_allocation = {self.rare_stage2_allocation}, replay_ratio = {self.replay_ratio}. However, {self.stage2_duration} * (1 - {self.replay_ratio}) = {self.stage2_duration * (1 - self.replay_ratio)} != {self.rare_fraction_epoched} * {self.rare_stage2_allocation} = {self.rare_fraction_epoched * self.rare_stage2_allocation}"
 
         self.total_tokens = self.num_train_steps * self.train_batch_size * self.model_config.seq_len
         self.rare_batches = int(self.num_train_steps * self.rare_fraction_epoched)
@@ -163,14 +165,27 @@ class TwoStageConfig:
         else:
             weights_list = [stage1, stage2]
 
+        max_batches_dict = {self.rare_data_name: self.rare_batches}
+        num_validation_batches_dict = {self.rare_data_name: 10, self.common_data_name: 10}
+
+        no_rare_data = all(stage[1][self.rare_data_name] == 0.0 for stage in weights_list)
+        if no_rare_data:
+            for stage in weights_list:
+                stage[1].pop(self.rare_data_name)
+            max_batches_dict.pop(self.rare_data_name)
+            num_validation_batches_dict.pop(self.rare_data_name)
+
+        no_common_data = all(stage[1][self.common_data_name] == 0.0 for stage in weights_list)
+        if no_common_data:
+            for stage in weights_list:
+                stage[1].pop(self.common_data_name)
+            num_validation_batches_dict.pop(self.common_data_name)
+
         data_config = lm_varying_mixture_data_config(
             components=components,
             weights_list=weights_list,
-            max_batches_dict={self.rare_data_name: self.rare_batches},
-            num_validation_batches_dict={
-                self.rare_data_name: 10,
-                self.common_data_name: 10,
-            },
+            max_batches_dict=max_batches_dict,
+            num_validation_batches_dict=num_validation_batches_dict,
         )
 
         return _prepare_data_config(data_config, use_default_validation=True)
@@ -180,6 +195,8 @@ class TwoStageConfig:
         tokens = self.total_tokens
         if tokens >= 1_000_000_000:
             return f"{tokens/1_000_000_000:.1f}B"
+        elif tokens >= 10_000_000:
+            return f"{int(tokens/1_000_000)}M"
         elif tokens >= 1_000_000:
             return f"{tokens/1_000_000:.1f}M"
         elif tokens >= 1_000:
