@@ -1,5 +1,5 @@
 """
-Sample speedrun with an 75M LLaMA model.
+Speedrun code for a 75M parameter model based on the LLaMA architecture.
 """
 
 import logging

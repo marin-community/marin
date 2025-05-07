@@ -4,7 +4,7 @@ Default functions, configurations and utilities for Marin speedruns to use.
 default_speedrun() is the function a user should call to run a speedrun; example is
 in experiments/speedrun/sample_run.py
 """
-
+import os
 import dataclasses
 import json
 import logging
@@ -27,7 +27,6 @@ logger = logging.getLogger("ray")
 
 
 ### Configuration classes ###
-
 
 @dataclass
 class HardwareConfig:
@@ -53,12 +52,6 @@ class SpeedrunConfig:
         # Need to change this to automatically figure out vocab size
         # return load_tokenizer(unwrap_versioned_value(self.tokenized_dataset.tokenizer)).vocab_size
         return llama3_tokenizer_vocab_size
-
-    # def estimate_training_flops_using_levanter(self) -> float:
-    #     flops_per_token = self.model_config.flops_per_token(self.vocab_size)
-    #     total_tokens = self.train_config.train_batch_size * self.model_config.seq_len *
-    #                       self.train_config.num_train_steps
-    #     return flops_per_token * 6  # 6ND standard: forward + backward
 
     def estimate_flops_via_6nd(self) -> float:
         N = compute_num_parameters(self.model_config, self.vocab_size)
@@ -99,13 +92,27 @@ class SpeedrunResultsConfig:
 ### Utils and analysis functions ###
 
 
-def get_wandb_run_id_from_step(step: ExecutorStep) -> str:
-    if isinstance(step, str):
-        return step
-    if hasattr(step, "config") and hasattr(step.config, "trainer") and hasattr(step.config.trainer, "tracker"):
-        return step.config.trainer.tracker.id
-    return ""
+def get_wandb_run_info_from_step(step: ExecutorStep) -> tuple[str, str, str]:
+    """
+    Get the wandb entity, project, and run id from a given ExecutorStep.
+    """
 
+    # defaults
+    wandb_entity = "stanford-mercury"
+    wandb_project = "marin"
+
+    if isinstance(step, str):
+        return wandb_entity, wandb_project, step
+    elif hasattr(step, "config") and hasattr(step.config, "trainer") and hasattr(step.config.trainer, "tracker"):
+        wandb_entity = step.config.trainer.tracker.entity
+        if wandb_entity is None:
+            wandb_entity = "stanford-mercury"
+        wandb_project = step.config.trainer.tracker.project
+        if wandb_project is None:
+            wandb_project = "marin"
+        return wandb_entity, wandb_project, step.config.trainer.tracker.id
+    
+    return wandb_entity, wandb_project, None
 
 def get_step_times_from_wandb(run_id: str, entity: str = "stanford-mercury", project: str = "marin") -> list[float]:
     try:
@@ -131,8 +138,11 @@ def get_wandb_metrics(run_id: str, entity: str = "stanford-mercury", project: st
 def speedrun_results(config: SpeedrunResultsConfig):
     """Compute and store metrics and stats for the speedrun."""
 
-    run_id = get_wandb_run_id_from_step(config.speedrun_train_step)
-    step_times = get_step_times_from_wandb(run_id)
+    wandb_entity, wandb_project, run_id = get_wandb_run_info_from_step(config.speedrun_train_step)
+
+    assert run_id is not None, "Run ID not found while creating speedrun results file"
+
+    step_times = get_step_times_from_wandb(run_id, wandb_entity, wandb_project)
     if not step_times:
         logger.error("No step times available; analysis aborted.")
         return
@@ -145,15 +155,15 @@ def speedrun_results(config: SpeedrunResultsConfig):
         * config.speedrun_config.train_config.num_train_steps
     )
     total_time = sum(step_times)
-    total_hardware_flops = (
+    total_training_flops = (
         total_time
         * config.speedrun_config.hardware_config.num_devices
         * config.speedrun_config.hardware_config.device_flops
     )
 
     # get wandb metrics
-    run_id = get_wandb_run_id_from_step(config.speedrun_train_step)
-    wandb_metrics = get_wandb_metrics(run_id)
+    wandb_metrics = get_wandb_metrics(run_id, wandb_entity, wandb_project)
+    full_wandb_url = f"https://wandb.ai/{wandb_entity}/{wandb_project}/runs/{run_id}"
 
     run_stats = {
         "run_related_info": {
@@ -163,13 +173,14 @@ def speedrun_results(config: SpeedrunResultsConfig):
             "train_config": dataclasses.asdict(config.speedrun_config.train_config),
             "tokenized_dataset": str(config.speedrun_config.tokenized_dataset),
             "hardware_config": dataclasses.asdict(config.speedrun_config.hardware_config),
-            "wandb_run_id": run_id,
+            "wandb_link": full_wandb_url,
         },
         "run_stats": {
-            "pre_run_flops_estimate": f"{six_nd_flops:.2e}",
+            "pre_run_flops_estimate": six_nd_flops,
             "training_time_in_minutes": total_time,
-            "final_flops_estimate": f"{total_hardware_flops:.2e}",
-            "eval/paloma/c4_en/bpb": wandb_metrics["eval/paloma/c4_en/bpb"],
+            "total_training_flops": total_training_flops,
+            "eval/paloma/c4_en/bpb": float(wandb_metrics.get("eval/paloma/c4_en/bpb")) 
+                        if wandb_metrics.get("eval/paloma/c4_en/bpb") is not None else None,
         },
     }
 

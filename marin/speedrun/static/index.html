@@ -83,11 +83,11 @@
                 return data.map(entry => ({
                     ...entry,
                     model_size: parseFloat(entry.model_size) || 0,
-                    final_flops_used: parseFloat(entry.final_flops_used) || 0,
+                    total_training_flops: parseFloat(entry.total_training_flops) || 0,
                     total_training_time: parseFloat(entry.total_training_time) || 0,
                     eval_paloma_c4_en_bpb: entry.eval_paloma_c4_en_bpb != null ? parseFloat(entry.eval_paloma_c4_en_bpb) : null,
                     submitted_by: entry.submitted_by || "unknown",
-                    run_name: entry.run_name || "unnamed"
+                    wandb_link: entry.wandb_link || "N/A"
                 }));
             } catch (error) {
                 console.error("Error fetching leaderboard data:", error);
