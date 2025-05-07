@@ -5,7 +5,7 @@
 Before following the language model training guide, make sure to follow the general environment setup procedure described in the README:
 
 - **Environment Setup**: [README.md § Setup](https://github.com/stanford-crfm/marin/blob/main/README.md#setup)
-- **GPU Enviroment Setup**: [Setting up a Local GPU Environment](https://github.com/stanford-crfm/marin/blob/main/docs/how-to-guides/local-gpu.md)
+- **GPU Enviroment Setup**: [Setting up a Local GPU Environment](https://github.com/stanford-crfm/marin/blob/main/docs/tutorials/local-gpu.md)
 
 This guide explains how to train a language model using Marin, with our examples reproducing the DCLM 7B/1x and 1B/1x baselines.
 
@@ -50,7 +50,7 @@ model_config = LlamaConfig(
 )
 ```
 
-You can also use pre-defined model configurations from `experiments.llama` for common model sizes.
+You can also use pre-defined model configurations from [`experiments.llama`](https://www.github.com/stanford-crfm/marin/blob/main/experiments/llama.py) for common model sizes.
 
 ## Defining Training Parameters
 

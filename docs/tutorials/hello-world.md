@@ -131,14 +131,14 @@ if __name__ == "__main__":
 To run this experiment:
 
 ```bash
-python experiments/tutorial/hello_world.py --prefix var
+python experiments/tutorial/hello_world.py --prefix my_prefix
 ```
 
 This command will create several output files:
 
-1. `var/experiments/hello_world-7063e5.json`: Stores a record of all the steps in this experiment
-2. `var/hello_world/data-d50b06`: Contains the output of step 1 (numbers.json with generated data)
-3. `var/hello_world/stats-b5daf3`: Contains the output of step 2 (stats.json with computed statistics)
+1. `my_prefix/experiments/hello_world-7063e5.json`: Stores a record of all the steps in this experiment
+2. `my_prefix/hello_world/data-d50b06`: Contains the output of step 1 (numbers.json with generated data)
+3. `my_prefix/hello_world/stats-b5daf3`: Contains the output of step 2 (stats.json with computed statistics)
 
 > **Note**: If you run the same command again, it will detect that both steps have already been run and return automatically. This saves computation time when rerunning experiments.
 
@@ -146,6 +146,11 @@ This command will create several output files:
 
 The complete code for this tutorial is available at: [experiments/tutorial/hello_world.py](../../experiments/tutorial/hello_world.py)
 
-## Next Steps [TODO]
+## Next Steps
 
-- Where to go from here?
+- Read about our [language modeling efforts](/lm/overview.md)
+- Train a [tiny language model](/how-to-guides/train-an-lm.md) using Marin.
+- Read about Marin's key concepts and principles in [Concepts](/explanation/concepts.md)
+- Learn about the [Executor framework](/explanation/executor.md): how to manage Python libraries, run big parallel jobs using Ray, how versioning works, etc.
+- Read about [Experiments](/explanation/experiments.md): how we use the executor framework to run machine learning experiments.
+
