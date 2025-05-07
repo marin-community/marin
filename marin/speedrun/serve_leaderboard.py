@@ -1,5 +1,5 @@
 """
-Generate static leaderboard data.
+For local development: serves leaderboard files from static directory
 """
 
 import argparse

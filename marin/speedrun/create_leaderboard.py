@@ -7,6 +7,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import fsspec
+import datetime
 
 
 @dataclass(frozen=True)
@@ -19,6 +20,7 @@ class LeaderboardEntry:
     results_filepath: str
     wandb_link: str | None = None
     eval_paloma_c4_en_bpb: float | None = None
+    run_timestamp: datetime.datetime | None = None
 
 
 def find_speedrun_results(base_path: str) -> list[str]:
@@ -41,7 +43,8 @@ def create_entry_from_results(results: dict, results_filepath: str) -> Leaderboa
     eval_paloma_c4_en_bpb = results["run_stats"]["eval/paloma/c4_en/bpb"]
     model_size = results["run_related_info"]["num_parameters"]
     submitted_by = results["run_related_info"].get("submitted_by", "unknown")
-    wandb_link = results["run_related_info"].get("wandb_link", None)
+    wandb_link = results["run_related_info"].get("wandb_run_link", None)
+    run_timestamp = results["run_related_info"].get("run_completion_timestamp", None)
 
     return LeaderboardEntry(
         run_name=run_name,
@@ -52,6 +55,7 @@ def create_entry_from_results(results: dict, results_filepath: str) -> Leaderboa
         results_filepath=results_filepath,
         wandb_link=wandb_link,
         eval_paloma_c4_en_bpb=float(eval_paloma_c4_en_bpb) if eval_paloma_c4_en_bpb is not None else None,
+        run_timestamp=run_timestamp,
     )
 
 
@@ -79,10 +83,10 @@ def main():
     experiments_path = marin_root / "experiments" / "speedrun"
 
     parser.add_argument(
-        "--storage-path",
+        "--results-dir",
         type=str,
         default=experiments_path,
-        help="Storage path containing run directories",
+        help="Storage directory containing runs, which then contain JSONs (usually experiments/speedrun/)",
     )
     parser.add_argument(
         "--output",
@@ -92,7 +96,7 @@ def main():
     )
     args = parser.parse_args()
 
-    entries = get_entries(str(args.storage_path))
+    entries = get_entries(str(args.results_dir))
     entries_json = [asdict(e) for e in entries]
 
     output_path = Path(__file__).parent / args.output

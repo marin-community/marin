@@ -53,13 +53,13 @@
                     <thead class="bg-gray-50">
                         <tr>
                             <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Rank</th>
-                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Run Name</th>
-                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Timestamp (UTC)</th>
-                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Model Size</th>
-                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Training Time</th>
-                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Total FLOPs</th>
-                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">C4-EN BPB</th>
-                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Submitted By</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort="run_name">Run Name ↕</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort="run_timestamp">Timestamp (UTC) ↕</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort="model_size">Model Size ↕</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort="total_training_time">Training Time ↕</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort="total_training_flops">Total FLOPs ↕</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort="eval_paloma_c4_en_bpb">C4-EN BPB ↕</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">W&B Run</th>
                         </tr>
                     </thead>
                     <tbody class="bg-white divide-y divide-gray-200" id="leaderboard-body"></tbody>
@@ -146,6 +146,7 @@
         let paretoChart = null;
         let selectedRuns = new Set();
         let allEntries = [];
+        let currentSort = { field: 'eval_paloma_c4_en_bpb', direction: 'asc' };
 
         let updateTimeout = null;
 
@@ -277,14 +278,30 @@
             }, 100);
         }
 
+        function sortEntries(entries, field, direction) {
+            return [...entries].sort((a, b) => {
+                let aVal = a[field];
+                let bVal = b[field];
+                if (field === 'model_size' || field === 'total_training_flops' || field === 'total_training_time' || field === 'eval_paloma_c4_en_bpb') {
+                    aVal = parseFloat(aVal) || Infinity;
+                    bVal = parseFloat(bVal) || Infinity;
+                }
+                if (direction === 'asc') {
+                    return aVal > bVal ? 1 : -1;
+                } else {
+                    return aVal < bVal ? 1 : -1;
+                }
+            });
+        }
+
         function updateLeaderboard(entries) {
             allEntries = entries;
-            entries.sort((a, b) => (a.eval_paloma_c4_en_bpb || Infinity) - (b.eval_paloma_c4_en_bpb || Infinity));
+            const sortedEntries = sortEntries(entries, currentSort.field, currentSort.direction);
             updateStats(entries);
             updateParetoChart(entries);
             const tbody = document.getElementById('leaderboard-body');
             tbody.innerHTML = '';
-            entries.forEach((entry, index) => {
+            sortedEntries.forEach((entry, index) => {
                 const row = document.createElement('tr');
                 if (selectedRuns.size > 0 && selectedRuns.has(entry.run_name)) {
                     row.className = 'bg-yellow-100';
@@ -296,12 +313,14 @@
                     <td class="px-6 py-4 whitespace-nowrap text-sm text-blue-600 hover:text-blue-800 cursor-pointer">
                         <a href="https://github.com/stanford-crfm/marin/tree/main/experiments/speedrun/${entry.run_name}" target="_blank">${entry.run_name}</a>
                     </td>
-
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${entry.run_timestamp || 'N/A'}</td>
                     <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${formatModelSize(entry.model_size)}</td>
                     <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${entry.total_training_time.toFixed(1)}m</td>
                     <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${formatFlops(entry.total_training_flops)}</td>
                     <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${formatMetric(entry.eval_paloma_c4_en_bpb)}</td>
-                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${entry.submitted_by}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                        ${entry.wandb_link ? `<a href="${entry.wandb_link}" target="_blank" class="text-blue-600 hover:text-blue-800">View Run</a>` : 'N/A'}
+                    </td>
                 `;
                 tbody.appendChild(row);
             });
@@ -314,6 +333,27 @@
             document.getElementById('clear-selection').style.display = 'none';
             updateParetoChart(allEntries);
             updateLeaderboard(allEntries);
+        });
+
+        document.querySelectorAll('th[data-sort]').forEach(th => {
+            th.addEventListener('click', () => {
+                const field = th.dataset.sort;
+                if (currentSort.field === field) {
+                    currentSort.direction = currentSort.direction === 'asc' ? 'desc' : 'asc';
+                } else {
+                    currentSort.field = field;
+                    currentSort.direction = 'asc';
+                }
+                // Update sort indicators
+                document.querySelectorAll('th[data-sort]').forEach(header => {
+                    if (header === th) {
+                        header.textContent = header.textContent.replace(' ↕', currentSort.direction === 'asc' ? ' ↓' : ' ↑');
+                    } else {
+                        header.textContent = header.textContent.replace(/ [↑↓]/, ' ↕');
+                    }
+                });
+                updateLeaderboard(allEntries);
+            });
         });
 
         document.addEventListener('DOMContentLoaded', async () => {
