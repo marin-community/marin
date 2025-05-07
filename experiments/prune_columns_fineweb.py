@@ -3,7 +3,7 @@
 from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path, versioned
 from marin.schemas.web.convert import ResiliparseConfig
 from operations.download.huggingface.stream_remove_columns import DatasetConfig, prune_hf_dataset
-from scripts.fineweb.process_parquet_fw import ParquetFWConfig, process_fw_dump
+from operations.transform.fineweb.process_parquet_fw import ParquetFWConfig, process_fw_dump
 
 
 def filter_fineweb_parquet():
