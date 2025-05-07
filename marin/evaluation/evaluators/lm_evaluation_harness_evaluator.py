@@ -83,6 +83,7 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
                     tasks=[eval_task.name],
                     num_fewshot=eval_task.num_fewshot,
                     model_args=pretrained_args,
+                    apply_chat_template=True,
                     batch_size="auto",
                     confirm_run_unsafe_code=True,
                     limit=max_eval_instances if max_eval_instances is not None else None,

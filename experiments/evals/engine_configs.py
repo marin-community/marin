@@ -1,5 +1,3 @@
 """Engine configuration for vLLM used for evals."""
 
-DEFAULT_VLLM_ENGINE_KWARGS = {
-    "max_model_len": 4096,
-}
+DEFAULT_VLLM_ENGINE_KWARGS = {"max_model_len": 4096, "max_gen_toks": 4096}
