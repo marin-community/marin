@@ -99,3 +99,6 @@ To learn more about the core infrastructure:
 - [Experiments](docs/explanation/experiments.md): how we use the executor framework to run machine learning experiments.
 
 Or you can jump directly to learn about our [language modeling efforts](docs/lm/overview.md).
+
+For getting started and installation please see our [documentation](docs/index.md) or visit our [readthedocs](https://marin.readthedocs.io/en/latest/)
+

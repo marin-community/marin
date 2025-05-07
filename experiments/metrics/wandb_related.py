@@ -163,11 +163,11 @@ def count_params_for_run(run_id: str, entity="stanford-mercury", project="marin"
 
         assert run is not None, f"Run {run_id} not found."
 
-        tokenizer = run.config.get("data", {}).get("tokenizer", None)
+        tokenizer = run.train_config.get("data", {}).get("tokenizer", None)
         vocab_size = get_vocab_size_for_tokenizer(tokenizer)
         if not vocab_size:
             return None
-        model_dict = run.config.get("model", {})
+        model_dict = run.train_config.get("model", {})
         logger.info("Model dict: ", model_dict)
 
         llama_config = LlamaConfig(
