@@ -29,6 +29,7 @@ from experiments.nemotron_cc.tokenize_nemotron import NEMOTRON_WEIGHTS, tokenize
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
+from marin.resources import TpuPodConfig
 
 # Phases/Runs in this file:
 # 1. WSD-S on DCLM+Starcode+Proofpile on 2x v5litepod-256 (from scratch)
@@ -49,8 +50,7 @@ from marin.processing.tokenize.data_configs import lm_varying_mixture_data_confi
 # we use the exponential moving average (EMA) of the model weights to get a better model.
 
 tootise_phase1_config = SimpleTrainConfig(
-    tpu_type="v5litepod-256",
-    node_count=2,
+    resources=TpuPodConfig(tpu_type="v5litepod-256", node_count=2),
     train_batch_size=1024,
     num_train_steps=1_000_000,  # using wsd-s so this doesn't really matter
     # these hypers from Table 12 in https://arxiv.org/html/2406.11794v1#A6
@@ -83,8 +83,7 @@ llama_8b_tootsie_phase1 = dataclasses.replace(
 
 
 llama_8b_train_config_phase2 = SimpleTrainConfig(
-    tpu_type="v4-2048",
-    node_count=1,
+    resources=TpuPodConfig(tpu_type="v4-2048", node_count=1),
     num_train_steps=1_000_000,
     # after 660,600 we changed things up:
     train_batch_size=[ScheduleStep(start=0, value=1024), ScheduleStep(start=660_001, value=3072)],
@@ -138,8 +137,7 @@ DECAY_FRACTION = (PHASE_3_END - PHASE_3_START) / PHASE_3_END
 # This is basically the same as the phase 2 train config, but we
 # add DECAY_FRACTION.
 llama_8b_train_config_phase3 = SimpleTrainConfig(
-    tpu_type="v4-2048",
-    node_count=1,
+    resources=TpuPodConfig(tpu_type="v4-2048", node_count=1),
     num_train_steps=PHASE_3_END,
     # From Phase 2:
     train_batch_size=[ScheduleStep(start=0, value=1024), ScheduleStep(start=660_001, value=3072)],
@@ -318,8 +316,7 @@ bad_dessert_data_mixture_v1 = lm_varying_mixture_data_config(
 DESSERT_END = PHASE_3_END + 17000
 
 llama_8b_train_config_dessert = SimpleTrainConfig(
-    tpu_type="v4-2048",
-    node_count=1,
+    resources=TpuPodConfig(tpu_type="v4-128", node_count=4),
     num_train_steps=DESSERT_END,
     train_batch_size=[ScheduleStep(start=0, value=1024), ScheduleStep(start=660_001, value=3072)],
     # coast along at 1.7e-4
