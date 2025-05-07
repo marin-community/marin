@@ -31,6 +31,7 @@ def test_run_dry_runs(config_file, monkeypatch):
     # Check if the script contains the skip marker
     with open(script, "r") as file:
         content = file.read()
+
         # Hack: Skip files that don't seem to call executor_main
         if "executor_main(" not in content:
             pytest.skip(f"Skipping {script} (no executor_main)")
