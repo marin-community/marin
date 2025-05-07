@@ -74,7 +74,7 @@ class SpeedrunConfig:
 
         return 6.0 * N * total_tokens
 
-    def validate(self) -> tuple[bool, str]:
+    def estimate_flops_before_speedrun(self) -> tuple[bool, str]:
 
         # estimate model FLOPs as 6*N*D, and calculate estimated compute using this and (a reasonable estimate of) MFU
         model_flops = self.estimate_flops_via_6nd()
@@ -224,7 +224,7 @@ def default_speedrun(
     """
 
     logger.info(f"Running speedrun {name} with config {config}")
-    logger.info(f"Estimated FLOPs: {config.validate()}")
+    logger.info(f"Estimated FLOPs: {config.estimate_flops_before_speedrun()}")
 
     run_tags = ["speedrun"] + (tags or [])
 
@@ -257,7 +257,7 @@ def default_speedrun(
         # (Nikil) this is a hack (the ExecutorStep isn't populated when using an override path, so can't get configs when
         # we do an override or if it is None for some reason, but after some investigation found that in those cases we
         # can fall back to the fact that we set the wandb run ID as the last part of the path anyway, so can use that)
-        wandb_run_id = train_step.config.train_config.trainer.id or train_step.override_output_path.split("/")[-1]
+        wandb_run_id = train_step.config.train_config.trainer.id or str(output_path_of(train_step)).split("/")[-1]
 
     assert wandb_run_id is not None, "Could not extract wandb run ID from train step"
 
