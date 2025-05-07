@@ -1,34 +1,40 @@
 # Tootsie 8B Retrospective
 
 
-This is a retrospective on the Marin 8B run, codenamed "Tootsie."
+This is a retrospective on our first generation Marin 8B run, codenamed "Tootsie."
 We include details on the data mix, hyperparameters, and other details. We also include observations during the run and document some of the mistakes we made and lessons learned.
-
 
 ## The Origin of "Tootsie"
 
-A core premise of the Tootsie 8b run was that we didn't fully know what the best recipe was, but rather than let the good be the enemy of the okay, we decided to just start training something with the best information we had.
 
-The name "Tootsie" comes from [Tootsie Rolls, which use a "graining" process](https://en.wikipedia.org/wiki/Tootsie_Roll) whereby a portion of the previous day's batch is folded into the next, seeding the crystallization process or some such. This is admittedly a bit of a tortured metaphor, but the idea was that we would expect to change the data recipe as training progressed. (As it would turn out, dear reader, we would often change more than the data...)
+A core premise of the Tootsie 8B run was that we didn't fully know what the best recipe was, so we decided to just start training something with the best information we had.
+As new information (data, techniques, etc.) became available, we'd fold it into the training run and just keep chugging.
 
-So the idea was that, as new information (data, techniques, etc.) became available, we'd fold it into the training run and just keep chugging.
+The name "Tootsie" comes from [Tootsie Rolls, which use a "graining" process](https://en.wikipedia.org/wiki/Tootsie_Roll) whereby a portion of the previous
+day's batch is folded into the next, seeding the crystallization process or some such. This is admittedly a bit of a
+tortured metaphor, but the idea was that we would expect to change the data recipe as training progressed.
+(As it would turn out, dear reader, we would often change more than the data...)
+
 
 ## Model Basics
 ### Architecture
-We settled on the "Llama architecture" for the usual reasons: it has been shown to work well. No one ever got fired for buying IBM, as they say. We did not tie the lm_head to the word embeddings.
+We settled on the "Llama architecture" for the usual reasons: it has been shown to work well, no one ever got fired
+for buying IBM, etc. 
 
-We used Levanter's implementation, which uses JAX's TPU Splash Attention kernel. We used mixed float32/bfloat16 precision, with parameters and optimizer states in float32 and compute in bfloat16 (except for the final softmax over the vocabulary.)
-We trained with a sequence length of 4096 tokens.
+We used Levanter's implementation, which uses JAX's TPU Splash Attention kernel.
+
+We used mixed float32/bfloat16 precision, with parameters and optimizer states in float32 and compute in bfloat16
+(except for the final softmax over the vocabulary.)
+We trained with a sequence length of 4096 tokens per sample.
 
 ### Tokenizer
 
-In Marin, we also standardized on the Llama 3 tokenizer, after [our experiment](https://github.com/stanford-crfm/marin/issues/524) showing it to be superior to Llama 2 and NeoX in terms of bits-per-byte (bpb).
-
+In Marin, we also standardized on the Llama 3 tokenizer, after [our experiment](https://github.com/stanford-crfm/marin/issues/524) showing it to be superior 
+to both Llama 2 and NeoX in terms of bits-per-byte (bpb).
 
 ### Batch Schedule
 
 We used a varying batch schedule, with between 1024 * 4096 = 4Mi tokens, 3072 * 4096 = 12 Mi tokens and XXXX.
-
 
 ### Checkpointing Policy
 
@@ -46,14 +52,14 @@ Retrospectively, we can partition the 8b run into several different phases. We h
 * *DCLM EMA Phase*: We were given access to a v4-2048 slice and moved to that. (So fast!) To better utilize the hardware, we increased our batch size 50%. We also switched from WSD-S to WSD, using the exponential moving averaging (EMA) of weights for monitoring evaluation performance. (XXX cite whoever) We kept the learning rate high until 3.7T tokens.
 * *First Cooldown: Jellyfish*  It was time to cooldown, as we were starting to run low on DCLM. Following recent work on midtraining (XXX), we decided to fold in higher quality data. Ultimately, after a series of ablations (XXX link) we landed on roughly the Dolmino mixture, with a few tweaks. The checkpoint at the end of this cooldown we call "monumental-jellyfish", and it had some fairly solid results. XXX
 * *Reheated: Phoenix* We had more time for training, so we decided to keep going. We rapidly rewarmed the model and transitioned our mixture to [Nemotron-CC ](XXX cite)XXX(plus some code and math).
-*  *Second Cooldown: Starling*: Now we were running low on time, so we started another cooldown. We followed a similar process to the first cooldown, but added a few new datasets that we had created and also some that had dropped since our previous attempt. We call the result of this cooldown "starling."
+* *Second Cooldown: Starling*: Now we were running low on time, so we started another cooldown. We followed a similar process to the first cooldown, but added a few new datasets that we had created and also some that had dropped since our previous attempt. We call the result of this cooldown "starling."
 
 We emphasize that these phases are retrospective: we didn't know exactly what changes we would make.
 
 Moreover, While there is a single straight-line set of phases that produced the final 8b artifact, there were a number
 of short branches that did not make it into the final run. Many of these were by design: there were other trial
 [LLama 3 style](XXX) data ablations that helped decide our cooldown mix, as well as attempts at "deeper cooldowns."
-We detail these [in a separate report](XXX). We also ran some experiments investigating issues with "fine-tune-ability,"
+We detail these [in a separate report](XXX). We also ran some experiments investigating issues with "SFT-ability,"
 documented [here](XXX).
 
 ## Phase 1: DCLM WSD-S Phase
@@ -91,9 +97,13 @@ We ended up moving away from WSD-S midway through the run, for reasons to be det
 
 We used a sequence length of 4096 and a batch size of $`1024 \cdot 4096 \approx 4M`$ tokens.
 
-The DCLM paper also showed that you could run fairly "hot", and we followed suit. At 1e-3, our LR was roughly 3x higher than Olmo 2 7b's 3e-4, and, with WSD-S, we were running at peak LR for 90% of steps. We used a weight decay of 0.05. These are roughly consistent with Table 12 of the DCLM paper. They recommend 2e-3, but we had divergence at that rate.
+The DCLM paper also showed that you could run fairly "hot", and we followed their example. 
+At 1e-3, our LR was roughly 3x higher than Olmo 2 7b's 3e-4, and, with WSD-S, we were running at peak LR for 90% of steps.
+We used a weight decay of 0.05. These are roughly consistent with Table 12 of the [DCLM paper](XXX).
+(They recommend 2e-3, but we encountered instability at that rate.)
 
-We opted to not use z-loss because we had other had no problems with stability, even with the high LR. (However, watch this space.) In retrospect, perhaps this would have allowed us to run at 2e-3.
+We initially opted to not use Z-loss because we didn't have problems with LR=1e-3. In retrospect, we should have used it 
+and have made it as default.
 
 ### Specification
 
@@ -123,19 +133,24 @@ Interestingly, not all eval losses dropped. In fact, for some domains, the eval 
 
 ## Phase 2: DCLM EMA Phase
 
-At around 2.7e12 tokens, we were given access to a v4-2048 and immediately moved to that.
-
+At around 2.7e12 tokens, we were given access to a v4-2048 and immediately moved to that. All subsequent
+phases were run on that.
 
 ### Adjusted Hyperparameters
 
-To better utilize the hardware, we increased our batch size by 3x, to 12Mi tokens at around 2.77e12 tokens. Following (XXX cite paper on increasing LR with bs) increased the learning rate to 1.7e-3, which is approximately the old learning rate multiplied by $`\sqrt{3}`$ (the square root of the batch size increase).  XXX double check this
+To better utilize the hardware, we increased our batch size by 3x, to 12Mi tokens at around 2.77e12 tokens.
+Following (XXX cite paper on increasing LR with bs) increased the learning rate to 1.7e-3,
+which is approximately the old learning rate multiplied by $`\sqrt{3}`$ (the square root of the batch size increase).  XXX double check this
 
-We also switched from WSD-S to WSD, using the exponential moving averaging (EMA) of weights for monitoring evaluation performance (XXX cite whoever). We used a $`\beta`$ of 0.995. Initially, I inadvertently got the direction of the EMA wrong, so early evals were not substantially different from the "hot" model. Oh well.
+We also switched from WSD-S to WSD, using the exponential moving averaging (EMA) of weights for monitoring evaluation
+performance (XXX cite whoever). We used a $`\beta`$ of 0.995.
+Initially, I (@dlwh) inadvertently got the direction of the EMA wrong, so early evals were not substantially different
+from the "hot" model. Oh well.
 
-We did not reset the optimizer state or do a rewarmup.
+We did not reset the optimizer state or do a rewarmup in this or any transition.
 
-To my (@dlwh's) embarrassment, I also realized that we were using Llama 2 Rotary Embeddings rather than Llama 3 rotary embedings.
-We changed this.
+To my embarrassment, I also realized that we were using Llama 2's settings for Rotary Embeddings rather than Llama 3's
+settings We changed to Llama3-style at this point.
 
 ### Specification
 
@@ -161,7 +176,7 @@ This was not to say there was no deviation in the gap, but the fact that it did 
 At around 3.7T tokens, we were running low on DCLM tokens, which meant we needed to change something. We decided
 to try a cooldown.
 
-###  Data Mix
+### Data Mix
 
 Following recent work on midtraining (XXX), we decided to fold in higher quality data. Ultimately, after a series of ablations (XXX link) we landed on roughly the [Dolmino mixture](XXX link), with some changes.
 
@@ -181,7 +196,7 @@ Specifically, we included:
 
 The main deviations from the Dolmino mixture were:
 
-* We included datasets that Olmo 2 used in its phase 1 (e.g. wikipedia). XXX link
+* We included datasets that Olmo 2 used in its phase 1 (e.g. wikipedia) that we did not. XXX link
 * We did not include FLAN. One of us had had less than stellar experiences with it. XXX more details/links
 * We added FineMath 3+ (xxx link).
 
@@ -195,8 +210,15 @@ We decayed the learning rate from 1.7e-3 to 1.7e-4 over 1e12 tokens (79500 steps
 ### Results
 
 
-XXX
+Results for this model are pretty good. XXX
 
+GSM8K 0.5094768764215315 -> 0.67854
+MATH 0.1846 -> 0.3526
+HumanEval 0.24390243902439024 -> 0.5731707317
+IFEval 0.09242144177449169 -> 0.4953789279
+BBH 0.5702657041929043 -> 0.003532483489479343
+
+TODO: MMLU
 
 ### Notes
 
@@ -206,14 +228,13 @@ Interestingly, this mix led to a large increase in Paloma c4en loss:
 
 ![embed](../images/tootsie-8b-ema-gap.png)
 
-We haven't investigated this yet, but our hypothesis is that there are more structural differences in the formatting
+We haven't investigated this, but our hypothesis is that there are more structural differences in the formatting
 between DCLM HQ and c4en than there were between DCLM Baseline and c4en.
 
-It is worth noting that we did not observe this increase in our largely similar final cooldown (which used Nemotron).
+It is worth noting that we did not observe this increase in our largely similar final cooldown (which used Nemotron CC).
 
-## Interlude: "Dessert" and Cooldown v2
 
-XXX
+
 
 ## Phase 4: Reheated: Phoenix
 
@@ -223,24 +244,48 @@ After the cooldown, at around 4.7T tokens, we had more time for training, so we 
 
 ### Data
 
-We transitioned the data from our phase 1 and 2 mixture (DCLM+Starcoder+Proofpile) to a new mixture that was Nemotron and Starcoder.
+Because we were running out of DCLM, we transitioned the data from our phase 1 and 2 mixture (DCLM+Starcoder+ProofPile) to a new mixture that was Nemotron and Starcoder.
+(We didn't worry too much about epoching StarCoder.)
 
-The target mixture was Nemotron CC (with each subset weighted proportionally to token count) and Starcoder, also weighted by token count. As a transition, we weighted all components (DCLM, Starcoder, Proofpile, and Nemotron) proportional to token count, which we used for 2000 steps (about 25.2e9 tokens), after which we switched to the target mixture.
+The target mixture was Nemotron-CC (with each subset weighted approximately proportionally to token count) and Starcoder,
+also weighted by token count. As a transition, we weighted all components
+(DCLM, Starcoder, Proofpile, and Nemotron's subcomponents) proportional to token count, which we used for 2000 steps (about 25.2e9 tokens), after which we switched to the target mixture.
 
-### Learning rate schedule
+### Learning Rate Schedule
 
 We rewarmed the learning rate linearly from 1.7e-4 to 1.7e-3 over those same 2000 steps after which we
 held the learning rate fixed.
 
 ### Notes
 
-
 The most interesting thing about this phase was the transition, which went very smoothly.
 
+XXX figure
+
+Also of small interest is that the steady state c4en loss for Phoenix was considerably lower
+than DCLM. This need not mean anything other than structural similarities in the preprocessing.
+
+XXX more?
+
+## Interlude: Deeper Cooldowns and "Dessert" Runs
+
+While our "mainline" run continued in the Phoenix phase, we ran a number of short ablations
+consisting of "deeper cooldowns" and what I termed "dessert" runs.
+Deeper cooldowns were just continued cooldowns to an even lower LR, starting from the end
+of the last cooldown. Dessert coasted at the same already low LR, with the goal of patching a few
+
+
+runs added Dolmino FLAN (excuse the pun) because some ablations (XXX) indicated
+that FLAN might in fact be useful.
 
 ## Phase 5: Second Cooldown: Starling
 
 At around XXX tokens, we decided to start another cooldown. Building on lessons from our previous cooldowns,
+we made the following changed:
+
+* We deepened the cooldown to 1.7e-5.
+* We added a small z-loss penalty of 1e-4.
+* We increased the batch size to 16 Mi tokens rather than 12Mi.
 
 ### Data
 
@@ -249,8 +294,7 @@ Nemotron-CC's components were weighted according to compressed bytes (which is r
 Within the high quality datasets, we weighted them roughly proportional to token counts multiplied by an oversampling
 ratio we set more or less arbitrarily.
 
-We
-included the following datasets:
+We included the following datasets:
 
 - NemoTron CC Medium: 22.1%
 - NemoTron CC HQ Synth: 17.8%
@@ -272,17 +316,41 @@ included the following datasets:
 - Dolmino Wiki: 0.3% (oversampled 5x)
 - Marin Datashop Science QA: 0.1% (oversampled 5x)
 
-Here "Dolmino Math" refers to 
+Here "Dolmino Math" refers to most of the math-y components of DCLM. 
 
-XXX
+XXX Links
 
+- Dolmino Code Search Net (with OWM Filter)
+- Dolmino GSM8K XXX
+- Dolmino metamath owmfilter
+- Dolmino MathCoder2 SynthMath
+- TinyGSM MIND
+- Dolmino Tulu Math
 
+### Learning Rate Schedule and Other Hyperparameters
+
+We linearly cooled down the learning rate schedule from 1.7e-3 to 1.7e-5 (sic) over approximately 1.34e12 tokens
+(80,000 steps).
+
+Based on our findings in the ["racooon" and "spoonbill"](XXX) deep cooldowns (where we observed steady loss increases at low
+learning rate), we imposed a z-loss penalty of 1e-4 on the final logits.
+
+We also increased our batch size to 16Mi tokens. This change was to further reduce gradient variance and better
+utilize the hardware (i.e. slightly more MFU).
+
+### Results
+
+GSM8K 0.5094768764215315 -> 0.67854
+MATH 0.1846 -> 0.3526
+HumanEval 0.24390243902439024 -> 0.5731707317
+IFEval 0.09242144177449169 -> 0.4953789279
+BBH 0.5702657041929043 -> 0.003532483489479343
 
 # Main Takeaways
 
 * **Tootsie means never having to say you're sorry.** We made several dramatic changes to the data mix, optimizer, and other hyperparameters during the run. We cooled down, rewarmed up, changed the mixture, etc. without any major issues.
-* **Tootsie means having to say you're sorry kind of a lot.** We made many, many mistakes during the run. Some of the changes were actually unintentional, or were fixes to initial mistakes (e.g. the rotary embedding hyperparameters). Nevertheless, the end result was a model that performed well on a wide variety of tasks.
 * **Z-loss isn't just for avoiding explosions.** While we didn't need z-loss to stabilize the training, we found it actually pretty necessary during very deep cooldowns.
 * **Format diversity is useful**:  XXX
+* **Tootsie means having to say you're sorry kind of a lot.** We made many, many mistakes during the run. Some of the changes were actually unintentional, or were fixes to initial mistakes (e.g. the rotary embedding hyperparameters). Nevertheless, the end result was a model that performed well on a wide variety of tasks.
 
 XXX
