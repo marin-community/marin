@@ -59,7 +59,7 @@
                         <tr>
                             <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Rank</th>
                             <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Run Name</th>
-
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Timestamp (UTC)</th>
                             <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Model Size</th>
                             <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Training Time</th>
                             <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Total FLOPs</th>
@@ -82,12 +82,13 @@
 
                 return data.map(entry => ({
                     ...entry,
+                    timestamp: entry.run_timestamp,
                     model_size: parseFloat(entry.model_size) || 0,
                     total_training_flops: parseFloat(entry.total_training_flops) || 0,
                     total_training_time: parseFloat(entry.total_training_time) || 0,
-                    eval_paloma_c4_en_bpb: entry.eval_paloma_c4_en_bpb != null ? parseFloat(entry.eval_paloma_c4_en_bpb) : null,
                     submitted_by: entry.submitted_by || "unknown",
-                    wandb_link: entry.wandb_link || "N/A"
+                    wandb_link: entry.wandb_link || "N/A",
+                    eval_paloma_c4_en_bpb: parseFloat(entry.eval_paloma_c4_en_bpb) || null
                 }));
             } catch (error) {
                 console.error("Error fetching leaderboard data:", error);
@@ -130,12 +131,12 @@
         function computeParetoFrontier(entries) {
             if (!entries.length) return [];
             const validEntries = entries.filter(e =>
-                e.final_flops_used > 0 &&
+                e.total_training_flops > 0 &&
                 Number.isFinite(e.eval_paloma_c4_en_bpb) &&
                 e.eval_paloma_c4_en_bpb > 0
             );
             if (!validEntries.length) return [];
-            const sorted = [...validEntries].sort((a, b) => a.final_flops_used - b.final_flops_used);
+            const sorted = [...validEntries].sort((a, b) => a.total_training_flops - b.total_training_flops);
             const frontier = [];
             let minBPB = Infinity;
             for (const entry of sorted) {
@@ -183,7 +184,7 @@
                         !e.tokenized_dataset || !e.tokenized_dataset.includes('fineweb-edu'));
                 }
                 const validEntries = filteredEntries.filter(
-            e => Number.isFinite(e.final_flops_used) && e.final_flops_used > 0 &&
+            e => Number.isFinite(e.total_training_flops) && e.total_training_flops > 0 &&
                  Number.isFinite(e.eval_paloma_c4_en_bpb) && e.eval_paloma_c4_en_bpb > 0
         );
                 if (!validEntries.length) {
@@ -197,7 +198,7 @@
                 }
 
                 const chartData = validEntries.map(entry => ({
-            x: entry.final_flops_used / 1e18,
+            x: entry.total_training_flops / 1e18,
             y: entry.eval_paloma_c4_en_bpb,
             run_name: entry.run_name,
             track: entry.compute_budget_track
@@ -205,14 +206,14 @@
 
         const paretoEntries = computeParetoFrontier(validEntries);
         const paretoData = paretoEntries.map(entry => ({
-            x: entry.final_flops_used / 1e18,
+            x: entry.total_training_flops / 1e18,
             y: entry.eval_paloma_c4_en_bpb
         }));
 
         const smoothCurveData = generateSmoothCurve(paretoData);
 
         // Calculate data ranges for axis scaling
-        const flopsValues = validEntries.map(e => e.final_flops_used / 1e18);
+        const flopsValues = validEntries.map(e => e.total_training_flops / 1e18);
         const bpbValues = validEntries.map(e => e.eval_paloma_c4_en_bpb);
         const minFlops = flopsValues.length ? Math.min(...flopsValues) : 0.1;
         const maxFlops = flopsValues.length ? Math.max(...flopsValues) : 1;
@@ -367,7 +368,7 @@
 
                     <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${formatModelSize(entry.model_size)}</td>
                     <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${entry.total_training_time.toFixed(1)}m</td>
-                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${formatFlops(entry.final_flops_used)}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${formatFlops(entry.total_training_flops)}</td>
                     <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${formatMetric(entry.eval_paloma_c4_en_bpb)}</td>
                     <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${entry.submitted_by}</td>
                 `;
@@ -455,10 +456,10 @@
 
                 selectedRuns.clear();
                 const chartData = allEntries
-                    .filter(e => Number.isFinite(e.model_size) && e.model_size > 0 && Number.isFinite(e.final_flops_used) && e.final_flops_used > 0)
+                    .filter(e => Number.isFinite(e.model_size) && e.model_size > 0 && Number.isFinite(e.total_training_flops) && e.total_training_flops > 0)
                     .map(entry => ({
                         x: entry.model_size / 1e9,
-                        y: entry.final_flops_used / 1e18,
+                        y: entry.total_training_flops / 1e18,
                         run_name: entry.run_name
                     }));
                 chartData.forEach((point) => {
