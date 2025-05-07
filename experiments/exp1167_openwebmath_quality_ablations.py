@@ -8,11 +8,10 @@ which fine-tunes an 8B model on a mixture of:
 Reference Issue: https://github.com/stanford-crfm/marin/issues/1167
 """
 
-from experiments.llama import llama3_tokenizer
-from experiments.defaults import default_tokenize
-from marin.execution.executor import ExecutorMainConfig, executor_main
 from experiments.cooldown_quality import QualityAblationConfig, default_quality_ablation
-
+from experiments.defaults import default_tokenize
+from experiments.llama import llama3_tokenizer
+from marin.execution.executor import ExecutorMainConfig, executor_main
 
 executor_main_config = ExecutorMainConfig(force_run_failed=True)
 # Tokenize the openwebmath dataset
@@ -40,5 +39,5 @@ if __name__ == "__main__":
         steps=[
             openwebmath_crawl_tokenized,
             openwebmath_crawl_ablation,
-        ]
+        ],
     )
