@@ -238,7 +238,7 @@ def pull_metrics_from_wandb(
         run_data = {"run": run.name}
 
         # Get model configuration
-        model_dict = run.config.get("model", {})
+        model_dict = run.train_config.get("model", {})
 
         run_data["hidden_dim"] = model_dict.get("hidden_dim", 0)
 
