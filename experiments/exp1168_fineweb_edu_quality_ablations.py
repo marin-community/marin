@@ -2,7 +2,7 @@
 This experiment evaluates the quality of fineweb-edu crawl data for model cooldown using `default_quality_ablation`
 which fine-tunes an 8B model on a mixture of:
 - 70% DCLM baseline data
-- 15% fineweb-edu crawl data (markdownified using Resiliparse)
+- 15% fineweb-edu crawl data
 - 15% Dolma/FLAN dataset
 
 Reference Issue: https://github.com/stanford-crfm/marin/issues/1168
