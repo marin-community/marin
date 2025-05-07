@@ -67,7 +67,7 @@ def get_entries(base_path: str) -> list[LeaderboardEntry]:
         try:
             results_data = load_results_file(file_path)
             for i, run_results in enumerate(results_data["runs"]):
-                run_path = f"{file_path}#{i}" if i > 0 else file_path
+                run_path = file_path
                 entry = create_entry_from_results(run_results, run_path)
                 entries.append(entry)
         except Exception as e:
