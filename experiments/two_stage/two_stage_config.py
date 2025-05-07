@@ -165,27 +165,27 @@ class TwoStageConfig:
         else:
             weights_list = [stage1, stage2]
 
-        max_batches_dict = {self.rare_data_name: self.rare_batches}
-        num_validation_batches_dict = {self.rare_data_name: 10, self.common_data_name: 10}
+        max_train_batches = {self.rare_data_name: self.rare_batches}
+        num_validation_batches = {self.rare_data_name: 10, self.common_data_name: 10}
 
         no_rare_data = all(stage[1][self.rare_data_name] == 0.0 for stage in weights_list)
         if no_rare_data:
             for stage in weights_list:
                 stage[1].pop(self.rare_data_name)
-            max_batches_dict.pop(self.rare_data_name)
-            num_validation_batches_dict.pop(self.rare_data_name)
+            max_train_batches.pop(self.rare_data_name)
+            num_validation_batches.pop(self.rare_data_name)
 
         no_common_data = all(stage[1][self.common_data_name] == 0.0 for stage in weights_list)
         if no_common_data:
             for stage in weights_list:
                 stage[1].pop(self.common_data_name)
-            num_validation_batches_dict.pop(self.common_data_name)
+            num_validation_batches.pop(self.common_data_name)
 
         data_config = lm_varying_mixture_data_config(
             components=components,
             weights_list=weights_list,
-            max_batches_dict=max_batches_dict,
-            num_validation_batches_dict=num_validation_batches_dict,
+            max_train_batches=max_train_batches,
+            num_validation_batches=num_validation_batches,
         )
 
         return _prepare_data_config(data_config, use_default_validation=True)
