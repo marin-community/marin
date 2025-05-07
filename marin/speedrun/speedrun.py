@@ -10,6 +10,7 @@ import json
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
+import datetime
 
 import fsspec
 import wandb
@@ -110,7 +111,7 @@ def get_wandb_run_info_from_step(step: ExecutorStep) -> tuple[str, str, str]:
         wandb_project = step.config.trainer.tracker.project
         if wandb_project is None:
             wandb_project = "marin"
-        return wandb_entity, wandb_project, step.config.trainer.tracker.id
+        return wandb_entity, wandb_project, step.config.trainer.id
     
     return wandb_entity, wandb_project, None
 
@@ -122,17 +123,6 @@ def get_step_times_from_wandb(run_id: str, entity: str = "stanford-mercury", pro
         logger.error(f"Failed to fetch step times: {e}")
         return []
 
-
-def get_wandb_metrics(run_id: str, entity: str = "stanford-mercury", project: str = "marin") -> dict:
-    try:
-        run = wandb.Api().run(f"{entity}/{project}/{run_id}")
-        summary = run.summary
-        return {
-            "eval/paloma/c4_en/bpb": summary.get("eval/paloma/c4_en/bpb", None),
-        }
-    except Exception as e:
-        logger.error(f"Failed to fetch wandb metrics: {e}")
-        return {"eval/paloma/c4_en/bpb": None}
 
 
 def speedrun_results(config: SpeedrunResultsConfig):
@@ -161,9 +151,17 @@ def speedrun_results(config: SpeedrunResultsConfig):
         * config.speedrun_config.hardware_config.device_flops
     )
 
-    # get wandb metrics
-    wandb_metrics = get_wandb_metrics(run_id, wandb_entity, wandb_project)
+    # get wandb run and metrics
+    run = wandb.Api().run(f"{wandb_entity}/{wandb_project}/{run_id}")
+    wandb_metrics = {
+        "eval/paloma/c4_en/bpb": run.summary.get("eval/paloma/c4_en/bpb", None),
+    }
     full_wandb_url = f"https://wandb.ai/{wandb_entity}/{wandb_project}/runs/{run_id}"
+
+    # Get timestamps in UTC
+    create_time = datetime.datetime.fromisoformat(run.createdAt.replace('Z', '+00:00'))  # Convert ISO string to datetime
+    runtime_seconds = run.summary["_runtime"]
+    end_time = create_time + datetime.timedelta(seconds=runtime_seconds)
 
     run_stats = {
         "run_related_info": {
@@ -174,6 +172,7 @@ def speedrun_results(config: SpeedrunResultsConfig):
             "tokenized_dataset": str(config.speedrun_config.tokenized_dataset),
             "hardware_config": dataclasses.asdict(config.speedrun_config.hardware_config),
             "wandb_link": full_wandb_url,
+            "run_completion_timestamp": end_time.strftime("%Y-%m-%d %H:%M:%S UTC"),
         },
         "run_stats": {
             "pre_run_flops_estimate": six_nd_flops,
@@ -236,7 +235,7 @@ def default_speedrun(
     )
 
     results_step = ExecutorStep(
-        name=f"speedrun/{name}_speedrun_results",
+        name=f"speedrun/{name}-speedrun_results",
         description=f"compute and store metrics and stats for the speedrun {name}.",
         fn=speedrun_results,
         config=SpeedrunResultsConfig(
