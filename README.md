@@ -27,35 +27,28 @@ with the appropriate Python version (3.11), and then run the following:
 ```bash
 git clone https://github.com/stanford-crfm/marin
 cd marin
-pip install -e .[dev]
 ```
 
-This will install all the core dependencies and build `marin` as a Python
-package. Installing the `[dev]` requirements will additionally install test,
+To run the tests you need to install Node:
+```bash
+# For macOS
+brew install node
+# For Linux (not tested)
+sudo apt-get update
+sudo apt-get install -y nodejs npm
+# For Windows (not tested)
+choco install nodejs
+```
+
+Then you can install all the core dependencies and build `marin` as a Python
+package with `make init`.
+Installing the `[dev]` requirements will additionally install test,
 linting, and debugging dependencies (e.g., `pytest`).
 
-## Tests
+## Linting & Tests
 
-
-To run the tests, first run `export RAY_ADDRESS=` to run Ray in local mode.
-
-1. We have linters set up to ensure code quality. You can run them with:
-   ```bash
-   pre-commit run --all-files
-   ```
-2. To run the tests, run `PYTHONPATH=tests:. pytest tests --durations=0 -n 4 --tb=no -v`
-
-### Pandiff
-
-If you're working on html-to-text conversion, you will likely want to install
-`pandiff` to run the snapshot tests. This is a one-time install that can be done
-using the following commands:
-
-```bash
-brew install node  # For macOS
-conda install -c conda-forge pandoc
-npm install -g pandiff
-```
+1. We have linters set up to ensure code quality. You can run them with `make lint`
+2. To run the tests, run `make test`
 
 ## Hello world example
 
@@ -74,12 +67,11 @@ python experiments/hello_world.py --prefix var
 This command should create the following assets:
 
 1. `var/experiments/hello_world-7063e5.json`: stores a record of all the steps in this experiment.
-1. `var/hello_world/data-d50b06`: the output of step 1 (generate some numbers, stored in `numbers.json`).
-1. `var/hello_world/stats-b5daf3`: the output of step 2 (compute some statistics, stored in `stats.json`).
+2. `var/hello_world/data-d50b06`: the output of step 1 (generate some numbers, stored in `numbers.json`).
+3. `var/hello_world/stats-b5daf3`: the output of step 2 (compute some statistics, stored in `stats.json`).
 
 Note that if you run the same command again, it will detect that both steps
 have been already run and return automatically.
-
 
 ## Data browser
 
@@ -109,3 +101,4 @@ To learn more about the core infrastructure:
 Or you can jump directly to learn about our [language modeling efforts](docs/lm/overview.md).
 
 For getting started and installation please see our [documentation](docs/index.md) or visit our [readthedocs](https://marin.readthedocs.io/en/latest/)
+
