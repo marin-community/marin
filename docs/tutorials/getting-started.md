@@ -32,6 +32,7 @@ Before you begin, ensure you have the following installed:
 
 ## Next Steps
 
+- Run [your first experiment](first-experiment.md) TODO
 - Run [Hello World](../tutorials/hello-world.md)
 - Learn about [Basic Usage](basic-usage.md) TODO
 - Explore the [Configuration Guide](../how-to-guides/configuration.md) TODO
