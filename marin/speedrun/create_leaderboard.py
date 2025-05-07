@@ -66,7 +66,7 @@ def get_entries(base_path: str) -> list[LeaderboardEntry]:
     for file_path in results_files:
         try:
             results_data = load_results_file(file_path)
-            for i, run_results in enumerate(results_data["runs"]):
+            for _i, run_results in enumerate(results_data["runs"]):
                 run_path = file_path
                 entry = create_entry_from_results(run_results, run_path)
                 entries.append(entry)
