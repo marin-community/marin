@@ -10,7 +10,9 @@ This documentation is for internal developers.
 ## Setup
 
 Behind the scenes, we run an instance of Marin on Google Cloud Platform (GCP).
-Make sure to [install `gcloud`](https://cloud.google.com/sdk/docs/quickstarts) and then run:
+
+Ensure that someone (e.g. @dlwh) adds you to the `hai-gcp-models` project on GCP
+as a `Marin Dev`. Make sure to [install `gcloud`](https://cloud.google.com/sdk/docs/quickstarts) and then run:
 
 ```bash
 gcloud auth login
@@ -137,8 +139,3 @@ from marin.utils import remove_tpu_lockfile_on_exit
 def my_tpu_job():
     ...
 ```
-
-## Evaluation
-
-By default, we run evaluations on TPU using `lm-evaluation-harness` via Levanter. See
-[README_eval.md](https://github.com/stanford-crfm/marin/blob/main/experiments/evals/README_eval.md) for more details.
