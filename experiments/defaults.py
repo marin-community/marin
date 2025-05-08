@@ -160,6 +160,7 @@ def default_train(
     tags: Sequence[str] = (),
     use_default_validation: bool = True,
     eval_harness_tasks: Sequence[EvalTaskConfig] = CORE_TASKS,
+    override_output_path: str | None = None,
 ) -> ExecutorStep:
     """
     Train a language model using the default configuration.
@@ -315,6 +316,7 @@ def default_train(
         fn=run_levanter_train_lm,
         config=config,
         pip_dependency_groups=["tokenize_train"],
+        override_output_path=override_output_path,
     )
 
 

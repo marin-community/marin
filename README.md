@@ -101,4 +101,3 @@ To learn more about the core infrastructure:
 Or you can jump directly to learn about our [language modeling efforts](docs/lm/overview.md).
 
 For getting started and installation please see our [documentation](docs/index.md) or visit our [readthedocs](https://marin.readthedocs.io/en/latest/)
-
