@@ -750,6 +750,8 @@ class Executor:
                 runtime_env=RuntimeEnv(
                     pip=pip_dependencies,
                 ),
+                # TODO: this is kind of gross, but the overhead of
+                num_cpus=0.001 if isinstance(step.fn, ray.remote_function.RemoteFunction) else 1,
             ).remote(step.fn, step_name, config, dependencies, output_path, self.status_actor, force_run_failed)
         else:
             # Necessary as we call ray.get on all the deps in execute_after_dependencies
@@ -1032,6 +1034,9 @@ def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], descrip
     executor.run(steps=steps, dry_run=config.dry_run, run_only=config.run_only, force_run_failed=config.force_run_failed)
     time_out = time.time()
     logger.info(f"Executor run took {time_out - time_in:.2f}s")
+    # print json path again so it's easy to copy
+    logger.info(f"Executor info written to {executor.executor_info_path}")
+    logger.info(f"View the experiment at {executor.get_experiment_url()}")
 
 
 def _is_relative_path(url_or_path):

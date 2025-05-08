@@ -150,6 +150,8 @@ def _expand_directories(config: UrlDatasetSourceConfig) -> UrlDatasetSourceConfi
     return dataclasses.replace(config, train_urls=train_paths, validation_urls=validation_paths)
 
 
+# most of the work is done in other ray remote functions, so we set 0.1
+@ray.remote(num_cpus=0.1)
 def tokenize(config: TokenizeConfigBase):
     source_config = config.as_lm_dataset_source_config(config.cache_path)
 

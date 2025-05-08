@@ -35,7 +35,7 @@ The Pareto frontier should provide a clearer picture of what's achievable with d
 ## Prerequisites
 
 The rest of this guide assumes you have already:
-1. Cloned the codebase and set up the environment and env vars for Marin by following [the setup instructions](../../README.md). If you are using a local GPU, follow [local-gpu.md](../../docs/tutorials/local-gpu.md) for GPU-specific setup instructions.
+1. Cloned the codebase and set up the environment and env vars for Marin by following [the setup instructions](../tutorials/getting-started.md). If you are using a local GPU, follow [local-gpu.md](../tutorials/local-gpu.md) for GPU-specific setup instructions.
 2. Set up [Weights and Biases](https://wandb.ai) for tracking your runs. You can sign up for a free account [here](https://wandb.ai). You will need a W&B API key to track metrics and submit your run.
 
 ## Creating Your Speedrun Submission
