@@ -1,7 +1,7 @@
+import logging
+from typing import Any
 
 import wandb
-from typing import Any
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -68,4 +68,3 @@ def get_wandb_run_metrics(
     except Exception as e:
         logger.error(f"An unexpected error occurred when trying to retrieve run data: {e}")
         return None
-
