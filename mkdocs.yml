@@ -92,6 +92,7 @@ plugins:
             show_bases: true
             show_submodules: true
             filters: ["!^_"]
+            show_if_no_docstring: true
             show_symbol_type_heading: false
             show_symbol_type_toc: false
             show_category_heading: true
