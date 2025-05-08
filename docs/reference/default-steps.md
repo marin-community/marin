@@ -25,7 +25,7 @@ TODO
 
 ## Scaling Law Prediction
 
-::: marin.scaling_laws.scaling_law_suite
+::: marin.scaling_laws.create_ladder_suite.scaling_law_suite
 
 ::: experiments.defaults.default_scaling_law_pred
 
