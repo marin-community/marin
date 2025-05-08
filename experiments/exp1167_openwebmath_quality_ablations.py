@@ -11,14 +11,16 @@ Reference Issue: https://github.com/stanford-crfm/marin/issues/1167
 from experiments.cooldown_quality import QualityAblationConfig, default_quality_ablation
 from experiments.defaults import default_tokenize
 from experiments.llama import llama3_tokenizer
-from marin.execution.executor import ExecutorMainConfig, executor_main
+from marin.execution.executor import ExecutorMainConfig, InputName, executor_main
 from marin.resources import TpuPodConfig
 
 executor_main_config = ExecutorMainConfig(force_run_failed=True)
 # Tokenize the openwebmath dataset
 openwebmath_crawl_tokenized = default_tokenize(
     "openwebmath-crawled",
-    "gs://marin-us-central2/scratch/nfliu/text/open_web_math_100M_passing_minhash_against_open_web_math",
+    InputName.hardcoded(
+        "gs://marin-us-central2/scratch/nfliu/text/open_web_math_100M_passing_minhash_against_open_web_math"
+    ),
     tokenizer=llama3_tokenizer,
 )
 
