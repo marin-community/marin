@@ -14,7 +14,7 @@ Before you begin, ensure you have the following installed:
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/stanford-crfm/marin.git
+   git clone https://github.com/marin-community/marin.git
    cd marin
    ```
 

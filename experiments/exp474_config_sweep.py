@@ -1,4 +1,4 @@
-# https://github.com/stanford-crfm/marin/issues/474
+# https://github.com/marin-community/marin/issues/474
 # Sweep to determine optimal training configs for small models
 import dataclasses
 import itertools

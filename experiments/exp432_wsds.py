@@ -1,6 +1,6 @@
 """
 Train 1.4B models on standard datasets (e.g., SlimPajama) using WSD-S.
-https://github.com/stanford-crfm/marin/issues/432
+https://github.com/marin-community/marin/issues/432
 """
 
 from experiments.defaults import default_train
