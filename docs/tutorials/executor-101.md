@@ -1,17 +1,32 @@
-# Hello World Tutorial: Your First Marin Experiment
+# Executor 101: Creating a Marin Experiment
 
-This tutorial will guide you through creating your first experiment using Marin's executor framework. We'll build a simple experiment that:
+This tutorial will guide you through creating an experiment using Marin's executor framework. We'll build a simple experiment that:
 1. Generates a sequence of numbers
 2. Computes basic statistics on those numbers
+
+
+## Goals
+
+In our [training tutorial](first-experiment.md), we created a simple experiment that trained a tiny model on TinyStories.
+That tutorial used the executor framework to run a sequence of steps, but didn't really cover how it works.
+
+In this tutorial, you will learn:
+
+- How to define steps in Marin
+- How to connect steps together
+- How to run an experiment
+- How to inspect the output of an experiment
 
 ## Prerequisites
 
 Before starting this tutorial, make sure you have:
+
 - Completed the general environment setup in the [getting-started.md](getting-started.md)
 
 ## Understanding the Components
 
 A Marin experiment consists of one or more `ExecutorStep`s that can be chained together. Each step:
+
 - Has a unique name and description
 - Takes a configuration object
 - Processes data and produces output
@@ -37,6 +52,7 @@ from marin.execution.executor import (
 ```
 
 Key imports:
+
 - `dataclass`: For creating configuration classes
 - `fsspec`: For file system operations (local or cloud)
 - `marin.execution.executor`: Core components for building experiments
@@ -140,7 +156,9 @@ This command will create several output files:
 2. `my_prefix/hello_world/data-d50b06`: Contains the output of step 1 (numbers.json with generated data)
 3. `my_prefix/hello_world/stats-b5daf3`: Contains the output of step 2 (stats.json with computed statistics)
 
-> **Note**: If you run the same command again, it will detect that both steps have already been run and return automatically. This saves computation time when rerunning experiments.
+!!! note
+
+    If you run the same command again, it will detect that both steps have already been run and return automatically. This saves computation time when rerunning experiments.
 
 ## Complete Code
 
@@ -148,8 +166,7 @@ The complete code for this tutorial is available at: [experiments/tutorial/hello
 
 ## Next Steps
 
-- Read about our [language modeling efforts](..//lm/overview.md)
-- Train a [tiny language model](..//how-to-guides/train-an-lm.md) using Marin.
+- Train a [tiny language model](first-experiment.md) using Marin.
 - Read about Marin's key concepts and principles in [Concepts](../explanation/concepts.md)
 - Learn about the [Executor framework](../explanation/executor.md): how to manage Python libraries, run big parallel jobs using Ray, how versioning works, etc.
 - Read about [Experiments](../explanation/experiments.md): how we use the executor framework to run machine learning experiments.

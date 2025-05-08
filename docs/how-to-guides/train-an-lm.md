@@ -34,8 +34,8 @@ import logging
 - [`dclm_mixture_config_llama3`][experiments.dclm.tokenize_dclm.dclm_mixture_config_llama3]: A predefined dataset configuration for the DCLM mixture, this can be replaced with any tokenized dataset in Marin of the `lm_mixture_data_config` type (e.g. [Dolma](https://github.com/stanford-crfm/marin/blob/main/experiments/dolma/exp442_dolma.py) or [Nemotron](https://github.com/stanford-crfm/marin/blob/main/experiments/exp934_hq_vs_pt.py))
 - [`SimpleTrainConfig`][experiments.simple_train_config.SimpleTrainConfig]
 - [`default_train`][experiments.defaults.default_train]: A utility function that creates a training pipeline
-- `LlamaConfig`: A dataclass that defines the model architecture from [Levanter](https://github.com/stanford-crfm/levanter)
-- [`executor_main`][marin.execution.executor]: The main entry point for the Marin executor framework
+- [`LlamaConfig`][levanter.models.llama.LlamaConfig]: A dataclass that defines the model architecture from [Levanter](https://github.com/stanford-crfm/levanter)
+- [`executor_main`][marin.execution.executor.executor_main]: The main entry point for the Marin executor framework
 
 ## Setting Up the Model Configuration
 
