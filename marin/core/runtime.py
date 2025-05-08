@@ -84,6 +84,66 @@ class TaskConfig:
     task_options: dict | None = None  # Options to pass to ray.remote decorator
 
 
+def map_file_groups_in_directory(
+    func: Callable | RemoteFunction,
+    input_path: os.PathLike | str,
+    pattern: str,
+    output_path: os.PathLike | str,
+    task_config: TaskConfig = TaskConfig(),
+    empty_glob_ok: bool = False,
+    group_size: int = 1,
+    *args,
+    **kwargs,
+):
+    """
+    Map a function to all files in a directory, but in groups (the function will be called with a list of files).
+    If the function is a ray.remote function, then it will be executed in parallel.
+
+    Args:
+        func: The function to map (must accept a list of files)
+        input_path: The input directory
+        pattern: Input file pattern to glob on
+        output_path: The output directory
+        task_config: TaskConfig object
+
+        empty_glob_ok: If True, then an empty glob will not raise an error.
+        group_size: The number of files per function call.
+
+    Returns:
+        List: A list of outputs from the function.
+    """
+    # Get a list of all files in the input directory
+    files = fsspec_glob(os.path.join(input_path, pattern))
+
+    file_pairs = []
+    for file in files:
+        output_file = rebase_file_path(input_path, file, output_path)
+        dir_name = os.path.dirname(output_file)
+        fsspec_mkdirs(dir_name)
+        file_pairs.append([file, output_file])
+
+    if len(file_pairs) == 0:
+        logger.error(f"No files found in {input_path} with pattern {pattern}!!! This is likely an error.")
+        if not empty_glob_ok:
+            raise FileNotFoundError(f"No files found in {input_path} with pattern {pattern}")
+
+    file_groups = [file_pairs[i : i + group_size] for i in range(0, len(file_pairs), group_size)]
+
+    if isinstance(func, ray.remote_function.RemoteFunction):
+        # If the function is a ray.remote function, then execute it in parallel
+        responses = simple_backpressure(
+            func, iter(file_groups), task_config.max_in_flight, fetch_local=True, *args, **kwargs  # noqa: B026
+        )
+        return responses
+    else:
+        # Map the function to all files
+        outputs = []
+        for file_group in file_groups:
+            outputs.append(func(file_group, *args, **kwargs))
+
+    return outputs
+
+
 def map_files_in_directory(
     func: Callable | RemoteFunction,
     input_path: os.PathLike | str,

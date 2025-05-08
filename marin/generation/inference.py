@@ -1,3 +1,4 @@
+import logging
 import os
 from dataclasses import dataclass, field
 from typing import Any
@@ -8,9 +9,12 @@ from ray.data import DataContext
 from ray.data.datasource import FilenameProvider
 
 from experiments.evals.resource_configs import TPU_V6E_8_STRICT_PACK, ResourceConfig
+from marin.core.runtime import cached_or_construct_output, map_file_groups_in_directory
 from marin.generation.pipeline import vLLMTextGeneration
 from marin.generation.ray_utils import get_ray_remote_args_scheduling_strategy_fn
 from marin.utils import fsspec_glob, remove_tpu_lockfile_on_exit
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -32,15 +36,15 @@ class TextGenerationInferenceConfig:
 
     # Ray data specific
     num_instances: tuple[int, int] = (1, 4)
-    batch_size: int = 32
-    tensor_parallel_size: int = 1
+    batch_size: int = 32  # TODO: incorporate into refactor
+    tensor_parallel_size: int = 1  # TODO: incorporate into refactor
     preserve_order: bool = False
     one_to_one_input_output_mapping: bool = False
 
     # File specific
     filetype: str = "jsonl.gz"
     # If none, then we use the same filetype as the input if possible, if not then we use json.
-    output_filetype_override: str | None = None
+    output_filetype_override: str | None = None  # TODO: incorporate into refactor
     prompt_column: str = "text"
 
     # Hardware specific
@@ -58,7 +62,7 @@ class OneToOneFilenameProvider(FilenameProvider):
         return output_filename
 
 
-class OverwriteOutputFiletypeFilenameProvider(FilenameProvider):
+class OverwriteOutputFiletypeFilenameProvider(FilenameProvider):  # TODO: incorporate into refactor
     def __init__(self, file_format: str):
         self.file_format = file_format
 
@@ -79,10 +83,12 @@ def set_ray_data_config(config: TextGenerationInferenceConfig):
     # This is the amount of time to wait for the actors to be created.
     # We increase the default timeout since model loading
     # for large models can take awhile.
-    ctx.wait_for_min_actors_s = 60 * 10 * config.tensor_parallel_size
+    ctx.wait_for_min_actors_s = 60 * 30 * config.tensor_parallel_size
 
 
 def ray_resources_kwarg(config: TextGenerationInferenceConfig):
+    assert config.tensor_parallel_size == 1, "Tensor parallel size must be 1"  # TODO: generalize later
+
     if config.tensor_parallel_size == 1:
         return {"resources": {"TPU": 1, f"{config.resource_config.tpu_type}-head": 1}}
     else:
@@ -122,37 +128,61 @@ def get_ray_data_write_kwargs(config: TextGenerationInferenceConfig):
 
 @ray.remote(max_calls=1)
 @remove_tpu_lockfile_on_exit
+def run_inference_on_file_group(
+    file_group: list[tuple[str, str]],
+    inference_config: TextGenerationInferenceConfig,
+):
+
+    vllm_instance = vLLMTextGeneration(
+        model_name=inference_config.model_name,
+        engine_kwargs=inference_config.engine_kwargs,
+        generation_kwargs=inference_config.generation_kwargs,
+        template=inference_config.template,
+        prompt_column=inference_config.prompt_column,
+        save_templated_prompt=inference_config.save_templated_prompt,
+        apply_chat_template=inference_config.apply_chat_template,
+    )
+
+    @cached_or_construct_output(success_suffix="SUCCESS")
+    def run_inference_on_file(
+        input_file_path: str,
+        output_file_path: str,
+    ):
+        with fsspec.open(input_file_path, "r", compression="infer") as f_in:
+            with fsspec.open(output_file_path, "w", compression="infer") as f_out:
+                print(f"{f_out}")
+                for line in f_in:
+                    output = vllm_instance.generate_text(line)
+                    print(output)
+
+    for input_file_path, output_file_path in file_group:
+        run_inference_on_file(input_file_path, output_file_path)
+
+
+@ray.remote(max_calls=1)
+@remove_tpu_lockfile_on_exit
 def run_inference(config: TextGenerationInferenceConfig):
-    set_ray_data_config(config)
-
-    ray_data_read_kwargs = get_ray_data_read_kwargs(config)
-    ds = ray.data.read_json(config.input_path, **ray_data_read_kwargs)
-
     assert (config.template_path or config.template) and not (
         config.template_path and config.template
     ), "Must provide either a template or a template path, but not both"
 
     if config.template_path:
         with fsspec.open(config.template_path, "r", compression="infer") as f:
-            template = str(f.read())
-    elif config.template:
-        template = config.template
+            config.template = str(f.read())
 
-    ds = ds.map_batches(  # Apply batch inference for all input data.
-        vLLMTextGeneration,
-        # Set the concurrency to the number of LLM instances.
-        concurrency=config.num_instances,
-        # Specify the batch size for inference.
-        batch_size=config.batch_size,
-        fn_constructor_kwargs={
-            "model_name": config.model_name,
-            "engine_kwargs": config.engine_kwargs,
-            "generation_kwargs": config.generation_kwargs,
-            "template": template,
-            "prompt_column": config.prompt_column,
-            "save_templated_prompt": config.save_templated_prompt,
-            "apply_chat_template": config.apply_chat_template,
-        },
-        **ray_resources_kwarg(config),
+    print(f"ray_resources_kwarg(config): {ray_resources_kwarg(config)}")
+    mapped_func = run_inference_on_file_group.options(
+        resources=ray_resources_kwarg(config)["resources"],
     )
-    ds = ds.write_json(config.output_path, **get_ray_data_write_kwargs(config))
+    responses = map_file_groups_in_directory(
+        func=mapped_func.remote,
+        input_path=config.input_path,
+        pattern=f"**/*.{config.filetype}",
+        output_path=config.output_path,
+        inference_config=config,
+    )
+    try:
+        ray.get(responses)
+    except Exception as e:
+        logger.exception(f"Error processing {config.input_path}: {e}")
+        raise

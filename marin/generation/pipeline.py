@@ -70,4 +70,5 @@ class vLLMTextGeneration(TextGeneration):
             prompts = [self.template.format(example=example) for example in batch[self.prompt_column]]
 
         generated_text = self.llm.generate(prompts)
-        return self._update_batch(batch, generated_text, prompts)
+        # return self._update_batch(batch, generated_text, prompts)
+        return generated_text
