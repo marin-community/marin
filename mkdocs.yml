@@ -38,6 +38,7 @@ nav:
   - Explanation:
     - Concepts: explanation/concepts.md
     - Data Browser: explanation/data-browser.md
+    - Evaluation: explanation/evaluation.md
     - Experiments: explanation/experiments.md
     - Executor: explanation/executor.md
   - Experiment Reports: reports/index.md
@@ -53,6 +54,7 @@ nav:
       - Resource Config: reference/resource-config.md
       - Executor API: reference/executor-api.md
       - Default Steps: reference/default-steps.md
+      - Training Configuration: reference/train-config.md
 
 markdown_extensions:
   - pymdownx.highlight
