@@ -69,7 +69,7 @@ nvcc --version
 
 1. Clone the Marin repository:
    ```bash
-   git clone https://github.com/stanford-crfm/marin.git
+   git clone https://github.com/marin-community/marin.git
    cd marin
    ```
 
@@ -78,7 +78,7 @@ nvcc --version
    python3 -m venv venv
    source venv/bin/activate  # On Windows: venv\Scripts\activate
    ```
-   
+
    or with conda:
    ```bash
    conda create --name marin python=3.10 pip
@@ -89,7 +89,7 @@ nvcc --version
    ```bash
    pip3 install -e . jax[cuda12]
    ```
-   
+
    (Marin uses [JAX](https://jax.readthedocs.io/en/latest/index.html) as a core library. See [JAX's installation guide](https://jax.readthedocs.io/en/latest/installation.html) for more options.)
 
 4. Set WANDB and HF tokens:
@@ -97,12 +97,12 @@ nvcc --version
    wandb login
    huggingface-cli login
    ```
-   
+
    For this guide, you'll need access to [Meta's Llama 3.1 8B model](https://huggingface.co/meta-llama/Llama-3.1-8B).
 
 ## Running an Experiment
 
-Now you can run an experiment. For example, to run the tiny model training script [`experiments/tutorial/exp1076_train_tiny_model.py`](https://github.com/stanford-crfm/marin/blob/main/experiments/tutorial/exp1076_train_tiny_model.py):
+Now you can run an experiment. For example, to run the tiny model training script [`experiments/tutorial/exp1076_train_tiny_model.py`](https://github.com/marin-community/marin/blob/main/experiments/tutorial/exp1076_train_tiny_model.py):
 
 ```bash
 python3 experiments/tutorial/exp1076_train_tiny_model.py --prefix /path/to/output

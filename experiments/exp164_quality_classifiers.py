@@ -1,6 +1,6 @@
 """
 Train quality classifiers on different subsets similar to DCLM's classifiers.
-https://github.com/stanford-crfm/marin/issues/164
+https://github.com/marin-community/marin/issues/164
 TODO: apply these quality classifiers on FineWeb (or DCLM, but that's larger), train models.
 """
 

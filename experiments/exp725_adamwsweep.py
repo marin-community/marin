@@ -1,4 +1,4 @@
-# https://github.com/stanford-crfm/marin/issues/725
+# https://github.com/marin-community/marin/issues/725
 # Sweep to determine optimal hyperparameters for Adam on small scale
 import dataclasses
 import itertools

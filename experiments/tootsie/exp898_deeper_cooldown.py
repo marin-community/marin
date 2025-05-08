@@ -1,5 +1,5 @@
 """
-https://github.com/stanford-crfm/marin/issues/898
+https://github.com/marin-community/marin/issues/898
 
 Codename: soft-raccoon
 

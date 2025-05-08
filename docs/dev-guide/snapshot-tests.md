@@ -21,8 +21,8 @@ Then run `npm install -g pandiff`
 
 To add a test case, do the following:
 
-* Add an html file to [`tests/snapshots/web/inputs/`](https://github.com/stanford-crfm/marin/tree/main/tests/snapshots/web/inputs)
-* Add the expected markdown output to [`tests/snapshots/web/expected/`](https://github.com/stanford-crfm/marin/tree/main/tests/snapshots/web/expected)
+* Add an html file to [`tests/snapshots/web/inputs/`](https://github.com/marin-community/marin/tree/main/tests/snapshots/web/inputs)
+* Add the expected markdown output to [`tests/snapshots/web/expected/`](https://github.com/marin-community/marin/tree/main/tests/snapshots/web/expected)
   with the same name as the input file.
 * Commit these files.
 

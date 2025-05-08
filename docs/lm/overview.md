@@ -25,7 +25,7 @@ We leverage various tools:
 
 Where possible, we use the same data formats as [Dolma](https://github.com/allenai/dolma). Where not possible, we try to use "natural" extensions that stick to the spirit of the format.
 
-The [Integration test](https://github.com/stanford-crfm/marin/blob/main/tests/integration_test.py) provides a mini-version of
+The [Integration test](https://github.com/marin-community/marin/blob/main/tests/integration_test.py) provides a mini-version of
 all the steps.  To run the integration test (which should finish in less than 10
 minutes, and doesn't require a GPU/TPU), run:
 
