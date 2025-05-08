@@ -68,6 +68,12 @@ class SimpleTrainConfig:
     optimizer_config: OptimizerConfig | None = None
     """Optimizer configuration to use. If not set, Adam will be used."""
 
+    reinit_tokens: list[str] | bool = False
+    """
+    if set, will reinitialize the embeddings for the given tokens. If True, will reinitialize the default tokens
+    for llama3's tokenizer
+    """
+
     watch: WatchConfig = dataclasses.field(default_factory=WatchConfig)
     """Config for watching gradients, parameters, etc. Default is to log norms of gradients and parameters."""
 

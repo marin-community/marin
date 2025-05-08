@@ -300,6 +300,7 @@ def default_train(
     # Create the inner config
     inner_config = TrainLmConfig(
         data=pretraining_data,
+        reinit_tokens=train_config.reinit_tokens,
         trainer=TrainerConfig(
             tracker=WandbConfig(
                 project="marin",
@@ -455,9 +456,6 @@ def default_sft(
         data_seed=sft_config.seed,
         z_loss_weight=sft_config.z_loss_weight,
     )
-
-    if sft_config.reinit_tokens:
-        raise NotImplementedError("reinit_tokens is not supported by default_train")
 
     # Create and return the ExecutorStep
     return default_train(
