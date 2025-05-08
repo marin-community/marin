@@ -250,6 +250,7 @@ def default_train(
             replica_dcn_axis_size=-1,
             allow_partial_checkpoint=train_config.allow_partial_checkpoint,
             per_device_eval_parallelism=per_device_eval_parallelism,
+            max_eval_batches=train_config.max_eval_batches,
             allow_nondivisible_batch_size=True,
             quantization=QuantizationConfig(int8=train_config.int8) if train_config.int8 else None,
             initialize_from=None if train_config.reset_data_loader_on_init else checkpoint_path_to_load_from,
