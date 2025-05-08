@@ -56,10 +56,10 @@ def process_optimizer(optimizer, model_and_data_size, sweep_configs, position):
         
         # Check cache first
         cache_key = get_cache_key(optimizer, model_size, data_size, target_chinchilla)
-        # if cache_key in cache:
-        #     optimizer_results[(model_size, data_size)] = cache[cache_key]
-        #     if type(optimizer_results[(model_size, data_size)]["min_num"]) is int and optimizer_results[(model_size, data_size)]["min_num"] <= 2:
-        #         continue
+        if cache_key in cache:
+            optimizer_results[(model_size, data_size)] = cache[cache_key]
+            if type(optimizer_results[(model_size, data_size)]["min_num"]) is int and optimizer_results[(model_size, data_size)]["min_num"] == 0:
+                continue
 
         
         # Get sweep configuration from saved configs
@@ -121,14 +121,11 @@ key_of_optimizer['kron'] = ['learning_rate', 'weight_decay', 'beta1', 'precondit
 key_of_optimizer['scion'] = ['learning_rate', 'weight_decay', 'min_lr_ratio', 'warmup', 'momentum', 'beta1', 'scion_epsilon', 'max_grad_norm', 'lr_schedule', 'scion_to_signum_lr', 'decay', 'train_batch_size']
 key_of_optimizer['cautious'] = ['learning_rate', 'weight_decay', 'min_lr_ratio', 'warmup', 'beta1', 'beta2', 'epsilon', 'max_grad_norm', 'train_batch_size']
 key_of_optimizer['soap'] = ['learning_rate', 'weight_decay', 'min_lr_ratio', 'warmup', 'beta1', 'beta2', 'shampoo_beta', 'precondition_frequency', 'partition_grads_into_blocks', 'block_size', 'epsilon', 'max_grad_norm', 'train_batch_size']
-key_of_optimizer['sophia'] = ['learning_rate', 'weight_decay', 'min_lr_ratio', 'warmup', 'beta1', 'beta2', 'gamma', 'epsilon', 'max_grad_norm', 'train_batch_size']
+# key_of_optimizer['sophia'] = ['learning_rate', 'weight_decay', 'min_lr_ratio', 'warmup', 'beta1', 'beta2', 'gamma', 'epsilon', 'max_grad_norm', 'train_batch_size']
 key_of_optimizer['soape'] = key_of_optimizer['soap']
 key_of_optimizer['soapb'] = key_of_optimizer['soap']
 key_of_optimizer['adamw'] = ['learning_rate', 'weight_decay', 'min_lr_ratio', 'warmup', 'beta1', 'beta2', 'epsilon', 'max_grad_norm', 'nesterov', 'train_batch_size']
-
-key_of_optimizer = {}
-# key_of_optimizer['mini'] = ['learning_rate', 'weight_decay', 'min_lr_ratio', 'warmup', 'beta1', 'beta2', 'epsilon', 'max_grad_norm', 'train_batch_size']
-key_of_optimizer['sophia'] = ['learning_rate', 'weight_decay', 'min_lr_ratio', 'warmup', 'beta1', 'beta2', 'gamma', 'epsilon', 'max_grad_norm', 'train_batch_size']
+key_of_optimizer['mini'] = ['learning_rate', 'weight_decay', 'min_lr_ratio', 'warmup', 'beta1', 'beta2', 'epsilon', 'max_grad_norm', 'train_batch_size']
 
 
 optimizers =  list(key_of_optimizer.keys())
@@ -147,11 +144,14 @@ if __name__ == '__main__':
     with open('sweep_configurations.json', 'r') as f:
         sweep_configs = json.load(f)
     
-    model_and_data_size = [('130m', '2B', 1), ('130m', '5B', 2), ('130m', '10B', 4), 
-                          ('130m', '21B', 8), ('300m', '6B', 1), ('520m', '10B', 1)]
-    model_and_data_size = [ ('130m', '10B', 4), ('130m', '21B', 8),  ('520m', '10B', 1)]
+    # model_and_data_size = [('130m', '2B', 1), ('130m', '5B', 2), ('130m', '10B', 4), 
+                        #   ('130m', '21B', 8), ('300m', '6B', 1), ('520m', '10B', 1)]
+    # model_and_data_size = [ ('130m', '10B', 4), ('130m', '21B', 8),  ('520m', '10B', 1)]
     # model_and_data_size = [('130m', '42B', 16)]
-    
+
+    model_and_data_size = [('300m', '12B', 2), ('300m', '24B', 4), ('300m', '48B', 8), ('520m', '21B', 2), ('520m', '42B', 4), ('520m', '85B', 8)]
+
+
     monitoring_results = {}
     
     # Process each optimizer sequentially with a progress bar

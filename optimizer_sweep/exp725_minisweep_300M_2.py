@@ -1,7 +1,7 @@
 from optimizer_sweep.template import template
 
 if __name__ == '__main__':
-    sweep_grids = {'learning_rate': [0.002, 0.004], 'weight_decay': [0.1, 0.2], 'warmup': [2000, 4000], 'epsilon': [1e-15, 9.999999999999999e-26, 1e-25, 1e-10, 1e-20], 'train_batch_size': [256, 128]}
+    sweep_grids = {'learning_rate': [0.002, 0.004], 'weight_decay': [0.1, 0.2], 'warmup': [2000, 4000], 'train_batch_size': [256, 128]}
     baseline_config = {'learning_rate': 0.004, 'weight_decay': 0.2, 'min_lr_ratio': 0, 'warmup': 2000, 'beta1': 0.9, 'beta2': 0.98, 'epsilon': 9.999999999999999e-26, 'max_grad_norm': 2, 'nesterov': False, 'train_batch_size': 128}
     model_size = '300m'
     target_chinchilla = 2

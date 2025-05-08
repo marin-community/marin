@@ -309,22 +309,22 @@ for model_size in model_sizes:
 
 keys = list(hyperparameters_dict[(model_sizes[0], 1)].keys())
 
-with open(f'hyperparameters_fit_{optimizer_name}.md', 'w') as f:
-    for key in keys:
-        # fit a power law that is A * model_size^B * chinchilla^C + D
-        x = [(expected_params[model_size], chinchilla) for model_size in model_sizes for chinchilla in [1, 2, 4, 8]]
-        y = [hyperparameters_dict[(model_size, chinchilla)][key] for model_size in model_sizes for chinchilla in [1, 2, 4, 8]]
-        # fit a power law and print error
-        if type(y[-1]) == float or type(y[-1]) == int:
-            print(key)
-            print(y)
-            if key == "muon_to_adam_lr":
-                continue
-            baseline = np.mean(y[:-1])
-            popt, _ = curve_fit(lambda t, A, B, C, D: A * t[:, 0]**B * t[:, 1]**C + D, x[1:-1], y[1:-1], p0=[0.0, -0.5, -0.5, baseline], maxfev=80000)
-            # print error on the last point
-            predicted_loss = popt[0] * x[-1][0]**popt[1] * x[-1][1]**popt[2] + popt[3]
-            error = np.sqrt(np.mean((predicted_loss - y[-1])**2))
-            f.write(f"Relative error for {key}: {error / (y[-1] + 1e-6)}\n")
+# with open(f'hyperparameters_fit_{optimizer_name}.md', 'w') as f:
+#     for key in keys:
+#         # fit a power law that is A * model_size^B * chinchilla^C + D
+#         x = [(expected_params[model_size], chinchilla) for model_size in model_sizes for chinchilla in [1, 2, 4, 8]]
+#         y = [hyperparameters_dict[(model_size, chinchilla)][key] for model_size in model_sizes for chinchilla in [1, 2, 4, 8]]
+#         # fit a power law and print error
+#         if type(y[-1]) == float or type(y[-1]) == int:
+#             print(key)
+#             print(y)
+#             if key == "muon_to_adam_lr":
+#                 continue
+#             baseline = np.mean(y[:-1])
+#             popt, _ = curve_fit(lambda t, A, B, C, D: A * t[:, 0]**B * t[:, 1]**C + D, x[1:-1], y[1:-1], p0=[0.0, -0.5, -0.5, baseline], maxfev=80000)
+#             # print error on the last point
+#             predicted_loss = popt[0] * x[-1][0]**popt[1] * x[-1][1]**popt[2] + popt[3]
+#             error = np.sqrt(np.mean((predicted_loss - y[-1])**2))
+#             f.write(f"Relative error for {key}: {error / (y[-1] + 1e-6)}\n")
 
 

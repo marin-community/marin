@@ -1,0 +1,12 @@
+Relative error for learning_rate: 0.5801070504865566
+Relative error for weight_decay: 0.0
+Relative error for min_lr_ratio: 0.0
+Relative error for warmup: 0.0
+Relative error for momentum: 0.0004340536004899529
+Relative error for beta1: 0.0
+Relative error for beta2: 0.0
+Relative error for epsilon: 4.697214808167194e-10
+Relative error for muon_epsilon: 0.0
+Relative error for max_grad_norm: 0.15675589317223634
+Relative error for decay: 0.02979673627369675
+Relative error for train_batch_size: 0.04763530405071645
