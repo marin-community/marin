@@ -60,7 +60,7 @@ tinystories_tokenized = default_tokenize(
 )
 ```
 
-[Steps](/explanation/executor.md#steps) are the basic unit of work in Marin.
+[Steps](../explanation/executor.md#steps) are the basic unit of work in Marin.
 A step defines a piece of work to be done, such as tokenizing a dataset or training a model.
 Each step has a name, a function to execute, and a configuration object.
 The function takes the configuration object and produces some output.
