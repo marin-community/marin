@@ -34,12 +34,8 @@ Before you begin, ensure you have the following installed:
 
 - If you're on GPU, see [local-gpu.md](local-gpu.md) for a GPU-specific walkthrough for getting started.
 
-- Run [your first experiment](first-experiment.md) TODO
-- Run [Hello World](../tutorials/hello-world.md)
-- Learn about [Basic Usage](basic-usage.md) TODO
-- Explore the [Configuration Guide](../how-to-guides/configuration.md) TODO
-- Check out the [API Reference](../reference/api.md) TODO
-
-## Troubleshooting
-
-If you encounter any issues during installation or setup, please refer to our [Troubleshooting Guide](../how-to-guides/troubleshooting.md).  TODO
+- Read about our [language modeling efforts](..//lm/overview.md)
+- Train a [tiny language model](..//how-to-guides/train-an-lm.md) using Marin.
+- Read about Marin's key concepts and principles in [Concepts](../explanation/concepts.md)
+- Learn about the [Executor framework](../explanation/executor.md): how to manage Python libraries, run big parallel jobs using Ray, how versioning works, etc.
+- Read about [Experiments](../explanation/experiments.md): how we use the executor framework to run machine learning experiments.

@@ -1,7 +1,7 @@
 # Executor framework
 
 Marin's executor framework manages the execution of experiments.
-This document is more about the mechanics, read [this](docs/explanation/experiments.md) to
+This document is more about the mechanics, read [this](../explanation/experiments.md) to
 learn more about the conventions.
 
 An **experiment** is a sequence (really, a DAG) of steps, where each **step** is
@@ -24,10 +24,10 @@ and step A is responsible for reading the data from that output path.
 The name of the output path includes the step name and a hash of the
 config (at least the part of it that's explicitly versioned) and all its dependencies.
 
-In the [hello world example](experiments/hello_world.py), we have two steps,
+In the [hello world example](../tutorials/hello_world_executor.md), we have two steps,
 generating data and compute statistics.
 
-See the documentation in [`executor.py`](marin/execution/executor.py) for more details.
+See the documentation in [`executor.py`](https://github.com/stanford-crfm/marin/blob/main/marin/execution/executor.py) for more details.
 
 ## Ray
 
@@ -71,6 +71,4 @@ This script ensure that:
 - All the relevant libraries (specified above) are installed.
 - The working directory is set appropriately.
 - Any subpaths under submodules are appended to PYTHONPATH, which is useful
-  when co-developing with another submodule (e.g., levanter).
-
-Check out [`quickstart.py`](experiments/quickstart.py) for a full example.
+  when [co-developing with another submodule](../how-to-guides/co-develop.md) (e.g., levanter).

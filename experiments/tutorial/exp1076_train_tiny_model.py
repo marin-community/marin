@@ -10,10 +10,10 @@ from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import executor_main
 from marin.resources import GpuConfig
 
-wikitext_hf_reference = "dlwh/wikitext_2_detokenized"
+wikitext_hf_id = "dlwh/wikitext_2_detokenized"
 wikitext_tokenized = default_tokenize(
-    name=f"tokenized/{wikitext_hf_reference}",
-    dataset=wikitext_hf_reference,
+    name=wikitext_hf_id,
+    dataset=wikitext_hf_id,
     tokenizer=llama3_tokenizer,
 )
 

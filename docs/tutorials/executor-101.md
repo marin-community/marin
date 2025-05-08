@@ -148,9 +148,8 @@ The complete code for this tutorial is available at: [experiments/tutorial/hello
 
 ## Next Steps
 
-- Read about our [language modeling efforts](/lm/overview.md)
-- Train a [tiny language model](/how-to-guides/train-an-lm.md) using Marin.
-- Read about Marin's key concepts and principles in [Concepts](/explanation/concepts.md)
-- Learn about the [Executor framework](/explanation/executor.md): how to manage Python libraries, run big parallel jobs using Ray, how versioning works, etc.
-- Read about [Experiments](/explanation/experiments.md): how we use the executor framework to run machine learning experiments.
-
+- Read about our [language modeling efforts](..//lm/overview.md)
+- Train a [tiny language model](..//how-to-guides/train-an-lm.md) using Marin.
+- Read about Marin's key concepts and principles in [Concepts](../explanation/concepts.md)
+- Learn about the [Executor framework](../explanation/executor.md): how to manage Python libraries, run big parallel jobs using Ray, how versioning works, etc.
+- Read about [Experiments](../explanation/experiments.md): how we use the executor framework to run machine learning experiments.
