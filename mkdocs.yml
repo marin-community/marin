@@ -16,7 +16,7 @@ theme:
 
 # Include extra JS to setup Read the Docs addons integrations
 extra_javascript:
-  - javascripts/readthedocs.js
+  - javascript/readthedocs.js
 
 nav:
   - Home: index.md
@@ -24,25 +24,25 @@ nav:
     - Getting Started: tutorials/getting-started.md
     - First Experiment: tutorials/first-experiment.md
     - Local GPU: tutorials/local-gpu.md
-    - Executor 101: tutorials/hello-world-executor.md
+    - Executor 101: tutorials/executor-101.md
   - How-to Guides:
-    - Co-Develop Marin and Levanter: how-to-guides/co-develop.md
+    - Train an LM: how-to-guides/train-an-lm.md
     - Filtering Data: how-to-guides/filtering-data.md
     - Submitting Speedruns: how-to-guides/submitting-speedrun.md
-    - Train an LM: how-to-guides/train-an-lm.md
+    - Co-Develop Marin and Levanter: how-to-guides/co-develop.md
   - Explanation:
     - Concepts: explanation/concepts.md
     - Data Browser: explanation/data-browser.md
     - Experiments: explanation/experiments.md
-    - Executor: reference/executor.md
+    - Executor: explanation/executor.md
   - Developer Guide:
       - Guidelines: guidelines.md
       - Internal Guidelines: guidelines-internal.md
-      - Building Docs: how-to-guides/building-docs.md
+      - Building Docs: dev-guide/building-docs.md
+      - Snapshot Tests: dev-guide/snapshot-tests.md
   - Technical Reference:
-      - API Reference: reference/api.md
       - Architecture: reference/architecture.md
-      - Configuration Options: reference/configuration.md
+      - LM Overview: lm/overview.md
 
 markdown_extensions:
   - pymdownx.highlight

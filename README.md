@@ -43,13 +43,12 @@ TODO XXX temporarily here: https://marin-mkdocs.readthedocs.io/en/latest/
 
 To learn more about Marin and how it works, you can:
 
-- Read aboutE our [language modeling efforts](docs/lm/overview.md)
 - Train a [tiny language model](docs/how-to-guides/train-an-lm.md) using Marin.
 - Read about Marin's key concepts and principles in [Concepts](docs/explanation/concepts.md)
 - Follow a [Executor Hello World tutorial](docs/tutorials/executor-101) to get a feel for how Marin works.
 - Learn about the [Executor framework](docs/explanation/executor.md): how to manage Python libraries, run big parallel jobs using Ray, how versioning works, etc.
 - Read about [Experiments](docs/explanation/experiments.md): how we use the executor framework to run machine learning experiments.
--
+
 <!--marin-first-steps-end-->
 
 ## Getting Started
@@ -82,7 +81,7 @@ Marin experiments are defined as a set of steps that can depend on each other an
 almost like a Makefile.
 
 As a brief example of how you can use Marin, here is a complete script for training a tiny model on [TinyStories](https://huggingface.co/datasets/roneneldan/TinyStories).
-You can check out the [full script](experiments/tutorial/exp1191_train_tiny_model_cpu.py) for more details.
+You can check out the [full script](https://github.com/stanford-crfm/marin/blob/main/experiments/tutorial/exp1191_train_tiny_model_cpu.py) for more details.
 
 <!--marin-example-start-->
 

@@ -32,25 +32,3 @@ minutes, and doesn't require a GPU/TPU), run:
 ```bash
 JAX_TRACEBACK_FILTERING=off PYTHONPATH=. python tests/integration_test.py --prefix var
 ```
-
-
-### Snapshot tests
-
-TODO: move this to a developer guide
-
-For HTML-to-text conversion, we have snapshot unit tests.  To add a test case,
-do the following:
-
-* Add an html file to [`tests/snapshots/inputs/`](tests/snapshots/inputs) that you want to test.
-* Add the expected markdown output to [`tests/snapshots/expected/`](tests/snapshots/expected)
-  with the same name as the input file.
-* Commit these files.
-
-Pro-tip: You can copy the markdown from `process_url.py`'s output to the
-expected file and edit it as needed.
-
-If it's reasonable, try to add a unit test as well. This will help ensure that
-the conversion is correct. If you've made a change that you think is correct,
-you can update the snapshots by copying [`tests/snapshots/outputs/`](tests/snapshots/outputs) to
-[`tests/snapshots/expected/`](tests/snapshots/expected). This will overwrite the expected output with the
-new output. You should review these changes before committing them.
