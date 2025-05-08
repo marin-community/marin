@@ -18,7 +18,7 @@ executor_main_config = ExecutorMainConfig(force_run_failed=True)
 # Tokenize the fineweb-edu dataset
 fineweb_edu_tokenized = default_tokenize(
     "fineweb-edu-crawled",
-    "gs://marin-us-central2/scratch/nfliu/text/fineweb_edu_unique_100M_passing_minhash_against_fineweb_edu",
+   InputName.hardcoded("scratch/nfliu/text/fineweb_edu_unique_100M_passing_minhash_against_fineweb_edu"),
     tokenizer=llama3_tokenizer,
 )
 
