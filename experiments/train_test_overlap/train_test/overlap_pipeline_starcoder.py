@@ -18,9 +18,8 @@ def generate_overlap_steps(base_input_dir, scenario_data, n_values, processes):
     logger.info(f"Found {len(subdirs)} subdirectories under {base_input_dir}")
 
     for subdir in subdirs:
-        if "fortran" not in subdir:
-            continue
         print(f"Processing subdir {subdir}", flush=True)
+        logger.info(f"LOGGER: Processing subdir {subdir}")
         sub_dir_name = os.path.basename(subdir.rstrip("/"))
         step_name = f"train_test_overlap/starcoder_data_overlap_pipeline_subset/{sub_dir_name}"
         print(f"Step name: {step_name}", flush=True)
