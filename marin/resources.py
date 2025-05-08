@@ -59,7 +59,7 @@ class ResourceConfig(Protocol):
 class CpuOnlyConfig(ResourceConfig):
     num_cpus: int = dataclasses.field(default_factory=lambda: logical_cpu_core_count())
     """Configuration for local training without specialized hardware."""
-    runtime_env: RuntimeEnv = dataclasses.field(default_factory=lambda: RuntimeEnv(env_vars={"JAX_PLATFORMS": "CPU"}))
+    runtime_env: RuntimeEnv = dataclasses.field(default_factory=lambda: RuntimeEnv(env_vars={"JAX_PLATFORMS": "cpu"}))
 
     def accelerator_descriptor(self) -> str | None:
         return None
@@ -112,3 +112,6 @@ class TpuPodConfig(ResourceConfig):
 
     def accelerator_descriptor(self) -> str | None:
         return self.tpu_type
+
+    def as_ray_resources(self) -> RayResources:
+        return RayResources(resources={self.tpu_type: self.node_count})
