@@ -28,7 +28,7 @@ nav:
   - Tutorials:
     - Getting Started: tutorials/getting-started.md
     - First Experiment: tutorials/first-experiment.md
-    - Local GPU: tutorials/local-gpu.md
+    - First Local GPU Experiment: tutorials/local-gpu.md
     - Executor 101: tutorials/executor-101.md
   - How-to Guides:
     - Train an LM: how-to-guides/train-an-lm.md
@@ -51,7 +51,7 @@ nav:
   - Technical Reference:
       - Architecture: reference/architecture.md
       - LM Overview: lm/overview.md
-      - Resource Config: reference/resource-config.md
+      - Specifying Hardware Resources: reference/resource-config.md
       - Executor API: reference/executor-api.md
       - Default Steps: reference/default-steps.md
       - Training Configuration: reference/train-config.md
