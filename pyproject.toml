@@ -16,7 +16,7 @@ dependencies = [
     "gcsfs",
     "google-cloud-storage",
     "google-cloud-storage-transfer",
-    "s3fs",
+    "s3fs>=2024",
     "regex",
     "requests",
     "numpy",
