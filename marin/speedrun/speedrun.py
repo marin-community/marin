@@ -23,6 +23,7 @@ from experiments.llama import compute_num_parameters, llama3_tokenizer_vocab_siz
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import ExecutorStep, InputName, output_path_of
 from marin.training.training import TrainLmOnPodConfig
+from marin.utilities.wandb_utils import WANDB_ENTITY, WANDB_PROJECT
 
 logger = logging.getLogger("ray")
 
@@ -101,10 +102,6 @@ def get_wandb_run_info_from_step(step: ExecutorStep) -> tuple[str, str, str]:
     Get the wandb entity, project, and run id from a given ExecutorStep.
     """
 
-    # defaults
-    wandb_entity = "stanford-mercury"
-    wandb_project = "marin"
-
     if (
         step.config
         and step.config.train_config
@@ -112,14 +109,14 @@ def get_wandb_run_info_from_step(step: ExecutorStep) -> tuple[str, str, str]:
         and step.config.train_config.trainer.tracker
     ):
         logger.info(f"Found wandb run info in step: {step}")
-        wandb_entity = step.config.train_config.trainer.tracker.entity or "stanford-mercury"
-        wandb_project = step.config.train_config.trainer.tracker.project or "marin"
+        wandb_entity = step.config.train_config.trainer.tracker.entity or WANDB_ENTITY
+        wandb_project = step.config.train_config.trainer.tracker.project or WANDB_PROJECT
         return wandb_entity, wandb_project, step.config.train_config.trainer.id
 
     return wandb_entity, wandb_project, None
 
 
-def get_step_times_from_wandb(run_id: str, entity: str = "stanford-mercury", project: str = "marin") -> list[float]:
+def get_step_times_from_wandb(run_id: str, entity: str = WANDB_ENTITY, project: str = WANDB_PROJECT) -> list[float]:
     try:
         run = wandb.Api().run(f"{entity}/{project}/{run_id}")
         return run.history(keys=["throughput/duration"])["throughput/duration"].tolist()
@@ -240,8 +237,6 @@ def default_speedrun(
     )
 
     # Extract wandb info from train step
-    wandb_entity = "stanford-mercury"
-    wandb_project = "marin"
     wandb_run_id = None  # None by default
 
     if (
@@ -251,8 +246,8 @@ def default_speedrun(
         and train_step.config.train_config.trainer.tracker
     ):
 
-        wandb_entity = train_step.config.train_config.trainer.tracker.entity or wandb_entity
-        wandb_project = train_step.config.train_config.trainer.tracker.project or wandb_project
+        wandb_entity = train_step.config.train_config.trainer.tracker.entity or WANDB_ENTITY
+        wandb_project = train_step.config.train_config.trainer.tracker.project or WANDB_PROJECT
 
         # (Nikil) this is a hack (the ExecutorStep isn't populated when using an override path, so can't get configs when
         # we do an override or if it is None for some reason, but after some investigation found that in those cases we
