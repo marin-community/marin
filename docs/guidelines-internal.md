@@ -59,7 +59,7 @@ this terminal open!
 To submit jobs, we use the
 [Jobs API](https://docs.ray.io/en/latest/cluster/running-applications/job-submission/quickstart.html#submitting-a-job).
 This requires that your Python script is formatted in a certain way, calling some boilerplate Ray functions prior to
-launching tasks -- see [`tests/test_integration_test.py`](./tests/test_integration_test.py) for a minimal example. To launch:
+launching tasks -- see [test_integration_test.py](https://github.com/stanford-crfm/marin/blob/main/tests/test_integration_test.py) for a minimal example. To launch:
 
 # [Terminal 2] Submit a Ray Job (specified via a Python script)
 #   =>> Will output a Job ID like `raysubmit_pAJM8vKfHPhiyHBa`
@@ -141,4 +141,4 @@ def my_tpu_job():
 ## Evaluation
 
 By default, we run evaluations on TPU using `lm-evaluation-harness` via Levanter. See
-[`experiments/evals/README_eval.md`](./experiments/evals/README_eval.md) for more details.
+[README_eval.md](https://github.com/stanford-crfm/marin/blob/main/experiments/evals/README_eval.md) for more details.
