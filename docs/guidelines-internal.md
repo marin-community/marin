@@ -1,7 +1,11 @@
 # Marin (internal)
-# THIS DOCUMENTATION SEEMS OUTDATED (please update @Abhi)
 
 This documentation is for internal developers.
+
+## Prerequisites
+
+- Please read the general guidelines in [guidelines.md](./guidelines.md)
+- Complete the environment setup in [getting-started.md](./tutorials/getting-started.md)
 
 ## Setup
 
@@ -57,7 +61,6 @@ To submit jobs, we use the
 This requires that your Python script is formatted in a certain way, calling some boilerplate Ray functions prior to
 launching tasks -- see [`tests/test_integration_test.py`](./tests/test_integration_test.py) for a minimal example. To launch:
 
-``3`
 # [Terminal 2] Submit a Ray Job (specified via a Python script)
 #   =>> Will output a Job ID like `raysubmit_pAJM8vKfHPhiyHBa`
 python marin/run/ray_run.py --no_wait --env_vars WANDB_API_KEY ${WANDB_API_KEY} -- python experiments/hello_world.py

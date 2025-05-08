@@ -1,7 +1,7 @@
 # Executor framework
 
 Marin's executor framework manages the execution of experiments.
-This document is more about the mechanics, read [this](docs/experiments.md) to
+This document is more about the mechanics, read [this](docs/explanation/experiments.md) to
 learn more about the conventions.
 
 An **experiment** is a sequence (really, a DAG) of steps, where each **step** is
@@ -27,7 +27,7 @@ config (at least the part of it that's explicitly versioned) and all its depende
 In the [hello world example](experiments/hello_world.py), we have two steps,
 generating data and compute statistics.
 
-See the documentation in [executor.py](marin/execution/executor.py) for more details.
+See the documentation in [`executor.py`](marin/execution/executor.py) for more details.
 
 ## Ray
 
@@ -40,7 +40,7 @@ dataset into shards and create a Ray function to process each shard.
 Ray packages up the code from the local directory and ships it off to the appropriate machine.
 The environment will have the following packages installed:
 - **Default packages**: installed on the Ray cluster (`dependencies` in
-  [pyproject.toml](pyproject.toml)), which include fsspec, draccus, etc.
+  [`pyproject.toml`](pyproject.toml)), which include fsspec, draccus, etc.
 - **Step-specific packages**: each `ExecutorStep` can specify
   `pip_dependency_groups`, a list of either (i) a key from
   `project.optional-dependencies` dictionary (e.g., `tokenize_train`), or (2) a
@@ -60,7 +60,7 @@ number_of_restarts = ExecutorStep(
 )
 ```
 
-Finally, to launch an experiment, use [ray_run.py](marin/run/ray_run.py), which
+Finally, to launch an experiment, use [`ray_run.py`](marin/run/ray_run.py), which
 launches jobs to the Ray cluster:
 
 ```bash
@@ -73,4 +73,4 @@ This script ensure that:
 - Any subpaths under submodules are appended to PYTHONPATH, which is useful
   when co-developing with another submodule (e.g., levanter).
 
-Check out [quickstart.py](experiments/quickstart.py) for a full example.
+Check out [`quickstart.py`](experiments/quickstart.py) for a full example.

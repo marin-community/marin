@@ -1,22 +1,22 @@
 """Convert fineweb to markdown"""
 
-import os
-import ray
 import json
-import fsspec
-import draccus
 import logging
+import os
 import traceback
-import pandas as pd
-
+from dataclasses import dataclass, field
 from datetime import datetime
-from dataclasses import dataclass
+
+import draccus
+import fsspec
+import pandas as pd
+import ray
 from warcio import ArchiveIterator
 
-from marin.web.convert import convert_page
 from marin.core.runtime import cached_or_construct_output
-from marin.utils import fsspec_exists, fsspec_glob, fsspec_rm
 from marin.schemas.web.convert import ExtractionConfig, HtmlToMarkdownConfig, ResiliparseConfig
+from marin.utils import fsspec_exists, fsspec_glob, fsspec_rm
+from marin.web.convert import convert_page
 
 logger = logging.getLogger("ray")
 
@@ -78,7 +78,7 @@ def process_one_warc_file(
     index = df.index.tolist()
 
     # url_dict is url to index in df so that we can update that record
-    url_dict = {url: idx for idx, url in zip(index, urls)}
+    url_dict = {url: idx for idx, url in zip(index, urls, strict=False)}
     num_urls_found = 0  # Used to early terminate
     num_urls_processed = 0
     length_url_inp_list = len(urls)
@@ -128,7 +128,7 @@ def process_one_warc_file(
     )
 
     with fsspec.open(md_output_file, "wt", compression="gzip") as f:  # md output
-        for index, row in df.iterrows():
+        for _index, row in df.iterrows():
             out_fw = row.to_dict()
             out_dolma = {
                 "id": out_fw["id"],
@@ -142,7 +142,7 @@ def process_one_warc_file(
 
     if text_output_file and "text" in df.columns:
         with fsspec.open(text_output_file, "wt", compression="gzip") as f:  # text output
-            for index, row in df.iterrows():
+            for _index, row in df.iterrows():
                 out_fw = row.to_dict()
                 out_dolma = {
                     "id": out_fw["id"],
@@ -157,7 +157,7 @@ def process_one_warc_file(
 
     if html_output_file:
         with fsspec.open(html_output_file, "wt", compression="gzip") as f:  # html output
-            for index, row in df.iterrows():
+            for _index, row in df.iterrows():
                 out_fw = row.to_dict()
                 out_dolma = {
                     "id": out_fw["id"],
@@ -221,7 +221,7 @@ def process_fw_parquet(
     # file_path is s3 url
     grouped = df.groupby("file_path")
 
-    for index, (file_url, group_df) in enumerate(grouped):
+    for index, (_file_url, group_df) in enumerate(grouped):
         filename = os.path.join(output_path, f"{index}.parquet")
         # filename = gs://marin-us-central2/processed/000_00000/0.parquet
 
@@ -267,7 +267,7 @@ def process_fw_parquet(
 
     was_successful = True
 
-    for waitable, filename in zip(ray_waitable, file_path):
+    for waitable, filename in zip(ray_waitable, file_path, strict=False):
         try:
             ray.get(waitable)
         except Exception as e:
@@ -302,7 +302,7 @@ class ParquetFWConfig:
     html_output_path: str | None = None
     cc_dumps: list[str] | None = None
     extract_method: str = "readability"
-    config: ExtractionConfig = HtmlToMarkdownConfig.default_config()
+    config: ExtractionConfig = field(default_factory=HtmlToMarkdownConfig.default_config)
     max_files: int | None = None
 
 
@@ -316,7 +316,6 @@ def process_fw_dump(cfg: ParquetFWConfig):
     for cc_dump in cc_dumps:
         files = fsspec_glob(os.path.join(cfg.input_path, cc_dump, "*.parquet"))
         MAX_NUM_PENDING_TASKS = 15  # Max number of parquet files we want to process in pending state
-        NUM_TASKS = len(files)
 
         if not files:
             logger.info(f"No files found in {cc_dump}, Skipping")
@@ -369,7 +368,7 @@ def process_fw_dump(cfg: ParquetFWConfig):
         try:
             ray.get(result_refs)
         except Exception as e:
-            raise Exception(f"Error processing the group: {e}")
+            raise e
 
         if end_processing:
             break
