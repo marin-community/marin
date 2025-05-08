@@ -1,6 +1,7 @@
-# Selected Experiments
+# Selected Experiment Reports
 
-This is a semi-automatically generated list of experiment issues and reports. It is periodically updated by a script.
+This is a semi-automatically generated list of experiment issues and reports. It is periodically updated by a script,
+and then curated by hand.
 
 This page includes only experiments that have at least one run or report.
 
@@ -56,6 +57,9 @@ This page includes only experiments that have at least one run or report.
     - [GitHub Issue #935](https://github.com/stanford-crfm/marin/issues/935) [![#935](https://img.shields.io/github/issues/detail/title/stanford-crfm/marin/935)](https://github.com/stanford-crfm/marin/issues/935)
     - [WandB Report](https://wandb.ai/stanford-mercury/marin/reports/ZLoss-vs-Not-1-4B--VmlldzoxMjEzMzA1NA)
     - Conclusion: z-loss seems not harmful. We'll use it.
+- Figuring out learning rate schedule!
+    - [GitHub Issue #764](https://github.com/stanford-crfm/marin/issues/764) [![#764](https://img.shields.io/github/issues/detail/title/stanford-crfm/marin/764)](https://github.com/stanford-crfm/marin/issues/764)
+    - [WandB Report](https://wandb.ai/stanford-mercury/marin-optimizer/reports/Deciding-the-optimal-lr-schedule-which-is-cosine---VmlldzoxMTIxNDk5NA)
     - Conclusion: Cosine is best. High LR is important. WSD isn't terrible.
 - Mixture of Experts
   - [GitHub Issue #929](https://github.com/stanford-crfm/marin/issues/929) [![#929](https://img.shields.io/github/issues/detail/title/stanford-crfm/marin/929)](https://github.com/stanford-crfm/marin/issues/929)
@@ -67,27 +71,27 @@ This page includes only experiments that have at least one run or report.
 ## Training and Performance
 
 - INT8 training in Levanter
-  - [GitHub Issue #620](https://github.com/stanford-crfm/marin/issues/620) [![#620](https://img.shields.io/github/issues/detail/title/stanford-crfm/marin/620)](https://github.com/stanford-crfm/marin/issues/620)
-  - [WandB Report](https://api.wandb.ai/links/stanford-mercury/yhrb0xik)
-  - Conclusion: Int8 training is much faster on the right hardware, but might lead to worse performance in terms of time-to-loss except in the early stages.
+    - [GitHub Issue #620](https://github.com/stanford-crfm/marin/issues/620) [![#620](https://img.shields.io/github/issues/detail/title/stanford-crfm/marin/620)](https://github.com/stanford-crfm/marin/issues/620)
+    - [WandB Report](https://api.wandb.ai/links/stanford-mercury/yhrb0xik)
+    - Conclusion: Int8 training is much faster on the right hardware, but might lead to worse performance in terms of time-to-loss except in the early stages.
 - MuP for scaling laws
-  - [GitHub Issue #621](https://github.com/stanford-crfm/marin/issues/621) [![#621](https://img.shields.io/github/issues/detail/title/stanford-crfm/marin/621)](https://github.com/stanford-crfm/marin/issues/621)
-  - [WandB Report](https://api.wandb.ai/links/stanford-mercury/h723u2ws)
-  - Conclusion: not worth it compared to our heuristic version.
+    - [GitHub Issue #621](https://github.com/stanford-crfm/marin/issues/621) [![#621](https://img.shields.io/github/issues/detail/title/stanford-crfm/marin/621)](https://github.com/stanford-crfm/marin/issues/621)
+    - [WandB Report](https://api.wandb.ai/links/stanford-mercury/h723u2ws)
+    - Conclusion: not worth it compared to our heuristic version.
 - Figuring out learning rate schedule!
-  - [GitHub Issue #764](https://github.com/stanford-crfm/marin/issues/764) [![#764](https://img.shields.io/github/issues/detail/title/stanford-crfm/marin/764)](https://github.com/stanford-crfm/marin/issues/764)
-  - [WandB Report](https://wandb.ai/stanford-mercury/marin-optimizer/reports/Deciding-the-optimal-lr-schedule-which-is-cosine---VmlldzoxMTIxNDk5NA)
+    - [GitHub Issue #764](https://github.com/stanford-crfm/marin/issues/764) [![#764](https://img.shields.io/github/issues/detail/title/stanford-crfm/marin/764)](https://github.com/stanford-crfm/marin/issues/764)
+    - [WandB Report](https://wandb.ai/stanford-mercury/marin-optimizer/reports/Deciding-the-optimal-lr-schedule-which-is-cosine---VmlldzoxMTIxNDk5NA)
 - Try out different remat strategies to get the 70b working on fewer slices
     - [GitHub Issue #906](https://github.com/stanford-crfm/marin/issues/906) [![#906](https://img.shields.io/github/issues/detail/title/stanford-crfm/marin/906)](https://github.com/stanford-crfm/marin/issues/906)
     - [WandB Report](https://wandb.ai/stanford-mercury/marin/reports/Remat-Strategies--VmlldzoxMTkxNzk3Ng)
     - [Data Browser](https://crfm.stanford.edu/marin/data_browser/experiment/?path=gs%3A//marin-us-central2/experiments/expXXX_fancier_checkpointing-453042.json)
     - Conclusion: Substantial performance hit but helpful. Still need to iterate.
 
- ## Data Experiments
+## Data Experiments
 
- ### High Quality Data Ablations
+### High Quality Data Ablations
 
- - Ablations on Cooldown for Markdownified Wikipedia
+- Ablations on Cooldown for Markdownified Wikipedia
     - [GitHub Issue #845](https://github.com/stanford-crfm/marin/issues/845) [![#845](https://img.shields.io/github/issues/detail/title/stanford-crfm/marin/845)](https://github.com/stanford-crfm/marin/issues/845)
     - [WandB Report](https://wandb.ai/stanford-mercury/marin/reports/845-6-Wiki-and-Arxiv-Quality-Ablations--VmlldzoxMTg4MzY2OA)
     - [Data Browser](https://crfm.stanford.edu/marin/data_browser/view?paths=%5B%22gs%3A%2F%2Fmarin-us-central2%2Fdocuments%2Fwikipedia-resiliparse-custom-fork-2569de%2F20241201%2Fenwiki_namespace_0_0.jsonl.gz%22%5D)
@@ -101,7 +105,7 @@ This page includes only experiments that have at least one run or report.
     - [GitHub Issue #847](https://github.com/stanford-crfm/marin/issues/847) [![#847](https://img.shields.io/github/issues/detail/title/stanford-crfm/marin/847)](https://github.com/stanford-crfm/marin/issues/847)
     - [WandB Report](https://wandb.ai/stanford-mercury/marin/reports/845-6-Wiki-and-Arxiv-Quality-Ablations--VmlldzoxMTg4MzY2OA)
     - [Data Browser](https://crfm.stanford.edu/marin/data_browser/view?paths=%5B%22gs%3A%2F%2Fmarin-us-central2%2Fdocuments%2Fstackexchange-resiliparse-custom-fork-ab41ad%2F3dprinting.jsonl.gz%22%5D)
-  - Conclusion: No major improvement compared to control.
+    - Conclusion: No major improvement compared to control.
 - Mixture of Formats Training on Wikipedia and Arxiv
     - [GitHub Issue #818](https://github.com/stanford-crfm/marin/issues/818) [![#818](https://img.shields.io/github/issues/detail/title/stanford-crfm/marin/818)](https://github.com/stanford-crfm/marin/issues/818)
     - [WandB Report](https://wandb.ai/stanford-mercury/marin/reports/818-Mixture-of-Formats--VmlldzoxMTg4MzU0NA)
@@ -141,8 +145,10 @@ This page includes only experiments that have at least one run or report.
     - [GitHub Issue #606](https://github.com/stanford-crfm/marin/issues/606) [![#606](https://img.shields.io/github/issues/detail/title/stanford-crfm/marin/606)](https://github.com/stanford-crfm/marin/issues/606)
     - [WandB Run: marin_olmo_tulu_sft_v3-acca67](https://wandb.ai/stanford-mercury/marin/runs/marin_olmo_tulu_sft_v3-acca67)
 - Create Mixture from All SFT Datasets
-  - [GitHub Issue #804](https://github.com/stanford-crfm/marin/issues/804) [![#804](https://img.shields.io/github/issues/detail/title/stanford-crfm/marin/804)](https://github.com/stanford-crfm/marin/issues/804)
-  - [WandB Report](https://api.wandb.ai/links/stanford-mercury/m8ak7uah)
+    - [GitHub Issue #804](https://github.com/stanford-crfm/marin/issues/804) [![#804](https://img.shields.io/github/issues/detail/title/stanford-crfm/marin/804)](https://github.com/stanford-crfm/marin/issues/804)
+    - [WandB Report](https://api.wandb.ai/links/stanford-mercury/m8ak7uah)
+- SFT on further cool-downed tootsie checkpoints
+    - [GitHub Issue #897](https://github.com/stanford-crfm/marin/issues/897) [![#897](https://img.shields.io/github/issues/detail/title/stanford-crfm/marin/897)](https://github.com/stanford-crfm/marin/issues/897)
 
 ## Scaling Laws
 

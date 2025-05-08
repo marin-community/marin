@@ -18,7 +18,7 @@ jobs:
 
     - name: Install dependencies
       run: |
-        pip install ruff black
+        pip install ruff==0.11.8 black==25.1.0
 
     - name: Run ruff
       run: ruff check .

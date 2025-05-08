@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
+"""
+Usage:
+python scripts/itemize-experiment-issues.py
+"""
 
 import os
 from pathlib import Path
 import re
 from github import Github
-import requests
-from urllib.parse import urlparse, unquote
-from collections import defaultdict
+from urllib.parse import urlparse
 import wandb
 
 
@@ -43,7 +45,7 @@ def get_run_name(wandb_url):
 
 def get_existing_reports():
     """Read existing reports from experiments.md if it exists."""
-    reports_path = Path("website/experiments.md")
+    reports_path = Path("docs/reports/index.md")
     if not reports_path.exists():
         return set()
 
@@ -90,7 +92,7 @@ def get_github_issues():
 
 def update_reports_md(new_reports):
     """Update experiments.md with new reports in the Uncategorized section."""
-    reports_path = Path("website/experiments.md")
+    reports_path = Path("docs/reports/index.md")
 
     # print absolute path of reports_path
     print(reports_path.absolute())
