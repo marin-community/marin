@@ -51,7 +51,6 @@ class ResourceConfig(Protocol):
     def with_env_vars(self, env: dict[str, str] | None = None, /, **kwargs):
         """Returns a new hardware configuration with the given environment variables."""
         new_env = self.runtime_env.get("env_vars", {}) | (env or {}) | kwargs
-        print(new_env)
         return dataclasses.replace(self, runtime_env=RuntimeEnv(**{**self.runtime_env, "env_vars": new_env}))
 
 
