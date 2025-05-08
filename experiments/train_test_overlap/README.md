@@ -33,17 +33,29 @@ This script:
 - Downloads evaluation datasets (MMLU, GSM8K, Math, TruthfulQA, BBH) from Hugging Face
 - Converts each dataset to the "decontamination" format with proper text fields for overlap detection
 
-### 2. Convert to Scenario Format
+### 2. Convert to Scenario Format and Consolidate
 
-Next, run `test_scenario_conversation.py` to convert the Dolma-formatted data to scenario files:
+Next, run `test_scenario_conversation.py` to convert the Dolma-formatted data to scenario files, and then use `consolidate_scenario_jsonl.py` to combine them into a single file:
 
 ```bash
+# Run conversion only
 python experiments/train_test_overlap/format/test_scenario_conversation.py
+
+# Run consolidation (this will automatically run conversion step first if needed)
+python experiments/train_test_overlap/format/consolidate_scenario_jsonl.py
 ```
 
-This creates JSONL scenario files for each dataset with standardized input and reference fields.
+Alternatively, you can run the entire pipeline at once:
 
-**IMPORTANT**: After this step, you need to manually merge the individual JSONL scenario files into a single file before proceeding to the overlap detection step. The final merged file should be passed to the overlap pipeline scripts.
+```bash
+python experiments/train_test_overlap/format/run_scenario_pipeline.py
+```
+
+These steps:
+1. Convert each dataset to standardized scenario JSONL files with input and reference fields
+2. Find all individual scenario files across datasets
+3. Consolidate them into a single file for easier processing by the overlap detection system
+4. The consolidated file can be directly passed to the overlap pipeline scripts
 
 ### 3. Run Overlap Detection
 
@@ -62,7 +74,7 @@ Each pipeline script:
 For StarCoder data specifically, you may need to first convert from Parquet to JSONL format using:
 
 ```bash
-python  experiments/train_test_overlap/format/convert_starcoder_parquet2jsonl.py
+python experiments/train_test_overlap/format/convert_starcoder_parquet2jsonl.py
 ```
 
 ### 4. Analysis of Results

@@ -115,6 +115,11 @@ def process_decontamination_file(input_file: str, output_file: str, scenario_cla
     """Process a decontamination file and convert it to scenario format."""
     logger.info(f"Processing file {input_file} -> {output_file}")
 
+    # Create a unique output file per input file to ensure parallel processing
+    file_basename = os.path.basename(input_file).split(".")[0]
+    output_dir = os.path.dirname(output_file)
+    unique_output_file = os.path.join(output_dir, f"scenario_{file_basename}.jsonl")
+
     # Read the input file
     with fsspec.open(input_file, "rt", compression="infer") as f:
         items = [json.loads(line) for line in f]
@@ -164,30 +169,27 @@ def process_decontamination_file(input_file: str, output_file: str, scenario_cla
         scenarios.append(scenario)
 
     # Write output
-    try:
-        fsspec_mkdirs(os.path.dirname(output_file))
+    fsspec_mkdirs(output_dir)
 
-        with fsspec.open(output_file, "wt") as f:
-            for scenario in scenarios:
-                f.write(
-                    json.dumps(
-                        {
-                            "scenario_key": {
-                                "scenario_spec": scenario.scenario_key.scenario_spec,
-                                "split": scenario.scenario_key.split,
-                            },
-                            "instances": [
-                                {"input": instance.input, "references": instance.references, "id": instance.id}
-                                for instance in scenario.instances
-                            ],
-                        }
-                    )
-                    + "\n"
+    with fsspec.open(unique_output_file, "wt") as f:
+        for scenario in scenarios:
+            f.write(
+                json.dumps(
+                    {
+                        "scenario_key": {
+                            "scenario_spec": scenario.scenario_key.scenario_spec,
+                            "split": scenario.scenario_key.split,
+                        },
+                        "instances": [
+                            {"input": instance.input, "references": instance.references, "id": instance.id}
+                            for instance in scenario.instances
+                        ],
+                    }
                 )
+                + "\n"
+            )
 
-        logger.info(f"Created scenario file with {len(scenarios)} scenarios")
-    except Exception as e:
-        logger.error(f"Error writing to {output_file}: {e}")
+    logger.info(f"Created scenario file {unique_output_file} with {len(scenarios)} scenarios")
 
 
 def convert_datasets_to_scenarios(config: ScenarioConversionConfig) -> str:
@@ -228,46 +230,40 @@ def convert_datasets_to_scenarios(config: ScenarioConversionConfig) -> str:
 
             logger.info(f"Found {len(input_files)} files in subdirectories")
 
-        # except Exception as e:
-        #     logger.error(f"Error finding files in {input_path}: {e}")
-        #     continue
-
         if not input_files:
             logger.warning(f"No input files found for step {step_name} at {input_path}")
             continue
 
-        # Process each input file
+        # Process each input file - now creates unique output files
         for input_file in input_files:
             process_decontamination_file(input_file, output_file, config.scenario_class_name_prefix)
 
-    return "Conversion to scenarios completed"
+        # Log information about created scenario files
+        created_files = fsspec_glob(os.path.join(output_directory, "scenario_*.jsonl"))
+        logger.info(f"Created {len(created_files)} scenario files for step {step_name}")
+
+    return "Conversion to scenarios completed, with unique files per input source"
 
 
-def main():
-    """Main function to run the conversion process."""
-    # Define the configuration with the executor steps
-    config = ScenarioConversionConfig(
-        input_steps=[
-            gsm8k_convert_dolma,
-            math_convert_dolma,
-            truthful_qa_convert_dolma,
-            bbh_convert_dolma,
-            mmlu_convert_dolma,
-        ],
-        output_path=this_output_path(),
-        scenario_class_name_prefix="helm.benchmark.scenarios",
-    )
+# Define the configuration with the executor steps
+scenario_conversion_config = ScenarioConversionConfig(
+    input_steps=[
+        gsm8k_convert_dolma,
+        math_convert_dolma,
+        truthful_qa_convert_dolma,
+        bbh_convert_dolma,
+        mmlu_convert_dolma,
+    ],
+    output_path=this_output_path(),
+    scenario_class_name_prefix="helm.benchmark.scenarios",
+)
 
-    # Create an executor step for the conversion
-    conversion_step = ExecutorStep(
-        name="scenarios/eval_scenarios",
-        fn=lambda cfg: convert_datasets_to_scenarios(cfg),
-        config=config,
-    )
-
-    # Run the executor
-    executor_main(steps=[conversion_step], description="Convert decontamination datasets to scenario format")
-
+# Create an executor step for the conversion
+conversion_step = ExecutorStep(
+    name="scenarios/eval_scenarios",
+    fn=lambda cfg: convert_datasets_to_scenarios(cfg),
+    config=scenario_conversion_config,
+)
 
 if __name__ == "__main__":
-    main()
+    executor_main(steps=[conversion_step], description="Convert decontamination datasets to scenario format")

@@ -14,9 +14,10 @@ logger = logging.getLogger(__name__)
 def generate_overlap_steps(base_input_dir, scenario_data, n_values, processes):
     steps = []
     subdirs = fsspec_get_curr_subdirectories(base_input_dir)
-    print(f"Found {len(subdirs)} subdirectories under {base_input_dir}", flush=True)
+
+    logger.info(f"Found {len(subdirs)} subdirectories under {base_input_dir}")
+
     for subdir in subdirs:
-        # list JSONL files under each subdirectory
         if "fortran" not in subdir:
             continue
         print(f"Processing subdir {subdir}", flush=True)
@@ -36,7 +37,7 @@ def generate_overlap_steps(base_input_dir, scenario_data, n_values, processes):
 
 if __name__ == "__main__":
     base_input_dir = "gs://marin-us-central2/documents/starcoderdata-720c8c/9fc30b5/"
-    scenario_data = "gs://marin-us-central2/scenario_data/scenario_data.jsonl"
+    scenario_data = "gs://marin-us-central2/scenarios/consolidated_eval_scenarios-a76e07/consolidated_scenarios.jsonl"
     # generate one step per subdir under the base input directory
     steps = generate_overlap_steps(base_input_dir, scenario_data, [5, 10, 15, 20], 4)
     executor_main(
