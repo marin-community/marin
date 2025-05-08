@@ -12,7 +12,7 @@ We prepare the text/markdown for use as a training dataset for a language model,
   passed to Markdownify to producing Markdown text that has less noise. We generate single variant for each without
   references and links.
 
-Reference Issue: https://github.com/stanford-crfm/marin/issues/579
+Reference Issue: https://github.com/marin-community/marin/issues/579
 """
 
 import logging

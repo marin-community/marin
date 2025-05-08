@@ -1,6 +1,6 @@
 # Marin
 
-<a href="https://github.com/stanford-crfm/marin/actions?query=branch%3Amain++">
+<a href="https://github.com/marin-community/marin/actions?query=branch%3Amain++">
     <img alt="Build Status" src="https://img.shields.io/github/actions/workflow/status/stanford-crfm/marin/run_tests.yaml?branch=main">
 </a>
 <a href="https://marin.readthedocs.io/en/latest/?badge=latest">
@@ -59,7 +59,7 @@ TODO XXX temporarily here: https://marin-mkdocs.readthedocs.io/en/latest/tutoria
 ### Installation
 
 ```bash
-git clone https://github.com/stanford-crfm/marin
+git clone https://github.com/marin-community/marin
 cd marin
 ```
 
@@ -81,7 +81,7 @@ Marin experiments are defined as a set of steps that can depend on each other an
 almost like a Makefile.
 
 As a brief example of how you can use Marin, here is a complete script for training a tiny model on [TinyStories](https://huggingface.co/datasets/roneneldan/TinyStories).
-You can check out the [full script](https://github.com/stanford-crfm/marin/blob/main/experiments/tutorial/exp1191_train_tiny_model_cpu.py) for more details.
+You can check out the [full script](https://github.com/marin-community/marin/blob/main/experiments/tutorial/exp1191_train_tiny_model_cpu.py) for more details.
 
 <!--marin-example-start-->
 
@@ -153,5 +153,5 @@ a [mixture of datasets](docs/how-to-guides/train-an-lm.md#mixture-of-sources), e
 
 We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for more information.
 
-- We also have a list of [good first issues](https://github.com/stanford-crfm/marin/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
+- We also have a list of [good first issues](https://github.com/marin-community/marin/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
 - You can find us on [Discord](https://discord.gg/J9CTk7pqcM).

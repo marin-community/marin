@@ -8,7 +8,7 @@
 4. Set up pre-commit hooks
 
 ```bash
-git clone https://github.com/stanford-crfm/marin.git
+git clone https://github.com/marin-community/marin.git
 cd marin
 python -m venv venv
 source venv/bin/activate
@@ -37,7 +37,7 @@ Please see the [guidelines](../guidelines.md) for principles and practices for M
 
 # Data browser
 
-Marin comes with a [data browser](https://github.com/stanford-crfm/marin/tree/main/data_browser) that makes it easy to
+Marin comes with a [data browser](https://github.com/marin-community/marin/tree/main/data_browser) that makes it easy to
 view datasets (in various formats) and experiments produced by the executor.
 After installing the necessary dependencies, run:
 
@@ -46,4 +46,4 @@ cd data_browser
 python server.py --config conf/local.conf
 ```
 
-For more information, see the [data browser README](https://github.com/stanford-crfm/marin/blob/main/data_browser/README.md).
+For more information, see the [data browser README](https://github.com/marin-community/marin/blob/main/data_browser/README.md).

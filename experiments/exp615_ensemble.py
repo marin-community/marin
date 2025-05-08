@@ -4,7 +4,7 @@ Experiment 615: Ensemble quality classifiers (via max score).
 This experiment ensembles a list of quality classifiers (in this case, the MMLU and DCLM classifiers)
 by taking their maximum score.
 
-See https://github.com/stanford-crfm/marin/issues/615 for more details.
+See https://github.com/marin-community/marin/issues/615 for more details.
 """
 
 import os

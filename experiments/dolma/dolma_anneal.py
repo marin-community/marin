@@ -1,7 +1,7 @@
 """An experiment to evaluate the quality of individual splits of the Dolma dataset.
 
 We cooldown a 8B model on a 30/70 mixture of some high quality Dolma split and Dolmino DCLM.
-Link to issue: https://github.com/stanford-crfm/marin/issues/820
+Link to issue: https://github.com/marin-community/marin/issues/820
 """
 
 from experiments.anneal_config import AnnealConfig
