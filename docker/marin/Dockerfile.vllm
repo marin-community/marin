@@ -42,5 +42,6 @@ ENV LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/home/ray/anaconda3/lib
 ENV PATH=$PATH:/root/gcloud/google-cloud-sdk/bin
 ENV VLLM_USE_V1=1
 ENV TF_CPP_MIN_LOG_LEVEL=1
+ENV HF_HOME=/opt/gcsfuse_mount/huggingface-cache
 
 WORKDIR /opt/marin
