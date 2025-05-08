@@ -1,3 +1,4 @@
+import os
 import time
 
 import pytest
@@ -8,6 +9,9 @@ from marin.evaluation.evaluators.evaluator import ModelConfig
 default_engine_kwargs = {"enforce_eager": True, "max_model_len": 1024}
 
 default_generation_params = {"max_tokens": 16, "truncate_prompt_tokens": 896}
+
+DEFAULT_BUCKET_NAME = "marin-us-east5"
+DEFAULT_DOCUMENT_PATH = "documents/test-document-path"
 
 
 @pytest.fixture(scope="module")
@@ -42,6 +46,9 @@ def current_date_time():
 
 @pytest.fixture(scope="module")
 def ray_tpu_cluster():
-    ray.init(resources={"TPU": 8, "TPU-v6e-8-head": 1}, num_cpus=120, ignore_reinit_error=True)
+    if os.getenv("TPU_CI") == "true":
+        ray.init(resources={"TPU": 8, "TPU-v6e-8-head": 1}, ignore_reinit_error=True)
+    else:
+        ray.init("auto", ignore_reinit_error=True)
     yield
     ray.shutdown()

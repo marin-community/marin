@@ -12,8 +12,6 @@ TEST_OUTPUT_PATH = "gs://marin-us-east5/documents/ray-data-test-llama-200m"
 
 @pytest.mark.skipif(os.getenv("TPU_CI") != "true", reason="Skip this test if not running with a TPU in CI.")
 def test_ray_data(gcsfuse_mount_model_path, test_file_path):
-    # model_path = model_config.ensure_downloaded("/tmp/test-llama-200m")
-
     ds = ray.data.read_json(test_file_path, arrow_open_stream_args={"compression": "gzip"})
 
     ds = ds.map_batches(  # Apply batch inference for all input data.
