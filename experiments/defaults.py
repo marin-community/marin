@@ -83,6 +83,7 @@ def default_tokenize(
             spec for the training run.
         options: CacheOptions to use for tokenization. You typically don't need to set this.
         format: The format of the dataset. This is used to determine how to tokenize the data.
+
             See [Levanter's documentation](https://levanter.readthedocs.io/en/latest/reference/Data-Formats/)
             for more details.
         is_validation: Whether the dataset is a validation set. Doesn't do anything for HF datasets.
