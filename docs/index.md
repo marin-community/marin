@@ -28,4 +28,10 @@ You should see these sections at the top.
 
 ## Contributing
 
-We welcome contributions to our documentation! Please see our [Contributing Guide](how-to-guides/contributing.md) for more information.
+We welcome contributions to our documentation! Please see our [Contributing Guide](dev-guide/contributing.md) for more information.
+
+
+## Get Help
+
+If you have any questions or need help, please feel free to reach out to us on [Discord](https://discord.gg/J9CTk7pqcM)
+or open an issue on [GitHub](https://github.com/stanford-crfm/marin).

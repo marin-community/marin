@@ -18,6 +18,11 @@ theme:
 extra_javascript:
   - javascript/readthedocs.js
 
+extra_css:
+  - css/mkdocstrings.css
+  - css/custom.css
+  - css/friendly.css
+
 nav:
   - Home: index.md
   - Tutorials:
@@ -36,6 +41,7 @@ nav:
     - Experiments: explanation/experiments.md
     - Executor: explanation/executor.md
   - Developer Guide:
+      - Contributing: dev-guide/contributing.md
       - Guidelines: guidelines.md
       - Internal Guidelines: guidelines-internal.md
       - Building Docs: dev-guide/building-docs.md
@@ -45,6 +51,7 @@ nav:
       - LM Overview: lm/overview.md
       - Resource Config: reference/resource-config.md
       - Executor API: reference/executor-api.md
+      - Default Steps: reference/default-steps.md
 
 markdown_extensions:
   - pymdownx.highlight
@@ -69,15 +76,27 @@ plugins:
         python:
           paths: ["."]
           options:
-            docstring_style: google
-            show_source: true
-            show_root_heading: true
+            annotations_path: brief
+            docstring_options:
+              ignore_init_summary: true
+              docstring_style: google
+            show_source: false
+            docstring_section_style: list
+            heading_level: 4
+            inherited_members: true
+            merge_init_into_class: false
+            load_external_modules: true
             show_signature_annotations: true
+            show_root_heading: true
+            show_root_full_path: false
             show_bases: true
             show_submodules: true
             filters: ["!^_"]
-            members_order: source
+            show_symbol_type_heading: false
+            show_symbol_type_toc: false
             show_category_heading: true
-            show_symbol_type_heading: true
-            show_symbol_type_toc: true
+            members_order: source
+            separate_signature: true
+            line_length: 60
+
   - include-markdown
