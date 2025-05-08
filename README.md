@@ -24,7 +24,7 @@ development of the final model) is transparent.
 
 The core part of Marin is minimal, consisting of basically an
 [executor framework](docs/explanation/executor.md), which manages the execution of a set of
-arbitrary steps. Marin also has a [data browser](data_browser/) that makes it easy to
+arbitrary steps. Marin also has a [data browser](https://crfm.stanford.edu/marin/data_browser/) that makes it easy to
 view datasets (in various formats) and experiments produced by the executor.
 
 Marin's primary use case is to build a language model like Qwen 3,
