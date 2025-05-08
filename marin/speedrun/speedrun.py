@@ -159,9 +159,9 @@ def speedrun_results(config: SpeedrunResultsConfig):
     }
 
     # Get timestamps in UTC
-    create_time = datetime.datetime.fromisoformat(run.createdAt.replace("Z", "+00:00"))  # Convert ISO string to datetime
+    start_time = datetime.datetime.fromisoformat(run.createdAt.replace("Z", "+00:00"))  # Convert ISO string to datetime
     runtime_seconds = run.summary["_runtime"]
-    end_time = create_time + datetime.timedelta(seconds=runtime_seconds)
+    end_time = start_time + datetime.timedelta(seconds=runtime_seconds)
 
     full_wandb_url = f"https://wandb.ai/{config.wandb_entity}/{config.wandb_project}/runs/{config.wandb_run_id}"
 
