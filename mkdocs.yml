@@ -78,6 +78,13 @@ plugins:
       handlers:
         python:
           paths: ["."]
+          inventories:
+            - https://docs.python.org/3/objects.inv
+            - https://jax.readthedocs.io/en/latest/objects.inv
+            - https://haliax.readthedocs.io/en/latest/objects.inv
+            - https://levanter.readthedocs.io/en/latest/objects.inv
+            - https://docs.kidger.site/equinox/objects.inv
+            - https://einops.rocks/objects.inv
           options:
             annotations_path: brief
             docstring_options:
