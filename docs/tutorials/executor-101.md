@@ -144,7 +144,7 @@ This command will create several output files:
 
 ## Complete Code
 
-The complete code for this tutorial is available at: [experiments/tutorial/hello_world.py](../../experiments/tutorial/hello_world.py)
+The complete code for this tutorial is available at: [experiments/tutorial/hello_world.py](https://github.com/stanford-crfm/marin/blob/main/experiments/tutorial/hello_world.py)
 
 ## Next Steps
 
