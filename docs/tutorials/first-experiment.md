@@ -91,7 +91,7 @@ nano_train_config = SimpleTrainConfig(
 With this configuration, we are training for 100 steps with a batch size of 4 examples.
 (The model definition we use will define the sequence length, so we don't need to specify it here.)
 
-The `CpuOnlyConfig` is a [resource configuration](/reference/resource-config.md) that requests a certain number of CPUs.
+The `CpuOnlyConfig` is a [resource configuration](../reference/resource-config.md) that requests a certain number of CPUs.
 Other resource configurations include `GpuConfig` for requesting GPUs and `TpuPodConfig` for requesting TPUs.
 
 ### 4. Train the Model

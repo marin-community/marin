@@ -43,6 +43,8 @@ nav:
   - Technical Reference:
       - Architecture: reference/architecture.md
       - LM Overview: lm/overview.md
+      - Resource Config: reference/resource-config.md
+      - Executor API: reference/executor-api.md
 
 markdown_extensions:
   - pymdownx.highlight
@@ -65,8 +67,17 @@ plugins:
       default_handler: python
       handlers:
         python:
+          paths: ["."]
           options:
             docstring_style: google
             show_source: true
             show_root_heading: true
+            show_signature_annotations: true
+            show_bases: true
+            show_submodules: true
+            filters: ["!^_"]
+            members_order: source
+            show_category_heading: true
+            show_symbol_type_heading: true
+            show_symbol_type_toc: true
   - include-markdown

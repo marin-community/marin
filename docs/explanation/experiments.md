@@ -1,6 +1,6 @@
 # Experiments
 
-At the [infrastructure level](docs/reference/executor.md), an experiment is simply a DAG of steps to be executed.
+At the [infrastructure level](../reference/executor.md), an experiment is simply a DAG of steps to be executed.
 However, conceptually, an **experiment** represents a unit of inquiry with a
 particular hypothesis or goal.
 Each such experiment is captured by a GitHub issue with the `experiments` tag
@@ -15,6 +15,6 @@ we record all experiments in the [experiments](https://github.com/stanford-crfm/
 Each file in that directory (e.g., [exp72_baselines.py](https://github.com/stanford-crfm/marin/blob/main/experiments/exp72_baselines.py)) corresponds to one experiment, where the naming convention contains the GitHub issue number.
 
 Running each experiment produces an experiment JSON file (see the
-[executor documentation](docs/reference/executor.md)), which can be visualized specially
+[executor documentation](../reference/executor.md)), which can be visualized specially
 in the data browser.  From this experiments page in the data browser,
 you can follow links to the Ray dashboard and wandb (for training steps).

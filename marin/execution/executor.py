@@ -320,7 +320,7 @@ class ExecutorInfo:
     steps: list[ExecutorStepInfo]
 
 
-def get_info_path(output_path: str) -> str:
+def _get_info_path(output_path: str) -> str:
     """Return the `path` of the info file associated with `output_path`."""
     return os.path.join(output_path, ".executor_info")
 
@@ -481,7 +481,7 @@ class Executor:
         Run the pipeline of `ExecutorStep`s.
 
         Args:
-            step: The step to run.
+            steps: The steps to run.
             dry_run: If True, only print out what needs to be done.
             run_only: If not None, only run the steps in the list and their dependencies. Matches steps' names as regex
             force_run_failed: If True, run steps even if they have already been run (including if they failed)
@@ -703,7 +703,7 @@ class Executor:
 
         # Write out info for each step
         for step, info in zip(self.steps, self.step_infos, strict=True):
-            info_path = get_info_path(self.output_paths[step])
+            info_path = _get_info_path(self.output_paths[step])
             fsspec_utils.mkdirs(os.path.dirname(info_path))
             with fsspec.open(info_path, "w") as f:
                 print(json.dumps(asdict(info), indent=2, cls=CustomJsonEncoder), file=f)
