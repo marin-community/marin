@@ -2,7 +2,7 @@
 name: Experiment
 about: Tracking issue for an experiment
 title: Experiment
-labels: experiments
+labels: experiment
 assignees: ''
 
 ---
@@ -18,13 +18,11 @@ assignees: ''
 
 ### Links
 
-(Delete any that aren't applicable)
+(Delete any that aren't applicable.)
 
 * WandB Report:  (link)
 * Data Browser: (link)
-* Experiment JSON: (link)
 * (etc.)
-
 
 
 ## Results
