@@ -248,4 +248,3 @@ scaling_llamas = [llama_30m, llama_50m, llama_150m, llama_300m, llama_600m, llam
 if __name__ == "__main__":
     for llama in scaling_llamas:
         print(f"{compute_num_parameters(llama, llama3_tokenizer_vocab_size) :,}")
-
