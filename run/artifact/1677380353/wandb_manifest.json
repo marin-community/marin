@@ -1,0 +1,1 @@
+{"version":1,"storagePolicy":"wandb-storage-policy-v1","storagePolicyConfig":{"storageLayout":"V2"},"contents":{"train_step_hooks.jaxpr.txt.gz":{"digest":"ZSOTycPip9h/IK7E0vOfqw==","size":80163,"local_path":"/home/ray/.local/share/wandb/artifacts/staging/tmppzkh98d8","birthArtifactID":"QXJ0aWZhY3Q6MTY3NzM4MDM1Mw==","skip_cache":false}}}

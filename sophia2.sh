@@ -16,7 +16,7 @@ for opt in "${optimizers[@]}"; do
                 echo "Job ${name} already succeeded. Skipping launch."
                 continue
             fi
-            python3 marin/run/ray_run.py -e WANDB_API_KEY 1c85c63399be786e59026e288175122f49a434b0 -- python optimizer_sweep/"${name}".py --force_run_failed True 2>&1 | tee logs/"${name}".txt 
+            python3 marin/run/ray_run.py -e WANDB_API_KEY $WANDB_API_KEY -- python optimizer_sweep/"${name}".py --force_run_failed True 2>&1 | tee logs/"${name}".txt 
             exit_code=$?
             # If the process failed (non-zero exit code), sleep for 20 seconds.
             if [ $exit_code -ne 0 ]; then
