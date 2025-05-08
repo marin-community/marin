@@ -1,0 +1,242 @@
+import json
+import logging
+import os
+import tempfile
+from collections import defaultdict
+from dataclasses import dataclass, field
+
+import draccus
+import fsspec
+import ray
+
+from marin.core.runtime import cached_or_construct_output
+from marin.utils import fsspec_glob, fsspec_mkdirs, rebase_file_path
+from train_test_overlap.compute_data_overlap_metrics import (
+    compute_all_data_overlap,
+    create_ngram_index,
+    load_light_scenarios_from_jsonl,
+)
+from train_test_overlap.compute_metrics_from_ngrams import get_metrics
+from train_test_overlap.data_overlap_spec import (
+    DataOverlapStats,
+    EntryOverlapNgrams,
+)
+from train_test_overlap.metrics import aggregate_metrics
+from train_test_overlap.utils import asdict_without_nones
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class DataOverlapPipelineConfig:
+    input_data: str
+    scenario_data: str
+    output_path: str
+    N: list[int] = field(default_factory=lambda: [5, 9, 13])
+    processes: int = 1
+
+
+@cached_or_construct_output(success_suffix="SUCCESS")
+def copy_metrics_out(input_file_path: str, output_file_path: str):
+    """
+    Idempotent copy of all metric files under input_file_path into output_file_path/metrics
+    """
+    dest_base = os.path.join(output_file_path, "metrics")
+    for local_file in fsspec_glob(f"{input_file_path}/**/*"):
+        dest = rebase_file_path(input_file_path, local_file, dest_base)
+        fsspec_mkdirs(os.path.dirname(dest))
+        with fsspec.open(local_file, "rb") as src, fsspec.open(dest, "wb") as dst:
+            dst.write(src.read())
+
+
+# 10 GiB
+@ray.remote(memory=1024 * 1024 * 1024 * 10)
+def run_data_overlap(config: DataOverlapPipelineConfig) -> str:
+    # Create a temporary directory under /tmp that will be cleaned up automatically
+    with tempfile.TemporaryDirectory(dir="/tmp") as tmpdir:
+        stats_prefix = os.path.join(tmpdir, "stats")
+
+        # Copy and merge scenario JSONL files to local tmpdir
+        local_scenarios_path = os.path.join(tmpdir, "scenario.jsonl")
+        scenario_root = config.scenario_data.rstrip("/")
+        remote_pattern = os.path.join(scenario_root, "**", "*.jsonl*")
+        scenario_files = fsspec_glob(remote_pattern)
+        if not scenario_files:
+            # fallback: treat scenario_data as a single file
+            scenario_files = [config.scenario_data]
+        scenario_files = sorted(scenario_files)
+        with open(local_scenarios_path, "wb") as out_f:
+            for remote_file in scenario_files:
+                with fsspec.open(remote_file, "rb", compression="infer") as in_f:
+                    out_f.write(in_f.read())
+        scenarios = load_light_scenarios_from_jsonl(local_scenarios_path)
+
+        # track ngram counts with a stats_key which is unique for each test instance
+        stats_key_counts: defaultdict = defaultdict(int)
+
+        # and choice of n
+        # TODO: this is the only time we need scenarios,
+        # refactor to get rid of this.
+        # create ngram_index for each N requested for test set
+        ngram_index = create_ngram_index(scenarios, config.N, stats_key_counts)
+
+        stats_key_to_input_ids = defaultdict(set)
+        stats_key_to_reference_ids = defaultdict(set)
+        entry_ngram_counts = defaultdict(lambda: defaultdict(int))
+
+        # Decompress all supported input files into a local temp directory
+        local_input_dir = os.path.join(tmpdir, "input")
+        for pattern in [
+            "**/*.jsonl.gz",
+            "**/*.jsonl.zst",
+            "**/*.jsonl.gs",
+            "**/*.json.gz",
+            "**/*.json.zst",
+            "**/*.jsonl",
+        ]:
+            remote_pattern = os.path.join(config.input_data, pattern)
+            for remote_file in fsspec_glob(remote_pattern):
+                # Preserve relative path and normalize extension to .jsonl
+                rel = os.path.relpath(remote_file, config.input_data)
+                for ext in [".jsonl.gz", ".jsonl.zst", ".jsonl.gs", ".json.gz", ".json.zst"]:
+                    if rel.endswith(ext):
+                        rel = rel[: -len(ext)] + ".jsonl"
+                local_file = os.path.join(local_input_dir, rel)
+                fsspec_mkdirs(os.path.dirname(local_file))
+                # Use fsspec to decompress if needed
+                with fsspec.open(remote_file, "rb", compression="infer") as src, open(local_file, "wb") as dst:
+                    dst.write(src.read())
+
+        for local_file in fsspec_glob(os.path.join(local_input_dir, "**", "*.jsonl")):
+            # Run overlap on each decompressed JSONL file. For each n_gram in the test file,
+            # If we see a hit in the training data we increment it's count.
+            # Also track a dict mapping stats_keys to input and reference strings so we know
+            # where overlap occurs later.
+            compute_all_data_overlap(
+                training_file_path=local_file,
+                ngram_index=ngram_index,
+                stats_key_to_input_ids=stats_key_to_input_ids,
+                stats_key_to_reference_ids=stats_key_to_reference_ids,
+                entry_overlap_key_to_ngram_counts=entry_ngram_counts,
+                output_ngrams=True,
+            )
+
+        # 2) Write raw ngrams
+        ngrams_out = stats_prefix + "_ngrams"
+        with open(ngrams_out, "w") as f:
+            for entry_key, counts in entry_ngram_counts.items():
+                # the entry overlap key tracks the dataset name, instance / example id
+                # whether it's an input or reference, a dataoverlap key which tracks
+                # the dataset and the length of the ngrams we're looking at.
+                # the counts here are the number of times each ngram appears in the training data
+                # for a given test instance.
+                eon = EntryOverlapNgrams(entry_data_overlap_key=entry_key, overlapping_ngram_counts=list(counts.items()))
+                f.write(json.dumps(asdict_without_nones(eon)) + "\n")
+
+        # 3) Write overlap stats to track which instances from test data
+        # have either overlapping inputs or reference answers
+        stats_out = stats_prefix
+        with open(stats_out, "w") as f:
+            for sk, count in stats_key_counts.items():
+                dos = DataOverlapStats(
+                    data_overlap_stats_key=sk,
+                    instance_ids_with_overlapping_input=sorted(stats_key_to_input_ids[sk]),
+                    instance_ids_with_overlapping_reference=sorted(stats_key_to_reference_ids[sk]),
+                    num_instances=count,
+                )
+                f.write(json.dumps(asdict_without_nones(dos)) + "\n")
+
+        # 4) Compute metrics from ngrams
+        metric_dirs = []
+        for n in config.N:
+            met_dir = os.path.join(tmpdir, f"metrics_{n}")
+            get_metrics(
+                ngrams_path=ngrams_out,
+                scenario_path=local_scenarios_path,
+                out_path=met_dir,
+                filter_path="",
+                N=n,
+            )
+            metric_dirs.append(met_dir)
+
+        # 5) Aggregate metrics
+        agg_dirs = []
+        for met_dir in metric_dirs:
+            agg_dir = os.path.join(tmpdir, f"aggregate_{os.path.basename(met_dir)}")
+            aggregate_metrics(path=met_dir, out_path=agg_dir)
+            agg_dirs.append(agg_dir)
+
+        # DEBUG: inspect what was generated
+        print(f"tmpdir contents: {os.listdir(tmpdir)}", flush=True)
+        print(f"  metric_dirs = {metric_dirs}", flush=True)
+        print(f"   agg_dirs   = {agg_dirs}", flush=True)
+
+        # 6) Copy each aggregated metrics file into its own folder under the output path
+        for agg_file in agg_dirs:
+            # agg_file is a JSONL file, e.g. /tmp/.../aggregate_metrics_5
+            agg_name = os.path.basename(agg_file)
+            remote_dir = os.path.join(config.output_path, agg_name)
+            print(f"Copying aggregated file {agg_file} into directory {remote_dir}/", flush=True)
+            # Destination is <remote_dir>/<filename>
+            dest_file = os.path.join(remote_dir, agg_name)
+            print(f"Copying file {agg_file} to {dest_file}", flush=True)
+            fsspec_mkdirs(os.path.dirname(dest_file))
+            with fsspec.open(agg_file, "rb") as src, fsspec.open(dest_file, "wb") as dst:
+                dst.write(src.read())
+
+        # 7) Copy raw ngrams file to raw_ngrams directory in output path
+        raw_ngrams_dir = os.path.join(config.output_path, "raw_ngrams")
+        fsspec_mkdirs(raw_ngrams_dir)
+        raw_ngrams_dest = os.path.join(raw_ngrams_dir, "raw_ngrams.jsonl")
+        print(f"Copying raw ngrams file {ngrams_out} to {raw_ngrams_dest}", flush=True)
+        with fsspec.open(ngrams_out, "rb") as src, fsspec.open(raw_ngrams_dest, "wb") as dst:
+            dst.write(src.read())
+
+        # 8) Copy stats file to stats directory in output path
+        stats_dir = os.path.join(config.output_path, "stats")
+        fsspec_mkdirs(stats_dir)
+        stats_dest = os.path.join(stats_dir, "overlap_stats.jsonl")
+        print(f"Copying stats file {stats_out} to {stats_dest}", flush=True)
+        with fsspec.open(stats_out, "rb") as src, fsspec.open(stats_dest, "wb") as dst:
+            dst.write(src.read())
+
+        # 9) Write a mapping file to track instance IDs to their metrics for easier analysis
+        instance_mapping_dir = os.path.join(config.output_path, "instance_mapping")
+        fsspec_mkdirs(instance_mapping_dir)
+        instance_mapping_dest = os.path.join(instance_mapping_dir, "instance_mapping.json")
+
+        # Create mapping of instance IDs to their stats_keys
+        instance_id_mapping = {}
+        for sk, _count in stats_key_counts.items():
+            scenario_name = sk.light_scenario_key.scenario_spec.class_name.split(".")[-1]
+            subject = sk.light_scenario_key.scenario_spec.args.get("subject", "unknown")
+            n_value = sk.overlap_protocol_spec.n
+            key_name = f"{scenario_name}_{subject}_n{n_value}"
+
+            # Add input overlapping instances
+            for instance_id in stats_key_to_input_ids[sk]:
+                if instance_id not in instance_id_mapping:
+                    instance_id_mapping[instance_id] = {}
+                if "input_overlaps" not in instance_id_mapping[instance_id]:
+                    instance_id_mapping[instance_id]["input_overlaps"] = []
+                instance_id_mapping[instance_id]["input_overlaps"].append(key_name)
+
+            # Add reference overlapping instances
+            for instance_id in stats_key_to_reference_ids[sk]:
+                if instance_id not in instance_id_mapping:
+                    instance_id_mapping[instance_id] = {}
+                if "reference_overlaps" not in instance_id_mapping[instance_id]:
+                    instance_id_mapping[instance_id]["reference_overlaps"] = []
+                instance_id_mapping[instance_id]["reference_overlaps"].append(key_name)
+
+        print(f"Writing instance mapping to {instance_mapping_dest}", flush=True)
+        with fsspec.open(instance_mapping_dest, "w") as f:
+            json.dump(instance_id_mapping, f, indent=2)
+
+    # Temporary directory is automatically cleaned up here
+    return "Train test overlap pipeline completed!"
+
+
+@draccus.wrap()
+def main(config: DataOverlapPipelineConfig):
+    ray.get(run_data_overlap.options(num_cpus=config.processes).remote(config))
