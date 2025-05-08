@@ -320,7 +320,7 @@ class ExecutorInfo:
     steps: list[ExecutorStepInfo]
 
 
-def get_info_path(output_path: str) -> str:
+def _get_info_path(output_path: str) -> str:
     """Return the `path` of the info file associated with `output_path`."""
     return os.path.join(output_path, ".executor_info")
 
@@ -481,7 +481,7 @@ class Executor:
         Run the pipeline of `ExecutorStep`s.
 
         Args:
-            step: The step to run.
+            steps: The steps to run.
             dry_run: If True, only print out what needs to be done.
             run_only: If not None, only run the steps in the list and their dependencies. Matches steps' names as regex
             force_run_failed: If True, run steps even if they have already been run (including if they failed)
@@ -703,7 +703,7 @@ class Executor:
 
         # Write out info for each step
         for step, info in zip(self.steps, self.step_infos, strict=True):
-            info_path = get_info_path(self.output_paths[step])
+            info_path = _get_info_path(self.output_paths[step])
             fsspec_utils.mkdirs(os.path.dirname(info_path))
             with fsspec.open(info_path, "w") as f:
                 print(json.dumps(asdict(info), indent=2, cls=CustomJsonEncoder), file=f)
@@ -750,6 +750,8 @@ class Executor:
                 runtime_env=RuntimeEnv(
                     pip=pip_dependencies,
                 ),
+                # TODO: this is kind of gross, but the overhead of
+                num_cpus=0.001 if isinstance(step.fn, ray.remote_function.RemoteFunction) else 1,
             ).remote(step.fn, step_name, config, dependencies, output_path, self.status_actor, force_run_failed)
         else:
             # Necessary as we call ray.get on all the deps in execute_after_dependencies
@@ -1032,6 +1034,9 @@ def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], descrip
     executor.run(steps=steps, dry_run=config.dry_run, run_only=config.run_only, force_run_failed=config.force_run_failed)
     time_out = time.time()
     logger.info(f"Executor run took {time_out - time_in:.2f}s")
+    # print json path again so it's easy to copy
+    logger.info(f"Executor info written to {executor.executor_info_path}")
+    logger.info(f"View the experiment at {executor.get_experiment_url()}")
 
 
 def _is_relative_path(url_or_path):
