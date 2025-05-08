@@ -12,6 +12,7 @@ from experiments.cooldown_quality import QualityAblationConfig, default_quality_
 from experiments.defaults import default_tokenize
 from experiments.llama import llama3_tokenizer
 from marin.execution.executor import ExecutorMainConfig, executor_main
+from marin.resources import TpuPodConfig
 
 executor_main_config = ExecutorMainConfig(force_run_failed=True)
 # Tokenize the openwebmath dataset
@@ -24,7 +25,7 @@ openwebmath_crawl_tokenized = default_tokenize(
 # Conduct the cooldown experiment over v4-128 TPU else the v5litepod-128
 # TPU is used which is not available in us-central2
 cooldown_config = QualityAblationConfig(
-    tpu_type="v4-128",
+    resources=TpuPodConfig(tpu_type="v4-128"),
 )
 
 # Conduct the cooldown experiment
