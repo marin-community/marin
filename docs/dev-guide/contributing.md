@@ -37,7 +37,7 @@ Please see the [guidelines](../guidelines.md) for principles and practices for M
 
 # Data browser
 
-Marin comes with a [data browser](data_browser/) that makes it easy to
+Marin comes with a [data browser](https://github.com/stanford-crfm/marin/tree/main/data_browser) that makes it easy to
 view datasets (in various formats) and experiments produced by the executor.
 After installing the necessary dependencies, run:
 
