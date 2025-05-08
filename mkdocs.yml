@@ -40,6 +40,7 @@ nav:
     - Data Browser: explanation/data-browser.md
     - Experiments: explanation/experiments.md
     - Executor: explanation/executor.md
+  - Experiment Reports: reports/index.md
   - Developer Guide:
       - Contributing: dev-guide/contributing.md
       - Guidelines: guidelines.md
