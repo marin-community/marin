@@ -34,5 +34,15 @@ datashop_dclm_pretraining_subset = ExecutorStep(
     ),
 )
 
+datashop_dclm_tutorial_subset = ExecutorStep(
+    name="documents/datashop-datasets/datashop-dclm-tutorial-subset",
+    fn=transfer_files,
+    config=TransferConfig(
+        input_path=dclm_baseline_global_shard_1_local_shard_1,
+        output_path=this_output_path(),
+        num_random_files=1,
+    ),
+)
+
 if __name__ == "__main__":
     executor_main([datashop_dclm_annotation_subset, datashop_dclm_pretraining_subset])

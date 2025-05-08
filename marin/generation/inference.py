@@ -79,7 +79,7 @@ def set_ray_data_config(config: TextGenerationInferenceConfig):
     # This is the amount of time to wait for the actors to be created.
     # We increase the default timeout since model loading
     # for large models can take awhile.
-    ctx.wait_for_min_actors_s = 60 * 10 * config.tensor_parallel_size
+    ctx.wait_for_min_actors_s = 60 * 15 * config.tensor_parallel_size
 
 
 def ray_resources_kwarg(config: TextGenerationInferenceConfig):
