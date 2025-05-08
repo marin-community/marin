@@ -1,5 +1,7 @@
 # Core Concepts
 
+(TODO(dlwh): I don't think this doc is up to date or very useful.)
+
 This document provides an overview of the key concepts and principles that underpin the Marin project. It serves as a foundation for understanding the system's architecture, experimental methodology, and development practices.
 
 ## System Architecture
@@ -36,24 +38,24 @@ An experiment in Marin represents a unit of inquiry with a specific hypothesis o
 
 ### Experiment Lifecycle
 1. **Planning**
-   - Define hypothesis or goal
-   - Specify changes to be tested
-   - Document expected outcomes
+    - Define hypothesis or goal
+    - Specify changes to be tested
+    - Document expected outcomes
 
 2. **Implementation**
-   - Create experiment file in `experiments` directory
-   - Define steps using the executor framework
-   - Implement necessary code changes
+    - Create experiment file in `experiments` directory
+    - Define steps using the executor framework
+    - Implement necessary code changes
 
 3. **Execution**
-   - Run sanity checks locally
-   - Perform dry runs
-   - Execute full experiment
+    - Run sanity checks locally
+    - Perform dry runs
+    - Execute full experiment
 
 4. **Analysis**
-   - Review results in data browser
-   - Analyze metrics in wandb
-   - Document findings
+    - Review results in data browser
+    - Analyze metrics in wandb
+    - Document findings
 
 ## Development Practices
 
@@ -75,24 +77,24 @@ An experiment in Marin represents a unit of inquiry with a specific hypothesis o
 ## Key Principles
 
 1. **Reproducibility**
-   - All experiments are fully reproducible
-   - Clear dependency tracking
-   - Versioned artifacts
+    - All experiments are fully reproducible
+    - Clear dependency tracking
+    - Versioned artifacts
 
 2. **Transparency**
-   - Open development process
-   - Documented design decisions
-   - Clear experiment tracking
+    - Open development process
+    - Documented design decisions
+    - Clear experiment tracking
 
 3. **Modularity**
-   - Independent components
-   - Clear interfaces
-   - Reusable code
+    - Independent components
+    - Clear interfaces
+    - Reusable code
 
 4. **Scalability**
-   - Distributed execution
-   - Resource management
-   - Parallel processing
+    - Distributed execution
+    - Resource management
+    - Parallel processing
 
 ## Related Documentation
 

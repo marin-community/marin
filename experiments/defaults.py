@@ -71,6 +71,24 @@ def default_tokenize(
     *,
     is_validation: bool = False,
 ) -> ExecutorStep:
+    """
+    Tokenizes a dataset using the specified tokenizer and Levanter's tokenization infrastructure.
+
+    Args:
+        name: The name of the tokenized dataset. This is used to form the output path for the executor step.
+            `tokenized/` will be prepended to the name.
+        dataset:  The dataset to tokenize. This can be an InputName, ExecutorStep, or a string as a
+            path to the dataset or a HuggingFace dataset ID.
+        tokenizer: string HuggingFace tokenizer name. Should be the same as you intend to use in the tokenizer
+            spec for the training run.
+        options: CacheOptions to use for tokenization. You typically don't need to set this.
+        format: The format of the dataset. This is used to determine how to tokenize the data.
+            See [Levanter's documentation](https://levanter.readthedocs.io/en/latest/reference/Data-Formats/)
+            for more details.
+        is_validation: Whether the dataset is a validation set. Doesn't do anything for HF datasets.
+    Returns:
+        An ExecutorStep that represents the tokenized dataset.
+    """
 
     # sniff out if it's a HuggingFace dataset
     if isinstance(dataset, str) and "/" in dataset and not fsspec_utils.exists(dataset):
@@ -398,7 +416,21 @@ def default_sft(
     )
 
 
-def default_anneal(name: str, anneal_config: AnnealConfig):
+def default_anneal(name: str, anneal_config: AnnealConfig) -> ExecutorStep:
+    """
+
+    Runs an annealing training run. This is a kind of continued pre-training intended
+    to replicate Llama 3-style data ablations (or XXX databricks microannealing)
+
+    Args:
+        name: The name of the training run. Will form the basis of the output path for the executor step.
+              `checkpoints/` will be prepended to the name.
+        anneal_config: Configuration for the annealing run.
+    Returns:
+
+        An ExecutorStep configured for annealing.
+
+    """
     imputed_checkpoint_steps = anneal_config.initialize_from_checkpoint_path.index("step-")
     imputed_checkpoint_step = int(
         anneal_config.initialize_from_checkpoint_path[imputed_checkpoint_steps + len("step-") :]
