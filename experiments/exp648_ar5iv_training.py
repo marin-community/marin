@@ -8,7 +8,7 @@ We then train 1.4B parameter models on these modified datasets to evaluate which
 approach produces better training data for language models. Idea is to see if references and links
 are important for the model training or if they are just noise.
 
-Reference Issue: https://github.com/stanford-crfm/marin/issues/648
+Reference Issue: https://github.com/marin-community/marin/issues/648
 """
 
 import logging

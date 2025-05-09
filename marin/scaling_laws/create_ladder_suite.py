@@ -1,5 +1,5 @@
 """
-Creates a suite of runs for scaling laws- based on https://arxiv.org/pdf/2412.04403 and https://github.com/stanford-crfm/marin/issues/646.
+Creates a suite of runs for scaling laws- based on https://arxiv.org/pdf/2412.04403 and https://github.com/marin-community/marin/issues/646.
 """
 
 import dataclasses
