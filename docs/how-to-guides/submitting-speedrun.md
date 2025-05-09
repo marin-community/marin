@@ -39,6 +39,7 @@ The rest of this guide assumes you have already:
 2. Set up [Weights and Biases](https://wandb.ai) for tracking your runs. You can sign up for a free account [here](https://wandb.ai). You will need a W&B API key to track metrics and submit your run.
 
 ## Creating Your Speedrun Submission
+## Creating Your Speedrun Submission
 
 1. Create a new directory for your run:
    ```bash
