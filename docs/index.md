@@ -36,4 +36,4 @@ We welcome contributions to our documentation! Please see our [Contributing Guid
 ## Get Help
 
 If you have any questions or need help, please feel free to reach out to us on [Discord](https://discord.gg/J9CTk7pqcM)
-or open an issue on [GitHub](https://github.com/stanford-crfm/marin).
+or open an issue on [GitHub](https://github.com/marin-community/marin).

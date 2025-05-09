@@ -1,5 +1,5 @@
 """
-These are larger versions of @dlwh's "YOLO"/vibes run described in https://github.com/stanford-crfm/marin/issues/600.
+These are larger versions of @dlwh's "YOLO"/vibes run described in https://github.com/marin-community/marin/issues/600.
 
 Initially, these were just testing runs, since we didn't know if we'd actually have the capacity for any length of time.
 Turns out we did and they seem pretty decent.
