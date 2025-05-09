@@ -171,12 +171,13 @@ class FasttextClassifier(BaseClassifier):
 
 
 class BERTClassifier(BaseClassifier):
-    def __init__(self, model_name: str, attribute_name: str, *args, **kwargs):
+    def __init__(self, model_name: str, attribute_name: str, max_label: int = 5, *args, **kwargs):
         from transformers import AutoTokenizer, FlaxAutoModelForSequenceClassification
 
         self.model = FlaxAutoModelForSequenceClassification.from_pretrained(model_name)
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         self.attribute_name = attribute_name
+        self.max_label = max_label
 
     def predict(self, documents: list[str]) -> list[float]:
         inputs = self.tokenizer(documents, return_tensors="jax", padding="longest", truncation=True)
@@ -194,7 +195,7 @@ class FinewebEduClassifier(BERTClassifier):
         scores = self.predict(batch["text"])
 
         # Fineweb edu classifier is scored on educational value from 0 to 5, so we want to round to the nearest integer.
-        int_scores = [round(max(0, min(score, 5))) for score in scores]
+        int_scores = [round(max(0, min(score, self.max_label))) for score in scores]
         batch.update(
             {
                 "attributes": [
@@ -257,7 +258,7 @@ class BERTQualityClassifier(BaseClassifier):
 class GTEClassifier(FinewebEduClassifier):
     """Classifier that uses the Alibaba-NLP/gte-base-en-v1.5 model to classify documents"""
 
-    def __init__(self, model_name: str, attribute_name: str, max_length: int, *args, **kwargs):
+    def __init__(self, model_name: str, attribute_name: str, max_length: int, max_label: int = 5, *args, **kwargs):
         from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
         device = xm.xla_device()
@@ -268,6 +269,7 @@ class GTEClassifier(FinewebEduClassifier):
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         self.attribute_name = attribute_name
         self.max_length = max_length
+        self.max_label = max_label
 
     @torch.no_grad()
     def predict(self, documents: list[str]) -> list[float]:
