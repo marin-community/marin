@@ -39,6 +39,7 @@ The rest of this guide assumes you have already:
 2. Set up [Weights and Biases](https://wandb.ai) for tracking your runs. You can sign up for a free account [here](https://wandb.ai). You will need a W&B API key to track metrics and submit your run.
 
 ## Creating Your Speedrun Submission
+## Creating Your Speedrun Submission
 
 1. Create a new directory for your run:
    ```bash
@@ -87,6 +88,18 @@ The rest of this guide assumes you have already:
     ```
 
     The folder and `.py` file names can be different, but should be descriptive of the configuration you use eg. something like `llama_75m_fineweb_edu`. Note that in principle, you could organize your directory experiments/speedrun/<your_run_name> however you like (multiple python files, etc) if you'd like to; in this guide, we'll go with one file to keep things simple.
+
+4. Set relevant environment variables needed for the run:
+
+    ```
+    export WANDB_API_KEY=...
+    export MARIN_PREFIX=...
+    export HF_TOKEN=...
+    ```
+
+    `MARIN_PREFIX` tells Marin where to put artifacts generated during the execution of any steps. For examples, training checkpoints usually will be written to `${MARIN_PREFIX}/checkpoints/`. You can set this to an fsspec-recognizable path eg. a GCS bucket, or a directory on your machine.
+
+    A more detailed description of these can be found in [docs/<TODO>](../../docs/<TODO>).
 
 3. Train your model:
    ```bash
