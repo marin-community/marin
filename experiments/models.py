@@ -32,7 +32,6 @@ from operations.download.huggingface.download_hf import download_hf
 class ModelConfig:
     hf_repo_id: str
     hf_revision: str
-    config_type: HFCompatConfig = LlamaConfig()
 
 
 # We utilize GCSFuse because our disk space is limited on TPUs.
@@ -119,11 +118,17 @@ tulu_3_1_8b_sft = download_model_step(
 )
 
 olmo_2_sft_8b = download_model_step(
-    ModelConfig(hf_repo_id="allenai/OLMo-2-1124-7B-SFT", hf_revision="1de02c0", config_type=Olmo2Config())
+    ModelConfig(
+        hf_repo_id="allenai/OLMo-2-1124-7B-SFT",
+        hf_revision="1de02c0",
+    )
 )
 
 olmo_2_base_8b = download_model_step(
-    ModelConfig(hf_repo_id="allenai/OLMo-2-1124-7B", hf_revision="7df9a82", config_type=Olmo2Config())
+    ModelConfig(
+        hf_repo_id="allenai/OLMo-2-1124-7B",
+        hf_revision="7df9a82",
+    )
 )
 
 amber_base_7b = download_model_step(

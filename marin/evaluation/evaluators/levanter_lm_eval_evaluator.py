@@ -8,8 +8,7 @@ import fsspec
 import jmp
 import levanter.eval_harness as eval_harness
 from levanter.distributed import RayConfig
-from levanter.models.llama import LlamaConfig
-from levanter.models.olmo import Olmo2Config
+from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef
 from levanter.trainer import TrainerConfig
 
 from experiments.evals.task_configs import convert_to_levanter_task_config
@@ -63,7 +62,9 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
                 ray=RayConfig(auto_start_cluster=False),
             )
 
-            model_config = model.config_type
+            model_config = HFCheckpointConverter._infer_config_class(
+                None, RepoRef.from_string(model_name_or_path), False
+            )()
 
             # convert to the config that Levanter's eval_harness expects
             tasks = convert_to_levanter_task_config(evals)
