@@ -33,8 +33,9 @@ nav:
   - How-to Guides:
     - Train an LM: how-to-guides/train-an-lm.md
     - Filtering Data: how-to-guides/filtering-data.md
-    - Submitting Speedruns: how-to-guides/submitting-speedrun.md
+    - Submit a Speedrun: how-to-guides/submitting-speedrun.md
     - Co-Develop Marin and Levanter: how-to-guides/co-develop.md
+    - Run an Annealing Experiment: how-to-guides/annealing-experiment.md
   - Explanation:
     - Concepts: explanation/concepts.md
     - Data Browser: explanation/data-browser.md
