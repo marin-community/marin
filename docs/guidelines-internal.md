@@ -10,7 +10,9 @@ This documentation is for internal developers.
 ## Setup
 
 Behind the scenes, we run an instance of Marin on Google Cloud Platform (GCP).
-Make sure to [install `gcloud`](https://cloud.google.com/sdk/docs/quickstarts) and then run:
+
+Ensure that someone (e.g. @dlwh) adds you to the `hai-gcp-models` project on GCP
+as a `Marin Dev`. Make sure to [install `gcloud`](https://cloud.google.com/sdk/docs/quickstarts) and then run:
 
 ```bash
 gcloud auth login
@@ -34,9 +36,9 @@ issues, contact David Hall for help!
 ## Ray Cluster + Job Submission
 
 Once authenticated for GCP, all other work happens through our
-[Ray Cluster](https://docs.ray.io/en/latest/cluster/getting-started.html). The entire cluster configuration template is stored in [`infra/marin-cluster-template.yaml`](./infra/marin-cluster-template.yaml). **Ray uses this file as the single-source of
+[Ray Cluster](https://docs.ray.io/en/latest/cluster/getting-started.html). The entire cluster configuration template is stored in [marin-cluster-template.yaml](https://github.com/marin-community/marin/blob/main/infra/marin-cluster-template.yaml). **Ray uses this file as the single-source of
 truth for all cluster operations** -- you can think of this file as an alternative to managing your own SSH keys,
-remembering the IP address of the cluster head node, what port the dashboard is running on, etc. For more info about this template and connecting to specific clusters, see [`infra/README.md`](./infra/README.md).
+remembering the IP address of the cluster head node, what port the dashboard is running on, etc. For more info about this template and connecting to specific clusters, see [README.md](https://github.com/marin-community/marin/blob/main/infra/README.md).
 
 There are two steps necessary for 1) establishing a connection to the cluster and 2) submitting/monitoring jobs on the
 cluster. **You will need at least two terminal processes running for the following steps** (make sure to activate your
@@ -59,7 +61,7 @@ this terminal open!
 To submit jobs, we use the
 [Jobs API](https://docs.ray.io/en/latest/cluster/running-applications/job-submission/quickstart.html#submitting-a-job).
 This requires that your Python script is formatted in a certain way, calling some boilerplate Ray functions prior to
-launching tasks -- see [`tests/test_integration_test.py`](./tests/test_integration_test.py) for a minimal example. To launch:
+launching tasks -- see [test_integration_test.py](https://github.com/marin-community/marin/blob/main/tests/test_integration_test.py) for a minimal example. To launch:
 
 # [Terminal 2] Submit a Ray Job (specified via a Python script)
 #   =>> Will output a Job ID like `raysubmit_pAJM8vKfHPhiyHBa`
@@ -137,8 +139,3 @@ from marin.utils import remove_tpu_lockfile_on_exit
 def my_tpu_job():
     ...
 ```
-
-## Evaluation
-
-By default, we run evaluations on TPU using `lm-evaluation-harness` via Levanter. See
-[`experiments/evals/README_eval.md`](./experiments/evals/README_eval.md) for more details.
