@@ -26,7 +26,9 @@ class AdamaxConfig(OptimizerConfig):
 ```
 `OptimizerConfig` has a number of fields that are common to all optimizer; these include `weight_decay`, `learning_rate`, `lr_schedule`, `min_lr_ratio`, `warmup`, `decay`, `rewarmup`, `cycles`, and `cycle_length`. You can find documentation for the OptimizerConfig class, along with further details about the fields [here](https://levanter.readthedocs.io/en/latest/reference/Configuration/#standard-options).
 
-3. Implement the `build()` method to define the optimizer's update rule. This method should return an Optax optimizer:
+3. Implement the `build()` method to define the optimizer's update rule. This method should return an Optax optimizer. Optax allows you to define components that are gradient transformations, and then chain them together to obtain a final gradient update rule.
+
+Additionally, you should register your optimizer class with an identifier, as shown below.
 
 ```python
 def build(self, num_train_steps):
@@ -78,7 +80,7 @@ def build(self, num_train_steps):
 
 Note that `optax.inject_hyperparams` is a wrapper in Optax that can be used to pass schedules (or stateful hyperparameters) into the optimizer. This also allows us to log the learning rate in the tracker.
 
-5. That's it! You can now use the optimizer in your training script. To use the new optimizer in your training script, simply instantiate it with your desired parameters:
+5. You can now use the optimizer in your training script. To use the new optimizer in your training script, simply instantiate it with your desired parameters:
 
 ```python
 optimizer = AdamaxConfig(
@@ -113,8 +115,6 @@ trainer_config = TrainLmConfig(
 Alternatively, you can set the optimizer config in `SimpleTrainConfig`:
 
 ```python
-from experiments.simple_train_config import SimpleTrainConfig
-
 train_config = SimpleTrainConfig(
     ...
     optimizer_config=AdamaxConfig(
@@ -127,18 +127,42 @@ train_config = SimpleTrainConfig(
     ),
     ...
 )
-
-default_train(
-    name="",
-    tokenized=,
-    model_config=,
-    train_config=train_config,
-    tags=(),
-    use_default_validation=True,
-    eval_harness_tasks=(),
-)
 ```
 
-For an example of a full speedrun script using the optimizer, see [this speedrun](https://github.com/mar-in/marin/blob/main/experiments/speedrun/llama_75m_fineweb_edu_adamax.py).
+and pass it into `default_train`, which will set the optimizer config correctly in the training step.
+
+That's it! You can use this approach to define new optimizers you are interested in experimenting with; for optimizers that work well and/or ones that are "standard", considering opening a pull request to Levanter with an implementation.
+
+Here's an example of a speedrun configuration that leverages `AdamaxConfig`:
+
+```
+speedrun_config = SpeedrunConfig(
+    model_config=llama_75m,
+    train_config=SimpleTrainConfig(
+        TpuPodConfig(tpu_type="v4-128"),
+        train_batch_size=512,
+        num_train_steps=6000,
+        learning_rate=3e-3,
+        weight_decay=0.0,
+        steps_per_eval=2000,
+        steps_per_task_eval=2000,
+        optimizer_config=AdamaxConfig(),
+    ),
+    hardware_config=HardwareConfig(
+        device_type="v4-128",
+        num_devices=64,
+        device_flops=275e12,  # from https://cloud.google.com/tpu/docs/v4
+    ),
+)
+
+if __name__ == "__main__":
+    executor_main(steps=default_speedrun("75M_llama_adamax", speedrun_config))
+```
+
+That's it! You can now define new optimizers in this manner and train models using them, all within Marin. For optimizers that are relatively standard, or that work really well, consider opening a pull request to add the optimizer to Levanter.
+
+See below for further examples and relevant links:
+
+[This link](https://github.com/marin-community/marin/blob/main/experiments/speedrun/llama_75m_fineweb_edu_adamax/llama_75m_fineweb_edu_adamax.py) contains the full code for defining a new optimizer and running a speedrun.
 
 See [Levanter's documentation](https://levanter.readthedocs.io/en/latest/optimizers.html) for more information on how to use Optax optimizers. Also, [Optax's documentation](https://optax.readthedocs.io/en/latest/api/optimizers.html) has a list of all available optimizers, as well as further details on how to implement a new/custom optimizer.
