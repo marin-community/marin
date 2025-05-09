@@ -16,7 +16,7 @@ python  experiments/exp615.py
 ## Designing Your Own Custom Filter
 
 To understand how to design your own filter, let's take a look at what the example script is doing.
-We first score the initial dataset with two previously trained Fasttext quality classifiers (`inference_step`), and then we define a custom attribute corresponding two the maximum of the two classifiers' scores (`ensemble_step`) using ['custom_attribute.py'](https://github.com/stanford-crfm/marin/blob/main/marin/processing/classification/custom/custom_attribute.py).
+We first score the initial dataset with two previously trained Fasttext quality classifiers (`inference_step`), and then we define a custom attribute corresponding two the maximum of the two classifiers' scores (`ensemble_step`) using ['custom_attribute.py'](https://github.com/marin-community/marin/blob/main/marin/processing/classification/custom/custom_attribute.py).
 We then consolidate the dataset (`consolidate_step`) to keep only the top 20\% of documents.
 
 The function we use to compute the custom attribute (in this case, the maximum of the two scores) is defined in `marin.classifiers.custom.registry`. The reason we require this registry instead of directly passing functions as arguments to Executor steps is that we need Executor steps to be serializeable.

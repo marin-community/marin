@@ -51,7 +51,6 @@ class ResourceConfig(Protocol):
     def with_env_vars(self, env: dict[str, str] | None = None, /, **kwargs):
         """Returns a new hardware configuration with the given environment variables."""
         new_env = self.runtime_env.get("env_vars", {}) | (env or {}) | kwargs
-        print(new_env)
         return dataclasses.replace(self, runtime_env=RuntimeEnv(**{**self.runtime_env, "env_vars": new_env}))
 
 
@@ -59,7 +58,7 @@ class ResourceConfig(Protocol):
 class CpuOnlyConfig(ResourceConfig):
     num_cpus: int = dataclasses.field(default_factory=lambda: logical_cpu_core_count())
     """Configuration for local training without specialized hardware."""
-    runtime_env: RuntimeEnv = dataclasses.field(default_factory=lambda: RuntimeEnv(env_vars={"JAX_PLATFORMS": "CPU"}))
+    runtime_env: RuntimeEnv = dataclasses.field(default_factory=lambda: RuntimeEnv(env_vars={"JAX_PLATFORMS": "cpu"}))
 
     def accelerator_descriptor(self) -> str | None:
         return None
@@ -112,3 +111,6 @@ class TpuPodConfig(ResourceConfig):
 
     def accelerator_descriptor(self) -> str | None:
         return self.tpu_type
+
+    def as_ray_resources(self) -> RayResources:
+        return RayResources(resources={self.tpu_type: self.node_count})

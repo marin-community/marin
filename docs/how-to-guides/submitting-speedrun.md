@@ -1,4 +1,4 @@
-# Submitting a Speedrun to the Leaderboard
+# Submitting to the Speedrun Leaderboard
 
 
 Marin Speedrun is a community-driven model training framework and contest that promotes collaborative language model development. By focusing on small-scale prototyping, it allows researchers to iterate quickly, test new ideas efficiently, and contribute to a shared leaderboard.
@@ -8,11 +8,10 @@ Submitting a speedrun consists of the following steps:
 - training it on your hardware; both GPUs and TPUs are supported
 - submitting the configuration and the generated results file to Marin via a pull request, and having it appear on the leaderboard!
 
-This guide will walk you through the process of creating and submitting your own speedrun to the Marin Speedrun leaderboard. For an example, see [llama_75m_fineweb_edu.py](marin/experiments/speedrun/llama_75m_fineweb_edu.py)- we will also use this as a reference as we go through this guide.
+This guide will walk you through the process of creating and submitting your own speedrun to the Marin Speedrun leaderboard. For an example, see [llama_75m_fineweb_edu.py](https://github.com/marin-community/marin/blob/main/experiments/speedrun/llama_75m_fineweb_edu/llama_75m_fineweb_edu.py)- we will also use this as a reference as we go through this guide.
 
 ## Motivation for Marin Speedrun
-
-Training large language models (LLMs) is compute-intensive, expensive, and time-consuming. Marin Speedrun offers a lightweight alternative: experiment with smaller-scale models and training recipes to validate ideas before scaling up. With speedrun, the goal is to make it easier to prototype ideas via smaller, focused experiments, and compare them to other models' performance and efficiency.
+Training large language models (LLMs) is compute-intensive, expensive, and time-consuming. To address this, Marin Speedrun provides a lightweight framework for rapid prototyping. Modeled after the [NanoGPT Speedrun](https://github.com/KellerJordan/modded-nanogpt), it enables researchers to explore new ideas using smaller-scale models before investing in large-scale training. The goal is to make it easier to iterate quickly on model architectures, training strategies, and optimization techniques—and to identify promising approaches by comparing performance and efficiency against other submissions.
 
 ## Framework
 
@@ -36,28 +35,15 @@ The Pareto frontier should provide a clearer picture of what's achievable with d
 ## Prerequisites
 
 The rest of this guide assumes you have already:
-1. Cloned the codebase and set up the environment for Marin by following the instructions in [the setup instructions](../../README.md). If you are using a local GPU, follow [local-gpu.md](../../docs/how-to-guides/local-gpu.md) for setup instructions.
+1. Cloned the codebase and set up the environment and env vars for Marin by following [the setup instructions](../tutorials/getting-started.md). If you are using a local GPU, follow [local-gpu.md](../tutorials/local-gpu.md) for GPU-specific setup instructions.
 2. Set up [Weights and Biases](https://wandb.ai) for tracking your runs. You can sign up for a free account [here](https://wandb.ai). You will need a W&B API key to track metrics and submit your run.
 
-## Creating Your Speedrun
+## Creating Your Speedrun Submission
 
-1. Create a new directory for your run, and create a file for your speedrun code:
+1. Create a new directory for your run:
    ```bash
    mkdir -p experiments/speedrun/<your_run_name>
-   cd experiments/speedrun/<your_speedrun_filename>.py
-   touch <yourscript_name>.py
    ```
-
-   In the reference example we're using, this would look like:
-
-    ```
-    mkdir -p experiments/speedrun/llama_75m_fineweb_edu/
-    cd experiments/speedrun/llama_75m_fineweb_edu/
-    touch llama_75m_fineweb_edu.py
-    ```
-
-   The folder and `.py` file names can be different, but should be descriptive of the configuration you use eg. something like `llama_75m_fineweb_edu`. Note that in principle, you could organize your directory experiments/speedrun/<your_run_name> however you like (multiple python files, etc) if you'd like to; in this guide, we'll go with one file to keep things simple.
-
 
 2. Create your training script in this directory; here's a reference speedrun file `llama_75m_fineweb_edu.py`:
 
@@ -98,22 +84,13 @@ The rest of this guide assumes you have already:
     if __name__ == "__main__":
         executor_main(steps=default_speedrun("75M_llama_fineweb_edu", speedrun_config))
 
-3. Set relevant environment variables needed for the run:
-
-    ```
-    export WANDB_API_KEY=...
-    export MARIN_PREFIX=...
-    export HF_TOKEN=...
     ```
 
-    `MARIN_PREFIX` tells Marin where to put artifacts generated during the execution of any steps. For examples, training checkpoints usually will be written to `${MARIN_PREFIX}/checkpoints/`. You can set this to
-    an fsspec-recognizable path eg. a GCS bucket, or a directory on your machine.
-
-    A more detailed description of these can be found in [docs/<TODO>](../../docs/<TODO>).
+    The folder and `.py` file names can be different, but should be descriptive of the configuration you use eg. something like `llama_75m_fineweb_edu`. Note that in principle, you could organize your directory experiments/speedrun/<your_run_name> however you like (multiple python files, etc) if you'd like to; in this guide, we'll go with one file to keep things simple.
 
 3. Train your model:
    ```bash
-   python marin/run/ray_run.py --env_vars WANDB_API_KEY ${WANDB_API_KEY} -- python experiments/speedrun/llama_75m_fineweb_edu/llama_75m_fineweb_edu.py
+   python marin/run/ray_run.py -- python experiments/speedrun/llama_75m_fineweb_edu/llama_75m_fineweb_edu.py
    ```
 
 ## Submitting Your Run

@@ -1,7 +1,7 @@
 """
 This script crawls the open-web-math dataset, which executed the `default_crawl` step for the dataset.
 
-Link to issue: https://github.com/stanford-crfm/marin/issues/868
+Link to issue: https://github.com/marin-community/marin/issues/868
 """
 
 # nodryrun

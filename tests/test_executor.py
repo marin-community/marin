@@ -10,7 +10,7 @@ import pytest
 import ray
 from draccus.utils import Dataclass
 
-from marin.execution.executor import Executor, ExecutorStep, get_info_path, output_path_of, this_output_path, versioned
+from marin.execution.executor import Executor, ExecutorStep, _get_info_path, output_path_of, this_output_path, versioned
 from marin.execution.executor_step_status import (
     STATUS_SUCCESS,
     get_current_status,
@@ -120,7 +120,7 @@ def test_executor():
             status_path = get_status_path(executor.output_paths[step])
             events = read_events(status_path)
             assert get_current_status(events) == STATUS_SUCCESS
-            info_path = get_info_path(executor.output_paths[step])
+            info_path = _get_info_path(executor.output_paths[step])
             with open(info_path) as f:
                 step_info = json.load(f)
                 check_info(step_info, step)
