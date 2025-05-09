@@ -17,12 +17,13 @@ from marin.execution.executor import executor_main
 deeper_starling_path = "gs://marin-us-central2/checkpoints/tootsie-8b-deeper-starling/hf/step-1419999"
 
 # Add GPQA to CORE_TASKS
-core_tasks_with_gpqa = CORE_TASKS + (
+core_tasks_with_gpqa = (
     EvalTaskConfig(
         "leaderboard_gpqa",
         0,
         task_alias="gpqa_0shot",
     ),
+    *CORE_TASKS,
 )
 
 # Create reusable EvalTaskConfig objects
