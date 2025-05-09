@@ -81,7 +81,9 @@ def build(self, num_train_steps):
 
 Note that `optax.inject_hyperparams` is a wrapper in Optax that can be used to pass schedules (or stateful hyperparameters) into the optimizer. This also allows us to log the learning rate in the tracker.
 
-NOTE: You should also register your optimizer class with an identifier, as shown above.
+!!! note
+
+     You should also register your optimizer class with an identifier, as shown above.
 
 5. Use the optimizer in your training script: You can instantiate and pass it directly into your training config:
 
