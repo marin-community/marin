@@ -3,7 +3,7 @@ import logging
 import math
 
 from levanter.models.mixtral import MixtralConfig
-
+from marin.resources import TpuPodConfig
 from experiments.defaults import default_train
 from experiments.dolma.tokenize_dolma import DOLMA_OLMO_MIXTURE_WEIGHTS, tokenize_dolma_steps
 from experiments.simple_train_config import SimpleTrainConfig
@@ -14,7 +14,7 @@ logger = logging.getLogger("ray")
 
 BEST_LR = 3e-3 / 4
 WD = 0.1
-TPU = "v5litepod-256"
+TPU = TpuPodConfig(tpu_type="v5litepod-256")
 TOKEN_TARGETS = 42_000_000_000
 BATCH_SIZE = 1024
 SEQ_LEN = 4096
@@ -64,7 +64,7 @@ num_train_steps = step_target(TOKEN_TARGETS, BATCH_SIZE, SEQ_LEN)
 
 
 train_config = SimpleTrainConfig(
-    tpu_type=versioned(TPU),
+    resources=TPU,
     train_batch_size=BATCH_SIZE,
     num_train_steps=num_train_steps,
     learning_rate=BEST_LR,
