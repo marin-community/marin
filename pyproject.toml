@@ -65,6 +65,7 @@ docs = [
     "mkdocs-git-revision-date-localized-plugin>=1.2.0",
     "mkdocs-git-authors-plugin>=0.9.0",
     "mkdocs-minify-plugin>=0.7.0",
+    "mkdocs-include-markdown-plugin>=7.1.5",
 ]
 
 download_transform = [

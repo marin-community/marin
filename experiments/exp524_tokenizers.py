@@ -1,6 +1,6 @@
 """
 Train 1.4B models on Fineweb Edu with different tokenizers.
-https://github.com/stanford-crfm/marin/issues/524
+https://github.com/marin-community/marin/issues/524
 """
 
 from experiments.defaults import default_tokenize, default_train
