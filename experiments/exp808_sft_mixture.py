@@ -10,7 +10,7 @@ accordingly.
 from levanter.data.text import ChatLmDatasetFormat
 
 from experiments.defaults import default_sft, default_tokenize
-from experiments.exp964_custom_chat_tokenizer import marin_tokenizer
+from experiments.marin_models import marin_tokenizer
 from experiments.instruction_datasets import get_instruction_dataset
 from experiments.llama import llama_8b
 from experiments.simple_sft_config import SimpleSFTConfig
