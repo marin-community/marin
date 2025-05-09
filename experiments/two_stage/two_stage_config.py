@@ -134,13 +134,19 @@ class TwoStageConfig:
         assert np.isclose(self.stage2_duration * (1 - self.replay_ratio), self.rare_fraction_epoched * self.rare_stage2_allocation), f"Parameters are inconsistent: stage2_duration = {self.stage2_duration}, rare_fraction_epoched = {self.rare_fraction_epoched}, rare_stage2_allocation = {self.rare_stage2_allocation}, replay_ratio = {self.replay_ratio}. However, {self.stage2_duration} * (1 - {self.replay_ratio}) = {self.stage2_duration * (1 - self.replay_ratio)} != {self.rare_fraction_epoched} * {self.rare_stage2_allocation} = {self.rare_fraction_epoched * self.rare_stage2_allocation}"
 
         self.total_tokens = self.num_train_steps * self.train_batch_size * self.model_config.seq_len
-        self.rare_batches = int(self.num_train_steps * self.rare_fraction_epoched)
-        self.common_batches = self.num_train_steps - self.rare_batches
+        self.rare_batches = int(self.num_train_steps * self.rare_fraction)
 
-        self.rare_weight_stage1 = self.rare_fraction_epoched * (1 - self.rare_stage2_allocation)
-        self.rare_weight_stage2 = self.rare_fraction_epoched * self.rare_stage2_allocation
+        self.stage1_duration = 1.0 - self.stage2_duration
+
+        if self.stage1_duration != 0.0:
+            self.rare_weight_stage1 = self.rare_fraction_epoched * (1 - self.rare_stage2_allocation) / self.stage1_duration
+        else:
+            self.rare_weight_stage1 = 0.0
+        self.rare_weight_stage2 = 1 - self.replay_ratio
         self.common_weight_stage1 = 1 - self.rare_weight_stage1
         self.common_weight_stage2 = 1 - self.rare_weight_stage2
+
+        assert np.isclose(self.rare_weight_stage1 * self.stage1_duration + self.rare_weight_stage2 * self.stage2_duration, self.rare_fraction_epoched), f"Rare weight stage 1 * stage 1 duration + rare weight stage 2 * stage 2 duration = {self.rare_weight_stage1 * self.stage1_duration + self.rare_weight_stage2 * self.stage2_duration} != {self.rare_fraction_epoched}"
 
         assert 0.0 <= self.rare_weight_stage1 <= 1.0, "Rare weight stage 1 must be between 0.0 and 1.0"
         assert 0.0 <= self.rare_weight_stage2 <= 1.0, "Rare weight stage 2 must be between 0.0 and 1.0"
@@ -154,7 +160,7 @@ class TwoStageConfig:
             self.common_data_name: self.common_data
         }
 
-        transition_idx = int((1 - self.stage2_duration) * self.num_train_steps)
+        transition_idx = int(self.stage1_duration * self.num_train_steps)
         # adjust by default block size
         transition_idx = (transition_idx // 2) * 2 # TODO: fix this
         stage1 = (0, {self.rare_data_name: self.rare_weight_stage1, self.common_data_name: self.common_weight_stage1})
