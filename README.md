@@ -19,7 +19,7 @@ Marin is a modular, open-source framework for the research and development of [f
 
 A key feature of Marin is **reproducibility**: every step, from raw data to the final model are recorded—not just the end result.
 This includes failed experiments, so the entire research process is transparent.
-You can browse all experiments and data in the [Marin Data Browser](https://crfm.stanford.edu/marin/data-browser/) XXX update link,
+You can browse all experiments and data in the [Marin Data Browser](https://crfm.stanford.edu/marin/data_browser/) XXX update link,
 or check out a [curated list of experiments](docs/reports/index.md).
 
 Marin's primary use case is training language model like Llama or Qwen 3.
