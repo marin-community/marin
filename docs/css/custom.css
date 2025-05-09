@@ -59,6 +59,7 @@ div.doc-contents {
 
 .md-main__inner {
   margin-bottom: 1.5rem;
+  max-width: 1200px; /* default is 960px; increase as needed */
 }
 
 /* Remove prev/next footer buttons */
