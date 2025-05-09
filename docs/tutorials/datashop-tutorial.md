@@ -3,7 +3,7 @@
 This tutorial will walk through a basic example of using Datashop to filter a data pool for desired documents given a prompt and training a model on the filtered data.
 
 ## Prerequisites
-TPUs are currently required to run this process for model inference. GPUs are not supported yet.
+TPUs are currently required to run this process for model inference. We perform this inference on TPU v6e-8s for serving and TPU v6e-128s for training for reference. Check the TPU Cluster yamls in `infra/` for reference. GPUs are not supported yet.
 
 
 We use vLLM to run fast model inference to annotate each document given a rubric prompt. To install the docker image with vLLM and publish it to Google Cloud Artifact Registry, run the following commands:
@@ -65,14 +65,14 @@ We then import the pretraining and annotator data path from the datashop dataset
 from experiments.datashop.datashop_datasets import datashop_dclm_annotation_subset, datashop_dclm_pretraining_subset
 ```
 
-We then initialize the datashop runner with the appropriate parameters. Note that we use the llama-3.3-70b-instruct model as the annotator and we pass in a `processor_type` kwarg to the dataset output processor to signify that our outputs are a score between 0 and 5. If you have a different output format, you may need to write your custom processor in `marin/datashop/dataset_processor.py` and pass in the `processor_type` kwarg to that dataset output processor.
+We then initialize the datashop runner with the appropriate parameters. Note that we use the Llama-3.1-8B-Instruct model as the annotator and we pass in a `processor_type` kwarg to the dataset output processor to signify that our outputs are a score between 0 and 5. We use the 8B model for this tutorial because it runs faster. If you have a different output format, you may need to write your custom processor in `marin/datashop/dataset_processor.py` and pass in the `processor_type` kwarg to that dataset output processor.
 ```python
 from experiments.datashop.datashop_runner import DatashopRunner, DatashopRunnerConfig
 
 datashop_runner = DatashopRunner(
     DatashopRunnerConfig(
         experiment_name="finemath-replication",
-        annotator_model_name="Llama-3.3-70B-Instruct",
+        annotator_model_name="meta-llama/Llama-3.1-8B-Instruct",
         pretraining_data_path=datashop_dclm_pretraining_subset,
         annotator_data_path=datashop_dclm_annotation_subset,
         data_filter_prompt=FINEMATH_DATA_FILTER_PROMPT,
@@ -82,6 +82,8 @@ datashop_runner = DatashopRunner(
 ```
 
 We then run the datashop steps in the vLLM cluster to obtain the encoder model.
+
+Expected runtime: 20 minutes
 ```python
 datashop_runner.run_eval_cluster_steps()
 ```
