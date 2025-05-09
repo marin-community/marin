@@ -2,13 +2,13 @@ import dataclasses
 import logging
 import math
 
-from experiments.dolma.tokenize_dolma import DOLMA_OLMO_MIXTURE_WEIGHTS, tokenize_dolma_steps
-from marin.processing.tokenize.data_configs import lm_mixture_data_config
+from levanter.models.mixtral import MixtralConfig
+
 from experiments.defaults import default_train
+from experiments.dolma.tokenize_dolma import DOLMA_OLMO_MIXTURE_WEIGHTS, tokenize_dolma_steps
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import executor_main, versioned
-
-from levanter.models.mixtral import MixtralConfig
+from marin.processing.tokenize.data_configs import lm_mixture_data_config
 
 logger = logging.getLogger("ray")
 
@@ -71,6 +71,7 @@ train_config = SimpleTrainConfig(
     weight_decay=WD,
 )
 
+
 def make_step(name, model_config):
     return default_train(
         name=name,
@@ -80,6 +81,7 @@ def make_step(name, model_config):
         use_default_validation=False,
         tags=("mixtral", "8x8b", "dolma"),
     )
+
 
 moe_big_unbalanced_step = make_step(
     name="moe-v5e-mixtral8x8b-unbalanced-13",
@@ -103,9 +105,4 @@ moe_big_balanced_step = make_step(
 
 
 if __name__ == "__main__":
-    executor_main([
-        moe_big_unbalanced_step, 
-        moe_big_lbl_step,
-        moe_big_lbl_shared_step, 
-        moe_big_balanced_step
-    ])
+    executor_main([moe_big_unbalanced_step, moe_big_lbl_step, moe_big_lbl_shared_step, moe_big_balanced_step])

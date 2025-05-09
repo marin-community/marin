@@ -10,6 +10,7 @@ from datetime import timedelta
 from functools import lru_cache
 
 import jmp
+from haliax.partitioning import ResourceAxis
 from haliax.quantization import QuantizationConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.compat.hf_checkpoints import load_tokenizer
@@ -58,8 +59,6 @@ from marin.training.training import (
     TrainLmOnPodConfig,
     run_levanter_train_lm,
 )
-
-from haliax.partitioning import ResourceAxis
 
 logger = logging.getLogger("ray")
 
@@ -280,7 +279,7 @@ def default_train(
             axis_resources={
                 "token": (ResourceAxis.REPLICA, ResourceAxis.DATA),
                 "token_repeat": (ResourceAxis.REPLICA, ResourceAxis.DATA),
-            }
+            },
         ),
         initialize_from_checkpoint_path=(
             checkpoint_path_to_load_from if train_config.reset_data_loader_on_init else None
