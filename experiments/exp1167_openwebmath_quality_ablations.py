@@ -24,6 +24,14 @@ openwebmath_crawl_tokenized = default_tokenize(
     tokenizer=llama3_tokenizer,
 )
 
+openwebmath_raw_tokenized = default_tokenize(
+    "openwebmath",
+    InputName.hardcoded(
+        "gs://marin-us-central2/raw/open-web-math-fde8ef8/fde8ef8/huggingface.co/datasets/open-web-math/open-web-math/resolve/fde8ef8/data"
+    ),
+    tokenizer=llama3_tokenizer,
+)
+
 # Conduct the cooldown experiment over v4-128 TPU else the v5litepod-128
 # TPU is used which is not available in us-central2
 cooldown_config = QualityAblationConfig(
@@ -36,11 +44,18 @@ openwebmath_crawl_ablation = default_quality_ablation(
     cooldown_config,
 )
 
+openwebmath_raw_ablation = default_quality_ablation(
+    openwebmath_raw_tokenized,
+    cooldown_config,
+)
+
 if __name__ == "__main__":
     executor_main(
         executor_main_config,
         steps=[
             openwebmath_crawl_tokenized,
             openwebmath_crawl_ablation,
+            openwebmath_raw_tokenized,
+            openwebmath_raw_ablation,
         ],
     )
