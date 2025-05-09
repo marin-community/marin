@@ -1,7 +1,7 @@
 """
 This script crawls the fineweb-edu dataset, which executed the `default_crawl` step for each dump in the dataset.
 
-Link to issue: https://github.com/stanford-crfm/marin/issues/868
+Link to issue: https://github.com/marin-community/marin/issues/868
 """
 
 # nodryrun

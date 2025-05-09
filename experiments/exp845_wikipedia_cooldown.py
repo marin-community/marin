@@ -5,7 +5,7 @@ which fine-tunes an 8B model on a mixture of:
 - 15% Wikipedia dataset (markdownified using Resiliparse)
 - 15% Dolma/FLAN dataset
 
-Reference Issue: https://github.com/stanford-crfm/marin/issues/845
+Reference Issue: https://github.com/marin-community/marin/issues/845
 """
 
 from experiments.cooldown_quality import QualityAblationConfig, default_quality_ablation

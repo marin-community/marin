@@ -8,7 +8,7 @@ This prediction is done through a two-step modeling process using (N, D) data fr
 - we first fit a power-law model to predict the task loss from the number of parameters and tokens.
 - then, we fit a sigmoidal model to predict the task accuracy from the task loss.
 
-For further details see the corresponding GitHub issue: https://github.com/stanford-crfm/marin/issues/646.
+For further details see the corresponding GitHub issue: https://github.com/marin-community/marin/issues/646.
 
 To use this code, call fit_scaling_laws() with appropriate arguments.
 """

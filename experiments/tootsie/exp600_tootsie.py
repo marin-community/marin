@@ -1,5 +1,5 @@
 """
-This is @dlwh's "YOLO"/vibes run described in https://github.com/stanford-crfm/marin/issues/600.
+This is @dlwh's "YOLO"/vibes run described in https://github.com/marin-community/marin/issues/600.
 
 The idea is/was to train a 8B model continuously updating the mixture, data, and anything else. With WSD-S,
 there's no "middle" or "end" of the run, there's just the run. So we'll just train for a long time, updating as we go.

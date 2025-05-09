@@ -59,7 +59,7 @@ abide by the following guidelines:
 - Use `dataclass(frozen=True)` instead of untyped dictionaries.
 - Write simple unit tests for any tricky piece of code.
 - Break code into small pieces as opposed to having giant monolithic functions
-  when the pieces could be reusable.
+  when the pieces could be reusable. But please keep in mind the [rule of three](https://en.wikipedia.org/wiki/Rule_of_three_(computer_programming)).
 
 # Experiments
 
