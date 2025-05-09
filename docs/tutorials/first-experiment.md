@@ -13,6 +13,8 @@ In this tutorial, we will cover the following:
 We assume you've already gone through the [getting started](getting-started.md) tutorial
 to install Marin and set up your environment.
 
+If you'd like to run this tutorial on a GPU, see the [local-gpu](local-gpu.md) tutorial.
+
 For this tutorial, we recommend running with WandB in offline mode.
 
 ```bash
@@ -22,8 +24,9 @@ wandb offline
 ## Creating an Experiment Script
 
 Experiments scripts live in the `experiments` directory. For instance, the script for this tutorial is in
-`experiments/tutorial/exp1191_train_tiny_model_cpu.py`.
-By convention, experiments are named `exp{GITHUB_ISSUE_NUMBER}_{DESCRIPTOR}.py`, where `GITHUB_ISSUE_NUMBER` is the issue number for your experiment and `DESCRIPTOR` is a brief description.
+`experiments/tutorial/train_tiny_model_cpu.py`.
+
+By convention, experiments are usually named `exp{GITHUB_ISSUE_NUMBER}_{DESCRIPTOR}.py`, where `GITHUB_ISSUE_NUMBER` is the issue number for your experiment and `DESCRIPTOR` is a brief description.
 But, to follow along with this tutorial, you can name it whatever you want.
 
 To train a model, we need to:
@@ -146,7 +149,7 @@ so we don't need to explicitly list them.
 To run the experiment, locally on CPU, we can run the script directly.
 
 ```bash
-python experiments/tutorial/exp1191_train_tiny_model_cpu.py --prefix /tmp/marin
+python experiments/tutorial/train_tiny_model_cpu.py --prefix /tmp/marin-tutorial
 ```
 
 The `--prefix` argument specifies the output directory for the experiment. It can be a local directory or anything [fsspec](https://filesystem-spec.readthedocs.io/en/latest/) supports,
@@ -158,8 +161,8 @@ At the end, you should see a message like this:
 
 ```
 2025-05-07 23:00:24,099	INFO executor.py:1036 -- Executor run took 263.37s
-2025-05-07 23:00:24,099	INFO executor.py:1037 -- Experiment info written to /tmp/marin/experiments/exp1191_train_tiny_model_cpu-0b39f4.json
-2025-05-07 23:00:24,099	INFO executor.py:1038 -- View the experiment at https://localhost:5000/experiment?path=gs%3A%2F%2Fmarin-us-central2%2Fexperiments%2Fexp1191_train_tiny_model_cpu-0b39f4.json
+2025-05-07 23:00:24,099	INFO executor.py:1037 -- Experiment info written to /tmp/marin-tutorial/experiments/train_tiny_model_cpu-0b39f4.json
+2025-05-07 23:00:24,099	INFO executor.py:1038 -- View the experiment at https://localhost:5000/experiment?path=gs%3A%2F%2Fmarin-us-central2%2Fexperiments%2Ftrain_tiny_model_cpu-0b39f4.json
 ```
 
 The json file contains a record of the experiment, including the steps and dependencies.
@@ -173,18 +176,18 @@ You can look at the artifacts logged to the output directory. Typically, for tra
 interesting logging goes to WandB, which you likely disabled.
 
 ```
-$ ls /tmp/marin/*
-/tmp/marin/checkpoints:
+$ ls /tmp/marin-tutorial/*
+/tmp/marin-tutorial/checkpoints:
 marin-nano-tinystories-b4157e
 
-/tmp/marin/experiments:
-exp1191_train_tiny_model_cpu-0b39f4.json
+/tmp/marin-tutorial/experiments:
+train_tiny_model_cpu-0b39f4.json
 
-/tmp/marin/tokenized:
+/tmp/marin-tutorial/tokenized:
 roneneldan
 ```
 
-The `experiments` directory contains the experiment JSON file.
+The `experiments` directory contains the experiment JSON file (which tracks all the steps and their dependencies).
 The `checkpoints` directory contains the trained model.
 The `tokenized` directory contains the tokenized dataset.
 
@@ -205,7 +208,7 @@ By default, the Marin executor won't rerun steps that failed.
 To force it to rerun a step, you can use the `--force_run_failed true` flag.
 
 ```bash
-python experiments/tutorial/exp1191_train_tiny_model_cpu.py --prefix /tmp/marin --force_run_failed true
+python experiments/tutorial/train_tiny_model_cpu.py --prefix /tmp/marin-tutorial --force_run_failed true
 ```
 
 
@@ -216,7 +219,7 @@ The easiest way to do this is to remove the output directory for the step.
 For instance, if the step is named `marin-nano-tinystories-b4157e`, you can remove the output directory with:
 
 ```bash
-rm -rf /tmp/marin/marin-tutorial-nano-tinystories-b4157e
+rm -rf /tmp/marin-tutorial/marin-tutorial-nano-tinystories-b4157e
 ```
 
 Note, however, that WandB does not like reusing the same run ID, so you may need to change the `name` argument to `default_train` to a new value.
