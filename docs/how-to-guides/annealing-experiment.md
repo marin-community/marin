@@ -1,4 +1,4 @@
-# How to Run a Microannealing Experiment
+# How to Run an Annealing Experiment
 
 This guide explains how to evaluate dataset quality using microannealing experiments, similar to techniques used in the Llama-3, Olmo-2, and Mosaic papers.
 The process involves cooldown training a pretrained model on a specific mixture of datasets and evaluating its impact on benchmark performance.
