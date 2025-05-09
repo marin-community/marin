@@ -27,7 +27,7 @@ Our documentation is organized into six main sections:
 - **Developer Guide**: Information for developers who want to contribute to Marin
 - **Technical Reference**: Detailed technical information about Marin's architecture and components
 
-You should see these sections at the top.
+These sections are available on the left side bar (or hamburger menu).
 
 ## Get Involved
 
