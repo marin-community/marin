@@ -87,9 +87,8 @@ plugins:
             - https://einops.rocks/objects.inv
           options:
             annotations_path: brief
-            docstring_options:
-              ignore_init_summary: true
-              docstring_style: google
+            ignore_init_summary: true
+            docstring_style: google
             show_source: false
             docstring_section_style: list
             heading_level: 4
