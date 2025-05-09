@@ -127,11 +127,11 @@ train_config = SimpleTrainConfig(
 
 Then pass it into `default_train`, which will set the optimizer config correctly in the training step.
 
-That's it! You can use this approach to define new optimizers you are interested in experimenting with; for optimizers that work well and/or ones that are "standard", considering opening a pull request to Levanter with an implementation.
+### Sample usage in a speedrun script
 
 Here's an example of a speedrun configuration that leverages `AdamaxConfig`:
 
-```
+```python
 speedrun_config = SpeedrunConfig(
     model_config=llama_75m,
     train_config=SimpleTrainConfig(
