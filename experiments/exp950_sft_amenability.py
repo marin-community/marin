@@ -1,6 +1,6 @@
 """
 Experiment 950: Learning Rate Schedule Comparison for 1.4B Llama Models
-Link: https://github.com/stanford-crfm/marin/issues/950
+Link: https://github.com/marin-community/marin/issues/950
 
 We have observed that Tootsie seems to be harder to SFT than OLMo, despite getting better
 scores on MMLU and similar scores on Paloma. One hypothesis is that the higher LR used
