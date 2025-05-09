@@ -7,8 +7,8 @@ from typing import ClassVar
 import fsspec
 import jmp
 import levanter.eval_harness as eval_harness
-from levanter.distributed import RayConfig
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
+from levanter.distributed import RayConfig
 from levanter.trainer import TrainerConfig
 
 from experiments.evals.task_configs import convert_to_levanter_task_config
