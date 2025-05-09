@@ -10,6 +10,7 @@ build:
       - pip install mkdocs-material
       - pip install mkdocstrings[python]
       - pip install markdown-include
+      - pip install mkdocs-include-markdown-plugin
 
 mkdocs:
   configuration: mkdocs.yml
