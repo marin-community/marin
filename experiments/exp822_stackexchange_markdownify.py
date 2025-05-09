@@ -17,7 +17,7 @@ Answer 2:
 Tags: <tags>
 ```
 
-Reference Issue: https://github.com/stanford-crfm/marin/issues/822
+Reference Issue: https://github.com/marin-community/marin/issues/822
 """
 
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
