@@ -4,8 +4,8 @@ Marin was mainly developed on Google Cloud Platform (GCP) using TPUs.
 However, it is possible to run Marin on GPUs as well.
 
 This guide will walk you through the steps to set up a local GPU environment for Marin.
-Similar steps will let you run Marin on a cloud GPU environment using Ray's autoscaler,
-but we defer that to a future guide.
+By "local", we mean a machine that you run directly, as opposed to using Ray's autoscaler to launch a cluster of GPU nodes.
+Similar steps will let you run Marin on a cloud GPU environment using Ray's autoscaler, but we defer that to a future guide.
 
 ## Prerequisites
 
@@ -18,6 +18,9 @@ This part walks you through having the following installed:
 - cuDNN (version 9.1 or higher)
 
 ## Basic system setup
+
+You may not need to do this if you're using a cloud service like GCP or AWS, or if you've already done
+more or less the same thing for a different project.
 
 ### 1. System setup
 First, refresh the system's package index:
@@ -39,6 +42,7 @@ sudo apt install git
 ```
 
 ### 3. CUDA installation
+
 Install CUDA 12.9.0:
 
 ```bash
@@ -102,10 +106,10 @@ nvcc --version
 
 ## Running an Experiment
 
-Now you can run an experiment. For example, to run the tiny model training script [`experiments/tutorial/exp1076_train_tiny_model.py`](https://github.com/marin-community/marin/blob/main/experiments/tutorial/exp1076_train_tiny_model.py):
+Now you can run an experiment. For example, to run the tiny model training script [`experiments/tutorial/train_tiny_model_gpu.py`](https://github.com/marin-community/marin/blob/main/experiments/tutorial/train_tiny_model_gpu.py):
 
 ```bash
-python3 experiments/tutorial/exp1076_train_tiny_model.py --prefix /path/to/output
+python3 experiments/tutorial/train_tiny_model_gpu.py --prefix /path/to/output
 ```
 
 The `prefix` is the directory where the output will be saved. It can be a local directory or anything fsspec supports,

@@ -11,13 +11,14 @@ end="<!--marin-intro-end-->"
 - [Getting Started](tutorials/getting-started.md)
 - [First Experiment](tutorials/first-experiment.md)
 - [Local GPU Setup](tutorials/local-gpu.md)
+- [Overview](lm/overview.md)
 - [Experiment Reports](reports/index.md)
 <!-- - [Architecture Overview](reference/architecture.md) TODO -->
 
 
 ## Documentation Structure
 
-Our documentation is organized into five main sections:
+Our documentation is organized into six main sections:
 
 - **Tutorials**: Step-by-step guides to help you get started with Marin, including installation, basic usage, and local GPU setup
 - **How-to Guides**: Practical guides for specific tasks and common operations
@@ -28,9 +29,13 @@ Our documentation is organized into five main sections:
 
 You should see these sections at the top.
 
-## Contributing
+## Get Involved
 
-We welcome contributions to our documentation! Please see our [Contributing Guide](dev-guide/contributing.md) for more information.
+{%
+include-markdown "../README.md"
+start="<!--marin-get-involved-start-->"
+end="<!--marin-get-involved-end-->"
+%}
 
 
 ## Get Help
