@@ -1,13 +1,13 @@
 # Marin
 
 <a href="https://github.com/marin-community/marin/actions?query=branch%3Amain++">
-    <img alt="Build Status" src="https://img.shields.io/github/actions/workflow/status/stanford-crfm/marin/run_tests.yaml?branch=main">
+    <img alt="Build Status" src="https://img.shields.io/github/actions/workflow/status/marin-community/marin/run_tests.yaml?branch=main">
 </a>
 <a href="https://marin.readthedocs.io/en/latest/?badge=latest">
     <img alt="Documentation" src="https://readthedocs.org/projects/marin/badge/?version=latest">
 </a>
 <a href="">
-<img alt="License" src="https://img.shields.io/github/license/stanford-crfm/marin?color=blue" />
+<img alt="License" src="https://img.shields.io/github/license/marin-community/marin?color=blue" />
 </a>
 
 <!--marin-intro-start-->
