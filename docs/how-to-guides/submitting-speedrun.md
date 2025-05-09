@@ -46,7 +46,14 @@ The rest of this guide assumes you have already:
    mkdir -p experiments/speedrun/<your_run_name>
    ```
 
-2. Create your training script in this directory; here's a reference speedrun file `llama_75m_fineweb_edu.py`:
+2. Create your training script in this directory. This involves the following:
+    - You will need to create a `SpeedRunConfig` object that specifies the model configuration, training configuration, and hardware configuration.
+    - The model configuration is specified using a `LlamaConfig` object (see [llama.py](../llama.py)).
+    - The training configuration is specified using a `TrainLmConfig` object, but you can also use a slightly more convenient `SimpleTrainConfig` (see [simple_train_config.py](../simple_train_config.py)).
+    - The dataset is set to FineWeb-Edu (with a fixed data seed) by default. You can optionally specify a (tokenized) dataset, but note that in order to count as a valid submission, you must use the default dataset (FineWeb-Edu)
+
+
+ here's a reference speedrun file `llama_75m_fineweb_edu.py`:
 
    ```python
     """
