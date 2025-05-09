@@ -24,15 +24,28 @@ fineweb_edu_tokenized = default_tokenize(
     tokenizer=llama3_tokenizer,
 )
 
+fineweb_edu_raw_tokenized = default_tokenize(
+    "fineweb-edu-raw",
+    InputName.hardcoded(
+        "gs://marin-us-central2/raw/fineweb-edu-c2beb4/3c452cb/huggingface.co/datasets/HuggingFaceFW/fineweb-edu/resolve/3c452cb/data"
+    ),
+    tokenizer=llama3_tokenizer,
+)
+
 # Conduct the cooldown experiment over v4-128 TPU else the v5litepod-128
 # TPU is used which is not available in us-central2
 cooldown_config = QualityAblationConfig(
     resources=TpuPodConfig(tpu_type="v4-128"),
 )
 
-# Conduct the cooldown experiment
+# Conduct the cooldown experimentm
 fineweb_edu_ablation = default_quality_ablation(
     fineweb_edu_tokenized,
+    cooldown_config,
+)
+
+fineweb_edu_raw_ablation = default_quality_ablation(
+    fineweb_edu_raw_tokenized,
     cooldown_config,
 )
 
@@ -42,5 +55,7 @@ if __name__ == "__main__":
         steps=[
             fineweb_edu_tokenized,
             fineweb_edu_ablation,
+            fineweb_edu_raw_tokenized,
+            fineweb_edu_raw_ablation,
         ],
     )
