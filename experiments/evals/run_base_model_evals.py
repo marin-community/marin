@@ -6,12 +6,11 @@ MAP-NEO 7B, and Amber Base 7B models on CORE_TASKS (augmented with GPQA) as well
 as dedicated MMLU 0-shot and 5-shot configurations.
 """
 
-from experiments.evals.evals import default_key_evals, default_eval
-from experiments.evals.task_configs import CORE_TASKS
-from experiments.evals.engine_configs import DEFAULT_VLLM_ENGINE_KWARGS
-from marin.evaluation.evaluation_config import EvalTaskConfig
+from experiments.evals.evals import default_eval
 from experiments.evals.resource_configs import SINGLE_TPU_V6E_8
-from experiments.models import llama_3_1_8b, olmo_2_base_8b, map_neo_7b, amber_base_7b
+from experiments.evals.task_configs import CORE_TASKS
+from experiments.models import amber_base_7b, llama_3_1_8b, map_neo_7b, olmo_2_base_8b
+from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.execution.executor import executor_main
 
 # Model path for deeper starling
