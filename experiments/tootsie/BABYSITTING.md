@@ -85,4 +85,4 @@ python marin/run/ray_run.py --env_vars WANDB_API_KEY ${WANDB_API_KEY}  --env_var
 ```
 
 
-Cf. https://github.com/stanford-crfm/marin/issues/750
+Cf. https://github.com/marin-community/marin/issues/750
