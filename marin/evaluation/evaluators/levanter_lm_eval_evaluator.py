@@ -9,6 +9,7 @@ import jmp
 import levanter.eval_harness as eval_harness
 from levanter.distributed import RayConfig
 from levanter.models.llama import LlamaConfig
+from levanter.models.olmo import Olmo2Config
 from levanter.trainer import TrainerConfig
 
 from experiments.evals.task_configs import convert_to_levanter_task_config
@@ -62,7 +63,7 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
                 ray=RayConfig(auto_start_cluster=False),
             )
 
-            model_config = LlamaConfig()
+            model_config = model.config_type
 
             # convert to the config that Levanter's eval_harness expects
             tasks = convert_to_levanter_task_config(evals)
