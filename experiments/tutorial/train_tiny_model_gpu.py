@@ -1,7 +1,12 @@
 """
-This is a tutorial on how to train a tiny model on a small dataset.
+This is a tutorial on how to train a tiny model on a small dataset using a GPU.
 
-This is designed to run on a single **GPU**
+This script demonstrates how to:
+1. Train a tiny model on Wikitext-2 using a single GPU
+2. Use GPU-specific training configuration
+3. Run a quick training experiment
+
+For CPU training, see train_tiny_model_cpu.py
 """
 
 from experiments.defaults import default_tokenize, default_train

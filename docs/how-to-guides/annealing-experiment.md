@@ -15,6 +15,9 @@ For example, we could do a cooldown on FineMath, and expect improvements on task
 2. **Set Up a Control Model** (optional): Create a control model for baseline comparison.
 3. **Run the Annealing Experiment**: Use the `default_anneal` function to execute your experiment.
 
+
+This how-to guide is based on the [FineMath annealing experiment](https://github.com/marin-community/marin/blob/main/experiments/exp722_anneal.py).
+
 ## Steps
 
 ### 1. Configure the Dataset Mixture
@@ -46,6 +49,10 @@ control_dataset_config=lm_mixture_data_config(
     },
     weights={"dolmino/dclm": 1.0},
 )
+
+control_dclm_anneal_config = AnnealConfig(
+    dataset_config=control_dataset_config,
+)
 ```
 
 ### 3. Run the Annealing Experiment
@@ -76,7 +83,7 @@ You can change this to use your own model or a different checkpoint. XXX update 
 
 For reference, see these example files:
 
-- Finemath: [`experiments.exp722_anneal.py`](https://github.com/marin-community/marin/blob/main/experiments/exp722_anneal.py)
+- FineMath: [`experiments.exp722_anneal.py`](https://github.com/marin-community/marin/blob/main/experiments/exp722_anneal.py)
 - Dolmino: [`experiments.dolmino.dolmino_anneal.py`](https://github.com/marin-community/marin/blob/main/experiments/dolmino/dolmino_anneal.py)
 - Dolma: [`experiments.dolma.dolma_anneal.py`](https://github.com/marin-community/marin/blob/main/experiments/dolma/dolma_anneal.py)
 - Cooldown: [`experiments.cooldown_anneal.py`](https://github.com/marin-community/marin/blob/main/experiments/cooldown_anneal.py)
