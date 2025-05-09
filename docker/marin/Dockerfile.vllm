@@ -1,12 +1,9 @@
 # vllm/vllm-tpu:9dbf7a2dc1448d6657adfb2daba36be270dcebcd - 0.7.4 has some issues
 # FROM vllm/vllm-tpu:e92694b6fe264a85371317295bca6643508034ef
-# FROM vllm/vllm-tpu:nightly
-FROM rayproject/ray:nightly.250506.04c4a5-py311-cpu
-ARG VLLM_VERSION=0.8.5.post1
-USER root
+FROM vllm/vllm-tpu:nightly
 
 # Setup gcsfuse
-RUN apt-get update && apt-get install lsb-release rsync docker.io curl -y
+RUN apt-get update && apt-get install lsb-release rsync docker.io -y
 RUN usermod -aG docker $(whoami)
 
 RUN export GCSFUSE_REPO=gcsfuse-`lsb_release -c -s` && echo "deb https://packages.cloud.google.com/apt $GCSFUSE_REPO main" | tee /etc/apt/sources.list.d/gcsfuse.list
@@ -21,7 +18,7 @@ RUN curl -sSL https://sdk.cloud.google.com > /tmp/gcl && \
     && chown -R $(whoami) /root/gcloud
 
 # Install core dependencies
-# RUN pip install --no-cache-dir draccus==0.11.5 google-api-python-client~=2.0 gcsfs google-cloud-storage google-cloud-storage-transfer s3fs regex requests braceexpand deepdiff tqdm tqdm-loggable levanter==1.2.dev1190 haliax==1.4.dev327
+RUN pip install --no-cache-dir draccus==0.11.5 google-api-python-client~=2.0 gcsfs google-cloud-storage google-cloud-storage-transfer s3fs regex requests braceexpand deepdiff tqdm tqdm-loggable levanter==1.2.dev1190 haliax==1.4.dev327
 
 # NOTE(chris): We fix the lm-evaluation-harness commit hash for now since the newest main is broken because of
 # the new eval_logger change they made
@@ -34,19 +31,8 @@ cd lm-evaluation-harness && \
 git fetch origin $LM_EVAL_EVAL_COMMIT_HASH && \
 git checkout $LM_EVAL_EVAL_COMMIT_HASH && pip install --no-cache-dir -e ".[ifeval, math]"
 
-RUN sudo apt update && \
-    sudo apt install unzip -y && \
-    sudo mkdir -p /opt/vllm && \
-    sudo chown -R $(whoami) /opt/vllm && \
-    cd /opt/vllm && \
-    curl -sLO "https://github.com/vllm-project/vllm/archive/refs/tags/v${VLLM_VERSION}.zip" && \
-    unzip v${VLLM_VERSION}.zip
-
-WORKDIR /opt/vllm/vllm-${VLLM_VERSION}
-RUN pip uninstall torch torch-xla -y && \
-    pip install --no-cache-dir -r requirements/tpu.txt && \
-    sudo apt-get install libopenblas-base libopenmpi-dev libomp-dev -y && \
-    VLLM_TARGET_DEVICE="tpu" python3 setup.py develop
+# Need the latest accelerate due to some deprecations in the newest pytorch
+RUN pip install --no-cache-dir https://github.com/huggingface/accelerate/archive/refs/heads/main.zip
 
 # Add /usr/lib/x86_64-linux-gnu/ to LD_LIBRARY_PATH so that bash prefers the systems
 # libtinfo.so over the conda-provided version. Using the conda-provided libtinfo.so
@@ -56,5 +42,6 @@ ENV LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/home/ray/anaconda3/lib
 ENV PATH=$PATH:/root/gcloud/google-cloud-sdk/bin
 ENV VLLM_USE_V1=1
 ENV TF_CPP_MIN_LOG_LEVEL=1
+ENV HF_HOME=/opt/gcsfuse_mount/huggingface-cache
 
 WORKDIR /opt/marin
