@@ -59,6 +59,8 @@ from marin.training.training import (
     run_levanter_train_lm,
 )
 
+from haliax.partitioning import ResourceAxis
+
 logger = logging.getLogger("ray")
 
 
@@ -275,6 +277,10 @@ def default_train(
             quantization=QuantizationConfig(int8=train_config.int8) if train_config.int8 else None,
             initialize_from=None if train_config.reset_data_loader_on_init else checkpoint_path_to_load_from,
             watch=train_config.watch,
+            axis_resources={
+                "token": (ResourceAxis.REPLICA, ResourceAxis.DATA),
+                "token_repeat": (ResourceAxis.REPLICA, ResourceAxis.DATA),
+            }
         ),
         initialize_from_checkpoint_path=(
             checkpoint_path_to_load_from if train_config.reset_data_loader_on_init else None
