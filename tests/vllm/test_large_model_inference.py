@@ -1,4 +1,4 @@
-"""Test whether vLLM can generate simple completions"""
+"""Test whether vLLM can generate simple completions on a large model."""
 
 import os
 
