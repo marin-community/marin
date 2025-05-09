@@ -20,9 +20,6 @@ import os
 from dataclasses import dataclass
 
 from marin.execution.executor import ExecutorStep, this_output_path, versioned
-from levanter.models.llama import LlamaConfig
-from levanter.models.olmo import Olmo2Config
-from levanter.compat.hf_checkpoints import HFCompatConfig
 from marin.utils import get_directory_friendly_name
 from operations.download.huggingface.download import DownloadConfig
 from operations.download.huggingface.download_hf import download_hf
