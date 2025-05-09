@@ -29,7 +29,7 @@ math500 = ExecutorStep(
 )
 
 generations = ExecutorStep(
-    name="documents/synthetic_data_llama_8b",
+    name="documents/synthetic_data_llama_8b_refactor",
     fn=run_inference,
     config=TextGenerationInferenceConfig(
         input_path=output_path_of(math500),
@@ -50,6 +50,10 @@ generations = ExecutorStep(
         prompt_column="problem",
         filetype="jsonl",
         resource_config=TPU_V6E_8_STRICT_PACK,
+        output_filetype_override=versioned("jsonl"),
+        num_instances=versioned((1, 1)),
+        preserve_order=versioned(False),
+        one_to_one_input_output_mapping=versioned(False),
     ),
 )
 
