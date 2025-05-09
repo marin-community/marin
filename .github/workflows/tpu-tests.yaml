@@ -85,6 +85,7 @@ jobs:
                                      && export WANDB_ENTITY=stanford-mercury \
                                      && export OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }} \
                                      && export HF_TOKEN=${{ secrets.HF_TOKEN }} \
+                                     && export START_RAY_TPU_CLUSTER=true \
                                      && python scripts/install_all_pip_dep.py \
                                      && pip list \
                                      && echo TPU_TEST \
