@@ -32,7 +32,7 @@ nav:
     - Executor 101: tutorials/executor-101.md
   - How-to Guides:
     - Train an LM: how-to-guides/train-an-lm.md
-    - Filtering Data: how-to-guides/filtering-data.md
+    - Filter Data: how-to-guides/filtering-data.md
     - Submit a Speedrun: how-to-guides/submitting-speedrun.md
     - Co-Develop Marin and Levanter: how-to-guides/co-develop.md
     - Run an Annealing Experiment: how-to-guides/annealing-experiment.md
