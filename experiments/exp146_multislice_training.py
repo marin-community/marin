@@ -1,6 +1,6 @@
 """
 Train 1.4B models on standard datasets (e.g., SlimPajama) using multislice.
-https://github.com/stanford-crfm/marin/issues/146
+https://github.com/marin-community/marin/issues/146
 """
 
 from experiments.defaults import default_train

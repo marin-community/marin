@@ -3,7 +3,7 @@ This script runs a suite of scaling laws on the DCLM-Baseline+StarCoder+ProofPil
 This is the default mix that we use for our experiments/scaling laws, and can be used
 as a reference point to compare other mixes/scaling law suites against.
 
-Link to issue for scaling law experiments: https://github.com/stanford-crfm/marin/issues/780
+Link to issue for scaling law experiments: https://github.com/marin-community/marin/issues/780
 """
 
 from experiments.defaults import default_scaling_law_pred

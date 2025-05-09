@@ -1,4 +1,4 @@
-# https://github.com/stanford-crfm/marin/issues/621
+# https://github.com/marin-community/marin/issues/621
 # Sweep to determine optimal training configs for small models
 import dataclasses
 import logging
