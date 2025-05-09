@@ -1,11 +1,14 @@
-# How to add a new optimizer in Marin
+# How to Add a New Optimizer in Marin
 
-Marin builds on Levanter for training code; this means that training changes added to Levanter will be available in Marin. It is also possible to add new optimizers directly in Marin, since Levanter supports [Optax](https://github.com/deepmind/optax) for optimization.
-This makes it easier to experiment with new optimizers (especially for speedruns) without having to merge a PR into Levanter.
+Marin builds on [Levanter](https://levanter.readthedocs.io/) for training code, meaning any training changes made in Levanter are automatically available in Marin. However, you can also add new optimizers **directly in Marin**- thanks to Levanter’s support for [Optax](https://optax.readthedocs.io/)-- without needing to merge a pull request upstream.
 
-In this guide, we will use a speedrun submission that uses [AdaMax](https://optax.readthedocs.io/en/latest/api/optimizers.html#optax.adamax) as a working example.
+This makes it easy to experiment with new optimizers (especially for speedruns) before integrating them into Levanter.
 
-### Steps to add an optimizer
+In this guide, we’ll walk through adding an [AdaMax](https://optax.readthedocs.io/en/latest/api/optimizers.html#optax.adamax) optimizer as an example.
+
+---
+
+## Steps to Add an Optimizer
 
 1. Import Optax and OptimizerConfig:
 
@@ -27,8 +30,6 @@ class AdamaxConfig(OptimizerConfig):
 `OptimizerConfig` has a number of fields that are common to all optimizer; these include `weight_decay`, `learning_rate`, `lr_schedule`, `min_lr_ratio`, `warmup`, `decay`, `rewarmup`, `cycles`, and `cycle_length`. You can find documentation for the OptimizerConfig class, along with further details about the fields [here](https://levanter.readthedocs.io/en/latest/reference/Configuration/#standard-options).
 
 3. Implement the `build()` method to define the optimizer's update rule. This method should return an Optax optimizer. Optax allows you to define components that are gradient transformations, and then chain them together to obtain a final gradient update rule.
-
-Additionally, you should register your optimizer class with an identifier, as shown below.
 
 ```python
 def build(self, num_train_steps):
@@ -80,7 +81,9 @@ def build(self, num_train_steps):
 
 Note that `optax.inject_hyperparams` is a wrapper in Optax that can be used to pass schedules (or stateful hyperparameters) into the optimizer. This also allows us to log the learning rate in the tracker.
 
-5. You can now use the optimizer in your training script. To use the new optimizer in your training script, simply instantiate it with your desired parameters:
+NOTE: You should also register your optimizer class with an identifier, as shown above.
+
+5. Use the optimizer in your training script: You can instantiate and pass it directly into your training config:
 
 ```python
 optimizer = AdamaxConfig(
@@ -93,26 +96,19 @@ optimizer = AdamaxConfig(
 )
 ```
 
-and you can simply pass it into `TrainLmConfig`:
+and use it in `TrainLmConfig`:
 
 ```python
 from levanter.trainer import TrainLmConfig
 
 trainer_config = TrainLmConfig(
     ...
-    optimizer=AdamaxConfig(
-        beta1=0.9,
-        beta2=0.95,
-        epsilon=1e-8,
-        max_grad_norm=1.0,
-        weight_decay=0.1,
-        lr=1e-4
-    ),
+    optimizer=optimizer,
     ...
 )
 ```
 
-Alternatively, you can set the optimizer config in `SimpleTrainConfig`:
+Or inside a `SimpleTrainConfig`:
 
 ```python
 train_config = SimpleTrainConfig(
@@ -129,7 +125,7 @@ train_config = SimpleTrainConfig(
 )
 ```
 
-and pass it into `default_train`, which will set the optimizer config correctly in the training step.
+Then pass it into `default_train`, which will set the optimizer config correctly in the training step.
 
 That's it! You can use this approach to define new optimizers you are interested in experimenting with; for optimizers that work well and/or ones that are "standard", considering opening a pull request to Levanter with an implementation.
 
@@ -159,10 +155,10 @@ if __name__ == "__main__":
     executor_main(steps=default_speedrun("75M_llama_adamax", speedrun_config))
 ```
 
-That's it! You can now define new optimizers in this manner and train models using them, all within Marin. For optimizers that are relatively standard, or that work really well, consider opening a pull request to add the optimizer to Levanter.
+🎉 That’s it! You can now define new optimizers in this manner and train models using them, all within Marin. For optimizers that are widely useful or “standard,” consider submitting a pull request to Levanter.
+See a full working example [in this GitHub link](https://github.com/marin-community/marin/blob/main/experiments/speedrun/llama_75m_fineweb_edu_adamax/llama_75m_fineweb_edu_adamax.py).
 
-See below for further examples and relevant links:
+Further reading:
 
-[This link](https://github.com/marin-community/marin/blob/main/experiments/speedrun/llama_75m_fineweb_edu_adamax/llama_75m_fineweb_edu_adamax.py) contains the full code for defining a new optimizer and running a speedrun.
-
-See [Levanter's documentation](https://levanter.readthedocs.io/en/latest/optimizers.html) for more information on how to use Optax optimizers. Also, [Optax's documentation](https://optax.readthedocs.io/en/latest/api/optimizers.html) has a list of all available optimizers, as well as further details on how to implement a new/custom optimizer.
+- [Levanter Optimizer Documentation](https://levanter.readthedocs.io/en/latest/optimizers.html)
+- [Optax Optimizer Reference](https://optax.readthedocs.io/en/latest/api/optimizers.html)
