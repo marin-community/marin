@@ -103,7 +103,7 @@ def create_ngram_index(
 
 
 def compute_all_data_overlap(
-    training_file_path: str,
+    document_iterator,
     ngram_index: NgramIndex,
     stats_key_to_input_ids: defaultdict[DataOverlapStatsKey, set[str]],
     stats_key_to_reference_ids: defaultdict[DataOverlapStatsKey, set[str]],
@@ -111,30 +111,29 @@ def compute_all_data_overlap(
     output_ngrams: bool,
 ) -> None:
     """
-    Given an input file, compute a overlap stats for each n and each scenario by calling
-    `compute_document_data_overlap()` for each document in the file. The function writes
-    to the stats_key_to_input_ids and stats_key_to_reference_ids directly and does not return anything.
-    training_file_path: file path of the training data
-    file_format: format of the training file(s) (unused since we're assuming The Pile format)
-    ngram_index: The ngram index that maps from ngrams to overlap stats
-    tokenizer: The tokenizer used to break documents in the file into tokens
-    stats_key_to_input_ids: a dict mapping the stats key to the overlapping input ids
-    stats_key_to_reference_ids: a dict mapping the stats key to the overlapping reference ids
-    entry_overlap_key_to_ngram_counts: a dict mapping the key to the overlapping ngrams
-    output_ngrams: whether we should output ngrams
+    Process documents from an iterator for data overlap computation.
+
+    Args:
+        document_iterator: Iterator yielding (document_text, source_info) tuples
+        ngram_index: The ngram index that maps from ngrams to overlap stats
+        stats_key_to_input_ids: Dict to keep track of input_ids that are overlapping
+        stats_key_to_reference_ids: Dict to keep track of reference_ids that are overlapping
+        entry_overlap_key_to_ngram_counts: a dict mapping the key to the overlapping ngrams
+        output_ngrams: whether we should output ngrams
     """
-    # Each file is jsonl so each line is a JSON with a "text" field containing the document
-    with open(training_file_path, "r") as f:
-        for line in f:
-            document = json.loads(line)["text"]
+    for document_text, source_info in document_iterator:
+        try:
             compute_document_data_overlap(
-                document=document,
+                document=document_text,
                 ngram_index=ngram_index,
                 stats_key_to_input_ids=stats_key_to_input_ids,
                 stats_key_to_reference_ids=stats_key_to_reference_ids,
                 entry_overlap_key_to_ngram_counts=entry_overlap_key_to_ngram_counts,
                 output_ngrams=output_ngrams,
             )
+        except Exception as e:
+            print(f"Failed to process document from {source_info}: {e!s}", flush=True)
+            continue
 
 
 def compute_document_data_overlap(

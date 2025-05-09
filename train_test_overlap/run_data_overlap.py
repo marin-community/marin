@@ -1,8 +1,11 @@
+import gc
 import json
 import logging
 import os
 import tempfile
 from collections import defaultdict
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 
 import draccus
@@ -49,8 +52,83 @@ def copy_metrics_out(input_file_path: str, output_file_path: str):
             dst.write(src.read())
 
 
-# 10 GiB
-@ray.remote(memory=1024 * 1024 * 1024 * 10)
+def create_compressed_file_iterator(
+    input_patterns: list[str],
+    base_path: str,
+) -> Iterator[tuple[str, str]]:
+    """
+    Create a streaming iterator over compressed files.
+    Only holds one file path and one line in memory at a time.
+
+    Args:
+        input_patterns: List of glob patterns to match
+        base_path: Base path to search from
+
+    Yields:
+        Tuple of (document_text, source_info) where source_info contains file info for logging
+    """
+    processed_files = 0
+    failed_files = 0
+
+    @contextmanager
+    def managed_file_open(file_path: str):
+        """Context manager to ensure proper file handle cleanup"""
+        f = None
+        try:
+            f = fsspec.open(file_path, "rt", compression="infer").open()  # Call .open() to get the actual file object
+            yield f
+        finally:
+            if f is not None:
+                f.close()
+                del f  # Explicitly delete the file handle
+
+    # Process one pattern at a time
+    for pattern in input_patterns:
+        remote_pattern = os.path.join(base_path, pattern)
+        # Use fsspec_glob but process one file at a time
+        for file_path in fsspec_glob(remote_pattern):
+            if not file_path.strip():
+                continue
+
+            logger.info(f"Processing file: {file_path}")
+            try:
+                with managed_file_open(file_path) as f:
+                    # Process one line at a time
+                    for line_num, line in enumerate(f, 1):
+                        try:
+                            document = json.loads(line)
+                            source_info = f"file={file_path}, line={line_num}"
+
+                            if "text" not in document:
+                                logger.warning(f"Missing 'text' field in document: {source_info}")
+                                continue
+
+                            yield document["text"], source_info
+
+                            # Explicitly clear memory
+                            del line
+                            del document
+
+                        except json.JSONDecodeError as e:
+                            logger.error(f"JSON decode error in {file_path}:{line_num}: {e!s}")
+                            continue
+                        except Exception as e:
+                            logger.error(f"Error processing line in {file_path}:{line_num}: {e!s}")
+                            continue
+
+                processed_files += 1
+                gc.collect()  # Force garbage collection after each file
+
+            except Exception as e:
+                failed_files += 1
+                logger.error(f"Failed to process file {file_path}: {e!s}")
+                continue
+
+    logger.info(f"Completed processing {processed_files} files. Failed: {failed_files}")
+
+
+# 32 GiB
+@ray.remote(memory=1024 * 1024 * 1024 * 32, num_cpus=4)
 def run_data_overlap(config: DataOverlapPipelineConfig) -> str:
     # Create a temporary directory under /tmp that will be cleaned up automatically
     with tempfile.TemporaryDirectory(dir="/tmp") as tmpdir:
@@ -84,42 +162,31 @@ def run_data_overlap(config: DataOverlapPipelineConfig) -> str:
         stats_key_to_reference_ids = defaultdict(set)
         entry_ngram_counts = defaultdict(lambda: defaultdict(int))
 
-        # Decompress all supported input files into a local temp directory
-        local_input_dir = os.path.join(tmpdir, "input")
-        for pattern in [
+        # Define patterns for supported file types
+        input_patterns = [
             "**/*.jsonl.gz",
             "**/*.jsonl.zst",
             "**/*.jsonl.gs",
             "**/*.json.gz",
             "**/*.json.zst",
             "**/*.jsonl",
-        ]:
-            remote_pattern = os.path.join(config.input_data, pattern)
-            for remote_file in fsspec_glob(remote_pattern):
-                # Preserve relative path and normalize extension to .jsonl
-                rel = os.path.relpath(remote_file, config.input_data)
-                for ext in [".jsonl.gz", ".jsonl.zst", ".jsonl.gs", ".json.gz", ".json.zst"]:
-                    if rel.endswith(ext):
-                        rel = rel[: -len(ext)] + ".jsonl"
-                local_file = os.path.join(local_input_dir, rel)
-                fsspec_mkdirs(os.path.dirname(local_file))
-                # Use fsspec to decompress if needed
-                with fsspec.open(remote_file, "rb", compression="infer") as src, open(local_file, "wb") as dst:
-                    dst.write(src.read())
+        ]
 
-        for local_file in fsspec_glob(os.path.join(local_input_dir, "**", "*.jsonl")):
-            # Run overlap on each decompressed JSONL file. For each n_gram in the test file,
-            # If we see a hit in the training data we increment it's count.
-            # Also track a dict mapping stats_keys to input and reference strings so we know
-            # where overlap occurs later.
-            compute_all_data_overlap(
-                training_file_path=local_file,
-                ngram_index=ngram_index,
-                stats_key_to_input_ids=stats_key_to_input_ids,
-                stats_key_to_reference_ids=stats_key_to_reference_ids,
-                entry_overlap_key_to_ngram_counts=entry_ngram_counts,
-                output_ngrams=True,
-            )
+        # Create streaming iterator for compressed files
+        document_iterator = create_compressed_file_iterator(
+            input_patterns=input_patterns,
+            base_path=config.input_data,
+        )
+
+        # Process documents using the iterator
+        compute_all_data_overlap(
+            document_iterator=document_iterator,
+            ngram_index=ngram_index,
+            stats_key_to_input_ids=stats_key_to_input_ids,
+            stats_key_to_reference_ids=stats_key_to_reference_ids,
+            entry_overlap_key_to_ngram_counts=entry_ngram_counts,
+            output_ngrams=True,
+        )
 
         # 2) Write raw ngrams
         ngrams_out = stats_prefix + "_ngrams"
