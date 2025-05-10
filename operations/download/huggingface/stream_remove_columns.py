@@ -11,7 +11,7 @@ import ray
 from huggingface_hub import HfFileSystem
 from tqdm import tqdm
 
-fs = HfFileSystem()
+hf_fs = HfFileSystem()
 logger = logging.getLogger("ray")
 
 
@@ -30,7 +30,7 @@ def prune_stream_and_save(input_file: str, output_file: str, keep_columns: list[
         output_path (str): Path where the pruned dataset will be saved
     """
     try:
-        parquet_file = pq.ParquetFile(fs.open(input_file))
+        parquet_file = pq.ParquetFile(hf_fs.open(input_file))
 
         full_df_list = []
         for batch in tqdm(parquet_file.iter_batches(batch_size=10000), desc=f"Processing {input_file}"):
@@ -61,7 +61,7 @@ def process_hf_subset(hf_path: str, output_path: str, keep_columns: list[str]):
     """
 
     logger.info(f"Loading dataset from {hf_path}")
-    parquet_list = fs.glob(f"{hf_path}/*.parquet")
+    parquet_list = hf_fs.glob(f"{hf_path}/*.parquet")
 
     ray_waitables = []
 
