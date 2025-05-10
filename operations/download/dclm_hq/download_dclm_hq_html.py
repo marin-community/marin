@@ -177,7 +177,7 @@ def process_dclm_shard(
     except Exception as e:
         logger.exception(f"Error processing the group: {e}")
 
-
+# TODO: add executor step for this in the experiments
 @draccus.wrap()
 def extract_dclm_hq_dump(cfg: DCLMHQDownloadConfig) -> None:
     """
