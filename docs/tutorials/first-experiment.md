@@ -112,7 +112,7 @@ This class defines basic training configuration that is sufficient for most expe
         ```python
         nano_train_config = SimpleTrainConfig(
             # Here we define the hardware resources we need.
-            resources=TpuPodConfig(tpu_type="v4-128"),
+            resources=TpuPodConfig(tpu_type="v4-8"),
             train_batch_size=4,
             num_train_steps=100,
             # set hyperparameters
