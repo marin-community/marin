@@ -16,25 +16,25 @@ if __name__ == "__main__":
                 lr={"cosine": 1e-3, "linear": 3e-3}[lr_schedule],
                 lr_cooldown_duration=lr_cooldown_duration,
                 wandb_project_name="suhas-two-stage",
-                wandb_additional_tags=[f"repetition-trial-v7", f"{rare_data_name}-c4-repetition-trial-v7"],
+                wandb_additional_tags=[f"repetition-trial-v9", f"{rare_data_name}-c4-repetition-trial-v9"],
                 model_name="150m4k",
-                nametag="-v7",
+                nametag="-v9",
             )
         )
         for lr_schedule, lr_cooldown_duration in [
             # ("cosine", 1.0),
             # ("linear", 0.01),
-            ("linear", 0.02),
-            # ("linear", 0.05),
-            ("linear", 0.1),
+            # ("linear", 0.02),
+            ("linear", 0.05),
+            # ("linear", 0.1),
             # ("linear", 0.2),
             # ("linear", 0.5),
         ]
-        for rare_fraction in [1.0/1024.0]
+        for rare_fraction in [4.0/1024.0]
         for replay_ratio in [0.0, 0.5, 0.75, 0.875, 0.9375, 0.96875]
-        for rare_stage2_allocation in [1.0]
-        for rare_data_name in ["finemath", "flan"]
-        for rare_data_epochs in [4, 8, 16]
+        for rare_stage2_allocation in [1.0, 0.5, 0.25, 0.125]
+        for rare_data_name in ["finemath", "starcoder", "spj", "flan"]
+        for rare_data_epochs in [4]
     ]
 
     executor_main(

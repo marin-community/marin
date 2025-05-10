@@ -9,6 +9,7 @@ from scipy.interpolate import griddata
 import numpy as np
 import json
 from scipy.optimize import curve_fit
+import matplotlib.colors as mcolors
 
 plt.rcParams.update({
     "font.family": "Palatino Linotype"
@@ -23,11 +24,11 @@ args = parser.parse_args()
 rare_data_name = args.rare_data_name
 common_data_name = args.common_data_name
 
-x_axis_key = "rare_data_epochs"
-y_axis_key = "replay_ratio"
+x_axis_key = "replay_ratio"
+y_axis_key = "stage2_allocation"
 
 # key = f"{rare_data_name}-{common_data_name}-lr-data-schedule"
-key = f"{rare_data_name}-{common_data_name}-repetition-trial-v7"
+key = f"{rare_data_name}-{common_data_name}-repetition-trial-v9"
 pretty_name_dict = {
     "finemath": "FineMath",
     "starcoder": "StarCoder",
@@ -102,22 +103,35 @@ for i, x in enumerate(unique_x_axis_values):
             loss_grid[i, j] = best_run[f'final_{rare_data_name}_loss']
             best_run_grid[i, j] = best_run
 
+# Create custom colormap from light blue to purple
+colors = ['#8CD9FF', '#7030A0']  # Lighter blue to purple
+custom_cmap = mcolors.LinearSegmentedColormap.from_list('custom', colors)
+
 # Create heatmap plot
-plt.figure(figsize=(10, 8), dpi=600)
-plt.imshow(loss_grid, cmap='viridis', aspect='auto', interpolation='nearest')
-plt.colorbar(label=f'{pretty_name_dict[rare_data_name]} Loss')
+plt.figure(figsize=(3.5, 6), dpi=600)
+plt.imshow(loss_grid, cmap=custom_cmap, aspect='auto', interpolation='nearest')
+
+# Find the best (minimum) value coordinates
+best_idx = np.unravel_index(np.argmin(loss_grid), loss_grid.shape)
+rect = plt.Rectangle((best_idx[1] - 0.5, best_idx[0] - 0.5), 1, 1, fill=False, 
+                    edgecolor='#7030A0', linewidth=2)
+plt.gca().add_patch(rect)
+
+# Move colorbar to bottom and make it horizontal
+plt.colorbar(label=f'{pretty_name_dict[rare_data_name]} Loss', 
+             orientation='horizontal')
 
 # Add text annotations to cells
 for i in range(len(unique_x_axis_values)):
     for j in range(len(unique_y_axis_values)):
         if best_run_grid[i, j] is not None:
-            plt.text(j, i, f'{loss_grid[i, j]:.3f}', 
+            plt.text(j, i, f'{loss_grid[i, j]:.2f}', 
                     ha='center', va='center', 
                     color='white' if loss_grid[i, j] > np.mean(loss_grid) else 'black')
 
 plt.xlabel(key_pretty_name_dict[y_axis_key])
 plt.ylabel(key_pretty_name_dict[x_axis_key])
-plt.title(f'{pretty_name_dict[rare_data_name]} Loss Heatmap\nBest Run for Each Configuration')
+plt.title(f'{pretty_name_dict[rare_data_name]} Loss')
 
 # Set tick labels
 plt.xticks(range(len(unique_y_axis_values)), unique_y_axis_values)

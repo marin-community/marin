@@ -152,7 +152,7 @@ class TwoStageConfig:
         assert 0.0 <= self.rare_weight_stage2 <= 1.0, "Rare weight stage 2 must be between 0.0 and 1.0"
         
     def build_name(self) -> str:
-        return f"{self.model_name}-{self.format_num_tokens()}-{self.rare_data_name}x{self.rare_fraction:.2f}x{self.rare_data_epochs}-{self.common_data_name}-rr{self.replay_ratio:.2f}-rs{self.rare_stage2_allocation:.2f}-{self.format_lr_schedule()}{self.nametag}"
+        return f"{self.model_name}-{self.format_num_tokens()}-{self.rare_data_name}x{self.format_rare_fraction()}x{self.rare_data_epochs}-{self.common_data_name}-rr{self.replay_ratio:.2f}-rs{self.rare_stage2_allocation:.2f}-{self.format_lr_schedule()}{self.nametag}"
 
     def build_data_config(self) -> LMMixtureDatasetConfig:
         components = {
@@ -214,7 +214,14 @@ class TwoStageConfig:
             "cosine": "cos",
             "linear": "wsd",
         }
-        return f"{schedule_short_name[self.lr_schedule]}-{self.lr}-{self.lr_cooldown_duration:.2f}"
+        lr_str = f"{self.lr:.3f}" if self.lr >= 1e-3 else f"{self.lr:.1e}"
+        return f"{schedule_short_name[self.lr_schedule]}-{lr_str}-{self.lr_cooldown_duration:.2f}"
+    
+    def format_rare_fraction(self) -> str:
+        if self.rare_fraction >= 0.01:
+            return f"{self.rare_fraction:.2f}"
+        else:
+            return f"{self.rare_fraction:.3f}"
 
     def build_trainer_config(self) -> TrainerConfig:
         return TrainerConfig(
