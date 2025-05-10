@@ -73,7 +73,23 @@ div.doc-contents {
 html {
     /* Decrease font size for overall webpage
        Down from 137.5% which is the Material default */
-    font-size: 110%;
+    font-size: 137.5%;
+}
+
+.md-main__inner.md-grid {
+    max-width: 70%;
+}
+
+@media screen and (max-width: 768px) {
+    .md-main__inner.md-grid {
+        max-width: 100%;
+    }
+}
+
+@media screen and (max-width: 2560px) {
+    .md-main__inner.md-grid {
+        max-width: 66%;
+    }
 }
 
 .md-typeset .admonition {
