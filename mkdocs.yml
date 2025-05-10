@@ -3,16 +3,12 @@ site_description: Documentation for the Marin project
 theme:
   name: material
   features:
-    - navigation.tabs
-    - navigation.sections
-    - navigation.expand
     - search.highlight
     - search.share
     - search.suggest
     - content.code.annotation
     - content.code.copy
   custom_dir: docs/overrides
-
 
 # Include extra JS to setup Read the Docs addons integrations
 extra_javascript:
@@ -32,9 +28,10 @@ nav:
     - Executor 101: tutorials/executor-101.md
   - How-to Guides:
     - Train an LM: how-to-guides/train-an-lm.md
-    - Filtering Data: how-to-guides/filtering-data.md
-    - Submitting Speedruns: how-to-guides/submitting-speedrun.md
+    - Filter Data: how-to-guides/filtering-data.md
+    - Submit a Speedrun: how-to-guides/submitting-speedrun.md
     - Co-Develop Marin and Levanter: how-to-guides/co-develop.md
+    - Run an Annealing Experiment: how-to-guides/annealing-experiment.md
   - Explanation:
     - Concepts: explanation/concepts.md
     - Data Browser: explanation/data-browser.md
