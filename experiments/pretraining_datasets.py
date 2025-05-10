@@ -2,7 +2,9 @@ from marin.execution.executor import ExecutorStep, this_output_path
 from operations.download.huggingface.download import DownloadConfig, download
 from operations.download.huggingface.download_gated_manual import download_and_upload_to_store
 from operations.download.huggingface.download_hf import download_hf
+from operations.download.nemotron_cc.download_nemotron_cc import NemotronIngressConfig, download_nemotron_cc
 
+# TODO: remove download and download_and_upload_to_store. Instead use download_hf instead
 fineweb = ExecutorStep(
     name="raw/fineweb",
     fn=download,
@@ -63,6 +65,21 @@ dolma = ExecutorStep(
     override_output_path="raw/dolma",
 )
 
+
+dclm_baseline_wrong = ExecutorStep(
+    name="raw/dclm-baseline-1.0",
+    fn=download,
+    config=DownloadConfig(
+        hf_dataset_id="mlfoundations/dclm-baseline-1.0",
+        revision="a3b142c",
+        gcs_output_path=this_output_path(),
+        wait_for_completion=True,
+        timeout=24 * 60 * 60,
+    ),
+    override_output_path="raw/dclm_WRONG_20250211/",
+)
+
+
 dclm_baseline = ExecutorStep(
     name="raw/dclm-baseline-1.0",
     fn=download,
@@ -74,7 +91,7 @@ dclm_baseline = ExecutorStep(
         timeout=24 * 60 * 60,
     ),
     override_output_path="raw/dclm",
-)
+).cd("a3b142c")
 
 the_stack_dedup = ExecutorStep(
     name="raw/the-stack-dedup",
@@ -100,6 +117,8 @@ proofpile_2 = ExecutorStep(
     override_output_path="raw/proof-pile-2-f1b1d8",
 ).cd("901a927/huggingface.co/datasets/EleutherAI/proof-pile-2/resolve/901a927")
 
+# TODO: Earlier datasets were stored in gcs_output_path/<revision> instead of gcs_output_path.
+#   Migrate the dataset and cd can be removed.
 starcoderdata = ExecutorStep(
     name="raw/starcoderdata",
     fn=download_hf,
@@ -110,4 +129,28 @@ starcoderdata = ExecutorStep(
         wait_for_completion=True,
     ),
     override_output_path="raw/starcoderdata-720c8c",
-).cd("9fc30b5")
+)
+
+dolmino = (
+    ExecutorStep(
+        name="raw/dolmino-mix-1124",
+        fn=download_hf,
+        config=DownloadConfig(
+            hf_dataset_id="allenai/dolmino-mix-1124",
+            revision="bb54cab",
+            gcs_output_path=this_output_path(),
+            wait_for_completion=True,
+        ),
+    )
+    .with_output_path("raw/dolmino-mix-1124-157960")
+    .cd("bb54cab")
+)
+
+nemotron_cc = ExecutorStep(
+    name="raw/nemotro-cc",
+    fn=download_nemotron_cc,
+    config=NemotronIngressConfig(
+        output_path=this_output_path(),
+    ),
+    pip_dependency_groups=["download_transform"],
+)

@@ -1,43 +1,31 @@
-from experiments.evals.evals import evaluate_lm_evaluation_harness
+from experiments.evals.evals import default_eval
+from experiments.exp246_web_extraction_method_training import (
+    fineweb_readability_1_4b_model,
+    fineweb_resiliparse_preserve_formatting_1_4b_model,
+    fineweb_trafilatura_1_4b_model,
+    fineweb_trafilatura_favor_precision_1_4b_model,
+    transform_resiliparse_default,
+)
 from marin.execution.executor import executor_main
 
-evaluate_readability = evaluate_lm_evaluation_harness(
-    model_name="fineweb-small-readability-1.4b",
-    model_path="gs://marin-us-central2/checkpoints/fineweb-small-1.4b-readability-5c0e2b/hf/step-9999",
-    evals=["mmlu"],
-)
+readability_eval = default_eval(fineweb_readability_1_4b_model)
 
-evaluate_trafilatura_default = evaluate_lm_evaluation_harness(
-    model_name="fineweb-small-trafilatura-default-1.4b",
-    model_path="gs://marin-us-central2/checkpoints/fineweb-small-1.4b-trafilatura-6ba941/hf/step-9999",
-    evals=["mmlu"],
-)
+trafilatura_default_eval = default_eval(fineweb_trafilatura_1_4b_model)
 
-evaluate_trafilatura_favor_precision = evaluate_lm_evaluation_harness(
-    model_name="fineweb-small-trafilatura-favor-precision-1.4b",
-    model_path="gs://marin-us-central2/checkpoints/fineweb-small-1.4b-trafilatura-favor-precision-b4f367/hf/step-9999",
-    evals=["mmlu"],
-)
+trafilatura_favor_precision_eval = default_eval(fineweb_trafilatura_favor_precision_1_4b_model)
 
-evaluate_resiliparse_default = evaluate_lm_evaluation_harness(
-    model_name="fineweb-small-resiliparse-default-1.4b",
-    model_path="gs://marin-us-central2/checkpoints/fineweb-small-1.4b-resiliparse-49c4d6/hf/step-9999",
-    evals=["mmlu"],
-)
+resiliparse_default_eval = default_eval(transform_resiliparse_default)
 
-evaluate_resiliparse_preserve_formatting = evaluate_lm_evaluation_harness(
-    model_name="fineweb-small-resiliparse-preserve-formatting-1.4b",
-    model_path="gs://marin-us-central2/checkpoints/fineweb-small-1.4b-resiliparse-preserve-formatting-792c36/hf/step-9999",
-    evals=["mmlu"],
-)
+resiliparse_preserve_formatting_eval = default_eval(fineweb_resiliparse_preserve_formatting_1_4b_model)
+
 
 if __name__ == "__main__":
     executor_main(
         steps=[
-            evaluate_readability,
-            evaluate_trafilatura_default,
-            evaluate_trafilatura_favor_precision,
-            evaluate_resiliparse_default,
-            evaluate_resiliparse_preserve_formatting,
+            readability_eval,
+            trafilatura_default_eval,
+            trafilatura_favor_precision_eval,
+            resiliparse_default_eval,
+            resiliparse_preserve_formatting_eval,
         ]
     )

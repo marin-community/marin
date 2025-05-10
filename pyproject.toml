@@ -10,13 +10,13 @@ license = {file = "LICENSE"}
 
 requires-python = ">=3.10"
 dependencies = [
-    "draccus>=0.8.0",
+    "draccus>=0.11.5",
     "google-api-python-client~=2.0",
     "ray",
     "gcsfs",
     "google-cloud-storage",
     "google-cloud-storage-transfer",
-    "s3fs",
+    "s3fs>=2024",
     "regex",
     "requests",
     "numpy",
@@ -28,10 +28,13 @@ dependencies = [
     "toml",
     "pandas", # Only needed by Fileprovider in inference.py
     "pyarrow", # # Only needed by Fileprovider in inference.py
-    # We are keeping levanter deps for now. @TODO :: Remove them
-    "jax>=0.4.34",
+    # We have levanter deps for now. @TODO :: Remove them
     "multiprocess==0.70.16",
-    "levanter>=1.2.dev1147",
+    "levanter>=1.2.dev1313",
+    "haliax>=1.4.dev343",
+    "sentencepiece",
+    "lz4",
+    "wandb<=0.19.9"
 ]
 
 [project.optional-dependencies]
@@ -47,6 +50,22 @@ dev = [
     "types-PyYAML",
     "types-requests",
     "types-six",
+]
+
+metrics = [
+    "google-cloud-logging",
+]
+
+docs = [
+    "mkdocs>=1.5.0",
+    "mkdocs-material>=9.5.0",
+    "mkdocstrings>=0.24.0",
+    "mkdocstrings-python>=1.7.0",
+    "pymdown-extensions>=10.0.0",
+    "mkdocs-git-revision-date-localized-plugin>=1.2.0",
+    "mkdocs-git-authors-plugin>=0.9.0",
+    "mkdocs-minify-plugin>=0.7.0",
+    "mkdocs-include-markdown-plugin>=7.1.5",
 ]
 
 download_transform = [
@@ -65,7 +84,7 @@ download_transform = [
     "resiliparse",
     "trafilatura",
     "boto3==1.35.23",
-    "htmlmin"
+    "htmlmin",
 ]
 
 quality_dedup_consolidate = [
@@ -76,9 +95,14 @@ quality_dedup_consolidate = [
     "transformers",
 ]
 tokenize_train = [
-    "jax>=0.4.34",
+#    "jax[tpu]==0.5.1",
     "multiprocess==0.70.16",
-    "levanter>=1.2.dev1054",
+    "levanter>=1.2.dev1313",
+    "haliax>=1.4.dev343",
+    "lm-eval@git+https://github.com/stanford-crfm/lm-evaluation-harness.git",
+    "tblib",
+    "sentencepiece",
+    "tiktoken",
 ]
 
 data_browser = [
@@ -86,8 +110,10 @@ data_browser = [
 ]
 
 eval = [
-    "lm-eval",
+    "levanter>=1.2.dev1312",
+    "lm-eval@git+https://github.com/stanford-crfm/lm-evaluation-harness.git",
 ]
+
 [tool.setuptools.packages.find]
 where = ["."]
 exclude = ["cache", "infra"]
@@ -116,7 +142,7 @@ extend-exclude = ["scripts/"]
 
 [tool.ruff.lint]
 select = ["A", "B", "E", "F", "I", "NPY", "RUF", "UP", "W"]
-ignore = ["F722", "B008", "UP015"]
+ignore = ["F722", "B008", "UP015", "A005"]
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["E402", "F401"]
@@ -130,3 +156,6 @@ exclude = [
     "marin/",
     "scripts/"
 ]
+
+[tool.uv.sources]
+resiliparse-dom = { git = "https://github.com/stanford-crfm/chatnoir-resiliparse", subdirectory = "resiliparse_dom", rev = "da2ff85fe51310484cf9435565b2bdde2a23708b" }

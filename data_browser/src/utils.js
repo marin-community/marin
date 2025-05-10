@@ -1,3 +1,7 @@
+export function apiConfigUrl() {
+  return "/api/config";
+}
+
 export function viewUrl(params) {
   // Encode arrays (e.g., `paths`) as JSON
   params = {...params, paths: JSON.stringify(params.paths)};

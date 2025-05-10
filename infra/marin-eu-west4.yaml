@@ -9,6 +9,11 @@ cluster_name: marin-eu-west4
 max_workers: 1024
 
 
+auth:
+  ssh_private_key:  ~/.ssh/marin_ray_cluster.pem
+  ssh_public_key:  ~/.ssh/marin_ray_cluster.pub
+  ssh_user: ray
+
 
 # Configure GCP
 provider:
@@ -17,8 +22,9 @@ provider:
   availability_zone: europe-west4-b
   project_id: hai-gcp-models
 
+
 docker:
-    image: "europe-west4-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:20241123"
+    image: "europe-west4-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:89b461b3"
     container_name: "ray_docker"
     pull_before_run: true
     worker_run_options:
@@ -54,7 +60,12 @@ setup_commands:
   - gcloud secrets versions access latest --secret=OPENAI_API_KEY > $HOME/.cache/openai/token
   - echo 'export MARIN_PREFIX="gs://marin-eu-west4"' >> $HOME/.bashrc
   - echo 'export BUCKET="marin-eu-west4"' >> $HOME/.bashrc
-  - gcsfuse --only-dir gcsfuse_mount $BUCKET /opt/gcsfuse_mount || true
+  # cf https://github.com/ray-project/ray/blob/0bc6ec86ffd0fc0d4e43fb339ffe0ac03ee5531b/python/ray/autoscaler/_private/constants.py#L66
+  # this is set to 30s by default, which is much too short for our use case
+  - echo 'export AUTOSCALER_HEARTBEAT_TIMEOUT_S=600' >> $HOME/.bashrc
+  - gcsfuse --implicit-dirs --only-dir gcsfuse_mount $BUCKET /opt/gcsfuse_mount || true
+  - mkdir -p /home/ray/.ssh && gcloud compute project-info describe --format="value(commonInstanceMetadata.items[?key==\"ssh-keys\"].value)" > /home/ray/.ssh/authorized_keys && chmod 600 /home/ray/.ssh/authorized_keys
+  - gcloud secrets versions access latest --secret=RAY_CLUSTER_PUBLIC_KEY > ~/.ssh/marin_ray_cluster.pub
 
 # Set Head Node == `ray_head_default`
 head_node_type: head_default
@@ -85,15 +96,15 @@ available_node_types:
             sourceImage: projects/ubuntu-os-cloud/global/images/family/ubuntu-2204-lts
   tpu_worker:
     max_workers: 1024
-    min_workers: 4
+    min_workers: 0
     node_config:
-      acceleratorType: v5litepod-1
+      acceleratorType: v5litepod-4
       runtimeVersion: v2-alpha-tpuv5-lite
       schedulingConfig:
         preemptible: true
     resources:
       CPU: 120
-      TPU: 8
+      TPU: 4
 
   tpu_slice_v5e_8:
     max_workers: 1024
@@ -105,7 +116,7 @@ available_node_types:
         preemptible: true
     resources:
       CPU: 120
-      TPU: 8
+      TPU: 4
 
   tpu_slice_v5e_16:
     max_workers: 1024
@@ -117,7 +128,7 @@ available_node_types:
         preemptible: true
     resources:
       CPU: 120
-      TPU: 8
+      TPU: 4
 
   tpu_slice_v5e_32:
     max_workers: 1024
@@ -129,7 +140,7 @@ available_node_types:
         preemptible: true
     resources:
       CPU: 120
-      TPU: 8
+      TPU: 4
 
   tpu_slice_v5e_64:
     max_workers: 1024
@@ -141,7 +152,7 @@ available_node_types:
         preemptible: true
     resources:
       CPU: 120
-      TPU: 8
+      TPU: 4
 
   tpu_slice_v5e_128:
     max_workers: 1024
@@ -153,11 +164,11 @@ available_node_types:
         preemptible: true
     resources:
       CPU: 120
-      TPU: 8
+      TPU: 4
 
   tpu_slice_v5e_256:
     max_workers: 1024
-    min_workers: 0
+    min_workers: 4
     node_config:
       acceleratorType: v5litepod-256
       runtimeVersion: v2-alpha-tpuv5-lite
@@ -165,4 +176,4 @@ available_node_types:
         preemptible: true
     resources:
       CPU: 120
-      TPU: 8
+      TPU: 4

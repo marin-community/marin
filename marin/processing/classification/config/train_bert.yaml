@@ -1,5 +1,0 @@
-bert_args:
-  lr: 0.01
-seed: 0
-val_frac: 0.1
-memory: 1

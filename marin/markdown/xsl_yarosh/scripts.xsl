@@ -2,7 +2,7 @@
 <xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
 		xmlns:m="http://www.w3.org/1998/Math/MathML"
                 version='1.0'>
-                
+
 <!-- ====================================================================== -->
 <!-- $Id: scripts.xsl,v 1.4 2003/06/10 12:24:04 shade33 Exp $
      This file is part of the XSLT MathML Library distribution.
@@ -99,7 +99,7 @@
 				<xsl:with-param name="pos_over" select="3"/>
 			</xsl:call-template>
 			<xsl:text>}</xsl:text>
-		</xsl:when>		
+		</xsl:when>
 		<xsl:when test="translate($base,'&#x0220F;&#x02210;&#x022c2;&#x022c3;&#x02294;',
 						'&#x02211;&#x02211;&#x02211;&#x02211;&#x02211;')='&#x02211;'">
 <!-- if $base is operator, such as
@@ -228,7 +228,7 @@
 			<!--
 			<xsl:text>\overset{</xsl:text>
 			<xsl:apply-templates select="./*[$pos_over]"/>
-			<xsl:text>}{</xsl:text>	
+			<xsl:text>}{</xsl:text>
 			<xsl:apply-templates select="./*[1]"/>
 			<xsl:text>}</xsl:text>-->
 		</xsl:otherwise>
@@ -282,9 +282,9 @@
 		<xsl:otherwise>
 			<xsl:text>\underset{</xsl:text>		<!-- Required AmsMath package -->
 			<xsl:apply-templates select="./*[2]"/>
-			<xsl:text>}{</xsl:text>	
+			<xsl:text>}{</xsl:text>
 			<xsl:apply-templates select="./*[1]"/>
-			<xsl:text>}</xsl:text>	
+			<xsl:text>}</xsl:text>
 		</xsl:otherwise>
 	</xsl:choose>
 </xsl:template>
@@ -404,30 +404,30 @@
 <xsl:template match="m:mmultiscripts" mode="mprescripts">
 	<xsl:for-each select="m:mprescripts/following-sibling::*">
 		<xsl:if test="position() mod 2 and local-name(.)!='none'">
-			<xsl:text>{}_{</xsl:text>	
+			<xsl:text>{}_{</xsl:text>
 			<xsl:apply-templates select="."/>
-			<xsl:text>}</xsl:text>	
+			<xsl:text>}</xsl:text>
 		</xsl:if>
 		<xsl:if test="not(position() mod 2) and local-name(.)!='none'">
-			<xsl:text>{}^{</xsl:text>	
+			<xsl:text>{}^{</xsl:text>
 			<xsl:apply-templates select="."/>
-			<xsl:text>}</xsl:text>	
+			<xsl:text>}</xsl:text>
 		</xsl:if>
 	</xsl:for-each>
 	<xsl:apply-templates select="./*[1]"/>
 	<xsl:for-each select="m:mprescripts/preceding-sibling::*[position()!=last()]">
 		<xsl:if test="position()>2 and local-name(.)!='none'">
-			<xsl:text>{}</xsl:text>	
+			<xsl:text>{}</xsl:text>
 		</xsl:if>
 		<xsl:if test="position() mod 2 and local-name(.)!='none'">
-			<xsl:text>_{</xsl:text>	
+			<xsl:text>_{</xsl:text>
 			<xsl:apply-templates select="."/>
-			<xsl:text>}</xsl:text>	
+			<xsl:text>}</xsl:text>
 		</xsl:if>
 		<xsl:if test="not(position() mod 2) and local-name(.)!='none'">
-			<xsl:text>^{</xsl:text>	
+			<xsl:text>^{</xsl:text>
 			<xsl:apply-templates select="."/>
-			<xsl:text>}</xsl:text>	
+			<xsl:text>}</xsl:text>
 		</xsl:if>
 	</xsl:for-each>
 </xsl:template>
@@ -441,17 +441,17 @@
 			<xsl:apply-templates select="./*[1]"/>
 			<xsl:for-each select="*[position()>1]">
 				<xsl:if test="position()>2 and local-name(.)!='none'">
-					<xsl:text>{}</xsl:text>	
+					<xsl:text>{}</xsl:text>
 				</xsl:if>
 				<xsl:if test="position() mod 2 and local-name(.)!='none'">
-					<xsl:text>_{</xsl:text>	
+					<xsl:text>_{</xsl:text>
 					<xsl:apply-templates select="."/>
-					<xsl:text>}</xsl:text>	
+					<xsl:text>}</xsl:text>
 				</xsl:if>
 				<xsl:if test="not(position() mod 2) and local-name(.)!='none'">
-					<xsl:text>^{</xsl:text>	
+					<xsl:text>^{</xsl:text>
 					<xsl:apply-templates select="."/>
-					<xsl:text>}</xsl:text>	
+					<xsl:text>}</xsl:text>
 				</xsl:if>
 			</xsl:for-each>
 		</xsl:otherwise>

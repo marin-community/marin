@@ -19,20 +19,17 @@ from dataclasses import dataclass
 import draccus
 import ray
 
+from marin.execution.executor import THIS_OUTPUT_PATH
 from marin.utilities.huggingface_hub_utils import download_hf_dataset
 from marin.utilities.storage_transfer_utils import wait_for_transfer_job
 
 logger = logging.getLogger("ray")
 
 
-@dataclass
+@dataclass(frozen=True)
 class DownloadConfig:
     # fmt: off
-    gcs_output_path: str
-    """
-    Path to store raw data in persistent storage (e.g. gs://$BUCKET/...).
-    This works with any fsspec-compatible path, but for backwards compatibility, we call it gcs_output_path.
-    """
+
 
     # HuggingFace Dataset Parameters
     hf_dataset_id: str                                      # HF Dataset to Download (as `$ORG/$DATASET` on HF Hub)
@@ -40,6 +37,12 @@ class DownloadConfig:
     revision: str  # (Short) Commit Hash (from HF Dataset Repo; 7 characters)
     hf_urls_glob: list[str] = dataclasses.field(default_factory=list)
     # List of Glob Patterns to Match Files in HF Dataset, If empty we get all the files in a hf repo
+
+    gcs_output_path: str = THIS_OUTPUT_PATH
+    """
+    Path to store raw data in persistent storage (e.g. gs://$BUCKET/...).
+    This works with any fsspec-compatible path, but for backwards compatibility, we call it gcs_output_path.
+    """
 
     # Additional GCS Parameters
     public_gcs_path: str = (                                # Path to Publicly Readable Bucket (for Storage Transfer)
@@ -52,6 +55,10 @@ class DownloadConfig:
     poll_interval: int = 10                                 # Time to wait between polling job status (in seconds)
 
     # fmt: on
+    hf_repo_type_prefix: str = (
+        "datasets"  # The repo_type_prefix is datasets/ for datasets,
+        # spaces/ for spaces, and models do not need a prefix in the URL.
+    )
 
 
 @ray.remote

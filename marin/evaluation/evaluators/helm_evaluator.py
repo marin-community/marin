@@ -96,7 +96,11 @@ class HELMEvaluator(VllmTpuEvaluator):
         write_yaml(content, HELMEvaluator.TOKENIZER_CONFIGS_FILE_PATH)
 
     def evaluate(
-        self, model: ModelConfig, evals: list[EvalTaskConfig], output_path: str, max_eval_instances: int | None = None
+        self,
+        model: ModelConfig,
+        evals: list[EvalTaskConfig],
+        output_path: str,
+        max_eval_instances: int | None = None,
     ) -> None:
         """
         Runs HELM on the specified model and set of evaluations.

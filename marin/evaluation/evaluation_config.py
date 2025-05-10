@@ -1,5 +1,7 @@
 from dataclasses import dataclass, field
 
+from experiments.evals.resource_configs import ResourceConfig
+
 
 @dataclass(frozen=True)
 class EvalTaskConfig:
@@ -8,6 +10,9 @@ class EvalTaskConfig:
 
     num_fewshot: int
     """Number of few-shot examples to evaluate on."""
+
+    task_alias: str | None = None
+    """Alias for the task name."""
 
 
 @dataclass(frozen=True)
@@ -57,4 +62,19 @@ class EvaluationConfig:
     max_eval_instances: int | None = None
     """
     Maximum number of evaluation instances to run.
+    """
+
+    engine_kwargs: dict | None = None
+    """
+    Additional keyword arguments to pass to the vLLM engine.
+    """
+
+    resource_config: ResourceConfig | None = None
+    """
+    Additional keyword arguments to pass to the Ray resources.
+    """
+
+    generation_params: dict | None = None
+    """
+    Additional keyword arguments passed to the vLLM sampling params engine
     """
