@@ -47,7 +47,7 @@
 	<xsl:if test="@numalign='left'">
 		<xsl:text>\hfill </xsl:text>
 	</xsl:if>
-	<xsl:text>}{</xsl:text>	
+	<xsl:text>}{</xsl:text>
 	<xsl:if test="@denomalign='right'">
 		<xsl:text>\hfill </xsl:text>
 	</xsl:if>
@@ -72,14 +72,14 @@
 		<xsl:when test="count(./*)=2">
 			<xsl:text>\sqrt[</xsl:text>
 			<xsl:apply-templates select="./*[2]"/>
-			<xsl:text>]{</xsl:text>	
+			<xsl:text>]{</xsl:text>
 			<xsl:apply-templates select="./*[1]"/>
-			<xsl:text>}</xsl:text>	
+			<xsl:text>}</xsl:text>
 		</xsl:when>
 		<xsl:otherwise>
 		<!-- number of argumnets is not 2 - code 25 -->
 			<xsl:message>exception 25:</xsl:message>
-			<xsl:text>\text{exception 25:}</xsl:text> 
+			<xsl:text>\text{exception 25:}</xsl:text>
 		</xsl:otherwise>
 	</xsl:choose>
 </xsl:template>
@@ -141,7 +141,7 @@
 			<xsl:value-of select="@close"/>
 		</xsl:when>
 		<xsl:otherwise><xsl:text>\right)</xsl:text></xsl:otherwise>
-	</xsl:choose>	
+	</xsl:choose>
 </xsl:template>
 
 <xsl:template match="m:mphantom">
@@ -184,9 +184,9 @@
 		<xsl:choose>
 			<xsl:when test="@scriptlevel=0"><xsl:text>\textstyle </xsl:text></xsl:when>
 			<xsl:when test="@scriptlevel=1"><xsl:text>\scriptstyle </xsl:text></xsl:when>
-			<xsl:otherwise><xsl:text>\scriptscriptstyle </xsl:text></xsl:otherwise> 
-		</xsl:choose> 
-	</xsl:if>	
+			<xsl:otherwise><xsl:text>\scriptscriptstyle </xsl:text></xsl:otherwise>
+		</xsl:choose>
+	</xsl:if>
 	<xsl:if test="@background">
 		<xsl:text>\colorbox[rgb]{</xsl:text>
 		<xsl:call-template name="color">
@@ -210,7 +210,7 @@
 	</xsl:if>
 	<xsl:if test="@scriptlevel and not(@displaystyle='true')">
 		<xsl:text>}</xsl:text>
-	</xsl:if>	
+	</xsl:if>
 	<xsl:if test="@displaystyle='true'">
 		<xsl:text>}</xsl:text>
 	</xsl:if>

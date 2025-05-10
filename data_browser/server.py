@@ -1,21 +1,86 @@
 import gzip
 import io
 import json
+import os
+from dataclasses import asdict, dataclass, replace
 
+import draccus
 import fsspec
+import requests
 import zstandard as zstd
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, Response, jsonify, request, send_from_directory
+from flask_limiter import Limiter
 from pyarrow.parquet import ParquetFile
 
 app = Flask(__name__, static_folder="build")
 
-# Initialize fsspec GCS filesystem
-fs = fsspec.filesystem("gcs")
+CLOUD_STORAGE_PREFIXES = ("gs://", "s3://")
+
+limiter = Limiter(app)
+
+
+@dataclass(frozen=True)
+class ServerConfig:
+    """
+    Specifies how to launch a data browser (e.g., what files to expose and how).
+    Any sort of permissions and throttling policies should be specified here.
+    """
+
+    root_paths: list[str]
+    """Paths (and their descendents) to allow access to."""
+
+    max_lines: int
+    """Maximum number of lines to read from a text or parquet file.
+    This is the maximum number of lines that will be read in a single request,
+    which means that even if we're only requesting a single line, if the portion
+    of the file requested is past the first `max_lines` lines, we would exceed
+    this limit."""
+
+
+class Server:
+    """
+    The only state that the server has right now is the filesystems.
+    Note that utils.py has fsspec utilities that we could call directly which
+    would simplify the code, but the filesystem objects wouldn't be cached.
+    """
+
+    def __init__(self, config: ServerConfig):
+        self.config = config
+
+        self.fs_cache = {
+            None: fsspec.filesystem("local"),
+            "gs": fsspec.filesystem("gcs"),
+            "s3": fsspec.filesystem("s3"),
+        }
+
+    def fs(self, path: str):
+        """Automatically figure out the filesystem to use based on the `path`."""
+        protocol, _ = fsspec.core.split_protocol(path)
+        return self.fs_cache[protocol]
+
+
+server: Server | None = None
+
+
+def resolve_path(path: str) -> str:
+    """Resolve a path to an absolute path, except for cloud storage paths."""
+    return path if path.startswith(CLOUD_STORAGE_PREFIXES) else os.path.realpath(path)
 
 
 def list_files(path: str) -> dict:
     """List all files in the given path."""
-    files = fs.ls(path, detail=True, refresh=True)
+    protocol, _ = fsspec.core.split_protocol(path)  # e.g., "gs"
+    files = server.fs(path).ls(path, detail=True, refresh=True)
+
+    # If path = "gs://", the file names listed don't have the "gs://" prefix
+    # (but still represents an absolute path), so we add it in.
+    def name_to_path(name: str) -> str:
+        if protocol is not None:
+            return f"{protocol}://{name}"
+        return name
+
+    # Replace file with path
+    files = [{"path": name_to_path(file["name"]), **file} for file in files]
 
     return {
         "type": "directory",
@@ -26,7 +91,7 @@ def list_files(path: str) -> dict:
 def read_json_file(path: str) -> dict:
     """Reads a JSON file."""
     MAX_BYTES = 100 * 1024 * 1024
-    with fs.open(path) as f:
+    with server.fs(path).open(path) as f:
         raw = f.read(MAX_BYTES)  # Don't OOM on huge files
         if len(raw) == MAX_BYTES:
             return {
@@ -48,7 +113,10 @@ def read_text_file(
     Reads a range of lines (offset to offset + count) from a text file (possibly compressed using gzip or zstd).
     Interpret each line as a JSON if `get_json` is set.
     """
-    with fs.open(path, "rb") as f:
+    # Ensure we only read a max of server.config.max_lines lines
+    if offset + count >= server.config.max_lines or count >= server.config.max_lines:
+        return {"error": f"Only {server.config.max_lines} lines are allowed to be read at a time"}
+    with server.fs(path).open(path, "rb") as f:
         # Unzip
         if gzipped:
             f = gzip.GzipFile(fileobj=f)
@@ -80,6 +148,10 @@ def read_text_file(
 
 def read_parquet_file(path: str, offset: int, count: int) -> dict:
     """Reads a range of records (offset to offset + count) from a parquet file."""
+    # Ensure we only read a max of server.config.max_lines lines
+    if offset + count >= server.config.max_lines or count >= server.config.max_lines:
+        return {"error": f"Only {server.config.max_lines} lines are allowed to be read at a time"}
+
     pf = ParquetFile(path)
     # Note: can make this more efficient by skipping the first offset without reading into memory
     rows = next(pf.iter_batches(batch_size=offset + count))[offset:]
@@ -89,7 +161,56 @@ def read_parquet_file(path: str, offset: int, count: int) -> dict:
     }
 
 
+def has_permissions(path: str, root_paths: list[str]) -> bool:
+    """Returns whether the user can access `path` according to the permissions."""
+    for allowed_path in root_paths:
+        # For cloud storage paths, check if the resolved path starts with the allowed path
+        if path.startswith(CLOUD_STORAGE_PREFIXES):
+            if path.startswith(allowed_path):
+                return True
+        else:
+            if not os.path.isabs(path):
+                # Don't allow relative paths
+                return False
+            if os.path.commonpath([path, allowed_path]) == allowed_path:
+                # The path is allowed if it's a subpath of the allowed path
+                return True
+    return False
+
+
+# Sanity checks to ensure has_permissions works as expected
+assert has_permissions("gs://marin-us-central2/test/test.txt", ["gs://marin-us-central2"])
+assert not has_permissions("gs://marin-us-central2/test/test.txt", [])
+assert not has_permissions("/etc/hosts", [])
+assert has_permissions("/app/var/test", ["/app/var"])
+assert not has_permissions("/app/various", ["/app/var"])
+assert not has_permissions("../app/var", ["/app/var"])
+assert not has_permissions("../etc/hosts", ["/etc"])
+
+
+@app.route("/api/config", methods=["GET"])
+def config():
+    # Later: only send the necessary parts of config
+    return jsonify(asdict(server.config))
+
+
+@app.route("/api/download", methods=["GET"])
+@limiter.limit("10 per minute")
+def download():
+    path = request.args.get("path")
+    if not path:
+        return jsonify({"error": "No path specified"})
+    if not has_permissions(path, server.config.root_paths):
+        return jsonify({"error": f"No permission to access: {path}"})
+    if not server.fs(path).exists(path):
+        return jsonify({"error": f"Path does not exist: {path}"})
+
+    # Stream the file directly from cloud storage or the filesystem
+    return Response(server.fs(path).open(path, "rb"), content_type="application/octet-stream")
+
+
 @app.route("/api/view", methods=["GET"])
+@limiter.limit("60 per minute")
 def view():
     path = request.args.get("path")
     offset = int(request.args.get("offset", 0))
@@ -97,12 +218,14 @@ def view():
 
     try:
         if not path:
-            return jsonify({"error": "Path not specified"}), 404
-        if not fs.exists(path):
-            return jsonify({"error": "Path does not exist"}), 404
+            return jsonify({"error": "No path specified"})
+        if not has_permissions(path, server.config.root_paths):
+            return jsonify({"error": f"No permission to access: {path}"})
+        if not server.fs(path).exists(path):
+            return jsonify({"error": f"Path does not exist: {path}"})
 
         # Directory
-        if fs.isdir(path):
+        if server.fs(path).isdir(path):
             return jsonify(list_files(path))
 
         # jsonl files
@@ -143,15 +266,55 @@ def view():
 
 @app.route("/")
 @app.route("/view")
+@app.route("/view/")
 @app.route("/experiment")
+@app.route("/experiment/")
 def serve():
+    if os.environ.get("DEV") == "true":
+        return proxy_to_dev_server("")
     return send_from_directory(app.static_folder, "index.html")
 
 
 @app.route("/<path:path>")
 def static_proxy(path):
+    if os.environ.get("DEV") == "true":
+        return proxy_to_dev_server(path)
     return send_from_directory(app.static_folder, path)
 
 
+def proxy_to_dev_server(path):
+    """Proxy requests to the development server running on port 3000
+
+    This implements a basic HTTP reverse proxy pattern where we forward the original request
+    to the target server (dev server) and then strip out hop-by-hop headers that should not
+    be forwarded (these headers are meant only for a single transport-level connection).
+    See https://www.rfc-editor.org/rfc/rfc2616#section-13.5.1
+    """
+    resp = requests.get(f"http://localhost:3000/{path}")
+    excluded_headers = ["content-encoding", "content-length", "transfer-encoding", "connection"]
+    headers = [(name, value) for (name, value) in resp.raw.headers.items() if name.lower() not in excluded_headers]
+    return Response(resp.content, resp.status_code, headers)
+
+
+def standardize_config(config: ServerConfig) -> ServerConfig:
+    """Replace relative paths with absolute paths, except for cloud storage paths."""
+    absolute_root_paths = [resolve_path(path) for path in config.root_paths]
+    return replace(config, root_paths=absolute_root_paths)
+
+
+@draccus.wrap()
+def main(config: ServerConfig):
+    print("ServerConfig:", config)
+
+    config = standardize_config(config)
+
+    global server
+    server = Server(config)
+
+    debug = os.environ.get("DEV") == "true"
+    assert debug, "This function must be run in debug mode"
+    app.run(host="0.0.0.0", port=5000 if debug else 80, debug=debug)
+
+
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    main()

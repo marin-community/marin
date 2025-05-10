@@ -37,10 +37,17 @@ def stream_file_to_fsspec(cfg: DownloadConfig, hf_fs: HfFileSystem, file_path: s
     """Ray task to stream a file from HfFileSystem to another fsspec path."""
     target_fs, _ = fsspec.core.url_to_fs(cfg.gcs_output_path)
 
+    # Increase timeout for large files
+    timeout = 600  # Increase from default 10 seconds to 60 seconds
+
     try:
-        with hf_fs.open(file_path, "rb") as src_file:
+        # Use the timeout parameter when opening the file
+        with hf_fs.open(file_path, "rb", timeout=timeout) as src_file:
+            target_fs.mkdirs(os.path.dirname(fsspec_file_path), exist_ok=True)
             with target_fs.open(fsspec_file_path, "wb") as dest_file:
-                while chunk := src_file.read(1024 * 1024):  # Read in 1MB chunks
+                # Increase chunk size for faster downloads
+                chunk_size = 8 * 1024 * 1024  # 8MB chunks instead of 1MB
+                while chunk := src_file.read(chunk_size):
                     dest_file.write(chunk)
         logging.info(f"Streamed {file_path} to fsspec path: {fsspec_file_path}")
     except Exception as e:
@@ -54,27 +61,30 @@ def download_hf(cfg: DownloadConfig) -> None:
     # Parse the output path and get the file system
     fs, _ = fsspec.core.url_to_fs(cfg.gcs_output_path)
 
-    # Use revision as "version" for writing to the output path
-    versioned_output_path = os.path.join(cfg.gcs_output_path, cfg.revision)
+    # TODO: Our earlier version of download_hf used this piece of code for calculating the versioned_output_path
+    # versioned_output_path = os.path.join(cfg.gcs_output_path, cfg.revision)
+    # This versioned_output_path was used instead of gcs_output_path. So some of the earlier datasets are stored in
+    # gcs_output_path/<revision> instead of gcs_output_path. We should do this migration.
 
     # Ensure the output path is writable
     try:
-        ensure_fsspec_path_writable(versioned_output_path)
+        ensure_fsspec_path_writable(cfg.gcs_output_path)
     except ValueError as e:
         logger.exception(f"Output path validation failed: {e}")
         raise e
 
     # Initialize Hugging Face filesystem
     hf_fs = HfFileSystem(token=os.environ.get("HF_TOKEN", False))
+    hf_repo_name_with_prefix = os.path.join(cfg.hf_repo_type_prefix, cfg.hf_dataset_id)
 
     if not cfg.hf_urls_glob:
         # We get all the files using find
-        files = hf_fs.find(f"datasets/{cfg.hf_dataset_id}/", revision=cfg.revision)
+        files = hf_fs.find(hf_repo_name_with_prefix, revision=cfg.revision)
     else:
         # Get list of files directly from HfFileSystem matching the pattern
         files = []
         for hf_url_glob in cfg.hf_urls_glob:
-            pattern = f"datasets/{cfg.hf_dataset_id}/{hf_url_glob}"
+            pattern = os.path.join(hf_repo_name_with_prefix, hf_url_glob)
             files += hf_fs.glob(pattern, revision=cfg.revision)
 
     if not files:
@@ -84,7 +94,7 @@ def download_hf(cfg: DownloadConfig) -> None:
 
     for file in files:
         try:
-            fsspec_file_path = os.path.join(versioned_output_path, file.split("/", 3)[-1])  # Strip the dataset prefix
+            fsspec_file_path = os.path.join(cfg.gcs_output_path, file.split("/", 3)[-1])  # Strip the dataset prefix
             # Hf file paths are always of format : hf://[<repo_type_prefix>]<repo_id>[@<revision>]/<path/in/repo>
             task_generator.append((cfg, hf_fs, file, fsspec_file_path))
         except Exception as e:
@@ -94,7 +104,7 @@ def download_hf(cfg: DownloadConfig) -> None:
     logger.info(f"Total number of files to process: {total_files}")
     pbar = tqdm_logging(total=total_files)
 
-    for ref in simple_backpressure(stream_file_to_fsspec, iter(task_generator), max_in_flight=32, fetch_local=True):
+    for ref in simple_backpressure(stream_file_to_fsspec, iter(task_generator), max_in_flight=16, fetch_local=True):
         try:
             ray.get(ref)
             pbar.update(1)
@@ -104,7 +114,7 @@ def download_hf(cfg: DownloadConfig) -> None:
 
     # Write Provenance JSON
     write_provenance_json(
-        versioned_output_path,
+        cfg.gcs_output_path,
         metadata={"dataset": cfg.hf_dataset_id, "version": cfg.revision, "links": files},
     )
 

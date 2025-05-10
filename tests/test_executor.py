@@ -1,5 +1,6 @@
 import json
 import os
+import random
 import re
 import tempfile
 import time
@@ -9,13 +10,18 @@ import pytest
 import ray
 from draccus.utils import Dataclass
 
-from marin.execution.executor import Executor, ExecutorStep, get_info_path, output_path_of, this_output_path, versioned
-from marin.execution.executor_step_status import STATUS_SUCCESS, get_current_status, get_status_path, read_events
+from marin.execution.executor import Executor, ExecutorStep, _get_info_path, output_path_of, this_output_path, versioned
+from marin.execution.executor_step_status import (
+    STATUS_SUCCESS,
+    get_current_status,
+    get_status_path,
+    read_events,
+)
 
 
-@pytest.fixture
+@pytest.fixture(scope="module", autouse=True)
 def ray_start():
-    ray.init("local", ignore_reinit_error=True)
+    ray.init(namespace="marin", ignore_reinit_error=True)
     yield
     ray.shutdown()  # teardown
 
@@ -114,7 +120,7 @@ def test_executor():
             status_path = get_status_path(executor.output_paths[step])
             events = read_events(status_path)
             assert get_current_status(events) == STATUS_SUCCESS
-            info_path = get_info_path(executor.output_paths[step])
+            info_path = _get_info_path(executor.output_paths[step])
             with open(info_path) as f:
                 step_info = json.load(f)
                 check_info(step_info, step)
@@ -178,7 +184,10 @@ def test_force_run_failed():
 
         # Re-run without force_run
         executor_non_force = Executor(prefix=temp_dir, executor_info_base_path=temp_dir)
-        executor_non_force.run(steps=[a])
+
+        with pytest.raises(Exception, match=".*failed previously.*"):
+            executor_non_force.run(steps=[a])
+
         # should still be failed
         with pytest.raises(FileNotFoundError):
             read_log(log)
@@ -190,6 +199,89 @@ def test_force_run_failed():
         assert len(results) == 2
 
     cleanup_log(log)
+
+
+def test_status_actor():
+    """Test the status actor that keeps track of statuses."""
+
+    def test_one_executor_waiting_for_another():
+        # Test when 2 experiments have a step in common and one waits for another to finish
+        with tempfile.NamedTemporaryFile() as file:
+            with open(file.name, "w") as f:
+                f.write("0")
+
+            @dataclass
+            class Config:
+                number: int
+                path: str
+                wait: int
+                input_path: str
+
+            def fn(config: Config):
+                time.sleep(config.wait)
+                with open(config.path, "r") as f:
+                    number = int(f.read())
+                with open(config.path, "w") as f:
+                    f.write(str(number + config.number))
+
+            a = ExecutorStep(name="a", fn=fn, config=Config(versioned(1), file.name, 2, ""))
+            b = ExecutorStep(name="b", fn=fn, config=Config(versioned(2), file.name, 0, output_path_of(a)))
+
+            @ray.remote
+            def run_fn(executor, steps):
+                executor.run(steps=steps)
+
+            with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
+                executor1 = create_executor(temp_dir)
+                executor2 = create_executor(temp_dir)
+
+                run1 = run_fn.remote(executor1, [a])
+                run2 = run_fn.remote(executor2, [a, b])
+
+                ray.get([run1, run2])
+
+                with open(file.name, "r") as f:
+                    assert int(f.read()) == 3
+
+    test_one_executor_waiting_for_another()
+
+    def test_multiple_steps_race_condition():
+        # Test when there are many steps trying to run simultaneously.
+        # Open a temp dir, make a step that write a random file in that temp dir. Make 10 of these steps and run them
+        # in parallel. Check that only one of them runs
+        with tempfile.TemporaryDirectory(prefix="output_path") as output_path:
+
+            @dataclass
+            class Config:
+                path: str
+
+            def fn(config: Config):
+                random_str = str(random.randint(0, 1000))
+                time.sleep(2)
+                with open(os.path.join(config.path, random_str), "w") as f:
+                    f.write("1")
+
+            @ray.remote
+            def run_fn(executor, steps):
+                executor.run(steps=steps)
+
+            with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
+
+                executor_refs = []
+                for _ in range(10):
+                    executor = create_executor(temp_dir)
+                    executor_refs.append(
+                        run_fn.remote(executor, [ExecutorStep(name="step", fn=fn, config=Config(output_path))])
+                    )
+
+                ray.get(executor_refs)
+
+                files = os.listdir(output_path)
+                print(files)
+                assert len(files) == 1
+                os.unlink(os.path.join(output_path, files[0]))
+
+    test_multiple_steps_race_condition()
 
 
 def test_parallelism():

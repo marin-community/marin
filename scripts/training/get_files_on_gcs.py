@@ -1,6 +1,7 @@
-"""A script to list out the files on GCS to prepare as training data. 
-We generate braceexpand paths for the files with the same prefix and suffix. 
+"""A script to list out the files on GCS to prepare as training data.
+We generate braceexpand paths for the files with the same prefix and suffix.
 """
+
 import os
 import re
 from typing import Generator
