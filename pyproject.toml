@@ -20,7 +20,7 @@ dependencies = [
     "regex",
     "requests",
     "numpy",
-    "torch",
+    "torch>=2.7.0",
     "braceexpand",
     "deepdiff",
     "tqdm",
@@ -50,6 +50,14 @@ dev = [
     "types-PyYAML",
     "types-requests",
     "types-six",
+]
+
+cuda12 = [
+    "jax[cuda12]==0.5.1",
+]
+
+tpu = [
+    "jax[tpu]==0.6.0",
 ]
 
 metrics = [
