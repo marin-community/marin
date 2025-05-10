@@ -22,7 +22,7 @@ wandb offline
 ## Creating an Experiment Script
 
 Experiments scripts live in the `experiments` directory. For instance, the script for this tutorial is in
-`experiments/tutorial/train_tiny_model_cpu.py` or `experiments/tutorial/train_tiny_model_gpu.py` if you want to test in GPU.
+`experiments/tutorial/train_tiny_model_cpu.py` or `experiments/tutorial/train_tiny_model_gpu.py` if you want to test on a GPU machine.
 
 By convention, experiments are usually named `exp{GITHUB_ISSUE_NUMBER}_{DESCRIPTOR}.py`, where `GITHUB_ISSUE_NUMBER` is the issue number for your experiment and `DESCRIPTOR` is a brief description.
 But, to follow along with this tutorial, you can name it whatever you want.
