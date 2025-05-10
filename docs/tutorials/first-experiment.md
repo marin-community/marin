@@ -146,7 +146,7 @@ so we don't need to explicitly list them.
 
 ## Running the Experiment
 
-To run the experiment, locally on CPU, we can run the script directly.
+To run the experiment locally on CPU, we can run the script directly.
 
 ```bash
 python experiments/tutorial/train_tiny_model_cpu.py --prefix /tmp/marin-tutorial
@@ -155,7 +155,7 @@ python experiments/tutorial/train_tiny_model_cpu.py --prefix /tmp/marin-tutorial
 The `--prefix` argument specifies the output directory for the experiment. It can be a local directory or anything [fsspec](https://filesystem-spec.readthedocs.io/en/latest/) supports,
 such as `s3://` or `gs://`.
 
-This will take a few minutes to run. (Marin isn't optimized for low latency.)
+This will take a few minutes to run. (Marin isn't optimized for low latency and Ray can take a while to schedule tasks initially...)
 
 At the end, you should see a message like this:
 
