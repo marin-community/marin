@@ -47,7 +47,7 @@ Marin supports multiple hardware configurations:
         ```
 
     === "GPU"
-         If you are working on GPUs you'll need to setup you system first by install the appropriate CUDA version. In marin we default to 12.9.0:
+         If you are working on GPUs you'll need to set up your system first by installing the appropriate CUDA version. In Marin, we default to 12.9.0:
          ```bash
          wget https://developer.download.nvidia.com/compute/cuda/12.9.0/local_installers/cuda_12.9.0_575.51.03_linux.run
          sudo sh cuda_12.9.0_575.51.03_linux.run
