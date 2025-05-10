@@ -52,10 +52,8 @@ The rest of this guide assumes you have already:
     - The training configuration is specified using a `TrainLmConfig` object, but you can also use a slightly more convenient `SimpleTrainConfig` (see [simple_train_config.py](../simple_train_config.py)).
     - The dataset is set to FineWeb-Edu (with a fixed data seed) by default. You can optionally specify a (tokenized) dataset, but note that in order to count as a valid submission, you must use the default dataset (FineWeb-Edu)
 
-
- here's a reference speedrun file `llama_75m_fineweb_edu.py`:
-
-   ```python
+    Here's a reference speedrun file `llama_75m_fineweb_edu.py`:
+    ```python
     """
     Sample speedrun with a 75M model that uses the Llama architecture.
     """
@@ -91,14 +89,12 @@ The rest of this guide assumes you have already:
 
     if __name__ == "__main__":
         executor_main(steps=default_speedrun("75M_llama_fineweb_edu", speedrun_config))
-
     ```
-
+    
     The folder and `.py` file names can be different, but should be descriptive of the configuration you use eg. something like `llama_75m_fineweb_edu`. Note that in principle, you could organize your directory experiments/speedrun/<your_run_name> however you like (multiple python files, etc) if you'd like to; in this guide, we'll go with one file to keep things simple.
 
 4. Set relevant environment variables needed for the run:
-
-    ```
+    ```bash
     export WANDB_API_KEY=...
     export MARIN_PREFIX=...
     export HF_TOKEN=...

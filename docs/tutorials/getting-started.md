@@ -24,7 +24,7 @@ Before you begin, ensure you have the following installed:
    source venv/bin/activate  # On Windows: venv\Scripts\activate
    ```
 
-3. Install the package:
+3. Install the required packages:
    ```bash
    pip install -e .
    ```
