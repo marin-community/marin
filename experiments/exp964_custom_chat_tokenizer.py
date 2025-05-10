@@ -7,14 +7,11 @@ from urllib.error import HTTPError
 
 import numpy as np
 from huggingface_hub.errors import GatedRepoError
-
-from experiments.marin_models import MARIN_CHAT_TEMPLATE, marin_tokenizer
 from levanter.data.text import ChatLmDatasetFormat
 from transformers import AutoTokenizer
 
 from experiments.llama import llama3_instruct_tokenizer, llama3_tokenizer
-
-
+from experiments.marin_models import MARIN_CHAT_TEMPLATE, marin_tokenizer
 
 # Olmo 2 template modified so we can use with levanter
 MARIN_OLMO2_CHAT_TEMPLATE = """
