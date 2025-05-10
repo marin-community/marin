@@ -1,5 +1,7 @@
 site_name: Marin Documentation
 site_description: Documentation for the Marin project
+site_url: https://marin.community
+
 theme:
   name: material
   features:
@@ -8,7 +10,11 @@ theme:
     - search.suggest
     - content.code.annotation
     - content.code.copy
+    - navigation.footer
   custom_dir: docs/overrides
+
+repo_url: https://github.com/marin-community/marin
+repo_name: marin-community/marin
 
 # Include extra JS to setup Read the Docs addons integrations
 extra_javascript:
@@ -24,7 +30,6 @@ nav:
   - Tutorials:
     - Getting Started: tutorials/getting-started.md
     - First Experiment: tutorials/first-experiment.md
-    - First Local GPU Experiment: tutorials/local-gpu.md
     - Executor 101: tutorials/executor-101.md
   - How-to Guides:
     - Train an LM: how-to-guides/train-an-lm.md
@@ -56,6 +61,8 @@ nav:
 markdown_extensions:
   - pymdownx.highlight
   - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
   - pymdownx.inlinehilite
   - pymdownx.tabbed
   - pymdownx.arithmatex
@@ -69,7 +76,18 @@ markdown_extensions:
       permalink: true
 
 plugins:
-  - search
+  - search:
+      lang: en
+      separator: '[\s\-\.]+'
+      min_search_length: 2
+      prebuild_index: true
+      indexing: 'full'
+      properties:
+          - title
+          - tags
+          - content
+          - sections
+      search_index_only: false
   - mkdocstrings:
       default_handler: python
       handlers:
