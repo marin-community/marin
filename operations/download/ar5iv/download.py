@@ -1,116 +1,127 @@
-"""
-ar5iv/download.py
-
-Download script for the ar5iv raw HTML data, provided by SIGMathLing (Forum/Resource Cooperative for the Linguistics of
-Mathematical/Technical Documents).
-
-Home Page: https://sigmathling.kwarc.info/resources/ar5iv-dataset-2024/
-
-Run with:
-    - [Local] python operations/download/ar5iv/download.py --gcs_output_path="gs://marin-us-central2/raw/ar5iv"
-"""
-
 import json
+import logging
+import zipfile
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
-import draccus
+import fsspec
+import ray
+from tqdm_loggable.auto import tqdm
 
-from marin.utilities.gcs_utils import split_gcs_path
-from marin.utilities.storage_transfer_utils import create_gcs_transfer_job_from_tsv, create_url_list_tsv_on_gcs
-from marin.utilities.validation_utils import write_provenance_json
+from marin.utils import fsspec_exists, fsspec_glob
 
-# TODO (siddk, dlwh, percyliang) :: This is basically the README... but if it lives in the "download.py" anyway, not
-#  sure if we should write a separate file to GCS?
-DOWNLOAD_INSTRUCTIONS = (
-    "\n===\n"
-    "Invalid `personalized_url_json` (see `operations/curate/ar5iv/ar5iv-04-2024.json` for format).\n\n"
-    "Downloading the ar5iv requires agreeing to a *per-user* License Agreement before getting access to the data.\n"
-    "See https://sigmathling.kwarc.info/resources/ar5iv-dataset-2024/ for instructions.\n\n"
-    "Once approved, add URLs for each zip file to `personalized_url_json` (and bump 'version' if appropriate)."
-    "\n===\n"
-)
+logger = logging.getLogger("ray")
 
 
 @dataclass
 class DownloadConfig:
-    # fmt: off
-    gcs_output_path: str = (                            # Path to store raw data on GCS (including gs://$BUCKET)
-        "gs://marin-us-central2/raw/ar5iv"
-    )
-
-    # Dataset-Specific Parameters
-    personalized_url_json: Path | None = Path(          # Path to JSON File defining (personalized) links to ar5iv data
-        "operations/download/ar5iv/ar5iv-v04-2024.json"
-    )
-
-    # Additional GCS Parameters
-    public_gcs_path: str = (                            # Path to Publicly Readable Bucket (for Storage Transfer)
-        "gs://hf_dataset_transfer_bucket"
-    )
-
-    def __post_init__(self) -> None:
-        if not self.gcs_output_path.startswith("gs://"):
-            raise ValueError(
-                f"Invalid `{self.gcs_output_path = }`; expected URI of form `gs://BUCKET/path/to/resource`"
-            )
-
-        if not self.public_gcs_path.startswith("gs://"):
-            raise ValueError(
-                f"Invalid `{self.public_gcs_path = }`; expected URI of form `gs://BUCKET`"
-            )
-
-    # fmt: on
+    input_path: Path
+    output_path: str
+    chunk_size: int = 20 * 1024 * 1024  # 20MB - not heavily used now, but left for compatibility
+    max_files: int = None  # Maximum number of shards to process
 
 
-@draccus.wrap()
+@ray.remote(memory=10 * 1024 * 1024 * 1024)
+def process_shard(input_path, output_path, shard_id: str, file_list: list) -> None:
+    """
+    Process a single shard by extracting its files from the zip in GCS and uploading the merged JSONL.
+    """
+    try:
+        # Open the GCS zip file again for random access
+        with fsspec.open(str(input_path), "rb") as f:
+            with zipfile.ZipFile(f) as zf:
+                gcs_path = f"{output_path}/{shard_id}.jsonl.gz"
+                success_path = f"{output_path}/{shard_id}.SUCCESS"
+
+                # Avoid overwriting if shard already exists
+                if fsspec_exists(success_path):
+                    logger.info(f"Shard {shard_id} already exists at {gcs_path}, skipping...")
+                    return
+
+                with (
+                    fsspec.open(gcs_path, "wt", compression="gzip") as out_f,
+                    fsspec.open(success_path, "wt") as success_f,
+                ):
+                    for filename in file_list:
+                        with zf.open(filename, "r") as file_handle:
+                            content = file_handle.read()
+                            record = {
+                                "filename": filename,
+                                "format": "html",
+                                "content": content.decode("utf-8", errors="replace"),
+                            }
+                            success_record = {
+                                "filename": filename,
+                                "format": "html",
+                            }
+                            print(json.dumps(record), file=out_f)
+                            print(json.dumps(success_record), file=success_f)
+
+                logger.info(f"Shard {shard_id} with {len(file_list)} files uploaded to {gcs_path}")
+
+    except Exception as e:
+        logger.exception(f"Error processing shard {shard_id}: {e}")
+        raise
+
+
+@ray.remote(memory=10 * 1024 * 1024 * 1024)
 def download(cfg: DownloadConfig) -> None:
-    print(f"[*] Downloading ar5iv Dataset to `{cfg.gcs_output_path}`")
-    if cfg.personalized_url_json is None or not cfg.personalized_url_json.exists():
-        print(DOWNLOAD_INSTRUCTIONS)
-        raise ValueError("Missing `personalized_url_json`")
+    try:
+        logger.info("Starting transfer of Ar5iv dataset...")
+        logger.info(f"Source: {cfg.input_path}")
 
-    # Load JSON =>> Gently Validate URLs
-    with open(cfg.personalized_url_json, "r") as f:
-        ar5iv_url_cfg = json.load(f)
-        if any(dl_file["url"] == "" for dl_file in ar5iv_url_cfg["links"]):
-            print(DOWNLOAD_INSTRUCTIONS)
-            raise ValueError("Missing `personalized_url_json`")
+        # Use fsspec+zipfile to list all files
+        with fsspec.open(str(cfg.input_path), "rb") as f:
+            with zipfile.ZipFile(f) as zf:
+                all_files = zf.infolist()
 
-    # Parse GCS Bucket, Relative Path from `gcs_output_path`
-    gcs_bucket, gcs_relative_path = split_gcs_path(cfg.gcs_output_path)
+                # Group by shard directory
+                # We assume structure: something like: shard_id/.../file
+                # shard_id is derived from the second last component if files are nested.
+                # Adjust as needed if directory structure differs.
+                shard_dict = defaultdict(list)
+                for info in all_files:
+                    if info.is_dir():
+                        continue
+                    # E.g. path might look like: "003/something.html"
+                    # Extract shard_id from the directory:
+                    # Split by "/" and take the first part if we assume structure {shard_id}/file
+                    parts = info.filename.strip("/").split("/")
+                    if len(parts) < 2:
+                        # File at root level - decide how to handle this case.
+                        # If no directory structure is given, skip or treat differently.
+                        continue
+                    shard_id = parts[-2]  # get the second-last directory as shard_id
+                    shard_dict[shard_id].append(info.filename)
 
-    # Parse Version =>> update `gcs_output_path`
-    gcs_versioned_relative_path = gcs_relative_path / ar5iv_url_cfg["version"]
+                # Filter out shards we already processed
+                downloaded_files = fsspec_glob(f"{cfg.output_path}/*.SUCCESS")
+                downloaded_shards = set(f.split("/")[-1].split(".")[0] for f in downloaded_files)
 
-    # Parse Public GCS Bucket from `public_gcs_path`
-    public_gcs_bucket, _ = split_gcs_path(cfg.public_gcs_path)
+                # Apply max_files limit if provided
+                shard_ids = [s for s in shard_dict.keys() if s not in downloaded_shards]
+                if cfg.max_files is not None:
+                    shard_ids = shard_ids[: cfg.max_files]
 
-    # Create a TSV File Manifest (publicly accessible URL)
-    tsv_url = create_url_list_tsv_on_gcs(
-        [dl_file["url"] for dl_file in ar5iv_url_cfg["links"]],
-        gcs_versioned_relative_path,
-        public_gcs_bucket,
-        return_url=True,
-    )
+                logger.info(f"Found {len(shard_ids)} shards to process.")
 
-    # Initialize and Launch STS Job (using GCloud API)
-    _, job_url = create_gcs_transfer_job_from_tsv(
-        tsv_url,
-        gcs_versioned_relative_path,
-        gcs_bucket,
-        description="Raw Custom Data Download: `ar5iv`",
-        return_job_url=True,
-    )
+                # Launch Ray tasks for each shard
+                tasks = []
+                for shard_id in shard_ids:
+                    files_for_shard = shard_dict[shard_id]
+                    tasks.append(process_shard.remote(cfg.input_path, cfg.output_path, shard_id, files_for_shard))
 
-    # Write Provenance JSON
-    # TODO: convert this script to fsspec
-    gcs_path = f"gs://{gcs_bucket}/{gcs_versioned_relative_path}"
-    write_provenance_json(gcs_path, metadata=ar5iv_url_cfg)
+                # Wait for all shards to be processed
+                with tqdm(total=len(tasks), desc="Processing shards") as pbar:
+                    done, pending = ray.wait(tasks, num_returns=len(tasks), timeout=None)
+                    while pending:
+                        done_iter, pending = ray.wait(pending, num_returns=len(pending), timeout=None)
+                        done += done_iter
+                        pbar.update(len(done_iter))
 
-    # Finalize
-    print(f"[*] Launched Transfer Job & wrote `provenance.json`; check Transfer Job status at:\n\t=> {job_url}")
+        logger.info("Transfer completed successfully!")
 
-
-if __name__ == "__main__":
-    download()
+    except Exception as e:
+        logger.exception(f"Error during transfer: {e}")
+        raise

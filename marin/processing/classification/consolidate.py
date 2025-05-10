@@ -47,11 +47,14 @@ class FilterConfig:
     label: str | None = None
     """The label under the attribute name."""
 
-    threshold: float | None = 0.5
+    threshold: float | None = None
     """Keep documents where the value is above this."""
 
     keep_fraction: float | None = None
     """Keep documents where the score is in the top percentile. Calculates the threshold from the entire dataset."""
+
+    upper_threshold: float | None = None
+    """Keep documents where the value is below this."""
 
 
 @dataclass(frozen=True)
@@ -74,6 +77,13 @@ class ConsolidateConfig:
 
     ray_memory_limit_gb: float = 0.5
     """The memory limit for the task in GB."""
+
+
+# Dictionary-based navigation guide for extracting IDs from different corpus types
+CORPUS_TYPE_TO_ID_GUIDE = {
+    "dolma": {"key": "id"},  # Direct key access
+    "dclm": {"key": "metadata", "nested": {"key": "WARC-Record-ID"}},  # Nested dictionary access
+}
 
 
 def remove_spans(text: str, spans: list[list[int]]) -> str:
@@ -108,14 +118,88 @@ def apply_filter_remove_spans(
 
 def apply_filter_classify(input_data: dict, doc_filter: FilterConfig, id_to_attributes: dict[str, Any]) -> bool:
     attributes = id_to_attributes[input_data["id"]]
-    # Check attribute >= threshold?
-    scores = attributes[doc_filter.name]
-    score = scores[doc_filter.label]
 
-    if score >= doc_filter.threshold:
-        return True
+    # Get value from attributes
+    attribute_value = attributes[doc_filter.name]
 
-    return False
+    # Handle nested attributes structure if a label is specified
+    if doc_filter.label is not None:
+        if isinstance(attribute_value, dict) and doc_filter.label in attribute_value:
+            value = attribute_value[doc_filter.label]
+        else:
+            logger.warning(
+                f"Label {doc_filter.label} not found in attribute {doc_filter.name} for document {input_data['id']}"
+            )
+            return False
+    else:
+        # If no label specified, use the attribute value directly
+        # This handles cases like compression_ratio where the value is a scalar
+        value = attribute_value
+
+    # Check both lower and upper bounds if specified
+    if doc_filter.threshold is not None and value < doc_filter.threshold:
+        return False
+
+    if doc_filter.upper_threshold is not None and value > doc_filter.upper_threshold:
+        return False
+
+    return True
+
+
+def get_corpus_type(filename: str) -> str:
+    if "dclm" in filename:
+        return "dclm"
+    else:  # Assume it's in dolma format
+        return "dolma"
+
+
+def get_id_column_name(corpus_type: str) -> str:
+    """Get the top-level key that contains the ID (or the ID itself for flat structures)."""
+    return CORPUS_TYPE_TO_ID_GUIDE[corpus_type]["key"]
+
+
+def get_nested_id_object(row: dict, corpus_type: str) -> dict:
+    """
+    Extract the ID from a row using a dictionary-based navigation guide.
+
+    The guide specifies how to traverse the nested dictionary structure to find the ID.
+    For example, for DCLM dataset, the ID is nested within the "metadata" column under "WARC-Record-ID":
+    {"metadata": {"WARC-Record-ID": "1234567890"}}
+
+    Our guide for this would be:
+    {"key": "metadata", "nested": {"key": "WARC-Record-ID"}}
+
+    Args:
+        row: The row containing the document data
+        corpus_type: The type of corpus (e.g., "dclm", "dolma")
+
+    Returns:
+        The row with the "id" field set to the extracted ID
+    """
+    guide = CORPUS_TYPE_TO_ID_GUIDE[corpus_type]
+
+    # Start with the top-level key
+    current_value = row[guide["key"]]
+
+    # If there's no nested structure, we're done
+    if "nested" not in guide:
+        row["id"] = current_value
+        return row
+
+    # Navigate through nested keys
+    current_guide = guide["nested"]
+    while True:
+        current_value = current_value[current_guide["key"]]
+
+        # If there are no more nested levels, we've reached the ID
+        if "nested" not in current_guide:
+            break
+
+        # Move to the next level in the guide
+        current_guide = current_guide["nested"]
+
+    row["id"] = current_value
+    return row
 
 
 def read_attributes_as_dict(attribute_filename: str) -> dict[str, Any]:
@@ -127,7 +211,12 @@ def read_attributes_as_dict(attribute_filename: str) -> dict[str, Any]:
         filetype: str
             The filetype of the attribute file
     """
-    table = read_dataset(attribute_filename, columns=["id", "attributes"])
+
+    id_column_name = get_id_column_name(get_corpus_type(attribute_filename))
+    corpus_type = get_corpus_type(attribute_filename)
+    table = read_dataset(attribute_filename, columns=[id_column_name, "attributes"])
+    table = table.map(lambda row: get_nested_id_object(row, corpus_type))
+
     data = {}
     for row_id, attr in zip(table["id"], table["attributes"], strict=True):
         data[row_id] = attr
@@ -158,6 +247,7 @@ def process_file(
             attribute_files.append(None)
 
     dataset = read_dataset(input_path)
+    dataset = dataset.map(lambda row: get_nested_id_object(row, get_corpus_type(input_path)))
 
     total_examples = len(dataset)
 

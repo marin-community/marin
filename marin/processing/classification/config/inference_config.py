@@ -34,3 +34,5 @@ class InferenceConfig:
 
     # The filetype of the input data.
     filetype: str = "jsonl.gz"
+
+    classifier_kwargs: dict = field(default_factory=dict)

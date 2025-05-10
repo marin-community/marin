@@ -3,7 +3,6 @@ import re
 from dataclasses import asdict
 from urllib.parse import urljoin
 
-import htmlmin
 from bs4 import BeautifulSoup
 
 from marin.markdown import to_markdown
@@ -94,7 +93,10 @@ def convert_page_with_resiliparse(
     if not config.use_custom_variant:
         content = extract_plain_text(html, **config.resiliparse_kwargs)
 
-        if title:
+        if title and config.prepend_title:
+            # remove html tags from title
+            title = re.sub(r"<[^>]*>", "", title).strip()
+
             content = f"{title}\n\n{content}"
 
     else:
@@ -103,7 +105,10 @@ def convert_page_with_resiliparse(
         # install the custom package.
         content = extract_content_from_dom(html, config.resiliparse_kwargs, config.markdownify_config)
 
-        if title:
+        if title and config.prepend_title:
+            # remove html tags from title
+            title = re.sub(r"<[^>]*>", "", title).strip()
+
             content = f"# {title}\n\n{content}"
 
     out = {"title": title, "content": content, "html": html}
@@ -130,6 +135,7 @@ def convert_page_with_readability(
     Returns:
         dict[str, str]: Dictionary containing the title, content, and HTML of the page.
     """
+    import htmlmin
     from readability import Document
 
     # remove null character and control characters
@@ -172,6 +178,7 @@ def convert_page_with_readability(
 
 def convert_page_legacy(html: str, url: str | None = None) -> dict[str, str]:
     print("This is Legacy method, use convert_page_python instead")
+    import htmlmin
     from readabilipy import simple_json_from_html_string
 
     reabilitied = simple_json_from_html_string(html, use_readability=True)

@@ -4,8 +4,10 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import ClassVar
 
+from experiments.evals.resource_configs import ResourceConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.utils import download_from_gcs, is_remote_path
+from marin.generation.ray_utils import scheduling_strategy_fn
 
 
 @dataclass(frozen=True)
@@ -30,6 +32,16 @@ class ModelConfig:
     path: str | None
     """
     The path to the model checkpoint. Can be a local path or a path on GCS.
+    """
+
+    engine_kwargs: dict | None = None
+    """
+    Additional keyword arguments to pass to the vLLM engine.
+    """
+
+    generation_params: dict | None = None
+    """
+    Additional keyword arguments passed to the SamplingParams for the vLLM engine
     """
 
     def ensure_downloaded(self, local_path: str | None = None) -> str | None:
@@ -59,12 +71,22 @@ class Evaluator(ABC):
     _pip_packages: ClassVar[list[Dependency]]
     _py_modules: ClassVar[list[Dependency]]
 
+    def _get_scheduling_strategy(self, resource_config: ResourceConfig | None):
+        if resource_config is None:
+            fn = None
+        else:
+            fn = scheduling_strategy_fn(resource_config.num_tpu, resource_config.strategy)
+
+        return fn
+
     @abstractmethod
     def launch_evaluate_with_ray(
         self,
         model: ModelConfig,
         evals: list[EvalTaskConfig],
         output_path: str,
+        max_eval_instances: int | None = None,
+        resource_config: ResourceConfig | None = None,
     ) -> None:
         """
         Launches the evaluation run with Ray.
@@ -74,10 +96,17 @@ class Evaluator(ABC):
             evals (List[EvalTaskConfig]): The list of evaluations to run.
             output_path (str): The path to save the evaluation results.
             max_eval_instances (int | None): The maximum number of evaluation instances to run.
+            step (ExecutorStep | None): The step to evaluate. Used to get the config for the model and the trainer.
         """
         pass
 
     @abstractmethod
-    def evaluate(self, model: ModelConfig, evals: list[EvalTaskConfig], output_path: str) -> None:
+    def evaluate(
+        self,
+        model: ModelConfig,
+        evals: list[EvalTaskConfig],
+        output_path: str,
+        max_eval_instances: int | None = None,
+    ) -> None:
         """What to run to evaluate."""
         pass

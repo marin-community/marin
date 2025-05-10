@@ -4,7 +4,6 @@ import re
 from textwrap import fill
 
 import html2text
-import lxml.etree as ET
 import markdownify
 import six
 from bs4 import BeautifulSoup, Comment, Doctype, NavigableString
@@ -163,7 +162,8 @@ class MyMarkdownConverter(MarkdownConverter):
         hashes = "#" * n
         if style == markdownify.ATX_CLOSED:
             return f"{hashes} {text} {hashes}\n\n"
-        return f"{hashes} {text}\n\n"
+
+        return f"\n\n{hashes} {text}\n\n"
 
     def convert_a(self, el, text, convert_as_inline):
         prefix, suffix, text = markdownify.chomp(text)
@@ -588,7 +588,7 @@ class MyMarkdownConverter(MarkdownConverter):
 
         if self.options["wrap"]:
             text = fill(text, width=self.options["wrap_width"], break_long_words=False, break_on_hyphens=False)
-        return f"{text}\n\n" if text else ""
+        return f"\n\n{text}\n\n" if text else ""
 
     def process_text(self, el):
         text = six.text_type(el) or ""
@@ -621,6 +621,8 @@ _xslt_mml_path = os.path.join(os.path.dirname(__file__), "xsl_yarosh/mmltex.xsl"
 # cf https://github.com/oerpub/mathconverter/blob/master/converter.py#L14
 # (we've modified the xslt to output simpler markdown when possible
 def mathml_to_markdown(mathml_node):
+    import lxml.etree as ET
+
     global _xslt_mml
     if _xslt_mml is None:
         _xslt_mml = ET.parse(_xslt_mml_path)

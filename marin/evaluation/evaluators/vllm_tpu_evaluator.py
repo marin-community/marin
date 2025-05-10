@@ -7,6 +7,7 @@ from typing import ClassVar
 import ray
 import requests
 
+from experiments.evals.resource_configs import ResourceConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Dependency, Evaluator, ModelConfig
 from marin.evaluation.utils import kill_process_on_port
@@ -16,19 +17,7 @@ from marin.utils import remove_tpu_lockfile_on_exit
 class VllmTpuEvaluator(Evaluator, ABC):
     """For `Evaluator`s that runs inference with VLLM on TPUs."""
 
-    # Default pip packages to install for VLLM on TPUs
-    # Some versions were fixed in order to resolve dependency conflicts.
-    DEFAULT_PIP_PACKAGES: ClassVar[list[Dependency]] = [
-        Dependency(name="aiohttp"),
-        Dependency(name="attrs", version="22.2.0"),
-        Dependency(name="click", version="8.1.3"),
-        Dependency(name="jsonschema", version="4.23.0"),
-        Dependency(name="packaging"),
-        Dependency(name="pynvml", version="11.5.3"),
-        Dependency(name="starlette", version="0.37.2"),
-        Dependency(name="tokenizers", version="0.19.1"),
-        Dependency(name="transformers", version="4.44.0"),
-    ]
+    DEFAULT_PIP_PACKAGES: ClassVar[list[Dependency]] = []
 
     # Where to store checkpoints, cache inference results, etc.
     CACHE_PATH: str = "/tmp"
@@ -57,7 +46,14 @@ class VllmTpuEvaluator(Evaluator, ABC):
         model_name_or_path: str = VllmTpuEvaluator.download_model(model)
 
         # From https://docs.vllm.ai/en/v0.4.0/models/engine_args.html
-        command: str = f"vllm serve {model_name_or_path} --trust-remote-code --host {host} --port {port} --device tpu"
+        command: str = (
+            f"vllm serve {model_name_or_path} "
+            f"--trust-remote-code "
+            f"--host {host} "
+            f"--port {port} "
+            f"--device tpu "
+            f"--distributed-executor-backend ray"
+        )
         process = subprocess.Popen(command, shell=True)
 
         # Check that the server has started by sending heartbeat checks
@@ -113,17 +109,29 @@ class VllmTpuEvaluator(Evaluator, ABC):
     _python_version: str = "3.10"
     _pip_packages: ClassVar[list[Dependency]] = DEFAULT_PIP_PACKAGES
     _py_modules: ClassVar[list[Dependency]] = []
+    _env_vars: ClassVar[dict[str, str]] = {}
 
     def get_runtime_env(self) -> dict:
         """
         Returns the runtime environment to run the evaluator on the Ray cluster.
         """
+        # Get the current runtime environment
+        current_runtime_env = ray.get_runtime_context().runtime_env or {}
+
+        # Get the current pip packages
+        current_pip_packages = []
+        if current_runtime_env.get("pip"):
+            if isinstance(current_runtime_env["pip"], dict):
+                current_pip_packages = current_runtime_env["pip"].get("packages", [])
+            else:
+                current_pip_packages = current_runtime_env["pip"]
+
+        all_packages = current_pip_packages + [str(package) for package in self._pip_packages]
         runtime_env: dict = {
             "pip": {
-                "packages": [str(package) for package in self._pip_packages],
-                "pip_check": False,
-                "pip_version": f"==23.0.1;python_version=='{self._python_version}'",
+                "packages": all_packages,
             },
+            "env_vars": self._env_vars,
         }
 
         # An empty list of py_modules can cause an error in Ray
@@ -138,17 +146,23 @@ class VllmTpuEvaluator(Evaluator, ABC):
         evals: list[EvalTaskConfig],
         output_path: str,
         max_eval_instances: int | None = None,
+        resource_config: ResourceConfig | None = None,
     ) -> None:
         """
         Launches the evaluation run with Ray.
         """
 
         @ray.remote(
-            memory=64 * 1024 * 1024 * 1024, resources={"TPU": 1, "TPU-v4-8-head": 1}, runtime_env=self.get_runtime_env()
+            scheduling_strategy=self._get_scheduling_strategy(resource_config),
+            runtime_env=self.get_runtime_env(),
+            max_calls=1,
         )
         @remove_tpu_lockfile_on_exit
         def launch(
-            model: ModelConfig, evals: list[EvalTaskConfig], output_path: str, max_eval_instances: int | None = None
+            model: ModelConfig,
+            evals: list[EvalTaskConfig],
+            output_path: str,
+            max_eval_instances: int | None = None,
         ) -> None:
             self.evaluate(model, evals, output_path, max_eval_instances)
 

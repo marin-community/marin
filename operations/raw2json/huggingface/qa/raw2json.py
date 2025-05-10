@@ -237,13 +237,18 @@ def get_nested_item(data: dict[str, Any], key: str, default_item: Any = None) ->
         Any: The value at the specified key path, or the default_item if any key in the path
              does not exist or if the input data is not a dictionary.
     """
+    if len(key) == 0:
+        return default_item
+
     keys = key.split(".")
     result = data
     try:
         for k in keys:
             result = result[k]
         return result
-    except (KeyError, TypeError):
+    except (KeyError, TypeError) as e:
+        if len(k) > 1:
+            print(f"Error getting nested item {k} in data {data}: {e}")
         return default_item
 
 

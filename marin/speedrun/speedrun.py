@@ -96,6 +96,27 @@ class SpeedrunResultsConfig:
 
 ### Utils and analysis functions ###
 
+
+def get_wandb_run_info_from_step(step: ExecutorStep) -> tuple[str, str, str]:
+    """
+    Get the wandb entity, project, and run id from a given ExecutorStep.
+    """
+
+    if (
+        step.config
+        and step.config.train_config
+        and step.config.train_config.trainer
+        and step.config.train_config.trainer.tracker
+    ):
+        logger.info(f"Found wandb run info in step: {step}")
+        wandb_entity = step.config.train_config.trainer.tracker.entity or WANDB_ENTITY
+        wandb_project = step.config.train_config.trainer.tracker.project or WANDB_PROJECT
+        wandb_run_id = step.output_path.split("/")[-1]
+        return wandb_entity, wandb_project, wandb_run_id
+    else:
+        return None, None, None
+
+
 def get_step_times_from_wandb(run_id: str, entity: str = WANDB_ENTITY, project: str = WANDB_PROJECT) -> list[float]:
     try:
         run = wandb.Api().run(f"{entity}/{project}/{run_id}")
@@ -239,7 +260,7 @@ def default_speedrun(
             wandb_run_id = override_output_path.split("/")[-1]
         else:
             wandb_run_id = train_step # gets converted to output path when passing it into the results step
-            
+
     assert wandb_run_id is not None, "Could not extract wandb run ID from train step"
 
     results_step = ExecutorStep(

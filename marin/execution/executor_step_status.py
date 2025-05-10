@@ -25,6 +25,8 @@ STATUS_RUNNING = "RUNNING"
 STATUS_FAILED = "FAILED"
 STATUS_SUCCESS = "SUCCESS"
 STATUS_DEP_FAILED = "DEP_FAILED"  # Dependency failed
+STATUS_UNKNOWN = "UNKNOWN"  # Unknown status, Ray failed to return the status
+STATUS_CANCELLED = "CANCELLED"  # Job was cancelled by user
 
 
 @dataclass(frozen=True)
@@ -64,6 +66,13 @@ def get_current_status(events: list[ExecutorStepEvent]) -> str | None:
     return events[-1].status if len(events) > 0 else None
 
 
+def get_latest_status_from_gcs(output_path: str) -> str | None:
+    """Get the most recent status of the step at `output_path`."""
+    path = get_status_path(output_path)
+    events = read_events(path)
+    return get_current_status(events)
+
+
 def append_status(path: str, status: str, message: str | None = None, ray_task_id: str | None = None):
     """Append a new event with `status` to the file at `path`."""
     events = read_events(path)
@@ -78,5 +87,20 @@ def append_status(path: str, status: str, message: str | None = None, ray_task_i
             print(json.dumps(asdict(event)), file=f)
 
 
-def is_failure(status):
+def append_status_event(output_path: str, executor_step_event: ExecutorStepEvent):
+    # Write to GCS
+    path = get_status_path(output_path)
+    events = read_events(path)
+    events.append(executor_step_event)
+    # Note: gcs files are immutable so can't append, so have to read everything.
+    with fsspec.open(path, "w") as f:
+        for event in events:
+            print(json.dumps(asdict(event)), file=f)
+
+
+def is_failure(status: str):
     return status in [STATUS_FAILED, STATUS_DEP_FAILED]
+
+
+def is_running_or_waiting(status: str):
+    return status in [STATUS_WAITING, STATUS_RUNNING]

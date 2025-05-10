@@ -74,34 +74,39 @@ import logging
 import os
 import re
 import subprocess
+import time
 import traceback
 import urllib.parse
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, fields, is_dataclass, replace
 from datetime import datetime
+from functools import cached_property
 from typing import Any, Generic, TypeVar
 from urllib.parse import urlparse
 
 import draccus
 import fsspec
+import levanter.utils.fsspec_utils as fsspec_utils
 import ray
 import ray.remote_function
 from ray.runtime_env import RuntimeEnv
+from ray.util import state  # noqa
+from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 
 from marin.execution.executor_step_status import (
+    STATUS_CANCELLED,
     STATUS_DEP_FAILED,
     STATUS_FAILED,
     STATUS_RUNNING,
     STATUS_SUCCESS,
+    STATUS_UNKNOWN,
     STATUS_WAITING,
     append_status,
-    get_current_status,
+    get_latest_status_from_gcs,
     get_status_path,
-    is_failure,
-    read_events,
 )
-from marin.utilities.executor_utils import compare_dicts, get_pip_dependencies
+from marin.execution.status_actor import PreviousTaskFailedError, StatusActor
+from marin.utilities.executor_utils import get_pip_dependencies
 from marin.utilities.json_encoder import CustomJsonEncoder
 
 logger = logging.getLogger("ray")
@@ -154,20 +159,61 @@ class ExecutorStep(Generic[ConfigT]):
         """Refer to the `name` under `self`'s output_path."""
         return InputName(self, name=name)
 
+    def __truediv__(self, other: str) -> "InputName":
+        """Alias for `cd`. That looks more Pythonic."""
+        return InputName(self, name=other)
+
     def __hash__(self):
         """Hash based on the ID (every object is different)."""
         return hash(id(self))
+
+    def with_output_path(self, output_path: str) -> "ExecutorStep":
+        """Return a copy of the step with the given output_path."""
+        return replace(self, override_output_path=output_path)
 
 
 @dataclass(frozen=True)
 class InputName:
     """To be interpreted as a previous `step`'s output_path joined with `name`."""
 
-    step: ExecutorStep
+    step: ExecutorStep | None
     name: str | None
 
     def cd(self, name: str) -> "InputName":
         return InputName(self.step, name=os.path.join(self.name, name) if self.name else name)
+
+    def __truediv__(self, other: str) -> "InputName":
+        """Alias for `cd`. That looks more Pythonic."""
+        return self.cd(other)
+
+    @staticmethod
+    def hardcoded(path: str) -> "InputName":
+        """
+        Sometimes we want to specify a path that is not part of the pipeline but is still relative to the prefix.
+        Try to use this sparingly.
+        """
+        return InputName(None, name=path)
+
+
+def get_executor_step(run: ExecutorStep | InputName) -> ExecutorStep:
+    """
+    Helper function to extract the ExecutorStep from an InputName or ExecutorStep.
+
+    Args:
+        run (ExecutorStep | InputName): The input to extract the step from.
+
+    Returns:
+        ExecutorStep: The extracted step.
+    """
+    if isinstance(run, ExecutorStep):
+        return run
+    elif isinstance(run, InputName):
+        step = run.step
+        if step is None:
+            raise ValueError(f"Hardcoded path {run.name} is not part of the pipeline")
+        return step
+    else:
+        raise ValueError(f"Unexpected type {type(run)} for run: {run}")
 
 
 def output_path_of(step: ExecutorStep, name: str | None = None) -> InputName:
@@ -185,6 +231,10 @@ def this_output_path(name: str | None = None):
     return OutputName(name=name)
 
 
+# constant so we can use it in fields of dataclasses
+THIS_OUTPUT_PATH = OutputName(None)
+
+
 @dataclass(frozen=True)
 class VersionedValue(Generic[T_co]):
     """Wraps a value, to signal that this value (part of a config) should be part of the version."""
@@ -195,7 +245,27 @@ class VersionedValue(Generic[T_co]):
 def versioned(value: T_co) -> VersionedValue[T_co]:
     if isinstance(value, VersionedValue):
         raise ValueError("Can't nest VersionedValue")
+    elif isinstance(value, InputName):
+        # TODO: We have also run into Versioned([InputName(...), ...])
+        raise ValueError("Can't version an InputName")
+
     return VersionedValue(value)
+
+
+def ensure_versioned(value: VersionedValue[T_co] | T_co) -> VersionedValue[T_co]:
+    """
+    Ensure that the value is wrapped in a VersionedValue. If it is already wrapped, return it as is.
+    """
+    return value if isinstance(value, VersionedValue) else VersionedValue(value)
+
+
+def unwrap_versioned_value(value: VersionedValue[T_co] | T_co) -> T_co:
+    """
+    Unwrap the value if it is a VersionedValue, otherwise return the value as is.
+
+    Sometimes we need to actually use a value that is wrapped in a VersionedValue before it is used in a config.
+    """
+    return value.value if isinstance(value, VersionedValue) else value
 
 
 ############################################################
@@ -250,7 +320,7 @@ class ExecutorInfo:
     steps: list[ExecutorStepInfo]
 
 
-def get_info_path(output_path: str) -> str:
+def _get_info_path(output_path: str) -> str:
     """Return the `path` of the info file associated with `output_path`."""
     return os.path.join(output_path, ".executor_info")
 
@@ -283,13 +353,15 @@ def collect_dependencies_and_version(obj: Any, dependencies: list[ExecutorStep],
             obj = output_path_of(obj, None)
 
         if isinstance(obj, VersionedValue):
-            # Just extract the value
             version[prefix] = obj.value
         elif isinstance(obj, InputName):
             # Put string i for the i-th dependency
             index = len(dependencies)
-            dependencies.append(obj.step)
-            version[prefix] = dependency_index_str(index) + ("/" + obj.name if obj.name else "")
+            if obj.step is not None:
+                dependencies.append(obj.step)
+                version[prefix] = dependency_index_str(index) + ("/" + obj.name if obj.name else "")
+            else:
+                version[prefix] = obj.name
         elif is_dataclass(obj):
             # Recurse through dataclasses
             for field in fields(obj):
@@ -309,7 +381,9 @@ def collect_dependencies_and_version(obj: Any, dependencies: list[ExecutorStep],
     recurse(obj, "")
 
 
-def instantiate_config(config: dataclass, output_path: str, output_paths: dict[ExecutorStep, str]) -> dataclass:
+def instantiate_config(
+    config: dataclass, output_path: str, output_paths: dict[ExecutorStep, str], prefix: str
+) -> dataclass:
     """
     Return a "real" config where all the special values (e.g., `InputName`,
     `OutputName`, and `VersionedValue`) have been replaced with
@@ -329,7 +403,10 @@ def instantiate_config(config: dataclass, output_path: str, output_paths: dict[E
             obj = output_path_of(obj)
 
         if isinstance(obj, InputName):
-            return join_path(output_paths[obj.step], obj.name)
+            if obj.step is None:
+                return _make_prefix_absolute_path(prefix, obj.name)
+            else:
+                return join_path(output_paths[obj.step], obj.name)
         elif isinstance(obj, OutputName):
             return join_path(output_path, obj.name)
         elif isinstance(obj, VersionedValue):
@@ -354,7 +431,7 @@ def instantiate_config(config: dataclass, output_path: str, output_paths: dict[E
 
 
 class Executor:
-    """ "
+    """
     Performs the execution of a pipeline of `ExecutorStep`s.
     1. Instantiate all the `output_path`s for each `ExecutorStep` based on `prefix`, names, and versions of everything.
     2. Run each `ExecutorStep` in a proper topological sort order.
@@ -377,10 +454,20 @@ class Executor:
         self.version_str_to_step: dict[str, ExecutorStep] = {}
         self.output_paths: dict[ExecutorStep, str] = {}
         self.steps: list[ExecutorStep] = []
-        self.statuses: dict[ExecutorStep, str] = {}
         self.refs: dict[ExecutorStep, ray.ObjectRef] = {}
         self.step_infos: list[ExecutorStepInfo] = []
         self.executor_info: ExecutorInfo | None = None
+        self.status_actor: StatusActor = StatusActor.options(
+            name="status_actor",
+            get_if_exists=True,
+            lifetime="detached",
+            # This is to ensure that the status actor is only schduled on the headnode
+            scheduling_strategy=NodeAffinitySchedulingStrategy(
+                node_id=ray.get_runtime_context().get_node_id(),
+                soft=False,
+            ),
+        ).remote()
+        # TODO: Add a design docstring of how status_actor works
 
     def run(
         self,
@@ -394,21 +481,22 @@ class Executor:
         Run the pipeline of `ExecutorStep`s.
 
         Args:
-            step: The step to run.
+            steps: The steps to run.
             dry_run: If True, only print out what needs to be done.
             run_only: If not None, only run the steps in the list and their dependencies. Matches steps' names as regex
             force_run_failed: If True, run steps even if they have already been run (including if they failed)
         """
+
         # Gather all the steps, compute versions and output paths for all of them.
         logger.info(f"### Inspecting the {len(steps)} provided steps ###")
         for step in steps:
             if isinstance(step, InputName):  # Interpret InputName as the underlying step
                 step = step.step
-            self.compute_version(step)
+            if step is not None:
+                self.compute_version(step)
 
         self.get_infos()
         logger.info(f"### Reading {len(self.steps)} statuses ###")
-        self.read_statuses()
 
         if run_only is not None:
             steps_to_run = self._compute_transitive_deps(self.steps, run_only)
@@ -463,9 +551,15 @@ class Executor:
             visited.add(step)
             in_stack.add(step)
 
-            for dep in self.dependencies[step]:
-                dfs(dep)
-            to_run.append(step)
+            info = self.step_infos[self.steps.index(step)]
+
+            # only run if the step hasn't already been run
+            if get_status(info.output_path, None, {}) not in [STATUS_SUCCESS]:
+                for dep in self.dependencies[step]:
+                    dfs(dep)
+                to_run.append(step)
+            else:
+                logger.info(f"Skipping {step.name}'s dependencies as it has already been run")
             in_stack.remove(step)
 
         for step in steps:
@@ -508,13 +602,12 @@ class Executor:
         # Override output path if specified
         override_path = step.override_output_path
         if override_path is not None:
-            if _is_relative_path(override_path):
-                override_path = os.path.join(self.prefix, override_path)
+            override_path = _make_prefix_absolute_path(self.prefix, override_path)
 
             if output_path != override_path:
                 logger.warning(
                     f"Output path {output_path} doesn't match given "
-                    "override {step.override_output_path}, using the latter."
+                    f"override {step.override_output_path}, using the latter."
                 )
                 output_path = override_path
 
@@ -530,10 +623,12 @@ class Executor:
             logger.warning(
                 f"Multiple `ExecutorStep`s (named {step.name}) have the same version; try to instantiate only once."
             )
+
         self.configs[step] = instantiate_config(
             config=step.config,
             output_path=output_path,
             output_paths=self.output_paths,
+            prefix=self.prefix,
         )
         self.dependencies[step] = list(map(self.canonicalize, dependencies))
         self.versions[step] = version
@@ -562,9 +657,10 @@ class Executor:
             )
 
         # Compute info for the entire execution
+        path = get_caller_path()
         self.executor_info = ExecutorInfo(
             git_commit=get_git_commit(),
-            caller_path=get_caller_path(),
+            caller_path=path,
             created_date=datetime.now().isoformat(),
             user=get_user(),
             ray_job_id=ray.get_runtime_context().get_job_id(),
@@ -572,6 +668,16 @@ class Executor:
             description=self.description,
             steps=self.step_infos,
         )
+
+    def get_experiment_url(self) -> str:
+        """Return the URL where the experiment can be viewed."""
+        # TODO: remove hardcoding
+        if self.prefix.startswith("gs://"):
+            host = "https://crfm.stanford.edu/marin/data_browser"
+        else:
+            host = "http://localhost:5000"
+
+        return host + "/experiment?path=" + urllib.parse.quote(self.executor_info_path)
 
     def write_infos(self):
         """Output JSON files (one for the entire execution, one for each step)."""
@@ -590,38 +696,24 @@ class Executor:
 
         # Print where to find the executor info (experiments JSON)
         logger.info(f"Writing executor info to {self.executor_info_path}")
-        # TODO: don't hardcode this webserver later
-        experimentUrl = "https://marlin-subtle-barnacle.ngrok-free.app/experiment?path=" + urllib.parse.quote(
-            self.executor_info_path
-        )
         logger.info("To view the experiment page, go to:")
         logger.info("")
-        logger.info(experimentUrl)
+        logger.info(self.get_experiment_url())
         logger.info("")
 
         # Write out info for each step
         for step, info in zip(self.steps, self.step_infos, strict=True):
-            info_path = get_info_path(self.output_paths[step])
+            info_path = _get_info_path(self.output_paths[step])
+            fsspec_utils.mkdirs(os.path.dirname(info_path))
             with fsspec.open(info_path, "w") as f:
                 print(json.dumps(asdict(info), indent=2, cls=CustomJsonEncoder), file=f)
 
         # Write out info for the entire execution
+        fsspec_utils.mkdirs(os.path.dirname(self.executor_info_path))
         with fsspec.open(self.executor_info_path, "w") as f:
             print(json.dumps(asdict(self.executor_info), indent=2, cls=CustomJsonEncoder), file=f)
 
-    def read_statuses(self):
-        """Read the statuses of all the steps in parallel."""
-
-        def get_status(step: ExecutorStep):
-            status_path = get_status_path(self.output_paths[step])
-            statuses = read_events(status_path)
-            status = get_current_status(statuses)
-            self.statuses[step] = status
-
-        with ThreadPoolExecutor(max_workers=16) as executor:
-            executor.map(get_status, self.steps)
-
-    def run_step(self, step: ExecutorStep, dry_run: bool, force_run_failed: bool):
+    def run_step(self, step: ExecutorStep, dry_run: bool, force_run_failed: bool) -> None:
         """
         Return a Ray object reference to the result of running the `step`.
 
@@ -635,54 +727,40 @@ class Executor:
         config = self.configs[step]
         config_version = self.versions[step]["config"]
         output_path = self.output_paths[step]
-        status = self.statuses[step]
 
         # Print information about this step
-        logger.info(f"[{status}] {step.name}: {get_fn_name(step.fn)}")
+        logger.info(f"{step.name}: {get_fn_name(step.fn)}")
         logger.info(f"  output_path = {output_path}")
         logger.info(f"  config = {json.dumps(config_version, cls=CustomJsonEncoder)}")
         for i, dep in enumerate(self.dependencies[step]):
             logger.info(f"  {dependency_index_str(i)} = {self.output_paths[dep]}")
 
-        should_run = status is None
-        if force_run_failed and is_failure(status):
-            logger.info(f"Force running {step.name}, previous status: {status}")
-            should_run = True
-
-        # Only start if there's no status
-        should_run = not dry_run and should_run
-        dependencies = [self.refs[dep] for dep in self.dependencies[step]]
+        dependencies = [self.refs[dep] for dep in self.dependencies[step] if dep in self.refs]
         name = f"execute_after_dependencies({get_fn_name(step.fn, short=True)})::{step.name})"
-        if status is not None:
-            # We skip running a step if we find a SUCCESS file for a step, but here we compare the complete info
-            # to show if previous info and current info match so we aren't accidentally using the wrong version.
-            # This is important since we aren't versioning everything
-            # Compare the info files too and print the diff
-            info_path = get_info_path(output_path)
-            with fsspec.open(info_path, "r") as f:
-                previous_info = json.load(f)
-            step_idx = self.steps.index(step)
-            current_info = json.loads(json.dumps(asdict(self.step_infos[step_idx]), indent=2, cls=CustomJsonEncoder))
-            logger.info(f"Comparing previous info with current info for {step.name}:")
-            if not compare_dicts(previous_info, current_info):
-                logger.warning(
-                    f"The current and previous info files are not same for {step.name} "
-                    f"and executor will override the previous info-file."
-                )
 
         if step.pip_dependency_groups is not None:
             pip_dependencies = get_pip_dependencies(step.pip_dependency_groups)
         else:
             pip_dependencies = None
 
-        self.refs[step] = execute_after_dependencies.options(
-            name=name,
-            runtime_env=RuntimeEnv(
-                pip=pip_dependencies,
-            ),
-        ).remote(step.fn, config, dependencies, output_path, should_run)
+        if not dry_run:
+            step_name = f"{step.name}: {get_fn_name(step.fn)}"
+            self.refs[step] = execute_after_dependencies.options(
+                name=name,
+                runtime_env=RuntimeEnv(
+                    pip=pip_dependencies,
+                ),
+                # TODO: this is kind of gross, but the overhead of
+                num_cpus=0.001 if isinstance(step.fn, ray.remote_function.RemoteFunction) else 1,
+            ).remote(step.fn, step_name, config, dependencies, output_path, self.status_actor, force_run_failed)
+        else:
+            # Necessary as we call ray.get on all the deps in execute_after_dependencies
+            self.refs[step] = self._dry_run_result
 
-        return self.refs[step]
+    # caching saves ~10% off some tests
+    @cached_property
+    def _dry_run_result(self):
+        return ray.put(None)
 
 
 def asdict_without_description(obj: dataclass) -> dict[str, Any]:
@@ -692,51 +770,176 @@ def asdict_without_description(obj: dataclass) -> dict[str, Any]:
     return d
 
 
+def _get_ray_status(current_owner_task_id: str | None) -> str | None:
+    """Get the status of a Ray task."""
+
+    current_owner_ray_status = None
+    if current_owner_task_id is None:
+        return current_owner_ray_status
+
+    current_owner = ray.util.state.get_task(current_owner_task_id)
+    if type(current_owner) is list:  # Due to retries in ray, task_state can be a list of states
+        current_owner = current_owner[-1]
+
+    if current_owner is None:  # We need to retry. Ray still does not have the status of the task
+        current_owner_ray_status = STATUS_UNKNOWN
+    elif current_owner.state == "FINISHED":
+        current_owner_ray_status = STATUS_SUCCESS
+    elif current_owner.state == "FAILED":
+        current_owner_ray_status = STATUS_FAILED
+    else:  # We give status as Running to task that are even waiting for dependencies
+        current_owner_ray_status = STATUS_RUNNING
+
+    return current_owner_ray_status
+
+
+def get_status(output_path: str, current_owner_task_id: str | None, states: dict) -> str | None:
+    """Get the status of an output Path. This retruns the status of the output path
+    there is no status anywhere (i.e. brand-new step) -> return None
+    a task is currently running a step -> return WAITING
+    no task is currently running it, but there is a status on disk -> return disk status
+    """
+
+    current_owner_ray_status = _get_ray_status(current_owner_task_id)
+
+    num_unknown = states.get("num_unknown", 0)  # Number of times the status was unknown
+    # We check how many times has times ray has returned status Unknown in a row. If it returns more than 20 times,
+    # We assume ray has lost that task and we use GCP status instead.
+    if current_owner_ray_status == STATUS_UNKNOWN:
+        num_unknown += 1
+        states["num_unknown"] = num_unknown
+        if num_unknown > 20:
+            current_owner_ray_status = None
+            states["num_unknown"] = 0
+    else:
+        states["num_unknown"] = 0  # Reset the counter
+
+    # Immediately return if the ray status is unknown or running, we don't need to check GCS
+    if current_owner_ray_status in [STATUS_UNKNOWN, STATUS_RUNNING]:
+        return current_owner_ray_status
+
+    # If the ray status is terminal [Failed, Success], we check the status on GCS and trust it
+
+    current_owner_gcs_status = get_latest_status_from_gcs(output_path)
+
+    if current_owner_gcs_status in [STATUS_RUNNING, STATUS_WAITING]:
+        logger.info(
+            f"Status of {output_path = } is {current_owner_gcs_status} as per GCP. "
+            f"But as per Ray, the task has terminated, it's likely that this task was cancelled previously"
+        )
+        current_owner_gcs_status = STATUS_CANCELLED
+
+    return current_owner_gcs_status
+
+
+def should_run(
+    output_path: str, step_name: str, status_actor: StatusActor, ray_task_id: str, force_run_failed: bool = False
+):
+    """Check if the step should run or not based on the status of the step."""
+    """Logic for should run:
+    1. Check which task is currently the owner of this step (current_owner_task_id).
+    2. If ray_status(current_owner_task_id) is Running , we wait.
+    3. if ray_status(current_owner_task_id) is Terminated (Failed, Successful), we trust the status on GCP
+    4. A special case where ray_status(current_owner_task_id) is Terminated, but GCP status is Running, We return
+    CANCELLED"""
+
+    log_once = True
+    get_status_states = {}  # States used by get_status, since get_status is stateless we keep them here
+    while True:
+        current_owner_task_id = ray.get(status_actor.get_task_id_with_lock.remote(output_path=output_path))
+
+        # get_status also updates get_status_states via internal mutation
+        status = get_status(output_path, current_owner_task_id, get_status_states)
+
+        if log_once:
+            logger.info(f"Status {step_name} : {status}.")
+            log_once = False
+
+        if status in [STATUS_RUNNING, STATUS_WAITING, STATUS_UNKNOWN]:
+            time.sleep(5)
+            continue
+
+        # If the current owner is finished or is None, try to become the owner.
+        # If we can't become the owner, then loop again
+        if ray.get(status_actor.get_lock_by_replacing_task_id.remote(output_path, ray_task_id, current_owner_task_id)):
+            break
+
+    if status is None:
+        return True
+    elif status == STATUS_CANCELLED:
+        logger.info(f"Step {step_name} was cancelled previously. Retrying.")
+        return True
+    elif status in [STATUS_FAILED, STATUS_DEP_FAILED]:
+        if force_run_failed:
+            logger.info(f"Force running {step_name}, previous status: {status}")
+            return True
+        else:
+            raise PreviousTaskFailedError(f"Step {step_name} failed previously. Status: {status}")
+    else:
+        logger.info(f"Step {step_name} has already succeeded. Status: {status}")
+        return False
+
+
 @ray.remote
 def execute_after_dependencies(
-    fn: ExecutorFunction, config: dataclass, dependencies: list[ray.ObjectRef], output_path: str, should_run: bool
+    fn: ExecutorFunction,
+    step_name: str,
+    config: dataclass,
+    dependencies: list[ray.ObjectRef],
+    output_path: str,
+    status_actor: StatusActor,
+    force_run_failed: bool = False,
 ):
     """
     Run a function `fn` with the given `config`, after all the `dependencies` have finished.
-    Only do stuff if `should_run` is True.
+
     """
-    status_path = get_status_path(output_path)
+
     ray_task_id = ray.get_runtime_context().get_task_id()
 
-    # Ensure that dependencies are all run first
-    if should_run:
-        append_status(status_path, STATUS_WAITING, ray_task_id=ray_task_id)
+    status_path = get_status_path(output_path)
+
+    try:
+        if not should_run(output_path, step_name, status_actor, ray_task_id, force_run_failed):
+            append_status(status_path, STATUS_SUCCESS, ray_task_id=ray_task_id, message="Step was already successful")
+            return
+    except PreviousTaskFailedError as e:
+        # Failed due to some exception
+        message = traceback.format_exc()
+        append_status(status_path, STATUS_FAILED, message=message, ray_task_id=ray_task_id)
+        raise e
+    except Exception as e:
+        logger.error(f"Error while checking if the step should run [This is a Ray related Error]: {e}")
+        raise e
+
+    append_status(status_path, STATUS_WAITING, ray_task_id=ray_task_id)
+
+    # Get all the dependencies
     try:
         ray.get(dependencies)
     except Exception as e:
         # Failed due to some exception
         message = traceback.format_exc()
-        if should_run:
-            append_status(status_path, STATUS_DEP_FAILED, message=message, ray_task_id=ray_task_id)
+        append_status(status_path, STATUS_DEP_FAILED, message=message, ray_task_id=ray_task_id)
         raise e
 
     # Call fn(config)
-    if should_run:
-        append_status(status_path, STATUS_RUNNING, ray_task_id=ray_task_id)
+    append_status(status_path, STATUS_RUNNING, ray_task_id=ray_task_id)
     try:
         if isinstance(fn, ray.remote_function.RemoteFunction):
-            if should_run:
-                ray.get(fn.remote(config))
+            ray.get(fn.remote(config))
         elif isinstance(fn, Callable):
-            if should_run:
-                fn(config)
+            fn(config)
         else:
             raise ValueError(f"Expected a Callable or Ray function, but got {fn}")
     except Exception as e:
         # Failed due to some exception
         message = traceback.format_exc()
-        if should_run:
-            append_status(status_path, STATUS_FAILED, message=message, ray_task_id=ray_task_id)
+        # Release the lock
+        append_status(status_path, STATUS_FAILED, message=message, ray_task_id=ray_task_id)
         raise e
 
-    # Success!
-    if should_run:
-        append_status(status_path, STATUS_SUCCESS, ray_task_id=ray_task_id)
+    append_status(status_path, STATUS_SUCCESS, ray_task_id=ray_task_id)
 
 
 def get_fn_name(fn: Callable | ray.remote_function.RemoteFunction, short: bool = False):
@@ -794,6 +997,15 @@ def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], descrip
     """Main entry point for experiments (to standardize)"""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
+    time_in = time.time()
+    ray.init(
+        namespace="marin", ignore_reinit_error=True
+    )  # We need to init ray here to make sure we have the correct namespace for actors
+    # (status_actor in particular)
+    time_out = time.time()
+    logger.info(f"Ray init took {time_out - time_in:.2f}s")
+    time_in = time.time()
+
     prefix = config.prefix
     if prefix is None:
         # infer from the environment
@@ -820,6 +1032,11 @@ def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], descrip
     )
 
     executor.run(steps=steps, dry_run=config.dry_run, run_only=config.run_only, force_run_failed=config.force_run_failed)
+    time_out = time.time()
+    logger.info(f"Executor run took {time_out - time_in:.2f}s")
+    # print json path again so it's easy to copy
+    logger.info(f"Executor info written to {executor.executor_info_path}")
+    logger.info(f"View the experiment at {executor.get_experiment_url()}")
 
 
 def _is_relative_path(url_or_path):
@@ -831,3 +1048,9 @@ def _is_relative_path(url_or_path):
 
     # otherwise if it starts with a slash, it's not a relative path
     return not url_or_path.startswith("/")
+
+
+def _make_prefix_absolute_path(prefix, override_path):
+    if _is_relative_path(override_path):
+        override_path = os.path.join(prefix, override_path)
+    return override_path
