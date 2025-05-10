@@ -82,7 +82,7 @@ def get_github_issues():
         }
 
         if any(urls.values()):  # If we found any experiment links
-            badge_url = f"https://img.shields.io/github/issues/detail/title/stanford-crfm/marin/{issue.number}"
+            badge_url = f"https://img.shields.io/github/issues/detail/state/stanford-crfm/marin/{issue.number}"
             experiment_links.append(
                 {"title": clean_title(issue.title), "issue_num": issue.number, "badge_url": badge_url, "urls": urls}
             )
@@ -120,7 +120,7 @@ def update_reports_md(new_reports):
         new_content += f"- {title}\n"
 
         # Add GitHub issue link
-        new_content += f"    - [GitHub Issue #{report['issue_num']}](https://github.com/stanford-crfm/marin/issues/{report['issue_num']}) [![#{report['issue_num']}]({report['badge_url']})](https://github.com/stanford-crfm/marin/issues/{report['issue_num']})\n"
+        new_content += f"    - [GitHub Issue #{report['issue_num']}](https://github.com/marin-community/marin/issues/{report['issue_num']}) [![#{report['issue_num']}]({report['badge_url']})](https://github.com/marin-community/marin/issues/{report['issue_num']})\n"
 
         # Add WandB links if present
         for url in report["urls"]["wandb"]:

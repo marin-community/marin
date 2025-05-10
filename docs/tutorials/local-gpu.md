@@ -4,8 +4,8 @@ Marin was mainly developed on Google Cloud Platform (GCP) using TPUs.
 However, it is possible to run Marin on GPUs as well.
 
 This guide will walk you through the steps to set up a local GPU environment for Marin.
-Similar steps will let you run Marin on a cloud GPU environment using Ray's autoscaler,
-but we defer that to a future guide.
+By "local", we mean a machine that you run directly, as opposed to using Ray's autoscaler to launch a cluster of GPU nodes.
+Similar steps will let you run Marin on a cloud GPU environment using Ray's autoscaler, but we defer that to a future guide.
 
 ## Prerequisites
 
@@ -18,6 +18,9 @@ This part walks you through having the following installed:
 - cuDNN (version 9.1 or higher)
 
 ## Basic system setup
+
+You may not need to do this if you're using a cloud service like GCP or AWS, or if you've already done
+more or less the same thing for a different project.
 
 ### 1. System setup
 First, refresh the system's package index:
@@ -39,6 +42,7 @@ sudo apt install git
 ```
 
 ### 3. CUDA installation
+
 Install CUDA 12.9.0:
 
 ```bash
@@ -69,7 +73,7 @@ nvcc --version
 
 1. Clone the Marin repository:
    ```bash
-   git clone https://github.com/stanford-crfm/marin.git
+   git clone https://github.com/marin-community/marin.git
    cd marin
    ```
 
@@ -78,7 +82,7 @@ nvcc --version
    python3 -m venv venv
    source venv/bin/activate  # On Windows: venv\Scripts\activate
    ```
-   
+
    or with conda:
    ```bash
    conda create --name marin python=3.10 pip
@@ -89,7 +93,7 @@ nvcc --version
    ```bash
    pip3 install -e . jax[cuda12]
    ```
-   
+
    (Marin uses [JAX](https://jax.readthedocs.io/en/latest/index.html) as a core library. See [JAX's installation guide](https://jax.readthedocs.io/en/latest/installation.html) for more options.)
 
 4. Set WANDB and HF tokens:
@@ -97,15 +101,15 @@ nvcc --version
    wandb login
    huggingface-cli login
    ```
-   
+
    For this guide, you'll need access to [Meta's Llama 3.1 8B model](https://huggingface.co/meta-llama/Llama-3.1-8B).
 
 ## Running an Experiment
 
-Now you can run an experiment. For example, to run the tiny model training script [`experiments/tutorial/exp1076_train_tiny_model.py`](https://github.com/stanford-crfm/marin/blob/main/experiments/tutorial/exp1076_train_tiny_model.py):
+Now you can run an experiment. For example, to run the tiny model training script [`experiments/tutorial/train_tiny_model_gpu.py`](https://github.com/marin-community/marin/blob/main/experiments/tutorial/train_tiny_model_gpu.py):
 
 ```bash
-python3 experiments/tutorial/exp1076_train_tiny_model.py --prefix /path/to/output
+python3 experiments/tutorial/train_tiny_model_gpu.py --prefix /path/to/output
 ```
 
 The `prefix` is the directory where the output will be saved. It can be a local directory or anything fsspec supports,
