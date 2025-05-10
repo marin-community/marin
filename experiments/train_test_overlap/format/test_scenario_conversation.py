@@ -8,9 +8,13 @@ import fsspec
 
 from experiments.train_test_overlap.eval_datasets_overlap import (
     bbh_convert_dolma,
+    gpqa_convert_dolma,
     gsm8k_convert_dolma,
+    instruction_following_convert_dolma,
     math_convert_dolma,
     mmlu_convert_dolma,
+    mmlu_pro_convert_dolma,
+    musr_convert_dolma,
     truthful_qa_convert_dolma,
 )
 from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path
@@ -253,6 +257,10 @@ scenario_conversion_config = ScenarioConversionConfig(
         truthful_qa_convert_dolma,
         bbh_convert_dolma,
         mmlu_convert_dolma,
+        mmlu_pro_convert_dolma,
+        gpqa_convert_dolma,
+        instruction_following_convert_dolma,
+        musr_convert_dolma,
     ],
     output_path=this_output_path(),
     scenario_class_name_prefix="helm.benchmark.scenarios",

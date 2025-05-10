@@ -84,6 +84,75 @@ bbh_raw = ExecutorStep(
     override_output_path="raw/SaylorTwift/bbhhf",
 )
 
+# download humaneval dataset
+humaneval_raw = ExecutorStep(
+    name="raw/humaneval",
+    fn=download_hf,
+    config=DownloadConfig(
+        hf_dataset_id="openai/openai_humaneval",
+        revision=versioned("7dce605"),
+        gcs_output_path=this_output_path(),
+        wait_for_completion=True,
+        hf_urls_glob=["**/*.parquet", "*.md"],
+    ),
+    override_output_path="raw/openai/openai_humanevalhf",
+)
+
+
+# download musr dataset
+musr_raw = ExecutorStep(
+    name="raw/musr",
+    fn=download_hf,
+    config=DownloadConfig(
+        hf_dataset_id="TAUR-Lab/MuSR",
+        revision=versioned("7c365b4"),
+        gcs_output_path=this_output_path(),
+        wait_for_completion=True,
+        hf_urls_glob=["**/*.csv", "*.csv"],
+    ),
+    override_output_path="raw/TAUR-Lab/MuSRhf",
+)
+
+
+mmlu_pro_raw = ExecutorStep(
+    name="raw/mmlu_pro",
+    fn=download_hf,
+    config=DownloadConfig(
+        hf_dataset_id="TIGER-Lab/MMLU-Pro",
+        revision=versioned("475d58b"),
+        gcs_output_path=this_output_path(),
+        wait_for_completion=True,
+        hf_urls_glob=["**/*.parquet", "*.md"],
+    ),
+    override_output_path="raw/TIGER-Lab/MMLU-Prohf",
+)
+
+instruction_following_raw = ExecutorStep(
+    name="raw/instruction_following_eval",
+    fn=download_hf,
+    config=DownloadConfig(
+        hf_dataset_id="wis-k/instruction-following-eval",
+        revision=versioned("5a5661c"),
+        gcs_output_path=this_output_path(),
+        wait_for_completion=True,
+        hf_urls_glob=["**/*.jsonl", "*.jsonl"],
+    ),
+    override_output_path="raw/wis-k/instruction-following-evalhf",
+)
+
+gpqa_raw = ExecutorStep(
+    name="raw/gpqa",
+    fn=download_hf,
+    config=DownloadConfig(
+        hf_dataset_id="Idavidrein/gpqa",
+        revision=versioned("90b8e5b"),
+        gcs_output_path=this_output_path(),
+        wait_for_completion=True,
+        hf_urls_glob=["**/*.csv", "*.csv"],
+    ),
+    override_output_path="raw/Idavidrein/gpqa",
+)
+
 ############################################################
 # Convert datasets to dolma format for decontamination
 ############################################################
@@ -176,6 +245,99 @@ mmlu_convert_dolma = ExecutorStep(
         answer_labels=["A", "B", "C", "D"],
     ),
 )
+
+# Convert humaneval to dolma format
+humaneval_convert_dolma = ExecutorStep(
+    name="decontamination/humaneval",
+    fn=raw2json,
+    config=DatasetConversionConfig(
+        dataset_name="openai/openai_humaneval",
+        subsets=["*"],
+        splits=["test"],
+        input_path=humaneval_raw,
+        hf_path="openai/openai_humaneval",
+        output_path=this_output_path(),
+        output_format=OutputFormatOptions("decontamination"),
+        prompt_key="prompt",
+        answer_text_key="canonical_solution",
+    ),
+)
+
+# Convert instruction_following to dolma format
+# TODO: ahmed: this doesn't have reference answers
+# / they don't make sense, really only for inputs
+instruction_following_convert_dolma = ExecutorStep(
+    name="decontamination/instruction_following",
+    fn=raw2json,
+    config=DatasetConversionConfig(
+        dataset_name="wis-k/instruction-following-eval",
+        subsets=["*"],
+        splits=["test"],
+        input_path=instruction_following_raw,
+        hf_path="wis-k/instruction-following-eval",
+        output_path=this_output_path(),
+        output_format=OutputFormatOptions("decontamination"),
+        prompt_key="prompt",
+        options_key="instruction_id_list",
+    ),
+)
+
+gpqa_convert_dolma = ExecutorStep(
+    name="decontamination/gpqa",
+    fn=raw2json,
+    config=DatasetConversionConfig(
+        dataset_name="Idavidrein/gpqa",
+        subsets=["default"],
+        splits=["*"],
+        input_path=gpqa_raw,
+        hf_path="Idavidrein/gpqa",
+        output_path=this_output_path(),
+        output_format=OutputFormatOptions("decontamination"),
+        prompt_key="question",
+        answer_text_key="Correct Answer",
+        options_key="choices",
+    ),
+)
+
+
+mmlu_pro_convert_dolma = ExecutorStep(
+    name="decontamination/mmlu_pro",
+    fn=raw2json,
+    config=DatasetConversionConfig(
+        dataset_name="TIGER-Lab/MMLU-Pro",
+        subsets=["*"],
+        splits=["*"],
+        input_path=mmlu_pro_raw,
+        hf_path="TIGER-Lab/MMLU-Pro",
+        output_path=this_output_path(),
+        output_format=OutputFormatOptions("decontamination"),
+        prompt_key="question",
+        answer_text_key="answer",
+        options_key="options",
+    ),
+)
+
+# Convert musr to dolma format
+# TODO: ahmed: this is a bit of a hack, we should probably have a better way to handle this
+# technically 'question' is the question but narrative has the actual details
+# so if there is contamination that's what will get us a hit. Ideally we can
+# pass two fields that can be collated for a single prompt_key
+musr_convert_dolma = ExecutorStep(
+    name="decontamination/musr",
+    fn=raw2json,
+    config=DatasetConversionConfig(
+        dataset_name="TAUR-Lab/MuSR",
+        subsets=["*"],
+        splits=["*"],
+        input_path=musr_raw,
+        hf_path="TAUR-Lab/MuSR",
+        output_path=this_output_path(),
+        output_format=OutputFormatOptions("decontamination"),
+        prompt_key="narrative",
+        answer_text_key="answer",
+        options_key="choices",
+    ),
+)
 ############################################################
 
 if __name__ == "__main__":
@@ -187,11 +349,21 @@ if __name__ == "__main__":
             truthful_qa_raw,
             bbh_raw,
             mmlu_raw,
+            humaneval_raw,
+            gpqa_raw,
+            instruction_following_raw,
+            musr_raw,
+            mmlu_pro_raw,
             # Decontamination conversion steps
             gsm8k_convert_dolma,
             math_convert_dolma,
             truthful_qa_convert_dolma,
             bbh_convert_dolma,
             mmlu_convert_dolma,
+            humaneval_convert_dolma,
+            instruction_following_convert_dolma,
+            gpqa_convert_dolma,
+            musr_convert_dolma,
+            mmlu_pro_convert_dolma,
         ]
     )

@@ -7,13 +7,14 @@ from collections import defaultdict
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from time import time
 
 import draccus
 import fsspec
 import ray
 
 from marin.core.runtime import cached_or_construct_output
-from marin.utils import fsspec_glob, fsspec_mkdirs, rebase_file_path
+from marin.utils import fsspec_exists, fsspec_glob, fsspec_isdir, fsspec_mkdirs, rebase_file_path
 from train_test_overlap.compute_data_overlap_metrics import (
     compute_all_data_overlap,
     create_ngram_index,
@@ -67,6 +68,7 @@ def create_compressed_file_iterator(
     Yields:
         Tuple of (document_text, source_info) where source_info contains file info for logging
     """
+    start_time = time()
     processed_files = 0
     failed_files = 0
 
@@ -75,60 +77,80 @@ def create_compressed_file_iterator(
         """Context manager to ensure proper file handle cleanup"""
         f = None
         try:
-            f = fsspec.open(file_path, "rt", compression="infer").open()  # Call .open() to get the actual file object
+            f = fsspec.open(file_path, "rt", compression="infer").open()
             yield f
         finally:
             if f is not None:
                 f.close()
                 del f  # Explicitly delete the file handle
 
-    # Process one pattern at a time
-    for pattern in input_patterns:
-        remote_pattern = os.path.join(base_path, pattern)
-        # Use fsspec_glob but process one file at a time
-        for file_path in fsspec_glob(remote_pattern):
-            if not file_path.strip():
-                continue
+    # Determine list of files to process: single file or all matching patterns
+    try:
+        is_file = fsspec_exists(base_path) and not fsspec_isdir(base_path)
+    except Exception:
+        is_file = False
+    if is_file:
+        file_list = [base_path]
+    else:
+        file_list: list[str] = []
+        for pattern in input_patterns:
+            remote_pattern = os.path.join(base_path.rstrip("/"), pattern)
+            files = fsspec_glob(remote_pattern)
+            file_list.extend(files)
+    # Process each file one at a time
+    for file_path in file_list:
+        if not file_path.strip():
+            continue
 
-            logger.info(f"Processing file: {file_path}")
-            try:
-                with managed_file_open(file_path) as f:
-                    # Process one line at a time
-                    for line_num, line in enumerate(f, 1):
-                        try:
-                            document = json.loads(line)
-                            source_info = f"file={file_path}, line={line_num}"
+        file_start = time()
+        print(f"Starting file: {file_path}", flush=True)
 
-                            if "text" not in document:
-                                logger.warning(f"Missing 'text' field in document: {source_info}")
-                                continue
+        try:
+            with managed_file_open(file_path) as f:
+                # Process one line at a time
+                for line_num, line in enumerate(f, 1):
+                    try:
+                        document = json.loads(line)
+                        source_info = f"file={file_path}, line={line_num}"
 
-                            yield document["text"], source_info
-
-                            # Explicitly clear memory
-                            del line
-                            del document
-
-                        except json.JSONDecodeError as e:
-                            logger.error(f"JSON decode error in {file_path}:{line_num}: {e!s}")
+                        if "text" not in document:
+                            logger.warning(f"Missing 'text' field in document: {source_info}")
                             continue
-                        except Exception as e:
-                            logger.error(f"Error processing line in {file_path}:{line_num}: {e!s}")
-                            continue
 
-                processed_files += 1
-                gc.collect()  # Force garbage collection after each file
+                        yield document["text"], source_info
 
-            except Exception as e:
-                failed_files += 1
-                logger.error(f"Failed to process file {file_path}: {e!s}")
-                continue
+                        # Explicitly clear memory
+                        del line
+                        del document
 
-    logger.info(f"Completed processing {processed_files} files. Failed: {failed_files}")
+                    except json.JSONDecodeError as e:
+                        logger.error(f"JSON decode error in {file_path}:{line_num}: {e!s}")
+                        continue
+                    except Exception as e:
+                        logger.error(f"Error processing line in {file_path}:{line_num}: {e!s}")
+                        continue
+
+            processed_files += 1
+            elapsed = time() - start_time
+            rate = processed_files / (elapsed / 60) if elapsed > 0 else 0
+            file_time = time() - file_start
+            print(
+                f"Completed file in {file_time:.1f}s. Total: {processed_files} files ({rate:.1f} files/min)", flush=True
+            )
+
+            gc.collect()  # Force garbage collection after each file
+
+        except Exception as e:
+            failed_files += 1
+            logger.error(f"Failed to process file {file_path}: {e!s}")
+            continue
+
+    total_time = time() - start_time
+    print(f"Completed processing {processed_files} files in {total_time:.1f}s. Failed: {failed_files}", flush=True)
 
 
-# 32 GiB
-@ray.remote(memory=1024 * 1024 * 1024 * 32, num_cpus=4)
+# 4 GiB
+@ray.remote(memory=1024 * 1024 * 1024 * 4, num_cpus=4)
 def run_data_overlap(config: DataOverlapPipelineConfig) -> str:
     # Create a temporary directory under /tmp that will be cleaned up automatically
     with tempfile.TemporaryDirectory(dir="/tmp") as tmpdir:
