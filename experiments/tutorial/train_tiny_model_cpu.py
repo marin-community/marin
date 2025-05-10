@@ -1,3 +1,14 @@
+"""
+This is a tutorial on how to train a tiny model on a small dataset using CPU.
+
+This script demonstrates how to:
+1. Train a tiny model on TinyStories using CPU
+2. Use CPU-specific training configuration
+3. Run a quick training experiment
+
+For GPU training, see train_tiny_model_gpu.py
+"""
+
 from experiments.defaults import default_tokenize, default_train
 from experiments.llama import llama3_tokenizer, llama_nano
 from experiments.simple_train_config import SimpleTrainConfig
@@ -28,7 +39,6 @@ nano_train_config = SimpleTrainConfig(
 )
 
 # 4. Train the model
-
 nano_tinystories_model = default_train(
     name="marin-nano-tinystories",
     # Steps can depend on other steps: nano_tinystories_model depends on tinystories_tokenized

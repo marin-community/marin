@@ -82,7 +82,7 @@ def get_github_issues():
         }
 
         if any(urls.values()):  # If we found any experiment links
-            badge_url = f"https://img.shields.io/github/issues/detail/title/stanford-crfm/marin/{issue.number}"
+            badge_url = f"https://img.shields.io/github/issues/detail/state/stanford-crfm/marin/{issue.number}"
             experiment_links.append(
                 {"title": clean_title(issue.title), "issue_num": issue.number, "badge_url": badge_url, "urls": urls}
             )
