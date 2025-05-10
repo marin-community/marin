@@ -8,7 +8,7 @@ from marin.execution.executor import (
     get_executor_step,
     this_output_path,
 )
-from marin.utils import fsspec_get_curr_subdirectories  # Assuming this is the correct location
+from marin.utils import fsspec_get_curr_subdirectories, fsspec_glob
 from train_test_overlap.run_data_overlap import (
     DataOverlapPipelineConfig,
     run_data_overlap,
@@ -26,7 +26,7 @@ def generate_dclm_overlap_steps(
     processes: int,
 ):
     """
-    Generates ExecutorSteps for processing each local shard in the DCLM dataset.
+    Generates ExecutorSteps for processing each compressed JSONL shard file under every local shard.
     """
     steps = []
     print(f"Attempting to find global shards under: {base_path_for_local_shards_str}", flush=True)
@@ -52,24 +52,37 @@ def generate_dclm_overlap_steps(
                 print(f"Skipping non-local-shard directory: {local_shard_dir}", flush=True)
                 continue
 
-            print(f"LOGGER: Preparing step for local_shard_dir {local_shard_dir}", flush=True)
+            # discover compressed JSONL shards under this local shard
+            input_patterns = [
+                "**/*.jsonl.gz",
+                "**/*.jsonl.zst",
+                "**/*.jsonl.gs",
+                "**/*.json.gz",
+                "**/*.json.zst",
+                "**/*.jsonl",
+            ]
+            all_files = set()
+            for patt in input_patterns:
+                pattern = os.path.join(local_shard_dir.rstrip("/"), patt)
+                files = fsspec_glob(pattern)
+                print(f"Found {len(files)} files for pattern {patt} under {local_shard_dir}", flush=True)
+                all_files.update(files)
+            print(f"Total {len(all_files)} shard files under {local_shard_dir}", flush=True)
 
-            step_name = f"train_test_overlap/dclm_data_overlap/{global_shard_name}/{local_shard_name}"
-
-            config = DataOverlapPipelineConfig(
-                input_data=local_shard_dir,  # This is the path to e.g., .../local-shard_0_of_10
-                scenario_data=scenario_data_path,
-                output_path=this_output_path(),
-                N=n_values,
-                processes=processes,
-            )
-            print(f"  Generated Config for step {step_name}:", flush=True)
-            print(f"    input_data: {config.input_data}", flush=True)
-            print(f"    scenario_data: {config.scenario_data}", flush=True)
-            print(f"    N: {config.N}", flush=True)
-            print(f"    processes: {config.processes}", flush=True)
-
-            steps.append(ExecutorStep(name=step_name, fn=run_data_overlap, config=config))
+            # create one step per file
+            for file_path in sorted(all_files):
+                shard = os.path.basename(file_path)
+                step_name = (
+                    f"train_test_overlap/dclm_data_overlap_per_file/{global_shard_name}/{local_shard_name}/{shard}"
+                )
+                config = DataOverlapPipelineConfig(
+                    input_data=file_path,
+                    scenario_data=scenario_data_path,
+                    output_path=this_output_path(),
+                    N=n_values,
+                    processes=processes,
+                )
+                steps.append(ExecutorStep(name=step_name, fn=run_data_overlap, config=config))
 
     print(f"Total overlap steps generated: {len(steps)}", flush=True)
     return steps
@@ -116,7 +129,7 @@ if __name__ == "__main__":
     print(f"Constructed base path for DCLM global shards: {base_path_for_dclm_shards_str}", flush=True)
 
     # Define scenario data (can be the same as starcoder for now, or a different one)
-    scenario_data = "gs://marin-us-central2/scenarios/consolidated_eval_scenarios-a76e07/consolidated_scenarios.jsonl"
+    scenario_data = "gs://marin-us-central2/scenarios/consolidated_eval_scenarios-d3f040/consolidated_scenarios.jsonl"
     print(f"Using scenario data: {scenario_data}", flush=True)
 
     # N-gram values and processes
@@ -148,7 +161,7 @@ if __name__ == "__main__":
 
     executor_main(
         steps=all_steps,
-        description="Run n-gram data overlap pipeline on DCLM dataset for each local shard.",
+        description="Run n-gram data overlap pipeline on DCLM dataset for each shard file",
         # prefix and executor_info_base_path will be handled by executor_main's default logic
         # or ExecutorMainConfig if you choose to use draccus for this script too.
     )

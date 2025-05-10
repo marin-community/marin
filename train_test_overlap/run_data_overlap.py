@@ -30,6 +30,11 @@ from train_test_overlap.utils import asdict_without_nones
 
 logger = logging.getLogger(__name__)
 
+# Prefer RAM-backed scratch if available, else fallback to /tmp
+SCRATCH_DIR = os.environ.get("MARIN_TMPDIR", "/dev/shm")
+if not os.path.isdir(SCRATCH_DIR):
+    SCRATCH_DIR = "/tmp"
+
 
 @dataclass
 class DataOverlapPipelineConfig:
@@ -149,11 +154,10 @@ def create_compressed_file_iterator(
     print(f"Completed processing {processed_files} files in {total_time:.1f}s. Failed: {failed_files}", flush=True)
 
 
-# 4 GiB
 @ray.remote(memory=1024 * 1024 * 1024 * 4, num_cpus=4)
 def run_data_overlap(config: DataOverlapPipelineConfig) -> str:
-    # Create a temporary directory under /tmp that will be cleaned up automatically
-    with tempfile.TemporaryDirectory(dir="/tmp") as tmpdir:
+    # Create a temporary directory under SCRATCH_DIR (e.g. /dev/shm) that will be cleaned up automatically
+    with tempfile.TemporaryDirectory(dir=SCRATCH_DIR) as tmpdir:
         stats_prefix = os.path.join(tmpdir, "stats")
 
         # Copy and merge scenario JSONL files to local tmpdir
