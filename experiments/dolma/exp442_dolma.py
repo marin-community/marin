@@ -1,6 +1,6 @@
 """
 Train Dolma/OLMo models.
-https://github.com/stanford-crfm/marin/issues/442
+https://github.com/marin-community/marin/issues/442
 """
 
 from levanter.models.llama import LlamaConfig
