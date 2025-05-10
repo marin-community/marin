@@ -1,7 +1,7 @@
 """An experiment to evaluate the quality of individual splits of the Dolmino dataset.
 
 We cooldown a 8B model on a 30/70 mixture of some high quality Dolmino split and Dolmino DCLM.
-Link to issue: https://github.com/stanford-crfm/marin/issues/784
+Link to issue: https://github.com/marin-community/marin/issues/784
 
 Evaluation Criteria:
 -------------------

@@ -158,7 +158,10 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
         config.resources.runtime_env.get("env_vars", {}),
         default_launch_config.env_for_accel(config.resources.accelerator_descriptor() or ""),
     )
-    _check_for_wandb_key(env)
+    # if we're on tpu, ensure we have wandb
+    if isinstance(config.resources, TpuPodConfig):
+        _check_for_wandb_key(env)
+
     env = _add_run_env_variables(env)
     hw_config = config.resources.with_env_vars(env)
 
