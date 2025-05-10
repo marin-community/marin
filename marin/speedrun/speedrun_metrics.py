@@ -19,7 +19,7 @@ def compute_expected_flops(target_bpb: float, params: ScalingLawParams | None = 
         params = ScalingLawParams()
 
     # N*(C) = AC^a from the paper, solving for C
-    return (target_bpb / params.A) ** (1/params.alpha)
+    return (target_bpb / params.A) ** (1 / params.alpha)
 
 
 def compute_speedup(actual_flops: float, achieved_bpb: float, params: ScalingLawParams | None = None) -> float:
