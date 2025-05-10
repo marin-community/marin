@@ -37,6 +37,46 @@ This document focuses on basic setup and usage of Marin. If you're on a GPU, see
 
 Marin supports multiple hardware configurations:
 
+!!! info "Install `marin` for different accelerators"
+
+    Marin requires different JAX installations depending on your hardware accelerator. These installation options are defined in our `pyproject.toml` file and will install the appropriate JAX version for your hardware.
+
+    === "CPU"
+        ```bash
+        pip install -e "."
+        ```
+
+    === "GPU"
+         If you are working on GPUs you'll need to setup you system first by install the appropriate CUDA version. In marin we default to 12.9.0:
+         ```bash
+         wget https://developer.download.nvidia.com/compute/cuda/12.9.0/local_installers/cuda_12.9.0_575.51.03_linux.run
+         sudo sh cuda_12.9.0_575.51.03_linux.run
+         ```
+         Now we'll need to install cuDNN, instructions from [NVIDIA docs](https://developer.nvidia.com/cudnn-downloads?target_os=Linux&target_arch=x86_64&Distribution=Ubuntu&target_version=24.04&target_type=deb_local), via following:
+         ```bash
+         wget https://developer.download.nvidia.com/compute/cudnn/9.10.0/local_installers/cudnn-local-repo-ubuntu2404-9.10.0_1.0-1_amd64.deb
+         sudo dpkg -i cudnn-local-repo-ubuntu2404-9.10.0_1.0-1_amd64.deb
+         sudo cp /var/cudnn-local-repo-ubuntu2404-9.10.0/cudnn-*-keyring.gpg /usr/share/keyrings/
+         sudo apt-get update
+         sudo apt-get -y install cudnn
+         sudo apt-get -y install cudnn-cuda-12
+         ```
+         Once system is setup you can verify it via:
+         ```bash
+         nvcc --version
+         ```
+         Finally we'll install the correct libraries for GPU setup:
+
+         ```bash
+         pip install -e ".[cuda12]"
+         ```
+
+    === "TPU"
+
+        ```bash
+        pip install -e ".[tpu]"
+        ```
+
 - **CPU**: Works out of the box, suitable for small experiments
 - **GPU**: See [Local GPU Setup](local-gpu.md) for CUDA configuration and multi-GPU support
 - **TPU**: See [TPU Setup](../how-to-guides/tpu-setup.md) for Google Cloud TPU configuration
