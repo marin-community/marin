@@ -28,7 +28,7 @@ This document focuses on basic setup and usage of Marin. If you're on a GPU, see
    source venv/bin/activate  # On Windows: venv\Scripts\activate
    ```
 
-3. Install the package:
+3. Install the required packages:
    ```bash
    pip install -e .
    ```
