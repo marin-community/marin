@@ -362,3 +362,14 @@ that. You can run it from your laptop.
 
 If you want to change that to, say, two v4-64s, you need to delete the TPU node (using the GCP console) and then run the
 command again with the new TPU type.
+
+
+To reconnect already created nodes (e.g. because you restarted the cluster or Ray lost them), you can run the same
+command with the name of the already created TPU slice:
+
+```bash
+python infra/manual_ray_worker_launch.py --cluster_yaml infra/marin-us-central2.yaml \
+       --reserved --tpu_type v4-128 --head $IP --zone us-central2-b --name ray-manual-worker-deadbeef
+```
+
+If there are a lot of nodes you need to reconnect, you can use the `gcloud` command and a for loop:

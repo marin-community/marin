@@ -1,6 +1,6 @@
 """
 Test different html->text transformation methods (on FineWeb, train 1.4B models).
-https://github.com/stanford-crfm/marin/issues/246
+https://github.com/marin-community/marin/issues/246
 """
 
 import logging
