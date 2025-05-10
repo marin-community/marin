@@ -15,37 +15,38 @@
 > "*I am not afraid of storms, for I am learning how to sail my ship.*"<br/>
 > – Louisa May Alcott
 
-Marin is a modular, open-source framework for the research and development of
-foundation models.  A key property of Marin is reproducibility: All the steps
-raw data to the final model are recorded for posterity (not just the final
-model).  Moreover, all experiments (whether successful
-or not) are also recorded, so the entire research process (not just the
-development of the final model) is transparent.
+Marin is a modular, open-source framework for the research and development of [foundation models](https://en.wikipedia.org/wiki/Foundation_model).
 
-The core part of Marin is minimal, consisting of basically an
-[executor framework](docs/explanation/executor.md), which manages the execution of a set of
-arbitrary steps. Marin also has a [data browser](https://crfm.stanford.edu/marin/data_browser/) that makes it easy to
-view datasets (in various formats) and experiments produced by the executor.
+A key feature of Marin is **reproducibility**: every step, from raw data to the final model are recorded—not just the end result.
+This includes failed experiments, so the entire research process is transparent.
+You can browse all experiments and data in the [Marin Data Browser](https://crfm.stanford.edu/marin/data_browser/) XXX update link,
+or check out a [curated list of experiments](docs/reports/index.md).
 
-Marin's primary use case is to build a language model like Qwen 3,
-which involves data curation, transformation, filtering, tokenization,
-training, and evaluation (see [overview](docs/lm/overview.md)).
-Note that for now, all this specific code resides in this repository.
+Marin's primary use case is training language model like Llama or Qwen 3.
+This includes data curation, transformation, filtering, tokenization,
+training, and evaluation (see our [overview](docs/lm/overview.md) or XXX tootsie retrospective).
+
+We used Marin to train the Caravel 8B model, the first open-source 8B-class model to outperform Llama 3.1 8B.
+You can see the training script [here](https://github.com/marin-community/marin/blob/main/experiments/tootsie/exp600_tootsie.py) or read the [retrospective](docs/lm/tootsie-retrospective.md) XXX.
+
+Marin was originally created by Stanford's [Center for Research on Foundation Models](https://crfm.stanford.edu/) (CRFM),
+but you can [join us](#get-involved)!
 
 <!--marin-intro-end-->
 
 ## Documentation
 
 The documentation for Marin is available on [ReadTheDocs](https://marin.readthedocs.io/en/latest/) or in the [`docs/`](docs/) folder.
-TODO XXX temporarily here: https://marin-mkdocs.readthedocs.io/en/latest/
 
 <!--marin-first-steps-start-->
 
 To learn more about Marin and how it works, you can:
 
-- Train a [tiny language model](docs/how-to-guides/train-an-lm.md) using Marin.
+- Train a [tiny language model](docs/tutorials/first-experiment.md) using Marin.
+- See how to run a [DCLM 1B/1x](docs/how-to-guides/train-an-lm.md) experiment using Marin.
+- Learn how to join Marin's [Speed Run](docs/how-to-guides/submitting-speedrun.md) to try to find fast, scalable ways to train language models.
 - Read about Marin's key concepts and principles in [Concepts](docs/explanation/concepts.md)
-- Follow a [Executor Hello World tutorial](docs/tutorials/executor-101) to get a feel for how Marin works.
+- Follow the [Executor 101](docs/tutorials/executor-101) tutorial to get a feel for how Marin works.
 - Learn about the [Executor framework](docs/explanation/executor.md): how to manage Python libraries, run big parallel jobs using Ray, how versioning works, etc.
 - Read about [Experiments](docs/explanation/experiments.md): how we use the executor framework to run machine learning experiments.
 
@@ -53,8 +54,7 @@ To learn more about Marin and how it works, you can:
 
 ## Getting Started
 
-Full documentation on setup is available on [ReadTheDocs](https://marin.readthedocs.io/en/latest/tutorials/getting-started/)
-TODO XXX temporarily here: https://marin-mkdocs.readthedocs.io/en/latest/tutorials/getting-started/
+Full documentation on setup is available on [ReadTheDocs](https://marin.readthedocs.io/en/latest/tutorials/getting-started/).
 
 ### Installation
 
@@ -73,7 +73,7 @@ source marin-venv/bin/activate
 pip install -e .
 ```
 
-To contribute to Marin, please see the [Contributing Guide](CONTRIBUTING.md).
+To contribute to Marin, please see the [Contributing Guide](docs/dev-guide/contributing.md)
 
 ## Example
 
@@ -81,7 +81,7 @@ Marin experiments are defined as a set of steps that can depend on each other an
 almost like a Makefile.
 
 As a brief example of how you can use Marin, here is a complete script for training a tiny model on [TinyStories](https://huggingface.co/datasets/roneneldan/TinyStories).
-You can check out the [full script](https://github.com/marin-community/marin/blob/main/experiments/tutorial/exp1191_train_tiny_model_cpu.py) for more details.
+You can check out the [full script](https://github.com/marin-community/marin/blob/main/experiments/tutorial/train_tiny_model_cpu.py) for more details.
 
 <!--marin-example-start-->
 
@@ -151,7 +151,13 @@ a [mixture of datasets](docs/how-to-guides/train-an-lm.md#mixture-of-sources), e
 
 ## Get Involved
 
-We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for more information.
+We welcome contributions! Please see our [Contributor's Guide](docs/dev-guide/contributing.md) for more information.
 
-- We also have a list of [good first issues](https://github.com/marin-community/marin/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
-- You can find us on [Discord](https://discord.gg/J9CTk7pqcM).
+<!--marin-get-involved-start-->
+
+- Join the [Marin Speed Run](https://marin.community/speedrun/) to try to find fast, scalable ways to train language models.
+- Try out the [Marin Data Shop](XXX) to find and improve data for training language models.
+- Join the [Marin Discord](https://discord.gg/J9CTk7pqcM) to chat with the community.
+- We also have a list of [good first issues](https://github.com/marin-community/marin/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22) for those who want to contribute to Marin.
+
+<!--marin-get-involved-end-->
