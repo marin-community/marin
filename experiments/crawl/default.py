@@ -157,9 +157,8 @@ def default_crawl(
     )
 
     # Passing paths: gs://marin-us-central2/scratch/nfliu/fineweb_edu_10M_passing_paths.txt
-    source_name = config.source_name.split("/")[-1]
     links_minhash_deduplicated = ExecutorStep(
-        name=f"crawl/{source_name}/minhash",
+        name=f"crawl/{config.source_name}/minhash",
         fn=minhash_deduplicate_against_index_driver,
         config=MinhashDeduplicateAgainstIndexConfig(
             index_path=this_output_path(f"index"),
@@ -168,15 +167,14 @@ def default_crawl(
                     links_fetched_warc_yield, f"*_text_and_scores.passing.parquet"
                 )
             ],
-            parquets_paths_file=this_output_path(f"{source_name}-passing_paths.txt"),
+            parquets_paths_file=this_output_path(f"{config.source_name}-passing_paths.txt"),
             minhash_base_path=this_output_path(
-                f"{source_name}_passing_minhash_against_{source_name}"
+                f"{config.source_name}_passing_minhash_against_{config.source_name}"
             ),
             minhash_logs_path=this_output_path(
-                f"{source_name}_passing_minhash_against_{source_name}_logs"
+                f"{config.source_name}_passing_minhash_against_{config.source_name}_logs"
             ),
         ),
-        override_output_path=f"crawl/{config.source_name}",
     )
 
     steps = [
