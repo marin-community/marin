@@ -46,6 +46,8 @@ class SimpleTrainConfig:
     """None means match steps_per_export, -1 disables"""
     per_device_eval_parallelism: int | None = None
     """Number of examples to evaluate in parallel on each device"""
+    max_eval_batches: int | None = None
+    """Maximum number of batches to evaluate on. None means all batches"""
 
     initialize_from_checkpoint_path: str | None = None
     """If set, the training will resume from the checkpoint at this path. Otherwise, training will start from scratch."""
