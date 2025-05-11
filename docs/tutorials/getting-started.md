@@ -12,7 +12,7 @@ Before you begin, ensure you have the following installed:
 - A [Weights & Biases](https://wandb.ai) account for experiment tracking (optional but recommended)
 
 
-This document focuses on basic setup and usage of Marin. If you're on a GPU, see [local-gpu.md](local-gpu.md) for a GPU-specific walkthrough for getting started. If you want to set up a TPU cluster, see [TPU Setup](../how-to-guides/tpu-cluster-setup.md).
+This document focuses on basic setup and usage of Marin. If you're on a GPU, see [local-gpu.md](local-gpu.md) for a GPU-specific walkthrough for getting started. If you want to set up a TPU cluster, see [TPU Setup](../tutorials/tpu-cluster-setup.md).
 
 ## Installation
 
@@ -79,7 +79,7 @@ Marin supports multiple hardware configurations:
 
 - **CPU**: Works out of the box, suitable for small experiments
 - **GPU**: See [Local GPU Setup](local-gpu.md) for CUDA configuration and multi-GPU support
-- **TPU**: See [TPU Setup](../how-to-guides/tpu-setup.md) for Google Cloud TPU configuration
+- **TPU**: See [TPU Setup](../tutorials/tpu-setup.md) for Google Cloud TPU configuration
 
 ## Running Your First Experiment
 
@@ -102,7 +102,7 @@ The experiment uses CPU by default, but you can modify it to use GPU or TPU by f
 Now that you have Marin set up and running, here are the recommended next steps:
 
 1. Follow our [First Experiment](first-experiment.md) tutorial to understand how to create and run your own experiments
-2. Learn about [Training Language Models](../how-to-guides/train-an-lm.md) - A comprehensive guide to training models with Marin
+2. Learn about [Training Language Models](../tutorials/train-an-lm.md) - A comprehensive guide to training models with Marin
 3. Read our [Language Modeling Overview](../lm/overview.md) to understand Marin's approach to language models
 4. Explore Marin's key concepts in [Concepts](../explanation/concepts.md)
 5. Learn about the [Executor framework](../explanation/executor.md) for managing experiments
