@@ -81,6 +81,7 @@ jobs:
                           && sudo docker run --net host --shm-size=16G --privileged -v /tmp/repo:/opt/marin \
                             ${{ env.DOCKER_IMAGE }}:${{ env.DOCKER_SHA }} \
                             /bin/bash -c "export TPU_CI=true \
+                                     && export START_RAY_TPU_CLUSTER=true \
                                      && export WANDB_API_KEY=${{ secrets.WANDB_API_KEY }} \
                                      && export WANDB_ENTITY=stanford-mercury \
                                      && export OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }} \
