@@ -30,6 +30,7 @@ class TextGenerationInferenceConfig:
     template_path: str | None = None
     apply_chat_template: bool = True
     save_templated_prompt: bool = False
+    max_doc_length: int = 7000
 
     # Ray data specific
     num_instances: tuple[int, int] = (1, 4)
@@ -154,6 +155,7 @@ def run_inference(config: TextGenerationInferenceConfig):
             "prompt_column": config.prompt_column,
             "save_templated_prompt": config.save_templated_prompt,
             "apply_chat_template": config.apply_chat_template,
+            "max_doc_length": config.max_doc_length,
         },
         **ray_resources_kwarg(config),
     )

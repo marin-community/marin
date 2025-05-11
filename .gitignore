@@ -202,4 +202,7 @@ archive/
 # wandb logs
 wandb
 
+# Generated leaderboard data
+marin/speedrun/static/data/runs.json
+
 .aider*

@@ -10,6 +10,7 @@ try:
     from vllm.inputs.data import TokensPrompt
 except ImportError:
     logger.warning("vLLM is not installed, so we will not be able to generate text.")
+    TokensPrompt = Any
 
 
 class TextGeneration:
@@ -59,6 +60,7 @@ class vLLMTextGeneration(TextGeneration):
         prompt_column: str = "text",
         apply_chat_template: bool = True,
         save_templated_prompt: bool = False,
+        max_doc_length: int = 7000,
     ):
         # Initialize the LLM Provider here for the pipeline since we need the model
         # to be placed in the same placement group as the pipeline
@@ -66,36 +68,21 @@ class vLLMTextGeneration(TextGeneration):
 
         super().__init__(llm, template, num_generations, prompt_column, save_templated_prompt)
         self.apply_chat_template = apply_chat_template
-        self.truncate_prompt_tokens = None
-        if generation_kwargs:
-            self.truncate_prompt_tokens = generation_kwargs.get("truncate_prompt_tokens", None)
+        self.max_doc_length = max_doc_length
 
     def __call__(self, batch: dict[str, Any]) -> dict[str, Any]:
         tokenizer = self.llm.llm.get_tokenizer()
-        if self.apply_chat_template:
-            prompts = []
-            for example in batch[self.prompt_column]:
+        prompts = []
+        for example in batch[self.prompt_column]:
+            # NOTE(chris): We perform a left truncation of the document to the max doc length.
+            if len(example) > self.max_doc_length:
+                example = example[: self.max_doc_length]
+
+            if self.apply_chat_template:
                 chat_example = [{"role": "user", "content": self.template.format(example=example)}]
                 prompts.append(tokenizer.apply_chat_template(chat_example, tokenize=False, add_generation_prompt=True))
-        else:
-            prompts = [self.template.format(example=example) for example in batch[self.prompt_column]]
+            else:
+                prompts.append(example)
 
-        # Fix: Use batch_encode_plus to encode a list of prompts
-        encoded = tokenizer.batch_encode_plus(
-            prompts,
-            add_special_tokens=True,
-            return_attention_mask=False,
-            return_token_type_ids=False,
-        )
-        prompt_token_ids = encoded["input_ids"]
-
-        if self.truncate_prompt_tokens:
-            # Truncate each prompt's token ids individually
-            prompt_token_ids = [
-                ids[-self.truncate_prompt_tokens :] if len(ids) > self.truncate_prompt_tokens else ids
-                for ids in prompt_token_ids
-            ]
-
-        generation_input = [TokensPrompt(prompt_token_ids=prompt_token_seq) for prompt_token_seq in prompt_token_ids]
-        generated_text = self.llm.generate(generation_input)
+        generated_text = self.llm.generate(prompts)
         return self._update_batch(batch, generated_text, prompts)

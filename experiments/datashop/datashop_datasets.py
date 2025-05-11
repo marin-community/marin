@@ -1,4 +1,5 @@
 from experiments.pretraining_datasets import dclm_baseline
+from marin.classifiers.utils import CreateDatasetConfig, create_dataset
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from operations.download.filesystem.transfer import TransferConfig, transfer_files
 
@@ -31,6 +32,29 @@ datashop_dclm_pretraining_subset = ExecutorStep(
     config=TransferConfig(
         input_path=dclm_baseline_global_shard_2,
         output_path=this_output_path(),
+    ),
+)
+
+datashop_dclm_tutorial_pretraining_subset = ExecutorStep(
+    name="documents/datashop-datasets/datashop-dclm-tutorial-pretraining-subset",
+    fn=transfer_files,
+    config=TransferConfig(
+        input_path=dclm_baseline_global_shard_1_local_shard_1,
+        output_path=this_output_path(),
+        num_random_files=1,
+    ),
+)
+
+datashop_dclm_tutorial_annotation_subset = ExecutorStep(
+    name="documents/datashop-datasets/datashop-dclm-tutorial-annotation-subset",
+    fn=create_dataset,
+    config=CreateDatasetConfig(
+        input_doc_path=datashop_dclm_tutorial_pretraining_subset,
+        output_dataset_path=this_output_path(),
+        max_sample_size=1_000,
+        filetype="jsonl.zst",
+        merge_dataset_shards=False,
+        columns_to_keep=["text", "metadata"],
     ),
 )
 

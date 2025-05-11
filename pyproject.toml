@@ -19,7 +19,8 @@ dependencies = [
     "s3fs>=2024",
     "regex",
     "requests",
-    "torch",
+    "numpy",
+    "torch>=2.7.0",
     "braceexpand",
     "deepdiff",
     "tqdm",
@@ -51,6 +52,14 @@ dev = [
     "types-six",
 ]
 
+cuda12 = [
+    "jax[cuda12]==0.5.1",
+]
+
+tpu = [
+    "jax[tpu]==0.5.1",
+]
+
 metrics = [
     "google-cloud-logging",
 ]
@@ -64,6 +73,7 @@ docs = [
     "mkdocs-git-revision-date-localized-plugin>=1.2.0",
     "mkdocs-git-authors-plugin>=0.9.0",
     "mkdocs-minify-plugin>=0.7.0",
+    "mkdocs-include-markdown-plugin>=7.1.5",
 ]
 
 download_transform = [
