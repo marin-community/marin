@@ -43,7 +43,7 @@ def gcsfuse_mount_llama_8b_model_path():
     return "/opt/gcsfuse_mount/models/meta-llama--Llama-3-1-8B-Instruct"
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture
 def test_file_path():
     return "gs://marin-us-east5/documents/chris-test/test_50.jsonl.gz"
 
