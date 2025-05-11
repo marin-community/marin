@@ -18,7 +18,7 @@ jobs:
       TPU_ZONE: "us-east5-b"
       TPU_NAME: "ci-run-${{ github.run_id }}"
       DOCKER_IMAGE: "us-east5-docker.pkg.dev/hai-gcp-models/marin/marin_vllm"
-      DOCKER_SHA: "6965cbb1"
+      DOCKER_SHA: "6e804a10"
 
     steps:
       - name: Checkout code
