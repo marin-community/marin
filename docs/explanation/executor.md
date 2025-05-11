@@ -71,4 +71,4 @@ This script ensure that:
 - All the relevant libraries (specified above) are installed.
 - The working directory is set appropriately.
 - Any subpaths under submodules are appended to PYTHONPATH, which is useful
-  when [co-developing with another submodule](../how-to-guides/co-develop.md) (e.g., levanter).
+  when [co-developing with another submodule](../tutorials/co-develop.md) (e.g., levanter).
