@@ -3,7 +3,7 @@
 # Update the template or the script, not this file! #
 #####################################################
 # Unique Identifier for the Head Node + Workers
-cluster_name: marin-us-central2
+cluster_name: marin-us-central2-compress
 
 # Maximum Workers (excluding Head Node)
 max_workers: 1024
