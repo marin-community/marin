@@ -1,12 +1,13 @@
-import os
 import json
+import logging
+import os
 import tempfile
 from collections import defaultdict
-import logging
-import ray
-import fsspec
 
-from train_test_overlap.run_data_overlap import DataOverlapPipelineConfig, SCRATCH_DIR, create_compressed_file_iterator
+import fsspec
+import ray
+
+from marin.utils import fsspec_glob, fsspec_mkdirs
 from train_test_overlap.compute_data_overlap_metrics import (
     compute_all_data_overlap,
     create_ngram_index,
@@ -15,13 +16,14 @@ from train_test_overlap.compute_data_overlap_metrics import (
 from train_test_overlap.compute_metrics_from_ngrams import get_metrics
 from train_test_overlap.data_overlap_spec import DataOverlapStats, EntryOverlapNgrams
 from train_test_overlap.metrics import aggregate_metrics
+from train_test_overlap.run_data_overlap import SCRATCH_DIR, DataOverlapPipelineConfig, create_compressed_file_iterator
 from train_test_overlap.utils import asdict_without_nones
-from marin.utils import fsspec_glob, fsspec_mkdirs
 
 logger = logging.getLogger(__name__)
 
+
 # 4 GiB per actor, 1 CPU each
-@ray.remote(memory=1024 * 1024 * 1024 * 4, num_cpus=1)
+@ray.remote(memory=1024 * 1024 * 1024 * 16, num_cpus=1)
 class OverlapWorker:
     def __init__(self, scenario_data: str, N: list[int]):
         # Create a per-actor scratch dir
@@ -63,9 +65,7 @@ class OverlapWorker:
             "**/*.json.zst",
             "**/*.jsonl",
         ]
-        document_iterator = create_compressed_file_iterator(
-            input_patterns=input_patterns, base_path=input_data
-        )
+        document_iterator = create_compressed_file_iterator(input_patterns=input_patterns, base_path=input_data)
         compute_all_data_overlap(
             document_iterator=document_iterator,
             ngram_index=self.ngram_index,
@@ -167,6 +167,7 @@ class OverlapWorker:
 _worker_pool = []
 _next_worker_idx = 0
 
+
 @ray.remote(num_cpus=0)
 def run_data_overlap(config: DataOverlapPipelineConfig) -> str:
     global _worker_pool, _next_worker_idx
@@ -177,4 +178,4 @@ def run_data_overlap(config: DataOverlapPipelineConfig) -> str:
     actor = _worker_pool[_next_worker_idx]
     _next_worker_idx = (_next_worker_idx + 1) % len(_worker_pool)
     # Delegate to actor and wait
-    return ray.get(actor.run.remote(config.input_data, config.output_path)) 
+    return ray.get(actor.run.remote(config.input_data, config.output_path))
