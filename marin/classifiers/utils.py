@@ -26,6 +26,23 @@ logger = logging.getLogger("ray")
 
 @dataclass(frozen=True)
 class CreateDatasetConfig:
+    """Configuration for creating a dataset such as ensembling attributes and randomly sampling examples.
+
+    Attributes:
+        input_doc_path (str): Path to the input dataset directory (Dolma format).
+        output_dataset_path (str): Path to the output dataset directory.
+        label_func (Callable[[Document, list[Attribute]], str]): Function to label the dataset. This function
+            accepts a document and a list of attributes and returns a string label. This can be used to
+            ensemble multiple attributes together or create new attributes based on the document (e.g. length).
+        input_attr_paths (list[str] | None): Path to the attributes directory.
+        seed (int): Seed for random number generator to ensure reproducibility.
+        sampling_rate (float): Fraction of the dataset to sample.
+        max_sample_size (int | None): Maximum number of examples to include in the dataset.
+        filetype (str): Filetype of the input dataset.
+        merge_dataset_shards (bool): Whether to merge dataset shards. If False, the dataset will
+            be sharded across many files. If True, the dataset will be merged into a single file.
+    """
+
     input_doc_path: str
     output_dataset_path: str
     label_func: Callable[[Document, list[Attribute]], str]

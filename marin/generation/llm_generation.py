@@ -12,8 +12,10 @@ logger = logging.getLogger(__name__)
 
 try:
     from vllm import LLM, SamplingParams
+    from vllm.inputs.data import TokensPrompt
 except ImportError:
     logger.warning("vLLM is not installed, so we will not be able to generate text.")
+    TokensPrompt = Any
 
 
 class BaseLLMProvider(ABC):
@@ -36,7 +38,6 @@ class vLLMProvider(BaseLLMProvider):
     DEFAULT_GENERATION_KWARGS: ClassVar[dict[str, Any]] = {
         "temperature": 0.1,
         "max_tokens": 1024,
-        "truncate_prompt_tokens": 8000,
     }
 
     def __init__(
@@ -54,7 +55,7 @@ class vLLMProvider(BaseLLMProvider):
         self.llm = LLM(model=self.model_name, **self.engine_kwargs)
         self.sampling_params = SamplingParams(**self.generation_kwargs)
 
-    def generate(self, prompts) -> list[str]:
+    def generate(self, prompts: list[str]) -> list[str]:
         outputs = self.llm.generate(prompts, self.sampling_params)
         generated_text: list[str] = []
         for output in outputs:
