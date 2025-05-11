@@ -51,12 +51,10 @@ datashop_dclm_tutorial_annotation_subset = ExecutorStep(
     config=CreateDatasetConfig(
         input_doc_path=datashop_dclm_tutorial_pretraining_subset,
         output_dataset_path=this_output_path(),
-        # The label function actually doesn't matter for this step since we just want to
-        # sample documents.
-        label_func=lambda doc, attrs: -1,
         max_sample_size=1_000,
         filetype="jsonl.zst",
         merge_dataset_shards=False,
+        columns_to_keep=["text", "metadata"],
     ),
 )
 
