@@ -7,7 +7,7 @@
     <img alt="Documentation" src="https://readthedocs.org/projects/marin/badge/?version=latest">
 </a>
 <a href="">
-<img alt="License" src="https://img.shields.io/github/license/marin-community/marin?color=blue" />
+    <img alt="License" src="https://img.shields.io/github/license/marin-community/marin?color=blue" />
 </a>
 
 <!--marin-intro-start-->
@@ -17,7 +17,7 @@
 
 Marin is a modular, open-source framework for the research and development of [foundation models](https://en.wikipedia.org/wiki/Foundation_model).
 
-A key feature of Marin is **reproducibility**: every step, from raw data to the final model are recorded—not just the end result.
+A key feature of Marin is **reproducibility**: every step, from raw data to the final model are recorded, not just the end result.
 This includes failed experiments, so the entire research process is transparent.
 You can browse all experiments and data in the [Marin Data Browser](https://crfm.stanford.edu/marin/data_browser/) XXX update link,
 or check out a [curated list of experiments](docs/reports/index.md).
