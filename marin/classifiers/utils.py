@@ -11,7 +11,7 @@ import os
 import tempfile
 from collections.abc import Callable
 from contextlib import ExitStack
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import fsspec
 import numpy as np
@@ -45,13 +45,14 @@ class CreateDatasetConfig:
 
     input_doc_path: str
     output_dataset_path: str
-    label_func: Callable[[Document, list[Attribute]], str]
+    label_func: Callable[[Document, list[Attribute]], str] | None = None
     input_attr_paths: list[str] | None = None
     seed: int = 0
     sampling_rate: float = 1.0
     max_sample_size: int | None = None
     filetype: str = "jsonl.gz"
     merge_dataset_shards: bool = True
+    columns_to_keep: list[str] = field(default_factory=lambda: ["text"])
 
 
 def label_documents(
@@ -160,6 +161,7 @@ def create_dataset(
             attr_file_paths,
             config.sampling_rate,
             config.seed,
+            config.columns_to_keep,
         )
 
     _, doc_fs_path = fsspec.core.url_to_fs(config.input_doc_path)
@@ -209,10 +211,11 @@ def create_dataset(
 def create_dataset_shard(
     input_doc_file_path: str,
     output_file_path: str,
-    label_func: Callable[[Document, list[Attribute]], str],
+    label_func: Callable[[Document, list[Attribute]], str] | None,
     input_attr_file_paths: list[str],
     sampling_rate: float,
     seed: int,
+    columns_to_keep: list[str],
 ) -> None:
     """
     Writes training examples to an output file.
@@ -226,6 +229,7 @@ def create_dataset_shard(
         input_attr_file_paths (list[str]): Path to the attribute JSONL file (gzip compressed).
         sampling_rate (float): Fraction of lines to be written to the output file.
         seed (int): Seed for random number generator to ensure reproducibility.
+        columns_to_keep (list[str]): List of columns to keep in the output file.
     """
 
     def hash_fn(text: str) -> int:
@@ -255,7 +259,9 @@ def create_dataset_shard(
                 attr_objs = [json.loads(line) for line in lines[1:]]
 
                 if "text" in doc_obj:
-                    example: LabeledExample = {"text": doc_obj["text"], "label": label_func(doc_obj, attr_objs)}
+                    example = {col: doc_obj[col] for col in columns_to_keep}
+                    if label_func is not None:
+                        example.update({"label": label_func(doc_obj, attr_objs)})
                     f_out.write(json.dumps(example) + "\n")
                 else:
                     logging.warning(f"Document {doc_obj['id']} has no text field.")
