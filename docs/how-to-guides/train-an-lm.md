@@ -4,10 +4,11 @@
 
 Before following the language model training guide, make sure to follow the general environment setup procedure described in the README:
 
-- **Environment Setup**: [README.md § Setup](https://github.com/stanford-crfm/marin/blob/main/README.md#setup)
-- **GPU Enviroment Setup**: [Setting up a Local GPU Environment](https://github.com/stanford-crfm/marin/blob/main/docs/how-to-guides/local-gpu.md)
+- **Environment Setup**: [Getting Started with Marin](../tutorials/getting-started.md)
+- **GPU Enviroment Setup**: [Setting up a Local GPU Environment](../tutorials/local-gpu.md)
 
-This guide explains how to train a language model using Marin, with our examples reproducing the DCLM 7B/1x and 1B/1x baselines.
+This guide explains how to train a language model using Marin, with our examples reproducing the
+[DCLM](https://arxiv.org/pdf/2406.11794) 7B/1x and 1B/1x baselines.
 
 ## Required Imports
 
@@ -30,11 +31,11 @@ from marin.execution.executor import executor_main
 import logging
 ```
 
-- [`dclm_mixture_config_llama3`][experiments.dclm.tokenize_dclm.dclm_mixture_config_llama3]: A predefined dataset configuration for the DCLM mixture, this can be replaced with any tokenized dataset in Marin of the `lm_mixture_data_config` type (e.g. [Dolma](../../experiments/dolma/exp442_dolma.py) or [Nemotron](../../experiments/exp934_hq_vs_pt.py))
+- [`dclm_mixture_config_llama3`][experiments.dclm.tokenize_dclm.dclm_mixture_config_llama3]: A predefined dataset configuration for the DCLM mixture, this can be replaced with any tokenized dataset in Marin of the `lm_mixture_data_config` type (e.g. [Dolma](https://github.com/marin-community/marin/blob/main/experiments/dolma/exp442_dolma.py) or [Nemotron](https://github.com/marin-community/marin/blob/main/experiments/exp934_hq_vs_pt.py))
 - [`SimpleTrainConfig`][experiments.simple_train_config.SimpleTrainConfig]
 - [`default_train`][experiments.defaults.default_train]: A utility function that creates a training pipeline
-- `LlamaConfig`: A dataclass that defines the model architecture from [Levanter](https://github.com/stanford-crfm/levanter)
-- [`executor_main`][marin.execution.executor]: The main entry point for the Marin executor framework
+- [`LlamaConfig`][levanter.models.llama.LlamaConfig]: A dataclass that defines the model architecture from [Levanter](https://github.com/stanford-crfm/levanter)
+- [`executor_main`][marin.execution.executor.executor_main]: The main entry point for the Marin executor framework
 
 ## Setting Up the Model Configuration
 
@@ -50,7 +51,7 @@ model_config = LlamaConfig(
 )
 ```
 
-You can also use pre-defined model configurations from `experiments.llama` for common model sizes.
+You can also use pre-defined model configurations from [`experiments.llama`](https://www.github.com/marin-community/marin/blob/main/experiments/llama.py) for common model sizes.
 
 ## Defining Training Parameters
 
@@ -127,13 +128,12 @@ Monitor your training progress through:
 
 For a complete example of training a DCLM 1B/1x model, see the implementation in:
 
-Code: [experiments/howto/exp1077_reproduce_dclm_1b1x.py](../../experiments/howto/exp1077_reproduce_dclm_1b1x.py)
-WandB: [Dashboard](https://wandb.ai/stanford-mercury/marin/runs/dclm_1b_1x_how_to-58c8f0)
+- Code: [experiments/howto/exp1077_reproduce_dclm_1b1x.py](https://github.com/marin-community/marin/blob/main/experiments/howto/exp1077_reproduce_dclm_1b1x.py)
+- WandB: [Dashboard](https://wandb.ai/stanford-mercury/marin/runs/dclm_1b_1x_how_to-58c8f0)
 
-This trains on the DCLM baseline mix with the same config. as described in the original DCLM paper for 1X the compute optimal number of tokens!
-
+This trains on the DCLM baseline mix with the same config as described in the original DCLM paper for 1X the compute optimal number of tokens!
 
 For a larger scale example of training a DCLM 7B/1x model, see the implementation in:
 
-Code: [experiments/howto/exp1078_reproduce_dclm_7b1x.py](../../experiments/howto/exp1078_reproduce_dclm_7b1x.py)
-WandB: [Dashboard](https://wandb.ai/stanford-mercury/marin/runs/dclm_7b_1x_how_to-fefaab)
+- Code: [experiments/howto/exp1078_reproduce_dclm_7b1x.py](https://github.com/marin-community/marin/blob/main/experiments/howto/exp1078_reproduce_dclm_7b1x.py)
+- WandB: [Dashboard](https://wandb.ai/stanford-mercury/marin/runs/dclm_7b_1x_how_to-fefaab)

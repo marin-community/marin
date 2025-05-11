@@ -1,6 +1,6 @@
 """
 Test Simulated Epoching on a Data Mixture
-https://github.com/stanford-crfm/marin/issues/718
+https://github.com/marin-community/marin/issues/718
 """
 
 from experiments.defaults import default_train, simulated_epoching_train

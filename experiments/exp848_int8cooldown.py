@@ -1,7 +1,7 @@
 """An experiment comparing standard v.s. int8 cooldown
 
 We cooldown a 8B model on DCLM baine using both bf16 and int8 training to compare the results.
-Link to issue: https://github.com/stanford-crfm/marin/issues/848
+Link to issue: https://github.com/marin-community/marin/issues/848
 """
 
 import dataclasses
