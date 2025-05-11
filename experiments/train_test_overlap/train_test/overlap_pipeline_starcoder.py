@@ -3,7 +3,8 @@ import os
 
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from marin.utils import fsspec_glob
-from train_test_overlap.run_data_overlap import DataOverlapPipelineConfig, run_data_overlap
+from train_test_overlap.run_data_overlap import DataOverlapPipelineConfig
+from train_test_overlap.run_data_overlap_actor import run_data_overlap
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -55,7 +56,7 @@ if __name__ == "__main__":
     base_input_dir = "gs://marin-us-central2/documents/starcoderdata-720c8c/9fc30b5/"
     scenario_data = "gs://marin-us-central2/scenarios/consolidated_eval_scenarios-d3f040/consolidated_scenarios.jsonl"
     # generate one step per shard file under the base input directory
-    steps = generate_overlap_steps(base_input_dir, scenario_data, [5, 10, 15, 20], 4)
+    steps = generate_overlap_steps(base_input_dir, scenario_data, [5, 10, 15, 20], 32)
     executor_main(
         steps=steps,
         description="Run n-gram data overlap pipeline on StarCoder data for each shard file",

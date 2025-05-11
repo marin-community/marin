@@ -154,8 +154,8 @@ def create_compressed_file_iterator(
     # print(f"Completed processing {processed_files} files in {total_time:.1f}s. Failed: {failed_files}", flush=True)
 
 
-# 1 GiB
-@ray.remote(memory=1024 * 1024 * 1024, num_cpus=1)
+# 4 GiB
+@ray.remote(memory=1024 * 1024 * 1024 * 4, num_cpus=1)
 def run_data_overlap(config: DataOverlapPipelineConfig) -> str:
     # Create a temporary directory under SCRATCH_DIR (e.g. /dev/shm) that will be cleaned up automatically
     with tempfile.TemporaryDirectory(dir=SCRATCH_DIR) as tmpdir:
