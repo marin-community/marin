@@ -10,8 +10,6 @@ try:
 except ImportError:
     pytest.skip("vLLM is not installed", allow_module_level=True)
 
-from tests.conftest import model_config
-
 
 @ray.remote(resources={"TPU-v6e-8-head": 1})
 def _test_llm_func(model_config):
@@ -35,5 +33,5 @@ def _test_llm_func(model_config):
 
 
 @pytest.mark.skipif(os.getenv("TPU_CI") != "true", reason="Skip this test if not running with a TPU in CI.")
-def test_local_llm_inference(ray_tpu_cluster):
+def test_local_llm_inference(ray_tpu_cluster, model_config):
     ray.get(_test_llm_func.remote(model_config))
