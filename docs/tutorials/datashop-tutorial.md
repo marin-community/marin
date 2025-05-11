@@ -1,6 +1,6 @@
-# A tutorial to using Datashop
+# Datashop Tutorial
 
-This tutorial will walk through a basic example of using Datashop to filter a data pool for desired documents given a prompt and training a model on the filtered data.
+Datashop is a tool for data filtering and evaluating the filtered data quality. This tutorial will walk through a basic example of using Datashop to filter a data pool for desired documents given a prompt and training a model on the filtered data.
 
 ## Prerequisites
 TPUs are currently required to run this process for model inference. We perform this inference on TPU v6e-8s for serving and TPU v6e-128s for training for reference. Check the TPU Cluster yamls in `infra/` for reference. GPUs are not supported yet.
