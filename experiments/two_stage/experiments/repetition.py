@@ -13,27 +13,26 @@ if __name__ == "__main__":
                 rare_data_epochs=rare_data_epochs,
                 num_train_steps=1000,
                 lr_schedule=lr_schedule,
-                lr=lr,
+                lr=3e-3,
                 lr_cooldown_duration=lr_cooldown_duration,
                 wandb_project_name="suhas-two-stage",
-                wandb_additional_tags=["efficiency-baselines-v2", f"{rare_data_name}-c4-efficiency-baselines-v2"],
+                wandb_additional_tags=[f"finding-repetitions", f"{rare_data_name}-c4-finding-repetitions"],
                 model_name="150m4k",
-                nametag="-eb",
+                nametag="-fr",
             )
         )
         for lr_schedule, lr_cooldown_duration in [
-            ("linear", 0.5),
+            ("linear", 0.0),
         ]
-        for rare_fraction in [0.05, 0.1, 0.2]
+        for rare_fraction in [4.0/1024.0]
         for replay_ratio in [0.0]
         for rare_stage2_allocation in [1.0]
-        for lr in [3e-3]
-        for rare_data_name in ["flan"]
-        for rare_data_epochs in [4]
+        for rare_data_name in ["finemath"]
+        for rare_data_epochs in [1, 2, 4, 8, 16]
     ]
 
     executor_main(
         steps=train_steps,
-        description="Data efficiency baselines",
+        description="Finding repetitions",
     )
     
