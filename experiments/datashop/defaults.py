@@ -39,6 +39,7 @@ def default_label(
     targeted_documents: list[list[str] | str],
     experiment_name: str,
     resource_config: ResourceConfig,
+    annotator_model_name_or_path: str = "meta-llama/Llama-3.3-70B-Instruct",
     data_filter_prompt: str | None = None,
     medu_pipeline_config_kwargs: dict | None = None,
     text_generation_inference_config: dict | None = None,
@@ -83,6 +84,7 @@ def default_label(
             input_path=documents_to_be_labeled,
             output_path=this_output_path(),
             resource_config=resource_config,
+            model_name=annotator_model_name_or_path,
             **medu_pipeline_config_kwargs,
         )
 
@@ -113,6 +115,7 @@ def default_label(
         template_path=data_filter_prompt_path,
         tensor_parallel_size=resource_config.num_tpu,
         resource_config=resource_config,
+        model_name=annotator_model_name_or_path,
         **text_generation_inference_config_kwargs,
     )
 
