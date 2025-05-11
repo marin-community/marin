@@ -230,7 +230,7 @@ The `tokenized` directory contains the tokenized dataset.
 
 ## Next Steps
 
-- Train a real [1B or 8B parameter language model](../how-to-guides/train-an-lm.md) using Marin.
+- Train a real [1B or 8B parameter language model](../tutorials/train-an-lm.md) using Marin.
 - Read about Marin's key concepts and principles in [Concepts](../explanation/concepts.md)
 - Learn about the [Executor framework](../explanation/executor.md).
 - Read more about our [language modeling efforts](../lm/overview.md)
