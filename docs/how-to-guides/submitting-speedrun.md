@@ -47,11 +47,17 @@ The rest of this guide assumes you have already:
    mkdir -p experiments/speedrun/<your_run_name>
    ```
 
-2. Create your training script in this directory. Here's a reference speedrun file [`llama_75m_fineweb_edu.py`](https://github.com/marin-community/marin/blob/main/experiments/speedrun/llama_75m_fineweb_edu/llama_75m_fineweb_edu.py):
-   ```python
-   """
-   Sample speedrun with a 75M model that uses the Llama architecture.
-   """
+2. Create your training script in this directory. This involves the following:
+    - You will need to create a `SpeedRunConfig` object that specifies the model configuration, training configuration, and hardware configuration.
+    - The model configuration is specified using an `LmConfig` object (see [llama.py](../llama.py) for examples of `LlamaConfig`s, which are Llama-architecture `LmConfig`s that are already defined for you to use).
+    - The training configuration is specified using a `TrainLmConfig` object, but you can also use a slightly more convenient `SimpleTrainConfig` (see [simple_train_config.py](../simple_train_config.py)).
+    - The dataset is set to FineWeb-Edu (with a fixed data seed) by default. You can optionally specify a (tokenized) dataset, but note that in order to count as a valid submission, you must use the default dataset (FineWeb-Edu)
+
+    Here's a reference speedrun file `llama_75m_fineweb_edu.py`:
+    ```python
+    """
+    Sample speedrun with a 75M model that uses the Llama architecture.
+    """
 
    import logging
 
@@ -88,8 +94,7 @@ The rest of this guide assumes you have already:
    The folder and `.py` file names can be different, but should be descriptive of the configuration you use eg. something like `llama_75m_fineweb_edu`. Note that in principle, you could organize your directory experiments/speedrun/<your_run_name> however you like (multiple python files, etc) if you'd like to; in this guide, we'll go with one file to keep things simple.
 
 4. Set relevant environment variables needed for the run:
-
-    ```
+    ```bash
     export WANDB_API_KEY=...
     export MARIN_PREFIX=...
     export HF_TOKEN=...
