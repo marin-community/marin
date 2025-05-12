@@ -3,6 +3,7 @@
 Our goal is to build strong base and instruction-tuned language models.
 There are many components of this pipeline, all of which are represented in Marin:
 
+
 1. Curating raw sources (e.g., HTML, PDF, etc.)
 2. Crawling the web for additional raw sources
 3. Converting raw sources into text
