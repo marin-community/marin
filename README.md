@@ -1,8 +1,5 @@
 # Marin
 
-<a href="https://github.com/marin-community/marin/actions?query=branch%3Amain++">
-    <img alt="Build Status" src="https://img.shields.io/github/actions/workflow/status/marin-community/marin/run_tests.yaml?branch=main">
-</a>
 <a href="https://marin.readthedocs.io/en/latest/?badge=latest">
     <img alt="Documentation" src="https://readthedocs.org/projects/marin/badge/?version=latest">
 </a>
@@ -15,7 +12,7 @@
 > "*I am not afraid of storms, for I am learning how to sail my ship.*"<br/>
 > – Louisa May Alcott
 
-Marin is an open-source framework for the research and development of [foundation models](https://en.wikipedia.org/wiki/Foundation_model).
+[Marin](https://marin.community) is a modular, open-source framework for the research and development of [foundation models](https://en.wikipedia.org/wiki/Foundation_model).
 
 A key feature of Marin is **reproducibility**: every step, from raw data to the final model are recorded, not just the end result.
 This includes failed experiments, so the entire research process is transparent.
