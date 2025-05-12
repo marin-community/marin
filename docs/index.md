@@ -8,13 +8,11 @@ end="<!--marin-intro-end-->"
 
 ## Quick Links
 
-- [Getting Started](tutorials/getting-started.md)
+- [Installation](tutorials/installation.md)
 - [First Experiment](tutorials/first-experiment.md)
 - [Local GPU Setup](tutorials/local-gpu.md)
-- [Overview](lm/overview.md)
+- [The Language Modeling Pipeline](explanation/lm-pipeline.md)
 - [Experiment Reports](reports/index.md)
-<!-- - [Architecture Overview](reference/architecture.md) TODO -->
-
 
 ## Documentation Structure
 
