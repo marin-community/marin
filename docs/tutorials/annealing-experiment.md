@@ -16,7 +16,7 @@ For example, we could do a cooldown on FineMath, and expect improvements on task
 3. **Run the Annealing Experiment**: Use the `default_anneal` function to execute your experiment.
 
 
-This how-to guide is based on the [FineMath annealing experiment](https://github.com/marin-community/marin/blob/main/experiments/exp722_anneal.py).
+This tutorial is based on the [FineMath annealing experiment](https://github.com/marin-community/marin/blob/main/experiments/exp722_anneal.py).
 
 ## Steps
 

@@ -28,35 +28,35 @@ extra_css:
 nav:
   - Home: index.md
   - Tutorials:
-    - Getting Started: tutorials/getting-started.md
+    - Installation: tutorials/installation.md
     - First Experiment: tutorials/first-experiment.md
     - Executor 101: tutorials/executor-101.md
-  - How-to Guides:
-    - Train an LM: how-to-guides/train-an-lm.md
-    - Filter Data: how-to-guides/filtering-data.md
-    - Submit a Speedrun: how-to-guides/submitting-speedrun.md
-    - Co-Develop Marin and Levanter: how-to-guides/co-develop.md
-    - Run an Annealing Experiment: how-to-guides/annealing-experiment.md
+    - Data Browser: tutorials/data-browser.md
+    - Training an LM: tutorials/train-an-lm.md
+    - Submitting a Speedrun: tutorials/submitting-speedrun.md
+    - Filtering Data: tutorials/filtering-data.md
+    - Co-Developing with Marin and Levanter: tutorials/co-develop.md
+    - Run an Annealing Experiment: tutorials/annealing-experiment.md
   - Explanation:
+    - The Language Modeling Pipeline: explanation/lm-pipeline.md
     - Concepts: explanation/concepts.md
-    - Data Browser: explanation/data-browser.md
     - Evaluation: explanation/evaluation.md
     - Experiments: explanation/experiments.md
     - Executor: explanation/executor.md
+    - Guidelines: explanation/guidelines.md
   - Experiment Reports: reports/index.md
   - Developer Guide:
-      - Contributing: dev-guide/contributing.md
-      - Guidelines: guidelines.md
-      - Internal Guidelines: guidelines-internal.md
-      - Building Docs: dev-guide/building-docs.md
-      - Snapshot Tests: dev-guide/snapshot-tests.md
+    - Contributing: dev-guide/contributing.md
+    - Guidelines: dev-guide/guidelines.md
+    - Internal Guidelines: dev-guide/guidelines-internal.md
+    - Building Docs: dev-guide/building-docs.md
+    - Snapshot Tests: dev-guide/snapshot-tests.md
   - Technical Reference:
-      - Architecture: reference/architecture.md
-      - LM Overview: lm/overview.md
-      - Specifying Hardware Resources: reference/resource-config.md
-      - Executor API: reference/executor-api.md
-      - Default Steps: reference/default-steps.md
-      - Training Configuration: reference/train-config.md
+    - Architecture: reference/architecture.md
+    - Specifying Hardware Resources: reference/resource-config.md
+    - Executor API: reference/executor-api.md
+    - Default Steps: reference/default-steps.md
+    - Training Configuration: reference/train-config.md
 
 markdown_extensions:
   - pymdownx.highlight
