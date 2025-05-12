@@ -21,7 +21,8 @@ Marin's primary use case is training language model like Llama, DeepSeek, Qwen, 
 Notably, this includes data curation, transformation, filtering, tokenization, training, and evaluation.
 
 We used Marin to train the first open-source 8B parameter model to outperform Llama 3.1 8B.
-You can see the training script [here](https://github.com/marin-community/marin/blob/main/experiments/tootsie/exp600_tootsie.py) or read the [retrospective](docs/reports/tootsie-retrospective.md).
+You can see the [training script](https://github.com/marin-community/marin/blob/main/experiments/tootsie/exp600_tootsie.py)
+or read the [retrospective](docs/reports/tootsie-retrospective.md).
 
 <!--marin-intro-end-->
 
