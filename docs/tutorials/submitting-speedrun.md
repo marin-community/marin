@@ -10,6 +10,7 @@ and allow participants to specify their own FLOPs budget.
 This allows us examine the tradeoff between compute and model quality.
 
 Submitting to the Speedrun Leaderboard consists of the following steps:
+
 1. Define a configuration for training a model.
 2. Train it on your hardware; both GPUs and TPUs are supported.
 3. Submit the configuration and the generated results file to the Marin GitHub repository via a pull request.
