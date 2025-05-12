@@ -43,7 +43,7 @@ if __name__ == "__main__":
         output_base=this_output_path(),
         N=n_values,
         processes=processes,
-        max_in_flight=64,
+        max_in_flight=256,
     )
     step = ExecutorStep(
         name="train_test_overlap/dclm_data_overlap_sharded",

@@ -17,7 +17,7 @@ if __name__ == "__main__":
         output_base=this_output_path(),
         N=[5, 10, 15, 20],
         processes=4,
-        max_in_flight=1,
+        max_in_flight=64,
     )
     step = ExecutorStep(
         name="train_test_overlap/starcoder_data_overlap_sharded",

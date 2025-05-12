@@ -24,7 +24,7 @@ provider:
 
 
 docker:
-    image: "us-central2-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:8b035b60"
+    image: "us-central2-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:c19d0043"
     container_name: "ray_docker"
     pull_before_run: true
     worker_run_options:
@@ -96,7 +96,7 @@ available_node_types:
             sourceImage: projects/ubuntu-os-cloud/global/images/family/ubuntu-2204-lts
   tpu_worker:
     max_workers: 1024
-    min_workers: 128
+    min_workers: 24
     node_config:
       acceleratorType: v4-8
       runtimeVersion: tpu-ubuntu2204-base
