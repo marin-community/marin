@@ -9,7 +9,7 @@ import logging
 from experiments.llama import llama_nano
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import executor_main
-from marin.resources import GpuConfig, TpuPodConfig
+from marin.resources import TpuPodConfig
 from marin.speedrun.speedrun import HardwareConfig, SpeedrunConfig, default_speedrun
 
 logger = logging.getLogger("ray")
@@ -31,4 +31,4 @@ speedrun_config = SpeedrunConfig(
 )
 
 if __name__ == "__main__":
-    executor_main(steps=default_speedrun("hello_world_tpu_speedrun", speedrun_config))
+    executor_main(steps=default_speedrun("hello_world_tpu_speedrun_sanity", speedrun_config))
