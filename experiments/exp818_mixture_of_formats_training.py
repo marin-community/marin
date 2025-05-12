@@ -11,7 +11,7 @@ for training language models. We evaluate four scenarios:
 The goal is to determine if exposing models to multiple formats of the same content source
 improves model performance.
 
-Reference Issue: https://github.com/stanford-crfm/marin/issues/818
+Reference Issue: https://github.com/marin-community/marin/issues/818
 
 """
 

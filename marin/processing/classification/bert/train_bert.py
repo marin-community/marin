@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 import draccus
 
 from marin.classifiers.bert.training import train_model
-from marin.classifiers.utils import DatasetConfig, create_dataset
+from marin.classifiers.utils import CreateDatasetConfig, DatasetConfig, create_dataset
 
 
 @dataclass
@@ -39,12 +39,14 @@ class TrainBertClassifierConfig:
 def train(cfg: TrainBertClassifierConfig):
     for dataset in cfg.datasets:
         create_dataset(
-            input_doc_path=dataset.input_doc_path,
-            output_dataset_path=cfg.output_path,
-            label_func=lambda doc, attrs, dataset=dataset: dataset.label,
-            seed=cfg.seed,
-            sampling_rate=dataset.sampling_rate,
-            max_sample_size=dataset.max_sample_size,
+            config=CreateDatasetConfig(
+                input_doc_path=dataset.input_doc_path,
+                output_dataset_path=cfg.output_path,
+                label_func=lambda doc, attrs, dataset=dataset: dataset.label,
+                seed=cfg.seed,
+                sampling_rate=dataset.sampling_rate,
+                max_sample_size=dataset.max_sample_size,
+            )
         )
 
     input_dataset_path = os.path.join(cfg.output_path, "data")
