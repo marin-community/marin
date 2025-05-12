@@ -102,9 +102,8 @@ nano_tinystories_model = default_train(
 
 if __name__ == "__main__":
     executor_main(steps=[
-            nano_tinystories_model,
-        ]
-    )
+        nano_tinystories_model,
+    ])
 ```
 
 Here, we create two [steps](docs/explanation/executor.md#steps), one for tokenizing the dataset and one for training the model.
