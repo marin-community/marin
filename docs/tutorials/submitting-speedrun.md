@@ -1,53 +1,56 @@
 # Submitting to the Speedrun Leaderboard
 
+Marin Speedrun, inspired by the [nanogpt Speedrun](https://github.com/KellerJordan/modded-nanogpt), is a benchmark
+aimed at improving the compute efficiency of language model training, by
+incentivizing researchers to develop new model architectures, optimizers, and
+training strategies.
 
-Marin Speedrun is a community-driven model training framework and contest that promotes collaborative language model development. By focusing on small-scale prototyping, it allows researchers to iterate quickly, test new ideas efficiently, and contribute to a shared leaderboard.
+We fix the dataset to be the [FineWeb-Edu dataset](https://huggingface.co/datasets/HuggingFaceFW/fineweb-edu),
+and allow participants to specify their own FLOPs budget.
+This allows us examine the tradeoff between compute and model quality.
 
-Submitting a speedrun consists of the following steps:
-- defining a configuration for training a model
-- training it on your hardware; both GPUs and TPUs are supported
-- submitting the configuration and the generated results file to Marin via a pull request, and having it appear on the leaderboard!
+Submitting to the Speedrun Leaderboard consists of the following steps:
+1. Define a configuration for training a model.
+2. Train it on your hardware; both GPUs and TPUs are supported.
+3. Submit the configuration and the generated results file to the Marin GitHub repository via a pull request.
+4. Watch it appear on the leaderboard!
 
-This guide will walk you through the process of creating and submitting your own speedrun to the Marin Speedrun leaderboard. For an example, see [llama_75m_fineweb_edu.py](https://github.com/marin-community/marin/blob/main/experiments/speedrun/llama_75m_fineweb_edu/llama_75m_fineweb_edu.py) - we will also use this as a reference as we go through this guide.
-
-## Motivation for Marin Speedrun
-Training large language models (LLMs) is compute-intensive, expensive, and time-consuming. To address this, Marin Speedrun provides a lightweight framework for rapid prototyping. Modeled after the [NanoGPT Speedrun](https://github.com/KellerJordan/modded-nanogpt), it enables researchers to explore new ideas using smaller-scale models before investing in large-scale training. The goal is to make it easier to iterate quickly on model architectures, training strategies, and optimization techniques—and to identify promising approaches by comparing performance and efficiency against other submissions.
-
-## Framework
-
-We use the [FineWeb-Edu dataset](https://huggingface.co/datasets/HuggingFaceFW/fineweb-edu) by default. You can experiment with any model architecture, optimizers, learning rate schedules, or hyperparameters.
-[TODO (Nikil): The tokenized, shuffled dataset is also available on HF [link] to make speedrun more accessible]. We track the following key metrics:
-
-- **C4-EN BPB (Bits per Byte)**: Bits-per-byte on the `c4-en` (English portion of the C4) dataset; lower values are better.
-- **FLOPs Used**: Floating point operations used in training the model.
-
-
-While tracking performance on `c4-en` helps us understand model performance/capability, we opt to track a Pareto frontier to highlight trade-offs between model performance and scale. The Pareto frontier represents the set of models that are not outperformed in both metrics by any other submission. In other words, a model is Pareto-optimal if no other model achieves better BPB and uses fewer FLOPs.
-
-This approach encourages creative and efficient experimentation. For example:
-
-- A large model with very low BPB but needing a lot of compute to train may be Pareto-optimal.
-- A smaller or more efficient model with worse BPB but dramatically lower compute may also make the frontier.
-
-The Pareto frontier should provide a clearer picture of what's achievable with different model scales and approaches, both in terms of model performance/capability, and the amount of compute it requires.
-
+Here is an [example submission](https://github.com/marin-community/marin/blob/main/experiments/speedrun/llama_75m_fineweb_edu/llama_75m_fineweb_edu.py),
+and here is the [current leaderboard](https://marin.community/speedrun).
 
 ## Prerequisites
 
-The rest of this guide assumes you have already:
+Before you get started, you will need the following:
 
-1. Cloned the codebase and set up the environment and env vars for Marin by following [the setup instructions](../tutorials/getting-started.md). If you are using a local GPU, follow [local-gpu.md](../tutorials/local-gpu.md) for GPU-specific setup instructions.
-2. Set up [Weights and Biases](https://wandb.ai) for tracking your runs. You can sign up for a free account [here](https://wandb.ai). You will need a W&B API key to track metrics and submit your run.
+- Basic [installation](installation.md)
+- Set up your [local GPU](local-gpu.md)
+- You need to make sure that your Ray GPU cluster is started.
 
-## Creating Your Speedrun Submission
+## Framework
+
+You are given the [FineWeb-Edu dataset](https://huggingface.co/datasets/HuggingFaceFW/fineweb-edu),
+but you can define any training scheme you'd like.
+Each speedrun submission will generate the following key metrics:
+
+- **C4-EN BPB (Bits per Byte)** (quality): Bits-per-byte on the validation portion of the `c4-en` (English portion of the C4) dataset; lower values are better.
+- **FLOPs Used** (compute): Floating point operations used to train the model; lower values are better.
+
+We also define the **Pareto frontier**, the set of submissions that are not
+outperformed in both metrics by any other submission. In other words, a
+submission is Pareto-optimal if no other model achieves better BPB and uses
+fewer FLOPs.
+
+It is important that the Speedrun leaderboard span multiple compute scales, since the best strategy might differ across scales,
+and having multiple scales allows us to fit scaling laws and extrapolate out to much larger scales.
+
 ## Creating Your Speedrun Submission
 
 1. Create a new directory for your run:
    ```bash
-   mkdir -p experiments/speedrun/<your_run_name>
+   mkdir -p experiments/speedrun/YOUR_RUN_NAME
    ```
 
-2. Create your training script in this directory. Here's a reference speedrun file [`llama_75m_fineweb_edu.py`](https://github.com/marin-community/marin/blob/main/experiments/speedrun/llama_75m_fineweb_edu/llama_75m_fineweb_edu.py):
+2. Create your training script in this directory. See [`llama_75m_fineweb_edu.py`](https://github.com/marin-community/marin/blob/main/experiments/speedrun/llama_75m_fineweb_edu/llama_75m_fineweb_edu.py) for a reference:
    ```python
    """
    Sample speedrun with a 75M model that uses the Llama architecture.
@@ -85,37 +88,34 @@ The rest of this guide assumes you have already:
    if __name__ == "__main__":
        executor_main(steps=default_speedrun("75M_llama_fineweb_edu", speedrun_config))
    ```
-   The folder and `.py` file names can be different, but should be descriptive of the configuration you use eg. something like `llama_75m_fineweb_edu`. Note that in principle, you could organize your directory experiments/speedrun/<your_run_name> however you like (multiple python files, etc) if you'd like to; in this guide, we'll go with one file to keep things simple.
+   In this example, you only have one Python file, but if your submission is more complex, you can split it into multiple files.
 
-4. Set relevant environment variables needed for the run:
+3. Set relevant environment variables needed for the run:
 
     ```
     export WANDB_API_KEY=...
-    export MARIN_PREFIX=...
     export HF_TOKEN=...
+    export MARIN_PREFIX=...
     ```
 
-    `MARIN_PREFIX` tells Marin where to put artifacts generated during the execution of any steps. For examples, training checkpoints usually will be written to `${MARIN_PREFIX}/checkpoints/`. You can set this to an fsspec-recognizable path eg. a GCS bucket, or a directory on your machine.
+    `MARIN_PREFIX` tells Marin where to put artifacts generated during the execution of any steps.
+    For examples, training checkpoints usually will be written to `${MARIN_PREFIX}/checkpoints/`.
+    You can set this to an fsspec-recognizable path eg. a GCS bucket, or a directory on your machine.
 
-    A more detailed description of these can be found in [docs/<TODO>](../../docs/<TODO>).
-
-3. Train your model:
+4. Train your model:
    ```bash
    python marin/run/ray_run.py -- python experiments/speedrun/llama_75m_fineweb_edu/llama_75m_fineweb_edu.py
    ```
 
 ## Submitting Your Run
 
-1. Add your `speedrun_results.json` file to your run directory:
+1. Add the resulting `speedrun_results.json` file to your run directory:
    ```bash
-   cp ${MARIN_PREFIX}/speedrun_results.json experiments/speedrun/llama_75m_fineweb_edu/
+   cp ${MARIN_PREFIX}/speedrun_results.json experiments/speedrun/${YOUR_RUN_NAME}/
    ```
 
 2. Create a pull request including:
     - Your run directory (training script and results file)
     - A brief explanation of your approach (model architecture, training strategy, optimizations)
 
-3. Once reviewed and merged, the leaderboard gets updated, and your run will appear on the public leaderboard at https://marin.community/speedrun/.
-
-
-TODO (Nikil): add some details about what happens afterwards (pic of leaderboard, scaling up to larger models, etc.)
+3. Once reviewed and merged, the leaderboard gets updated, and your run will appear on the [public leaderboard](https://marin.community/speedrun/).
