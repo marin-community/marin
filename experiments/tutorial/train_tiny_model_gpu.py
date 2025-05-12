@@ -10,16 +10,17 @@ For CPU training, see train_tiny_model_cpu.py
 """
 
 from experiments.defaults import default_tokenize, default_train
-from experiments.llama import llama3_tokenizer, llama_nano
+from experiments.llama import llama_nano
+from experiments.marin_models import marin_tokenizer
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import executor_main
 from marin.resources import GpuConfig
 
 wikitext_hf_id = "dlwh/wikitext_2_detokenized"
 wikitext_tokenized = default_tokenize(
-    name=wikitext_hf_id,
-    dataset=wikitext_hf_id,
-    tokenizer=llama3_tokenizer,
+    name="wikitext_2_detokenized",  # path to store the tokenized data inside PREFIX. `tokenized/` will be prepended
+    dataset=wikitext_hf_id,  # dataset can be a step for downloaded data, or a raw HF id
+    tokenizer=marin_tokenizer,  # the marin tokenizer is the llama3 tokenizer with a custom chat template
 )
 
 

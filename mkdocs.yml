@@ -31,12 +31,11 @@ nav:
     - Getting Started: tutorials/getting-started.md
     - First Experiment: tutorials/first-experiment.md
     - Executor 101: tutorials/executor-101.md
-  - How-to Guides:
-    - Train an LM: how-to-guides/train-an-lm.md
-    - Filter Data: how-to-guides/filtering-data.md
-    - Submit a Speedrun: how-to-guides/submitting-speedrun.md
-    - Co-Develop Marin and Levanter: how-to-guides/co-develop.md
-    - Run an Annealing Experiment: how-to-guides/annealing-experiment.md
+    - Train an LM: tutorials/train-an-lm.md
+    - Filter Data: tutorials/filtering-data.md
+    - Submit a Speedrun: tutorials/submitting-speedrun.md
+    - Co-Develop Marin and Levanter: tutorials/co-develop.md
+    - Run an Annealing Experiment: tutorials/annealing-experiment.md
   - Explanation:
     - Concepts: explanation/concepts.md
     - Data Browser: explanation/data-browser.md

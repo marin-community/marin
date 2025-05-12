@@ -43,8 +43,8 @@ The documentation for Marin is available on [ReadTheDocs](https://marin.readthed
 To learn more about Marin and how it works, you can:
 
 - Train a [tiny language model](docs/tutorials/first-experiment.md) using Marin.
-- See how to run a [DCLM 1B/1x](docs/how-to-guides/train-an-lm.md) experiment using Marin.
-- Learn how to join Marin's [Speed Run](docs/how-to-guides/submitting-speedrun.md) to try to find fast, scalable ways to train language models.
+- See how to run a [DCLM 1B/1x](docs/tutorials/train-an-lm.md) experiment using Marin.
+- Learn how to join Marin's [Speed Run](docs/tutorials/submitting-speedrun.md) to try to find fast, scalable ways to train language models.
 - Read about Marin's key concepts and principles in [Concepts](docs/explanation/concepts.md)
 - Follow the [Executor 101](docs/tutorials/executor-101) tutorial to get a feel for how Marin works.
 - Learn about the [Executor framework](docs/explanation/executor.md): how to manage Python libraries, run big parallel jobs using Ray, how versioning works, etc.
@@ -144,8 +144,8 @@ The training step depends on the tokenized dataset step, so it will be executed 
 
 <!--marin-example-end-->
 
-With slight modifications, you can extend this to train a [larger model on a larger dataset](docs/how-to-guides/train-an-lm.md),
-a [mixture of datasets](docs/how-to-guides/train-an-lm.md#mixture-of-sources), even scaling to very large TPU pods
+With slight modifications, you can extend this to train a [larger model on a larger dataset](docs/tutorials/train-an-lm.md),
+a [mixture of datasets](docs/tutorials/train-an-lm.md#mixture-of-sources), even scaling to very large TPU pods
 (or multislice TPU, and, soon, multi-node GPUs!).
 
 
@@ -155,8 +155,8 @@ We welcome contributions! Please see our [Contributor's Guide](docs/dev-guide/co
 
 <!--marin-get-involved-start-->
 
-- Join the [Marin Speed Run](https://marin.community/speedrun/) to try to find fast, scalable ways to train language models.
-- Try out the [Marin Data Shop](XXX) to find and improve data for training language models.
+- Join the [Marin Speedrun](https://marin.community/speedrun/) to try to find fast, scalable ways to train language models.
+- Try out the [Marin Datashop](XXX) to find and improve data for training language models.
 - Join the [Marin Discord](https://discord.gg/J9CTk7pqcM) to chat with the community.
 - We also have a list of [good first issues](https://github.com/marin-community/marin/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22) for those who want to contribute to Marin.
 

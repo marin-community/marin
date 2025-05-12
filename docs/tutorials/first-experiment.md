@@ -175,7 +175,7 @@ so we don't need to explicitly list them.
 
 ## Running the Experiment
 
-To run the experiment, locally, we can run the script directly:
+To run the experiment locally, we can run the script directly:
 
 === "CPU"
     ```bash
@@ -191,7 +191,7 @@ To run the experiment, locally, we can run the script directly:
 The `--prefix` argument specifies the output directory for the experiment. It can be a local directory or anything [fsspec](https://filesystem-spec.readthedocs.io/en/latest/) supports,
 such as `s3://` or `gs://`.
 
-This will take a few minutes to run. (Marin isn't optimized for low latency.)
+This will take a few minutes to run. (Marin isn't optimized for low latency and Ray can take a while to schedule tasks initially...)
 
 At the end, you should see a message like this:
 
@@ -230,7 +230,7 @@ The `tokenized` directory contains the tokenized dataset.
 
 ## Next Steps
 
-- Train a real [1B or 8B parameter language model](../how-to-guides/train-an-lm.md) using Marin.
+- Train a real [1B or 8B parameter language model](../tutorials/train-an-lm.md) using Marin.
 - Read about Marin's key concepts and principles in [Concepts](../explanation/concepts.md)
 - Learn about the [Executor framework](../explanation/executor.md).
 - Read more about our [language modeling efforts](../lm/overview.md)

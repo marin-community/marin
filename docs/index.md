@@ -18,10 +18,9 @@ end="<!--marin-intro-end-->"
 
 ## Documentation Structure
 
-Our documentation is organized into six main sections:
+Our documentation is organized into the following main sections:
 
 - **Tutorials**: Step-by-step guides to help you get started with Marin, including installation, basic usage, and local GPU setup
-- **How-to Guides**: Practical guides for specific tasks and common operations
 - **Explanation**: Background information and context about the project
 - **Experiment Reports**: Reports from our experiments
 - **Developer Guide**: Information for developers who want to contribute to Marin
