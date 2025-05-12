@@ -5,7 +5,7 @@ import wandb
 
 logger = logging.getLogger(__name__)
 
-WANDB_ENTITY = "stanford-mercury"
+WANDB_ENTITY = "marin-community"
 WANDB_PROJECT = "marin"
 WANDB_PATH = f"{WANDB_ENTITY}/{WANDB_PROJECT}"
 

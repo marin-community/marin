@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import wandb
+from marin.utilities.wandb_utils import WANDB_ENTITY, WANDB_PROJECT
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +19,7 @@ class WandbMetricsConfig:
 
 
 def get_wandb_run_metrics(
-    run_id: str, metrics=None, entity: str = "stanford-mercury", project: str = "marin"
+    run_id: str, metrics=None, entity: str = WANDB_ENTITY, project: str = WANDB_PROJECT
 ) -> dict[str, Any] | None:
     """
     Retrieves key metrics for a specific WandB run.
@@ -84,7 +85,9 @@ def get_wandb_run_metrics(
 
 
 def get_all_runs_over_period(
-    num_days: int | None = None, entity="stanford-mercury", project="marin"
+    num_days: int | None = None,
+    entity=WANDB_ENTITY,
+    project=WANDB_PROJECT,
 ) -> list[dict[str, Any]] | None:
     """
     Retrieves all runs created within the past week (or given time window).
@@ -148,7 +151,7 @@ def get_vocab_size_for_tokenizer(tokenizer: str) -> int | None:
     return vocab_size
 
 
-def count_params_for_run(run_id: str, entity="stanford-mercury", project="marin") -> int | None:
+def count_params_for_run(run_id: str, entity=WANDB_ENTITY, project=WANDB_PROJECT) -> int | None:
     """
     Retrieves the number of parameters for a specific WandB run.
     """
@@ -325,6 +328,6 @@ def calculate_wandb_metrics(config: WandbMetricsConfig) -> dict[str, Any]:
 
 if __name__ == "__main__":
 
-    config = WandbMetricsConfig(entity="stanford-mercury", project="marin", num_days=7)
+    config = WandbMetricsConfig(entity=WANDB_ENTITY, project=WANDB_PROJECT, num_days=7)
 
     calculate_wandb_metrics(config)
