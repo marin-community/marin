@@ -115,8 +115,8 @@ jobs:
                                      && echo VLLM_TEST \
                                      && pytest tests/vllm -s -v \
                                      && echo EVALS_TEST \
-                                     && pytest tests/evals -s -v \ 
-                                     && echo RAY_DATA_TEST \ 
+                                     && pytest tests/evals -s -v \
+                                     && echo RAY_DATA_TEST \
                                      && pytest tests/ray-data -s -v"'
 
       # - name: Configure Docker for Artifact Registry
