@@ -146,7 +146,7 @@ if __name__ == "__main__":
 To run this experiment:
 
 ```bash
-python experiments/tutorial/hello_world.py --prefix local_store
+python experiments/tutorials/hello_world.py --prefix local_store
 ```
 
 This command will create several output files:
@@ -161,9 +161,9 @@ This command will create several output files:
 
 ## Complete Code
 
-The complete code for this tutorial is available at: [experiments/tutorial/hello_world.py](https://github.com/marin-community/marin/blob/main/experiments/tutorial/hello_world.py)
+The complete code for this tutorial is available at: [experiments/tutorials/hello_world.py](https://github.com/marin-community/marin/blob/main/experiments/tutorials/hello_world.py)
 
 ## Next Steps
 
 - Train a [tiny language model](first-experiment.md) using Marin.
-- Learn about the [Executor framework](../explanation/executor.md): how to manage Python libraries, run big parallel jobs using Ray, how versioning works, etc.
+- Learn about the [Executor framework](../explanations/executor.md): how to manage Python libraries, run big parallel jobs using Ray, how versioning works, etc.
