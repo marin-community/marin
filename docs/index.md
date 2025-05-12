@@ -30,8 +30,8 @@ These sections are available on the left side bar (or hamburger menu).
 
 {%
 include-markdown "../README.md"
-start="<!--marin-get-involved-start-->"
-end="<!--marin-get-involved-end-->"
+start="<!--marin-first-steps-start-->"
+end="<!--marin-first-steps-end-->"
 %}
 
 
