@@ -4,6 +4,7 @@ from experiments.instruction_datasets import get_instruction_dataset
 from experiments.llama import llama3_instruct_tokenizer, llama3_tokenizer, llama_8b
 from experiments.simple_sft_config import SimpleSFTConfig
 from marin.execution.executor import executor_main
+from marin.resources import TpuPodConfig
 
 # Get instruction dataset
 synthetic_instruction_dataset = get_instruction_dataset("sherryy/tulu-3-sft-personas-instruction-following-expanded")
@@ -29,7 +30,7 @@ tulu3_sft_8b_synthetic_instruction_model = default_sft(
         train_batch_size=64,
         num_train_steps=NUM_TRAIN_STEPS,
         learning_rate=5e-6,
-        tpu_type="v4-64",
+        resources=TpuPodConfig(tpu_type="v4-64"),
         tokenizer=llama3_tokenizer,
         model_name_or_path="meta-llama/Llama-3.1-8B",
         max_seq_len=4096,

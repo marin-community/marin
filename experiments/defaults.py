@@ -23,6 +23,7 @@ from levanter.schedule import BatchSchedule
 from levanter.store.cache import CacheOptions
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
+from levanter.utils import fsspec_utils
 
 from experiments.anneal_config import AnnealConfig
 from experiments.evals.task_configs import (
@@ -51,9 +52,9 @@ from marin.processing.tokenize import (
     lm_data_config,
     tokenize,
 )
+from marin.processing.tokenize.tokenize import HfTokenizeConfig
 from marin.scaling_laws.scaling_laws import ScalingLawConfig, run_scaling_law_analysis
 from marin.training.training import (
-    PodConfig,
     TrainLmOnPodConfig,
     run_levanter_train_lm,
 )
@@ -70,13 +71,43 @@ def default_tokenize(
     *,
     is_validation: bool = False,
 ) -> ExecutorStep:
-    config = TokenizeConfig(
-        train_paths=[dataset] if not is_validation else [],
-        validation_paths=[dataset] if is_validation else [],
-        cache_path=this_output_path(),
-        tokenizer=ensure_versioned(tokenizer),
-        format=format,
-    )
+    """
+    Tokenizes a dataset using the specified tokenizer and Levanter's tokenization infrastructure.
+
+    Args:
+        name: The name of the tokenized dataset. This is used to form the output path for the executor step.
+            `tokenized/` will be prepended to the name.
+        dataset:  The dataset to tokenize. This can be an InputName, ExecutorStep, or a string as a
+            path to the dataset or a HuggingFace dataset ID.
+        tokenizer: string HuggingFace tokenizer name. Should be the same as you intend to use in the tokenizer
+            spec for the training run.
+        options: CacheOptions to use for tokenization. You typically don't need to set this.
+        format: The format of the dataset. This is used to determine how to tokenize the data.
+
+            See [Levanter's documentation](https://levanter.readthedocs.io/en/latest/reference/Data-Formats/)
+            for more details.
+        is_validation: Whether the dataset is a validation set. Doesn't do anything for HF datasets.
+    Returns:
+        An ExecutorStep that represents the tokenized dataset.
+    """
+
+    # sniff out if it's a HuggingFace dataset
+    if isinstance(dataset, str) and "/" in dataset and not fsspec_utils.exists(dataset):
+        config = HfTokenizeConfig(
+            id=dataset,
+            cache_path=this_output_path(),
+            tokenizer=ensure_versioned(tokenizer),
+            format=format,
+        )
+    else:
+        config = TokenizeConfig(
+            train_paths=[dataset] if not is_validation else [],
+            validation_paths=[dataset] if is_validation else [],
+            cache_path=this_output_path(),
+            tokenizer=ensure_versioned(tokenizer),
+            format=format,
+        )
+
     if options is not None:
         config = dataclasses.replace(config, cache_options=options)
 
@@ -148,6 +179,7 @@ def default_train(
     tags: Sequence[str] = (),
     use_default_validation: bool = True,
     eval_harness_tasks: Sequence[EvalTaskConfig] = CORE_TASKS,
+    override_output_path: str | None = None,
 ) -> ExecutorStep:
     """
     Train a language model using the default configuration.
@@ -238,6 +270,7 @@ def default_train(
             replica_dcn_axis_size=-1,
             allow_partial_checkpoint=train_config.allow_partial_checkpoint,
             per_device_eval_parallelism=per_device_eval_parallelism,
+            max_eval_batches=train_config.max_eval_batches,
             allow_nondivisible_batch_size=True,
             quantization=QuantizationConfig(int8=train_config.int8) if train_config.int8 else None,
             initialize_from=None if train_config.reset_data_loader_on_init else checkpoint_path_to_load_from,
@@ -282,15 +315,12 @@ def default_train(
     )
 
     # Create the pod config
-    pod_config = PodConfig(
-        tpu_type=train_config.tpu_type,
-        node_count=train_config.node_count,
-    )
+    pod_config = train_config.resources
 
     # Create the full config
     config = TrainLmOnPodConfig(
-        config=inner_config,
-        pod_config=pod_config,
+        train_config=inner_config,
+        resources=pod_config,
         output_path=this_output_path(),
     )
 
@@ -306,6 +336,7 @@ def default_train(
         fn=run_levanter_train_lm,
         config=config,
         pip_dependency_groups=["tokenize_train"],
+        override_output_path=override_output_path,
     )
 
 
@@ -353,8 +384,7 @@ def default_sft(
 
     # now we just shell out to default_train
     normal_train_config = SimpleTrainConfig(
-        tpu_type=sft_config.tpu_type,
-        node_count=sft_config.node_count,
+        resources=sft_config.resources,
         train_batch_size=sft_config.train_batch_size,
         num_train_steps=sft_config.num_train_steps,
         learning_rate=sft_config.learning_rate,
@@ -389,7 +419,21 @@ def default_sft(
     )
 
 
-def default_anneal(name: str, anneal_config: AnnealConfig):
+def default_anneal(name: str, anneal_config: AnnealConfig) -> ExecutorStep:
+    """
+
+    Runs an annealing training run. This is a kind of continued pre-training intended
+    to replicate Llama 3-style data ablations (or XXX databricks microannealing)
+
+    Args:
+        name: The name of the training run. Will form the basis of the output path for the executor step.
+              `checkpoints/` will be prepended to the name.
+        anneal_config: Configuration for the annealing run.
+    Returns:
+
+        An ExecutorStep configured for annealing.
+
+    """
     imputed_checkpoint_steps = anneal_config.initialize_from_checkpoint_path.index("step-")
     imputed_checkpoint_step = int(
         anneal_config.initialize_from_checkpoint_path[imputed_checkpoint_steps + len("step-") :]
@@ -411,8 +455,7 @@ def default_anneal(name: str, anneal_config: AnnealConfig):
     learning_rate = num_train_steps * (anneal_config.learning_rate / num_anneal_steps)
 
     anneal_stage_train_config = SimpleTrainConfig(
-        tpu_type=anneal_config.tpu_type,
-        node_count=anneal_config.node_count,
+        resources=anneal_config.resources,
         train_batch_size=anneal_config.train_batch_size,
         num_train_steps=num_train_steps,
         learning_rate=learning_rate,
@@ -476,6 +519,8 @@ def _get_tokenizer_for_train(tokenized: InputName | ExecutorStep | LMMixtureData
         case LMMixtureDatasetConfig(tokenizer=tokenizer):
             pass
         case ExecutorStep(config=TokenizeConfig(tokenizer=tokenizer)):
+            pass
+        case ExecutorStep(config=HfTokenizeConfig(tokenizer=tokenizer)):
             pass
         case InputName(step=ExecutorStep(config=TokenizeConfig(tokenizer=tokenizer))):
             pass

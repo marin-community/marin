@@ -30,6 +30,7 @@ from marin.processing.classification.config.inference_config import InferenceCon
 from marin.processing.classification.consolidate import ConsolidateConfig, FilterConfig, consolidate
 from marin.processing.classification.inference import run_inference
 from marin.processing.tokenize.data_configs import TokenizerStep, lm_mixture_data_config
+from marin.resources import TpuPodConfig
 from operations.download.filesystem.transfer import TransferConfig, transfer_files
 
 
@@ -38,6 +39,7 @@ def default_label(
     targeted_documents: list[list[str] | str],
     experiment_name: str,
     resource_config: ResourceConfig,
+    annotator_model_name_or_path: str = "meta-llama/Llama-3.3-70B-Instruct",
     data_filter_prompt: str | None = None,
     medu_pipeline_config_kwargs: dict | None = None,
     text_generation_inference_config: dict | None = None,
@@ -82,6 +84,7 @@ def default_label(
             input_path=documents_to_be_labeled,
             output_path=this_output_path(),
             resource_config=resource_config,
+            model_name=annotator_model_name_or_path,
             **medu_pipeline_config_kwargs,
         )
 
@@ -112,6 +115,7 @@ def default_label(
         template_path=data_filter_prompt_path,
         tensor_parallel_size=resource_config.num_tpu,
         resource_config=resource_config,
+        model_name=annotator_model_name_or_path,
         **text_generation_inference_config_kwargs,
     )
 
@@ -302,7 +306,7 @@ def _get_anneal_config(candidate_tokenized: TokenizerStep | None, tpu_type: str,
             dataset_config=lm_mixture_data_config(
                 components={"dclm": dclm_components_llama3["dclm_baseline"]}, weights={"dclm": 1.0}
             ),
-            tpu_type=tpu_type,
+            resources=TpuPodConfig(tpu_type=tpu_type),
         )
     else:
         return AnnealConfig(
@@ -310,7 +314,7 @@ def _get_anneal_config(candidate_tokenized: TokenizerStep | None, tpu_type: str,
                 components={"dclm": dclm_components_llama3["dclm_baseline"], "candidate": candidate_tokenized},
                 weights={"dclm": 0.70, "candidate": 0.30},
             ),
-            tpu_type=tpu_type,
+            resources=TpuPodConfig(tpu_type=tpu_type),
         )
 
 
