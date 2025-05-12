@@ -1,11 +1,12 @@
-# How to Train a Language Model
+# Training a Language Model
 
 ## Prerequisites
 
-Before following the language model training guide, make sure to follow the general environment setup procedure described in the README:
+Before we start training, make sure you have gone through:
 
-- **Environment Setup**: [Getting Started with Marin](../tutorials/getting-started.md)
-- **GPU Enviroment Setup**: [Setting up a Local GPU Environment](../tutorials/local-gpu.md)
+- Basic [installation](installation.md)
+- Set up your [local GPU](local-gpu.md)
+- You need to make sure that your Ray GPU cluster is configured.
 
 This guide explains how to train a language model using Marin, with our examples reproducing the
 [DCLM](https://arxiv.org/pdf/2406.11794) 7B/1x and 1B/1x baselines.
@@ -66,13 +67,13 @@ NUM_TRAIN_STEPS = NUM_TRAIN_TOKENS // (BATCH_SIZE * SEQ_LEN)
 
 training_config = SimpleTrainConfig(
     resources=TpuPodConfig(tpu_type="v4-128"),  # Hardware configuration: 128 v4 TPU cores, can be swapped for GpuConfig
-    train_batch_size=BATCH_SIZE,  # Sequences processed per step
-    num_train_steps=NUM_TRAIN_STEPS,  # Total optimization steps
-    learning_rate=3e-3,     # Initial learning rate
-    weight_decay=0.033,     # L2 regularization
-    min_lr_ratio=0.1,       # Minimum learning rate ratio (for decay)
-    warmup=5000,            # Steps for learning rate warmup
-    z_loss_weight=1e-4,     # Optional stabilization technique
+    train_batch_size=BATCH_SIZE,                # Sequences processed per step
+    num_train_steps=NUM_TRAIN_STEPS,            # Total optimization steps
+    learning_rate=3e-3,                         # Initial learning rate
+    weight_decay=0.033,                         # L2 regularization
+    min_lr_ratio=0.1,                           # Minimum learning rate ratio (for decay)
+    warmup=5000,                                # Steps for learning rate warmup
+    z_loss_weight=1e-4,                         # Optional stabilization technique
 )
 ```
 
@@ -83,11 +84,11 @@ Connect your model configuration, training parameters, and dataset to create a t
 ```python
 # Create the training pipeline
 model = default_train(
-    name="your_model_name",  # Unique identifier for this training run
+    name="YOUR_MODEL_NAME",                # Unique identifier for this training run
     tokenized=dclm_mixture_config_llama3,  # Dataset configuration
-    model_config=model_config,  # Model architecture
-    train_config=training_config,  # Training hyperparameters
-    tags=["YOUR_TAGS"],  # Tags for experiment tracking
+    model_config=model_config,             # Model architecture
+    train_config=training_config,          # Training hyperparameters
+    tags=["YOUR_TAGS"],                    # Tags for experiment tracking
     eval_harness_tasks = [EvalTaskConfig("mmlu", 0, task_alias="mmlu_0shot"), EvalTaskConfig("mmlu", 5, task_alias="mmlu_5shot")] # Evaluation Tasks to run on the checkpoint
 )
 
@@ -113,7 +114,7 @@ The `default_train` function creates a training pipeline that:
 To train the model with experiment tracking:
 
 ```bash
-python marin/run/ray_run.py --env_vars WANDB_API_KEY YOUR_WANDB_API_KEY -- python experiments/exp123_your_model.py
+python marin/run/ray_run.py --env_vars WANDB_API_KEY YOUR_WANDB_API_KEY -- python experiments/YOUR_EXPERIMENT_SCRIPT.py
 ```
 
 Following Marin's guidelines, name your experiment script `experiments/exp{GITHUB_ISSUE_NUMBER}_{DESCRIPTOR}.py`, where `GITHUB_ISSUE_NUMBER` is the issue number for your experiment and `DESCRIPTOR` is a brief description.
@@ -122,7 +123,8 @@ Following Marin's guidelines, name your experiment script `experiments/exp{GITHU
 
 Monitor your training progress through:
 
-- **Experiment tracking tools**: If using Weights & Biases, you'll see real-time metrics and visualizations logged to the "Marin" project under your default W&B organization. The run will be named based on the name you provided.
+- **Experiment tracking tools**: If using WandB, you'll see real-time metrics and visualizations logged to the "Marin" project under your default W&B organization (if you have access).
+The run will be named based on the name you provided.
 
 ## Example Implementations
 
