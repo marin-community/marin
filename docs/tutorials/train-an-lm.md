@@ -84,11 +84,11 @@ Connect your model configuration, training parameters, and dataset to create a t
 ```python
 # Create the training pipeline
 model = default_train(
-    name="YOUR_MODEL_NAME",                # Unique identifier for this training run
-    tokenized=dclm_mixture_config_llama3,  # Dataset configuration
-    model_config=model_config,             # Model architecture
-    train_config=training_config,          # Training hyperparameters
-    tags=["YOUR_TAGS"],                    # Tags for experiment tracking
+    name="${YOUR_MODEL_NAME}",              # Unique identifier for this training run
+    tokenized=dclm_mixture_config_llama3,   # Dataset configuration
+    model_config=model_config,              # Model architecture
+    train_config=training_config,           # Training hyperparameters
+    tags=["${YOUR_TAG1}", "${YOUR_TAG2}"],  # Tags for experiment tracking
     eval_harness_tasks = [EvalTaskConfig("mmlu", 0, task_alias="mmlu_0shot"), EvalTaskConfig("mmlu", 5, task_alias="mmlu_5shot")] # Evaluation Tasks to run on the checkpoint
 )
 
@@ -114,7 +114,7 @@ The `default_train` function creates a training pipeline that:
 To train the model with experiment tracking:
 
 ```bash
-python marin/run/ray_run.py --env_vars WANDB_API_KEY YOUR_WANDB_API_KEY -- python experiments/YOUR_EXPERIMENT_SCRIPT.py
+python marin/run/ray_run.py --env_vars WANDB_API_KEY ${YOUR_WANDB_API_KEY} -- python experiments/${YOUR_EXPERIMENT_SCRIPT}.py
 ```
 
 Following Marin's guidelines, name your experiment script `experiments/exp{GITHUB_ISSUE_NUMBER}_{DESCRIPTOR}.py`, where `GITHUB_ISSUE_NUMBER` is the issue number for your experiment and `DESCRIPTOR` is a brief description.
