@@ -1,7 +1,7 @@
 # Executor framework
 
 Marin's executor framework manages the execution of experiments.
-This document is more about the mechanics, read [this](../explanation/experiments.md) to
+This document is more about the mechanics, read [this](../explanations/experiments.md) to
 learn more about the conventions.
 
 An **experiment** is a sequence (really, a DAG) of steps, where each **step** is
@@ -71,4 +71,4 @@ This script ensure that:
 - All the relevant libraries (specified above) are installed.
 - The working directory is set appropriately.
 - Any subpaths under submodules are appended to PYTHONPATH, which is useful
-  when [co-developing with another submodule](../how-to-guides/co-develop.md) (e.g., levanter).
+  when [co-developing with another submodule](../tutorials/co-develop.md) (e.g., levanter).

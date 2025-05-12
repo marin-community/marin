@@ -1,7 +1,7 @@
 # Evaluation Overview
 
 This document provides a overview on how to evaluate models using Marin.
-For a step-by-step guide on how to evaluate models, see the [evaluation how-to guide](../how-to-guides/evaluate-a-model.md). XXX TODO
+For a step-by-step guide on how to evaluate models, see the [evaluation tutorial](../tutorials/evaluate-a-model.md). XXX TODO
 
 We evaluate a few different ways, depending on the kind of task.
 
@@ -51,4 +51,4 @@ For an 8B model, you can run the model using a single TPU v6e-8 chip, but for la
 You can also specify the node type in the [`resource_configs.py`](https://github.com/marin-community/marin/blob/main/experiments/evals/resource_configs.py) file.
 
 
-TODO: flesh this out, add a how-to
+TODO: flesh this out, add a tutorial
