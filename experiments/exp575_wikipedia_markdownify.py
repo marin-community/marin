@@ -9,7 +9,7 @@ We prepare the text/markdown for use as a training dataset for a language model,
 * Our custom fork of Resiliparse which provides a simplified DOM tree with removed boilerplate which can be
 passed to Markdownify to producing Markdown text that has less noise.
 
-Reference Issue: https://github.com/stanford-crfm/marin/issues/575
+Reference Issue: https://github.com/marin-community/marin/issues/575
 """
 
 from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path, versioned

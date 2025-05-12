@@ -1,5 +1,5 @@
 """
-https://github.com/stanford-crfm/marin/issues/977
+https://github.com/marin-community/marin/issues/977
 
 Codename: sensible-starling
 
