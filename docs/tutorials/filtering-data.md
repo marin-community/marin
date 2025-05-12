@@ -1,13 +1,23 @@
 # Filtering Data
 
+Given a large pretraining dataset (e.g., FineWeb), we want to filter it down to a smaller dataset of higher-quality documents.
 This guide will walk you through how to apply a custom filter to a dataset, so that you can then
 train models on the filtered data.
 
+## Prerequisites
+
+- You must have a Ray cluster setup.
+- You must have internal access to the Marin cluster.
+
 ## An Example of an Attribute Filter
 
-Marin organizes data into collections of documents and attributes. One example of an attribute is a quality classifier score for a particular classifier. We can filter collections of document based on various (combinations of) attributes in order to obtain higher-quality documents.
+Following [Dolma](https://allenai.github.io/dolma/),
+Marin represents data as follows:
+1. We have a set of text documents, representing the raw data.
+2. We use classifiers to produce a parallel set of attributes (e.g., quality scores) for each document.
+3. We then consolidate, which takes the set of documents and attributes (possibly many), a quality threshold, and produces a filtered set of documents.
 
-For example, in [`experiments/exp615_ensemble.py`](https://github.com/marin-community/marin/blob/main/experiments/exp615_ensemble.py) we filter Fineweb documents based on ensembling the scores from two different Fasttext quality classifier models by taking their maximum.
+For example, in [`experiments/exp615_ensemble.py`](https://github.com/marin-community/marin/blob/main/experiments/exp615_ensemble.py) we filter FineWeb documents based on ensembling the scores from two different Fasttext quality classifier models by taking their maximum.
 We first score the Fineweb documents with the two Fasttext classifiers, recording each classifier's score as an attribute:
 ```python
 for classifier_id, quality_classifier_model_path in enumerate(config.quality_classifier_model_paths):
