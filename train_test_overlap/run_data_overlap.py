@@ -30,11 +30,6 @@ from train_test_overlap.utils import asdict_without_nones
 
 logger = logging.getLogger(__name__)
 
-# Prefer RAM-backed scratch if available, else fallback to /tmp
-SCRATCH_DIR = os.environ.get("MARIN_TMPDIR", "/dev/shm")
-if not os.path.isdir(SCRATCH_DIR):
-    SCRATCH_DIR = "/tmp"
-
 
 @dataclass
 class DataOverlapPipelineConfig:
@@ -108,7 +103,7 @@ def create_compressed_file_iterator(
             continue
 
         file_start = time()
-        # print(f"Starting file: {file_path}", flush=True)
+        print(f"Starting file: {file_path}", flush=True)
 
         try:
             with managed_file_open(file_path) as f:
@@ -139,9 +134,9 @@ def create_compressed_file_iterator(
             elapsed = time() - start_time
             rate = processed_files / (elapsed / 60) if elapsed > 0 else 0
             file_time = time() - file_start
-            # print(
-            #     f"Completed file in {file_time:.1f}s. Total: {processed_files} files ({rate:.1f} files/min)", flush=True
-            # )
+            print(
+                f"Completed file in {file_time:.1f}s. Total: {processed_files} files ({rate:.1f} files/min)", flush=True
+            )
 
             gc.collect()  # Force garbage collection after each file
 
@@ -151,14 +146,21 @@ def create_compressed_file_iterator(
             continue
 
     total_time = time() - start_time
-    # print(f"Completed processing {processed_files} files in {total_time:.1f}s. Failed: {failed_files}", flush=True)
+    print(f"Completed processing {processed_files} files in {total_time:.1f}s. Failed: {failed_files}", flush=True)
 
 
-# 4 GiB
-@ray.remote(memory=1024 * 1024 * 1024 * 4, num_cpus=1)
+# 16 GiB
+@ray.remote(memory=1024 * 1024 * 1024 * 32, num_cpus=16)
 def run_data_overlap(config: DataOverlapPipelineConfig) -> str:
-    # Create a temporary directory under SCRATCH_DIR (e.g. /dev/shm) that will be cleaned up automatically
-    with tempfile.TemporaryDirectory(dir=SCRATCH_DIR) as tmpdir:
+    # Idempotence: skip if already completed
+    print(f"starting run_data_overlap for {config.input_data}", flush=True)
+    success_file = config.output_path.rstrip("/") + ".SUCCESS"
+    if fsspec_exists(success_file):
+        logger.info(f"Skipping run_data_overlap for {config.input_data}, success exists at {success_file}")
+        return f"Skipped {config.input_data}"
+
+    # Create a temporary directory under /tmp that will be cleaned up automatically
+    with tempfile.TemporaryDirectory(dir="/dev/shm") as tmpdir:
         stats_prefix = os.path.join(tmpdir, "stats")
 
         # Copy and merge scenario JSONL files to local tmpdir
@@ -260,20 +262,13 @@ def run_data_overlap(config: DataOverlapPipelineConfig) -> str:
             aggregate_metrics(path=met_dir, out_path=agg_dir)
             agg_dirs.append(agg_dir)
 
-        # DEBUG: inspect what was generated
-        # print(f"tmpdir contents: {os.listdir(tmpdir)}", flush=True)
-        # print(f"  metric_dirs = {metric_dirs}", flush=True)
-        # print(f"   agg_dirs   = {agg_dirs}", flush=True)
-
         # 6) Copy each aggregated metrics file into its own folder under the output path
         for agg_file in agg_dirs:
             # agg_file is a JSONL file, e.g. /tmp/.../aggregate_metrics_5
             agg_name = os.path.basename(agg_file)
             remote_dir = os.path.join(config.output_path, agg_name)
-            # print(f"Copying aggregated file {agg_file} into directory {remote_dir}/", flush=True)
             # Destination is <remote_dir>/<filename>
             dest_file = os.path.join(remote_dir, agg_name)
-            # print(f"Copying file {agg_file} to {dest_file}", flush=True)
             fsspec_mkdirs(os.path.dirname(dest_file))
             with fsspec.open(agg_file, "rb") as src, fsspec.open(dest_file, "wb") as dst:
                 dst.write(src.read())
@@ -282,7 +277,6 @@ def run_data_overlap(config: DataOverlapPipelineConfig) -> str:
         raw_ngrams_dir = os.path.join(config.output_path, "raw_ngrams")
         fsspec_mkdirs(raw_ngrams_dir)
         raw_ngrams_dest = os.path.join(raw_ngrams_dir, "raw_ngrams.jsonl")
-        # print(f"Copying raw ngrams file {ngrams_out} to {raw_ngrams_dest}", flush=True)
         with fsspec.open(ngrams_out, "rb") as src, fsspec.open(raw_ngrams_dest, "wb") as dst:
             dst.write(src.read())
 
@@ -290,12 +284,12 @@ def run_data_overlap(config: DataOverlapPipelineConfig) -> str:
         stats_dir = os.path.join(config.output_path, "stats")
         fsspec_mkdirs(stats_dir)
         stats_dest = os.path.join(stats_dir, "overlap_stats.jsonl")
-        # print(f"Copying stats file {stats_out} to {stats_dest}", flush=True)
         with fsspec.open(stats_out, "rb") as src, fsspec.open(stats_dest, "wb") as dst:
             dst.write(src.read())
 
         # 9) Write a mapping file to track instance IDs to their metrics for easier analysis
-        instance_mapping_dir = os.path.join(config.output_path, "instance_mapping")
+        print(f"Writing instance mapping to {config.output_path}", flush=True)
+        instance_mapping_dir = os.path.join(str(config.output_path), "instance_mapping")
         fsspec_mkdirs(instance_mapping_dir)
         instance_mapping_dest = os.path.join(instance_mapping_dir, "instance_mapping.json")
 
@@ -323,14 +317,18 @@ def run_data_overlap(config: DataOverlapPipelineConfig) -> str:
                     instance_id_mapping[instance_id]["reference_overlaps"] = []
                 instance_id_mapping[instance_id]["reference_overlaps"].append(key_name)
 
-        # print(f"Writing instance mapping to {instance_mapping_dest}", flush=True)
         with fsspec.open(instance_mapping_dest, "w") as f:
             json.dump(instance_id_mapping, f, indent=2)
 
     # Temporary directory is automatically cleaned up here
+    # Write success marker
+    fsspec_mkdirs(os.path.dirname(success_file))
+    with fsspec.open(success_file, "w") as _f:
+        _f.write("")
+
     return "Train test overlap pipeline completed!"
 
 
 @draccus.wrap()
 def main(config: DataOverlapPipelineConfig):
-    ray.get(run_data_overlap.options(num_cpus=config.processes).remote(config))
+    ray.get(run_data_overlap.options().remote(config))
