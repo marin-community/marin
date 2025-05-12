@@ -111,4 +111,4 @@ You can define your own custom attribute logic by adding a function to this regi
 
 ## Next Steps
 
-After filtering your dataset, the next step is to train a model on the filtered data. See our guide on [How To train a Langue Model](./train-an-lm.md).
+After filtering your dataset, the next step is to train a model on the filtered data. See our guide on [how to train a language model](./train-an-lm.md).
