@@ -80,7 +80,7 @@ def run_core_base_evals(
 
     name, model_step_path = extract_model_name_and_path(step)
     generation = evaluate_lm_evaluation_harness(
-        name + "_mmlu_pro",
+        name,
         model_step_path,
         generation_tasks,
         max_eval_instances=max_eval_instances,
