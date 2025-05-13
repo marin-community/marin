@@ -92,6 +92,7 @@ class DatashopRunner:
             self.config.corpus_content_paths,
             self.config.experiment_name,
             self.config.labeler_resource_config,
+            self.config.annotator_model_name,
             self.config.data_filter_prompt,
             self.config.medu_pipeline_config_kwargs,
             self.config.text_generation_inference_config_kwargs,

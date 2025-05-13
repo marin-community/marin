@@ -6,11 +6,10 @@ from experiments.evals.resource_configs import SINGLE_TPU_V6E_8
 from experiments.evals.task_configs import EvalTaskConfig
 from marin.evaluation.evaluation_config import EvaluationConfig
 from marin.evaluation.run import evaluate
-from tests.conftest import model_config
 
 
 @pytest.mark.skipif(os.getenv("TPU_CI") != "true", reason="Skip this test if not running with a TPU in CI.")
-def test_lm_eval_harness(current_date_time, ray_tpu_cluster):
+def test_lm_eval_harness(current_date_time, ray_tpu_cluster, model_config):
     gsm8k_config = EvalTaskConfig(name="gsm8k_cot", num_fewshot=8)
     config = EvaluationConfig(
         evaluator="lm_evaluation_harness",
