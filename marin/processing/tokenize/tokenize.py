@@ -15,6 +15,7 @@ Usage:
     The data will be tokenized to $cache_path
 """
 
+import abc
 import dataclasses
 import logging
 import os
@@ -28,6 +29,7 @@ import ray
 import transformers
 from levanter.data.sharded_datasource import ShardedDataSource, UrlDataSource
 from levanter.data.text import (
+    HfDatasetSourceConfig,
     LmDatasetFormatBase,
     LMDatasetSourceConfig,
     TextLmDatasetFormat,
@@ -43,8 +45,26 @@ from marin.utils import fsspec_glob, fsspec_isdir, fsspec_size
 logger = logging.getLogger(__name__)
 
 
+class TokenizeConfigBase(abc.ABC):
+    """Base class for tokenize configs."""
+
+    @abc.abstractmethod
+    def as_lm_dataset_source_config(
+        self, actual_output_path: str | InputName | None, *, include_raw_paths=True
+    ) -> LMDatasetSourceConfig:
+        """
+        Create a Levanter dataset source config from this config and the actual output path.
+        """
+        pass
+
+    cache_path: str
+    tokenizer: str  # tokenizer name. Should be the same as you intend to use in the tokenizer spec for the training run
+    cache_options: CacheOptions | None = None
+    format: LmDatasetFormatBase = TextLmDatasetFormat()
+
+
 @dataclasses.dataclass(frozen=True)
-class TokenizeConfig:
+class TokenizeConfig(TokenizeConfigBase):
     train_paths: list[str]  # path to training data
     validation_paths: list[str]  # path to validation data
     cache_path: str  # base path to save the tokenized files
@@ -93,6 +113,32 @@ class TokenizeConfig:
             assert "/" not in self.validation_paths, "don't use the entire fs for validation paths!"
 
 
+@dataclasses.dataclass(frozen=True)
+class HfTokenizeConfig(TokenizeConfigBase):
+    """
+    Tokenize a HuggingFace dataset directly without having to download it first.
+    """
+
+    id: str  # HF dataset id
+    cache_path: str  # base path to save the tokenized files
+    tokenizer: str  # tokenizer name. Should be the same as you intend to use in the tokenizer spec for the training run
+    name: str | None = None  # HF dataset name
+    tags: list[str] = dataclasses.field(default_factory=list)  # tags to be added to config
+    cache_options: CacheOptions | None = None
+    format: LmDatasetFormatBase = TextLmDatasetFormat()  # noqa: RUF009
+
+    def as_lm_dataset_source_config(
+        self, actual_output_path: str | InputName | None, *, include_raw_paths=True
+    ) -> LMDatasetSourceConfig:
+        return HfDatasetSourceConfig(
+            id=self.id,
+            name=self.name,
+            tags=self.tags,
+            cache_dir=actual_output_path,
+            format=self.format,
+        )
+
+
 def _expand_directories(config: UrlDatasetSourceConfig) -> UrlDatasetSourceConfig:
     """
     Expand directories in the config to globs.
@@ -104,13 +150,15 @@ def _expand_directories(config: UrlDatasetSourceConfig) -> UrlDatasetSourceConfi
     return dataclasses.replace(config, train_urls=train_paths, validation_urls=validation_paths)
 
 
-def tokenize(config: TokenizeConfig):
+# most of the work is done in other ray remote functions, so we set 0.1
+@ray.remote(num_cpus=0.1)
+def tokenize(config: TokenizeConfigBase):
     source_config = config.as_lm_dataset_source_config(config.cache_path)
 
-    # TODO: Levanter doesn't automatically expand directories to globs, but by convention we do in Marin
-    # we should backport this to Levanter
-
-    source_config = _expand_directories(source_config)
+    if isinstance(config, TokenizeConfig):
+        # TODO: Levanter doesn't automatically expand directories to globs, but by convention we do in Marin
+        # we should backport this to Levanter
+        source_config = _expand_directories(source_config)
 
     train_source = source_config.get_shard_source("train")
     validation_source = source_config.get_shard_source("validation")
@@ -123,8 +171,10 @@ def tokenize(config: TokenizeConfig):
 
     if train_source is not None:
         options = config.cache_options
-        if options is None:
+        if options is None and isinstance(config, TokenizeConfig):
             options = _heuristic_cache_options(config.train_paths)
+        else:
+            options = CacheOptions()
 
         train_ledger = (
             ray.remote(_levanter_build_cache)
@@ -145,8 +195,10 @@ def tokenize(config: TokenizeConfig):
 
     if validation_source is not None:
         options = config.cache_options
-        if options is None:
+        if options is None and isinstance(config, TokenizeConfig):
             options = _heuristic_cache_options(config.validation_paths)
+        else:
+            options = CacheOptions()
 
         validation_ledger = (
             ray.remote(_levanter_build_cache)
