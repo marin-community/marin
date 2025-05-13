@@ -74,27 +74,34 @@ able to share them. ("Temporary" checkpoints were saved much more frequently.)
 
 ### Hardware
 
-The TPU hardware varied
+The TPU hardware varied between two different TPU clusters, generously provided by Google's [TPU Research Cloud]( https://sites.research.google/trc/about/):
+
+- 2x v5e-256, configured using [multislice](https://cloud.google.com/tpu/docs/multislice-introduction)
+- 1x v4-2048
+
+The first phase was run on the 2x v5e-256, while subsequent phases were run on the v4-2048.
 
 # Training Phases
 
-Retrospectively, we can partition the 8b run into several different phases. We have given them animal names as monikers.
-Here is a short summary:
+Retrospectively, we can partition the 8b run into several different phases. We have given them animal names as monikers.  Here is a short summary:
 
-* *DCLM WSD-S Phase* (aka Kestrel): In the first phase, we used the "DCLM mix" and [WSD-S](https://arxiv.org/abs/2410.05192)  for about 2.8T tokens. We used 2x TPU v5e-256 coordinated with multislice for this.
-* *DCLM EMA Phase* (aka Ocelot): We were given access to a v4-2048 slice and moved to that. (So fast!) To better utilize the hardware, we increased our batch size 50%. We also switched from WSD-S to WSD, using the exponential moving averaging (EMA) of weights for monitoring evaluation performance. (XXX cite whoever) We kept the learning rate high until 3.7T tokens.
-* *First Cooldown* (aka Jellyfish):  It was time to cooldown as we were starting to run low on DCLM. Following recent work on midtraining (e.g. [Olmo 2](https://arxiv.org/abs/2501.00656)), we decided to fold in higher quality data. 
-* *Reheated* (aka Phoenix): We had more time for training, so we rapidly rewarmed the model and transitioned our mixture to [Nemotron-CC](https://arxiv.org/abs/2412.02595) (plus [Starcoder](https://huggingface.co/datasets/bigcode/starcoderdata)).
-* *Second Cooldown* (aka Starling): Now we were running low on time, so we started another cooldown. We followed a similar process to the first cooldown, but added a few new datasets that we had created and also some that had dropped since our previous attempt.
+- *DCLM WSD-S Phase* (aka Kestrel): In the first phase, we used the "DCLM mix" and [WSD-S](https://arxiv.org/abs/2410.05192)  for about 2.8T tokens. We used 2x TPU v5e-256 coordinated with multislice for this.
+- *DCLM WSD Phase* (aka Ocelot): We were given access to a v4-2048 slice and moved to that. To better utilize the hardware, we increased our batch size 50%. We also switched from WSD-S to WSD. We kept the learning rate high until 3.7T tokens.
+- *First Cooldown* (aka Jellyfish):  It was time to cooldown as we were starting to run low on DCLM. Following recent work on midtraining (e.g. [Olmo 2](https://arxiv.org/abs/2501.00656)), we decided to fold in higher quality data during cooldown.
+- *Reheated* (aka Phoenix): We had more time for training, so we rapidly rewarmed the model and transitioned our mixture to [Nemotron-CC](https://arxiv.org/abs/2412.02595) (plus [Starcoder](https://huggingface.co/datasets/bigcode/starcoderdata)).
+- *Second Cooldown* (aka Starling): Now we were running low on time, so we started another cooldown. We followed a similar process to the first cooldown, but added a few new datasets that we had created and also some that had dropped since our previous attempt.
 
-We emphasize that these phases were not planned in advance.
+We emphasize that these phases were not planned in advance. Decisions were made reactively based on changing time lines and data availability.
 
 Moreover, while there is a single straight-line set of phases that produced the final Marin 8B artifact,
 there were a number of short branches that did not make it into the final run. Many of these were by design: there were other trial
 [LLama 3 style](XXX) data ablations that helped decide our cooldown mix, as well as attempts at "deeper cooldowns."
 We detail these [in a separate report](XXX), though provide a summary later in this one.
 We also ran some experiments investigating issues with "SFT-ability,"
-documented [here](XXX).
+documented in these issues: 
+
+- [#898 Raccoon](https://github.com/marin-community/marin/issues/898) 
+- [#916 Spoonbill](https://github.com/marin-community/marin/issues/916)
 
 ## Phase 1: DCLM WSD-S Phase
 
@@ -109,46 +116,51 @@ We started with a reserved 2x TPU v5e-256 slice, which was the largest TPU slice
 
 ### Data Mix
 
-At the beginning, we decided to use the DCLM 7b mix (including XXX link DCLM baseline, starcoder and proofpile) in
+At the beginning, we decided to use the DCLM 7B mix in
 ratios roughly proportional to token count. (DCLM 7B was, at the time, the best open source model.)
 
-Specifically this meant:
-* DCLM Baseline: 92.6%
-* Starcoder: 6.1%
-* Proofpile: 1.3%
+Specifically, this meant:
 
-We planned on adding new datasets as we (and others!) developed them: this is the origin of the name Tootsie.
-For evaluation, we initially tracked a large subset of Paloma (with a particular focus on the `c4_en` subset) during training.
+| Dataset                                                                          | Percentage |
+|----------------------------------------------------------------------------------|------------|
+| [DCLM Baseline](https://huggingface.co/datasets/mlfoundations/dclm-baseline-1.0) | 92.6%      |
+| [Starcoder](https://huggingface.co/datasets/bigcode/starcoderdata)               | 6.1%       |
+| [Proofpile](https://huggingface.co/datasets/proofpile)                           | 1.3%       |
+
+We planned on adding new datasets as we (and others!) developed them.
+For evaluation, we initially tracked a large subset of Paloma (with a particular focus on the `c4_en` subset)
+during training.
 
 ### WSD-S
 
 Based on the success of [our work understanding cyclic warmup-stable-decay schedules (WSD-S)](https://arxiv.org/abs/2410.05192), we decided to use a
 WSD-S learning rate schedule. WSD-S is essentially cyclic warmup-(stable-decay)`*`, where you do a warmup, then a long
-plateau at peak learning rate, and then a decay phase, repeating the stable and decay phase. The decay phases allow you to measure how the model is performing.
+plateau at peak learning rate, and then a decay phase, repeating the stable and decay phase. The decay phases allow you
+to measure how the model is performing.
 
 WSD-S has a number of appealing properties:
 
-* You can run at a very high learning rate for as long as you want, without needing to pre-register cooldowns.
-* We could periodically do a rapid cooldown to get a sense of model performance without (completely) "wasting" FLOPs.
-* WSD-S was shown to converge just as well as Cosine at any given point, meaning we could potentially use the checkpoints as fodder for scaling law analysis.
+- You can run at a very high learning rate for as long as you want, without needing to pre-register cooldowns.
+- We could periodically do a rapid cooldown to get a sense of model performance without (completely) "wasting" FLOPs.
+- WSD-S was shown to converge just as well as the more standard cosine schedule at any given point, meaning we could potentially use the checkpoints as fodder for scaling law analysis.
 
-We ended up moving away from WSD-S midway through the run, for reasons to be detailed later.
 For the first 200K steps, we did a decay cycle every 10k steps for 1k steps.
 However, I (@dlwh) got worried that we weren't seeing significant improvement in evaluation losses.
 We then moved to a decay cycle every 20k steps for 2k steps, which led to a significant improvement in some eval losses,
 but not all. (See below.)
 
+We ended up moving away from WSD-S after this phase, for reasons to be detailed later.
+
 ### Other hyperparameters
 
 We used a sequence length of 4096 and a batch size of 1024 * 4096 = 4Mi tokens.
 
-The DCLM paper also showed that you could run fairly "hot", and we followed their example.
-At 1e-3, our LR was roughly 3x higher than Olmo 2 7b's 3e-4, and, with WSD-S, we were running at peak LR for 90% of steps.
+The [DCLM paper](https://arxiv.org/abs/2406.11794) also showed that you could run fairly "hot", and we followed their example.
+At 1e-3, our LR was roughly 3x higher than [Olmo 2 7B](https://arxiv.org/abs/2501.00656)'s 3e-4, and, with WSD-S, we were running at peak LR for 90% of steps.
 We used a weight decay of 0.05. These are roughly consistent with Table 12 of the [DCLM paper](https://arxiv.org/abs/2406.11794).
 (They recommend 2e-3, but we encountered instability at that rate.)
 
-We initially opted to not use Z-loss because we didn't have problems with LR=1e-3. In retrospect, we should have used it
-and have since made it the default for future Marin runs.
+We initially opted to not use Z-loss because we didn't have problems with LR=1e-3. In retrospect, we should have used it and have since made it the default for future Marin runs.
 
 ### Specification
 
@@ -161,6 +173,7 @@ The specification for the first phase is available on [Github here](https://gith
 Training was fairly stable with very few spikes.
 
 #### WSD Cycle Change
+
 At step 200k, we had a hypothesis that longer cooldowns would show more progress in terms of eval losses.
 We had been doing a decay every 10k steps for 1k steps, and we switched to a decay every 20k steps for 2k steps.
 That is, we still spent 10% of our steps in a decay phase, but each decay phase was twice as long, giving the model more
@@ -168,21 +181,20 @@ time to consolidate its progress.
 
 Visually, the schedule now looked like this:
 
-![embed](../images/tootsie-8b-retro-wsd-interval.png)
+![graph depicting the new spacing of decay phases](../images/tootsie-8b-retro-wsd-interval.png)
 
 As expected, this led to a drop in eval losses that most looked like our training data. In the below, the orange line is
 eval loss (Paloma's c4en), while the blue line is training loss.
 There is a noticeable drop in both the eval loss and the training loss during the decay phase.
 
-![embed](../images/tootsie-8b-wsd-s-loss-transition.png)
+![graph depicting the drop in eval loss and training loss with the longer, less frequent decay phases](../images/tootsie-8b-wsd-s-loss-transition.png)
 
-Interestingly, not all eval losses dropped.
-In fact, for some domains, the eval loss increased.
+Interestingly, not all eval losses dropped.  In fact, for some domains, the eval loss increased.
 We saw decreases in `mc4`, `c4en`, `m2d2 wikipedia`, `m2d2 s2orc`, and `refined web`, but marked increases in `100_subreddits`, `twitterAAE_HELM_fixed`, `manosphere`, `4chan`, among a fwe others.
 Interestingly, after this initial increase, almost all domains started to decrease again.
 Subsequent analysis revealed that this was due to structural differences in preprocessing between the domains: some Paloma domains had texts that obligatorily ended with a space character (which we did not strip), which was not how our training data was formatted. The deeper cooldown allowed the model to dislike these final spaces more. We did a more thorough analysis [here](https://github.com/marin-community/marin/issues/826#issuecomment-2696496271).
 
-![embed](../images/tootsie-8b-wsd-s-losses-post-transition.png)
+![graph depicting many eval losses after the transition to longer decay phases](../images/tootsie-8b-wsd-s-losses-post-transition.png)
 
 
 ## Phase 2: DCLM EMA Phase
@@ -250,9 +262,9 @@ Specifically, we included:
 
 The main deviations from the Dolmino mixture were:
 
-* We included datasets that [Olmo 2](https://arxiv.org/abs/2501.00656) used in its Phase 1 (e.g. wikipedia) that we did not.
-* We did not include [FLAN](https://arxiv.org/abs/2109.01652). One of us had had less than stellar experiences with it. XXX more details
-* We added [FineMath 3+](https://huggingface.co/datasets/HuggingFaceTB/finemath).
+- We included datasets that [Olmo 2](https://arxiv.org/abs/2501.00656) used in its Phase 1 (e.g. wikipedia) that we did not.
+- We did not include [FLAN](https://arxiv.org/abs/2109.01652). One of us had had less than stellar experiences with it. XXX more details
+- We added [FineMath 3+](https://huggingface.co/datasets/HuggingFaceTB/finemath).
 
 XXX link to ablations
 
@@ -328,16 +340,16 @@ that FLAN might in fact be useful.
 
 Our takeaways from these runs were:
 
-* XXX
-* Z-loss is important to avoid loss increases at low LRs.
+- XXX
+- Z-loss is important to avoid loss increases at low LRs.
 
 ## Phase 5: Second Cooldown: Starling
 
 At around 11.1e12 tokens, we decided to start another cooldown. Building on lessons from our previous cooldowns, we made the following changes:
 
-* We deepened the cooldown to 1.7e-5, rather than 1.7e-4.
-* We added a small z-loss penalty of 1e-4.
-* We increased the batch size to 16 Mi tokens rather than 12Mi.
+- We deepened the cooldown to 1.7e-5, rather than 1.7e-4.
+- We added a small z-loss penalty of 1e-4.
+- We increased the batch size to 16 Mi tokens rather than 12Mi.
 
 ### Data
 
@@ -393,20 +405,23 @@ We also increased our batch size to 16Mi tokens. This change was to further redu
 
 ### Bonus: Starling Dessert
 
-We also ran a dessert run from 11.1e12 to 12.7e12 tokens. This was a simple coast, with the learning rate fixed at 1.7e-5 and otherwise using the same hyperparameters as Starling.
+Because we were still seeing steady log-linear loss decreases (in c4en and elsewhere) even at this very low LR, we decided to 
+coast a little longer. We ran a dessert run from 12.4e12 to 12.7e12 tokens, with the learning rate fixed at 1.7e-5
+and otherwise using the same hyperparameters as Starling.
 
-
-### Notes:
+### Notes
 
 #### C4 EN Perplexity
 
 XXX embed
 
-Interestingly, c4en perplexity decreased a lot during the cooldown, when in the previous cooldown it had increased. Again, we attribute this to structural differences in the preprocessing of Dolmino HQ and Nemotron CC.
+Interestingly, c4en perplexity decreased a lot during the cooldown, when in the previous cooldown it had increased.
+Again, we attribute this to structural differences in the preprocessing of Dolmino's DCLM HQ and Nemotron CC.
 
-#### Dessert Loss
+Separately, the slope in loss decrease during the cooldown slowed down dramatically.
+This is consistent with the theory around [WSD-S](https://arxiv.org/abs/2410.05192), which decomposes the loss into a "river" and "hill" component, where the hill is the loss due to the learning rate.  As the learning rate is decayed, the hill component goes away, leaving only the river and therefore a slower rate of loss decrease.
 
-The theory around WSD-S suggests that a large component of the decrease in loss during the cooldown is due entirely to the fact that you're decaying the learning rate: it's not that the learning rate is XXX
+![graph depicting the slowdown in loss decrease during the cooldown](../images/tootsie-8b-starling-loss-slowdown.png)
 
 
 ### Results
@@ -421,10 +436,10 @@ BBH 0.5702657041929043 -> 0.003532483489479343
 
 # Main Takeaways
 
-* **Tootsie means never having to say you're sorry.** We made several dramatic changes to the data mix, optimizer, and other hyperparameters during the run. We cooled down, rewarmed up, changed the mixture, etc. without any major issues.
-* **Z-loss isn't just for avoiding explosions.** While we didn't need z-loss to stabilize the training, we found it actually pretty necessary during very deep cooldowns.
-* **Formatting diversity is useful**:  While not necessarily showing up in non-loss evals, the high sensitivity of c4en perplexity to the data mix suggests that formatting diversity is useful. We will pursue this further in future runs.
-* **Tootsie means having to say you're sorry kind of a lot.** We made many, many mistakes during the run. Some of the changes were actually unintentional, or were fixes to initial mistakes (e.g. the rotary embedding hyperparameters). Nevertheless, the end result was a model that performed well on a wide variety of tasks.
+- **Tootsie means never having to say you're sorry.** We made several dramatic changes to the data mix, optimizer, and other hyperparameters during the run. We cooled down, rewarmed up, changed the mixture, etc. without any major issues.
+- **Z-loss isn't just for avoiding explosions.** While we didn't need z-loss to stabilize the training, we found it actually pretty necessary during very deep cooldowns.
+- **Formatting diversity is useful**:  While not necessarily showing up in non-loss evals, the high sensitivity of c4en perplexity to the data mix suggests that formatting diversity is useful. We will pursue this further in future runs.
+- **Tootsie means having to say you're sorry kind of a lot.** We made many, many mistakes during the run. Some of the changes were actually unintentional, or were fixes to initial mistakes (e.g. the rotary embedding hyperparameters). Nevertheless, the end result was a model that performed well on a wide variety of tasks.
 
 XXX
 
@@ -432,6 +447,6 @@ XXX
 
 Future work will focus on:
 
-* **Bigger models.** We have a 32B model that is performing quite well at 1T tokens.
-* **SFT and instruction tuning.** We're in the middle of SFTing Marin 8B. (TL;DR is that it works pretty well at AlpacaEval, but there is an unacceptable degradation on tasks like MMLU.)
-* **RL**: Obvious.
+- **Bigger models.** We have a 32B model that is performing quite well at 1T tokens.
+- **SFT and instruction tuning.** We're in the middle of SFTing Marin 8B. (TL;DR is that it works pretty well at AlpacaEval, but there is an unacceptable degradation on tasks like MMLU.)
+- **RL**: Obvious.
