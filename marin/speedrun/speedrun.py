@@ -13,10 +13,10 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 import fsspec
-import wandb
 from levanter.data.text import LMMixtureDatasetConfig
 from levanter.models.lm_model import LmConfig
 
+import wandb
 from experiments.defaults import default_train
 from experiments.exp72_baselines import fineweb_edu_tokenized
 from experiments.llama import compute_num_parameters, llama3_tokenizer_vocab_size
@@ -43,7 +43,6 @@ class SpeedrunConfig:
     model_config: LmConfig
     train_config: SimpleTrainConfig | TrainLmOnPodConfig
     hardware_config: HardwareConfig
-    mfu_estimate: float = 0.5
 
     # by default, this is fineweb_edu_tokenized
     tokenized_dataset: InputName | LMMixtureDatasetConfig = fineweb_edu_tokenized
