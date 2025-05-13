@@ -59,7 +59,7 @@ class TwoStageConfig:
     ### Optimizer config
     lr_schedule: str = "cosine"
     lr: float = 3e-3
-    lr_cooldown_duration: float = 1.0
+    lr_cooldown_duration: Optional[float] = None
     weight_decay: float = 0.1
     min_lr_ratio: float = 0.0
 
@@ -82,7 +82,7 @@ class TwoStageConfig:
         if self.steps_per_eval is None:
             self.steps_per_eval = self.num_train_steps // 20
         
-        self.steps_per_eval = min(self.steps_per_eval, self.num_train_steps)
+        self.steps_per_eval = min(self.steps_per_eval, self.num_train_steps // 2)
 
         if self.eval_harness_steps is None and self.eval_harness_tasks is not None:
             self.eval_harness_steps = self.num_train_steps // 4
@@ -148,11 +148,13 @@ class TwoStageConfig:
 
         assert np.isclose(self.rare_weight_stage1 * self.stage1_duration + self.rare_weight_stage2 * self.stage2_duration, self.rare_fraction_epoched), f"Rare weight stage 1 * stage 1 duration + rare weight stage 2 * stage 2 duration = {self.rare_weight_stage1 * self.stage1_duration + self.rare_weight_stage2 * self.stage2_duration} != {self.rare_fraction_epoched}"
 
-        assert 0.0 <= self.rare_weight_stage1 <= 1.0, "Rare weight stage 1 must be between 0.0 and 1.0"
-        assert 0.0 <= self.rare_weight_stage2 <= 1.0, "Rare weight stage 2 must be between 0.0 and 1.0"
+        assert 0.0 <= self.rare_weight_stage1 <= 1.0, f"Rare weight stage 1 must be between 0.0 and 1.0, but is {self.rare_weight_stage1}"
+        assert 0.0 <= self.rare_weight_stage2 <= 1.0, f"Rare weight stage 2 must be between 0.0 and 1.0, but is {self.rare_weight_stage2}"
         
     def build_name(self) -> str:
-        return f"{self.model_name}-{self.format_num_tokens()}-{self.rare_data_name}x{self.format_rare_fraction()}x{self.rare_data_epochs}-{self.common_data_name}-rr{self.replay_ratio:.2f}-rs{self.rare_stage2_allocation:.2f}-{self.format_lr_schedule()}{self.nametag}"
+        name = f"{self.model_name}-{self.format_num_tokens()}-{self.rare_data_name}x{self.format_rare_fraction()}x{self.rare_data_epochs}-{self.common_data_name}-rr{self.replay_ratio:.2f}-rs{self.rare_stage2_allocation:.2f}-{self.format_lr_schedule()}{self.nametag}"
+        assert len(name) <= 64, f"Name is too long with length {len(name)}: {name}"
+        return name
 
     def build_data_config(self) -> LMMixtureDatasetConfig:
         components = {
@@ -172,26 +174,26 @@ class TwoStageConfig:
             weights_list = [stage1, stage2]
 
         max_train_batches = {self.rare_data_name: self.rare_batches}
-        num_validation_batches = {self.rare_data_name: 10, self.common_data_name: 10}
+        num_validation_sequences = {self.rare_data_name: 10240, self.common_data_name: 10240}
 
         no_rare_data = all(stage[1][self.rare_data_name] == 0.0 for stage in weights_list)
         if no_rare_data:
             for stage in weights_list:
                 stage[1].pop(self.rare_data_name)
             max_train_batches.pop(self.rare_data_name)
-            num_validation_batches.pop(self.rare_data_name)
+            num_validation_sequences.pop(self.rare_data_name)
 
         no_common_data = all(stage[1][self.common_data_name] == 0.0 for stage in weights_list)
         if no_common_data:
             for stage in weights_list:
                 stage[1].pop(self.common_data_name)
-            num_validation_batches.pop(self.common_data_name)
+            num_validation_sequences.pop(self.common_data_name)
 
         data_config = lm_varying_mixture_data_config(
             components=components,
             weights_list=weights_list,
             max_train_batches=max_train_batches,
-            num_validation_batches=num_validation_batches,
+            num_validation_sequences=num_validation_sequences,
         )
 
         return _prepare_data_config(data_config, use_default_validation=True)
@@ -208,14 +210,23 @@ class TwoStageConfig:
         elif tokens >= 1_000:
             return f"{tokens/1_000:.1f}K"
         return str(tokens)
-        
+    
+    def format_sci(self, val):
+        return f"{val:.0e}".replace("e-0", "e-").replace("e+0", "e+")
+    
     def format_lr_schedule(self) -> str:
         schedule_short_name = {
             "cosine": "cos",
             "linear": "wsd",
         }
-        lr_str = f"{self.lr:.3f}" if self.lr >= 1e-3 else f"{self.lr:.1e}"
-        return f"{schedule_short_name[self.lr_schedule]}-{lr_str}-{self.lr_cooldown_duration:.2f}"
+        lr_str = f"{self.lr:.3f}" if self.lr >= 1e-3 else f"{self.format_sci(self.lr)}"
+
+        # TODO: Remove later
+        if self.rare_data_name == "latxa":
+            lr_str = f"{self.lr:.1e}"
+
+        cooldown_str = f"{self.lr_cooldown_duration:.2f}" if self.lr_cooldown_duration is not None else "na"
+        return f"{schedule_short_name[self.lr_schedule]}-{lr_str}-{cooldown_str}"
     
     def format_rare_fraction(self) -> str:
         if self.rare_fraction >= 0.01:

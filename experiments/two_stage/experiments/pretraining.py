@@ -22,10 +22,10 @@ pretraining_configs = [
     for lr_schedule, lr_cooldown_duration in [
         ("cosine", 1.0),
     ]
-    for rare_fraction in [0.0, 0.01]
+    for rare_fraction in [0.0]
     for stage2_duration in [1.0]
     for rare_stage2_allocation in [1.0]
-    for rare_data_name in ["finemath", "starcoder", "flan", "spj"]
+    for rare_data_name in ["finemath"]
 ]
 
 pretraining_steps = [

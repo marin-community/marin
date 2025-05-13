@@ -27,8 +27,8 @@ if __name__ == "__main__":
         for rare_fraction in [4.0/1024.0]
         for replay_ratio in [0.0]
         for rare_stage2_allocation in [1.0]
-        for rare_data_name in ["finemath"]
-        for rare_data_epochs in [1, 2, 4, 8, 16]
+        for rare_data_name in ["finemath","starcoder"]
+        for rare_data_epochs in [32, 64]
     ]
 
     executor_main(

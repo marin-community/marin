@@ -56,6 +56,7 @@ model_dict = {
     "600m4k": llama_600m_4096_config,
     "1_4b4k": llama_1_4b_4096_config,
     "1_9b4k": llama_1_9b_4096_config,
+    "l8b": llama_8b_config,
 }
 
 inverse_width_dict = {

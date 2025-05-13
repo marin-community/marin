@@ -33,6 +33,7 @@ key_pretty_name_dict = {
     "replay_ratio": "Replay Ratio",
     "stage2_allocation": "Stage 2 Allocation",
     "model_name": "Parameter Count",
+    "lr_cooldown_duration": "LR Cooldown Duration",
 }
 
 value_pretty_name_dict = {
@@ -59,7 +60,8 @@ def parse_run(run):
     run_dict["replay_ratio"] = float(run_id.split("-rr")[-1][:4])
     run_dict["stage2_allocation"] = float(run_id.split("-rs")[-1][:4])
     run_dict["lr_schedule"] = "wsd" if "wsd" in run_id else "cos"
-    run_dict["lr_cooldown_duration"] = float(run_id.split(f"{run_dict['lr_schedule']}-")[-1][:5])
+    run_dict["lr"] = float(run_id.split(f"{run_dict['lr_schedule']}-")[-1][:5])
+    run_dict["lr_cooldown_duration"] = float(run_id.split(f"{run_dict['lr']}-")[-1][:4])
     run_dict["rare_data_epochs"] = int(run_id.split("x")[-1].split("-")[0])
     run_dict["model_name"] = run_id.split("-")[0]
 
@@ -231,7 +233,7 @@ def create_scatter_plot(run_list, x_axis_key, y_axis_key, rare_data_name, common
     
     unique_x_values = sorted(list(set([run[x_axis_key] for run in run_list])))
     x_ticks = [transform_x(x) for x in unique_x_values]
-    plt.xticks(x_ticks, [get_tick_labels(x) for x in unique_x_values], rotation=45)
+    plt.xticks(x_ticks, [get_tick_labels(x) for x in unique_x_values])
     
     output_path = f'plotting/plots/{key}_loss_scatter.png'
     plt.savefig(output_path, bbox_inches='tight')
@@ -240,6 +242,73 @@ def create_scatter_plot(run_list, x_axis_key, y_axis_key, rare_data_name, common
     print("\nBest configuration from scatter analysis:")
     print(f"{key_pretty_name_dict[x_axis_key]}: {best_run[x_axis_key]}")
     print(f"{key_pretty_name_dict[y_axis_key]}: {best_run[y_axis_key]}")
+    print(f"Final {pretty_name_dict[rare_data_name]} Loss: {best_run[f'final_{rare_data_name}_loss']:.4f}")
+    print(f"Run ID: {best_run['run_id']}")
+
+def create_simple_scatter(run_list, x_axis_key, rare_data_name, common_data_name, key, fit=True, baseline=None, label='Data Points'):
+    """
+    Creates a simple scatter plot with x_axis_key on x-axis and loss on y-axis.
+    """
+    def transform_x(x):
+        if x_axis_key == "replay_ratio":
+            return -np.log(1 - x)
+        elif x_axis_key == "lr_cooldown_duration":
+            x = np.clip(x, 0.01, 0.99)
+            return np.log(x)
+        elif x_axis_key == "rare_data_epochs":
+            return np.log(x)
+        return x
+
+    def get_tick_labels(x):
+        return str(x)
+    
+    plt.figure(figsize=(5, 3), dpi=300)
+    
+    x_values = [run[x_axis_key] for run in run_list]
+    x_values_transformed = [transform_x(x) for x in x_values]
+    losses = [run[f'final_{rare_data_name}_loss'] for run in run_list]
+    
+    # Plot the actual points first
+    scatter = plt.scatter(x_values_transformed, losses, color=LIGHT_BLUE, 
+                         label=label, zorder=5)
+    
+    # Plot quadratic fit
+    if fit:
+        coeffs = np.polyfit(x_values_transformed, losses, 2)
+        x_fit = np.linspace(min(x_values_transformed), max(x_values_transformed), 100)
+        y_fit = coeffs[0]*x_fit**2 + coeffs[1]*x_fit + coeffs[2]
+        fit_line = plt.plot(x_fit, y_fit, '--k', alpha=0.5, label='Quadratic Fit')[0]
+    else:
+        plt.plot(x_values_transformed, losses, color=LIGHT_BLUE, zorder=5)
+        fit_line = None
+
+    if baseline:
+        baseline_point = plt.scatter([transform_x(1.0)], [baseline], color=PURPLE, zorder=10)
+        plt.axhline(y=baseline, color=PURPLE, linestyle='--', label='Uniform Ordering')
+    else:
+        baseline_point = None
+    
+    # Find best point for printing stats
+    best_run = min(run_list, key=lambda x: x[f'final_{rare_data_name}_loss'])
+    
+    plt.xlabel(f'{key_pretty_name_dict[x_axis_key]}')
+    plt.ylabel(f'{pretty_name_dict[rare_data_name]} Loss')
+    plt.title(f'{pretty_name_dict[rare_data_name]} Loss vs {key_pretty_name_dict[x_axis_key]}')
+    
+    unique_x_values = sorted(list(set(x_values)))
+    x_ticks = [transform_x(x) for x in unique_x_values]
+    plt.xticks(x_ticks, [get_tick_labels(x) for x in unique_x_values])
+    
+    # Order legend with data points first
+    plt.legend([scatter, fit_line, baseline_point], ['Data Points', 'Quadratic Fit', 'Uniform Ordering'], 
+              bbox_to_anchor=(1.05, 1), loc='upper left')
+    
+    output_path = f'plotting/plots/{key}_loss_simple.png'
+    plt.savefig(output_path, bbox_inches='tight')
+    plt.close()
+    
+    print("\nBest configuration from simple scatter analysis:")
+    print(f"{key_pretty_name_dict[x_axis_key]}: {best_run[x_axis_key]}")
     print(f"Final {pretty_name_dict[rare_data_name]} Loss: {best_run[f'final_{rare_data_name}_loss']:.4f}")
     print(f"Run ID: {best_run['run_id']}")
 
@@ -261,8 +330,11 @@ if __name__ == "__main__":
     y_axis_key = args.y_axis_key
 
     key = {
+        "repetition": f"{rare_data_name}-{common_data_name}-finding-repetitions",
         "schedule": f"{rare_data_name}-{common_data_name}-repetition-trial-v9",
+        "schedule_v2": f"{rare_data_name}-{common_data_name}-repetition-trial-v10",
         "model": f"{rare_data_name}-{common_data_name}-model-scaling",
+        "lr_schedule": f"{rare_data_name}-{common_data_name}-finding-lr-schedule",
     }[args.mode]
 
     if args.build_cache:
@@ -278,9 +350,18 @@ if __name__ == "__main__":
     else:
         run_list = pickle.load(open(f"cache/{key}_run_list.pkl", "rb"))
 
+    run_list = sorted(run_list, key=lambda x: x[x_axis_key])
+
     print("Total runs: ", len(run_list))
-    create_heatmap(run_list, x_axis_key, y_axis_key, rare_data_name, common_data_name, key)
-    create_scatter_plot(run_list, x_axis_key, y_axis_key, rare_data_name, common_data_name, key)
+    if x_axis_key == "rare_data_epochs":
+        create_simple_scatter(run_list, x_axis_key, rare_data_name, common_data_name, key, fit=False, label='Repetitions')
+    elif x_axis_key == "lr_cooldown_duration":
+        baseline_run = [run for run in run_list if run["replay_ratio"] != 0.0 and run["lr_cooldown_duration"] == 0.99][0]
+        run_list = [run for run in run_list if run["replay_ratio"] == 0.0 and run["lr_cooldown_duration"] != 1.0]
+        create_simple_scatter(run_list, x_axis_key, rare_data_name, common_data_name, key, fit=False, label='Fine-tuning', baseline=baseline_run[f"final_{rare_data_name}_loss"])
+    else:
+        create_heatmap(run_list, x_axis_key, y_axis_key, rare_data_name, common_data_name, key)
+        create_scatter_plot(run_list, x_axis_key, y_axis_key, rare_data_name, common_data_name, key)
 
 
 

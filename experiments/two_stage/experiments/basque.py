@@ -1,14 +1,21 @@
 from marin.execution.executor import output_path_of, executor_main
+from marin.evaluation.evaluation_config import EvalTaskConfig
 
 from experiments.two_stage.two_stage_config import TwoStageConfig, two_stage_train_step
+from experiments.two_stage.experiments.pretraining import pretraining_configs, NUM_PRETRAINING_STEPS
+
+
+BASQUE_TASKS = (
+    EvalTaskConfig("xcopa_eu", num_fewshot=0, task_alias="xcopa_eu"),
+)
 
 if __name__ == "__main__":
-    NUM_RARE_STEPS = 10.0
+    NUM_RARE_STEPS = 400.0 # 40M tokens
     train_steps = [
         two_stage_train_step(
             TwoStageConfig(
                 rare_data_name=rare_data_name,
-                common_data_name="c4",
+                common_data_name="spj",
                 rare_fraction=NUM_RARE_STEPS / (base_num_train_steps * rare_data_epochs),
                 rare_stage2_allocation=1.0,
                 stage2_duration=1.0,
@@ -17,23 +24,21 @@ if __name__ == "__main__":
                 lr_schedule=lr_schedule,
                 lr=lr,
                 lr_cooldown_duration=lr_cooldown_duration,
+                train_batch_size=128,
                 wandb_project_name="suhas-two-stage",
-                wandb_additional_tags=["fine-tuning-5-11", f"{rare_data_name}-c4-fine-tuning-v3"],
-                model_name="150m4k",
-                initialize_from_hf=f"gs://marin-us-central2/checkpoints/two_stage/150m4k-4.2B-finemathx0.00x1-c4-rr1.00-rs1.00-cos-0.001-1.00-pt/hf/step-999",
-                nametag="-ft" if rare_data_name != "starcoder" else "-f"
+                wandb_additional_tags=["cpt", f"{rare_data_name}-spj-cpt"],
+                model_name="l8b",
+                initialize_from_hf="meta-llama/Meta-Llama-3.1-8B",
+                eval_harness_tasks=BASQUE_TASKS,
             )
         )
-        for lr, lr_schedule, lr_cooldown_duration in [
-            (1e-3, "cosine", 1.0),
+        for lr_schedule, lr_cooldown_duration in [
+            ("cosine", 1.0),
         ]
-        for base_num_train_steps in [10, 20, 40, 80]
-        for rare_data_name, rare_data_epochs in [
-            ("finemath", 16),
-            ("spj", 16),
-            ("flan", 16),
-            ("starcoder", 16),
-        ]
+        for lr in [1e-5]
+        for base_num_train_steps in [NUM_RARE_STEPS, NUM_RARE_STEPS * 2, NUM_RARE_STEPS * 4, NUM_RARE_STEPS * 10]
+        for rare_data_name in ["latxa"]
+        for rare_data_epochs in [1, 2, 4]
     ]
 
     executor_main(
