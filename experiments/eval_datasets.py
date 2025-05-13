@@ -486,6 +486,17 @@ mmlu_convert_dolma = ExecutorStep(
     ),
 )
 
+lingoly = ExecutorStep(
+    name="raw/ambean/lingOly",
+    fn=download_hf,
+    config=DownloadConfig(
+        hf_dataset_id="ambean/lingOly",
+        revision=versioned("6aff4c2"),
+        gcs_output_path=this_output_path(),
+        wait_for_completion=True,
+    ),
+)
+
 ############################################################
 
 if __name__ == "__main__":
