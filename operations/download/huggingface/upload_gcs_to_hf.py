@@ -8,8 +8,19 @@ to Hugging Face repositories. It handles:
 - Uploading to a specified Hugging Face repository with appropriate versioning
 - Supporting dry-run mode to preview what would be uploaded
 
-Usage:
+Usage as a script:
   python upload_gcs_to_hf.py --repo-id="organization/model-name" [--dry-run] [--directory="gs://bucket/path"]
+
+Usage as an ExecutorStep:
+  upload_step = ExecutorStep(
+      name="upload_model_to_hf",
+      fn=upload_gcs_to_hf,
+      config=UploadConfig(
+          hf_repo_id="organization/model-name",
+          gcs_directories=["gs://bucket/path/to/model"],
+          dry_run=False
+      )
+  )
 """
 
 from google.cloud import storage
@@ -18,12 +29,29 @@ import re
 import subprocess
 import tempfile
 import shutil
+import logging
 from collections import defaultdict
+from dataclasses import dataclass, field
+from typing import List, Optional, Tuple
 from huggingface_hub import HfApi, create_repo
 import argparse
 
-# List of GCS directories to check
-dirs = [
+# Set up logging
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class UploadConfig:
+    """Configuration for uploading from GCS to Hugging Face."""
+
+    hf_repo_id: str
+    gcs_directories: List[str] = field(default_factory=list)
+    dry_run: bool = False
+    wait_for_completion: bool = True  # Added for compatibility with other configs
+
+
+# Default GCS directories to check if none specified
+DEFAULT_GCS_DIRS = [
     "gs://marin-eu-west4/checkpoints/llama-8b-tootsie-0.001-19ad63/hf/",
     "gs://marin-us-central2/checkpoints/llama-8b-tootsie-phase2/hf/",
     "gs://marin-us-central2/checkpoints/llama-8b-tootsie-phase3/hf/",
@@ -34,7 +62,7 @@ dirs = [
 ]
 
 
-def list_gcs_directories(gcs_path: str) -> list[tuple[str, int]]:
+def list_gcs_directories(gcs_path: str) -> List[Tuple[str, int]]:
     """List subdirectories by examining full blob paths."""
     if not gcs_path.startswith("gs://"):
         raise ValueError(f"Invalid GCS path: {gcs_path}")
@@ -43,7 +71,7 @@ def list_gcs_directories(gcs_path: str) -> list[tuple[str, int]]:
     bucket_name = path.split("/")[0]
     prefix = "/".join(path.split("/")[1:])
 
-    print(f"\nChecking: {gcs_path}")
+    logger.info(f"Checking: {gcs_path}")
 
     # Get the bucket
     client = storage.Client()
@@ -81,26 +109,26 @@ def list_gcs_directories(gcs_path: str) -> list[tuple[str, int]]:
                 step_number = int(dir_name.split("-")[1])
                 full_path = f"{gcs_path}{dir_name}/"
                 step_dirs_local.append((full_path, step_number))
-                print(f"Found step directory: {full_path} with step {step_number}")
+                logger.info(f"Found step directory: {full_path} with step {step_number}")
             except (IndexError, ValueError) as e:
-                print(f"Error parsing step number from {dir_name}: {e}")
+                logger.error(f"Error parsing step number from {dir_name}: {e}")
 
-    print(f"Found {len(step_dirs_local)} step directories in {gcs_path}")
+    logger.info(f"Found {len(step_dirs_local)} step directories in {gcs_path}")
     return step_dirs_local
 
 
 def download_from_gcs(gcs_path: str, local_path: str) -> bool:
     """Download contents from a GCS path to a local directory using gsutil."""
     try:
-        print(f"Downloading {gcs_path} to {local_path}...")
+        logger.info(f"Downloading {gcs_path} to {local_path}...")
         cmd = ["gsutil", "-m", "cp", "-r", f"{gcs_path}*", local_path]
         result = subprocess.run(cmd, check=True, capture_output=True, text=True)
-        print(f"Download completed successfully.")
+        logger.info(f"Download completed successfully.")
         return True
     except subprocess.CalledProcessError as e:
-        print(f"Error downloading from {gcs_path}: {e}")
-        print(f"stdout: {e.stdout}")
-        print(f"stderr: {e.stderr}")
+        logger.error(f"Error downloading from {gcs_path}: {e}")
+        logger.error(f"stdout: {e.stdout}")
+        logger.error(f"stderr: {e.stderr}")
         return False
 
 
@@ -129,7 +157,7 @@ def extract_version_from_path(gcs_path: str) -> str:
 def upload_to_huggingface(local_path: str, repo_id: str, revision: int, version_name: str) -> bool:
     """Upload a local directory to Hugging Face as a specific revision."""
     try:
-        print(f"Uploading checkpoint {version_name} to Hugging Face as revision: {revision}")
+        logger.info(f"Uploading checkpoint {version_name} to Hugging Face as revision: {revision}")
 
         # Check if repo exists, create if not
         api = HfApi()
@@ -142,26 +170,18 @@ def upload_to_huggingface(local_path: str, repo_id: str, revision: int, version_
             revision=f"step-{revision}",
             commit_message=f"Upload checkpoint for step {revision}{version_info}",
         )
-        print(f"Upload completed successfully.")
-        print(f"Commit URL: {result.commit_url}")
+        logger.info(f"Upload completed successfully.")
+        logger.info(f"Commit URL: {result.commit_url}")
         return True
     except Exception as e:
-        print(f"Error uploading to Hugging Face: {e}")
+        logger.error(f"Error uploading to Hugging Face: {e}")
         return False
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Upload checkpoints from GCS to Hugging Face")
-    parser.add_argument(
-        "--repo-id", required=True, help='Target Hugging Face repository ID (e.g., "username/model-name")'
-    )
-    parser.add_argument("--dry-run", action="store_true", help="Only list checkpoints without uploading")
-    parser.add_argument(
-        "--directories",
-        nargs="+",
-        help="Process specific GCS directories instead of the built-in list. Multiple directories can be provided.",
-    )
-    args = parser.parse_args()
+def upload_gcs_to_hf(cfg: UploadConfig) -> None:
+    """Main function to upload model checkpoints from GCS to Hugging Face."""
+    # Configure logging
+    logging.basicConfig(level=logging.INFO)
 
     # Initialize the GCS client
     client = storage.Client()
@@ -169,42 +189,37 @@ def main():
     # Collect all step directories
     all_step_dirs = []
 
-    # Main execution
-    if args.directories:
-        for directory in args.directories:
-            try:
-                step_dirs = list_gcs_directories(directory)
-                all_step_dirs.extend(step_dirs)
-            except Exception as e:
-                print(f"Error listing {directory}: {e}")
-    else:
-        for directory in dirs:
-            try:
-                step_dirs = list_gcs_directories(directory)
-                all_step_dirs.extend(step_dirs)
-            except Exception as e:
-                print(f"Error listing {directory}: {e}")
+    # Determine which directories to process
+    directories_to_process = cfg.gcs_directories if cfg.gcs_directories else DEFAULT_GCS_DIRS
+
+    # Process each directory
+    for directory in directories_to_process:
+        try:
+            step_dirs = list_gcs_directories(directory)
+            all_step_dirs.extend(step_dirs)
+        except Exception as e:
+            logger.error(f"Error listing {directory}: {e}")
 
     # Sort all step directories by step number
     if all_step_dirs:
         all_step_dirs.sort(key=lambda x: x[1])
 
         # Print sorted step directories
-        print("\nAll step directories sorted by step number:")
-        print("-" * 50)
+        logger.info("\nAll step directories sorted by step number:")
+        logger.info("-" * 50)
         for full_path, step_number in all_step_dirs:
-            print(f"- {full_path}")
+            logger.info(f"- {full_path}")
 
-        print(f"\nTotal: {len(all_step_dirs)} step directories")
+        logger.info(f"\nTotal: {len(all_step_dirs)} step directories")
 
         # Upload to Hugging Face
-        if not args.dry_run:
-            print(f"\nUploading to Hugging Face repo: {args.repo_id}")
+        if not cfg.dry_run:
+            logger.info(f"\nUploading to Hugging Face repo: {cfg.hf_repo_id}")
 
             for full_path, step_number in all_step_dirs:
                 # Check if this revision already exists
-                if revision_exists(args.repo_id, step_number):
-                    print(f"Step {step_number} already exists in HF repo {args.repo_id}, skipping")
+                if revision_exists(cfg.hf_repo_id, step_number):
+                    logger.info(f"Step {step_number} already exists in HF repo {cfg.hf_repo_id}, skipping")
                     continue
 
                 # Extract version name from the path
@@ -212,30 +227,32 @@ def main():
 
                 # Create a temporary directory for downloading
                 with tempfile.TemporaryDirectory() as temp_dir:
-                    print(f"\nProcessing step {step_number} from {full_path} ({version_name})")
+                    logger.info(f"\nProcessing step {step_number} from {full_path} ({version_name})")
 
                     # Download from GCS
                     if download_from_gcs(full_path, temp_dir):
                         # Upload to HF
-                        if upload_to_huggingface(temp_dir, args.repo_id, step_number, version_name):
-                            print(f"Successfully uploaded step {step_number} ({version_name}) to HF repo {args.repo_id}")
+                        if upload_to_huggingface(temp_dir, cfg.hf_repo_id, step_number, version_name):
+                            logger.info(
+                                f"Successfully uploaded step {step_number} ({version_name}) to HF repo {cfg.hf_repo_id}"
+                            )
                         else:
-                            print(f"Failed to upload step {step_number}")
+                            logger.error(f"Failed to upload step {step_number}")
                     else:
-                        print(f"Failed to download step {step_number}")
+                        logger.error(f"Failed to download step {step_number}")
 
-            print("\nUpload process completed.")
+            logger.info("\nUpload process completed.")
         else:
-            print("\nDry run - showing what would be uploaded:")
-            print("-" * 50)
+            logger.info("\nDry run - showing what would be uploaded:")
+            logger.info("-" * 50)
 
             for i, (full_path, step_number) in enumerate(all_step_dirs):
                 version_name = extract_version_from_path(full_path)
-                print(f"\nCheckpoint {i+1}/{len(all_step_dirs)}:")
-                print(f"  Source: {full_path}")
-                print(f"  Target repo: {args.repo_id}")
-                print(f"  Revision: step-{step_number}")
-                print(f"  Commit message: Upload checkpoint for step {step_number} ({version_name})")
+                logger.info(f"\nCheckpoint {i+1}/{len(all_step_dirs)}:")
+                logger.info(f"  Source: {full_path}")
+                logger.info(f"  Target repo: {cfg.hf_repo_id}")
+                logger.info(f"  Revision: step-{step_number}")
+                logger.info(f"  Commit message: Upload checkpoint for step {step_number} ({version_name})")
 
                 # Try to estimate what files would be uploaded
                 try:
@@ -248,28 +265,53 @@ def main():
                         files = [f for f in files if f]
 
                         if files:
-                            print(f"  Example files that would be uploaded ({min(len(files), 5)} of {len(files)}):")
+                            logger.info(
+                                f"  Example files that would be uploaded ({min(len(files), 5)} of {len(files)}):"
+                            )
                             for file in files[:5]:
-                                print(f"    - {os.path.basename(file)}")
+                                logger.info(f"    - {os.path.basename(file)}")
                             if len(files) > 5:
-                                print(f"    - ... and {len(files) - 5} more")
+                                logger.info(f"    - ... and {len(files) - 5} more")
                 except Exception as e:
-                    print(f"  Could not list files: {e}")
+                    logger.error(f"  Could not list files: {e}")
 
-            print("\nDry run completed - no actual uploads performed.")
+            logger.info("\nDry run completed - no actual uploads performed.")
     else:
-        print("\nNo step directories found in any of the paths.")
-        print("You might want to check if:")
-        print("1. The paths are correct")
-        print("2. You have permissions to access these buckets")
-        print("3. There are step directories in these locations")
+        logger.warning("\nNo step directories found in any of the paths.")
+        logger.warning("You might want to check if:")
+        logger.warning("1. The paths are correct")
+        logger.warning("2. You have permissions to access these buckets")
+        logger.warning("3. There are step directories in these locations")
+
+
+def main():
+    """Command line entry point for direct script usage."""
+    parser = argparse.ArgumentParser(description="Upload checkpoints from GCS to Hugging Face")
+    parser.add_argument(
+        "--repo-id", required=True, help='Target Hugging Face repository ID (e.g., "username/model-name")'
+    )
+    parser.add_argument("--dry-run", action="store_true", help="Only list checkpoints without uploading")
+    parser.add_argument(
+        "--directories",
+        nargs="+",
+        help="Process specific GCS directories instead of the built-in list. Multiple directories can be provided.",
+    )
+    args = parser.parse_args()
+
+    # Create config from args
+    config = UploadConfig(
+        hf_repo_id=args.repo_id, gcs_directories=args.directories if args.directories else [], dry_run=args.dry_run
+    )
+
+    # Check if application default credentials are set
+    if "GOOGLE_APPLICATION_CREDENTIALS" not in os.environ:
+        logger.warning("Warning: GOOGLE_APPLICATION_CREDENTIALS environment variable not set.")
+        logger.warning("Make sure you're authenticated with Google Cloud before running this script.")
+        logger.warning("You can authenticate using: gcloud auth application-default login")
+
+    # Run the upload function
+    upload_gcs_to_hf(config)
 
 
 if __name__ == "__main__":
-    # Check if application default credentials are set
-    if "GOOGLE_APPLICATION_CREDENTIALS" not in os.environ:
-        print("Warning: GOOGLE_APPLICATION_CREDENTIALS environment variable not set.")
-        print("Make sure you're authenticated with Google Cloud before running this script.")
-        print("You can authenticate using: gcloud auth application-default login")
-
     main()
