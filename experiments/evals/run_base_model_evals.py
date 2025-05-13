@@ -23,6 +23,7 @@ def run_core_base_evals(
     run_generation_evals: bool = True,
 ):
     # Add GPQA to CORE_TASKS
+
     core_tasks_with_leaderboard = (
         EvalTaskConfig(
             "leaderboard_bbh",
@@ -88,8 +89,7 @@ def run_core_base_evals(
     # )
 
     # eval_jobs.append(generation)
-
-    return [eval_jobs[-1]]
+    return [eval_jobs[0]]
 
 
 if __name__ == "__main__":
@@ -100,8 +100,8 @@ if __name__ == "__main__":
         steps=[
             # *run_core_base_evals(deeper_starling_path),
             # *run_core_base_evals(llama_3_1_8b),
-            *run_core_base_evals(olmo_2_base_8b),
-            # *run_core_base_evals(amber_base_7b, engine_kwargs={"max_model_len": 2048, "max_gen_toks": 2048}),
+            # *run_core_base_evals(olmo_2_base_8b),
+            *run_core_base_evals(amber_base_7b, engine_kwargs={"max_model_len": 2048, "max_gen_toks": 2048}),
             # *run_core_base_evals(
             #     map_neo_7b, engine_kwargs={"trust_remote_code": True, "max_model_len": 4096, "max_gen_toks": 4096}
             # ),
