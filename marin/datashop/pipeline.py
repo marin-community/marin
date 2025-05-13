@@ -19,6 +19,7 @@ from marin.datashop.templates import (
 from marin.generation.dataset import DatasetSampler
 from marin.generation.llm_generation import vLLMProvider
 from marin.generation.ray_utils import scheduling_strategy_fn
+from marin.utils import fsspec_glob
 
 logger = logging.getLogger("ray")
 
@@ -37,6 +38,10 @@ class CorpusContent:
 
     # The column name of the prompt in the corpus. This can be "text" for Dolma datasets for example.
     prompt_column: str = "text"
+
+    # The glob pattern to use to find the files in the corpus if the `content_type` is `filepath`. This
+    # is useful for datasets where we want to glob specific files in the corpus which is a directory.
+    glob_pattern: str | None = None
 
 
 @dataclass
@@ -59,6 +64,8 @@ class MEDUPipelineConfig:
         resource_config: The type of TPU hardware to use for the pipeline.
         medu_benchmark_description_template: The template that prompts an LLM to generate a description of the skills
                                              that the data should have.
+        max_corpus_length: The maximum length of the corpus to use for the pipeline. We right-truncate the corpus so that
+            the corpus fits into the model's context window.
     """
 
     model_name: str
@@ -74,6 +81,7 @@ class MEDUPipelineConfig:
     output_filetype_override: str = "jsonl.gz"
     resource_config: ResourceConfig = field(default_factory=lambda: TPU_V6E_8_STRICT_PACK)
     medu_benchmark_description_template: str = MEDU_BENCHMARK_DESCRIPTION_TEMPLATE
+    max_corpus_tokens: int = 7000
 
 
 @ray.remote(max_restarts=-1)  # NOTE(chris): We use Spot TPUs, so we need to be able to restart the pipeline if it fails.
@@ -100,6 +108,7 @@ class MEDUPipeline:
         engine_kwargs: dict[str, Any] | None = None,
         generation_kwargs: dict[str, Any] | None = None,
         medu_benchmark_description_template: str = MEDU_BENCHMARK_DESCRIPTION_TEMPLATE,
+        max_corpus_tokens: int = 7000,
     ):
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         self.llm = vLLMProvider(model_name, engine_kwargs, generation_kwargs)
@@ -108,6 +117,7 @@ class MEDUPipeline:
         self.medu_benchmark_description_template = medu_benchmark_description_template
         self.corpus_contents = corpus_contents
         self.tensor_parallel_size = tensor_parallel_size
+        self.max_corpus_tokens = max_corpus_tokens
 
     def _get_final_medu_prompt(self, benchmark_description: str) -> str:
         return MEDU_DOCUMENT_LABELING_PROMPT.format(test_description=benchmark_description, example="{example}")
@@ -132,15 +142,25 @@ class MEDUPipeline:
                 corpus = "\n\n".join(dev_set.content)
                 corpus += "\n\n"
             elif dev_set.content_type == "filepath":
-                with fsspec.open(dev_set.content, "r", compression="infer") as f:
-                    for line in f:
-                        row = json.loads(line)
-                        if dev_set.prompt_column not in row:
-                            raise ValueError(
-                                f"The file {dev_set.content} does not contain a '{dev_set.prompt_column}' key, "
-                                "please include it in the JSONL file."
-                            )
-                        corpus += row[dev_set.prompt_column] + "\n\n"
+                if dev_set.glob_pattern is not None:
+                    files = fsspec_glob(os.path.join(dev_set.content, dev_set.glob_pattern))
+                else:
+                    files = [dev_set.content]
+
+                for file in files:
+                    with fsspec.open(file, "r", compression="infer") as f:
+                        for line in f:
+                            row = json.loads(line)
+                            if dev_set.prompt_column not in row:
+                                raise ValueError(
+                                    f"The file {dev_set.content} does not contain a '{dev_set.prompt_column}' key, "
+                                    "please include it in the JSONL file."
+                                )
+                            corpus += row[dev_set.prompt_column] + "\n\n"
+
+            corpus_tokens = self.tokenizer.encode(corpus)
+            if len(corpus_tokens) > self.max_corpus_tokens:
+                corpus = self.tokenizer.decode(corpus_tokens[: self.max_corpus_tokens])
 
             prompt = self.medu_benchmark_description_template.format(corpus=corpus)
             prompts.append(
@@ -228,6 +248,7 @@ def _run_benchmark_prompt_generation_pipeline(config: MEDUPipelineConfig):
         config.engine_kwargs,
         config.generation_kwargs,
         config.medu_benchmark_description_template,
+        config.max_corpus_tokens,
     )
 
     futures = []
