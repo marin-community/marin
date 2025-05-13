@@ -49,12 +49,12 @@ The documentation follows the [Diátaxis](https://diataxis.fr/) framework with f
    - Getting started guides
    - Learning-oriented content
 
-2. **Technical References** (`docs/references/`)
+2. **Technical Reference** (`docs/reference/`)
    - API documentation
    - Configuration options
    - Technical specifications
 
-3. **Explanations** (`docs/explanations/`)
+3. **Explanation** (`docs/explanation/`)
    - Background information
    - Design decisions
    - Best practices
