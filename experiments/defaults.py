@@ -84,7 +84,7 @@ def default_download(
         output_path: The output path for the dataset.
         **kwargs: Additional keyword arguments that are passed to the download config.
 
-    The final output data will reside in 'output_path/revision'.
+    The final output data will reside in '{output_path}/{revision}'.
     """
 
     step = ExecutorStep(
