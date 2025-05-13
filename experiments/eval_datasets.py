@@ -2,6 +2,8 @@ import dataclasses
 
 from experiments.defaults import default_download
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
+from operations.download.huggingface.download import DownloadConfig
+from operations.download.huggingface.download_hf import download_hf
 from operations.raw2json.huggingface.qa.raw2json import DatasetConversionConfig, OutputFormatOptions, raw2json
 
 """
@@ -35,12 +37,17 @@ Downloads the following datasets
 # download mmlu dataset
 # TODO: Earlier datasets were stored in gcs_output_path/<revision> instead of gcs_output_path.
 #   Migrate the dataset and cd can be removed.
-mmlu_raw = default_download(
+mmlu_raw = ExecutorStep(
     name="raw/cais/mmlu",
-    hf_dataset_id="cais/mmlu",
-    revision=versioned("c30699e"),
-    output_path="raw/cais/mmluhf",
-    hf_urls_glob=["**/*.parquet", "*.md"],
+    fn=download_hf,
+    config=DownloadConfig(
+        hf_dataset_id="cais/mmlu",
+        revision=versioned("c30699e"),
+        gcs_output_path=this_output_path(),
+        wait_for_completion=True,
+        hf_urls_glob=["**/*.parquet", "*.md"],
+    ),
+    override_output_path="raw/cais/mmluhf",
 )
 
 # download boolq dataset
@@ -51,7 +58,6 @@ boolq_raw = default_download(
     hf_dataset_id="google/boolq",
     revision=versioned("35b264d"),
     output_path="raw/google/boolqhf",
-    cd="35b264d",
     hf_urls_glob=["**/*.parquet"],
 )
 
@@ -63,7 +69,6 @@ hellaswag_raw = default_download(
     hf_dataset_id="Rowan/hellaswag",
     revision=versioned("50441ce"),
     output_path="raw/Rowan/hellaswaghf",
-    cd="50441ce",
     hf_urls_glob=["**/*.parquet"],
 )
 
@@ -75,7 +80,6 @@ piqa_raw = default_download(
     hf_dataset_id="ybisk/piqa",
     revision=versioned("142c512"),
     output_path="raw/ybisk/piqahf",
-    cd="142c512",
     hf_urls_glob=["**/*.parquet"],
 )
 
@@ -87,7 +91,6 @@ winogrande_raw = default_download(
     hf_dataset_id="allenai/winogrande",
     revision=versioned("ebf71e3"),
     output_path="raw/allenai/winograndehf",
-    cd="ebf71e3",
     hf_urls_glob=["winogrande_xl/**/*.parquet"],
 )
 
@@ -99,7 +102,6 @@ arc_raw = default_download(
     hf_dataset_id="allenai/ai2_arc",
     revision=versioned("210d026"),
     output_path="raw/allenai/ai2_archf",
-    cd="210d026",
     hf_urls_glob=["**/*.parquet", "*.md"],
 )
 
@@ -111,7 +113,6 @@ openbookqa_raw = default_download(
     hf_dataset_id="allenai/openbookqa",
     revision=versioned("388097e"),
     output_path="raw/allenai/openbookqahf",
-    cd="388097e",
     hf_urls_glob=["**/*.parquet", "*.md"],
 )
 
@@ -123,7 +124,6 @@ mmlu_pro_raw = default_download(
     hf_dataset_id="TIGER-Lab/MMLU-Pro",
     revision=versioned("3373e0b"),
     output_path="raw/TIGER-Lab/MMLU-Prohf",
-    cd="3373e0b",
     hf_urls_glob=["**/*.parquet", "*.md"],
 )
 
@@ -135,21 +135,24 @@ humaneval_raw = default_download(
     hf_dataset_id="openai/openai_humaneval",
     revision=versioned("7dce605"),
     output_path="gs://marin-us-central2/raw/openai/openai_humanevalhf",
-    cd="7dce605",
     hf_urls_glob=["**/*.parquet", "*.md"],
 )
 
 # download mbpp
 # TODO: Earlier datasets were stored in gcs_output_path/<revision> instead of gcs_output_path.
 #   Migrate the dataset and cd can be removed.
-mbpp_raw = default_download(
+mbpp_raw = ExecutorStep(
     name="raw/google-research-datasets/mbpp",
-    hf_dataset_id="google-research-datasets/mbpp",
-    revision=versioned("4bb6404"),
-    output_path="raw/google-research-datasets/mbpphf",
-    cd="4bb6404",
-    hf_urls_glob=["**/*.parquet", "*.md"],
-)
+    fn=download_hf,
+    config=DownloadConfig(
+        hf_dataset_id="google-research-datasets/mbpp",
+        revision=versioned("4bb6404"),
+        gcs_output_path=this_output_path(),
+        wait_for_completion=True,
+        hf_urls_glob=["**/*.parquet", "*.md"],
+    ),
+    override_output_path="raw/google-research-datasets/mbpphf",
+).cd("4bb6404/full")
 
 """
 Converts raw to JSON for:
