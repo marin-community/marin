@@ -98,7 +98,7 @@ An experiment in Marin represents a unit of inquiry with a specific hypothesis o
 
 ## Related Documentation
 
-- [Architecture Reference](../reference/architecture.md) - Detailed technical architecture
-- [Experiments](../explanation/experiments.md) - Experimental methodology
-- [Guidelines](../guidelines.md) - Development guidelines
-- [Executor](../explanation/executor.md) - Execution framework
+- [Architecture Reference](../references/architecture.md) - Detailed technical architecture
+- [Experiments](../explanations/experiments.md) - Experimental methodology
+- [Guidelines](../explanations/guidelines.md) - Development guidelines
+- [Executor](../explanations/executor.md) - Execution framework
