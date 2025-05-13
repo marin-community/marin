@@ -17,7 +17,7 @@ to install Marin and set up your environment.
 ## Creating an Experiment Script
 
 Experiments scripts live in the `experiments` directory. For instance, the script for this tutorial is in
-`experiments/tutorial/train_tiny_model_cpu.py` or `experiments/tutorial/train_tiny_model_gpu.py` if you want to test on a GPU machine.
+`experiments/tutorials/train_tiny_model_cpu.py` or `experiments/tutorials/train_tiny_model_gpu.py` if you want to test on a GPU machine.
 
 By convention, experiments are usually named `exp{GITHUB_ISSUE_NUMBER}_{DESCRIPTOR}.py`, where `GITHUB_ISSUE_NUMBER` is the issue number for your experiment and `DESCRIPTOR` is a brief description.
 But, to follow along with this tutorial, you can name it whatever you want.
@@ -56,7 +56,7 @@ tinystories_tokenized = default_tokenize(
 )
 ```
 
-An [`ExecutorStep`](../explanation/executor.md#steps) is the basic unit of work in Marin.
+An [`ExecutorStep`](../explanations/executor.md#steps) is the basic unit of work in Marin.
 A step defines a piece of work to be done, such as tokenizing a dataset or training a model.
 Each step has a name, a function to execute, and a configuration object.
 The function takes the configuration object and produces some output.
@@ -71,7 +71,7 @@ For this tutorial, we will use the `SimpleTrainConfig` class from `experiments.s
 This class defines basic training configuration that is sufficient for most experiments.
 
 !!! info "Training Configuration for Different Accelerators"
-    You need to provide the appropriate resource configuration based on your hardware setup. Marin supports different accelerator types through various [resource configuration](../reference/resource-config.md). The `CpuOnlyConfig` is one such resource configuration that requests a certain number of CPUs. Other resource configurations include `GpuConfig` for requesting GPUs and `TpuPodConfig` for requesting TPUs.
+    You need to provide the appropriate resource configuration based on your hardware setup. Marin supports different accelerator types through various [resource configurations](../references/resource-config.md). The `CpuOnlyConfig` is one such resource configuration that requests a certain number of CPUs. Other resource configurations include `GpuConfig` for requesting GPUs and `TpuPodConfig` for requesting TPUs.
 
     === "CPU"
         ```python
@@ -118,7 +118,7 @@ This class defines basic training configuration that is sufficient for most expe
         )
         ```
 
-The `CpuOnlyConfig` is a [resource configuration](../reference/resource-config.md) that requests a certain number of CPUs;
+The `CpuOnlyConfig` is a [resource configuration](../references/resource-config.md) that requests a certain number of CPUs;
 `GpuConfig` requests GPUs; and `TpuPodConfig` for requests TPUs.
 
 ### 4. Train the Model
@@ -174,12 +174,12 @@ To run the experiment locally, we can run the script directly:
 
 === "CPU"
     ```bash
-    python experiments/tutorial/train_tiny_model_cpu.py --prefix local_store
+    python experiments/tutorials/train_tiny_model_cpu.py --prefix local_store
     ```
 
 === "GPU"
     ```bash
-    python experiments/tutorial/train_tiny_model_gpu.py --prefix local_store
+    python experiments/tutorials/train_tiny_model_gpu.py --prefix local_store
     ```
 
 The `--prefix` argument specifies the output directory for the experiment. It can be a local directory or anything [fsspec](https://filesystem-spec.readthedocs.io/en/latest/) supports,
@@ -191,12 +191,12 @@ At the end, you should see a message like this:
 
 ```
 2025-05-07 23:00:24,099	INFO executor.py:1036 -- Executor run took 263.37s
-2025-05-07 23:00:24,099	INFO executor.py:1037 -- Experiment info written to /tmp/marin-tutorial/experiments/train_tiny_model_cpu-0b39f4.json
+2025-05-07 23:00:24,099	INFO executor.py:1037 -- Experiment info written to local_store/experiments/train_tiny_model_cpu-0b39f4.json
 2025-05-07 23:00:24,099	INFO executor.py:1038 -- View the experiment at https://localhost:5000/experiment?path=gs%3A%2F%2Fmarin-us-central2%2Fexperiments%2Ftrain_tiny_model_cpu-0b39f4.json
 ```
 
 The JSON file contains a record of the experiment, including the steps and dependencies.
-(Note that this link won't work unless you [start the data browser](../tutorials/data-browser.md).)
+(Note that this link won't work unless you [start the data browser](data-browser.md).)
 
 If you were to rerun this experiment, the executor would detect that the training step has already been run and skip it.
 
@@ -206,14 +206,14 @@ You can look at the artifacts logged to the output directory. Typically, for tra
 interesting logging goes to WandB, which you likely disabled.
 
 ```
-$ ls tiny_model_output/*
-tiny_model_output/checkpoints:
+$ ls local_store/*
+local_store/checkpoints:
 marin-nano-tinystories-b4157e
 
-tiny_model_output/experiments:
+local_store/experiments:
 train_tiny_model_cpu-0b39f4.json
 
-tiny_model_output/tokenized:
+local_store/tokenized:
 roneneldan
 ```
 
@@ -225,10 +225,10 @@ The `tokenized` directory contains the tokenized dataset.
 
 Congratulations! You have trained your first model in Marin.  Choose your next adventure:
 
-- Train a real [1B or 8B parameter language model](../tutorials/train-an-lm.md) using Marin.
-- Read about Marin's key concepts and principles in [Concepts](../explanation/concepts.md).
-- Learn about the [Executor framework](../explanation/executor.md).
-- Read more about the full [language modeling pipeline](../explanation/lm-pipeline.md), including data processing.
+- Train a real [1B or 8B parameter language model](train-an-lm.md) using Marin.
+- Read about Marin's key concepts and principles in [Concepts](../explanations/concepts.md).
+- Learn about the [Executor framework](../explanations/executor.md).
+- Read more about the full [language modeling pipeline](../explanations/lm-pipeline.md), including data processing.
 
 ## Troubleshooting
 
@@ -239,12 +239,12 @@ To force it to rerun a step, you can use the `--force_run_failed true` flag.
 
 === "CPU"
     ```bash
-    python experiments/tutorial/train_tiny_model_cpu.py --prefix local_store --force_run_failed true
+    python experiments/tutorials/train_tiny_model_cpu.py --prefix local_store --force_run_failed true
     ```
 
 === "GPU"
     ```bash
-    python experiments/tutorial/train_tiny_model_gpu.py --prefix local_store --force_run_failed true
+    python experiments/tutorials/train_tiny_model_gpu.py --prefix local_store --force_run_failed true
     ```
 
 ### I want to rerun the step after it succeeded, how do I do that?
@@ -254,7 +254,7 @@ The easiest way to do this is to remove the output directory for the step.
 For instance, if the step is named `marin-nano-tinystories-b4157e`, you can remove the output directory with:
 
 ```bash
-rm -rf /tmp/marin-tutorial/marin-tutorial-nano-tinystories-b4157e
+rm -rf local_store/marin-nano-tinystories-b4157e
 ```
 
 Note, however, that WandB does not like reusing the same run ID, so you may need to change the `name` argument to `default_train` to a new value.
