@@ -31,6 +31,9 @@ cd lm-evaluation-harness && \
 git fetch origin $LM_EVAL_EVAL_COMMIT_HASH && \
 git checkout $LM_EVAL_EVAL_COMMIT_HASH && pip install --no-cache-dir -e ".[ifeval, math]"
 
+# Need the latest accelerate due to some deprecations in the newest pytorch
+RUN pip install --no-cache-dir https://github.com/huggingface/accelerate/archive/refs/heads/main.zip
+
 # Add /usr/lib/x86_64-linux-gnu/ to LD_LIBRARY_PATH so that bash prefers the systems
 # libtinfo.so over the conda-provided version. Using the conda-provided libtinfo.so
 # outputs a noisy warning because it doesn't include version information.
@@ -38,5 +41,7 @@ ENV LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/lib/x86_64-linux-gnu/
 ENV LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/home/ray/anaconda3/lib
 ENV PATH=$PATH:/root/gcloud/google-cloud-sdk/bin
 ENV VLLM_USE_V1=1
+ENV TF_CPP_MIN_LOG_LEVEL=1
+ENV HF_HOME=/opt/gcsfuse_mount/huggingface-cache
 
 WORKDIR /opt/marin
