@@ -6,6 +6,7 @@ from experiments.datashop.default_configs import (
     default_quality_filter_train_config_kwargs,
 )
 from experiments.exp939_finemath import FINEMATH_DATA_FILTER_PROMPT
+from experiments.models import get_model_local_path, llama_3_3_70b_instruct
 from marin.classifiers.utils import CreateDatasetConfig, create_dataset
 from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path
 
@@ -33,7 +34,7 @@ quality_filter_train_config_kwargs["training_config"].max_label = 3
 datashop_runner = DatashopRunner(
     DatashopRunnerConfig(
         experiment_name="finemath-cascade",
-        annotator_model_name="Llama-3.3-70B-Instruct",
+        annotator_model_name=get_model_local_path(llama_3_3_70b_instruct),
         pretraining_data_path=datashop_dclm_pretraining_subset,
         annotator_data_path=datashop_dclm_annotation_subset,
         data_filter_prompt=FINEMATH_3_POINT_DATA_FILTER_PROMPT,
@@ -48,9 +49,6 @@ new_annotation_data_pool = ExecutorStep(
     config=CreateDatasetConfig(
         input_doc_path=output_path_of(datashop_runner.filtered_documents),
         output_dataset_path=this_output_path(),
-        # The label function actually doesn't matter for this step since we just want to
-        # sample documents.
-        label_func=lambda doc, attrs: -1,
         max_sample_size=1_000_000,
         filetype="jsonl.zst",
         merge_dataset_shards=False,
@@ -65,7 +63,7 @@ consolidate_filter_kwargs["keep_fraction"] = 0.25
 datashop_runner_phase_2 = DatashopRunner(
     DatashopRunnerConfig(
         experiment_name="finemath-cascade-phase-2",
-        annotator_model_name="Llama-3.3-70B-Instruct",
+        annotator_model_name=get_model_local_path(llama_3_3_70b_instruct),
         pretraining_data_path=datashop_runner.filtered_documents,
         annotator_data_path=new_annotation_data_pool,
         data_filter_prompt=FINEMATH_DATA_FILTER_PROMPT,
@@ -74,12 +72,6 @@ datashop_runner_phase_2 = DatashopRunner(
         filter_config_kwargs=consolidate_filter_kwargs,
     )
 )
-
-
-# TODO(chris): After obtaining the 3-point filtering model,
-# 1. Filter the pretraining data pool to 3+ examples.
-# 2. Annotate with 5 point scale.
-# 3. Filter rest of the documents.
 
 if __name__ == "__main__":
     executor_main([datashop_runner_phase_2.quality_ablation_model])
