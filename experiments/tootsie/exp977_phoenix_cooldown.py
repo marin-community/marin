@@ -117,8 +117,34 @@ normalized = {k: v / sum(starling_cooldown_weights.values()) for k, v in starlin
 assert 0.69 < sum(v for k, v in normalized.items() if k.startswith("nemotron")) < 0.71
 assert 0.29 < sum(v for k, v in normalized.items() if k not in NEMOTRON_WEIGHTS) < 0.31
 
+
+# things kept getting better, so we'll do a constant LR run for a bit longer
+
+starling_checkpoint = "gs://marin-us-central2/checkpoints/tootsie-8b-sensible-starling/checkpoints/step-1399923/"
+
+EXTRA_COOLDOWN_LEN = 20000
+
+tootsie_8b_deeper_starling_train_config = dataclasses.replace(
+    cooldown_train_config,
+    learning_rate=1.7e-5,
+    min_lr_ratio=1.0,
+    decay=0,
+    num_train_steps=PHASE_4_END + COOLDOWN_LEN + EXTRA_COOLDOWN_LEN,
+    initialize_from_checkpoint_path=starling_checkpoint,
+)
+
+tootsie_8b_deeper_starling = default_train(
+    name="tootsie-8b-deeper-starling",
+    tokenized=starling_cooldown_mixture,
+    model_config=llama_8b,
+    train_config=tootsie_8b_deeper_starling_train_config,
+    tags=["llama", "8b", "ema", "exp977", "tootsie", "cooldown"],
+    eval_harness_tasks=CORE_TASKS_PLUS_MMLU,
+).with_output_path("checkpoints/tootsie-8b-deeper-starling")
+
+
 if __name__ == "__main__":
     executor_main(
-        [tootsie_8b_sensible_starling],
+        [tootsie_8b_sensible_starling, tootsie_8b_deeper_starling],
         description="Train Tootsie 8b with cooldown from 1.7e-4 to 1.7e-5 over 125B tokens",
     )
