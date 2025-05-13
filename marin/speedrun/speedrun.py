@@ -59,6 +59,7 @@ class SpeedrunConfig:
         N = compute_num_parameters(self.model_config, self.vocab_size)
 
         # TODO (Nikil): make this a helper and handle edge-cases
+        # also, need to add attention terms to expression
         if isinstance(self.train_config.train_batch_size, list) and len(self.train_config.train_batch_size) > 0:
             from levanter.schedule import BatchSchedule
 
@@ -77,11 +78,14 @@ class SpeedrunConfig:
     def estimate_flops_before_speedrun(self) -> tuple[bool, str]:
 
         # estimate model FLOPs as 6*N*D, and calculate estimated compute using this and (a reasonable estimate of) MFU
-        model_flops = self.estimate_flops_via_6nd()
-        estimated_compute = model_flops / self.mfu_estimate
+        estimated_model_flops = self.estimate_flops_via_6nd()
 
-        logger.info(f"Estimated {estimated_compute:.2e} FLOPs")
-        return estimated_compute
+        logger.info(
+            f"The rough estimated compute (calculated as 6*N*D / (Estimate of MFU)) for your run is around {estimated_model_flops/0.5:.2e} FLOPs assuming an MFU of 0.5."
+            "This is calculated based on plausible MFU values and can be used as a rough estimate to guide your config setup."
+        )
+
+        return estimated_model_flops
 
 
 @dataclass
