@@ -5,20 +5,28 @@ a Llama-3.1-8B-Instruct model. To try a different model or dataset,
 you can change the `model_name` or `huggingface_dataset_id` variables, respectively.
 """
 
-from experiments.defaults import default_download
 from experiments.evals.resource_configs import TPU_V6E_8_STRICT_PACK
 from experiments.models import get_model_local_path, llama_3_1_8b_instruct
 from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path, versioned
 from marin.generation.inference import TextGenerationInferenceConfig, run_inference
 from marin.utils import get_directory_friendly_name
+from operations.download.huggingface.download import DownloadConfig
+from operations.download.huggingface.download_hf import download_hf
 
 huggingface_dataset_id = "HuggingFaceH4/MATH-500"
 tensor_parallel_size = 1
 
 dataset_name = get_directory_friendly_name(huggingface_dataset_id)
 
-math500 = default_download(
-    name=f"raw/{dataset_name}-retry-2", hf_dataset_id=huggingface_dataset_id, revision=versioned("ff5b202")
+math500 = ExecutorStep(
+    name=f"raw/{dataset_name}-retry-2",
+    fn=download_hf,
+    config=DownloadConfig(
+        hf_dataset_id=huggingface_dataset_id,
+        revision=versioned("ff5b202"),
+        gcs_output_path=this_output_path(),
+        wait_for_completion=True,
+    ),
 )
 
 generations = ExecutorStep(
