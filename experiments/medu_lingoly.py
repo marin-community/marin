@@ -2,6 +2,7 @@ from experiments.datashop.datashop_datasets import datashop_dclm_annotation_subs
 from experiments.datashop.datashop_runner import DatashopRunner, DatashopRunnerConfig
 from experiments.datashop.default_configs import default_medu_config_kwargs, default_text_generation_config_kwargs
 from experiments.eval_datasets import lingoly
+from experiments.models import get_model_local_path, llama_3_3_70b_instruct
 from marin.datashop.pipeline import CorpusContent
 from marin.execution.executor import ExecutorStep, output_path_of, this_output_path
 from operations.transform.lingoly.to_dolma import ConvertLingolyToDolmaConfig, convert_lingoly_to_dolma
@@ -26,10 +27,7 @@ text_generation_config_kwargs["generation_kwargs"] = medu_config_kwargs["generat
 lingoly_datashop_runner = DatashopRunner(
     DatashopRunnerConfig(
         experiment_name="lingoly",
-        # annotator_model_name="meta-llama/Llama-3.1-8B-Instruct",
-        annotator_model_name="/opt/gcsfuse_mount/models/meta-llama--Llama-3-3-70B-Instruct",
-        # pretraining_data_path=datashop_dclm_tutorial_pretraining_subset,
-        # annotator_data_path=datashop_dclm_tutorial_annotation_subset,
+        annotator_model_name=get_model_local_path(llama_3_3_70b_instruct),
         pretraining_data_path=datashop_dclm_pretraining_subset,
         annotator_data_path=datashop_dclm_annotation_subset,
         corpus_content_paths=[
