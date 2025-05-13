@@ -105,7 +105,7 @@ you train a tiny language model on TinyStories on your CPU.  For a sneak preview
 
 ```bash
 wandb offline  # Disable WandB logging
-python experiments/tutorial/train_tiny_model_cpu.py --prefix local_store
+python experiments/tutorials/train_tiny_model_cpu.py --prefix local_store
 ```
 
 This will:
@@ -121,4 +121,4 @@ next hands-on tutorial or read more about how Marin is designed for building
 language models.
 
 1. Follow our [First Experiment](first-experiment.md) tutorial to run a training experiment
-2. Read our [Language Modeling Pipeline](../explanation/lm-pipeline.md) to understand Marin's approach to language models
+2. Read our [Language Modeling Pipeline](../explanations/lm-pipeline.md) to understand Marin's approach to language models
