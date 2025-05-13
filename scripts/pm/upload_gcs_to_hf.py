@@ -126,7 +126,7 @@ def extract_version_from_path(gcs_path: str) -> str:
     return parts[-3]
 
 
-def upload_to_huggingface(local_path: str, repo_id: str, revision: int) -> bool:
+def upload_to_huggingface(local_path: str, repo_id: str, revision: int, version_name: str) -> bool:
     """Upload a local directory to Hugging Face as a specific revision."""
     try:
         print(f"Uploading checkpoint {version_name} to Hugging Face as revision: {revision}")
