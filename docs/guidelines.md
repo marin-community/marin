@@ -59,7 +59,7 @@ abide by the following guidelines:
 - Use `dataclass(frozen=True)` instead of untyped dictionaries.
 - Write simple unit tests for any tricky piece of code.
 - Break code into small pieces as opposed to having giant monolithic functions
-  when the pieces could be reusable.
+  when the pieces could be reusable. But please keep in mind the [rule of three](https://en.wikipedia.org/wiki/Rule_of_three_(computer_programming)).
 
 # Experiments
 
@@ -92,7 +92,7 @@ GitHub experiment issue should include the following:
   (e.g., 1.4B parameter models for 28B tokens), and the metrics that will be
   used to evaluate the changes.
 - A **hypothesis or goal**, which is an a priori prediction of what the outcomes
-  will be (e.g., optimizer A will be faster).  This serves as a
+  will be (e.g., optimizer A will be faster). This serves as a
   [preregistration](https://en.wikipedia.org/wiki/Preregistration).
 - Links to the following, which allow anyone to monitor the progress of an
   experiment, which will be filled in over time:
@@ -120,7 +120,7 @@ for the experiment.  This file should take no arguments (aside from those the
 executor accepts), and running this experiment should launch all the relevant
 jobs for this experiment from start to finish.
 
-Experiments are defined using the [executor framework](executor.md),
+Experiments are defined using the [executor framework](explanation/executor.md),
 which represents a DAG over steps.  Each step makes a call to a (Ray)
 function with a custom `config`.
 
