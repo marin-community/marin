@@ -147,6 +147,7 @@ def main():
 
     # Load and merge environment variables from multiple -e options
     env_vars = {}
+
     if args.env_vars:
         for item in args.env_vars:
             if len(item) > 2:
