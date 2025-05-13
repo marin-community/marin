@@ -11,30 +11,10 @@ from levanter.data.text import ChatLmDatasetFormat
 from transformers import AutoTokenizer
 
 from experiments.llama import llama3_instruct_tokenizer, llama3_tokenizer
+from experiments.marin_models import MARIN_CHAT_TEMPLATE, marin_tokenizer
 
-# name for the hf hub. cf llama3_tokenizer
-marin_tokenizer = "stanford-crfm/marin-tokenizer"
-
-# to be clear this is the Olmo 2 template except we use llama3's special tokens
-# we also add the {% generation -%} tag stuff that makes the assistant_mask work
-MARIN_TEMPLATE = """
-{{ bos_token }}
-{%- for message in messages -%}
-{%- if message['role'] == 'assistant' -%}
-    <|start_header_id|>{{ message['role'] }}<|end_header_id|>
-{% generation %}{{- message['content'] | trim }}<|eot_id|>{% endgeneration %}\n
-{% else %}
-<|start_header_id|>{{ message['role'] }}<|end_header_id|>
-{{ message['content'] | trim }}<|eot_id|>
-{% endif %}
-{%- endfor -%}
-{%- if add_generation_prompt -%}
-<|start_header_id|>assistant<|end_header_id|>\n{% endif -%}
-""".strip()
-
-
-# Olmo 2 template modified so we can use with with levanter
-MARIN_OLMO2_TEMPLATE = """
+# Olmo 2 template modified so we can use with levanter
+MARIN_OLMO2_CHAT_TEMPLATE = """
 {{ bos_token }}
 {%- for message in messages -%}
   {%- if message['role'] == 'system' -%}
@@ -64,13 +44,13 @@ def main():
             return
         raise e
 
-    marin.chat_template = MARIN_TEMPLATE
+    marin.chat_template = MARIN_CHAT_TEMPLATE
 
     marin.save_pretrained(os.path.join(os.getcwd(), "marin_tokenizer"))
 
     marin = AutoTokenizer.from_pretrained(os.path.join(os.getcwd(), "marin_tokenizer"))
 
-    assert marin.chat_template == MARIN_TEMPLATE
+    assert marin.chat_template == MARIN_CHAT_TEMPLATE
 
     olmo2 = AutoTokenizer.from_pretrained("allenai/OLMo-2-1124-7B-SFT")
     llama3_instruct = AutoTokenizer.from_pretrained(llama3_instruct_tokenizer)
@@ -79,11 +59,11 @@ def main():
     # now do the olmo2 template
     marin_olmo2_tokenizer = "stanford-crfm/marin-olmo2-tokenizer"
     marin_olmo2 = AutoTokenizer.from_pretrained("allenai/OLMo-2-1124-7B-SFT")
-    marin_olmo2.chat_template = MARIN_OLMO2_TEMPLATE
+    marin_olmo2.chat_template = MARIN_OLMO2_CHAT_TEMPLATE
     marin_olmo2.save_pretrained(os.path.join(os.getcwd(), "marin_olmo2_tokenizer"))
 
     marin_olmo2 = AutoTokenizer.from_pretrained(os.path.join(os.getcwd(), "marin_olmo2_tokenizer"))
-    assert marin_olmo2.chat_template == MARIN_OLMO2_TEMPLATE
+    assert marin_olmo2.chat_template == MARIN_OLMO2_CHAT_TEMPLATE
 
     # try it out a bit
     convo = [

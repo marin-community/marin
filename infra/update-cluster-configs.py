@@ -12,7 +12,8 @@ vllm_template_path = os.path.join(this_path, "marin-vllm-template.yaml")
 # LAtest tahs ABh:  latest 4a47ffc0 20250305
 
 DOCKER_TAGS = {
-    "us-central2": "4a47ffc0",
+    "us-central2": "8b035b60",
+    "us-central2-compress": "8b035b60",
     "us-central1": "4a47ffc0",
     "big-run": "4a47ffc0",
     "us-west4": "89b461b3",
@@ -35,6 +36,15 @@ configs = {
         "ZONE": "us-central2-b",
         "BUCKET": "marin-us-central2",
         "DOCKER_TAG": DOCKER_TAGS["us-central2"],
+        "tpu_generation": "v4",
+        "min_workers": 4,
+    },
+    "marin-us-central2-compress": {
+        "NAME": "marin-us-central2-compress",
+        "REGION": "us-central2",
+        "ZONE": "us-central2-b",
+        "BUCKET": "marin-us-central2",
+        "DOCKER_TAG": DOCKER_TAGS["us-central2-compress"],
         "tpu_generation": "v4",
         "min_workers": 4,
     },

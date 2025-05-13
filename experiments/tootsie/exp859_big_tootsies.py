@@ -1,5 +1,5 @@
 """
-These are larger versions of @dlwh's "YOLO"/vibes run described in https://github.com/stanford-crfm/marin/issues/600.
+These are larger versions of @dlwh's "YOLO"/vibes run described in https://github.com/marin-community/marin/issues/600.
 
 Initially, these were just testing runs, since we didn't know if we'd actually have the capacity for any length of time.
 Turns out we did and they seem pretty decent.
@@ -14,10 +14,10 @@ Also buried in here is a 56B model that I thought was a 70B model. Always double
 
 import dataclasses
 
+import haliax
 from levanter.models.rotary import DefaultRotaryEmbeddingsConfig
 from levanter.schedule import ScheduleStep
 
-import haliax
 from experiments.dclm.tokenize_dclm import DCLM_MIXTURE_WEIGHTS, dclm_components_llama3, dclm_mixture_config_llama3
 from experiments.defaults import default_train
 from experiments.llama import llama_13b, llama_24b, llama_32b, llama_56b
@@ -25,6 +25,7 @@ from experiments.nemotron_cc.tokenize_nemotron import NEMOTRON_WEIGHTS, tokenize
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import executor_main
 from marin.processing.tokenize import lm_mixture_data_config
+from marin.resources import TpuPodConfig
 
 # data
 
@@ -51,8 +52,7 @@ llama_24b_old_rotary = dataclasses.replace(llama_24b, rope=DefaultRotaryEmbeddin
 
 ## Initial 13B config for the first phase
 llama_13b_train_config = SimpleTrainConfig(
-    tpu_type="v6e-64",
-    node_count=4,
+    resources=TpuPodConfig(tpu_type="v6e-64", node_count=4),
     train_batch_size=1024,
     num_train_steps=1_000_000,  # using wsd-s so this doesn't really matter
     learning_rate=3e-4,
@@ -69,8 +69,7 @@ llama_13b_train_config = SimpleTrainConfig(
 
 ## Initial "22B" config for the first phase
 llama_22b_train_config = SimpleTrainConfig(
-    tpu_type="v6e-256",
-    node_count=2,
+    resources=TpuPodConfig(tpu_type="v6e-256", node_count=2),
     train_batch_size=1024,
     num_train_steps=1_000_000,  # using wsd-s so this doesn't really matter
     learning_rate=3e-4,
@@ -110,8 +109,7 @@ llama_22b_tootsie_phase1 = default_train(
 #####
 
 llama_13b_train_config_ema = SimpleTrainConfig(
-    tpu_type="v6e-64",
-    node_count=7,
+    resources=TpuPodConfig(tpu_type="v6e-64", node_count=7),
     train_batch_size=[ScheduleStep(start=0, value=1024), ScheduleStep(start=280_000, value=3072)],
     num_train_steps=1_000_000,
     weight_decay=0.05,
@@ -125,8 +123,7 @@ llama_13b_train_config_ema = SimpleTrainConfig(
 
 # 22b warmstart, switching to EMA
 llama_22b_train_config_ema = SimpleTrainConfig(
-    tpu_type="v6e-128",
-    node_count=4,
+    resources=TpuPodConfig(tpu_type="v6e-128", node_count=4),
     # train_batch_size=1024,
     train_batch_size=[ScheduleStep(start=0, value=1024), ScheduleStep(start=200_000, value=3072)],
     num_train_steps=1_000_000,
@@ -172,8 +169,7 @@ llama_22b_tootsie_ema_warmstart = dataclasses.replace(
 ## 32b experiments
 
 llama_32b_remat = dataclasses.replace(
-    llama_32b,
-    gradient_checkpointing=haliax.ScanCheckpointPolicy(save_carries="offload")
+    llama_32b, gradient_checkpointing=haliax.ScanCheckpointPolicy(save_carries="offload")
 )
 
 llama_32b_train_config = SimpleTrainConfig(
@@ -181,7 +177,11 @@ llama_32b_train_config = SimpleTrainConfig(
     node_count=1,
     # decreasing so we don't have padding at slice count 3
     # but we moved to v4 once we lost the v5 compute so we moved back to 8192 again
-    train_batch_size=[ScheduleStep(start=0, value=8192), ScheduleStep(start=18500, value=7680), ScheduleStep(start=21010, value=8192)],
+    train_batch_size=[
+        ScheduleStep(start=0, value=8192),
+        ScheduleStep(start=18500, value=7680),
+        ScheduleStep(start=21010, value=8192),
+    ],
     num_train_steps=1_000_000,
     weight_decay=0.05,
     # width is a little smaller than the 24B and we're using a much larger batch size
@@ -221,8 +221,7 @@ llama_32b_tootsie = default_train(
 # sigh... 56B. you can ignore this.
 #####
 llama_56b_train_config = SimpleTrainConfig(
-    tpu_type="v6e-256",
-    node_count=2,
+    resources=TpuPodConfig(tpu_type="v6e-256", node_count=2),
     train_batch_size=1024,
     num_train_steps=1_000_000,  # using wsd-s so this doesn't really matter
     learning_rate=3e-5,
@@ -242,8 +241,7 @@ llama_56b_train_config = SimpleTrainConfig(
 llama_56b_train_config_mk2 = dataclasses.replace(
     llama_56b_train_config,
     train_batch_size=1024,
-    tpu_type="v4-2048",
-    node_count=1,
+    resources=TpuPodConfig(tpu_type="v4-2048", node_count=1),
     learning_rate=2e-4,
     decay=0.4,
     ema_beta=0.995,

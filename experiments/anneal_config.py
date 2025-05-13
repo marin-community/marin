@@ -1,9 +1,10 @@
 from dataclasses import dataclass
 
 from marin.processing.tokenize.data_configs import LMMixtureDatasetConfig
+from marin.resources import ResourceConfig, TpuPodConfig
 
 
-@dataclass
+@dataclass(frozen=True)
 class AnnealConfig:
     # 198468 steps is roughly 198468 steps * 1024 batch size * 4096 seq len = 0.832T tokens
     # Numbers were taken from exp600_tootsie.py. We start with this 8B model because it would take a long time to train
@@ -26,8 +27,21 @@ class AnnealConfig:
     num_anneal_training_tokens: int = 50_000_000_000  # 50B tokens
 
     # Hardware related
-    tpu_type: str = "v4-128"
-    node_count: int = 2
+    resources: ResourceConfig = TpuPodConfig(tpu_type="v4-128", node_count=2)  # noqa: RUF009
 
     # Checkpoint related
     steps_per_export: int = 10000
+
+    @property
+    def tpu_type(self) -> str | None:
+        """For backward compatibility."""
+        if isinstance(self.resources, TpuPodConfig):
+            return self.resources.tpu_type
+        return None
+
+    @property
+    def node_count(self) -> int:
+        """For backward compatibility."""
+        if isinstance(self.resources, TpuPodConfig):
+            return self.resources.node_count
+        return 1

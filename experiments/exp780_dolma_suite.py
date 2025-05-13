@@ -1,7 +1,7 @@
 """
 This script runs a suite of scaling laws on the Dolma mix.
 
-Link to issue: https://github.com/stanford-crfm/marin/issues/780
+Link to issue: https://github.com/marin-community/marin/issues/780
 """
 
 from experiments.defaults import default_scaling_law_pred
