@@ -111,9 +111,9 @@ The rest of this guide assumes you have already:
 
 ## Submitting Your Run
 
-1. Add your `speedrun_results.json` file to your run directory:
+1. Add your `speedrun_results.json` file to your run directory. This will be in the `${MARIN_PREFIX}/checkpoints/speedrun/<YOUR_RUN-computedhash>`:
    ```bash
-   cp ${MARIN_PREFIX}/speedrun_results.json experiments/speedrun/llama_75m_fineweb_edu/
+   cp ${MARIN_PREFIX}/checkpoints/speedrun/75M_llama_fineweb_edu-ca427c/speedrun_results.json experiments/speedrun/llama_75m_fineweb_edu/
    ```
 
 2. Create a pull request including:
