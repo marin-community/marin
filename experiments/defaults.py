@@ -5,7 +5,7 @@ This file represents the best practices for each stage of the pipeline.
 import dataclasses
 import logging
 import os
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from datetime import timedelta
 from functools import lru_cache
 
@@ -39,6 +39,7 @@ from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.execution.executor import (
     ExecutorStep,
     InputName,
+    VersionedValue,
     ensure_versioned,
     get_executor_step,
     this_output_path,
@@ -67,9 +68,7 @@ def default_download(
     name: str,
     hf_dataset_id: str,
     revision: str,
-    output_path: str | None = None,
-    download_fn: Callable[[DownloadConfig], None] | None = None,
-    cd: str | None = None,
+    output_path: str,
     **kwargs,
 ) -> ExecutorStep:
     """
@@ -81,23 +80,16 @@ def default_download(
         hf_dataset_id: The HuggingFace dataset ID to download. As `$ORG/$DATASET` on HF Hub
         revision: The revision of the dataset to download.
             Short Commit Hash from HF Dataset Repo (7 characters)
-        output_path: Optional override for the output path.
-            If not specified, the output path will be detemined by the executor based on name.
-        download_fn: Optional override for the download function.
-            If not specified, download_hf will be used.
-        cd: Optional override for the cd parameter.
-            Since download_fn adds a revision subdirectory, cd is generally required to get the exact path.
+        output_path: The output path for the dataset.
         **kwargs: Additional keyword arguments that are passed to the download config.
 
-    The final output data will reside in 'output_path/{cd}',
-    where output_path is either explicitly specified or determined by the executor based on name.
+    The final output data will reside in 'output_path/revision'.
     """
 
-    if download_fn is None:
-        download_fn = download_hf
     step = ExecutorStep(
         name=name,
-        fn=download_fn,
+        description=f"Download {hf_dataset_id} revision {revision} to {output_path}",
+        fn=download_hf,
         config=DownloadConfig(
             hf_dataset_id=hf_dataset_id,
             revision=revision,
@@ -108,7 +100,11 @@ def default_download(
         override_output_path=output_path,
     )
 
-    return step.cd(cd) if cd is not None else step
+    cd_path = revision
+    if isinstance(cd_path, VersionedValue):
+        cd_path = cd_path.value
+
+    return step.cd(cd_path)
 
 
 def default_tokenize(
