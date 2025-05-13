@@ -19,9 +19,10 @@ local_path = get_model_local_path(model_name)
 import os
 from dataclasses import dataclass
 
-from experiments.defaults import default_download
-from marin.execution.executor import ExecutorStep, versioned
+from marin.execution.executor import ExecutorStep, this_output_path, versioned
 from marin.utils import get_directory_friendly_name
+from operations.download.huggingface.download import DownloadConfig
+from operations.download.huggingface.download_hf import download_hf
 
 
 @dataclass(frozen=True)
@@ -40,13 +41,19 @@ GCS_FUSE_MOUNT_PATH = "gcsfuse_mount/models"
 
 def download_model_step(model_config: ModelConfig) -> ExecutorStep:
     model_name = get_directory_friendly_name(model_config.hf_repo_id)
-
-    download_step = default_download(
+    download_step = ExecutorStep(
         name=f"{GCS_FUSE_MOUNT_PATH}/{model_name}",
-        hf_dataset_id=model_config.hf_repo_id,
-        revision=versioned(model_config.hf_revision),
-        output_path=f"{GCS_FUSE_MOUNT_PATH}/{model_name}",
-        hf_repo_type_prefix="",
+        fn=download_hf,
+        config=DownloadConfig(
+            hf_dataset_id=model_config.hf_repo_id,
+            revision=versioned(model_config.hf_revision),
+            gcs_output_path=this_output_path(),
+            wait_for_completion=True,
+            hf_repo_type_prefix="",
+        ),
+        # must override because it because if we don't then it will end in a hash
+        # if it ends in a hash, then we cannot determine the local path
+        override_output_path=f"{GCS_FUSE_MOUNT_PATH}/{model_name}",
     )
 
     return download_step
