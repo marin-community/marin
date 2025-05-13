@@ -1,3 +1,17 @@
+"""
+Upload GCS to Hugging Face (HF) Script
+
+This script transfers model checkpoints or other content from Google Cloud Storage (GCS)
+to Hugging Face repositories. It handles:
+- Finding checkpoint directories in GCS buckets
+- Downloading the content locally (to a temporary directory)
+- Uploading to a specified Hugging Face repository with appropriate versioning
+- Supporting dry-run mode to preview what would be uploaded
+
+Usage:
+  python upload_gcs_to_hf.py --repo-id="organization/model-name" [--dry-run] [--directory="gs://bucket/path"]
+"""
+
 from google.cloud import storage
 import os
 import re
@@ -5,6 +19,7 @@ import subprocess
 import tempfile
 import shutil
 from collections import defaultdict
+from huggingface_hub import HfApi, create_repo
 import argparse
 
 # List of GCS directories to check
@@ -19,7 +34,7 @@ dirs = [
 ]
 
 
-def list_gcs_directories(gcs_path):
+def list_gcs_directories(gcs_path: str) -> list[tuple[str, int]]:
     """List subdirectories by examining full blob paths."""
     if not gcs_path.startswith("gs://"):
         raise ValueError(f"Invalid GCS path: {gcs_path}")
@@ -74,7 +89,7 @@ def list_gcs_directories(gcs_path):
     return step_dirs_local
 
 
-def download_from_gcs(gcs_path, local_path):
+def download_from_gcs(gcs_path: str, local_path: str) -> bool:
     """Download contents from a GCS path to a local directory using gsutil."""
     try:
         print(f"Downloading {gcs_path} to {local_path}...")
@@ -89,35 +104,49 @@ def download_from_gcs(gcs_path, local_path):
         return False
 
 
-def upload_to_huggingface(local_path, repo_id, revision):
+def revision_exists(repo_id: str, revision: int) -> bool:
+    """Check if a specific revision exists in a Hugging Face repository."""
+    try:
+        from huggingface_hub import HfApi
+
+        api = HfApi()
+        try:
+            api.repo_info(repo_id=repo_id, revision=f"step-{revision}")
+            return True
+        except Exception:
+            return False
+    except Exception:
+        return False
+
+
+def extract_version_from_path(gcs_path: str) -> str:
+    """Extract the version name from a GCS path."""
+    # Extract model name from path like "gs://marin-eu-west4/checkpoints/llama-8b-tootsie-0.001-19ad63/hf/"
+    parts = gcs_path.strip("/").split("/")
+    return parts[-3]
+
+
+def upload_to_huggingface(local_path: str, repo_id: str, revision: int) -> bool:
     """Upload a local directory to Hugging Face as a specific revision."""
     try:
-        print(f"Uploading checkpoint to Hugging Face as revision: {revision}")
-        # Make sure huggingface_hub is installed
-        subprocess.run(["pip", "install", "huggingface_hub"], check=True, capture_output=True)
+        print(f"Uploading checkpoint {version_name} to Hugging Face as revision: {revision}")
 
-        # Use the Hugging Face CLI to upload
-        cmd = [
-            "python",
-            "-m",
-            "huggingface_hub",
-            "upload",
-            local_path,
-            "--repo-id",
-            repo_id,
-            "--revision",
-            f"step-{revision}",
-            "--commit-message",
-            f"Upload checkpoint for step {revision}",
-        ]
-        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        # Check if repo exists, create if not
+        api = HfApi()
+        create_repo(repo_id=repo_id, exist_ok=True)
+        version_info = f" ({version_name})" if version_name else ""
+        # Upload the directory
+        result = api.upload_folder(
+            folder_path=local_path,
+            repo_id=repo_id,
+            revision=f"step-{revision}",
+            commit_message=f"Upload checkpoint for step {revision}{version_info}",
+        )
         print(f"Upload completed successfully.")
-        print(result.stdout)
+        print(f"Commit URL: {result.commit_url}")
         return True
-    except subprocess.CalledProcessError as e:
+    except Exception as e:
         print(f"Error uploading to Hugging Face: {e}")
-        print(f"stdout: {e.stdout}")
-        print(f"stderr: {e.stderr}")
         return False
 
 
@@ -127,6 +156,11 @@ def main():
         "--repo-id", required=True, help='Target Hugging Face repository ID (e.g., "username/model-name")'
     )
     parser.add_argument("--dry-run", action="store_true", help="Only list checkpoints without uploading")
+    parser.add_argument(
+        "--directories",
+        nargs="+",
+        help="Process specific GCS directories instead of the built-in list. Multiple directories can be provided.",
+    )
     args = parser.parse_args()
 
     # Initialize the GCS client
@@ -136,12 +170,20 @@ def main():
     all_step_dirs = []
 
     # Main execution
-    for directory in dirs:
-        try:
-            step_dirs = list_gcs_directories(directory)
-            all_step_dirs.extend(step_dirs)
-        except Exception as e:
-            print(f"Error listing {directory}: {e}")
+    if args.directories:
+        for directory in args.directories:
+            try:
+                step_dirs = list_gcs_directories(directory)
+                all_step_dirs.extend(step_dirs)
+            except Exception as e:
+                print(f"Error listing {directory}: {e}")
+    else:
+        for directory in dirs:
+            try:
+                step_dirs = list_gcs_directories(directory)
+                all_step_dirs.extend(step_dirs)
+            except Exception as e:
+                print(f"Error listing {directory}: {e}")
 
     # Sort all step directories by step number
     if all_step_dirs:
@@ -160,15 +202,23 @@ def main():
             print(f"\nUploading to Hugging Face repo: {args.repo_id}")
 
             for full_path, step_number in all_step_dirs:
+                # Check if this revision already exists
+                if revision_exists(args.repo_id, step_number):
+                    print(f"Step {step_number} already exists in HF repo {args.repo_id}, skipping")
+                    continue
+
+                # Extract version name from the path
+                version_name = extract_version_from_path(full_path)
+
                 # Create a temporary directory for downloading
                 with tempfile.TemporaryDirectory() as temp_dir:
-                    print(f"\nProcessing step {step_number} from {full_path}")
+                    print(f"\nProcessing step {step_number} from {full_path} ({version_name})")
 
                     # Download from GCS
                     if download_from_gcs(full_path, temp_dir):
                         # Upload to HF
-                        if upload_to_huggingface(temp_dir, args.repo_id, step_number):
-                            print(f"Successfully uploaded step {step_number} to HF repo {args.repo_id}")
+                        if upload_to_huggingface(temp_dir, args.repo_id, step_number, version_name):
+                            print(f"Successfully uploaded step {step_number} ({version_name}) to HF repo {args.repo_id}")
                         else:
                             print(f"Failed to upload step {step_number}")
                     else:
@@ -180,11 +230,12 @@ def main():
             print("-" * 50)
 
             for i, (full_path, step_number) in enumerate(all_step_dirs):
+                version_name = extract_version_from_path(full_path)
                 print(f"\nCheckpoint {i+1}/{len(all_step_dirs)}:")
                 print(f"  Source: {full_path}")
                 print(f"  Target repo: {args.repo_id}")
                 print(f"  Revision: step-{step_number}")
-                print(f"  Commit message: Upload checkpoint for step {step_number}")
+                print(f"  Commit message: Upload checkpoint for step {step_number} ({version_name})")
 
                 # Try to estimate what files would be uploaded
                 try:
