@@ -92,6 +92,6 @@ us_central1_uploads = upload_model_to_hf_step(
 if __name__ == "__main__":
     # Default to running region-based upload steps when script is executed directly
     executor_main(
-        [eu_west4_uploads],  # , us_central2_uploads, us_central1_uploads],
+        [eu_west4_uploads, us_central2_uploads, us_central1_uploads],
         description="Upload model checkpoints to Hugging Face by region",
     )
