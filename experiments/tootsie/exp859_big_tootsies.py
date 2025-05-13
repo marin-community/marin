@@ -173,8 +173,7 @@ llama_32b_remat = dataclasses.replace(
 )
 
 llama_32b_train_config = SimpleTrainConfig(
-    tpu_type="v4-2048",
-    node_count=1,
+    resources=TpuPodConfig(tpu_type="v4-2048", node_count=1),
     # decreasing so we don't have padding at slice count 3
     # but we moved to v4 once we lost the v5 compute so we moved back to 8192 again
     train_batch_size=[
