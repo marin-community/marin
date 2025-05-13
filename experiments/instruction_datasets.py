@@ -33,7 +33,7 @@ import hashlib
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 
-from experiments.defaults import default_download, default_tokenize
+from experiments.defaults import default_tokenize
 from experiments.llama import llama3_tokenizer
 from marin.execution.executor import (
     ExecutorStep,
@@ -42,6 +42,8 @@ from marin.execution.executor import (
     this_output_path,
     versioned,
 )
+from operations.download.huggingface.download import DownloadConfig
+from operations.download.huggingface.download_hf import download_hf
 from operations.transform.conversation.conversation_to_dolma import (
     ConversationToDolmaConfig,
     convert_conversation_to_dolma,
@@ -225,12 +227,19 @@ def get_directory_friendly_dataset_name(hf_dataset_id: str) -> str:
 def download_dataset_step(dataset: InstructionDatasetConfig) -> ExecutorStep:
     """ExecutorStep for downloading of data from external source to GCP"""
     dataset_name = get_directory_friendly_dataset_name(dataset.hf_dataset_id)
-    return default_download(
+    download_step = ExecutorStep(
         name=f"raw/{dataset_name}",
-        hf_dataset_id=dataset.hf_dataset_id,
-        revision=dataset.revision,
-        output_path=f"raw/{dataset_name}-{dataset.revision}",
+        fn=download_hf,
+        config=DownloadConfig(
+            hf_dataset_id=dataset.hf_dataset_id,
+            revision=versioned(dataset.revision),
+            gcs_output_path=this_output_path(),
+            wait_for_completion=True,
+        ),
+        override_output_path=f"raw/{dataset_name}-{dataset.revision}",
     )
+
+    return download_step
 
 
 def transform_dataset_step(dataset_cfg: InstructionDatasetConfig, download_step: ExecutorStep) -> ExecutorStep:
