@@ -2,7 +2,7 @@
 Base model evaluations across multiple LLMs.
 
 This experiment evaluates OLMO Base 8B, LLAMA 3.1 8B, Deeper Starling 8B,
-MAP-NEO 7B, and Amber Base 7B models on CORE_TASKS (augmented with GPQA) as well
+MAP-NEO 7B, and Amber Base 7B models on CORE_TASKS (augmented with OLMo Eval Tasks) as well
 as dedicated MMLU 0-shot and 5-shot configurations.
 """
 
@@ -30,12 +30,12 @@ def run_core_base_evals(
             3,
             task_alias="bbh_3shot",
         ),
-        # EvalTaskConfig(
-        #     "leaderboard_gpqa",
-        #     0,
-        #     task_alias="gpqa_0shot",
-        # ),
-        # *CORE_TASKS,
+        EvalTaskConfig(
+            "leaderboard_gpqa",
+            0,
+            task_alias="gpqa_0shot",
+        ),
+        *CORE_TASKS,
     )
     # Create EvalTaskConfig objects for tasks that need to be run on their own for Macro Avg purposes in LM Eval harness
     mmlu_0shot_config = [EvalTaskConfig("mmlu", 0, task_alias="mmlu_0shot")]
@@ -43,9 +43,9 @@ def run_core_base_evals(
     mmlu_pro_5shot_config = [EvalTaskConfig("leaderboard_mmlu_pro", 5, task_alias="mmlu_5shot")]
 
     generation_tasks = (
-        # EvalTaskConfig(name="gsm8k_cot", num_fewshot=8),
-        # EvalTaskConfig(name="nq_open", num_fewshot=0, task_alias="nq_open"),
-        # EvalTaskConfig(name="triviaqa", num_fewshot=0, task_alias="triviaqa"),
+        EvalTaskConfig(name="gsm8k_cot", num_fewshot=8),
+        EvalTaskConfig(name="nq_open", num_fewshot=0, task_alias="nq_open"),
+        EvalTaskConfig(name="triviaqa", num_fewshot=0, task_alias="triviaqa"),
     )
 
     # Set up evaluations for core tasks (including GPQA)
@@ -78,18 +78,18 @@ def run_core_base_evals(
     )
     eval_jobs.append(mmlu_pro_5shot)
 
-    # name, model_step_path = extract_model_name_and_path(step)
-    # generation = evaluate_lm_evaluation_harness(
-    #     name + "_mmlu_pro",
-    #     model_step_path,
-    #     generation_tasks,
-    #     max_eval_instances=max_eval_instances,
-    #     engine_kwargs=engine_kwargs,
-    #     resource_config=resource_config,
-    # )
+    name, model_step_path = extract_model_name_and_path(step)
+    generation = evaluate_lm_evaluation_harness(
+        name + "_mmlu_pro",
+        model_step_path,
+        generation_tasks,
+        max_eval_instances=max_eval_instances,
+        engine_kwargs=engine_kwargs,
+        resource_config=resource_config,
+    )
 
-    # eval_jobs.append(generation)
-    return [eval_jobs[0]]
+    eval_jobs.append(generation)
+    return eval_jobs
 
 
 if __name__ == "__main__":
@@ -98,12 +98,12 @@ if __name__ == "__main__":
     # Run all evaluations on all models
     executor_main(
         steps=[
-            # *run_core_base_evals(deeper_starling_path),
-            # *run_core_base_evals(llama_3_1_8b),
-            # *run_core_base_evals(olmo_2_base_8b),
+            *run_core_base_evals(deeper_starling_path),
+            *run_core_base_evals(llama_3_1_8b),
+            *run_core_base_evals(olmo_2_base_8b),
             *run_core_base_evals(amber_base_7b, engine_kwargs={"max_model_len": 2048, "max_gen_toks": 2048}),
-            # *run_core_base_evals(
-            #     map_neo_7b, engine_kwargs={"trust_remote_code": True, "max_model_len": 4096, "max_gen_toks": 4096}
-            # ),
+            *run_core_base_evals(
+                map_neo_7b, engine_kwargs={"trust_remote_code": True, "max_model_len": 4096, "max_gen_toks": 4096}
+            ),
         ]
     )
