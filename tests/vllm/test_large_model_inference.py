@@ -18,6 +18,9 @@ def _test_llm_func(model_path):
     return run_vllm_inference(model_path, **large_model_engine_kwargs)
 
 
-@pytest.mark.skipif(os.getenv("TPU_CI") != "true", reason="Skip this test if not running with a TPU in CI.")
+@pytest.mark.skipif(
+    os.getenv("TPU_CI") != "true" or os.getenv("SLOW_TEST") != "true",
+    reason="Skip this test if not running with a TPU in CI or if we don't want to run slow tests.",
+)
 def test_local_llm_inference(gcsfuse_mount_llama_70b_model_path):
     ray.get(_test_llm_func.remote(gcsfuse_mount_llama_70b_model_path))
