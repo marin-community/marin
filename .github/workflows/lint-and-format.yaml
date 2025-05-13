@@ -18,10 +18,8 @@ jobs:
 
     - name: Install dependencies
       run: |
-        pip install ruff==0.11.8 black==25.1.0
+        python -m pip install --upgrade pip
+        pip install pre-commit
 
-    - name: Run ruff
-      run: ruff check .
-
-    - name: Run black
-      run: black --check --diff .
+    - name: Run pre-commit
+      run: pre-commit run --all-files
