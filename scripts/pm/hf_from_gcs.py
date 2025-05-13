@@ -221,18 +221,4 @@ if __name__ == "__main__":
         print("Make sure you're authenticated with Google Cloud before running this script.")
         print("You can authenticate using: gcloud auth application-default login")
 
-    # Check if logged in to Hugging Face
-    try:
-        result = subprocess.run(["huggingface-cli", "whoami"], capture_output=True, text=True)
-        if "Not logged in" in result.stdout:
-            print("Not logged in to Hugging Face. Please login using:")
-            print("huggingface-cli login")
-            exit(1)
-    except FileNotFoundError:
-        print("Hugging Face CLI not found. Installing huggingface_hub...")
-        subprocess.run(["pip", "install", "huggingface_hub"], check=True)
-        print("Please login to Hugging Face after installation:")
-        print("huggingface-cli login")
-        exit(1)
-
     main()
