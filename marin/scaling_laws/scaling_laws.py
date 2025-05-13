@@ -27,6 +27,7 @@ from marin.scaling_laws.utils import (
     plot_actual_vs_predicted,
     plot_scaling_projections,
 )
+from marin.utilities.wandb_utils import WANDB_ENTITY, WANDB_PROJECT
 
 
 @dataclass(frozen=True)
@@ -58,7 +59,7 @@ class ScalingLawConfig:
     count_embedding_params: bool = False
     """whether to count embedding parameters in scaling laws"""
 
-    entity: str = "stanford-mercury"
+    entity: str = WANDB_ENTITY
     project: str = "marin"
 
     def __post_init__(self):
@@ -128,7 +129,8 @@ def log_and_create_report(
     pred_run_id: str | None,
     scaling_law_config: ScalingLawConfig,
     wandb_project: str = "marin-scaling-laws",
-    wandb_entity: str = "stanford-mercury",
+    wandb_entity: str = WANDB_ENTITY,
+    wandb_source_project: str = WANDB_PROJECT,
 ):
     """
     Logs scaling law analysis creates a concise WandB report with plots and info about runs.
@@ -184,8 +186,12 @@ def log_and_create_report(
     wandb.log(plots)
 
     # Info about runs and links
-    input_run_links = [f"https://wandb.ai/stanford-mercury/marin/runs/{run_id}" for run_id in input_run_ids]
-    prediction_run_link = f"https://wandb.ai/stanford-mercury/marin/runs/{pred_run_id}" if pred_run_id else None
+    input_run_links = [
+        f"https://wandb.ai/{wandb_entity}/{wandb_source_project}/runs/{run_id}" for run_id in input_run_ids
+    ]
+    prediction_run_link = (
+        f"https://wandb.ai/{wandb_entity}/{wandb_source_project}/runs/{pred_run_id}" if pred_run_id else None
+    )
     run.summary.update(
         {
             "Input Runs": input_run_links,
