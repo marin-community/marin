@@ -127,8 +127,6 @@ def main():
         "--repo-id", required=True, help='Target Hugging Face repository ID (e.g., "username/model-name")'
     )
     parser.add_argument("--dry-run", action="store_true", help="Only list checkpoints without uploading")
-    parser.add_argument("--max-uploads", type=int, default=None, help="Maximum number of checkpoints to upload")
-    parser.add_argument("--min-step", type=int, default=0, help="Minimum step number to include")
     args = parser.parse_args()
 
     # Initialize the GCS client
@@ -148,13 +146,6 @@ def main():
     # Sort all step directories by step number
     if all_step_dirs:
         all_step_dirs.sort(key=lambda x: x[1])
-
-        # Filter steps by minimum step number
-        all_step_dirs = [d for d in all_step_dirs if d[1] >= args.min_step]
-
-        # Limit the number of uploads if requested
-        if args.max_uploads:
-            all_step_dirs = all_step_dirs[: args.max_uploads]
 
         # Print sorted step directories
         print("\nAll step directories sorted by step number:")
