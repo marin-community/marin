@@ -43,7 +43,6 @@ class SpeedrunConfig:
     model_config: LmConfig
     train_config: SimpleTrainConfig | TrainLmOnPodConfig
     hardware_config: HardwareConfig
-    mfu_estimate: float = 0.5
 
     # by default, this is fineweb_edu_tokenized
     tokenized_dataset: InputName | LMMixtureDatasetConfig = fineweb_edu_tokenized
