@@ -1,3 +1,4 @@
+import json
 import os
 import shutil
 import traceback
@@ -120,6 +121,19 @@ class AlpacaEvaluator(VllmTpuEvaluator):
 
             # Download the model from GCS or HuggingFace
             model_name_or_path: str = self.download_model(model)
+            # If stop_token_ids not provided, try to load from config.json in the local model directory
+            gen_params = model.generation_params or {}
+            if gen_params.get("stop_token_ids") is None and os.path.isdir(model_name_or_path):
+                config_json_path = os.path.join(model_name_or_path, "config.json")
+                if os.path.exists(config_json_path):
+                    with open(config_json_path, "r") as f:
+                        config_data = json.load(f)
+                    eos = config_data.get("eos_token_id")
+                    if eos is not None:
+                        stop_ids = eos if isinstance(eos, list) else [eos]
+                        gen_params["stop_token_ids"] = stop_ids
+                        print(f"Loaded stop_token_ids from {config_json_path}: {stop_ids}")
+            model.generation_params = gen_params
 
             model_config_path: str = os.path.join(AlpacaEvaluator.CACHE_PATH, model_name_or_path, "model_config.yaml")
             model_config_content = self.write_model_config_file(model, model_config_path)
