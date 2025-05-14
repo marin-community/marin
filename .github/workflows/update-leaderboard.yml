@@ -57,24 +57,47 @@ jobs:
           echo "Marin directory structure (marin):"
           ls -la marin/ || echo "No marin directory"
       
-      # - name: Sync static files
-      #   run: |
-      #     # marin/speedrun/static/data that we generate as a temp dir should mirror speedrun-repo/data/
-      #     # everything else in speedrun-repo/ should be left as-is
-      #     rm -rf speedrun-repo/data/*
-      #     cp -r marin/speedrun/static/data/* speedrun-repo/data/
+      - name: Sync static files
+        run: |
+          # # marin/speedrun/static/data that we generate as a temp dir should mirror speedrun-repo/data/
+          # # everything else in speedrun-repo/ should be left as-is
+          # rm -rf speedrun-repo/data/*
+          # cp -r marin/speedrun/static/data/* speedrun-repo/data/
           
-      #     # configure and commit changes
-      #     cd speedrun-repo
-      #     git config user.name "speedrun-leaderboard-bot"
-      #     git config user.email "github-actions@github.com"
-      #     git add .
+          # # configure and commit changes
+          # cd speedrun-repo
+          # git config user.name "speedrun-leaderboard-bot"
+          # git config user.email "github-actions@github.com"
+          # git add .
           
-      #     # only commit and push if there are actual changes
-      #     if ! git diff --cached --quiet; then
-      #       git commit -m "Sync updated static files from Marin"
-      #       git push
-      #       echo "Successfully synced static files to speedrun repository"
-      #     else
-      #       echo "No changes to commit"
-      #     fi
+          # # only commit and push if there are actual changes
+          # if ! git diff --cached --quiet; then
+          #   git commit -m "Sync updated static files from Marin"
+          #   git push
+          #   echo "Successfully synced static files to speedrun repository"
+          # else
+          #   echo "No changes to commit"
+          # fi
+
+          - name: Sync static files (TEST MODE)
+          # Show current state
+          echo "Source directory content:"
+          ls -la marin/speedrun/static/data/
+          
+          echo "Destination directory content (before):"
+          ls -la speedrun-repo/data/ || echo "Directory empty"
+    
+          # What we would do in real mode
+          echo "Would run: rm -rf speedrun-repo/data/*"
+          echo "Would run: cp -r marin/speedrun/static/data/* speedrun-repo/data/"
+    
+          # Configure git
+          cd speedrun-repo
+          git config user.name "speedrun-leaderboard-bot"
+          git config user.email "github-actions@github.com"
+    
+          # Show what changes would be made
+          echo "Changes that would be committed:"
+          git status
+    
+          echo "TEST MODE: No changes were committed"
