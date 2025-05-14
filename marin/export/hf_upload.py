@@ -54,7 +54,7 @@ def upload_dir_to_hf(
     it will stream the files using preupload_lfs_files and/or upload_folder
 
     Args:
-        path: path to upload (can be a GCS path)
+        input_path: path to upload (can be a GCS path)
         repo_id: the repo id to upload to (e.g. "username/repo_name")
         repo_type: the type of repo to upload to (e.g. "dataset", "model", etc.)
         token: the token to use for authentication (if not provided, it will use the default token)
