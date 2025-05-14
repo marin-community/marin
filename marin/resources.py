@@ -87,7 +87,7 @@ class GpuConfig(ResourceConfig):
 
     # NB that Ray doesn't like resources={"GPU": 1} so we have to do this
     def as_remote_kwargs(self) -> dict:
-        out = {"num_gpus": self.gpu_count, "runtime_env": self.runtime_env}
+        out = dict(num_gpus=self.gpu_count, runtime_env=self.runtime_env)
         if self.accelerator_type is not None:
             out["accelerator_type"] = self.accelerator_type
 
@@ -105,7 +105,7 @@ class TpuPodConfig(ResourceConfig):
 
     tpu_type: str
     """Type of TPU to use, e.g. v4-128."""
-    node_count: int = 1
+    slice_count: int = 1
     """Number of TPU slices for training."""
 
     runtime_env: RuntimeEnv = dataclasses.field(default_factory=lambda: RuntimeEnv())
