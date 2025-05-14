@@ -1,5 +1,5 @@
 """
-Speedrun code for a 75M parameter model based on the LLaMA architecture on a 2x A100 GPU.
+Speedrun code for a 75M parameter model based on the LLaMA architecture on a 2 A100s.
 """
 
 import logging
