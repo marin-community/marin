@@ -24,6 +24,7 @@ from experiments.datashop.defaults import (
     default_train_quality_model,
 )
 from experiments.evals.resource_configs import TPU_V6E_8_STRICT_PACK, ResourceConfig
+from marin.datashop.pipeline import CorpusContent
 from marin.execution.executor import executor_main
 
 
@@ -49,7 +50,7 @@ class DatashopRunnerConfig:
     # Defines the corpus content that we will create annotator prompts for
     # In other words, the data that we "care" about finding more of
     # Default: Empty list to represent that the user does not specify a targeted dataset
-    corpus_content_paths: list[str] = field(default_factory=list)
+    corpus_content_paths: list[CorpusContent] = field(default_factory=list)
 
     # Name of the pretraining data path to group the output by in a single directory
     pretraining_data_path_name: str = "datashop-dclm-pretraining-subset"
