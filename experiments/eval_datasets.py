@@ -57,7 +57,7 @@ boolq_raw = default_download(
     name="raw/google/boolq",
     hf_dataset_id="google/boolq",
     revision=versioned("35b264d"),
-    output_path="raw/google/boolqhf",
+    override_output_path="raw/google/boolqhf",
     hf_urls_glob=["**/*.parquet"],
 )
 
@@ -68,7 +68,7 @@ hellaswag_raw = default_download(
     name="raw/Rowan/hellaswag",
     hf_dataset_id="Rowan/hellaswag",
     revision=versioned("50441ce"),
-    output_path="raw/Rowan/hellaswaghf",
+    override_output_path="raw/Rowan/hellaswaghf",
     hf_urls_glob=["**/*.parquet"],
 )
 
@@ -79,7 +79,7 @@ piqa_raw = default_download(
     name="raw/ybisk/piqa",
     hf_dataset_id="ybisk/piqa",
     revision=versioned("142c512"),
-    output_path="raw/ybisk/piqahf",
+    override_output_path="raw/ybisk/piqahf",
     hf_urls_glob=["**/*.parquet"],
 )
 
@@ -90,7 +90,7 @@ winogrande_raw = default_download(
     name="raw/allenai/winogrande",
     hf_dataset_id="allenai/winogrande",
     revision=versioned("ebf71e3"),
-    output_path="raw/allenai/winograndehf",
+    override_output_path="raw/allenai/winograndehf",
     hf_urls_glob=["winogrande_xl/**/*.parquet"],
 )
 
@@ -101,7 +101,7 @@ arc_raw = default_download(
     name="raw/allenai/ai2_arc",
     hf_dataset_id="allenai/ai2_arc",
     revision=versioned("210d026"),
-    output_path="raw/allenai/ai2_archf",
+    override_output_path="raw/allenai/ai2_archf",
     hf_urls_glob=["**/*.parquet", "*.md"],
 )
 
@@ -112,7 +112,7 @@ openbookqa_raw = default_download(
     name="raw/allenai/openbookqa",
     hf_dataset_id="allenai/openbookqa",
     revision=versioned("388097e"),
-    output_path="raw/allenai/openbookqahf",
+    override_output_path="raw/allenai/openbookqahf",
     hf_urls_glob=["**/*.parquet", "*.md"],
 )
 
@@ -123,7 +123,7 @@ mmlu_pro_raw = default_download(
     name="raw/TIGER-Lab/MMLU-Pro",
     hf_dataset_id="TIGER-Lab/MMLU-Pro",
     revision=versioned("3373e0b"),
-    output_path="raw/TIGER-Lab/MMLU-Prohf",
+    override_output_path="raw/TIGER-Lab/MMLU-Prohf",
     hf_urls_glob=["**/*.parquet", "*.md"],
 )
 
@@ -134,7 +134,7 @@ humaneval_raw = default_download(
     name="raw/openai/openai_humaneval",
     hf_dataset_id="openai/openai_humaneval",
     revision=versioned("7dce605"),
-    output_path="gs://marin-us-central2/raw/openai/openai_humanevalhf",
+    override_output_path="gs://marin-us-central2/raw/openai/openai_humanevalhf",
     hf_urls_glob=["**/*.parquet", "*.md"],
 )
 
