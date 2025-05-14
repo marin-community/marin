@@ -80,7 +80,7 @@ This class defines basic training configuration that is sufficient for most expe
         ```python
         from marin.resources import CpuOnlyConfig
         from experiments.simple_train_config import SimpleTrainConfig
-        
+
         nano_train_config = SimpleTrainConfig(
             # Here we define the hardware resources we need.
             resources=CpuOnlyConfig(num_cpus=1),
@@ -113,7 +113,7 @@ This class defines basic training configuration that is sufficient for most expe
         ```
 
     === "TPU"
-        ```python        
+        ```python
         from marin.resources import TpuPodConfig
         from experiments.simple_train_config import SimpleTrainConfig
 
