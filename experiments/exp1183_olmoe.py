@@ -1,15 +1,15 @@
 import logging
 import math
 
-from experiments.dolma.tokenize_dolma import DOLMA_OLMO_MIXTURE_WEIGHTS, tokenize_dolma_steps
-from marin.processing.tokenize.data_configs import lm_mixture_data_config
+from levanter.models.llama import LlamaConfig
+from levanter.models.mixtral import MixtralConfig
+
 from experiments.defaults import default_train
+from experiments.dolma.tokenize_dolma import DOLMA_OLMO_MIXTURE_WEIGHTS, tokenize_dolma_steps
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import executor_main
+from marin.processing.tokenize.data_configs import lm_mixture_data_config
 from marin.resources import TpuPodConfig
-
-from levanter.models.mixtral import MixtralConfig
-from levanter.models.llama import LlamaConfig
 
 logger = logging.getLogger("ray")
 
@@ -31,6 +31,7 @@ def step_target(token_target, batch_size, seq_len):
     actual_step_count = math.ceil(token_target / (batch_size * seq_len))
     nice_round_step_count = math.ceil(actual_step_count / 1000) * 1000
     return nice_round_step_count
+
 
 baseline_1_4b = LlamaConfig(
     seq_len=SEQ_LEN,
@@ -61,8 +62,9 @@ train_config = SimpleTrainConfig(
     num_train_steps=num_train_steps,
     learning_rate=LR,
     weight_decay=WD,
-    warmup=1/500,
+    warmup=1 / 500,
 )
+
 
 def make_step(name, model_config):
     return default_train(
@@ -73,6 +75,7 @@ def make_step(name, model_config):
         use_default_validation=False,
         tags=("olmoe", "dolma"),
     )
+
 
 baseline_step = make_step(
     name="moe-v5e-baseline-1b",
