@@ -1,0 +1,38 @@
+name: Sync Speedrun Static
+
+on:
+  push:
+    paths:
+      - 'speedrun/static/**'
+  workflow_dispatch:
+
+jobs:
+  sync-static:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Checkout the Marin repo (default behavior)
+      - name: Checkout Marin repo
+        uses: actions/checkout@v3
+
+      # Checkout the Speedrun repo into a separate directory
+      - name: Checkout Speedrun repo
+        uses: actions/checkout@v3
+        with:
+          repository: marin-community/speedrun
+          token: ${{ secrets.SPEEDRUN_LEADERBOARD_PAT }}
+          path: speedrun-repo
+
+      - name: Sync static files
+        run: |
+          rm -rf speedrun-repo/*
+          cp -r speedrun/static/* speedrun-repo/
+          cd speedrun-repo
+          git config user.name "speedrun-leaderboard-bot"
+          git add .
+          if ! git diff --cached --quiet; then
+            git commit -m "Sync updated static files from Marin"
+            git push
+          else
+            echo "No changes to commit"
+          fi
