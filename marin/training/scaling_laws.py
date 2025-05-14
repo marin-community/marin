@@ -9,6 +9,7 @@ from experiments.defaults import default_train
 from experiments.llama import llama_1_4b
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import ExecutorStep, InputName
+from marin.resources import TpuPodConfig
 
 DEFAULT_MODEL_CONFIG = LlamaConfig(
     seq_len=4096,
@@ -21,8 +22,7 @@ DEFAULT_MODEL_CONFIG = LlamaConfig(
 
 # WSD-S training configuration
 DEFAULT_SWEEP_TRAIN_CONFIG = SimpleTrainConfig(
-    tpu_type="v4-128",
-    node_count=1,
+    resources=TpuPodConfig(tpu_type="v4-128"),
     train_batch_size=1024,
     learning_rate=1e-3,  # will be replaced in the scaling law suite
     weight_decay=0.1,

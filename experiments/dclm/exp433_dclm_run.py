@@ -8,6 +8,7 @@ from experiments.llama import LlamaConfig
 from experiments.pretraining_datasets import dclm_baseline, proofpile_2, starcoderdata
 from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
+from marin.resources import TpuPodConfig
 
 gpt_neox_tokenizer = "EleutherAI/gpt-neox-20b"
 
@@ -77,7 +78,7 @@ NUM_TRAIN_TOKENS = int(28.8e9)  # 28.8 billion tokens
 NUM_TRAIN_STEPS = NUM_TRAIN_TOKENS // (256 * 2048)  # 256 is the batch size, 2048 is the sequence length
 
 training_config = SimpleTrainConfig(
-    tpu_type="v4-128",
+    resources=TpuPodConfig(tpu_type="v4-128", slice_count=1),
     train_batch_size=256,
     num_train_steps=NUM_TRAIN_STEPS,
     learning_rate=3e-3,
