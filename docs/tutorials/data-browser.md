@@ -16,6 +16,7 @@ Install dependencies:
 ```bash
 cd data_browser
 poetry install
+npm install
 ```
 
 The data browser takes a configuration file that specifies the root directory (in our examples, it's been `local_store`,
