@@ -72,7 +72,7 @@ RUN pip install --no-cache-dir -U jax[tpu]==0.5.1 -f https://storage.googleapis.
 # ['draccus>=0.8.0', 'google-api-python-client~=2.0', 'ray', 'gcsfs', 'google-cloud-storage',
 # 'google-cloud-storage-transfer', 's3fs', 'regex', 'requests', 'numpy', 'torch', 'braceexpand', 'deepdiff', 'tqdm',
 # 'tqdm-loggable', 'toml', 'pandas', 'pyarrow', 'jax==0.4.35', 'multiprocess==0.70.16', 'levanter>=1.2.dev1163']
-RUN pip install --no-cache-dir -U draccus==0.10 google-api-python-client~=2.0 gcsfs google-cloud-storage google-cloud-storage-transfer s3fs regex requests numpy torch braceexpand deepdiff tqdm tqdm-loggable toml pandas pyarrow "levanter>=1.2.dev1359" "haliax>=1.4dev348"
+RUN pip install --no-cache-dir -U draccus==0.11.5 google-api-python-client~=2.0 gcsfs google-cloud-storage google-cloud-storage-transfer s3fs regex requests numpy torch>=2.7.0 braceexpand deepdiff tqdm tqdm-loggable toml pandas pyarrow "levanter>=1.2.dev1361" "haliax>=1.4dev348"
 
 
 # NOTE: Try to keep as much "heavy" stuff as possible before this line to avoid re-installing

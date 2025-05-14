@@ -11,7 +11,7 @@ import os
 import tempfile
 from collections.abc import Callable
 from contextlib import ExitStack
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import fsspec
 import numpy as np
@@ -22,6 +22,37 @@ from marin.core.runtime import cached_or_construct_output, map_files_in_director
 from marin.utils import fsspec_glob, fsspec_rm, rebase_file_path
 
 logger = logging.getLogger("ray")
+
+
+@dataclass(frozen=True)
+class CreateDatasetConfig:
+    """Configuration for creating a dataset such as ensembling attributes and randomly sampling examples.
+
+    Attributes:
+        input_doc_path (str): Path to the input dataset directory (Dolma format).
+        output_dataset_path (str): Path to the output dataset directory.
+        label_func (Callable[[Document, list[Attribute]], str]): Function to label the dataset. This function
+            accepts a document and a list of attributes and returns a string label. This can be used to
+            ensemble multiple attributes together or create new attributes based on the document (e.g. length).
+        input_attr_paths (list[str] | None): Path to the attributes directory.
+        seed (int): Seed for random number generator to ensure reproducibility.
+        sampling_rate (float): Fraction of the dataset to sample.
+        max_sample_size (int | None): Maximum number of examples to include in the dataset.
+        filetype (str): Filetype of the input dataset.
+        merge_dataset_shards (bool): Whether to merge dataset shards. If False, the dataset will
+            be sharded across many files. If True, the dataset will be merged into a single file.
+    """
+
+    input_doc_path: str
+    output_dataset_path: str
+    label_func: Callable[[Document, list[Attribute]], str] | None = None
+    input_attr_paths: list[str] | None = None
+    seed: int = 0
+    sampling_rate: float = 1.0
+    max_sample_size: int | None = None
+    filetype: str = "jsonl.gz"
+    merge_dataset_shards: bool = True
+    columns_to_keep: list[str] = field(default_factory=lambda: ["text"])
 
 
 def label_documents(
@@ -104,55 +135,74 @@ def label_documents_shard(
 
 
 def create_dataset(
-    input_doc_path: str,
-    output_dataset_path: str,
-    label_func: Callable[[Document, list[Attribute]], str],
-    input_attr_paths: list[str] | None = None,
-    seed: int = 0,
-    sampling_rate: float = 1.0,
-    max_sample_size: int | None = None,
+    config: CreateDatasetConfig,
 ) -> None:
     """
     Converts documents and specified attribute to quality classifier training data (text,label) pairs.
 
     Args:
-        input_doc_path (str): Path to input documents (i.e., gs://$BUCKET/documents/reddit/v0/<doc_experiment>).
-        output_dataset_path (str): Path for output data (i.e., gs://$BUCKET/classifiers/$EXPERIMENT).
-        label_func (Callable[[Document, list[Attribute]], str]): Generates label from document and input attributes.
-        input_attr_paths (str): Path to input attributes (i.e., gs://$BUCKET/attributes/reddit/v0/<attr_experiment>).
-        seed (int): Seed for random number generator to ensure reproducibility.
-        sampling_rate (float): Fraction of documents from the dataset to add to quality classifier training dataset.
-        max_sample_size (Optional[int]): Maximum number of examples to include in the quality classifier
-                                         training dataset. Defaults to None.
+        config (CreateDatasetConfig): Configuration object containing all parameters for dataset creation.
     """
 
     @ray.remote(memory=1 * 1024 * 1024 * 1024, num_cpus=1)  # 1 GB
     def processing_func(input_file_path: str, output_file_path: str) -> None:
         attr_file_paths = (
-            [rebase_file_path(input_doc_path, input_file_path, input_attr_path) for input_attr_path in input_attr_paths]
-            if input_attr_paths is not None
+            [
+                rebase_file_path(config.input_doc_path, input_file_path, input_attr_path)
+                for input_attr_path in config.input_attr_paths
+            ]
+            if config.input_attr_paths is not None
             else []
         )
-        return create_dataset_shard(input_file_path, output_file_path, label_func, attr_file_paths, sampling_rate, seed)
+        return create_dataset_shard(
+            input_file_path,
+            output_file_path,
+            config.label_func,
+            attr_file_paths,
+            config.sampling_rate,
+            config.seed,
+            config.columns_to_keep,
+        )
 
-    _, doc_fs_path = fsspec.core.url_to_fs(input_doc_path)
-    dataset_file_path = os.path.join(output_dataset_path, "data", doc_fs_path.lstrip("/"), "data.jsonl.gz")
-    shard_path = os.path.join(output_dataset_path, "shards", doc_fs_path.lstrip("/"))
+    _, doc_fs_path = fsspec.core.url_to_fs(config.input_doc_path)
+    dataset_file_path = os.path.join(
+        config.output_dataset_path, "data", doc_fs_path.lstrip("/"), f"data.{config.filetype}"
+    )
+    shard_path = os.path.join(config.output_dataset_path, "shards", doc_fs_path.lstrip("/"))
 
-    responses = map_files_in_directory(processing_func.remote, input_doc_path, "**/*.jsonl.gz", shard_path)
+    responses = map_files_in_directory(
+        processing_func.remote,
+        config.input_doc_path,
+        f"**/*.{config.filetype}",
+        shard_path,
+    )
     try:
         ray.get(responses)
     except Exception as e:
-        logger.exception(f"Error processing {input_doc_path}: {e}")
+        logger.exception(f"Error processing {config.input_doc_path}: {e}")
         raise
 
-    shard_paths = fsspec_glob(os.path.join(shard_path, "**/*.jsonl.gz"))
-    if max_sample_size is None:
-        merge_dataset_shards(shard_paths, dataset_file_path)
+    shard_paths = fsspec_glob(os.path.join(shard_path, f"**/*.{config.filetype}"))
+    if config.max_sample_size is None:
+        if config.merge_dataset_shards:
+            merge_dataset_shards(shard_paths, dataset_file_path)
     else:
-        with tempfile.NamedTemporaryFile() as tmpfile:
-            merge_dataset_shards(shard_paths, tmpfile.name)
-            reservoir_sample(tmpfile.name, dataset_file_path, max_sample_size, seed)
+        if config.merge_dataset_shards:
+            with tempfile.NamedTemporaryFile() as tmpfile:
+                merge_dataset_shards(shard_paths, tmpfile.name)
+                reservoir_sample(
+                    [tmpfile.name],
+                    dataset_file_path,
+                    config.max_sample_size,
+                    config.seed,
+                )
+        else:
+            reservoir_sample(
+                shard_paths,
+                dataset_file_path,
+                config.max_sample_size,
+                config.seed,
+            )
 
     fsspec_rm(shard_path)
 
@@ -161,10 +211,11 @@ def create_dataset(
 def create_dataset_shard(
     input_doc_file_path: str,
     output_file_path: str,
-    label_func: Callable[[Document, list[Attribute]], str],
+    label_func: Callable[[Document, list[Attribute]], str] | None,
     input_attr_file_paths: list[str],
     sampling_rate: float,
     seed: int,
+    columns_to_keep: list[str],
 ) -> None:
     """
     Writes training examples to an output file.
@@ -178,6 +229,7 @@ def create_dataset_shard(
         input_attr_file_paths (list[str]): Path to the attribute JSONL file (gzip compressed).
         sampling_rate (float): Fraction of lines to be written to the output file.
         seed (int): Seed for random number generator to ensure reproducibility.
+        columns_to_keep (list[str]): List of columns to keep in the output file.
     """
 
     def hash_fn(text: str) -> int:
@@ -207,7 +259,9 @@ def create_dataset_shard(
                 attr_objs = [json.loads(line) for line in lines[1:]]
 
                 if "text" in doc_obj:
-                    example: LabeledExample = {"text": doc_obj["text"], "label": label_func(doc_obj, attr_objs)}
+                    example = {col: doc_obj[col] for col in columns_to_keep}
+                    if label_func is not None:
+                        example.update({"label": label_func(doc_obj, attr_objs)})
                     f_out.write(json.dumps(example) + "\n")
                 else:
                     logging.warning(f"Document {doc_obj['id']} has no text field.")
@@ -308,7 +362,7 @@ def shuffle(input_file_path: str, output_file_path: str, seed: int) -> None:
 
 
 def reservoir_sample(
-    input_file_path: str,
+    input_file_paths: list[str],
     output_file_path: str,
     sample_size: int,
     seed: int,
@@ -325,12 +379,13 @@ def reservoir_sample(
     rng = np.random.default_rng(seed=seed)
     reservoir = []
 
-    with fsspec.open(input_file_path, "rt", compression="infer") as f_in:
-        for line in f_in:
-            if len(reservoir) < sample_size:
-                reservoir.append(line)
-            else:
-                reservoir[rng.integers(sample_size)] = line
+    for input_file_path in input_file_paths:
+        with fsspec.open(input_file_path, "rt", compression="infer") as f_in:
+            for line in f_in:
+                if len(reservoir) < sample_size:
+                    reservoir.append(line)
+                else:
+                    reservoir[rng.integers(sample_size)] = line
 
     with fsspec.open(output_file_path, "wt", compression="infer") as f_out:
         for line in reservoir:
