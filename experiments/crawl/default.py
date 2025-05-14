@@ -16,6 +16,7 @@ from collections.abc import Callable
 from marin.crawl.common.convert_to_html import process_parquet
 from marin.crawl.common.schemas import HtmlExtractionConfig
 from marin.crawl.convert_responses_parquet_to_warc import ConvertResponsesToWARCConfig, convert_shards_to_warc
+from marin.crawl.deduplicate_outlinks import DeduplicateOutlinksConfig, deduplicate_and_shuffle_with_bq_driver
 from marin.crawl.deduplicate_outlinks_against_cc import (
     DeduplicateOutlinksAgainstCCConfig,
     deduplicate_outlinks_against_cc_driver,
@@ -28,7 +29,6 @@ from marin.crawl.minhash.deduplicate_against_index import (
     minhash_deduplicate_against_index_driver,
 )
 from marin.crawl.sample_from_unique_outlinks import OutlinksSamplingConfig, sample_outlinks
-from marin.crawl.deduplicate_outlinks import DeduplicateOutlinksConfig, deduplicate_and_shuffle_with_bq_driver
 from marin.execution.executor import ExecutorStep, output_path_of, this_output_path
 
 # path to bloom filter for links. The year range corresponds to time period designations for CC
@@ -144,13 +144,13 @@ def default_crawl(
 
     # Yield outlinks: gs://marin-us-central2/scratch/nfliu/text/fineweb-edu-10M/links.0_extracted_text.parquet
     links_fetched_warc_yield = ExecutorStep(
-        name=f"crawl/{config.source_name}",
+        name=f"crawl/{config.source_name}/text",
         fn=yield_fn,
         config=GetCrawlYieldConfig(
             urls_input_directory=output_path_of(sampled_outlinks),
             crawl_input_directory=output_path_of(links_fetched_warc),
             data_source=config.source_name.split("/")[-1],
-            text_output_directory=this_output_path(f"text/{config.source_name}"),
+            text_output_directory=this_output_path(),
             statistics_output_path=output_path_of(links_fetched_warc, "yield_statistics.json.gz"),
         ),
         override_output_path=f"crawl/{config.source_name}",
@@ -161,7 +161,7 @@ def default_crawl(
         name=f"crawl/{config.source_name}/minhash",
         fn=minhash_deduplicate_against_index_driver,
         config=MinhashDeduplicateAgainstIndexConfig(
-            index_path=this_output_path(f"index"),
+            index_path=this_output_path("index"),
             input_patterns=[
                 output_path_of(
                     links_fetched_warc_yield, f"*_text_and_scores.passing.parquet"

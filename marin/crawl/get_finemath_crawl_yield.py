@@ -55,12 +55,9 @@ from typing import Any
 import draccus
 import fsspec
 import pandas as pd
-from marin.schemas.web.convert import ResiliparseConfig
-from marin.web.convert import convert_page
 import pyarrow as pa
 import pyarrow.parquet as pq
 import ray
-import resiliparse
 import w3lib.url
 from datatrove.data import Document
 from datatrove.pipeline.filters import (
@@ -71,12 +68,13 @@ from datatrove.pipeline.filters import (
     URLFilter,
 )
 from tqdm_loggable.auto import tqdm
-from trafilatura import extract
 from transformers import AutoTokenizer, FlaxAutoModelForSequenceClassification
 from warcio import ArchiveIterator
 
 from marin.crawl.common.utils import decode_html
+from marin.schemas.web.convert import ResiliparseConfig
 from marin.utils import fsspec_exists, fsspec_glob
+from marin.web.convert import convert_page
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -141,7 +139,7 @@ def extract_text_from_warc(
     extracted_text_output_path: str,
 ):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-    logger.info(f"Using resiliparse")
+    logger.info("Using resiliparse")
     success_path = extracted_text_output_path + ".SUCCESS"
     if fsspec_exists(success_path):
         logger.info(f"Success path {success_path} already exists, skipping...")

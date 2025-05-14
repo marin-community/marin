@@ -79,9 +79,9 @@ import uuid
 from dataclasses import dataclass
 
 import draccus
+from google.api_core.exceptions import NotFound
 from google.cloud import bigquery
 from google.oauth2 import service_account
-from google.api_core.exceptions import NotFound
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -153,7 +153,7 @@ def deduplicate_and_shuffle_with_bq(
     dataset_name = f"{project_id}.{dataset_id}"
     dataset_location = "us-central2"  # Required location
     logger.info(f"Checking for BigQuery dataset {dataset_name}...")
-    
+
     try:
         dataset = client.get_dataset(dataset_name) # Check existence first
         logger.info(f"Found existing dataset {dataset_name}.")
@@ -165,7 +165,7 @@ def deduplicate_and_shuffle_with_bq(
             )
         else:
             logger.info(f"Dataset already exists in the correct location: {dataset_location}.")
-            
+
     except NotFound:
         logger.info(f"Dataset {dataset_name} not found. Creating in location {dataset_location}...")
         dataset_ref = bigquery.Dataset(dataset_name)
@@ -176,7 +176,7 @@ def deduplicate_and_shuffle_with_bq(
         except Exception as e:
             logger.error(f"Failed to create dataset {dataset_name}: {e}")
             raise
-            
+
     logger.info(f"Using BigQuery dataset {dataset_name} in location {dataset_location}")
 
     # 3) Create an external table referencing the GCS files
@@ -188,16 +188,16 @@ def deduplicate_and_shuffle_with_bq(
         bigquery.SchemaField("is_internal_link", "BOOLEAN", mode="NULLABLE"),
         bigquery.SchemaField("in_main_content", "BOOLEAN", mode="NULLABLE"),
     ]
-    
+
     logger.info(f"Creating external table {ext_table_ref} pointing to {gcs_input_pattern}...")
     external_config = bigquery.ExternalConfig("NEWLINE_DELIMITED_JSON")
     external_config.source_uris = [gcs_input_pattern]
     external_config.schema = schema
     external_config.compression = "GZIP"
-    
+
     table = bigquery.Table(ext_table_ref)
     table.external_data_configuration = external_config
-    
+
     try:
         client.delete_table(ext_table_ref, not_found_ok=True)
         table = client.create_table(table)
@@ -208,7 +208,7 @@ def deduplicate_and_shuffle_with_bq(
 
     table_ref = f"{project_id}.{dataset_id}.{table_id}"
     logger.info(f"Deduplicating data into {table_ref}...")
-    
+
     dedup_query = f"""
     CREATE OR REPLACE TABLE `{table_ref}` AS
     WITH ranked AS (
@@ -221,7 +221,7 @@ def deduplicate_and_shuffle_with_bq(
     FROM ranked
     WHERE rn = 1
     """
-    
+
     # Ensure the query job runs in the correct location
     query_job = client.query(dedup_query, location=dataset_location)
     query_job.result()

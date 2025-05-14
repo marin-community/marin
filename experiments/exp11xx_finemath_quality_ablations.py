@@ -1,8 +1,8 @@
 """
-This experiment evaluates the quality of openwebmath crawl data for model cooldown using `default_quality_ablation`
+This experiment evaluates the quality of finemath crawl data for model cooldown using `default_quality_ablation`
 which fine-tunes an 8B model on a mixture of:
 - 70% DCLM baseline data
-- 15% openwebmath crawl data
+- 15% finemath crawl data
 - 15% Dolma/FLAN dataset
 
 Reference Issue: https://github.com/stanford-crfm/marin/issues/1167
@@ -14,19 +14,19 @@ from experiments.llama import llama3_tokenizer
 from marin.execution.executor import InputName, executor_main
 from marin.resources import TpuPodConfig
 
-# Tokenize the openwebmath dataset
-openwebmath_crawl_tokenized = default_tokenize(
-    "openwebmath-crawled",
+# Tokenize the finemath crawl dataset
+finemath_crawl_tokenized = default_tokenize(
+    "finemath-crawled",
     InputName.hardcoded(
-        "gs://marin-us-central2/scratch/nfliu/text/open_web_math_100M_passing_minhash_against_open_web_math"
+        "gs://marin-us-central2/crawl/finemath-3plus/minhash-c4a324/finemath-3plus_passing_minhash_against_finemath-3plus/deduplicated_output"
     ),
     tokenizer=llama3_tokenizer,
 )
 
-openwebmath_raw_tokenized = default_tokenize(
-    "openwebmath-control",
+finemath_raw_tokenized = default_tokenize(
+    "finemath-control",
     InputName.hardcoded(
-        "gs://marin-us-central2/raw/open-web-math-fde8ef8/fde8ef8/huggingface.co/datasets/open-web-math/open-web-math/resolve/fde8ef8/data"
+        "gs://marin-us-central2/raw/finemath-7090a5/finemath-3plus"
     ),
     tokenizer=llama3_tokenizer,
 )
@@ -38,22 +38,22 @@ cooldown_config = QualityAblationConfig(
 )
 
 # Conduct the cooldown experiment
-openwebmath_crawl_ablation = default_quality_ablation(
-    openwebmath_crawl_tokenized,
+finemath_crawl_ablation = default_quality_ablation(
+    finemath_crawl_tokenized,
     cooldown_config,
 )
 
-openwebmath_raw_ablation = default_quality_ablation(
-    openwebmath_raw_tokenized,
+finemath_raw_ablation = default_quality_ablation(
+    finemath_raw_tokenized,
     cooldown_config,
 )
 
 if __name__ == "__main__":
     executor_main(
         steps=[
-            openwebmath_crawl_tokenized,
-            openwebmath_crawl_ablation,
-            openwebmath_raw_tokenized,
-            openwebmath_raw_ablation,
+            finemath_crawl_tokenized,
+            finemath_crawl_ablation,
+            finemath_raw_tokenized,
+            finemath_raw_ablation,
         ],
     )
