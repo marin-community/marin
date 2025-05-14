@@ -23,7 +23,6 @@ speedrun_config = SpeedrunConfig(
         weight_decay=0.1,
         steps_per_eval=500,
     ),
-    tokenized_dataset=fineweb_edu_tokenized,
     hardware_config=HardwareConfig(
         device_type="a100",
         num_devices=2,
