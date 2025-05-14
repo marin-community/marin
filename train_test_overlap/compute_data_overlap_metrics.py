@@ -1,7 +1,6 @@
 import json
 from collections import defaultdict
-
-from nltk import ngrams
+from collections.abc import Iterator
 
 from train_test_overlap.data_overlap_spec import (
     DataOverlapStatsKey,
@@ -27,6 +26,11 @@ NgramCounter = dict[EntryDataOverlapKey, dict[Ngram, int]]
 # Declare global tokenizer that will be used throughout module
 global tokenizer
 tokenizer = DefaultTokenizer()
+
+
+def generate_ngrams(tokens: list[str], n: int) -> Iterator[tuple[str, ...]]:
+    """Yield n-grams over tokens via a sliding window."""
+    return zip(*(tokens[i:] for i in range(n)), strict=False)
 
 
 def load_light_scenarios_from_jsonl(path: str) -> list[LightScenario]:
@@ -83,7 +87,7 @@ def create_ngram_index(
                 assert instance_id is not None
                 input_tokens = tokenizer.tokenize(instance.input)
                 # For each n_gram in the input text
-                for input_ngram in ngrams(input_tokens, n):
+                for input_ngram in generate_ngrams(input_tokens, n):
                     if input_ngram not in ngram_index[n]:
                         ngram_index[n][input_ngram] = set()
                     ngram_index[n][input_ngram].add(
@@ -93,7 +97,7 @@ def create_ngram_index(
                 # compute reference ngrams
                 for reference in instance.references:
                     reference_unigrams = tokenizer.tokenize(reference)
-                    for reference_ngram in ngrams(reference_unigrams, n):
+                    for reference_ngram in generate_ngrams(reference_unigrams, n):
                         if reference_ngram not in ngram_index[n]:
                             ngram_index[n][reference_ngram] = set()
                         ngram_index[n][reference_ngram].add(
@@ -164,7 +168,7 @@ def compute_document_data_overlap(
     # for all values of n, go through the n_grams for the document.
     # if we find a hit
     for n in ngram_index.keys():
-        for document_ngram in ngrams(document_tokens, n):
+        for document_ngram in generate_ngrams(document_tokens, n):
             # checks for n-gram membership
             if document_ngram in ngram_index[n]:
                 # If it's present that means there's a dict entry for the value

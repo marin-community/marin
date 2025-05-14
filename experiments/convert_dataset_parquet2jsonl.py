@@ -1,15 +1,16 @@
+import logging
 import os
 import sys
-import logging
 
-import ray
 import draccus
+import ray
 
-from operations.transform.format.parquet2jsonl import JsonlConversionConfig, convert_parquet_to_jsonl
-from marin.utils import fsspec_glob
 from marin.execution.executor import ExecutorStep, executor_main
+from marin.utils import fsspec_glob
+from operations.transform.format.parquet2jsonl import JsonlConversionConfig, convert_parquet_to_jsonl
 
 logger = logging.getLogger(__name__)
+
 
 @draccus.wrap()
 def convert_dataset_parquet2jsonl(cfg: JsonlConversionConfig) -> bool:
@@ -38,6 +39,7 @@ def convert_dataset_parquet2jsonl(cfg: JsonlConversionConfig) -> bool:
     logger.info(f"Completed conversion of {len(futures)} shards")
     return True
 
+
 if __name__ == "__main__":
     if len(sys.argv) != 2:
         print("Usage: python convert_dataset_parquet2jsonl.py <dataset_relative_path_under_raw>")
@@ -51,8 +53,8 @@ if __name__ == "__main__":
         name=f"convert_parquet2jsonl/{dataset_relpath}",
         fn=convert_dataset_parquet2jsonl,
         config=JsonlConversionConfig(
-            input_path=input_path,  
+            input_path=input_path,
             output_path=output_path,
         ),
     )
-    executor_main(steps=[step], description=f"Convert dataset {dataset_relpath} from Parquet to JSONL") 
+    executor_main(steps=[step], description=f"Convert dataset {dataset_relpath} from Parquet to JSONL")

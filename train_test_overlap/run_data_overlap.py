@@ -150,7 +150,9 @@ def create_compressed_file_iterator(
 
 
 # 16 GiB
-@ray.remote(memory=1024 * 1024 * 1024 * 32, num_cpus=16)
+# for v4-8 we have 240 cpus and 400 GB so will set
+# 12 GB ram and 12 cpus per task to be safe
+@ray.remote(memory=1024 * 1024 * 1024 * 12, num_cpus=12)
 def run_data_overlap(config: DataOverlapPipelineConfig) -> str:
     # Idempotence: skip if already completed
     print(f"starting run_data_overlap for {config.input_data}", flush=True)

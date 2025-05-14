@@ -1,3 +1,4 @@
+import json
 import os
 import subprocess
 import tempfile
@@ -6,6 +7,7 @@ from dataclasses import dataclass
 import draccus
 import fsspec
 import ray
+from hyperloglog import HyperLogLog
 from tqdm import tqdm
 
 from marin.core.runtime import cached_or_construct_output
@@ -307,6 +309,35 @@ def delete_jsonl_files(dir_path):
     return files_deleted
 
 
+def estimate_ngram_count(local_base_dir, ngram):
+    """
+    Estimate number of unique n-grams across staged JSONL under local_base_dir/documents/.
+    """
+    hll = HyperLogLog(0.01)
+    pattern = os.path.join(local_base_dir, "documents", "**", "*.jsonl.gz")
+    files = fsspec_glob(pattern)
+    for file in files:
+        with fsspec.open(file, "rt", compression="infer") as f:
+            for line in f:
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                text = rec.get("text", "")
+                for paragraph in text.split("\n"):
+                    tokens = paragraph.split()
+                    L = len(tokens)
+                    if L < ngram.ngram_length:
+                        hll.add(paragraph)
+                    else:
+                        stride = ngram.stride
+                        step = stride if stride > 0 else 1
+                        for i in range(0, L - ngram.ngram_length + 1, step):
+                            ngram_str = " ".join(tokens[i : i + ngram.ngram_length])
+                            hll.add(ngram_str)
+    return len(hll)
+
+
 @ray.remote(num_cpus=4)
 def dolma_dedup(
     input_path,
@@ -322,72 +353,74 @@ def dolma_dedup(
     decomtaminate_dir,
     decontaminate,
 ):
+    # require ngram config for decontamination
+    if decontaminate and ngram is None:
+        raise ValueError("ngram configuration is required in decontamination mode")
+    with tempfile.TemporaryDirectory(dir="/dev/shm") as tmpdir:
+        if decontaminate:
+            # First we copy the files to the temporary directory to get bloom filter
+            copy_files_in(decomtaminate_dir, tmpdir)
+            # Estimate number of n-grams in decontamination set
+            estimated_count = estimate_ngram_count(tmpdir, ngram)
+            print(f"Estimated {estimated_count} n-grams for decontamination filter")
+            do_dedup(
+                tmpdir,
+                attribute_name,
+                min_length,
+                min_words,
+                bloom_filter_size,
+                estimated_count,
+                false_positive_rate,
+                ngram,
+                processes,
+                read_only=False,
+                bloom_filter_file="decontaminated_bloom_filter.bin",
+            )
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        try:
-            if decontaminate:
-                # First we copy the files to the temporary directory to get bloom filter
-                copy_files_in(decomtaminate_dir, tmpdir)
-                do_dedup(
-                    tmpdir,
-                    attribute_name,
-                    min_length,
-                    min_words,
-                    bloom_filter_size,
-                    estimated_doc_count,
-                    false_positive_rate,
-                    ngram,
-                    processes,
-                    read_only=False,
-                    bloom_filter_file="decontaminated_bloom_filter.bin",
-                )
+            # Delete all JSONL files in the temporary directory since we have bloom filter
+            delete_jsonl_files(tmpdir)
+            # Then copy files of interest and apply bloom filter read only
+            copy_files_in(input_path, tmpdir)
+            do_dedup(
+                tmpdir,
+                attribute_name,
+                min_length,
+                min_words,
+                bloom_filter_size,
+                estimated_doc_count,
+                false_positive_rate,
+                ngram,
+                processes,
+                read_only=True,
+                bloom_filter_file="decontaminated_bloom_filter.bin",
+            )
+        else:
+            copy_files_in(input_path, tmpdir)
+            do_dedup(
+                tmpdir,
+                attribute_name,
+                min_length,
+                min_words,
+                bloom_filter_size,
+                estimated_doc_count,
+                false_positive_rate,
+                ngram,
+                processes,
+            )
 
-                # Delete all JSONL files in the temporary directory since we have bloom filter
-                delete_jsonl_files(tmpdir)
-                # Then copy files of interest and apply bloom filter read only
-                copy_files_in(input_path, tmpdir)
-                do_dedup(
-                    tmpdir,
-                    attribute_name,
-                    min_length,
-                    min_words,
-                    bloom_filter_size,
-                    estimated_doc_count,
-                    false_positive_rate,
-                    ngram,
-                    processes,
-                    read_only=True,
-                    bloom_filter_file="decontaminated_bloom_filter.bin",
-                )
-            else:
-                copy_files_in(input_path, tmpdir)
-                do_dedup(
-                    tmpdir,
-                    attribute_name,
-                    min_length,
-                    min_words,
-                    bloom_filter_size,
-                    estimated_doc_count,
-                    false_positive_rate,
-                    ngram,
-                    processes,
-                )
+        # copy files out stays the same.
+        # Ensure output_path doesn't end with a slash
+        output_path = output_path.rstrip("/")
 
-            # copy files out stays the same.
-            # Ensure output_path doesn't end with a slash
-            output_path = output_path.rstrip("/")
+        local_attribute_dir = os.path.join(tmpdir, "attributes", attribute_name)
 
-            local_attribute_dir = os.path.join(tmpdir, "attributes", attribute_name)
+        # Get all .jsonl.gz files in the local attribute directory
+        glob_path = f"{local_attribute_dir}/**/*.jsonl.gz"
+        local_files = fsspec_glob(glob_path)
+        for local_file in tqdm(local_files, desc="Uploading files"):
+            output_file = rebase_file_path(local_attribute_dir, local_file, output_path)
+            copy_file_out(local_file, output_file)
 
-            # Get all .jsonl.gz files in the local attribute directory
-            glob_path = f"{local_attribute_dir}/**/*.jsonl.gz"
-            local_files = fsspec_glob(glob_path)
-            for local_file in tqdm(local_files, desc="Uploading files"):
-                output_file = rebase_file_path(local_attribute_dir, local_file, output_path)
-                copy_file_out(local_file, output_file)
-
-        except Exception as e:
-            raise RuntimeError("An error has occurred during deduplication") from e
     return "Deduplication process completed"
 
 

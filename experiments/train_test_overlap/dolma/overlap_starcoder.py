@@ -1,6 +1,6 @@
 import logging
 
-from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path
+from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from marin.processing.classification.dedupe import DedupeConfig, NGramConfig, dedupe
 
 # Configure logging
@@ -13,7 +13,7 @@ starcoder_dedupe = ExecutorStep(
     fn=dedupe,
     config=DedupeConfig(
         input_path="gs://marin-us-central2/dolma/mmlu_dev_set/",
-        #input_path="gs://marin-us-central2/documents/starcoderdata-720c8c/9fc30b5/ada/",
+        # input_path="gs://marin-us-central2/documents/starcoderdata-720c8c/9fc30b5/ada/",
         output_path=this_output_path(),
         attribute_name="starcoder_overlap",
         false_positive_rate=0.00001,
@@ -25,7 +25,7 @@ starcoder_dedupe = ExecutorStep(
         processes=4,
         decontaminate=True,
         decontaminate_path="gs://marin-us-central2/documents/starcoderdata-720c8c/9fc30b5/ada/",
-        #decontaminate_path="gs://marin-us-central2/dolma/mmlu_dev_set/",
+        # decontaminate_path="gs://marin-us-central2/dolma/mmlu_dev_set/",
     ),
 )
 
@@ -34,4 +34,4 @@ if __name__ == "__main__":
     executor_main(
         steps=[starcoder_dedupe],
         description="Detect n-gram dedupe overlap",
-    ) 
+    )
