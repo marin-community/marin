@@ -5,6 +5,7 @@ on:
     paths:
       - 'marin/speedrun/**'
       - 'marin/experiments/speedrun/**'
+      - 'marin/.github/workflows/update-leaderboard.yml'
     branches:
       - nikil/speedrun-modifications
       - main
@@ -79,24 +80,19 @@ jobs:
           #   echo "No changes to commit"
           # fi
 
-          # Show current state
           echo "Source directory content:"
           ls -la marin/speedrun/static/data/
           
           echo "Destination directory content (before):"
           ls -la speedrun-repo/data/ || echo "Directory empty"
-    
-          # What we would do in real mode
-          echo "Would run: rm -rf speedrun-repo/data/*"
-          echo "Would run: cp -r marin/speedrun/static/data/* speedrun-repo/data/"
-    
-          # Configure git
-          cd speedrun-repo
-          git config user.name "speedrun-leaderboard-bot"
-          git config user.email "github-actions@github.com"
-    
-          # Show what changes would be made
-          echo "Changes that would be committed:"
-          git status
-    
+          
+          # Create a temporary copy to show what would happen
+          mkdir -p /tmp/test-data
+          cp -r speedrun-repo/data/* /tmp/test-data/ 2>/dev/null || true
+          rm -rf /tmp/test-data/*
+          cp -r marin/speedrun/static/data/* /tmp/test-data/ 2>/dev/null || true
+          
+          echo "Differences between source and destination:"
+          diff -r speedrun-repo/data/ /tmp/test-data/ || echo "Files would be different"
+          
           echo "TEST MODE: No changes were committed"
