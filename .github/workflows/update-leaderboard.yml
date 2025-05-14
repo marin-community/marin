@@ -3,8 +3,8 @@ name: Sync Speedrun Static
 on:
   push:
     paths:
-      - 'speedrun/**'
-      - 'experiments/speedrun/**'
+      - 'marin/speedrun/**'
+      - 'marin/experiments/speedrun/**'
     branches:
       - nikil/speedrun-modifications
       - main
