@@ -27,6 +27,9 @@ Before you get started, you will need the following:
 - Set up your [local GPU](local-gpu.md)
 - You need to make sure that your Ray GPU cluster is started.
 
+!!! danger "GPU Setup"
+    If you are working on GPU, make sure you've correctly installed and set up the environment by following the [local GPU setup guide](local-gpu.md). This ensures your environment is properly configured for training with GPU.
+
 ## Framework
 
 You are given the [FineWeb-Edu dataset](https://huggingface.co/datasets/HuggingFaceFW/fineweb-edu),
@@ -52,9 +55,6 @@ and having multiple scales allows us to fit scaling laws and extrapolate out to 
    ```
 
 2. Create your training script in this directory. See [`llama_75m_fineweb_edu.py`](https://github.com/marin-community/marin/blob/main/experiments/speedrun/llama_75m_fineweb_edu/llama_75m_fineweb_edu.py) for a reference:
-
-    !!! danger "GPU Setup"
-        If you are working on GPU, make sure you've correctly installed and set up the environment by following the [local GPU setup guide](local-gpu.md). This ensures your environment is properly configured for training with GPU.
     
     === "GPU"
         ```python
@@ -85,9 +85,9 @@ and having multiple scales allows us to fit scaling laws and extrapolate out to 
             ),
             tokenized_dataset=fineweb_edu_tokenized,
             hardware_config=HardwareConfig(
-                device_type="v4-128",
-                num_devices=64,
-                device_flops=275e12,
+                device_type="a100",
+                num_devices=1,
+                device_flops=312e12,
             ),
         )
 
