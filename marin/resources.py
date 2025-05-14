@@ -104,7 +104,7 @@ class TpuPodConfig(ResourceConfig):
 
     tpu_type: str
     """Type of TPU to use, e.g. v4-128."""
-    node_count: int = 1
+    slice_count: int = 1
     """Number of TPU slices for training."""
 
     runtime_env: RuntimeEnv = dataclasses.field(default_factory=lambda: RuntimeEnv())
@@ -113,4 +113,4 @@ class TpuPodConfig(ResourceConfig):
         return self.tpu_type
 
     def as_ray_resources(self) -> RayResources:
-        return RayResources(resources={self.tpu_type: self.node_count})
+        return RayResources(resources={self.tpu_type: self.slice_count})
