@@ -1,18 +1,20 @@
 site_name: Marin Documentation
 site_description: Documentation for the Marin project
+site_url: https://marin.community
+
 theme:
   name: material
   features:
-    - navigation.tabs
-    - navigation.sections
-    - navigation.expand
     - search.highlight
     - search.share
     - search.suggest
     - content.code.annotation
     - content.code.copy
+    - navigation.footer
   custom_dir: docs/overrides
 
+repo_url: https://github.com/marin-community/marin
+repo_name: marin-community/marin
 
 # Include extra JS to setup Read the Docs addons integrations
 extra_javascript:
@@ -26,39 +28,41 @@ extra_css:
 nav:
   - Home: index.md
   - Tutorials:
-    - Getting Started: tutorials/getting-started.md
+    - Installation: tutorials/installation.md
     - First Experiment: tutorials/first-experiment.md
-    - First Local GPU Experiment: tutorials/local-gpu.md
     - Executor 101: tutorials/executor-101.md
-  - How-to Guides:
-    - Train an LM: how-to-guides/train-an-lm.md
-    - Filtering Data: how-to-guides/filtering-data.md
-    - Submitting Speedruns: how-to-guides/submitting-speedrun.md
-    - Co-Develop Marin and Levanter: how-to-guides/co-develop.md
+    - Data Browser: tutorials/data-browser.md
+    - Training an LM: tutorials/train-an-lm.md
+    - Submitting a Speedrun: tutorials/submitting-speedrun.md
+    - Filtering Data: tutorials/filtering-data.md
+    - Co-Developing with Marin and Levanter: tutorials/co-develop.md
+    - Run an Annealing Experiment: tutorials/annealing-experiment.md
   - Explanation:
-    - Concepts: explanation/concepts.md
-    - Data Browser: explanation/data-browser.md
+    - The Language Modeling Pipeline: explanation/lm-pipeline.md
     - Evaluation: explanation/evaluation.md
     - Experiments: explanation/experiments.md
     - Executor: explanation/executor.md
+    - Guidelines: explanation/guidelines.md
   - Experiment Reports: reports/index.md
   - Developer Guide:
-      - Contributing: dev-guide/contributing.md
-      - Guidelines: guidelines.md
-      - Internal Guidelines: guidelines-internal.md
-      - Building Docs: dev-guide/building-docs.md
-      - Snapshot Tests: dev-guide/snapshot-tests.md
+    - Contributing: dev-guide/contributing.md
+    - Guidelines: dev-guide/guidelines.md
+    - Tutorial Guidelines: dev-guide/tutorial-guidelines.md
+    - Internal Guidelines: dev-guide/guidelines-internal.md
+    - Building Docs: dev-guide/building-docs.md
+    - Snapshot Tests: dev-guide/snapshot-tests.md
   - Technical Reference:
-      - Architecture: reference/architecture.md
-      - LM Overview: lm/overview.md
-      - Specifying Hardware Resources: reference/resource-config.md
-      - Executor API: reference/executor-api.md
-      - Default Steps: reference/default-steps.md
-      - Training Configuration: reference/train-config.md
+    - Architecture: reference/architecture.md
+    - Specifying Hardware Resources: reference/resource-config.md
+    - Executor API: reference/executor-api.md
+    - Default Steps: reference/default-steps.md
+    - Training Configuration: reference/train-config.md
 
 markdown_extensions:
   - pymdownx.highlight
   - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
   - pymdownx.inlinehilite
   - pymdownx.tabbed
   - pymdownx.arithmatex
@@ -72,7 +76,18 @@ markdown_extensions:
       permalink: true
 
 plugins:
-  - search
+  - search:
+      lang: en
+      separator: '[\s\-\.]+'
+      min_search_length: 2
+      prebuild_index: true
+      indexing: 'full'
+      properties:
+          - title
+          - tags
+          - content
+          - sections
+      search_index_only: false
   - mkdocstrings:
       default_handler: python
       handlers:
@@ -87,9 +102,8 @@ plugins:
             - https://einops.rocks/objects.inv
           options:
             annotations_path: brief
-            docstring_options:
-              ignore_init_summary: true
-              docstring_style: google
+            ignore_init_summary: true
+            docstring_style: google
             show_source: false
             docstring_section_style: list
             heading_level: 4

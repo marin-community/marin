@@ -304,6 +304,7 @@ def calculate_percentile_threshold(
             sketch.add(score)
 
     threshold = sketch.get_quantile_value(1 - keep_fraction)
+    logger.info(f"Calculated the threshold {threshold} to keep {keep_fraction} of the documents")
 
     return threshold
 

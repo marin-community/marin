@@ -12,8 +12,10 @@ logger = logging.getLogger(__name__)
 
 try:
     from vllm import LLM, SamplingParams
+    from vllm.inputs.data import TokensPrompt
 except ImportError:
     logger.warning("vLLM is not installed, so we will not be able to generate text.")
+    TokensPrompt = Any
 
 
 class BaseLLMProvider(ABC):

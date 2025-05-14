@@ -4,10 +4,9 @@ This tutorial will guide you through creating an experiment using Marin's execut
 1. Generates a sequence of numbers
 2. Computes basic statistics on those numbers
 
-
 ## Goals
 
-In our [training tutorial](first-experiment.md), we created a simple experiment that trained a tiny model on TinyStories.
+In our [First Experiment](first-experiment.md), we trained a tiny model on TinyStories.
 That tutorial used the executor framework to run a sequence of steps, but didn't really cover how it works.
 
 In this tutorial, you will learn:
@@ -21,7 +20,7 @@ In this tutorial, you will learn:
 
 Before starting this tutorial, make sure you have:
 
-- Completed the general environment setup in the [getting-started.md](getting-started.md)
+- Completed the [installation](installation.md).
 
 ## Understanding the Components
 
@@ -79,7 +78,7 @@ def generate_data(config: GenerateDataConfig):
 
 ## Step 2: Computing Statistics
 
-Next, we'll create a step that reads the generated numbers and computes statistics:
+Next, we'll create a second step that reads the generated numbers and computes statistics:
 
 ```python
 @dataclass(frozen=True)
@@ -147,14 +146,14 @@ if __name__ == "__main__":
 To run this experiment:
 
 ```bash
-python experiments/tutorial/hello_world.py --prefix my_prefix
+python experiments/tutorials/hello_world.py --prefix local_store
 ```
 
 This command will create several output files:
 
-1. `my_prefix/experiments/hello_world-7063e5.json`: Stores a record of all the steps in this experiment
-2. `my_prefix/hello_world/data-d50b06`: Contains the output of step 1 (numbers.json with generated data)
-3. `my_prefix/hello_world/stats-b5daf3`: Contains the output of step 2 (stats.json with computed statistics)
+1. `local_store/experiments/hello_world-7063e5.json`: Stores a record of all the steps in this experiment
+2. `local_store/hello_world/data-d50b06`: Contains the output of step 1 (numbers.json with generated data)
+3. `local_store/hello_world/stats-b5daf3`: Contains the output of step 2 (stats.json with computed statistics)
 
 !!! note
 
@@ -162,11 +161,9 @@ This command will create several output files:
 
 ## Complete Code
 
-The complete code for this tutorial is available at: [experiments/tutorial/hello_world.py](https://github.com/marin-community/marin/blob/main/experiments/tutorial/hello_world.py)
+The complete code for this tutorial is available at: [experiments/tutorials/hello_world.py](https://github.com/marin-community/marin/blob/main/experiments/tutorials/hello_world.py)
 
 ## Next Steps
 
 - Train a [tiny language model](first-experiment.md) using Marin.
-- Read about Marin's key concepts and principles in [Concepts](../explanation/concepts.md)
-- Learn about the [Executor framework](../explanation/executor.md): how to manage Python libraries, run big parallel jobs using Ray, how versioning works, etc.
-- Read about [Experiments](../explanation/experiments.md): how we use the executor framework to run machine learning experiments.
+- Learn about the [Executor framework](../explanations/executor.md): how to manage Python libraries, run big parallel jobs using Ray, how versioning works, etc.
