@@ -27,7 +27,7 @@ if __name__ == "__main__":
     )
 ```
 
-We put this in the file `experiments/tutorials/download_dataest.py`, and we can run this file with the following command:
+We put this in the file `experiments/tutorials/download_dataset.py`, and we can run this file with the following command:
 ```
 python marin/run/ray_run.py --env_vars HF_TOKEN $HF_TOKEN -- python experiments/tutorials/download_dataset.py
 ```
