@@ -20,7 +20,7 @@ dependencies = [
     "regex",
     "requests",
     "numpy",
-    "torch>=2.7.0",
+    "torch",
     "braceexpand",
     "deepdiff",
     "tqdm",
@@ -54,6 +54,7 @@ dev = [
 
 cuda12 = [
     "jax[cuda12]==0.5.1",
+    "torch>=2.7.0",
 ]
 
 tpu = [
