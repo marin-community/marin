@@ -15,7 +15,7 @@ import re
 from github import Github
 from openai import OpenAI
 
-MODEL = "gpt-4o-mini"
+MODEL = "gpt-4o"
 OUTPUT_PATH = "docs/reports/summary.md"
 
 def get_github_issues():
