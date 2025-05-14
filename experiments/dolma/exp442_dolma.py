@@ -50,7 +50,7 @@ olmoish_1b_config = LlamaConfig(
 )
 
 olmoish_1b_train_config = SimpleTrainConfig(
-    resources=TpuPodConfig(tpu_type="v5litepod-256", node_count=1),
+    resources=TpuPodConfig(tpu_type="v5litepod-256", slice_count=1),
     learning_rate=4e-4,
     warmup=2000,
     weight_decay=0.1,
