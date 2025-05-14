@@ -39,7 +39,6 @@ nav:
     - Run an Annealing Experiment: tutorials/annealing-experiment.md
   - Explanation:
     - The Language Modeling Pipeline: explanation/lm-pipeline.md
-    - Concepts: explanation/concepts.md
     - Evaluation: explanation/evaluation.md
     - Experiments: explanation/experiments.md
     - Executor: explanation/executor.md
@@ -50,6 +49,7 @@ nav:
   - Developer Guide:
     - Contributing: dev-guide/contributing.md
     - Guidelines: dev-guide/guidelines.md
+    - Tutorial Guidelines: dev-guide/tutorial-guidelines.md
     - Internal Guidelines: dev-guide/guidelines-internal.md
     - Building Docs: dev-guide/building-docs.md
     - Snapshot Tests: dev-guide/snapshot-tests.md
