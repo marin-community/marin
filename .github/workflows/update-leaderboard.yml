@@ -1,4 +1,4 @@
-name: Sync Speedrun Static
+name: Update speedrun leaderboard
 
 on:
   push:
