@@ -1,83 +1,56 @@
-# Summary of GitHub Issues
+# Chronological Summary of Issues
 
-## 1. Chronological Summary of Issues
+1. **[Train 1B models on prior datasets](https://github.com/marin-community/marin/issues/72)** - July 31, 2024
+2. **[Replicate DCLM OH-2.5 + ELI5 fasttext classifier](https://github.com/marin-community/marin/issues/102)** - August 11, 2024
+3. **[Train a simple Dolma/Olmo baseline to flex the pipeline](https://github.com/marin-community/marin/issues/442)** - October 17, 2024
+4. **[compare html -> text methods](https://github.com/marin-community/marin/issues/246)** - September 11, 2024
+5. **[train MMLU quality classifier](https://github.com/marin-community/marin/issues/274)** - September 18, 2024
+6. **[Reproduce Olmo SFT for quickstart](https://github.com/marin-community/marin/issues/227)** - September 9, 2024
+7. **[Evaluate baselines at 1B scale on LegalBench](https://github.com/marin-community/marin/issues/230)** - September 10, 2024
+8. **[Train 1B models with different amounts of law data, eval on LegalBench](https://github.com/marin-community/marin/issues/231)** - September 10, 2024
+9. **[SFT on all turns](https://github.com/marin-community/marin/issues/904)** - March 21, 2025
+10. **[Experiment: See if WSD models are less amenable to SFT](https://github.com/marin-community/marin/issues/950)** - April 8, 2025
+11. **[Update issues with latest entries; results for synthetic data curation](https://github.com/marin-community/marin/issues/640)** - December 9, 2024
+12. **[Update issues with latest entries; run experiments on FineQA](https://github.com/marin-community/marin/issues/958)** - April 12, 2025
 
-### May 2025
-- **[SFT Deeper Starling](https://github.com/marin-community/marin/issues/1237)** - May 12, 2025
-  - Focused on testing the SFT capabilities of the Deeper Starling model with results indicating mixed performance.
-  
-### May 2025
-- **[OLMoE replication](https://github.com/marin-community/marin/issues/1183)** - May 6, 2025
-  - Aimed to replicate OLMoE to compare the performance of MoE architecture against dense models.
+# Summary Grouped by Topic
 
-### May 2025
-- **[Fineweb-Edu Crawl Annealing Experiments](https://github.com/marin-community/marin/issues/1168)** - May 3, 2025
-  - Tested quality ablation with a crawled dataset, aiming to demonstrate improvements from new data.
+## General Experiments
 
-### May 2025
-- **[OpenWebMath Crawl Annealing Experiments](https://github.com/marin-community/marin/issues/1167)** - May 3, 2025
-  - Similar objectives as the Fineweb-Edu issue focused on the effectiveness of a new crawled dataset.
+### [Train 1B models on prior datasets](https://github.com/marin-community/marin/issues/72)
 
-### April 2025
-- **[Experiment: Tootsie Phoenix Cooldown (sensible-starling)](https://github.com/marin-community/marin/issues/977)** - April 22, 2025
-  - Focused on cooling down the Tootsie Phoenix model with specific datasets to enhance performance.
+Establishes baselines for datasets including FineWeb, Dolma, and DCLM-Baseline. Goals involve replicating published numbers and aligning configurations using current defaults.
 
-### April 2025
-- **[Experiment: Try not masking user turns in SFT](https://github.com/marin-community/marin/issues/975)** - April 21, 2025
-  - Examined the impact of masking in user turns during supervised fine-tuning.
+## Quality Classifiers
 
-### April 2025
-- **[FineMath Crawling](https://github.com/marin-community/marin/issues/968)** - April 15, 2025
-  - Aimed to gather contextual data on FineMath.
+### [Replicate DCLM OH-2.5 + ELI5 fasttext classifier](https://github.com/marin-community/marin/issues/102)
 
-### April 2025
-- **[Cascading Quality Filters](https://github.com/marin-community/marin/issues/963)** - April 13, 2025
-  - Investigated improving label precision through cascading quality filters.
+This experiment replicated the fasttext classifier from the DCLM paper using ELI5 and OH-2.5 data, aiming to measure downstream performance via data filtering and training.
 
-### April 2025
-- **[Experiment: Hybrid Norm and Input Embedding Norm](https://github.com/marin-community/marin/issues/961)** - April 12, 2025
-  - Modulated architecture changes to test SFT efficacy.
+### [train MMLU quality classifier](https://github.com/marin-community/marin/issues/274)
 
-### April 2025
-- **[Create and Test out FineQA using Datashop pipeline](https://github.com/marin-community/marin/issues/958)** - April 12, 2025
-  - Focused on improving QA data in training mixtures.
+Training a classifier on MMLU versus non-MMLU data to analyze impacts on MMLU scores. It aimed to correlate classifier performance on distinguishing MMLU with the resulting LM's performance.
 
-### April 2025
-- **[Experiment: Compression Ratio Filtering on 8B models](https://github.com/marin-community/marin/issues/955)** - April 9, 2025
-  - Tested the hypothesis that filtering based on compression ratio can enhance model performance.
+## SFT and Instruction Following
 
-### April 2025
-- **[Experiment: See if WSD models are less amenable to SFT](https://github.com/marin-community/marin/issues/950)** - April 8, 2025
-  - Explored the relationship between WSD models and their SFT effectiveness.
+### [Reproduce Olmo SFT for quickstart](https://github.com/marin-community/marin/issues/227) & [SFT on all turns](https://github.com/marin-community/marin/issues/904) & [Experiment: See if WSD models are less amenable to SFT](https://github.com/marin-community/marin/issues/950)
 
-### April 2025
-- **[Experiment: double check that throughput isn't impacted by upcasting attn](https://github.com/marin-community/marin/issues/943)** - April 4, 2025
-  - Validated that recent changes did not affect training throughput.
+These experiments focus on SFT (Supervised Fine-Tuning) and its interaction with model architectures and data inputs, investigating potential improvements or identifying hindrances such as WSD model limitations.
 
-### April 2025
-- **[Reproduce Finemath performance using Datashop](https://github.com/marin-community/marin/issues/939)** - April 3, 2025
-  - Compared and evaluated finest math performance in varying configurations.
+## Legal Domain Experiments
 
-... (other issues follow the same chronological structure)
+### [Evaluate baselines at 1B scale on LegalBench](https://github.com/marin-community/marin/issues/230) & [Train 1B models with different amounts of law data, eval on LegalBench](https://github.com/marin-community/marin/issues/231)
 
-## 2. Summary Grouped by Topic
+These efforts target the legal domain using LegalBench benchmarks to assess performance influenced by varying legal data proportions, scrutinizing model enhancements through substantial legal dataset integration. 
 
-### Model Cooling Experiments
-- **[SFT Deeper Starling](https://github.com/marin-community/marin/issues/1237)** and **[Tootsie Phoenix Cooldown (sensible-starling)](https://github.com/marin-community/marin/issues/977)** dealt with testing cooling techniques on models and newly crawled datasets, yielding mixed results in model performance.
+## Synthetic Data Curation
 
-### Replication Studies
-- **[OLMoE replication](https://github.com/marin-community/marin/issues/1183)** and **[Reproduce Finemath performance using Datashop](https://github.com/marin-community/marin/issues/939)** focused on replicating models to understand methodologies and outcomes from different architectures.
+### [Update issues with latest entries; results for synthetic data curation](https://github.com/marin-community/marin/issues/640) & [Update issues with latest entries; run experiments on FineQA](https://github.com/marin-community/marin/issues/958)
 
-### Dataset Quality Improvements
-- Issues like **[Fineweb-Edu Crawl Annealing Experiments](https://github.com/marin-community/marin/issues/1168)** and **[OpenWebMath Crawl Annealing Experiments](https://github.com/marin-community/marin/issues/1167)** highlight efforts in improving the quality of datasets for training, emphasizing the need for fine improvements in data mixture.
+Focused on generating diverse instruction-following data and testing the effectiveness through curated datasets like FineQA, highlighting performance impacts on models trained with enhanced synthetic content. 
 
-### Filtering Techniques
-- **[Experiment: Compression Ratio Filtering on 8B models](https://github.com/marin-community/marin/issues/955)** put forward the importance of quality data filtering using compression ratios to combat data noise and enhance model training outcomes.
+## HTML to Text Conversion
 
-### Normations and Architectures
-- Experiments such as **[Experiment: Hybrid Norm and Input Embedding Norm](https://github.com/marin-community/marin/issues/961)** explored architecture modifications to stabilize SFT training and improve effectiveness.
+### [compare html -> text methods](https://github.com/marin-community/marin/issues/246)
 
-### Usage of High-Quality Data in Training
-- Various experiments including **[FineMath Crawling](https://github.com/marin-community/marin/issues/968)** and **[Fineweb-Edu Crawl Annealing Experiments](https://github.com/marin-community/marin/issues/1168)** aimed to assess the impact of high-quality data on model performance improvements.
-
-This format reflects both chronological and thematic overviews of the projects, providing a comprehensive look at ongoing experiments and their focus areas in model training and evaluation.
+This issue compared different HTML-to-text conversion methods to identify the most efficient way to preprocess data for language model training, aiming for improved accuracy and content retention.
