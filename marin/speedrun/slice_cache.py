@@ -38,8 +38,9 @@ class SliceCacheConfig(TokenizeConfigBase):
     def as_lm_dataset_source_config(
         self, actual_output_path: str | InputName | None, *, include_raw_paths=True
     ) -> LMDatasetSourceConfig:
+        humanfriendly_tokens = humanfriendly.format_size(self.num_tokens)[0:-1].replace(" ", "").replace("byte", "")
         out = _patch_source_config(
-            self.input_config, self.cache_path, extra_tags=["subsampled", f"subsampled-{self.num_tokens}"]
+            self.input_config, self.cache_path, extra_tags=["subsampled", f"subsampled-{humanfriendly_tokens}"]
         )
 
         return out  # type: ignore
@@ -63,10 +64,7 @@ def _do_slice_cache(
 
     assert "input_ids" in exemplar, "This only works for datasets with input ids right now"
 
-    human_friendly_tokens = humanfriendly.format_size(cfg.num_tokens)[0:-1].replace(" ", "").replace("byte", "")
-    subsampled_source_spec = _patch_source_config(
-        cfg.input_config, cfg.cache_path, extra_tags=["subsampled", f"subsampled-{human_friendly_tokens}"]
-    )
+    subsampled_source_spec = cfg.as_lm_dataset_source_config(cfg.cache_path)
 
     try:
         TreeCache.load(os.path.join(cfg.cache_path, split), exemplar)
