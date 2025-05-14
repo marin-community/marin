@@ -16,6 +16,7 @@ from github import Github
 from openai import OpenAI
 
 MODEL = "gpt-4o"
+PROMPT_PATH = "docs/reports/summary_prompt.txt"
 OUTPUT_PATH = "docs/reports/summary.md"
 
 def get_github_issues():
@@ -63,8 +64,12 @@ def main():
     print(f"Read {len(issues)} issues.")
     xml = "\n".join([convert_issue_to_xml(issue) for issue in issues])
 
+    print(f"Saving the prompt ({len(prompt_template)} characters) to {PROMPT_PATH}...")
     prompt = prompt_template.format(issues=xml)
-    print(f"Asking an LM to summarize (prompt is {len(prompt)} characters long)...")
+    with open(PROMPT_PATH, "w") as f:
+        f.write(prompt)
+
+    print(f"Asking an LM to summarize..")
     client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
     response = client.chat.completions.create(
         model=MODEL,
