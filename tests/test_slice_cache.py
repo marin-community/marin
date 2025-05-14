@@ -7,7 +7,7 @@ from levanter.data import ShardedDataSource
 from levanter.data.text import LmDatasetSourceConfigBase
 from levanter.store import SerialCacheWriter, TreeCache
 
-from marin.speedrun.slice_cache import _do_slice_cache
+from marin.speedrun.slice_cache import SliceCacheConfig, _do_slice_cache
 
 
 @dataclass
@@ -24,17 +24,17 @@ class MockDatasetSource(LmDatasetSourceConfigBase):
     def get_shard_source(self, split) -> ShardedDataSource[dict] | None:
         raise NotImplementedError
 
-    def load_cache(self, tokenizer):
+    def load_cache(self, split, tokenizer):
         # Create a mock dataset with the specified number of docs and tokens per doc
         exemplar = {"input_ids": np.array([0] * self.tokens_per_doc, dtype=np.int32)}
 
-        with SerialCacheWriter(self.cache_dir, exemplar) as writer:
+        with SerialCacheWriter(f"{self.cache_dir}/train", exemplar) as writer:
             for i in range(self.num_docs):
                 # Create a document with unique token IDs for easy verification
                 doc = {"input_ids": np.array([i] * self.tokens_per_doc, dtype=np.int32)}
                 writer.write_batch([doc])
 
-        out = TreeCache.load(self.cache_dir, exemplar)
+        out = TreeCache.load(f"{self.cache_dir}/{split}", exemplar)
         return out
 
 
@@ -57,10 +57,10 @@ def test_slice_cache(num_docs: int, tokens_per_doc: int, requested_tokens: int):
         output_path = f"{tmpdir}/sliced_cache"
         key = 0
 
-        sliced_config = _do_slice_cache(source, "gpt2", output_path, requested_tokens, key)
+        sliced_config = _do_slice_cache(SliceCacheConfig(source, requested_tokens, output_path, "gpt2", key))
 
         # Verify the sliced cache
-        cache = TreeCache.load(output_path, {"input_ids": np.array([0], dtype=np.int32)})
+        cache = TreeCache.load(f"{output_path}/train", {"input_ids": np.array([0], dtype=np.int32)})
 
         # Count total tokens in the sliced cache
         total_tokens = 0
@@ -79,7 +79,7 @@ def test_slice_cache(num_docs: int, tokens_per_doc: int, requested_tokens: int):
 
         # Second run: should reuse existing cache
         key2 = 1  # Different key shouldn't matter
-        sliced_config2 = _do_slice_cache(source, "gpt2", output_path, requested_tokens, key2)
+        sliced_config2 = _do_slice_cache(SliceCacheConfig(source, requested_tokens, output_path, "gpt2", key2))
 
         # Verify we got the same config back
         assert sliced_config.cache_dir == sliced_config2.cache_dir
@@ -94,7 +94,7 @@ def test_slice_cache_too_small():
 
         # Request more tokens than available (2000 > 1000)
         with pytest.raises(ValueError, match="Cache does not seem to be big enough"):
-            _do_slice_cache(source, "gpt2", f"{tmpdir}/sliced_cache", 2000, 0)
+            _do_slice_cache(SliceCacheConfig(source, 2000, f"{tmpdir}/sliced_cache", "gpt2", 0))
 
 
 def test_slice_cache_tags():
@@ -106,7 +106,7 @@ def test_slice_cache_tags():
         )
 
         # Request 500 tokens (50K tokens)
-        sliced_config = _do_slice_cache(source, "gpt2", f"{tmpdir}/sliced_cache", 500, 0)
+        sliced_config = _do_slice_cache(SliceCacheConfig(source, 500, f"{tmpdir}/sliced_cache", "gpt2", 0))
 
         # Verify tags
         assert "original" in sliced_config.tags
@@ -116,6 +116,6 @@ def test_slice_cache_tags():
         assert len(sliced_config.tags) == 4  # exactly these 4 tags
 
         # Test with a different token count to verify the token count tag changes
-        sliced_config2 = _do_slice_cache(source, "gpt2", f"{tmpdir}/sliced_cache2", 1000, 0)
+        sliced_config2 = _do_slice_cache(SliceCacheConfig(source, 1000, f"{tmpdir}/sliced_cache", "gpt2", 0))
         assert "subsampled-1K" in sliced_config2.tags
         assert "subsampled-500" not in sliced_config2.tags  # old tag shouldn't be there

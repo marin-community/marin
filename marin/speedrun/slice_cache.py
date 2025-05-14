@@ -4,66 +4,93 @@ Step to read a Levanter cache and produce a subsample of that cache.
 
 import dataclasses
 import logging
+import os
 from dataclasses import dataclass
 
 import fsspec
 import humanfriendly
 from jax.random import PRNGKey
-from levanter.data.text import HfDatasetSourceConfig, LmDatasetSourceConfigBase, UrlDatasetSourceConfig
+from levanter.data.text import (
+    HfDatasetSourceConfig,
+    LMDatasetSourceConfig,
+    LmDatasetSourceConfigBase,
+    UrlDatasetSourceConfig,
+)
 from levanter.store import SerialCacheWriter, TreeCache
 from transformers import AutoTokenizer
 
-from marin.execution import THIS_OUTPUT_PATH
+from marin.execution import THIS_OUTPUT_PATH, ExecutorStep, InputName
+from marin.processing.tokenize.tokenize import TokenizeConfigBase
 
 logger = logging.getLogger(__name__)
 
 
+@dataclass
+class SliceCacheConfig(TokenizeConfigBase):
+    """Configuration for slicing a Levanter cache."""
+
+    input_config: LmDatasetSourceConfigBase
+    num_tokens: int
+    cache_path: str = THIS_OUTPUT_PATH
+    tokenizer: str = "stanford-crfm/marin_tokenizer"
+    seed: int = 42
+
+    def as_lm_dataset_source_config(
+        self, actual_output_path: str | InputName | None, *, include_raw_paths=True
+    ) -> LMDatasetSourceConfig:
+        out = _patch_source_config(
+            self.input_config, self.cache_path, extra_tags=["subsampled", f"subsampled-{self.num_tokens}"]
+        )
+
+        return out  # type: ignore
+
+
 def _do_slice_cache(
-    input_config: LmDatasetSourceConfigBase, tokenizer_spec: str, output_path: str, num_tokens: int, seed: int
+    cfg: SliceCacheConfig,
 ) -> LmDatasetSourceConfigBase:
     """
     Read a Levanter cache and produce a subsample of that cache.
 
     This only works for datasets with input ids right now. Luckily this is all the datasets we care about atm.
     """
-    key = PRNGKey(seed)
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_spec)
-    # gonna be lazy with async stuff
-    train_set = input_config.load_cache(tokenizer)
-    # we want a random sample of docs (token seqs would probably be better but much more work)
+    key = PRNGKey(cfg.seed)
+    tokenizer = AutoTokenizer.from_pretrained(cfg.tokenizer)
+    split = "train"
+    train_set = cfg.input_config.load_cache(split, tokenizer)
 
+    # we want a random sample of docs (token seqs would probably be better but much more work)
     exemplar = train_set.as_sync_dataset()[0]
 
     assert "input_ids" in exemplar, "This only works for datasets with input ids right now"
 
-    human_friendly_tokens = humanfriendly.format_size(num_tokens)[0:-1].replace(" ", "").replace("byte", "")
+    human_friendly_tokens = humanfriendly.format_size(cfg.num_tokens)[0:-1].replace(" ", "").replace("byte", "")
     subsampled_source_spec = _patch_source_config(
-        input_config, output_path, extra_tags=["subsampled", f"subsampled-{human_friendly_tokens}"]
+        cfg.input_config, cfg.cache_path, extra_tags=["subsampled", f"subsampled-{human_friendly_tokens}"]
     )
 
     try:
-        TreeCache.load(output_path, exemplar)
+        TreeCache.load(os.path.join(cfg.cache_path, split), exemplar)
         return subsampled_source_spec
     except FileNotFoundError:
         pass
 
     expected_input_ids = train_set.store.tree["input_ids"].data_size
 
-    if expected_input_ids < num_tokens:
+    if expected_input_ids < cfg.num_tokens:
         raise ValueError(
-            f"Cache does not seem to be big enough: {expected_input_ids} in cache but ${num_tokens} requested"
+            f"Cache does not seem to be big enough: {expected_input_ids} in cache but ${cfg.num_tokens} requested"
         )
 
     train_set_shuffled = train_set.shuffle(key).as_sync_dataset()
     num_docs = len(train_set_shuffled)
 
-    with SerialCacheWriter(output_path, exemplar) as output_writer:
+    with SerialCacheWriter(os.path.join(cfg.cache_path, split), exemplar) as output_writer:
         # TensorStore has high latency so we load biggish batches
         BS_TO_LOAD = 1024
 
         loaded_tokens = 0
         first_doc = 0
-        while loaded_tokens < num_tokens and first_doc < num_docs:
+        while loaded_tokens < cfg.num_tokens and first_doc < num_docs:
             end_doc = min(first_doc + BS_TO_LOAD, num_docs)
             batch = train_set_shuffled.get_batch(range(first_doc, end_doc))
             first_doc = end_doc
@@ -71,18 +98,18 @@ def _do_slice_cache(
             # decide how many docs to take from this batch
             batch_to_write = []
             for ex in batch:
-                if loaded_tokens + len(ex["input_ids"]) > num_tokens:
+                if loaded_tokens + len(ex["input_ids"]) > cfg.num_tokens:
                     break
                 batch_to_write.append(ex)
                 loaded_tokens += len(ex["input_ids"])
 
             output_writer.write_batch(batch_to_write)
 
-    if loaded_tokens < num_tokens:
+    if loaded_tokens < cfg.num_tokens:
         raise ValueError("Provided cache doesn't have enough tokens")
 
     # These are usually uploaded to HF, so we write a README
-    _create_readme(output_path, input_config, loaded_tokens, tokenizer_spec, seed)
+    _create_readme(cfg.cache_path, cfg.input_config, loaded_tokens, cfg.tokenizer, cfg.seed)
 
     return subsampled_source_spec
 
@@ -97,7 +124,7 @@ def _create_readme(
     with fsspec.open(readme_path, "w") as f:
         f.write("# Marin/Levanter Subsampled Pretokenized Dataset\n\n")
         f.write("## Dataset\n\n")
-        f.write({_short_desc_from_lm_config(input_config)})
+        f.write(_short_desc_from_lm_config(input_config))
         f.write("\n\n## Factsheet\n\n")
         f.write(f"* Original cache: {input_config.cache_dir}\n")
         f.write(f"* Tokenizer: [{tokenizer_spec}](https://huggingface.co/{tokenizer_spec})\n")
@@ -147,34 +174,35 @@ def _patch_source_config(
     return dataclasses.replace(input_config, cache_dir=output_path, tags=input_config.tags + extra_tags)
 
 
-@dataclass
-class SliceCacheConfig:
-    """Configuration for slicing a Levanter cache."""
-
-    input_config: LmDatasetSourceConfigBase
-    num_tokens: int
-    seed: int = 42
-    output_path: str = THIS_OUTPUT_PATH
-    tokenizer_spec: str = "stanford-crfm/marin_tokenizer"
-
-    def as_lm_source_config(self) -> LmDatasetSourceConfigBase:
-        """Convert the config to a LmDatasetSourceConfigBase."""
-        return _patch_source_config(
-            self.input_config, self.output_path, extra_tags=["subsampled", f"subsampled-{self.num_tokens}"]
-        )
-
-
-def slice_cache(cfg: SliceCacheConfig) -> LmDatasetSourceConfigBase:
+def slice_cache(
+    input_config: LmDatasetSourceConfigBase,
+    tokenizer_spec: str,
+    output_path: str,
+    num_tokens: int,
+    seed: int = 42,
+) -> ExecutorStep[SliceCacheConfig]:
     """High-level function to slice a Levanter cache.
 
-    This is the main entry point for slicing a cache. It creates and runs a SliceCacheStep.
+    This is the main entry point for slicing a cache.
 
     Args:
-        cfg: Configuration for the slice operation
+        input_config: The input cache configuration.
+        tokenizer_spec: The tokenizer specification.
+        output_path: The output path for the sliced cache.
+        num_tokens: The number of tokens to slice.
+        seed: The random seed for shuffling the dataset.
 
     Returns:
         The configuration for the sliced cache
     """
 
-    logger.info(f"Slicing cache {cfg.input_config.cache_dir} to {cfg.output_path} with {cfg.num_tokens} tokens")
-    return _do_slice_cache(cfg.input_config, cfg.tokenizer_spec, cfg.output_path, cfg.num_tokens, cfg.seed)
+    return ExecutorStep(
+        fn=_do_slice_cache,
+        config=SliceCacheConfig(
+            input_config=input_config,
+            num_tokens=num_tokens,
+            seed=seed,
+            cache_path=output_path,
+            tokenizer=tokenizer_spec,
+        ),
+    )
