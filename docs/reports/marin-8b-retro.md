@@ -32,9 +32,9 @@ to train a model of that size for long enough.
 
 ### Architecture
 
-We settled on the "[Llama architecture](https://arxiv.org/abs/2302.13971)" for the usual reasons: it has been shown to work well, 
+We settled on the "[Llama architecture](https://arxiv.org/abs/2302.13971)" for the usual reasons: it has been shown to work well,
 easier to plug into existing inference stacks, no one ever got fired
-for buying IBM, etc. 
+for buying IBM, etc.
 
 We used the same settings as Llama 3.1 8B. More specifically:
 
@@ -95,12 +95,12 @@ We emphasize that these phases were not planned in advance. Decisions were made 
 
 Moreover, while there is a single straight-line set of phases that produced the final Marin 8B artifact,
 there were a number of short branches that did not make it into the final run. Many of these were by design: there were other trial
-[LLama 3 style](XXX) data ablations that helped decide our cooldown mix, as well as attempts at "deeper cooldowns."
-We detail these [in a separate report](XXX), though provide a summary later in this one.
+[LLama 3](https://arxiv.org/abs/2302.13971) micro-annealing runs (see also [Olmo 2](https://arxiv.org/abs/2501.00656), [Yi](https://arxiv.org/html/2403.04652v1), [DBRX](https://www.databricks.com/blog/introducing-dbrx-new-state-art-open-llm)) that helped decide our cooldown mix, as well as attempts at "deeper cooldowns.
+We detail these [GH#784](https://github.com/marin-community/marin/issues/784), [GH#820](https://github.com/marin-community/marin/issues/820), and [GH#898](https://github.com/marin-community/marin/issues/898), though provide a summary later in this one.
 We also ran some experiments investigating issues with "SFT-ability,"
-documented in these issues: 
+documented in these issues:
 
-- [#898 Raccoon](https://github.com/marin-community/marin/issues/898) 
+- [#898 Raccoon](https://github.com/marin-community/marin/issues/898)
 - [#916 Spoonbill](https://github.com/marin-community/marin/issues/916)
 
 ## Phase 1: DCLM WSD-S Phase
@@ -128,8 +128,7 @@ Specifically, this meant:
 | [Proofpile](https://huggingface.co/datasets/proofpile)                           | 1.3%       |
 
 We planned on adding new datasets as we (and others!) developed them.
-For evaluation, we initially tracked a large subset of Paloma (with a particular focus on the `c4_en` subset)
-during training.
+For evaluation, we initially tracked a large subset of Paloma (with a particular focus on the `c4_en` subset) during training.
 
 ### WSD-S
 
@@ -208,7 +207,7 @@ To better utilize the hardware, we increased our batch size by 3x, to 12Mi token
 Following [this blog post by Sadhika Malladi](https://www.cs.princeton.edu/~smalladi/blog/2024/01/22/SDEs-ScalingRules/), we increased the learning rate to 1.7e-3,
 which is approximately the old learning rate multiplied by $`\sqrt{3}`$ (the square root of the batch size increase).
 
-We also switched from WSD-S to WSD, using the exponential moving averaging (EMA) of weights for monitoring evaluation performance (XXX cite whoever). We used a $`\beta`$ of 0.995.
+We also switched from WSD-S to WSD, using the exponential moving averaging (EMA) of weights for monitoring evaluation performance. We did this following the [Deepseek V3 paper](https://arxiv.org/pdf/2412.19437v1). We used a $`\beta`$ of 0.995.
 Initially, I inadvertently got the direction of the EMA wrong, so early evals were not substantially different from the "hot" model. Oh well.
 
 We did not reset the optimizer state or do a rewarmup in this or any transition.
@@ -228,8 +227,8 @@ We saw a brief spike near the beginning which we attribute to the change in rota
 
 #### The EMA Gap
 
-One of the most interesting things we saw during this phase was what we call the "EMA gap." 
-The EMA gap is the difference between the eval loss of the EMA model and the eval loss of the hot model. As expected, the EMA loss was better. 
+One of the most interesting things we saw during this phase was what we call the "EMA gap."
+The EMA gap is the difference between the eval loss of the EMA model and the eval loss of the hot model. As expected, the EMA loss was better.
 Surprisingly, the gap was fairly stable over time, changing only with changes to the learning rate (or different datasets). For c4en, with the hot learning rate, the gap was consistently around 0.015 bits-per-byte (bpb). A stable gap of 0.017 was observed in the subsequent Phoenix phase. The EMA gap would of course shrink as the learning rate was cooled down (since, in the limit, the model freezes).
 
 This was not to say there was no deviation in the gap, but the fact that it did not seem to increase or decrease with time was surprising.
@@ -240,12 +239,32 @@ This was not to say there was no deviation in the gap, but the fact that it did 
 
 At around 3.7T tokens, we were running low on DCLM tokens, which meant we needed to change something. We decided to try a cooldown.
 
+### Interlude: Micro-Annealing
+
+Following recent work on midtraining (e.g. [Olmo 2](https://arxiv.org/abs/2501.00656), [Yi](https://arxiv.org/html/2403.04652v1), [DBRX](https://www.databricks.com/blog/introducing-dbrx-new-state-art-open-llm)), we knew we would need to mix in higher quality data during our cooldowns. What constitues higher quality data?
+
+Llama 3, Olmo 2, and DBRX (XXX is this right?) used small experiments (what Olmo calls "microannealing") to test the effect of different data sources. The basic idea is to take a model that has already been mostly trained, and then do a short cooldown with ~70% original data and ~30% a test high quality data source. We ran a series of micro-annealing runs to test the effect of different data sources.
+
+See [GH#784](https://github.com/marin-community/marin/issues/784) and [GH#820](https://github.com/marin-community/marin/issues/820) for all experiments and more details on our approach.
+
+The most important takeaway was that naively oversampling "High Quality" (HQ) data does not lead to improved task performance in
+microannealing experiments, though they do usually lead to improved loss on HQ validation sets (e.g. Paloma's various subsets).
+
+We believe this is because typical "high quality" data sources (e.g. ArXiv, Wikipedia) don't have as much fewshot-learning-inducing data (e.g. mulitple choice questions) as the broader web does. When you replace such a large fraction of the PT mix with a HQ source, you lose out on the multiple choice data that is present in the web.
+
+In fact, we found that nothing led to improved task performance in microannealing experiments compared to the control (of 100% PT mix)... until we mixed in FLAN into all microannealing runs. (XXX is this right)
+Instead of the 70/30 recommended in the Llama 3 paper, we found that 70% PT/ 15% FLAN/15% HQ led to the best results for our experiment budget.
+
+
+By doing this, we were able to improve both the loss and the task performance of most microannealing runs. Ironically, notwithstanding the above, only 70% PT/30% FLAN underperformed the 100% PT control.
+
+We also found that a microannealing experiment with all HQ sources performed approximately average compared to the other microannealing runs: in this setting, there was no advantage to variety.
+
 ### Data Mix
 
-Following recent work on midtraining (e.g. [Olmo 2](https://arxiv.org/abs/2501.00656), XXX more), we decided to fold in higher quality data. Ultimately, after a series of ablations (XXX link) we landed on roughly the [Dolmino mixture](https://huggingface.co/datasets/allenai/dolmino-mix-1124), with some changes.
+Based on the above, we decided to mix in a mixture of 70% high quality "web" (i.e. Dolmino's DCLM HQ and [StarCoder](https://huggingface.co/datasets/bigcode/starcoderdata)), and 30% a modified Dolmino + [FineMath 3+](https://huggingface.co/datasets/HuggingFaceTB/finemath).
 
-We used 70% high quality "web" (i.e. Dolmino's DCLM HQ and [StarCoder](https://huggingface.co/datasets/bigcode/starcoderdata)), and 30% a modified Dolmino + [FineMath 3+](https://huggingface.co/datasets/HuggingFaceTB/finemath).
-Specifically, we included:
+Specifically, we included all sources from our ablations that outperformed the 100% PT control, meaning everything we tried at this phase except Dolmino FLAN.
 
 | Dataset | Percentage |
 |---------|------------|
@@ -260,13 +279,15 @@ Specifically, we included:
 | Dolma Megawika | 0.8% |
 | Dolma Wikipedia | 0.7% |
 
+
+The HQ sources were weighted roughly proportional to token count and then upweighted to be 30% of the total.
+
 The main deviations from the Dolmino mixture were:
 
 - We included datasets that [Olmo 2](https://arxiv.org/abs/2501.00656) used in its Phase 1 (e.g. wikipedia) that we did not.
-- We did not include [FLAN](https://arxiv.org/abs/2109.01652). One of us had had less than stellar experiences with it. XXX more details
+- We did not include [FLAN](https://arxiv.org/abs/2109.01652).
+- We did not include the other synthetic math datasets in Dolmino. (This was a mistake.)
 - We added [FineMath 3+](https://huggingface.co/datasets/HuggingFaceTB/finemath).
-
-XXX link to ablations
 
 ### Learning rate schedule
 
@@ -274,15 +295,19 @@ We decayed the learning rate from 1.7e-3 to 1.7e-4 over 1e12 tokens (79500 steps
 
 ### Results
 
-Results for this model are pretty good. XXX
+Results for this model are pretty good for "base model" tasks, though predictably not great for math and instruction following.
 
-GSM8K 0.5094768764215315 -> 0.67854
-MATH 0.1846 -> 0.3526
-HumanEval 0.24390243902439024 -> 0.5731707317
-IFEval 0.09242144177449169 -> 0.4953789279
-BBH 0.5702657041929043 -> 0.003532483489479343
+| Task | Score (%) |
+|------|-----------|
+| MMLU (5-shot) | 65.3 |
+| MMLU (0-shot) | 62.5 |
+| BBH (few-shot CoT) | 57.0 |
+| GSM8K (8-shot) | 50.9 |
+| HumanEval (pass@1) | 24.4 |
+| MATH (4-shot) | 18.5 |
+| IFEval (prompt-level loose) | 9.2 |
 
-TODO: MMLU
+A 5-shot MMLU of 65.3 was better than both Olmo 2 7B and DCLM, and not too far behind Llama 3.1 8B. But we can do better.
 
 ### Notes
 
@@ -297,6 +322,18 @@ We haven't investigated this, but our hypothesis is that there are more structur
 It is worth noting that we did not observe this increase in our largely similar final cooldown (which used Nemotron CC instead of Dolmino's DCLM HQ).
 
 
+## Interlude: "Dessert" Runs
+
+While our "mainline" run continued in the Phoenix phase, we ran a number of short ablations
+consisting of what we termed "dessert" runs.
+Dessert coasted at the same already low LR, with the goal of patching a few gaps in capabilities: we added the synthetic math datasets from Dolmino that we had excluded from our main run and added FLAN. See [this comment in GH#600](https://github.com/marin-community/marin/issues/600#issuecomment-2704462502) as well as [this one](https://github.com/marin-community/marin/issues/600#issuecomment-2704521062) for more details.
+
+- Adding the math datasets improved GSM8K and MATH somewhat. GSM8K went from 0.509 to 0.611, and MATH went from 0.184 to 0.211. Not enough to get excited about, but a positive sign for later.
+- FLAN didn't help final MMLU 5-shot (.653->651) or other tasks, at least not in this regime.
+
+So "dessert" was seemingly a failure, though we revisited this in the final phase.
+
+
 ## Phase 4: Reheated: Phoenix
 
 The specification for this phase is available [here](https://github.com/marin-community/marin/blob/852c53f9741b233549daf9f1649fe88c9c5a170c/experiments/tootsie/exp600_tootsie.py#L465-L522).
@@ -305,7 +342,7 @@ After the cooldown, at around 4.7T tokens, we had more time for training, so we 
 
 ### Data
 
-Because we were running out of DCLM, we transitioned the data from our phase 1 and 2 mixture (DCLM+Starcoder+ProofPile) to a new mixture that was Nemotron and Starcoder.
+Because we were running out of DCLM, we transitioned the data from our phase 1 and 2 mixture (DCLM+Starcoder+ProofPile) to a new mixture that was [Nemotron-CC](https://arxiv.org/abs/2412.02595) and [Starcoder](https://huggingface.co/datasets/bigcode/starcoderdata).
 (We didn't worry too much about epoching StarCoder.)
 
 The target mixture was Nemotron-CC (with each subset weighted approximately proportionally to token count) and Starcoder,
@@ -315,33 +352,71 @@ also weighted by token count. As a transition, we weighted all components
 ### Learning Rate Schedule
 
 We rewarmed the learning rate linearly from 1.7e-4 to 1.7e-3 over those same 2000 steps after which we
-held the learning rate fixed.
+held the learning rate fixed for the duration of this phase.
 
 ### Notes
 
-The most interesting thing about this phase was that the transition went very smoothly.
+The most interesting thing about this phase was that the transition went very smoothly. We expected a substantial loss spike, but didn't see one. The loss did jump, but returns to a slighly lower level than where the run was before the cooldown.
 
-XXX figure
+![graph depicting the loss during the transition to the new data mix. The loss very briefly spiked but then returned to lower levels than before the firstcooldown.](../images/8b-phoenix-transition.png)
 
 Also of small interest is that the steady state c4en loss for Phoenix was considerably lower
 than DCLM. This need not mean anything other than structural similarities in the preprocessing.
 We have not investigated this further.
 
-XXX more?
 
-## Interlude: Deeper Cooldowns and "Dessert" Runs
+## Interlude: Deeper Cooldowns
 
-While our "mainline" run continued in the Phoenix phase, we ran a number of short ablations
-consisting of "deeper cooldowns" and what we termed "dessert" runs.
-Deeper cooldowns were just continued cooldowns to an even lower LR, starting from the end
-of the last cooldown. Dessert coasted at the same already low LR, with the goal of patching a few
-runs added Dolmino FLAN (excuse the pun) because some ablations (XXX) indicated
-that FLAN might in fact be useful.
+While Phoenix was running, we also ran a series of "deeper" cooldowns, trying to improve the model's SFT-ability. This led to the [Raccoon](https://github.com/marin-community/marin/issues/898) and [Spoonbill](https://github.com/marin-community/marin/issues/916) series of runs.
 
-Our takeaways from these runs were:
+### Raccoon: Debugging SFT-ability
 
-- XXX
-- Z-loss is important to avoid loss increases at low LRs.
+The genesis of Raccoon was that we were having trouble getting our model to SFT well. While our nascent SFT pipeline would exhibit an "epoch cliff" (i.e. loss would jump down on each repeated epoch) for Llama 3.1 8B and Olmo 2 7B, [it didn't do that for our model](https://github.com/marin-community/marin/issues/897), and indeed didn't perform that well. We hypothesized that this was because our "cooled down" LR was still quite high: 1.7e-4, which was closer to Olmo 2's peak LR than their final LR.
+We thought this might have something to do with our struggles with SFT-ability.
+
+Starting from the jellyfish cooldown, we further cooled down the model from 1.7e-4 to 1.7e-5 over about 100B tokens. ([WandB report here](https://wandb.ai/stanford-mercury/marin/reports/898-Tootsie-Soft-Raccoon--VmlldzoxMTk3NjUwNg?accessToken=06f87pmmvhdulczenkg3349jxk7e1pwbd4pdci2i8wvyxg9289122gfnckr9ymwc))
+Things looked good at first, but as the cool down deepened the the training loss started slowly creeping up?!?
+Divergence we could understand, but a slow increase in training loss we couldn't.
+
+![graph depicting the slow increase in training loss during the cooldown](../images/8b-raccoon-loss-increase.png)
+
+We tried a number of things to debug this:
+
+- Resetting the optimizer state (maybe something was wonky?)
+- Removing weight decay (maybe the gradient signal was too weak?)
+
+Nothing solved the problem.
+
+(That said, SFT performance did get better, so that was good!)
+
+What?
+
+### Spoonbill: Z-loss to the rescue
+
+[WandB report here](https://wandb.ai/stanford-mercury/marin/reports/916-Tootsie-Hypnotic-Spoonbill--VmlldzoxMjA1NjU2Nw)
+
+With [Spoonbill](https://github.com/marin-community/marin/issues/916), we tried decaying to 3e-5 rather than 1.7e-5. 3e-5 was Olmo 2's final LR, and in Raccoon we were still seeing decreases at 3e-5. We also threw in some [Tulu v3 data](https://arxiv.org/abs/2411.15124) (.3% of the data) and FLAN (1%) to adjust the data schedule and generally improve SFT-ability.
+
+Alas, the training loss still crept up.
+
+What?
+
+![graph depicting the slow increase in training loss during the cooldown for spoonbil](../images/marin-8b-spoonbill-loss.png)
+
+We reran with extensive norm tracking and finally isolated the problem: the `lm_head` was exploding:
+
+![graph depicting the norm of the lm_head during training compared to some other params](../images/8b-spoonbill-norms.png)
+
+We fixed this by adding a z-loss penalty of 1e-4 on the final logits.
+
+And it worked!
+
+![graph depicting the loss during the cooldown for spoonbill](../images/8b-spoonbill-zloss.png)
+
+Interestingly, [subsequent experiments](https://wandb.ai/marin-community/marin/reports/ZLoss-vs-Not-1-4B--VmlldzoxMjEzMzA1NA) showed that, when starting from scratch, zloss shrinks the final layer norm, and typically **increases** the lm_head.
+
+So, zloss, it's not just for avoiding explosions.
+
 
 ## Phase 5: Second Cooldown: Starling
 
@@ -381,23 +456,22 @@ We included the following datasets:
 | Dolmino Wiki | 0.3% | 5x |
 | Marin Datashop Science QA | 0.1% | 5x |
 
-Here "Dolmino Math" refers to most of the math-y components of DCLM.
+Here "Dolmino Math" refers to most of the math-y components of Dolmino:
 
-XXX Links
-
-- Dolmino Code Search Net (with OWM Filter)
-- Dolmino GSM8K XXX
-- Dolmino metamath owmfilter
-- Dolmino MathCoder2 SynthMath
-- TinyGSM MIND
-- Dolmino Tulu Math
+- [CodeSearchNet](https://arxiv.org/abs/1909.09436) (with OWM Filter)
+- [GSM8K](https://arxiv.org/pdf/2110.14168v1)
+- [MetaMath](https://arxiv.org/abs/2309.12284)
+- [Dolmino SynthMath](https://arxiv.org/abs/2501.00656)
+- [MathCoder2 Synthetic](https://arxiv.org/abs/2310.03731)
+- [Dolmino TinyGSM-MIND](https://arxiv.org/abs/2501.00656)
+- [Dolmino Tulu Math](https://arxiv.org/abs/2501.00656)
 
 ### Learning Rate Schedule and Other Hyperparameters
 
 We linearly cooled down the learning rate schedule from 1.7e-3 to 1.7e-5 (sic) over approximately 1.34e12 tokens
 (80,000 steps).
 
-Based on our findings in the ["racooon" and "spoonbill"](XXX) deep cooldowns (where we observed steady loss increases at low
+Based on our findings in the "Racooon" and "Spoonbill" deep cooldowns (where we observed steady loss increases at low
 learning rate), we imposed a z-loss penalty of 1e-4 on the final logits.
 
 We also increased our batch size to 16Mi tokens. This change was to further reduce gradient variance and better utilize the hardware (i.e. slightly more MFU).
@@ -405,7 +479,7 @@ We also increased our batch size to 16Mi tokens. This change was to further redu
 
 ### Bonus: Starling Dessert
 
-Because we were still seeing steady log-linear loss decreases (in c4en and elsewhere) even at this very low LR, we decided to 
+Because we were still seeing steady log-linear loss decreases (in c4en and elsewhere) even at this very low LR, we decided to
 coast a little longer. We ran a dessert run from 12.4e12 to 12.7e12 tokens, with the learning rate fixed at 1.7e-5
 and otherwise using the same hyperparameters as Starling.
 
@@ -413,13 +487,17 @@ and otherwise using the same hyperparameters as Starling.
 
 #### C4 EN Perplexity
 
-XXX embed
+![embed](../images/tootsie-8b-starling-loss-slowdown.png)
 
-Interestingly, c4en perplexity decreased a lot during the cooldown, when in the previous cooldown it had increased.
+Interestingly, c4en perplexity decreased a lot during this cooldown, when in the previous cooldown it had increased.
 Again, we attribute this to structural differences in the preprocessing of Dolmino's DCLM HQ and Nemotron CC.
 
-Separately, the slope in loss decrease during the cooldown slowed down dramatically.
-This is consistent with the theory around [WSD-S](https://arxiv.org/abs/2410.05192), which decomposes the loss into a "river" and "hill" component, where the hill is the loss due to the learning rate.  As the learning rate is decayed, the hill component goes away, leaving only the river and therefore a slower rate of loss decrease.
+#### WSD-S Hill / River decomposition
+
+Separately, the slope in loss decrease during the dessert phase slowed down dramatically.
+This is consistent with the theory around [WSD-S](https://arxiv.org/abs/2410.05192), which decomposes the loss into a "river" and "hill" component, where the hill is the loss due to flucuations due to the learning rate (and stochasticity in SGD).
+
+As the learning rate is decayed, the hill component diminishes. Once we stop decaying the learning rate, there is no further decrease in the hill component, so progress slows down.
 
 ![graph depicting the slowdown in loss decrease during the cooldown](../images/tootsie-8b-starling-loss-slowdown.png)
 
@@ -434,19 +512,21 @@ HumanEval 0.24390243902439024 -> 0.5731707317
 IFEval 0.09242144177449169 -> 0.4953789279
 BBH 0.5702657041929043 -> 0.003532483489479343
 
-# Main Takeaways
 
-- **Tootsie means never having to say you're sorry.** We made several dramatic changes to the data mix, optimizer, and other hyperparameters during the run. We cooled down, rewarmed up, changed the mixture, etc. without any major issues.
+## Main Takeaways
+
+- **Tootsie means never having to say you're sorry.** We made several dramatic changes to the data mix, optimizer, and other hyperparameters during the run. We cooled down, rewarmed up, changed the mixture, etc. without any major issues. Highly recommend.
 - **Z-loss isn't just for avoiding explosions.** While we didn't need z-loss to stabilize the training, we found it actually pretty necessary during very deep cooldowns.
-- **Formatting diversity is useful**:  While not necessarily showing up in non-loss evals, the high sensitivity of c4en perplexity to the data mix suggests that formatting diversity is useful. We will pursue this further in future runs.
+- **Format diversity is useful.**  While not necessarily showing up in non-loss evals, the high sensitivity of c4en perplexity (and that of other datasets) to the data mix suggests that formatting diversity is useful. We will pursue this further in future runs.
+- **So-called "high quality" data doesn't have everything.** High quality data seems to often lack data that leads to good few-shot performance. Mixing in FLAN or other datasets seems to help.
+- **Exponential moving averages are nice, but maybe not all that useful with WSD.** The stability of the EMA gap suggests that there isn't that much information in monitoring EMA model evals: we know from WSD that there is some easy performance to be had whenever we want it (by cooling down and removing the hill component). That said, even at very low LR there is still *some* gap, so that's a tiny bit of free performance. The harm is also small, since the EMA can be held in CPU memory rather than HBM.
 - **Tootsie means having to say you're sorry kind of a lot.** We made many, many mistakes during the run. Some of the changes were actually unintentional, or were fixes to initial mistakes (e.g. the rotary embedding hyperparameters). Nevertheless, the end result was a model that performed well on a wide variety of tasks.
 
-XXX
 
-# Future Work
+## Future Work
 
 Future work will focus on:
 
 - **Bigger models.** We have a 32B model that is performing quite well at 1T tokens.
-- **SFT and instruction tuning.** We're in the middle of SFTing Marin 8B. (TL;DR is that it works pretty well at AlpacaEval, but there is an unacceptable degradation on tasks like MMLU.)
-- **RL**: Obvious.
+- **SFT/RL.** We're in the middle of SFTing Marin 8B. (TL;DR is that it works pretty well at AlpacaEval, but there is an unacceptable degradation on tasks like MMLU.) RL is the obvious next step.
+- **Format diversity.** We will continue to pursue formatting diversity as a way to improve performance on tasks like MMLU.
