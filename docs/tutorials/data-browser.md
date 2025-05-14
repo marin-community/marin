@@ -16,6 +16,7 @@ Install dependencies:
 ```bash
 cd data_browser
 poetry install
+npm install
 ```
 
 The data browser takes a configuration file that specifies the root directory (in our examples, it's been `local_store`,
@@ -28,7 +29,7 @@ The data browser has two pieces:
 To start the data browser, we need to run both servers, in different shells:
 ```bash
 DEV=true python server.py --config conf/local.conf
-npm i && npm start
+npm start
 ```
 
 Once the server is started, go to
