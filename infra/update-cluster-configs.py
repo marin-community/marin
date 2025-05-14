@@ -15,7 +15,7 @@ DOCKER_TAGS = {
     "us-central2": "8b035b60",
     "us-central2-compress": "8b035b60",
     "us-central1": "4a47ffc0",
-    "big-run": "4a47ffc0",
+    "big-run": "8b035b60",
     "us-west4": "89b461b3",
     "europe-west4": "89b461b3",
     "us-east1": "89b461b3",
@@ -195,7 +195,7 @@ generation_configs = {
     "v5p": {
         "runtime_version": "v2-alpha-tpuv5",
         "base_worker": "8",
-        "slices": [8, 16, 32, 64, 128, 256],
+        "slices": [8, 16, 32, 64, 128, 256, 512, 1024],
         "num_tpus": 8,
         "tpus_worker": 8,
     },
