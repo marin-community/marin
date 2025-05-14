@@ -85,11 +85,11 @@ The first phase was run on the 2x v5e-256, while subsequent phases were run on t
 
 Retrospectively, we can partition the 8b run into several different phases. We have given them animal names as monikers.  Here is a short summary:
 
-- *DCLM WSD-S Phase* (aka Kestrel): In the first phase, we used the "DCLM mix" and [WSD-S](https://arxiv.org/abs/2410.05192)  for about 2.8T tokens. We used 2x TPU v5e-256 coordinated with multislice for this.
-- *DCLM WSD Phase* (aka Ocelot): We were given access to a v4-2048 slice and moved to that. To better utilize the hardware, we increased our batch size 50%. We also switched from WSD-S to WSD. We kept the learning rate high until 3.7T tokens.
-- *First Cooldown* (aka Jellyfish):  It was time to cooldown as we were starting to run low on DCLM. Following recent work on midtraining (e.g. [Olmo 2](https://arxiv.org/abs/2501.00656)), we decided to fold in higher quality data during cooldown.
-- *Reheated* (aka Phoenix): We had more time for training, so we rapidly rewarmed the model and transitioned our mixture to [Nemotron-CC](https://arxiv.org/abs/2412.02595) (plus [Starcoder](https://huggingface.co/datasets/bigcode/starcoderdata)).
-- *Second Cooldown* (aka Starling): Now we were running low on time, so we started another cooldown. We followed a similar process to the first cooldown, but added a few new datasets that we had created and also some that had dropped since our previous attempt.
+- *Kestrel (DCLM WSD-S Phase)*: In the first phase, we used the "DCLM mix" and [WSD-S](https://arxiv.org/abs/2410.05192) for about 2.7T tokens. We used 2x TPU v5e-256 coordinated with multislice for this. (0->2.7T tokens)
+- *Ocelot (DCLM WSD Phase)*: We were given access to a v4-2048 slice and moved to that. To better utilize the hardware, we increased our batch size 50%. We also switched from WSD-S to WSD. We kept the learning rate high until 3.78T tokens.
+- *Jellyfish (First Cooldown)*: It was time to cooldown as we were starting to run low on DCLM. Following recent work on midtraining (e.g. [Olmo 2](https://arxiv.org/abs/2501.00656)), we decided to fold in higher quality data during cooldown. (3.78T->4.78T tokens)
+- *Phoenix (Reheated)*: We had more time for training, so we rapidly rewarmed the model and transitioned our mixture to [Nemotron-CC](https://arxiv.org/abs/2412.02595) (plus [Starcoder](https://huggingface.co/datasets/bigcode/starcoderdata)). (4.78T->11.1T tokens)
+- *Starling (Second Cooldown)*: Now we were running low on time, so we started another cooldown. We followed a similar process to the first cooldown, but added a few new datasets that we had created and also some that had dropped since our previous attempt. (11.1T->12.75T tokens)
 
 We emphasize that these phases were not planned in advance. Decisions were made reactively based on changing time lines and data availability.
 
@@ -103,11 +103,11 @@ documented in these issues:
 - [#898 Raccoon](https://github.com/marin-community/marin/issues/898)
 - [#916 Spoonbill](https://github.com/marin-community/marin/issues/916)
 
-## Phase 1: DCLM WSD-S Phase
+## Phase 1: Kestrel (DCLM WSD-S Phase)
 
 In the first phase, we trained from scratch using the best publicly available dataset at the time:
 [DCLM Baseline](https://huggingface.co/datasets/mlfoundations/dclm-baseline-1.0).
-We decided to use [their best mixture](https://arxiv.org/abs/2406.11794): DCLM Baseline, [Starcoder](https://huggingface.co/datasets/bigcode/starcoderdata), and [Proofpile](https://huggingface.co/datasets/proofpile), though we did not use a curriculum
+We decided to use [their best mixture](https://arxiv.org/abs/2406.11794): DCLM Baseline, [Starcoder](https://huggingface.co/datasets/bigcode/starcoderdata), and [Proofpile 2](https://huggingface.co/datasets/EleutherAI/proof-pile-2), though we did not use a curriculum
 as they did.
 
 ### Hardware
@@ -125,7 +125,7 @@ Specifically, this meant:
 |----------------------------------------------------------------------------------|------------|
 | [DCLM Baseline](https://huggingface.co/datasets/mlfoundations/dclm-baseline-1.0) | 92.6%      |
 | [Starcoder](https://huggingface.co/datasets/bigcode/starcoderdata)               | 6.1%       |
-| [Proofpile](https://huggingface.co/datasets/proofpile)                           | 1.3%       |
+| [Proofpile 2](https://huggingface.co/datasets/EleutherAI/proof-pile-2)                        | 1.3%       |
 
 We planned on adding new datasets as we (and others!) developed them.
 For evaluation, we initially tracked a large subset of Paloma (with a particular focus on the `c4_en` subset) during training.
@@ -196,7 +196,7 @@ Subsequent analysis revealed that this was due to structural differences in prep
 ![graph depicting many eval losses after the transition to longer decay phases](../images/tootsie-8b-wsd-s-losses-post-transition.png)
 
 
-## Phase 2: DCLM EMA Phase
+## Phase 2: Ocelot (DCLM EMA Phase)
 
 At around 2.7e12 tokens, we were given access to a v4-2048 reservation and immediately moved to that.
 All subsequent phases were run on that.
@@ -235,9 +235,6 @@ This was not to say there was no deviation in the gap, but the fact that it did 
 
 ![embed](../images/tootsie-8b-ema-gap.png)
 
-## Phase 3: First Cooldown: Jellyfish
-
-At around 3.7T tokens, we were running low on DCLM tokens, which meant we needed to change something. We decided to try a cooldown.
 
 ### Interlude: Micro-Annealing
 
@@ -255,10 +252,13 @@ We believe this is because typical "high quality" data sources (e.g. ArXiv, Wiki
 In fact, we found that nothing led to improved task performance in microannealing experiments compared to the control (of 100% PT mix)... until we mixed in FLAN into all microannealing runs. (XXX is this right)
 Instead of the 70/30 recommended in the Llama 3 paper, we found that 70% PT/ 15% FLAN/15% HQ led to the best results for our experiment budget.
 
-
 By doing this, we were able to improve both the loss and the task performance of most microannealing runs. Ironically, notwithstanding the above, only 70% PT/30% FLAN underperformed the 100% PT control.
 
 We also found that a microannealing experiment with all HQ sources performed approximately average compared to the other microannealing runs: in this setting, there was no advantage to variety.
+
+## Phase 3: Jellyfish (First Cooldown)
+
+At around 3.7T tokens, we were running low on DCLM tokens, which meant we needed to change something. We decided to try a cooldown.
 
 ### Data Mix
 
@@ -266,18 +266,18 @@ Based on the above, we decided to mix in a mixture of 70% high quality "web" (i.
 
 Specifically, we included all sources from our ablations that outperformed the 100% PT control, meaning everything we tried at this phase except Dolmino FLAN.
 
-| Dataset | Percentage |
-|---------|------------|
-| Dolma DCLM HQ | 67.8% |
-| Dolma peS2o | 10.8% |
-| FineMath 3+ | 6.3% |
-| Dolma Arxiv | 5.2% |
-| Dolma StackExchange | 3.2% |
-| Starcoder | 2.2% |
+| Dataset               | Percentage |
+|-----------------------|------------|
+| Dolmino DCLM HQ       | 67.8% |
+| Dolma peS2o           | 10.8% |
+| FineMath 3+           | 6.3% |
+| Dolma Arxiv           | 5.2% |
+| Dolma StackExchange   | 3.2% |
+| Starcoder             | 2.2% |
 | Dolma Algebraic Stack | 2.1% |
-| Dolma Open Web Math | 0.9% |
-| Dolma Megawika | 0.8% |
-| Dolma Wikipedia | 0.7% |
+| Dolma Open Web Math   | 0.9% |
+| Dolma Megawika        | 0.8% |
+| Dolma Wikipedia       | 0.7% |
 
 
 The HQ sources were weighted roughly proportional to token count and then upweighted to be 30% of the total.
@@ -334,7 +334,7 @@ Dessert coasted at the same already low LR, with the goal of patching a few gaps
 So "dessert" was seemingly a failure, though we revisited this in the final phase.
 
 
-## Phase 4: Reheated: Phoenix
+## Phase 4: Phoenix (Reheated)
 
 The specification for this phase is available [here](https://github.com/marin-community/marin/blob/852c53f9741b233549daf9f1649fe88c9c5a170c/experiments/tootsie/exp600_tootsie.py#L465-L522).
 
@@ -342,7 +342,7 @@ After the cooldown, at around 4.7T tokens, we had more time for training, so we 
 
 ### Data
 
-Because we were running out of DCLM, we transitioned the data from our phase 1 and 2 mixture (DCLM+Starcoder+ProofPile) to a new mixture that was [Nemotron-CC](https://arxiv.org/abs/2412.02595) and [Starcoder](https://huggingface.co/datasets/bigcode/starcoderdata).
+Because we were running out of DCLM, we transitioned the data from our phase 1 and 2 mixture (DCLM+Starcoder+ProofPile 2) to a new mixture that was [Nemotron-CC](https://arxiv.org/abs/2412.02595) and [Starcoder](https://huggingface.co/datasets/bigcode/starcoderdata).
 (We didn't worry too much about epoching StarCoder.)
 
 The target mixture was Nemotron-CC (with each subset weighted approximately proportionally to token count) and Starcoder,
@@ -418,7 +418,7 @@ Interestingly, [subsequent experiments](https://wandb.ai/marin-community/marin/r
 So, zloss, it's not just for avoiding explosions.
 
 
-## Phase 5: Second Cooldown: Starling
+## Phase 5: Starling (Second Cooldown)
 
 At around 11.1e12 tokens, we decided to start another cooldown. Building on lessons from our previous cooldowns, we made the following changes:
 
@@ -434,27 +434,27 @@ Within the high quality datasets, we weighted them roughly proportional to token
 
 We included the following datasets:
 
-| Dataset | Proportion | Oversampling |
-|---------|------------|--------------|
-| NemoTron CC Medium | 22.1% | 1x |
-| NemoTron CC HQ Synth | 17.8% | 1x |
-| NemoTron CC Medium Low | 10.1% | 1x |
-| NemoTron CC HQ Actual | 6.0% | 1x |
-| NemoTron CC Medium High | 5.4% | 1x |
-| NemoTron CC Low Actual | 4.6% | 1x |
-| NemoTron CC Low Synth | 4.1% | 1x |
-| Marin Arxiv Markdownified | 5.2% | 5x |
-| Dolmino PES2O | 5.2% | 5x |
-| StarcoderData | 4.5% | 1x |
-| Proofpile 2 | 4.5% | 1x |
-| Finemath-3-Plus | 3.0% | 5x |
-| Dolmino FLAN | 3.0% | 10x |
-| Dolmino StackExchange | 1.5% | 5x |
+| Dataset                           | Proportion | Oversampling |
+|-----------------------------------|------------|--------------|
+| NemoTron CC Medium                | 22.1% | 1x |
+| NemoTron CC HQ Synth              | 17.8% | 1x |
+| NemoTron CC Medium Low            | 10.1% | 1x |
+| NemoTron CC HQ Actual             | 6.0% | 1x |
+| NemoTron CC Medium High           | 5.4% | 1x |
+| NemoTron CC Low Actual            | 4.6% | 1x |
+| NemoTron CC Low Synth             | 4.1% | 1x |
+| Marin Arxiv Markdownified         | 5.2% | 5x |
+| Dolmino PES2O                     | 5.2% | 5x |
+| Starcoder Data                    | 4.5% | 1x |
+| Proofpile 2                       | 4.5% | 1x |
+| Finemath-3-Plus                   | 3.0% | 5x |
+| Dolmino FLAN                      | 3.0% | 10x |
+| Dolmino StackExchange             | 1.5% | 5x |
 | Marin StackExchange Markdownified | 1.5% | 5x |
-| Dolmino Math | 0.8% | 10x |
-| Marin Wikipedia Markdownified | 0.3% | 5x |
-| Dolmino Wiki | 0.3% | 5x |
-| Marin Datashop Science QA | 0.1% | 5x |
+| Dolmino Math                      | 0.8% | 10x |
+| Marin Wikipedia Markdownified     | 0.3% | 5x |
+| Dolmino Wiki                      | 0.3% | 5x |
+| Marin Datashop Science QA         | 0.1% | 5x |
 
 Here "Dolmino Math" refers to most of the math-y components of Dolmino:
 
