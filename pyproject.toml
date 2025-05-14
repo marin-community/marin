@@ -20,7 +20,7 @@ dependencies = [
     "regex",
     "requests",
     "numpy",
-    "torch>=2.7.0",
+    "torch",
     "braceexpand",
     "deepdiff",
     "tqdm",
