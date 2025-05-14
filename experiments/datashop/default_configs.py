@@ -1,11 +1,6 @@
-from transformers import AutoTokenizer
-
 from marin.classifiers.hf.train_classifier import HFTrainingConfig
 from marin.execution.executor import this_output_path
 from marin.processing.classification.config.inference_config import RuntimeConfig, TaskConfig
-
-quality_teacher_model = "/opt/gcsfuse_mount/models/meta-llama--Llama-3-3-70B-Instruct"
-tokenizer = AutoTokenizer.from_pretrained(quality_teacher_model)
 
 default_engine_kwargs = {
     "tensor_parallel_size": 8,
@@ -16,14 +11,12 @@ default_engine_kwargs = {
 default_generation_kwargs = {
     "temperature": 0.1,
     "max_tokens": 256,
-    "stop_token_ids": [tokenizer.eos_token_id, tokenizer.convert_tokens_to_ids("<|eot_id|>")],
     "truncate_prompt_tokens": (
         default_engine_kwargs["max_model_len"] - 256
     ),  # Number of prompt tokens = max model length - max new tokens
 }
 
 default_medu_config_kwargs = {
-    "model_name": quality_teacher_model,
     "engine_kwargs": default_engine_kwargs,
     "generation_kwargs": default_generation_kwargs,
     "filetype": "jsonl.zst",
@@ -31,7 +24,6 @@ default_medu_config_kwargs = {
 }
 
 default_text_generation_config_kwargs = {
-    "model_name": quality_teacher_model,
     "engine_kwargs": default_engine_kwargs,
     "generation_kwargs": default_generation_kwargs,
     "num_instances": (1, 128),

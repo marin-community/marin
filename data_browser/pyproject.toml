@@ -1,9 +1,8 @@
 [tool.poetry]
 name = "data-browser"
 version = "0.1.0"
-description = "Marin data browser"
-authors = ["Your Name <you@example.com>"]
-readme = "README.md"
+description = "Marin Data Browser"
+authors = ["Marin Team"]
 
 [tool.poetry.dependencies]
 python = "^3.11"

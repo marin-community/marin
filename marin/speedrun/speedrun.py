@@ -43,7 +43,6 @@ class SpeedrunConfig:
     model_config: LmConfig
     train_config: SimpleTrainConfig | TrainLmOnPodConfig
     hardware_config: HardwareConfig
-    mfu_estimate: float = 0.5
 
     # by default, this is fineweb_edu_tokenized
     tokenized_dataset: InputName | LMMixtureDatasetConfig = fineweb_edu_tokenized
@@ -60,6 +59,7 @@ class SpeedrunConfig:
         N = compute_num_parameters(self.model_config, self.vocab_size)
 
         # TODO (Nikil): make this a helper and handle edge-cases
+        # also, need to add attention terms to expression
         if isinstance(self.train_config.train_batch_size, list) and len(self.train_config.train_batch_size) > 0:
             from levanter.schedule import BatchSchedule
 
@@ -78,11 +78,16 @@ class SpeedrunConfig:
     def estimate_flops_before_speedrun(self) -> tuple[bool, str]:
 
         # estimate model FLOPs as 6*N*D, and calculate estimated compute using this and (a reasonable estimate of) MFU
-        model_flops = self.estimate_flops_via_6nd()
-        estimated_compute = model_flops / self.mfu_estimate
+        estimated_model_flops = self.estimate_flops_via_6nd()
 
-        logger.info(f"Estimated {estimated_compute:.2e} FLOPs")
-        return estimated_compute
+        logger.info(
+            f"""The rough estimated compute (calculated as 6*N*D / (Estimate of MFU))
+            for your run is around {estimated_model_flops/0.5:.2e} FLOPs assuming an MFU of 0.5.
+            This is calculated based on plausible MFU values and can be used as a rough estimate to
+            guide your config/training setup."""
+        )
+
+        return estimated_model_flops
 
 
 @dataclass
@@ -97,25 +102,6 @@ class SpeedrunResultsConfig:
 ### Utils and analysis functions ###
 
 
-def get_wandb_run_info_from_step(step: ExecutorStep) -> tuple[str, str, str]:
-    """
-    Get the wandb entity, project, and run id from a given ExecutorStep.
-    """
-
-    if (
-        step.config
-        and step.config.train_config
-        and step.config.train_config.trainer
-        and step.config.train_config.trainer.tracker
-    ):
-        logger.info(f"Found wandb run info in step: {step}")
-        wandb_entity = step.config.train_config.trainer.tracker.entity or WANDB_ENTITY
-        wandb_project = step.config.train_config.trainer.tracker.project or WANDB_PROJECT
-        return wandb_entity, wandb_project, step.config.train_config.trainer.id
-
-    return wandb_entity, wandb_project, None
-
-
 def get_step_times_from_wandb(run_id: str, entity: str = WANDB_ENTITY, project: str = WANDB_PROJECT) -> list[float]:
     try:
         run = wandb.Api().run(f"{entity}/{project}/{run_id}")
@@ -128,9 +114,10 @@ def get_step_times_from_wandb(run_id: str, entity: str = WANDB_ENTITY, project: 
 def speedrun_results(config: SpeedrunResultsConfig):
     """Compute and store metrics and stats for the speedrun."""
 
-    step_times = get_step_times_from_wandb(
-        run_id=config.wandb_run_id, entity=config.wandb_entity, project=config.wandb_project
-    )
+    # get the last part of the path (i.e. last part of gs://.../checkpoints/speedrun/<wandb_run_id>)
+    wandb_run_id = config.wandb_run_id.split("/")[-1]
+
+    step_times = get_step_times_from_wandb(run_id=wandb_run_id, entity=config.wandb_entity, project=config.wandb_project)
     if not step_times:
         logger.error("No step times available; analysis aborted.")
         return
@@ -150,7 +137,7 @@ def speedrun_results(config: SpeedrunResultsConfig):
     )
 
     # get wandb run and metrics
-    run = wandb.Api().run(f"{config.wandb_entity}/{config.wandb_project}/{config.wandb_run_id}")
+    run = wandb.Api().run(f"{config.wandb_entity}/{config.wandb_project}/{wandb_run_id}")
     wandb_metrics = {
         "eval/paloma/c4_en/bpb": run.summary.get("eval/paloma/c4_en/bpb", None),
     }
@@ -160,7 +147,7 @@ def speedrun_results(config: SpeedrunResultsConfig):
     runtime_seconds = run.summary["_runtime"]
     end_time = start_time + datetime.timedelta(seconds=runtime_seconds)
 
-    full_wandb_url = f"https://wandb.ai/{config.wandb_entity}/{config.wandb_project}/runs/{config.wandb_run_id}"
+    full_wandb_url = f"https://wandb.ai/{config.wandb_entity}/{config.wandb_project}/runs/{wandb_run_id}"
 
     run_stats = {
         "run_related_info": {
@@ -252,7 +239,10 @@ def default_speedrun(
         # (Nikil) this is a hack (the ExecutorStep isn't populated when using an override path, so can't get configs when
         # we do an override or if it is None for some reason, but after some investigation found that in those cases we
         # can fall back to the fact that we set the wandb run ID as the last part of the path anyway, so can use that)
-        wandb_run_id = train_step.config.train_config.trainer.id or str(output_path_of(train_step)).split("/")[-1]
+        if override_output_path:
+            wandb_run_id = override_output_path.split("/")[-1]
+        else:
+            wandb_run_id = train_step  # gets converted to output path when passing it into the results step
 
     assert wandb_run_id is not None, "Could not extract wandb run ID from train step"
 
