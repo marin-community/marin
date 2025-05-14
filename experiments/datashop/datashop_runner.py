@@ -23,7 +23,9 @@ from experiments.datashop.defaults import (
     default_quality_filter_and_consolidate,
     default_train_quality_model,
 )
+from experiments.evals.evals import default_eval
 from experiments.evals.resource_configs import TPU_V6E_8_STRICT_PACK, ResourceConfig
+from experiments.evals.task_configs import MMLU_5_SHOT
 from marin.execution.executor import executor_main
 
 
@@ -123,12 +125,16 @@ class DatashopRunner:
             self.config.training_tpu_type,
             self.config.experiment_name,
         )
+        self.evals = [
+            default_eval(self.control_model, self.config.labeler_resource_config, MMLU_5_SHOT),
+            default_eval(self.quality_ablation_model, self.config.labeler_resource_config, MMLU_5_SHOT),
+        ]
 
     def get_eval_cluster_steps(self):
         return [self.encoder_model]
 
     def get_all_steps(self):
-        return [self.quality_ablation_model, self.control_model]
+        return self.evals
 
     # NOTE(chris): Run this in the vLLM Cluster
     def run_eval_cluster_steps(self):
