@@ -487,7 +487,7 @@ and otherwise using the same hyperparameters as Starling.
 
 #### C4 EN Perplexity
 
-![embed](../images/tootsie-8b-starling-loss-slowdown.png)
+![graph depicting the c4en perplexity during the starling cooldown phases](../images/marin-8b-starling-c4en.png)
 
 Interestingly, c4en perplexity decreased a lot during this cooldown, when in the previous cooldown it had increased.
 Again, we attribute this to structural differences in the preprocessing of Dolmino's DCLM HQ and Nemotron CC.
