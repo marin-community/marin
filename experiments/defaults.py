@@ -69,19 +69,19 @@ def default_download(
     name: str,
     hf_dataset_id: str,
     revision: str,
-    output_path: str,
+    override_output_path: str | None = None,
     **kwargs,
-) -> ExecutorStep:
+) -> InputName:
     """
     Download a HuggingFace dataset and upload it to a specified path with default configuration.
 
     Args:
         name: The name of the Download step. It forms the basis of the output path
-            unless output_path is explicitly specified.
+            unless override_output_path is explicitly specified.
         hf_dataset_id: The HuggingFace dataset ID to download. As `$ORG/$DATASET` on HF Hub
         revision: The revision of the dataset to download.
             Short Commit Hash from HF Dataset Repo (7 characters)
-        output_path: The output path for the dataset.
+        override_output_path: Optional. The output path for the dataset.
         **kwargs: Additional keyword arguments that are passed to the download config.
 
     The final output data will reside in 'output_path/revision'.
@@ -89,7 +89,7 @@ def default_download(
 
     step = ExecutorStep(
         name=name,
-        description=f"Download {hf_dataset_id} revision {revision} to {output_path}",
+        description=f"Download {hf_dataset_id} revision {revision}",
         fn=download_hf,
         config=DownloadConfig(
             hf_dataset_id=hf_dataset_id,
@@ -98,7 +98,7 @@ def default_download(
             wait_for_completion=True,
             **kwargs,
         ),
-        override_output_path=output_path,
+        override_output_path=override_output_path,
     )
 
     cd_path = revision
