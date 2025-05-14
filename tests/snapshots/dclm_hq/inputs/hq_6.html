@@ -1,0 +1,1897 @@
+<!-- received="Wed May  3 18:36:02 1995 PDT PDT" -->
+<!-- sent="Tue, 2 May 1995 04:07:10 +0500" -->
+<!-- name="Kevin Hughes" -->
+<!-- email="kevinh@eit.COM" -->
+<!-- subject="Thinking about style sheets" -->
+<!-- id="9505020756.AA11271@eitech.eit.com" -->
+<!-- inreplyto="" -->
+<title>WWW-HTML Apr-Jun 1995: Thinking about style sheets</title>
+<h1>Thinking about style sheets</h1>
+Kevin Hughes (<i>kevinh@eit.COM</i>)<br>
+<i>Tue, 2 May 1995 04:07:10 +0500</i>
+<p>
+<ul>
+<li> <b>Messages sorted by:</b> <a href="date.html#257">[ date ]</a><a href="index.html#257">[ thread ]</a><a href="subject.html#257">[ subject ]</a><a href="author.html#257">[ author ]</a>
+<!-- next="start" -->
+<li> <b>Next message:</b> <a href="0258.html">Robert A. Mesa: "Print Form Code"</a>
+<li> <b>Previous message:</b> <a href="0256.html">H&kon W Lie: "Parsability (re: Thinking about style sheets)"</a>
+<!-- nextthread="start" -->
+</ul>
+<hr>
+<!-- body="start" -->
+	This post is a long one; I would encourage replies to be<br>
+broken up into manageable subjects such as fonts, etc.<br>
+	The following thoughts revolve around creating a simple<br>
+yet powerful style sheet language for the World-Wide Web. I have<br>
+incorporated comments here and there from a previous email<br>
+discussion involving Hakon Lie, Dave Raggett, Dan Connolly, and<br>
+Bill Perry. Hakon should feel free to put this post under the<br>
+style sheet area at the W3O site.<br>
+	A W3 style-sheet mailing list will likely be created,<br>
+but Hakon says this will take some days. There should be pointers<br>
+at <a href="http://www.w3.org/">http://www.w3.org/</a> in time. In the meantime you can refer to:<br>
+<p>
+	<a href="http://gummo.stanford.edu/html/hypermail/archives.html">http://gummo.stanford.edu/html/hypermail/archives.html</a><br>
+<p>
+	If you're not familiar with style sheets, please take<br>
+a look at:<br>
+<p>
+	<a href="http://www.w3.org/hypertext/WWW/Style/">http://www.w3.org/hypertext/WWW/Style/</a><br>
+<p>
+	...and take a look at the current proposals and ideas out<br>
+there.<br>
+	The format I discuss below is a bit different and somewhat<br>
+improved over Hakon's format as described at the Chicago conference:<br>
+<p>
+	<a href="http://www.w3.org/hypertext/WWW/People/howcome/p/cascade.html">http://www.w3.org/hypertext/WWW/People/howcome/p/cascade.html</a><br>
+<p>
+	...but from the examples below it should be fairly easy<br>
+to figure things out.<br>
+	Finally, a few seconds of silence for the NSFNET backbone<br>
+service, which was decommissioned yesterday, April 30, 1995.<br>
+	May it rest in peace,<br>
+<p>
+	-- Kevin<br>
+<p>
+<p>
+Thinking About Style Sheets<br>
+~~~~~~~~~~~~~~~~~~~~~~~~~~~<br>
+<p>
+Hakon Lie described a simple yet powerful style sheet format in<br>
+Darmstadt, one which he has been working on for some time and had<br>
+been greatly improved since its first rollout in Chicago. Despite<br>
+that fact that it has not been formally described anywhere, I feel<br>
+that the format is superior to the other proposed formats for a number<br>
+of reasons:<br>
+<p>
+	1) It's simple yet flexible.<br>
+<p>
+	Many proposed formats are much too complex for their own<br>
+	good - in order to read the simplest formatting commands,<br>
+	browsers have to parse ornate structures and operations<br>
+	which add little to the overall utility of the format.<br>
+	Hakon's format is broken into manageable, logical chunks<br>
+	that allow for extensibility and ease of parsing. The<br>
+	format is also well-suited to be written in a compact format<br>
+	that keeps the style sheet size to a minimum.<br>
+<p>
+	2) It's human readable and writeable.<br>
+<p>
+	The Web no longer belongs to the average Internet-savvy<br>
+	technician who writes daily in Perl and C++. In order to<br>
+	urge authors and designers to make use of style sheets<br>
+	the format must be understandable so that one can "look<br>
+	under the hood" when needed. Certainly tools and editors<br>
+	will be created that makes style sheet creation easy,<br>
+	but the Web will be rewarded a hundredfold by using a<br>
+	format for which it is easy to create tools for.<br>
+<p>
+Below I propose a number of changes and additions to Hakon's format,<br>
+using the time-tested lessons learned by the most popular DTP<br>
+software packages on the market today as well as a little Web design<br>
+experience. I feel that style sheets have the potential to revolutionize<br>
+the way people use and think about the Web and hope that the standards<br>
+process does the right thing both for users and authors.<br>
+<p>
+Note that many of the examples below will replace the need for using<br>
+tag attributes and nonstandard HTML extensions to create layout. This<br>
+is a good thing, as the layout/style will finally be separated more<br>
+cleanly from the document structure.<br>
+<p>
+The idea, if I understand correctly, is:<br>
+<p>
+	&lt;HTML&gt;<br>
+	&lt;STYLE NOTATION="experimental"&gt;<br>
+<p>
+	&lt;!-- The style sheet (or perhaps a pointer to it) goes here. --&gt;<br>
+	&lt;!-- Here I can define a particular style, or rather, a CLASS. --&gt;<br>
+<p>
+	P[mystyle] : font.size = 12pt<br>
+<p>
+	&lt;/STYLE&gt;<br>
+	&lt;BODY&gt;<br>
+	Regular structured markup goes here.<br>
+<p>
+	&lt;P CLASS="mystyle"&gt;This is a paragraph in my style,<br>
+	with a font size of 12 points.<br>
+	&lt;/BODY&gt;<br>
+	&lt;/HTML&gt;<br>
+<p>
+If you find this pretty easy to understand, well, that's the idea.<br>
+Browsers may very well support DTDs as well as a readable style sheet<br>
+format like Hakon's.<br>
+<p>
+Linked style sheets will announce themselves to browsers with a MIME<br>
+type such as:<br>
+<p>
+	application/x-perry-stylesheet<br>
+	application/x-arena-stylesheet<br>
+	application/x-w3c-experimental<br>
+	application/x-dsssl-lite<br>
+<p>
+New Things<br>
+~~~~~~~~~~<br>
+<p>
+I would say that authors should have the capability to include<br>
+style sheets within the document as well as point to particular<br>
+style sheets (that is, link to them). This makes it easy for a site<br>
+to have a directory of "house" style sheets that apply to all documents<br>
+in a particular web.<br>
+<p>
+First, there should be a way to specify data that applies to all tags,<br>
+or data that applies to entire style sheet or class of objects. This<br>
+may be done with wildcards:<br>
+<p>
+	BODY	: *.color = red<br>
+	doc	: *.color = red<br>
+	*	: font.size = 12pt<br>
+<p>
+"doc" is something representing the entire document. Most likely<br>
+this should be replaced with HTML, as one may want different<br>
+properties for HEAD and BODY.<br>
+<p>
+Apparently Hakon's notation allows for pattern matching on<br>
+sequences of tags, hierarchies of tags, and attribute values.<br>
+<p>
+	HTML	: *.color = red<br>
+<p>
+In the second example, the font size of 12 points applies to the data in<br>
+all tags. In the first example, the color of all elements in the BODY<br>
+tag are red.<br>
+<p>
+In regards to sizes and such, there should be a way to specify a<br>
+base size and then allow other styles to be sized relative to the<br>
+base size.<br>
+<p>
+	H1	: font.size += 3pt<br>
+	H1	: font.size = P[mystyle]:font.size + 10pt<br>
+	H1	: font.size = 1.5 * P:font.size<br>
+<p>
+There should be a full listing and study of the proposed format<br>
+name hierarchy, so that attributes are named in a logical, structured<br>
+manner. More general objects should be on the left, with values becoming<br>
+more specific to the right. So "color.background" should instead<br>
+be "background.color", because background is a general object, while<br>
+color is a specific property.<br>
+<p>
+Style sheets should support the most common units in DTP; these may be:<br>
+<p>
+	inches (in)<br>
+	pixels (px)<br>
+	centimeters/millimeters (cm/mm)<br>
+	ems (em)<br>
+	points (pt)<br>
+	characters(ch)<br>
+	pica(pi) - "pi" is equal to 12pt<br>
+<p>
+The characters unit is needed because a designer may wish to specify<br>
+an indent or tab stop by the number of characters in the current font,<br>
+for instance, in a PRE tag.<br>
+<p>
+All elements that support values should support a value of "default".<br>
+Browsers would come out of the box with a default style sheet preselected<br>
+that the user never need change if they don't want to.<br>
+<p>
+One possible way to specify tab stops might be:<br>
+<p>
+	PRE	: tabs = 8ch, 16ch, 24ch<br>
+<p>
+Dave Raggett notes that this is discouraged, as HTML 3.0 includes<br>
+a TAB element that does many nice things.<br>
+<p>
+It would be useful to allow a number of format "shortcuts" so that people<br>
+writing sheets manually don't have to type so much and so that the size<br>
+of the style sheet stays at a minimum. One possible thing to do is to<br>
+use the semicolon (is there a more appropriate character?) for allowing<br>
+the designer to specify multiple values for multiple tags:<br>
+<p>
+	P H1     : font.color = red; blue<br>
+	H1 H2 LI : font.size = 1.0; 0.8; 0.2<br>
+<p>
+In the first example, data in P tags would be red; data in H1 tags<br>
+would be blue.<br>
+<p>
+In the second, the font size in H1 is the normal default size, H2<br>
+has a font size of 0.8 times that, and LI has a font size of 0.2<br>
+times that.<br>
+<p>
+Bill Perry suggests another kind of shortcut:<br>
+<p>
+	H1	: font.size=12pt; background.color = red;<br>
+		  foreground.color = blue<br>
+<p>
+This is very nice, as authors can deal with a whole tag at a time on<br>
+one line or split things up over multiple lines so the organization<br>
+makes more sense. Again, this is for human usability.<br>
+<p>
+Another kind of shortcut is to provide shorter versions of<br>
+words:<br>
+<p>
+	"img" for "image"<br>
+	"bg" for "background"<br>
+<p>
+	H1	: bg.color = blue<br>
+<p>
+In specifying color, the designer should be able to enter the<br>
+decimal/percentage values using the RGB color space, since it is more<br>
+understandable and most image processing programs use these values:<br>
+<p>
+	P	: font.color = 191, 191, 191<br>
+	P	: font.color = 0.75, 0.75, 0.75<br>
+<p>
+The percentages are percents of the range from 0 to 255. In the<br>
+3D world, the range would be from 0 to 1, but we're not dealing with<br>
+that context (yet).<br>
+<p>
+It would also be nice if one could define style-sheet specific color<br>
+labels so that colors could be referred to by name rather than by number:<br>
+<p>
+	define "My Gray" "191, 191, 191"<br>
+	P	: font.color = "My Gray"<br>
+<p>
+The use of such pre-processor-like definitions could be considered a<br>
+good thing, since it again reduces the style sheet size and makes<br>
+readability easier. For colors, as an example, one may be able to<br>
+specify the color name as given in the X11 rgb database.<br>
+<p>
+It may be useful to allow the designer to provide hints about the<br>
+document dimensions, but it is unclear as to where and how such metadata<br>
+might be specified. Perhaps:<br>
+<p>
+	HTML	: width = 600px<br>
+	HTML	: height = 800px<br>
+<p>
+Some browsers have a widget that when selected sizes the window to<br>
+the widest non-textual element on the screen. I think the browser<br>
+should resize itself automatically according to these hints if the user<br>
+wants.<br>
+<p>
+Alignment and Justification<br>
+~~~~~~~~~~~~~~~~~~~~~~~~~~~<br>
+<p>
+Alignment should refer to vertical movement, as in the IMG tag, while<br>
+justification should be used to specify horizontal movement. Thus:<br>
+<p>
+	align may be top, middle, bottom, basetop, basemiddle, basebottom<br>
+	justify may be left, right, center, full<br>
+<p>
+	IMG	: align = basetop<br>
+	P	: justify = center<br>
+<p>
+Top, middle, and bottom align elements relative to the size of the<br>
+highest character on the current line, measured from the baseline.<br>
+<p>
+Dave Raggett comments that HTML has got it wrong in this respect, with<br>
+ALIGN being used for vertical and horizontal alignment. I say that although<br>
+it's probably too late to change things in HTML, let's get it right in<br>
+style sheets.<br>
+<p>
+Dave also says that one needs bleedleft, bleedright, and bleedboth<br>
+additionally for figures and tables.<br>
+<p>
+                    ---         ---<br>
+                --- | |         | |<br>
+	--- --- | | | |     --- | | &lt;- font height<br>
+	ABC | | | | | |     | | | |<br>
+	--- | | | | --- --- | | --- &lt;- baseline<br>
+<i>            | | ___     | | | |</i><br>
+            ---         | | ---<br>
+<i>                        | |</i><br>
+                        ---<br>
+<p>
+	    top mid bot bas bas bas<br>
+                        top mid bot<br>
+<p>
+Containers and Spacing<br>
+~~~~~~~~~~~~~~~~~~~~~~<br>
+<p>
+If browser layout is parsed and understood internally in a container-like<br>
+manner, it should not be difficult to give every element a margin on each<br>
+side, which specifies the amount of space above, below, and to the sides<br>
+of an element. In this way, margins for an entire document as well as<br>
+margins for a particular element can be specified.<br>
+<p>
+	margin values can be top, bottom, left, right<br>
+<p>
+	BODY	: margin.top = 10px<br>
+	BODY	: margin.bottom = 10px<br>
+	P	: margin.left = 10px<br>
+<p>
+Regarding "container" properties, one can think of borders and styles,<br>
+backgrounds and foregrounds, and (tiled) images.<br>
+<p>
+	BODY	: background.color = red<br>
+	BODY	: foreground.color = blue<br>
+	BODY	: background.image = "<a href="http://somewhere.com/tile.gif">http://somewhere.com/tile.gif</a>"<br>
+	P	: border.width = 3px<br>
+<p>
+	border.style may be none, default, line, bevel<br>
+<p>
+	P	: border.style = line<br>
+	P	: border.color = black<br>
+	P	: border.image = "picture.frame.tile.gif"<br>
+<p>
+The border may go inside, centered with, or outside the margin boundaries.<br>
+A property name should be suggested for this - somehow "justify" and<br>
+"align" don't seem appropriate.<br>
+<p>
+Line size could be specified. When applied to a textual element, this<br>
+would indicate leading, the space below a line's baseline. When applied<br>
+to an element like HR, this refers to the height of the element.<br>
+<p>
+	HR	: line.size = 3px<br>
+	P	: line.size = 12pt<br>
+<p>
+Line indentation can be specified for elements - most designers find<br>
+general indents and indents for the first line to be desireable. So:<br>
+<p>
+	P	: line.indent.first = 1in<br>
+	P	: line.indent = 0.5in<br>
+<p>
+So the general spacing model for an element would look like:<br>
+<p>
+	------------------ &lt;- margin.top<br>
+<i>	| blah blah...   |</i><br>
+<i>	|                | &lt;- line.indent.first</i><br>
+<i>	|                | &lt;- line.indent</i><br>
+<i>	|                | &lt;- line.size (leading)</i><br>
+<i>	|                |</i><br>
+	------------------ &lt;- margin.bottom<br>
+        ^                ^<br>
+	margin.left      margin.right<br>
+<p>
+In this model, no negative values are allowed.<br>
+<p>
+Fonts<br>
+~~~~~<br>
+<p>
+Technically a font has a few basic properties:<br>
+<p>
+	font.family (Helvetica, Lucida)<br>
+	font.weight (Plain, Bold, Roman)<br>
+	font.angle (Italic, Regular)<br>
+	font.variation (Regular, Compressed)<br>
+<p>
+Although one should be able to completely specify a font with these<br>
+attributes, things can and should be simplified:<br>
+<p>
+	P	: font.name = "Helvetica Compressed Bold Italic"<br>
+<p>
+font.name would allow one to specify a font by its full name as a<br>
+shortcut. However, using the prior four variables may be desired since<br>
+they could provide hints to the browser on how to generate the font<br>
+on the fly.<br>
+<p>
+Hakon suggested that the order of the words in font.name should not<br>
+matter - the set should be descriptive enough to find a particular<br>
+font.<br>
+<p>
+Besides font.size and font.color, I would propose font.style, which<br>
+would provide hints to the browser as how to display the given font.<br>
+This style would be generated dynamically (mathematically perhaps),<br>
+based on the given font name or family/weight/angle/variation set.<br>
+<p>
+	font.style may be default, plain, bold, italic, underline,<br>
+		double underline, strikethrough, overline, change bar,<br>
+		inverse, superscript, subscript, outline, shadow,<br>
+		small caps, big caps, lowercase, uppercase<br>
+<p>
+The case styles would display text as follows:<br>
+<p>
+	plain:      "John Smith studies at MIT."<br>
+	small caps: "john smith studies at mIT."<br>
+	big caps:   "John Smith Studies At MIT."<br>
+	lowercase:  "john smith studies at mit."<br>
+	uppercase:  "JOHN SMITH STUDIES AT MIT."<br>
+<p>
+Of course you could specify multiple values where it makes sense:<br>
+<p>
+	P	: font.style = subscript &amp; bold<br>
+<p>
+One desired style is using an all-capitals string with larger<br>
+capitals at the beginning of words. One way to do this may be:<br>
+<p>
+	P	: font.style = uppercase &amp; bigcaps<br>
+<p>
+Much in the same way that one can specify different spacing for the<br>
+first line of an element, one should be able to specify different<br>
+styles for the first letter of a word. This may enable things<br>
+like drop caps.<br>
+<p>
+	P	: font.family.dropcap = Times<br>
+	P	: font.family.firstletter = Times<br>
+<p>
+The first example changes the first letter in the entire paragraph;<br>
+the second changes the first letter of every word.<br>
+<p>
+For elements such as drop caps and images there should be a way<br>
+to specify how many lines high the element is compared to the<br>
+normal text, and how that element should be aligned in respect<br>
+to the first line of the element. This is so things like this<br>
+can be made:<br>
+<p>
+	---- blah blah blah<br>
+<i>        |  | blah blah blah</i><br>
+        ---- blah blah blah<br>
+	blah blah blah blah<br>
+<p>
+	P	: font.size.dropcap += 3pt<br>
+<p>
+	The dropcap is 3 points larger than the element's normal<br>
+	font size.<br>
+<p>
+	P	: font.size.dropcap *= 4<br>
+<p>
+	The size of the dropcap is four times bigger than the<br>
+	size of the normal font size.<br>
+<p>
+	P            : align.dropcap = top<br>
+	IMG[dropcap] : align.dropcap = top<br>
+<p>
+	When a dropcap has an alignment of "top" its top is<br>
+	aligned with the first line of the element and drops below<br>
+	that line, allowing subsequent lines to wrap around it.<br>
+<p>
+	Perhaps there should be "align.topwrap" and "align.bottomwrap"<br>
+	instead?<br>
+<p>
+Links<br>
+~~~~~<br>
+<p>
+The designer should be able to specify how links are displayed, but<br>
+users should be able to easily override these specifications, as<br>
+they may be dependent on a particular navigation style. "imglink"<br>
+would refer to a link on an image, while "txtlink" would refer to<br>
+a textual link.<br>
+<p>
+	txtlink.color = blue<br>
+	txtlink.color = blue &lt; AGE / 7d &lt; "Background Color"<br>
+	imglink.color = default<br>
+	imglink.size = 3px<br>
+	imglink.style may be line, bevel, default, none<br>
+	txtlink.style may be underline, double underline,<br>
+		inverse, default, none<br>
+<p>
+Note that in conjunction with AGE links may be colored dynamically.<br>
+If there is a predefined value for the background color, links can<br>
+disappear with time and yet still be active, as in the example above.<br>
+<p>
+There should be a way to specify new versus followed links, but I<br>
+have no good ideas as how to do so.<br>
+<p>
+Based on something Hakon said:<br>
+<p>
+	HTML	: txtlink.color = red &lt; FETCHED &lt; blue<br>
+<p>
+Style Sheet Permissions<br>
+~~~~~~~~~~~~~~~~~~~~~~~<br>
+<p>
+There should be an extra layer in the current permissions model:<br>
+<p>
+		&lt;- author insist | legal<br>
+	user insist<br>
+	author important<br>
+	user important<br>
+	author normal<br>
+	user normal<br>
+	application default<br>
+<p>
+"author insist" would first display the page as the author intended<br>
+but allow the user to change the style (for example, via a pop-up<br>
+"styles" menu in the browser) after the initial download. The "legal"<br>
+specification would display as the author intended and not allow the<br>
+user to make changes. If the particular style in a browser was not<br>
+supported for a legal document, then the document would not display<br>
+at all.<br>
+<p>
+	P	: font.size = 12pt ! legal<br>
+<p>
+Authors writing legal documents may first display a readable<br>
+disclaimer which tells the user what they must to do read the legal<br>
+document (get a particular browser, enter a password, use a particular<br>
+style, etc.), why it is legal (display copyrights, licensing restrictions,<br>
+etc.) and then link to the document in question.<br>
+<p>
+Bill Perry suggests that it is more reasonable is for a dialog box to appear:<br>
+<p>
+	"Your settings will override something flagged as 'legal'.<br>
+	Should I continue?"<br>
+<p>
+	[ OK ] [ Cancel ]<br>
+<p>
+All of this was a heavily debated issue at Darmstadt and will continue<br>
+to be for some time. One thing to consider is that in the real world,<br>
+given enough time and resources, you can copy anything man-made reasonably<br>
+well and change it to suit your worldview. People will always want<br>
+to do this to things. Now that it can be very easy for them to do so,<br>
+why not let them?<br>
+<p>
+Users should be able to specify particular styles they do not want<br>
+to see, for instance, a color blind user may never want to see any<br>
+elements colored red or blue and instead would wish them to be colored<br>
+black. Dave Raggett notes that authors, not users, should be the ones to<br>
+anticipate this type of need in the style sheet. Forcing the browser<br>
+to deal with it would lead to crude results.<br>
+<p>
+Note that the issues of filtering out particular styles and filtering<br>
+out particular media/textual content are somewhat different and discussions<br>
+regarding them should keep this in mind. The style area of a document<br>
+should hold information related to layout and "look and feel". Within<br>
+the content area, things that more closely affect the textual/media<br>
+content should be put there, such as ways to represent different languages<br>
+and multiple versions of the same content (animations, ISMAP things, etc.).<br>
+Care should be taken not to confuse the two.<br>
+<p>
+Dave Raggett suggests that the style sheet should have a way to insert<br>
+particular elements into the document so that one could create<br>
+templates, page headers and footers, etc. easily.<br>
+<p>
+Perhaps:<br>
+<p>
+	HEADER	: insert "page.header.html"<br>
+	FOOTER	: insert "page.footer.html"<br>
+<p>
+	This inserts HTML within tags, while:<br>
+<p>
+	H1	: insert.before "&lt;IMG SRC=\"rule.gif\"&gt;"<br>
+	H1	: insert.after "some text"<br>
+<p>
+	adds text/HTML before or after elements.<br>
+<p>
+Industrial-Strength Stuff<br>
+~~~~~~~~~~~~~~~~~~~~~~~~~<br>
+<p>
+Here are some features which may also be added, in no particular order:<br>
+<p>
+	Kerning<br>
+	Tracking (spaces between words, letters, spacing limits)<br>
+	The ability to specify particular color models<br>
+	Columns (auto flow, positioning)<br>
+	Ways to allow elements to float over others<br>
+	Different ways of word wrapping<br>
+	Ways to handle breaks in text<br>
+	Page numbering<br>
+	Numbering of list elements<br>
+	Transitions (a la a presentation program)<br>
+	Control over text flow<br>
+<p>
+Finally...<br>
+~~~~~~~~~~<br>
+<p>
+We should be seeing a full description of the experimental notation,<br>
+with proposals, etc. and a full listing of properties, values,<br>
+meta-variables, etc. on the Web pretty soon.<br>
+<p>
+The above examples and features cover a good deal of the general<br>
+functionality of the most common DTP programs and remove the need<br>
+for many of the nonstandard HTML extensions that are seen today.<br>
+With a powerful style sheet language, the Web will certainly take on<br>
+a new level of sophistication and many of the problems authors have<br>
+had in the past regarding online design and layout will be solved.<br>
+Dave Raggett notes that notation that is meant to be read and used by<br>
+humans must have the right level of abstraction so that users and authors<br>
+can easily control style.<br>
+<p>
+The web's incorporation of style sheets will certainly raise the<br>
+level of expectation higher: users will not just expect to see a few<br>
+blocks of text but will soon expect the features previously only available<br>
+in "real" desktop publishing programs. Because of this it's quite<br>
+possible that developers will force themselves to look at parsing<br>
+and browser architecture in a more object-oriented manner, giving<br>
+way to a more modular, container-based approach. Arena and Bert Bos's<br>
+work are starting points, but once you add in OpenDoc or OLE,<br>
+COBRA, HotJava, etc. you can begin to see how powerful that<br>
+approach can be.<br>
+<p>
+People will finally think more about the structure of information<br>
+and more about making it universal and interchangable. And hopefully<br>
+we can finally see some serious content on the Internet.<br>
+<p>
+Arena is currently implementing Hakon's style sheet format, as is<br>
+Bill Perry - what is needed is a lot more discussion and real code<br>
+out there before a proposal can be presented to an IETF working group.<br>
+Hakon says that a W3C workshop on stylesheets is planned for September;<br>
+hopefully we'll see some good things happen before then.<br>
+<p>
+<p>
+<p>
+<pre>
+--
+Kevin Hughes * kevinh@eit.com
+Enterprise Integration Technologies Webmaster (<a href="http://www.eit.com/">http://www.eit.com/</a>)
+Hypermedia Industrial Designer * Duty now for the future!
+</pre>
+<!-- body="end" -->
+<hr>
+<p>
+<ul>
+<!-- next="start" -->
+<li> <b>Next message:</b> <a href="0258.html">Robert A. Mesa: "Print Form Code"</a>
+<li> <b>Previous message:</b> <a href="0256.html">H&kon W Lie: "Parsability (re: Thinking about style sheets)"</a>
+<!-- nextthread="start" -->
+</ul>
+<!-- received="Wed May  3 18:36:02 1995 PDT PDT" -->
+<!-- sent="Tue, 2 May 1995 04:07:10 +0500" -->
+<!-- name="Kevin Hughes" -->
+<!-- email="kevinh@eit.COM" -->
+<!-- subject="Thinking about style sheets" -->
+<!-- id="9505020756.AA11271@eitech.eit.com" -->
+<!-- inreplyto="" -->
+<title>WWW-HTML Apr-Jun 1995: Thinking about style sheets</title>
+<h1>Thinking about style sheets</h1>
+Kevin Hughes (<i>kevinh@eit.COM</i>)<br>
+<i>Tue, 2 May 1995 04:07:10 +0500</i>
+<p>
+<ul>
+<li> <b>Messages sorted by:</b> <a href="date.html#257">[ date ]</a><a href="index.html#257">[ thread ]</a><a href="subject.html#257">[ subject ]</a><a href="author.html#257">[ author ]</a>
+<!-- next="start" -->
+<li> <b>Next message:</b> <a href="0258.html">Robert A. Mesa: "Print Form Code"</a>
+<li> <b>Previous message:</b> <a href="0256.html">H&kon W Lie: "Parsability (re: Thinking about style sheets)"</a>
+<!-- nextthread="start" -->
+</ul>
+<hr>
+<!-- body="start" -->
+	This post is a long one; I would encourage replies to be<br>
+broken up into manageable subjects such as fonts, etc.<br>
+	The following thoughts revolve around creating a simple<br>
+yet powerful style sheet language for the World-Wide Web. I have<br>
+incorporated comments here and there from a previous email<br>
+discussion involving Hakon Lie, Dave Raggett, Dan Connolly, and<br>
+Bill Perry. Hakon should feel free to put this post under the<br>
+style sheet area at the W3O site.<br>
+	A W3 style-sheet mailing list will likely be created,<br>
+but Hakon says this will take some days. There should be pointers<br>
+at <a href="http://www.w3.org/">http://www.w3.org/</a> in time. In the meantime you can refer to:<br>
+<p>
+	<a href="http://gummo.stanford.edu/html/hypermail/archives.html">http://gummo.stanford.edu/html/hypermail/archives.html</a><br>
+<p>
+	If you're not familiar with style sheets, please take<br>
+a look at:<br>
+<p>
+	<a href="http://www.w3.org/hypertext/WWW/Style/">http://www.w3.org/hypertext/WWW/Style/</a><br>
+<p>
+	...and take a look at the current proposals and ideas out<br>
+there.<br>
+	The format I discuss below is a bit different and somewhat<br>
+improved over Hakon's format as described at the Chicago conference:<br>
+<p>
+	<a href="http://www.w3.org/hypertext/WWW/People/howcome/p/cascade.html">http://www.w3.org/hypertext/WWW/People/howcome/p/cascade.html</a><br>
+<p>
+	...but from the examples below it should be fairly easy<br>
+to figure things out.<br>
+	Finally, a few seconds of silence for the NSFNET backbone<br>
+service, which was decommissioned yesterday, April 30, 1995.<br>
+	May it rest in peace,<br>
+<p>
+	-- Kevin<br>
+<p>
+<p>
+Thinking About Style Sheets<br>
+~~~~~~~~~~~~~~~~~~~~~~~~~~~<br>
+<p>
+Hakon Lie described a simple yet powerful style sheet format in<br>
+Darmstadt, one which he has been working on for some time and had<br>
+been greatly improved since its first rollout in Chicago. Despite<br>
+that fact that it has not been formally described anywhere, I feel<br>
+that the format is superior to the other proposed formats for a number<br>
+of reasons:<br>
+<p>
+	1) It's simple yet flexible.<br>
+<p>
+	Many proposed formats are much too complex for their own<br>
+	good - in order to read the simplest formatting commands,<br>
+	browsers have to parse ornate structures and operations<br>
+	which add little to the overall utility of the format.<br>
+	Hakon's format is broken into manageable, logical chunks<br>
+	that allow for extensibility and ease of parsing. The<br>
+	format is also well-suited to be written in a compact format<br>
+	that keeps the style sheet size to a minimum.<br>
+<p>
+	2) It's human readable and writeable.<br>
+<p>
+	The Web no longer belongs to the average Internet-savvy<br>
+	technician who writes daily in Perl and C++. In order to<br>
+	urge authors and designers to make use of style sheets<br>
+	the format must be understandable so that one can "look<br>
+	under the hood" when needed. Certainly tools and editors<br>
+	will be created that makes style sheet creation easy,<br>
+	but the Web will be rewarded a hundredfold by using a<br>
+	format for which it is easy to create tools for.<br>
+<p>
+Below I propose a number of changes and additions to Hakon's format,<br>
+using the time-tested lessons learned by the most popular DTP<br>
+software packages on the market today as well as a little Web design<br>
+experience. I feel that style sheets have the potential to revolutionize<br>
+the way people use and think about the Web and hope that the standards<br>
+process does the right thing both for users and authors.<br>
+<p>
+Note that many of the examples below will replace the need for using<br>
+tag attributes and nonstandard HTML extensions to create layout. This<br>
+is a good thing, as the layout/style will finally be separated more<br>
+cleanly from the document structure.<br>
+<p>
+The idea, if I understand correctly, is:<br>
+<p>
+	&lt;HTML&gt;<br>
+	&lt;STYLE NOTATION="experimental"&gt;<br>
+<p>
+	&lt;!-- The style sheet (or perhaps a pointer to it) goes here. --&gt;<br>
+	&lt;!-- Here I can define a particular style, or rather, a CLASS. --&gt;<br>
+<p>
+	P[mystyle] : font.size = 12pt<br>
+<p>
+	&lt;/STYLE&gt;<br>
+	&lt;BODY&gt;<br>
+	Regular structured markup goes here.<br>
+<p>
+	&lt;P CLASS="mystyle"&gt;This is a paragraph in my style,<br>
+	with a font size of 12 points.<br>
+	&lt;/BODY&gt;<br>
+	&lt;/HTML&gt;<br>
+<p>
+If you find this pretty easy to understand, well, that's the idea.<br>
+Browsers may very well support DTDs as well as a readable style sheet<br>
+format like Hakon's.<br>
+<p>
+Linked style sheets will announce themselves to browsers with a MIME<br>
+type such as:<br>
+<p>
+	application/x-perry-stylesheet<br>
+	application/x-arena-stylesheet<br>
+	application/x-w3c-experimental<br>
+	application/x-dsssl-lite<br>
+<p>
+New Things<br>
+~~~~~~~~~~<br>
+<p>
+I would say that authors should have the capability to include<br>
+style sheets within the document as well as point to particular<br>
+style sheets (that is, link to them). This makes it easy for a site<br>
+to have a directory of "house" style sheets that apply to all documents<br>
+in a particular web.<br>
+<p>
+First, there should be a way to specify data that applies to all tags,<br>
+or data that applies to entire style sheet or class of objects. This<br>
+may be done with wildcards:<br>
+<p>
+	BODY	: *.color = red<br>
+	doc	: *.color = red<br>
+	*	: font.size = 12pt<br>
+<p>
+"doc" is something representing the entire document. Most likely<br>
+this should be replaced with HTML, as one may want different<br>
+properties for HEAD and BODY.<br>
+<p>
+Apparently Hakon's notation allows for pattern matching on<br>
+sequences of tags, hierarchies of tags, and attribute values.<br>
+<p>
+	HTML	: *.color = red<br>
+<p>
+In the second example, the font size of 12 points applies to the data in<br>
+all tags. In the first example, the color of all elements in the BODY<br>
+tag are red.<br>
+<p>
+In regards to sizes and such, there should be a way to specify a<br>
+base size and then allow other styles to be sized relative to the<br>
+base size.<br>
+<p>
+	H1	: font.size += 3pt<br>
+	H1	: font.size = P[mystyle]:font.size + 10pt<br>
+	H1	: font.size = 1.5 * P:font.size<br>
+<p>
+There should be a full listing and study of the proposed format<br>
+name hierarchy, so that attributes are named in a logical, structured<br>
+manner. More general objects should be on the left, with values becoming<br>
+more specific to the right. So "color.background" should instead<br>
+be "background.color", because background is a general object, while<br>
+color is a specific property.<br>
+<p>
+Style sheets should support the most common units in DTP; these may be:<br>
+<p>
+	inches (in)<br>
+	pixels (px)<br>
+	centimeters/millimeters (cm/mm)<br>
+	ems (em)<br>
+	points (pt)<br>
+	characters(ch)<br>
+	pica(pi) - "pi" is equal to 12pt<br>
+<p>
+The characters unit is needed because a designer may wish to specify<br>
+an indent or tab stop by the number of characters in the current font,<br>
+for instance, in a PRE tag.<br>
+<p>
+All elements that support values should support a value of "default".<br>
+Browsers would come out of the box with a default style sheet preselected<br>
+that the user never need change if they don't want to.<br>
+<p>
+One possible way to specify tab stops might be:<br>
+<p>
+	PRE	: tabs = 8ch, 16ch, 24ch<br>
+<p>
+Dave Raggett notes that this is discouraged, as HTML 3.0 includes<br>
+a TAB element that does many nice things.<br>
+<p>
+It would be useful to allow a number of format "shortcuts" so that people<br>
+writing sheets manually don't have to type so much and so that the size<br>
+of the style sheet stays at a minimum. One possible thing to do is to<br>
+use the semicolon (is there a more appropriate character?) for allowing<br>
+the designer to specify multiple values for multiple tags:<br>
+<p>
+	P H1     : font.color = red; blue<br>
+	H1 H2 LI : font.size = 1.0; 0.8; 0.2<br>
+<p>
+In the first example, data in P tags would be red; data in H1 tags<br>
+would be blue.<br>
+<p>
+In the second, the font size in H1 is the normal default size, H2<br>
+has a font size of 0.8 times that, and LI has a font size of 0.2<br>
+times that.<br>
+<p>
+Bill Perry suggests another kind of shortcut:<br>
+<p>
+	H1	: font.size=12pt; background.color = red;<br>
+		  foreground.color = blue<br>
+<p>
+This is very nice, as authors can deal with a whole tag at a time on<br>
+one line or split things up over multiple lines so the organization<br>
+makes more sense. Again, this is for human usability.<br>
+<p>
+Another kind of shortcut is to provide shorter versions of<br>
+words:<br>
+<p>
+	"img" for "image"<br>
+	"bg" for "background"<br>
+<p>
+	H1	: bg.color = blue<br>
+<p>
+In specifying color, the designer should be able to enter the<br>
+decimal/percentage values using the RGB color space, since it is more<br>
+understandable and most image processing programs use these values:<br>
+<p>
+	P	: font.color = 191, 191, 191<br>
+	P	: font.color = 0.75, 0.75, 0.75<br>
+<p>
+The percentages are percents of the range from 0 to 255. In the<br>
+3D world, the range would be from 0 to 1, but we're not dealing with<br>
+that context (yet).<br>
+<p>
+It would also be nice if one could define style-sheet specific color<br>
+labels so that colors could be referred to by name rather than by number:<br>
+<p>
+	define "My Gray" "191, 191, 191"<br>
+	P	: font.color = "My Gray"<br>
+<p>
+The use of such pre-processor-like definitions could be considered a<br>
+good thing, since it again reduces the style sheet size and makes<br>
+readability easier. For colors, as an example, one may be able to<br>
+specify the color name as given in the X11 rgb database.<br>
+<p>
+It may be useful to allow the designer to provide hints about the<br>
+document dimensions, but it is unclear as to where and how such metadata<br>
+might be specified. Perhaps:<br>
+<p>
+	HTML	: width = 600px<br>
+	HTML	: height = 800px<br>
+<p>
+Some browsers have a widget that when selected sizes the window to<br>
+the widest non-textual element on the screen. I think the browser<br>
+should resize itself automatically according to these hints if the user<br>
+wants.<br>
+<p>
+Alignment and Justification<br>
+~~~~~~~~~~~~~~~~~~~~~~~~~~~<br>
+<p>
+Alignment should refer to vertical movement, as in the IMG tag, while<br>
+justification should be used to specify horizontal movement. Thus:<br>
+<p>
+	align may be top, middle, bottom, basetop, basemiddle, basebottom<br>
+	justify may be left, right, center, full<br>
+<p>
+	IMG	: align = basetop<br>
+	P	: justify = center<br>
+<p>
+Top, middle, and bottom align elements relative to the size of the<br>
+highest character on the current line, measured from the baseline.<br>
+<p>
+Dave Raggett comments that HTML has got it wrong in this respect, with<br>
+ALIGN being used for vertical and horizontal alignment. I say that although<br>
+it's probably too late to change things in HTML, let's get it right in<br>
+style sheets.<br>
+<p>
+Dave also says that one needs bleedleft, bleedright, and bleedboth<br>
+additionally for figures and tables.<br>
+<p>
+                    ---         ---<br>
+                --- | |         | |<br>
+	--- --- | | | |     --- | | &lt;- font height<br>
+	ABC | | | | | |     | | | |<br>
+	--- | | | | --- --- | | --- &lt;- baseline<br>
+<i>            | | ___     | | | |</i><br>
+            ---         | | ---<br>
+<i>                        | |</i><br>
+                        ---<br>
+<p>
+	    top mid bot bas bas bas<br>
+                        top mid bot<br>
+<p>
+Containers and Spacing<br>
+~~~~~~~~~~~~~~~~~~~~~~<br>
+<p>
+If browser layout is parsed and understood internally in a container-like<br>
+manner, it should not be difficult to give every element a margin on each<br>
+side, which specifies the amount of space above, below, and to the sides<br>
+of an element. In this way, margins for an entire document as well as<br>
+margins for a particular element can be specified.<br>
+<p>
+	margin values can be top, bottom, left, right<br>
+<p>
+	BODY	: margin.top = 10px<br>
+	BODY	: margin.bottom = 10px<br>
+	P	: margin.left = 10px<br>
+<p>
+Regarding "container" properties, one can think of borders and styles,<br>
+backgrounds and foregrounds, and (tiled) images.<br>
+<p>
+	BODY	: background.color = red<br>
+	BODY	: foreground.color = blue<br>
+	BODY	: background.image = "<a href="http://somewhere.com/tile.gif">http://somewhere.com/tile.gif</a>"<br>
+	P	: border.width = 3px<br>
+<p>
+	border.style may be none, default, line, bevel<br>
+<p>
+	P	: border.style = line<br>
+	P	: border.color = black<br>
+	P	: border.image = "picture.frame.tile.gif"<br>
+<p>
+The border may go inside, centered with, or outside the margin boundaries.<br>
+A property name should be suggested for this - somehow "justify" and<br>
+"align" don't seem appropriate.<br>
+<p>
+Line size could be specified. When applied to a textual element, this<br>
+would indicate leading, the space below a line's baseline. When applied<br>
+to an element like HR, this refers to the height of the element.<br>
+<p>
+	HR	: line.size = 3px<br>
+	P	: line.size = 12pt<br>
+<p>
+Line indentation can be specified for elements - most designers find<br>
+general indents and indents for the first line to be desireable. So:<br>
+<p>
+	P	: line.indent.first = 1in<br>
+	P	: line.indent = 0.5in<br>
+<p>
+So the general spacing model for an element would look like:<br>
+<p>
+	------------------ &lt;- margin.top<br>
+<i>	| blah blah...   |</i><br>
+<i>	|                | &lt;- line.indent.first</i><br>
+<i>	|                | &lt;- line.indent</i><br>
+<i>	|                | &lt;- line.size (leading)</i><br>
+<i>	|                |</i><br>
+	------------------ &lt;- margin.bottom<br>
+        ^                ^<br>
+	margin.left      margin.right<br>
+<p>
+In this model, no negative values are allowed.<br>
+<p>
+Fonts<br>
+~~~~~<br>
+<p>
+Technically a font has a few basic properties:<br>
+<p>
+	font.family (Helvetica, Lucida)<br>
+	font.weight (Plain, Bold, Roman)<br>
+	font.angle (Italic, Regular)<br>
+	font.variation (Regular, Compressed)<br>
+<p>
+Although one should be able to completely specify a font with these<br>
+attributes, things can and should be simplified:<br>
+<p>
+	P	: font.name = "Helvetica Compressed Bold Italic"<br>
+<p>
+font.name would allow one to specify a font by its full name as a<br>
+shortcut. However, using the prior four variables may be desired since<br>
+they could provide hints to the browser on how to generate the font<br>
+on the fly.<br>
+<p>
+Hakon suggested that the order of the words in font.name should not<br>
+matter - the set should be descriptive enough to find a particular<br>
+font.<br>
+<p>
+Besides font.size and font.color, I would propose font.style, which<br>
+would provide hints to the browser as how to display the given font.<br>
+This style would be generated dynamically (mathematically perhaps),<br>
+based on the given font name or family/weight/angle/variation set.<br>
+<p>
+	font.style may be default, plain, bold, italic, underline,<br>
+		double underline, strikethrough, overline, change bar,<br>
+		inverse, superscript, subscript, outline, shadow,<br>
+		small caps, big caps, lowercase, uppercase<br>
+<p>
+The case styles would display text as follows:<br>
+<p>
+	plain:      "John Smith studies at MIT."<br>
+	small caps: "john smith studies at mIT."<br>
+	big caps:   "John Smith Studies At MIT."<br>
+	lowercase:  "john smith studies at mit."<br>
+	uppercase:  "JOHN SMITH STUDIES AT MIT."<br>
+<p>
+Of course you could specify multiple values where it makes sense:<br>
+<p>
+	P	: font.style = subscript &amp; bold<br>
+<p>
+One desired style is using an all-capitals string with larger<br>
+capitals at the beginning of words. One way to do this may be:<br>
+<p>
+	P	: font.style = uppercase &amp; bigcaps<br>
+<p>
+Much in the same way that one can specify different spacing for the<br>
+first line of an element, one should be able to specify different<br>
+styles for the first letter of a word. This may enable things<br>
+like drop caps.<br>
+<p>
+	P	: font.family.dropcap = Times<br>
+	P	: font.family.firstletter = Times<br>
+<p>
+The first example changes the first letter in the entire paragraph;<br>
+the second changes the first letter of every word.<br>
+<p>
+For elements such as drop caps and images there should be a way<br>
+to specify how many lines high the element is compared to the<br>
+normal text, and how that element should be aligned in respect<br>
+to the first line of the element. This is so things like this<br>
+can be made:<br>
+<p>
+	---- blah blah blah<br>
+<i>        |  | blah blah blah</i><br>
+        ---- blah blah blah<br>
+	blah blah blah blah<br>
+<p>
+	P	: font.size.dropcap += 3pt<br>
+<p>
+	The dropcap is 3 points larger than the element's normal<br>
+	font size.<br>
+<p>
+	P	: font.size.dropcap *= 4<br>
+<p>
+	The size of the dropcap is four times bigger than the<br>
+	size of the normal font size.<br>
+<p>
+	P            : align.dropcap = top<br>
+	IMG[dropcap] : align.dropcap = top<br>
+<p>
+	When a dropcap has an alignment of "top" its top is<br>
+	aligned with the first line of the element and drops below<br>
+	that line, allowing subsequent lines to wrap around it.<br>
+<p>
+	Perhaps there should be "align.topwrap" and "align.bottomwrap"<br>
+	instead?<br>
+<p>
+Links<br>
+~~~~~<br>
+<p>
+The designer should be able to specify how links are displayed, but<br>
+users should be able to easily override these specifications, as<br>
+they may be dependent on a particular navigation style. "imglink"<br>
+would refer to a link on an image, while "txtlink" would refer to<br>
+a textual link.<br>
+<p>
+	txtlink.color = blue<br>
+	txtlink.color = blue &lt; AGE / 7d &lt; "Background Color"<br>
+	imglink.color = default<br>
+	imglink.size = 3px<br>
+	imglink.style may be line, bevel, default, none<br>
+	txtlink.style may be underline, double underline,<br>
+		inverse, default, none<br>
+<p>
+Note that in conjunction with AGE links may be colored dynamically.<br>
+If there is a predefined value for the background color, links can<br>
+disappear with time and yet still be active, as in the example above.<br>
+<p>
+There should be a way to specify new versus followed links, but I<br>
+have no good ideas as how to do so.<br>
+<p>
+Based on something Hakon said:<br>
+<p>
+	HTML	: txtlink.color = red &lt; FETCHED &lt; blue<br>
+<p>
+Style Sheet Permissions<br>
+~~~~~~~~~~~~~~~~~~~~~~~<br>
+<p>
+There should be an extra layer in the current permissions model:<br>
+<p>
+		&lt;- author insist | legal<br>
+	user insist<br>
+	author important<br>
+	user important<br>
+	author normal<br>
+	user normal<br>
+	application default<br>
+<p>
+"author insist" would first display the page as the author intended<br>
+but allow the user to change the style (for example, via a pop-up<br>
+"styles" menu in the browser) after the initial download. The "legal"<br>
+specification would display as the author intended and not allow the<br>
+user to make changes. If the particular style in a browser was not<br>
+supported for a legal document, then the document would not display<br>
+at all.<br>
+<p>
+	P	: font.size = 12pt ! legal<br>
+<p>
+Authors writing legal documents may first display a readable<br>
+disclaimer which tells the user what they must to do read the legal<br>
+document (get a particular browser, enter a password, use a particular<br>
+style, etc.), why it is legal (display copyrights, licensing restrictions,<br>
+etc.) and then link to the document in question.<br>
+<p>
+Bill Perry suggests that it is more reasonable is for a dialog box to appear:<br>
+<p>
+	"Your settings will override something flagged as 'legal'.<br>
+	Should I continue?"<br>
+<p>
+	[ OK ] [ Cancel ]<br>
+<p>
+All of this was a heavily debated issue at Darmstadt and will continue<br>
+to be for some time. One thing to consider is that in the real world,<br>
+given enough time and resources, you can copy anything man-made reasonably<br>
+well and change it to suit your worldview. People will always want<br>
+to do this to things. Now that it can be very easy for them to do so,<br>
+why not let them?<br>
+<p>
+Users should be able to specify particular styles they do not want<br>
+to see, for instance, a color blind user may never want to see any<br>
+elements colored red or blue and instead would wish them to be colored<br>
+black. Dave Raggett notes that authors, not users, should be the ones to<br>
+anticipate this type of need in the style sheet. Forcing the browser<br>
+to deal with it would lead to crude results.<br>
+<p>
+Note that the issues of filtering out particular styles and filtering<br>
+out particular media/textual content are somewhat different and discussions<br>
+regarding them should keep this in mind. The style area of a document<br>
+should hold information related to layout and "look and feel". Within<br>
+the content area, things that more closely affect the textual/media<br>
+content should be put there, such as ways to represent different languages<br>
+and multiple versions of the same content (animations, ISMAP things, etc.).<br>
+Care should be taken not to confuse the two.<br>
+<p>
+Dave Raggett suggests that the style sheet should have a way to insert<br>
+particular elements into the document so that one could create<br>
+templates, page headers and footers, etc. easily.<br>
+<p>
+Perhaps:<br>
+<p>
+	HEADER	: insert "page.header.html"<br>
+	FOOTER	: insert "page.footer.html"<br>
+<p>
+	This inserts HTML within tags, while:<br>
+<p>
+	H1	: insert.before "&lt;IMG SRC=\"rule.gif\"&gt;"<br>
+	H1	: insert.after "some text"<br>
+<p>
+	adds text/HTML before or after elements.<br>
+<p>
+Industrial-Strength Stuff<br>
+~~~~~~~~~~~~~~~~~~~~~~~~~<br>
+<p>
+Here are some features which may also be added, in no particular order:<br>
+<p>
+	Kerning<br>
+	Tracking (spaces between words, letters, spacing limits)<br>
+	The ability to specify particular color models<br>
+	Columns (auto flow, positioning)<br>
+	Ways to allow elements to float over others<br>
+	Different ways of word wrapping<br>
+	Ways to handle breaks in text<br>
+	Page numbering<br>
+	Numbering of list elements<br>
+	Transitions (a la a presentation program)<br>
+	Control over text flow<br>
+<p>
+Finally...<br>
+~~~~~~~~~~<br>
+<p>
+We should be seeing a full description of the experimental notation,<br>
+with proposals, etc. and a full listing of properties, values,<br>
+meta-variables, etc. on the Web pretty soon.<br>
+<p>
+The above examples and features cover a good deal of the general<br>
+functionality of the most common DTP programs and remove the need<br>
+for many of the nonstandard HTML extensions that are seen today.<br>
+With a powerful style sheet language, the Web will certainly take on<br>
+a new level of sophistication and many of the problems authors have<br>
+had in the past regarding online design and layout will be solved.<br>
+Dave Raggett notes that notation that is meant to be read and used by<br>
+humans must have the right level of abstraction so that users and authors<br>
+can easily control style.<br>
+<p>
+The web's incorporation of style sheets will certainly raise the<br>
+level of expectation higher: users will not just expect to see a few<br>
+blocks of text but will soon expect the features previously only available<br>
+in "real" desktop publishing programs. Because of this it's quite<br>
+possible that developers will force themselves to look at parsing<br>
+and browser architecture in a more object-oriented manner, giving<br>
+way to a more modular, container-based approach. Arena and Bert Bos's<br>
+work are starting points, but once you add in OpenDoc or OLE,<br>
+COBRA, HotJava, etc. you can begin to see how powerful that<br>
+approach can be.<br>
+<p>
+People will finally think more about the structure of information<br>
+and more about making it universal and interchangable. And hopefully<br>
+we can finally see some serious content on the Internet.<br>
+<p>
+Arena is currently implementing Hakon's style sheet format, as is<br>
+Bill Perry - what is needed is a lot more discussion and real code<br>
+out there before a proposal can be presented to an IETF working group.<br>
+Hakon says that a W3C workshop on stylesheets is planned for September;<br>
+hopefully we'll see some good things happen before then.<br>
+<p>
+<p>
+<p>
+<pre>
+--
+Kevin Hughes * kevinh@eit.com
+Enterprise Integration Technologies Webmaster (<a href="http://www.eit.com/">http://www.eit.com/</a>)
+Hypermedia Industrial Designer * Duty now for the future!
+</pre>
+<!-- body="end" -->
+<hr>
+<p>
+<ul>
+<!-- next="start" -->
+<li> <b>Next message:</b> <a href="0258.html">Robert A. Mesa: "Print Form Code"</a>
+<li> <b>Previous message:</b> <a href="0256.html">H&kon W Lie: "Parsability (re: Thinking about style sheets)"</a>
+<!-- nextthread="start" -->
+</ul>
+<!-- received="Wed May  3 18:36:02 1995 PDT PDT" -->
+<!-- sent="Tue, 2 May 1995 04:07:10 +0500" -->
+<!-- name="Kevin Hughes" -->
+<!-- email="kevinh@eit.COM" -->
+<!-- subject="Thinking about style sheets" -->
+<!-- id="9505020756.AA11271@eitech.eit.com" -->
+<!-- inreplyto="" -->
+<title>WWW-HTML Apr-Jun 1995: Thinking about style sheets</title>
+<h1>Thinking about style sheets</h1>
+Kevin Hughes (<i>kevinh@eit.COM</i>)<br>
+<i>Tue, 2 May 1995 04:07:10 +0500</i>
+<p>
+<ul>
+<li> <b>Messages sorted by:</b> <a href="date.html#257">[ date ]</a><a href="index.html#257">[ thread ]</a><a href="subject.html#257">[ subject ]</a><a href="author.html#257">[ author ]</a>
+<!-- next="start" -->
+<li> <b>Next message:</b> <a href="0258.html">Robert A. Mesa: "Print Form Code"</a>
+<li> <b>Previous message:</b> <a href="0256.html">H&kon W Lie: "Parsability (re: Thinking about style sheets)"</a>
+<!-- nextthread="start" -->
+</ul>
+<hr>
+<!-- body="start" -->
+	This post is a long one; I would encourage replies to be<br>
+broken up into manageable subjects such as fonts, etc.<br>
+	The following thoughts revolve around creating a simple<br>
+yet powerful style sheet language for the World-Wide Web. I have<br>
+incorporated comments here and there from a previous email<br>
+discussion involving Hakon Lie, Dave Raggett, Dan Connolly, and<br>
+Bill Perry. Hakon should feel free to put this post under the<br>
+style sheet area at the W3O site.<br>
+	A W3 style-sheet mailing list will likely be created,<br>
+but Hakon says this will take some days. There should be pointers<br>
+at <a href="http://www.w3.org/">http://www.w3.org/</a> in time. In the meantime you can refer to:<br>
+<p>
+	<a href="http://gummo.stanford.edu/html/hypermail/archives.html">http://gummo.stanford.edu/html/hypermail/archives.html</a><br>
+<p>
+	If you're not familiar with style sheets, please take<br>
+a look at:<br>
+<p>
+	<a href="http://www.w3.org/hypertext/WWW/Style/">http://www.w3.org/hypertext/WWW/Style/</a><br>
+<p>
+	...and take a look at the current proposals and ideas out<br>
+there.<br>
+	The format I discuss below is a bit different and somewhat<br>
+improved over Hakon's format as described at the Chicago conference:<br>
+<p>
+	<a href="http://www.w3.org/hypertext/WWW/People/howcome/p/cascade.html">http://www.w3.org/hypertext/WWW/People/howcome/p/cascade.html</a><br>
+<p>
+	...but from the examples below it should be fairly easy<br>
+to figure things out.<br>
+	Finally, a few seconds of silence for the NSFNET backbone<br>
+service, which was decommissioned yesterday, April 30, 1995.<br>
+	May it rest in peace,<br>
+<p>
+	-- Kevin<br>
+<p>
+<p>
+Thinking About Style Sheets<br>
+~~~~~~~~~~~~~~~~~~~~~~~~~~~<br>
+<p>
+Hakon Lie described a simple yet powerful style sheet format in<br>
+Darmstadt, one which he has been working on for some time and had<br>
+been greatly improved since its first rollout in Chicago. Despite<br>
+that fact that it has not been formally described anywhere, I feel<br>
+that the format is superior to the other proposed formats for a number<br>
+of reasons:<br>
+<p>
+	1) It's simple yet flexible.<br>
+<p>
+	Many proposed formats are much too complex for their own<br>
+	good - in order to read the simplest formatting commands,<br>
+	browsers have to parse ornate structures and operations<br>
+	which add little to the overall utility of the format.<br>
+	Hakon's format is broken into manageable, logical chunks<br>
+	that allow for extensibility and ease of parsing. The<br>
+	format is also well-suited to be written in a compact format<br>
+	that keeps the style sheet size to a minimum.<br>
+<p>
+	2) It's human readable and writeable.<br>
+<p>
+	The Web no longer belongs to the average Internet-savvy<br>
+	technician who writes daily in Perl and C++. In order to<br>
+	urge authors and designers to make use of style sheets<br>
+	the format must be understandable so that one can "look<br>
+	under the hood" when needed. Certainly tools and editors<br>
+	will be created that makes style sheet creation easy,<br>
+	but the Web will be rewarded a hundredfold by using a<br>
+	format for which it is easy to create tools for.<br>
+<p>
+Below I propose a number of changes and additions to Hakon's format,<br>
+using the time-tested lessons learned by the most popular DTP<br>
+software packages on the market today as well as a little Web design<br>
+experience. I feel that style sheets have the potential to revolutionize<br>
+the way people use and think about the Web and hope that the standards<br>
+process does the right thing both for users and authors.<br>
+<p>
+Note that many of the examples below will replace the need for using<br>
+tag attributes and nonstandard HTML extensions to create layout. This<br>
+is a good thing, as the layout/style will finally be separated more<br>
+cleanly from the document structure.<br>
+<p>
+The idea, if I understand correctly, is:<br>
+<p>
+	&lt;HTML&gt;<br>
+	&lt;STYLE NOTATION="experimental"&gt;<br>
+<p>
+	&lt;!-- The style sheet (or perhaps a pointer to it) goes here. --&gt;<br>
+	&lt;!-- Here I can define a particular style, or rather, a CLASS. --&gt;<br>
+<p>
+	P[mystyle] : font.size = 12pt<br>
+<p>
+	&lt;/STYLE&gt;<br>
+	&lt;BODY&gt;<br>
+	Regular structured markup goes here.<br>
+<p>
+	&lt;P CLASS="mystyle"&gt;This is a paragraph in my style,<br>
+	with a font size of 12 points.<br>
+	&lt;/BODY&gt;<br>
+	&lt;/HTML&gt;<br>
+<p>
+If you find this pretty easy to understand, well, that's the idea.<br>
+Browsers may very well support DTDs as well as a readable style sheet<br>
+format like Hakon's.<br>
+<p>
+Linked style sheets will announce themselves to browsers with a MIME<br>
+type such as:<br>
+<p>
+	application/x-perry-stylesheet<br>
+	application/x-arena-stylesheet<br>
+	application/x-w3c-experimental<br>
+	application/x-dsssl-lite<br>
+<p>
+New Things<br>
+~~~~~~~~~~<br>
+<p>
+I would say that authors should have the capability to include<br>
+style sheets within the document as well as point to particular<br>
+style sheets (that is, link to them). This makes it easy for a site<br>
+to have a directory of "house" style sheets that apply to all documents<br>
+in a particular web.<br>
+<p>
+First, there should be a way to specify data that applies to all tags,<br>
+or data that applies to entire style sheet or class of objects. This<br>
+may be done with wildcards:<br>
+<p>
+	BODY	: *.color = red<br>
+	doc	: *.color = red<br>
+	*	: font.size = 12pt<br>
+<p>
+"doc" is something representing the entire document. Most likely<br>
+this should be replaced with HTML, as one may want different<br>
+properties for HEAD and BODY.<br>
+<p>
+Apparently Hakon's notation allows for pattern matching on<br>
+sequences of tags, hierarchies of tags, and attribute values.<br>
+<p>
+	HTML	: *.color = red<br>
+<p>
+In the second example, the font size of 12 points applies to the data in<br>
+all tags. In the first example, the color of all elements in the BODY<br>
+tag are red.<br>
+<p>
+In regards to sizes and such, there should be a way to specify a<br>
+base size and then allow other styles to be sized relative to the<br>
+base size.<br>
+<p>
+	H1	: font.size += 3pt<br>
+	H1	: font.size = P[mystyle]:font.size + 10pt<br>
+	H1	: font.size = 1.5 * P:font.size<br>
+<p>
+There should be a full listing and study of the proposed format<br>
+name hierarchy, so that attributes are named in a logical, structured<br>
+manner. More general objects should be on the left, with values becoming<br>
+more specific to the right. So "color.background" should instead<br>
+be "background.color", because background is a general object, while<br>
+color is a specific property.<br>
+<p>
+Style sheets should support the most common units in DTP; these may be:<br>
+<p>
+	inches (in)<br>
+	pixels (px)<br>
+	centimeters/millimeters (cm/mm)<br>
+	ems (em)<br>
+	points (pt)<br>
+	characters(ch)<br>
+	pica(pi) - "pi" is equal to 12pt<br>
+<p>
+The characters unit is needed because a designer may wish to specify<br>
+an indent or tab stop by the number of characters in the current font,<br>
+for instance, in a PRE tag.<br>
+<p>
+All elements that support values should support a value of "default".<br>
+Browsers would come out of the box with a default style sheet preselected<br>
+that the user never need change if they don't want to.<br>
+<p>
+One possible way to specify tab stops might be:<br>
+<p>
+	PRE	: tabs = 8ch, 16ch, 24ch<br>
+<p>
+Dave Raggett notes that this is discouraged, as HTML 3.0 includes<br>
+a TAB element that does many nice things.<br>
+<p>
+It would be useful to allow a number of format "shortcuts" so that people<br>
+writing sheets manually don't have to type so much and so that the size<br>
+of the style sheet stays at a minimum. One possible thing to do is to<br>
+use the semicolon (is there a more appropriate character?) for allowing<br>
+the designer to specify multiple values for multiple tags:<br>
+<p>
+	P H1     : font.color = red; blue<br>
+	H1 H2 LI : font.size = 1.0; 0.8; 0.2<br>
+<p>
+In the first example, data in P tags would be red; data in H1 tags<br>
+would be blue.<br>
+<p>
+In the second, the font size in H1 is the normal default size, H2<br>
+has a font size of 0.8 times that, and LI has a font size of 0.2<br>
+times that.<br>
+<p>
+Bill Perry suggests another kind of shortcut:<br>
+<p>
+	H1	: font.size=12pt; background.color = red;<br>
+		  foreground.color = blue<br>
+<p>
+This is very nice, as authors can deal with a whole tag at a time on<br>
+one line or split things up over multiple lines so the organization<br>
+makes more sense. Again, this is for human usability.<br>
+<p>
+Another kind of shortcut is to provide shorter versions of<br>
+words:<br>
+<p>
+	"img" for "image"<br>
+	"bg" for "background"<br>
+<p>
+	H1	: bg.color = blue<br>
+<p>
+In specifying color, the designer should be able to enter the<br>
+decimal/percentage values using the RGB color space, since it is more<br>
+understandable and most image processing programs use these values:<br>
+<p>
+	P	: font.color = 191, 191, 191<br>
+	P	: font.color = 0.75, 0.75, 0.75<br>
+<p>
+The percentages are percents of the range from 0 to 255. In the<br>
+3D world, the range would be from 0 to 1, but we're not dealing with<br>
+that context (yet).<br>
+<p>
+It would also be nice if one could define style-sheet specific color<br>
+labels so that colors could be referred to by name rather than by number:<br>
+<p>
+	define "My Gray" "191, 191, 191"<br>
+	P	: font.color = "My Gray"<br>
+<p>
+The use of such pre-processor-like definitions could be considered a<br>
+good thing, since it again reduces the style sheet size and makes<br>
+readability easier. For colors, as an example, one may be able to<br>
+specify the color name as given in the X11 rgb database.<br>
+<p>
+It may be useful to allow the designer to provide hints about the<br>
+document dimensions, but it is unclear as to where and how such metadata<br>
+might be specified. Perhaps:<br>
+<p>
+	HTML	: width = 600px<br>
+	HTML	: height = 800px<br>
+<p>
+Some browsers have a widget that when selected sizes the window to<br>
+the widest non-textual element on the screen. I think the browser<br>
+should resize itself automatically according to these hints if the user<br>
+wants.<br>
+<p>
+Alignment and Justification<br>
+~~~~~~~~~~~~~~~~~~~~~~~~~~~<br>
+<p>
+Alignment should refer to vertical movement, as in the IMG tag, while<br>
+justification should be used to specify horizontal movement. Thus:<br>
+<p>
+	align may be top, middle, bottom, basetop, basemiddle, basebottom<br>
+	justify may be left, right, center, full<br>
+<p>
+	IMG	: align = basetop<br>
+	P	: justify = center<br>
+<p>
+Top, middle, and bottom align elements relative to the size of the<br>
+highest character on the current line, measured from the baseline.<br>
+<p>
+Dave Raggett comments that HTML has got it wrong in this respect, with<br>
+ALIGN being used for vertical and horizontal alignment. I say that although<br>
+it's probably too late to change things in HTML, let's get it right in<br>
+style sheets.<br>
+<p>
+Dave also says that one needs bleedleft, bleedright, and bleedboth<br>
+additionally for figures and tables.<br>
+<p>
+                    ---         ---<br>
+                --- | |         | |<br>
+	--- --- | | | |     --- | | &lt;- font height<br>
+	ABC | | | | | |     | | | |<br>
+	--- | | | | --- --- | | --- &lt;- baseline<br>
+<i>            | | ___     | | | |</i><br>
+            ---         | | ---<br>
+<i>                        | |</i><br>
+                        ---<br>
+<p>
+	    top mid bot bas bas bas<br>
+                        top mid bot<br>
+<p>
+Containers and Spacing<br>
+~~~~~~~~~~~~~~~~~~~~~~<br>
+<p>
+If browser layout is parsed and understood internally in a container-like<br>
+manner, it should not be difficult to give every element a margin on each<br>
+side, which specifies the amount of space above, below, and to the sides<br>
+of an element. In this way, margins for an entire document as well as<br>
+margins for a particular element can be specified.<br>
+<p>
+	margin values can be top, bottom, left, right<br>
+<p>
+	BODY	: margin.top = 10px<br>
+	BODY	: margin.bottom = 10px<br>
+	P	: margin.left = 10px<br>
+<p>
+Regarding "container" properties, one can think of borders and styles,<br>
+backgrounds and foregrounds, and (tiled) images.<br>
+<p>
+	BODY	: background.color = red<br>
+	BODY	: foreground.color = blue<br>
+	BODY	: background.image = "<a href="http://somewhere.com/tile.gif">http://somewhere.com/tile.gif</a>"<br>
+	P	: border.width = 3px<br>
+<p>
+	border.style may be none, default, line, bevel<br>
+<p>
+	P	: border.style = line<br>
+	P	: border.color = black<br>
+	P	: border.image = "picture.frame.tile.gif"<br>
+<p>
+The border may go inside, centered with, or outside the margin boundaries.<br>
+A property name should be suggested for this - somehow "justify" and<br>
+"align" don't seem appropriate.<br>
+<p>
+Line size could be specified. When applied to a textual element, this<br>
+would indicate leading, the space below a line's baseline. When applied<br>
+to an element like HR, this refers to the height of the element.<br>
+<p>
+	HR	: line.size = 3px<br>
+	P	: line.size = 12pt<br>
+<p>
+Line indentation can be specified for elements - most designers find<br>
+general indents and indents for the first line to be desireable. So:<br>
+<p>
+	P	: line.indent.first = 1in<br>
+	P	: line.indent = 0.5in<br>
+<p>
+So the general spacing model for an element would look like:<br>
+<p>
+	------------------ &lt;- margin.top<br>
+<i>	| blah blah...   |</i><br>
+<i>	|                | &lt;- line.indent.first</i><br>
+<i>	|                | &lt;- line.indent</i><br>
+<i>	|                | &lt;- line.size (leading)</i><br>
+<i>	|                |</i><br>
+	------------------ &lt;- margin.bottom<br>
+        ^                ^<br>
+	margin.left      margin.right<br>
+<p>
+In this model, no negative values are allowed.<br>
+<p>
+Fonts<br>
+~~~~~<br>
+<p>
+Technically a font has a few basic properties:<br>
+<p>
+	font.family (Helvetica, Lucida)<br>
+	font.weight (Plain, Bold, Roman)<br>
+	font.angle (Italic, Regular)<br>
+	font.variation (Regular, Compressed)<br>
+<p>
+Although one should be able to completely specify a font with these<br>
+attributes, things can and should be simplified:<br>
+<p>
+	P	: font.name = "Helvetica Compressed Bold Italic"<br>
+<p>
+font.name would allow one to specify a font by its full name as a<br>
+shortcut. However, using the prior four variables may be desired since<br>
+they could provide hints to the browser on how to generate the font<br>
+on the fly.<br>
+<p>
+Hakon suggested that the order of the words in font.name should not<br>
+matter - the set should be descriptive enough to find a particular<br>
+font.<br>
+<p>
+Besides font.size and font.color, I would propose font.style, which<br>
+would provide hints to the browser as how to display the given font.<br>
+This style would be generated dynamically (mathematically perhaps),<br>
+based on the given font name or family/weight/angle/variation set.<br>
+<p>
+	font.style may be default, plain, bold, italic, underline,<br>
+		double underline, strikethrough, overline, change bar,<br>
+		inverse, superscript, subscript, outline, shadow,<br>
+		small caps, big caps, lowercase, uppercase<br>
+<p>
+The case styles would display text as follows:<br>
+<p>
+	plain:      "John Smith studies at MIT."<br>
+	small caps: "john smith studies at mIT."<br>
+	big caps:   "John Smith Studies At MIT."<br>
+	lowercase:  "john smith studies at mit."<br>
+	uppercase:  "JOHN SMITH STUDIES AT MIT."<br>
+<p>
+Of course you could specify multiple values where it makes sense:<br>
+<p>
+	P	: font.style = subscript &amp; bold<br>
+<p>
+One desired style is using an all-capitals string with larger<br>
+capitals at the beginning of words. One way to do this may be:<br>
+<p>
+	P	: font.style = uppercase &amp; bigcaps<br>
+<p>
+Much in the same way that one can specify different spacing for the<br>
+first line of an element, one should be able to specify different<br>
+styles for the first letter of a word. This may enable things<br>
+like drop caps.<br>
+<p>
+	P	: font.family.dropcap = Times<br>
+	P	: font.family.firstletter = Times<br>
+<p>
+The first example changes the first letter in the entire paragraph;<br>
+the second changes the first letter of every word.<br>
+<p>
+For elements such as drop caps and images there should be a way<br>
+to specify how many lines high the element is compared to the<br>
+normal text, and how that element should be aligned in respect<br>
+to the first line of the element. This is so things like this<br>
+can be made:<br>
+<p>
+	---- blah blah blah<br>
+<i>        |  | blah blah blah</i><br>
+        ---- blah blah blah<br>
+	blah blah blah blah<br>
+<p>
+	P	: font.size.dropcap += 3pt<br>
+<p>
+	The dropcap is 3 points larger than the element's normal<br>
+	font size.<br>
+<p>
+	P	: font.size.dropcap *= 4<br>
+<p>
+	The size of the dropcap is four times bigger than the<br>
+	size of the normal font size.<br>
+<p>
+	P            : align.dropcap = top<br>
+	IMG[dropcap] : align.dropcap = top<br>
+<p>
+	When a dropcap has an alignment of "top" its top is<br>
+	aligned with the first line of the element and drops below<br>
+	that line, allowing subsequent lines to wrap around it.<br>
+<p>
+	Perhaps there should be "align.topwrap" and "align.bottomwrap"<br>
+	instead?<br>
+<p>
+Links<br>
+~~~~~<br>
+<p>
+The designer should be able to specify how links are displayed, but<br>
+users should be able to easily override these specifications, as<br>
+they may be dependent on a particular navigation style. "imglink"<br>
+would refer to a link on an image, while "txtlink" would refer to<br>
+a textual link.<br>
+<p>
+	txtlink.color = blue<br>
+	txtlink.color = blue &lt; AGE / 7d &lt; "Background Color"<br>
+	imglink.color = default<br>
+	imglink.size = 3px<br>
+	imglink.style may be line, bevel, default, none<br>
+	txtlink.style may be underline, double underline,<br>
+		inverse, default, none<br>
+<p>
+Note that in conjunction with AGE links may be colored dynamically.<br>
+If there is a predefined value for the background color, links can<br>
+disappear with time and yet still be active, as in the example above.<br>
+<p>
+There should be a way to specify new versus followed links, but I<br>
+have no good ideas as how to do so.<br>
+<p>
+Based on something Hakon said:<br>
+<p>
+	HTML	: txtlink.color = red &lt; FETCHED &lt; blue<br>
+<p>
+Style Sheet Permissions<br>
+~~~~~~~~~~~~~~~~~~~~~~~<br>
+<p>
+There should be an extra layer in the current permissions model:<br>
+<p>
+		&lt;- author insist | legal<br>
+	user insist<br>
+	author important<br>
+	user important<br>
+	author normal<br>
+	user normal<br>
+	application default<br>
+<p>
+"author insist" would first display the page as the author intended<br>
+but allow the user to change the style (for example, via a pop-up<br>
+"styles" menu in the browser) after the initial download. The "legal"<br>
+specification would display as the author intended and not allow the<br>
+user to make changes. If the particular style in a browser was not<br>
+supported for a legal document, then the document would not display<br>
+at all.<br>
+<p>
+	P	: font.size = 12pt ! legal<br>
+<p>
+Authors writing legal documents may first display a readable<br>
+disclaimer which tells the user what they must to do read the legal<br>
+document (get a particular browser, enter a password, use a particular<br>
+style, etc.), why it is legal (display copyrights, licensing restrictions,<br>
+etc.) and then link to the document in question.<br>
+<p>
+Bill Perry suggests that it is more reasonable is for a dialog box to appear:<br>
+<p>
+	"Your settings will override something flagged as 'legal'.<br>
+	Should I continue?"<br>
+<p>
+	[ OK ] [ Cancel ]<br>
+<p>
+All of this was a heavily debated issue at Darmstadt and will continue<br>
+to be for some time. One thing to consider is that in the real world,<br>
+given enough time and resources, you can copy anything man-made reasonably<br>
+well and change it to suit your worldview. People will always want<br>
+to do this to things. Now that it can be very easy for them to do so,<br>
+why not let them?<br>
+<p>
+Users should be able to specify particular styles they do not want<br>
+to see, for instance, a color blind user may never want to see any<br>
+elements colored red or blue and instead would wish them to be colored<br>
+black. Dave Raggett notes that authors, not users, should be the ones to<br>
+anticipate this type of need in the style sheet. Forcing the browser<br>
+to deal with it would lead to crude results.<br>
+<p>
+Note that the issues of filtering out particular styles and filtering<br>
+out particular media/textual content are somewhat different and discussions<br>
+regarding them should keep this in mind. The style area of a document<br>
+should hold information related to layout and "look and feel". Within<br>
+the content area, things that more closely affect the textual/media<br>
+content should be put there, such as ways to represent different languages<br>
+and multiple versions of the same content (animations, ISMAP things, etc.).<br>
+Care should be taken not to confuse the two.<br>
+<p>
+Dave Raggett suggests that the style sheet should have a way to insert<br>
+particular elements into the document so that one could create<br>
+templates, page headers and footers, etc. easily.<br>
+<p>
+Perhaps:<br>
+<p>
+	HEADER	: insert "page.header.html"<br>
+	FOOTER	: insert "page.footer.html"<br>
+<p>
+	This inserts HTML within tags, while:<br>
+<p>
+	H1	: insert.before "&lt;IMG SRC=\"rule.gif\"&gt;"<br>
+	H1	: insert.after "some text"<br>
+<p>
+	adds text/HTML before or after elements.<br>
+<p>
+Industrial-Strength Stuff<br>
+~~~~~~~~~~~~~~~~~~~~~~~~~<br>
+<p>
+Here are some features which may also be added, in no particular order:<br>
+<p>
+	Kerning<br>
+	Tracking (spaces between words, letters, spacing limits)<br>
+	The ability to specify particular color models<br>
+	Columns (auto flow, positioning)<br>
+	Ways to allow elements to float over others<br>
+	Different ways of word wrapping<br>
+	Ways to handle breaks in text<br>
+	Page numbering<br>
+	Numbering of list elements<br>
+	Transitions (a la a presentation program)<br>
+	Control over text flow<br>
+<p>
+Finally...<br>
+~~~~~~~~~~<br>
+<p>
+We should be seeing a full description of the experimental notation,<br>
+with proposals, etc. and a full listing of properties, values,<br>
+meta-variables, etc. on the Web pretty soon.<br>
+<p>
+The above examples and features cover a good deal of the general<br>
+functionality of the most common DTP programs and remove the need<br>
+for many of the nonstandard HTML extensions that are seen today.<br>
+With a powerful style sheet language, the Web will certainly take on<br>
+a new level of sophistication and many of the problems authors have<br>
+had in the past regarding online design and layout will be solved.<br>
+Dave Raggett notes that notation that is meant to be read and used by<br>
+humans must have the right level of abstraction so that users and authors<br>
+can easily control style.<br>
+<p>
+The web's incorporation of style sheets will certainly raise the<br>
+level of expectation higher: users will not just expect to see a few<br>
+blocks of text but will soon expect the features previously only available<br>
+in "real" desktop publishing programs. Because of this it's quite<br>
+possible that developers will force themselves to look at parsing<br>
+and browser architecture in a more object-oriented manner, giving<br>
+way to a more modular, container-based approach. Arena and Bert Bos's<br>
+work are starting points, but once you add in OpenDoc or OLE,<br>
+COBRA, HotJava, etc. you can begin to see how powerful that<br>
+approach can be.<br>
+<p>
+People will finally think more about the structure of information<br>
+and more about making it universal and interchangable. And hopefully<br>
+we can finally see some serious content on the Internet.<br>
+<p>
+Arena is currently implementing Hakon's style sheet format, as is<br>
+Bill Perry - what is needed is a lot more discussion and real code<br>
+out there before a proposal can be presented to an IETF working group.<br>
+Hakon says that a W3C workshop on stylesheets is planned for September;<br>
+hopefully we'll see some good things happen before then.<br>
+<p>
+<p>
+<p>
+<pre>
+--
+Kevin Hughes * kevinh@eit.com
+Enterprise Integration Technologies Webmaster (<a href="http://www.eit.com/">http://www.eit.com/</a>)
+Hypermedia Industrial Designer * Duty now for the future!
+</pre>
+<!-- body="end" -->
+<hr>
+<p>
+<ul>
+<!-- next="start" -->
+<li> <b>Next message:</b> <a href="0258.html">Robert A. Mesa: "Print Form Code"</a>
+<li> <b>Previous message:</b> <a href="0256.html">H&kon W Lie: "Parsability (re: Thinking about style sheets)"</a>
+<!-- nextthread="start" -->
+</ul>
+

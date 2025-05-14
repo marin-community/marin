@@ -146,7 +146,7 @@ def run_cooldown_ablation():
                 data_mix, {"tulu_sft": tulu3_flat_llama_tokenized_as_validation}
             ),
             num_anneal_training_tokens=anneal_tokens,
-            resources=TpuPodConfig(tpu_type=tpu_type, node_count=node_count),
+            resources=TpuPodConfig(tpu_type=tpu_type, slice_count=node_count),
             train_batch_size=2048,
         )
 
