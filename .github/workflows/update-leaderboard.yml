@@ -72,7 +72,7 @@ jobs:
           
           # only commit and push if there are actual changes
           if ! git diff --cached --quiet; then
-            git commit -m "automated update - leaderboard data"
+            git commit -m "automated update- leaderboard data"
             git push
             echo "Successfully synced static leaderboard data to speedrun repository"
           else
