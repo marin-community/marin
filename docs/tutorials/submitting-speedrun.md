@@ -52,44 +52,88 @@ and having multiple scales allows us to fit scaling laws and extrapolate out to 
    ```
 
 2. Create your training script in this directory. See [`llama_75m_fineweb_edu.py`](https://github.com/marin-community/marin/blob/main/experiments/speedrun/llama_75m_fineweb_edu/llama_75m_fineweb_edu.py) for a reference:
-   ```python
-   """
-   Sample speedrun with a 75M model that uses the Llama architecture.
-   """
 
-   import logging
+    !!! danger "GPU Setup"
+        If you are working on GPU, make sure you've correctly installed and set up the environment by following the [local GPU setup guide](local-gpu.md). This ensures your environment is properly configured for training with GPU.
+    
+    === "GPU"
+        ```python
+        """
+        Sample speedrun with a 75M model that uses the Llama architecture.
+        """
 
-   from experiments.exp72_baselines import fineweb_edu_tokenized
-   from experiments.llama import llama_75m
-   from experiments.simple_train_config import SimpleTrainConfig
-   from marin.execution.executor import executor_main
-   from marin.resources import TpuPodConfig
-   from marin.speedrun.speedrun import HardwareConfig, SpeedrunConfig, default_speedrun
+        import logging
 
-   logger = logging.getLogger("ray")
+        from experiments.exp72_baselines import fineweb_edu_tokenized
+        from experiments.llama import llama_75m
+        from experiments.simple_train_config import SimpleTrainConfig
+        from marin.execution.executor import executor_main
+        from marin.resources import GpuConfig
+        from marin.speedrun.speedrun import HardwareConfig, SpeedrunConfig, default_speedrun
 
-   speedrun_config = SpeedrunConfig(
-       model_config=llama_75m,
-       train_config=SimpleTrainConfig(
-           TpuPodConfig(tpu_type="v4-128"),
-           train_batch_size=512,
-           num_train_steps=3000,
-           learning_rate=3e-3,
-           weight_decay=0.1,
-           steps_per_eval=1000,
-       ),
-       tokenized_dataset=fineweb_edu_tokenized,
-       hardware_config=HardwareConfig(
-           device_type="v4-128",
-           num_devices=64,
-           device_flops=275e12,
-       ),
-   )
+        logger = logging.getLogger("ray")
 
-   if __name__ == "__main__":
-       executor_main(steps=default_speedrun("75M_llama_fineweb_edu", speedrun_config))
-   ```
-   In this example, you only have one Python file, but if your submission is more complex, you can split it into multiple files.
+        speedrun_config = SpeedrunConfig(
+            model_config=llama_75m,
+            train_config=SimpleTrainConfig(
+                GpuConfig(gpu_count=1),
+                train_batch_size=512,
+                num_train_steps=3000,
+                learning_rate=3e-3,
+                weight_decay=0.1,
+                steps_per_eval=1000,
+            ),
+            tokenized_dataset=fineweb_edu_tokenized,
+            hardware_config=HardwareConfig(
+                device_type="v4-128",
+                num_devices=64,
+                device_flops=275e12,
+            ),
+        )
+
+        if __name__ == "__main__":
+            executor_main(steps=default_speedrun("75M_llama_fineweb_edu", speedrun_config))
+        ```
+    === "TPU"
+        ```python
+        """
+        Sample speedrun with a 75M model that uses the Llama architecture.
+        """
+
+        import logging
+
+        from experiments.exp72_baselines import fineweb_edu_tokenized
+        from experiments.llama import llama_75m
+        from experiments.simple_train_config import SimpleTrainConfig
+        from marin.execution.executor import executor_main
+        from marin.resources import TpuPodConfig
+        from marin.speedrun.speedrun import HardwareConfig, SpeedrunConfig, default_speedrun
+
+        logger = logging.getLogger("ray")
+
+        speedrun_config = SpeedrunConfig(
+            model_config=llama_75m,
+            train_config=SimpleTrainConfig(
+                TpuPodConfig(tpu_type="v4-128"),
+                train_batch_size=512,
+                num_train_steps=3000,
+                learning_rate=3e-3,
+                weight_decay=0.1,
+                steps_per_eval=1000,
+            ),
+            tokenized_dataset=fineweb_edu_tokenized,
+            hardware_config=HardwareConfig(
+                device_type="v4-128",
+                num_devices=64,
+                device_flops=275e12,
+            ),
+        )
+
+        if __name__ == "__main__":
+            executor_main(steps=default_speedrun("75M_llama_fineweb_edu", speedrun_config))
+        ```
+
+    In this example, you only have one Python file, but if your submission is more complex, you can split it into multiple files.
 
 3. Set relevant environment variables needed for the run:
 
