@@ -6,4 +6,4 @@ This document describes a checklist for writing tutorials.
 - Do not include steps that are redundant with prerequisites (e.g., installing Python).
 - Write down explicitly the resource requirements for the tutorial (e.g., whether GPUs are required).
 - Specify the approximate time it takes to complete the tutorial (both in human time and in run time).
-- Walk through a concrete example that the user should be able to run fully (commands whould have concrete arguments that can be copy/pasted, not filled with placeholders that the user has to think about).
+- Walk through a concrete example that the user should be able to run fully (unless impossible, commands should have concrete arguments that can be copy/pasted, not filled with placeholders that the user has to think about).
