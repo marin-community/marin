@@ -277,6 +277,7 @@ def default_train(
             initialize_from=None if train_config.reset_data_loader_on_init else checkpoint_path_to_load_from,
             watch=train_config.watch,
             axis_resources={
+                # Special axes for MoEs
                 "token": (ResourceAxis.REPLICA, ResourceAxis.DATA),
                 "token_repeat": (ResourceAxis.REPLICA, ResourceAxis.DATA),
             },
