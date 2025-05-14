@@ -16,7 +16,7 @@ _ACCEL_TYPES: list[str] = [
 ]
 assert all(isinstance(x, str) for x in _ACCEL_TYPES), "Expected all accelerator types to be strings"
 
-AcceleratorType: TypeAlias = Literal[*_ACCEL_TYPES]
+AcceleratorType: TypeAlias = Literal[tuple(_ACCEL_TYPES)]
 """
 https://docs.ray.io/en/latest/ray-core/scheduling/accelerators.html
 """
@@ -104,7 +104,7 @@ class TpuPodConfig(ResourceConfig):
 
     tpu_type: str
     """Type of TPU to use, e.g. v4-128."""
-    node_count: int = 1
+    slice_count: int = 1
     """Number of TPU slices for training."""
 
     runtime_env: RuntimeEnv = dataclasses.field(default_factory=lambda: RuntimeEnv())
@@ -113,4 +113,4 @@ class TpuPodConfig(ResourceConfig):
         return self.tpu_type
 
     def as_ray_resources(self) -> RayResources:
-        return RayResources(resources={self.tpu_type: self.node_count})
+        return RayResources(resources={self.tpu_type: self.slice_count})

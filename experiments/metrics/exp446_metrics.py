@@ -54,7 +54,7 @@ def compute_metrics(save_path: str) -> dict:
 
     # get all runs; num_days=-1 means all runs
     experiment_metrics = calculate_wandb_metrics(
-        WandbMetricsConfig(num_days=None, entity="stanford-mercury", project="marin")
+        WandbMetricsConfig(num_days=None, entity="marin-community", project="marin")
     )
 
     logger.info("Experiment metrics: %s", experiment_metrics)
