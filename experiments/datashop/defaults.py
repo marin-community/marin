@@ -366,7 +366,7 @@ def default_synthetic_data_generation(
     input_filetype: str,
     prompt_column: str,
     resource_config: ResourceConfig,
-    generated_text_column_name: str = "text",
+    generated_text_column_name: str = "generated_text",
     engine_kwargs: dict = default_engine_kwargs,
     generation_kwargs: dict = default_generation_kwargs,
     output_path: str | None = None,
