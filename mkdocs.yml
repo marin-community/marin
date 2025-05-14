@@ -55,7 +55,6 @@ nav:
     - Building Docs: dev-guide/building-docs.md
     - Snapshot Tests: dev-guide/snapshot-tests.md
   - Technical Reference:
-    - Architecture: references/architecture.md
     - Specifying Hardware Resources: references/resource-config.md
     - Executor API: references/executor-api.md
     - Default Steps: references/default-steps.md
