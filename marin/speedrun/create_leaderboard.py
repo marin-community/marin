@@ -10,7 +10,6 @@ from pathlib import Path
 import fsspec
 
 
-
 @dataclass(frozen=True)
 class LeaderboardEntry:
     run_name: str
