@@ -69,7 +69,7 @@ def main():
     with open(PROMPT_PATH, "w") as f:
         f.write(prompt)
 
-    print(f"Asking an LM to summarize..")
+    print("Asking an LM to summarize..")
     client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
     response = client.chat.completions.create(
         model=MODEL,
