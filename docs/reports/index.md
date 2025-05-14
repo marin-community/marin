@@ -5,16 +5,14 @@ and then curated by hand.
 
 This page includes only experiments that have at least one run or report.
 
-## Tootsie Runs
-
-### Tootsie 8b
+## Marin 8B Base
 
 - Tootsie 8B (Main Issue) [![#600](https://img.shields.io/github/issues/detail/state/marin-community/marin/600)](https://github.com/marin-community/marin/issues/600)
     - [GitHub Issue #600](https://github.com/marin-community/marin/issues/600)
     - [WandB Report](https://wandb.ai/stanford-mercury/marin/reports/Tootsie-8B---VmlldzoxMTY3MzU3OA)
     - [Data Browser](https://crfm.stanford.edu/marin/data_browser/experiment/?path=gs%3A//marin-us-central2/experiments/exp600_tootsie-4c95ae.json)
 
-#### Cooldowns
+### Cooldowns
 
 - Try deepening the cooldown of "monumental-jellyfish" (tootsie 8b cooldown 1) to see if it improves SFT [![#898](https://img.shields.io/github/issues/detail/state/marin-community/marin/898)](https://github.com/marin-community/marin/issues/898)
     - [GitHub Issue #898](https://github.com/marin-community/marin/issues/898)
@@ -31,21 +29,20 @@ This page includes only experiments that have at least one run or report.
     - [WandB Run: tootsie-8b-sensible-starling](https://wandb.ai/stanford-mercury/marin/runs/tootsie-8b-sensible-starling?nw=nwuserdlwh)
     - [Data Browser](https://crfm.stanford.edu/marin/data_browser/experiment/?path=gs%3A//marin-us-central2/experiments/exp977_phoenix_cooldown-8e3456.json)
 
-## Big Tootsies
+## Big Runs
 
-- \[EPIC\] Big Tootsies [![#859](https://img.shields.io/github/issues/detail/state/marin-community/marin/859)](https://github.com/marin-community/marin/issues/859)
+- \[EPIC\] Big Runs [![#859](https://img.shields.io/github/issues/detail/state/marin-community/marin/859)](https://github.com/marin-community/marin/issues/859)
     - [GitHub Issue #859](https://github.com/marin-community/marin/issues/859)
     - [WandB Report](https://wandb.ai/stanford-mercury/marin/reports/Big-Tootsies--VmlldzoxMTEyOTQ0MA?accessToken=st1rajwy32etqi5rrlm3kuhgqa4ods6fnwsbyk8azjc8ar3eikf4dnz1p2ldz8yx)
-- Tootsie 13B [![#860](https://img.shields.io/github/issues/detail/state/marin-community/marin/860)](https://github.com/marin-community/marin/issues/860)
+- Marin 13B [![#860](https://img.shields.io/github/issues/detail/state/marin-community/marin/860)](https://github.com/marin-community/marin/issues/860)
     - [GitHub Issue #860](https://github.com/marin-community/marin/issues/860)
     - [WandB Report](https://wandb.ai/stanford-mercury/marin/reports/Big-Tootsies--VmlldzoxMTEyOTQ0MA?accessToken=st1rajwy32etqi5rrlm3kuhgqa4ods6fnwsbyk8azjc8ar3eikf4dnz1p2ldz8yx)
-- Tootsie 24B [![#861](https://img.shields.io/github/issues/detail/state/marin-community/marin/861)](https://github.com/marin-community/marin/issues/861)
+- Marin 24B [![#861](https://img.shields.io/github/issues/detail/state/marin-community/marin/861)](https://github.com/marin-community/marin/issues/861)
     - [GitHub Issue #861](https://github.com/marin-community/marin/issues/861)
     - [WandB Report](https://wandb.ai/stanford-mercury/marin/reports/Big-Tootsies--VmlldzoxMTEyOTQ0MA)
-- Tootsie 70b [![#750](https://img.shields.io/github/issues/detail/state/marin-community/marin/750)](https://github.com/marin-community/marin/issues/750)
+- Marin 70b [![#750](https://img.shields.io/github/issues/detail/state/marin-community/marin/750)](https://github.com/marin-community/marin/issues/750)
     - [GitHub Issue #750](https://github.com/marin-community/marin/issues/750)
     - [WandB Report](https://wandb.ai/stanford-mercury/marin/reports/Big-Tootsies--VmlldzoxMTEyOTQ0MA)
-
 
 ## Modeling
 
@@ -88,6 +85,16 @@ This page includes only experiments that have at least one run or report.
     - Conclusion: Substantial performance hit but helpful. Still need to iterate.
 
 ## Data Experiments
+
+### Datashop
+- MEDU filtering across MMLU subsets [![#923](https://img.shields.io/github/issues/detail/state/stanford-crfm/marin/923)](https://github.com/marin-community/marin/issues/923)
+  - [GitHub Issue #923](https://github.com/marin-community/marin/issues/923)
+  - [WandB Report](https://api.wandb.ai/links/marin-community/9b1v0zwa)
+  - [Data Browser](https://crfm.stanford.edu/marin/data_browser/experiment?path=gs%3A%2F%2Fmarin-us-east1%2Fexperiments%2Fmedu_mmlu-051285.json)
+- Reproduce Finemath performance using Datashop [![#939](https://img.shields.io/github/issues/detail/state/stanford-crfm/marin/939)](https://github.com/marin-community/marin/issues/939) [![#939](https://img.shields.io/github/issues/detail/state/stanford-crfm/marin/939)](https://github.com/marin-community/marin/issues/939)
+  - [GitHub Issue #939](https://github.com/marin-community/marin/issues/939)
+  - [WandB Report](https://wandb.ai/marin-community/marin/reports/Reproducing-Finemath--VmlldzoxMjc2NDMyNg?accessToken=xnwbosaz2es5lkoyjmtclq0xoqbbqzyyg7gjt8qkmjz7zs0vx1p4g8t5nloyx9ft)
+
 
 ### High Quality Data Ablations
 
@@ -149,6 +156,9 @@ This page includes only experiments that have at least one run or report.
     - [WandB Report](https://api.wandb.ai/links/stanford-mercury/m8ak7uah)
 - SFT on further cool-downed tootsie checkpoints [![#897](https://img.shields.io/github/issues/detail/state/marin-community/marin/897)](https://github.com/marin-community/marin/issues/897)
     - [GitHub Issue #897](https://github.com/marin-community/marin/issues/897)
+- SFT Deeper Starling [![#1237](https://img.shields.io/github/issues/detail/state/stanford-crfm/marin/1237)](https://github.com/marin-community/marin/issues/1237)
+  - [GitHub Issue #1237](https://github.com/marin-community/marin/issues/1237)
+  - [WandB Run: deeper_mixture_sft_starling_1e-4-longer-2](https://wandb.ai/marin-community/marin/runs/deeper_mixture_sft_starling_1e-4-longer-2?nw=nwuserheld)
 
 ## Scaling Laws
 
