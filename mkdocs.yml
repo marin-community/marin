@@ -30,33 +30,36 @@ nav:
   - Tutorials:
     - Installation: tutorials/installation.md
     - First Experiment: tutorials/first-experiment.md
+    - Setting up a Local GPU Environment: tutorials/local-gpu.md
     - Executor 101: tutorials/executor-101.md
     - Data Browser: tutorials/data-browser.md
+    - Using Data Shop: tutorials/datashop.md
     - Training an LM: tutorials/train-an-lm.md
     - Submitting a Speedrun: tutorials/submitting-speedrun.md
     - Filtering Data: tutorials/filtering-data.md
+    - Running an Annealing Experiment: tutorials/annealing-experiment.md
     - Co-Developing with Marin and Levanter: tutorials/co-develop.md
-    - Run an Annealing Experiment: tutorials/annealing-experiment.md
+    - Adding an Optimizer for Speedrun: tutorials/add-optimizer.md
   - Explanation:
-    - The Language Modeling Pipeline: explanation/lm-pipeline.md
-    - Evaluation: explanation/evaluation.md
-    - Experiments: explanation/experiments.md
-    - Executor: explanation/executor.md
-    - Guidelines: explanation/guidelines.md
+    - The Language Modeling Pipeline: explanations/lm-pipeline.md
+    - Evaluation: explanations/evaluation.md
+    - Experiments: explanations/experiments.md
+    - Executor: explanations/executor.md
+    - Guidelines: explanations/guidelines.md
   - Experiment Reports: reports/index.md
   - Developer Guide:
     - Contributing: dev-guide/contributing.md
-    - Guidelines: dev-guide/guidelines.md
+    - Deployment: dev-guide/deployment.md
     - Tutorial Guidelines: dev-guide/tutorial-guidelines.md
     - Internal Guidelines: dev-guide/guidelines-internal.md
     - Building Docs: dev-guide/building-docs.md
     - Snapshot Tests: dev-guide/snapshot-tests.md
   - Technical Reference:
-    - Architecture: reference/architecture.md
-    - Specifying Hardware Resources: reference/resource-config.md
-    - Executor API: reference/executor-api.md
-    - Default Steps: reference/default-steps.md
-    - Training Configuration: reference/train-config.md
+    - Architecture: references/architecture.md
+    - Specifying Hardware Resources: references/resource-config.md
+    - Executor API: references/executor-api.md
+    - Default Steps: references/default-steps.md
+    - Training Configuration: references/train-config.md
 
 markdown_extensions:
   - pymdownx.highlight
@@ -123,5 +126,6 @@ plugins:
             members_order: source
             separate_signature: true
             line_length: 60
+            signature_crossrefs: true
 
   - include-markdown
