@@ -1,0 +1,89 @@
+import logging
+import math
+
+from experiments.dolma.tokenize_dolma import DOLMA_OLMO_MIXTURE_WEIGHTS, tokenize_dolma_steps
+from marin.processing.tokenize.data_configs import lm_mixture_data_config
+from experiments.defaults import default_train
+from experiments.simple_train_config import SimpleTrainConfig
+from marin.execution.executor import executor_main
+from marin.resources import TpuPodConfig
+
+from levanter.models.mixtral import MixtralConfig
+from levanter.models.llama import LlamaConfig
+
+logger = logging.getLogger("ray")
+
+LR = 4e-4
+WD = 0.1
+TPU = TpuPodConfig(tpu_type="v5litepod-128")
+TOKEN_TARGETS = 2_000_000_000_000
+BATCH_SIZE = 1024
+SEQ_LEN = 4096
+
+dolma_llama3_tokenized = lm_mixture_data_config(
+    components=tokenize_dolma_steps(),
+    weights=DOLMA_OLMO_MIXTURE_WEIGHTS,
+    include_raw_paths=False,
+)
+
+
+def step_target(token_target, batch_size, seq_len):
+    actual_step_count = math.ceil(token_target / (batch_size * seq_len))
+    nice_round_step_count = math.ceil(actual_step_count / 1000) * 1000
+    return nice_round_step_count
+
+baseline_1_4b = LlamaConfig(
+    seq_len=SEQ_LEN,
+    hidden_dim=2048,
+    intermediate_dim=8192,
+    num_heads=16,
+    num_kv_heads=16,
+    num_layers=16,
+)
+
+olmoe_8x_1_4b = MixtralConfig(
+    seq_len=SEQ_LEN,
+    hidden_dim=2048,
+    intermediate_dim=1024,
+    num_heads=16,
+    num_kv_heads=16,
+    num_layers=16,
+    n_routed_experts=64,
+    num_experts_per_tok=8,
+)
+
+num_train_steps = step_target(TOKEN_TARGETS, BATCH_SIZE, SEQ_LEN)
+
+
+train_config = SimpleTrainConfig(
+    tpu_type=TPU,
+    train_batch_size=BATCH_SIZE,
+    num_train_steps=num_train_steps,
+    learning_rate=LR,
+    weight_decay=WD,
+    warmup=1/500,
+)
+
+def make_step(name, model_config):
+    return default_train(
+        name=name,
+        train_config=train_config,
+        model_config=model_config,
+        tokenized=dolma_llama3_tokenized,
+        use_default_validation=False,
+        tags=("olmoe", "dolma"),
+    )
+
+baseline_step = make_step(
+    name="moe-v5e-baseline-1b",
+    model_config=baseline_1_4b,
+)
+
+olmoe_step = make_step(
+    name="moe-v5e-olmoe-1b7b",
+    model_config=olmoe_8x_1_4b,
+)
+
+
+if __name__ == "__main__":
+    executor_main([baseline_step, olmoe_step])
