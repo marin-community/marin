@@ -32,7 +32,7 @@ train_step = default_sft(
         train_batch_size=128,
         num_train_steps=NUM_TRAIN_STEPS,
         learning_rate=2e-6,  #  2x10^-6
-        resources=TpuPodConfig(tpu_type="v4-128", node_count=1),
+        resources=TpuPodConfig(tpu_type="v4-128", slice_count=1),
         tokenizer="EleutherAI/gpt-neox-20b",
         model_name_or_path="gs://levanter-checkpoints/marin/olmoish7b_v4_1024_0627/dlwh_7b0627/step-510000/",
         max_seq_len=4096,
