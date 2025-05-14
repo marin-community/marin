@@ -4,8 +4,8 @@ on:
   push:
     paths:
       - 'marin/speedrun/**'
-      - 'marin/experiments/speedrun/**'
-      - 'marin/.github/workflows/update-leaderboard.yml'
+      - 'experiments/speedrun/**'
+      - '.github/workflows/update-leaderboard.yml'
     branches:
       - nikil/speedrun-modifications
       - main
