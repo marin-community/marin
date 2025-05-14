@@ -19,11 +19,13 @@ MODEL = "gpt-4o"
 PROMPT_PATH = "docs/reports/summary_prompt.txt"
 OUTPUT_PATH = "docs/reports/summary.md"
 
+
 def get_github_issues():
     """Get all issues with the `experiment` label."""
     g = Github()
     repo = g.get_repo("marin-community/marin")
     return repo.get_issues(labels=["experiment"], state="all")
+
 
 def convert_issue_to_xml(issue):
     return f"""<issue>
@@ -37,6 +39,7 @@ def convert_issue_to_xml(issue):
         <body>\n{issue.body}</body>
         <comments>{issue.comments}</comments>
     </issue>\n"""
+
 
 prompt_template = """
 You are a helpful assistant that summarizes GitHub issues.
@@ -57,6 +60,7 @@ Please generate a report describing the issues.  Please keep the following in mi
      Create a final subsection corresponding to open issues.
      Important: **all** issues must be included in the timeline, and each issue should appear exactly once.
 """
+
 
 def main():
     print("Getting GitHub issues...")
