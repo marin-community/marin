@@ -79,7 +79,6 @@ jobs:
           #   echo "No changes to commit"
           # fi
 
-          - name: Sync static files (TEST MODE)
           # Show current state
           echo "Source directory content:"
           ls -la marin/speedrun/static/data/
