@@ -9,6 +9,10 @@ In general, you should reach for the default steps before writing your own.
 
 TODO
 
+## Uploading
+
+::: marin.export.upload_dir_to_hf
+
 ## Tokenization
 
 ::: experiments.defaults.default_tokenize
