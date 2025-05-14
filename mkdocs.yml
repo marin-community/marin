@@ -44,7 +44,9 @@ nav:
     - Experiments: explanation/experiments.md
     - Executor: explanation/executor.md
     - Guidelines: explanation/guidelines.md
-  - Experiment Reports: reports/index.md
+  - Experiments:
+    - Summary: reports/summary.md
+    - Index: reports/index.md
   - Developer Guide:
     - Contributing: dev-guide/contributing.md
     - Guidelines: dev-guide/guidelines.md
