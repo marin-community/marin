@@ -40,7 +40,7 @@ COOLDOWN_END = PHASE_3_END + COOLDOWN_LEN
 
 tootsie_8b_hypnotic_spoonbill_train = dataclasses.replace(
     llama_8b_train_config_phase3,
-    resources=TpuPodConfig(tpu_type="v4-128", node_count=4),
+    resources=TpuPodConfig(tpu_type="v4-128", slice_count=4),
     learning_rate=1.7e-4,  # only does what we want b/c we're warmstarting from the ckpt below
     num_train_steps=COOLDOWN_END,
     min_lr_ratio=2.75e-5 / 1.7e-4,
