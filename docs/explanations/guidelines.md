@@ -120,7 +120,7 @@ for the experiment.  This file should take no arguments (aside from those the
 executor accepts), and running this experiment should launch all the relevant
 jobs for this experiment from start to finish.
 
-Experiments are defined using the [executor framework](explanation/executor.md),
+Experiments are defined using the [executor framework](../explanations/executor.md),
 which represents a DAG over steps.  Each step makes a call to a (Ray)
 function with a custom `config`.
 
