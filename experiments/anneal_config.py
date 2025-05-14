@@ -27,7 +27,7 @@ class AnnealConfig:
     num_anneal_training_tokens: int = 50_000_000_000  # 50B tokens
 
     # Hardware related
-    resources: ResourceConfig = TpuPodConfig(tpu_type="v4-128", node_count=2)  # noqa: RUF009
+    resources: ResourceConfig = TpuPodConfig(tpu_type="v4-128", slice_count=2)  # noqa: RUF009
 
     # Checkpoint related
     steps_per_export: int = 10000
@@ -43,5 +43,5 @@ class AnnealConfig:
     def node_count(self) -> int:
         """For backward compatibility."""
         if isinstance(self.resources, TpuPodConfig):
-            return self.resources.node_count
+            return self.resources.slice_count
         return 1
