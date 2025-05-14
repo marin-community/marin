@@ -26,9 +26,9 @@ speedrun_config = SpeedrunConfig(
     hardware_config=HardwareConfig(
         device_type="a100",
         num_devices=2,
-        device_flops=312e12,
+        device_flops=195e11,
     ),
 )
 
 if __name__ == "__main__":
-    executor_main(steps=default_speedrun("75M_llama_fineweb_edu_gpu", speedrun_config))
+    executor_main(steps=default_speedrun("75M_llama_fineweb_edu_speedrun_gpu", speedrun_config))
