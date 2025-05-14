@@ -82,5 +82,5 @@ class SimpleTrainConfig:
     def node_count(self) -> int:
         """For backward compatibility."""
         if isinstance(self.resources, TpuPodConfig):
-            return self.resources.node_count
+            return self.resources.slice_count
         return 1
