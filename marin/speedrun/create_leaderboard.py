@@ -8,6 +8,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import fsspec
+import marin
 
 
 @dataclass(frozen=True)
@@ -39,7 +40,7 @@ def load_results_file(path: str) -> dict:
 def create_entry_from_results(results: dict, results_filepath: str) -> LeaderboardEntry:
     run_name = Path(results_filepath).parent.name
     filepath = Path(results_filepath)
-    repo_root = Path(__file__).resolve().parent.parent.parent
+    repo_root = Path(marin.__file__).resolve().parent.parent
     relative_path = filepath.relative_to(repo_root)
     total_training_flops = results["run_stats"]["total_training_flops"]
     training_time = results["run_stats"]["training_time_in_minutes"]
