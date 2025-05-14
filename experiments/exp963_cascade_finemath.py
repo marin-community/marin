@@ -8,7 +8,7 @@ from experiments.datashop.default_configs import (
 from experiments.exp939_finemath import FINEMATH_DATA_FILTER_PROMPT
 from experiments.models import get_model_local_path, llama_3_3_70b_instruct
 from marin.classifiers.utils import CreateDatasetConfig, create_dataset
-from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path
+from marin.execution.executor import ExecutorStep, output_path_of, this_output_path
 
 FINEMATH_3_POINT_DATA_FILTER_PROMPT = """
 Evaluate the following text extract for its potential usefulness for studying mathematics up to high school and early undergraduate levels. Use the following 3-point scoring system described below. Points are accumulated based on the satisfaction of
@@ -74,4 +74,4 @@ datashop_runner_phase_2 = DatashopRunner(
 )
 
 if __name__ == "__main__":
-    executor_main([datashop_runner_phase_2.quality_ablation_model])
+    datashop_runner_phase_2.run_all_steps()

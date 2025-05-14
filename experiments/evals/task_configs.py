@@ -25,10 +25,9 @@ CORE_TASKS = (
     EvalTaskConfig("winogrande", 0),  # Winograd challenge, extended to more domains
 )
 
-MMLU_TASKS = (
-    EvalTaskConfig("mmlu", 0, task_alias="mmlu_0shot"),
-    EvalTaskConfig("mmlu", 5, task_alias="mmlu_5shot"),
-)
+MMLU_0_SHOT = (EvalTaskConfig("mmlu", 0, task_alias="mmlu_0shot"),)
+MMLU_5_SHOT = (EvalTaskConfig("mmlu", 5, task_alias="mmlu_5shot"),)
+MMLU_TASKS = MMLU_0_SHOT + MMLU_5_SHOT
 
 CORE_TASKS_PLUS_MMLU = CORE_TASKS + MMLU_TASKS
 
