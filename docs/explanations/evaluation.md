@@ -1,7 +1,7 @@
 # Evaluation Overview
 
 This document provides a overview on how to evaluate models using Marin.
-For a step-by-step guide on how to evaluate models, see the [evaluation tutorial](../tutorial/evaluate-a-model.md). XXX TODO
+For a step-by-step guide on how to evaluate models, see the [evaluation tutorial](../tutorials/evaluate-a-model.md). XXX TODO
 
 We evaluate a few different ways, depending on the kind of task.
 
