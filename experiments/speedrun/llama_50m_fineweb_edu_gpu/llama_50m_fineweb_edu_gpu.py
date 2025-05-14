@@ -1,6 +1,6 @@
 """
 Speedrun code for a 50M parameter model based on the LLaMA architecture. The model is trained on the Fineweb-Edu dataset
-(the default dataset for speedruns) on a single GPU.
+(the default dataset for speedruns) on one A100.
 """
 
 import logging
