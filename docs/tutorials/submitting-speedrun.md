@@ -55,7 +55,7 @@ and having multiple scales allows us to fit scaling laws and extrapolate out to 
    ```
 
 2. Create your training script in this directory. See [`llama_75m_fineweb_edu.py`](https://github.com/marin-community/marin/blob/main/experiments/speedrun/llama_75m_fineweb_edu/llama_75m_fineweb_edu.py) for a reference:
-    
+
     === "GPU"
         ```python
         """
