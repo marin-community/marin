@@ -471,6 +471,7 @@ def default_anneal(name: str, anneal_config: AnnealConfig) -> ExecutorStep:
         tokenized=anneal_config.dataset_config,
         model_config=llama_8b,
         train_config=anneal_stage_train_config,
+        use_default_validation=anneal_config.use_default_validation,
         eval_harness_tasks=MMLU_TASKS,
     )
 
