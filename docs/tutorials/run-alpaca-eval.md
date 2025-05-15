@@ -57,8 +57,6 @@ if __name__ == "__main__":
     executor_main(executor_main_config, steps=steps)
 ```
 
-Just to doubly emphasize, ***make sure to pass in correct stop_token_id*** otherwise the generation will continue until the max model length.
-If you don't specify this the alpaca_evaluator will guess what those tokens are from the HF config but that is often wrong :)
 
 ## Parameter Reference
 
@@ -73,7 +71,7 @@ If you don't specify this the alpaca_evaluator will guess what those tokens are 
 | presence_penalty     | `float`              | Penalize new token presence. |
 | frequency_penalty    | `float`              | Penalize repeated tokens. |
 | repetition_penalty   | `float`              | Another repetition control. |
-| top_p                | `float`              | Nucleus sampling threshold. |
+| top_p                | `float`              | Nucleus sampling threshold. Fixed to 1.0 for TPU |
 | top_k                | `int`                | Top-K sampling; `-1` disables. |
 | stop_token_ids       | `List[int]`  None | Token IDs at which generation halts—**must include your model's `eos_token_id`.** |
 
@@ -86,14 +84,20 @@ python experiments/evals/run_alpaca_eval.py
 ```
 
 This will:
-1. Spin up the specified hardware (Ray + TPU/GPU).
+1. Spin up the specified hardware (Ray + TPU).
 2. Load your model checkpoint.
 3. Run the Alpaca prompts through a vLLM-powered loop.
 4. Save and log results (accuracy, generation samples) to W&B under `model_name`.
 
 ---
 
-**Tip**: To find your model's `eos_token_id`, do:
+## Common pitfals
+
+If there is a discrepancy between the `eos_token_id` between the tokenizer_config.json and model_config.json then
+***make sure to pass in correct stop_token_id*** otherwise the generation will continue until the max model length.
+If you don't specify this the alpaca_evaluator will guess what those tokens are from the HF config but that is often wrong :)
+
+ To find your model's `eos_token_id`, do:
 ```python
 from transformers import AutoConfig
 config = AutoConfig.from_pretrained("path/to/your/model")
