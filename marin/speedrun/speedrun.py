@@ -37,15 +37,20 @@ class HardwareConfig:
     num_devices: int
     device_flops: float  # Peak FLOPs/s per device
 
-
 @dataclass
 class SpeedrunConfig:
+
+    contributor_name: str # name of the author/individual submitting the speedrun
+    contributor_affiliation: str # affiliation/institution of the contributor
+    description: str # brief (~1 sentence) description of the speedrun
+
     model_config: LmConfig
     train_config: SimpleTrainConfig | TrainLmOnPodConfig
     hardware_config: HardwareConfig
 
     # by default, this is fineweb_edu_tokenized
     tokenized_dataset: InputName | LMMixtureDatasetConfig = fineweb_edu_tokenized
+
 
     @property
     def vocab_size(self) -> int:
@@ -149,18 +154,21 @@ def speedrun_results(config: SpeedrunResultsConfig):
 
     full_wandb_url = f"https://wandb.ai/{config.wandb_entity}/{config.wandb_project}/runs/{wandb_run_id}"
 
-    run_stats = {
-        "run_related_info": {
+    run_info = {
+        "speedrun_config": {
+            "contributor_name": config.speedrun_config.contributor_name or "marin-community",
+            "contributor_affiliation": config.speedrun_config.contributor_affiliation,
+            "description": config.speedrun_config.description,
             "num_parameters": num_params,
             "total_tokens": total_tokens,
             "model_config": dataclasses.asdict(config.speedrun_config.model_config),
             "train_config": dataclasses.asdict(config.speedrun_config.train_config),
             "tokenized_dataset": str(config.speedrun_config.tokenized_dataset),
             "hardware_config": dataclasses.asdict(config.speedrun_config.hardware_config),
+        },
+        "speedrun_results": {
             "run_completion_timestamp": end_time.strftime("%Y-%m-%d %H:%M:%S UTC"),
             "wandb_run_link": full_wandb_url,
-        },
-        "run_stats": {
             "pre_run_flops_estimate": six_nd_flops,
             "training_time_in_minutes": total_time,
             "total_training_flops": total_training_flops,
@@ -172,9 +180,9 @@ def speedrun_results(config: SpeedrunResultsConfig):
         },
     }
 
-    logger.info(f"Speedrun stats: {run_stats}")
+    logger.info(f"Speedrun stats: {run_info}")
 
-    output_data = {"runs": [run_stats]}
+    output_data = {"runs": [run_info]}
     with fsspec.open(config.output_path, "w") as f:
         json.dump(output_data, f, indent=2, sort_keys=True)
     logger.info(f"Speedrun stats written to {config.output_path}")
