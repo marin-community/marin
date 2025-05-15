@@ -32,6 +32,7 @@ import tempfile
 from dataclasses import dataclass, field
 
 from google.cloud import storage
+from google.cloud.storage import transfer_manager
 from huggingface_hub import HfApi, create_repo
 
 # Set up logging
@@ -116,29 +117,77 @@ def list_gcs_directories(gcs_path: str) -> list[tuple[str, int]]:
 
 
 def download_from_gcs(gcs_path: str, local_path: str) -> bool:
-    """Download contents from a GCS path to a local directory using gsutil."""
-    try:
-        logger.info(f"Downloading {gcs_path} to {local_path}...")
-        cmd = ["gsutil", "-m", "cp", "-r", f"{gcs_path}*", local_path]
-        _ = subprocess.run(cmd, check=True, capture_output=True, text=True)
-        logger.info("Download completed successfully.")
-        return True
-    except subprocess.CalledProcessError as e:
-        logger.error(f"Error downloading from {gcs_path}: {e}")
-        logger.error(f"stdout: {e.stdout}")
-        logger.error(f"stderr: {e.stderr}")
+    """Download contents from a GCS path to a local directory using the GCS transfer manager."""
+    logger.info(f"Downloading {gcs_path} to {local_path}...")
+
+    # Parse the GCS path (format: gs://bucket-name/path/to/files)
+    if not gcs_path.startswith("gs://"):
+        logger.error(f"Invalid GCS path format: {gcs_path}")
         return False
+
+    bucket_name = gcs_path[5:].split("/")[0]
+    prefix = "/".join(gcs_path[5:].split("/")[1:])
+
+    # Handle wildcard at the end (the original had f"{gcs_path}*")
+    if prefix.endswith("*"):
+        prefix = prefix[:-1]
+
+    # Initialize the GCS client
+    client = storage.Client()
+    bucket = client.bucket(bucket_name)
+
+    # List all matching blobs
+    blobs = list(bucket.list_blobs(prefix=prefix))
+
+    if not blobs:
+        logger.error(f"No files found in {gcs_path}")
+        return False
+
+    total_files = len(blobs)
+    logger.info(f"Found {total_files} files to download from {gcs_path}")
+
+    # Get the blob names to download (excluding directory placeholders)
+    blob_names = []
+    for blob in blobs:
+        if not blob.name.endswith("/"):
+            blob_names.append(blob.name)
+
+    if len(blob_names) < total_files:
+        logger.info(f"Filtered out {total_files - len(blob_names)} directory markers")
+
+    # Ensure local directory exists
+    os.makedirs(local_path, exist_ok=True)
+
+    # Log the first few blob names to debug issues
+    if blob_names:
+        logger.info(f"Sample blob names (first 3): {', '.join(blob_names[:3])}")
+
+    # Use transfer manager to download all blobs in parallel
+    logger.info(f"Starting parallel download of {len(blob_names)} files...")
+
+    # The key fix: set blob_name_prefix correctly to avoid path duplication
+    # We're using the exact prefix we specified, not trying to strip anything extra
+    results = storage.transfer_manager.download_many_to_path(
+        bucket=bucket,
+        blob_names=blob_names,
+        destination_directory=local_path,
+        max_workers=8,
+        create_directories=True,
+        worker_type="process",
+        raise_exception=True,
+    )
+
+    logger.info(f"Download completed successfully. Downloaded {len(blob_names)} files.")
+    return True
 
 
 def checkpoint_exists(repo_id: str, step: int, version_name: str) -> bool:
     """Check if a specific revision exists in a Hugging Face repository."""
     try:
-        from huggingface_hub import HfApi
-
         api = HfApi()
-        commits = api.list_repo_commits(repo_id=repo_id, revision=f"{version_name}")
+        commits = api.list_repo_commits(repo_id=repo_id)
         for commit in commits:
-            if f"step-{step}" in commit.message:
+            if f"step {step}" in commit.title:
                 return True
         return False
     except Exception:
@@ -154,25 +203,25 @@ def extract_version_from_path(gcs_path: str) -> str:
 
 def upload_to_huggingface(local_path: str, repo_id: str, step: int, version_name: str) -> bool:
     """Upload a local directory to Hugging Face as a specific revision."""
-    try:
-        logger.info(f"Uploading checkpoint {version_name} to Hugging Face as revision: {step}")
+    logger.info(f"Uploading checkpoint {version_name}, step {step} to Hugging Face")
 
-        # Check if repo exists, create if not
-        api = HfApi()
-        create_repo(repo_id=repo_id, exist_ok=True)
-        # Upload the directory
-        result = api.upload_folder(
-            folder_path=local_path,
-            repo_id=repo_id,
-            revision=f"{version_name}",
-            commit_message=f"Upload checkpoint for step {step} ({version_name})",
-        )
-        logger.info("Upload completed successfully.")
-        logger.info(f"Commit URL: {result.commit_url}")
-        return True
-    except Exception as e:
-        logger.error(f"Error uploading to Hugging Face: {e}")
-        return False
+    # Check if repo exists, create if not
+    api = HfApi()
+    create_repo(repo_id=repo_id, exist_ok=True)
+    # Upload the directory
+    result = api.upload_folder(
+        folder_path=local_path,
+        repo_id=repo_id,
+        commit_message=f"Upload checkpoint for step {step} ({version_name})",
+    )
+    try:
+        api.delete_tag(repo_id=repo_id, tag=version_name)
+    except:
+        logger.info("Creating tag for the first time")
+    api.create_tag(repo_id=repo_id, tag=version_name)
+    logger.info("Upload completed successfully.")
+    logger.info(f"Commit URL: {result.commit_url}")
+    return True
 
 
 def upload_gcs_to_hf(cfg: UploadConfig) -> None:
