@@ -21,6 +21,7 @@ fineweb_edu_10B_repo_id = "marin-community/fineweb-edu-pretokenized-10B"
 
 uploaded_cert = upload_dir_to_hf(fineweb_edu_subcache_10B_created, repo_id=fineweb_edu_10B_repo_id)
 
+# 10M is mostly for debugging purposes
 fineweb_edu_subcache_10M_created = slice_cache(
     output_path="tokenized/subcache/fineweb-edu-10M",
     input_config=step_to_lm_mixture_component(fineweb_edu_llama3_tokenized, include_raw_paths=True),

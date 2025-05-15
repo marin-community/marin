@@ -84,7 +84,7 @@ def _do_slice_cache(
     train_set_shuffled = train_set.shuffle(key).as_sync_dataset()
     num_docs = len(train_set_shuffled)
 
-    print(f"Subsampling {cfg.num_tokens} tokens from {num_docs} docs to {cfg.cache_path}")
+    logger.info(f"Subsampling {cfg.num_tokens} tokens from {num_docs} docs to {cfg.cache_path}")
     with SerialCacheWriter(os.path.join(cfg.cache_path, split), exemplar) as output_writer:
         # TensorStore has high latency so we load biggish batches
         # Fineweb averages about 1000 tokens per doc.
@@ -98,7 +98,6 @@ def _do_slice_cache(
             batch = train_set_shuffled.get_batch(range(first_doc, end_doc))
             first_doc = end_doc
             pbar.set_postfix({"docs": first_doc})
-            print(len(batch))
 
             # decide how many docs to take from this batch
             batch_to_write = []
@@ -113,7 +112,7 @@ def _do_slice_cache(
                 time_in = time.time()
                 output_writer.write_batch(batch_to_write)
                 time_out = time.time()
-                print(f"Wrote {len(batch_to_write)} docs in {time_out - time_in:.2f} seconds")
+                logger.info(f"Wrote {len(batch_to_write)} docs in {time_out - time_in:.2f} seconds")
 
     if loaded_tokens < cfg.num_tokens:
         raise ValueError("Provided cache doesn't have enough tokens")
@@ -192,6 +191,12 @@ def _patch_source_config(
     return dataclasses.replace(input_config, cache_dir=output_path, tags=input_config.tags + extra_tags)
 
 
+def _slice_cache_in_ray(cfg: SliceCacheConfig):
+    logging.basicConfig(level=logging.INFO)
+    logger.info(f"Starting slice cache with config: {cfg}")
+    return _do_slice_cache(cfg)
+
+
 def slice_cache(
     output_path: str,
     input_config: LmDatasetSourceConfigBase,
@@ -215,7 +220,7 @@ def slice_cache(
 
     return ExecutorStep(
         name=output_path,
-        fn=_do_slice_cache,
+        fn=_slice_cache_in_ray,
         config=SliceCacheConfig(
             input_config=input_config,
             num_tokens=num_tokens,
