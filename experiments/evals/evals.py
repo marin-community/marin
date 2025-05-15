@@ -5,8 +5,17 @@ Canonical set of evals.
 import logging
 
 from experiments.evals.engine_configs import DEFAULT_VLLM_ENGINE_KWARGS
-from experiments.evals.resource_configs import SINGLE_TPU_V4_8, ResourceConfig
-from experiments.evals.task_configs import CORE_TASKS, KEY_GENERATION_TASKS, KEY_MULTIPLE_CHOICE_TASKS
+from experiments.evals.resource_configs import SINGLE_TPU_V4_8, SINGLE_TPU_V6E_8, ResourceConfig
+from experiments.evals.task_configs import (
+    BASE_GENERATION_TASKS,
+    CORE_TASKS,
+    CORE_TASKS_PLUS_LEADERBOARD,
+    KEY_GENERATION_TASKS,
+    KEY_MULTIPLE_CHOICE_TASKS,
+    MMLU_0_SHOT,
+    MMLU_5_SHOT,
+    MMLU_PRO_5_SHOT,
+)
 from marin.evaluation.evaluation_config import EvalTaskConfig, EvaluationConfig
 from marin.evaluation.run import evaluate
 from marin.execution.executor import (
@@ -259,6 +268,57 @@ def default_eval(
     return evaluate_levanter_lm_evaluation_harness(
         name, model_step_path, evals, resource_config, max_eval_instances=max_eval_instances
     )
+
+
+def default_base_eval(
+    step: ExecutorStep | InputName | str,
+    resource_config: ResourceConfig = SINGLE_TPU_V6E_8,
+    max_eval_instances: int | None = None,
+    engine_kwargs: dict | None = DEFAULT_VLLM_ENGINE_KWARGS,
+    run_generation_evals: bool = True,
+):
+    # Add GPQA to CORE_TASKS
+
+    # Set up evaluations for core tasks (including GPQA)
+    eval_jobs = []
+    core_grouped = default_eval(step=step, resource_config=resource_config, evals=CORE_TASKS_PLUS_LEADERBOARD)
+    eval_jobs.append(core_grouped)
+
+    # Run tasks where we report Macro_Avg separately to make sure the macro avg gets computed correctly.
+    mmlu_0shot = default_eval(
+        step=step,
+        resource_config=resource_config,
+        evals=MMLU_0_SHOT,
+    )
+    eval_jobs.append(mmlu_0shot)
+
+    mmlu_5shot = default_eval(
+        step=step,
+        resource_config=resource_config,
+        evals=MMLU_5_SHOT,
+    )
+    eval_jobs.append(mmlu_5shot)
+
+    mmlu_pro_5shot = default_eval(
+        step=step,
+        resource_config=resource_config,
+        evals=MMLU_PRO_5_SHOT,
+    )
+    eval_jobs.append(mmlu_pro_5shot)
+
+    name, model_step_path = extract_model_name_and_path(step)
+    if run_generation_evals:
+        generation = evaluate_lm_evaluation_harness(
+            name,
+            model_step_path,
+            BASE_GENERATION_TASKS,
+            max_eval_instances=max_eval_instances,
+            engine_kwargs=engine_kwargs,
+            resource_config=resource_config,
+        )
+
+        eval_jobs.append(generation)
+    return eval_jobs
 
 
 def default_key_evals(
