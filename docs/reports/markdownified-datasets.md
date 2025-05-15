@@ -9,7 +9,7 @@ This dataset collection consists of several large-scale text corpora that have b
 | Wiki | 8587224558 | 8.59B tokens | [Wikipedia Dump](https://dumps.wikimedia.org/other/enterprise_html/runs/20241201/enwiki-NS0-20241201-ENTERPRISE-HTML.json.tar.gz) |
 | Arxiv No Problem | 2742463924 | 2.74B tokens | [ArXiv Dump](https://sigmathling.kwarc.info/resources/ar5iv-dataset-2024/) |
 | Arxiv Warning | 19552307274 | 19.6B tokens | [ArXiv Dump](https://sigmathling.kwarc.info/resources/ar5iv-dataset-2024/) |
-| Stack Exchange | TODO | TODO | [Stack Exchange Dump] |
+| Stack Exchange | 20413785853 | 20.4B tokens | [Stack Exchange Dump] |
 
 ## Processing Methodology
 
