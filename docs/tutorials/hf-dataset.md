@@ -1,7 +1,7 @@
 # How to download a dataset from HuggingFace to Marin
 
 This guide will walk you through the process of downloading a datset from HuggingFace to Marin. We will
-show how to download the deepseek-ai/DeepSeek-ProverBench dataset as an example.
+show how to download the [deepseek-ai/DeepSeek-ProverBench](https://huggingface.co/datasets/deepseek-ai/DeepSeek-ProverBench) dataset as an example.
 
 
 When writing an ExecutorStep, we need three things:
@@ -27,9 +27,9 @@ if __name__ == "__main__":
     )
 ```
 
-We put this in the file `experiments/tutorials/download_dataset.py`, and we can run this file with the following command:
+We put this in the file [`experiments/tutorials/download_dataset.py`](https://github.com/marin-community/marin/blob/main/experiments/tutorials/download_dataset.py), and we can run this file with the following command:
 ```
 python marin/run/ray_run.py --env_vars HF_TOKEN $HF_TOKEN -- python experiments/tutorials/download_dataset.py
 ```
 
-After running the command, we can view the dataset in the GCS Bucket at `gs://$MARIN_PREFIX/raw/deepseek-prover-bench` or in the Marin Data Browser.
+After running the command, we can view the dataset in the GCS Bucket at `gs://$MARIN_PREFIX/raw/deepseek-prover-bench` or in the Marin Data Browser. Once you've downloaded the dataset, you can directly pass your dataset into any other ExecutorStep as an input path. You can tokenize the dataset with [`default_tokenize`][experiments.defaults.default_tokenize] and train your language model or you can generate synthetic data with [`default_synthetic_data_generation`][experiments.datashop.defaults.default_synthetic_data_generation].
