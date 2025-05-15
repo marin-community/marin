@@ -47,6 +47,7 @@ class TextGenerationInferenceConfig:
 
     # Hardware specific
     resource_config: ResourceConfig = field(default_factory=lambda: TPU_V6E_8_STRICT_PACK)
+    generated_text_column_name: str = "text"
 
 
 class OneToOneFilenameProvider(FilenameProvider):
@@ -156,6 +157,7 @@ def run_inference(config: TextGenerationInferenceConfig):
             "save_templated_prompt": config.save_templated_prompt,
             "apply_chat_template": config.apply_chat_template,
             "max_doc_length": config.max_doc_length,
+            "generated_text_column_name": config.generated_text_column_name,
         },
         **ray_resources_kwarg(config),
     )
