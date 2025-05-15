@@ -1,5 +1,23 @@
 # Marin 8B Retrospective
 
+## Table of Contents
+
+- [The "Tootsie Roll" process](#the-tootsie-roll-process)
+- [Model Basics](#model-basics)
+- [Training Phases](#training-phases)
+  - [Phase 1: Kestrel (DCLM WSD-S Phase)](#phase-1-kestrel-dclm-wsd-s-phase)
+  - [Phase 2: Ocelot (DCLM EMA Phase)](#phase-2-ocelot-dclm-ema-phase)
+  - [Interlude: Micro-Annealing](#interlude-micro-annealing)
+  - [Phase 3: Jellyfish (First Cooldown)](#phase-3-jellyfish-first-cooldown)
+  - [Interlude: "Dessert" Runs](#interlude-dessert-runs)
+  - [Phase 4: Phoenix (Reheated)](#phase-4-phoenix-reheated)
+  - [Interlude: Deeper Cooldowns](#interlude-deeper-cooldowns)
+  - [Phase 5: Starling (Second Cooldown)](#phase-5-starling-second-cooldown)
+  - [Bonus: Deeper Starling (Dessert)](#bonus-deeper-starling-dessert)
+- [Base Model Results](#base-model-results)
+- [Supervised Fine-Tuning](#supervised-fine-tuning)
+- [Conclusion](#conclusion)
+
 This is a retrospective on our first generation Marin 8B run.
 We include details on the data mix, hyperparameters, and other details. We also include observations during the run and
 document some of the mistakes we made and lessons learned.
@@ -11,15 +29,14 @@ In addition, the [actual code](https://github.com/marin-community/marin/blob/852
 for the run should be treated as more authoritative than this document. See also the [main issue on GitHub](https://github.com/marin-community/marin/issues/600)
 or the [WandB report](https://wandb.ai/stanford-mercury/marin/reports/Tootsie-8B---VmlldzoxMTY3MzU3OA)
 
-
 ## The "Tootsie Roll" process
 
-A core premise of the Marin 8B run was that we didn’t fully know the best recipe—
+A core premise of the Marin 8B run was that we didn't fully know the best recipe—
 so we just started training with what we had, and planned to adapt along the way.
 Internally, we referred to this as the "Tootsie" process, a reference to
 [Tootsie Rolls, which use a "graining" process](https://en.wikipedia.org/wiki/Tootsie_Roll) where each day's batch
 contains a bit of the previous day's, seeding crystallization or something. (We are not food scientists.)
-This is admittedly a bit of a strained metaphor, but the idea was that we’d keep folding in new data and whatever
+This is admittedly a bit of a strained metaphor, but the idea was that we'd keep folding in new data and whatever
 else as the training process went on.
 (As it would turn out, dear reader, we would often change more than the data...)
 
@@ -62,7 +79,7 @@ to both Llama 2 and NeoX in terms of bits-per-byte (bpb).
 
 ### Batch Schedule
 
-We used a varying batch schedule, with between 1024 * 4096 = 4Mi tokens, 3072 * 4096 = 12 Mi tokens and 4096 * 4096 = 16 Mi tokens.
+We used a varying batch schedule, with between 1024 * 4096 = 4Mi tokens, 3072 * 4096 = 12Mi tokens and 4096 * 4096 = 16Mi tokens.
 (As with most things in this run, we did not initially plan for this schedule.)
 (Note, we use `Mi` to mean Mebi-, not mega-.)
 
@@ -72,7 +89,7 @@ We saved permanent full checkpoints every 20,000 steps (which, due to the varyin
 
 ### Hardware
 
-The TPU hardware varied between two different TPU clusters, generously provided by Google's [TPU Research Cloud]( https://sites.research.google/trc/about/):
+The TPU hardware varied between two different TPU clusters, generously provided by Google's [TPU Research Cloud](https://sites.research.google/trc/about/):
 
 - 2x v5e-256, configured using [multislice](https://cloud.google.com/tpu/docs/multislice-introduction)
 - 1x v4-2048
@@ -86,7 +103,7 @@ Retrospectively, we can partition the 8b run into several different phases. We h
 - *Kestrel (DCLM WSD-S Phase)*: In the first phase, we used the "DCLM mix" and [WSD-S](https://arxiv.org/abs/2410.05192) for about 2.7T tokens. We used 2x TPU v5e-256 coordinated with multislice for this. (0->2.7T tokens)
 - *Ocelot (DCLM WSD Phase)*: We were given access to a v4-2048 slice and moved to that. To better utilize the hardware, we increased our batch size 50%. We also switched from WSD-S to WSD. We kept the learning rate high until 3.78T tokens.
 - *Jellyfish (First Cooldown)*: It was time to cooldown as we were starting to run low on DCLM. Following recent work on midtraining (e.g. [Olmo 2](https://arxiv.org/abs/2501.00656)), we decided to fold in higher quality data during cooldown. (3.78T->4.78T tokens)
-- *Phoenix (Reheated)*: We had more time for training, so we rapidly rewarmed the model and transitioned our mixture to [Nemotron-CC](https://arxiv.org/abs/2412.02595) (plus [Starcoder](https://huggingface.co/datasets/bigcode/starcoderdata)). (4.78T->11.1T tokens)
+- *Phoenix (Reheated)*: We had more time for training, so we rapidly rewarmed the model and transitioned our mixture to [Nemotron-CC](https://arxiv.org/abs/2412.02595) (plus [StarCoder Data](https://huggingface.co/datasets/bigcode/starcoderdata)). (4.78T->11.1T tokens)
 - *Starling (Second Cooldown)*: Now we were running low on time, so we started another cooldown. We followed a similar process to the first cooldown, but added a few new datasets that we had created and also some that had dropped since our previous attempt. (11.1T->12.75T tokens)
 
 We emphasize that these phases were not planned in advance. Decisions were made reactively based on changing time lines and data availability.
@@ -105,7 +122,7 @@ documented in these issues:
 
 In the first phase, we trained from scratch using the best publicly available dataset at the time:
 [DCLM Baseline](https://huggingface.co/datasets/mlfoundations/dclm-baseline-1.0).
-We decided to use [their best mixture](https://arxiv.org/abs/2406.11794): DCLM Baseline, [Starcoder](https://huggingface.co/datasets/bigcode/starcoderdata), and [Proofpile 2](https://huggingface.co/datasets/EleutherAI/proof-pile-2), though we did not use a curriculum
+We decided to use [their best mixture](https://arxiv.org/abs/2406.11794): DCLM Baseline, [StarCoder Data](https://huggingface.co/datasets/bigcode/starcoderdata), and [Proofpile 2](https://huggingface.co/datasets/EleutherAI/proof-pile-2), though we did not use a curriculum
 as they did.
 
 ### Hardware
@@ -122,8 +139,8 @@ Specifically, this meant:
 | Dataset                                                                          | Percentage |
 |----------------------------------------------------------------------------------|------------|
 | [DCLM Baseline](https://huggingface.co/datasets/mlfoundations/dclm-baseline-1.0) | 92.6%      |
-| [Starcoder](https://huggingface.co/datasets/bigcode/starcoderdata)               | 6.1%       |
-| [Proofpile 2](https://huggingface.co/datasets/EleutherAI/proof-pile-2)                        | 1.3%       |
+| [StarCoder Data](https://huggingface.co/datasets/bigcode/starcoderdata)         | 6.1%       |
+| [Proofpile 2](https://huggingface.co/datasets/EleutherAI/proof-pile-2)           | 1.3%       |
 
 We planned on adding new datasets as we (and others!) developed them.
 For evaluation, we initially tracked a large subset of Paloma (with a particular focus on the `c4_en` subset) during training.
@@ -270,7 +287,7 @@ Specifically, we included all sources from our ablations that outperformed the 1
 | FineMath 3+           | 6.3% |
 | Dolma Arxiv           | 5.2% |
 | Dolma StackExchange   | 3.2% |
-| Starcoder             | 2.2% |
+| StarCoder             | 2.2% |
 | Dolma Algebraic Stack | 2.1% |
 | Dolma Open Web Math   | 0.9% |
 | Dolma Megawika        | 0.8% |
@@ -339,12 +356,12 @@ After the cooldown, at around 4.7T tokens, we had more time for training, so we 
 
 ### Data
 
-Because we were running out of DCLM, we transitioned the data from our phase 1 and 2 mixture (DCLM+Starcoder+ProofPile 2) to a new mixture that was [Nemotron-CC](https://arxiv.org/abs/2412.02595) and [Starcoder](https://huggingface.co/datasets/bigcode/starcoderdata).
+Because we were running out of DCLM, we transitioned the data from our phase 1 and 2 mixture (DCLM+StarCoder+ProofPile 2) to a new mixture that was [Nemotron-CC](https://arxiv.org/abs/2412.02595) and [StarCoder](https://huggingface.co/datasets/bigcode/starcoderdata).
 (We didn't worry too much about epoching StarCoder.)
 
-The target mixture was Nemotron-CC (with each subset weighted approximately proportionally to token count) and Starcoder,
+The target mixture was Nemotron-CC (with each subset weighted approximately proportionally to token count) and StarCoder,
 also weighted by token count. As a transition, we weighted all components
-(DCLM, Starcoder, Proofpile, and Nemotron's subcomponents) approximately proportional to token count, which we used for 2000 steps (about 25.2e9 tokens), after which we switched to the target mixture.
+(DCLM, StarCoder, Proofpile, and Nemotron's subcomponents) approximately proportional to token count, which we used for 2000 steps (about 25.2e9 tokens), after which we switched to the target mixture.
 
 ### Learning Rate Schedule
 
@@ -353,9 +370,9 @@ held the learning rate fixed for the duration of this phase.
 
 ### Notes
 
-The most interesting thing about this phase was that the transition went very smoothly. We expected a substantial loss spike, but didn't see one. The loss did jump, but returns to a slighly lower level than where the run was before the cooldown.
+The most interesting thing about this phase was that the transition went very smoothly. We expected a substantial loss spike, but didn't see one. The loss did jump, but returns to a slightly lower level than where the run was before the cooldown.
 
-![graph depicting the loss during the transition to the new data mix. The loss very briefly spiked but then returned to lower levels than before the firstcooldown.](../images/8b-phoenix-transition.png)
+![graph depicting the loss during the transition to the new data mix. The loss very briefly spiked but then returned to lower levels than before the first cooldown.](../images/8b-phoenix-transition.png)
 
 Also of small interest is that the steady state c4en loss for Phoenix was considerably lower
 than DCLM. This need not mean anything other than structural similarities in the preprocessing.
@@ -384,21 +401,21 @@ We tried a number of things to debug this:
 
 Nothing solved the problem.
 
-(That said, SFT performance did get better, so that was good!)
-
 What?
+
+(That said, SFT performance did get better, so that was good!)
 
 ### Spoonbill: Z-loss to the rescue
 
 [WandB report here](https://wandb.ai/stanford-mercury/marin/reports/916-Tootsie-Hypnotic-Spoonbill--VmlldzoxMjA1NjU2Nw)
 
-With [Spoonbill](https://github.com/marin-community/marin/issues/916), we tried decaying to 3e-5 rather than 1.7e-5. 3e-5 was Olmo 2's final LR, and in Raccoon we were still seeing decreases at 3e-5. We also threw in some [Tulu v3 data](https://arxiv.org/abs/2411.15124) (.3% of the data) and FLAN (1%) to adjust the data schedule and generally improve SFT-ability.
+With [Spoonbill](https://github.com/marin-community/marin/issues/916), we tried decaying to 3e-5 rather than 1.7e-5. (3e-5 was Olmo 2's final LR, and in Raccoon we were still seeing decreases at 3e-5.) We also threw in some [Tulu v3 data](https://arxiv.org/abs/2411.15124) (.3% of the data) and FLAN (1%) to adjust the data schedule and generally improve SFT-ability.
 
 Alas, the training loss still crept up.
 
 What?
 
-![graph depicting the slow increase in training loss during the cooldown for spoonbil](../images/marin-8b-spoonbill-loss.png)
+![graph depicting the slow increase in training loss during the cooldown for spoonbill](../images/marin-8b-spoonbill-loss.png)
 
 We reran with extensive norm tracking and finally isolated the problem: the `lm_head` was exploding:
 
@@ -423,7 +440,7 @@ At around 11.1e12 tokens, we decided to start another cooldown. Building on less
 
 - We deepened the cooldown to 1.7e-5, rather than 1.7e-4.
 - We added a small z-loss penalty of 1e-4.
-- We increased the batch size to 16 Mi tokens rather than 12Mi.
+- We increased the batch size to 16Mi tokens rather than 12Mi.
 
 ### Data
 
@@ -443,10 +460,10 @@ We included the following datasets:
 | NemoTron CC Low Actual            | 4.6% | 1x |
 | NemoTron CC Low Synth             | 4.1% | 1x |
 | Marin Arxiv Markdownified         | 5.2% | 5x |
-| Dolmino PES2O                     | 5.2% | 5x |
-| Starcoder Data                    | 4.5% | 1x |
+| Dolmino peS2o                     | 5.2% | 5x |
+| StarCoder Data                    | 4.5% | 1x |
 | Proofpile 2                       | 4.5% | 1x |
-| Finemath-3-Plus                   | 3.0% | 5x |
+| Finemath (3+)                     | 3.0% | 5x |
 | Dolmino FLAN                      | 3.0% | 10x |
 | Dolmino StackExchange             | 1.5% | 5x |
 | Marin StackExchange Markdownified | 1.5% | 5x |
@@ -455,7 +472,7 @@ We included the following datasets:
 | Dolmino Wiki                      | 0.3% | 5x |
 | Marin Datashop Science QA         | 0.1% | 5x |
 
-Here "Dolmino Math" refers to most of the math-y components of Dolmino:
+Here "Dolmino Math" refers to most of the mathy components of Dolmino:
 
 - [CodeSearchNet](https://arxiv.org/abs/1909.09436) (with OWM Filter)
 - [GSM8K](https://arxiv.org/pdf/2110.14168v1)
@@ -470,13 +487,13 @@ Here "Dolmino Math" refers to most of the math-y components of Dolmino:
 We linearly cooled down the learning rate schedule from 1.7e-3 to 1.7e-5 (sic) over approximately 1.34e12 tokens
 (80,000 steps).
 
-Based on our findings in the "Racooon" and "Spoonbill" deep cooldowns (where we observed steady loss increases at low
+Based on our findings in the "Raccoon" and "Spoonbill" deep cooldowns (where we observed steady loss increases at low
 learning rate), we imposed a z-loss penalty of 1e-4 on the final logits.
 
 We also increased our batch size to 16Mi tokens. This change was to further reduce gradient variance and better utilize the hardware (i.e. slightly more MFU).
 
 
-### Bonus: Starling Dessert
+### Bonus: Deeper Starling (Dessert)
 
 Because we were still seeing steady log-linear loss decreases (in c4en and elsewhere) even at this very low LR, we decided to
 coast a little longer. We ran a dessert run from 12.4e12 to 12.7e12 tokens, with the learning rate fixed at 1.7e-5
@@ -582,5 +599,5 @@ We see an unfortunate degradation in "base model" tasks like MMLU, not dissimila
 Future work will focus on:
 
 - **Bigger models.** We have a 32B model that is performing quite well at 1T tokens.
-- **SFT/RL.** We're in the middle of SFTing Marin 8B. (TL;DR is that it works pretty well at AlpacaEval, but there is an unacceptable degradation on tasks like MMLU.) RL is the obvious next step.
+- **SFT/RL.** We're still improving our Instruct model. In addition to making the model genenerally better, we would like to reduce degradation on tasks like MMLU.
 - **Format diversity.** We will continue to pursue formatting diversity as a way to improve performance on tasks like MMLU.
