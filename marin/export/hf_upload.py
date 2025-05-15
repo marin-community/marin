@@ -65,7 +65,10 @@ def upload_dir_to_hf(
         ExecutorStep
     """
     if not certificate_path:
-        certificate_path = f"metadata/hf_uploads/{input_path.name}"
+        if isinstance(input_path, InputName) or isinstance(input_path, ExecutorStep):
+            certificate_path = f"metadata/hf_uploads/{input_path.name}"
+        else:
+            certificate_path = f"metadata/hf_uploads/{input_path.split('/')[-1]}"
 
     return ExecutorStep(
         name=certificate_path,
