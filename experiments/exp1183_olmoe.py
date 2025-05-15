@@ -1,3 +1,11 @@
+"""
+This experiment replicates the results from OLMoE paper (https://arxiv.org/pdf/2409.02060),
+which shows that an 8x1B moe model is better than a 1B dense model (both has 1B activated params).
+Training uses Dolma dataset for 2T tokens on v5e-128.
+
+Reference Issue: https://github.com/marin-community/marin/issues/1183
+"""
+
 import logging
 import math
 
@@ -57,7 +65,7 @@ num_train_steps = step_target(TOKEN_TARGETS, BATCH_SIZE, SEQ_LEN)
 
 
 train_config = SimpleTrainConfig(
-    tpu_type=TPU,
+    resources=TPU,
     train_batch_size=BATCH_SIZE,
     num_train_steps=num_train_steps,
     learning_rate=LR,

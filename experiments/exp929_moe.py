@@ -1,3 +1,12 @@
+"""
+This experiment tests out the MoE feature from Levanter.
+We showed that basic MoE architecture results in unbalanced expert load.
+With auxiliary loss such as load balancing loss and router z-loss,
+training MoE gives a much more stable and balanced expert load.
+
+Reference Issue: https://github.com/marin-community/marin/issues/929
+"""
+
 import dataclasses
 import logging
 import math
