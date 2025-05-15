@@ -88,7 +88,7 @@ Retrospectively, we can partition the 8b run into several different phases. We h
 - *[Kestrel](#phase-1-kestrel-dclm-wsd-s-phase) (DCLM WSD-S Phase)*: In the first phase, we used the "DCLM mix" and [WSD-S](https://arxiv.org/abs/2410.05192) for about 2.7T tokens. We used 2x TPU v5e-256 coordinated with multislice for this. (0->2.7T tokens)
 - *[Ocelot](#phase-2-ocelot-dclm-ema-phase) (DCLM WSD Phase)*: We were given access to a v4-2048 slice and moved to that. To better utilize the hardware, we increased our batch size by 50%. We also switched from WSD-S to WSD. We kept the learning rate high until 3.78T tokens (2.7T->3.78T tokens).
 - *[Jellyfish](#phase-3-jellyfish-first-cooldown) (First Cooldown)*: It was time to cooldown as we were starting to run low on DCLM. Following a recent work on midtraining (e.g. [Olmo 2](https://arxiv.org/abs/2501.00656)), we decided to fold in higher quality data during cooldown. (3.78T->4.78T tokens)
-- *[Phoenix](#phase-4-phoenix-reheated) (Reheated)*: We had more time for training, so we rapidly rewarmed the model and transitioned our mixture to [Nemotron-CC](https://arxiv.org/abs/2412.02595) and added [Starcoder](https://huggingface.co/datasets/bigcode/starcoderdata). (4.78T->11.1T tokens)
+- *[Phoenix](#phase-4-phoenix-reheated) (Reheated)*: We had more time for training, so we rapidly rewarmed the model and transitioned our mixture to [Nemotron-CC](https://arxiv.org/abs/2412.02595) and [Starcoder](https://huggingface.co/datasets/bigcode/starcoderdata). (4.78T->11.1T tokens)
 - *[Starling](#phase-5-starling-second-cooldown) (Second Cooldown)*: Now we were running low on time, so we started another cooldown. We followed a similar process to the first cooldown, but added a few new datasets that we had created and also some that had dropped since our previous attempt. (11.1T->12.75T tokens)
 
 We emphasize that these phases were not planned in advance. Decisions were made reactively based on changing time lines and data availability.
@@ -97,8 +97,7 @@ Moreover, while there is a single straight-line set of phases that produced the 
 there were a number of short branches that did not make it into the final run. Many of these were by design: there were other trial
 [LLama 3](https://arxiv.org/abs/2302.13971) micro-annealing runs (see also [Olmo 2](https://arxiv.org/abs/2501.00656), [Yi](https://arxiv.org/html/2403.04652v1), [DBRX](https://www.databricks.com/blog/introducing-dbrx-new-state-art-open-llm)) that helped decide our cooldown mix, as well as attempts at "deeper cooldowns.
 We detail these [GH#784](https://github.com/marin-community/marin/issues/784), [GH#820](https://github.com/marin-community/marin/issues/820), and [GH#898](https://github.com/marin-community/marin/issues/898), though provide a summary later in this one.
-We also ran some experiments investigating issues with "SFT-ability,"
-documented in these issues:
+We also ran some experiments investigating issues with "SFT-ability", which we documented in these issues:
 
 - [#898 Raccoon](https://github.com/marin-community/marin/issues/898)
 - [#916 Spoonbill](https://github.com/marin-community/marin/issues/916)
@@ -119,15 +118,15 @@ We started with a reserved 2x TPU v5e-256 slice, which was the largest TPU slice
 At the beginning, we decided to use the DCLM 7B mix in
 ratios roughly proportional to token count. (DCLM 7B was, at the time, the best open source model.)
 
-Specifically, this meant:
+Specifically, this meant the following ratios in absolute percentages:
 
 | Dataset                                                                          | Percentage |
 |----------------------------------------------------------------------------------|------------|
 | [DCLM Baseline](https://huggingface.co/datasets/mlfoundations/dclm-baseline-1.0) | 92.6%      |
 | [Starcoder](https://huggingface.co/datasets/bigcode/starcoderdata)               | 6.1%       |
-| [Proofpile 2](https://huggingface.co/datasets/EleutherAI/proof-pile-2)                        | 1.3%       |
+| [Proofpile 2](https://huggingface.co/datasets/EleutherAI/proof-pile-2)           | 1.3%       |
 
-We planned on adding new datasets as we (and others!) developed them.
+We planned on adding new datasets as we (and others!) develop them.
 For evaluation, we initially tracked a large subset of Paloma (with a particular focus on the `c4_en` subset) during training.
 
 ### WSD-S
@@ -155,11 +154,11 @@ We ended up moving away from WSD-S after this phase, for reasons to be detailed 
 We used a sequence length of 4096 and a batch size of 1024 * 4096 = 4Mi tokens.
 
 The [DCLM paper](https://arxiv.org/abs/2406.11794) also showed that you could run fairly "hot", and we followed their example.
-At 1e-3, our LR was roughly 3x higher than [Olmo 2 7B](https://arxiv.org/abs/2501.00656)'s 3e-4, and, with WSD-S, we were running at peak LR for 90% of steps.
+At 1e-3, our learning rate (LR) was roughly 3x higher than [Olmo 2 7B](https://arxiv.org/abs/2501.00656)'s 3e-4, and, with WSD-S, we were running at peak LR for 90% of steps.
 We used a weight decay of 0.05. These are roughly consistent with Table 12 of the [DCLM paper](https://arxiv.org/abs/2406.11794).
 (They recommend 2e-3, but we encountered instability at that rate.)
 
-We initially opted to not use Z-loss because we didn't have problems with LR=1e-3. In retrospect, we should have used it and have since made it the default for future Marin runs.
+We initially opted to not use Z-loss because we didn't have problems with LR set to 1e-3. In retrospect, we should have used it and have since made it the default for future Marin runs.
 
 ### Specification
 
