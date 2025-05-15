@@ -1,16 +1,15 @@
 # Dataset Card: Markdownified Datasets
 
-## Overview
 This dataset collection consists of several large-scale text corpora that have been processed and tokenized through a custom fork of Resiliparse. The datasets are primarily intended for language model training and research purposes.
 
 ## Dataset Statistics
 
 | Dataset | Token Count | Approximate Size | Source |
 |---------|------------|------------------|--------|
-| Wiki | 8,587,224,558 | 8.59B tokens | Wikipedia |
-| Arxiv No Problem | 2,742,463,924 | 2.74B tokens | ArXiv |
-| Arxiv Warning | 19,552,307,274 | 19.6B tokens | ArXiv |
-| Stack Exchange | [Missing data] | [Missing data] | Stack Exchange Network |
+| Wiki | 8587224558 | 8.59B tokens | [Wikipedia Dump](https://dumps.wikimedia.org/other/enterprise_html/runs/20241201/enwiki-NS0-20241201-ENTERPRISE-HTML.json.tar.gz) |
+| Arxiv No Problem | 2742463924 | 2.74B tokens | [ArXiv Dump](https://sigmathling.kwarc.info/resources/ar5iv-dataset-2024/) |
+| Arxiv Warning | 19552307274 | 19.6B tokens | [ArXiv Dump](https://sigmathling.kwarc.info/resources/ar5iv-dataset-2024/) |
+| Stack Exchange | TODO | TODO | [Stack Exchange Dump] |
 
 ## Processing Methodology
 
@@ -26,7 +25,7 @@ When using these datasets, people should be aware of:
 - The potential differences in quality between the "No Problem" and "Warning" subsets of Arxiv.
 - These are Markdownified version of the raw dataset and have not been filtered for quality.
 
-# Resiliparse Custom Fork
+## Resiliparse Custom Fork
 
 This fork extends the original **Resiliparse** HTML-to-text extractor with a new helper, `extract_simplified_dom`, that yields a _cleaned & simplified_ HTML snippet instead of plain text.  The goal is to preserve **minimal HTML structure** (e.g. headings, paragraphs, links, lists) while still removing boiler-plate, scripts, tracking pixels, etc.
 
@@ -62,5 +61,4 @@ This enhancement maintains full backward compatibility with the existing Resilip
 
 ### Acknowledgements
 
-Huge thanks to **Janek Bevendorff** for the original Resiliparse project and to
-Lexbor contributors for the blazing-fast HTML parser/serializer. 
+Huge thanks to **Janek Bevendorff** for the original Resiliparse project. 
