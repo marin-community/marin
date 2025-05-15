@@ -12,9 +12,8 @@ datasets:
 language:
 - en
 ---
-## Model Details
 
-<img alt="Marin Logo" src="https://huggingface.co/datasets/marin-community/blog-images/resolve/main/marin-boat.png" width="242px" style="margin-left:'auto' margin-right:'auto' display:'block'">
+<img alt="Marin Logo" src="https://huggingface.co/datasets/marin-community/blog-images/resolve/main/marin-boat.jpg" width="64" style="margin-left:'auto' margin-right:'auto' display:'block'">
 
 
 # Model Card for Marin 8B
