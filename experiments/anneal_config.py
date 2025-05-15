@@ -32,6 +32,9 @@ class AnnealConfig:
     # Checkpoint related
     steps_per_export: int = 10000
 
+    # Validation related
+    use_default_validation: bool = True
+
     @property
     def tpu_type(self) -> str | None:
         """For backward compatibility."""
