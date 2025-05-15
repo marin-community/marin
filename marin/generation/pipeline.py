@@ -21,6 +21,7 @@ class TextGeneration:
         num_generations: int = 1,
         prompt_column: str = "text",
         save_templated_prompt: bool = False,
+        generated_text_column_name: str = "generated_text",
     ):
         self.llm = llm
 
@@ -30,9 +31,10 @@ class TextGeneration:
         self.num_generations = num_generations
         self.prompt_column = prompt_column
         self.save_templated_prompt = save_templated_prompt
+        self.generated_text_column_name = generated_text_column_name
 
     def _update_batch(self, batch: dict[str, Any], generated_text: list[str], prompts: list[str]) -> dict[str, Any]:
-        batch.update({"generated_text": generated_text})
+        batch.update({self.generated_text_column_name: generated_text})
 
         if self.save_templated_prompt:
             batch.update({"prompt": prompts})
@@ -61,12 +63,15 @@ class vLLMTextGeneration(TextGeneration):
         apply_chat_template: bool = True,
         save_templated_prompt: bool = False,
         max_doc_length: int = 7000,
+        generated_text_column_name: str = "generated_text",
     ):
         # Initialize the LLM Provider here for the pipeline since we need the model
         # to be placed in the same placement group as the pipeline
         llm = vLLMProvider(model_name, engine_kwargs, generation_kwargs)
 
-        super().__init__(llm, template, num_generations, prompt_column, save_templated_prompt)
+        super().__init__(
+            llm, template, num_generations, prompt_column, save_templated_prompt, generated_text_column_name
+        )
         self.apply_chat_template = apply_chat_template
         self.max_doc_length = max_doc_length
 

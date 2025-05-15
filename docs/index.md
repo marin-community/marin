@@ -11,7 +11,7 @@ end="<!--marin-intro-end-->"
 - [Installation](tutorials/installation.md)
 - [First Experiment](tutorials/first-experiment.md)
 - [Local GPU Setup](tutorials/local-gpu.md)
-- [The Language Modeling Pipeline](explanation/lm-pipeline.md)
+- [The Language Modeling Pipeline](explanations/lm-pipeline.md)
 - [Experiment Reports](reports/index.md)
 
 ## Documentation Structure

@@ -27,7 +27,7 @@ llama_70b_train_config_mk6 = SimpleTrainConfig(
     # so it's safer.
     train_batch_size=[ScheduleStep(start=0, value=1024), ScheduleStep(start=96001, value=1536)],
     weight_decay=0.05,
-    resources=TpuPodConfig(tpu_type="v6e-128", node_count=6),
+    resources=TpuPodConfig(tpu_type="v6e-128", slice_count=6),
     # LR doesn't support schedule yet
     # until 93_621, was 2e-4
     # learning_rate=2e-4,
@@ -49,7 +49,7 @@ llama_70b_train_config_mk6 = SimpleTrainConfig(
 llama_70b_train_config_1536 = dataclasses.replace(
     llama_70b_train_config_mk6,
     train_batch_size=1536,  # 2 * 6 * 128
-    resources=TpuPodConfig(tpu_type="v6e-128", node_count=6),
+    resources=TpuPodConfig(tpu_type="v6e-128", slice_count=6),
     learning_rate=2e-4,
     decay=0.4,
     ema_beta=0.995,

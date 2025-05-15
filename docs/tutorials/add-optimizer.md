@@ -1,4 +1,4 @@
-# How to Add a New Optimizer in Marin
+# How to Add a New Optimizer for Speedruns
 
 Marin builds on [Levanter](https://levanter.readthedocs.io/) for training code, meaning any training changes made in Levanter are automatically available in Marin. However, you can also add new optimizers **directly in Marin**- thanks to Levanter’s support for [Optax](https://optax.readthedocs.io/)-- without needing to merge a pull request upstream.
 
