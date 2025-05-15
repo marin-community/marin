@@ -26,6 +26,18 @@ def step_to_lm_mixture_component(step: TokenizerStep | TokenizeConfig, include_r
         return step.config.as_lm_dataset_source_config(output_path_of(step), include_raw_paths=include_raw_paths)
 
 
+def as_single_lm_data_source(
+    input: TokenizerStep | InputName,
+) -> LMDatasetSourceConfig:
+    """
+    Creates a dataset config suitable for Levanter's TrainLMConfig from a single training set
+
+    Args:
+        input: The training set to use
+    """
+    return step_to_lm_mixture_component(input, include_raw_paths=True)
+
+
 def lm_data_config(
     training_set: TokenizerStep | InputName,
     validation_sets: dict[str, TokenizerStep] | None = None,

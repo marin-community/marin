@@ -5,6 +5,7 @@ Step to read a Levanter cache and produce a subsample of that cache.
 import dataclasses
 import logging
 import os
+import time
 from dataclasses import dataclass
 
 import fsspec
@@ -17,6 +18,7 @@ from levanter.data.text import (
     UrlDatasetSourceConfig,
 )
 from levanter.store import SerialCacheWriter, TreeCache
+from tqdm_loggable.auto import tqdm
 from transformers import AutoTokenizer
 
 from marin.execution import THIS_OUTPUT_PATH, ExecutorStep, InputName
@@ -82,29 +84,47 @@ def _do_slice_cache(
     train_set_shuffled = train_set.shuffle(key).as_sync_dataset()
     num_docs = len(train_set_shuffled)
 
+    print(f"Subsampling {cfg.num_tokens} tokens from {num_docs} docs to {cfg.cache_path}")
     with SerialCacheWriter(os.path.join(cfg.cache_path, split), exemplar) as output_writer:
         # TensorStore has high latency so we load biggish batches
-        BS_TO_LOAD = 1024
+        # Fineweb averages about 1000 tokens per doc.
+        BS_TO_LOAD = 4096
 
         loaded_tokens = 0
         first_doc = 0
+        pbar = tqdm(total=cfg.num_tokens, desc="Sampling docs", unit="token")
         while loaded_tokens < cfg.num_tokens and first_doc < num_docs:
             end_doc = min(first_doc + BS_TO_LOAD, num_docs)
             batch = train_set_shuffled.get_batch(range(first_doc, end_doc))
             first_doc = end_doc
+            pbar.set_postfix({"docs": first_doc})
+            print(len(batch))
 
             # decide how many docs to take from this batch
             batch_to_write = []
             for ex in batch:
-                if loaded_tokens + len(ex["input_ids"]) > cfg.num_tokens:
-                    break
                 batch_to_write.append(ex)
                 loaded_tokens += len(ex["input_ids"])
+                pbar.update(len(ex["input_ids"]))
+                if loaded_tokens > cfg.num_tokens:
+                    break
 
-            output_writer.write_batch(batch_to_write)
+            if batch_to_write:
+                time_in = time.time()
+                output_writer.write_batch(batch_to_write)
+                time_out = time.time()
+                print(f"Wrote {len(batch_to_write)} docs in {time_out - time_in:.2f} seconds")
 
     if loaded_tokens < cfg.num_tokens:
         raise ValueError("Provided cache doesn't have enough tokens")
+
+    out = TreeCache.load(os.path.join(cfg.cache_path, split), exemplar)
+    # ensure it's the right size
+    if out.store.tree["input_ids"].data_size != loaded_tokens:
+        raise ValueError(
+            f"Cache size mismatch: {out.store.tree['input_ids'].data_size} != {loaded_tokens}"
+            f" (expected at least {cfg.num_tokens} tokens)"
+        )
 
     # These are usually uploaded to HF, so we write a README
     _create_readme(cfg.cache_path, cfg.input_config, loaded_tokens, cfg.tokenizer, cfg.seed)
@@ -173,11 +193,11 @@ def _patch_source_config(
 
 
 def slice_cache(
-    input_config: LmDatasetSourceConfigBase,
-    tokenizer_spec: str,
     output_path: str,
+    input_config: LmDatasetSourceConfigBase,
     num_tokens: int,
     seed: int = 42,
+    tokenizer_spec: str = "stanford-crfm/marin-tokenizer",
 ) -> ExecutorStep[SliceCacheConfig]:
     """High-level function to slice a Levanter cache.
 
@@ -186,7 +206,6 @@ def slice_cache(
     Args:
         input_config: The input cache configuration.
         tokenizer_spec: The tokenizer specification.
-        output_path: The output path for the sliced cache.
         num_tokens: The number of tokens to slice.
         seed: The random seed for shuffling the dataset.
 
@@ -195,12 +214,12 @@ def slice_cache(
     """
 
     return ExecutorStep(
+        name=output_path,
         fn=_do_slice_cache,
         config=SliceCacheConfig(
             input_config=input_config,
             num_tokens=num_tokens,
             seed=seed,
-            cache_path=output_path,
             tokenizer=tokenizer_spec,
         ),
     )
