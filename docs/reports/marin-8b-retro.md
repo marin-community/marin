@@ -14,12 +14,12 @@ or the [WandB report](https://wandb.ai/stanford-mercury/marin/reports/Tootsie-8B
 
 ## The "Tootsie Roll" process
 
-A core premise of the Marin 8B run was that we didn’t fully know the best recipe—
-so we just started training with what we had, and planned to adapt along the way.
+A core premise of the Marin 8B run was that we didn't fully know the best recipe—
+so we just started training with what we had and adapted along the way.
 Internally, we referred to this as the "Tootsie" process, a reference to
 [Tootsie Rolls, which use a "graining" process](https://en.wikipedia.org/wiki/Tootsie_Roll) where each day's batch
 contains a bit of the previous day's, seeding crystallization or something. (We are not food scientists.)
-This is admittedly a bit of a strained metaphor, but the idea was that we’d keep folding in new data and whatever
+This is admittedly a bit of a strained metaphor, but the idea was that we'd keep folding in new data and whatever
 else as the training process went on.
 (As it would turn out, dear reader, we would often change more than the data...)
 
@@ -47,7 +47,7 @@ We used the same settings as Llama 3.1 8B. More specifically:
 | `num_layers`          | 32          |
 | `activation_function` | `silu`      |
 
-We used [Levanter](https://github.com/stanford-crfm/levanter's implementation of the Llama architecture.
+We used [Levanter](https://github.com/stanford-crfm/levanter)'s implementation of the Llama architecture.
 We trained with a sequence length of 4096 tokens per sample.
 We used JAX's TPU Splash Attention kernel.
 
@@ -57,14 +57,14 @@ We used the [AdamW](https://arxiv.org/abs/1711.05101) optimizer.
 
 ### Tokenizer
 
-In Marin, we also standardized on the Llama 3 tokenizer, after [an experiment](https://github.com/marin-community/marin/issues/524) showing it to be superior
+In Marin, we ultimately converged on using the Llama 3 tokenizer after [an experiment](https://github.com/marin-community/marin/issues/524) showing it to be superior
 to both Llama 2 and NeoX in terms of bits-per-byte (bpb).
 
 ### Batch Schedule
 
-We used a varying batch schedule, with between 1024 * 4096 = 4Mi tokens, 3072 * 4096 = 12 Mi tokens and 4096 * 4096 = 16 Mi tokens.
-(As with most things in this run, we did not initially plan for this schedule.)
-(Note, we use `Mi` to mean Mebi-, not mega-.)
+We used a varying batch schedule, with between 1024 * 4096 = 4Mi tokens, 3072 * 4096 = 12Mi tokens, and 4096 * 4096 = 16Mi tokens.
+As with most things in this run, we did not initially plan for this schedule; we changed the batch schedule to adapt to our changing infrastructure, data availability, and timelines.
+(Note: we use `Mi` to mean Mebi-(https://simple.wikipedia.org/wiki/Mebibyte), not mega-.)
 
 ### Checkpointing Policy
 
@@ -85,10 +85,10 @@ The first phase was run on the 2x v5e-256, while subsequent phases were run on t
 
 Retrospectively, we can partition the 8b run into several different phases. We have given them animal names as monikers.  Here is a short summary:
 
-- *Kestrel (DCLM WSD-S Phase)*: In the first phase, we used the "DCLM mix" and [WSD-S](https://arxiv.org/abs/2410.05192) for about 2.7T tokens. We used 2x TPU v5e-256 coordinated with multislice for this. (0->2.7T tokens)
-- *Ocelot (DCLM WSD Phase)*: We were given access to a v4-2048 slice and moved to that. To better utilize the hardware, we increased our batch size 50%. We also switched from WSD-S to WSD. We kept the learning rate high until 3.78T tokens.
-- *Jellyfish (First Cooldown)*: It was time to cooldown as we were starting to run low on DCLM. Following recent work on midtraining (e.g. [Olmo 2](https://arxiv.org/abs/2501.00656)), we decided to fold in higher quality data during cooldown. (3.78T->4.78T tokens)
-- *Phoenix (Reheated)*: We had more time for training, so we rapidly rewarmed the model and transitioned our mixture to [Nemotron-CC](https://arxiv.org/abs/2412.02595) (plus [Starcoder](https://huggingface.co/datasets/bigcode/starcoderdata)). (4.78T->11.1T tokens)
+- *Kestrel(## Phase 1: Kestrel (DCLM WSD-S Phase))(DCLM WSD-S Phase)*: In the first phase, we used the "DCLM mix" and [WSD-S](https://arxiv.org/abs/2410.05192) for about 2.7T tokens. We used 2x TPU v5e-256 coordinated with multislice for this. (0->2.7T tokens)
+- *Ocelot (DCLM WSD Phase)*: We were given access to a v4-2048 slice and moved to that. To better utilize the hardware, we increased our batch size by 50%. We also switched from WSD-S to WSD. We kept the learning rate high until 3.78T tokens (2.7T->3.78T tokens).
+- *Jellyfish (First Cooldown)*: It was time to cooldown as we were starting to run low on DCLM. Following a recent work on midtraining (e.g. [Olmo 2](https://arxiv.org/abs/2501.00656)), we decided to fold in higher quality data during cooldown. (3.78T->4.78T tokens)
+- *Phoenix (Reheated)*: We had more time for training, so we rapidly rewarmed the model and transitioned our mixture to [Nemotron-CC](https://arxiv.org/abs/2412.02595) and added [Starcoder](https://huggingface.co/datasets/bigcode/starcoderdata). (4.78T->11.1T tokens)
 - *Starling (Second Cooldown)*: Now we were running low on time, so we started another cooldown. We followed a similar process to the first cooldown, but added a few new datasets that we had created and also some that had dropped since our previous attempt. (11.1T->12.75T tokens)
 
 We emphasize that these phases were not planned in advance. Decisions were made reactively based on changing time lines and data availability.
