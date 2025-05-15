@@ -61,4 +61,4 @@ This enhancement maintains full backward compatibility with the existing Resilip
 
 ### Acknowledgements
 
-Huge thanks to **Janek Bevendorff** for the original Resiliparse project. 
+Huge thanks to **Janek Bevendorff** for the original Resiliparse project.
