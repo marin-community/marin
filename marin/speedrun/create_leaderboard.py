@@ -21,6 +21,9 @@ class LeaderboardEntry:
     wandb_link: str | None = None
     eval_paloma_c4_en_bpb: float | None = None
     run_timestamp: datetime.datetime | None = None
+    contributor_name: str | None = None
+    contributor_affiliation: str | None = None
+    description: str | None = None
 
 
 def find_speedrun_results(base_path: str) -> list[str]:
@@ -38,24 +41,47 @@ def load_results_file(path: str) -> dict:
 
 def create_entry_from_results(results: dict, results_filepath: str) -> LeaderboardEntry:
     run_name = Path(results_filepath).parent.name
-    total_training_flops = results["run_stats"]["total_training_flops"]
-    training_time = results["run_stats"]["training_time_in_minutes"]
-    eval_paloma_c4_en_bpb = results["run_stats"]["eval/paloma/c4_en/bpb"]
-    model_size = results["run_related_info"]["num_parameters"]
-    submitted_by = results["run_related_info"].get("submitted_by", "unknown")
-    wandb_link = results["run_related_info"].get("wandb_run_link", None)
-    run_timestamp = results["run_related_info"].get("run_completion_timestamp", None)
+
+    # Extract from speedrun_config
+    speedrun_config = results.get("speedrun_config", {})
+    model_size = speedrun_config.get("num_parameters")
+    contributor_name = speedrun_config.get("contributor_name", "marin-community")
+    contributor_affiliation = speedrun_config.get("contributor_affiliation")
+    description = speedrun_config.get("description")
+
+    # Extract from speedrun_results
+    speedrun_results = results.get("speedrun_results", {})
+    total_training_flops = speedrun_results.get("total_training_flops")
+    training_time = speedrun_results.get("training_time_in_minutes")
+    eval_paloma_c4_en_bpb = speedrun_results.get("eval/paloma/c4_en/bpb")
+    wandb_link = speedrun_results.get("wandb_run_link")
+    run_timestamp_str = speedrun_results.get("run_completion_timestamp")
+
+    # submitted_by will be the contributor_name from the config
+    submitted_by = contributor_name
+    
+    # Convert timestamp string to datetime object if present
+    run_timestamp = None
+    if run_timestamp_str:
+        try:
+            run_timestamp = datetime.datetime.strptime(run_timestamp_str, "%Y-%m-%d %H:%M:%S UTC")
+        except ValueError:
+            print(f"Warning: Could not parse timestamp '{run_timestamp_str}' for {run_name}. Leaving as None.")
+            run_timestamp = None # Or keep as string if preferred, but dataclass expects datetime
 
     return LeaderboardEntry(
         run_name=run_name,
-        model_size=model_size,
-        total_training_time=training_time,
-        total_training_flops=total_training_flops,
+        model_size=int(model_size) if model_size is not None else 0, # Ensure int
+        total_training_time=float(training_time) if training_time is not None else 0.0,
+        total_training_flops=float(total_training_flops) if total_training_flops is not None else 0.0,
         submitted_by=submitted_by,
         results_filepath=results_filepath,
         wandb_link=wandb_link,
         eval_paloma_c4_en_bpb=float(eval_paloma_c4_en_bpb) if eval_paloma_c4_en_bpb is not None else None,
-        run_timestamp=run_timestamp,
+        run_timestamp=run_timestamp, # Already a datetime object or None
+        contributor_name=contributor_name,
+        contributor_affiliation=contributor_affiliation,
+        description=description,
     )
 
 
