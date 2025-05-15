@@ -25,9 +25,9 @@ CORE_TASKS = (
     EvalTaskConfig("winogrande", 0),  # Winograd challenge, extended to more domains
 )
 
-MMLU_0_SHOT = [EvalTaskConfig("mmlu", 0, task_alias="mmlu_0shot")]
-MMLU_5_SHOT = [EvalTaskConfig("mmlu", 5, task_alias="mmlu_5shot")]
-MMLU_PRO_5_SHOT = [EvalTaskConfig("leaderboard_mmlu_pro", 5, task_alias="mmlu_5shot")]
+MMLU_0_SHOT = EvalTaskConfig("mmlu", 0, task_alias="mmlu_0shot")
+MMLU_5_SHOT = EvalTaskConfig("mmlu", 5, task_alias="mmlu_5shot")
+MMLU_PRO_5_SHOT = EvalTaskConfig("leaderboard_mmlu_pro", 5, task_alias="mmlu_5shot")
 
 MMLU_TASKS = (
     MMLU_0_SHOT,

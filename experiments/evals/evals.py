@@ -288,21 +288,21 @@ def default_base_eval(
     mmlu_0shot = default_eval(
         step=step,
         resource_config=resource_config,
-        evals=MMLU_0_SHOT,
+        evals=(MMLU_0_SHOT,),
     )
     eval_jobs.append(mmlu_0shot)
 
     mmlu_5shot = default_eval(
         step=step,
         resource_config=resource_config,
-        evals=MMLU_5_SHOT,
+        evals=(MMLU_5_SHOT,),
     )
     eval_jobs.append(mmlu_5shot)
 
     mmlu_pro_5shot = default_eval(
         step=step,
         resource_config=resource_config,
-        evals=MMLU_PRO_5_SHOT,
+        evals=(MMLU_PRO_5_SHOT,),
     )
     eval_jobs.append(mmlu_pro_5shot)
 
