@@ -86,10 +86,10 @@ The first phase was run on the 2x v5e-256, while subsequent phases were run on t
 Retrospectively, we can partition the 8b run into several different phases. We have given them animal names as monikers.  Here is a short summary:
 
 - *[Kestrel](#phase-1-kestrel-dclm-wsd-s-phase) (DCLM WSD-S Phase)*: In the first phase, we used the "DCLM mix" and [WSD-S](https://arxiv.org/abs/2410.05192) for about 2.7T tokens. We used 2x TPU v5e-256 coordinated with multislice for this. (0->2.7T tokens)
-- *Ocelot (DCLM WSD Phase)*: We were given access to a v4-2048 slice and moved to that. To better utilize the hardware, we increased our batch size by 50%. We also switched from WSD-S to WSD. We kept the learning rate high until 3.78T tokens (2.7T->3.78T tokens).
-- *Jellyfish (First Cooldown)*: It was time to cooldown as we were starting to run low on DCLM. Following a recent work on midtraining (e.g. [Olmo 2](https://arxiv.org/abs/2501.00656)), we decided to fold in higher quality data during cooldown. (3.78T->4.78T tokens)
-- *Phoenix (Reheated)*: We had more time for training, so we rapidly rewarmed the model and transitioned our mixture to [Nemotron-CC](https://arxiv.org/abs/2412.02595) and added [Starcoder](https://huggingface.co/datasets/bigcode/starcoderdata). (4.78T->11.1T tokens)
-- *Starling (Second Cooldown)*: Now we were running low on time, so we started another cooldown. We followed a similar process to the first cooldown, but added a few new datasets that we had created and also some that had dropped since our previous attempt. (11.1T->12.75T tokens)
+- *[Ocelot](#phase-2-ocelot-dclm-ema-phase) (DCLM WSD Phase)*: We were given access to a v4-2048 slice and moved to that. To better utilize the hardware, we increased our batch size by 50%. We also switched from WSD-S to WSD. We kept the learning rate high until 3.78T tokens (2.7T->3.78T tokens).
+- *[Jellyfish](#phase-3-jellyfish-first-cooldown) (First Cooldown)*: It was time to cooldown as we were starting to run low on DCLM. Following a recent work on midtraining (e.g. [Olmo 2](https://arxiv.org/abs/2501.00656)), we decided to fold in higher quality data during cooldown. (3.78T->4.78T tokens)
+- *[Phoenix](#phase-4-phoenix-reheated) (Reheated)*: We had more time for training, so we rapidly rewarmed the model and transitioned our mixture to [Nemotron-CC](https://arxiv.org/abs/2412.02595) and added [Starcoder](https://huggingface.co/datasets/bigcode/starcoderdata). (4.78T->11.1T tokens)
+- *[Starling](#phase-5-starling-second-cooldown) (Second Cooldown)*: Now we were running low on time, so we started another cooldown. We followed a similar process to the first cooldown, but added a few new datasets that we had created and also some that had dropped since our previous attempt. (11.1T->12.75T tokens)
 
 We emphasize that these phases were not planned in advance. Decisions were made reactively based on changing time lines and data availability.
 
