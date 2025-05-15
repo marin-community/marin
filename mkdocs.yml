@@ -40,13 +40,15 @@ nav:
     - Running an Annealing Experiment: tutorials/annealing-experiment.md
     - Co-Developing with Marin and Levanter: tutorials/co-develop.md
     - Adding an Optimizer for Speedrun: tutorials/add-optimizer.md
-  - Explanation:
+  - Explanations:
     - The Language Modeling Pipeline: explanations/lm-pipeline.md
     - Evaluation: explanations/evaluation.md
     - Experiments: explanations/experiments.md
     - Executor: explanations/executor.md
     - Guidelines: explanations/guidelines.md
-  - Experiment Reports: reports/index.md
+  - Experiments:
+    - Index: reports/index.md
+    - Auto-Generated Summary: reports/summary.md
   - Developer Guide:
     - Contributing: dev-guide/contributing.md
     - Deployment: dev-guide/deployment.md
