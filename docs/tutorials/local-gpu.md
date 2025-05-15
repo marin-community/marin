@@ -54,19 +54,19 @@ See [JAX's installation guide](https://jax.readthedocs.io/en/latest/installation
 ## Running an Experiment
 
 Now you can run an experiment.
-Let's start by running the tiny model training script (GPU version) [`experiments/tutorial/train_tiny_model_gpu.py`](https://github.com/marin-community/marin/blob/main/experiments/tutorial/train_tiny_model_gpu.py):
+Let's start by running the tiny model training script (GPU version) [`experiments/tutorials/train_tiny_model_gpu.py`](https://github.com/marin-community/marin/blob/main/experiments/tutorials/train_tiny_model_gpu.py):
 
 ```bash
-python3 experiments/tutorial/train_tiny_model_gpu.py --prefix local_store
+python3 experiments/tutorials/train_tiny_model_gpu.py --prefix local_store
 ```
 
 The `prefix` is the directory where the output will be saved. It can be a local directory or anything fsspec supports,
 such as `s3://` or `gs://`.
 
 Let's take a look at the script.
-Whereas the [CPU version](https://github.com/marin-community/marin/blob/main/experiments/tutorial/train_tiny_model_cpu.py)
+Whereas the [CPU version](https://github.com/marin-community/marin/blob/main/experiments/tutorials/train_tiny_model_cpu.py)
 requests `resources=CpuOnlyConfig(num_cpus=1)`,
-the [GPU version](https://github.com/marin-community/marin/blob/main/experiments/tutorial/train_tiny_model_gpu.py)
+the [GPU version](https://github.com/marin-community/marin/blob/main/experiments/tutorials/train_tiny_model_gpu.py)
 requests `resources=GpuConfig(gpu_count=1)`:
 
 ```python
