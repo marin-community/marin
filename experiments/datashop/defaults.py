@@ -405,7 +405,7 @@ def default_synthetic_data_generation(
             engine_kwargs=engine_kwargs,
             generation_kwargs=generation_kwargs,
             template=data_generation_template,
-            tensor_parallel_size=generation_kwargs.get("tensor_parallel_size", 1),
+            tensor_parallel_size=resource_config.num_tpu,
             prompt_column=prompt_column,
             filetype=input_filetype,
             output_filetype_override="jsonl.gz",
