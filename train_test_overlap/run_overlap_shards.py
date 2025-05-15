@@ -22,8 +22,6 @@ class ShardedOverlapConfig:
     output_base: str
     # List of n-gram sizes to compute
     N: list[int] = field(default_factory=lambda: [5, 9, 13])
-    # Number of processes hint (not currently used inside run_data_overlap)
-    processes: int = 1
     # Max number of run_data_overlap tasks in flight at once
     max_in_flight: int = 64
 
@@ -64,7 +62,6 @@ def run_all_shards(cfg: ShardedOverlapConfig) -> str:
             scenario_data=cfg.scenario_data,
             output_path=out_path,
             N=cfg.N,
-            processes=cfg.processes,
         )
 
     # Generator of arguments for each Ray task

@@ -37,7 +37,6 @@ class DataOverlapPipelineConfig:
     scenario_data: str
     output_path: str
     N: list[int] = field(default_factory=lambda: [5, 9, 13])
-    processes: int = 1
 
 
 @cached_or_construct_output(success_suffix="SUCCESS")
@@ -149,10 +148,7 @@ def create_compressed_file_iterator(
     print(f"Completed processing {processed_files} files in {total_time:.1f}s. Failed: {failed_files}", flush=True)
 
 
-# 16 GiB
-# for v4-8 we have 240 cpus and 400 GB so will set
-# 12 GB ram and 12 cpus per task to be safe
-@ray.remote(memory=1024 * 1024 * 1024 * 12, num_cpus=12)
+@ray.remote(memory=1024 * 1024 * 1024 * 6, num_cpus=6)
 def run_data_overlap(config: DataOverlapPipelineConfig) -> str:
     # Idempotence: skip if already completed
     print(f"starting run_data_overlap for {config.input_data}", flush=True)
