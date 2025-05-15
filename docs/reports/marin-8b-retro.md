@@ -340,11 +340,12 @@ It is worth noting that we did not observe this increase in our largely similar 
 While our "mainline" run continued in the Phoenix phase, we ran a number of short ablations
 consisting of what we termed "dessert" runs.
 Dessert coasted at the same already-low, learning rate with the goal of patching a few gaps in capabilities: we added the synthetic math datasets from Dolmino that we had excluded from our main run and added FLAN. See [this comment in GH#600](https://github.com/marin-community/marin/issues/600#issuecomment-2704462502) as well as [this one](https://github.com/marin-community/marin/issues/600#issuecomment-2704521062) for more details.
+(Dessert runs are called "dessert" because they come at the end and originally, at least, added FLAN.)
 
 - Adding the math datasets improved GSM8K and MATH somewhat. GSM8K went from 0.509 to 0.611, and MATH went from 0.184 to 0.211. Not enough to get excited about, but a positive sign for later.
-- FLAN didn't help final MMLU 5-shot (.653->651) or other tasks, at least not in this regime.
+- FLAN didn't help final MMLU 5-shot (.653->.651) or other tasks, at least not in this regime.
 
-So "dessert" was seemingly a failure, even though we revisited this in the final phase.
+So "dessert" was seemingly a failure, though we revisit this in the final phase.
 
 
 ## Phase 4: Phoenix (Reheated)
