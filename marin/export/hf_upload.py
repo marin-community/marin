@@ -60,7 +60,7 @@ def upload_dir_to_hf(
         token: the token to use for authentication (if not provided, it will use the default token)
         revision: the branch to upload to (if not provided, it will use the default branch)
         certificate_path: where to store the certificate that we uploaded to HF (needed for executor idempotency).
-           If not provided, a reasonable default will be used. Should be a path relative to the executor prefix.
+             If not provided, a reasonable default will be used. Should be a path relative to the executor prefix.
     Returns:
         ExecutorStep
     """
