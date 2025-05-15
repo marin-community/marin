@@ -20,12 +20,10 @@ executor_main([upload_step])
 ```
 """
 
-import os
 from dataclasses import dataclass, field
-from typing import List
 
 from marin.execution.executor import ExecutorStep, executor_main
-from operations.download.huggingface.upload_gcs_to_hf import upload_gcs_to_hf, UploadConfig
+from operations.download.huggingface.upload_gcs_to_hf import UploadConfig, upload_gcs_to_hf
 
 
 @dataclass(frozen=True)
@@ -33,7 +31,7 @@ class ModelUploadConfig:
     """Configuration for uploading model checkpoints to Hugging Face."""
 
     hf_repo_id: str
-    gcs_directories: List[str] = field(default_factory=list)
+    gcs_directories: list[str] = field(default_factory=list)
     dry_run: bool = False
 
 
