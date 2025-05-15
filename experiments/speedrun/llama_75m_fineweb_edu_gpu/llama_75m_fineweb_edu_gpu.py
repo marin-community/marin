@@ -4,7 +4,6 @@ Speedrun code for a 75M parameter model based on the LLaMA architecture on a 2 A
 
 import logging
 
-from experiments.exp72_baselines import fineweb_edu_tokenized
 from experiments.llama import llama_75m
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import executor_main
