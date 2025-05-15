@@ -237,7 +237,7 @@ This was not to say there was no deviation in the gap, but the fact that it did 
 
 ### Interlude: Micro-Annealing
 
-Following recent work on midtraining (e.g. [Olmo 2](https://arxiv.org/abs/2501.00656), [Yi](https://arxiv.org/html/2403.04652v1), [DBRX](https://www.databricks.com/blog/introducing-dbrx-new-state-art-open-llm)), we knew we would need to mix in higher quality data during our cooldowns. What constitues higher quality data?
+Following recent work on midtraining (e.g. [Olmo 2](https://arxiv.org/abs/2501.00656), [Yi](https://arxiv.org/html/2403.04652v1), [DBRX](https://www.databricks.com/blog/introducing-dbrx-new-state-art-open-llm)), we knew we would need to mix in higher quality data during our cooldowns. But, what constitues higher quality data?
 
 Llama 3, Olmo 2, and DBRX (XXX is this right?) used small experiments (what Olmo calls "microannealing") to test the effect of different data sources. The basic idea is to take a model that has already been mostly trained, and then do a short cooldown with ~70% original data and ~30% a test high quality data source. We ran a series of micro-annealing runs to test the effect of different data sources.
 
@@ -253,7 +253,7 @@ Instead of the 70/30 recommended in the Llama 3 paper, we found that 70% PT/ 15%
 
 By doing this, we were able to improve both the loss and the task performance of most microannealing runs. Ironically, notwithstanding the above, only 70% PT/30% FLAN underperformed the 100% PT control.
 
-We also found that a microannealing experiment with all HQ sources performed approximately average compared to the other microannealing runs: in this setting, there was no advantage to variety.
+We also found that a microannealing experiment with all HQ sources resulted in average performance compared to the other microannealing runs; in this setting, there was no advantage in having a variety of data.
 
 ## Phase 3: Jellyfish (First Cooldown)
 
@@ -261,9 +261,9 @@ At around 3.7T tokens, we were running low on DCLM tokens, which meant we needed
 
 ### Data Mix
 
-Based on the above, we decided to mix in a mixture of 70% high quality "web" (i.e. Dolmino's DCLM HQ and [StarCoder](https://huggingface.co/datasets/bigcode/starcoderdata)), and 30% a modified Dolmino + [FineMath 3+](https://huggingface.co/datasets/HuggingFaceTB/finemath).
+Based on the above, we decided to mix in a mixture of 70% high quality "web" (i.e. Dolmino's DCLM HQ and [StarCoder](https://huggingface.co/datasets/bigcode/starcoderdata)) and 30% of a combination of modified Dolmino and [FineMath-3+](https://huggingface.co/datasets/HuggingFaceTB/finemath).
 
-Specifically, we included all sources from our ablations that outperformed the 100% PT control, meaning everything we tried at this phase except Dolmino FLAN.
+Specifically, we included all sources from our ablations that outperformed the 100% PT control, which is everything we tried at this phase except Dolmino FLAN.
 
 | Dataset               | Percentage |
 |-----------------------|------------|
@@ -286,7 +286,7 @@ The main deviations from the Dolmino mixture were:
 - We included datasets that [Olmo 2](https://arxiv.org/abs/2501.00656) used in its Phase 1 (e.g. wikipedia) that we did not.
 - We did not include [FLAN](https://arxiv.org/abs/2109.01652).
 - We did not include the other synthetic math datasets in Dolmino. (This was a mistake.)
-- We added [FineMath 3+](https://huggingface.co/datasets/HuggingFaceTB/finemath).
+- We added [FineMath-3+](https://huggingface.co/datasets/HuggingFaceTB/finemath).
 
 ### Learning rate schedule
 
@@ -325,12 +325,12 @@ It is worth noting that we did not observe this increase in our largely similar 
 
 While our "mainline" run continued in the Phoenix phase, we ran a number of short ablations
 consisting of what we termed "dessert" runs.
-Dessert coasted at the same already low LR, with the goal of patching a few gaps in capabilities: we added the synthetic math datasets from Dolmino that we had excluded from our main run and added FLAN. See [this comment in GH#600](https://github.com/marin-community/marin/issues/600#issuecomment-2704462502) as well as [this one](https://github.com/marin-community/marin/issues/600#issuecomment-2704521062) for more details.
+Dessert coasted at the same already-low, learning rate with the goal of patching a few gaps in capabilities: we added the synthetic math datasets from Dolmino that we had excluded from our main run and added FLAN. See [this comment in GH#600](https://github.com/marin-community/marin/issues/600#issuecomment-2704462502) as well as [this one](https://github.com/marin-community/marin/issues/600#issuecomment-2704521062) for more details.
 
 - Adding the math datasets improved GSM8K and MATH somewhat. GSM8K went from 0.509 to 0.611, and MATH went from 0.184 to 0.211. Not enough to get excited about, but a positive sign for later.
 - FLAN didn't help final MMLU 5-shot (.653->651) or other tasks, at least not in this regime.
 
-So "dessert" was seemingly a failure, though we revisited this in the final phase.
+So "dessert" was seemingly a failure, even though we revisited this in the final phase.
 
 
 ## Phase 4: Phoenix (Reheated)
@@ -346,12 +346,12 @@ Because we were running out of DCLM, we transitioned the data from our phase 1 a
 
 The target mixture was Nemotron-CC (with each subset weighted approximately proportionally to token count) and Starcoder,
 also weighted by token count. As a transition, we weighted all components
-(DCLM, Starcoder, Proofpile, and Nemotron's subcomponents) approximately proportional to token count, which we used for 2000 steps (about 25.2e9 tokens), after which we switched to the target mixture.
+(DCLM, Starcoder, Proofpile, and Nemotron's subcomponents) approximately proportional to token count, which we used for 2,000 steps (about 25.2e9 tokens), after which we switched to the target mixture.
 
 ### Learning Rate Schedule
 
-We rewarmed the learning rate linearly from 1.7e-4 to 1.7e-3 over those same 2000 steps after which we
-held the learning rate fixed for the duration of this phase.
+We rewarmed the learning rate linearly from 1.7e-4 to 1.7e-3 over those same 2,000 steps and
+held the learning rate fixed at 1.7e-3 for the remainder of this phase.
 
 ### Notes
 
@@ -359,23 +359,23 @@ The most interesting thing about this phase was that the transition went very sm
 
 ![graph depicting the loss during the transition to the new data mix. The loss very briefly spiked but then returned to lower levels than before the firstcooldown.](../images/8b-phoenix-transition.png)
 
-Also of small interest is that the steady state c4en loss for Phoenix was considerably lower
+Another point of small interest is that the steady state c4en loss for Phoenix was considerably lower
 than DCLM. This need not mean anything other than structural similarities in the preprocessing.
 We have not investigated this further.
 
 
 ## Interlude: Deeper Cooldowns
 
-While Phoenix was running, we also ran a series of "deeper" cooldowns, trying to improve the model's SFT-ability. This led to the [Raccoon](https://github.com/marin-community/marin/issues/898) and [Spoonbill](https://github.com/marin-community/marin/issues/916) series of runs.
+While Phoenix was running, we also ran a series of "deeper" cooldowns, trying to improve the model's amenability to supervised fine tuning ("SFT-ability"). This led to the [Raccoon](https://github.com/marin-community/marin/issues/898) and [Spoonbill](https://github.com/marin-community/marin/issues/916) series of runs.
 
 ### Raccoon: Debugging SFT-ability
 
-The genesis of Raccoon was that we were having trouble getting our model to SFT well. While our nascent SFT pipeline would exhibit an "epoch cliff" (i.e. loss would jump down on each repeated epoch) for Llama 3.1 8B and Olmo 2 7B, [it didn't do that for our model](https://github.com/marin-community/marin/issues/897), and indeed didn't perform that well. We hypothesized that this was because our "cooled down" LR was still quite high: 1.7e-4, which was closer to Olmo 2's peak LR than their final LR.
+The genesis of Raccoon was that we were having trouble getting our model to perform well after supervised fine tuning (SFT). While our nascent SFT pipeline would exhibit an "epoch cliff" (i.e. loss would jump down on each repeated epoch) for Llama 3.1 8B and Olmo 2 7B, [it didn't do that for our model](https://github.com/marin-community/marin/issues/897), and indeed didn't perform that well. We hypothesized that this was because our "cooled down" LR was still quite high: 1.7e-4, which was closer to Olmo 2's peak LR than their final LR.
 We thought this might have something to do with our struggles with SFT-ability.
 
 Starting from the jellyfish cooldown, we further cooled down the model from 1.7e-4 to 1.7e-5 over about 100B tokens. ([WandB report here](https://wandb.ai/stanford-mercury/marin/reports/898-Tootsie-Soft-Raccoon--VmlldzoxMTk3NjUwNg?accessToken=06f87pmmvhdulczenkg3349jxk7e1pwbd4pdci2i8wvyxg9289122gfnckr9ymwc))
 Things looked good at first, but as the cool down deepened the the training loss started slowly creeping up?!?
-Divergence we could understand, but a slow increase in training loss we couldn't.
+We could understand if there was a divergence but we couldn't understand a slow increase in training loss.
 
 ![graph depicting the slow increase in training loss during the cooldown](../images/8b-raccoon-loss-increase.png)
 
