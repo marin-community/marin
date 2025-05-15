@@ -50,8 +50,7 @@ to train a model of that size for long enough.
 ### Architecture
 
 We settled on the "[Llama architecture](https://arxiv.org/abs/2302.13971)" for the usual reasons: it has been shown to work well,
-easier to plug into existing inference stacks, no one ever got fired
-for buying IBM, etc.
+easier to plug into existing inference stacks, no one ever got fired for buying IBM, etc.
 
 We used the same settings as Llama 3.1 8B. More specifically:
 
@@ -106,7 +105,7 @@ Retrospectively, we can partition the 8b run into several different phases. We h
 - *Phoenix (Reheated)*: We had more time for training, so we rapidly rewarmed the model and transitioned our mixture to [Nemotron-CC](https://arxiv.org/abs/2412.02595) (plus [StarCoder Data](https://huggingface.co/datasets/bigcode/starcoderdata)). (4.78T->11.1T tokens)
 - *Starling (Second Cooldown)*: Now we were running low on time, so we started another cooldown. We followed a similar process to the first cooldown, but added a few new datasets that we had created and also some that had dropped since our previous attempt. (11.1T->12.75T tokens)
 
-We emphasize that these phases were not planned in advance. Decisions were made reactively based on changing time lines and data availability.
+We emphasize that these phases were not planned in advance. Decisions were made reactively based on changing timelines and data availability.
 
 Moreover, while there is a single straight-line set of phases that produced the final Marin 8B artifact,
 there were a number of short branches that did not make it into the final run. Many of these were by design: there were other trial
@@ -143,7 +142,7 @@ Specifically, this meant:
 | [Proofpile 2](https://huggingface.co/datasets/EleutherAI/proof-pile-2)           | 1.3%       |
 
 We planned on adding new datasets as we (and others!) developed them.
-For evaluation, we initially tracked a large subset of Paloma (with a particular focus on the `c4_en` subset) during training.
+For evaluation, we initially tracked a large subset of Paloma (with a particular focus on the `c4en` subset) during training.
 
 ### WSD-S
 
@@ -511,7 +510,7 @@ Again, we attribute this to structural differences in the preprocessing of Dolmi
 #### WSD-S Hill / River decomposition
 
 Separately, the slope in loss decrease during the dessert phase slowed down dramatically.
-This is consistent with the theory around [WSD-S](https://arxiv.org/abs/2410.05192), which decomposes the loss into a "river" and "hill" component, where the hill is the loss due to flucuations due to the learning rate (and stochasticity in SGD).
+This is consistent with the theory around [WSD-S](https://arxiv.org/abs/2410.05192), which decomposes the loss into a "river" and "hill" component, where the hill is the loss due to fluctuations due to the learning rate (and stochasticity in SGD).
 
 As the learning rate is decayed, the hill component diminishes. Once we stop decaying the learning rate, there is no further decrease in the hill component, so progress slows down.
 
