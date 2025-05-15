@@ -116,8 +116,9 @@ marin = AutoModelForCausalLM.from_pretrained("marin-community/marin-8b-base", re
 
 ### Model Description
 
-- **Developed by:** Stanford CRFM and the Marin Community
+- **Developed by:** The Marin team at Stanford CRFM.
 - **Model type:** a Transformer style autoregressive language model.
+- **Knowledge Cutoff:** ~July 2024
 - **Language(s) (NLP):** English
 - **License:** The code and model are released under Apache 2.0.
 - **Contact:** `dlwh at stanford.edu`
