@@ -4,7 +4,7 @@ Canonical set of evals.
 
 import logging
 
-from experiments.evals.engine_configs import DEFAULT_VLLM_ENGINE_KWARGS
+from experiments.evals.engine_configs import DEFAULT_LM_EVAL_MODEL_KWARGS
 from experiments.evals.resource_configs import SINGLE_TPU_V4_8, SINGLE_TPU_V6E_8, ResourceConfig
 from experiments.evals.task_configs import (
     BASE_GENERATION_TASKS,
@@ -274,7 +274,7 @@ def default_base_eval(
     step: ExecutorStep | InputName | str,
     resource_config: ResourceConfig = SINGLE_TPU_V6E_8,
     max_eval_instances: int | None = None,
-    engine_kwargs: dict | None = DEFAULT_VLLM_ENGINE_KWARGS,
+    engine_kwargs: dict | None = DEFAULT_LM_EVAL_MODEL_KWARGS,
     run_generation_evals: bool = True,
 ):
     # Add GPQA to CORE_TASKS
@@ -326,7 +326,7 @@ def default_key_evals(
     resource_config: ResourceConfig,
     model_name: str | None = None,
     max_eval_instances: int | None = None,
-    engine_kwargs: dict | None = DEFAULT_VLLM_ENGINE_KWARGS,
+    engine_kwargs: dict | None = DEFAULT_LM_EVAL_MODEL_KWARGS,
 ) -> list[ExecutorStep]:
     """
     Create a list of ExecutorSteps to evaluate the model using LM Evaluation Harness on a step.
