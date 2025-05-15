@@ -165,9 +165,7 @@ def download_from_gcs(gcs_path: str, local_path: str) -> bool:
     # Use transfer manager to download all blobs in parallel
     logger.info(f"Starting parallel download of {len(blob_names)} files...")
 
-    # The key fix: set blob_name_prefix correctly to avoid path duplication
-    # We're using the exact prefix we specified, not trying to strip anything extra
-    results = storage.transfer_manager.download_many_to_path(
+    transfer_manager.download_many_to_path(
         bucket=bucket,
         blob_names=blob_names,
         destination_directory=local_path,
@@ -216,7 +214,7 @@ def upload_to_huggingface(local_path: str, repo_id: str, step: int, version_name
     )
     try:
         api.delete_tag(repo_id=repo_id, tag=version_name)
-    except:
+    except Exception:
         logger.info("Creating tag for the first time")
     api.create_tag(repo_id=repo_id, tag=version_name)
     logger.info("Upload completed successfully.")
