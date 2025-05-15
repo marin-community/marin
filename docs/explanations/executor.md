@@ -1,7 +1,7 @@
 # Executor framework
 
 Marin's executor framework manages the execution of experiments.
-This document is more about the mechanics, read [this](../explanation/experiments.md) to
+This document is more about the mechanics, read [this](../explanations/experiments.md) to
 learn more about the conventions.
 
 An **experiment** is a sequence (really, a DAG) of steps, where each **step** is
