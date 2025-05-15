@@ -24,7 +24,7 @@ from experiments.datashop.defaults import (
     default_train_quality_model,
 )
 from experiments.evals.evals import default_eval
-from experiments.evals.resource_configs import TPU_V6E_8_STRICT_PACK, ResourceConfig
+from experiments.evals.resource_configs import SINGLE_TPU_V6E_8, TPU_V6E_8_STRICT_PACK, ResourceConfig
 from experiments.evals.task_configs import MMLU_5_SHOT
 from marin.execution.executor import executor_main
 
@@ -83,6 +83,9 @@ class DatashopRunnerConfig:
     # Config for consolidate to allow for changing things like filetype or ray memory usage
     consolidate_config_kwargs: dict | None = None
 
+    # What hardware to use for evaluating the model
+    eval_resource_config: ResourceConfig = field(default_factory=lambda: SINGLE_TPU_V6E_8)
+
 
 class DatashopRunner:
     def __init__(self, config: DatashopRunnerConfig):
@@ -126,8 +129,8 @@ class DatashopRunner:
             self.config.experiment_name,
         )
         self.evals = [
-            default_eval(self.control_model, self.config.labeler_resource_config, MMLU_5_SHOT),
-            default_eval(self.quality_ablation_model, self.config.labeler_resource_config, MMLU_5_SHOT),
+            default_eval(self.control_model, self.config.eval_resource_config, MMLU_5_SHOT),
+            default_eval(self.quality_ablation_model, self.config.eval_resource_config, MMLU_5_SHOT),
         ]
 
     def get_eval_cluster_steps(self):
