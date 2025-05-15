@@ -23,18 +23,16 @@ Usage as an ExecutorStep:
   )
 """
 
-from google.cloud import storage
+import argparse
+import logging
 import os
 import re
 import subprocess
 import tempfile
-import shutil
-import logging
-from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+
+from google.cloud import storage
 from huggingface_hub import HfApi, create_repo
-import argparse
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -45,7 +43,7 @@ class UploadConfig:
     """Configuration for uploading from GCS to Hugging Face."""
 
     hf_repo_id: str
-    gcs_directories: List[str] = field(default_factory=list)
+    gcs_directories: list[str] = field(default_factory=list)
     dry_run: bool = False
     wait_for_completion: bool = True  # Added for compatibility with other configs
 
@@ -62,7 +60,7 @@ DEFAULT_GCS_DIRS = [
 ]
 
 
-def list_gcs_directories(gcs_path: str) -> List[Tuple[str, int]]:
+def list_gcs_directories(gcs_path: str) -> list[tuple[str, int]]:
     """List subdirectories by examining full blob paths."""
     if not gcs_path.startswith("gs://"):
         raise ValueError(f"Invalid GCS path: {gcs_path}")
@@ -122,8 +120,8 @@ def download_from_gcs(gcs_path: str, local_path: str) -> bool:
     try:
         logger.info(f"Downloading {gcs_path} to {local_path}...")
         cmd = ["gsutil", "-m", "cp", "-r", f"{gcs_path}*", local_path]
-        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
-        logger.info(f"Download completed successfully.")
+        _ = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        logger.info("Download completed successfully.")
         return True
     except subprocess.CalledProcessError as e:
         logger.error(f"Error downloading from {gcs_path}: {e}")
@@ -132,17 +130,17 @@ def download_from_gcs(gcs_path: str, local_path: str) -> bool:
         return False
 
 
-def revision_exists(repo_id: str, revision: int) -> bool:
+def checkpoint_exists(repo_id: str, step: int, version_name: str) -> bool:
     """Check if a specific revision exists in a Hugging Face repository."""
     try:
         from huggingface_hub import HfApi
 
         api = HfApi()
-        try:
-            api.repo_info(repo_id=repo_id, revision=f"step-{revision}")
-            return True
-        except Exception:
-            return False
+        commits = api.list_repo_commits(repo_id=repo_id, revision=f"{version_name}")
+        for commit in commits:
+            if f"step-{step}" in commit.message:
+                return True
+        return False
     except Exception:
         return False
 
@@ -154,23 +152,22 @@ def extract_version_from_path(gcs_path: str) -> str:
     return parts[-3]
 
 
-def upload_to_huggingface(local_path: str, repo_id: str, revision: int, version_name: str) -> bool:
+def upload_to_huggingface(local_path: str, repo_id: str, step: int, version_name: str) -> bool:
     """Upload a local directory to Hugging Face as a specific revision."""
     try:
-        logger.info(f"Uploading checkpoint {version_name} to Hugging Face as revision: {revision}")
+        logger.info(f"Uploading checkpoint {version_name} to Hugging Face as revision: {step}")
 
         # Check if repo exists, create if not
         api = HfApi()
         create_repo(repo_id=repo_id, exist_ok=True)
-        version_info = f" ({version_name})" if version_name else ""
         # Upload the directory
         result = api.upload_folder(
             folder_path=local_path,
             repo_id=repo_id,
-            revision=f"step-{revision}",
-            commit_message=f"Upload checkpoint for step {revision}{version_info}",
+            revision=f"{version_name}",
+            commit_message=f"Upload checkpoint for step {step} ({version_name})",
         )
-        logger.info(f"Upload completed successfully.")
+        logger.info("Upload completed successfully.")
         logger.info(f"Commit URL: {result.commit_url}")
         return True
     except Exception as e:
@@ -182,9 +179,6 @@ def upload_gcs_to_hf(cfg: UploadConfig) -> None:
     """Main function to upload model checkpoints from GCS to Hugging Face."""
     # Configure logging
     logging.basicConfig(level=logging.INFO)
-
-    # Initialize the GCS client
-    client = storage.Client()
 
     # Collect all step directories
     all_step_dirs = []
@@ -207,7 +201,7 @@ def upload_gcs_to_hf(cfg: UploadConfig) -> None:
         # Print sorted step directories
         logger.info("\nAll step directories sorted by step number:")
         logger.info("-" * 50)
-        for full_path, step_number in all_step_dirs:
+        for full_path, _step_number in all_step_dirs:
             logger.info(f"- {full_path}")
 
         logger.info(f"\nTotal: {len(all_step_dirs)} step directories")
@@ -217,13 +211,15 @@ def upload_gcs_to_hf(cfg: UploadConfig) -> None:
             logger.info(f"\nUploading to Hugging Face repo: {cfg.hf_repo_id}")
 
             for full_path, step_number in all_step_dirs:
-                # Check if this revision already exists
-                if revision_exists(cfg.hf_repo_id, step_number):
-                    logger.info(f"Step {step_number} already exists in HF repo {cfg.hf_repo_id}, skipping")
-                    continue
-
                 # Extract version name from the path
                 version_name = extract_version_from_path(full_path)
+
+                # Check if this checkpoint already exists
+                if checkpoint_exists(cfg.hf_repo_id, step_number, version_name):
+                    logger.info(
+                        f"Step {step_number} for {version_name} already exists in HF repo {cfg.hf_repo_id}, skipping"
+                    )
+                    continue
 
                 # Create a temporary directory for downloading
                 with tempfile.TemporaryDirectory() as temp_dir:
@@ -251,7 +247,7 @@ def upload_gcs_to_hf(cfg: UploadConfig) -> None:
                 logger.info(f"\nCheckpoint {i+1}/{len(all_step_dirs)}:")
                 logger.info(f"  Source: {full_path}")
                 logger.info(f"  Target repo: {cfg.hf_repo_id}")
-                logger.info(f"  Revision: step-{step_number}")
+                logger.info(f"  Revision: {version_name}")
                 logger.info(f"  Commit message: Upload checkpoint for step {step_number} ({version_name})")
 
                 # Try to estimate what files would be uploaded
