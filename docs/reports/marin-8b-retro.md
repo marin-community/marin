@@ -493,7 +493,7 @@ Again, we attribute this to structural differences in the preprocessing of Dolmi
 
 #### WSD-S Hill / River decomposition
 
-Separately, the slope in loss decrease during the dessert phase slowed down dramatically.
+Separately, the slope of the loss flattened dramatically during the dessert phase.
 This is consistent with the theory around [WSD-S](https://arxiv.org/abs/2410.05192), which decomposes the loss into a "river" and "hill" component, where the hill is the loss due to flucuations due to the learning rate (and stochasticity in SGD).
 
 As the learning rate is decayed, the hill component diminishes. Once we stop decaying the learning rate, there is no further decrease in the hill component, so progress slows down.
