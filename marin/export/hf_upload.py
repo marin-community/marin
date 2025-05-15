@@ -1,5 +1,6 @@
 import dataclasses
 import functools
+import io
 import logging
 import os
 import tempfile
@@ -156,6 +157,10 @@ def _actually_upload_to_hf(config: UploadToHfConfig):
                 path_in_repo = os.path.relpath(path, config.input_path)
                 logger.info(f"Uploading {path} to {config.repo_id}/{path_in_repo}")
 
+                # HF is very picky about the type of fileobj we pass in, so we need to
+                if not isinstance(fileobj, io.BufferedIOBase):
+                    fileobj = _wrap_in_buffered_base(fileobj)
+
                 batch.append(CommitOperationAdd(path_in_repo=path_in_repo, path_or_fileobj=fileobj))
                 batch_bytes += size_
                 commit_message += f"- {path_in_repo}\n"
@@ -216,6 +221,17 @@ def retrying_upload_folder(*args, **kwargs):
 @with_retries()
 def retrying_create_commit(*args, **kwargs):
     return create_commit(*args, **kwargs)
+
+
+def _wrap_in_buffered_base(fileobj):
+    """
+    Wraps a file-like object in a BufferedIOBase object.
+    This is necessary because HF's upload_folder function expects a BufferedIOBase object.
+    """
+    if isinstance(fileobj, io.BufferedIOBase):
+        return fileobj
+    else:
+        return io.BufferedReader(fileobj)
 
 
 if __name__ == "__main__":
