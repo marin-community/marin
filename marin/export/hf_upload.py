@@ -3,9 +3,7 @@ import functools
 import logging
 import os
 import tempfile
-import time
 from dataclasses import dataclass
-from functools import wraps
 
 import fsspec
 import humanfriendly
@@ -14,6 +12,7 @@ from huggingface_hub import create_commit, upload_folder
 from tqdm_loggable.auto import tqdm
 
 from marin.execution import ExecutorStep, InputName
+from marin.utilities.fn_utils import with_retries
 from marin.utils import fsspec_glob
 
 logger = logging.getLogger(__name__)
@@ -38,7 +37,7 @@ class UploadToHfConfig:
 
 
 def upload_dir_to_hf(
-    input_path: str | InputName,
+    input_path: str | InputName | ExecutorStep,
     repo_id: str,
     repo_type: str = "dataset",
     token: str | None = None,
@@ -60,7 +59,7 @@ def upload_dir_to_hf(
         token: the token to use for authentication (if not provided, it will use the default token)
         revision: the branch to upload to (if not provided, it will use the default branch)
         certificate_path: where to store the certificate that we uploaded to HF (needed for executor idempotency).
-           If not provided, a reasonable default will be used.
+           If not provided, a reasonable default will be used. Should be a path relative to the executor prefix.
     Returns:
         ExecutorStep
     """
@@ -101,6 +100,8 @@ def _actually_upload_to_hf(config: UploadToHfConfig):
             private=config.private,
         )
 
+    logger.info(f"Uploading {config.input_path} to {config.repo_id}")
+
     # Upload the folder. For local paths, we want to upload the folder directly.
     # For fsspec paths, we want to stream the files using create_commit
     fs = fsspec.core.get_fs_token_paths(config.input_path, mode="rb")[0]
@@ -119,13 +120,17 @@ def _actually_upload_to_hf(config: UploadToHfConfig):
     else:
         all_paths = fsspec_glob(os.path.join(config.input_path, "**"))
         tiny_files = []
-        large_files = {}
+        large_files: dict[str, int] = {}  # path -> size
 
         small_file_size = humanfriendly.parse_size(config.small_file_limit)
 
         for path in all_paths:
             info = fs.info(path)
             if info["type"] == "directory":
+                continue
+
+            # skip executor metadata files
+            if path.endswith(".executor_info") or path.endswith(".executor_status"):
                 continue
 
             size_ = info["size"]
@@ -156,7 +161,7 @@ def _actually_upload_to_hf(config: UploadToHfConfig):
                 commit_message += f"- {path_in_repo}\n"
 
                 if batch_bytes > max_size_bytes:
-                    safe_create_commit(
+                    retrying_create_commit(
                         config.repo_id,
                         operations=batch,
                         commit_message=base_message,
@@ -171,7 +176,7 @@ def _actually_upload_to_hf(config: UploadToHfConfig):
                     commit_message = base_message
 
             if batch:
-                safe_create_commit(
+                retrying_create_commit(
                     config.repo_id,
                     operations=batch,
                     commit_message=base_message,
@@ -190,7 +195,7 @@ def _actually_upload_to_hf(config: UploadToHfConfig):
                     path_in_repo = os.path.relpath(path, config.input_path)
                     fs.get(path, os.path.join(tmpdir, path_in_repo))
 
-                safe_upload_folder(
+                retrying_upload_folder(
                     folder_path=tmpdir,
                     repo_id=config.repo_id,
                     repo_type=config.repo_type,
@@ -201,35 +206,15 @@ def _actually_upload_to_hf(config: UploadToHfConfig):
                 )
 
 
-def with_retries(max_retries=3, delay=2.0):
-    def decorator(fn):
-        @wraps(fn)
-        def wrapped(*args, **kwargs):
-            for attempt in range(max_retries):
-                try:
-                    return fn(*args, **kwargs)
-                except Exception as e:
-                    if attempt == max_retries - 1:
-                        raise
-                    logger.warning(f"{fn.__name__} failed on attempt {attempt + 1}, retrying: {e}")
-                    time.sleep(delay)
-
-            raise RuntimeError(f"{fn.__name__} failed after {max_retries} attempts")
-
-        return wrapped
-
-    return decorator
-
-
 @functools.wraps(upload_folder)
 @with_retries()
-def safe_upload_folder(*args, **kwargs):
+def retrying_upload_folder(*args, **kwargs):
     return upload_folder(*args, **kwargs)
 
 
 @functools.wraps(create_commit)
 @with_retries()
-def safe_create_commit(*args, **kwargs):
+def retrying_create_commit(*args, **kwargs):
     return create_commit(*args, **kwargs)
 
 
