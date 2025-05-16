@@ -75,7 +75,7 @@ nav:
     - Executor: explanations/executor.md
     - Guidelines: explanations/guidelines.md
   - Experiments:
-    - Index: reports/index.md
+    - Report Index: reports/index.md
     - Auto-Generated Summary: reports/summary.md
   - Developer Guide:
     - Contributing: dev-guide/contributing.md
