@@ -1,14 +1,6 @@
 name: Update speedrun leaderboard
 
 on:
-  push:
-    paths:
-      - 'marin/speedrun/**'
-      - 'experiments/speedrun/**'
-      - '.github/workflows/update-leaderboard.yml'
-    branches:
-      - nikil/speedrun-modifications
-      - main
   workflow_dispatch:
 
 jobs:
@@ -67,14 +59,23 @@ jobs:
           
           # configure and commit changes
           cd speedrun-repo
+          
+          # Define the branch name
+          NEW_BRANCH_NAME="leaderboard-updates"
+
+          # Create a new branch from the current HEAD or switch if it exists
+          # Suppress stderr for the first checkout -b to avoid error message if branch exists
+          git checkout -b $NEW_BRANCH_NAME 2>/dev/null || git checkout $NEW_BRANCH_NAME
+          
           git config user.name "speedrun-leaderboard-update-bot"
           git add .
           
           # only commit and push if there are actual changes
           if ! git diff --cached --quiet; then
             git commit -m "automated update- leaderboard data"
-            git push
-            echo "Successfully synced static leaderboard data to speedrun repository"
+            # Push the new branch to origin, setting upstream
+            git push -u origin $NEW_BRANCH_NAME 
+            echo "Successfully synced static leaderboard data to '$NEW_BRANCH_NAME' branch in speedrun repository"
           else
-            echo "No changes to commit"
+            echo "No changes to commit to '$NEW_BRANCH_NAME' branch"
           fi
