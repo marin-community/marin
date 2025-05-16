@@ -89,7 +89,7 @@ md_stackexchange_tokenized = default_tokenize(
     tokenizer=llama3_tokenizer,
 ).with_output_path("tokenized/stackexchange-621b94")
 
-full_mix_components = {
+pt_vs_hq_components = {
     **tokenize_nemotron_steps(),
     "starcoderdata": dclm_components_llama3["starcoderdata"],
     "proofpile_2": dclm_components_llama3["proofpile_2"],
@@ -118,7 +118,7 @@ full_mix_weights = {
     "medu_science_qa": 0.0012 * 5,
 }
 
-full_mix = lm_mixture_data_config(components=full_mix_components, weights=full_mix_weights)
+full_mix = lm_mixture_data_config(components=pt_vs_hq_components, weights=full_mix_weights)
 
 # Dictionary of all mixes
 data_mixes = {

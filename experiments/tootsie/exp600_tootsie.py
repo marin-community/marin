@@ -23,6 +23,7 @@ from experiments.defaults import default_train
 from experiments.dolma.tokenize_dolma import tokenize_dolma_steps
 from experiments.dolmino.tokenize_dolmino import dolmino_math_tokenized_llama3, get_dolmino_step_llama3
 from experiments.evals.task_configs import CORE_TASKS_PLUS_MMLU
+from experiments.exp934_hq_vs_pt import pt_vs_hq_components
 from experiments.llama import llama3_tokenizer, llama_8b, llama_8b_old_rotary
 from experiments.midtraining_datasets import finemath_3_plus_tokenized
 from experiments.nemotron_cc.tokenize_nemotron import NEMOTRON_WEIGHTS, tokenize_nemotron_steps
@@ -32,17 +33,18 @@ from marin.processing.tokenize.data_configs import lm_varying_mixture_data_confi
 from marin.resources import TpuPodConfig
 
 # Phases/Runs in this file:
-# 1. WSD-S on DCLM+Starcode+Proofpile on 2x v5litepod-256 (from scratch)
-# 2. Switch to WSD with EMA on v4-2048 (from (1))
-# 3. Cooldown v1: Switch to a 30% Dolmino-ish HQ dataset mixture, decay the LR (from (2))
-# 4a. Tootsie Dessert (Attempt 1): Sprinkle in a bit of FLAN and Synth Math (from (3))
-# 4b. Tootsie Dessert (Attempt 2): Fix the weights and add in all the HQ docs from dolmino (from (3))
-# 5. Tootsie Cooldown v2: Another attempt at a final cooldown (from (2))
-# 6. Tootsie rewarm: from (3), rewarmup and use mix of nemotron_cc and starcoder to keep moving
+# 1. Kestrel: WSD-S on DCLM+Starcode+Proofpile on 2x v5litepod-256 (from scratch)
+# 2. Ocelot: Switch to WSD with EMA on v4-2048 (from (1))
+# 3. Jellyfish Cooldown v1: Switch to a 30% Dolmino-ish HQ dataset mixture, decay the LR (from (2))
+# 4a. Dessert (Attempt 1): Sprinkle in a bit of FLAN and Synth Math (from (3))
+# 4b. Dessert (Attempt 2): Fix the weights and add in all the HQ docs from dolmino (from (3))
+# 5. Cooldown v2: Another attempt at a final cooldown (from (2))
+# 6. Phoenix: from (3), rewarmup and use mix of nemotron_cc and starcoder to keep moving
+# 7. Starling: from (6), cooldown from 1.7e-3 to 1.7e-5 over 1.34T tokens
 
 
 ################################################################
-# PHASE 1: WSD-S on DCLM+Starcode+Proofpile on 2x v5litepod-256
+# PHASE 1: "Kestrel" WSD-S on DCLM+Starcode+Proofpile on 2x v5litepod-256
 ################################################################
 
 # Initially, we start with WSD-S (cyclic stable/decay). The idea was to use WSD-S to train forever,
@@ -78,9 +80,13 @@ llama_8b_tootsie_phase1 = dataclasses.replace(
 )
 
 
-# PHASE 2: We switch to WSD with EMA, moving to v4-2048 and increasing the batch size to better utilize the hardware.
+##########################
+# PHASE 2: Ocelot We switch to WSD with EMA, moving to v4-2048, increased batch size
+###########################
+# We increased batch size b/c we have more hardware
 # Because we increased the batch size, we need to increase the LR by \sqrt(ratio), which is ≈1.7x
 
+kestrel_phase_1_checkpoint_for_phase2 = llama_8b_tootsie_phase1.cd("checkpoints/step-660000").skip_parent(False)
 
 llama_8b_train_config_phase2 = SimpleTrainConfig(
     resources=TpuPodConfig(tpu_type="v4-2048", slice_count=1),
@@ -100,6 +106,9 @@ llama_8b_train_config_phase2 = SimpleTrainConfig(
     steps_per_task_eval=10000,
     steps_per_export=20000,
     per_device_eval_parallelism=16,
+    # this is retconning a bit: I actually copied the checkpoint manually. But this is the same thing
+    initialize_from_checkpoint_path=kestrel_phase_1_checkpoint_for_phase2,  # from phase 1
+    reset_data_loader_on_init=False,
 )
 
 
@@ -111,7 +120,7 @@ llama_8b_tootsie_phase2 = dataclasses.replace(
         train_config=llama_8b_train_config_phase2,
         tags=["llama", "8b", "ema", "exp600"],
     ),
-    override_output_path="checkpoints/lama-8b-tootsie-phase2",
+    override_output_path="checkpoints/llama-8b-tootsie-phase2",
 )
 
 # Note, we originally tried to fold the phase 3 mixture (below) into phase 2, but I messed up the hand off, so
@@ -119,12 +128,14 @@ llama_8b_tootsie_phase2 = dataclasses.replace(
 # account for that in the handoff. WandB doesn't work if you try to overwrite steps so we just made a new run.)
 
 ################################################################
-# PHASE 3 (v1): We switch to a new mixture, decay the LR
+# PHASE 3 (Jellyfish): We switch to a new mixture, decay the LR
 ################################################################
 # This mixture is basically a subset of dolmino.
 # At this time, some of us had prior experience with FLAN
 # that suggested it was not great and we were a bit
 # leery of the very specific synth math data, so we left those parts out.
+ocelot_phase_2_checkpoint_for_phase3 = llama_8b_tootsie_phase1.cd("checkpoints/step-738376").skip_parent(False)
+
 
 # main phase: base mix for 740,500 steps
 # more dclm out to ≈3.78e+12 tokens (740,500 total steps)
@@ -151,6 +162,9 @@ llama_8b_train_config_phase3 = SimpleTrainConfig(
     steps_per_task_eval=10000,
     steps_per_export=20000,
     per_device_eval_parallelism=16,
+    # retconning again
+    initialize_from_checkpoint_path=ocelot_phase_2_checkpoint_for_phase3,
+    reset_data_loader_on_init=False,
 )
 
 # Data for phase 3 consists of three parts:
@@ -173,7 +187,6 @@ dolma_splits = [
 all_dolma_steps = tokenize_dolma_steps(tokenizer=llama3_tokenizer)
 phase_3_tokenized.update({dataset: step for dataset, step in all_dolma_steps.items() if dataset in dolma_splits})
 phase_3_tokenized["finemath_3_plus"] = finemath_3_plus_tokenized
-# phase_3_tokenized["fineweb_edu"] = fineweb_edu_tokenized
 phase_3_tokenized["dolmino_dclm"] = dolmino_dclm
 
 
@@ -459,12 +472,15 @@ llama_8b_tootsie_cooldown_v2 = dataclasses.replace(
 )
 
 
-## Tootsie rewarm: from (3), rewarmup and use mix of nemotron_cc and starcoder to keep moving
+###############################################################
+## Phase 4: Phoenix from (3), rewarmup and use mix of nemotron_cc and starcoder to keep moving
+###############################################################
+
+jellyfish_phase_3_checkpoint_for_phase4 = llama_8b_tootsie_phase3.cd("checkpoints/step-819924").skip_parent(False)
 
 # We're going to try to keep moving by rewarming the model with a mix of nemotron_cc and starcoder.
 
 PHASE_4_START = PHASE_3_END
-PHASE_4_END = 2_000_000
 # ramp up to 1.7e-3 over 2k steps
 PHASE_4_REWARMUP_DURATION = 2000
 
@@ -487,13 +503,17 @@ phase_4_warmup_weights = {
 
 llama_8b_train_config_phase4 = dataclasses.replace(
     llama_8b_train_config_phase3,
-    num_train_steps=PHASE_4_END,
+    num_train_steps=2_000_000,
     learning_rate=1.7e-3,
     lr_schedule="linear",
     decay=DECAY_FRACTION,
     # use the WSD-S api to do the re-warmup
-    cycle_length=[PHASE_3_END, (PHASE_4_END - PHASE_3_END)],
+    # (we don't actually train for 2M steps)
+    cycle_length=[PHASE_3_END, (2_000_000 - PHASE_3_END)],
     rewarmup=PHASE_4_REWARMUP_DURATION,
+    # retconning again
+    initialize_from_checkpoint_path=jellyfish_phase_3_checkpoint_for_phase4,
+    reset_data_loader_on_init=False,
 )
 
 phase_4_data_mixture = lm_varying_mixture_data_config(
@@ -532,6 +552,97 @@ llama_8b_tootsie_adept_phoenix = dataclasses.replace(
 # plt.plot(range(0, PHASE_4_END, 10), [lr_schedule(x) for x in range(0, PHASE_4_END, 10)])
 # plt.show()
 
+######################################
+# Phase 5: Starling second cooldown
+######################################
+
+# This is documented in https://github.com/marin-community/marin/issues/977
+
+PHASE_4_END = 1_320_000
+
+# aiming for 1.3e12 more tokens
+# 4096 * 4096 * 80_000 is ~1.34e12
+COOLDOWN_LEN = 80_000
+
+# for these long runs we don't usually actually **finish** the run in the Executor's eyes,
+# so we use `wait_for_completion`
+phoenix_phase4_checkpoint_for_phase5 = llama_8b_tootsie_adept_phoenix.cd("checkpoints/step-1320000").skip_parent(False)
+
+cooldown_train_config = dataclasses.replace(
+    llama_8b_train_config_phase4,
+    train_batch_size=[
+        ScheduleStep(start=0, value=1024),
+        ScheduleStep(start=660_001, value=3072),
+        ScheduleStep(start=1320001, value=4096),
+    ],
+    # from spoonbill: zloss is important for low LR phase
+    z_loss_weight=1e-4,
+    initialize_from_checkpoint_path=phoenix_phase4_checkpoint_for_phase5,
+    decay=COOLDOWN_LEN,
+    num_train_steps=PHASE_4_END + COOLDOWN_LEN,
+    learning_rate=1.7e-3,  # same peak lr
+    lr_schedule="linear",
+    # spoonbill went to just 2.75e-5 but with zloss I think we can go lower
+    min_lr_ratio=1.7e-5 / 1.7e-3,  # 0.01 of peak lr
+    cycle_length=None,
+)
+
+starling_hq_cooldown_weights = {
+    "starcoderdata": 0.25,
+    "proofpile_2": 0.25,
+    "dolmino/flan": 0.017 * 10,
+    "dolmino/pes2o": 0.0581 * 5,
+    "dolmino/stackexchange": 0.0171 * 5,
+    "dolmino/wiki": 0.00365 * 5,
+    "all_math": 0.00422 * 10,
+    "arxiv_markdownified": 0.0581 * 5,
+    "stackexchange_custom": 0.0171 * 5,
+    "wikipedia_markdown": 0.00365 * 5,
+    "medu_science_qa": 0.0012 * 5,
+    # about 34B tokens
+    "finemath-3-plus": 0.034 * 5,
+}
+
+total_hq_weight = sum(v for k, v in starling_hq_cooldown_weights.items())
+# we want nemotron to be 0.7 of the total weight
+nemotron_total = sum(v for k, v in NEMOTRON_WEIGHTS.items())
+
+
+starling_cooldown_weights = {
+    **{k: v * 0.7 / nemotron_total for k, v in NEMOTRON_WEIGHTS.items()},
+    **{k: v * 0.3 / total_hq_weight for k, v in starling_hq_cooldown_weights.items()},
+}
+
+starling_components = {"finemath-3-plus": finemath_3_plus_tokenized}
+
+starling_cooldown_mixture = lm_varying_mixture_data_config(
+    components={**phase_3_tokenized, **nemotron_cc_steps, **pt_vs_hq_components, **starling_components},
+    weights_list=[
+        (0, DCLM_MIXTURE_WEIGHTS),
+        (PHASE_3_START, cooldown_mixture_weights_v1),
+        (PHASE_4_START, phase_4_warmup_weights),
+        (PHASE_4_START + PHASE_4_REWARMUP_DURATION, phase_4_steady_state_weights),
+        (PHASE_4_END, starling_cooldown_weights),
+    ],
+)
+
+tootsie_8b_sensible_starling = default_train(
+    name="tootsie-8b-sensible-starling",
+    tokenized=starling_cooldown_mixture,
+    model_config=llama_8b,
+    train_config=cooldown_train_config,
+    tags=["llama", "8b", "ema", "exp977", "tootsie", "cooldown"],
+    eval_harness_tasks=CORE_TASKS_PLUS_MMLU,
+).with_output_path("checkpoints/tootsie-8b-sensible-starling")
+
+# print normalized weights for final phase
+# sanity checks:
+normalized = {k: v / sum(starling_cooldown_weights.values()) for k, v in starling_cooldown_weights.items()}
+
+# sum up the nemotron ones:
+assert 0.69 < sum(v for k, v in normalized.items() if k.startswith("nemotron")) < 0.71
+assert 0.29 < sum(v for k, v in normalized.items() if k not in NEMOTRON_WEIGHTS) < 0.31
+
 
 if __name__ == "__main__":
     executor_main(
@@ -542,6 +653,7 @@ if __name__ == "__main__":
             llama_8b_tootsie_dessert_v3,
             llama_8b_tootsie_cooldown_v2,
             llama_8b_tootsie_adept_phoenix,
+            tootsie_8b_sensible_starling,
         ],
         description="Train 8B model on DCLM using WSD-S, then switching to EMA with a new mixture.",
     )
