@@ -45,11 +45,10 @@ Marin 8B Base was trained on a variety of datasets:
 
 And some new datasets:
 
-
 - [Marin Markdownified StackExchange](XXX)
 - [Marin Markdownified Wikipedia](XXX)
 - [Marin Markdownified Ar5iv](XXX)
-- [Marin Datashop Science QA](XXX)
+- [Marin Datashop Science QA](https://huggingface.co/datasets/marin-community/datashop-science-qa)
 
 (We are still uploading these datasets. The first three will be licensed per their original licenses. The fourth--based on rephrased web content--will be licensed under CC-BY-SA 4.0.)
 
