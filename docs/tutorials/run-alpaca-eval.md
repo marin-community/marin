@@ -5,6 +5,7 @@ This tutorial shows how to configure and launch the Alpaca evaluation pipeline i
 ## Prerequisites
 
 - A trained model checkpoint in Hugging Face (HF) format.
+- Access to TPUs. AlpacaEval via GPU is in progress and we recommend using the main [AlpacaEval](https://github.com/tatsu-lab/alpaca_eval/tree/main) library on GPU at present.
 
 ## Required Imports
 
