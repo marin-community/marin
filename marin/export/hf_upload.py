@@ -5,6 +5,7 @@ import logging
 import os
 import tempfile
 from dataclasses import dataclass
+from urllib.parse import urlparse
 
 import fsspec
 import humanfriendly
@@ -68,7 +69,10 @@ def upload_dir_to_hf(
         if isinstance(input_path, InputName) or isinstance(input_path, ExecutorStep):
             certificate_path = f"metadata/hf_uploads/{input_path.name}"
         else:
-            certificate_path = f"metadata/hf_uploads/{input_path.split('/')[-1]}"
+            # This will drop the scheme (e.g., 'gs') and keep the path
+            parsed = urlparse(input_path)
+            path = parsed.path.lstrip("/")
+            certificate_path = f"metadata/hf_uploads/{path}"
 
     return ExecutorStep(
         name=certificate_path,
