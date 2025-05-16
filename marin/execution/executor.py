@@ -821,8 +821,8 @@ class Executor:
                     pip=pip_dependencies,
                 ),
                 # TODO: this is kind of gross, but the overhead of instantiating a separate ray task
-                # that only blocks is pretty wasteful. Would be better to not make 1 step per, but
-                # this is a good first step
+                # that only blocks is pretty wasteful. Would be better to not make 1 task per step, but
+                # this is a good first start
                 num_cpus=0.001 if isinstance(step.fn, ray.remote_function.RemoteFunction) else 1,
             ).remote(step.fn, step_name, config, dependencies, output_path, self.status_actor, force_run_failed)
         else:
