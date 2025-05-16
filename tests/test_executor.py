@@ -524,6 +524,7 @@ def test_parent_version_bubbles_into_skip_child():
         executor = create_executor(temp_dir)
         executor.run(steps=[child1])
         version1 = executor.version_strs[child1]
+        executor = create_executor(temp_dir)
 
         # Second pair - identical except parent.x = 2
         parent2 = ExecutorStep(name="parent2", fn=dummy_fn, config=DummyCfg(x=versioned(2)))
