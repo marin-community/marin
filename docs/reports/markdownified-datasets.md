@@ -7,22 +7,66 @@ This dataset collection consists of several large-scale text corpora that have b
 | Dataset | Token Count | Approximate Size | Source |
 |---------|------------|------------------|--------|
 | Wiki | 8587224558 | 8.59B tokens | [Wikipedia Dump](https://dumps.wikimedia.org/other/enterprise_html/runs/20241201/enwiki-NS0-20241201-ENTERPRISE-HTML.json.tar.gz) |
-| Arxiv No Problem | 2742463924 | 2.74B tokens | [ArXiv Dump](https://sigmathling.kwarc.info/resources/ar5iv-dataset-2024/) |
-| Arxiv Warning | 19552307274 | 19.6B tokens | [ArXiv Dump](https://sigmathling.kwarc.info/resources/ar5iv-dataset-2024/) |
+| Ar5iv No Problem | 2742463924 | 2.74B tokens | [Ar5iv Dump](https://sigmathling.kwarc.info/resources/ar5iv-dataset-2024/) |
+| Ar5iv Warning | 19552307274 | 19.6B tokens | [Ar5iv Dump](https://sigmathling.kwarc.info/resources/ar5iv-dataset-2024/) |
 | Stack Exchange | 20413785853 | 20.4B tokens | [Stack Exchange Dump] |
 
 ## Processing Methodology
 
-These datasets were processed using our custom fork of Resiliparse which simplified the raw HTML DOM, the simplified DOM was then processed by our custom implementation of Markdownify. The exact modifications and enhancements made to the original Resiliparse are documented in the next section, the processing pipeline appears to have:
+These datasets were processed using our [custom fork of Resiliparse](https://github.com/stanford-crfm/chatnoir-resiliparse) which simplified the raw HTML DOM, the simplified DOM was then processed by our [custom implementation](https://github.com/marin-community/marin/blob/main/marin/markdown/markdown.py#L145-L650) of [Markdownify](https://github.com/matthewwithanm/python-markdownify). The exact modifications and enhancements made to the [original Resiliparse](https://github.com/chatnoir-eu/chatnoir-resiliparse) are documented in the next section, the processing pipeline appears to have:
 
-1. Extracted text from various sources (Wikipedia, ArXiv, Stack Exchange)
+1. Extracted text from various sources (Wikipedia, Ar5iv, Stack Exchange)
 2. Simplified the raw HTML DOM through our custom fork of Resiliparse
 3. Process the simplified DOM with our custom Markdownify implementation to covert DOM to Markdown.
+
+## Heuristic Filters
+
+The markdownification pipeline applies specific heuristic filters to each dataset to clean and improve the quality of the markdown content. These filters are designed to remove noise, preserve valuable content, and ensure consistent formatting.
+
+### Wikipedia
+
+The Wikipedia preprocessing pipeline includes several heuristic filters:
+
+- **Blacklisted Selectors Removal**: Removes specific DOM elements like navigation bars, footer elements, reference sections, and edit buttons using CSS selectors (e.g., `div.navbox`, `span.mw-editsection`, `div#catlinks`).
+- **External Links Removal**: Automatically removes "External Links" sections and their content.
+- **Dense Link Removal**: Identifies and removes link clusters which are sections that are primarily composed of links (>80% links).
+- **Numerical and Character Thresholds**: Filters out content with excessive digit percentages (>50%), insufficient word counts (<70 words), or excessive special character percentages (>50%).
+- **Reference Section Removal**: Removes references sections to reduce noise while preserving informative content.
+- **Table Formatting**: Converts HTML tables to markdown tables while preserving structure and removing empty rows/columns.
+- **Main Content Extraction**: Leverages Resiliparse to extract the main content and avoid boilerplate elements.
+
+### Ar5iv
+
+The Ar5iv dataset uses specialized filters for academic papers:
+
+- **Abstract Transformation**: Converts abstract sections into proper headings for better structure.
+- **Metadata Removal**: Removes author information, title pages, and article metadata to reduce noise.
+- **List Cleaning**: Removes duplicate numbering patterns that occur when LaTeX numbering combines with HTML list markers (e.g., "1. 1.").
+- **Academic Elements Removal**: Removes bibliography sections, footnotes, and citation links that don't add value to the main content.
+- **Equation Formatting**: Transforms equation tables into inline elements for better markdown conversion and preserves LaTeX notation.
+- **Footer Removal**: Removes the ar5iv-specific footer information.
+- **Figure Caption Removal**: Removes figure captions to reduce noise.
+- **Code Preservation**: Converts code listing lines to proper newlines to preserve code formatting.
+- **Whitespace Normalization**: Standardizes whitespace and newlines.
+
+### Stack Exchange
+
+The Stack Exchange dataset applies several specific filters:
+
+- **Vote Threshold Filtering**: Only includes posts with a minimum vote threshold (typically ≥8 votes) to ensure quality.
+- **Duplicate Question Removal**: Removes duplicate questions, keeping only the first instance.
+- **Q&A Structure Preservation**: Special processing to maintain the question-answer structure of posts.
+- **Markup Formatting**: Proper conversion of Stack Exchange markup to markdown, preserving code blocks, lists, and other formatting.
+- **URL Filtering**: Removes problematic URLs (e.g., user profile pages) using blacklist patterns.
+- **Dense Link Removal**: Similar to Wikipedia, removes sections with excessive links.
+- **Separator Addition**: Adds separators between questions and answers for better readability.
+- **Main Content Preprocessing**: Special handling for Stack Exchange specific elements like "qa-main" class, question headers, and post content.
+
 
 ## Usage Notes
 
 When using these datasets, people should be aware of:
-- The potential differences in quality between the "No Problem" and "Warning" subsets of Arxiv.
+- The potential differences in quality between the "No Problem" and "Warning" subsets of Ar5iv.
 - These are Markdownified version of the raw dataset and have not been filtered for quality.
 
 ## Resiliparse Custom Fork
@@ -42,7 +86,7 @@ This fork extends the original **Resiliparse** HTML-to-text extractor with a new
 
 ### Implementation Details
 
-The core enhancement is the implementation of `extract_simplified_dom` which leverages Lexbor's DOM serialization capabilities to maintain HTML structure while still applying the filtering and content extraction logic from the original `extract_plain_text` function.
+The core enhancement is the implementation of `extract_simplified_dom` which leverages [Lexbor's](https://github.com/lexbor/lexbor) DOM serialization capabilities to maintain HTML structure while still applying the filtering and content extraction logic from the original `extract_plain_text` function.
 
 1. **DOM Serialization**:
    - Added `serialize_node` function that converts DOM nodes to their HTML string representation
@@ -61,4 +105,10 @@ This enhancement maintains full backward compatibility with the existing Resilip
 
 ### Acknowledgements
 
-Huge thanks to **Janek Bevendorff** for the original Resiliparse project.
+We would like to express our sincere gratitude to:
+
+- **Janek Bevendorff** for creating the original Resiliparse project
+- The **Arxiv Labs** and **KWARC** teams for their meticulous work in curating the Ar5iv dataset
+- **Matthew Dapena-Tretter** for developing the original Markdownify Project
+
+Their contributions have been really important in making this work possible.
