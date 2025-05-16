@@ -85,7 +85,7 @@
             "weight_decay": 0.1,
             "z_loss_weight": null
           },
-          "wandb_run_link": "https://wandb.ai/stanford-mercury/marin/runs/75M_llama_fineweb_edu_gpu_test_1-81a601"
+          "wandb_run_link": "https://wandb.ai/marin-community/marin/runs/75M_llama_fineweb_edu_gpu_test_1-81a601"
         },
         "run_stats": {
           "eval/paloma/c4_en/bpb": 1.6050434112548828,
