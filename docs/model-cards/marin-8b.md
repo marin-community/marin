@@ -72,8 +72,7 @@ It is quite likely that we will release improved versions of this model in the f
 
 ## Checkpoints
 
-We release a number of training checkpoints. Other checkpoints may be made available on request.
-
+We release a large number of checkpoints.
 
 ### Base Model Checkpoints
 

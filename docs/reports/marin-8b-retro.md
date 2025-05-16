@@ -1,12 +1,17 @@
 # Marin 8B Retrospective
 
+
+<!--
+
+Turns out mkdocs does a ToC
+
 - [Introduction](#introduction)
 - [The "Tootsie Roll" process](#the-tootsie-roll-process)
 - [Model Basics](#model-basics)
 - [Training Phases](#training-phases)
   - [Phase 1: Kestrel (DCLM WSD-S Phase)](#phase-1-kestrel-dclm-wsd-s-phase)
   - [Phase 2: Ocelot (DCLM EMA Phase)](#phase-2-ocelot-dclm-ema-phase)
-  - [Interlude: Micro-Annealing](#interlude-micro-annealing)
+  - [Interlude: microannealing](#interlude-micro-annealing)
   - [Phase 3: Jellyfish (First Cooldown)](#phase-3-jellyfish-first-cooldown)
   - [Interlude: "Dessert" Runs](#interlude-dessert-runs)
   - [Phase 4: Phoenix (Reheated)](#phase-4-phoenix-reheated)
@@ -15,7 +20,7 @@
   - [Bonus: Deeper Starling (Dessert)](#bonus-deeper-starling-dessert)
 - [Base Model Results](#base-model-results)
 - [Supervised Fine-Tuning](#supervised-fine-tuning)
-- [Conclusion](#conclusion)
+- [Conclusion](#conclusion) -->
 
 
 ## Introduction
@@ -24,22 +29,22 @@ This is a retrospective on our first generation Marin 8B run.
 We include details on the data mix, hyperparameters, and other details. We also include observations during the run and
 document some of the mistakes we made and lessons learned.
 
-This document was not created during the run, but rather after the fact. Some details may be missing or incorrect,
-but we have tried to be as accurate as possible.
+This retrospective was written post-run and may contain minor inaccuracies, though we’ve tried to be as accurate as possible.
 
 In addition, the [actual code](https://github.com/marin-community/marin/blob/852c53f9741b233549daf9f1649fe88c9c5a170c/experiments/tootsie/exp600_tootsie.py)
 for the run should be treated as more authoritative than this document. See also the [main issue on GitHub](https://github.com/marin-community/marin/issues/600)
 or the [WandB report](https://wandb.ai/stanford-mercury/marin/reports/Tootsie-8B---VmlldzoxMTY3MzU3OA)
 
-## The "Tootsie Roll" process
+We recommend reading this report on our [ReadTheDocs](https://marin.readthedocs.io/en/latest/reports/marin-8b-retro.html) if you aren't already there. There should be a table of contents on the right.
+
+## The "Tootsie Roll" Process
 
 A core premise of the Marin 8B run was that we didn't fully know the best recipe—
 so we just started training with what we had, and planned to adapt along the way.
 Internally, we referred to this as the "Tootsie" process, a reference to
 [Tootsie Rolls, which use a "graining" process](https://en.wikipedia.org/wiki/Tootsie_Roll) where each day's batch
 contains a bit of the previous day's, seeding crystallization or something. (We are not food scientists.)
-This is admittedly a bit of a strained metaphor, but the idea was that we'd keep folding in new data and whatever
-else as the training process went on.
+This is admittedly a bit of a strained metaphor, but the idea was that we'd keep folding in new data, training techniques, and whatever else as the training process went on.
 (As it would turn out, dear reader, we would often change more than the data...)
 
 ## Model Basics
@@ -80,9 +85,11 @@ to both Llama 2 and NeoX in terms of bits-per-byte (bpb).
 
 ### Batch Schedule
 
-We used a varying batch schedule, with between 1024 * 4096 = 4Mi tokens, 3072 * 4096 = 12Mi tokens and 4096 * 4096 = 16Mi tokens.
-(As with most things in this run, we did not initially plan for this schedule.)
-(Note, we use `Mi` to mean Mebi-, not mega-.)
+We used a varying batch schedule, ranging from 1024 × 4096 = 4Mi tokens, to 3072 × 4096 = 12Mi [^Mi] tokens, and up to 4096 × 4096 = 16Mi tokens per step.
+
+[^Mi]: Note: `Mi` refers to mebibytes, not megabytes—i.e., powers of 2.
+
+As with many aspects of the run, this schedule wasn't part of our original plan. We adapted it opportunistically as the run progressed.
 
 ### Checkpointing Policy
 
@@ -97,7 +104,9 @@ The TPU hardware varied between two different TPU clusters, generously provided 
 
 The first phase was run on the 2x v5e-256, while subsequent phases were run on the v4-2048.
 
-# Training Phases
+## Training Phases
+
+![Training phases. See text for details.](../images/marin-timeline.png)
 
 Retrospectively, we can partition the 8b run into several different phases. We have given them animal names as monikers.  Here is a short summary:
 
@@ -111,7 +120,7 @@ We emphasize that these phases were not planned in advance. Decisions were made 
 
 Moreover, while there is a single straight-line set of phases that produced the final Marin 8B artifact,
 there were a number of short branches that did not make it into the final run. Many of these were by design: there were other trial
-[LLama 3](https://arxiv.org/abs/2302.13971) micro-annealing runs (see also [Olmo 2](https://arxiv.org/abs/2501.00656), [Yi](https://arxiv.org/html/2403.04652v1), [DBRX](https://www.databricks.com/blog/introducing-dbrx-new-state-art-open-llm)) that helped decide our cooldown mix, as well as attempts at "deeper cooldowns.
+[LLama 3](https://arxiv.org/abs/2302.13971) microannealing runs (see also [Olmo 2](https://arxiv.org/abs/2501.00656), [Yi](https://arxiv.org/html/2403.04652v1), [DBRX](https://www.databricks.com/blog/introducing-dbrx-new-state-art-open-llm)) that helped decide our cooldown mix, as well as attempts at "deeper cooldowns.
 We detail these [GH#784](https://github.com/marin-community/marin/issues/784), [GH#820](https://github.com/marin-community/marin/issues/820), and [GH#898](https://github.com/marin-community/marin/issues/898), though provide a summary later in this one.
 We also ran some experiments investigating issues with "SFT-ability,"
 documented in these issues:
@@ -119,7 +128,7 @@ documented in these issues:
 - [#898 Raccoon](https://github.com/marin-community/marin/issues/898)
 - [#916 Spoonbill](https://github.com/marin-community/marin/issues/916)
 
-## Phase 1: Kestrel (DCLM WSD-S Phase)
+## Phase 1: Kestrel (WSD-S Phase)
 
 In the first phase, we trained from scratch using the best publicly available dataset at the time:
 [DCLM Baseline](https://huggingface.co/datasets/mlfoundations/dclm-baseline-1.0).
@@ -207,12 +216,14 @@ There is a noticeable drop in both the eval loss and the training loss during th
 Interestingly, not all eval losses dropped.  In fact, for some domains, the eval loss increased.
 We saw decreases in `mc4`, `c4en`, `m2d2 wikipedia`, `m2d2 s2orc`, and `refined web`, but marked increases in `100_subreddits`, `twitterAAE_HELM_fixed`, `manosphere`, `4chan`, among a fwe others.
 Interestingly, after this initial increase, almost all domains started to decrease again.
-Subsequent analysis revealed that this was due to structural differences in preprocessing between the domains: some Paloma domains had texts that obligatorily ended with a space character (which we did not strip), which was not how our training data was formatted. The deeper cooldown allowed the model to dislike these final spaces more. We did a more thorough analysis [here](https://github.com/marin-community/marin/issues/826#issuecomment-2696496271).
+Subsequent analysis revealed that this was due to structural differences in preprocessing between the domains: some Paloma domains had texts that obligatorily ended with a space character (which we did not strip), which was not how our training data was formatted.
+The deeper cooldown allowed the model to "dislike" these final spaces more clearly.
+We investigated this behavior further in [this analysis](https://github.com/marin-community/marin/issues/826#issuecomment-2696496271).
 
 ![graph depicting many eval losses after the transition to longer decay phases](../images/tootsie-8b-wsd-s-losses-post-transition.png)
 
 
-## Phase 2: Ocelot (DCLM EMA Phase)
+## Phase 2: Ocelot (EMA Phase)
 
 At around 2.7e12 tokens, we were given access to a v4-2048 reservation and immediately moved to that.
 All subsequent phases were run on that.
@@ -252,11 +263,11 @@ This was not to say there was no deviation in the gap, but the fact that it did 
 ![embed](../images/tootsie-8b-ema-gap.png)
 
 
-### Interlude: Micro-Annealing
+### Interlude: microannealing
 
-Following recent work on midtraining (e.g. [Olmo 2](https://arxiv.org/abs/2501.00656), [Yi](https://arxiv.org/html/2403.04652v1), [DBRX](https://www.databricks.com/blog/introducing-dbrx-new-state-art-open-llm)), we knew we would need to mix in higher quality data during our cooldowns. But, what constitues higher quality data?
+Following recent work on midtraining (e.g. [Olmo 2](https://arxiv.org/abs/2501.00656), [Yi](https://arxiv.org/html/2403.04652v1), [DBRX](https://www.databricks.com/blog/introducing-dbrx-new-state-art-open-llm)), we knew we would need to mix in higher quality data during our cooldowns. But, what constitutes higher quality data?
 
-Llama 3 and Olmo 2 used small experiments (what Olmo calls "microannealing") to test the effect of different data sources. The basic idea is to take a model that has already been mostly trained, and then do a short cooldown with ~70% original data and ~30% a test high quality data source. (Olmo 2 uses 50/50.) We ran a series of micro-annealing runs to test the effect of different data sources.
+Llama 3 and Olmo 2 used small experiments (what Olmo calls "microannealing") to test the effect of different data sources. The basic idea is to take a model that has already been mostly trained, and then do a short cooldown with ~70% original data and ~30% a test high quality data source. (Olmo 2 uses 50/50.) We ran a series of microannealing runs to test the effect of different data sources.
 
 See [GH#784](https://github.com/marin-community/marin/issues/784) and [GH#820](https://github.com/marin-community/marin/issues/820) for the experiments and more details on our approach.
 
@@ -270,6 +281,18 @@ In fact, we found that nothing led to improved task performance in microannealin
 By doing this, we were able to improve both the loss and the task performance of most microannealing runs. Ironically, notwithstanding the above, only 70% PT/30% FLAN underperformed the 100% PT control.
 
 We also found that a microannealing experiment with all HQ sources resulted in average performance compared to the other microannealing runs; in this setting, there was no advantage in having a variety of data.
+
+In summary:
+
+- Naively oversampling "high-quality" (HQ) sources improved loss on HQ eval sets, but degraded general task performance.
+- HQ data often lacks formats useful for few-shot learning (e.g., multiple-choice Q&A).
+- Mixing in FLAN counteracted this by reintroducing task-like structure, improving task performance.
+- The best results came from 70% PT / 15% FLAN / 15% HQ — not from HQ alone.
+- Mixing all HQ sources together performed about at the average of the specific HQ sources.
+- Including FLAN alone (i.e. 70% PT / 30% FLAN) underperformed the PT baseline.
+
+So: FLAN helps in moderation, HQ alone didn't.
+
 
 ## Phase 3: Jellyfish (First Cooldown)
 
@@ -321,7 +344,9 @@ Results for this model are pretty good for "base model" tasks, though predictabl
 | MATH (4-shot) | 18.5 |
 | IFEval (prompt-level loose) | 9.2 |
 
-A 5-shot MMLU of 65.3 was better than both Olmo 2 7B and DCLM, and not too far behind Llama 3.1 8B. But we can do better.
+A 5-shot MMLU of 65.3 was better than both Olmo 2 7B (63.9) and DCLM (64.4), and not too far behind Llama 3.1 8B (66.4).[^MMLU scores] But we can do better.
+
+[^MMLU scores]: These scores are from [our evaluations](#base-model-results), except for DCLM, for which we use their published score.
 
 ### Notes
 
@@ -346,7 +371,7 @@ Dessert coasted at the same already-low, learning rate with the goal of patching
 - Adding the math datasets improved GSM8K and MATH somewhat. GSM8K went from 0.509 to 0.611, and MATH went from 0.184 to 0.211. Not enough to get excited about, but a positive sign for later.
 - FLAN didn't help final MMLU 5-shot (.653->.651) or other tasks, at least not in this regime.
 
-So "dessert" was seemingly a failure, though we revisit this in the final phase.
+So "Dessert" was seemingly a failure, though we revisit this in the final phase.
 
 
 ## Phase 4: Phoenix (Reheated)
@@ -390,7 +415,7 @@ The genesis of Raccoon was that we were having trouble getting our model to perf
 We thought this might have something to do with our struggles with SFT-ability.
 
 Starting from the jellyfish cooldown, we further cooled down the model from 1.7e-4 to 1.7e-5 over about 100B tokens. ([WandB report here](https://wandb.ai/stanford-mercury/marin/reports/898-Tootsie-Soft-Raccoon--VmlldzoxMTk3NjUwNg?accessToken=06f87pmmvhdulczenkg3349jxk7e1pwbd4pdci2i8wvyxg9289122gfnckr9ymwc))
-Things looked good at first, but as the cool down deepened the the training loss started slowly creeping up?!?
+Things looked good at first, but as the cool down deepened the training loss started slowly creeping up?!?
 We could understand if there was a divergence but we couldn't understand a slow increase in training loss.
 
 ![graph depicting the slow increase in training loss during the cooldown](../images/8b-raccoon-loss-increase.png)
@@ -491,13 +516,15 @@ About the new datasets:
 
 ##### Marin Markdown Corpora
 
-We create three new datasets by Markdownifying a variety of sources. The idea behind these datasets was two-fold: (1)to create a high-fidelity conversion of high-quality sources that preserve most of the relevant formatting and information (e.g. tables and LaTeX), and secondarily because Markdown has become the default format for many LLM applications. (Also, we noticed in [our visualization experiments](https://github.com/marin-community/marin/issues/826) the prior checkpoint was qualitatively worse at Markdown than Llama 8B.)
+More details on the Markdown corpora are available in [our report on the datasets](../reports/markdownified-datasets.md).
+
+We create three new datasets by Markdownifying a few different "high-quality sources."  The motivation behind these datasets was two-fold. First, we wanted to create high-fidelity conversions of high-quality sources that preserve important structure and formatting (e.g., tables and LaTeX). Second, Markdown has increasingly become the default format for many LLM applications, so training on Markdown-style inputs may improve downstream usability. (Also, we noticed in [our visualization experiments](https://github.com/marin-community/marin/issues/826) the prior checkpoint was qualitatively worse at Markdown than Llama 8B.)
 
 - Marin Arxiv Markdown (available as two datasets: [ar5iv-no-warning-markdown](https://huggingface.co/datasets/marin-community/ar5iv-no-problem-markdown) and [ar5iv-warning-markdown](https://huggingface.co/datasets/marin-community/ar5iv-warning-markdown)) is a new dataset of [Arxiv](https://arxiv.org/) papers that have been markdownified from their HTML5-formatted versions from the [Ar5iv](https://ar5iv.labs.arxiv.org/) project. (The warning/no-problems distinction is from the conversion from LaTeX to Markdown.)
 - [Marin StackExchange Markdown](https://huggingface.co/datasets/marin-community/stackexchange-markdown) similarly is a version of StackExchange markdownified from HTML5-formatted versions.
 - [Marin Wikipedia Markdown](https://huggingface.co/datasets/marin-community/wikipedia-markdown) is a new dataset of [Wikipedia](https://wikipedia.org/) articles that have been markdownified from their HTML5-formatted versions, which are available through the now deprecated [Wikipedia Enterprise HTML Dumps](https://dumps.wikimedia.org/other/enterprise_html/).
 
-These datasets are licensed under the original licenses of the sources. You can find more details in [our report on the datasets](../reports/markdownified-datasets.md).
+These datasets are licensed under the original licenses of the sources.
 
 
 ### Learning Rate Schedule and Other Hyperparameters
@@ -614,3 +641,18 @@ Future work will focus on:
 - **Bigger models.** We have a 32B model that is performing quite well at 1T tokens.
 - **SFT/RL.** We're still improving our Instruct model. In addition to making the model genenerally better, we would like to reduce degradation on tasks like MMLU.
 - **Format diversity.** We will continue to pursue formatting diversity as a way to improve performance on tasks like MMLU.
+
+
+## Glossary
+
+- **WSD**: Warmup-Stable-Decay, a learning rate schedule that warms up, remains stable, and then decays at the end (typically ~10-20% of the total training budget).
+- **WSD-S**: A learning rate schedule that includes cyclic long flat phases and short cooldowns to probe model performance. Read more in [our paper](https://arxiv.org/abs/2410.05192).
+- **Cooldown**: A phase in training where the learning rate is gradually decreased, often accompanied by a shift to higher-quality or more structured data.
+- **FLAN**: A [large instruction-tuned dataset from Google](https://arxiv.org/abs/2109.01652) designed to improve few-shot and instruction-following abilities.
+- **EMA (Exponential Moving Average)**: A moving average over model weights used to evaluate model performance without being affected by short-term parameter fluctuations.
+- **Z-loss**: A regularization term that penalizes the logit norm, helping to stabilize the `lm_head` by keeping its output distribution from getting too large.
+- **PT Mix**: Pretraining mixture — the standard data blend used during the initial training phases.
+- **Mi tokens**: Mebibyte-equivalent tokens, where 1 Mi = 1024², as opposed to a million (10⁶).
+- **Microannealing**: A mid-training experiment that mixes in new data to test effects on loss and task performance, typically in a short cooldown-like window.
+- **SFT-ability**: A model's amenability to supervised fine-tuning. Poor SFT-ability may manifest as unstable loss or poor generalization after SFT.
+- **Dessert Run**: A short continuation of training, typically at low learning rates, aimed at patching specific weaknesses (e.g., math, instruction following).
