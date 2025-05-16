@@ -96,7 +96,7 @@ Different subfields received targeted training to boost capabilities:
 ### Open Issues
 
 - [#911](https://github.com/marin-community/marin/issues/911) Visualize entropy of tootsie model vs llama
-- [#850](https://github.com/marin-community/marin/issues/850) [Experiment Framework] [RFC] Targeted cooldowns
+- [#850](https://github.com/marin-community/marin/issues/850) [Experiment Framework] \[RFC\] Targeted cooldowns
 - [#661](https://github.com/marin-community/marin/issues/661) Run Extraction Method Ablation on Fineweb-edu
 - [#400](https://github.com/marin-community/marin/issues/400) Train quality classifiers on WildChat
 - [#390](https://github.com/marin-community/marin/issues/390) Train a fasttext classifier using fineweb-edu llama3 annotations
