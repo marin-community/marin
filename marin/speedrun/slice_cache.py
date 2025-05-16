@@ -36,7 +36,7 @@ class SliceCacheConfig(TokenizeConfigBase):
     input_config: LmDatasetSourceConfigBase
     num_tokens: int
     cache_path: str = THIS_OUTPUT_PATH
-    tokenizer: str = "stanford-crfm/marin_tokenizer"
+    tokenizer: str = "stanford-crfm/marin-tokenizer"
     seed: int = 42
 
     def as_lm_dataset_source_config(
