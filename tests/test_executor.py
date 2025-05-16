@@ -487,7 +487,10 @@ def test_collect_deps_skip_vs_block():
 
     # ----- skip parent -------------------------------------------------
     inp_skip = InputName(step=parent, name="ckpt.pt").nonblocking()
-    deps, ver, pseudo = collect_dependencies_and_version(inp_skip)
+    computed_deps = collect_dependencies_and_version(inp_skip)
+    deps = computed_deps.dependencies
+    ver = computed_deps.version
+    pseudo = computed_deps.pseudo_dependencies
 
     assert parent in pseudo and parent not in deps
     # Placeholder looks like "DEP[0]/ckpt.pt"
@@ -495,7 +498,10 @@ def test_collect_deps_skip_vs_block():
 
     # ----- require parent (default) ------------------------------------
     inp_block = InputName(step=parent, name="ckpt.pt")  # no .skip_parent()
-    deps, ver, pseudo = collect_dependencies_and_version(inp_block)
+    computed_deps = collect_dependencies_and_version(inp_block)
+    deps = computed_deps.dependencies
+    ver = computed_deps.version
+    pseudo = computed_deps.pseudo_dependencies
 
     assert parent in deps and parent not in pseudo
     assert ver == {"": "DEP[0]/ckpt.pt"}  # same placeholder, but in deps
