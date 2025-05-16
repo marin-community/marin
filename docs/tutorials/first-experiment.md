@@ -243,7 +243,6 @@ The `tokenized` directory contains the tokenized dataset.
 Congratulations! You have trained your first model in Marin.  Choose your next adventure:
 
 - Train a real [1B or 8B parameter language model](train-an-lm.md) using Marin.
-- Read about Marin's key concepts and principles in [Concepts](../explanations/concepts.md).
 - Learn about the [Executor framework](../explanations/executor.md).
 - Read more about the full [language modeling pipeline](../explanations/lm-pipeline.md), including data processing.
 
