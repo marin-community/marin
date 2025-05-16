@@ -83,7 +83,7 @@ Main Page: [marin-community/marin-8b-base](https://huggingface.co/marin-communit
 (More checkpoints are being uploaded right now.)
 
 | Name | Training Tokens | Link |
-|------|--------|---------|-------------|
+|------|--------|-------------|
 | `deeper-starling` | 13.7T | [marin-community/marin-8b-base](https://huggingface.co/marin-community/marin-8b-base/tree/deeper-starling) |
 
 `main` currently refers to `deeper-starling`. This may change in the future, though we will maintain model compatibility. If you require a specific checkpoint, please use the `revision` argument.
@@ -93,10 +93,10 @@ Main Page: [marin-community/marin-8b-base](https://huggingface.co/marin-communit
 Main Page: [marin-community/marin-8b-instruct](https://huggingface.co/marin-community/marin-8b-instruct)
 
 | Name | Training Tokens | Link |
-|------|--------|---------|-------------|
-| `deeper-starling-sft` | 5.3B | [marin-community/marin-8b-instruct](https://huggingface.co/marin-community/marin-8b-instruct/) |
+|------|--------|-------------|
+| `deeper-starling-05-15` | 5.3B | [marin-community/marin-8b-instruct](https://huggingface.co/marin-community/marin-8b-instruct/) |
 
-`main` currently refers to `deeper-starling-sft`. This may change in the future, though we will maintain model compatibility. If you require a specific checkpoint, please use the `revision` argument.
+`main` currently refers to `deeper-starling-05-15`. This may change in the future, though we will maintain model compatibility. If you require a specific checkpoint, please use the `revision` argument.
 
 
 ## Installation
@@ -116,11 +116,10 @@ You can use Marin with the standard HuggingFace Transformers library:
 from transformers import AutoModelForCausalLM, AutoTokenizer
 marin = AutoModelForCausalLM.from_pretrained("marin-community/marin-8b-base")
 tokenizer = AutoTokenizer.from_pretrained("marin-community/marin-8b-base")
-message = ["The Marin wind is "]
+message = ["The Marin wind is"]
 inputs = tokenizer(message, return_tensors='pt', return_token_type_ids=False)
 response = marin.generate(**inputs, max_new_tokens=100, do_sample=True, top_k=50, top_p=0.95)
 print(tokenizer.batch_decode(response, skip_special_tokens=True)[0])
->> 'Language modeling is  a key component of any text-based application, but its effectiveness...'
 ```
 
 We released a number of checkpoints of this model. To load a specific checkpoint, simply add the argument `revision`:
@@ -165,7 +164,7 @@ For all benchmarks, we used [LM Eval Harness](https://github.com/EleutherAI/lm-e
 | MAP NEO 7B               | 62.2     | **23.0**         | 81.1     | 52.0          | 42.4     | 84.7     | **81.7**       | 82.0     | 27.8     | 72.5             | 73.3              | 64.6           |  58.2        | 56.4        | TODO     |39.4       | 79.0     | 66.1       | 73.3     |
 
 
-Marin 7B Base fares well on most tasks.
+Marin 8B Base fares well on most tasks.
 
 
 ## Model Details
@@ -214,6 +213,6 @@ For errors in this model card, please open an issue in this repository. For tech
 
 ## Acknowledgements
 
-The compute for this model was generously provided by the Google's [TPU Research Cloud](https://sites.research.google/trc/about/).
+The compute for this model was generously provided by Google's [TPU Research Cloud](https://sites.research.google/trc/about/).
 
 (We based this model card on Olmo 2's.)
