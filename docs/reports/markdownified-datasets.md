@@ -57,8 +57,6 @@ The Stack Exchange dataset applies several specific filters:
 - **Duplicate Question Removal**: Removes duplicate questions, keeping only the first instance.
 - **Q&A Structure Preservation**: Special processing to maintain the question-answer structure of posts.
 - **Markup Formatting**: Proper conversion of Stack Exchange markup to markdown, preserving code blocks, lists, and other formatting.
-- **URL Filtering**: Removes problematic URLs (e.g., user profile pages) using blacklist patterns.
-- **Dense Link Removal**: Similar to Wikipedia, removes sections with excessive links.
 - **Separator Addition**: Adds separators between questions and answers for better readability.
 - **Main Content Preprocessing**: Special handling for Stack Exchange specific elements like "qa-main" class, question headers, and post content.
 
