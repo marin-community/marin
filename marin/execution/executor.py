@@ -185,7 +185,7 @@ class InputName:
 
     step: ExecutorStep | None
     name: str | None
-    wait_on_step: bool = True
+    block_on_step: bool = True
     """
     If False, the step that uses this InputName
     will not block (or attempt to execute) the parent step. We use this for
@@ -217,7 +217,7 @@ class InputName:
 
          (Note that if another step depends on the parent step, it will still block on it.)
         """
-        return dataclasses.replace(self, wait_on_step=False)
+        return dataclasses.replace(self, block_on_step=False)
 
 
 def get_executor_step(run: ExecutorStep | InputName) -> ExecutorStep:
@@ -409,7 +409,7 @@ def collect_dependencies_and_version(obj: Any) -> _Dependencies:
             # Put string i for the i-th dependency
             if obj.step is not None:
                 index = len(dependencies) + len(pseudo_dependencies)
-                if not obj.wait_on_step:
+                if not obj.block_on_step:
                     pseudo_dependencies.append(obj.step)
                 else:
                     dependencies.append(obj.step)
@@ -660,7 +660,7 @@ class Executor:
         }
 
         if computed_deps.pseudo_dependencies:
-            # don't put this in the literal to avoid changing the hash for old pre-pseudo-dep runs
+            # don't put this in the literal to avoid changing the hash for runs without pseudo-deps
             version["pseudo_dependencies"] = [self.versions[dep] for dep in computed_deps.pseudo_dependencies]
 
         # Compute output path
@@ -821,8 +821,8 @@ class Executor:
                     pip=pip_dependencies,
                 ),
                 # TODO: this is kind of gross, but the overhead of instantiating a separate ray task
-                # that only blocks is pretty wasteful. Would be better to not make 1 step per, but
-                # this is a good first step
+                # that only blocks is pretty wasteful. Would be better to not make 1 task per step, but
+                # this is a good first start
                 num_cpus=0.001 if isinstance(step.fn, ray.remote_function.RemoteFunction) else 1,
             ).remote(step.fn, step_name, config, dependencies, output_path, self.status_actor, force_run_failed)
         else:
