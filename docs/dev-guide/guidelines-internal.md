@@ -4,8 +4,8 @@ This documentation is for internal developers.
 
 ## Prerequisites
 
-- Please read the general guidelines in [guidelines.md](./guidelines.md)
-- Complete the environment setup in [getting-started.md](./tutorials/getting-started.md)
+- Please read the general guidelines in [guidelines.md](../explanations/guidelines.md)
+- Complete the environment setup in [installation.md](../tutorials/installation.md)
 
 ## Setup
 
