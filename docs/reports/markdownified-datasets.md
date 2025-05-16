@@ -9,7 +9,7 @@ This dataset collection consists of several large-scale text corpora that have b
 | Wiki | 8587224558 | 8.59B tokens | [Wikipedia Dump](https://dumps.wikimedia.org/other/enterprise_html/runs/20241201/enwiki-NS0-20241201-ENTERPRISE-HTML.json.tar.gz) |
 | Ar5iv No Problem | 2742463924 | 2.74B tokens | [Ar5iv Dump](https://sigmathling.kwarc.info/resources/ar5iv-dataset-2024/) |
 | Ar5iv Warning | 19552307274 | 19.6B tokens | [Ar5iv Dump](https://sigmathling.kwarc.info/resources/ar5iv-dataset-2024/) |
-| Stack Exchange | 20413785853 | 20.4B tokens | [Stack Exchange Dump] |
+| Stack Exchange | 20413785853 | 20.4B tokens | [Stack Exchange Dump](https://archive.org/details/stackexchange) |
 
 ## Processing Methodology
 
@@ -101,7 +101,17 @@ The core enhancement is the implementation of `extract_simplified_dom` which lev
 
 This enhancement maintains full backward compatibility with the existing Resiliparse API while extending its capabilities for applications that need more structure than plain text extraction provides.
 
-### Acknowledgements
+## Examples
+
+We have several "snapshot tests" as quality control. You can see some of them in our GitHub repo:
+
+- [Ar5iv](https://github.com/marin-community/marin/blob/main/tests/snapshots/ar5iv/expected/arxiv_4.md)
+- [Stack Exchange](https://github.com/marin-community/marin/blob/main/tests/snapshots/stackexchange/expected/stackoverflow.md)
+- [Wikipedia](https://github.com/marin-community/marin/blob/main/tests/snapshots/wiki/expected/aquila.md)
+
+While the conversion is by no means perfect, we believe the datasets are of high quality and a useful resource for the community.
+
+### ### Acknowledgements
 
 We would like to express our sincere gratitude to:
 
