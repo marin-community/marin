@@ -183,3 +183,7 @@ h5.doc-heading, h6.heading {
 .output_error > pre {
     overflow: auto;
 }
+
+header.md-header {
+    box-shadow: none;
+}

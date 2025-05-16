@@ -13,9 +13,9 @@ In general, you should reach for the default steps before writing your own.
 
 ::: marin.export.upload_dir_to_hf
 
-## Uploading
+## Data Generation
 
-::: marin.export.upload_dir_to_hf
+::: experiments.datashop.defaults.default_synthetic_data_generation
 
 ## Tokenization
 

@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """
+This script updates the `docs/reports/index.md` file with new experiment GitHub issues.
+
 Usage:
-python scripts/itemize-experiment-issues.py
+pip install PyGithub
+python scripts/itemize_experiment_issues.py
 """
 
 import os
@@ -54,6 +57,7 @@ def get_existing_reports():
 
     # Extract report URLs using regex
     report_urls = set(
+        # TODO: move this once we replace
         re.findall(
             r"https://(?:crfm\.stanford\.edu/marin/data_browser/|wandb\.ai/[^)]+|api\.wandb\.ai/links/[^)]+)", content
         )
@@ -65,7 +69,7 @@ def get_github_issues():
     """Get all issues with experiments label and extract experiment links."""
     # Initialize GitHub API
     g = Github(os.environ.get("GITHUB_TOKEN"))
-    repo = g.get_repo("stanford-crfm/marin")
+    repo = g.get_repo("marin-community/marin")
 
     # Get all issues with experiments label
     issues = repo.get_issues(labels=["experiment"], state="all")
@@ -82,7 +86,7 @@ def get_github_issues():
         }
 
         if any(urls.values()):  # If we found any experiment links
-            badge_url = f"https://img.shields.io/github/issues/detail/state/stanford-crfm/marin/{issue.number}"
+            badge_url = f"https://img.shields.io/github/issues/detail/state/marin-community/marin/{issue.number}"
             experiment_links.append(
                 {"title": clean_title(issue.title), "issue_num": issue.number, "badge_url": badge_url, "urls": urls}
             )
