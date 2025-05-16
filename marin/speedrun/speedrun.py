@@ -1,8 +1,8 @@
 """
 Default functions, configurations and utilities for Marin speedruns to use.
 
-default_speedrun() is the function a user should call to run a speedrun; example is
-in experiments/speedrun/sample_run.py
+NOTE: If you are submitting a speedrun, you shouldn't modify this code (unless there is a very strong reason to do so).
+You should just call default_speedrun() to run a speedrun; examples can be found in marin/experiments/speedrun/.
 """
 
 import dataclasses
