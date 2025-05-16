@@ -12,6 +12,9 @@ Tests four data mixes for cooldown:
 
 Metrics: Paloma Loss, Tulu3 Validation Loss, MMLU Accuracy
 """
+# In this experiment:
+# PT = Pretraining
+# HQ = High Quality
 
 from experiments.anneal_config import AnnealConfig
 from experiments.dclm.tokenize_dclm import DCLM_MIXTURE_WEIGHTS, dclm_components_llama3
@@ -89,7 +92,7 @@ md_stackexchange_tokenized = default_tokenize(
     tokenizer=llama3_tokenizer,
 ).with_output_path("tokenized/stackexchange-621b94")
 
-full_mix_components = {
+pt_vs_hq_components = {
     **tokenize_nemotron_steps(),
     "starcoderdata": dclm_components_llama3["starcoderdata"],
     "proofpile_2": dclm_components_llama3["proofpile_2"],
@@ -118,7 +121,7 @@ full_mix_weights = {
     "medu_science_qa": 0.0012 * 5,
 }
 
-full_mix = lm_mixture_data_config(components=full_mix_components, weights=full_mix_weights)
+full_mix = lm_mixture_data_config(components=pt_vs_hq_components, weights=full_mix_weights)
 
 # Dictionary of all mixes
 data_mixes = {
@@ -146,7 +149,7 @@ def run_cooldown_ablation():
                 data_mix, {"tulu_sft": tulu3_flat_llama_tokenized_as_validation}
             ),
             num_anneal_training_tokens=anneal_tokens,
-            resources=TpuPodConfig(tpu_type=tpu_type, node_count=node_count),
+            resources=TpuPodConfig(tpu_type=tpu_type, slice_count=node_count),
             train_batch_size=2048,
         )
 

@@ -7,7 +7,15 @@ In general, you should reach for the default steps before writing your own.
 
 ## Downloading
 
-TODO
+::: experiments.defaults.default_download
+
+## Exporting and Uploading
+
+::: marin.export.upload_dir_to_hf
+
+## Data Generation
+
+::: experiments.datashop.defaults.default_synthetic_data_generation
 
 ## Tokenization
 
