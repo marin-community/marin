@@ -2,6 +2,8 @@
 Step to read a Levanter cache and produce a subsample of that cache.
 """
 
+# TODO: this is painfully slow. Should figure out what's going on
+
 import dataclasses
 import logging
 import os
