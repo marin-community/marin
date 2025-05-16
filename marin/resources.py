@@ -87,9 +87,10 @@ class GpuConfig(ResourceConfig):
 
     # NB that Ray doesn't like resources={"GPU": 1} so we have to do this
     def as_remote_kwargs(self) -> dict:
-        out = {"num_gpus": self.gpu_count}
+        out = dict(num_gpus=self.gpu_count, runtime_env=self.runtime_env)
         if self.accelerator_type is not None:
             out["accelerator_type"] = self.accelerator_type
+
         return out
 
     def as_ray_resources(self) -> RayResources:
@@ -113,4 +114,4 @@ class TpuPodConfig(ResourceConfig):
         return self.tpu_type
 
     def as_ray_resources(self) -> RayResources:
-        return RayResources(resources={self.tpu_type: self.slice_count})
+        return RayResources(runtime_env=self.runtime_env, num_cpus=8)
