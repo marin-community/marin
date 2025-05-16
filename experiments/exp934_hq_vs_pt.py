@@ -12,6 +12,9 @@ Tests four data mixes for cooldown:
 
 Metrics: Paloma Loss, Tulu3 Validation Loss, MMLU Accuracy
 """
+# In this experiment:
+# PT = Pretraining
+# HQ = High Quality
 
 from experiments.anneal_config import AnnealConfig
 from experiments.dclm.tokenize_dclm import DCLM_MIXTURE_WEIGHTS, dclm_components_llama3

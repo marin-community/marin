@@ -41,6 +41,7 @@ from marin.resources import TpuPodConfig
 # 5. Cooldown v2: Another attempt at a final cooldown (from (2))
 # 6. Phoenix: from (3), rewarmup and use mix of nemotron_cc and starcoder to keep moving
 # 7. Starling: from (6), cooldown from 1.7e-3 to 1.7e-5 over 1.34T tokens
+# 8. Deeper Starling: from (7), coast at 1.7e-5 over ~250B tokens
 
 
 ################################################################
@@ -86,13 +87,15 @@ llama_8b_tootsie_phase1 = dataclasses.replace(
 # We increased batch size b/c we have more hardware
 # Because we increased the batch size, we need to increase the LR by \sqrt(ratio), which is ≈1.7x
 
-kestrel_phase_1_checkpoint_for_phase2 = llama_8b_tootsie_phase1.cd("checkpoints/step-660000").skip_parent()
+PHASE_1_END = 660_000
+
+kestrel_phase_1_checkpoint_for_phase2 = llama_8b_tootsie_phase1.cd(f"checkpoints/step-{PHASE_1_END}").nonblocking()
 
 llama_8b_train_config_phase2 = SimpleTrainConfig(
     resources=TpuPodConfig(tpu_type="v4-2048", slice_count=1),
     num_train_steps=1_000_000,
-    # after 660,600 we changed things up:
-    train_batch_size=[ScheduleStep(start=0, value=1024), ScheduleStep(start=660_001, value=3072)],
+    # after PHASE_1_END we changed things up:
+    train_batch_size=[ScheduleStep(start=0, value=1024), ScheduleStep(start=PHASE_1_END + 1, value=3072)],
     # LR doesn't (yet) support the schedule stuff so we just set it to the new value
     # because we're increasing the batch size, we need to increase the LR by \sqrt(ratio), which is ≈1.7x
     learning_rate=1.7e-3,
@@ -134,7 +137,7 @@ llama_8b_tootsie_phase2 = dataclasses.replace(
 # At this time, some of us had prior experience with FLAN
 # that suggested it was not great and we were a bit
 # leery of the very specific synth math data, so we left those parts out.
-ocelot_phase_2_checkpoint_for_phase3 = llama_8b_tootsie_phase1.cd("checkpoints/step-738376").skip_parent()
+ocelot_phase_2_checkpoint_for_phase3 = llama_8b_tootsie_phase1.cd("checkpoints/step-738376").nonblocking()
 
 
 # main phase: base mix for 740,500 steps
@@ -151,7 +154,7 @@ llama_8b_train_config_phase3 = SimpleTrainConfig(
     resources=TpuPodConfig(tpu_type="v4-2048", slice_count=1),
     num_train_steps=PHASE_3_END,
     # From Phase 2:
-    train_batch_size=[ScheduleStep(start=0, value=1024), ScheduleStep(start=660_001, value=3072)],
+    train_batch_size=[ScheduleStep(start=0, value=1024), ScheduleStep(start=PHASE_1_END + 1, value=3072)],
     learning_rate=1.7e-3,
     decay=DECAY_FRACTION,
     ema_beta=0.995,
@@ -331,7 +334,7 @@ DESSERT_END = PHASE_3_END + 17000
 llama_8b_train_config_dessert = SimpleTrainConfig(
     resources=TpuPodConfig(tpu_type="v4-128", slice_count=4),
     num_train_steps=DESSERT_END,
-    train_batch_size=[ScheduleStep(start=0, value=1024), ScheduleStep(start=660_001, value=3072)],
+    train_batch_size=[ScheduleStep(start=0, value=1024), ScheduleStep(start=PHASE_1_END + 1, value=3072)],
     # coast along at 1.7e-4
     learning_rate=1.7e-4,
     decay=0.0,  # we're already at the lowest we want to go
@@ -476,13 +479,16 @@ llama_8b_tootsie_cooldown_v2 = dataclasses.replace(
 ## Phase 4: Phoenix from (3), rewarmup and use mix of nemotron_cc and starcoder to keep moving
 ###############################################################
 
-jellyfish_phase_3_checkpoint_for_phase4 = llama_8b_tootsie_phase3.cd("checkpoints/step-819924").skip_parent()
+jellyfish_phase_3_checkpoint_for_phase4 = llama_8b_tootsie_phase3.cd("checkpoints/step-819924").nonblocking()
 
 # We're going to try to keep moving by rewarming the model with a mix of nemotron_cc and starcoder.
 
 PHASE_4_START = PHASE_3_END
 # ramp up to 1.7e-3 over 2k steps
 PHASE_4_REWARMUP_DURATION = 2000
+
+# we use this so the schedule doesn't try to decay before we're ready
+REALLY_FAR_AWAY_STEP = 2_000_000
 
 
 nemotron_cc_steps = tokenize_nemotron_steps()
@@ -503,7 +509,7 @@ phase_4_warmup_weights = {
 
 llama_8b_train_config_phase4 = dataclasses.replace(
     llama_8b_train_config_phase3,
-    num_train_steps=2_000_000,
+    num_train_steps=REALLY_FAR_AWAY_STEP,
     learning_rate=1.7e-3,
     lr_schedule="linear",
     decay=DECAY_FRACTION,
@@ -566,14 +572,14 @@ COOLDOWN_LEN = 80_000
 
 # for these long runs we don't usually actually **finish** the run in the Executor's eyes,
 # so we use `wait_for_completion`
-phoenix_phase4_checkpoint_for_phase5 = llama_8b_tootsie_adept_phoenix.cd("checkpoints/step-1320000").skip_parent()
+phoenix_phase4_checkpoint_for_phase5 = llama_8b_tootsie_adept_phoenix.cd("checkpoints/step-1320000").nonblocking()
 
 cooldown_train_config = dataclasses.replace(
     llama_8b_train_config_phase4,
     train_batch_size=[
         ScheduleStep(start=0, value=1024),
-        ScheduleStep(start=660_001, value=3072),
-        ScheduleStep(start=1320001, value=4096),
+        ScheduleStep(start=PHASE_1_END + 1, value=3072),
+        ScheduleStep(start=PHASE_4_END + 1, value=4096),
     ],
     # from spoonbill: zloss is important for low LR phase
     z_loss_weight=1e-4,
@@ -649,7 +655,7 @@ assert 0.29 < sum(v for k, v in normalized.items() if k not in NEMOTRON_WEIGHTS)
 # things kept getting better, so we'll do a constant LR run for a bit longer
 
 # starling_checkpoint = "gs://marin-us-central2/checkpoints/tootsie-8b-sensible-starling/checkpoints/step-1399923/"
-starling_checkpoint = tootsie_8b_sensible_starling.cd("checkpoints/step-1399923").skip_parent()
+starling_checkpoint = tootsie_8b_sensible_starling.cd("checkpoints/step-1399923").nonblocking()
 
 EXTRA_COOLDOWN_LEN = 20000
 
