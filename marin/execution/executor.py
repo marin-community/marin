@@ -660,7 +660,7 @@ class Executor:
         }
 
         if computed_deps.pseudo_dependencies:
-            # don't put this in the literal to avoid changing the hash for old pre-pseudo-dep runs
+            # don't put this in the literal to avoid changing the hash for runs without pseudo-deps
             version["pseudo_dependencies"] = [self.versions[dep] for dep in computed_deps.pseudo_dependencies]
 
         # Compute output path
