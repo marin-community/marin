@@ -188,7 +188,7 @@ class InputName:
     block_on_step: bool = True
     """
     If False, the step that uses this InputName
-    will not block (or attempt to execute) the parent step. We use this for
+    will not block (or attempt to execute) `step`. We use this for
     documenting dependencies in the config, but where that step might not have technically finished...
 
     For instance, we sometimes use training checkpoints before the training step has finished.
