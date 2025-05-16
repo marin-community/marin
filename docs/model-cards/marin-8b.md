@@ -8,12 +8,17 @@ datasets:
 - hltcoe/megawika
 - mlfoundations/dclm-baseline-1.0
 - HuggingFaceTB/finemath
-
+- marin-community/ar5iv-noproblem-markdown
+- marin-community/ar5iv-warning-markdown
+- marin-community/datashop-science-qa
+- marin-community/stackexchange-markdown
+- marin-community/wikipedia-markdown
+# REMINDER: when the instruct model should add dependencies on the instruct datasets and the base model.
 language:
 - en
 ---
 
-<img alt="Marin Logo" src="https://huggingface.co/datasets/marin-community/blog-images/resolve/main/marin-boat.jpg" width="64" style="margin-left:'auto' margin-right:'auto' display:'block'">
+<img alt="Marin Logo" src="https://huggingface.co/datasets/marin-community/blog-images/resolve/main/marin-boat.jpg" width="96" style="margin-left:'auto' margin-right:'auto' display:'block'">
 
 
 # Model Card for Marin 8B
@@ -158,7 +163,7 @@ For all benchmarks, we used [LM Eval Harness](https://github.com/EleutherAI/lm-e
 | Marin 8B Base (Starling) | **68.3** | 20.9             | **86.5** | **63.1**      | **50.6** | **85.9** | 79.1           | **92.0** | 30.3     | **82.3**         | **83.6**          | **74.7**       |  **67.6**    | **65.9**    | **36.5** |44.2       | **84.4** | **74.5**   | 82.1     |
 | Llama 3.1 Base           | 67.0     | 20.4             | 85.8     | 58.9          | 46.4     | 84.2     | 75.2           | **92.0** | **32.3** | 79.4             | 81.9              | **74.7**       |  66.4        | 65.5        | 33.3     |45.8       | 82.9     | 74.4       | 83.5     |
 | OLMo 2 Base              | 66.7     | 17.4             | 85.0     | 60.7          | 44.4     | 85.5     | 75.4           | 89.0     | 26.8     | 80.5             | 81.7              | 73.1           |  63.9        | 61.9        | 30.6     |**46.2**   | 82.5     | 74.3       | **86.1** |
-| MAP NEO 7B               | 62.2     | **23.0**         | 81.1     | 52.0          | 42.4     | 84.7     | **81.7**       | 82.0     | 27.8     | 72.5             | 73.3              | 64.6           |  58.2        | 56.4        | TODO     |39.4       | 79.0     | 66.1       | 73.3     |
+| MAP NEO 7B               | 62.2     | **23.0**         | 81.1     | 52.0          | 42.4     | 84.7     | **81.7**       | 82.0     | 27.8     | 72.5             | 73.3              | 64.6           |  58.2        | 56.4        | 25.2     |39.4       | 79.0     | 66.1       | 73.3     |
 
 
 Marin 8B Base fares well on most tasks.
