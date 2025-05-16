@@ -66,11 +66,11 @@ might be:
 - If we decide to rename fields, we can extend `versioned` to take a string of
   the old field name to preserve backward compatibility.
 
-- "Pseudo-dependencies" are dependencies that are not actually run, but are
-  included in the hash. This is useful for depending on checkpoints of in-progress
-  training runs, for example. When you run a step that has a pseudo-dependency,
-  it will not wait for the pseudo-dependency to finish executing (or even check if it is executing or failed)
-  before running.
+- "Pseudo-dependencies" are dependencies that do not block the execution of
+  the step, but are still included in the version.  This is useful for depending
+   on checkpoints of in-progress training runs, for example. When you run a step
+  that has a pseudo-dependency, it will not wait for the pseudo-dependency to
+  finish executing (or even check if it is executing or failed) before running.
 """
 
 import dataclasses
@@ -185,10 +185,11 @@ class InputName:
 
     step: ExecutorStep | None
     name: str | None
-    should_skip_parent: bool = False
+    wait_on_step: bool = True
     """
-    If True, the step will not block (or attempt to execute) the parent step. We use this for
-    documenting dependencies in the config, but that step might not have technically finished...
+    If False, the step that uses this InputName
+    will not block (or attempt to execute) the parent step. We use this for
+    documenting dependencies in the config, but where that step might not have technically finished...
 
     For instance, we sometimes use training checkpoints before the training step has finished.
 
@@ -210,13 +211,13 @@ class InputName:
         """
         return InputName(None, name=path)
 
-    def skip_parent(self, should_skip: bool = True) -> "InputName":
+    def nonblocking(self) -> "InputName":
         """
-        If `should_skip` is True (default), the step will not block on (or attempt to execute) the parent step.
+        the step will not block on (or attempt to execute) the parent step.
 
-        (Note that if another step depends on the parent step, it will still block on it.)
+         (Note that if another step depends on the parent step, it will still block on it.)
         """
-        return dataclasses.replace(self, should_skip_parent=should_skip)
+        return dataclasses.replace(self, wait_on_step=False)
 
 
 def get_executor_step(run: ExecutorStep | InputName) -> ExecutorStep:
@@ -356,7 +357,22 @@ def dependency_index_str(i: int) -> str:
     return f"DEP[{i}]"
 
 
-def collect_dependencies_and_version(obj: Any) -> tuple[list[ExecutorStep], dict[str, Any], list[ExecutorStep]]:
+@dataclass(frozen=True)
+class _Dependencies:
+    """
+    Contains the dependencies of a step, the pseudo-dependencies, and the version of the dependencies.
+    Internal use.
+    """
+
+    dependencies: list[ExecutorStep]
+    """List of dependencies."""
+    pseudo_dependencies: list[ExecutorStep]
+    """List of pseudo-dependencies."""
+    version: dict[str, Any]
+    """Version of the dependencies."""
+
+
+def collect_dependencies_and_version(obj: Any) -> _Dependencies:
     """Recurse through `obj` to find all the versioned values, and return them
     as a dict where the key is the sequence of fields identifying where the
     value resides in obj.  Example:
@@ -393,7 +409,7 @@ def collect_dependencies_and_version(obj: Any) -> tuple[list[ExecutorStep], dict
             # Put string i for the i-th dependency
             if obj.step is not None:
                 index = len(dependencies) + len(pseudo_dependencies)
-                if obj.should_skip_parent:
+                if not obj.wait_on_step:
                     pseudo_dependencies.append(obj.step)
                 else:
                     dependencies.append(obj.step)
@@ -418,7 +434,7 @@ def collect_dependencies_and_version(obj: Any) -> tuple[list[ExecutorStep], dict
 
     recurse(obj, "")
 
-    return dependencies, version, pseudo_dependencies
+    return _Dependencies(dependencies, pseudo_dependencies, version)
 
 
 def instantiate_config(
@@ -490,8 +506,9 @@ class Executor:
         self.configs: dict[ExecutorStep, dataclass] = {}
         self.dependencies: dict[ExecutorStep, list[ExecutorStep]] = {}
         self.versions: dict[ExecutorStep, dict[str, Any]] = {}
-        # skippable deps are pseudo-dependencies that only impact version but not blocking
-        self.skippable: dict[ExecutorStep, bool] = {}
+        # pseudo-dependencies only impact version but don't block execution of descendants
+        # this dict contains is True for steps that are only used as pseudo-dependencies
+        self.is_pseudo_dep: dict[ExecutorStep, bool] = {}
         self.version_strs: dict[ExecutorStep, str] = {}
         self.version_str_to_step: dict[str, ExecutorStep] = {}
         self.output_paths: dict[ExecutorStep, str] = {}
@@ -543,7 +560,7 @@ class Executor:
         if run_only is not None:
             steps_to_run = self._compute_transitive_deps(self.steps, run_only)
         else:
-            steps_to_run = [step for step in self.steps if not self.skippable[step]]
+            steps_to_run = [step for step in self.steps if not self.is_pseudo_dep[step]]
 
         if steps_to_run != self.steps:
             logger.info(f"### Running {len(steps_to_run)} steps out of {len(self.steps)} ###")
@@ -618,20 +635,19 @@ class Executor:
 
     def compute_version(self, step: ExecutorStep, is_pseudo_dep: bool):
         if step in self.versions:
-            if not is_pseudo_dep and self.skippable[step]:
+            if not is_pseudo_dep and self.is_pseudo_dep[step]:
                 logger.info(f"Step {step.name} was previously marked as skippable, but is not anymore.")
-                self.skippable[step] = False
+                self.is_pseudo_dep[step] = False
 
             return
 
         # Collect dependencies and the config version
-        dependencies, config_version, pseudo_deps = collect_dependencies_and_version(obj=step.config)
-
+        computed_deps = collect_dependencies_and_version(obj=step.config)
         # Recurse on dependencies
-        for dep in dependencies:
+        for dep in computed_deps.dependencies:
             self.compute_version(dep, is_pseudo_dep=is_pseudo_dep)
 
-        for dep in pseudo_deps:
+        for dep in computed_deps.pseudo_dependencies:
             self.compute_version(dep, is_pseudo_dep=True)
 
         # The version specifies precisely all the information that uniquely
@@ -639,13 +655,13 @@ class Executor:
         # version.
         version = {
             "name": step.name,
-            "config": config_version,
-            "dependencies": [self.versions[dep] for dep in dependencies],
+            "config": computed_deps.version,
+            "dependencies": [self.versions[dep] for dep in computed_deps.dependencies],
         }
 
-        if pseudo_deps:
+        if computed_deps.pseudo_dependencies:
             # don't put this in the literal to avoid changing the hash for old pre-pseudo-dep runs
-            version["pseudo_dependencies"] = [self.versions[dep] for dep in pseudo_deps]
+            version["pseudo_dependencies"] = [self.versions[dep] for dep in computed_deps.pseudo_dependencies]
 
         # Compute output path
         version_str = json.dumps(version, sort_keys=True, cls=CustomJsonEncoder)
@@ -683,11 +699,11 @@ class Executor:
             output_paths=self.output_paths,
             prefix=self.prefix,
         )
-        self.dependencies[step] = list(map(self.canonicalize, dependencies))
+        self.dependencies[step] = list(map(self.canonicalize, computed_deps.dependencies))
         self.versions[step] = version
         self.version_strs[step] = version_str
         self.output_paths[step] = output_path
-        self.skippable[step] = is_pseudo_dep
+        self.is_pseudo_dep[step] = is_pseudo_dep
 
     def canonicalize(self, step: ExecutorStep) -> ExecutorStep:
         """Multiple instances of `ExecutorStep` might have the same version."""

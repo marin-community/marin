@@ -486,7 +486,7 @@ def test_collect_deps_skip_vs_block():
     parent = ExecutorStep(name="parent", fn=dummy_fn, config=DummyCfg(x=1))
 
     # ----- skip parent -------------------------------------------------
-    inp_skip = InputName(step=parent, name="ckpt.pt").skip_parent()
+    inp_skip = InputName(step=parent, name="ckpt.pt").nonblocking()
     deps, ver, pseudo = collect_dependencies_and_version(inp_skip)
 
     assert parent in pseudo and parent not in deps
@@ -514,7 +514,7 @@ def test_parent_version_bubbles_into_skip_child():
     with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
         # First parent/child pair (parent.x = 1)
         parent1 = ExecutorStep(name="parent", fn=dummy_fn, config=DummyCfg(x=versioned(1)))
-        child1_cfg = DummyCfg(0, input_path=parent1.cd("dummy").skip_parent())
+        child1_cfg = DummyCfg(0, input_path=parent1.cd("dummy").nonblocking())
         child1 = ExecutorStep(
             name="child",
             fn=dummy_fn,
@@ -531,7 +531,7 @@ def test_parent_version_bubbles_into_skip_child():
         child2 = ExecutorStep(
             name="child",
             fn=dummy_fn,
-            config=DummyCfg(x=0, input_path=parent2.cd("dummy").skip_parent()),
+            config=DummyCfg(x=0, input_path=parent2.cd("dummy").nonblocking()),
         )
         executor.run(steps=[child2])
         version2 = executor.version_strs[child2]
@@ -549,7 +549,7 @@ def test_parent_doesnt_run_on_skip_parent():
         child = ExecutorStep(
             name="child",
             fn=dummy_fn,
-            config=DummyCfg(input_path=parent.cd("dummy").skip_parent()),
+            config=DummyCfg(input_path=parent.cd("dummy").nonblocking()),
         )
 
         executor = create_executor(temp_dir)
@@ -565,7 +565,7 @@ def test_skippable_parent_will_run_if_asked():
         child = ExecutorStep(
             name="child",
             fn=dummy_fn,
-            config=DummyCfg(input_path=parent.cd("dummy").skip_parent()),
+            config=DummyCfg(input_path=parent.cd("dummy").nonblocking()),
         )
 
         executor = create_executor(temp_dir)
@@ -584,7 +584,7 @@ def test_parent_will_run_if_some_child_is_not_skippable():
         child = ExecutorStep(
             name="child",
             fn=dummy_fn,
-            config=DummyCfg(input_path=parent.cd("dummy").skip_parent()),
+            config=DummyCfg(input_path=parent.cd("dummy").nonblocking()),
         )
 
         child2 = ExecutorStep(
