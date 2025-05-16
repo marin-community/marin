@@ -107,7 +107,7 @@ jobs:
                                      && export WANDB_ENTITY=stanford-mercury \
                                      && export OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }} \
                                      && export HF_TOKEN=${{ secrets.HF_TOKEN }} \
-                                     && export TF_CPP_MIN_LOG_LEVEL=1 \
+                                     && export START_RAY_TPU_CLUSTER=true \
                                      && python scripts/install_all_pip_dep.py \
                                      && pip list \
                                      && echo TPU_TEST \
@@ -115,7 +115,9 @@ jobs:
                                      && echo VLLM_TEST \
                                      && pytest tests/vllm -s -v \
                                      && echo EVALS_TEST \
-                                     && pytest tests/evals -s -v"'
+                                     && pytest tests/evals -s -v \
+                                     && echo RAY_DATA_TEST \
+                                     && pytest tests/ray-data -s -v"'
 
       # - name: Configure Docker for Artifact Registry
       #   run: |

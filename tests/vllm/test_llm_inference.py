@@ -6,7 +6,7 @@ import pytest
 import ray
 
 try:
-    from vllm import LLM, SamplingParams
+    from tests.vllm.utils import run_vllm_inference
 except ImportError:
     pytest.skip("vLLM is not installed", allow_module_level=True)
 
@@ -15,21 +15,9 @@ except ImportError:
 def _test_llm_func(model_config):
     model_path = model_config.ensure_downloaded("/tmp/test-llama-eval")
 
-    llm = LLM(model=model_path, **model_config.engine_kwargs)
-
-    sampling_params = SamplingParams(
-        max_tokens=100,
-        temperature=0.7,
-    )
-
-    generated_texts = llm.generate(
-        "Hello, how are you?",
-        sampling_params=sampling_params,
-    )
+    run_vllm_inference(model_path, **model_config.engine_kwargs)
 
     model_config.destroy()
-
-    return generated_texts
 
 
 @pytest.mark.skipif(os.getenv("TPU_CI") != "true", reason="Skip this test if not running with a TPU in CI.")
