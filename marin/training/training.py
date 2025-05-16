@@ -1,7 +1,6 @@
 import dataclasses
 import logging
 import os
-import sys
 from copy import deepcopy
 from dataclasses import dataclass, replace
 
@@ -183,13 +182,13 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
 
     # TODO: abstract this?
     if isinstance(hw_config, TpuPodConfig):
-        if hw_config.node_count == 1:
+        if hw_config.slice_count == 1:
             return run_on_pod_resumable(train_lm_task, config.resources.accelerator_descriptor(), max_retries_failure=10)
         else:
             return run_on_pod_multislice_resumable(
                 train_lm_task,
                 config.resources.accelerator_descriptor(),
-                hw_config.node_count,
+                hw_config.slice_count,
                 max_retries_failure=10,
             )
     else:

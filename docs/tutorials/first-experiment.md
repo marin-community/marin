@@ -49,6 +49,9 @@ This function takes a dataset and a tokenizer and returns an `ExecutorStep` that
 The tokenized dataset is a directory containing one file per shard of the dataset.
 
 ```python
+from experiments.llama import llama3_tokenizer
+from experiments.defaults import default_tokenize
+
 tinystories_tokenized = default_tokenize(
     name=tinystories_hf_id,  # path to write tokenized files (tokenized/ will be prepended)
     dataset=tinystories_hf_id,  # HF dataset id
@@ -75,6 +78,9 @@ This class defines basic training configuration that is sufficient for most expe
 
     === "CPU"
         ```python
+        from marin.resources import CpuOnlyConfig
+        from experiments.simple_train_config import SimpleTrainConfig
+
         nano_train_config = SimpleTrainConfig(
             # Here we define the hardware resources we need.
             resources=CpuOnlyConfig(num_cpus=1),
@@ -90,6 +96,9 @@ This class defines basic training configuration that is sufficient for most expe
 
     === "GPU"
         ```python
+        from marin.resources import GpuConfig
+        from experiments.simple_train_config import SimpleTrainConfig
+
         nano_train_config = SimpleTrainConfig(
             # Here we define the hardware resources we need.
             resources=GpuConfig(gpu_count=1),
@@ -105,6 +114,9 @@ This class defines basic training configuration that is sufficient for most expe
 
     === "TPU"
         ```python
+        from marin.resources import TpuPodConfig
+        from experiments.simple_train_config import SimpleTrainConfig
+
         nano_train_config = SimpleTrainConfig(
             # Here we define the hardware resources we need.
             resources=TpuPodConfig(tpu_type="v4-8"),
@@ -127,6 +139,9 @@ To train the model, we use the `default_train` function from `experiments.defaul
 This function takes a tokenized dataset, a model configuration, and a training configuration and returns (a step that trains) the model.
 
 ```python
+from experiments.llama import llama_nano
+from experiments.defaults import default_train
+
 nano_tinystories_model = default_train(
     name="marin-tutorial-nano-tinystories",
     tokenized=tinystories_tokenized,
@@ -156,6 +171,8 @@ We do this by calling `executor_main` from `marin.execution.executor`.
 We put this in a `if __name__ == "__main__":`:
 
 ```python
+from marin.execution.executor import executor_main
+
 if __name__ == "__main__":
     executor_main(
         steps=[
@@ -226,7 +243,6 @@ The `tokenized` directory contains the tokenized dataset.
 Congratulations! You have trained your first model in Marin.  Choose your next adventure:
 
 - Train a real [1B or 8B parameter language model](train-an-lm.md) using Marin.
-- Read about Marin's key concepts and principles in [Concepts](../explanations/concepts.md).
 - Learn about the [Executor framework](../explanations/executor.md).
 - Read more about the full [language modeling pipeline](../explanations/lm-pipeline.md), including data processing.
 
