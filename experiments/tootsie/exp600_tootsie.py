@@ -86,7 +86,7 @@ llama_8b_tootsie_phase1 = dataclasses.replace(
 # We increased batch size b/c we have more hardware
 # Because we increased the batch size, we need to increase the LR by \sqrt(ratio), which is ≈1.7x
 
-kestrel_phase_1_checkpoint_for_phase2 = llama_8b_tootsie_phase1.cd("checkpoints/step-660000").skip_parent(False)
+kestrel_phase_1_checkpoint_for_phase2 = llama_8b_tootsie_phase1.cd("checkpoints/step-660000").skip_parent()
 
 llama_8b_train_config_phase2 = SimpleTrainConfig(
     resources=TpuPodConfig(tpu_type="v4-2048", slice_count=1),
@@ -134,7 +134,7 @@ llama_8b_tootsie_phase2 = dataclasses.replace(
 # At this time, some of us had prior experience with FLAN
 # that suggested it was not great and we were a bit
 # leery of the very specific synth math data, so we left those parts out.
-ocelot_phase_2_checkpoint_for_phase3 = llama_8b_tootsie_phase1.cd("checkpoints/step-738376").skip_parent(False)
+ocelot_phase_2_checkpoint_for_phase3 = llama_8b_tootsie_phase1.cd("checkpoints/step-738376").skip_parent()
 
 
 # main phase: base mix for 740,500 steps
@@ -476,7 +476,7 @@ llama_8b_tootsie_cooldown_v2 = dataclasses.replace(
 ## Phase 4: Phoenix from (3), rewarmup and use mix of nemotron_cc and starcoder to keep moving
 ###############################################################
 
-jellyfish_phase_3_checkpoint_for_phase4 = llama_8b_tootsie_phase3.cd("checkpoints/step-819924").skip_parent(False)
+jellyfish_phase_3_checkpoint_for_phase4 = llama_8b_tootsie_phase3.cd("checkpoints/step-819924").skip_parent()
 
 # We're going to try to keep moving by rewarming the model with a mix of nemotron_cc and starcoder.
 
@@ -566,7 +566,7 @@ COOLDOWN_LEN = 80_000
 
 # for these long runs we don't usually actually **finish** the run in the Executor's eyes,
 # so we use `wait_for_completion`
-phoenix_phase4_checkpoint_for_phase5 = llama_8b_tootsie_adept_phoenix.cd("checkpoints/step-1320000").skip_parent(False)
+phoenix_phase4_checkpoint_for_phase5 = llama_8b_tootsie_adept_phoenix.cd("checkpoints/step-1320000").skip_parent()
 
 cooldown_train_config = dataclasses.replace(
     llama_8b_train_config_phase4,
@@ -643,6 +643,35 @@ normalized = {k: v / sum(starling_cooldown_weights.values()) for k, v in starlin
 assert 0.69 < sum(v for k, v in normalized.items() if k.startswith("nemotron")) < 0.71
 assert 0.29 < sum(v for k, v in normalized.items() if k not in NEMOTRON_WEIGHTS) < 0.31
 
+############################
+# Phase 6: Deeper Starling (dessert-ish)
+############################
+# things kept getting better, so we'll do a constant LR run for a bit longer
+
+# starling_checkpoint = "gs://marin-us-central2/checkpoints/tootsie-8b-sensible-starling/checkpoints/step-1399923/"
+starling_checkpoint = tootsie_8b_sensible_starling.cd("checkpoints/step-1399923").skip_parent()
+
+EXTRA_COOLDOWN_LEN = 20000
+
+tootsie_8b_deeper_starling_train_config = dataclasses.replace(
+    cooldown_train_config,
+    learning_rate=1.7e-5,
+    min_lr_ratio=1.0,
+    decay=0,
+    num_train_steps=PHASE_4_END + COOLDOWN_LEN + EXTRA_COOLDOWN_LEN,
+    initialize_from_checkpoint_path=starling_checkpoint,
+    reset_data_loader_on_init=False,
+)
+
+tootsie_8b_deeper_starling = default_train(
+    name="tootsie-8b-deeper-starling",
+    tokenized=starling_cooldown_mixture,
+    model_config=llama_8b,
+    train_config=tootsie_8b_deeper_starling_train_config,
+    tags=["llama", "8b", "ema", "exp977", "tootsie", "cooldown"],
+    eval_harness_tasks=CORE_TASKS_PLUS_MMLU,
+).with_output_path("checkpoints/tootsie-8b-deeper-starling")
+
 
 if __name__ == "__main__":
     executor_main(
@@ -654,6 +683,7 @@ if __name__ == "__main__":
             llama_8b_tootsie_cooldown_v2,
             llama_8b_tootsie_adept_phoenix,
             tootsie_8b_sensible_starling,
+            tootsie_8b_deeper_starling,
         ],
         description="Train 8B model on DCLM using WSD-S, then switching to EMA with a new mixture.",
     )
