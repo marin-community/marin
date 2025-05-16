@@ -8,8 +8,10 @@ import os
 from collections.abc import Sequence
 from datetime import timedelta
 from functools import lru_cache
+from typing import Any
 
 import jmp
+from haliax.partitioning import ResourceAxis
 from haliax.quantization import QuantizationConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.compat.hf_checkpoints import load_tokenizer
@@ -40,6 +42,7 @@ from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.execution.executor import (
     ExecutorStep,
     InputName,
+    VersionedValue,
     ensure_versioned,
     get_executor_step,
     this_output_path,
@@ -58,8 +61,53 @@ from marin.training.training import (
     TrainLmOnPodConfig,
     run_levanter_train_lm,
 )
+from operations.download.huggingface.download import DownloadConfig
+from operations.download.huggingface.download_hf import download_hf
 
 logger = logging.getLogger("ray")
+
+
+def default_download(
+    name: str,
+    hf_dataset_id: str,
+    revision: str,
+    override_output_path: str | None = None,
+    **kwargs: Any,
+) -> InputName:
+    """
+    Download a HuggingFace dataset and upload it to a specified path with default configuration.
+
+    Args:
+        name: The name of the Download step. It forms the basis of the output path
+            unless override_output_path is explicitly specified.
+        hf_dataset_id: The HuggingFace dataset ID to download. As `$ORG/$DATASET` on HF Hub
+        revision: The revision of the dataset to download.
+            Short Commit Hash from HF Dataset Repo (7 characters)
+        override_output_path: Optional. The output path for the dataset.
+        **kwargs: Additional keyword arguments that are passed to the download config.
+
+    The final output data will reside in '{output_path}/{revision}'.
+    """
+
+    step = ExecutorStep(
+        name=name,
+        description=f"Download {hf_dataset_id} revision {revision}",
+        fn=download_hf,
+        config=DownloadConfig(
+            hf_dataset_id=hf_dataset_id,
+            revision=revision,
+            gcs_output_path=this_output_path(),
+            wait_for_completion=True,
+            **kwargs,
+        ),
+        override_output_path=override_output_path,
+    )
+
+    cd_path = revision
+    if isinstance(cd_path, VersionedValue):
+        cd_path = cd_path.value
+
+    return step.cd(cd_path)
 
 
 def default_tokenize(
@@ -275,6 +323,11 @@ def default_train(
             quantization=QuantizationConfig(int8=train_config.int8) if train_config.int8 else None,
             initialize_from=None if train_config.reset_data_loader_on_init else checkpoint_path_to_load_from,
             watch=train_config.watch,
+            axis_resources={
+                # Special axes for MoEs
+                "token": (ResourceAxis.REPLICA, ResourceAxis.DATA),
+                "token_repeat": (ResourceAxis.REPLICA, ResourceAxis.DATA),
+            },
         ),
         initialize_from_checkpoint_path=(
             checkpoint_path_to_load_from if train_config.reset_data_loader_on_init else None
@@ -360,8 +413,6 @@ def default_sft(
                   - For mixture: a LMMixtureDatasetConfig with multiple datasets.
         model_config: Levanter LlamaConfig for the model architecture to train.
         sft_config: Configuration for the SFT training process.
-        mixture_weights: Dict mapping datasets within mixture to weight to sample with. If provided,
-                       enables mixture-based training.
         tags: Additional tags for WandB logging. Default: ().
 
     Returns:
