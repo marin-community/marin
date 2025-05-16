@@ -8,7 +8,7 @@ datasets:
 - hltcoe/megawika
 - mlfoundations/dclm-baseline-1.0
 - HuggingFaceTB/finemath
-# REMINDER: when the instruct model should add dependencies on the instruct datasets and the base model.
+
 language:
 - en
 ---

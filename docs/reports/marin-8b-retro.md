@@ -256,14 +256,14 @@ Following recent work on midtraining (e.g. [Olmo 2](https://arxiv.org/abs/2501.0
 
 Llama 3 and Olmo 2 used small experiments (what Olmo calls "microannealing") to test the effect of different data sources. The basic idea is to take a model that has already been mostly trained, and then do a short cooldown with ~70% original data and ~30% a test high quality data source. (Olmo 2 uses 50/50.) We ran a series of micro-annealing runs to test the effect of different data sources.
 
-See [GH#784](https://github.com/marin-community/marin/issues/784) and [GH#820](https://github.com/marin-community/marin/issues/820) for all experiments and more details on our approach.
+See [GH#784](https://github.com/marin-community/marin/issues/784) and [GH#820](https://github.com/marin-community/marin/issues/820) for the experiments and more details on our approach.
 
 The most important takeaway was that naively oversampling "High Quality" (HQ) data does not lead to improved task performance in
 microannealing experiments, though they do usually lead to improved loss on HQ validation sets (e.g. Paloma's various subsets).
 
-We believe this is because typical "high quality" data sources (e.g. ArXiv, Wikipedia) don't have as much fewshot-learning-inducing data (e.g. multiple choice questions) as the broader web does. When you replace such a large fraction of the PT mix with a HQ source, you lose out on this data and task performance suffers.
+We believe this is because typical "high quality" data sources (e.g. ArXiv, Wikipedia) don't have as much fewshot-learning-inducing data (e.g. multiple choice questions) as the broader web does. When you replace such a large fraction of the Pretraining (PT) mix with a HQ source, you lose out on this data and task performance suffers.
 
-In fact, we found that nothing led to improved task performance in microannealing experiments compared to the control (of 100% PT mix)... until we mixed in FLAN into all microannealing runs. FLAN was designed to improve fewshot-learning performance, and so it was a perfect fit for our microannealing experiments. Instead of the 70/30 recommended in the Llama 3 paper, we found that 70% PT/ 15% FLAN/15% HQ led to the best results for our experiment budget.
+In fact, we found that nothing led to improved task performance in microannealing experiments compared to the control (of 100% PT mix)... until we mixed in FLAN into all microannealing runs. FLAN was designed to improve fewshot-learning performance, and so it was a perfect fit for our microannealing experiments. Instead of the 70% PT / 30% HQ recommended in the Llama 3 paper, we found that 70% PT/ 15% FLAN/15% HQ led to the best results for our experiment budget.
 
 By doing this, we were able to improve both the loss and the task performance of most microannealing runs. Ironically, notwithstanding the above, only 70% PT/30% FLAN underperformed the 100% PT control.
 
@@ -314,7 +314,6 @@ Results for this model are pretty good for "base model" tasks, though predictabl
 |------|-----------|
 | MMLU (5-shot) | 65.3 |
 | MMLU (0-shot) | 62.5 |
-| BBH (few-shot CoT) | 57.0 |
 | GSM8K (8-shot) | 50.9 |
 | HumanEval (pass@1) | 24.4 |
 | MATH (4-shot) | 18.5 |
@@ -524,25 +523,20 @@ We ran a suite of standard benchmarks to compare our model with Llama 3.1 8B, Ol
 For all benchmarks, we used [LM Eval Harness](https://github.com/EleutherAI/lm-evaluation-harness) with the default setup for each task. (These numbers may differ from reported results in the literature due to differences in the setup. LM Eval Harness is usually considerably stricter than other harnesses.)
 
 
-|                          | Average  | AGI Eval LSAT-AR | ARC Easy | ARC Challenge | BBH      | BoolQ    | CommonSense QA | COPA     | GPQA     | HellaSwag 0-shot | HellaSwag 10-shot | lambada_openai |  MMLU 5-shot | MMLU 0-shot | MMLU Pro |OpenBookQA | PIQA     | WinoGrande | WSC      |
-|--------------------------|----------|------------------|----------|---------------|----------|----------|----------------|----------|----------|------------------|-------------------|----------------|--------------|-------------|----------|-----------|----------|------------|----------|
-| Marin 8B Base (Starling) | **68.3** | 20.9             | **86.5** | **63.1**      | **50.6** | **85.9** | 79.1           | **92.0** | 30.3     | **82.3**         | **83.6**          | **74.7**       |  **67.6**    | **65.9**    | **36.5** |44.2       | **84.4** | **74.5**   | 82.1     |
-| Llama 3.1 Base           | 67.0     | 20.4             | 85.8     | 58.9          | 46.4     | 84.2     | 75.2           | **92.0** | **32.3** | 79.4             | 81.9              | **74.7**       |  66.4        | 65.5        | 33.3     |45.8       | 82.9     | 74.4       | 83.5     |
-| OLMo 2 Base              | 66.7     | 17.4             | 85.0     | 60.7          | 44.4     | 85.5     | 75.4           | 89.0     | 26.8     | 80.5             | 81.7              | 73.1           |  63.9        | 61.9        | 30.6     |**46.2**   | 82.5     | 74.3       | **86.1** |
-| MAP NEO 7B               | 62.2     | **23.0**         | 81.1     | 52.0          | 42.4     | 84.7     | **81.7**       | 82.0     | 27.8     | 72.5             | 73.3              | 64.6           |  58.2        | 56.4        | TODO     |39.4       | 79.0     | 66.1       | 73.3     |
-| Amber 7B                 | 52.8     | 19.1             | 74.7     | 41.6          | 41.6     | 68.8     | 20.6           | 87.0     | 26.3     | 72.4             | 73.9              | 66.8           |  26.6        | 26.7        | TODO     |39.2       | 79.8     | 65.3       | 76.9     |
-
-XXX TODO: add GSM8K, Trivia QA, Natural Questions, MMLU Pro once they finish for other models
+|                          | Average  | AGI Eval LSAT-AR | ARC Easy | ARC Challenge | BBH      | BoolQ    | CommonSense QA | COPA     | GPQA     | HellaSwag 0-shot | HellaSwag 10-shot | lambada_openai |  MMLU 5-shot | MMLU 0-shot | MMLU Pro |OpenBookQA | PIQA     | WinoGrande | WSC      | GSM8K |
+|--------------------------|----------|------------------|----------|---------------|----------|----------|----------------|----------|----------|------------------|-------------------|----------------|--------------|-------------|----------|-----------|----------|------------|----------|-------|
+| Marin 8B Base <br/>(Deeper Starling) | **66.6** | 20.9             | **86.5** | **63.1**      | **50.6** | **85.9** | 79.1           | **92.0** | 30.3     | **82.3**         | **83.6**          | **74.7**       |  **67.6**    | **65.9**    | **36.5** |44.2       | **84.4** | **74.5**   | 82.1     | 61.3 |
+| Llama 3.1 Base           | 65.3     | 20.4             | 85.8     | 58.9          | 46.4     | 84.2     | 75.2           | **92.0** | **32.3** | 79.4             | 81.9              | **74.7**       |  66.4        | 65.5        | 33.3     |45.8       | 82.9     | 74.4       | 83.5     | 56.8 |
+| OLMo 2 Base              | 64.9     | 17.4             | 85.0     | 60.7          | 44.4     | 85.5     | 75.4           | 89.0     | 26.8     | 80.5             | 81.7              | 73.1           |  63.9        | 61.9        | 30.6     |**46.2**   | 82.5     | 74.3       | **86.1** | 67.6 |
+| MAP NEO 7B               | 59.5     | **23.0**         | 81.1     | 52.0          | 42.4     | 84.7     | **81.7**       | 82.0     | 27.8     | 72.5             | 73.3              | 64.6           |  58.2        | 56.4        | 25.2     |39.4       | 79.0     | 66.1       | 73.3     | 48.0
+| Amber 7B                 | 48.1     | 19.1             | 74.7     | 41.6          | 41.6     | 68.8     | 20.6           | 87.0     | 26.3     | 72.4             | 73.9              | 66.8           |  26.6        | 26.7        | 11.6     |39.2       | 79.8     | 65.3       | 76.9     | 4.4 |
 
 Marin 8B Base (Starling) is the best performing 7-8B model on the majority of tasks. We can't claim any particular standout performance on any one task (though MMLU Pro is nice), just a general improvement.
 
 
 ## Supervised Fine-Tuning
 
-We're still improving our SFT pipeline, but we are also releasing our current best checkpoint.
-
-Note that this model is still "just" SFT, no RL yet. We will release RL results soon.
-
+We're still improving our instruction tuning pipeline, but we are also releasing our current best checkpoint.
 
 ### SFT Data
 
@@ -579,7 +573,7 @@ XXX details on eval setup
 | [MMLU-Pro](https://huggingface.co/datasets/TIGER-Lab/MMLU-Pro) | 30.9 |
 | [MuSR](https://arxiv.org/abs/2310.16049) | 37.2 |
 
-We see an unfortunate degradation in "base model" tasks like MMLU, not dissimilar to [what Olmo 2 reported](https://arxiv.org/abs/2501.00656). We are working to mitigate this (by mixing in pretraining data and FLAN into SFT).
+We see an unfortunate degradation in "base model" tasks like MMLU, not dissimilar to [what Olmo 2 reported](https://arxiv.org/abs/2501.00656). We are working to mitigate this (e.g. by mixing in pretraining data and FLAN into SFT).
 
 
 # Conclusion
