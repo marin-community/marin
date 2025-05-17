@@ -2,13 +2,13 @@
 Uses download_hf to download a pretokenized dataset cache from Hugging Face
 and prepares it as a tokenized dataset source for Levanter.
 """
+
 import dataclasses
 import logging
-import os
 
 from levanter.data.text import (
-    LMDatasetSourceConfig,
     LmDatasetFormatBase,
+    LMDatasetSourceConfig,
     TextLmDatasetFormat,
     UrlDatasetSourceConfig,
 )
@@ -38,7 +38,7 @@ class PretokenizedCacheDownloadConfig(TokenizeConfigBase):
     hf_repo_type_prefix: str = "datasets"  # Typically "datasets" or "models"
     hf_token: str | None = None  # Hugging Face API token for private repositories
 
-    format: LmDatasetFormatBase = TextLmDatasetFormat()
+    format: LmDatasetFormatBase = TextLmDatasetFormat()  # noqa: RUF009
     cache_options: CacheOptions | None = None  # For TokenizeConfigBase interface, not used during download
 
     tags: list[str] = dataclasses.field(default_factory=list)  # Tags for Levanter's LMDatasetSourceConfig
@@ -56,9 +56,9 @@ class PretokenizedCacheDownloadConfig(TokenizeConfigBase):
 
         return UrlDatasetSourceConfig(
             tags=self.tags,
-            train_urls=[],  # No raw train URLs; cache is already built
+            train_urls=["dummy.jsonl"],  # Levanter misbehaves if these are empty
             validation_urls=[],  # No raw validation URLs; cache is already built
-            cache_dir=str(actual_output_path),  # This is where the cache was downloaded
+            cache_dir=actual_output_path,
             format=self.format,  # Retain format info if needed downstream
         )
 
@@ -66,12 +66,11 @@ class PretokenizedCacheDownloadConfig(TokenizeConfigBase):
 def download_pretokenized_cache(
     output_cache_path_name: str,  # Name for the ExecutorStep, forms part of the output path
     hf_repo_id: str,
-    tokenizer_name: str,  # The tokenizer this cache was built with
+    tokenizer: str,  # The tokenizer this cache was built with
     hf_revision: str | None = None,
-    hf_repo_type_prefix: str = "datasets",
     hf_token: str | None = None,
     tags: list[str] | None = None,
-    format: LmDatasetFormatBase = TextLmDatasetFormat(),
+    format: LmDatasetFormatBase = TextLmDatasetFormat(),  # noqa: A002
 ) -> ExecutorStep[PretokenizedCacheDownloadConfig]:
     """
     Creates an ExecutorStep to download a pre-tokenized Levanter cache from Hugging Face.
@@ -80,11 +79,11 @@ def download_pretokenized_cache(
         output_cache_path_name: The logical name for this download step. The Executor will use this
                                 to construct the actual output directory for the cache.
         hf_repo_id: The Hugging Face repository ID (e.g., "username/my_cache_repo").
-        tokenizer_name: The name or path of the tokenizer associated with this cache.
+        tokenizer: The name or path of the tokenizer associated with this cache.
         hf_revision: The specific revision, branch, or tag of the repository to download.
-        hf_repo_type_prefix: The type of Hugging Face repository (e.g., "datasets", "models").
         hf_token: An optional Hugging Face API token for accessing private repositories.
         tags: Optional list of tags for the Levanter LMDatasetSourceConfig.
+        format: The format of the dataset (default is TextLmDatasetFormat).
 
     Returns:
         An ExecutorStep that, when run, will download the cache and output a
@@ -92,10 +91,10 @@ def download_pretokenized_cache(
     """
     config = PretokenizedCacheDownloadConfig(
         cache_path=THIS_OUTPUT_PATH,  # ExecutorStep will resolve this to the actual output path
-        tokenizer=tokenizer_name,
+        tokenizer=tokenizer,
         hf_repo_id=hf_repo_id,
         hf_revision=hf_revision,
-        hf_repo_type_prefix=hf_repo_type_prefix,
+        hf_repo_type_prefix="datasets",  # Default for Hugging Face datasets
         hf_token=hf_token,
         tags=tags or [],
         format=format,
@@ -105,7 +104,6 @@ def download_pretokenized_cache(
         name=output_cache_path_name,
         fn=_actually_download_pretokenized_cache,
         config=config,
-        # TODO: consider resource requests if download is heavy
     )
 
 
@@ -123,10 +121,6 @@ def _actually_download_pretokenized_cache(
 
     # The hf_download_logic uses HF_TOKEN from environment variables.
     # Temporarily set it if provided in the config.
-    original_hf_token_env = os.environ.get("HF_TOKEN")
-    if cfg.hf_token:
-        os.environ["HF_TOKEN"] = cfg.hf_token
-        logger.debug("Temporarily set HF_TOKEN from config for download.")
 
     try:
         # Map our config to the HfDownloadConfig required by hf_download_logic
@@ -134,9 +128,7 @@ def _actually_download_pretokenized_cache(
             hf_dataset_id=cfg.hf_repo_id,
             revision=cfg.hf_revision,
             hf_repo_type_prefix=cfg.hf_repo_type_prefix,
-            gcs_output_path=cfg.cache_path,  # Download directly into the step's output path
-            # hf_urls_glob is intentionally None to download all files in the repo path,
-            # which is usually desired for a complete Levanter cache.
+            gcs_output_path=cfg.cache_path,
         )
 
         # Execute the download
@@ -145,19 +137,8 @@ def _actually_download_pretokenized_cache(
         logger.info(f"Successfully downloaded pretokenized cache to '{cfg.cache_path}'.")
 
     except Exception:
-        logger.exception(
-            f"Failed to download pretokenized cache '{cfg.hf_repo_id}' to '{cfg.cache_path}'."
-        )
+        logger.exception(f"Failed to download pretokenized cache '{cfg.hf_repo_id}' to '{cfg.cache_path}'.")
         raise  # Re-raise the exception to mark the step as failed
-    finally:
-        # Restore original HF_TOKEN environment state
-        if cfg.hf_token:  # If we set it from config
-            if original_hf_token_env is not None:
-                os.environ["HF_TOKEN"] = original_hf_token_env
-                logger.debug("Restored original HF_TOKEN.")
-            else:
-                del os.environ["HF_TOKEN"]
-                logger.debug("Cleared temporarily set HF_TOKEN.")
 
     # The ExecutorStep's output is the config object itself.
     # After this function, cfg.cache_path (resolved by the Executor)
