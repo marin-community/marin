@@ -1,7 +1,10 @@
 import dataclasses
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal, Protocol, TypeAlias
+
+logger = logging.getLogger(__name__)
 
 import ray
 import ray.util.accelerators.accelerators as ray_accel_types
@@ -34,6 +37,10 @@ class ResourceConfig(Protocol):
     A Ray runtime environment to use. You can set environment variables and specify
     additional resources to request for this task.
     """
+
+    device_flops_override: float | None = None
+    """Optional override for device FLOPS. If set, this value will be used instead of looking up in device_flops_map."""
+    
 
     def accelerator_descriptor(self) -> str | None:
         """Returns the accelerator type descriptor for this hardware configuration."""
@@ -125,6 +132,10 @@ class GpuConfig(ResourceConfig):
 
     def device_flops(self) -> float:
         """Get the peak FLOPs/s for the GPU type."""
+        if self.device_flops_override is not None:
+            logger.info(f"Using user-provided device FLOPS override: {self.device_flops_override} for GPU type {self.accelerator_type}")
+            return self.device_flops_override
+
         from marin.resources_utils import device_flops_map
         
         if self.accelerator_type is None:
@@ -137,7 +148,8 @@ class GpuConfig(ResourceConfig):
         if flops is None:
             raise ValueError(
                 f"No FLOPs data available for accelerator type: {self.accelerator_type}. "
-                "Available types: " + ", ".join(_ACCEL_TYPES)
+                "Available types: " + ", ".join(_ACCEL_TYPES) + "\n" +
+                "You can provide a custom FLOPS value using device_flops_override."
             )
         return flops
 
@@ -166,33 +178,29 @@ class TpuPodConfig(ResourceConfig):
 
     def device_flops(self) -> float:
         """Get the peak FLOPs/s for the TPU type."""
+        if self.device_flops_override is not None:
+            logger.info(f"Using user-provided device FLOPS override: {self.device_flops_override} for TPU type {self.tpu_type}")
+            return self.device_flops_override
+
         from marin.resources_utils import device_flops_map
         
         # Map TPU type to the corresponding key in device_flops_map
         tpu_type = self.tpu_type.upper()
         if "V4" in tpu_type:
             key = "TPU-V4"
-        elif "V5P" in tpu_type:
-            key = "TPU-V5P"
-        elif "V5LITE" in tpu_type:
-            key = "TPU-V5LITEPOD"
-        elif "V6" in tpu_type:
-            key = "TPU-V6E"
-        elif "V3" in tpu_type:
-            key = "TPU-V3"
-        elif "V2" in tpu_type:
-            key = "TPU-V2"
         else:
             raise ValueError(
                 f"Unknown TPU type: {self.tpu_type}. "
-                "Available types: " + ", ".join(sorted(k for k in device_flops_map.keys() if k.startswith("TPU")))
+                "Available types: " + ", ".join(sorted(k for k in device_flops_map.keys() if k.startswith("TPU"))) + "\n" +
+                "You can provide a custom FLOPS value using device_flops_override."
             )
         
         flops = device_flops_map.get(key)
         if flops is None:
             raise ValueError(
                 f"No FLOPs data available for TPU type: {key}. "
-                "Available types: " + ", ".join(sorted(k for k in device_flops_map.keys() if k.startswith("TPU")))
+                "Available types: " + ", ".join(sorted(k for k in device_flops_map.keys() if k.startswith("TPU"))) + "\n" +
+                "You can provide a custom FLOPS value using device_flops_override."
             )
 
         return flops
@@ -200,10 +208,6 @@ class TpuPodConfig(ResourceConfig):
     def total_device_count(self) -> int:
         """Get the total number of TPU chips."""
         tpu_type = self.tpu_type.upper()
-        if "V4" in tpu_type:
-            return self.slice_count * 64
-        elif "V5" in tpu_type:
-            return self.slice_count * 64
-        elif "V6" in tpu_type:
-            return self.slice_count * 64
-        return self.slice_count
+        if "V4-128" in tpu_type:
+            return self.slice_count * 64 # 64 chips in v4-128
+        return self.slice_count # this is incorrect at the moment
