@@ -181,23 +181,26 @@ if __name__ == '__main__':
     # rewrite('nadamw', '300m', 1, '520m', 1)
 
     for file_path in file_list:
-        print(f'Going over: {file_path}')
-        name = file_path.split('/')[1].split('.txt')[0]
-        log_name = file_path
-        filename = f'optimizer_sweep/{name}.py'
-        parsed_data = parse_command_file(filename)
-        first_baseline = parsed_data['baseline_config']
-        sweep_grids = parsed_data['sweep_grids']
-        model_size = parsed_data['model_size']
-        target_chinchilla = parsed_data['target_chinchilla']
-        optimizer = parsed_data['optimizer_name']
-        target_data, data_size = calculate_data_tag(model_size, target_chinchilla)
-        tags = (model_size, data_size, optimizer)
-        with open(file_path, 'r') as f:
-            lines = f.readlines()
-            if len(lines) > 0:
-                for line in lines:
-                    if('Stupid Ray' in line):
-                        print('Stupid Ray Found')
-                        replace_random_suffix(filename)
-                        
+        try:    
+            print(f'Going over: {file_path}')
+            name = file_path.split('/')[1].split('.txt')[0]
+            log_name = file_path
+            filename = f'optimizer_sweep/{name}.py'
+            parsed_data = parse_command_file(filename)
+            first_baseline = parsed_data['baseline_config']
+            sweep_grids = parsed_data['sweep_grids']
+            model_size = parsed_data['model_size']
+            target_chinchilla = parsed_data['target_chinchilla']
+            optimizer = parsed_data['optimizer_name']
+            target_data, data_size = calculate_data_tag(model_size, target_chinchilla)
+            tags = (model_size, data_size, optimizer)
+            with open(file_path, 'r') as f:
+                lines = f.readlines()
+                if len(lines) > 0:
+                    for line in lines:
+                        if('Stupid Ray' in line):
+                            print('Stupid Ray Found')
+                            replace_random_suffix(filename)
+        except Exception as e:
+            print(f'Error in {file_path}: {e}')
+                            

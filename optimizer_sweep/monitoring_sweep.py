@@ -68,11 +68,12 @@ def process_optimizer(optimizer, model_and_data_size, sweep_configs, position):
 
         # print(optimizer_configs)
         
-        if not optimizer_configs or not model_configs:
-            optimizer_results[(model_size, data_size)]["min_num"] = "Missing Grids"
-            continue
+        # if not optimizer_configs or not model_configs:
+        #     # optimizer_results[(model_size, data_size)]["min_num"] = "Missing Grids"
+        #     continue
         
         current_best_config, approximate_best_config_list, min_loss = grab_best_run(keys, tags, return_loss = True, thshold = 5e-3)
+        # print(current_best_config)
         if approximate_best_config_list is None or not approximate_best_config_list:
             optimizer_results[(model_size, data_size)]["min_num"] = "Missing Runs"
             continue
@@ -80,9 +81,9 @@ def process_optimizer(optimizer, model_and_data_size, sweep_configs, position):
         sweep_config = model_configs.get(str(target_chinchilla), [{}])[0]
         sweep_grids = sweep_config.get('sweep_grids', None)
         
-        if not sweep_grids:
-            optimizer_results[(model_size, data_size)]["min_num"] = "Missing Grids"
-            continue
+        # if not sweep_grids:
+        #     optimizer_results[(model_size, data_size)]["min_num"] = "Missing Grids"
+        #     continue
         
         min_num_left = float('inf')
         best_config = None
@@ -91,7 +92,8 @@ def process_optimizer(optimizer, model_and_data_size, sweep_configs, position):
             if num_left_config < min_num_left:
                 min_num_left = num_left_config
                 best_config = approximate_best_config
-        
+        if best_config is not None:
+            num_left_config = num_left(best_config, sweep_grids, target_data, tags, printing= True)
         optimizer_results[(model_size, data_size)]["min_num"] = min_num_left
         optimizer_results[(model_size, data_size)]["min_loss"] = min_loss
         optimizer_results[(model_size, data_size)]["best_config"] = best_config
@@ -103,12 +105,16 @@ def process_optimizer(optimizer, model_and_data_size, sweep_configs, position):
     print(f'Results for {optimizer}: {optimizer_results}')
     return optimizer, optimizer_results
 
-def num_left(baseline_config, sweep_grids, target_data, tags):
+def num_left(baseline_config, sweep_grids, target_data, tags, printing = False):
     """Modified num_left function that takes required parameters"""
     target_steps, config_in_dict = create_configs(baseline_config, sweep_grids, target_data=target_data)
     num_left = 0
     for config in config_in_dict:
         if(not check_baseline_run(config, tags)):
+            if printing:
+                for key, value in config.items():
+                    if baseline_config[key] != value:
+                        print(f"Missing ablation for {key} = {value}")
             num_left += 1
     return num_left
 
@@ -130,8 +136,10 @@ key_of_optimizer['mini'] = ['learning_rate', 'weight_decay', 'min_lr_ratio', 'wa
 
 optimizers =  list(key_of_optimizer.keys())
 
+
+
 new_key_of_optimizer = {}
-for optimizer in optimizers:
+for optimizer in ['muon']:
     new_key_of_optimizer[optimizer] = key_of_optimizer[optimizer]
 key_of_optimizer = new_key_of_optimizer
 
@@ -146,10 +154,14 @@ if __name__ == '__main__':
     
     # model_and_data_size = [('130m', '2B', 1), ('130m', '5B', 2), ('130m', '10B', 4), 
                         #   ('130m', '21B', 8), ('300m', '6B', 1), ('520m', '10B', 1)]
+    # model_and_data_size = [('130m', '21B', 8)]
     # model_and_data_size = [ ('130m', '10B', 4), ('130m', '21B', 8),  ('520m', '10B', 1)]
     # model_and_data_size = [('130m', '42B', 16)]
 
-    model_and_data_size = [('300m', '12B', 2), ('300m', '24B', 4), ('300m', '48B', 8), ('520m', '21B', 2), ('520m', '42B', 4), ('520m', '85B', 8)]
+    # model_and_data_size = [('300m', '12B', 2), ('300m', '24B', 4), ('300m', '48B', 8), ('520m', '21B', 2), ('520m', '42B', 4), ('520m', '85B', 8)]
+    model_and_data_size = [('1.2b', '193B', 8)]
+
+    # model_and_data_size = [('300m', '48B', 8)]
 
 
     monitoring_results = {}
@@ -171,9 +183,9 @@ if __name__ == '__main__':
             monitoring_results[optimizer] = result
             pbar.update(1)
     
-    # Save results to a JSON file
-    with open('monitoring_results.json', 'w') as f:
-        json.dump(monitoring_results, f, indent=2)
+    # # Save results to a JSON file
+    # with open('monitoring_results.json', 'w') as f:
+    #     json.dump(monitoring_results, f, indent=2)
     
     
 

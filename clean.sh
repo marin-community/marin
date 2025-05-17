@@ -1,0 +1,1 @@
+bash run.sh kron 300M 8

@@ -6,4 +6,4 @@ if __name__ == '__main__':
     model_size = '300m'
     target_chinchilla = 8
     my_suffix = None
-    template(model_size, target_chinchilla, 'soap', baseline_config, sweep_grids, random_suffix=my_suffix)
+    template(model_size, target_chinchilla, 'soape', baseline_config, sweep_grids, random_suffix=my_suffix)

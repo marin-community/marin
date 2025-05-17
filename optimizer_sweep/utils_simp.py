@@ -15,6 +15,7 @@ def convert_run_to_config(run, keys):
 
 def grab_best_run(keys, tags, return_loss = False, thshold = 3e-3):
     filters = {"tags": {"$all": tags}}
+    print(tags)
     runs = api.runs(f"{username}/{project}", filters=filters)
     min_loss = 10000
     min_run = None
@@ -26,6 +27,7 @@ def grab_best_run(keys, tags, return_loss = False, thshold = 3e-3):
         if type(loss) is float and loss < min_loss:
             min_loss = loss
             min_run = run
+    print(min_loss)
     approximate_min_runs = []
     for run in runs:
         loss = run.summary.get('eval/paloma/c4_en/loss', None)
@@ -45,9 +47,9 @@ def grab_best_run(keys, tags, return_loss = False, thshold = 3e-3):
             return best_config, approximate_best_list
     else: 
         if return_loss:
-            return None, None, None
+            return None, [], None
         else:
-            return None, None
+            return None, []
     
 
 def bad_number(x):
@@ -107,6 +109,22 @@ def check_baseline_run(baseline, tags, strict = True, return_loss = False):
     else:
         return False
 
+
+def grab_run(baseline, tags):    
+    filters = {"tags": {"$all": tags}}
+    runs = api.runs(f"{username}/{project}", filters=filters)
+    print(runs)
+
+    for run in runs:
+        config = convert_run_to_config(run, baseline.keys())
+        print(config)
+        print(baseline)
+        if approximate(baseline, config) and actually_finish(run, strict = False):
+            # diverge before finish
+            # or have some crazyness: finished eval multiple time
+            print("Found run")
+            return run
+    return None
 
 def create_configs(baseline_config, sweep_grids, target_data = 5120000):
     config_in_dict = []
