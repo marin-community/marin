@@ -101,6 +101,9 @@ class GpuConfig(ResourceConfig):
     accelerator_type: AcceleratorType | None = None
     """Type of GPU to use. Must be one of the Ray accelerator types."""
 
+    device_flops_override: float | None = None
+    """Optional override for device FLOPS. If set, this value will be used instead of looking up in device_flops_map."""
+
     def __post_init__(self):
         if self.accelerator_type is not None:
             upper = self.accelerator_type.upper()
@@ -169,6 +172,9 @@ class TpuPodConfig(ResourceConfig):
     """Number of TPU slices for training."""
 
     runtime_env: RuntimeEnv = dataclasses.field(default_factory=lambda: RuntimeEnv())
+
+    device_flops_override: float | None = None
+    """Optional override for device FLOPS. If set, this value will be used instead of looking up in device_flops_map."""
 
     def accelerator_descriptor(self) -> str | None:
         return self.tpu_type

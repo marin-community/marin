@@ -18,7 +18,7 @@ speedrun_config = SpeedrunConfig(
     description="75M parameter model based on LLaMA architecture.",
     model_config=llama_75m,
     train_config=SimpleTrainConfig(
-        resources=TpuPodConfig(tpu_type="v4-128", slice_count=2),
+        resources=TpuPodConfig(tpu_type="v4-128", slice_count=2, device_flops_override=1e15),
         train_batch_size=512,
         num_train_steps=3000,
         learning_rate=3e-3,
