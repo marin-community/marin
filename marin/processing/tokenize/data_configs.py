@@ -27,7 +27,7 @@ def step_to_lm_mixture_component(step: TokenizerStep | TokenizeConfig, include_r
 
 
 def as_single_lm_data_source(
-    input: TokenizerStep | InputName,
+    input: TokenizerStep | InputName,  # noqa: A002
 ) -> LMDatasetSourceConfig:
     """
     Creates a dataset config suitable for Levanter's TrainLMConfig from a single training set
