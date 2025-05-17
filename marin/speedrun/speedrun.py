@@ -95,7 +95,7 @@ class SpeedrunConfig:
         estimated_model_flops = flops_per_token * total_tokens
 
         logger.info(
-            f"""The rough estimated compute (calculated as 6*N*D / (Estimate of MFU))
+            f"""The rough estimated compute (calculated as model FLOPs / (Estimate of MFU))
             for your run is around {estimated_model_flops/0.5:.2e} FLOPs assuming an MFU of 0.5.
             This is calculated based on plausible MFU values and can be used as a rough estimate to
             guide your config/training setup."""
