@@ -1,1 +1,0 @@
-bash run.sh adamw 130M 16

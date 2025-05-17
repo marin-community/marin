@@ -1,1 +1,0 @@
-bash run.sh adamw 1.2B 8

@@ -1,1 +1,0 @@
-bash run.sh muon 520M 16
