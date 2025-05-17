@@ -7,6 +7,7 @@ import ray
 import ray.util.accelerators.accelerators as ray_accel_types
 from levanter.utils.py_utils import logical_cpu_core_count
 from levanter.utils.ray_utils import RayResources
+from levanter.utils.flop_utils import DEVICE_AVAILABLE_FLOPS
 from ray.remote_function import RemoteFunction
 from ray.runtime_env import RuntimeEnv
 
@@ -53,6 +54,14 @@ class ResourceConfig(Protocol):
         new_env = self.runtime_env.get("env_vars", {}) | (env or {}) | kwargs
         return dataclasses.replace(self, runtime_env=RuntimeEnv(**{**self.runtime_env, "env_vars": new_env}))
 
+    def device_flops(self) -> float:
+        """Returns the peak FLOPs/s for a single device in this configuration."""
+        return 0.0
+
+    def total_device_count(self) -> int:
+        """Returns the total number of devices in this configuration."""
+        return 1
+
 
 @dataclass(frozen=True)
 class CpuOnlyConfig(ResourceConfig):
@@ -68,6 +77,9 @@ class CpuOnlyConfig(ResourceConfig):
 
     def as_ray_resources(self) -> RayResources:
         return RayResources(**self.as_remote_kwargs())
+
+    def total_device_count(self) -> int:
+        return self.num_cpus
 
 
 @dataclass(frozen=True)
@@ -96,6 +108,18 @@ class GpuConfig(ResourceConfig):
     def as_ray_resources(self) -> RayResources:
         return RayResources(**self.as_remote_kwargs())
 
+    def device_flops(self) -> float:
+        """Get the peak FLOPs/s for the GPU type."""
+        device_type = self.accelerator_type or "a100"
+        # Try bf16 first, then fp16
+        flops = DEVICE_AVAILABLE_FLOPS.get(device_type, {}).get("bf16")
+        if flops is None:
+            flops = DEVICE_AVAILABLE_FLOPS.get(device_type, {}).get("fp16", 0)
+        return flops
+
+    def total_device_count(self) -> int:
+        return self.gpu_count
+
 
 @dataclass(frozen=True)
 class TpuPodConfig(ResourceConfig):
@@ -115,3 +139,23 @@ class TpuPodConfig(ResourceConfig):
 
     def as_ray_resources(self) -> RayResources:
         return RayResources(runtime_env=self.runtime_env, num_cpus=8)
+
+    def device_flops(self) -> float:
+        """Get the peak FLOPs/s for the TPU type."""
+        if "v4" in self.tpu_type:
+            return DEVICE_AVAILABLE_FLOPS["tpu v4"]["bf16"]
+        elif "v5" in self.tpu_type:
+            return DEVICE_AVAILABLE_FLOPS["tpu v5"]["bf16"]
+        elif "v6" in self.tpu_type:
+            return DEVICE_AVAILABLE_FLOPS["tpu v6 lite"]["bf16"]
+        return 0.0
+
+    def total_device_count(self) -> int:
+        """Get the total number of TPU chips."""
+        if "v4-128" in self.tpu_type:
+            return self.slice_count * 64  # v4 has 64 chips per slice
+        elif "v5" in self.tpu_type:
+            return self.slice_count * 64  # v5 has 64 chips per slice
+        elif "v6" in self.tpu_type:
+            return self.slice_count * 64  # v6 has 64 chips per slice
+        return self.slice_count  # fallback

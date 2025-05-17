@@ -81,28 +81,12 @@ class SpeedrunConfig:
     @property
     def device_flops(self) -> float:
         """Get the peak FLOPs/s for the device type."""
-        resources = self.train_config.resources
-        if isinstance(resources, TpuPodConfig):
-            # For TPU v4, use bf16 flops
-            return DEVICE_AVAILABLE_FLOPS["tpu v4"]["bf16"]
-        elif isinstance(resources, GpuConfig):
-            # For GPUs, use bf16 flops if available, otherwise fp16
-            device_type = resources.accelerator_type or "a100"
-            flops = DEVICE_AVAILABLE_FLOPS.get(device_type, {}).get("bf16")
-            if flops is None:
-                flops = DEVICE_AVAILABLE_FLOPS.get(device_type, {}).get("fp16", 0)
-            return flops
-        return 0
+        return self.train_config.resources.device_flops()
 
     @property
     def num_devices(self) -> int:
         """Get the number of devices."""
-        resources = self.train_config.resources
-        if isinstance(resources, TpuPodConfig):
-            return resources.slice_count * 64
-        elif isinstance(resources, GpuConfig):
-            return resources.gpu_count
-        return 1
+        return self.train_config.resources.total_device_count()
 
 
 @dataclass
