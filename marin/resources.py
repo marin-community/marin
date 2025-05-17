@@ -110,12 +110,10 @@ class GpuConfig(ResourceConfig):
 
     def device_flops(self) -> float:
         """Get the peak FLOPs/s for the GPU type."""
-        device_type = self.accelerator_type or "a100"
-        # Try bf16 first, then fp16
-        flops = DEVICE_AVAILABLE_FLOPS.get(device_type, {}).get("bf16")
-        if flops is None:
-            flops = DEVICE_AVAILABLE_FLOPS.get(device_type, {}).get("fp16", 0)
-        return flops
+        from marin.resources_utils import device_flops_map
+        device_type = self.accelerator_type or "A100"
+        device_type = device_type.upper()
+        return device_flops_map.get(device_type, None)
 
     def total_device_count(self) -> int:
         return self.gpu_count
@@ -142,13 +140,34 @@ class TpuPodConfig(ResourceConfig):
 
     def device_flops(self) -> float:
         """Get the peak FLOPs/s for the TPU type."""
-        if "v4" in self.tpu_type:
-            return DEVICE_AVAILABLE_FLOPS["tpu v4"]["bf16"]
-        elif "v5" in self.tpu_type:
-            return DEVICE_AVAILABLE_FLOPS["tpu v5"]["bf16"]
-        elif "v6" in self.tpu_type:
-            return DEVICE_AVAILABLE_FLOPS["tpu v6 lite"]["bf16"]
-        return 0.0
+        from marin.resources_utils import device_flops_map
+        
+        # Map TPU type to the corresponding key in device_flops_map
+        tpu_type = self.tpu_type.upper()
+        if "V4" in tpu_type:
+            key = "TPU-V4"
+            # For V4, the flops in device_flops_map are per chip
+            # No need to divide since JAX v4 device is a single chip
+            return device_flops_map.get(key, 0.0)
+        elif "V5P" in tpu_type:
+            key = "TPU-V5P"
+        elif "V5LITE" in tpu_type:
+            key = "TPU-V5LITEPOD"
+        elif "V6" in tpu_type:
+            key = "TPU-V6E"
+        elif "V3" in tpu_type:
+            key = "TPU-V3"
+            # For V3, the flops in device_flops_map are already per core
+            return device_flops_map.get(key, 0.0)
+        elif "V2" in tpu_type:
+            key = "TPU-V2"
+            # For V2, using V3 as proxy, already per core
+            return device_flops_map.get(key, 0.0)
+        else:
+            return 0.0
+        
+        # For V5/V6, the flops in device_flops_map are per chip
+        return device_flops_map.get(key, 0.0)
 
     def total_device_count(self) -> int:
         """Get the total number of TPU chips."""
