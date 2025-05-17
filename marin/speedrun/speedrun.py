@@ -16,40 +16,30 @@ import fsspec
 import wandb
 from levanter.data.text import LMMixtureDatasetConfig
 from levanter.models.lm_model import LmConfig
+from levanter.utils.flop_utils import DEVICE_AVAILABLE_FLOPS
 
 from experiments.defaults import default_train
 from experiments.exp72_baselines import fineweb_edu_tokenized
 from experiments.llama import compute_num_parameters, llama3_tokenizer_vocab_size
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import ExecutorStep, InputName, output_path_of
+from marin.resources import ResourceConfig, TpuPodConfig, GpuConfig
 from marin.training.training import TrainLmOnPodConfig
 from marin.utilities.wandb_utils import WANDB_ENTITY, WANDB_PROJECT
 
 logger = logging.getLogger("ray")
 
 
-### Configuration classes ###
-
-
-@dataclass
-class HardwareConfig:
-    device_type: str  # a string describing the device e.g. "v4-128", or "h100"
-    num_devices: int
-    device_flops: float  # Peak FLOPs/s per device
-
-
 @dataclass
 class SpeedrunConfig:
     model_config: LmConfig
     train_config: SimpleTrainConfig | TrainLmOnPodConfig
-    hardware_config: HardwareConfig
 
     # by default, this is fineweb_edu_tokenized
     tokenized_dataset: InputName | LMMixtureDatasetConfig = fineweb_edu_tokenized
 
     @property
     def vocab_size(self) -> int:
-
         # TODO (Nikil): this doesn't interact well with different types (InputName, LMMixtureDatasetConfig, ExecutorStep)
         # Need to change this to automatically figure out vocab size
         # return load_tokenizer(unwrap_versioned_value(self.tokenized_dataset.tokenizer)).vocab_size
@@ -76,7 +66,6 @@ class SpeedrunConfig:
         return 6.0 * N * total_tokens
 
     def estimate_flops_before_speedrun(self) -> tuple[bool, str]:
-
         # estimate model FLOPs as 6*N*D, and calculate estimated compute using this and (a reasonable estimate of) MFU
         estimated_model_flops = self.estimate_flops_via_6nd()
 
@@ -88,6 +77,32 @@ class SpeedrunConfig:
         )
 
         return estimated_model_flops
+
+    @property
+    def device_flops(self) -> float:
+        """Get the peak FLOPs/s for the device type."""
+        resources = self.train_config.resources
+        if isinstance(resources, TpuPodConfig):
+            # For TPU v4, use bf16 flops
+            return DEVICE_AVAILABLE_FLOPS["tpu v4"]["bf16"]
+        elif isinstance(resources, GpuConfig):
+            # For GPUs, use bf16 flops if available, otherwise fp16
+            device_type = resources.accelerator_type or "a100"
+            flops = DEVICE_AVAILABLE_FLOPS.get(device_type, {}).get("bf16")
+            if flops is None:
+                flops = DEVICE_AVAILABLE_FLOPS.get(device_type, {}).get("fp16", 0)
+            return flops
+        return 0
+
+    @property
+    def num_devices(self) -> int:
+        """Get the number of devices."""
+        resources = self.train_config.resources
+        if isinstance(resources, TpuPodConfig):
+            return resources.slice_count * 64
+        elif isinstance(resources, GpuConfig):
+            return resources.gpu_count
+        return 1
 
 
 @dataclass
@@ -132,8 +147,8 @@ def speedrun_results(config: SpeedrunResultsConfig):
     total_time = sum(step_times)
     total_training_flops = (
         total_time
-        * config.speedrun_config.hardware_config.num_devices
-        * config.speedrun_config.hardware_config.device_flops
+        * config.speedrun_config.num_devices
+        * config.speedrun_config.device_flops
     )
 
     # get wandb run and metrics
@@ -156,7 +171,7 @@ def speedrun_results(config: SpeedrunResultsConfig):
             "model_config": dataclasses.asdict(config.speedrun_config.model_config),
             "train_config": dataclasses.asdict(config.speedrun_config.train_config),
             "tokenized_dataset": str(config.speedrun_config.tokenized_dataset),
-            "hardware_config": dataclasses.asdict(config.speedrun_config.hardware_config),
+            "resources": dataclasses.asdict(config.speedrun_config.train_config.resources),
             "run_completion_timestamp": end_time.strftime("%Y-%m-%d %H:%M:%S UTC"),
             "wandb_run_link": full_wandb_url,
         },
