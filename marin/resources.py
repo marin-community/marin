@@ -111,9 +111,21 @@ class GpuConfig(ResourceConfig):
     def device_flops(self) -> float:
         """Get the peak FLOPs/s for the GPU type."""
         from marin.resources_utils import device_flops_map
-        device_type = self.accelerator_type or "A100"
-        device_type = device_type.upper()
-        return device_flops_map.get(device_type, None)
+        
+        if self.accelerator_type is None:
+            raise ValueError(
+                "accelerator_type must be explicitly specified in GpuConfig. "
+                "Available types: " + ", ".join(sorted(k for k in device_flops_map.keys() if not k.startswith("TPU")))
+            )
+        
+        device_type = self.accelerator_type.upper()  # Normalize to uppercase for matching
+        flops = device_flops_map.get(device_type, None)
+        if flops is None:
+            raise ValueError(
+                f"Unknown accelerator_type: {self.accelerator_type}. "
+                "Available types: " + ", ".join(sorted(k for k in device_flops_map.keys() if not k.startswith("TPU")))
+            )
+        return flops
 
     def total_device_count(self) -> int:
         return self.gpu_count
@@ -146,9 +158,6 @@ class TpuPodConfig(ResourceConfig):
         tpu_type = self.tpu_type.upper()
         if "V4" in tpu_type:
             key = "TPU-V4"
-            # For V4, the flops in device_flops_map are per chip
-            # No need to divide since JAX v4 device is a single chip
-            return device_flops_map.get(key, 0.0)
         elif "V5P" in tpu_type:
             key = "TPU-V5P"
         elif "V5LITE" in tpu_type:
@@ -157,24 +166,30 @@ class TpuPodConfig(ResourceConfig):
             key = "TPU-V6E"
         elif "V3" in tpu_type:
             key = "TPU-V3"
-            # For V3, the flops in device_flops_map are already per core
-            return device_flops_map.get(key, 0.0)
         elif "V2" in tpu_type:
             key = "TPU-V2"
-            # For V2, using V3 as proxy, already per core
-            return device_flops_map.get(key, 0.0)
         else:
-            return 0.0
+            raise ValueError(
+                f"Unknown TPU type: {self.tpu_type}. "
+                "Available types: " + ", ".join(sorted(k for k in device_flops_map.keys() if k.startswith("TPU")))
+            )
         
-        # For V5/V6, the flops in device_flops_map are per chip
-        return device_flops_map.get(key, 0.0)
+        flops = device_flops_map.get(key)
+        if flops is None:
+            raise ValueError(
+                f"No FLOPs data available for TPU type: {key}. "
+                "Available types: " + ", ".join(sorted(k for k in device_flops_map.keys() if k.startswith("TPU")))
+            )
+
+        return flops
 
     def total_device_count(self) -> int:
         """Get the total number of TPU chips."""
-        if "v4-128" in self.tpu_type:
-            return self.slice_count * 64  # v4 has 64 chips per slice
-        elif "v5" in self.tpu_type:
-            return self.slice_count * 64  # v5 has 64 chips per slice
-        elif "v6" in self.tpu_type:
-            return self.slice_count * 64  # v6 has 64 chips per slice
-        return self.slice_count  # fallback
+        tpu_type = self.tpu_type.upper()
+        if "V4" in tpu_type:
+            return self.slice_count * 64
+        elif "V5" in tpu_type:
+            return self.slice_count * 64
+        elif "V6" in tpu_type:
+            return self.slice_count * 64
+        return self.slice_count
