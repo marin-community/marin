@@ -123,12 +123,12 @@ def consolidate_stats_only(cfg: ConsolidateStatsOnlyConfig) -> str:
             json.dump(mapping, f, indent=2)
 
     # Consolidate per-global and per-local
-    for g_shard, locals in nested.items():
+    for g_shard, local_shards in nested.items():
         # Global aggregate
-        all_dirs = [d for group in locals.values() for d in group]
+        all_dirs = [d for group in local_shards.values() for d in group]
         merge_group(g_shard, all_dirs)
         # Local under global
-        for l_shard, dirs in locals.items():
+        for l_shard, dirs in local_shards.items():
             merge_group(f"{g_shard}/{l_shard}", dirs)
 
     return f"Consolidation only written to {output_base}"

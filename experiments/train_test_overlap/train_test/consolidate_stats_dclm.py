@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-consolidate_stats.py: Consolidate per-shard data-overlap outputs into per-local and per-global aggregates via Executor framework.
+consolidate_stats.py: Consolidate per-shard data-overlap outputs into per-local and per-global shards for DCLM.
 """
 import json
 import logging
@@ -25,7 +25,7 @@ class ConsolidateStatsConfig:
 
 
 def consolidate_stats(cfg: ConsolidateStatsConfig) -> str:
-    """Read all .SUCCESS markers under the sharded output, then merge overlap_stats, raw_ngrams, instance_mapping per-group."""
+    """Read all .SUCCESS markers under the sharded output merge overlap_stats, raw_ngrams, instance_mapping per-group."""
     base = cfg.input_step.rstrip("/")
     output_base = cfg.output_path.rstrip("/")
     print(f"[consolidate_stats] Starting consolidation: base={base}, output_base={output_base}", flush=True)
@@ -124,7 +124,8 @@ def consolidate_stats(cfg: ConsolidateStatsConfig) -> str:
             in_map = f"{d}/instance_mapping/instance_mapping.json"
             try:
                 print(f"[consolidate_group] Merging mapping from {in_map}", flush=True)
-                data = json.loads(fsspec.open(in_map, "rt").read())
+                with fsspec.open(in_map, "rt") as f:
+                    data = json.load(f)
                 for inst, overlap in data.items():
                     entry = mapping.setdefault(inst, {"input_overlaps": [], "reference_overlaps": []})
                     for k in overlap.get("input_overlaps", []):
@@ -142,13 +143,13 @@ def consolidate_stats(cfg: ConsolidateStatsConfig) -> str:
         print(f"[consolidate_group] Wrote merged instance_mapping to {out_map}", flush=True)
 
     # run consolidation per global and nested local shards
-    for g_shard, locals in nested.items():
+    for g_shard, local_shards in nested.items():
         # global-level aggregate
-        all_dirs = [d for dirs in locals.values() for d in dirs]
+        all_dirs = [d for dirs in local_shards.values() for d in dirs]
         print(f"[consolidate_stats] Consolidating global shard {g_shard} with {len(all_dirs)} dirs", flush=True)
         consolidate_group(g_shard, all_dirs)
         # local-level aggregates under this global shard
-        for l_shard, dirs in locals.items():
+        for l_shard, dirs in local_shards.items():
             print(
                 f"[consolidate_stats] Consolidating local shard {l_shard} under {g_shard} with {len(dirs)} dirs",
                 flush=True,
