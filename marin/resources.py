@@ -53,6 +53,14 @@ class ResourceConfig(Protocol):
         new_env = self.runtime_env.get("env_vars", {}) | (env or {}) | kwargs
         return dataclasses.replace(self, runtime_env=RuntimeEnv(**{**self.runtime_env, "env_vars": new_env}))
 
+    def device_flops(self) -> float | None:
+        """Returns the peak FLOPs/s for a single device in this configuration."""
+        return None
+
+    def total_device_count(self) -> int:
+        """Returns the total number of devices in this configuration."""
+        return 1
+
 
 @dataclass(frozen=True)
 class CpuOnlyConfig(ResourceConfig):
@@ -80,7 +88,22 @@ class GpuConfig(ResourceConfig):
     runtime_env: RuntimeEnv = dataclasses.field(default_factory=RuntimeEnv)
 
     accelerator_type: AcceleratorType | None = None
-    """Type of GPU accelerator to use. If None, will use any available GPU."""
+    """Type of GPU to use. Must be one of the Ray accelerator types."""
+
+    def __post_init__(self):
+        if self.accelerator_type is not None:
+            upper = self.accelerator_type.upper()
+            if upper in _ACCEL_TYPES:
+                object.__setattr__(self, 'accelerator_type', upper)
+            else:
+                raise ValueError(
+                    f"Invalid accelerator_type: {self.accelerator_type}. "
+                    "Available types: " + ", ".join(_ACCEL_TYPES)
+                )
+
+    def get_accelerator_type(self) -> AcceleratorType | None:
+        """Get the accelerator type for Ray."""
+        return self.accelerator_type
 
     def accelerator_descriptor(self) -> str | None:
         return self.accelerator_type
@@ -94,6 +117,27 @@ class GpuConfig(ResourceConfig):
 
     def as_ray_resources(self) -> RayResources:
         return RayResources(**self.as_remote_kwargs())
+
+    def device_flops(self) -> float:
+        """Get the peak FLOPs/s for the GPU type."""
+        from marin.resources_utils import device_flops_map
+        
+        if self.accelerator_type is None:
+            raise ValueError(
+                "accelerator_type must be explicitly specified in GpuConfig. "
+                "Available types: " + ", ".join(_ACCEL_TYPES)
+            )
+        
+        flops = device_flops_map.get(self.accelerator_type)
+        if flops is None:
+            raise ValueError(
+                f"No FLOPs data available for accelerator type: {self.accelerator_type}. "
+                "Available types: " + ", ".join(_ACCEL_TYPES)
+            )
+        return flops
+
+    def total_device_count(self) -> int:
+        return self.gpu_count
 
 
 @dataclass(frozen=True)
