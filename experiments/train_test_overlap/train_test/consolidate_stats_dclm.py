@@ -97,7 +97,7 @@ def consolidate_stats(cfg: ConsolidateStatsConfig) -> str:
         # Write the consolidated overlap statistics for this group:
         # - Sort keys to ensure deterministic ordering
         # - Convert sets of overlapping instance IDs into sorted lists
-        # - Output each record as a JSON line with data_overlap_stats_key and num_instances preserved from run_data_overlap
+        # - Output each record as a JSON line with data_overlap_stats_key and num_instances from run_data_overlap
         with fsspec.open(out_stats, "wt") as out_f:
             for key in sorted(agg.keys()):
                 data = agg[key]
