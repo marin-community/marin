@@ -40,8 +40,8 @@ class HardwareConfig:
 @dataclass
 class SpeedrunConfig:
 
-    contributor_name: str # name of the author/individual submitting the speedrun
-    contributor_affiliation: str # affiliation/institution of the contributor
+    author: str # name of the author/individual submitting the speedrun
+    affiliation: str # affiliation/institution of the contributor
     description: str # brief (~1 sentence) description of the speedrun
 
     model_config: LmConfig
@@ -60,11 +60,8 @@ class SpeedrunConfig:
         # return load_tokenizer(unwrap_versioned_value(self.tokenized_dataset.tokenizer)).vocab_size
         return llama3_tokenizer_vocab_size
 
-    def estimate_flops_via_6nd(self) -> float:
-        N = compute_num_parameters(self.model_config, self.vocab_size)
-
+    def estimate_model_flops(self) -> float:
         # TODO (Nikil): make this a helper and handle edge-cases
-        # also, need to add attention terms to expression
         if isinstance(self.train_config.train_batch_size, list) and len(self.train_config.train_batch_size) > 0:
             from levanter.schedule import BatchSchedule
 
@@ -78,12 +75,28 @@ class SpeedrunConfig:
                 self.train_config.train_batch_size * self.model_config.seq_len * self.train_config.num_train_steps
             )
 
-        return 6.0 * N * total_tokens
+        # Get MoE parameters if available, otherwise use defaults for dense models
+        num_experts = getattr(self.model_config, 'n_routed_experts', 1)
+        num_shared_experts = getattr(self.model_config, 'n_shared_experts', 0)
+        num_experts_per_tok = getattr(self.model_config, 'num_experts_per_tok', 1)
 
-    def estimate_flops_before_speedrun(self) -> tuple[bool, str]:
+        flops_per_token = lm_flops_per_token(
+            self.model_config.hidden_dim,
+            self.model_config.intermediate_dim,
+            self.model_config.num_layers,
+            self.model_config.num_kv_heads,
+            self.model_config.num_heads,
+            self.model_config.seq_len,
+            self.vocab_size,
+            glu=True,
+            num_experts=num_experts,
+            num_shared_experts=num_shared_experts,
+            num_experts_per_tok=num_experts_per_tok
+        )  # only fwd flops
 
-        # estimate model FLOPs as 6*N*D, and calculate estimated compute using this and (a reasonable estimate of) MFU
-        estimated_model_flops = self.estimate_flops_via_6nd()
+        flops_per_token *= 3  # fwd + bwd
+
+        estimated_model_flops = flops_per_token * total_tokens
 
         logger.info(
             f"""The rough estimated compute (calculated as 6*N*D / (Estimate of MFU))
@@ -127,7 +140,7 @@ def speedrun_results(config: SpeedrunResultsConfig):
         logger.error("No step times available; analysis aborted.")
         return
 
-    six_nd_flops = config.speedrun_config.estimate_flops_via_6nd()
+    model_flops = config.speedrun_config.estimate_model_flops()
     num_params = compute_num_parameters(config.speedrun_config.model_config, config.speedrun_config.vocab_size)
     total_tokens = (
         config.speedrun_config.train_config.train_batch_size
@@ -156,8 +169,8 @@ def speedrun_results(config: SpeedrunResultsConfig):
 
     run_info = {
         "speedrun_config": {
-            "contributor_name": config.speedrun_config.contributor_name or "marin-community",
-            "contributor_affiliation": config.speedrun_config.contributor_affiliation,
+            "author": config.speedrun_config.author or "marin-community",
+            "affiliation": config.speedrun_config.affiliation,
             "description": config.speedrun_config.description,
             "num_parameters": num_params,
             "total_tokens": total_tokens,
@@ -169,7 +182,7 @@ def speedrun_results(config: SpeedrunResultsConfig):
         "speedrun_results": {
             "run_completion_timestamp": end_time.strftime("%Y-%m-%d %H:%M:%S UTC"),
             "wandb_run_link": full_wandb_url,
-            "pre_run_flops_estimate": six_nd_flops,
+            "model_flops": model_flops,
             "training_time_in_minutes": total_time,
             "total_training_flops": total_training_flops,
             "eval/paloma/c4_en/bpb": (
