@@ -7,6 +7,7 @@ import ray
 import ray.util.accelerators.accelerators as ray_accel_types
 from levanter.utils.py_utils import logical_cpu_core_count
 from levanter.utils.ray_utils import RayResources
+from levanter.utils.flop_utils import DEVICE_AVAILABLE_FLOPS
 from ray.remote_function import RemoteFunction
 from ray.runtime_env import RuntimeEnv
 
@@ -77,6 +78,9 @@ class CpuOnlyConfig(ResourceConfig):
     def as_ray_resources(self) -> RayResources:
         return RayResources(**self.as_remote_kwargs())
 
+    def total_device_count(self) -> int:
+        return self.num_cpus
+
 
 @dataclass(frozen=True)
 class GpuConfig(ResourceConfig):
@@ -110,9 +114,10 @@ class GpuConfig(ResourceConfig):
 
     # NB that Ray doesn't like resources={"GPU": 1} so we have to do this
     def as_remote_kwargs(self) -> dict:
-        out = {"num_gpus": self.gpu_count}
+        out = dict(num_gpus=self.gpu_count, runtime_env=self.runtime_env)
         if self.accelerator_type is not None:
             out["accelerator_type"] = self.accelerator_type
+
         return out
 
     def as_ray_resources(self) -> RayResources:
@@ -157,4 +162,48 @@ class TpuPodConfig(ResourceConfig):
         return self.tpu_type
 
     def as_ray_resources(self) -> RayResources:
-        return RayResources(resources={self.tpu_type: self.slice_count})
+        return RayResources(runtime_env=self.runtime_env, num_cpus=8)
+
+    def device_flops(self) -> float:
+        """Get the peak FLOPs/s for the TPU type."""
+        from marin.resources_utils import device_flops_map
+        
+        # Map TPU type to the corresponding key in device_flops_map
+        tpu_type = self.tpu_type.upper()
+        if "V4" in tpu_type:
+            key = "TPU-V4"
+        elif "V5P" in tpu_type:
+            key = "TPU-V5P"
+        elif "V5LITE" in tpu_type:
+            key = "TPU-V5LITEPOD"
+        elif "V6" in tpu_type:
+            key = "TPU-V6E"
+        elif "V3" in tpu_type:
+            key = "TPU-V3"
+        elif "V2" in tpu_type:
+            key = "TPU-V2"
+        else:
+            raise ValueError(
+                f"Unknown TPU type: {self.tpu_type}. "
+                "Available types: " + ", ".join(sorted(k for k in device_flops_map.keys() if k.startswith("TPU")))
+            )
+        
+        flops = device_flops_map.get(key)
+        if flops is None:
+            raise ValueError(
+                f"No FLOPs data available for TPU type: {key}. "
+                "Available types: " + ", ".join(sorted(k for k in device_flops_map.keys() if k.startswith("TPU")))
+            )
+
+        return flops
+
+    def total_device_count(self) -> int:
+        """Get the total number of TPU chips."""
+        tpu_type = self.tpu_type.upper()
+        if "V4" in tpu_type:
+            return self.slice_count * 64
+        elif "V5" in tpu_type:
+            return self.slice_count * 64
+        elif "V6" in tpu_type:
+            return self.slice_count * 64
+        return self.slice_count

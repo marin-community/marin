@@ -9,7 +9,7 @@ from experiments.llama import llama_50m
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import executor_main
 from marin.resources import TpuPodConfig
-from marin.speedrun.speedrun import HardwareConfig, SpeedrunConfig, default_speedrun
+from marin.speedrun.speedrun import SpeedrunConfig, default_speedrun
 
 logger = logging.getLogger("ray")
 
@@ -23,11 +23,6 @@ speedrun_config = SpeedrunConfig(
         weight_decay=0.1,
         steps_per_eval=1500,
         steps_per_task_eval=1500,
-    ),
-    hardware_config=HardwareConfig(
-        device_type="v4-128",
-        num_devices=64,
-        device_flops=275e12,  # from https://cloud.google.com/tpu/docs/v4
     ),
 )
 

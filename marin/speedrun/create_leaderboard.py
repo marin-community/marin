@@ -16,13 +16,14 @@ class LeaderboardEntry:
     model_size: int
     total_training_time: float
     total_training_flops: float
+    model_flops: float
     submitted_by: str
     results_filepath: str
     wandb_link: str | None = None
     eval_paloma_c4_en_bpb: float | None = None
     run_timestamp: datetime.datetime | None = None
-    contributor_name: str | None = None
-    contributor_affiliation: str | None = None
+    author: str | None = None
+    affiliation: str | None = None
     description: str | None = None
 
 
@@ -41,46 +42,34 @@ def load_results_file(path: str) -> dict:
 
 def create_entry_from_results(results: dict, results_filepath: str) -> LeaderboardEntry:
     run_name = Path(results_filepath).parent.name
-
-    # Extract from speedrun_config
-    speedrun_config = results.get("speedrun_config", {})
-    model_size = speedrun_config.get("num_parameters")
-    contributor_name = speedrun_config.get("contributor_name", "marin-community")
-    contributor_affiliation = speedrun_config.get("contributor_affiliation")
-    description = speedrun_config.get("description")
-
-    # Extract from speedrun_results
-    speedrun_results = results.get("speedrun_results", {})
-    total_training_flops = speedrun_results.get("total_training_flops")
-    training_time = speedrun_results.get("training_time_in_minutes")
-    eval_paloma_c4_en_bpb = speedrun_results.get("eval/paloma/c4_en/bpb")
-    wandb_link = speedrun_results.get("wandb_run_link")
-    run_timestamp_str = speedrun_results.get("run_completion_timestamp")
-
-    # submitted_by will be the contributor_name from the config
-    submitted_by = contributor_name
-    
-    # Convert timestamp string to datetime object if present
-    run_timestamp = None
-    if run_timestamp_str:
-        try:
-            run_timestamp = datetime.datetime.strptime(run_timestamp_str, "%Y-%m-%d %H:%M:%S UTC")
-        except ValueError:
-            print(f"Warning: Could not parse timestamp '{run_timestamp_str}' for {run_name}. Leaving as None.")
-            run_timestamp = None # Or keep as string if preferred, but dataclass expects datetime
+    filepath = Path(results_filepath)
+    repo_root = Path(__file__).resolve().parent.parent.parent
+    relative_path = filepath.relative_to(repo_root).parent
+    total_training_flops = results["run_info"]["total_training_flops"]
+    training_time = results["run_info"]["training_time_in_minutes"]
+    eval_paloma_c4_en_bpb = results["run_info"]["eval/paloma/c4_en/bpb"]
+    model_size = results["run_info"]["num_parameters"]
+    submitted_by = results["run_info"].get("submitted_by", "unknown")
+    wandb_link = results["run_info"].get("wandb_run_link", None)
+    run_timestamp = results["run_info"].get("run_completion_timestamp", None)
+    model_flops = results["run_info"]["model_flops"]
+    author = results["run_info"]["author"]
+    affiliation = results["run_info"]["affiliation"]
+    description = results["run_info"]["description"]
 
     return LeaderboardEntry(
         run_name=run_name,
-        model_size=int(model_size) if model_size is not None else 0, # Ensure int
+        model_size=int(model_size) if model_size is not None else 0,  # ensure int, may change to str in future
         total_training_time=float(training_time) if training_time is not None else 0.0,
         total_training_flops=float(total_training_flops) if total_training_flops is not None else 0.0,
+        model_flops=model_flops,
         submitted_by=submitted_by,
-        results_filepath=results_filepath,
+        results_filepath=str(relative_path),
         wandb_link=wandb_link,
         eval_paloma_c4_en_bpb=float(eval_paloma_c4_en_bpb) if eval_paloma_c4_en_bpb is not None else None,
-        run_timestamp=run_timestamp, # Already a datetime object or None
-        contributor_name=contributor_name,
-        contributor_affiliation=contributor_affiliation,
+        run_timestamp=run_timestamp,
+        author=author,
+        affiliation=affiliation,
         description=description,
     )
 

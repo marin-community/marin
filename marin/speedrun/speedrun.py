@@ -1,8 +1,8 @@
 """
 Default functions, configurations and utilities for Marin speedruns to use.
 
-default_speedrun() is the function a user should call to run a speedrun; example is
-in experiments/speedrun/sample_run.py
+NOTE: If you are submitting a speedrun, you shouldn't modify this code (unless there is a very strong reason to do so).
+You should just call default_speedrun() to run a speedrun; examples can be found in marin/experiments/speedrun/.
 """
 
 import dataclasses
@@ -16,26 +16,19 @@ import fsspec
 import wandb
 from levanter.data.text import LMMixtureDatasetConfig
 from levanter.models.lm_model import LmConfig
+from levanter.utils.flop_utils import DEVICE_AVAILABLE_FLOPS
 
 from experiments.defaults import default_train
 from experiments.exp72_baselines import fineweb_edu_tokenized
 from experiments.llama import compute_num_parameters, llama3_tokenizer_vocab_size
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import ExecutorStep, InputName, output_path_of
+from marin.resources import ResourceConfig, TpuPodConfig, GpuConfig
 from marin.training.training import TrainLmOnPodConfig
 from marin.utilities.wandb_utils import WANDB_ENTITY, WANDB_PROJECT
 
 logger = logging.getLogger("ray")
 
-
-### Configuration classes ###
-
-
-@dataclass
-class HardwareConfig:
-    device_type: str  # a string describing the device e.g. "v4-128", or "h100"
-    num_devices: int
-    device_flops: float  # Peak FLOPs/s per device
 
 @dataclass
 class SpeedrunConfig:
@@ -46,7 +39,6 @@ class SpeedrunConfig:
 
     model_config: LmConfig
     train_config: SimpleTrainConfig | TrainLmOnPodConfig
-    hardware_config: HardwareConfig
 
     # by default, this is fineweb_edu_tokenized
     tokenized_dataset: InputName | LMMixtureDatasetConfig = fineweb_edu_tokenized
@@ -54,7 +46,6 @@ class SpeedrunConfig:
 
     @property
     def vocab_size(self) -> int:
-
         # TODO (Nikil): this doesn't interact well with different types (InputName, LMMixtureDatasetConfig, ExecutorStep)
         # Need to change this to automatically figure out vocab size
         # return load_tokenizer(unwrap_versioned_value(self.tokenized_dataset.tokenizer)).vocab_size
@@ -107,6 +98,16 @@ class SpeedrunConfig:
 
         return estimated_model_flops
 
+    @property
+    def device_flops(self) -> float:
+        """Get the peak FLOPs/s for the device type."""
+        return self.train_config.resources.device_flops()
+
+    @property
+    def num_devices(self) -> int:
+        """Get the number of devices."""
+        return self.train_config.resources.total_device_count()
+
 
 @dataclass
 class SpeedrunResultsConfig:
@@ -150,8 +151,8 @@ def speedrun_results(config: SpeedrunResultsConfig):
     total_time = sum(step_times)
     total_training_flops = (
         total_time
-        * config.speedrun_config.hardware_config.num_devices
-        * config.speedrun_config.hardware_config.device_flops
+        * config.speedrun_config.num_devices
+        * config.speedrun_config.device_flops
     )
 
     # get wandb run and metrics
@@ -177,9 +178,7 @@ def speedrun_results(config: SpeedrunResultsConfig):
             "model_config": dataclasses.asdict(config.speedrun_config.model_config),
             "train_config": dataclasses.asdict(config.speedrun_config.train_config),
             "tokenized_dataset": str(config.speedrun_config.tokenized_dataset),
-            "hardware_config": dataclasses.asdict(config.speedrun_config.hardware_config),
-        },
-        "speedrun_results": {
+            "resources": dataclasses.asdict(config.speedrun_config.train_config.resources),
             "run_completion_timestamp": end_time.strftime("%Y-%m-%d %H:%M:%S UTC"),
             "wandb_run_link": full_wandb_url,
             "model_flops": model_flops,
