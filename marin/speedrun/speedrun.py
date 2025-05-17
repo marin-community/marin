@@ -12,13 +12,12 @@ import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-
 import fsspec
-import wandb
 from levanter.data.text import LMMixtureDatasetConfig
 from levanter.models.lm_model import LmConfig
 from levanter.utils.flop_utils import lm_flops_per_token
 
+import wandb
 from experiments.defaults import default_train
 from experiments.exp72_baselines import fineweb_edu_tokenized
 from experiments.llama import compute_num_parameters, llama3_tokenizer_vocab_size
@@ -33,16 +32,15 @@ logger = logging.getLogger("ray")
 @dataclass
 class SpeedrunConfig:
 
-    author: str # name of the author/individual submitting the speedrun
-    affiliation: str # affiliation/institution of the contributor
-    description: str # brief (~1 sentence) description of the speedrun
+    author: str  # name of the author/individual submitting the speedrun
+    affiliation: str  # affiliation/institution of the contributor
+    description: str  # brief (~1 sentence) description of the speedrun
 
     model_config: LmConfig
     train_config: SimpleTrainConfig | TrainLmOnPodConfig
 
     # by default, this is fineweb_edu_tokenized
     tokenized_dataset: InputName | LMMixtureDatasetConfig = fineweb_edu_tokenized
-
 
     @property
     def vocab_size(self) -> int:
@@ -67,11 +65,13 @@ class SpeedrunConfig:
             )
 
         # Get MoE parameters if available, otherwise use defaults for dense models
-        num_experts = getattr(self.model_config, 'n_routed_experts', 1)
-        num_shared_experts = getattr(self.model_config, 'n_shared_experts', 0)
-        num_experts_per_tok = getattr(self.model_config, 'num_experts_per_tok', 1)
+        num_experts = getattr(self.model_config, "n_routed_experts", 1)
+        num_shared_experts = getattr(self.model_config, "n_shared_experts", 0)
+        num_experts_per_tok = getattr(self.model_config, "num_experts_per_tok", 1)
 
-        logger.info(f"num_experts: {num_experts}, num_shared_experts: {num_shared_experts}, num_experts_per_tok: {num_experts_per_tok}")
+        logger.info(
+            f"num_experts: {num_experts}, num_shared_experts: {num_shared_experts}, num_experts_per_tok: {num_experts_per_tok}"
+        )
         logger.info(f"total_tokens: {total_tokens}")
         logger.info(f"num_shared_experts: {num_shared_experts}")
         logger.info(f"num_experts_per_tok: {num_experts_per_tok}")
@@ -87,7 +87,7 @@ class SpeedrunConfig:
             glu=True,
             num_experts=num_experts,
             num_shared_experts=num_shared_experts,
-            num_experts_per_tok=num_experts_per_tok
+            num_experts_per_tok=num_experts_per_tok,
         )  # only fwd flops
 
         flops_per_token *= 3  # fwd + bwd
@@ -154,11 +154,7 @@ def speedrun_results(config: SpeedrunResultsConfig):
         * config.speedrun_config.train_config.num_train_steps
     )
     total_time = sum(step_times)
-    total_training_flops = (
-        total_time
-        * config.speedrun_config.num_devices
-        * config.speedrun_config.device_flops
-    )
+    total_training_flops = total_time * config.speedrun_config.num_devices * config.speedrun_config.device_flops
 
     # get wandb run and metrics
     run = wandb.Api().run(f"{config.wandb_entity}/{config.wandb_project}/{wandb_run_id}")
