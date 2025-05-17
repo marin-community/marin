@@ -12,18 +12,18 @@ import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 
+
 import fsspec
 import wandb
 from levanter.data.text import LMMixtureDatasetConfig
 from levanter.models.lm_model import LmConfig
-from levanter.utils.flop_utils import DEVICE_AVAILABLE_FLOPS
+from levanter.utils.flop_utils import lm_flops_per_token
 
 from experiments.defaults import default_train
 from experiments.exp72_baselines import fineweb_edu_tokenized
 from experiments.llama import compute_num_parameters, llama3_tokenizer_vocab_size
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import ExecutorStep, InputName, output_path_of
-from marin.resources import ResourceConfig, TpuPodConfig, GpuConfig
 from marin.training.training import TrainLmOnPodConfig
 from marin.utilities.wandb_utils import WANDB_ENTITY, WANDB_PROJECT
 
@@ -70,6 +70,11 @@ class SpeedrunConfig:
         num_experts = getattr(self.model_config, 'n_routed_experts', 1)
         num_shared_experts = getattr(self.model_config, 'n_shared_experts', 0)
         num_experts_per_tok = getattr(self.model_config, 'num_experts_per_tok', 1)
+
+        logger.info(f"num_experts: {num_experts}, num_shared_experts: {num_shared_experts}, num_experts_per_tok: {num_experts_per_tok}")
+        logger.info(f"total_tokens: {total_tokens}")
+        logger.info(f"num_shared_experts: {num_shared_experts}")
+        logger.info(f"num_experts_per_tok: {num_experts_per_tok}")
 
         flops_per_token = lm_flops_per_token(
             self.model_config.hidden_dim,
