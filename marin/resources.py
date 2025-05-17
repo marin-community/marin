@@ -10,7 +10,6 @@ import ray
 import ray.util.accelerators.accelerators as ray_accel_types
 from levanter.utils.py_utils import logical_cpu_core_count
 from levanter.utils.ray_utils import RayResources
-from levanter.utils.flop_utils import DEVICE_AVAILABLE_FLOPS
 from ray.remote_function import RemoteFunction
 from ray.runtime_env import RuntimeEnv
 
@@ -63,11 +62,17 @@ class ResourceConfig(Protocol):
 
     def device_flops(self) -> float | None:
         """Returns the peak FLOPs/s for a single device in this configuration."""
-        return None
+        raise NotImplementedError(
+            f"device_flops() not implemented for {self.__class__.__name__}. "
+            "Either implement this method in your ResourceConfig subclass or provide a device_flops_override."
+        )
 
     def total_device_count(self) -> int:
         """Returns the total number of devices in this configuration."""
-        return 1
+        raise NotImplementedError(
+            f"total_device_count() not implemented for {self.__class__.__name__}. "
+            "This method must be implemented to determine the total number of accelerator devices available."
+        )
 
 
 @dataclass(frozen=True)
@@ -75,6 +80,8 @@ class CpuOnlyConfig(ResourceConfig):
     num_cpus: int = dataclasses.field(default_factory=lambda: logical_cpu_core_count())
     """Configuration for local training without specialized hardware."""
     runtime_env: RuntimeEnv = dataclasses.field(default_factory=lambda: RuntimeEnv(env_vars={"JAX_PLATFORMS": "cpu"}))
+    device_flops_override: float | None = None
+    """Optional override for device FLOPS. If set, this value will be used instead of looking up in device_flops_map."""
 
     def accelerator_descriptor(self) -> str | None:
         return None
@@ -84,6 +91,14 @@ class CpuOnlyConfig(ResourceConfig):
 
     def as_ray_resources(self) -> RayResources:
         return RayResources(**self.as_remote_kwargs())
+
+    def device_flops(self) -> float | None:
+        if self.device_flops_override is not None:
+            logger.info(f"Using user-provided device FLOPS override: {self.device_flops_override} for CPU")
+            return self.device_flops_override
+        raise NotImplementedError(
+            "CPU FLOPS are not available by default. Please provide a device_flops_override if you need to specify CPU FLOPS."
+        )
 
     def total_device_count(self) -> int:
         return self.num_cpus

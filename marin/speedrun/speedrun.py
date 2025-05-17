@@ -147,15 +147,16 @@ def speedrun_results(config: SpeedrunResultsConfig):
         return
 
     model_flops = config.speedrun_config.estimate_model_flops()
-    num_params = compute_num_parameters(config.speedrun_config.model_config, config.speedrun_config.vocab_size)
+    model_size = compute_num_parameters(config.speedrun_config.model_config, config.speedrun_config.vocab_size)
     total_tokens = (
         config.speedrun_config.train_config.train_batch_size
         * config.speedrun_config.model_config.seq_len
         * config.speedrun_config.train_config.num_train_steps
     )
-    total_time = sum(step_times)
-    total_training_flops = total_time * config.speedrun_config.num_devices * config.speedrun_config.device_flops
 
+    training_time_seconds = sum(step_times)
+    training_time_in_minutes = training_time_seconds / 60
+    training_hardware_flops = training_time_seconds * config.speedrun_config.num_devices * config.speedrun_config.device_flops
     # get wandb run and metrics
     run = wandb.Api().run(f"{config.wandb_entity}/{config.wandb_project}/{wandb_run_id}")
     wandb_metrics = {
@@ -174,7 +175,7 @@ def speedrun_results(config: SpeedrunResultsConfig):
             "author": config.speedrun_config.author or "marin-community",
             "affiliation": config.speedrun_config.affiliation,
             "description": config.speedrun_config.description,
-            "num_parameters": num_params,
+            "model_size": model_size,
             "total_tokens": total_tokens,
             "model_config": dataclasses.asdict(config.speedrun_config.model_config),
             "train_config": dataclasses.asdict(config.speedrun_config.train_config),
@@ -183,8 +184,8 @@ def speedrun_results(config: SpeedrunResultsConfig):
             "run_completion_timestamp": end_time.strftime("%Y-%m-%d %H:%M:%S UTC"),
             "wandb_run_link": full_wandb_url,
             "model_flops": model_flops,
-            "training_time_in_minutes": total_time,
-            "total_training_flops": total_training_flops,
+            "training_time_in_minutes": training_time_in_minutes,
+            "training_hardware_flops": training_hardware_flops,
             "eval/paloma/c4_en/bpb": (
                 float(wandb_metrics.get("eval/paloma/c4_en/bpb"))
                 if wandb_metrics.get("eval/paloma/c4_en/bpb") is not None

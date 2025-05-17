@@ -14,10 +14,9 @@ import fsspec
 class LeaderboardEntry:
     run_name: str
     model_size: int
-    total_training_time: float
-    total_training_flops: float
+    training_time_in_minutes: float
+    training_hardware_flops: float
     model_flops: float
-    submitted_by: str
     results_filepath: str
     wandb_link: str | None = None
     eval_paloma_c4_en_bpb: float | None = None
@@ -45,11 +44,10 @@ def create_entry_from_results(results: dict, results_filepath: str) -> Leaderboa
     filepath = Path(results_filepath)
     repo_root = Path(__file__).resolve().parent.parent.parent
     relative_path = filepath.relative_to(repo_root).parent
-    total_training_flops = results["run_info"]["total_training_flops"]
-    training_time = results["run_info"]["training_time_in_minutes"]
+    training_hardware_flops = results["run_info"]["training_hardware_flops"]
+    training_time_in_minutes = results["run_info"]["training_time_in_minutes"]
     eval_paloma_c4_en_bpb = results["run_info"]["eval/paloma/c4_en/bpb"]
-    model_size = results["run_info"]["num_parameters"]
-    submitted_by = results["run_info"].get("submitted_by", "unknown")
+    model_size = results["run_info"]["model_size"]
     wandb_link = results["run_info"].get("wandb_run_link", None)
     run_timestamp = results["run_info"].get("run_completion_timestamp", None)
     model_flops = results["run_info"]["model_flops"]
@@ -60,10 +58,9 @@ def create_entry_from_results(results: dict, results_filepath: str) -> Leaderboa
     return LeaderboardEntry(
         run_name=run_name,
         model_size=int(model_size) if model_size is not None else 0,  # ensure int, may change to str in future
-        total_training_time=float(training_time) if training_time is not None else 0.0,
-        total_training_flops=float(total_training_flops) if total_training_flops is not None else 0.0,
+        training_time_in_minutes=float(training_time_in_minutes) if training_time_in_minutes is not None else 0.0,
+        training_hardware_flops=float(training_hardware_flops) if training_hardware_flops is not None else 0.0,
         model_flops=model_flops,
-        submitted_by=submitted_by,
         results_filepath=str(relative_path),
         wandb_link=wandb_link,
         eval_paloma_c4_en_bpb=float(eval_paloma_c4_en_bpb) if eval_paloma_c4_en_bpb is not None else None,
