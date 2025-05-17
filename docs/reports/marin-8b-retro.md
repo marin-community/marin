@@ -454,8 +454,8 @@ And it worked!
 ![graph depicting the loss during the cooldown for spoonbill](../images/8b-spoonbill-zloss.png)
 
 Interestingly, [subsequent experiments](https://wandb.ai/marin-community/marin/reports/ZLoss-vs-Not-1-4B--VmlldzoxMjEzMzA1NA) showed that, when starting from scratch, z-loss **increases** the norm of the lm_head, while it decreases the scale on the final layer norm.
-(In retrospect, this makes sense: the final layer norm has a disproportionate impact on the scale of the logits compared
-to any one component in the lm_head.)
+(In retrospect, this makes sense, for two reasons. First, the final layer norm has a disproportionate impact on the scale of the logits compared
+to any one component in the lm_head. Second, layer norms are typically not weight decayed, so z-loss is the only regularization pressure on it.)
 
 So, z-loss, it's not just for avoiding explosions.
 
@@ -566,7 +566,8 @@ As the learning rate is decayed, the hill component diminishes. Once we stop dec
 ## Base Model Results
 
 We ran a suite of standard benchmarks to compare our model with Llama 3.1 8B, Olmo 2, and a few other open source 7-8B models.
-For all benchmarks, we used [LM Eval Harness](https://github.com/EleutherAI/lm-evaluation-harness) with the default setup for each task. (These numbers may differ from reported results in the literature due to differences in the setup. LM Eval Harness is usually considerably stricter than other harnesses.)
+For all benchmarks, we used [LM Eval Harness](https://github.com/EleutherAI/lm-evaluation-harness) with the default setup for each task. These numbers differ from reported results in the literature due to differences in the setup. LM Eval Harness is usually considerably more strict than other harnesses.
+For other evaluations, you can see [Olmo 2's technical report](https://allenai.org/blog/olmo2) which includes results using [OLMES](https://github.com/allenai/olmes).
 
 
 |                          | Average  | AGI Eval LSAT-AR | ARC Easy | ARC Challenge | BBH      | BoolQ    | CommonSense QA | COPA     | GPQA     | HellaSwag 0-shot | HellaSwag 10-shot | lambada_openai |  MMLU 5-shot | MMLU 0-shot | MMLU Pro |OpenBookQA | PIQA     | WinoGrande | WSC      | GSM8K |
@@ -579,13 +580,14 @@ For all benchmarks, we used [LM Eval Harness](https://github.com/EleutherAI/lm-e
 
 Marin 8B Base (Starling) is the best performing 7-8B model on the majority of tasks. We can't claim any particular standout performance on any one task (though MMLU Pro is nice), just a general improvement.
 
+(Models like Gemma 2 9B )
+
 
 ## Supervised Fine-Tuning
 
 We're still improving our instruction tuning pipeline, but we are also releasing our current best checkpoint.
 
 ### SFT Data
-
 
 - [TIGER-Lab/AceCode-89K](https://huggingface.co/datasets/TIGER-Lab/AceCode-89K)
 - [bespokelabs/Bespoke-Stratos-17k](https://huggingface.co/datasets/bespokelabs/Bespoke-Stratos-17k)
@@ -600,27 +602,46 @@ We're still improving our instruction tuning pipeline, but we are also releasing
 ### SFT Details
 
 We used a batch size of 512Ki tokens and a learning rate of 1.7e-4. We started from the final checkpoint of the Deeper Starling run.
-We performed approximately XXX 2 epochs(XXX) over the data above, 10,227 steps (just under 5Gi tokens).
+We train for about 5Gi tokens, 10,227 steps.
 
 ### SFT Evals
 
-XXX details on eval setup
+In order to avoid bias in our benchmark selection, we follow established evaluation suites to ensure unbiased assessment of model capabilities.
 
-| Task | Score (%) |
-|------|-----------|
-| [AlpacaEval](https://github.com/tatsu-lab/alpaca_eval) | 18.3 |
-| [IFEval](https://arxiv.org/abs/2311.07911) | 69.7 |
-| [GSM8k_cot](https://github.com/EleutherAI/lm-evaluation-harness/blob/main/lm_eval/tasks/gsm8k/gsm8k-cot.yaml) | 70.3 |
-| [HumanEval](https://github.com/openai/human-eval) | 47.6 |
-| [BigBenchHard](https://arxiv.org/abs/2305.15243) | 61.0 |
-| [MATH](https://github.com/hendrycks/math) | 15.9 |
-| [MMLU](https://huggingface.co/datasets/cais/mmlu) | 63.1 |
-| [GPQA](https://arxiv.org/abs/2311.12022) | 27.5 |
-| [MMLU-Pro](https://huggingface.co/datasets/TIGER-Lab/MMLU-Pro) | 30.9 |
-| [MuSR](https://arxiv.org/abs/2310.16049) | 37.2 |
+Our benchmarks come primarily from the Open LLM Leaderboard's hard evaluation set, which includes [IFEval](https://huggingface.co/datasets/google/IFEval), [BigBenchHard (BBH)](https://arxiv.org/abs/2210.09261), [MATH](https://huggingface.co/datasets/hendrycks/math) (the Hard subset that LM Eval Harness uses), [GPQA](https://arxiv.org/abs/2311.12022), [MuSR](https://arxiv.org/abs/2310.16049), and [MMLU-Pro](https://huggingface.co/datasets/TIGER-Lab/MMLU-Pro) - tasks specifically designed to avoid data contamination while measuring reasoning and instruction.
 
-We see an unfortunate degradation in "base model" tasks like MMLU, not dissimilar to [what Olmo 2 reported](https://arxiv.org/abs/2501.00656). We are working to mitigate this (e.g. by mixing in pretraining data and FLAN into SFT).
+We also incorporate key benchmarks from the OLMo 2 technical report for instruction tuned models, which includes [GSM8K-CoT](https://github.com/EleutherAI/lm-evaluation-harness/blob/main/lm_eval/tasks/gsm8k/gsm8k-cot.yaml), [MMLU](https://huggingface.co/datasets/cais/mmlu), and [AlpacaEval](https://github.com/tatsu-lab/alpaca_eval). We exclude [DROP](https://huggingface.co/datasets/ucinlp/drop) from our evaluations due to [recently identified issues in the benchmark by HuggingFace](https://huggingface.co/blog/open-llm-leaderboard-drop).
 
+For code generation, we use [HumanEval](https://github.com/openai/human-eval) - which continues to be the standard benchmark for simpler non-agentic coding validation.
+
+For all tasks aside from AlpacaEval, we utilize the [EleutherAI Lm Evaluation Harness](https://github.com/EleutherAI/lm-evaluation-harness) with chat templates turned -- a standardized evaluation harness from an independent party from all models evaluated.
+For AlpacaEval, we use the [AlpacaEval](https://github.com/tatsu-lab/alpaca_eval) harness.
+
+As we noted earlier, LM Eval Harness can be quite strict, leading to extremely low performance due to systematic failures to follow the strict templates.
+In this case, Olmo 2 SFT suffered on MATH, and Llama 3.1 Instruct suffered on HumanEval. Therefore, we report both the average score and the average score excluding those two tasks.
+
+
+| Model | Average | Average w/o <br/> outliers | AlpacaEval | IFEval | Gsm8k_cot | BigBenchHard | MMLU | GPQA | MMLU-Pro | MuSR | MATH Hard | HumanEval |
+|-------|---------|---------------------|------------|--------|------------|---------------|-------|------|-----------|------|-----------|-----------|
+| OLMo 2 SFT | 37.7 | 41.4 | 10.2 | 63.6 | 69.4 | 42.0 | 59.6 | 25.8 | 22.7 | 37.7 | 7.2 | 38.4 |
+| OLMo 2 Instruct | 38.7 | 44.6 | 29.1 | 69.5 | 79.0 | 42.6 | 59.7 | 24.2 | 17.6 | 34.7 | 14.0 | 17.1 |
+| Llama 3.1 Instruct | 39.8 | 46.8 | 23.6 | 84.5 | 82.6 | 36.9 | **63.2** | 29.2 | 15.9 | 38.1 | 23.1 | 0.6 |
+| Llama 3.1 Tulu | **50.0** | **51.9** | **34.9** | **87.5** | **88.1** | 43.9 | 60.7 | 28.7 | 29.4 | **42.2** | **24.7** | **60.4** |
+| Marin 8B SFT | 43.8 | 46.2 | 18.3 | 78.3 | 68.9 | **46.0** | 61.6 | **29.5** | **31.2** | 35.9 | 21.2 | 47.0 |
+
+We see an unfortunate degradation in "base model" tasks like MMLU, not dissimilar to [what Olmo 2 reported in their own results](https://arxiv.org/abs/2501.00656). We are working to mitigate this (e.g. by mixing in pretraining data and FLAN into SFT).
+
+If we look at ranks:
+
+| Model | Average Rank | Average Rank<br/>w/o outliers |
+|-------|---------|---------------------|
+| OLMo 2 SFT | 4.1 | 4.125 |
+| OLMo 2 Instruct | 3.8 | 3.75 |
+| Llama 3.1 Instruct | 2.9 | 2.75 |
+| Llama 3.1 Tulu | 1.6 | 1.75 |
+| Marin 8B SFT | 2.6 | 2.625 |
+
+So we still haven't surpassed Llama 3.1 Tulu, bu
 
 # Conclusion
 
@@ -628,8 +649,8 @@ We see an unfortunate degradation in "base model" tasks like MMLU, not dissimila
 
 - **Tootsie means never having to say you're sorry.** We made several dramatic changes to the data mix, optimizer, and other hyperparameters during the run. We cooled down, rewarmed up, changed the mixture, etc. without any major issues. Highly recommend.
 - **Z-loss isn't just for avoiding explosions.** While we didn't need z-loss to stabilize the training, we found it actually pretty necessary during very deep cooldowns.
-- **Format diversity is useful.**  While not necessarily showing up in non-loss evals, the high sensitivity of c4en perplexity (and that of other datasets) to the data mix suggests that formatting diversity is useful. We will pursue this further in future runs.
 - **So-called "high quality" data doesn't have everything.** High quality data seems to often lack data that leads to good few-shot performance. Mixing in FLAN or other datasets seems to help.
+- **Format diversity is useful.**  While not necessarily showing up in non-loss evals, the high sensitivity of c4en perplexity (and that of other datasets) to the data mix suggests that formatting diversity is useful. We will pursue this further in future runs.
 - **Exponential moving averages are nice, but maybe not all that useful with WSD.** The stability of the EMA gap suggests that there isn't that much information in monitoring EMA model evals: we know from WSD that there is some easy performance to be had whenever we want it (by cooling down and removing the hill component). That said, even at very low LR there is still *some* gap, so that's a tiny bit of free performance. The harm is also small, since the EMA can be held in CPU memory rather than HBM.
 - **Tootsie means having to say you're sorry kind of a lot.** We made many, many mistakes during the run. Some of the changes were actually unintentional, or were fixes to initial mistakes (e.g. the rotary embedding hyperparameters). Nevertheless, the end result was a model that performed well on a wide variety of tasks.
 
