@@ -1,5 +1,9 @@
 """
-Step to read a Levanter cache and produce a subsample of that cache.
+Step to read a Levanter cache and produce a subsample of that cache. We mostly use this in Speedrun
+to create smaller caches that can be downloaded directly from Hugging Face.
+
+slice_cache will take a Levanter cache and produce a subsample of that cache by sampling documents randomly
+from the cache (without replacement) until the desired number of tokens is reached.
 """
 
 # TODO: this is painfully slow. Should figure out what's going on

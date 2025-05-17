@@ -5,6 +5,7 @@ and prepares it as a tokenized dataset source for Levanter.
 
 import dataclasses
 import logging
+import os
 
 from levanter.data.text import (
     LmDatasetFormatBase,
@@ -14,7 +15,7 @@ from levanter.data.text import (
 )
 from levanter.store.cache import CacheOptions
 
-from marin.execution import THIS_OUTPUT_PATH, ExecutorStep, InputName
+from marin.execution import THIS_OUTPUT_PATH, ExecutorStep, InputName, ensure_versioned
 from marin.processing.tokenize.tokenize import TokenizeConfigBase
 from operations.download.huggingface.download import DownloadConfig as HfDownloadConfig
 from operations.download.huggingface.download_hf import (
@@ -78,6 +79,7 @@ def download_pretokenized_cache(
     Args:
         output_cache_path_name: The logical name for this download step. The Executor will use this
                                 to construct the actual output directory for the cache.
+                                "tokenized/subcache" will be prepended to this name.
         hf_repo_id: The Hugging Face repository ID (e.g., "username/my_cache_repo").
         tokenizer: The name or path of the tokenizer associated with this cache.
         hf_revision: The specific revision, branch, or tag of the repository to download.
@@ -92,8 +94,8 @@ def download_pretokenized_cache(
     config = PretokenizedCacheDownloadConfig(
         cache_path=THIS_OUTPUT_PATH,  # ExecutorStep will resolve this to the actual output path
         tokenizer=tokenizer,
-        hf_repo_id=hf_repo_id,
-        hf_revision=hf_revision,
+        hf_repo_id=ensure_versioned(hf_repo_id),  # type: ignore[call-arg]
+        hf_revision=ensure_versioned(hf_revision),  # type: ignore[call-arg]
         hf_repo_type_prefix="datasets",  # Default for Hugging Face datasets
         hf_token=hf_token,
         tags=tags or [],
@@ -101,7 +103,7 @@ def download_pretokenized_cache(
     )
 
     return ExecutorStep(
-        name=output_cache_path_name,
+        name=os.path.join("tokenized", "subcache", output_cache_path_name),
         fn=_actually_download_pretokenized_cache,
         config=config,
     )
