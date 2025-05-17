@@ -8,7 +8,7 @@ from experiments.llama import llama_75m
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import executor_main
 from marin.resources import TpuPodConfig
-from marin.speedrun.speedrun import SpeedrunConfig
+from marin.speedrun.speedrun import SpeedrunConfig, default_speedrun
 
 logger = logging.getLogger("ray")
 
@@ -24,7 +24,7 @@ speedrun_config = SpeedrunConfig(
         learning_rate=3e-3,
         weight_decay=0.1,
         steps_per_eval=1000,
-    ),    
+    ),
 )
 
 if __name__ == "__main__":
@@ -34,6 +34,6 @@ if __name__ == "__main__":
     print(f"Total peak FLOPs: {speedrun_config.device_flops * speedrun_config.num_devices}")
 
     print(f"Estimated model flops: {speedrun_config.estimate_model_flops()}")
-    
+
     # Comment out the actual run for now
     # executor_main(steps=default_speedrun("75M_llama_fineweb_edu", speedrun_config))
