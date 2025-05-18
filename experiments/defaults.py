@@ -8,6 +8,7 @@ import os
 from collections.abc import Sequence
 from datetime import timedelta
 from functools import lru_cache
+from typing import Any
 
 import jmp
 from haliax.partitioning import ResourceAxis
@@ -54,7 +55,7 @@ from marin.processing.tokenize import (
     lm_data_config,
     tokenize,
 )
-from marin.processing.tokenize.tokenize import HfTokenizeConfig
+from marin.processing.tokenize.tokenize import HfTokenizeConfig, TokenizeConfigBase
 from marin.scaling_laws.scaling_laws import ScalingLawConfig, run_scaling_law_analysis
 from marin.training.training import (
     TrainLmOnPodConfig,
@@ -71,7 +72,7 @@ def default_download(
     hf_dataset_id: str,
     revision: str,
     override_output_path: str | None = None,
-    **kwargs,
+    **kwargs: Any,
 ) -> InputName:
     """
     Download a HuggingFace dataset and upload it to a specified path with default configuration.
@@ -412,8 +413,6 @@ def default_sft(
                   - For mixture: a LMMixtureDatasetConfig with multiple datasets.
         model_config: Levanter LlamaConfig for the model architecture to train.
         sft_config: Configuration for the SFT training process.
-        mixture_weights: Dict mapping datasets within mixture to weight to sample with. If provided,
-                       enables mixture-based training.
         tags: Additional tags for WandB logging. Default: ().
 
     Returns:
@@ -571,12 +570,12 @@ def _get_tokenizer_for_train(tokenized: InputName | ExecutorStep | LMMixtureData
     match tokenized:
         case LMMixtureDatasetConfig(tokenizer=tokenizer):
             pass
-        case ExecutorStep(config=TokenizeConfig(tokenizer=tokenizer)):
-            pass
+        case ExecutorStep(config=config) if isinstance(config, TokenizeConfigBase):
+            tokenizer = config.tokenizer
         case ExecutorStep(config=HfTokenizeConfig(tokenizer=tokenizer)):
             pass
-        case InputName(step=ExecutorStep(config=TokenizeConfig(tokenizer=tokenizer))):
-            pass
+        case InputName(step=ExecutorStep(config)) if isinstance(config, TokenizeConfigBase):
+            tokenizer = config.tokenizer
         case _:
             raise ValueError(f"Could not determine tokenizer from {tokenized}")
 

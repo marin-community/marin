@@ -5,6 +5,7 @@ import logging
 import os
 import tempfile
 from dataclasses import dataclass
+from urllib.parse import urlparse
 
 import fsspec
 import humanfriendly
@@ -60,12 +61,18 @@ def upload_dir_to_hf(
         token: the token to use for authentication (if not provided, it will use the default token)
         revision: the branch to upload to (if not provided, it will use the default branch)
         certificate_path: where to store the certificate that we uploaded to HF (needed for executor idempotency).
-           If not provided, a reasonable default will be used. Should be a path relative to the executor prefix.
+             If not provided, a reasonable default will be used. Should be a path relative to the executor prefix.
     Returns:
         ExecutorStep
     """
     if not certificate_path:
-        certificate_path = f"metadata/hf_uploads/{input_path.name}"
+        if isinstance(input_path, InputName) or isinstance(input_path, ExecutorStep):
+            certificate_path = f"metadata/hf_uploads/{input_path.name}"
+        else:
+            # This will drop the scheme (e.g., 'gs') and keep the path
+            parsed = urlparse(input_path)
+            path = parsed.path.lstrip("/")
+            certificate_path = f"metadata/hf_uploads/{path}"
 
     return ExecutorStep(
         name=certificate_path,
