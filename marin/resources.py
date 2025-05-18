@@ -177,6 +177,14 @@ class GpuConfig(ResourceConfig):
     def total_device_count(self) -> int:
         return self.gpu_count
 
+    def as_json_dict(self) -> dict:
+        """Convert GpuConfig to a JSON-serializable dictionary."""
+        return {
+            "gpu_count": self.gpu_count,
+            "accelerator_type": self.accelerator_type,
+            "device_flops_override": self.device_flops_override
+        }
+
 
 @dataclass(frozen=True)
 class TpuPodConfig(ResourceConfig):
@@ -206,16 +214,23 @@ class TpuPodConfig(ResourceConfig):
             logger.info(f"Using user-provided device FLOPS override: {self.device_flops_override} for TPU type {self.tpu_type}")
             return self.device_flops_override
 
-        from marin.resources_utils import get_tpu_type_and_chips, device_flops_map
-        
-        # Get the base TPU type and validate it exists
-        tpu_type, _ = get_tpu_type_and_chips(self.tpu_type)
-        return device_flops_map[tpu_type]
+        from marin.resources_utils import get_tpu_flops
+        return get_tpu_flops(self.tpu_type)
 
     def total_device_count(self) -> int:
         """Get the total number of TPU devices."""
         from marin.resources_utils import get_tpu_type_and_chips
+
+        logger.info(f"TPU type: {self.tpu_type}")
         
         # Get the number of devices for this TPU configuration
         _, num_devices = get_tpu_type_and_chips(self.tpu_type)
         return self.slice_count * num_devices
+
+    def as_json_dict(self) -> dict:
+        """Convert TpuPodConfig to a JSON-serializable dictionary."""
+        return {
+            "tpu_type": self.tpu_type,
+            "slice_count": self.slice_count,
+            "device_flops_override": self.device_flops_override
+        }

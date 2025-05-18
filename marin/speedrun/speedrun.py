@@ -60,12 +60,43 @@ class SpeedrunConfig:
     def vocab_size(self) -> int:
         return llama3_tokenizer_vocab_size
 
+    def as_json_dict(self) -> dict:
+        """Convert SpeedrunConfig to a JSON-serializable dictionary."""
+
+        # dataclasses.asdict() doesn't serialize the resources field, so we do it manually
+        resources = self.train_config.resources
+        resources_dict = {
+            "type": resources.__class__.__name__,
+            "config": resources.as_json_dict()
+        }
+
+        # Create train_config dict excluding resources field
+        train_config_dict = {k: v for k, v in dataclasses.asdict(self.train_config).items() if k != 'resources'}
+
+        return {
+            "author": {
+                "name": self.author.name,
+                "affiliation": self.author.affiliation,
+                "url": self.author.url
+            },
+            "description": self.description,
+            "model_config": dataclasses.asdict(self.model_config),
+            "train_config": train_config_dict,
+            "tokenized_dataset": str(self.tokenized_dataset),
+            "resources": resources_dict
+        }
+
     def print_flops_info(self) -> None:
         """Print information about device FLOPS, model FLOPS, and hardware configuration."""
 
         num_devices = self.num_devices
         device_flops = self.device_flops
         total_peak_flops = device_flops * num_devices
+
+        # Print simplified config info
+        logger.info("Speedrun Configuration:")
+        logger.info(json.dumps(self.as_json_dict(), indent=2))
+
         model_flops = self.compute_model_flops()
 
         logger.info("Hardware and Model FLOPS Information:")
@@ -200,7 +231,7 @@ def speedrun_results(config: SpeedrunResultsConfig):
     full_wandb_url = f"https://wandb.ai/{config.wandb_entity}/{config.wandb_project}/runs/{wandb_run_id}"
 
     # Start with the base config as a dictionary
-    speedrun_dict = dataclasses.asdict(config.speedrun_config)
+    speedrun_dict = config.speedrun_config.as_json_dict()
 
     # Add computed values and results
     run_info = {
