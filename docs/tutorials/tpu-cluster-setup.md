@@ -97,7 +97,7 @@ ray down -y infra/marin-$CLUSTER.yaml
 
 ## Best Practices
 
-1. **Data Location**: Use the bucket in the same region as your cluster to minimize data transfer costs.
+1. **Data Location**: Use a bucket in the same region as your cluster to minimize data transfer costs.
 
 2. **Preemption Handling**: Most compute is preemptible, meaning VMs can be shut down at any time. Design your jobs to:
    - Be idempotent (can run multiple times safely)
