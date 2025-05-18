@@ -1,4 +1,4 @@
-from experiments.defaults import default_train
+from marin.optimizer_sweep.defaults import default_train
 from marin.optimizer_sweep.AdamMini.adam_mini import adam_mini_train
 from marin.optimizer_sweep.Cautious.cautious import cautious_train
 from marin.optimizer_sweep.Kron.kron import kron_train
