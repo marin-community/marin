@@ -29,12 +29,26 @@ from marin.utilities.wandb_utils import WANDB_ENTITY, WANDB_PROJECT
 logger = logging.getLogger("ray")
 
 
+@dataclass(frozen=True)
+class Author:
+    """Author information for a speedrun."""
+
+    name: str
+    """Name of the author/individual submitting the speedrun."""
+
+    affiliation: str
+    """Affiliation/institution of the contributor."""
+
+    url: str | None = None
+    """Optional URL to author's profile/website."""
+
+
 @dataclass
 class SpeedrunConfig:
-
-    author: str  # name of the author/individual submitting the speedrun
-    affiliation: str  # affiliation/institution of the contributor
-    description: str  # brief (~1 sentence) description of the speedrun
+    author: Author
+    """Author information for the speedrun."""
+    description: str
+    """Brief (~1 sentence) description of the speedrun."""
 
     model_config: LmConfig
     train_config: SimpleTrainConfig | TrainLmOnPodConfig
@@ -44,12 +58,27 @@ class SpeedrunConfig:
 
     @property
     def vocab_size(self) -> int:
-        # TODO (Nikil): this doesn't interact well with different types (InputName, LMMixtureDatasetConfig, ExecutorStep)
-        # Need to change this to automatically figure out vocab size
-        # return load_tokenizer(unwrap_versioned_value(self.tokenized_dataset.tokenizer)).vocab_size
         return llama3_tokenizer_vocab_size
 
-    def estimate_model_flops(self) -> float:
+    def print_flops_info(self) -> None:
+        """Print information about device FLOPS, model FLOPS, and hardware configuration."""
+
+        num_devices = self.num_devices
+        device_flops = self.device_flops
+        total_peak_flops = device_flops * num_devices
+        model_flops = self.compute_model_flops()
+
+        logger.info("Hardware and Model FLOPS Information:")
+        logger.info(f"  Number of devices: {num_devices}")
+        logger.info(f"  Device FLOPs: {device_flops:.2e} FLOP/s")
+        logger.info(f"  Total peak hardware FLOPs: {total_peak_flops:.2e} FLOP/s")
+        logger.info(f"  Model FLOPs: {model_flops:.2e} FLOP")
+        if model_flops > 0 and total_peak_flops > 0:
+            estimated_time = model_flops / (total_peak_flops * 0.5)
+            logger.info(f"  Estimated training time at 50% MFU: {estimated_time/3600:.1f} hours")
+
+
+    def compute_model_flops(self) -> float:
         # TODO (Nikil): make this a helper and handle edge-cases
         if isinstance(self.train_config.train_batch_size, list) and len(self.train_config.train_batch_size) > 0:
             from levanter.schedule import BatchSchedule
@@ -146,7 +175,7 @@ def speedrun_results(config: SpeedrunResultsConfig):
         logger.error("No step times available; analysis aborted.")
         return
 
-    model_flops = config.speedrun_config.estimate_model_flops()
+    model_flops = config.speedrun_config.compute_model_flops()
     model_size = compute_num_parameters(config.speedrun_config.model_config, config.speedrun_config.vocab_size)
     total_tokens = (
         config.speedrun_config.train_config.train_batch_size
@@ -170,36 +199,33 @@ def speedrun_results(config: SpeedrunResultsConfig):
 
     full_wandb_url = f"https://wandb.ai/{config.wandb_entity}/{config.wandb_project}/runs/{wandb_run_id}"
 
+    # Start with the base config as a dictionary
+    speedrun_dict = dataclasses.asdict(config.speedrun_config)
+
+    # Add computed values and results
     run_info = {
-        "speedrun_config": {
-            "author": config.speedrun_config.author or "marin-community",
-            "affiliation": config.speedrun_config.affiliation,
-            "description": config.speedrun_config.description,
-            "model_size": model_size,
-            "total_tokens": total_tokens,
-            "model_config": dataclasses.asdict(config.speedrun_config.model_config),
-            "train_config": dataclasses.asdict(config.speedrun_config.train_config),
-            "tokenized_dataset": str(config.speedrun_config.tokenized_dataset),
-            "resources": dataclasses.asdict(config.speedrun_config.train_config.resources),
-            "run_completion_timestamp": end_time.strftime("%Y-%m-%d %H:%M:%S UTC"),
-            "wandb_run_link": full_wandb_url,
-            "model_flops": model_flops,
-            "training_time_in_minutes": training_time_in_minutes,
-            "training_hardware_flops": training_hardware_flops,
-            "eval/paloma/c4_en/bpb": (
-                float(wandb_metrics.get("eval/paloma/c4_en/bpb"))
-                if wandb_metrics.get("eval/paloma/c4_en/bpb") is not None
-                else None
-            ),
-        },
+        **speedrun_dict,
+        # Model metrics
+        "model_size": model_size,
+        "total_tokens": total_tokens,
+        "model_flops": model_flops,
+
+        # Training metrics
+        "training_time_in_minutes": training_time_in_minutes,
+        "training_hardware_flops": training_hardware_flops,
+        "eval/paloma/c4_en/bpb": float(wandb_metrics.get("eval/paloma/c4_en/bpb")) if wandb_metrics.get("eval/paloma/c4_en/bpb") is not None else None,
+
+        # Run metadata
+        "run_completion_timestamp": end_time.strftime("%Y-%m-%d %H:%M:%S UTC"),
+        "wandb_run_link": full_wandb_url,
     }
 
-    logger.info(f"Speedrun stats: {run_info}")
+    logger.info(f"Speedrun info and results: {run_info}")
 
     output_data = {"runs": [run_info]}
     with fsspec.open(config.output_path, "w") as f:
         json.dump(output_data, f, indent=2, sort_keys=True)
-    logger.info(f"Speedrun stats written to {config.output_path}")
+    logger.info(f"Speedrun info and results written to {config.output_path}")
 
 
 ### Default speedrun function ###
