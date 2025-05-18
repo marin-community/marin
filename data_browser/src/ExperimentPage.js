@@ -95,8 +95,8 @@ function renderExperiment({experiment, path, auxiliaryData}) {
   const steps = renderExperimentSteps({experiment, auxiliaryData});
 
   return (<div>
-    {header}
-    {steps}
+    <Paper elevation={3} style={{padding: 10}}>{header}</Paper>
+    <Paper elevation={3} style={{padding: 10}}>{steps}</Paper>
   </div>);
 }
 
@@ -141,7 +141,7 @@ function renderExperimentSteps({experiment, auxiliaryData}) {
     row.push(<td className="experiment-step-table-cell" key="equals">:=</td>);
 
     const {name, description} = renderStepDescription({step, steps: experiment.steps, auxiliaryData});
-    row.push(<td className="experiment-step-table-cell" key="name">{name}</td>);
+    row.push(<td className="experiment-step-table-cell" key="name" title={step.fn_name}>{name}</td>);
     row.push(<td className="experiment-step-table-cell" key="description">{description}</td>);
 
     rows.push(<tr key={index}>{row}</tr>);
@@ -165,9 +165,77 @@ function renderStepDescription({step, steps, auxiliaryData}) {
     return {name: "download", description: <a href={url} target="_blank">{description}</a>};
   }
 
+  if (step.fn_name === "operations.download.filesystem.transfer.transfer_files") {
+    const description = renderPath({path: step.config.input_path, steps});
+    return {name: "copy", description};
+  }
+
   // Tokenize
   if (step.fn_name === "marin.processing.tokenize.tokenize.tokenize") {
     return renderTokenizeStepDescription({step, steps});
+  }
+
+  // Run inference (e.g., for quality filtering)
+  if (step.fn_name === "marin.processing.classification.inference.run_inference") {
+    const description = <table>
+      <tbody>
+        <tr><td>Model:</td><td>{step.config.model_type}</td></tr>
+        <tr><td>Input:</td><td>{renderPath({path: step.config.input_path, steps})}</td></tr>
+        <tr><td>Output attribute:</td><td>{step.config.attribute_name}</td></tr>
+      </tbody>
+    </table>;
+    return {name: "run_inference", description};
+  }
+
+  if (step.fn_name === "marin.generation.inference.run_inference") {
+    const description = <table>
+      <tbody>
+        <tr><td>Model:</td><td>{getBasename(step.config.model_name)}</td></tr>
+        <tr><td>Prompt:</td><td>{step.config.template.substring(0, 80)}... <span title={step.config.template}>{infoIcon}</span></td></tr>
+        <tr><td>Input:</td><td>{renderPath({path: step.config.input_path, steps})}</td></tr>
+      </tbody>
+    </table>;
+    return {name: "run_inference", description};
+  }
+
+  if (step.fn_name === "marin.datashop.pipeline.run_medu_dataset_sampling_pipeline") {
+    const description = <table>
+      <tbody>
+        <tr><td>Input:</td><td>{renderPath({path: step.config.input_path, steps})}</td></tr>
+        <tr><td>Processor:</td><td>{step.config.processor_type}</td></tr>
+      </tbody>
+    </table>;
+    return {name: "sample", description};
+  }
+
+  if (step.fn_name === "marin.classifiers.hf.launch_ray_training.launch_training_with_ray") {
+    const resources = step.config.resource_config;
+    const hardwareSummary = `${resources.num_tpu} * ${resources.tpu_type}`;
+    const trainingConfig = step.config.training_config;
+    const modelName = trainingConfig.model_name;
+    const modelLink = <a href={`https://huggingface.co/${modelName}`} target="_blank">{huggingfaceIcon}{modelName}</a>;
+    const description = <table>
+      <tbody>
+        <tr><td>Base model:</td><td>{modelLink}</td></tr>
+        <tr><td>Input data:</td><td>{renderPath({path: trainingConfig.train_dataset, steps})}</td></tr>
+        <tr><td>Hardware:</td><td>{hardwareSummary}</td></tr>
+      </tbody>
+    </table>;
+    return {name: "train", description};
+  }
+
+  // Consolidate (e.g., filter)
+  if (step.fn_name === "marin.processing.classification.consolidate.consolidate") {
+    const filters = step.config.filters.map((filter) => {
+      return <div key={filter.name}>{renderPath({path: filter.attribute_path, steps})}.{filter.name}.{filter.label} (keep {filter.keep_fraction})</div>;
+    });
+    const description = <table>
+      <tbody>
+        <tr><td>Input data:</td><td>{renderPath({path: step.config.input_path, steps})}</td></tr>
+        <tr><td>Filters:</td><td>{filters}</td></tr>
+      </tbody>
+    </table>;
+    return {name: "consolidate", description};
   }
 
   // Train
@@ -245,9 +313,9 @@ function renderTrainStepDescription({step, steps}) {
   const optimizerConfig = step.config.train_config.optimizer;
   const finalLearningRate = optimizerConfig.learning_rate * optimizerConfig.min_lr_ratio;
   const optimizerSummary = [
-    `betas = ${optimizerConfig.beta1},${optimizerConfig.beta2}`,
-    `warmup = ${optimizerConfig.warmup}`,
     `lr = ${renderSciNotation(optimizerConfig.learning_rate)} → ${renderSciNotation(finalLearningRate)} (${optimizerConfig.lr_schedule})`,
+    `warmup = ${optimizerConfig.warmup}`,
+    `betas = ${optimizerConfig.beta1},${optimizerConfig.beta2}`,
     `weight_decay = ${optimizerConfig.weight_decay}`,
   ].join(", ");
 
@@ -437,4 +505,8 @@ function computeNumTokens({numSteps, batchSize, seqLen}) {
     return total;
   }
   return numSteps * batchSize * seqLen;
+}
+
+function getBasename(path) {
+  return path.split("/").pop();
 }
