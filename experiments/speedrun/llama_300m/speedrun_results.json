@@ -84,7 +84,7 @@
           "weight_decay": 0.1,
           "z_loss_weight": null
         },
-        "wandb_run_link": "https://wandb.ai/stanford-mercury/marin/runs/300M_llama-7e3b0f"
+        "wandb_run_link": "https://wandb.ai/marin-community/marin/runs/300M_llama-7e3b0f"
       },
       "run_stats": {
         "eval/paloma/c4_en/bpb": 1.1648558378219604,

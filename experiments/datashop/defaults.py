@@ -372,7 +372,7 @@ def default_synthetic_data_generation(
     engine_kwargs: dict = default_engine_kwargs,
     generation_kwargs: dict = default_generation_kwargs,
     output_path: str | None = None,
-):
+) -> ExecutorStep:
     """
     Generates synthetic data using a specified model and prompt template.
 
@@ -395,7 +395,7 @@ def default_synthetic_data_generation(
             If None, a default path is used.
 
     Returns:
-        ExecutorStep: An ExecutorStep of the synthetic dataset.
+        (ExecutorStep): An ExecutorStep of the synthetic dataset.
     """
     return ExecutorStep(
         name=output_path,
