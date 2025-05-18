@@ -285,12 +285,14 @@ function renderTokenizeStepDescription({step, steps}) {
   return {name: "tokenize", description};
 }
 
-function renderTrainStep({step, steps}) {
-  const dataConfig = step.config.train_config.data;
+function renderTrainLmStep({step, steps}) {
+  // Old runs don't have a train_config, it's just config
+  const trainConfig = step.config.train_config || step.config;
+  const dataConfig = trainConfig.data;
   const datasetSummary = renderDatasetSummary({dataConfig, steps});
 
   // Model
-  const modelConfig = step.config.train_config.model;
+  const modelConfig = trainConfig.model;
   const architectureSummary = [
     `d_model = ${modelConfig.hidden_dim}`,
     `d_ff = ${modelConfig.intermediate_dim}`,
@@ -302,7 +304,7 @@ function renderTrainStep({step, steps}) {
   ].join(", ");
 
   // Optimizer
-  const optimizerConfig = step.config.train_config.optimizer;
+  const optimizerConfig = trainConfig.optimizer;
   const finalLearningRate = optimizerConfig.learning_rate * optimizerConfig.min_lr_ratio;
   const optimizerSummary = [
     `lr = ${renderSciNotation(optimizerConfig.learning_rate)} → ${renderSciNotation(finalLearningRate)} (${optimizerConfig.lr_schedule})`,
@@ -312,7 +314,7 @@ function renderTrainStep({step, steps}) {
   ].join(", ");
 
   // Initialization + training
-  const trainerConfig = step.config.train_config.trainer;
+  const trainerConfig = trainConfig.trainer;
   const initializationSummary = trainerConfig.initialize_from ?
     renderPath({path: trainerConfig.initialize_from, steps}) :
     `random(${modelConfig.initializer_range})`;
@@ -327,7 +329,7 @@ function renderTrainStep({step, steps}) {
 
   // Hardware
   const resources = step.config.resources;
-  const resourcesSummary = `${resources.slice_count || 1} * ${resources.tpu_type}`;
+  const resourcesSummary = resources ? `${resources.slice_count || 1} * ${resources.tpu_type}` : "n/a";
 
   const wandbLink = <a href={getWandbUrl({step})} title="Go to the WandB page for this training run" target="_blank">[WandB {wandbIcon}]</a>;
   const description = (
@@ -374,13 +376,17 @@ function renderDatasetSummary({dataConfig, steps}) {
     return true;
   });
 
+  function getUrl(location) {
+    return location.cache_dir || location.train_urls[0];
+  }
+
   if (nonzeroSources.length === 1) {
-    return renderPath({path: nonzeroSources[0][1].train_urls[0], steps});
+    return renderPath({path: getUrl(nonzeroSources[0][1]), steps});
   }
 
   nonzeroSources.forEach(([source, location]) => {
-    const row = [<td key="source">{renderPath({path: location.train_urls[0], steps})}</td>].concat(
-      allWeights.map(([step, weights], stage) => <td key={step}>{round(weights[source] / sumWeights[stage], 2)}</td>)
+    const row = [<td key="source">{renderPath({path: getUrl(location), steps})}</td>].concat(
+      allWeights.map(([step, weights], stage) => <td key={step}>{round(weights[source] / sumWeights[stage], 3)}</td>)
     );
     datasetRows.push(<tr key={source}>{row}</tr>);
   });
@@ -459,6 +465,7 @@ const stepRenderers = {
   "operations.download.nemotron_cc.download_nemotron_cc.download_nemotron_cc": renderDownloadNemotronCCStep,
   "operations.download.filesystem.transfer.transfer_files": renderTransferStep,
   "operations.raw2json.huggingface.qa.raw2json.raw2json": renderRaw2JsonStep,
+  "operations.transform.conversation.transform_conversation.transform_hf_dataset": renderRaw2JsonStep,
   "operations.transform.fasttext.transform.main": renderFastTextTransformStep,
   "operations.transform.evaluation.eval_to_dolma.convert_eval_to_dolma": renderConvertEvalToDolmaStep,
 
@@ -474,7 +481,7 @@ const stepRenderers = {
 
   // Tokenize, train, eval
   "marin.processing.tokenize.tokenize.tokenize": renderTokenizeStepDescription,
-  "marin.training.training.run_levanter_train_lm": renderTrainStep,
+  "marin.training.training.run_levanter_train_lm": renderTrainLmStep,
   "marin.evaluation.run.evaluate": renderEvaluateStep,
 };
 
