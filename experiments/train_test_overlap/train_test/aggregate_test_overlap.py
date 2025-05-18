@@ -17,6 +17,21 @@ from marin.utils import fsspec_glob, fsspec_mkdirs
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
+# Define map from path fragment to training dataset label
+TRAINING_DATASET_MAP = {
+    "nemotro-cc-eeb783": "NEMOTRON",
+    "mlfoundations/dclm-baseline": "DCLM",
+    "dolmino": "DOLMINO",
+    "proof-pile-2": "PROOFPILE",
+    "finemath-3plus": "FINEMATH3+",
+}
+
+def detect_training_dataset(paths: list[str]) -> str:
+    for p in paths:
+        for fragment, label in TRAINING_DATASET_MAP.items():
+            if fragment in p:
+                return label
+    return "UNKNOWN"
 
 @dataclass
 class AggregateTestOverlapConfig:
@@ -77,6 +92,8 @@ def aggregate_test_overlap(cfg: AggregateTestOverlapConfig) -> str:
     summary = {}
     # separate summary stats per part
     summary_by_part = {"input": {}, "references": {}}
+    # separate summary stats per training dataset
+    summary_by_training = {"input": {}, "references": {}}
 
     for idx, path in enumerate(metric_paths, start=1):
         print(f"Processing file {idx}/{total_metrics}: {path}", flush=True)
@@ -130,6 +147,17 @@ def aggregate_test_overlap(cfg: AggregateTestOverlapConfig) -> str:
                 part_ent = part_smap.setdefault(split, set())
                 for inst in inst_ids:
                     part_ent.add(inst)
+
+                # accumulate for training-dataset summary stats by part
+                training_paths = [p for inst_paths in mip.values() for p in inst_paths]
+                training_ds = detect_training_dataset(training_paths)
+                train_part = summary_by_training[part]
+                tl1 = train_part.setdefault(training_ds, {})
+                tl2 = tl1.setdefault(n_val, {})
+                tl3 = tl2.setdefault(dataset, {})
+                tl4 = tl3.setdefault(subset, {})
+                tl5 = tl4.setdefault(split, set())
+                tl5.update(inst_ids)
 
         # Finished reading this metric file
         print(f"Finished processing file {idx}/{total_metrics}", flush=True)
@@ -209,6 +237,38 @@ def aggregate_test_overlap(cfg: AggregateTestOverlapConfig) -> str:
                     tot_f.write(json.dumps(total_rec) + "\n")
 
     logger.info("Wrote aggregate summaries to %s", out_base)
+    # Write per-training-dataset summary totals
+    for part in ["input", "references"]:
+        for training_ds, nmap in summary_by_training[part].items():
+            for n_val, dataset_map in nmap.items():
+                out_dir = os.path.join(out_base, training_ds, f"ngram_{n_val}")
+                fsspec_mkdirs(out_dir)
+                total_filename = "summary_input_total.jsonl" if part == "input" else "summary_reference_total.jsonl"
+                total_file = os.path.join(out_dir, total_filename)
+                print(f"  Writing training summary_{part}.jsonl for {training_ds}, n-gram {n_val}", flush=True)
+                with fsspec.open(total_file, "wt") as tot_f:
+                    for test_dataset, subset_map in dataset_map.items():
+                        total_instances = sum(
+                            scenario_counts.get(test_dataset, {}).get(subset_key, {}).get("test", 0)
+                            for subset_key in scenario_counts.get(test_dataset, {})
+                        )
+                        overlap_count = sum(
+                            len(inst_set)
+                            for subset_key, split_map in subset_map.items()
+                            for split, inst_set in split_map.items() if split == "test"
+                        )
+                        fraction = (overlap_count / total_instances) if total_instances else None
+                        rec = {
+                            "training_dataset": training_ds,
+                            "test_dataset": test_dataset,
+                            "n_val": n_val,
+                            "part": part,
+                            "total_instances": total_instances,
+                            "overlap_count": overlap_count,
+                            "overlap_fraction": fraction,
+                        }
+                        tot_f.write(json.dumps(rec) + "\n")
+
     return "Aggregate test overlap completed!"
 
 
