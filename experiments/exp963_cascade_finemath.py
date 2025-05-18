@@ -1,4 +1,6 @@
 # nodryrun
+from dataclasses import replace
+
 from experiments.datashop.datashop_datasets import datashop_dclm_annotation_subset, datashop_dclm_pretraining_subset
 from experiments.datashop.datashop_runner import DatashopRunner, DatashopRunnerConfig
 from experiments.datashop.default_configs import (
@@ -10,6 +12,7 @@ from experiments.models import get_model_local_path, llama_3_3_70b_instruct
 from marin.classifiers.utils import CreateDatasetConfig, create_dataset
 from marin.execution.executor import ExecutorStep, output_path_of, this_output_path
 
+# From the SmolLM2 paper: https://arxiv.org/pdf/2502.02737
 FINEMATH_3_POINT_DATA_FILTER_PROMPT = """
 Evaluate the following text extract for its potential usefulness for studying mathematics up to high school and early undergraduate levels. Use the following 3-point scoring system described below. Points are accumulated based on the satisfaction of
 each criterion:
@@ -28,8 +31,13 @@ After examining the extract:
 - Conclude with the score using the format: "Final score: <total points>"
 """  # noqa: E501, RUF001
 
+
+# ===== STAGE 1: Filter out most of the low-quality data =====
 quality_filter_train_config_kwargs = default_quality_filter_train_config_kwargs.copy()
-quality_filter_train_config_kwargs["training_config"].max_label = 3
+quality_filter_train_config_kwargs["training_config"] = replace(
+    quality_filter_train_config_kwargs["training_config"],
+    max_label=3,
+)
 
 datashop_runner = DatashopRunner(
     DatashopRunnerConfig(
@@ -43,6 +51,7 @@ datashop_runner = DatashopRunner(
     )
 )
 
+# ===== STAGE 2: From the remaining data, create a annotation pool and train a model on its filtered data =====
 new_annotation_data_pool = ExecutorStep(
     name="documents/finemath-cascade-3-point-filter/dclm-baseline",
     fn=create_dataset,
@@ -56,8 +65,12 @@ new_annotation_data_pool = ExecutorStep(
 )
 
 phase_2_quality_filter_config_kwargs = default_quality_filter_train_config_kwargs.copy()
-phase_2_quality_filter_config_kwargs["training_config"].learning_rate = 1e-4
-phase_2_quality_filter_config_kwargs["training_config"].max_label = 5
+phase_2_quality_filter_config_kwargs["training_config"] = replace(
+    phase_2_quality_filter_config_kwargs["training_config"],
+    learning_rate=1e-4,
+    max_label=5,
+)
+
 consolidate_filter_kwargs = default_consolidate_filter_config_kwargs.copy()
 consolidate_filter_kwargs["keep_fraction"] = 0.25
 datashop_runner_phase_2 = DatashopRunner(
