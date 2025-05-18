@@ -16,9 +16,6 @@ from experiments.anneal_config import AnnealConfig
 from experiments.defaults import default_anneal, default_tokenize, default_train
 from experiments.dolmino.tokenize_dolmino import get_dolmino_step_llama3
 from experiments.evals.evals import default_eval
-from experiments.exp246_web_extraction_method_training import (
-    transform_resiliparse_preserve_formatting,
-)
 from experiments.exp274_mmlu_quality_classifier import (
     dclm_negative_examples_in_dolma_format,
     mmlu_eval_aux_in_dolma_format,
@@ -84,7 +81,11 @@ class ExperimentConfig:
     classifier_training_datasets: list[DatasetConfig]
     input_data_source_to_path: dict[str, str] = field(
         default_factory=lambda: {
-            "fineweb_2024_18": output_path_of(transform_resiliparse_preserve_formatting, "md/CC-MAIN-2024-18"),
+            "fineweb_2024_18": (
+                # the executor path is:output_path_of(transform_resiliparse_preserve_formatting, "md/CC-MAIN-2024-18"),
+                # but we want to use this specific shard without redownloading the full FineWeb so we hardcode instead
+                "gs://marin-us-central2/documents/fineweb-small-resiliparse-preserve-formatting-v2-e72837/md/CC-MAIN-2024-18/"
+            ),
         }
     )
     keep_fractions: list[float] = field(default_factory=lambda: [0.01, 0.05, 0.1, 0.2])
