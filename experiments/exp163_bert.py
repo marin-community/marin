@@ -12,10 +12,8 @@ See https://github.com/stanford-crfm/marin/issues/163 for more details.
 import os
 from dataclasses import dataclass, field
 
-from experiments.anneal_config import AnnealConfig
-from experiments.defaults import default_anneal, default_tokenize, default_train
+from experiments.defaults import default_tokenize, default_train
 from experiments.dolmino.tokenize_dolmino import get_dolmino_step_llama3
-from experiments.evals.evals import default_eval
 from experiments.exp274_mmlu_quality_classifier import (
     dclm_negative_examples_in_dolma_format,
     mmlu_eval_aux_in_dolma_format,
@@ -45,7 +43,6 @@ from marin.processing.classification.fasttext.train_fasttext import (
     train as train_fasttext,
 )
 from marin.processing.classification.inference import InferenceConfig, run_inference
-from marin.processing.tokenize.data_configs import lm_mixture_data_config
 
 dolmino_dclm = get_dolmino_step_llama3("dclm")
 
@@ -240,46 +237,6 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
             )
             steps.append(fasttext_train_step)
             steps.append(bert_train_step)
-
-            fasttext_anneal_config = AnnealConfig(
-                dataset_config=lm_mixture_data_config(
-                    components={
-                        "fineweb-hq": fasttext_tokenize_step,
-                        "dolmino": dolmino_dclm,
-                    },
-                    weights={"fineweb-hq": 0.3, "dolmino": 0.7},
-                ),
-            )
-            fasttext_anneal_step = default_anneal(
-                name=f"checkpoints/quality_filtering/{config.experiment_name}/fasttext/{input_data_source}/anneal",
-                anneal_config=fasttext_anneal_config,
-            )
-
-            bert_anneal_config = AnnealConfig(
-                dataset_config=lm_mixture_data_config(
-                    components={
-                        "fineweb-hq": bert_tokenize_step,
-                        "dolmino": dolmino_dclm,
-                    },
-                    weights={"fineweb-hq": 0.3, "dolmino": 0.7},
-                ),
-            )
-            bert_anneal_step = default_anneal(
-                name=f"checkpoints/quality_filtering/{config.experiment_name}/bert/{input_data_source}/anneal",
-                anneal_config=bert_anneal_config,
-            )
-            steps.append(fasttext_anneal_step)
-            steps.append(bert_anneal_step)
-
-            eval_fasttext_train = default_eval(fasttext_train_step)
-            eval_bert_train = default_eval(bert_train_step)
-            eval_fasttext_anneal = default_eval(fasttext_anneal_step)
-            eval_bert_anneal = default_eval(bert_anneal_step)
-
-            steps.append(eval_fasttext_train)
-            steps.append(eval_bert_train)
-            steps.append(eval_fasttext_anneal)
-            steps.append(eval_bert_anneal)
 
     return steps
 
