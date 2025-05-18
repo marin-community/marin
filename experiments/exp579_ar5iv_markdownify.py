@@ -242,7 +242,9 @@ ar5iv_extraction_steps = get_ar5iv_extraction_step(
     ),
 )
 
-ar5iv_no_problem_resiliparse_custom_fork = ar5iv_extraction_steps["no-problem"]
+ar5iv_no_problem_resiliparse_custom_fork = ar5iv_extraction_steps["no-problem"].with_output_path(
+    "documents/ar5iv/ar5iv-04-2024-no-problem-3971f"
+)
 ar5iv_warnings_resiliparse_custom_fork = ar5iv_extraction_steps["warnings"]
 ar5iv_errors_resiliparse_custom_fork = ar5iv_extraction_steps["errors"]
 
