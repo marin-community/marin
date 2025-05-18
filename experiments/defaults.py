@@ -55,7 +55,7 @@ from marin.processing.tokenize import (
     lm_data_config,
     tokenize,
 )
-from marin.processing.tokenize.tokenize import HfTokenizeConfig
+from marin.processing.tokenize.tokenize import HfTokenizeConfig, TokenizeConfigBase
 from marin.scaling_laws.scaling_laws import ScalingLawConfig, run_scaling_law_analysis
 from marin.training.training import (
     TrainLmOnPodConfig,
@@ -569,12 +569,12 @@ def _get_tokenizer_for_train(tokenized: InputName | ExecutorStep | LMMixtureData
     match tokenized:
         case LMMixtureDatasetConfig(tokenizer=tokenizer):
             pass
-        case ExecutorStep(config=TokenizeConfig(tokenizer=tokenizer)):
-            pass
+        case ExecutorStep(config=config) if isinstance(config, TokenizeConfigBase):
+            tokenizer = config.tokenizer
         case ExecutorStep(config=HfTokenizeConfig(tokenizer=tokenizer)):
             pass
-        case InputName(step=ExecutorStep(config=TokenizeConfig(tokenizer=tokenizer))):
-            pass
+        case InputName(step=ExecutorStep(config)) if isinstance(config, TokenizeConfigBase):
+            tokenizer = config.tokenizer
         case _:
             raise ValueError(f"Could not determine tokenizer from {tokenized}")
 
