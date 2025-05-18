@@ -53,8 +53,6 @@ The Ar5iv dataset uses specialized filters for academic papers:
 
 The Stack Exchange dataset applies several specific filters:
 
-- **Vote Threshold Filtering**: Only includes posts with a minimum vote threshold (typically ≥8 votes) to ensure quality.
-- **Duplicate Question Removal**: Removes duplicate questions, keeping only the first instance.
 - **Q&A Structure Preservation**: Special processing to maintain the question-answer structure of posts.
 - **Markup Formatting**: Proper conversion of Stack Exchange markup to markdown, preserving code blocks, lists, and other formatting.
 - **Separator Addition**: Adds separators between questions and answers for better readability.
