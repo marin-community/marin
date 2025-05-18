@@ -6,8 +6,9 @@ import logging
 
 from experiments.llama import llama_75m
 from experiments.simple_train_config import SimpleTrainConfig
+from marin.execution.executor import executor_main
 from marin.resources import TpuPodConfig
-from marin.speedrun.speedrun import Author, SpeedrunConfig
+from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 
 logger = logging.getLogger("ray")
 
@@ -32,7 +33,4 @@ speedrun_config = SpeedrunConfig(
 speedrun_config.print_run_info()
 
 if __name__ == "__main__":
-    # Comment out the actual run for now
-    # executor_main(steps=default_speedrun("75M_llama_fineweb_edu", speedrun_config))
-
-    print(speedrun_config.as_json_dict())
+    executor_main(steps=default_speedrun("75M_llama_fineweb_edu", speedrun_config))
