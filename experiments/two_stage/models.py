@@ -3,30 +3,11 @@ from levanter.models.llama import LlamaConfig
 from levanter.models.rotary import Llama3RotaryEmbeddingsConfig
 from experiments.llama import llama_150m, llama_300m, llama_600m, llama_1_4b, llama_1_9b
 
-llama_150m_4096_config = dataclasses.replace(
-    llama_150m,
-    seq_len=4096,
-)
-
-llama_300m_4096_config = dataclasses.replace(
-    llama_300m,
-    seq_len=4096,
-)
-
-llama_600m_4096_config = dataclasses.replace(
-    llama_600m,
-    seq_len=4096,
-)
-
-llama_1_4b_4096_config = dataclasses.replace(
-    llama_1_4b,
-    seq_len=4096,
-)
-
-llama_1_9b_4096_config = dataclasses.replace(
-    llama_1_9b,
-    seq_len=4096,
-)
+llama_150m_4096_config = dataclasses.replace(llama_150m, seq_len=4096)
+llama_300m_4096_config = dataclasses.replace(llama_300m, seq_len=4096)
+llama_600m_4096_config = dataclasses.replace(llama_600m, seq_len=4096)
+llama_1_4b_4096_config = dataclasses.replace(llama_1_4b, seq_len=4096)
+llama_1_9b_4096_config = dataclasses.replace(llama_1_9b, seq_len=4096)
 
 llama_8b_config = LlamaConfig(
     seq_len=4096,  # Seq len set to reproduce Tulu SFT
@@ -57,12 +38,4 @@ model_dict = {
     "1_4b4k": llama_1_4b_4096_config,
     "1_9b4k": llama_1_9b_4096_config,
     "l8b": llama_8b_config,
-}
-
-inverse_width_dict = {
-    "150m4k": 1.0,
-    "300m4k": 1.0 / 1.5,
-    "600m4k": 1.0 / 2.0,
-    "1_4b4k": 1.0 / 4.0,
-    "1_9b4k": 1.0 / 4.0,
 }

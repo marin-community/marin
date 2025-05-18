@@ -17,8 +17,7 @@ if __name__ == "__main__":
                 wandb_project_name="suhas-two-stage",
                 wandb_additional_tags=["debug"],
                 model_name="150m4k",
-                nametag="-dv2",
-                # tpu_type="v6e-128"
+                nametag="",
             )
         )
         for lr, lr_schedule, lr_cooldown_duration in [

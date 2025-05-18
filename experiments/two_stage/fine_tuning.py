@@ -1,3 +1,7 @@
+"""
+Searching for the best replay ratio for fine-tuning. Training proceeds in two stages, first is pre-training on only C4 data, second is fine-tuning on a mixture of C4 and the rare data. We cooldown/rewarmup the learning rate and reset the optimizer state in between checkpoints. For a fair comparison, we keep the total number of training steps fixed across replay ratio. When we increase the replay ratio, the second stage has more steps so we decrease the length of pre-training.
+"""
+
 from marin.execution.executor import output_path_of, executor_main
 from experiments.two_stage.two_stage_config import TwoStageConfig, two_stage_train_step
 
@@ -13,7 +17,7 @@ def pretraining_for_fixed_steps(steps: int):
             lr_schedule="cosine",
             lr=1e-3,
             wandb_project_name="suhas-two-stage",
-            wandb_additional_tags=["joint-pt-5-12"],
+            wandb_additional_tags=["pretraining-replay"],
             model_name="150m4k",
             nametag=f"-{int(steps)}"
         )
@@ -56,6 +60,7 @@ def finetuning_with_replay(
 if __name__ == "__main__":
     NUM_RARE_STEPS = 1
     TOTAL_STEPS = 1024
+
     train_steps = [
         finetuning_with_replay(
             rare_data_name=rare_data_name,
@@ -65,21 +70,15 @@ if __name__ == "__main__":
             num_total_steps=TOTAL_STEPS,
             lr=lr,
             nametag="-j",
-            wandb_additional_tags=["joint-ft-5-12-v5", f"{rare_data_name}-c4-fine-tuning-v5"],
+            wandb_additional_tags=["fine-tuning-replay", f"{rare_data_name}-c4-fine-tuning-replay"],
         )
-        for replay_multiplier in [1.125, 1.25]
+        for replay_multiplier in [1.125, 1.25, 1.5, 2.0, 3.0, 4.0]
         for lr in [3e-4]
-        for rare_data_name in [
-            "finemath",
-            "flan",
-            "starcoder",
-            "spj",
-        ]
+        for rare_data_name in ["finemath", "flan", "starcoder"]
         for rare_data_epochs in [64]
     ]
 
     executor_main(
         steps=train_steps,
-        description="Sanity check for lr data schedule",
+        description="Fine-tuning with replay",
     )
-
