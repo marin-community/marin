@@ -101,8 +101,10 @@ function renderExperiment({experiment, path, auxiliaryData}) {
   </div>);
 }
 
-function renderExperimentHeader(args) {
-  const {experiment, path} = args;
+/**
+ * Renders the header (link to GitHub, etc.)
+ */
+function renderExperimentHeader({experiment, path}) {
   const relativePath = extractRayRelativePath(experiment.caller_path);
 
   const links = [];
@@ -126,6 +128,22 @@ function renderExperimentHeader(args) {
   </div>);
 }
 
+/**
+ * Key function for rendering all the experiments.
+ * Right now, we just treat the experiments as a long listof steps that get rendered as rows of a table.
+ * Each row has:
+ * - Links (status, info)
+ * - Name of the step (note: not unique)
+ * - Function (which is custom)
+ * - Description (which includes both arguments and outputs)
+ *
+ * The description will (based on the function) refer to different paths, and we
+ * automatically detect these as the output path for the step.
+ *
+ * Note: we are currently not looking at the explicit dependencies of each step!
+ * So that means a hardcoded path will show up as a (implicit) dependency and
+ * dependencies that are not part of the selected fields will not show up.
+ */
 function renderExperimentSteps({experiment, auxiliaryData}) {
   const rows = [];
   experiment.steps.forEach((step, index) => {
