@@ -72,6 +72,9 @@ export function joinSpans(spans, separator) {
 }
 
 export function renderSciNotation(value) {
+  if (value === 0) {
+    return value
+  }
   // Render using scientific notation
   return value.toExponential(1);
 }

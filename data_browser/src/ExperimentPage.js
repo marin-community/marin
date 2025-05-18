@@ -13,7 +13,7 @@ const statusIcons = {
   "SUCCESS": "✅",
   "FAILED": "❌",
   "WAITING": "🧍",
-  "RUNNING": "🔄",
+  "RUNNING": "🏃",
 };
 const loadingIcon = "⏳";
 const errorIcon = "❌";
@@ -111,10 +111,10 @@ function renderExperimentHeader(args) {
   const githubUrl = experiment.git_commit ?
     `https://github.com/stanford-crfm/marin/tree/${experiment.git_commit}/${relativePath}` :
     `https://github.com/stanford-crfm/marin/blob/main/${relativePath}`;
-  links.push(<Button href={githubUrl} color="primary" target="_blank">Code</Button>);
+  links.push(<Button href={githubUrl} color="primary" target="_blank" rel="noreferrer">Code</Button>);
 
   // Link to plain data browser
-  links.push(<Button href={viewSingleUrl(path)} target="_blank">JSON</Button>);
+  links.push(<Button href={viewSingleUrl(path)} target="_blank" rel="noreferrer">JSON</Button>);
 
   return (<div>
     <h3>Experiment: {relativePath}</h3>
@@ -133,10 +133,10 @@ function renderExperimentSteps({experiment, auxiliaryData}) {
 
     row.push(<td className="experiment-step-table-cell" key="status">{renderExperimentStatus({step, auxiliaryData})}</td>);
 
-    const info = <a href={viewInfoUrl(step)} target="_blank" title="View raw JSON specification of this step">{infoIcon}</a>;
+    const info = <a href={viewInfoUrl(step)} target="_blank" rel="noreferrer" title="View raw JSON specification of this step">{infoIcon}</a>;
     row.push(<td className="experiment-step-table-cell" key="info">{info}</td>);
 
-    const stepName = <a href={viewOutputPathUrl(step)} target="_blank" title={`View raw output path produced by this step:\n${step.output_path}`}>[{step.name}]</a>;
+    const stepName = <a href={viewOutputPathUrl(step)} target="_blank" rel="noreferrer" title={`View raw output path produced by this step:\n${step.output_path}`}>[{step.name}]</a>;
     row.push(<td className="experiment-step-table-cell" key="step-name">{stepName}</td>);
 
     row.push(<td className="experiment-step-table-cell" key="equals">:=</td>);
@@ -160,13 +160,13 @@ function renderDownloadStep({step}) {
   const hfDatasetId = step.config.hf_dataset_id;
   const revision = step.config.revision;
   const hfUrl = `https://huggingface.co/datasets/${hfDatasetId}/tree/${revision}`;
-  return {name: "download", description: <a href={hfUrl} target="_blank">{huggingfaceIcon}{hfDatasetId}</a>};
+  return {name: "download", description: <a href={hfUrl} target="_blank" rel="noreferrer">{huggingfaceIcon}{hfDatasetId}</a>};
 }
 
 function renderDownloadNemotronCCStep({step}) {
   const url = "https://data.commoncrawl.org/contrib/Nemotron/Nemotron-CC/index.html";
   const description = "Nemotron-CC from Common Crawl";
-  return {name: "download", description: <a href={url} target="_blank">{description}</a>};
+  return {name: "download", description: <a href={url} target="_blank" rel="noreferrer">{description}</a>};
 }
 
 function renderTransferStep({step, steps}) {
@@ -245,7 +245,7 @@ function renderHfLaunchTrainingStep({step, steps}) {
   const hardwareSummary = `${resources.num_tpu} * ${resources.tpu_type}`;
   const trainingConfig = step.config.training_config;
   const modelName = trainingConfig.model_name;
-  const modelLink = <a href={`https://huggingface.co/${modelName}`} target="_blank">{huggingfaceIcon}{modelName}</a>;
+  const modelLink = <a href={`https://huggingface.co/${modelName}`} target="_blank" rel="noreferrer">{huggingfaceIcon}{modelName}</a>;
   const description = <table>
     <tbody>
       <tr><td>Base model:</td><td>{modelLink}</td></tr>
@@ -278,7 +278,7 @@ function renderTokenizeStepDescription({step, steps}) {
   });
   const description = <table>
     <tbody>
-      <tr><td>Tokenizer:</td><td><a href={hfUrl} target="_blank">{tokenizer}</a></td></tr>
+      <tr><td>Tokenizer:</td><td><a href={hfUrl} target="_blank" rel="noreferrer">{tokenizer}</a></td></tr>
       <tr><td>Raw text:</td><td>{links}</td></tr>
     </tbody>
   </table>;
@@ -287,7 +287,7 @@ function renderTokenizeStepDescription({step, steps}) {
 
 function renderTrainLmStep({step, steps}) {
   // Old runs don't have a train_config, it's just config
-  const trainConfig = step.config.train_config || step.config;
+  const trainConfig = step.config.train_config || step.config.config || step.config;
   const dataConfig = trainConfig.data;
   const datasetSummary = renderDatasetSummary({dataConfig, steps});
 
@@ -331,7 +331,7 @@ function renderTrainLmStep({step, steps}) {
   const resources = step.config.resources;
   const resourcesSummary = resources ? `${resources.slice_count || 1} * ${resources.tpu_type}` : "n/a";
 
-  const wandbLink = <a href={getWandbUrl({step})} title="Go to the WandB page for this training run" target="_blank">[WandB {wandbIcon}]</a>;
+  const wandbLink = <a href={getWandbUrl({step})} title="Go to the WandB page for this training run" target="_blank" rel="noreferrer">[WandB {wandbIcon}]</a>;
   const description = (
     <table className="train-table">
       <tbody>
@@ -421,7 +421,7 @@ function renderEvaluateStep({step, steps, auxiliaryData}) {
   const description = <table>
     <tbody>
       <tr><td>Model:</td><td>{renderPath({path: step.config.model_path, steps})}</td></tr>
-      <tr><td><a href={viewResultsUrl(step)} target="_blank">Results</a>:</td><td>{resultsSummary}</td></tr>
+      <tr><td><a href={viewResultsUrl(step)} target="_blank" rel="noreferrer">Results</a>:</td><td>{resultsSummary}</td></tr>
     </tbody>
   </table>;
   return {name: "evaluate", description};
@@ -451,7 +451,7 @@ function renderExperimentStatus({step, auxiliaryData}) {
   const lastStatus = <span className={"status-" + lastEvent.status}>{statusIcon}</span>;
   const temporalInfo = `last updated ${renderDate(lastEvent.date)}, lifetime is ${renderDuration(duration)}`;
   return <span className="status-container">
-    <a href={viewStatusUrl(step)} target="_blank" title={`View raw JSON status of this step ${temporalInfo}`}>
+    <a href={viewStatusUrl(step)} target="_blank" rel="noreferrer" title={`View raw JSON status of this step ${temporalInfo}`}>
       {lastStatus}
     </a>
   </span>;
@@ -514,7 +514,7 @@ function renderPath({path, steps}) {
     document.getElementById(step.output_path).classList.remove("highlight");
   }
 
-  const link = <a href={viewSingleUrl(linkedPath)} target="_blank"
+  const link = <a href={viewSingleUrl(linkedPath)} target="_blank" rel="noreferrer"
       className={step && "path-link"}
       title={`View raw path:\n${linkedPath}`}
       onMouseEnter={step && (() => onMouseEnter(step))}
