@@ -96,17 +96,6 @@ download_transform = [
     "htmlmin",
 ]
 
-bert_quality = [
-    "--find-links https://storage.googleapis.com/libtpu-releases/index.html",
-    "--find-links https://storage.googleapis.com/libtpu-wheels/index.html",
-    "fasttext",
-    "datasets",
-    "filelock",
-    "torch",
-    "torch_xla[tpu]",
-    "accelerate",
-]
-
 quality_dedup_consolidate = [
     "dolma",
     "fasttext",
