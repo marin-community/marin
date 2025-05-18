@@ -144,7 +144,7 @@ function renderExperimentSteps({experiment, auxiliaryData}) {
     row.push(<td className="experiment-step-table-cell" key="name" title={step.fn_name}>{name}</td>);
     row.push(<td className="experiment-step-table-cell" key="description">{description}</td>);
 
-    rows.push(<tr key={index}>{row}</tr>);
+    rows.push(<tr key={index} id={step.name}>{row}</tr>);
   });
   return (<table className="experiment-steps-table"><tbody>{rows}</tbody></table>);
 }
@@ -262,19 +262,36 @@ function renderPath({path, steps}) {
   }
 
   // What to show
-  const replacedPath = replacePath({path, steps});
+  const {step, replacedPath} = replacePath({path, steps});
 
-  return <a href={viewSingleUrl(linkedPath)} target="_blank">{replacedPath}</a>;
+  function onMouseEnter(step) {
+    console.log("onMouseEnter", step);
+    document.getElementById(step.name).classList.add("highlight");
+  }
+
+  function onMouseLeave(step) {
+    console.log("onMouseLeave", step);
+    document.getElementById(step.name).classList.remove("highlight");
+  }
+
+  const link = <a href={viewSingleUrl(linkedPath)} target="_blank"
+      className={step && "path-link"}
+      onMouseEnter={step && (() => onMouseEnter(step))}
+      onMouseLeave={step && (() => onMouseLeave(step))}>
+    {replacedPath}
+  </a>;
+
+  return link;
 }
     
 function replacePath({path, steps}) {
   // If the path is under an output path of some step, then link to the name of that step
   for (const step of steps) {
     if (path.startsWith(step.output_path)) {
-      return path.replace(step.output_path, `[${step.name}]`);
+      return {step, replacedPath: path.replace(step.output_path, `[${step.name}]`)};
     }
   }
-  return path;
+  return {step: null, replacedPath: path};
 }
 
 function renderTokenizeStepDescription({step, steps}) {
