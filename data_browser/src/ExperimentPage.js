@@ -147,7 +147,7 @@ function renderExperimentStep(args) {
   }
 
   const configRows = Object.entries(step.version.config).map(([key, value]) => {
-    return <tr key={key}><td>{key}</td><td>: {value}</td></tr>;
+    return <tr key={key}><td>{key}</td><td>: {renderValue(value)}</td></tr>;
   });
   const configTable = configRows.length === 0 ? null :
     <table className="experiment-step-config"><tbody>{configRows}</tbody></table>;
@@ -190,4 +190,12 @@ function renderExperimentStatus(events) {
     Status: {lastStatus}{lastMessage ? ": " + lastMessage : ""}&nbsp;
     {renderDate(lastEvent.date)} &mdash; {renderDuration(duration)}
   </div>);
+}
+
+function renderValue(value) {
+  const str = JSON.stringify(value);
+  if (str.startsWith("\"") && str.endsWith("\"")) {
+    return str.slice(1, -1);
+  }
+  return str;
 }

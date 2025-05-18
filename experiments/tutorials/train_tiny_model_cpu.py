@@ -26,6 +26,7 @@ tinystories_tokenized = default_tokenize(
     tokenizer=marin_tokenizer,  # the marin tokenizer is the llama3 tokenizer with a custom chat template
 )
 
+
 # 3. Define training configuration
 nano_train_config = SimpleTrainConfig(
     # Here we define the hardware resources we need.
