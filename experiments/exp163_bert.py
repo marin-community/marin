@@ -1,5 +1,10 @@
 """
-Experiment 163: Compare BERT vs Fasttext classifiers (in this case, with MMLU positive examples).
+Experiment 163: Compare BERT vs Fasttext classifiers. In particular, we 1) train both types of classifiers on the
+same high-quality versus low-quality data, 2) filter a pool of pretraining documents using the classifiers, and
+then 3) train language models on the filtered documents.
+For this experiment, we use 100k examples from the MMLU benchmark as the high-quality examples 100k documents from the
+DCLM pool as the low-quality examples. We then filter (varying fractions of) FineWeb Common Crawl documents using
+the classifiers, and then use our default experiment training pipeline to train language models on the filtered data.
 
 See https://github.com/stanford-crfm/marin/issues/163 for more details.
 """
@@ -11,6 +16,9 @@ from experiments.anneal_config import AnnealConfig
 from experiments.defaults import default_anneal, default_tokenize, default_train
 from experiments.dolmino.tokenize_dolmino import get_dolmino_step_llama3
 from experiments.evals.evals import default_eval
+from experiments.exp246_web_extraction_method_training import (
+    transform_resiliparse_preserve_formatting,
+)
 from experiments.exp274_mmlu_quality_classifier import (
     dclm_negative_examples_in_dolma_format,
     mmlu_eval_aux_in_dolma_format,
@@ -47,27 +55,25 @@ dolmino_dclm = get_dolmino_step_llama3("dclm")
 
 @dataclass
 class ExperimentConfig:
-    """Configuration for comparing BERT vs Fasttext classifiers.
+    """Configuration for comparing BERT vs fastText classifiers.
 
     This config defines parameters for an experiment that:
     1. Takes input documents from specified data sources
     2. Takes positive and negative documents from specified data sources.
-    3. Trains both a BERT and a Fasttext classifier on the positive/negative documents.
+    3. Trains both a BERT and a fastText classifier on the positive/negative documents.
     4. Filters and tokenizes the resulting data.
 
     Args:
         experiment_name: Identifier for this experiment
         input_data_source_to_path: Mapping of data source names to their GCS paths
-        keep_fraction: Fraction of highest-quality documents to keep after filtering
+        keep_fractions: Fractions of highest-quality documents to keep after filtering
     """
 
     experiment_name: str
     classifier_training_datasets: list[DatasetConfig]
     input_data_source_to_path: dict[str, str] = field(
         default_factory=lambda: {
-            "fineweb_2024_18": (
-                "gs://marin-us-central2/documents/fineweb-small-resiliparse-preserve-formatting-v2-e72837/md/CC-MAIN-2024-18/"
-            ),
+            "fineweb_2024_18": output_path_of(transform_resiliparse_preserve_formatting, "md", "CC-MAIN-2024-18"),
         }
     )
     keep_fractions: list[float] = field(default_factory=lambda: [0.01, 0.05, 0.1, 0.2])
@@ -95,7 +101,7 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
     )
 
     bert_classifier_train = ExecutorStep(
-        name=f"classifiers/{config.experiment_name}/bert-debug",  # TODO: remove debug
+        name=f"classifiers/{config.experiment_name}/bert",
         fn=train_bert,
         config=TrainBertClassifierConfig(
             datasets=config.classifier_training_datasets,
