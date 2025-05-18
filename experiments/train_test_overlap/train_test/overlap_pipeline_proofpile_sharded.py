@@ -2,6 +2,10 @@ import logging
 import os
 
 from experiments.pretraining_datasets import proofpile_2  # InputName for Proof-Pile download step
+from experiments.train_test_overlap.train_test.consolidate_sharded_pipeline import (
+    ConsolidateShardedConfig,
+    consolidate_sharded,
+)
 from marin.execution.executor import ExecutorStep, executor_main, get_executor_step, this_output_path
 from train_test_overlap.run_overlap_shards import ShardedOverlapConfig, run_all_shards
 
@@ -26,7 +30,7 @@ logger.info(f"Using base input dir for Proof-Pile shards: {base_input_dir}")
 
 # Scenario data and parameters
 scenario_data = "gs://marin-us-central2/scenarios/consolidated_eval_scenarios-d3f040/consolidated_scenarios.jsonl"
-n_values = [5, 10, 15, 20]
+n_values = [5, 10, 15]
 
 # Configure the sharded runner with backpressure
 config = ShardedOverlapConfig(
@@ -37,13 +41,24 @@ config = ShardedOverlapConfig(
     max_in_flight=1024,
 )
 proofpile_sharded_step = ExecutorStep(
-    name="train_test_overlap/proofpile_data_overlap_sharded",
+    name="train_test_overlap/ngrams/proofpile_data_overlap_sharded",
     fn=run_all_shards,
     config=config,
 )
 
+consolidate_sharded_config = ConsolidateShardedConfig(
+    input_step=proofpile_sharded_step,
+    output_path=this_output_path(),
+)
+consolidate_proofpile_sharded_step = ExecutorStep(
+    name="train_test_overlap/consolidated/consolidate_sharded_proofpile",
+    fn=lambda cfg: consolidate_sharded(cfg),
+    config=consolidate_sharded_config,
+)
+
+
 if __name__ == "__main__":
     executor_main(
-        steps=[proofpile_sharded_step],
+        steps=[proofpile_sharded_step, consolidate_proofpile_sharded_step],
         description="Run sharded n-gram data overlap pipeline on Proof-Pile dataset",
     )

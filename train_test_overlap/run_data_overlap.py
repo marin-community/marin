@@ -253,11 +253,11 @@ def run_data_overlap(config: DataOverlapPipelineConfig) -> str:
             )
             metric_dirs.append(met_dir)
 
-        # 5) Aggregate metrics
+        # 5) Aggregate metrics (include original GCS input_data path)
         agg_dirs = []
         for met_dir in metric_dirs:
             agg_dir = os.path.join(tmpdir, f"aggregate_{os.path.basename(met_dir)}")
-            aggregate_metrics(path=met_dir, out_path=agg_dir)
+            aggregate_metrics(path=met_dir, out_path=agg_dir, metrics_input_path=config.input_data)
             agg_dirs.append(agg_dir)
 
         # 6) Copy each aggregated metrics file into its own folder under the output path

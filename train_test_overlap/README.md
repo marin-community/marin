@@ -136,6 +136,17 @@ This shows that 11 test instances in the MMLU Anatomy dataset have at least one 
 
 #### 2. Jaccard Overlap (partial_overlap_spec: 1)
 
+for each train shard:
+  track test instances detected:
+    jaccrd_overlap
+
+for top level summary, go through each shard, aggregate all test instance
+keys, keep the highest value for overlap.
+
+So each shard will have highest training sample (somewhere) that has overlap w test instance
+
+Then total shards will record max overlap per instance over all training shards.
+
 Measures the proportion of n-grams in the test instance that also appear in the training data.
 
 **How it's calculated**:
@@ -147,7 +158,7 @@ Measures the proportion of n-grams in the test instance that also appear in the 
 - 0.0 means no overlap
 - Values closer to 1.0 indicate more extensive overlap
 - A score of 0.4 means 40% of the n-grams in the test instance appear in training data
-- Higher values suggest more significant contamination
+- Higher values potentially suggest more significant contamination
 
 **Example (MMLU Anatomy, 5-grams, input texts):**
 ```json

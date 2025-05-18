@@ -156,6 +156,63 @@ def consolidate_stats(cfg: ConsolidateStatsConfig) -> str:
             json.dump(mapping, f, indent=2)
         print(f"[consolidate_group] Wrote merged instance_mapping to {out_map}", flush=True)
 
+        # 4) merge aggregated metrics from each shard
+        metrics_agg: dict[tuple, dict] = {}
+        for d in dirs:
+            # find per-shard aggregated metrics files
+            metrics_paths = fsspec_glob(f"{d}/aggregate_*/aggregate_*")
+            for mpath in sorted(metrics_paths):
+                try:
+                    print(f"[consolidate_group] Merging metrics from {mpath}", flush=True)
+                    with fsspec.open(mpath, "rt") as mf:
+                        for line in mf:
+                            rec = json.loads(line)
+                            # extract grouping key
+                            key_spec = rec["aggregate_data_overlap_key"]["stats_key"]
+                            scenario = key_spec["light_scenario_key"]["scenario_spec"]["class_name"]
+                            args = key_spec["light_scenario_key"]["scenario_spec"]["args"]
+                            split = key_spec["light_scenario_key"]["split"]
+                            n = key_spec["overlap_protocol_spec"]["n"]
+                            part = rec["aggregate_data_overlap_key"]["part"]
+                            protocol = rec["metric_protocol_spec"]["partial_overlap_spec"]
+                            key = (scenario, tuple(sorted(args.items())), split, n, part, protocol)
+                            if key not in metrics_agg:
+                                metrics_agg[key] = {
+                                    "aggregate_data_overlap_key": rec["aggregate_data_overlap_key"],
+                                    "metric_protocol_spec": rec["metric_protocol_spec"],
+                                    "instance_ids": [],
+                                    "metric_scores": [],
+                                    "metrics_input_paths": {},
+                                }
+                            # accumulate per-instance entries
+                            for inst, score in zip(
+                                rec.get("instance_ids", []), rec.get("metric_scores", []), strict=False
+                            ):
+                                metrics_agg[key]["instance_ids"].append(inst)
+                                metrics_agg[key]["metric_scores"].append(score)
+                                metrics_agg[key]["metrics_input_paths"].setdefault(inst, set()).add(
+                                    rec.get("metrics_input_path")
+                                )
+                except Exception:
+                    logger.warning(f"Missing or unreadable metrics file {mpath}, skipping")
+        # write merged aggregated metrics
+        out_metrics = f"{out_dir}/aggregated_metrics.jsonl"
+        print(f"[consolidate_group] Writing merged aggregated metrics to {out_metrics}", flush=True)
+        with fsspec.open(out_metrics, "wt") as out_f:
+            for key in sorted(metrics_agg):
+                entry = metrics_agg[key]
+                out_rec = {
+                    "aggregate_data_overlap_key": entry["aggregate_data_overlap_key"],
+                    "instance_ids": entry["instance_ids"],
+                    "metric_scores": entry["metric_scores"],
+                    "metrics_input_paths": {
+                        inst: sorted(list(paths)) for inst, paths in entry["metrics_input_paths"].items()
+                    },
+                    "metric_protocol_spec": entry["metric_protocol_spec"],
+                }
+                out_f.write(json.dumps(out_rec) + "\n")
+        print(f"[consolidate_group] Wrote merged aggregated metrics to {out_metrics}", flush=True)
+
     # run consolidation per global and nested local shards
     for g_shard, local_shards in nested.items():
         # global-level aggregate
@@ -180,7 +237,7 @@ consolidate_config = ConsolidateStatsConfig(
     only_stats=False,  # set True to only merge stats and instance mappings without raw ngrams
 )
 consolidate_step = ExecutorStep(
-    name="train_test_overlap/consolidate_stats",
+    name="train_test_overlap/consolidate_stats_dclm",
     fn=lambda cfg: consolidate_stats(cfg),
     config=consolidate_config,
 )

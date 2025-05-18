@@ -282,6 +282,7 @@ class AggregateOverlapMetric:
     """Dataclass representing the aggregated overlap metrics"""
 
     aggregate_data_overlap_key: AggregateDataOverlapKey
+    instance_ids: list[str]
     metric_scores: list[float]  # List of scores instead of a single value
     metric_protocol_spec: MetricProtocolSpec
 

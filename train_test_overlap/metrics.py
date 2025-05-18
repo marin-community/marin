@@ -40,7 +40,7 @@ non_weighted_metrics = [
 ]
 
 
-def aggregate_metrics(path, out_path):
+def aggregate_metrics(path, out_path, metrics_input_path=None):
     print(f"Aggregating metrics from {path}", flush=True)
     overlap_metrics_jsons = open(path, "r").readlines()
     print(f"Aggregating {len(overlap_metrics_jsons)} metrics from {path}", flush=True)
@@ -49,11 +49,12 @@ def aggregate_metrics(path, out_path):
         entry_overlap_metric_dict = json.loads(entry_overlap_metric_json)
         entry_overlap_metric_list.append(cattrs.structure(entry_overlap_metric_dict, EntryOverlapMetric))
 
-    # Initialize a new dictionary for aggregated scores
-    aggregate_score_dict = {}
+    # Initialize a new dictionary for aggregated scores (mapping to list of (instance_id, metric_score))
+    aggregate_score_dict: dict[tuple, list[tuple[str, float]]] = {}
 
     for entry_overlap_metric in entry_overlap_metric_list:
         # Extract necessary information
+        instance_id = entry_overlap_metric.entry_data_overlap_key.instance_id
         stats_key = entry_overlap_metric.entry_data_overlap_key.stats_key
         part = entry_overlap_metric.entry_data_overlap_key.part
         metric_protocol_spec = entry_overlap_metric.overlap_metric.metric_protocol_spec
@@ -64,25 +65,26 @@ def aggregate_metrics(path, out_path):
         # Define the aggregate key
         agg_key = (stats_key, part, metric_protocol_spec)
 
-        # Initialize or append the metric score
+        # Initialize or append the (instance_id, metric_score) tuple
         if agg_key not in aggregate_score_dict:
-            if (
-                stats_key.light_scenario_key.scenario_spec.class_name
-                == "helm.benchmark.scenarios.copyright_scenario.CopyrightScenario"
-            ):
+            # skip certain scenarios
+            if stats_key.light_scenario_key.scenario_spec.class_name.endswith("CopyrightScenario"):
                 continue
-            aggregate_score_dict[agg_key] = [metric_score]
+            aggregate_score_dict[agg_key] = [(instance_id, metric_score)]
         else:
-            aggregate_score_dict[agg_key].append(metric_score)
+            aggregate_score_dict[agg_key].append((instance_id, metric_score))
 
-    # Convert the aggregated data to AggregateOverlapMetric objects
+    # Convert the aggregated data to AggregateOverlapMetric objects (including instance IDs)
     aggregate_overlap_metrics = []
-    for (stats_key, part, metric_protocol_spec), scores in aggregate_score_dict.items():
+    for (stats_key, part, metric_protocol_spec), entries in aggregate_score_dict.items():
+        instance_ids, scores = zip(*entries, strict=False)
         aggregate_key = AggregateDataOverlapKey(stats_key=stats_key, part=part)
-        # if aggregate_key.stats_key.light_scenario_key.split == 'test':
         aggregate_overlap_metrics.append(
             AggregateOverlapMetric(
-                aggregate_data_overlap_key=aggregate_key, metric_scores=scores, metric_protocol_spec=metric_protocol_spec
+                aggregate_data_overlap_key=aggregate_key,
+                instance_ids=list(instance_ids),
+                metric_scores=list(scores),
+                metric_protocol_spec=metric_protocol_spec,
             )
         )
 
@@ -90,6 +92,13 @@ def aggregate_metrics(path, out_path):
         print(f"Saving {len(overlap_metrics)} metrics to {filename}", flush=True)
         with open(filename, "w") as f:
             for overlap_metric in overlap_metrics:
-                f.write(json.dumps(asdict_without_nones(overlap_metric), ensure_ascii=False) + "\n")
+                d = asdict_without_nones(overlap_metric)
+                # record the original GCS input path if provided, otherwise fallback to local path
+                d["metrics_input_path"] = metrics_input_path or path
+                # represent the partial overlap spec as its name rather than numeric code
+                d["metric_protocol_spec"][
+                    "partial_overlap_spec"
+                ] = overlap_metric.metric_protocol_spec.partial_overlap_spec.name
+                f.write(json.dumps(d, ensure_ascii=False) + "\n")
 
     save_metrics_to_jsonl(aggregate_overlap_metrics, out_path)
