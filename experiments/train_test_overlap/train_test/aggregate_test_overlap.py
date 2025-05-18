@@ -26,12 +26,14 @@ TRAINING_DATASET_MAP = {
     "finemath-3plus": "FINEMATH3+",
 }
 
+
 def detect_training_dataset(paths: list[str]) -> str:
     for p in paths:
         for fragment, label in TRAINING_DATASET_MAP.items():
             if fragment in p:
                 return label
     return "UNKNOWN"
+
 
 @dataclass
 class AggregateTestOverlapConfig:
@@ -255,7 +257,7 @@ def aggregate_test_overlap(cfg: AggregateTestOverlapConfig) -> str:
                         overlap_count = sum(
                             len(inst_set)
                             for subset_key, split_map in subset_map.items()
-                            for split, inst_set in split_map.items() if split == "test"
+                            if split == "test"
                         )
                         fraction = (overlap_count / total_instances) if total_instances else None
                         rec = {
@@ -268,6 +270,51 @@ def aggregate_test_overlap(cfg: AggregateTestOverlapConfig) -> str:
                             "overlap_fraction": fraction,
                         }
                         tot_f.write(json.dumps(rec) + "\n")
+
+    # Generate CSV overlap matrices (rows=training datasets, cols=test datasets)
+    for part, label in [("input", "inputs"), ("references", "reference")]:
+        # Collect test datasets for the matrix
+        test_ds_set = set()
+        # For simplicity, use the first n_val for each training_ds
+        for training_ds, nmap in summary_by_training[part].items():
+            if not nmap:
+                continue
+            first_n = next(iter(nmap))
+            for test_ds in nmap[first_n].keys():
+                test_ds_set.add(test_ds)
+        test_ds_list = sorted(test_ds_set)
+        training_ds_list = sorted(summary_by_training[part].keys())
+
+        # CSV header
+        csv_file = os.path.join(out_base, f"matrix_overlap_{label}.csv")
+        print(f"Writing matrix CSV {csv_file}", flush=True)
+        with fsspec.open(csv_file, "wt") as mf:
+            mf.write('training_dataset,' + ','.join(test_ds_list) + "\n")
+            for training_ds in training_ds_list:
+                row_vals = []
+                nmap = summary_by_training[part].get(training_ds, {})
+                if not nmap:
+                    # no data for this training_ds
+                    row_vals = ["" for _ in test_ds_list]
+                else:
+                    first_n = next(iter(nmap))
+                    dsmap = nmap[first_n]
+                    for test_ds in test_ds_list:
+                        # total test instances across all subsets
+                        total_instances = sum(
+                            scenario_counts.get(test_ds, {}).get(sub, {}).get("test", 0)
+                            for sub in scenario_counts.get(test_ds, {})
+                        )
+                        # overlap count
+                        subset_map = dsmap.get(test_ds, {})
+                        overlap_count = sum(
+                            len(inst_set)
+                            for subset_key, split_map in subset_map.items()
+                            for split, inst_set in split_map.items() if split == "test"
+                        )
+                        frac = (overlap_count / total_instances) if total_instances else None
+                        row_vals.append(str(frac) if frac is not None else "")
+                mf.write(training_ds + ',' + ','.join(row_vals) + "\n")
 
     return "Aggregate test overlap completed!"
 
