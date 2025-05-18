@@ -15,7 +15,7 @@ I use this command to launch it:
 python marin/run/ray_run.py --env_vars WANDB_API_KEY ${WANDB_API_KEY}  --env_vars HF_DATASETS_TRUST_REMOTE_CODE true --  python experiments/exp600_tootsie.py --run_only "[adept]" --force_run_failed true
 ```
 
-I keep an eye on the wandb dashboard. I have runs sorted by last modified time. https://wandb.ai/stanford-mercury/marin?nw=nwuserdlwh
+I keep an eye on the wandb dashboard. I have runs sorted by last modified time. https://wandb.ai/marin-community/marin?nw=nwuserdlwh
 
 I have seen a few hangs, I think due to bugs in eval, which I think I have fixed. But if it hangs, just kill it.
 
